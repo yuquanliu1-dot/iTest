@@ -38,6 +38,8 @@ pnpm dev
 
 ## Chrome 扩展加载
 
+先 `pnpm --filter @itest/recorder build` 编译 modules/，再加载扩展
+
 1. 打开 `chrome://extensions/`
 2. 开启「开发者模式」
 3. 「加载已解压的扩展程序」 → 选择 `apps/recorder/` 目录

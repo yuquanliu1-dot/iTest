@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.280",
+    "@types/jsdom": "^30.0.0",
     "jsdom": "^25.0.1",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"
