@@ -38,9 +38,11 @@ async function executeRun(run: RunRow) {
       .where(eq(agentRuns.id, run.id));
     if (run.targetType === 'requirement2cases') {
       const reqData = (await db.select().from(requirements).where(eq(requirements.id, run.targetId)))[0];
-      const finalJson = result[result.length - 1] as {
-        cases?: Array<{ title: string; description?: string; priority?: string; steps?: Array<{ order: number; action: unknown }> }>;
-      };
+      const finalJson = result.find((r) => r && typeof r === 'object' && 'cases' in (r as object)) as
+        | {
+            cases?: Array<{ title: string; description?: string; priority?: string; steps?: Array<{ order: number; action: unknown }> }>;
+          }
+        | undefined;
       if (reqData && finalJson?.cases) {
         for (const c of finalJson.cases) {
           const caseRows = await db
