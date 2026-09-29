@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: itest-pg
+    environment:
+      POSTGRES_USER: itest
+      POSTGRES_PASSWORD: itest
+      POSTGRES_DB: itest
+    ports:
+      - "5432:5432"
+    volumes:
+      - itest-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U itest"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    container_name: itest-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+volumes:
+  itest-pg-data:
