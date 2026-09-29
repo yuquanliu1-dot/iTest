@@ -8,6 +8,7 @@ import { stepsRoute } from './routes/steps.js';
 import { reportsRoute } from './routes/reports.js';
 import { agentRunsRoute } from './routes/agentRuns.js';
 import { recorderRoute } from './routes/recorder.js';
+import { executeRoute } from './routes/execute.js';
 import { attachRecorderWs } from './recorder/ws.js';
 
 const app = express();
@@ -17,6 +18,7 @@ app.use('/api/settings', settingsRoute);
 app.use('/api/requirements', requirementsRoute);
 app.use('/api/cases', casesRoute);
 app.use('/api/cases', stepsRoute);
+app.use('/api', executeRoute);
 app.use('/api/reports', reportsRoute);
 app.use('/api/agent-runs', agentRunsRoute);
 app.use('/api/recorder', recorderRoute);
