@@ -46,8 +46,9 @@ export default function RequirementDetail() {
             if (payload.type === 'workflow_error') {
               es.close();
               setStreaming(false);
-              toast((payload as { error?: { message?: string } }).error?.message ?? '生成失败', 'error');
-              reject(new Error((payload as { error?: { message?: string } }).error?.message));
+              const msg = typeof payload.error === 'string' ? payload.error : '生成失败';
+              toast(msg, 'error');
+              reject(new Error(msg));
             }
           } catch {
             /* ignore */

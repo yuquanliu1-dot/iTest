@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useUIStore } from '../stores/ui';
 import { useRecorderStore } from '../stores/recorder';
+import { useAgentRunStore } from '../stores/agentRun';
 
 type Tab = 'description' | 'reports' | 'recording';
 
@@ -12,8 +13,12 @@ export default function CaseDetail() {
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
   const recorder = useRecorderStore();
+  const pushEvent = useAgentRunStore((s) => s.pushEvent);
+  const clearEvents = useAgentRunStore((s) => s.clear);
   const [tab, setTab] = useState<Tab>('description');
-  const wsRef = useRef<WebSocket | null>(null);
+  const [targetUrl, setTargetUrl] = useState('');
+  const [streaming, setStreaming] = useState(false);
+  const sessionRef = useRef<string | null>(null);
 
   const { data: caseDetail } = useQuery({
     queryKey: ['case', id],
@@ -26,15 +31,35 @@ export default function CaseDetail() {
       const session = await api.recorder.createSession(id!);
       recorder.setStatus('recording');
       recorder.setSession(session.sessionId);
-      const ws = new WebSocket(`${session.wsUrl}?sessionId=${session.sessionId}&token=${session.wsToken}`);
-      wsRef.current = ws;
-      ws.onopen = () => {
-        window.postMessage({ source: 'ita-web', type: 'start-recording', sessionId: session.sessionId }, '*');
-      };
-      ws.onerror = () => {
-        recorder.setError('WS 连接失败');
-        toast('WS 连接失败，请确认 Chrome 扩展已加载', 'error');
-      };
+      sessionRef.current = session.sessionId;
+      const ok = await new Promise<boolean>((resolve) => {
+        let settled = false;
+        const finish = (v: boolean) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          window.removeEventListener('message', onMsg);
+          resolve(v);
+        };
+        const onMsg = (e: MessageEvent) => {
+          if (e.data?.source === 'ita-ext' && e.data?.type === 'start-result') finish(!!e.data.ok);
+        };
+        const timer = setTimeout(() => finish(false), 3000);
+        window.addEventListener('message', onMsg);
+        window.postMessage(
+          {
+            source: 'ita-web',
+            type: 'start-recording',
+            session: { wsUrl: session.wsUrl, sessionId: session.sessionId, token: session.wsToken },
+            targetUrl,
+          },
+          '*',
+        );
+      });
+      if (!ok) {
+        recorder.setError('请确认已加载 Chrome 录制扩展');
+        sessionRef.current = null;
+      }
     },
     onError: (e: Error) => {
       recorder.setError(e.message);
@@ -46,12 +71,61 @@ export default function CaseDetail() {
     mutationFn: async () => {
       const sessionId = recorder.sessionId;
       if (!sessionId) throw new Error('no active session');
-      wsRef.current?.close();
+      window.postMessage({ source: 'ita-web', type: 'stop-recording', sessionId }, '*');
       const r = await api.recorder.finish(sessionId);
+      sessionRef.current = null;
       recorder.reset();
       toast(`已写入 ${r.inserted} 个步骤`, 'success');
       qc.invalidateQueries({ queryKey: ['case', id] });
     },
+  });
+
+  const genSteps = useMutation({
+    mutationFn: async () => {
+      if (!caseDetail) throw new Error('case not loaded');
+      clearEvents();
+      const run = await api.agentRuns.create({
+        targetType: 'case2script',
+        targetId: id!,
+        prompt: JSON.stringify({
+          title: caseDetail.title,
+          description: caseDetail.description,
+          steps: caseDetail.steps.map((s) => s.action),
+        }),
+      });
+      setStreaming(true);
+      return new Promise<void>((resolve, reject) => {
+        const es = new EventSource(api.agentRuns.eventsUrl(run.id));
+        es.onmessage = (e) => {
+          try {
+            const payload = JSON.parse(e.data);
+            pushEvent({ type: payload.type, payload });
+            if (payload.type === 'workflow_complete') {
+              es.close();
+              setStreaming(false);
+              toast('步骤已补充', 'success');
+              qc.invalidateQueries({ queryKey: ['case', id] });
+              resolve();
+            }
+            if (payload.type === 'workflow_error') {
+              es.close();
+              setStreaming(false);
+              const msg = typeof payload.error === 'string' ? payload.error : '生成失败';
+              toast(msg, 'error');
+              reject(new Error(msg));
+            }
+          } catch {
+            /* ignore */
+          }
+        };
+        es.onerror = () => {
+          es.close();
+          setStreaming(false);
+          reject(new Error('SSE connection failed'));
+        };
+      });
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
   });
 
   const execute = useMutation({
@@ -66,7 +140,10 @@ export default function CaseDetail() {
 
   useEffect(() => {
     return () => {
-      wsRef.current?.close();
+      if (sessionRef.current) {
+        window.postMessage({ source: 'ita-web', type: 'stop-recording', sessionId: sessionRef.current }, '*');
+        sessionRef.current = null;
+      }
     };
   }, []);
 
@@ -106,7 +183,21 @@ export default function CaseDetail() {
             <div>
               <div className="flex justify-between items-center mb-2">
                 <h3 className="font-semibold">步骤 ({caseDetail.steps.length})</h3>
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
+                  <input
+                    className="input-base"
+                    style={{ width: 220 }}
+                    placeholder="录制目标 URL"
+                    value={targetUrl}
+                    onChange={(e) => setTargetUrl(e.target.value)}
+                  />
+                  <button
+                    className="btn-ghost"
+                    disabled={streaming || genSteps.isPending}
+                    onClick={() => genSteps.mutate()}
+                  >
+                    {streaming ? '补充中...' : '⚡ AI 补充步骤'}
+                  </button>
                   <button
                     className="btn-primary"
                     disabled={execute.isPending}
