@@ -1,0 +1,5 @@
+body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; width: 240px; background: #EEF0FF; }
+h1 { font-size: 16px; margin: 0 0 8px; color: #7C5CFC; }
+.hint { font-size: 12px; color: #6E6A8A; margin-bottom: 12px; }
+button { background: #7C5CFC; color: white; border: none; padding: 8px 12px; border-radius: 8px; cursor: pointer; width: 100%; }
+button:hover { background: #6A4AE0; }
