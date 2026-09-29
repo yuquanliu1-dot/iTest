@@ -70,6 +70,24 @@ async function executeRun(run: RunRow) {
         }
       }
     }
+    if (run.targetType === 'case2script') {
+      const gen = result.find((r) => r && typeof r === 'object' && 'steps' in (r as object)) as
+        | { steps?: Array<{ order: number; action: unknown }> }
+        | undefined;
+      if (gen?.steps?.length) {
+        await db.insert(testSteps).values(
+          gen.steps.map((s) => {
+            StepAction.parse(s.action);
+            return {
+              caseId: run.targetId,
+              order: s.order,
+              source: 'agent' as const,
+              action: s.action as object,
+            };
+          }),
+        );
+      }
+    }
   } catch (e) {
     await db
       .update(agentRuns)
