@@ -13,4 +13,8 @@
       manager.stop();
     }
   });
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.type === 'stop') manager.stop();
+  });
 })();
