@@ -40,7 +40,7 @@ export async function runWorkflow(opts: RunOptions): Promise<unknown> {
     const userMessage = fillTemplate(step.prompt, { userMessage: opts.initialMessage, previousOutput });
     try {
       const r = await opts.llmClient.complete({ systemPrompt: '', userMessage });
-      const output = r.kind === 'json' ? r.value : r.value;
+      const output = r.value;
       result.push(output);
       previousOutput = typeof output === 'string' ? output : JSON.stringify(output);
       opts.onEvent({ type: 'step_text', stepId: step.id, delta: previousOutput });
