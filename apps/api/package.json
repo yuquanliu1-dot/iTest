@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "vitest run",
+    "test": "TESTCONTAINERS_RYUK_DISABLED=true vitest run",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
