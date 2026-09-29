@@ -1,4 +1,5 @@
 import express from 'express';
+import { join } from 'node:path';
 import { logger } from './logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { settingsRoute } from './routes/settings.js';
@@ -13,6 +14,7 @@ import { attachRecorderWs } from './recorder/ws.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
+app.use('/screenshots', express.static(join(process.cwd(), 'screenshots')));
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/settings', settingsRoute);
 app.use('/api/requirements', requirementsRoute);
