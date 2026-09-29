@@ -6,6 +6,7 @@ import RequirementDetail from './pages/RequirementDetail';
 import Cases from './pages/Cases';
 import CaseDetail from './pages/CaseDetail';
 import Reports from './pages/Reports';
+import ReportDetail from './pages/ReportDetail';
 import Settings from './pages/Settings';
 
 export default function App() {
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="/cases" element={<Cases />} />
         <Route path="/cases/:id" element={<CaseDetail />} />
         <Route path="/reports" element={<Reports />} />
+        <Route path="/reports/:id" element={<ReportDetail />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>
     </AppShell>
