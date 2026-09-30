@@ -51,17 +51,17 @@ describe('ElementPicker', () => {
   it('Escape cancels with null and cleans up listeners', () => {
     const el = document.createElement('div');
     document.body.appendChild(el);
-    let called = 0;
-    picker.start(() => {
-      called++;
-    });
+    const received: (PickResult | null)[] = [];
+    picker.start((r) => received.push(r));
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-    expect(called).toBe(1);
-    // 再次点击不应再触发（监听器已移除，且回调收的是 null）
-    const r: (PickResult | null)[] = [];
-    // 重新 start 一个 picker 验证前一个已停止：直接再 start 新的即可，这里验证 stop() 幂等
+    expect(received).toHaveLength(1);
+    expect(received[0]).toBeNull();
+    // 监听器已移除：Esc 后再点击不应再触发
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(received).toHaveLength(1);
+    // stop() 幂等
     picker.stop();
-    expect(called).toBe(1);
+    expect(received).toHaveLength(1);
   });
 
   it('does not start twice', () => {
