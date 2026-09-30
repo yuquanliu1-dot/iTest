@@ -92,7 +92,8 @@ projectsRoute.get('/:id/stats', async (req, res) => {
   const reportRows = caseIds.length
     ? await db.select().from(reports).where(inArray(reports.caseId, caseIds)).orderBy(desc(reports.createdAt))
     : [];
-  const counts = await caseCountsByGroup();
+  const counts = new Map<string, number>();
+  for (const c of caseRows) counts.set(c.groupId, (counts.get(c.groupId) ?? 0) + 1);
   const reqCount = (
     await db.select({ count: sql<number>`count(*)` }).from(requirements).where(eq(requirements.projectId, req.params.id))
   ).map((r) => Number(r.count))[0]!;
