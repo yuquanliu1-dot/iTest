@@ -1,10 +1,13 @@
 import { useState, useEffect, type CSSProperties } from 'react';
 import type { StepClip } from '../stores/stepClipboard';
+import { api } from '../api/client';
 
 interface Props {
   initial: StepClip;
   /** 用例中已定义的变量名（extract 步骤产出），用于 fill 值的引用提示 */
   availableVars?: string[];
+  /** 当前 case id，用于附件上传接口 */
+  caseId?: string;
   onSave: (next: StepClip) => void;
   onClose: () => void;
 }
@@ -12,12 +15,19 @@ interface Props {
 type ValueMode = 'fixed' | 'randomString' | 'randomNumber' | 'timestamp' | 'prefixTimestamp';
 
 /** 步骤编辑弹窗：名称/等待时间 + 按 action.kind 分派的值编辑。 */
-export default function StepEditModal({ initial, availableVars = [], onSave, onClose }: Props) {
+export default function StepEditModal({ initial, availableVars = [], caseId, onSave, onClose }: Props) {
   const action = initial.action as Record<string, unknown>;
   const kind = action.kind as string;
 
   const [name, setName] = useState(initial.name ?? '');
   const [delayMs, setDelayMs] = useState(initial.delayMs ? String(initial.delayMs) : '');
+
+  // fill 敏感值
+  const [sensitive, setSensitive] = useState(!!(action as { sensitive?: boolean }).sensitive);
+  const [pwdDraft, setPwdDraft] = useState('');
+
+  // upload
+  const [fileId, setFileId] = useState<string | undefined>((action as { fileId?: string }).fileId);
 
   // fill/select 值编辑
   const rawValue = (action.value ?? '') as string | Record<string, unknown>;
@@ -74,6 +84,25 @@ export default function StepEditModal({ initial, availableVars = [], onSave, onC
   const handleSave = () => {
     const next: Record<string, unknown> = { ...action };
     if (kind === 'fill' || kind === 'select') next.value = buildValue();
+    if (kind === 'fill') {
+      if (sensitive) {
+        if (!pwdDraft) {
+          setError('已加密 — 修改时请输入新密码');
+          return;
+        }
+        next.value = pwdDraft;
+        next.sensitive = true;
+      } else {
+        delete next.sensitive;
+      }
+    }
+    if (kind === 'upload') {
+      if (!fileId) {
+        setError('请先绑定回放文件');
+        return;
+      }
+      next.fileId = fileId;
+    }
     if (kind === 'assertText') next.equals = equalsText;
     if (kind === 'assertJson') {
       try {
@@ -146,44 +175,67 @@ export default function StepEditModal({ initial, availableVars = [], onSave, onC
 
           {(kind === 'fill' || kind === 'select') && (
             <div className="flex flex-col gap-2">
-              <span style={labelStyle}>值</span>
-              <div className="flex gap-1 flex-wrap">
-                {(['fixed', 'randomString', 'randomNumber', 'timestamp', 'prefixTimestamp'] as ValueMode[]).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setValueMode(m)}
-                    style={{
-                      fontSize: 11, padding: '3px 8px', borderRadius: 5, cursor: 'pointer',
-                      border: '1px solid var(--color-glass-border)',
-                      background: valueMode === m ? 'var(--color-accent)' : 'transparent',
-                      color: valueMode === m ? '#fff' : 'var(--color-foreground-secondary)',
-                    }}
-                  >
-                    {{ fixed: '固定值', randomString: '随机字符串', randomNumber: '随机数字', timestamp: '时间戳', prefixTimestamp: '前缀+时间戳' }[m]}
-                  </button>
-                ))}
-              </div>
-              {valueMode === 'fixed' && (
+              {kind === 'fill' && (
+                <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={sensitive}
+                    onChange={(e) => setSensitive(e.target.checked)}
+                  />
+                  敏感值（密码，加密保存，明文不显示）
+                </label>
+              )}
+              {kind === 'fill' && sensitive && (
+                <input
+                  type="password"
+                  style={inputStyle}
+                  placeholder="输入新密码（修改时填写；留空表示保留原值）"
+                  value={pwdDraft}
+                  onChange={(e) => setPwdDraft(e.target.value)}
+                />
+              )}
+              {!sensitive && (
                 <>
-                  <input style={inputStyle} value={fixedValue} onChange={(e) => setFixedValue(e.target.value)} placeholder="支持 {{变量名}} 引用" list="available-vars" />
-                  <datalist id="available-vars">
-                    {availableVars.map((v) => (
-                      <option key={v} value={`{{${v}}}`} />
+                  <span style={labelStyle}>值</span>
+                  <div className="flex gap-1 flex-wrap">
+                    {(['fixed', 'randomString', 'randomNumber', 'timestamp', 'prefixTimestamp'] as ValueMode[]).map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => setValueMode(m)}
+                        style={{
+                          fontSize: 11, padding: '3px 8px', borderRadius: 5, cursor: 'pointer',
+                          border: '1px solid var(--color-glass-border)',
+                          background: valueMode === m ? 'var(--color-accent)' : 'transparent',
+                          color: valueMode === m ? '#fff' : 'var(--color-foreground-secondary)',
+                        }}
+                      >
+                        {{ fixed: '固定值', randomString: '随机字符串', randomNumber: '随机数字', timestamp: '时间戳', prefixTimestamp: '前缀+时间戳' }[m]}
+                      </button>
                     ))}
-                  </datalist>
+                  </div>
+                  {valueMode === 'fixed' && (
+                    <>
+                      <input style={inputStyle} value={fixedValue} onChange={(e) => setFixedValue(e.target.value)} placeholder="支持 {{变量名}} 引用" list="available-vars" />
+                      <datalist id="available-vars">
+                        {availableVars.map((v) => (
+                          <option key={v} value={`{{${v}}}`} />
+                        ))}
+                      </datalist>
+                    </>
+                  )}
+                  {valueMode === 'randomString' && (
+                    <label style={labelStyle}>长度<input style={inputStyle} value={genLength} onChange={(e) => setGenLength(e.target.value)} inputMode="numeric" /></label>
+                  )}
+                  {valueMode === 'randomNumber' && (
+                    <div className="flex gap-2">
+                      <label style={{ ...labelStyle, flex: 1 }}>最小<input style={inputStyle} value={genMin} onChange={(e) => setGenMin(e.target.value)} inputMode="numeric" /></label>
+                      <label style={{ ...labelStyle, flex: 1 }}>最大<input style={inputStyle} value={genMax} onChange={(e) => setGenMax(e.target.value)} inputMode="numeric" /></label>
+                    </div>
+                  )}
+                  {valueMode === 'prefixTimestamp' && (
+                    <input style={inputStyle} value={genPrefix} onChange={(e) => setGenPrefix(e.target.value)} placeholder="前缀，如 测试-" />
+                  )}
                 </>
-              )}
-              {valueMode === 'randomString' && (
-                <label style={labelStyle}>长度<input style={inputStyle} value={genLength} onChange={(e) => setGenLength(e.target.value)} inputMode="numeric" /></label>
-              )}
-              {valueMode === 'randomNumber' && (
-                <div className="flex gap-2">
-                  <label style={{ ...labelStyle, flex: 1 }}>最小<input style={inputStyle} value={genMin} onChange={(e) => setGenMin(e.target.value)} inputMode="numeric" /></label>
-                  <label style={{ ...labelStyle, flex: 1 }}>最大<input style={inputStyle} value={genMax} onChange={(e) => setGenMax(e.target.value)} inputMode="numeric" /></label>
-                </div>
-              )}
-              {valueMode === 'prefixTimestamp' && (
-                <input style={inputStyle} value={genPrefix} onChange={(e) => setGenPrefix(e.target.value)} placeholder="前缀，如 测试-" />
               )}
             </div>
           )}
@@ -231,7 +283,34 @@ export default function StepEditModal({ initial, availableVars = [], onSave, onC
             </label>
           )}
           {kind === 'upload' && (
-            <p style={labelStyle}>文件上传步骤：回放文件绑定将在后续版本支持。</p>
+            <div className="flex flex-col gap-2">
+              <span style={labelStyle}>绑定回放文件（按 sha256 复用）</span>
+              <input
+                type="file"
+                style={inputStyle}
+                onChange={async (e) => {
+                  if (!caseId) return;
+                  const f = e.target.files?.[0];
+                  if (!f) return;
+                  if (f.size > 50 * 1024 * 1024) {
+                    setError('文件超过 50MB 上限');
+                    return;
+                  }
+                  try {
+                    const r = await api.attachments.upload(caseId, f);
+                    setFileId(r.id);
+                    setError('');
+                  } catch (err) {
+                    setError((err as Error).message);
+                  }
+                }}
+              />
+              {fileId && (
+                <p className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                  已绑定 fileId：<code>{fileId.slice(0, 8)}…</code>
+                </p>
+              )}
+            </div>
           )}
 
           {error && <p className="text-[12px]" style={{ color: 'var(--color-destructive)' }}>{error}</p>}
