@@ -168,13 +168,46 @@ export const api = {
     eventsUrl: (id: string) => `${BASE}/agent-runs/${id}/events`,
   },
   recorder: {
-    createSession: (caseId: string) =>
-      request<{ sessionId: string; wsUrl: string; wsToken: string; resolvedUrl: string | null }>(
+    createSession: (
+      caseId: string,
+      opts?: { mode?: 'fresh' | 'append' | 'resume' | 'incognito'; incognito?: boolean; resumeFromOrder?: number },
+    ) =>
+      request<{ sessionId: string; wsUrl: string; wsToken: string; resolvedUrl: string | null; mode: string }>(
         '/recorder/sessions',
-        { method: 'POST', body: JSON.stringify({ caseId }) },
+        { method: 'POST', body: JSON.stringify({ caseId, ...(opts ?? {}) }) },
       ),
     finish: (sessionId: string) =>
       request<{ inserted: number }>(`/recorder/sessions/${sessionId}/finish`, { method: 'POST' }),
+    tabEvents: (
+      sessionId: string,
+      events: Array<{ kind: 'opened' | 'closed'; tabRef: string; title?: string; url?: string }>,
+    ) =>
+      request<{ count: number }>(`/recorder/sessions/${sessionId}/tab-events`, {
+        method: 'POST',
+        body: JSON.stringify({ events }),
+      }),
+  },
+  attachments: {
+    upload: async (caseId: string, file: File) => {
+      const buf = await file.arrayBuffer();
+      const r = await fetch(`${BASE}/cases/${caseId}/attachments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
+        body: buf,
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.message ?? `HTTP ${r.status}`);
+      }
+      return r.json() as Promise<{ id: string; originalName: string; size: number; sha256: string }>;
+    },
+  },
+  secrets: {
+    fetch: (caseId: string, stepId: string, token: string) =>
+      request<{ plaintext: string }>(
+        `/cases/${caseId}/steps/secrets/${stepId}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      ),
   },
 };
 
@@ -305,6 +338,9 @@ export interface TestStep {
   action: unknown;
   name?: string | null;
   delayMs?: number | null;
+  tabRef?: string | null;
+  componentKind?: string | null;
+  sensitive?: boolean;
 }
 export interface TestCaseDetail extends TestCase {
   description?: string;
