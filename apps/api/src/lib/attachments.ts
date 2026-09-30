@@ -16,8 +16,8 @@ export interface PreparedUpload {
   size: number;
 }
 
-export function ensureUploadDir(): Promise<void> {
-  return mkdir(UPLOAD_DIR, { recursive: true });
+export async function ensureUploadDir(): Promise<void> {
+  await mkdir(UPLOAD_DIR, { recursive: true });
 }
 
 export async function persistUpload(buf: Buffer): Promise<PreparedUpload> {
