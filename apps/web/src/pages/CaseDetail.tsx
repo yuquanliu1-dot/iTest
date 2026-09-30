@@ -18,6 +18,11 @@ import StepEditModal from '../components/StepEditModal';
 
 type Tab = 'description' | 'reports' | 'recording';
 
+/** 步骤身份快照比较：用于检测并发 mutation 是否动了我们正在编辑的那一行。 */
+function sameStep(a: StepClip, b: StepClip): boolean {
+  return JSON.stringify(a.action) === JSON.stringify(b.action);
+}
+
 export default function CaseDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -35,6 +40,7 @@ export default function CaseDetail() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<StepClip | null>(null);
   const editingIdxRef = useRef<number>(-1);
+  const editingSnapshotRef = useRef<StepClip | null>(null);
   const historyRef = useRef<StepClip[][]>([]);
 
   const toClip = (s: { action: unknown; source: string; name?: string | null; delayMs?: number | null }): StepClip => ({
@@ -414,14 +420,20 @@ export default function CaseDetail() {
                                       toast('重新编译失败', 'error');
                                       return;
                                     }
-                                    mutateSteps((cur) =>
-                                      cur.map((c, i) =>
-                                        i === caseDetail.steps.findIndex((x) => x.id === s.id)
-                                          ? { ...c, action: { ...(c.action as object), compiled: r.compiled } }
-                                          : c,
-                                      ),
-                                    );
-                                    toast('编译成功', 'success');
+                                    let applied = false;
+                                    mutateSteps((cur) => {
+                                      const i = cur.findIndex((c) => {
+                                        const a = c.action as { kind?: string; instruction?: string };
+                                        return a.kind === 'aiStep' && a.instruction === instruction;
+                                      });
+                                      if (i < 0) return cur;
+                                      applied = true;
+                                      const next = [...cur];
+                                      next[i] = { ...next[i]!, action: { ...(next[i]!.action as object), compiled: r.compiled } };
+                                      return next;
+                                    });
+                                    // applied 在 mutateSteps 内部同步置位；HTTP 失败时此路径不会跑到这里
+                                    toast(applied ? '编译成功' : '步骤已被修改，请刷新后重试', applied ? 'success' : 'error');
                                   })
                                   .catch((e: Error) => toast(e.message, 'error'));
                               }}
@@ -451,6 +463,7 @@ export default function CaseDetail() {
                           <button
                             onClick={() => {
                               editingIdxRef.current = idx;
+                              editingSnapshotRef.current = toClip(s);
                               setEditing(toClip(s));
                             }}
                             title="编辑"
@@ -558,8 +571,20 @@ export default function CaseDetail() {
             .filter((v): v is string => !!v)}
           onClose={() => setEditing(null)}
           onSave={(next) => {
-            mutateSteps((cur) => cur.map((c, i) => (i === editingIdxRef.current ? next : c)));
+            let applied = false;
+            mutateSteps((cur) => {
+              const i = editingIdxRef.current;
+              const prev = editingSnapshotRef.current;
+              const curAt = cur[i];
+              if (!curAt || !prev || !sameStep(curAt, prev)) return cur;
+              applied = true;
+              const newCur = [...cur];
+              newCur[i] = next;
+              return newCur;
+            });
+            if (!applied) toast('步骤已被修改，请关闭弹窗重试', 'error');
             setEditing(null);
+            editingSnapshotRef.current = null;
           }}
         />
       )}
