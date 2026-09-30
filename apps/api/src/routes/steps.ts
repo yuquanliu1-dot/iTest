@@ -5,6 +5,7 @@ import { testSteps, testCases } from '../db/schema.js';
 import { eq, asc, inArray } from 'drizzle-orm';
 import { StepAction } from '@itest/shared';
 import { HttpError } from '../middleware/errorHandler.js';
+import { compileAiStep, compileAiStepsInPlace } from '../agent/aiStepCompile.js';
 
 export const stepsRoute = Router();
 
@@ -25,6 +26,7 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
   const body = AppendBody.parse(req.body);
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  const failedAi = await compileAiStepsInPlace(body.steps.map((s) => ({ action: s.action })));
   const rows = await db
     .insert(testSteps)
     .values(
@@ -42,7 +44,7 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
     .from(testSteps)
     .where(eq(testSteps.caseId, req.params.caseId))
     .orderBy(asc(testSteps.order));
-  res.json({ count: rows.length, steps: sorted });
+  res.json({ count: rows.length, steps: sorted, failedAi });
 });
 
 const ReorderBody = z.object({ stepIds: z.array(z.string().uuid()).min(1) });
@@ -85,4 +87,53 @@ stepsRoute.delete('/:caseId/steps/:stepId', async (req, res) => {
     await db.update(testSteps).set({ order: i + 1 }).where(eq(testSteps.id, remaining[i]!));
   }
   res.json({ ok: true });
+});
+
+/** 全量替换步骤（步骤维护/粘贴/撤销的统一写入口）。aiStep 保存前自动编译。 */
+stepsRoute.put('/:caseId/steps', async (req, res) => {
+  const body = z
+    .object({
+      steps: z.array(
+        z.object({
+          action: StepAction,
+          source: z.enum(['agent', 'recorder', 'manual']).default('manual'),
+          name: z.string().max(200).optional(),
+          delayMs: z.number().int().nonnegative().max(60000).optional(),
+        }),
+      ),
+    })
+    .parse(req.body);
+  const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
+  if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  const failedAi = await compileAiStepsInPlace(body.steps.map((s) => ({ action: s.action })));
+  const rows = await db.transaction(async (tx) => {
+    await tx.delete(testSteps).where(eq(testSteps.caseId, req.params.caseId));
+    if (body.steps.length === 0) return [];
+    return tx
+      .insert(testSteps)
+      .values(
+        body.steps.map((s, i) => ({
+          caseId: req.params.caseId,
+          order: i + 1,
+          source: s.source,
+          action: s.action as object,
+          name: s.name ?? null,
+          delayMs: s.delayMs ?? null,
+        })),
+      )
+      .returning();
+  });
+  res.json({ steps: rows.sort((a, b) => a.order - b.order), failedAi });
+});
+
+/** 单独编译一条 AI 指令（步骤编辑页「重新编译」）。失败返回 compiled: null，不抛错。 */
+stepsRoute.post('/:caseId/steps/recompile', async (req, res) => {
+  const { instruction } = z.object({ instruction: z.string().min(1) }).parse(req.body);
+  const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
+  if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  try {
+    res.json({ compiled: await compileAiStep(instruction) });
+  } catch {
+    res.json({ compiled: null });
+  }
 });

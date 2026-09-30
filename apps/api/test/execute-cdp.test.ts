@@ -9,6 +9,12 @@ vi.mock('playwright-core', () => {
     hover: vi.fn().mockResolvedValue(undefined),
     waitFor: vi.fn().mockResolvedValue(undefined),
     isVisible: vi.fn().mockResolvedValue(true),
+    isChecked: vi.fn().mockResolvedValue(false),
+    check: vi.fn().mockResolvedValue(undefined),
+    uncheck: vi.fn().mockResolvedValue(undefined),
+    selectOption: vi.fn().mockResolvedValue(undefined),
+    innerText: vi.fn().mockResolvedValue('{"code":0}'),
+    inputValue: vi.fn().mockResolvedValue('input-val'),
     filter: vi.fn().mockReturnThis(),
     first: vi.fn().mockReturnThis(),
   });
@@ -23,6 +29,7 @@ vi.mock('playwright-core', () => {
     getByRole,
     getByText,
     screenshot: vi.fn().mockResolvedValue(undefined),
+    waitForTimeout: vi.fn().mockResolvedValue(undefined),
   };
 
   return {
@@ -45,6 +52,7 @@ const mocked = await import('playwright-core') as unknown as {
   __page: Page & {
     goto: ReturnType<typeof vi.fn>;
     screenshot: ReturnType<typeof vi.fn>;
+    waitForTimeout: ReturnType<typeof vi.fn>;
   };
   __getByRole: ReturnType<typeof vi.fn>;
   __getByText: ReturnType<typeof vi.fn>;
@@ -98,5 +106,107 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(results).toHaveLength(1);
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.error).toMatch(/boom/);
+  });
+
+  it('check action performs check only when state differs', async () => {
+    mocked.__page.waitForTimeout.mockClear();
+    await executeCaseReal(
+      '00000000-0000-0000-0000-000000000001',
+      [{ order: 1, action: { kind: 'check', locator: [{ strategy: 'css', value: '#cb' }], checked: true } }],
+      { reportId: 'r-check' },
+    );
+    const loc = (mocked.__page.locator as ReturnType<typeof vi.fn>).mock.results[0]!.value;
+    expect(loc.check).toHaveBeenCalled();
+    expect(loc.uncheck).not.toHaveBeenCalled();
+    expect(loc.isChecked).toHaveBeenCalled();
+  });
+
+  it('select action forwards materialized value to selectOption', async () => {
+    await executeCaseReal(
+      '00000000-0000-0000-0000-000000000001',
+      [{ order: 1, action: { kind: 'select', locator: [{ strategy: 'css', value: 'select' }], value: 'cn' } }],
+      { reportId: 'r-select' },
+    );
+    const loc = (mocked.__page.locator as ReturnType<typeof vi.fn>).mock.results[0]!.value;
+    expect(loc.selectOption).toHaveBeenCalledWith('cn', expect.objectContaining({ timeout: 5000 }));
+  });
+
+  it('upload action skips with warning (P5 binds real files)', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000001',
+      [{ order: 1, action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }] } }],
+      { reportId: 'r-upload' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(results[0]!.warning).toMatch(/待绑定回放文件/);
+  });
+
+  it('extract action stores element value into vars for later fill', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000001',
+      [
+        { order: 1, action: { kind: 'extract', locator: [{ strategy: 'css', value: '#no' }], varName: 'orderNo' } },
+        { order: 2, action: { kind: 'fill', locator: [{ strategy: 'css', value: '#f' }], value: '{{orderNo}}' } },
+      ],
+      { reportId: 'r-extract' },
+    );
+    expect(results.every((r) => r.status === 'passed')).toBe(true);
+    const loc = (mocked.__page.locator as ReturnType<typeof vi.fn>).mock.results[1]!.value;
+    expect(loc.fill).toHaveBeenCalledWith('input-val', expect.anything());
+  });
+
+  it('unresolved {{var}} fails the step with missing var name', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000001',
+      [{ order: 1, action: { kind: 'fill', locator: [{ strategy: 'css', value: '#f' }], value: '{{nope}}' } }],
+      { reportId: 'r-var' },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/nope/);
+  });
+
+  it('assertJson deep-compares parsed element text', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000001',
+      [{ order: 1, action: { kind: 'assertJson', locator: [{ strategy: 'css', value: 'pre' }], equals: { code: 0 } } }],
+      { reportId: 'r-json' },
+    );
+    expect(results[0]!.status).toBe('passed');
+  });
+
+  it('uncompiled aiStep fails with clear error; compiled aiStep runs substeps', async () => {
+    const bad = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000001',
+      [{ order: 1, action: { kind: 'aiStep', instruction: 'x', compiled: null } }],
+      { reportId: 'r-ai-bad' },
+    );
+    expect(bad[0]!.status).toBe('failed');
+    expect(bad[0]!.error).toMatch(/未编译/);
+
+    const good = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000001',
+      [
+        {
+          order: 1,
+          action: {
+            kind: 'aiStep',
+            instruction: 'x',
+            compiled: [{ kind: 'assertVisible', locator: [{ strategy: 'role', value: 'main' }] }],
+          },
+        },
+      ],
+      { reportId: 'r-ai-good' },
+    );
+    expect(good[0]!.status).toBe('passed');
+  });
+
+  it('applies delayMs via page.waitForTimeout before dispatch', async () => {
+    mocked.__page.waitForTimeout.mockClear();
+    await executeCaseReal(
+      '00000000-0000-0000-0000-000000000001',
+      [{ order: 1, delayMs: 300, action: { kind: 'navigate', url: 'https://example.com' } }],
+      { reportId: 'r-delay' },
+    );
+    expect(mocked.__page.waitForTimeout).toHaveBeenCalledWith(300);
   });
 });
