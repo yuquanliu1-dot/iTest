@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testSteps, testCases } from '../db/schema.js';
+import { testSteps, testCases, testAttachments } from '../db/schema.js';
 import { eq, asc, inArray } from 'drizzle-orm';
 import { StepAction } from '@itest/shared';
 import { HttpError } from '../middleware/errorHandler.js';
 import { compileAiStep, compileAiStepsInPlace } from '../agent/aiStepCompile.js';
+import { encrypt, ensureKeyLoaded } from '../lib/secret-crypto.js';
 
 export const stepsRoute = Router();
 
@@ -105,6 +106,22 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
     .parse(req.body);
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  for (const s of body.steps) {
+    const a = s.action as { kind?: string; fileId?: string; sensitive?: boolean };
+    if (a.kind === 'upload') {
+      const fileId = a.fileId;
+      if (!fileId) throw new HttpError(422, 'upload_no_file', 'upload step requires fileId');
+      // Defend against non-UUID strings: validate shape before hitting Postgres.
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileId)) {
+        throw new HttpError(422, 'upload_unknown_file', `attachment ${fileId} not found`);
+      }
+      const row = await db.select().from(testAttachments).where(eq(testAttachments.id, fileId));
+      if (row.length === 0) throw new HttpError(422, 'upload_unknown_file', `attachment ${fileId} not found`);
+    }
+    if (a.kind === 'fill' && a.sensitive) {
+      ensureKeyLoaded();
+    }
+  }
   const failedAi = await compileAiStepsInPlace(body.steps.map((s) => ({ action: s.action })));
   const rows = await db.transaction(async (tx) => {
     await tx.delete(testSteps).where(eq(testSteps.caseId, req.params.caseId));
@@ -112,14 +129,32 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
     return tx
       .insert(testSteps)
       .values(
-        body.steps.map((s, i) => ({
-          caseId: req.params.caseId,
-          order: i + 1,
-          source: s.source,
-          action: s.action as object,
-          name: s.name ?? null,
-          delayMs: s.delayMs ?? null,
-        })),
+        body.steps.map((s, i) => {
+          const a = s.action as { kind?: string; value?: unknown; sensitive?: boolean };
+          let secretCiphertext: string | null = null;
+          let secretIv: string | null = null;
+          let secretTag: string | null = null;
+          let storedAction: unknown = s.action;
+          if (a.kind === 'fill' && a.sensitive) {
+            const enc = encrypt(String(a.value ?? ''));
+            secretCiphertext = enc.ciphertext.toString('base64');
+            secretIv = enc.iv.toString('base64');
+            secretTag = enc.tag.toString('base64');
+            storedAction = { ...(s.action as object), value: '__sensitive__' };
+          }
+          return {
+            caseId: req.params.caseId,
+            order: i + 1,
+            source: s.source,
+            action: storedAction as object,
+            name: s.name ?? null,
+            delayMs: s.delayMs ?? null,
+            sensitive: a.kind === 'fill' && !!a.sensitive,
+            secretCiphertext,
+            secretIv,
+            secretTag,
+          };
+        }),
       )
       .returning();
   });

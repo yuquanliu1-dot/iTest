@@ -11,16 +11,20 @@ let app: import('express').Express;
 beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   process.env.DATABASE_URL = container.getConnectionUri();
+  process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
   pool = new Pool({ connectionString: container.getConnectionUri() });
   await pool.query(SCHEMA_SQL);
   const { default: express } = await import('express');
   const { casesRoute } = await import('../src/routes/cases.js');
   const { stepsRoute } = await import('../src/routes/steps.js');
+  const { attachmentsRoute } = await import('../src/routes/attachments.js');
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
   app = express();
   app.use(express.json());
+  app.use(express.raw({ type: 'application/octet-stream', limit: '60mb' }));
   app.use('/api/cases', casesRoute);
   app.use('/api/cases', stepsRoute);
+  app.use('/api/cases', attachmentsRoute);
   app.use(errorHandler);
 });
 
@@ -235,5 +239,64 @@ describe('cases + steps', () => {
     const ok = await request(app).post(`/api/cases/${c.body.id}/steps/recompile`).send({ instruction: '关闭弹窗' });
     expect(ok.status).toBe(200);
     expect(Array.isArray(ok.body.compiled)).toBe(true);
+  });
+
+  it('PUT stores sensitive fill as ciphertext and never echoes plaintext', async () => {
+    const { ensureKeyLoaded } = await import('../src/lib/secret-crypto.js');
+    ensureKeyLoaded();
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'S', groupId });
+    const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
+      steps: [
+        {
+          action: {
+            kind: 'fill',
+            locator: [{ strategy: 'css', value: 'input[type=password]' }],
+            value: 'super-secret',
+            sensitive: true,
+          },
+          source: 'manual',
+        },
+      ],
+    });
+    expect(r.status).toBe(200);
+    const body = JSON.stringify(r.body);
+    expect(body).not.toContain('super-secret');
+    const got = await request(app).get(`/api/cases/${c.body.id}`);
+    expect(JSON.stringify(got.body)).not.toContain('super-secret');
+  });
+
+  it('PUT rejects upload step with unknown fileId', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'U', groupId });
+    const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
+      steps: [
+        {
+          action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: 'no-such' },
+          source: 'manual',
+        },
+      ],
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it('PUT accepts upload step with valid fileId', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'U2', groupId });
+    const buf = Buffer.from('file-body');
+    const up = await request(app)
+      .post(`/api/cases/${c.body.id}/attachments`)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Filename', 'x.bin')
+      .send(buf);
+    const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
+      steps: [
+        {
+          action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: up.body.id },
+          source: 'manual',
+        },
+      ],
+    });
+    expect(r.status).toBe(200);
   });
 });
