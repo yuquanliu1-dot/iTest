@@ -60,11 +60,8 @@ export default function PlanDetail() {
   const run = useMutation({
     mutationFn: () => api.plans.run(id!),
     onSuccess: (r) => {
-      const passed = r.results.filter((x) => x.status === 'passed').length;
-      const failed = r.results.length - passed;
-      toast(`执行完成：${passed} 通过 / ${failed} 失败`, failed > 0 ? 'error' : 'success');
-      qc.invalidateQueries({ queryKey: ['reports'] });
-      qc.invalidateQueries({ queryKey: ['reports', projectId] });
+      toast(`已启动执行 #${r.runId.slice(0, 8)}`, 'success');
+      qc.invalidateQueries({ queryKey: ['executions', projectId] });
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
