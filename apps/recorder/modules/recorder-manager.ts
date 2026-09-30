@@ -1,4 +1,5 @@
 import { generateLocators, type Locator } from './selector-core.js';
+import { detectComponent } from './component-detector.js';
 
 export type RecordedStepType = 'click' | 'fill' | 'hover' | 'check' | 'select' | 'upload';
 
@@ -11,6 +12,14 @@ export interface RecordedStep {
   checked?: boolean;
   url: string;
   timestamp: number;
+  /** 当前录制 tab 的标识符（由 content script 注入），用于回放时切换页面上下文。 */
+  tabRef?: string;
+  /** 嗅探到的组件类型；只有命中 select/treeSelect 时才有。 */
+  componentKind?: 'select' | 'tree' | 'treeSelect';
+  /** 密码字段：true 时值会在 PUT 前由接口端加密存储。 */
+  sensitive?: boolean;
+  /** upload 步骤对应的 test_attachments.id；录制时为空，由编辑器后绑定。 */
+  fileId?: string;
 }
 
 type StepHandler = (step: RecordedStep) => void;
@@ -93,6 +102,9 @@ export class RecorderManager {
       if (target.type === 'checkbox' || target.type === 'radio' || target.type === 'file') return;
       const value = (target as { value?: string }).value;
       if (value === undefined) return;
+      const isSensitive = target.type === 'password'
+        || /password/i.test(target.name ?? '')
+        || /password/i.test(target.id ?? '');
       this.lastInputAt = Date.now();
       this.handler?.({
         type: 'fill',
@@ -100,6 +112,7 @@ export class RecorderManager {
         value,
         url: location.href,
         timestamp: Date.now(),
+        sensitive: isSensitive || undefined,
       });
     };
     const onChange = (e: Event) => {
@@ -134,12 +147,14 @@ export class RecorderManager {
         return;
       }
       if (tag === 'select') {
+        const comp = detectComponent(target as Element);
         this.handler?.({
           type: 'select',
           target: generateLocators(target),
           value: target.value,
           url: location.href,
           timestamp: now,
+          componentKind: comp?.kind,
         });
       }
     };
