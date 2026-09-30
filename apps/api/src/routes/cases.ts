@@ -70,7 +70,7 @@ casesRoute.patch('/:id', async (req, res) => {
   res.json(rows[0]);
 });
 
-async function nextCopyTitle(base: string, existing: string[]): string {
+async function nextCopyTitle(base: string, existing: string[]): Promise<string> {
   const taken = new Set(existing);
   const first = `${base} 副本`;
   if (!taken.has(first)) return first;
