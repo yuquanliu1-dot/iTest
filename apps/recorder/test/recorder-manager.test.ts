@@ -203,6 +203,40 @@ describe('recorder-manager — phase1 change events + pause', () => {
     sel.remove();
   });
 
+  it('select input event does not emit fill', () => {
+    const { captured } = setup();
+    const sel = document.createElement('select');
+    sel.innerHTML = '<option value="cn">中文</option><option value="en" selected>EN</option>';
+    document.body.appendChild(sel);
+    sel.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(captured.filter((s) => s.type === 'fill')).toHaveLength(0);
+    sel.remove();
+  });
+
+  it('radio input does not emit fill; radio change emits check with target state', () => {
+    const { captured } = setup();
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    document.body.appendChild(radio);
+    radio.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(captured.filter((s) => s.type === 'fill')).toHaveLength(0);
+    radio.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(captured.filter((s) => s.type === 'check')).toHaveLength(1);
+    expect(captured[0]!.type).toBe('check');
+    expect(captured[0]!.checked).toBe(false);
+    radio.remove();
+  });
+
+  it('contenteditable input event does not emit fill (no value)', () => {
+    const { captured } = setup();
+    const div = document.createElement('div');
+    div.setAttribute('contenteditable', '');
+    document.body.appendChild(div);
+    div.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(captured.filter((s) => s.type === 'fill')).toHaveLength(0);
+    div.remove();
+  });
+
   it('paused manager emits nothing', () => {
     const { mgr, captured } = setup();
     mgr.setPaused(true);

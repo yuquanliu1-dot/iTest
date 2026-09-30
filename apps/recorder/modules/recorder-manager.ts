@@ -21,7 +21,7 @@ type StepHandler = (step: RecordedStep) => void;
  *  - change 细分：checkbox → check（带目标状态），select → select（带选中值），file → upload（只记文件名）。
  *  - 200ms 内的重复 click 去重（双击是用户意图但不应产生 2 个 click 步骤）。
  *  - 当 input 事件触发时，跳过紧随其后的 mouseover，避免「键入即 hover」噪声。
- *  - 输入框上 hover 不被发射（hover-when-input 抑制）；checkbox/file 的 input 不产 fill。
+ *  - 输入框上 hover 不被发射（hover-when-input 抑制）；checkbox/radio/select/file 及无 value 目标的 input 不产 fill。
  *  - setPaused(true) 期间所有事件被忽略（录制面板「暂停」/元素拾取期间使用）。
  */
 export class RecorderManager {
@@ -86,13 +86,18 @@ export class RecorderManager {
       if (!this.canRecord()) return;
       const target = e.target as HTMLInputElement;
       if (!target) return;
-      // checkbox 由 change 事件产出 check 步骤；file 由 change 产出 upload 步骤。
-      if (target.type === 'checkbox' || target.type === 'file') return;
+      // select/radio 由 change 产出 select/check 步骤，checkbox 由 change 产出 check，file 由 change 产出 upload；
+      // contenteditable 等非表单目标没有 value 属性，也不产 fill。
+      const tag = (target.tagName ?? '').toLowerCase();
+      if (tag === 'select') return;
+      if (target.type === 'checkbox' || target.type === 'radio' || target.type === 'file') return;
+      const value = (target as { value?: string }).value;
+      if (value === undefined) return;
       this.lastInputAt = Date.now();
       this.handler?.({
         type: 'fill',
         target: generateLocators(target),
-        value: target.value,
+        value,
         url: location.href,
         timestamp: Date.now(),
       });
@@ -106,7 +111,7 @@ export class RecorderManager {
       const tag = (target.tagName ?? '').toLowerCase();
       if (tag === 'input') {
         const t = (target as HTMLInputElement).type;
-        if (t === 'checkbox') {
+        if (t === 'checkbox' || t === 'radio') {
           this.handler?.({
             type: 'check',
             target: generateLocators(target),
