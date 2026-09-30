@@ -1,3 +1,5 @@
+import { filterCssPath, isStableCssPath, stripRuntimeAria } from './selector-filter.js';
+
 export interface Locator {
   strategy: 'role' | 'testId' | 'text' | 'css' | 'xpath';
   value: string;
@@ -86,7 +88,9 @@ export function generateLocators(el: Element): Locator[] {
     push({ strategy: 'text', value: name });
   }
 
-  push({ strategy: 'css', value: buildCssPath(el) });
+  const cssRaw = buildCssPath(el);
+  const css = isStableCssPath(cssRaw) ? cssRaw : stripRuntimeAria(filterCssPath(cssRaw));
+  push({ strategy: 'css', value: css || cssRaw });
   push({ strategy: 'xpath', value: buildXPath(el) });
 
   return out.slice(0, MAX_CANDIDATES);
