@@ -134,4 +134,26 @@ describe('step-dsl — phase1 new kinds', () => {
     });
     expect(r.success).toBe(false);
   });
+
+  it('accepts aiStep nested inside aiStep compiled (recursion)', () => {
+    const r = StepAction.safeParse({
+      kind: 'aiStep',
+      instruction: '外层',
+      compiled: [{ kind: 'aiStep', instruction: '内层', compiled: null }],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('generator defaults materialize on parse', () => {
+    const r = StepAction.safeParse({
+      kind: 'fill',
+      locator: [{ strategy: 'css', value: '#x' }],
+      value: { mode: 'randomString' },
+    });
+    expect(r.success).toBe(true);
+    if (r.success && r.data.kind === 'fill') {
+      const v = r.data.value as { mode: string; length: number };
+      expect(v.length).toBe(12);
+    }
+  });
 });
