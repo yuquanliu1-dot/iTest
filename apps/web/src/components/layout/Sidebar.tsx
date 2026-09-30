@@ -1,11 +1,14 @@
 import { useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useLayoutStore } from '../../stores/layout';
 import { useThemeStore } from '../../stores/theme';
+import { useProjectStore } from '../../stores/project';
 import Icon from '../Icon';
 import SidebarGroup, { type NavGroupDef } from './SidebarGroup';
 
-const TEST_GROUP: NavGroupDef = {
+// 顶层：项目外可见（项目 + 设置）。
+const WORKSPACE_GROUP: NavGroupDef = {
   id: 'workspace',
   label: '工作区',
   items: [
@@ -14,13 +17,35 @@ const TEST_GROUP: NavGroupDef = {
   ],
 };
 
-const NAV_GROUPS: NavGroupDef[] = [TEST_GROUP];
+// 选中项目后注入：项目内的二级导航。
+const PROJECT_GROUP: NavGroupDef = {
+  id: 'project',
+  label: '项目',
+  items: [
+    { path: 'overview', icon: 'sparkles', label: '工作台', projectOnly: true },
+    { path: 'groups', icon: 'beaker', label: '用例', projectOnly: true },
+    { path: 'requirements', icon: 'listChecks', label: '需求', projectOnly: true },
+    { path: 'plans', icon: 'play', label: '执行计划', projectOnly: true },
+    { path: 'reports', icon: 'flag', label: '报告', projectOnly: true },
+  ],
+};
+
+const NAV_GROUPS: NavGroupDef[] = [WORKSPACE_GROUP, PROJECT_GROUP];
 
 export default function Sidebar() {
+  const { projectId: urlProjectId } = useParams<{ projectId: string }>();
+  const navigate = useNavigate();
   const sidebarCollapsed = useLayoutStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useLayoutStore((s) => s.toggleSidebar);
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
+  const current = useProjectStore((s) => s.current);
+  const exit = useProjectStore((s) => s.exit);
+
+  // URL 优先，回退到 store；保证非项目页面（如 /settings）仍带旧上下文。
+  const projectId = urlProjectId ?? current?.id;
+  const basePath = projectId ? `/p/${projectId}` : '';
+  const hasProject = Boolean(projectId);
 
   // Cmd+B / Ctrl+B shortcut
   useEffect(() => {
@@ -34,13 +59,16 @@ export default function Sidebar() {
     return () => window.removeEventListener('keydown', handler);
   }, [toggleSidebar]);
 
+  const handleExitProject = () => {
+    exit();
+    navigate('/');
+  };
+
   return (
     <Tooltip.Provider delayDuration={300}>
       <nav
         className="glass-panel"
         style={{
-          // backdrop-filter 创建独立 stacking context，抬高 nav 本体
-          // （40 < dialog 1100 < toast 9999 < skip-link 60 之下不受影响）
           position: 'relative',
           zIndex: 40,
           display: 'flex',
@@ -79,7 +107,6 @@ export default function Sidebar() {
             <span style={{ color: 'white', fontSize: 10, fontWeight: 700, letterSpacing: 0.2 }}>iTest</span>
           </div>
 
-          {/* Collapse/Expand toggle */}
           <button
             onClick={toggleSidebar}
             aria-label={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
@@ -108,9 +135,44 @@ export default function Sidebar() {
         {/* Navigation groups */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 1, marginTop: 6, overflowY: 'auto' }}>
           {NAV_GROUPS.map((g, i) => (
-            <SidebarGroup key={g.id} group={g} collapsed={sidebarCollapsed} isFirst={i === 0} />
+            <SidebarGroup
+              key={g.id}
+              group={g}
+              basePath={basePath}
+              hasProject={hasProject}
+              collapsed={sidebarCollapsed}
+              isFirst={i === 0}
+            />
           ))}
         </div>
+
+        {/* 退出项目（展开态，底部用户区上方） */}
+        {!sidebarCollapsed && hasProject && (
+          <div style={{ marginBottom: 4 }}>
+            <button
+              onClick={handleExitProject}
+              className="block w-full px-2 group-nav-item"
+              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', width: '100%', textAlign: 'left' }}
+              aria-label={`退出项目：${current?.name ?? ''}`}
+            >
+              <div
+                className="flex items-center gap-[10px] w-full cursor-pointer"
+                style={{
+                  height: 36,
+                  padding: '0 8px',
+                  borderRadius: 5,
+                  color: 'var(--color-foreground-secondary)',
+                  fontSize: 13,
+                }}
+              >
+                <div className="flex items-center justify-center" style={{ width: 16, flexShrink: 0 }}>
+                  <Icon name="logOut" size={16} />
+                </div>
+                <span className="flex-1 truncate">退出项目{current?.name ? `：${current.name}` : ''}</span>
+              </div>
+            </button>
+          </div>
+        )}
 
         {/* 底部工具区：主题切换 */}
         <div
