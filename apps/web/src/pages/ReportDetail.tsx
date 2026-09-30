@@ -11,6 +11,7 @@ interface StepResult {
   status: string;
   durationMs: number;
   error?: string;
+  warning?: string;
   screenshot?: string;
 }
 
@@ -97,6 +98,11 @@ export default function ReportDetail() {
                         {s.error && (
                           <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>
                             {s.error}
+                          </div>
+                        )}
+                        {s.warning && (
+                          <div className="text-[12px] mt-1" style={{ color: '#b45309' }}>
+                            ⚠ {s.warning}
                           </div>
                         )}
                       </div>
