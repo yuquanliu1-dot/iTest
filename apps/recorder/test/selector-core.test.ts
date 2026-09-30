@@ -51,4 +51,18 @@ describe('selector-core', () => {
     const locs = generateLocators(el);
     expect(locs.find((l) => l.strategy === 'text')?.value).toBe('登录');
   });
+
+  it('filters runtime id hash from css locator', () => {
+    const el = makeEl('<button id="login-7f9c3a">x</button>');
+    const locs = generateLocators(el);
+    const css = locs.find((l) => l.strategy === 'css')!;
+    expect(css.value).not.toContain('login-7f9c3a');
+  });
+
+  it('strips state class active from css locator', () => {
+    const el = makeEl('<button class="btn primary active">x</button>');
+    const locs = generateLocators(el);
+    const css = locs.find((l) => l.strategy === 'css')!.value;
+    expect(css).not.toMatch(/active/);
+  });
 });
