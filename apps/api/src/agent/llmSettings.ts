@@ -7,6 +7,7 @@ const KEYS = {
   provider: 'llm_provider',
   apiKey: 'llm_api_key',
   model: 'llm_model',
+  baseUrl: 'llm_base_url',
 } as const;
 
 export interface ResolvedLLM {
@@ -26,16 +27,17 @@ export async function resolveLlmClient(): Promise<ResolvedLLM> {
     : 'mock';
   const apiKey = String(map.get(KEYS.apiKey) ?? '');
   const model = String(map.get(KEYS.model) ?? '');
+  const baseUrl = String(map.get(KEYS.baseUrl) ?? '') || undefined;
   if (provider !== 'mock' && !apiKey) {
     throw new Error(`LLM provider ${provider} selected but API key is empty`);
   }
-  const config: LLMConfig = { provider, apiKey, model };
+  const config: LLMConfig = { provider, apiKey, model, baseUrl };
   return { config, client: getLlmClient(config) };
 }
 
 /** 设置某条 LLM key（保持原 /settings/:key 的 PUT 行为）。 */
-export async function setLlmField(key: 'llm_provider' | 'llm_api_key' | 'llm_model', value: string) {
-  const allowed = new Set(['llm_provider', 'llm_api_key', 'llm_model']);
+export async function setLlmField(key: 'llm_provider' | 'llm_api_key' | 'llm_model' | 'llm_base_url', value: string) {
+  const allowed = new Set(['llm_provider', 'llm_api_key', 'llm_model', 'llm_base_url']);
   if (!allowed.has(key)) throw new Error(`unrecognised LLM key ${key}`);
   if (key === 'llm_provider' && !(VALID_PROVIDERS as readonly string[]).includes(value)) {
     throw new Error(`invalid LLM provider ${value}`);

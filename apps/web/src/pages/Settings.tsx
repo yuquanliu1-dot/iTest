@@ -38,6 +38,7 @@ export default function Settings() {
   const [provider, setProvider] = useState('mock');
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
 
   const { data, isLoading } = useQuery({ queryKey: ['settings'], queryFn: api.settings.list });
 
@@ -46,6 +47,7 @@ export default function Settings() {
     setProvider((data.llm_provider as string) ?? 'mock');
     setApiKey((data.llm_api_key as string) ?? '');
     setModel((data.llm_model as string) ?? '');
+    setBaseUrl((data.llm_base_url as string) ?? '');
   }, [data]);
 
   const save = useMutation({
@@ -53,6 +55,7 @@ export default function Settings() {
       await api.settings.put('llm_provider', provider);
       await api.settings.put('llm_api_key', apiKey);
       await api.settings.put('llm_model', model);
+      await api.settings.put('llm_base_url', baseUrl);
     },
     onSuccess: () => toast('设置已保存', 'success'),
     onError: (e: Error) => toast(e.message, 'error'),
@@ -155,6 +158,20 @@ export default function Settings() {
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                 />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)', display: 'block', marginBottom: 4 }}>
+                  Base URL（可选）
+                </label>
+                <input
+                  className="input-base"
+                  placeholder="https://api.anthropic.com（留空用官方地址）"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                />
+                <p className="text-[11px] mt-1" style={{ color: 'var(--color-foreground-muted)' }}>
+                  内网网关 / 代理地址，如 http://192.168.2.197:3000
+                </p>
               </div>
               <div>
                 <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)', display: 'block', marginBottom: 4 }}>

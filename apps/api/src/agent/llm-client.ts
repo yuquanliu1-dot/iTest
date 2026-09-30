@@ -8,6 +8,8 @@ export interface LLMConfig {
   provider: LLMProvider;
   apiKey: string;
   model: string;
+  /** 自定义网关地址（如内网代理）；留空用各 SDK 官方默认。 */
+  baseUrl?: string;
 }
 
 export type LLMCompleteResult =
@@ -84,7 +86,7 @@ class OpenAIClient implements LLMClient {
   provider = 'openai' as const;
   private client: OpenAI;
   constructor(private cfg: LLMConfig) {
-    this.client = new OpenAI({ apiKey: cfg.apiKey });
+    this.client = new OpenAI({ apiKey: cfg.apiKey, ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}) });
   }
   async complete({ systemPrompt, userMessage }: { systemPrompt: string; userMessage: string }): Promise<LLMCompleteResult> {
     const model = this.cfg.model || 'gpt-4o-mini';
@@ -107,7 +109,7 @@ class AnthropicClient implements LLMClient {
   provider = 'anthropic' as const;
   private client: Anthropic;
   constructor(private cfg: LLMConfig) {
-    this.client = new Anthropic({ apiKey: cfg.apiKey });
+    this.client = new Anthropic({ apiKey: cfg.apiKey, ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}) });
   }
   async complete({ systemPrompt, userMessage }: { systemPrompt: string; userMessage: string }): Promise<LLMCompleteResult> {
     const model = this.cfg.model || 'claude-sonnet-4-6';
