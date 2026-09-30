@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import AppShell from './components/layout/AppShell';
-import ProjectLayout from './components/layout/ProjectLayout';
+import ProjectGuard from './components/layout/ProjectGuard';
 import { useThemeStore } from './stores/theme';
 import ProjectsHome from './pages/ProjectsHome';
 import Dashboard from './pages/Dashboard';
@@ -24,7 +24,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<ProjectsHome />} />
         <Route path="/settings" element={<Settings />} />
-        <Route path="/p/:projectId" element={<ProjectLayout />}>
+        <Route path="/p/:projectId" element={<ProjectGuard />}>
           <Route index element={<Navigate to="overview" replace />} />
           <Route path="overview" element={<Dashboard />} />
           <Route path="groups" element={<GroupsPage />} />

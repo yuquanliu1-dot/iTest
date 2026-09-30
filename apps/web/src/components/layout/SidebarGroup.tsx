@@ -6,6 +6,8 @@ export interface NavItemDef {
   icon: IconName;
   label: string;
   end?: boolean;
+  /** Hidden when no project is in context. Default false. */
+  projectOnly?: boolean;
 }
 
 export interface NavGroupDef {
@@ -16,14 +18,22 @@ export interface NavGroupDef {
 
 interface SidebarGroupProps {
   group: NavGroupDef;
+  basePath: string;
+  hasProject: boolean;
   collapsed: boolean;
   isFirst?: boolean;
 }
 
-export default function SidebarGroup({ group, collapsed, isFirst }: SidebarGroupProps) {
+function resolvePath(basePath: string, itemPath: string): string {
+  if (itemPath.startsWith('/')) return itemPath;
+  const sep = basePath.endsWith('/') ? '' : '/';
+  return `${basePath}${sep}${itemPath}`;
+}
+
+export default function SidebarGroup({ group, basePath, hasProject, collapsed, isFirst }: SidebarGroupProps) {
+  const visibleItems = group.items.filter((it) => hasProject || !it.projectOnly);
+
   if (collapsed) {
-    // 折叠态平铺：所有可见项直接渲染为纯图标磁贴（无二级弹层），
-    // 分组间 hairline 分隔（VS Code 活动栏式分段）
     return (
       <div
         style={{
@@ -35,8 +45,15 @@ export default function SidebarGroup({ group, collapsed, isFirst }: SidebarGroup
           gap: 2,
         }}
       >
-        {group.items.map((item) => (
-          <SidebarNavItem key={item.path} icon={item.icon} label={item.label} path={item.path} end={item.end} collapsed />
+        {visibleItems.map((item) => (
+          <SidebarNavItem
+            key={item.path}
+            icon={item.icon}
+            label={item.label}
+            path={resolvePath(basePath, item.path)}
+            end={item.end}
+            collapsed
+          />
         ))}
       </div>
     );
@@ -51,7 +68,6 @@ export default function SidebarGroup({ group, collapsed, isFirst }: SidebarGroup
         gap: 1,
       }}
     >
-      {/* 静态分组标签：纯说明文字，不可交互（Linear 式导航） */}
       <div
         className="group-nav-header"
         style={{
@@ -74,12 +90,12 @@ export default function SidebarGroup({ group, collapsed, isFirst }: SidebarGroup
         </span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 1, paddingTop: 2 }}>
-        {group.items.map((item) => (
+        {visibleItems.map((item) => (
           <SidebarNavItem
             key={item.path}
             icon={item.icon}
             label={item.label}
-            path={item.path}
+            path={resolvePath(basePath, item.path)}
             end={item.end}
             collapsed={false}
           />
