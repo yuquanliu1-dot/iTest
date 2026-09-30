@@ -655,6 +655,7 @@ export default function CaseDetail() {
               ? (s.action as { varName: string }).varName
               : undefined)
             .filter((v): v is string => !!v)}
+          caseId={id}
           onClose={() => setEditing(null)}
           onSave={(next) => {
             let applied = false;
