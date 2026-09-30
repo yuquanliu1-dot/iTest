@@ -56,7 +56,12 @@ plan_cases      id uuid pk, plan_id uuid fk→execution_plans not null,
 `test_cases` 变更：
 
 - 新增 `group_id uuid fk→groups not null`
+- 新增 `url text`（用例自有域名，可空；解析链第一级）
 - `requirement_id` 保留（来源追溯），不再承担组织职责
+
+`requirements` 变更（计划阶段补充，支撑「需求列表按项目过滤」）：
+
+- 新增 `project_id uuid fk→projects not null`，存量归入默认项目
 
 默认域名解析链（新建用例表单、录制目标 URL 预填用）：
 
@@ -119,7 +124,7 @@ plan_cases      id uuid pk, plan_id uuid fk→execution_plans not null,
 - 计划列表：名称、环境、用例数、最近运行时间。
 - 新建：名称 + 环境（如「预发冒烟」）。
 - 计划详情：用例有序列表（可移除、上下移）；「加入用例」入口跳转用例列表并预选该计划。
-- 「运行全部」：串行逐个执行计划内用例（复用现有 execute 流程），实时显示进度（成功 n / 失败 n / 共 m）；完成后跳转报告列表。
+- 「运行全部」：串行逐个执行计划内用例（复用现有 execute 流程），**同步执行完成后返回逐条结果** `{ results: [{ caseId, reportId, status }] }`；前端运行期间禁用按钮并显示运行中状态，完成后展示成功/失败汇总并跳转报告列表。MVP 不做 SSE 实时进度推送。
 - 运行期间禁止再次点击（前端置灰）。
 
 ## 6. API 设计
