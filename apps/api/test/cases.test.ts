@@ -18,6 +18,7 @@ beforeAll(async () => {
   const { casesRoute } = await import('../src/routes/cases.js');
   const { stepsRoute } = await import('../src/routes/steps.js');
   const { attachmentsRoute } = await import('../src/routes/attachments.js');
+  const { secretsRoute } = await import('../src/routes/secrets.js');
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
   app = express();
   app.use(express.json());
@@ -25,6 +26,7 @@ beforeAll(async () => {
   app.use('/api/cases', casesRoute);
   app.use('/api/cases', stepsRoute);
   app.use('/api/cases', attachmentsRoute);
+  app.use('/api/cases', secretsRoute);
   app.use(errorHandler);
 });
 
@@ -298,5 +300,51 @@ describe('cases + steps', () => {
       ],
     });
     expect(r.status).toBe(200);
+  });
+
+  it('GET /api/cases/:id/steps/secrets/:stepId returns plaintext for recorder token', async () => {
+    process.env.RECORDER_TOKEN_SECRET = 'dev-secret-change-me';
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'SC', groupId });
+    const put = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
+      steps: [
+        {
+          action: {
+            kind: 'fill',
+            locator: [{ strategy: 'css', value: 'input[type=password]' }],
+            value: 'open-sesame',
+            sensitive: true,
+          },
+          source: 'manual',
+        },
+      ],
+    });
+    const stepId = put.body.steps[0].id;
+    const r = await request(app)
+      .get(`/api/cases/${c.body.id}/steps/secrets/${stepId}`)
+      .set('Authorization', 'Bearer dev-secret-change-me');
+    expect(r.status).toBe(200);
+    expect(r.body.value).toBe('open-sesame');
+  });
+
+  it('GET secrets without token returns 403', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'SN', groupId });
+    const put = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
+      steps: [
+        {
+          action: {
+            kind: 'fill',
+            locator: [{ strategy: 'css', value: '#x' }],
+            value: 'v',
+            sensitive: true,
+          },
+          source: 'manual',
+        },
+      ],
+    });
+    const stepId = put.body.steps[0].id;
+    const r = await request(app).get(`/api/cases/${c.body.id}/steps/secrets/${stepId}`);
+    expect(r.status).toBe(403);
   });
 });
