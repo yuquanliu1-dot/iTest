@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "turbo run dev --parallel",
+    "dev": "docker compose -f infra/docker-compose.yml up -d --wait && pnpm --filter @itest/api db:migrate && turbo run dev --parallel",
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",
