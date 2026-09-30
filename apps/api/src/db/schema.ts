@@ -45,6 +45,12 @@ export const testSteps = pgTable('test_steps', {
   name: varchar('name', { length: 200 }),
   delayMs: integer('delay_ms'),
   source: varchar('source', { length: 20 }).notNull(),
+  tabRef: varchar('tab_ref', { length: 64 }),
+  sensitive: boolean('sensitive').notNull().default(false),
+  componentKind: varchar('component_kind', { length: 32 }),
+  secretCiphertext: text('secret_ciphertext'),
+  secretIv: text('secret_iv'),
+  secretTag: text('secret_tag'),
   action: jsonb('action').notNull(),
   assertion: jsonb('assertion'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -146,4 +152,26 @@ export const planRunCases = pgTable('plan_run_cases', {
   finishedAt: timestamp('finished_at'),
   durationMs: integer('duration_ms'),
   error: text('error'),
+});
+
+export const testAttachments = pgTable('test_attachments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
+  stepId: uuid('step_id').references(() => testSteps.id, { onDelete: 'set null' }),
+  originalName: text('original_name').notNull(),
+  mime: text('mime'),
+  size: integer('size').notNull(),
+  sha256: varchar('sha256', { length: 64 }).notNull().unique(),
+  storedPath: text('stored_path').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const testSessions = pgTable('test_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
+  mode: varchar('mode', { length: 16 }).notNull().default('fresh'),
+  incognito: boolean('incognito').notNull().default(false),
+  resumeFromOrder: integer('resume_from_order'),
+  tabs: jsonb('tabs'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
 });
