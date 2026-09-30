@@ -7,8 +7,16 @@
   <body>
     <div class="container">
       <h1>iTest Recorder</h1>
-      <p class="hint">从中台「用例详情」页发起录制，本扩展负责采集步骤。</p>
+      <p id="status" class="hint">检查录制状态...</p>
       <button id="open">打开中台</button>
+      <hr />
+      <button id="pause" disabled>暂停录制</button>
+      <hr />
+      <p class="hint">以下操作会打开一个小窗口，在窗口里完成配置：</p>
+      <button class="panel-btn" data-mode="variable" disabled>保存变量</button>
+      <button class="panel-btn" data-mode="assert" disabled>添加断言</button>
+      <button class="panel-btn" data-mode="hover" disabled>记录悬浮</button>
+      <button class="panel-btn" data-mode="ai" disabled>AI 自然语言步骤</button>
     </div>
     <script src="popup.js"></script>
   </body>
