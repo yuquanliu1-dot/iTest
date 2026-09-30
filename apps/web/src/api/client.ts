@@ -50,8 +50,21 @@ export const api = {
   },
   plans: {
     get: (id: string) => request<PlanDetail>(`/plans/${id}`),
-    patch: (id: string, body: Partial<{ name: string; environment: string }>) =>
-      request<ExecutionPlan>(`/plans/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    patch: (
+      id: string,
+      body: Partial<{
+        name: string;
+        environment: string;
+        strategy: 'run_all' | 'fail_fast';
+        loginPrepare: {
+          enabled: boolean;
+          caseId: string | null;
+          detectionUrl: string | null;
+          successSelector: string | null;
+          unauthorizedKeywords: string[] | null;
+        };
+      }>,
+    ) => request<ExecutionPlan>(`/plans/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/plans/${id}`, { method: 'DELETE' }),
     setCases: (id: string, caseIds: string[]) =>
       request<{ ok: boolean }>(`/plans/${id}/cases`, {
@@ -199,6 +212,12 @@ export interface PlanWithCount extends ExecutionPlan {
 }
 export interface PlanDetail extends ExecutionPlan {
   cases: Array<{ id: string; order: number; title: string; url: string | null }>;
+  strategy: 'run_all' | 'fail_fast';
+  loginPrepareEnabled: boolean;
+  loginCaseId: string | null;
+  detectionUrl: string | null;
+  loginSuccessSelector: string | null;
+  loginUnauthorizedKeywords: string[] | null;
 }
 export interface PlanRunDetail {
   id: string;
