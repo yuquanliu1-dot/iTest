@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import { useUIStore } from '../stores/ui';
 import { useRecorderStore } from '../stores/recorder';
 import { useAgentRunStore } from '../stores/agentRun';
+import { useStepClipboard, type StepClip } from '../stores/stepClipboard';
 import Icon from '../components/Icon';
 import StatusPill from '../components/ui/StatusPill';
 import PriorityBadge from '../components/ui/PriorityBadge';
@@ -13,6 +14,7 @@ import Input from '../components/ui/Input';
 import Segmented from '../components/ui/Segmented';
 import EmptyState from '../components/ui/EmptyState';
 import AgentStreamPanel from '../components/ui/AgentStreamPanel';
+import StepEditModal from '../components/StepEditModal';
 
 type Tab = 'description' | 'reports' | 'recording';
 
@@ -29,6 +31,59 @@ export default function CaseDetail() {
   const [streaming, setStreaming] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const clipboard = useStepClipboard();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [editing, setEditing] = useState<StepClip | null>(null);
+  const editingIdxRef = useRef<number>(-1);
+  const historyRef = useRef<StepClip[][]>([]);
+
+  const toClip = (s: { action: unknown; source: string; name?: string | null; delayMs?: number | null }): StepClip => ({
+    action: s.action,
+    source: s.source,
+    name: s.name ?? undefined,
+    delayMs: s.delayMs ?? undefined,
+  });
+
+  const replaceSteps = useMutation({
+    mutationFn: (steps: StepClip[]) =>
+      api.cases.replaceSteps(
+        id!,
+        steps.map((s) => ({ ...s, name: s.name ?? undefined, delayMs: s.delayMs ?? undefined })),
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }),
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
+  /** 所有步骤变更统一入口：先记撤销快照，再全量替换。 */
+  const mutateSteps = (updater: (steps: StepClip[]) => StepClip[]) => {
+    if (!caseDetail) return;
+    const current = caseDetail.steps.map(toClip);
+    historyRef.current.push(current);
+    if (historyRef.current.length > 20) historyRef.current.shift();
+    replaceSteps.mutate(updater(current));
+  };
+
+  const undo = () => {
+    const snapshot = historyRef.current.pop();
+    if (!snapshot) {
+      toast('没有可撤销的操作', 'info');
+      return;
+    }
+    replaceSteps.mutate(snapshot);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        e.preventDefault();
+        undo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo]);
 
   const { data: caseDetail } = useQuery({
     queryKey: ['case', id],
@@ -266,8 +321,52 @@ export default function CaseDetail() {
                     {caseDetail.description}
                   </p>
                 )}
-                <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
-                  步骤 ({caseDetail.steps.length})
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
+                    步骤 ({caseDetail.steps.length})
+                  </div>
+                  <div className="flex-1" />
+                  <button
+                    onClick={() => {
+                      const clips = caseDetail.steps.filter((s) => selected.has(s.id)).map(toClip);
+                      if (clips.length === 0) {
+                        toast('先勾选要复制的步骤', 'info');
+                        return;
+                      }
+                      clipboard.setSteps(clips);
+                      toast(`已复制 ${clips.length} 个步骤`, 'success');
+                    }}
+                    disabled={selected.size === 0}
+                    className="text-[11px] px-2 py-1 rounded-[6px]"
+                    style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-secondary)', cursor: selected.size === 0 ? 'default' : 'pointer', opacity: selected.size === 0 ? 0.4 : 1 }}
+                  >
+                    复制选中 ({selected.size})
+                  </button>
+                  <button
+                    onClick={() =>
+                      mutateSteps((cur) => {
+                        const afterIdx =
+                          selected.size === 1 ? cur.findIndex((_, i) => caseDetail.steps[i]!.id === [...selected][0]) : cur.length - 1;
+                        const at = afterIdx < 0 ? cur.length - 1 : afterIdx;
+                        const next = [...cur];
+                        next.splice(at + 1, 0, ...clipboard.steps.map((c) => ({ ...c })));
+                        return next;
+                      })
+                    }
+                    disabled={clipboard.steps.length === 0}
+                    className="text-[11px] px-2 py-1 rounded-[6px]"
+                    style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-secondary)', cursor: clipboard.steps.length === 0 ? 'default' : 'pointer', opacity: clipboard.steps.length === 0 ? 0.4 : 1 }}
+                  >
+                    粘贴 ({clipboard.steps.length})
+                  </button>
+                  <button
+                    onClick={undo}
+                    disabled={historyRef.current.length === 0}
+                    className="text-[11px] px-2 py-1 rounded-[6px]"
+                    style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-secondary)', cursor: 'pointer', opacity: historyRef.current.length === 0 ? 0.4 : 1 }}
+                  >
+                    撤销
+                  </button>
                 </div>
                 {caseDetail.steps.length === 0 ? (
                   <EmptyState
@@ -283,6 +382,17 @@ export default function CaseDetail() {
                         className="flex items-center gap-3 px-3 py-2 rounded-[8px]"
                         style={{ background: 'var(--color-background-subtle)', border: '1px solid var(--color-glass-border)' }}
                       >
+                        <input
+                          type="checkbox"
+                          checked={selected.has(s.id)}
+                          onChange={(e) => {
+                            const next = new Set(selected);
+                            if (e.target.checked) next.add(s.id);
+                            else next.delete(s.id);
+                            setSelected(next);
+                          }}
+                          style={{ accentColor: 'var(--color-accent)' }}
+                        />
                         <span className="text-[10px] uppercase font-semibold tracking-wide shrink-0" style={{ color: 'var(--color-accent)' }}>
                           {s.source}
                         </span>
@@ -292,6 +402,35 @@ export default function CaseDetail() {
                         <code className="text-[12px] font-mono flex-1 break-all" style={{ color: 'var(--color-foreground)' }}>
                           {JSON.stringify(s.action)}
                         </code>
+                        {(s.action as { kind?: string; compiled?: unknown[] | null }).kind === 'aiStep' &&
+                          (s.action as { compiled?: unknown[] | null }).compiled == null && (
+                            <button
+                              onClick={() => {
+                                const instruction = (s.action as { instruction?: string }).instruction ?? '';
+                                api.cases
+                                  .recompileStep(id!, instruction)
+                                  .then((r) => {
+                                    if (!r.compiled) {
+                                      toast('重新编译失败', 'error');
+                                      return;
+                                    }
+                                    mutateSteps((cur) =>
+                                      cur.map((c, i) =>
+                                        i === caseDetail.steps.findIndex((x) => x.id === s.id)
+                                          ? { ...c, action: { ...(c.action as object), compiled: r.compiled } }
+                                          : c,
+                                      ),
+                                    );
+                                    toast('编译成功', 'success');
+                                  })
+                                  .catch((e: Error) => toast(e.message, 'error'));
+                              }}
+                              className="text-[10px] px-2 py-0.5 rounded-full shrink-0"
+                              style={{ border: '1px solid #b45309', color: '#b45309', background: 'transparent', cursor: 'pointer' }}
+                            >
+                              AI 编译失败 · 点我重编
+                            </button>
+                          )}
                         <div className="flex items-center gap-1 shrink-0">
                           <button
                             onClick={() => moveStep.mutate({ stepId: s.id, dir: -1 })}
@@ -308,6 +447,16 @@ export default function CaseDetail() {
                             style={{ background: 'transparent', border: 'none', cursor: idx === caseDetail.steps.length - 1 ? 'default' : 'pointer', color: 'var(--color-foreground-muted)', opacity: idx === caseDetail.steps.length - 1 ? 0.3 : 1, padding: 2 }}
                           >
                             <Icon name="chevronDown" size={12} />
+                          </button>
+                          <button
+                            onClick={() => {
+                              editingIdxRef.current = idx;
+                              setEditing(toClip(s));
+                            }}
+                            title="编辑"
+                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
+                          >
+                            <Icon name="pencil" size={12} />
                           </button>
                           <button
                             onClick={() => deleteStep.mutate(s.id)}
@@ -399,6 +548,21 @@ export default function CaseDetail() {
           </div>
         </div>
       </div>
+      {editing && (
+        <StepEditModal
+          initial={editing}
+          availableVars={caseDetail.steps
+            .map((s) => (s.action as { kind?: string; varName?: string }).kind === 'extract'
+              ? (s.action as { varName: string }).varName
+              : undefined)
+            .filter((v): v is string => !!v)}
+          onClose={() => setEditing(null)}
+          onSave={(next) => {
+            mutateSteps((cur) => cur.map((c, i) => (i === editingIdxRef.current ? next : c)));
+            setEditing(null);
+          }}
+        />
+      )}
     </div>
   );
 }
