@@ -31,10 +31,11 @@
     } else if (msg?.type === 'resume') {
       manager.setPaused(false);
     } else if (msg?.type === 'pick') {
-      // 面板发起的元素拾取：拾取期间暂停普通录制
+      // 面板发起的元素拾取：拾取期间暂停普通录制。结束后恢复到拾取前的 paused 状态。
+      const prevPaused = manager.isPaused();
       manager.setPaused(true);
       picker.start((result) => {
-        manager.setPaused(false);
+        manager.setPaused(prevPaused);
         sendResponse(result ?? { canceled: true });
       });
       return true;

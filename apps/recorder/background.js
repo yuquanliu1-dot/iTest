@@ -86,7 +86,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'pause' || msg.type === 'resume') {
     paused = msg.type === 'pause';
     if (recordingTabId !== null) chrome.tabs.sendMessage(recordingTabId, { type: msg.type });
-    sendResponse({ ok: true });
+    sendResponse({ recording: recordingTabId !== null, paused });
     return;
   }
   if (msg.type === 'pick' || msg.type === 'emit-step') {
