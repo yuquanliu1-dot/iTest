@@ -65,9 +65,6 @@ export const api = {
       ),
   },
   requirements: {
-    list: () => request<Requirement[]>('/requirements'),
-    create: (body: { title: string; content: string }) =>
-      request<Requirement>('/requirements', { method: 'POST', body: JSON.stringify(body) }),
     get: (id: string) => request<Requirement>(`/requirements/${id}`),
   },
   cases: {

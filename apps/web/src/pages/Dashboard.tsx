@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
@@ -26,23 +26,24 @@ void STATUS_LABELS;
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { projectId } = useParams<{ projectId: string }>();
   const stats = useQuery({
-    queryKey: ['stats'],
+    queryKey: ['stats', projectId],
     queryFn: async (): Promise<Stats> => {
       const [reqs, cases, reports] = await Promise.all([
-        api.requirements.list(),
-        api.cases.list(),
-        api.reports.list(),
+        api.projects.requirements(projectId!),
+        api.cases.list({ projectId }),
+        api.reports.list(projectId),
       ]);
-      const passes = reports.filter((r) => r.status === 'passed').length;
-      const failures = reports.filter((r) => r.status === 'failed').length;
+      const passes = reports.filter((r: { status: string }) => r.status === 'passed').length;
+      const failures = reports.filter((r: { status: string }) => r.status === 'failed').length;
       return {
         requirements: reqs.length,
         cases: cases.length,
         reports: reports.length,
         passes,
         failures,
-        recentRuns: reports.slice(0, 6).map((r) => ({
+        recentRuns: reports.slice(0, 6).map((r: { id: string; caseId: string; status: string; createdAt: string }) => ({
           id: r.id,
           caseId: r.caseId,
           targetType: 'execute',
@@ -51,9 +52,14 @@ export default function Dashboard() {
         })),
       };
     },
+    enabled: !!projectId,
   });
-  const { data: casesData } = useQuery({ queryKey: ['cases'], queryFn: () => api.cases.list() });
-  const caseTitleMap = new Map((casesData ?? []).map((c) => [c.id, c.title]));
+  const { data: casesData } = useQuery({
+    queryKey: ['cases', projectId],
+    queryFn: () => api.cases.list({ projectId }),
+    enabled: !!projectId,
+  });
+  const caseTitleMap = new Map((casesData ?? []).map((c: { id: string; title: string }) => [c.id, c.title]));
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -83,10 +89,10 @@ export default function Dashboard() {
           ))
         ) : (
           [
-            { label: '需求', value: stats.data?.requirements ?? 0, icon: 'listChecks', to: '/requirements', tone: 'var(--color-accent)' },
-            { label: '用例', value: stats.data?.cases ?? 0, icon: 'beaker', to: '/cases', tone: 'var(--color-info)' },
-            { label: '通过报告', value: stats.data?.passes ?? 0, icon: 'checkCircle', to: '/reports', tone: 'var(--color-success)' },
-            { label: '失败报告', value: stats.data?.failures ?? 0, icon: 'exclamationCircle', to: '/reports', tone: 'var(--color-destructive)' },
+            { label: '需求', value: stats.data?.requirements ?? 0, icon: 'listChecks', to: `/p/${projectId}/requirements`, tone: 'var(--color-accent)' },
+            { label: '用例', value: stats.data?.cases ?? 0, icon: 'beaker', to: `/p/${projectId}/groups`, tone: 'var(--color-info)' },
+            { label: '通过报告', value: stats.data?.passes ?? 0, icon: 'checkCircle', to: `/p/${projectId}/reports`, tone: 'var(--color-success)' },
+            { label: '失败报告', value: stats.data?.failures ?? 0, icon: 'exclamationCircle', to: `/p/${projectId}/reports`, tone: 'var(--color-destructive)' },
           ].map((c) => (
             <div
               key={c.label}
@@ -122,7 +128,7 @@ export default function Dashboard() {
             (stats.data?.recentRuns ?? []).map((r) => (
               <div
                 key={r.id}
-                onClick={() => navigate(`/reports/${r.id}`)}
+                onClick={() => navigate(`/p/${projectId}/reports/${r.id}`)}
                 className="flex items-center gap-4 px-5 py-[12px] cursor-pointer list-row-clickable"
                 style={{ borderBottom: '1px solid var(--color-muted)' }}
               >
