@@ -7,8 +7,13 @@ import { executeCaseReal, writePlaceholderScreenshot, type ExecStepResult } from
 /**
  * 执行单条用例并落报告。真实 CDP 失败时降级 mock。
  * 返回 reportId 与最终状态，供单用例路由和执行计划共用。
+ * `storageState` 用于在执行计划中复用登录准备阶段导出的 cookie/localStorage。
+ * `forceFail`（测试用）让 mock 路径直接返回失败，便于 fail_fast 行为测试。
  */
-export async function runCase(caseId: string): Promise<{ reportId: string; status: string }> {
+export async function runCase(
+  caseId: string,
+  opts?: { storageState?: unknown; forceFail?: boolean },
+): Promise<{ reportId: string; status: string }> {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
   if (!caseRow) throw new Error('case not found');
 
@@ -32,6 +37,8 @@ export async function runCase(caseId: string): Promise<{ reportId: string; statu
       caseId,
       steps.map((s) => ({ order: s.order, action: s.action, delayMs: s.delayMs })),
       { reportId },
+      undefined,
+      opts?.storageState,
     );
     const failed = stepResults.filter((r) => r.status === 'failed').length;
     status = failed === 0 ? 'passed' : 'failed';
@@ -39,7 +46,7 @@ export async function runCase(caseId: string): Promise<{ reportId: string; statu
     logger.warn({ err: e, caseId, reportId }, 'CDP unavailable, falling back to mock execution');
     const mockResults: ExecStepResult[] = [];
     for (let i = 0; i < steps.length; i++) {
-      const isFail = Math.random() < 0.2;
+      const isFail = opts?.forceFail ? true : Math.random() < 0.2;
       const screenshot = await writePlaceholderScreenshot(reportId, i + 1);
       mockResults.push({
         order: steps[i]!.order,
@@ -50,7 +57,7 @@ export async function runCase(caseId: string): Promise<{ reportId: string; statu
       });
     }
     stepResults = mockResults;
-    status = mockResults.some((r) => r.status === 'failed') ? 'failed' : 'passed';
+    status = mockResults.some((r) => r.status === 'failed') || (opts?.forceFail ?? false) ? 'failed' : 'passed';
   }
 
   const durationMs = Date.now() - startedAt;

@@ -11,8 +11,8 @@ import { runCase } from './runCase.js';
 import { loginPrepare } from './loginPrepare.js';
 import { publishRunEvent, subscribeRunEvent } from '../sse/planRunBus.js';
 
-/** 单 planRun 的运行控制器：内存中保存 cancelRequested。 */
-const runState = new Map<string, { cancelRequested: boolean }>();
+/** 单 planRun 的运行控制器：内存中保存 storageState 与 cancelRequested。 */
+const runState = new Map<string, { cancelRequested: boolean; storageState?: unknown }>();
 
 export function requestCancel(planRunId: string): void {
   const s = runState.get(planRunId);
@@ -133,9 +133,18 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       runState.delete(planRunId);
       return;
     }
+    // 把登录准备产出的 storageState 缓存到内存中，供业务用例注入 context。
+    if (result.storageState) {
+      runState.get(planRunId)!.storageState = result.storageState;
+    }
   }
 
   // 业务用例串行执行
+  const loginState = runState.get(planRunId)?.storageState;
+  // 测试钩子：FORCE_FAIL_CASE_IDS=uuid1,uuid2 让对应 caseId 强制失败，便于 fail_fast/cancel 测试。
+  const forceFailIds = new Set(
+    (process.env.FORCE_FAIL_CASE_IDS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+  );
   for (let i = 0; i < cases.length; i++) {
     if (isCancelRequested(planRunId)) {
       const remaining = cases.length - i;
@@ -158,7 +167,10 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       .returning();
     publish(planRunId, { type: 'plan_run_case_start', caseId: c.caseId, stepKind: 'business', status: 'running' });
     try {
-      const r = await runCase(c.caseId);
+      const r = await runCase(c.caseId, {
+        storageState: loginState,
+        forceFail: forceFailIds.has(c.caseId),
+      });
       await db
         .update(planRunCases)
         .set({ status: r.status, reportId: r.reportId, finishedAt: new Date(), error: r.status === 'failed' ? 'case failed' : null })
