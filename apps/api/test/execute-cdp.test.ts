@@ -131,14 +131,14 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(loc.selectOption).toHaveBeenCalledWith('cn', expect.objectContaining({ timeout: 5000 }));
   });
 
-  it('upload action skips with warning (P5 binds real files)', async () => {
+  it('upload without bound fileId fails attachment-missing', async () => {
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
       [{ order: 1, action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }] } }],
       { reportId: 'r-upload' },
     );
-    expect(results[0]!.status).toBe('passed');
-    expect(results[0]!.warning).toMatch(/待绑定回放文件/);
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/attachment-missing/);
   });
 
   it('extract action stores element value into vars for later fill', async () => {
@@ -208,5 +208,71 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
       { reportId: 'r-delay' },
     );
     expect(mocked.__page.waitForTimeout).toHaveBeenCalledWith(300);
+  });
+
+  it('switchTab action uses tabMap to switch the page context', async () => {
+    const bringToFront = vi.fn().mockResolvedValue(undefined);
+    (mocked.__page as unknown as { bringToFront: ReturnType<typeof vi.fn> }).bringToFront = bringToFront;
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000010',
+      [{ order: 1, action: { kind: 'switchTab', tabRef: 'session-x|tab#1' } }],
+      { reportId: 'r-switch', tabMap: new Map([['session-x|tab#1', mocked.__page]]) },
+    );
+    expect(bringToFront).toHaveBeenCalled();
+    expect(results[0]!.status).toBe('passed');
+  });
+
+  it('switchTab without matching tabMap entry fails with tab-missing', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000011',
+      [{ order: 1, action: { kind: 'switchTab', tabRef: 'session-x|tab#9' } }],
+      { reportId: 'r-miss', tabMap: new Map() },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/tab-missing/);
+  });
+
+  it('upload action calls setInputFiles with stored_path', async () => {
+    const setInputFiles = vi.fn().mockResolvedValue(undefined);
+    mocked.__locator.mockReturnValueOnce({ setInputFiles } as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000012',
+      [{ order: 1, action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: 'fake-id' } }],
+      { reportId: 'r-up', attachmentResolver: async () => ({ storedPath: '/tmp/x.bin', originalName: 'x.bin' }) },
+    );
+    expect(setInputFiles).toHaveBeenCalledWith('/tmp/x.bin', { timeout: 5000 });
+    expect(results[0]!.status).toBe('passed');
+  });
+
+  it('upload without resolver or db row fails attachment-missing', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000013',
+      [{ order: 1, action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: 'nope' } }],
+      { reportId: 'r-up-miss', attachmentResolver: async () => null },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/attachment-missing/);
+  });
+
+  it('sensitive fill resolves plaintext via secretResolver', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    mocked.__locator.mockReturnValueOnce({ fill } as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000014',
+      [{ order: 1, action: { kind: 'fill', locator: [{ strategy: 'css', value: 'input[type=password]' }], value: '__sensitive__', sensitive: true }, id: 'step-1' }],
+      { reportId: 'r-secret', secretResolver: async (stepId: string) => (stepId === 'step-1' ? 'hunter2' : null) },
+    );
+    expect(fill).toHaveBeenCalledWith('hunter2', { timeout: 5000 });
+    expect(results[0]!.status).toBe('passed');
+  });
+
+  it('sensitive fill without resolver value fails secret-missing', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000015',
+      [{ order: 1, action: { kind: 'fill', locator: [{ strategy: 'css', value: 'input[type=password]' }], value: '__sensitive__', sensitive: true }, id: 'step-2' }],
+      { reportId: 'r-secret-miss', secretResolver: async () => null },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/secret-missing/);
   });
 });

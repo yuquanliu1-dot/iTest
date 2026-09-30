@@ -35,7 +35,15 @@ export async function runCase(
   try {
     stepResults = await executeCaseReal(
       caseId,
-      steps.map((s) => ({ order: s.order, action: s.action, delayMs: s.delayMs })),
+      steps.map((s) => ({
+        order: s.order,
+        action: s.action,
+        delayMs: s.delayMs,
+        id: s.id,
+        tabRef: s.tabRef,
+        componentKind: s.componentKind,
+        sensitive: s.sensitive,
+      })),
       { reportId },
       undefined,
       opts?.storageState,

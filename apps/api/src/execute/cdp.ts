@@ -1,11 +1,18 @@
 import { chromium, type Browser, type Page } from 'playwright-core';
 import type { StepAction, Locator } from '@itest/shared';
 import { deepEqual, materializeValue } from '@itest/shared';
+import { eq } from 'drizzle-orm';
+import { db } from '../db/client.js';
+import { testAttachments, testSteps } from '../db/schema.js';
+import { decrypt } from '../lib/secret-crypto.js';
 import { logger } from '../logger.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
+
+/** Postgres uuid 列形状校验，避免非法 id 触发 22P02。 */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface ExecStepResult {
   order: number;
@@ -18,11 +25,41 @@ export interface ExecStepResult {
 
 export interface ExecContext {
   reportId: string;
+  /** tabRef → Page（phase2 switchTab） */
+  tabMap?: Map<string, Page>;
+  /** fileId → 附件元数据；缺省回落 db 查询 */
+  attachmentResolver?: (fileId: string) => Promise<{ storedPath: string; originalName: string } | null>;
+  /** stepId → 敏感字段明文；缺省回落 db 查询 + 解密 */
+  secretResolver?: (stepId: string) => Promise<string | null>;
 }
 
 interface DispatchOpts {
   page: Page;
   vars: Record<string, string>;
+  ctx: ExecContext;
+  /** 当前步骤 id（敏感填充解密用） */
+  stepId?: string;
+}
+
+/** 默认附件解析：按 fileId 查 test_attachments（非 UUID 直接 miss，避免 22P02）。 */
+async function defaultAttachmentResolver(fileId: string): Promise<{ storedPath: string; originalName: string } | null> {
+  if (!fileId || !UUID_RE.test(fileId)) return null;
+  const rows = await db.select().from(testAttachments).where(eq(testAttachments.id, fileId));
+  const row = rows[0];
+  return row ? { storedPath: row.storedPath, originalName: row.originalName } : null;
+}
+
+/** 默认密钥解析：按 stepId 查 test_steps 并解密（非 UUID 或密文字段缺失 → null）。 */
+async function defaultSecretResolver(stepId: string): Promise<string | null> {
+  if (!stepId || !UUID_RE.test(stepId)) return null;
+  const rows = await db.select().from(testSteps).where(eq(testSteps.id, stepId));
+  const s = rows[0];
+  if (!s || !s.sensitive || !s.secretCiphertext || !s.secretIv || !s.secretTag) return null;
+  return decrypt({
+    ciphertext: Buffer.from(s.secretCiphertext, 'base64'),
+    iv: Buffer.from(s.secretIv, 'base64'),
+    tag: Buffer.from(s.secretTag, 'base64'),
+  });
 }
 
 function locatorToPlaywright(page: Page, loc: Locator) {
@@ -61,9 +98,20 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
     case 'click':
       await firstMatch(page, action.locator).click({ timeout: 5000 });
       return;
-    case 'fill':
-      await firstMatch(page, action.locator).fill(materializeValue(action.value, vars), { timeout: 5000 });
+    case 'fill': {
+      let value: string;
+      if (action.sensitive) {
+        const secret = opts.ctx.secretResolver
+          ? await opts.ctx.secretResolver(opts.stepId ?? '')
+          : await defaultSecretResolver(opts.stepId ?? '');
+        if (secret == null) throw new Error(`secret-missing: step ${opts.stepId ?? '(no id)'}`);
+        value = secret;
+      } else {
+        value = materializeValue(action.value, vars);
+      }
+      await firstMatch(page, action.locator).fill(value, { timeout: 5000 });
       return;
+    }
     case 'hover':
       await firstMatch(page, action.locator).hover({ timeout: 5000 });
       return;
@@ -106,9 +154,22 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
     case 'select':
       await firstMatch(page, action.locator).selectOption(materializeValue(action.value, vars), { timeout: 5000 });
       return;
-    case 'upload':
-      // P5 才支持绑定回放文件；P1 记录 warning 并跳过，不算失败。
-      return '待绑定回放文件（后续版本支持），本次跳过';
+    case 'upload': {
+      const meta = opts.ctx.attachmentResolver
+        ? await opts.ctx.attachmentResolver(action.fileId)
+        : await defaultAttachmentResolver(action.fileId);
+      if (!meta) throw new Error(`attachment-missing: ${action.fileId}`);
+      await firstMatch(page, action.locator).setInputFiles(meta.storedPath, { timeout: 5000 });
+      return;
+    }
+    case 'switchTab': {
+      const target = opts.ctx.tabMap?.get(action.tabRef);
+      if (!target) throw new Error(`tab-missing: ${action.tabRef}`);
+      await target.bringToFront();
+      // 后续步骤（含截图）都落在切换后的页面上。
+      opts.page = target;
+      return;
+    }
     case 'extract': {
       const loc = firstMatch(page, action.locator);
       let text: string;
@@ -152,7 +213,15 @@ async function writeStepScreenshot(reportId: string, stepIndex: number, page: Pa
 /** 真实浏览器执行用例（playwright-core 驱动 chromium）。返回 step 粒度的执行结果。 */
 export async function executeCaseReal(
   caseId: string,
-  steps: Array<{ order: number; action: unknown; delayMs?: number | null }>,
+  steps: Array<{
+    order: number;
+    action: unknown;
+    delayMs?: number | null;
+    id?: string;
+    tabRef?: string | null;
+    componentKind?: string | null;
+    sensitive?: boolean | null;
+  }>,
   ctx: ExecContext,
   targetUrl?: string,
   storageState?: unknown,
@@ -173,13 +242,15 @@ export async function executeCaseReal(
     if (targetUrl) {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
+    const opts: DispatchOpts = { page, vars, ctx };
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]!;
       const started = Date.now();
+      opts.stepId = step.id;
       try {
-        if (step.delayMs) await page.waitForTimeout(step.delayMs);
-        const warning = await dispatch(step.action as StepAction, { page, vars });
-        const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, page);
+        if (step.delayMs) await opts.page.waitForTimeout(step.delayMs);
+        const warning = await dispatch(step.action as StepAction, opts);
+        const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
         results.push({
           order: step.order,
           status: 'passed',
@@ -188,7 +259,7 @@ export async function executeCaseReal(
           screenshot,
         });
       } catch (e) {
-        const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, page);
+        const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
         results.push({
           order: step.order,
           status: 'failed',
