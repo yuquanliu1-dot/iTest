@@ -1,4 +1,5 @@
 import { generateLocators, type Locator } from './selector-core.js';
+import { detectComponent, type ComponentInfo } from './component-detector.js';
 
 export interface PickResult {
   locators: Locator[];
@@ -10,6 +11,8 @@ export interface PickResult {
   /** 元素 id / name 属性，用于变量名建议 */
   id: string;
   nameAttr: string;
+  /** 静态嗅探到的组件归属，便于录制定位策略选择 */
+  componentHint?: ComponentInfo;
 }
 
 /**
@@ -60,8 +63,9 @@ export class ElementPicker {
       const locators = generateLocators(el);
       const id = el.id ?? '';
       const nameAttr = el.getAttribute('name') ?? '';
+      const componentHint = detectComponent(el) ?? undefined;
       this.teardown();
-      onDone({ locators, text, inputValue, tagName: el.tagName.toLowerCase(), id, nameAttr });
+      onDone({ locators, text, inputValue, tagName: el.tagName.toLowerCase(), id, nameAttr, componentHint });
     };
 
     this.onKey = (e: KeyboardEvent) => {
