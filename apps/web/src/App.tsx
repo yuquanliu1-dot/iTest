@@ -17,19 +17,16 @@ export default function App() {
 
   return (
     <AppShell>
-      {/* UI-C 页面重写完成后，各页面自带滚动容器，此包裹层移除 */}
-      <div className="flex-1 min-h-0 overflow-auto">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/requirements" element={<Requirements />} />
-          <Route path="/requirements/:id" element={<RequirementDetail />} />
-          <Route path="/cases" element={<Cases />} />
-          <Route path="/cases/:id" element={<CaseDetail />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/reports/:id" element={<ReportDetail />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
-      </div>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/requirements" element={<Requirements />} />
+        <Route path="/requirements/:id" element={<RequirementDetail />} />
+        <Route path="/cases" element={<Cases />} />
+        <Route path="/cases/:id" element={<CaseDetail />} />
+        <Route path="/reports" element={<Reports />} />
+        <Route path="/reports/:id" element={<ReportDetail />} />
+        <Route path="/settings" element={<Settings />} />
+      </Routes>
     </AppShell>
   );
 }

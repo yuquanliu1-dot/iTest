@@ -1,6 +1,10 @@
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
+import Icon from '../components/Icon';
+import StatusPill from '../components/ui/StatusPill';
+import EmptyState from '../components/ui/EmptyState';
+import { fullDateTime } from '../lib/format';
 
 interface StepResult {
   order: number;
@@ -12,80 +16,139 @@ interface StepResult {
 
 export default function ReportDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { data, isLoading } = useQuery({
     queryKey: ['report', id],
     queryFn: () => api.reports.get(id!),
     enabled: !!id,
   });
 
-  if (isLoading || !data) return <div className="glass-panel p-8">加载中...</div>;
+  if (isLoading || !data) {
+    return (
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)' }}>
+        <Icon name="loader" size={16} className="animate-spin" />
+        <span style={{ marginLeft: 8 }}>加载中...</span>
+      </div>
+    );
+  }
 
   const stepResults = (data.stepResults as StepResult[]) ?? [];
+  const passed = stepResults.filter((s) => s.status === 'passed').length;
+  const failed = stepResults.filter((s) => s.status === 'failed').length;
 
   return (
-    <div className="max-w-5xl flex flex-col gap-6">
-      <Link to="/reports" style={{ color: 'var(--color-text-secondary)' }}>
-        ← 返回报告列表
-      </Link>
-      <div className="glass-panel p-6">
-        <div className="flex justify-between items-start">
-          <div>
-            <h1 className="text-2xl font-semibold">测试报告</h1>
-            <p style={{ color: 'var(--color-text-muted)' }} className="text-sm mt-1">
-              {new Date(data.createdAt).toLocaleString('zh-CN')}
-            </p>
-          </div>
-          <div
-            className="text-lg font-bold px-4 py-2 rounded"
-            style={{
-              color: data.status === 'passed' ? 'var(--color-success)' : 'var(--color-destructive)',
-              background:
-                data.status === 'passed' ? 'rgba(18,183,106,0.1)' : 'rgba(240,68,56,0.1)',
-            }}
-          >
-            {data.status.toUpperCase()}
-          </div>
-        </div>
-        {data.summary && <p className="mt-4">{data.summary}</p>}
-        <p className="text-sm mt-2" style={{ color: 'var(--color-text-muted)' }}>
-          总耗时：{data.durationMs ?? 0} ms
-        </p>
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Header bar */}
+      <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
+        <button
+          onClick={() => navigate('/reports')}
+          className="flex items-center gap-1 text-[12px]"
+          style={{ color: 'var(--color-foreground-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+        >
+          <Icon name="arrowLeft" size={12} />
+          返回报告列表
+        </button>
+        <span style={{ width: 1, height: 16, background: 'var(--color-glass-border)' }} />
+        <h1 className="text-[16px] font-semibold" style={{ color: 'var(--color-foreground)' }}>
+          测试报告
+        </h1>
+        <StatusPill status={data.status}>{data.status.toUpperCase()}</StatusPill>
+        <div className="flex-1" />
+        <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+          {fullDateTime(data.createdAt)} · {data.durationMs ?? 0} ms
+        </span>
       </div>
 
-      <div className="glass-panel p-6">
-        <h2 className="text-lg font-semibold mb-4">步骤时间线</h2>
-        <ol className="flex flex-col gap-3">
-          {stepResults.map((s, i) => (
-            <li key={i} className="flex gap-3 items-start p-3 rounded border" style={{ borderColor: 'rgba(0,0,0,0.08)' }}>
-              <span
-                className="font-mono text-sm flex-shrink-0"
-                style={{
-                  color: s.status === 'passed' ? 'var(--color-success)' : 'var(--color-destructive)',
-                }}
-              >
-                {s.status === 'passed' ? '✓' : '✕'} #{s.order}
-              </span>
-              <div className="flex-1">
-                <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                  {s.durationMs} ms
-                </div>
-                {s.error && (
-                  <div className="text-sm mt-1" style={{ color: 'var(--color-destructive)' }}>
-                    {s.error}
-                  </div>
-                )}
+      {/* Body — 步骤时间线 + 右侧 metadata */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="flex gap-5 p-6">
+          <div className="flex-1 min-w-0 flex flex-col gap-3">
+            {data.summary && (
+              <div className="glass-card rounded-[12px] p-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+                {data.summary}
               </div>
-              {s.screenshot && (
-                <img
-                  src={s.screenshot}
-                  alt={`step ${s.order}`}
-                  className="w-16 h-16 rounded border"
-                  style={{ borderColor: 'rgba(0,0,0,0.1)' }}
-                />
+            )}
+            <div className="glass-card rounded-[12px] overflow-hidden">
+              <div className="px-5 py-[10px]" style={{ background: 'var(--color-background-subtle)', borderBottom: '1px solid var(--color-border)' }}>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
+                  步骤时间线
+                </span>
+              </div>
+              {stepResults.length === 0 ? (
+                <EmptyState icon="listChecks" title="无步骤结果" />
+              ) : (
+                <div className="flex flex-col">
+                  {stepResults.map((s, i) => (
+                    <div
+                      key={i}
+                      className="flex gap-3 items-start px-5 py-3"
+                      style={{ borderBottom: '1px solid var(--color-muted)' }}
+                    >
+                      <span
+                        className="font-mono text-[12px] shrink-0 mt-0.5"
+                        style={{ color: s.status === 'passed' ? 'var(--color-success)' : 'var(--color-destructive)' }}
+                      >
+                        {s.status === 'passed' ? '✓' : '✕'} #{s.order}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }}>
+                          {s.durationMs} ms
+                        </div>
+                        {s.error && (
+                          <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>
+                            {s.error}
+                          </div>
+                        )}
+                      </div>
+                      {s.screenshot && (
+                        <img
+                          src={s.screenshot}
+                          alt={`step ${s.order}`}
+                          className="w-16 h-16 rounded-[6px] object-cover"
+                          style={{ border: '1px solid var(--color-glass-border)' }}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
-            </li>
-          ))}
-        </ol>
+            </div>
+          </div>
+
+          {/* Right rail — 统计 */}
+          <div className="w-[280px] shrink-0 flex flex-col gap-3">
+            <div className="glass-card rounded-[12px] p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
+                汇总
+              </div>
+              <div className="flex items-center justify-between mb-2">
+                <span style={{ fontSize: 12, color: 'var(--color-foreground-secondary)' }}>总步骤</span>
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-foreground)' }}>{stepResults.length}</span>
+              </div>
+              <div className="flex items-center justify-between mb-2">
+                <span style={{ fontSize: 12, color: 'var(--color-foreground-secondary)' }}>通过</span>
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-success)' }}>{passed}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span style={{ fontSize: 12, color: 'var(--color-foreground-secondary)' }}>失败</span>
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-destructive)' }}>{failed}</span>
+              </div>
+            </div>
+            <div className="glass-card rounded-[12px] p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
+                元数据
+              </div>
+              <div className="flex justify-between text-[12px] mb-2">
+                <span style={{ color: 'var(--color-foreground-muted)' }}>用例 ID</span>
+                <span className="font-mono text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>{data.caseId.slice(0, 8)}</span>
+              </div>
+              <div className="flex justify-between text-[12px]">
+                <span style={{ color: 'var(--color-foreground-muted)' }}>报告 ID</span>
+                <span className="font-mono text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>{data.id.slice(0, 8)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

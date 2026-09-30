@@ -1,15 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useUIStore } from '../stores/ui';
 import { useRecorderStore } from '../stores/recorder';
 import { useAgentRunStore } from '../stores/agentRun';
+import Icon from '../components/Icon';
+import StatusPill from '../components/ui/StatusPill';
+import PriorityBadge from '../components/ui/PriorityBadge';
+import Button from '../components/ui/Button';
+import Input from '../components/ui/Input';
+import Segmented from '../components/ui/Segmented';
+import EmptyState from '../components/ui/EmptyState';
 
 type Tab = 'description' | 'reports' | 'recording';
 
 export default function CaseDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
   const recorder = useRecorderStore();
@@ -133,7 +141,7 @@ export default function CaseDetail() {
     onSuccess: (r) => {
       toast('执行完成', 'success');
       qc.invalidateQueries({ queryKey: ['reports'] });
-      window.location.href = `/reports/${r.reportId}`;
+      navigate(`/reports/${r.reportId}`);
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -147,112 +155,173 @@ export default function CaseDetail() {
     };
   }, []);
 
-  if (!caseDetail) return <div className="glass-panel p-8">加载中...</div>;
+  if (!caseDetail) {
+    return (
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)' }}>
+        <Icon name="loader" size={16} className="animate-spin" />
+        <span style={{ marginLeft: 8 }}>加载中...</span>
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-5xl flex flex-col gap-6">
-      <Link to="/cases" style={{ color: 'var(--color-text-secondary)' }}>
-        ← 返回用例列表
-      </Link>
-      <div className="glass-panel p-6">
-        <h1 className="text-2xl font-semibold">{caseDetail.title}</h1>
-        <p style={{ color: 'var(--color-text-muted)' }} className="text-sm mt-1">
-          {caseDetail.priority} · {caseDetail.status}
-        </p>
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Header bar */}
+      <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
+        <button
+          onClick={() => navigate('/cases')}
+          className="flex items-center gap-1 text-[12px]"
+          style={{ color: 'var(--color-foreground-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+        >
+          <Icon name="arrowLeft" size={12} />
+          返回用例列表
+        </button>
+        <span style={{ width: 1, height: 16, background: 'var(--color-glass-border)' }} />
+        <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>
+          {caseDetail.title}
+        </h1>
+        <PriorityBadge priority={caseDetail.priority} />
+        <StatusPill status={caseDetail.status}>{caseDetail.status}</StatusPill>
+        <div className="flex-1" />
+        <Button
+          variant="secondary"
+          onClick={() => execute.mutate()}
+          disabled={execute.isPending || caseDetail.steps.length === 0}
+        >
+          <Icon name="play" size={12} />
+          执行（Mock）
+        </Button>
       </div>
 
-      <div className="flex gap-2">
-        {(['description', 'reports', 'recording'] as Tab[]).map((t) => (
-          <button
-            key={t}
-            className="btn-ghost"
-            style={tab === t ? { borderColor: 'var(--color-primary)', color: 'var(--color-primary)' } : {}}
-            onClick={() => setTab(t)}
-          >
-            {t === 'description' ? '描述 / 步骤' : t === 'reports' ? '报告' : '录制历史'}
-          </button>
-        ))}
+      {/* Tabs */}
+      <div className="flex items-center gap-2 px-6 py-3 shrink-0">
+        <Segmented
+          options={[
+            { value: 'description', label: '描述 / 步骤', icon: 'list' },
+            { value: 'reports', label: '报告', icon: 'flag' },
+            { value: 'recording', label: '录制历史', icon: 'clock' },
+          ]}
+          value={tab}
+          onChange={(v) => setTab(v)}
+        />
       </div>
 
-      <div className="glass-panel p-6">
-        {tab === 'description' && (
-          <div className="flex flex-col gap-4">
-            {caseDetail.description && (
-              <p style={{ color: 'var(--color-text-secondary)' }}>{caseDetail.description}</p>
-            )}
-            <div>
-              <div className="flex justify-between items-center mb-2">
-                <h3 className="font-semibold">步骤 ({caseDetail.steps.length})</h3>
-                <div className="flex gap-2 items-center">
-                  <input
-                    className="input-base"
-                    style={{ width: 220 }}
-                    placeholder="录制目标 URL"
-                    value={targetUrl}
-                    onChange={(e) => setTargetUrl(e.target.value)}
-                  />
-                  <button
-                    className="btn-ghost"
-                    disabled={streaming || genSteps.isPending}
-                    onClick={() => genSteps.mutate()}
-                  >
-                    {streaming ? '补充中...' : '⚡ AI 补充步骤'}
-                  </button>
-                  <button
-                    className="btn-primary"
-                    disabled={execute.isPending}
-                    onClick={() => execute.mutate()}
-                  >
-                    ▶ 执行（Mock）
-                  </button>
-                  {recorder.status === 'recording' ? (
-                    <button className="btn-ghost" onClick={() => stopRecording.mutate()}>
-                      ⏹ 停止录制
-                    </button>
-                  ) : (
-                    <button className="btn-ghost" onClick={() => startRecording.mutate()}>
-                      ▶ 录制补充
-                    </button>
-                  )}
+      {/* Body — 主区 + 右侧操作侧栏 */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="flex gap-5 px-6 pb-6">
+          <div className="flex-1 min-w-0 flex flex-col gap-4">
+            {tab === 'description' && (
+              <div className="glass-card rounded-[12px] p-5">
+                <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
+                  {caseDetail.description ? '描述' : '（无描述）'}
                 </div>
+                {caseDetail.description && (
+                  <p className="text-[13px] mb-4" style={{ color: 'var(--color-foreground-secondary)', lineHeight: 1.7 }}>
+                    {caseDetail.description}
+                  </p>
+                )}
+                <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
+                  步骤 ({caseDetail.steps.length})
+                </div>
+                {caseDetail.steps.length === 0 ? (
+                  <EmptyState
+                    icon="listChecks"
+                    title="暂无步骤"
+                    description="点击右侧「AI 补充步骤」让 Agent 起草，或用 Chrome 扩展录制。"
+                  />
+                ) : (
+                  <ol className="flex flex-col gap-2">
+                    {caseDetail.steps.map((s) => (
+                      <li
+                        key={s.id}
+                        className="flex items-start gap-3 px-3 py-2 rounded-[8px]"
+                        style={{ background: 'var(--color-background-subtle)', border: '1px solid var(--color-glass-border)' }}
+                      >
+                        <span className="text-[10px] uppercase font-semibold tracking-wide shrink-0" style={{ color: 'var(--color-accent)' }}>
+                          {s.source}
+                        </span>
+                        <code className="text-[12px] font-mono flex-1 break-all" style={{ color: 'var(--color-foreground)' }}>
+                          {JSON.stringify(s.action)}
+                        </code>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+                {recorder.status === 'recording' && (
+                  <p className="text-[12px] mt-3 flex items-center gap-2" style={{ color: 'var(--color-info)' }}>
+                    <span className="status-pulse" style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor' }} />
+                    录制中... 在 Chrome 扩展打开的页面操作即可。
+                  </p>
+                )}
+                {recorder.status === 'error' && (
+                  <p className="text-[12px] mt-3" style={{ color: 'var(--color-destructive)' }}>
+                    ✕ {recorder.errorMessage}
+                  </p>
+                )}
               </div>
-              {caseDetail.steps.length === 0 ? (
-                <p style={{ color: 'var(--color-text-muted)' }}>暂无步骤</p>
+            )}
+
+            {tab === 'reports' && (
+              <div className="glass-card rounded-[12px] p-5">
+                <EmptyState icon="flag" title="前往报告列表查看" description="该用例所有执行报告已汇总到报告页。" action={
+                  <Button size="sm" onClick={() => navigate('/reports')}>打开报告页</Button>
+                } />
+              </div>
+            )}
+
+            {tab === 'recording' && (
+              <div className="glass-card rounded-[12px] p-5">
+                <p className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                  录制历史（占位，未来按时间序列展示每次录制会话）。
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Right rail — 操作面板 */}
+          <div className="w-[280px] shrink-0 flex flex-col gap-3">
+            <div className="glass-card rounded-[12px] p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
+                AI 补充
+              </div>
+              <p className="text-[12px] mb-3" style={{ color: 'var(--color-foreground-secondary)' }}>
+                用 AI 根据标题/描述/已有步骤补充更多脚本步骤。
+              </p>
+              <Button onClick={() => genSteps.mutate()} disabled={streaming || genSteps.isPending} className="w-full">
+                <Icon name="bolt" size={12} />
+                {streaming ? '补充中...' : 'AI 补充步骤'}
+              </Button>
+            </div>
+
+            <div className="glass-card rounded-[12px] p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
+                浏览器录制
+              </div>
+              <Input
+                label="录制目标 URL"
+                placeholder="https://example.com"
+                value={targetUrl}
+                onChange={(e) => setTargetUrl(e.target.value)}
+                size="sm"
+                className="mb-3"
+              />
+              {recorder.status === 'recording' ? (
+                <Button variant="secondary" onClick={() => stopRecording.mutate()} className="w-full">
+                  <Icon name="pause" size={12} />
+                  停止录制
+                </Button>
               ) : (
-                <ol className="flex flex-col gap-2">
-                  {caseDetail.steps.map((s) => (
-                    <li key={s.id} className="p-3 rounded border text-sm" style={{ borderColor: 'rgba(0,0,0,0.08)' }}>
-                      <span className="text-xs mr-2 px-1.5 py-0.5 rounded" style={{ background: 'rgba(124,92,252,0.15)', color: 'var(--color-primary)' }}>
-                        {s.source}
-                      </span>
-                      <code className="text-xs">{JSON.stringify(s.action)}</code>
-                    </li>
-                  ))}
-                </ol>
+                <Button onClick={() => startRecording.mutate()} className="w-full">
+                  <Icon name="play" size={12} />
+                  录制补充
+                </Button>
               )}
-              {recorder.status === 'recording' && (
-                <p className="text-sm mt-2" style={{ color: 'var(--color-info)' }}>
-                  ● 录制中... 在 Chrome 扩展打开的页面操作即可。
-                </p>
-              )}
-              {recorder.status === 'error' && (
-                <p className="text-sm mt-2" style={{ color: 'var(--color-destructive)' }}>
-                  ✕ {recorder.errorMessage}
-                </p>
-              )}
+              <p className="text-[11px] mt-2" style={{ color: 'var(--color-foreground-muted)' }}>
+                需先加载 Chrome 录制扩展（apps/recorder/）。
+              </p>
             </div>
           </div>
-        )}
-        {tab === 'reports' && (
-          <Link to="/reports" style={{ color: 'var(--color-primary)' }}>
-            查看该用例的所有报告 →
-          </Link>
-        )}
-        {tab === 'recording' && (
-          <p style={{ color: 'var(--color-text-muted)' }}>
-            录制历史（占位，未来按时间序列展示每次录制会话）。
-          </p>
-        )}
+        </div>
       </div>
     </div>
   );
