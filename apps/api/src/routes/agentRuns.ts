@@ -33,7 +33,7 @@ async function executeRun(run: RunRow, opts: { targetGroupId?: string }) {
     }
     // 工具白名单随 run.targetId 构建；落库由 step.tools 处理（见 builtinTools.ts）。
     const wf = run.targetType === 'requirement2cases'
-      ? buildRequirement2CasesWorkflow(run.targetId, opts.targetGroupId ?? '')
+      ? buildRequirement2CasesWorkflow(run.targetId, opts.targetGroupId!)
       : buildCase2ScriptWorkflow(run.targetId);
     logger.info({ runId: run.id, provider: config.provider, model: config.model }, 'agent run start');
     const result = (await runWorkflow({
