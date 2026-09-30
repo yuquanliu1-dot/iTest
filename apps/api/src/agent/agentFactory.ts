@@ -38,9 +38,10 @@ export async function runWorkflow(opts: RunOptions): Promise<unknown> {
   for (const step of opts.steps) {
     opts.onEvent({ type: 'step_start', stepId: step.id });
     const userMessage = fillTemplate(step.prompt, { userMessage: opts.initialMessage, previousOutput });
+    let output: unknown;
     try {
       const r = await opts.llmClient.complete({ systemPrompt: '', userMessage });
-      const output = r.value;
+      output = r.value;
       result.push(output);
       previousOutput = typeof output === 'string' ? output : JSON.stringify(output);
       opts.onEvent({ type: 'step_text', stepId: step.id, delta: previousOutput });
@@ -51,6 +52,20 @@ export async function runWorkflow(opts: RunOptions): Promise<unknown> {
         runId,
         error: e instanceof Error ? e.message : String(e),
         code: 'llm',
+      });
+      throw e;
+    }
+    // 白名单工具：在 step 输出完成后按序调用，把落库从路由挪到工具层。
+    try {
+      for (const tool of step.tools) {
+        await tool.handler(output);
+      }
+    } catch (e) {
+      opts.onEvent({
+        type: 'workflow_error',
+        runId,
+        error: `tool call failed: ${e instanceof Error ? e.message : String(e)}`,
+        code: 'db',
       });
       throw e;
     }

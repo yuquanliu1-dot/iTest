@@ -1,16 +1,15 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { agentRuns, requirements, testCases, testSteps } from '../db/schema.js';
+import { agentRuns } from '../db/schema.js';
 import { eq, desc } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { runWorkflow } from '../agent/agentFactory.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
-import { requirement2CasesWorkflow } from '../agent/workflows/requirement2cases.js';
-import { case2ScriptWorkflow } from '../agent/workflows/case2script.js';
+import { buildRequirement2CasesWorkflow } from '../agent/workflows/requirement2cases.js';
+import { buildCase2ScriptWorkflow } from '../agent/workflows/case2script.js';
 import { sseHeaders, sseSend } from '../sse/agentRunStream.js';
 import { publishRunEvent, subscribeRun } from '../sse/runBus.js';
-import { StepAction } from '@itest/shared';
 
 export const agentRunsRoute = Router();
 
@@ -26,7 +25,10 @@ async function executeRun(run: RunRow) {
   // 走 settings 里的 LLM 配置；未配置 provider 默认为 mock（保持 MVP 启动体验）。
   // 当 provider != mock 且 apiKey 为空时，resolveLlmClient 抛错 → catch 把 error 写回 agent_runs。
   const { client, config } = await resolveLlmClient();
-  const wf = run.targetType === 'requirement2cases' ? requirement2CasesWorkflow : case2ScriptWorkflow;
+  // 工具白名单随 run.targetId 构建；落库由 step.tools 处理（见 builtinTools.ts）。
+  const wf = run.targetType === 'requirement2cases'
+    ? buildRequirement2CasesWorkflow(run.targetId)
+    : buildCase2ScriptWorkflow(run.targetId);
   const logger = (await import('../logger.js')).logger;
   try {
     logger.info({ runId: run.id, provider: config.provider, model: config.model }, 'agent run start');
@@ -41,58 +43,6 @@ async function executeRun(run: RunRow) {
       .update(agentRuns)
       .set({ status: 'success', result: result as object, finishedAt: new Date() })
       .where(eq(agentRuns.id, run.id));
-    if (run.targetType === 'requirement2cases') {
-      const reqData = (await db.select().from(requirements).where(eq(requirements.id, run.targetId)))[0];
-      const finalJson = result.find((r) => r && typeof r === 'object' && 'cases' in (r as object)) as
-        | {
-            cases?: Array<{ title: string; description?: string; priority?: string; steps?: Array<{ order: number; action: unknown }> }>;
-          }
-        | undefined;
-      if (reqData && finalJson?.cases) {
-        for (const c of finalJson.cases) {
-          const caseRows = await db
-            .insert(testCases)
-            .values({
-              requirementId: reqData.id,
-              title: c.title,
-              description: c.description,
-              priority: (c.priority ?? 'P1') as 'P0' | 'P1' | 'P2' | 'P3',
-            })
-            .returning();
-          if (c.steps && c.steps.length > 0) {
-            await db.insert(testSteps).values(
-              c.steps.map((s) => {
-                StepAction.parse(s.action);
-                return {
-                  caseId: caseRows[0]!.id,
-                  order: s.order,
-                  source: 'agent' as const,
-                  action: s.action as object,
-                };
-              }),
-            );
-          }
-        }
-      }
-    }
-    if (run.targetType === 'case2script') {
-      const gen = result.find((r) => r && typeof r === 'object' && 'steps' in (r as object)) as
-        | { steps?: Array<{ order: number; action: unknown }> }
-        | undefined;
-      if (gen?.steps?.length) {
-        await db.insert(testSteps).values(
-          gen.steps.map((s) => {
-            StepAction.parse(s.action);
-            return {
-              caseId: run.targetId,
-              order: s.order,
-              source: 'agent' as const,
-              action: s.action as object,
-            };
-          }),
-        );
-      }
-    }
   } catch (e) {
     await db
       .update(agentRuns)
