@@ -13,6 +13,7 @@ import { plansRoute } from './routes/plans.js';
 import { agentRunsRoute } from './routes/agentRuns.js';
 import { recorderRoute } from './routes/recorder.js';
 import { executeRoute } from './routes/execute.js';
+import { planRunsRoute } from './routes/planRuns.js';
 import { attachRecorderWs } from './recorder/ws.js';
 
 const app = express();
@@ -31,6 +32,7 @@ app.use('/api/reports', reportsRoute);
 app.use('/api/projects/:projectId/plans', plansRoute);
 app.use('/api/plans', plansRoute);
 app.use('/api/agent-runs', agentRunsRoute);
+app.use('/api/plan-runs', planRunsRoute);
 app.use('/api/recorder', recorderRoute);
 app.use(errorHandler);
 
