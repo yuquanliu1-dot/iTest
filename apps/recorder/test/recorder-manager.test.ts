@@ -249,4 +249,41 @@ describe('recorder-manager — phase1 change events + pause', () => {
     expect(captured).toHaveLength(1);
     btn.remove();
   });
+
+  it('password input marks step sensitive', () => {
+    const { captured } = setup();
+    const pwd = document.createElement('input');
+    pwd.type = 'password';
+    document.body.appendChild(pwd);
+    pwd.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(captured[0]!.sensitive).toBe(true);
+    pwd.remove();
+  });
+
+  it('select change inside antd container sets componentKind=select', () => {
+    const { captured } = setup();
+    const wrap = document.createElement('div');
+    wrap.className = 'ant-select';
+    const sel = document.createElement('select');
+    wrap.appendChild(sel);
+    document.body.appendChild(wrap);
+    sel.innerHTML = '<option value="x">x</option>';
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    const step = captured.find((s) => s.type === 'select');
+    expect(step?.componentKind).toBe('select');
+    wrap.remove();
+  });
+
+  it('file input change emits upload with empty fileId (binding happens later)', () => {
+    const { captured } = setup();
+    const f = document.createElement('input');
+    f.type = 'file';
+    document.body.appendChild(f);
+    Object.defineProperty(f, 'files', { value: [{ name: 'a.txt' }], configurable: true });
+    f.dispatchEvent(new Event('change', { bubbles: true }));
+    const u = captured.find((s) => s.type === 'upload');
+    expect(u?.fileId).toBeUndefined();
+    expect(u?.value).toBe('a.txt');
+    f.remove();
+  });
 });
