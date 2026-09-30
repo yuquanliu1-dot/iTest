@@ -1,23 +1,190 @@
-@theme {
+/* iTest Design Tokens — 与 iDO HIG「C 方案 · 彩色玻璃」对齐
+   来源：iDO apps/frontend/src/index.css @theme + :root
+   static：组件 inline style 直接引用 var(--*)，Tailwind 无法静态扫描，需保留全量 token */
+@theme static {
+  /* Backgrounds — 渐变画布（--app-gradient）+ 纯色兜底 */
   --color-background: #EEF0FF;
-  --color-surface: rgba(255, 255, 255, 0.62);
-  --color-surface-strong: rgba(255, 255, 255, 0.75);
+  --color-background-elevated: rgba(255, 255, 255, 0.82);
+  --color-background-subtle: #E9EAF6;
+  --color-surface-secondary: #ECEAF8;
+  --color-surface-overlay: #ffffff;
 
-  --color-primary: #7C5CFC;
-  --color-primary-hover: #6A4AE0;
-  --color-secondary: #af52de;
+  /* Glass panels */
+  --color-glass-panel: rgba(255, 255, 255, 0.62);
+  --color-glass-panel-strong: rgba(255, 255, 255, 0.75);
+  --color-glass-panel-border: rgba(255, 255, 255, 0.9);
+  --color-glass-border: rgba(0, 0, 0, 0.06);
+  --color-glass-border-hover: rgba(0, 0, 0, 0.10);
 
-  --color-success: #12B76A;
+  /* Text */
+  --color-foreground: #232038;
+  --color-foreground-secondary: #6E6A8A;
+  --color-foreground-muted: #9B97B5;
+  --color-foreground-disabled: #C9C6DC;
+
+  /* Accent — violet */
+  --color-accent: #7C5CFC;
+  --color-accent-hover: #6A4AE0;
+  --color-accent-foreground: #ffffff;
+  --color-accent-light: rgba(124, 92, 252, 0.12);
+  --color-accent-glow: rgba(124, 92, 252, 0.18);
+
+  /* Legacy compat */
+  --color-muted: rgba(0, 0, 0, 0.03);
+  --color-muted-foreground: #9B97B5;
+  --color-border: rgba(0, 0, 0, 0.06);
+  --color-border-subtle: #E4E2F0;
+  --color-divider-tinted: rgba(124, 92, 252, 0.10);
+  --color-card: rgba(255, 255, 255, 0.82);
+
+  /* Status */
   --color-destructive: #F04438;
-  --color-warning: #F79009;
+  --color-success: #12B76A;
+  --color-success-hover: #0E9F5B;
   --color-info: #06AED4;
+  --color-warning: #F79009;
 
-  --color-text-primary: #232038;
-  --color-text-secondary: #6E6A8A;
-  --color-text-muted: #9B97B5;
+  /* Status tints */
+  --color-success-light: rgba(18, 183, 106, 0.06);
+  --color-success-border: rgba(18, 183, 106, 0.10);
+  --color-success-text: #166534;
+  --color-destructive-light: rgba(240, 68, 56, 0.04);
+  --color-destructive-light-strong: rgba(240, 68, 56, 0.08);
+  --color-destructive-border: rgba(240, 68, 56, 0.10);
+  --color-destructive-text: #991b1b;
+  --color-warning-light: rgba(247, 144, 9, 0.08);
+  --color-warning-border: rgba(247, 144, 9, 0.10);
+  --color-warning-text: #9a6700;
+  --color-info-light: rgba(6, 174, 212, 0.08);
+  --color-info-border: rgba(6, 174, 212, 0.10);
+  --color-info-text: #087990;
 
-  --font-sans: "DM Sans", "Inter", system-ui, sans-serif;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --shadow-glass: 0 8px 32px rgba(124, 92, 252, 0.12);
+  /* Priority badge colors */
+  --color-priority-urgent-bg: #fff1e5;
+  --color-priority-urgent-text: #bc4c00;
+  --color-priority-high-bg: #ffebe9;
+  --color-priority-high-text: #cf222e;
+  --color-priority-medium-bg: #fff8c5;
+  --color-priority-medium-text: #9a6700;
+  --color-priority-low-bg: #dafbe1;
+  --color-priority-low-text: #1a7f37;
+
+  /* Radius */
+  --radius-xs: 3px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 16px;
+
+  /* Shadows — 紫调 */
+  --shadow-card: 0 2px 10px rgba(120, 110, 200, 0.07);
+  --shadow-middle: 0 4px 14px rgba(120, 110, 200, 0.12);
+  --shadow-elevated: 0 8px 30px rgba(120, 110, 200, 0.16);
+  --shadow-modal: 0 20px 60px rgba(50, 40, 100, 0.25);
+  --shadow-accent: 0 4px 12px rgba(124, 92, 252, 0.35);
+
+  /* Font families */
+  --font-sans: -apple-system, "SF Pro Text", "DM Sans", "Inter", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+  /* Typography scale (dense dev tool) */
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 15px;
+  --text-xl: 17px;
+  --text-2xl: 22px;
+
+  /* 过渡别名（页面迁移期兼容旧变量名，UI-C 完成后移除） */
+  --color-primary: var(--color-accent);
+  --color-primary-hover: var(--color-accent-hover);
+  --color-text-primary: var(--color-foreground);
+  --color-text-secondary: var(--color-foreground-secondary);
+  --color-text-muted: var(--color-foreground-muted);
+  --color-surface: var(--color-glass-panel);
+  --color-surface-strong: var(--color-glass-panel-strong);
+}
+
+:root {
+  /* 画布与品牌渐变（非 Tailwind namespace，必须放 @theme 外） */
+  --app-gradient: linear-gradient(135deg, #EEF0FF 0%, #F6EEFF 45%, #EAF6FF 100%);
+  --brand-gradient: linear-gradient(140deg, #4E7BFF 0%, #7C5CFC 60%, #B14CFF 100%);
+
+  /* 装饰色斑 */
+  --color-blob-purple: rgba(124, 92, 252, 0.16);
+  --color-blob-blue: rgba(78, 123, 255, 0.14);
+  --color-blob-pink: rgba(238, 70, 188, 0.10);
+
+  /* 过渡别名 */
+  --shadow-glass: var(--shadow-elevated);
+}
+
+/* Dark theme — C 深色玻璃，runtime 由 <html data-theme="dark"> 切换 */
+:root[data-theme="dark"] {
+  --color-background: #141221;
+  --color-background-elevated: rgba(26, 23, 48, 0.82);
+  --color-background-subtle: #262244;
+  --color-surface-secondary: #2A2648;
+  --color-surface-overlay: #211D3D;
+  --app-gradient: linear-gradient(135deg, #171430 0%, #1D1636 45%, #12182E 100%);
+  --color-foreground: #ECEAF6;
+  --color-foreground-secondary: #A8A3C2;
+  --color-foreground-muted: #7D7899;
+  --color-foreground-disabled: #4A4664;
+  --color-glass-border: rgba(255, 255, 255, 0.10);
+  --color-glass-border-hover: rgba(255, 255, 255, 0.14);
+  --color-glass-panel: rgba(22, 19, 40, 0.66);
+  --color-glass-panel-strong: rgba(24, 21, 44, 0.75);
+  --color-glass-panel-border: rgba(255, 255, 255, 0.10);
+  --color-muted: rgba(255, 255, 255, 0.05);
+  --color-muted-foreground: #7D7899;
+  --color-border: rgba(255, 255, 255, 0.10);
+  --color-border-subtle: #2C2850;
+  --color-divider-tinted: rgba(155, 134, 255, 0.14);
+  --color-card: rgba(26, 23, 48, 0.82);
+  --color-blob-purple: rgba(155, 134, 255, 0.22);
+  --color-blob-blue: rgba(127, 160, 255, 0.22);
+  --color-blob-pink: rgba(255, 123, 208, 0.20);
+
+  --color-accent: #9B86FF;
+  --color-accent-hover: #B3A1FF;
+  --color-destructive: #F87171;
+  --color-success: #34D399;
+  --color-success-hover: #2AB77E;
+  --color-info: #3FC9E8;
+  --color-warning: #FFB257;
+
+  --color-accent-light: rgba(155, 134, 255, 0.16);
+  --color-accent-glow: rgba(155, 134, 255, 0.28);
+
+  --color-success-light: rgba(52, 211, 153, 0.12);
+  --color-success-border: rgba(52, 211, 153, 0.20);
+  --color-success-text: #4ade80;
+  --color-destructive-light: rgba(248, 113, 113, 0.10);
+  --color-destructive-light-strong: rgba(248, 113, 113, 0.16);
+  --color-destructive-border: rgba(248, 113, 113, 0.20);
+  --color-destructive-text: #f87171;
+  --color-warning-light: rgba(255, 178, 87, 0.12);
+  --color-warning-border: rgba(255, 178, 87, 0.20);
+  --color-warning-text: #fbbf24;
+  --color-info-light: rgba(63, 201, 232, 0.12);
+  --color-info-border: rgba(63, 201, 232, 0.20);
+  --color-info-text: #3FC9E8;
+
+  --color-priority-urgent-bg: rgba(251, 146, 60, 0.16);
+  --color-priority-urgent-text: #fb923c;
+  --color-priority-high-bg: rgba(248, 113, 113, 0.16);
+  --color-priority-high-text: #f87171;
+  --color-priority-medium-bg: rgba(251, 191, 36, 0.16);
+  --color-priority-medium-text: #fbbf24;
+  --color-priority-low-bg: rgba(74, 222, 128, 0.16);
+  --color-priority-low-text: #4ade80;
+
+  --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+  --shadow-middle: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-elevated: 0 8px 30px rgba(0, 0, 0, 0.55);
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.65);
+  --shadow-accent: 0 4px 12px rgba(155, 134, 255, 0.30);
 }
