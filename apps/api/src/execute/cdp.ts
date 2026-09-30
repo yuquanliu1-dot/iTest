@@ -155,6 +155,7 @@ export async function executeCaseReal(
   steps: Array<{ order: number; action: unknown; delayMs?: number | null }>,
   ctx: ExecContext,
   targetUrl?: string,
+  storageState?: unknown,
 ): Promise<ExecStepResult[]> {
   let browser: Browser | undefined;
   const results: ExecStepResult[] = [];
@@ -164,7 +165,9 @@ export async function executeCaseReal(
       headless: true,
       executablePath: process.env.CHROMIUM_PATH || undefined,
     });
-    const context = await browser.newContext();
+    const context = await browser.newContext(
+      storageState ? { storageState: storageState as never } : undefined,
+    );
     const page = await context.newPage();
     // 导航到第一个 navigate 动作或外部传入的 targetUrl，否则就让用户先 navigate。
     if (targetUrl) {

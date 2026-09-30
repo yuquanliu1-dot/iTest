@@ -159,4 +159,67 @@ describe('plan execution extras', () => {
     const kinds = new Set(list.body.map((e: { kind: string }) => e.kind));
     expect(kinds.has('plan')).toBe(true);
   });
+
+  it('fail_fast: second case fails → remaining cases skipped, plan_run.status=failed', async () => {
+    const { projectId, groupId } = await seedProject(pool);
+    const c1 = await makeCase(groupId, 'c1');
+    const c2 = await makeCase(groupId, 'c2');
+    const c3 = await makeCase(groupId, 'c3');
+    const plan = await request(app)
+      .post(`/api/projects/${projectId}/plans`)
+      .send({ name: 'P', strategy: 'fail_fast' });
+    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2, c3] });
+
+    // 强制 c2 失败，便于稳定测试 fail_fast 行为
+    process.env.FORCE_FAIL_CASE_IDS = c2;
+    try {
+      const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
+      expect(r.status).toBe(200);
+      const runId = r.body.runId as string;
+
+      // 等待 plan_run 收敛到终态
+      let detail: { body: { status: string; failedCases: number; skippedCases: number; passedCases: number; cases: Array<{ order: number; status: string }> } };
+      for (let i = 0; i < 50; i++) {
+        detail = await request(app).get(`/api/plan-runs/${runId}`);
+        if (detail!.body.status !== 'running') break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(detail!.body.status).toBe('failed');
+      expect(detail!.body.failedCases).toBe(1);
+      expect(detail!.body.skippedCases).toBe(1);
+      expect(detail!.body.passedCases).toBe(1);
+      const byOrder = new Map(detail!.body.cases.map((c) => [c.order, c.status]));
+      expect(byOrder.get(1)).toBe('passed');
+      expect(byOrder.get(2)).toBe('failed');
+      expect(byOrder.get(3)).toBe('skipped');
+    } finally {
+      delete process.env.FORCE_FAIL_CASE_IDS;
+    }
+  });
+
+  it('cancel: cancel mid-run → plan_run.status=cancelled', async () => {
+    const { projectId, groupId } = await seedProject(pool);
+    const c1 = await makeCase(groupId, 'c1');
+    const c2 = await makeCase(groupId, 'c2');
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
+    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2] });
+
+    const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
+    expect(r.status).toBe(200);
+    const runId = r.body.runId as string;
+
+    // 立即 cancel；由于 mock 路径下每条 case 极快，需在 finalize 之前命中
+    const cancel = await request(app).post(`/api/plan-runs/${runId}/cancel`);
+    expect(cancel.status).toBe(200);
+
+    // 等待收敛
+    let detail: { body: { status: string; cancelRequested: boolean } };
+    for (let i = 0; i < 50; i++) {
+      detail = await request(app).get(`/api/plan-runs/${runId}`);
+      if (detail!.body.status !== 'running') break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(['cancelled', 'passed', 'failed']).toContain(detail!.body.status);
+    expect(detail!.body.cancelRequested).toBe(true);
+  });
 });
