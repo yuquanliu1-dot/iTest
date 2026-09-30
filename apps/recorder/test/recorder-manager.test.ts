@@ -147,3 +147,72 @@ describe('RecorderManager — output shape matches StepAction DSL', () => {
     }
   });
 });
+
+describe('recorder-manager — phase1 change events + pause', () => {
+  function setup() {
+    const mgr = new RecorderManager();
+    const captured: RecordedStep[] = [];
+    mgr.start((s) => captured.push(s));
+    return { mgr, captured };
+  }
+
+  it('checkbox change emits check step with target state', () => {
+    const { captured } = setup();
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    document.body.appendChild(cb);
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.type).toBe('check');
+    expect(captured[0]!.checked).toBe(false);
+    cb.remove();
+  });
+
+  it('checkbox does not emit fill from input event', () => {
+    const { captured } = setup();
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    document.body.appendChild(cb);
+    cb.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(captured.filter((s) => s.type === 'fill')).toHaveLength(0);
+    cb.remove();
+  });
+
+  it('file input emits upload step with file name, no fill', () => {
+    const { captured } = setup();
+    const f = document.createElement('input');
+    f.type = 'file';
+    document.body.appendChild(f);
+    Object.defineProperty(f, 'files', { value: [{ name: 'report.xlsx' }], configurable: true });
+    f.dispatchEvent(new Event('change', { bubbles: true }));
+    f.dispatchEvent(new Event('input', { bubbles: true }));
+    const upload = captured.find((s) => s.type === 'upload');
+    expect(upload?.value).toBe('report.xlsx');
+    expect(captured.filter((s) => s.type === 'fill')).toHaveLength(0);
+    f.remove();
+  });
+
+  it('select change emits select step with selected value', () => {
+    const { captured } = setup();
+    const sel = document.createElement('select');
+    sel.innerHTML = '<option value="cn">中文</option><option value="en" selected>EN</option>';
+    document.body.appendChild(sel);
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    const step = captured.find((s) => s.type === 'select');
+    expect(step?.value).toBe('en');
+    sel.remove();
+  });
+
+  it('paused manager emits nothing', () => {
+    const { mgr, captured } = setup();
+    mgr.setPaused(true);
+    const btn = document.createElement('button');
+    document.body.appendChild(btn);
+    btn.dispatchEvent(new Event('click', { bubbles: true }));
+    expect(captured).toHaveLength(0);
+    mgr.setPaused(false);
+    btn.dispatchEvent(new Event('click', { bubbles: true }));
+    expect(captured).toHaveLength(1);
+    btn.remove();
+  });
+});
