@@ -22,6 +22,48 @@ export const api = {
         body: JSON.stringify({ key, value }),
       }),
   },
+  projects: {
+    list: () => request<ProjectWithCount[]>('/projects'),
+    create: (body: { name: string; defaultUrl?: string }) =>
+      request<Project>('/projects', { method: 'POST', body: JSON.stringify(body) }),
+    patch: (id: string, body: Partial<{ name: string; defaultUrl: string }>) =>
+      request<Project>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    remove: (id: string) => request<{ ok: boolean }>(`/projects/${id}`, { method: 'DELETE' }),
+    groups: (id: string) => request<GroupWithCount[]>(`/projects/${id}/groups`),
+    createGroup: (id: string, body: { name: string; defaultUrl?: string }) =>
+      request<Group>(`/projects/${id}/groups`, { method: 'POST', body: JSON.stringify(body) }),
+    stats: (id: string) => request<ProjectStats>(`/projects/${id}/stats`),
+    plans: (id: string) => request<PlanWithCount[]>(`/projects/${id}/plans`),
+    createPlan: (id: string, body: { name: string; environment?: string }) =>
+      request<ExecutionPlan>(`/projects/${id}/plans`, { method: 'POST', body: JSON.stringify(body) }),
+    requirements: (id: string) => request<Requirement[]>(`/projects/${id}/requirements`),
+    createRequirement: (id: string, body: { title: string; content: string }) =>
+      request<Requirement>(`/projects/${id}/requirements`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+  },
+  groups: {
+    patch: (id: string, body: Partial<{ name: string; defaultUrl: string }>) =>
+      request<Group>(`/groups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    remove: (id: string) => request<{ ok: boolean }>(`/groups/${id}`, { method: 'DELETE' }),
+  },
+  plans: {
+    get: (id: string) => request<PlanDetail>(`/plans/${id}`),
+    patch: (id: string, body: Partial<{ name: string; environment: string }>) =>
+      request<ExecutionPlan>(`/plans/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    remove: (id: string) => request<{ ok: boolean }>(`/plans/${id}`, { method: 'DELETE' }),
+    setCases: (id: string, caseIds: string[]) =>
+      request<{ ok: boolean }>(`/plans/${id}/cases`, {
+        method: 'PUT',
+        body: JSON.stringify({ caseIds }),
+      }),
+    run: (id: string) =>
+      request<{ results: Array<{ caseId: string; reportId: string; status: string }> }>(
+        `/plans/${id}/run`,
+        { method: 'POST' },
+      ),
+  },
   requirements: {
     list: () => request<Requirement[]>('/requirements'),
     create: (body: { title: string; content: string }) =>
@@ -29,13 +71,30 @@ export const api = {
     get: (id: string) => request<Requirement>(`/requirements/${id}`),
   },
   cases: {
-    list: (priority?: string) =>
-      request<TestCase[]>(`/cases${priority ? `?priority=${priority}` : ''}`),
-    create: (body: { title: string; priority?: string; requirementId?: string }) =>
+    list: (params?: string | { priority?: string; groupId?: string; projectId?: string }) => {
+      const p = typeof params === 'string' ? { priority: params } : params;
+      const qs = new URLSearchParams();
+      if (p?.priority) qs.set('priority', p.priority);
+      if (p?.groupId) qs.set('groupId', p.groupId);
+      if (p?.projectId) qs.set('projectId', p.projectId);
+      const s = qs.toString();
+      return request<TestCase[]>(`/cases${s ? `?${s}` : ''}`);
+    },
+    create: (body: { title: string; priority?: string; requirementId?: string; groupId: string; url?: string }) =>
       request<TestCase>('/cases', { method: 'POST', body: JSON.stringify(body) }),
     get: (id: string) => request<TestCaseDetail>(`/cases/${id}`),
-    patch: (id: string, body: Partial<{ title: string; priority: string; description: string }>) =>
-      request<TestCase>(`/cases/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    patch: (
+      id: string,
+      body: Partial<{ title: string; priority: string; description: string; groupId: string; url: string }>,
+    ) => request<TestCase>(`/cases/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    remove: (id: string) => request<{ ok: boolean }>(`/cases/${id}`, { method: 'DELETE' }),
+    copy: (id: string, targetGroupId: string) =>
+      request<TestCase>(`/cases/${id}/copy`, { method: 'POST', body: JSON.stringify({ targetGroupId }) }),
+    copyBatch: (caseIds: string[], targetGroupId: string) =>
+      request<{ count: number }>('/cases/copy', {
+        method: 'POST',
+        body: JSON.stringify({ caseIds, targetGroupId }),
+      }),
     appendSteps: (id: string, steps: Array<{ order: number; source: string; action: unknown }>) =>
       request<{ count: number }>(`/cases/${id}/steps`, {
         method: 'POST',
@@ -52,31 +111,76 @@ export const api = {
       request<{ reportId: string }>(`/cases/${id}/execute`, { method: 'POST' }),
   },
   reports: {
-    list: () => request<Report[]>('/reports'),
+    list: (projectId?: string) =>
+      request<Report[]>(`/reports${projectId ? `?projectId=${projectId}` : ''}`),
     get: (id: string) => request<Report>(`/reports/${id}`),
   },
   agentRuns: {
-    create: (body: { targetType: string; targetId: string; prompt: string }) =>
+    create: (body: { targetType: string; targetId: string; prompt: string; targetGroupId?: string }) =>
       request<AgentRun>('/agent-runs', { method: 'POST', body: JSON.stringify(body) }),
     get: (id: string) => request<AgentRun>(`/agent-runs/${id}`),
     eventsUrl: (id: string) => `${BASE}/agent-runs/${id}/events`,
   },
   recorder: {
     createSession: (caseId: string) =>
-      request<{ sessionId: string; wsUrl: string; wsToken: string }>('/recorder/sessions', {
-        method: 'POST',
-        body: JSON.stringify({ caseId }),
-      }),
+      request<{ sessionId: string; wsUrl: string; wsToken: string; resolvedUrl: string | null }>(
+        '/recorder/sessions',
+        { method: 'POST', body: JSON.stringify({ caseId }) },
+      ),
     finish: (sessionId: string) =>
       request<{ inserted: number }>(`/recorder/sessions/${sessionId}/finish`, { method: 'POST' }),
   },
 };
 
+export interface Project {
+  id: string;
+  name: string;
+  defaultUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface ProjectWithCount extends Project {
+  caseCount: number;
+}
+export interface Group {
+  id: string;
+  projectId: string;
+  name: string;
+  defaultUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface GroupWithCount extends Group {
+  caseCount: number;
+}
+export interface ExecutionPlan {
+  id: string;
+  projectId: string;
+  name: string;
+  environment: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface PlanWithCount extends ExecutionPlan {
+  caseCount: number;
+}
+export interface PlanDetail extends ExecutionPlan {
+  cases: Array<{ id: string; order: number; title: string }>;
+}
+export interface ProjectStats {
+  requirements: number;
+  cases: number;
+  passes: number;
+  failures: number;
+  groups: Array<{ id: string; name: string; caseCount: number }>;
+  recentRuns: Array<{ id: string; caseId: string; status: string; createdAt: string }>;
+}
 export interface Requirement {
   id: string;
   title: string;
   content: string;
   status: string;
+  projectId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -85,7 +189,11 @@ export interface TestCase {
   title: string;
   priority: string;
   status: string;
-  requirementId?: string;
+  groupId?: string;
+  url?: string | null;
+  requirementId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 export interface TestStep {
   id: string;
@@ -96,6 +204,7 @@ export interface TestStep {
 export interface TestCaseDetail extends TestCase {
   description?: string;
   steps: TestStep[];
+  resolvedUrl: string | null;
 }
 export interface Report {
   id: string;

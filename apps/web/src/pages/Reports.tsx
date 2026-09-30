@@ -14,7 +14,7 @@ const GRID_COLS = 'grid-cols-[minmax(120px,1.2fr)_minmax(90px,0.7fr)_minmax(90px
 
 export default function Reports() {
   const navigate = useNavigate();
-  const { data, isLoading } = useQuery({ queryKey: ['reports'], queryFn: api.reports.list });
+  const { data, isLoading } = useQuery({ queryKey: ['reports'], queryFn: () => api.reports.list() });
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
