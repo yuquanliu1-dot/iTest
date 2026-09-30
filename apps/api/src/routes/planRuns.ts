@@ -1,0 +1,56 @@
+import { Router } from 'express';
+import { eq, asc } from 'drizzle-orm';
+import { db } from '../db/client.js';
+import { planRuns, planRunCases, executionPlans } from '../db/schema.js';
+import { HttpError } from '../middleware/errorHandler.js';
+import { requestCancel, subscribeRun } from '../execute/runPlan.js';
+import { sseHeaders } from '../sse/agentRunStream.js';
+
+export const planRunsRoute = Router();
+
+planRunsRoute.get('/:id', async (req, res) => {
+  const run = (await db.select().from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
+  if (!run) throw new HttpError(404, 'not_found', 'plan run not found');
+  const cases = await db
+    .select()
+    .from(planRunCases)
+    .where(eq(planRunCases.planRunId, run.id))
+    .orderBy(asc(planRunCases.order));
+  const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, run.planId)))[0];
+  res.json({
+    ...run,
+    planName: plan?.name ?? null,
+    cases,
+  });
+});
+
+planRunsRoute.post('/:id/cancel', async (req, res) => {
+  const run = (await db.select().from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
+  if (!run) throw new HttpError(404, 'not_found', 'plan run not found');
+  requestCancel(run.id);
+  await db.update(planRuns).set({ cancelRequested: true }).where(eq(planRuns.id, run.id));
+  res.json({ ok: true });
+});
+
+planRunsRoute.get('/:id/events', async (req, res) => {
+  sseHeaders(res);
+  const run = (await db.select().from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
+  if (!run) {
+    res.status(404).end();
+    return;
+  }
+  const unsub = subscribeRun(run.id, res);
+  // initial snapshot
+  res.write(
+    `data: ${JSON.stringify({
+      type: 'plan_run_snapshot',
+      status: run.status,
+      summary: run.summary,
+      totalCases: run.totalCases,
+      passedCases: run.passedCases,
+      failedCases: run.failedCases,
+      skippedCases: run.skippedCases,
+    })}\n\n`,
+  );
+  req.on('close', () => unsub());
+});
