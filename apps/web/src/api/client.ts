@@ -48,6 +48,19 @@ export const api = {
       }),
     deleteStep: (id: string, stepId: string) =>
       request<{ ok: boolean }>(`/cases/${id}/steps/${stepId}`, { method: 'DELETE' }),
+    replaceSteps: (
+      id: string,
+      steps: Array<{ action: unknown; source: string; name?: string; delayMs?: number }>,
+    ) =>
+      request<{ steps: TestStep[] }>(`/cases/${id}/steps`, {
+        method: 'PUT',
+        body: JSON.stringify({ steps }),
+      }),
+    recompileStep: (id: string, instruction: string) =>
+      request<{ compiled: unknown[] | null }>(`/cases/${id}/steps/recompile`, {
+        method: 'POST',
+        body: JSON.stringify({ instruction }),
+      }),
     execute: (id: string) =>
       request<{ reportId: string }>(`/cases/${id}/execute`, { method: 'POST' }),
   },
@@ -92,6 +105,8 @@ export interface TestStep {
   order: number;
   source: string;
   action: unknown;
+  name?: string | null;
+  delayMs?: number | null;
 }
 export interface TestCaseDetail extends TestCase {
   description?: string;
