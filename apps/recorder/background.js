@@ -34,13 +34,35 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     ws.send(JSON.stringify({ type: 'step', step: { action: toDSL(msg.step) } }));
   }
   if (msg.type === 'stop') {
-    ws?.send(JSON.stringify({ type: 'finish' }));
-    ws?.close();
+    const stopTab = () => {
+      if (recordingTabId !== null) {
+        chrome.tabs.sendMessage(recordingTabId, { type: 'stop' });
+        recordingTabId = null;
+      }
+    };
+    const sock = ws;
     ws = null;
-    if (recordingTabId !== null) {
-      chrome.tabs.sendMessage(recordingTabId, { type: 'stop' });
-      recordingTabId = null;
+    if (sock && sock.readyState === 1) {
+      // flush 握手：发 finish 后等服务端处理完队列里的 step 并关闭连接，
+      // 再通知页面去调 finish HTTP——否则尾部步骤可能还没落到 session.steps。
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        stopTab();
+        sendResponse({ ok: true });
+      };
+      sock.onclose = () => done();
+      sock.send(JSON.stringify({ type: 'finish' }));
+      setTimeout(() => {
+        try { sock.close(); } catch { /* already closed */ }
+        done();
+      }, 3000);
+    } else {
+      stopTab();
+      sendResponse({ ok: true });
     }
+    return true;
   }
   return false;
 });
