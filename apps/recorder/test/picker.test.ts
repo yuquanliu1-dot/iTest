@@ -73,4 +73,20 @@ describe('ElementPicker', () => {
     el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     expect(results).toHaveLength(1);
   });
+
+  it('returns componentHint when picking inside antd select container', () => {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = '<span class="ant-select-selection">click</span>';
+    document.body.appendChild(wrap);
+    const target = wrap.querySelector('.ant-select-selection')!;
+    let result: PickResult | null = null;
+    picker.start((r) => {
+      result = r;
+    });
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(result).not.toBeNull();
+    expect(result!.componentHint).toBeDefined();
+    expect(result!.componentHint!.lib).toBe('antd');
+    wrap.remove();
+  });
 });
