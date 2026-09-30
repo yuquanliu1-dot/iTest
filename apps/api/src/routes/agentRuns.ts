@@ -17,20 +17,24 @@ const CreateBody = z.object({
   targetType: z.enum(['requirement2cases', 'case2script']),
   targetId: z.string().uuid(),
   prompt: z.string().min(1),
+  targetGroupId: z.string().uuid().optional(),
 });
 
 type RunRow = typeof agentRuns.$inferSelect;
 
-async function executeRun(run: RunRow) {
+async function executeRun(run: RunRow, opts: { targetGroupId?: string }) {
   // 走 settings 里的 LLM 配置；未配置 provider 默认为 mock（保持 MVP 启动体验）。
   // 当 provider != mock 且 apiKey 为空时，resolveLlmClient 抛错 → catch 把 error 写回 agent_runs。
   const { client, config } = await resolveLlmClient();
-  // 工具白名单随 run.targetId 构建；落库由 step.tools 处理（见 builtinTools.ts）。
-  const wf = run.targetType === 'requirement2cases'
-    ? buildRequirement2CasesWorkflow(run.targetId)
-    : buildCase2ScriptWorkflow(run.targetId);
   const logger = (await import('../logger.js')).logger;
   try {
+    if (run.targetType === 'requirement2cases' && !opts.targetGroupId) {
+      throw new Error('targetGroupId is required for requirement2cases');
+    }
+    // 工具白名单随 run.targetId 构建；落库由 step.tools 处理（见 builtinTools.ts）。
+    const wf = run.targetType === 'requirement2cases'
+      ? buildRequirement2CasesWorkflow(run.targetId, opts.targetGroupId ?? '')
+      : buildCase2ScriptWorkflow(run.targetId);
     logger.info({ runId: run.id, provider: config.provider, model: config.model }, 'agent run start');
     const result = (await runWorkflow({
       workflowId: wf.workflowId,
@@ -69,7 +73,7 @@ agentRunsRoute.post('/', async (req, res) => {
     .values({ targetType: body.targetType, targetId: body.targetId, status: 'running', prompt: body.prompt })
     .returning();
   const run = rows[0]!;
-  void executeRun(run);
+  void executeRun(run, { targetGroupId: body.targetGroupId });
   res.json(run);
 });
 
