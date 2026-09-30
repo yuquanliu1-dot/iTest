@@ -1,5 +1,6 @@
 import { chromium, type Browser, type Page } from 'playwright-core';
 import type { StepAction, Locator } from '@itest/shared';
+import { deepEqual, materializeValue } from '@itest/shared';
 import { logger } from '../logger.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -12,6 +13,7 @@ export interface ExecStepResult {
   durationMs: number;
   error?: string;
   screenshot?: string;
+  warning?: string;
 }
 
 export interface ExecContext {
@@ -20,6 +22,7 @@ export interface ExecContext {
 
 interface DispatchOpts {
   page: Page;
+  vars: Record<string, string>;
 }
 
 function locatorToPlaywright(page: Page, loc: Locator) {
@@ -48,8 +51,9 @@ function locatorToPlaywright(page: Page, loc: Locator) {
   }
 }
 
-async function dispatch(action: StepAction, opts: DispatchOpts): Promise<void> {
-  const { page } = opts;
+/** 执行单步；返回 warning 文本（无则 undefined）。失败抛错由调用方记 failed。 */
+async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
+  const { page, vars } = opts;
   switch (action.kind) {
     case 'navigate':
       await page.goto(action.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -58,7 +62,7 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<void> {
       await firstMatch(page, action.locator).click({ timeout: 5000 });
       return;
     case 'fill':
-      await firstMatch(page, action.locator).fill(action.value, { timeout: 5000 });
+      await firstMatch(page, action.locator).fill(materializeValue(action.value, vars), { timeout: 5000 });
       return;
     case 'hover':
       await firstMatch(page, action.locator).hover({ timeout: 5000 });
@@ -74,10 +78,55 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<void> {
     case 'assertText':
       await firstMatch(page, action.locator).filter({ hasText: action.equals }).first().waitFor({ state: 'visible', timeout: 5000 });
       return;
+    case 'assertJson': {
+      const text = (await firstMatch(page, action.locator).innerText({ timeout: 5000 })).trim();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error(`assertJson: 元素文本不是合法 JSON: ${text.slice(0, 100)}`);
+      }
+      if (!deepEqual(parsed, action.equals)) {
+        throw new Error(`assertJson 深比较失败: 实际 ${text.slice(0, 100)}`);
+      }
+      return;
+    }
     case 'screenshot':
-      // 命名截图：调用方负责把文件放到合适目录（executeCaseReal 走 screenshots/<reportId>/）。
       await page.screenshot({ path: action.name || 'snap' });
       return;
+    case 'check': {
+      const loc = firstMatch(page, action.locator);
+      const current = await loc.isChecked({ timeout: 5000 });
+      if (current !== action.checked) {
+        if (action.checked) await loc.check({ timeout: 5000 });
+        else await loc.uncheck({ timeout: 5000 });
+      }
+      return;
+    }
+    case 'select':
+      await firstMatch(page, action.locator).selectOption(materializeValue(action.value, vars), { timeout: 5000 });
+      return;
+    case 'upload':
+      // P5 才支持绑定回放文件；P1 记录 warning 并跳过，不算失败。
+      return '待绑定回放文件（后续版本支持），本次跳过';
+    case 'extract': {
+      const loc = firstMatch(page, action.locator);
+      let text: string;
+      try {
+        text = await loc.inputValue({ timeout: 5000 });
+      } catch {
+        text = await loc.innerText({ timeout: 5000 });
+      }
+      vars[action.varName] = text.trim();
+      return;
+    }
+    case 'aiStep': {
+      if (!action.compiled) throw new Error('AI 步骤未编译');
+      for (const sub of action.compiled) {
+        await dispatch(sub, opts);
+      }
+      return;
+    }
   }
 }
 
@@ -103,12 +152,13 @@ async function writeStepScreenshot(reportId: string, stepIndex: number, page: Pa
 /** 真实浏览器执行用例（playwright-core 驱动 chromium）。返回 step 粒度的执行结果。 */
 export async function executeCaseReal(
   caseId: string,
-  steps: Array<{ order: number; action: unknown }>,
+  steps: Array<{ order: number; action: unknown; delayMs?: number | null }>,
   ctx: ExecContext,
   targetUrl?: string,
 ): Promise<ExecStepResult[]> {
   let browser: Browser | undefined;
   const results: ExecStepResult[] = [];
+  const vars: Record<string, string> = {};
   try {
     browser = await chromium.launch({
       headless: true,
@@ -124,12 +174,14 @@ export async function executeCaseReal(
       const step = steps[i]!;
       const started = Date.now();
       try {
-        await dispatch(step.action as StepAction, { page });
+        if (step.delayMs) await page.waitForTimeout(step.delayMs);
+        const warning = await dispatch(step.action as StepAction, { page, vars });
         const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, page);
         results.push({
           order: step.order,
           status: 'passed',
           durationMs: Date.now() - started,
+          warning,
           screenshot,
         });
       } catch (e) {

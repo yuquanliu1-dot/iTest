@@ -49,7 +49,7 @@ executeRoute.post('/cases/:caseId/execute', async (req, res) => {
   try {
     stepResults = await executeCaseReal(
       caseId,
-      steps.map((s) => ({ order: s.order, action: s.action })),
+      steps.map((s) => ({ order: s.order, action: s.action, delayMs: s.delayMs })),
       { reportId },
     );
     const failed = stepResults.filter((r) => r.status === 'failed').length;
