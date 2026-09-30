@@ -17,7 +17,7 @@ import AgentStreamPanel from '../components/ui/AgentStreamPanel';
 type Tab = 'description' | 'reports' | 'recording';
 
 export default function CaseDetail() {
-  const { id } = useParams<{ id: string }>();
+  const { id, projectId } = useParams<{ id: string; projectId: string }>();
   const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
@@ -36,12 +36,20 @@ export default function CaseDetail() {
     enabled: !!id,
   });
 
+  const { data: groups } = useQuery({
+    queryKey: ['groups', projectId],
+    queryFn: () => api.projects.groups(projectId!),
+    enabled: !!projectId,
+  });
+  const group = groups?.find((g) => g.id === caseDetail?.groupId);
+
   const startRecording = useMutation({
     mutationFn: async () => {
       const session = await api.recorder.createSession(id!);
       recorder.setStatus('recording');
       recorder.setSession(session.sessionId);
       sessionRef.current = session.sessionId;
+      if (!targetUrl && session.resolvedUrl) setTargetUrl(session.resolvedUrl);
       const ok = await new Promise<boolean>((resolve) => {
         let settled = false;
         const finish = (v: boolean) => {
@@ -102,6 +110,7 @@ export default function CaseDetail() {
       const r = await api.recorder.finish(sessionId);
       sessionRef.current = null;
       recorder.reset();
+      setTargetUrl('');
       toast(`已写入 ${r.inserted} 个步骤`, 'success');
       qc.invalidateQueries({ queryKey: ['case', id] });
     },
@@ -156,12 +165,23 @@ export default function CaseDetail() {
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
+  const moveGroup = useMutation({
+    mutationFn: (groupId: string) => api.cases.patch(id!, { groupId }),
+    onSuccess: () => {
+      toast('已移动分组', 'success');
+      qc.invalidateQueries({ queryKey: ['case', id] });
+      qc.invalidateQueries({ queryKey: ['cases', projectId] });
+      qc.invalidateQueries({ queryKey: ['groups', projectId] });
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
   const execute = useMutation({
     mutationFn: () => api.cases.execute(id!),
     onSuccess: (r) => {
       toast('执行完成', 'success');
       qc.invalidateQueries({ queryKey: ['reports'] });
-      navigate(`/reports/${r.reportId}`);
+      navigate(`/p/${projectId}/reports/${r.reportId}`);
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -209,12 +229,12 @@ export default function CaseDetail() {
       {/* Header bar */}
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
         <button
-          onClick={() => navigate('/cases')}
+          onClick={() => navigate(`/p/${projectId}/groups/${caseDetail.groupId ?? ''}`)}
           className="flex items-center gap-1 text-[12px]"
           style={{ color: 'var(--color-foreground-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}
         >
-          <Icon name="arrowLeft" size={12} />
-          返回用例列表
+          <Icon name="chevronLeft" size={12} />
+          {group?.name ?? '用例列表'}
         </button>
         <span style={{ width: 1, height: 16, background: 'var(--color-glass-border)' }} />
         <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>
@@ -340,7 +360,7 @@ export default function CaseDetail() {
             {tab === 'reports' && (
               <div className="glass-card rounded-[12px] p-5">
                 <EmptyState icon="flag" title="前往报告列表查看" description="该用例所有执行报告已汇总到报告页。" action={
-                  <Button size="sm" onClick={() => navigate('/reports')}>打开报告页</Button>
+                  <Button size="sm" onClick={() => navigate(`/p/${projectId}/reports`)}>打开报告页</Button>
                 } />
               </div>
             )}
@@ -356,6 +376,25 @@ export default function CaseDetail() {
 
           {/* Right rail — 操作面板 */}
           <div className="w-[280px] shrink-0 flex flex-col gap-3">
+            <div className="glass-card rounded-[12px] p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-2" style={{ color: 'var(--color-foreground-muted)' }}>
+                所属分组
+              </div>
+              <select
+                className="input-base input-sm"
+                value={caseDetail.groupId ?? ''}
+                disabled={moveGroup.isPending}
+                onChange={(e) => moveGroup.mutate(e.target.value)}
+              >
+                {(groups ?? []).map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+              <p className="text-[11px] mt-2" style={{ color: 'var(--color-foreground-muted)' }}>
+                录制目标 URL 解析链：用例 URL → 分组域名 → 项目域名。
+              </p>
+            </div>
+
             <div className="glass-card rounded-[12px] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
                 AI 补充
