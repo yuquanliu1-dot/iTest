@@ -14,10 +14,11 @@ const CreateBody = z.object({
 });
 
 plansRoute.get('/', async (req, res) => {
+  const { projectId } = req.params as { projectId: string };
   const ps = await db
     .select()
     .from(executionPlans)
-    .where(eq(executionPlans.projectId, req.params.projectId))
+    .where(eq(executionPlans.projectId, projectId))
     .orderBy(asc(executionPlans.createdAt));
   const pcs = await db.select().from(planCases);
   const countByPlan = new Map<string, number>();
@@ -28,10 +29,11 @@ plansRoute.get('/', async (req, res) => {
 });
 
 plansRoute.post('/', async (req, res) => {
+  const { projectId } = req.params as { projectId: string };
   const body = CreateBody.parse(req.body);
   const rows = await db
     .insert(executionPlans)
-    .values({ ...body, projectId: req.params.projectId })
+    .values({ ...body, projectId })
     .returning();
   res.json(rows[0]);
 });
