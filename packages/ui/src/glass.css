@@ -1,17 +1,19 @@
+/* Glass panels — 全站唯一允许 backdrop-filter 的三个工具类（iDO DESIGN.md §9）。
+   半透明面板必须直接坐在渐变画布上，不可互相嵌套；
+   portals（modal/toast/popover）用不透明 --color-surface-overlay。 */
 .glass-panel {
-  background: var(--color-surface);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-glass);
+  background: var(--color-glass-panel);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
 }
-
 .glass-panel-strong {
-  background: var(--color-surface-strong);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-glass);
+  background: var(--color-glass-panel-strong);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+.glass-card {
+  background: var(--color-background-elevated);
+  border: 1px solid var(--color-glass-panel-border);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
 }
