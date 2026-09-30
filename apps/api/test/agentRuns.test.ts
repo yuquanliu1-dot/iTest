@@ -76,7 +76,7 @@ describe('agent-runs', () => {
     await new Promise((r) => setTimeout(r, 500));
     const detail = await request(app).get(`/api/agent-runs/${created.body.id}`);
     expect(detail.body.status).toBe('failed');
-    expect(detail.body.error).toMatch(/group/i);
+    expect(detail.body.error).toMatch(/targetGroupId/);
   });
 
   it('case2script run appends steps via saveSteps tool', async () => {
