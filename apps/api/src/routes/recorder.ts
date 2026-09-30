@@ -24,8 +24,9 @@ recorderRoute.post('/sessions', async (req, res) => {
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
   if (body.mode === 'resume') {
     const steps = await db.select().from(testSteps).where(eq(testSteps.caseId, body.caseId));
-    const upto = body.resumeFromOrder ?? steps.length;
-    const slice = steps.filter((s) => s.order <= upto);
+    // resumeFromOrder 是第一条新步骤的 order；之前的步骤只做校验（回放由扩展侧驱动）。
+    const upto = body.resumeFromOrder ?? steps.length + 1;
+    const slice = steps.filter((s) => s.order < upto);
     for (const s of slice) {
       const a = (s.action ?? {}) as { kind?: string; fileId?: string };
       if (a.kind === 'upload') {
@@ -42,12 +43,16 @@ recorderRoute.post('/sessions', async (req, res) => {
     resumeFromOrder: body.resumeFromOrder,
   });
   // Also persist the session row for audit
-  await db.insert(testSessions).values({
-    caseId: body.caseId,
-    mode: body.mode,
-    incognito: body.incognito ?? body.mode === 'incognito',
-    resumeFromOrder: body.resumeFromOrder ?? null,
-  });
+  const dbRow = await db
+    .insert(testSessions)
+    .values({
+      caseId: body.caseId,
+      mode: body.mode,
+      incognito: body.incognito ?? body.mode === 'incognito',
+      resumeFromOrder: body.resumeFromOrder ?? null,
+    })
+    .returning({ id: testSessions.id });
+  session.dbSessionId = dbRow[0]!.id;
   res.json({
     sessionId: session.sessionId,
     wsToken: process.env.RECORDER_TOKEN_SECRET ?? 'dev-secret-change-me',
@@ -83,8 +88,8 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
     });
     inserted++;
   }
-  if (session.tabs && session.tabs.length > 0) {
-    await db.update(testSessions).set({ tabs: session.tabs }).where(eq(testSessions.caseId, session.caseId));
+  if (session.tabs && session.tabs.length > 0 && session.dbSessionId) {
+    await db.update(testSessions).set({ tabs: session.tabs }).where(eq(testSessions.id, session.dbSessionId));
   }
   res.json({ inserted });
 });
