@@ -47,7 +47,7 @@ describe('recorder routes', () => {
     expect(r.body.mode).toBe('incognito');
   });
 
-  it('resume with upload step lacking fileId returns 409', async () => {
+  it('resume with unbound upload step in the prefix returns 409', async () => {
     const { groupId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'RU', groupId });
     await request(app).put(`/api/cases/${c.body.id}/steps`).send({
@@ -56,18 +56,48 @@ describe('recorder routes', () => {
           action: { kind: 'click', locator: [{ strategy: 'css', value: '#x' }] },
           source: 'manual',
         },
+        {
+          action: { kind: 'click', locator: [{ strategy: 'css', value: '#y' }] },
+          source: 'manual',
+        },
       ],
     });
-    // Force an upload step with no fileId (bypassing PUT validation)
-    await pool.query(`UPDATE test_steps SET action = $1 WHERE case_id = $2`, [
-      JSON.stringify({ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }] }),
-      c.body.id,
-    ]);
+    // Force step #1 into an upload step with no fileId (bypassing PUT validation)
+    await pool.query(
+      `UPDATE test_steps SET action = $1 WHERE case_id = $2 AND "order" = 1`,
+      [JSON.stringify({ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }] }), c.body.id],
+    );
+    // resumeFromOrder = 2 → prefix is step #1 (unbound upload) → 409
+    const r = await request(app).post('/api/recorder/sessions').send({
+      caseId: c.body.id,
+      mode: 'resume',
+      resumeFromOrder: 2,
+    });
+    expect(r.status).toBe(409);
+  });
+
+  it('resume boundary step itself is not validated', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'RB', groupId });
+    await request(app).put(`/api/cases/${c.body.id}/steps`).send({
+      steps: [
+        {
+          action: { kind: 'click', locator: [{ strategy: 'css', value: '#x' }] },
+          source: 'manual',
+        },
+      ],
+    });
+    // Step #1 is an unbound upload, but resume starts AT it (resumeFromOrder = 1),
+    // so the prefix is empty and creation must succeed.
+    await pool.query(
+      `UPDATE test_steps SET action = $1 WHERE case_id = $2 AND "order" = 1`,
+      [JSON.stringify({ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }] }), c.body.id],
+    );
     const r = await request(app).post('/api/recorder/sessions').send({
       caseId: c.body.id,
       mode: 'resume',
       resumeFromOrder: 1,
     });
-    expect(r.status).toBe(409);
+    expect(r.status).toBe(200);
   });
 });

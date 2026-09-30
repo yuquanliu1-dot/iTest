@@ -18,6 +18,8 @@ export interface RecorderSession {
   incognito?: boolean;
   resumeFromOrder?: number;
   tabs?: RecorderTabEvent[];
+  /** test_sessions audit row id, set by the route that persisted it. */
+  dbSessionId?: string;
 }
 
 const sessions = new Map<string, RecorderSession>();
