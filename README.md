@@ -24,17 +24,23 @@ Turborepo monorepo：
 ## 启动
 
 ```bash
-# 1. 起 PG + Redis
-docker compose -f infra/docker-compose.yml up -d
-
-# 2. 应用 migration
-cd apps/api && pnpm db:migrate && cd ../..
-
-# 3. 一键启动 web + api
-pnpm dev
+pnpm install
+pnpm dev   # 自动：docker compose 起 PG/Redis → drizzle migrate → turbo 并行起 web + api
 ```
 
 访问 http://localhost:5173。
+
+前提：本机装有 Docker（用于 PG/Redis）与 Node 22 + pnpm 9。
+
+## 用例执行（真实浏览器）
+
+执行走 playwright-core 驱动本机 chromium（headless），逐步截图存到 `apps/api/screenshots/<reportId>/`。
+chromium 二进制 **不会** 随 `pnpm install` 下载（playwright-core 不含浏览器安装器），需要本机已存在：
+
+- 装过 `playwright` / `playwright-core` 的 `npx playwright install chromium`，缓存位于 `~/Library/Caches/ms-playwright`（macOS）/ `~/.cache/ms-playwright`（Linux）；或
+- 设置 `CHROMIUM_PATH` 指向系统 chromium。
+
+两者都缺失时执行自动回退 mock 路径（随机 80% 通过 + 占位截图），报告中会标注。
 
 ## Chrome 扩展加载
 
@@ -46,11 +52,11 @@ pnpm dev
 
 ## 核心流程
 
-1. `/settings` 配置 LLM provider（默认 mock）
+1. `/settings` 配置 LLM provider（默认 mock；支持 openai / anthropic / google，model 留空用各 provider 默认模型）
 2. `/requirements` 新建需求 → 「⚡ 用 AI 生成用例」
-3. `/cases` 看到生成的用例 → 进入详情
-4. 用例详情页：「▶ 录制补充」（需 Chrome 扩展）、「▶ 执行（Mock）」
-5. `/reports` 查看执行结果
+3. `/cases` 看到生成的用例 → 进入详情（步骤可删除 / 上下移重排）
+4. 用例详情页：「▶ 录制补充」（需 Chrome 扩展）、「AI 补充步骤」、「▶ 执行」
+5. `/reports` 查看执行结果（含逐步截图）
 
 ## 测试
 
@@ -63,14 +69,15 @@ pnpm verify  # lint + typecheck + test
 ## MVP 范围
 
 ✅ 已实现：
-- 需求 → 用例（mock LLM）
-- 用例 → 步骤（mock LLM）
-- 用例执行（mock，80/20 通过率）
-- Chrome 扩展骨架（WS 推送步骤）
+- 需求 → 用例（Agent 工作流 + saveCase 工具落库；LLM 支持 mock / openai / anthropic / google）
+- 用例 → 步骤（case2script 工作流 + saveSteps / getCase 工具）
+- 用例执行（playwright-core 真实 chromium 回放，失败即停 + 逐步截图；无浏览器时 mock 回退）
+- Chrome 扩展录制（点击 / 输入 / hover 降噪，stop flush 握手防漏步骤）
+- 步骤编辑（删除 + 重排）
+- SSE agent 事件流（step_start / step_text / step_complete / workflow_complete）
 - 紫罗兰玻璃 UI 主题
 
 ❌ 不在 MVP：
-- 真实 CDP 回放
 - 多用户/权限
 - i18n
 - 移动端适配

@@ -110,7 +110,10 @@ export async function executeCaseReal(
   let browser: Browser | undefined;
   const results: ExecStepResult[] = [];
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: true,
+      executablePath: process.env.CHROMIUM_PATH || undefined,
+    });
     const context = await browser.newContext();
     const page = await context.newPage();
     // 导航到第一个 navigate 动作或外部传入的 targetUrl，否则就让用户先 navigate。
