@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -11,14 +12,7 @@ beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   process.env.DATABASE_URL = container.getConnectionUri();
   pool = new Pool({ connectionString: container.getConnectionUri() });
-  await pool.query(`
-    CREATE TABLE requirements (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), title varchar(200) NOT NULL, content text NOT NULL, status varchar(20) NOT NULL DEFAULT 'draft', created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
-    CREATE TABLE test_cases (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), requirement_id uuid REFERENCES requirements(id) ON DELETE CASCADE, title varchar(200) NOT NULL, description text, priority varchar(20) NOT NULL DEFAULT 'P1', status varchar(20) NOT NULL DEFAULT 'draft', created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
-    CREATE TABLE test_steps (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), case_id uuid REFERENCES test_cases(id) ON DELETE CASCADE NOT NULL, "order" integer NOT NULL, source varchar(20) NOT NULL, action jsonb NOT NULL, assertion jsonb, created_at timestamp NOT NULL DEFAULT now());
-    CREATE TABLE agent_runs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), target_type varchar(30) NOT NULL, target_id uuid NOT NULL, status varchar(20) NOT NULL, prompt text NOT NULL, result jsonb, error text, started_at timestamp NOT NULL DEFAULT now(), finished_at timestamp);
-    CREATE TABLE reports (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), case_id uuid REFERENCES test_cases(id) ON DELETE CASCADE NOT NULL, agent_run_id uuid REFERENCES agent_runs(id), status varchar(20) NOT NULL, duration_ms integer, step_results jsonb NOT NULL, summary text, created_at timestamp NOT NULL DEFAULT now());
-    CREATE TABLE settings (key varchar(100) PRIMARY KEY, value jsonb NOT NULL, updated_at timestamp NOT NULL DEFAULT now());
-  `);
+  await pool.query(SCHEMA_SQL);
   const { default: express } = await import('express');
   const { agentRunsRoute } = await import('../src/routes/agentRuns.js');
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
@@ -37,7 +31,8 @@ afterAll(async () => {
 
 describe('agent-runs', () => {
   it('POST creates run and returns id', async () => {
-    const req = await pool.query(`INSERT INTO requirements(title, content) VALUES ('t','c') RETURNING id`);
+    const { projectId } = await seedProject(pool);
+    const req = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('t','c',$1) RETURNING id`, [projectId]);
     const r = await request(app)
       .post('/api/agent-runs')
       .send({ targetType: 'requirement2cases', targetId: req.rows[0].id, prompt: 't' });
@@ -46,7 +41,8 @@ describe('agent-runs', () => {
   });
 
   it('GET /:id returns detail after finish', async () => {
-    const r0 = await pool.query(`INSERT INTO requirements(title, content) VALUES ('x','y') RETURNING id`);
+    const { projectId } = await seedProject(pool);
+    const r0 = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('x','y',$1) RETURNING id`, [projectId]);
     const created = await request(app)
       .post('/api/agent-runs')
       .send({ targetType: 'requirement2cases', targetId: r0.rows[0].id, prompt: 'requirement: p' });
@@ -56,7 +52,8 @@ describe('agent-runs', () => {
   });
 
   it('requirement2cases run persists cases + steps via saveCase tool', async () => {
-    const r0 = await pool.query(`INSERT INTO requirements(title, content) VALUES ('persist','req') RETURNING id`);
+    const { projectId } = await seedProject(pool);
+    const r0 = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('persist','req',$1) RETURNING id`, [projectId]);
     const created = await request(app)
       .post('/api/agent-runs')
       .send({ targetType: 'requirement2cases', targetId: r0.rows[0].id, prompt: 'requirement: login' });
@@ -70,8 +67,9 @@ describe('agent-runs', () => {
   });
 
   it('case2script run appends steps via saveSteps tool', async () => {
-    const c = await pool.query(`INSERT INTO requirements(title, content) VALUES ('s','t') RETURNING id`);
-    const tc = await pool.query(`INSERT INTO test_cases(requirement_id, title) VALUES ($1, '用例A') RETURNING id`, [c.rows[0]!.id]);
+    const { projectId, groupId } = await seedProject(pool);
+    const c = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('s','t',$1) RETURNING id`, [projectId]);
+    const tc = await pool.query(`INSERT INTO test_cases(requirement_id, title, group_id) VALUES ($1, '用例A', $2) RETURNING id`, [c.rows[0]!.id, groupId]);
     const created = await request(app)
       .post('/api/agent-runs')
       .send({ targetType: 'case2script', targetId: tc.rows[0]!.id, prompt: '用例: 登录' });

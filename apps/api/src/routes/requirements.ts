@@ -10,6 +10,7 @@ export const requirementsRoute = Router();
 const CreateBody = z.object({
   title: z.string().min(1).max(200),
   content: z.string().min(1),
+  projectId: z.string().uuid().optional(),
 });
 
 requirementsRoute.get('/', async (_req, res) => {
