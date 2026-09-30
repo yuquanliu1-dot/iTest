@@ -11,6 +11,7 @@ import GroupsPage from './pages/GroupsPage';
 import CaseDetail from './pages/CaseDetail';
 import Plans from './pages/Plans';
 import PlanDetail from './pages/PlanDetail';
+import PlanRunDetail from './pages/PlanRunDetail';
 import Reports from './pages/Reports';
 import ReportDetail from './pages/ReportDetail';
 import Settings from './pages/Settings';
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="requirements/:id" element={<RequirementDetail />} />
           <Route path="plans" element={<Plans />} />
           <Route path="plans/:id" element={<PlanDetail />} />
+          <Route path="plans/:id/runs/:runId" element={<PlanRunDetail />} />
           <Route path="reports" element={<Reports />} />
           <Route path="reports/:id" element={<ReportDetail />} />
         </Route>
