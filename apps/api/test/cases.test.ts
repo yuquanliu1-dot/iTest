@@ -68,4 +68,62 @@ describe('cases + steps', () => {
     });
     expect(r.status).toBe(400);
   });
+
+  it('PUT reorder rewrites order to 1..n', async () => {
+    const c = await request(app).post('/api/cases').send({ title: 'R' });
+    const appended = await request(app).post(`/api/cases/${c.body.id}/steps`).send({
+      steps: [1, 2, 3].map((order) => ({
+        order,
+        source: 'agent',
+        action: { kind: 'navigate', url: `https://x.test/${order}` },
+      })),
+    });
+    const ids = appended.body.steps.map((s: { id: string }) => s.id) as string[];
+    const reversed = [...ids].reverse();
+    const r = await request(app)
+      .put(`/api/cases/${c.body.id}/steps/reorder`)
+      .send({ stepIds: reversed });
+    expect(r.status).toBe(200);
+    expect(r.body.steps.map((s: { id: string }) => s.id)).toEqual(reversed);
+    expect(r.body.steps.map((s: { order: number }) => s.order)).toEqual([1, 2, 3]);
+  });
+
+  it('PUT reorder rejects partial id list', async () => {
+    const c = await request(app).post('/api/cases').send({ title: 'P' });
+    const appended = await request(app).post(`/api/cases/${c.body.id}/steps`).send({
+      steps: [1, 2].map((order) => ({
+        order,
+        source: 'agent',
+        action: { kind: 'navigate', url: 'https://x.test' },
+      })),
+    });
+    const ids = appended.body.steps.map((s: { id: string }) => s.id) as string[];
+    const r = await request(app)
+      .put(`/api/cases/${c.body.id}/steps/reorder`)
+      .send({ stepIds: [ids[0]] });
+    expect(r.status).toBe(400);
+  });
+
+  it('DELETE step removes it and compacts order', async () => {
+    const c = await request(app).post('/api/cases').send({ title: 'D' });
+    const appended = await request(app).post(`/api/cases/${c.body.id}/steps`).send({
+      steps: [1, 2, 3].map((order) => ({
+        order,
+        source: 'agent',
+        action: { kind: 'navigate', url: `https://x.test/${order}` },
+      })),
+    });
+    const ids = appended.body.steps.map((s: { id: string }) => s.id) as string[];
+    const r = await request(app).delete(`/api/cases/${c.body.id}/steps/${ids[1]}`);
+    expect(r.status).toBe(200);
+    const detail = await request(app).get(`/api/cases/${c.body.id}`);
+    expect(detail.body.steps).toHaveLength(2);
+    expect(detail.body.steps.map((s: { order: number }) => s.order)).toEqual([1, 2]);
+  });
+
+  it('DELETE unknown step returns 404', async () => {
+    const c = await request(app).post('/api/cases').send({ title: 'N' });
+    const r = await request(app).delete(`/api/cases/${c.body.id}/steps/00000000-0000-0000-0000-000000000000`);
+    expect(r.status).toBe(404);
+  });
 });

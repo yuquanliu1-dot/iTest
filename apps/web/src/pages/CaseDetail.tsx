@@ -149,6 +149,26 @@ export default function CaseDetail() {
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
+  const deleteStep = useMutation({
+    mutationFn: (stepId: string) => api.cases.deleteStep(id!, stepId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }),
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
+  const moveStep = useMutation({
+    mutationFn: ({ stepId, dir }: { stepId: string; dir: -1 | 1 }) => {
+      if (!caseDetail) throw new Error('case not loaded');
+      const ids = caseDetail.steps.map((s) => s.id);
+      const i = ids.indexOf(stepId);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= ids.length) throw new Error('cannot move');
+      [ids[i], ids[j]] = [ids[j]!, ids[i]!];
+      return api.cases.reorderSteps(id!, ids);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }),
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
   useEffect(() => {
     return () => {
       if (sessionRef.current) {
@@ -192,7 +212,7 @@ export default function CaseDetail() {
           disabled={execute.isPending || caseDetail.steps.length === 0}
         >
           <Icon name="play" size={12} />
-          执行（Mock）
+          执行
         </Button>
       </div>
 
@@ -240,18 +260,47 @@ export default function CaseDetail() {
                   />
                 ) : (
                   <ol className="flex flex-col gap-2">
-                    {caseDetail.steps.map((s) => (
+                    {caseDetail.steps.map((s, idx) => (
                       <li
                         key={s.id}
-                        className="flex items-start gap-3 px-3 py-2 rounded-[8px]"
+                        className="flex items-center gap-3 px-3 py-2 rounded-[8px]"
                         style={{ background: 'var(--color-background-subtle)', border: '1px solid var(--color-glass-border)' }}
                       >
                         <span className="text-[10px] uppercase font-semibold tracking-wide shrink-0" style={{ color: 'var(--color-accent)' }}>
                           {s.source}
                         </span>
+                        <span className="text-[11px] font-mono shrink-0 w-5" style={{ color: 'var(--color-foreground-muted)' }}>
+                          {idx + 1}
+                        </span>
                         <code className="text-[12px] font-mono flex-1 break-all" style={{ color: 'var(--color-foreground)' }}>
                           {JSON.stringify(s.action)}
                         </code>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => moveStep.mutate({ stepId: s.id, dir: -1 })}
+                            disabled={idx === 0 || moveStep.isPending}
+                            title="上移"
+                            style={{ background: 'transparent', border: 'none', cursor: idx === 0 ? 'default' : 'pointer', color: 'var(--color-foreground-muted)', opacity: idx === 0 ? 0.3 : 1, padding: 2 }}
+                          >
+                            <Icon name="chevronUp" size={12} />
+                          </button>
+                          <button
+                            onClick={() => moveStep.mutate({ stepId: s.id, dir: 1 })}
+                            disabled={idx === caseDetail.steps.length - 1 || moveStep.isPending}
+                            title="下移"
+                            style={{ background: 'transparent', border: 'none', cursor: idx === caseDetail.steps.length - 1 ? 'default' : 'pointer', color: 'var(--color-foreground-muted)', opacity: idx === caseDetail.steps.length - 1 ? 0.3 : 1, padding: 2 }}
+                          >
+                            <Icon name="chevronDown" size={12} />
+                          </button>
+                          <button
+                            onClick={() => deleteStep.mutate(s.id)}
+                            disabled={deleteStep.isPending}
+                            title="删除"
+                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 2 }}
+                          >
+                            <Icon name="trash" size={12} />
+                          </button>
+                        </div>
                       </li>
                     ))}
                   </ol>

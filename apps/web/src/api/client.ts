@@ -41,6 +41,13 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ steps }),
       }),
+    reorderSteps: (id: string, stepIds: string[]) =>
+      request<{ steps: TestStep[] }>(`/cases/${id}/steps/reorder`, {
+        method: 'PUT',
+        body: JSON.stringify({ stepIds }),
+      }),
+    deleteStep: (id: string, stepId: string) =>
+      request<{ ok: boolean }>(`/cases/${id}/steps/${stepId}`, { method: 'DELETE' }),
     execute: (id: string) =>
       request<{ reportId: string }>(`/cases/${id}/execute`, { method: 'POST' }),
   },
