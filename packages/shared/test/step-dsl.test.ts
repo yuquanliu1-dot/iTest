@@ -69,10 +69,11 @@ describe('step-dsl — phase1 new kinds', () => {
     expect(r.success).toBe(true);
   });
 
-  it('accepts upload action without fileName', () => {
+  it('accepts upload action with fileId', () => {
     const r = StepAction.safeParse({
       kind: 'upload',
       locator: [{ strategy: 'css', value: 'input[type=file]' }],
+      fileId: 'att-1',
     });
     expect(r.success).toBe(true);
   });
@@ -164,5 +165,48 @@ describe('step-dsl — phase1 new kinds', () => {
       value: { mode: 'randomNumber', min: 5, max: 2 },
     });
     expect(r.success).toBe(false);
+  });
+});
+
+describe('step-dsl — phase2 new kinds', () => {
+  it('accepts switchTab action', () => {
+    const r = StepAction.safeParse({
+      kind: 'switchTab',
+      tabRef: 'session-abc|tab#1',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts upload action with required fileId', () => {
+    const ok = StepAction.safeParse({
+      kind: 'upload',
+      locator: [{ strategy: 'css', value: 'input[type=file]' }],
+      fileId: 'att-1',
+    });
+    expect(ok.success).toBe(true);
+    const noFile = StepAction.safeParse({
+      kind: 'upload',
+      locator: [{ strategy: 'css', value: 'input[type=file]' }],
+    });
+    expect(noFile.success).toBe(false);
+  });
+
+  it('accepts fill action with sensitive flag', () => {
+    const r = StepAction.safeParse({
+      kind: 'fill',
+      locator: [{ strategy: 'css', value: 'input[type=password]' }],
+      value: 'placeholder-not-stored',
+      sensitive: true,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts fill without sensitive flag (existing behavior)', () => {
+    const r = StepAction.safeParse({
+      kind: 'fill',
+      locator: [{ strategy: 'css', value: '#name' }],
+      value: 'alice',
+    });
+    expect(r.success).toBe(true);
   });
 });
