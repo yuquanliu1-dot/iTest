@@ -19,6 +19,7 @@ export const requirements = pgTable('requirements', {
   title: varchar('title', { length: 200 }).notNull(),
   content: text('content').notNull(),
   status: varchar('status', { length: 20 }).notNull().default('draft'),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -26,6 +27,8 @@ export const requirements = pgTable('requirements', {
 export const testCases = pgTable('test_cases', {
   id: uuid('id').primaryKey().defaultRandom(),
   requirementId: uuid('requirement_id').references(() => requirements.id, { onDelete: 'cascade' }),
+  groupId: uuid('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
+  url: text('url'),
   title: varchar('title', { length: 200 }).notNull(),
   description: text('description'),
   priority: varchar('priority', { length: 20 }).notNull().default('P1'),
@@ -65,4 +68,37 @@ export const reports = pgTable('reports', {
   stepResults: jsonb('step_results').notNull(),
   summary: text('summary'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const projects = pgTable('projects', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: varchar('name', { length: 200 }).notNull(),
+  defaultUrl: text('default_url'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const groups = pgTable('groups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 200 }).notNull(),
+  defaultUrl: text('default_url'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const executionPlans = pgTable('execution_plans', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 200 }).notNull(),
+  environment: varchar('environment', { length: 100 }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const planCases = pgTable('plan_cases', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  planId: uuid('plan_id').notNull().references(() => executionPlans.id, { onDelete: 'cascade' }),
+  caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
+  order: integer('order').notNull(),
 });
