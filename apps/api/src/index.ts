@@ -18,6 +18,7 @@ app.use('/screenshots', express.static(join(process.cwd(), 'screenshots')));
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/settings', settingsRoute);
 app.use('/api/requirements', requirementsRoute);
+app.use('/api/projects/:projectId/requirements', requirementsRoute);
 app.use('/api/cases', casesRoute);
 app.use('/api/cases', stepsRoute);
 app.use('/api', executeRoute);
