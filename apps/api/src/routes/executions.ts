@@ -53,7 +53,7 @@ executionsRoute.get('/', async (req, res) => {
     const rows = q
       ? await db.select().from(planRuns).where(q).orderBy(desc(planRuns.startedAt))
       : await db.select().from(planRuns).orderBy(desc(planRuns.startedAt));
-    planRows = (rows as any[]).map((r) => ({
+    planRows = rows.map((r) => ({
       ...r,
       kind: 'plan' as const,
       createdAt: r.startedAt,
