@@ -1,7 +1,15 @@
 let ws = null;
 let recordingTabId = null;
+let paused = false;
 
 function toDSL(step) {
+  if (step.type === 'check') return { kind: 'check', locator: step.target, checked: !!step.checked };
+  if (step.type === 'select') return { kind: 'select', locator: step.target, value: step.value ?? '' };
+  if (step.type === 'upload') {
+    const dsl = { kind: 'upload', locator: step.target };
+    if (step.value) dsl.fileName = step.value;
+    return dsl;
+  }
   const dsl = { kind: step.type, locator: step.target };
   if (dsl.kind === 'fill') dsl.value = step.value ?? '';
   return dsl;
@@ -11,7 +19,11 @@ function attachTabInjector() {
   const onUpdated = (tabId, changeInfo) => {
     if (tabId !== recordingTabId || changeInfo.status !== 'complete') return;
     chrome.tabs.onUpdated.removeListener(onUpdated);
-    chrome.scripting.executeScript({ target: { tabId }, files: ['content/recorder.js'] });
+    chrome.scripting
+      .executeScript({ target: { tabId }, files: ['content/recorder.js'] })
+      // 修复启动链路：新 tab 里没有任何 ita-web window 消息源，注入完成后由 background 显式启动采集。
+      .then(() => chrome.tabs.sendMessage(tabId, { type: 'start' }))
+      .catch(() => {});
   };
   chrome.tabs.onUpdated.addListener(onUpdated);
 }
@@ -31,20 +43,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === 'step' && ws && ws.readyState === 1) {
-    ws.send(JSON.stringify({ type: 'step', step: { action: toDSL(msg.step) } }));
+    // 事件步骤：msg.step 是 RecordedStep，需转换；面板步骤：msg.dsl 已是 DSL。
+    const dsl = msg.dsl ?? toDSL(msg.step);
+    const url = msg.step?.url ?? msg.url ?? null;
+    ws.send(JSON.stringify({ type: 'step', step: { action: dsl, url } }));
   }
   if (msg.type === 'stop') {
     const stopTab = () => {
       if (recordingTabId !== null) {
         chrome.tabs.sendMessage(recordingTabId, { type: 'stop' });
         recordingTabId = null;
+        paused = false;
       }
     };
     const sock = ws;
     ws = null;
     if (sock && sock.readyState === 1) {
-      // flush 握手：发 finish 后等服务端处理完队列里的 step 并关闭连接，
-      // 再通知页面去调 finish HTTP——否则尾部步骤可能还没落到 session.steps。
       let settled = false;
       const done = () => {
         if (settled) return;
@@ -62,6 +76,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       stopTab();
       sendResponse({ ok: true });
     }
+    return true;
+  }
+  // —— 录制面板（popup / panel 窗口）消息 ——
+  if (msg.type === 'get-state') {
+    sendResponse({ recording: recordingTabId !== null, paused });
+    return;
+  }
+  if (msg.type === 'pause' || msg.type === 'resume') {
+    paused = msg.type === 'pause';
+    if (recordingTabId !== null) chrome.tabs.sendMessage(recordingTabId, { type: msg.type });
+    sendResponse({ ok: true });
+    return;
+  }
+  if (msg.type === 'pick' || msg.type === 'emit-step') {
+    if (recordingTabId === null) {
+      sendResponse({ ok: false, error: '当前没有录制中的标签页' });
+      return;
+    }
+    chrome.tabs.sendMessage(recordingTabId, msg, (resp) => {
+      sendResponse(resp ?? { ok: false });
+    });
     return true;
   }
   return false;
