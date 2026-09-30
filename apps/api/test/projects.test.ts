@@ -57,9 +57,16 @@ describe('projects', () => {
   });
 
   it('DELETE rejects non-empty project with 409', async () => {
-    const { projectId } = await seedProject(pool);
+    const { projectId, groupId } = await seedProject(pool);
+    await pool.query(`INSERT INTO test_cases(title, group_id) VALUES ('x', $1)`, [groupId]);
     const r = await request(app).delete(`/api/projects/${projectId}`);
     expect(r.status).toBe(409);
+  });
+
+  it('DELETE removes project with empty groups', async () => {
+    const { projectId } = await seedProject(pool);
+    const r = await request(app).delete(`/api/projects/${projectId}`);
+    expect(r.status).toBe(200);
   });
 
   it('DELETE removes empty project', async () => {
