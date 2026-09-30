@@ -58,11 +58,31 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ caseIds }),
       }),
-    run: (id: string) =>
-      request<{ results: Array<{ caseId: string; reportId: string; status: string }> }>(
-        `/plans/${id}/run`,
-        { method: 'POST' },
+    reorderCases: (id: string, caseIds: string[]) =>
+      request<{ ok: boolean }>(`/plans/${id}/cases/order`, {
+        method: 'PUT',
+        body: JSON.stringify({ caseIds }),
+      }),
+    loginCases: (id: string, q?: string) =>
+      request<Array<{ id: string; title: string; groupId: string }>>(
+        `/plans/${id}/login-cases${q ? `?q=${encodeURIComponent(q)}` : ''}`,
       ),
+    run: (id: string) =>
+      request<{ runId: string }>(`/plans/${id}/run`, { method: 'POST' }),
+  },
+  planRuns: {
+    get: (id: string) => request<PlanRunDetail>(`/plan-runs/${id}`),
+    cancel: (id: string) => request<{ ok: boolean }>(`/plan-runs/${id}/cancel`, { method: 'POST' }),
+    eventsUrl: (id: string) => `${BASE}/plan-runs/${id}/events`,
+  },
+  executions: {
+    list: (params?: { projectId?: string; kind?: 'case' | 'plan' | 'all' }) => {
+      const qs = new URLSearchParams();
+      if (params?.projectId) qs.set('projectId', params.projectId);
+      if (params?.kind) qs.set('kind', params.kind);
+      const s = qs.toString();
+      return request<ExecutionEntry[]>(`/executions${s ? `?${s}` : ''}`);
+    },
   },
   requirements: {
     get: (id: string) => request<Requirement>(`/requirements/${id}`),
@@ -178,8 +198,59 @@ export interface PlanWithCount extends ExecutionPlan {
   caseCount: number;
 }
 export interface PlanDetail extends ExecutionPlan {
-  cases: Array<{ id: string; order: number; title: string }>;
+  cases: Array<{ id: string; order: number; title: string; url: string | null }>;
 }
+export interface PlanRunDetail {
+  id: string;
+  planId: string;
+  planName: string | null;
+  status: string;
+  strategy: string;
+  loginPrepareEnabled: boolean;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  summary: string | null;
+  totalCases: number;
+  passedCases: number | null;
+  failedCases: number | null;
+  skippedCases: number | null;
+  cases: Array<{
+    id: string;
+    caseId: string;
+    reportId: string | null;
+    order: number;
+    status: string;
+    stepKind: 'business' | 'login_prepare';
+    startedAt: string | null;
+    finishedAt: string | null;
+    durationMs: number | null;
+    error: string | null;
+  }>;
+}
+export type ExecutionEntry =
+  | {
+      kind: 'case';
+      id: string;
+      caseId: string;
+      status: string;
+      durationMs: number | null;
+      summary: string | null;
+      createdAt: string;
+    }
+  | {
+      kind: 'plan';
+      id: string;
+      planId: string;
+      status: string;
+      summary: string | null;
+      totalCases: number;
+      passedCases: number | null;
+      failedCases: number | null;
+      skippedCases: number | null;
+      durationMs: number | null;
+      createdAt: string;
+    };
 export interface ProjectStats {
   requirements: number;
   cases: number;
