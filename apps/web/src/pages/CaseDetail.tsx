@@ -36,6 +36,8 @@ export default function CaseDetail() {
   const [streaming, setStreaming] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const [mode, setMode] = useState<'fresh' | 'append' | 'resume' | 'incognito'>('fresh');
+  const [resumeTarget, setResumeTarget] = useState<{ stepId: string; order: number } | null>(null);
   const clipboard = useStepClipboard();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<StepClip | null>(null);
@@ -106,7 +108,10 @@ export default function CaseDetail() {
 
   const startRecording = useMutation({
     mutationFn: async () => {
-      const session = await api.recorder.createSession(id!);
+      const opts: Parameters<typeof api.recorder.createSession>[1] = { mode };
+      if (mode === 'resume' && resumeTarget) opts.resumeFromOrder = resumeTarget.order + 1;
+      if (mode === 'incognito') opts.incognito = true;
+      const session = await api.recorder.createSession(id!, opts);
       recorder.setStatus('recording');
       recorder.setSession(session.sessionId);
       sessionRef.current = session.sessionId;
@@ -129,7 +134,7 @@ export default function CaseDetail() {
           {
             source: 'ita-web',
             type: 'start-recording',
-            session: { wsUrl: session.wsUrl, sessionId: session.sessionId, token: session.wsToken },
+            session: { wsUrl: session.wsUrl, sessionId: session.sessionId, token: session.wsToken, mode: opts.mode, ...(opts.incognito ? { incognito: true } : {}) },
             targetUrl,
           },
           '*',
@@ -481,6 +486,23 @@ export default function CaseDetail() {
                             <Icon name="chevronDown" size={12} />
                           </button>
                           <button
+                            disabled={recorder.status === 'recording'}
+                            onClick={async () => {
+                              const ok = window.confirm('录制前是否先回放该步骤之前的步骤？');
+                              setResumeTarget({ stepId: s.id, order: idx });
+                              setMode('resume');
+                              if (!ok) {
+                                toast('已选中从此处开始，前置步骤不会回放', 'info');
+                              } else {
+                                toast('已选中，录制时会先回放前置步骤', 'info');
+                              }
+                            }}
+                            title="从这里开始录制"
+                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
+                          >
+                            <Icon name="chevronRight" size={12} />
+                          </button>
+                          <button
                             onClick={() => {
                               editingIdxRef.current = idx;
                               editingSnapshotRef.current = toClip(s);
@@ -574,6 +596,22 @@ export default function CaseDetail() {
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
                 浏览器录制
               </div>
+              <select
+                className="input-base input-sm mb-2"
+                value={mode}
+                onChange={(e) => setMode(e.target.value as typeof mode)}
+                disabled={recorder.status === 'recording'}
+              >
+                <option value="fresh">全新录制（覆盖旧步骤）</option>
+                <option value="append">追加录制（保留旧步骤）</option>
+                <option value="resume">从这里开始</option>
+                <option value="incognito">无痕录制</option>
+              </select>
+              {mode === 'resume' && (
+                <p className="text-[11px] mb-2" style={{ color: 'var(--color-info)' }}>
+                  请在步骤列表中点「从这里开始」选择目标步骤。
+                </p>
+              )}
               <Input
                 label="录制目标 URL"
                 placeholder="https://example.com"
@@ -588,7 +626,16 @@ export default function CaseDetail() {
                   停止录制
                 </Button>
               ) : (
-                <Button onClick={() => startRecording.mutate()} className="w-full">
+                <Button
+                  onClick={() => {
+                    if (mode === 'resume' && !resumeTarget) {
+                      toast('请先在步骤列表里选「从这里开始」指定步骤', 'info');
+                      return;
+                    }
+                    startRecording.mutate();
+                  }}
+                  className="w-full"
+                >
                   <Icon name="play" size={12} />
                   录制补充
                 </Button>
