@@ -15,7 +15,7 @@ interface StepResult {
 }
 
 export default function ReportDetail() {
-  const { id } = useParams<{ id: string }>();
+  const { id, projectId } = useParams<{ id: string; projectId: string }>();
   const navigate = useNavigate();
   const { data, isLoading } = useQuery({
     queryKey: ['report', id],
@@ -41,11 +41,11 @@ export default function ReportDetail() {
       {/* Header bar */}
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
         <button
-          onClick={() => navigate('/reports')}
+          onClick={() => navigate(`/p/${projectId}/reports`)}
           className="flex items-center gap-1 text-[12px]"
           style={{ color: 'var(--color-foreground-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}
         >
-          <Icon name="arrowLeft" size={12} />
+          <Icon name="chevronLeft" size={12} />
           返回报告列表
         </button>
         <span style={{ width: 1, height: 16, background: 'var(--color-glass-border)' }} />
