@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
@@ -14,7 +14,12 @@ const GRID_COLS = 'grid-cols-[minmax(120px,1.2fr)_minmax(90px,0.7fr)_minmax(90px
 
 export default function Reports() {
   const navigate = useNavigate();
-  const { data, isLoading } = useQuery({ queryKey: ['reports'], queryFn: api.reports.list });
+  const { projectId } = useParams<{ projectId: string }>();
+  const { data, isLoading } = useQuery({
+    queryKey: ['reports', projectId],
+    queryFn: () => api.reports.list(projectId),
+    enabled: !!projectId,
+  });
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
@@ -61,7 +66,7 @@ export default function Reports() {
               {rows.map((r) => (
                 <div
                   key={r.id}
-                  onClick={() => navigate(`/reports/${r.id}`)}
+                  onClick={() => navigate(`/p/${projectId}/reports/${r.id}`)}
                   className={`grid ${GRID_COLS} items-center px-5 py-[12px] cursor-pointer transition-colors list-row-clickable`}
                   style={{ borderBottom: '1px solid var(--color-muted)' }}
                 >

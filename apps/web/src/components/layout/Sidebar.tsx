@@ -6,23 +6,15 @@ import Icon from '../Icon';
 import SidebarGroup, { type NavGroupDef } from './SidebarGroup';
 
 const TEST_GROUP: NavGroupDef = {
-  id: 'test',
-  label: '测试工作区',
+  id: 'workspace',
+  label: '工作区',
   items: [
-    { path: '/', icon: 'sparkles', label: '总览', end: true },
-    { path: '/requirements', icon: 'listChecks', label: '需求' },
-    { path: '/cases', icon: 'beaker', label: '用例' },
-    { path: '/reports', icon: 'flag', label: '报告' },
+    { path: '/', icon: 'layers', label: '项目', end: true },
+    { path: '/settings', icon: 'settings', label: '设置' },
   ],
 };
 
-const SYSTEM_GROUP: NavGroupDef = {
-  id: 'system',
-  label: '系统',
-  items: [{ path: '/settings', icon: 'settings', label: '设置' }],
-};
-
-const NAV_GROUPS: NavGroupDef[] = [TEST_GROUP, SYSTEM_GROUP];
+const NAV_GROUPS: NavGroupDef[] = [TEST_GROUP];
 
 export default function Sidebar() {
   const sidebarCollapsed = useLayoutStore((s) => s.sidebarCollapsed);

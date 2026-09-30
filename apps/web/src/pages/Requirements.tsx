@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useUIStore } from '../stores/ui';
@@ -17,10 +17,15 @@ const DEFAULT_PAGE_SIZE = 20;
 const GRID_COLS = 'grid-cols-[minmax(240px,2fr)_minmax(90px,0.7fr)_minmax(120px,1fr)]';
 
 export default function Requirements() {
+  const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['requirements'], queryFn: api.requirements.list });
+  const { data, isLoading } = useQuery({
+    queryKey: ['requirements', projectId],
+    queryFn: () => api.projects.requirements(projectId!),
+    enabled: !!projectId,
+  });
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -30,13 +35,14 @@ export default function Requirements() {
   const [content, setContent] = useState('');
 
   const create = useMutation({
-    mutationFn: () => api.requirements.create({ title, content }),
+    mutationFn: () => api.projects.createRequirement(projectId!, { title, content }),
     onSuccess: () => {
       setTitle('');
       setContent('');
       setShowCreate(false);
       toast('需求已创建', 'success');
-      qc.invalidateQueries({ queryKey: ['requirements'] });
+      qc.invalidateQueries({ queryKey: ['requirements', projectId] });
+      qc.invalidateQueries({ queryKey: ['project-stats', projectId] });
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -85,7 +91,7 @@ export default function Requirements() {
         </div>
       </div>
 
-      {/* Table card — flex-1 min-h-0：头部/工具栏占固定高度，卡片吃满剩余空间，只有行区滚动 */}
+      {/* Table card */}
       <div
         className="flex-1 min-h-0 mx-5 mb-5 flex flex-col rounded-[12px] overflow-hidden"
         style={{ background: 'var(--color-background-elevated)', border: '1px solid var(--color-glass-border)', boxShadow: 'var(--shadow-card)' }}
@@ -104,7 +110,6 @@ export default function Requirements() {
           />
         ) : (
           <>
-            {/* 表头 + 行共用同一 grid 模板，保证对齐 */}
             <div className={`grid ${GRID_COLS} items-center px-5 py-[10px] shrink-0`} style={{ background: 'var(--color-background-subtle)', borderBottom: '1px solid var(--color-border)' }}>
               <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>标题</span>
               <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>状态</span>
@@ -115,7 +120,7 @@ export default function Requirements() {
               {rows.map((r) => (
                 <div
                   key={r.id}
-                  onClick={() => navigate(`/requirements/${r.id}`)}
+                  onClick={() => navigate(`/p/${projectId}/requirements/${r.id}`)}
                   className={`grid ${GRID_COLS} items-center px-5 py-[12px] cursor-pointer transition-colors list-row-clickable`}
                   style={{ borderBottom: '1px solid var(--color-muted)' }}
                 >

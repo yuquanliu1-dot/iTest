@@ -1,25 +1,37 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { requirements } from '../db/schema.js';
-import { eq } from 'drizzle-orm';
+import { requirements, projects } from '../db/schema.js';
+import { eq, asc } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 
-export const requirementsRoute = Router();
+export const requirementsRoute = Router({ mergeParams: true });
 
 const CreateBody = z.object({
   title: z.string().min(1).max(200),
   content: z.string().min(1),
 });
 
-requirementsRoute.get('/', async (_req, res) => {
-  const rows = await db.select().from(requirements).orderBy(requirements.createdAt);
+/** 挂载在 /projects/:projectId/requirements —— 写操作校验项目存在并打 projectId。 */
+requirementsRoute.get('/', async (req, res) => {
+  const { projectId } = req.params as { projectId: string };
+  const rows = await db
+    .select()
+    .from(requirements)
+    .where(eq(requirements.projectId, projectId))
+    .orderBy(asc(requirements.createdAt));
   res.json(rows);
 });
 
 requirementsRoute.post('/', async (req, res) => {
+  const { projectId } = req.params as { projectId: string };
   const body = CreateBody.parse(req.body);
-  const rows = await db.insert(requirements).values(body).returning();
+  const p = await db.select().from(projects).where(eq(projects.id, projectId));
+  if (p.length === 0) throw new HttpError(404, 'not_found', 'project not found');
+  const rows = await db
+    .insert(requirements)
+    .values({ ...body, projectId })
+    .returning();
   res.json(rows[0]);
 });
 
