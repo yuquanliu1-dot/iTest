@@ -16,6 +16,7 @@ import { executeRoute } from './routes/execute.js';
 import { planRunsRoute } from './routes/planRuns.js';
 import { executionsRoute } from './routes/executions.js';
 import { attachmentsRoute } from './routes/attachments.js';
+import { secretsRoute } from './routes/secrets.js';
 import { attachRecorderWs } from './recorder/ws.js';
 
 const app = express();
@@ -31,6 +32,7 @@ app.use('/api/groups', groupsRoute);
 app.use('/api/cases', casesRoute);
 app.use('/api/cases', stepsRoute);
 app.use('/api/cases', attachmentsRoute);
+app.use('/api/cases', secretsRoute);
 app.use('/api', executeRoute);
 app.use('/api/reports', reportsRoute);
 app.use('/api/projects/:projectId/plans', plansRoute);
