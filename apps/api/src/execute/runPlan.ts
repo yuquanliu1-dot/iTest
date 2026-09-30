@@ -1,25 +1,15 @@
 import { eq, asc } from 'drizzle-orm';
-import { chromium, type BrowserContext } from 'playwright-core';
+import { chromium } from 'playwright-core';
 import { db } from '../db/client.js';
 import {
   executionPlans,
   planCases,
   planRuns,
   planRunCases,
-  testCases,
-  reports,
 } from '../db/schema.js';
 import { runCase } from './runCase.js';
 import { loginPrepare } from './loginPrepare.js';
 import { publishRunEvent, subscribeRunEvent } from '../sse/planRunBus.js';
-import { logger } from '../logger.js';
-
-const STATUS = {
-  RUNNING: 'running',
-  PASSED: 'passed',
-  FAILED: 'failed',
-  CANCELLED: 'cancelled',
-} as const;
 
 /** 单 planRun 的运行控制器：内存中保存 cancelRequested。 */
 const runState = new Map<string, { cancelRequested: boolean }>();
