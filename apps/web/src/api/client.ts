@@ -52,15 +52,18 @@ export const api = {
       id: string,
       steps: Array<{ action: unknown; source: string; name?: string; delayMs?: number }>,
     ) =>
-      request<{ steps: TestStep[] }>(`/cases/${id}/steps`, {
+      request<{ steps: TestStep[]; failedAi: number }>(`/cases/${id}/steps`, {
         method: 'PUT',
         body: JSON.stringify({ steps }),
       }),
     recompileStep: (id: string, instruction: string) =>
-      request<{ compiled: unknown[] | null }>(`/cases/${id}/steps/recompile`, {
-        method: 'POST',
-        body: JSON.stringify({ instruction }),
-      }),
+      request<{ compiled: import('@itest/shared').StepAction[] | null }>(
+        `/cases/${id}/steps/recompile`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ instruction }),
+        },
+      ),
     execute: (id: string) =>
       request<{ reportId: string }>(`/cases/${id}/execute`, { method: 'POST' }),
   },
