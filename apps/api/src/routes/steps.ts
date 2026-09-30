@@ -105,24 +105,25 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
     .parse(req.body);
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
-  await compileAiStepsInPlace(body.steps.map((s) => ({ action: s.action })));
-  await db.delete(testSteps).where(eq(testSteps.caseId, req.params.caseId));
-  const rows = body.steps.length
-    ? await db
-        .insert(testSteps)
-        .values(
-          body.steps.map((s, i) => ({
-            caseId: req.params.caseId,
-            order: i + 1,
-            source: s.source,
-            action: s.action as object,
-            name: s.name ?? null,
-            delayMs: s.delayMs ?? null,
-          })),
-        )
-        .returning()
-    : [];
-  res.json({ steps: rows.sort((a, b) => a.order - b.order) });
+  const failedAi = await compileAiStepsInPlace(body.steps.map((s) => ({ action: s.action })));
+  const rows = await db.transaction(async (tx) => {
+    await tx.delete(testSteps).where(eq(testSteps.caseId, req.params.caseId));
+    if (body.steps.length === 0) return [];
+    return tx
+      .insert(testSteps)
+      .values(
+        body.steps.map((s, i) => ({
+          caseId: req.params.caseId,
+          order: i + 1,
+          source: s.source,
+          action: s.action as object,
+          name: s.name ?? null,
+          delayMs: s.delayMs ?? null,
+        })),
+      )
+      .returning();
+  });
+  res.json({ steps: rows.sort((a, b) => a.order - b.order), failedAi });
 });
 
 /** 单独编译一条 AI 指令（步骤编辑页「重新编译」）。失败返回 compiled: null，不抛错。 */
