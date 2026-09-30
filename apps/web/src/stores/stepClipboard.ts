@@ -3,8 +3,8 @@ import { create } from 'zustand';
 export interface StepClip {
   action: unknown;
   source: string;
-  name?: string;
-  delayMs?: number;
+  name?: string | null;
+  delayMs?: number | null;
 }
 
 interface StepClipboardState {
