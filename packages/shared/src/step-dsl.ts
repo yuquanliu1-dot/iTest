@@ -28,6 +28,7 @@ export const FillAction = z.object({
   kind: z.literal('fill'),
   locator: z.array(Locator).min(1),
   value: FillValue,
+  sensitive: z.boolean().optional(),
 });
 export const HoverAction = z.object({ kind: z.literal('hover'), locator: z.array(Locator).min(1) });
 export const WaitForAction = z.object({
@@ -59,7 +60,11 @@ export const SelectAction = z.object({
 export const UploadAction = z.object({
   kind: z.literal('upload'),
   locator: z.array(Locator).min(1),
-  fileName: z.string().optional(),
+  fileId: z.string().min(1),
+});
+export const SwitchTabAction = z.object({
+  kind: z.literal('switchTab'),
+  tabRef: z.string().min(1).max(64),
 });
 export const AssertJsonAction = z.object({
   kind: z.literal('assertJson'),
@@ -84,6 +89,7 @@ export type StepAction =
   | z.infer<typeof CheckAction>
   | z.infer<typeof SelectAction>
   | z.infer<typeof UploadAction>
+  | z.infer<typeof SwitchTabAction>
   | z.infer<typeof AssertJsonAction>
   | z.infer<typeof ExtractAction>
   | { kind: 'aiStep'; instruction: string; compiled: StepAction[] | null };
@@ -100,6 +106,7 @@ export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
   CheckAction,
   SelectAction,
   UploadAction,
+  SwitchTabAction,
   AssertJsonAction,
   ExtractAction,
   z.object({
