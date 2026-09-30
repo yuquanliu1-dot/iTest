@@ -222,6 +222,31 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(results[0]!.status).toBe('passed');
   });
 
+  it('steps after switchTab operate on the switched page', async () => {
+    const otherPage = {
+      goto: vi.fn().mockResolvedValue(undefined),
+      locator: vi.fn().mockReturnValue({
+        click: vi.fn().mockResolvedValue(undefined),
+        first: vi.fn().mockReturnThis(),
+      }),
+      screenshot: vi.fn().mockResolvedValue(undefined),
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      bringToFront: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Page & { locator: ReturnType<typeof vi.fn> };
+    const firstPage = mocked.__page;
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000016',
+      [
+        { order: 1, action: { kind: 'switchTab', tabRef: 'session-x|tab#1' } },
+        { order: 2, action: { kind: 'click', locator: [{ strategy: 'css', value: '#after-switch' }] } },
+      ],
+      { reportId: 'r-switch-follow', tabMap: new Map([['session-x|tab#1', otherPage]]) },
+    );
+    expect(results.map((r) => r.status)).toEqual(['passed', 'passed']);
+    expect(otherPage.locator).toHaveBeenCalledWith('#after-switch');
+    expect((firstPage.locator as ReturnType<typeof vi.fn>)).not.toHaveBeenCalledWith('#after-switch');
+  });
+
   it('switchTab without matching tabMap entry fails with tab-missing', async () => {
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000011',
