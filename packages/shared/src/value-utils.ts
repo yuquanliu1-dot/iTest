@@ -25,13 +25,13 @@ export function evaluateGenerator(gen: ValueGenerator): string {
   }
 }
 
-const VAR_RE = /\{\{(\w+)\}\}/g;
+const VAR_RE = /\{\{([^{}]+)\}\}/g;
 
 /** 替换 {{var}} 模板；未定义变量抛错并列出缺失变量名。 */
 export function substituteVars(text: string, vars: Record<string, string>): string {
   const missing: string[] = [];
   const out = text.replace(VAR_RE, (m, name: string) => {
-    if (!(name in vars)) {
+    if (!Object.hasOwn(vars, name)) {
       missing.push(name);
       return m;
     }

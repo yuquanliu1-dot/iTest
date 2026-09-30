@@ -156,4 +156,13 @@ describe('step-dsl — phase1 new kinds', () => {
       expect(v.length).toBe(12);
     }
   });
+
+  it('rejects randomNumber with inverted range', () => {
+    const r = StepAction.safeParse({
+      kind: 'fill',
+      locator: [{ strategy: 'css', value: '#x' }],
+      value: { mode: 'randomNumber', min: 5, max: 2 },
+    });
+    expect(r.success).toBe(false);
+  });
 });

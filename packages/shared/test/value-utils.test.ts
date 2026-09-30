@@ -30,6 +30,12 @@ describe('substituteVars', () => {
   it('leaves text without templates untouched', () => {
     expect(substituteVars('plain', {})).toBe('plain');
   });
+  it('does not resolve prototype-chain keys like toString', () => {
+    expect(() => substituteVars('{{toString}}', {})).toThrow(/toString/);
+  });
+  it('supports non-ASCII variable names', () => {
+    expect(substituteVars('订单{{订单号}}', { 订单号: 'A1' })).toBe('订单A1');
+  });
 });
 
 describe('materializeValue', () => {

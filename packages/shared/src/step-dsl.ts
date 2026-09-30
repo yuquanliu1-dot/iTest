@@ -11,12 +11,14 @@ export type Locator = z.infer<typeof Locator>;
 
 export const NavigateAction = z.object({ kind: z.literal('navigate'), url: z.string().url() });
 export const ClickAction = z.object({ kind: z.literal('click'), locator: z.array(Locator).min(1) });
-export const ValueGenerator = z.discriminatedUnion('mode', [
-  z.object({ mode: z.literal('randomString'), length: z.number().int().min(1).max(200).default(12) }),
-  z.object({ mode: z.literal('randomNumber'), min: z.number().int().default(0), max: z.number().int().default(999999) }),
-  z.object({ mode: z.literal('timestamp') }),
-  z.object({ mode: z.literal('prefixTimestamp'), prefix: z.string().min(1).max(100) }),
-]);
+export const ValueGenerator = z
+  .discriminatedUnion('mode', [
+    z.object({ mode: z.literal('randomString'), length: z.number().int().min(1).max(200).default(12) }),
+    z.object({ mode: z.literal('randomNumber'), min: z.number().int().default(0), max: z.number().int().default(999999) }),
+    z.object({ mode: z.literal('timestamp') }),
+    z.object({ mode: z.literal('prefixTimestamp'), prefix: z.string().min(1).max(100) }),
+  ])
+  .refine((d) => d.mode !== 'randomNumber' || d.max >= d.min, { message: 'max must be >= min' });
 export type ValueGenerator = z.infer<typeof ValueGenerator>;
 
 export const FillValue = z.union([z.string(), ValueGenerator]);
