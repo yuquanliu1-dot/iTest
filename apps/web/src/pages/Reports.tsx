@@ -8,42 +8,52 @@ import EmptyState from '../components/ui/EmptyState';
 import Pagination from '../components/ui/Pagination';
 import { shortDateTime, fullDateTime } from '../lib/format';
 
+type Tab = 'all' | 'case' | 'plan';
 const DEFAULT_PAGE_SIZE = 20;
 
-const GRID_COLS = 'grid-cols-[minmax(120px,1.2fr)_minmax(90px,0.7fr)_minmax(90px,0.8fr)_minmax(120px,1fr)]';
-
-export default function Reports() {
+export default function Executions() {
   const navigate = useNavigate();
   const { projectId } = useParams<{ projectId: string }>();
-  const { data, isLoading } = useQuery({
-    queryKey: ['reports', projectId],
-    queryFn: () => api.reports.list(projectId),
-    enabled: !!projectId,
-  });
-
+  const [tab, setTab] = useState<Tab>('all');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['executions', projectId, tab],
+    queryFn: () => api.executions.list({ projectId, kind: tab }),
+    enabled: !!projectId,
+  });
 
   const rows = useMemo(() => (data ?? []).slice((page - 1) * pageSize, page * pageSize), [data, page, pageSize]);
   const total = data?.length ?? 0;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Page header */}
       <div className="flex items-center justify-between px-5 pt-4 pb-0">
         <div>
-          <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--color-foreground)' }}>
-            报告
-          </h1>
-          <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
-            用例执行结果与步骤时间线
-          </p>
+          <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--color-foreground)' }}>执行历史</h1>
+          <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>用例执行结果与计划运行汇总</p>
         </div>
       </div>
-
-      {/* Table card */}
+      <div className="px-5 pt-3 flex gap-2">
+        {(['all', 'case', 'plan'] as Tab[]).map((t) => (
+          <button
+            key={t}
+            onClick={() => { setTab(t); setPage(1); }}
+            className="px-3 py-1.5 rounded-[8px] text-[12px]"
+            style={{
+              background: tab === t ? 'var(--color-accent)' : 'var(--color-background-subtle)',
+              color: tab === t ? 'var(--color-accent-foreground)' : 'var(--color-foreground-secondary)',
+              border: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            {t === 'all' ? '所有' : t === 'case' ? '单用例' : '计划运行'}
+          </button>
+        ))}
+      </div>
       <div
-        className="flex-1 min-h-0 mx-5 mb-5 flex flex-col rounded-[12px] overflow-hidden"
+        className="flex-1 min-h-0 mx-5 mb-5 mt-4 flex flex-col rounded-[12px] overflow-hidden"
         style={{ background: 'var(--color-background-elevated)', border: '1px solid var(--color-glass-border)', boxShadow: 'var(--shadow-card)' }}
       >
         {isLoading ? (
@@ -52,40 +62,34 @@ export default function Reports() {
             <span style={{ marginLeft: 8 }}>加载中...</span>
           </div>
         ) : rows.length === 0 ? (
-          <EmptyState icon="flag" title="还没有报告" description="到用例详情页执行用例，结果会在这里汇总。" />
+          <EmptyState icon="flag" title="还没有执行记录" description="在执行计划或用例详情页运行测试后会出现在这里。" />
         ) : (
           <>
-            <div className={`grid ${GRID_COLS} items-center px-5 py-[10px] shrink-0`} style={{ background: 'var(--color-background-subtle)', borderBottom: '1px solid var(--color-border)' }}>
-              <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>用例 ID</span>
+            <div className="grid grid-cols-[80px_1fr_120px_120px] items-center px-5 py-[10px] shrink-0" style={{ background: 'var(--color-background-subtle)', borderBottom: '1px solid var(--color-border)' }}>
+              <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>类型</span>
+              <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>标识</span>
               <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>状态</span>
-              <span className="text-[11px] font-medium uppercase tracking-[0.03em] text-right" style={{ color: 'var(--color-foreground-muted)' }}>耗时</span>
               <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>时间</span>
             </div>
-
             <div className="flex-1 min-h-0 overflow-y-auto">
               {rows.map((r) => (
                 <div
                   key={r.id}
-                  onClick={() => navigate(`/p/${projectId}/reports/${r.id}`)}
-                  className={`grid ${GRID_COLS} items-center px-5 py-[12px] cursor-pointer transition-colors list-row-clickable`}
+                  onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/reports/${r.id}`)}
+                  className="grid grid-cols-[80px_1fr_120px_120px] items-center px-5 py-[12px] cursor-pointer transition-colors list-row-clickable"
                   style={{ borderBottom: '1px solid var(--color-muted)' }}
                 >
-                  <span className="text-[11px] font-mono truncate" style={{ color: 'var(--color-foreground-muted)' }} title={r.caseId}>
-                    {r.caseId.slice(0, 8)}
+                  <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>{r.kind === 'plan' ? '计划' : '用例'}</span>
+                  <span className="text-[12px] font-mono truncate" style={{ color: 'var(--color-foreground-secondary)' }}>
+                    {r.kind === 'plan' ? `run ${r.id.slice(0, 8)}` : `case ${(r as { caseId: string }).caseId.slice(0, 8)}`}
                   </span>
-                  <span>
-                    <StatusPill status={r.status}>{r.status}</StatusPill>
-                  </span>
-                  <span className="text-[12px] font-mono text-right" style={{ color: 'var(--color-foreground-secondary)' }}>
-                    {r.durationMs != null ? `${r.durationMs} ms` : '—'}
-                  </span>
+                  <span><StatusPill status={r.status}>{r.status}</StatusPill></span>
                   <span className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }} title={fullDateTime(r.createdAt)}>
                     {shortDateTime(r.createdAt)}
                   </span>
                 </div>
               ))}
             </div>
-
             <Pagination
               page={page}
               pageSize={pageSize}
