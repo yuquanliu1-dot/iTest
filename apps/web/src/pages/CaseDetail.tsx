@@ -12,6 +12,7 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Segmented from '../components/ui/Segmented';
 import EmptyState from '../components/ui/EmptyState';
+import AgentStreamPanel from '../components/ui/AgentStreamPanel';
 
 type Tab = 'description' | 'reports' | 'recording';
 
@@ -26,6 +27,7 @@ export default function CaseDetail() {
   const [tab, setTab] = useState<Tab>('description');
   const [targetUrl, setTargetUrl] = useState('');
   const [streaming, setStreaming] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(null);
 
   const { data: caseDetail } = useQuery({
@@ -102,6 +104,7 @@ export default function CaseDetail() {
         }),
       });
       setStreaming(true);
+      setActiveRunId(run.id);
       return new Promise<void>((resolve, reject) => {
         const es = new EventSource(api.agentRuns.eventsUrl(run.id));
         es.onmessage = (e) => {
@@ -211,7 +214,13 @@ export default function CaseDetail() {
         <div className="flex gap-5 px-6 pb-6">
           <div className="flex-1 min-w-0 flex flex-col gap-4">
             {tab === 'description' && (
-              <div className="glass-card rounded-[12px] p-5">
+              <div className="flex flex-col gap-4">
+                <AgentStreamPanel
+                  runId={activeRunId}
+                  streaming={streaming}
+                  errorMessage={(genSteps.error as Error | null)?.message}
+                />
+                <div className="glass-card rounded-[12px] p-5">
                 <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
                   {caseDetail.description ? '描述' : '（无描述）'}
                 </div>
@@ -258,6 +267,7 @@ export default function CaseDetail() {
                     ✕ {recorder.errorMessage}
                   </p>
                 )}
+                </div>
               </div>
             )}
 

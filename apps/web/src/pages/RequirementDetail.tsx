@@ -7,6 +7,7 @@ import { useAgentRunStore } from '../stores/agentRun';
 import Icon from '../components/Icon';
 import StatusPill from '../components/ui/StatusPill';
 import Button from '../components/ui/Button';
+import AgentStreamPanel from '../components/ui/AgentStreamPanel';
 import { fullDateTime } from '../lib/format';
 
 export default function RequirementDetail() {
@@ -17,6 +18,7 @@ export default function RequirementDetail() {
   const pushEvent = useAgentRunStore((s) => s.pushEvent);
   const clearEvents = useAgentRunStore((s) => s.clear);
   const [streaming, setStreaming] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
 
   const { data: req } = useQuery({
     queryKey: ['requirement', id],
@@ -32,6 +34,7 @@ export default function RequirementDetail() {
         targetId: id!,
         prompt: req?.content ?? '',
       });
+      setActiveRunId(run.id);
       setStreaming(true);
       return new Promise<void>((resolve, reject) => {
         const es = new EventSource(api.agentRuns.eventsUrl(run.id));
@@ -113,6 +116,7 @@ export default function RequirementDetail() {
                 {req.content}
               </pre>
             </div>
+            <AgentStreamPanel runId={activeRunId} streaming={streaming} errorMessage={(generateCases.error as Error | null)?.message} />
           </div>
 
           <div className="w-[280px] shrink-0 flex flex-col gap-3">
@@ -140,7 +144,7 @@ export default function RequirementDetail() {
                 AI 提示
               </div>
               <p className="text-[12px]" style={{ color: 'var(--color-foreground-secondary)' }}>
-                将使用 Mock LLM 把上述需求解析为结构化用例并写入数据库。
+                优先使用 settings 中的 LLM 配置；未配置时降级为 mock provider。
               </p>
             </div>
           </div>

@@ -1,10 +1,15 @@
 import { create } from 'zustand';
 
+export interface AgentRunEvent {
+  type: string;
+  payload: unknown;
+}
+
 interface AgentRunState {
   activeRunId: string | null;
-  events: Array<{ type: string; payload: unknown }>;
+  events: AgentRunEvent[];
   setActive: (runId: string | null) => void;
-  pushEvent: (event: { type: string; payload: unknown }) => void;
+  pushEvent: (event: AgentRunEvent) => void;
   clear: () => void;
 }
 

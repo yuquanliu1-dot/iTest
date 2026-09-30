@@ -5,10 +5,11 @@ import { agentRuns, requirements, testCases, testSteps } from '../db/schema.js';
 import { eq, desc } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { runWorkflow } from '../agent/agentFactory.js';
-import { getLlmClient } from '../agent/llm-client.js';
+import { resolveLlmClient } from '../agent/llmSettings.js';
 import { requirement2CasesWorkflow } from '../agent/workflows/requirement2cases.js';
 import { case2ScriptWorkflow } from '../agent/workflows/case2script.js';
 import { sseHeaders, sseSend } from '../sse/agentRunStream.js';
+import { publishRunEvent, subscribeRun } from '../sse/runBus.js';
 import { StepAction } from '@itest/shared';
 
 export const agentRunsRoute = Router();
@@ -22,15 +23,19 @@ const CreateBody = z.object({
 type RunRow = typeof agentRuns.$inferSelect;
 
 async function executeRun(run: RunRow) {
-  const client = getLlmClient({ provider: 'mock', apiKey: '', model: '' });
+  // 走 settings 里的 LLM 配置；未配置 provider 默认为 mock（保持 MVP 启动体验）。
+  // 当 provider != mock 且 apiKey 为空时，resolveLlmClient 抛错 → catch 把 error 写回 agent_runs。
+  const { client, config } = await resolveLlmClient();
   const wf = run.targetType === 'requirement2cases' ? requirement2CasesWorkflow : case2ScriptWorkflow;
+  const logger = (await import('../logger.js')).logger;
   try {
+    logger.info({ runId: run.id, provider: config.provider, model: config.model }, 'agent run start');
     const result = (await runWorkflow({
       workflowId: wf.workflowId,
       steps: wf.steps,
       llmClient: client,
       initialMessage: run.prompt,
-      onEvent: () => {},
+      onEvent: (e) => publishRunEvent(run.id, e),
     })) as unknown[];
     await db
       .update(agentRuns)
@@ -125,22 +130,20 @@ agentRunsRoute.get('/:id/events', async (req, res) => {
     res.end();
     return;
   }
-  const poll = setInterval(async () => {
-    const current = (await db.select().from(agentRuns).where(eq(agentRuns.id, req.params.id)))[0];
-    if (!current) {
-      clearInterval(poll);
-      res.end();
-      return;
+  const run = rows[0]!;
+
+  // 已结束的 run：直接补发终态事件后关闭（前端 EventSource 不会收到 step 流，但能拿到最终结果）。
+  if (run.status === 'success' || run.status === 'failed') {
+    if (run.status === 'success') {
+      sseSend(res, { type: 'workflow_complete', runId: run.id, result: run.result });
+    } else {
+      sseSend(res, { type: 'workflow_error', runId: run.id, error: run.error ?? 'unknown', code: 'unknown' });
     }
-    if (current.status === 'success') {
-      clearInterval(poll);
-      sseSend(res, { type: 'workflow_complete', runId: current.id, result: current.result });
-      res.end();
-    } else if (current.status === 'failed') {
-      clearInterval(poll);
-      sseSend(res, { type: 'workflow_error', runId: current.id, error: current.error ?? 'unknown', code: 'unknown' });
-      res.end();
-    }
-  }, 200);
-  res.on('close', () => clearInterval(poll));
+    res.end();
+    return;
+  }
+
+  // 运行中：订阅 runBus，runBus 由 executeRun 在 step_start/step_text/step_complete 时刻写入。
+  const unsubscribe = subscribeRun(run.id, res);
+  res.on('close', unsubscribe);
 });

@@ -10,14 +10,27 @@ export interface RecordedStep {
 
 type StepHandler = (step: RecordedStep) => void;
 
+/**
+ * 浏览器端录制协调器：
+ *  - click / input / mouseover 三个事件都被捕获并生成多候选 locator。
+ *  - 200ms 内的重复 click 去重（双击是用户意图但不应产生 2 个 click 步骤）。
+ *  - 当 input 事件触发时，跳过紧随其后的 mouseover，避免「键入即 hover」噪声。
+ *  - 输入框上 hover 不被发射（hover-when-input 抑制）。
+ */
 export class RecorderManager {
   private active = false;
   private handler: StepHandler | null = null;
   private listeners: Array<{ el: EventTarget; type: string; fn: EventListener }> = [];
+  private lastClick: { signature: string; at: number } | null = null;
+  private lastInputAt: number | null = null;
+  private static DEDUP_WINDOW_MS = 200;
+  private static HOVER_SUPPRESS_AFTER_INPUT_MS = 300;
 
   start(handler: StepHandler) {
     this.active = true;
     this.handler = handler;
+    this.lastClick = null;
+    this.lastInputAt = null;
     this.attachListeners();
   }
 
@@ -31,16 +44,26 @@ export class RecorderManager {
     const onClick = (e: Event) => {
       const target = e.target as Element;
       if (!target) return;
+      const locs = generateLocators(target);
+      const sig = locs.map((l) => `${l.strategy}:${l.value}`).join('|');
+      const now = Date.now();
+      if (this.lastClick && this.lastClick.signature === sig && now - this.lastClick.at < RecorderManager.DEDUP_WINDOW_MS) {
+        // 200ms 内同一目标重复点击视为双击，不重复写步骤。
+        this.lastClick.at = now;
+        return;
+      }
+      this.lastClick = { signature: sig, at: now };
       this.handler?.({
         type: 'click',
-        target: generateLocators(target),
+        target: locs,
         url: location.href,
-        timestamp: Date.now(),
+        timestamp: now,
       });
     };
     const onInput = (e: Event) => {
       const target = e.target as HTMLInputElement;
       if (!target) return;
+      this.lastInputAt = Date.now();
       this.handler?.({
         type: 'fill',
         target: generateLocators(target),
@@ -52,6 +75,12 @@ export class RecorderManager {
     const onMouseOver = (e: Event) => {
       const target = e.target as Element;
       if (!target) return;
+      // hover-when-input 抑制：刚刚输入完，跳过紧随的 hover 噪声。
+      const sinceInput = this.lastInputAt !== null ? Date.now() - this.lastInputAt : Infinity;
+      if (sinceInput < RecorderManager.HOVER_SUPPRESS_AFTER_INPUT_MS) return;
+      // 在表单元素上 hover 也不发：用户聚焦输入而不是悬停。
+      const tag = (target.tagName ?? '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
       this.handler?.({
         type: 'hover',
         target: generateLocators(target),
