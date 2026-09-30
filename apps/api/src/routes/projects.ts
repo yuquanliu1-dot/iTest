@@ -56,7 +56,11 @@ projectsRoute.patch('/:id', async (req, res) => {
 
 projectsRoute.delete('/:id', async (req, res) => {
   const gs = await db.select().from(groups).where(eq(groups.projectId, req.params.id));
-  if (gs.length > 0) throw new HttpError(409, 'not_empty', 'project has groups');
+  if (gs.length > 0) {
+    const counts = await caseCountsByGroup();
+    const total = gs.reduce((sum, g) => sum + (counts.get(g.id) ?? 0), 0);
+    if (total > 0) throw new HttpError(409, 'not_empty', 'project has cases');
+  }
   const deleted = await db.delete(projects).where(eq(projects.id, req.params.id)).returning();
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'project not found');
   res.json({ ok: true });
