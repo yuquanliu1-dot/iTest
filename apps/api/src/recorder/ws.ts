@@ -2,11 +2,22 @@ import type { Server } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { URL } from 'url';
 
+export interface RecorderTabEvent {
+  kind: 'opened' | 'closed';
+  tabRef: string;
+  title?: string;
+  url?: string;
+}
+
 export interface RecorderSession {
   sessionId: string;
   caseId: string;
   steps: unknown[];
   ws?: WebSocket;
+  mode?: 'fresh' | 'append' | 'resume' | 'incognito';
+  incognito?: boolean;
+  resumeFromOrder?: number;
+  tabs?: RecorderTabEvent[];
 }
 
 const sessions = new Map<string, RecorderSession>();
@@ -35,7 +46,8 @@ export function attachRecorderWs(server: Server) {
         try {
           const msg = JSON.parse(raw.toString());
           if (msg.type === 'step') session.steps.push(msg.step);
-          if (msg.type === 'finish') ws.close(1000);
+          else if (msg.type === 'tab-event' && session.tabs) session.tabs.push(msg.event);
+          else if (msg.type === 'finish') ws.close(1000);
         } catch {
           // ignore malformed
         }
@@ -47,8 +59,19 @@ export function attachRecorderWs(server: Server) {
   });
 }
 
-export function createSession(caseId: string): RecorderSession {
-  const session: RecorderSession = { sessionId: crypto.randomUUID(), caseId, steps: [] };
+export function createSession(
+  caseId: string,
+  opts: { mode?: 'fresh' | 'append' | 'resume' | 'incognito'; incognito?: boolean; resumeFromOrder?: number } = {},
+): RecorderSession {
+  const session: RecorderSession = {
+    sessionId: crypto.randomUUID(),
+    caseId,
+    steps: [],
+    mode: opts.mode ?? 'fresh',
+    incognito: opts.incognito ?? false,
+    resumeFromOrder: opts.resumeFromOrder,
+    tabs: [],
+  };
   sessions.set(session.sessionId, session);
   return session;
 }
