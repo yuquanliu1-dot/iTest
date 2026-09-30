@@ -14,6 +14,13 @@ const PROVIDERS = [
   { value: 'google', label: 'google' },
 ];
 
+/** 与 apps/api/src/agent/llm-client.ts 中的服务端回退默认值保持一致。 */
+const DEFAULT_MODELS: Record<string, string> = {
+  openai: 'gpt-4o-mini',
+  anthropic: 'claude-sonnet-4-6',
+  google: 'gemini-2.0-flash',
+};
+
 type Panel = 'llm' | 'appearance';
 
 const PANELS: Array<{ key: Panel; label: string; icon: 'beaker' | 'sparkles' }> = [
@@ -155,10 +162,15 @@ export default function Settings() {
                 </label>
                 <input
                   className="input-base"
-                  placeholder="例如 gpt-4o-mini / claude-sonnet-4-6"
+                  placeholder="留空使用默认模型"
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
                 />
+                {DEFAULT_MODELS[provider] && (
+                  <p className="text-[11px] mt-1" style={{ color: 'var(--color-foreground-muted)' }}>
+                    默认：{DEFAULT_MODELS[provider]}（留空时服务端自动使用）
+                  </p>
+                )}
               </div>
               <Button className="self-start" disabled={save.isPending} onClick={() => save.mutate()}>
                 {save.isPending ? '保存中...' : '保存'}
