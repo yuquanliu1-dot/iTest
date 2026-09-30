@@ -69,3 +69,70 @@ casesRoute.patch('/:id', async (req, res) => {
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'case not found');
   res.json(rows[0]);
 });
+
+async function nextCopyTitle(base: string, existing: string[]): string {
+  const taken = new Set(existing);
+  const first = `${base} 副本`;
+  if (!taken.has(first)) return first;
+  let n = 1;
+  while (taken.has(`${base} 副本${n}`)) n++;
+  return `${base} 副本${n}`;
+}
+
+async function copyOneCase(caseId: string, targetGroupId: string): Promise<unknown> {
+  const src = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
+  if (!src) throw new HttpError(404, 'not_found', 'case not found');
+  const siblings = await db.select({ title: testCases.title }).from(testCases).where(eq(testCases.groupId, targetGroupId));
+  const title = await nextCopyTitle(src.title, siblings.map((s) => s.title));
+  const steps = await db
+    .select()
+    .from(testSteps)
+    .where(eq(testSteps.caseId, caseId))
+    .orderBy(asc(testSteps.order));
+  const inserted = await db
+    .insert(testCases)
+    .values({
+      title,
+      description: src.description,
+      priority: src.priority,
+      groupId: targetGroupId,
+      url: src.url,
+    })
+    .returning();
+  const newCase = inserted[0]!;
+  if (steps.length > 0) {
+    await db.insert(testSteps).values(
+      steps.map((s) => ({
+        caseId: newCase.id,
+        order: s.order,
+        source: s.source,
+        action: s.action,
+        assertion: s.assertion,
+      })),
+    );
+  }
+  return newCase;
+}
+
+casesRoute.post('/:id/copy', async (req, res) => {
+  const body = z.object({ targetGroupId: z.string().uuid() }).parse(req.body);
+  const g = await db.select().from(groups).where(eq(groups.id, body.targetGroupId));
+  if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
+  res.json(await copyOneCase(req.params.id, body.targetGroupId));
+});
+
+casesRoute.post('/copy', async (req, res) => {
+  const body = z.object({ caseIds: z.array(z.string().uuid()).min(1), targetGroupId: z.string().uuid() }).parse(req.body);
+  const g = await db.select().from(groups).where(eq(groups.id, body.targetGroupId));
+  if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
+  for (const id of body.caseIds) {
+    await copyOneCase(id, body.targetGroupId);
+  }
+  res.json({ count: body.caseIds.length });
+});
+
+casesRoute.delete('/:id', async (req, res) => {
+  const deleted = await db.delete(testCases).where(eq(testCases.id, req.params.id)).returning();
+  if (deleted.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  res.json({ ok: true });
+});
