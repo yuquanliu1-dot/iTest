@@ -98,13 +98,7 @@
   --text-2xl: 22px;
 
   /* 过渡别名（页面迁移期兼容旧变量名，UI-C 完成后移除） */
-  --color-primary: var(--color-accent);
-  --color-primary-hover: var(--color-accent-hover);
-  --color-text-primary: var(--color-foreground);
-  --color-text-secondary: var(--color-foreground-secondary);
-  --color-text-muted: var(--color-foreground-muted);
-  --color-surface: var(--color-glass-panel);
-  --color-surface-strong: var(--color-glass-panel-strong);
+  /* 已迁移完成：以下别名删除 */
 }
 
 :root {
