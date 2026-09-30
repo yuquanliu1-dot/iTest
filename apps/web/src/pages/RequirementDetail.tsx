@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -11,7 +11,7 @@ import AgentStreamPanel from '../components/ui/AgentStreamPanel';
 import { fullDateTime } from '../lib/format';
 
 export default function RequirementDetail() {
-  const { id } = useParams<{ id: string }>();
+  const { id, projectId } = useParams<{ id: string; projectId: string }>();
   const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
@@ -19,6 +19,7 @@ export default function RequirementDetail() {
   const clearEvents = useAgentRunStore((s) => s.clear);
   const [streaming, setStreaming] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [targetGroupId, setTargetGroupId] = useState<string>('');
 
   const { data: req } = useQuery({
     queryKey: ['requirement', id],
@@ -26,13 +27,26 @@ export default function RequirementDetail() {
     enabled: !!id,
   });
 
+  const { data: groups } = useQuery({
+    queryKey: ['groups', projectId],
+    queryFn: () => api.projects.groups(projectId!),
+    enabled: !!projectId,
+  });
+
+  // 首次加载分组时默认选第一个；用户手动切换后不再覆盖。
+  useEffect(() => {
+    if (!targetGroupId && groups && groups.length > 0) setTargetGroupId(groups[0]!.id);
+  }, [groups, targetGroupId]);
+
   const generateCases = useMutation({
     mutationFn: async () => {
+      if (!targetGroupId) throw new Error('请选择目标分组');
       clearEvents();
       const run = await api.agentRuns.create({
         targetType: 'requirement2cases',
         targetId: id!,
         prompt: req?.content ?? '',
+        targetGroupId,
       });
       setActiveRunId(run.id);
       setStreaming(true);
@@ -48,6 +62,9 @@ export default function RequirementDetail() {
               qc.invalidateQueries({ queryKey: ['requirement', id] });
               qc.invalidateQueries({ queryKey: ['requirements'] });
               qc.invalidateQueries({ queryKey: ['cases'] });
+              qc.invalidateQueries({ queryKey: ['groups', projectId] });
+              qc.invalidateQueries({ queryKey: ['cases', projectId] });
+              qc.invalidateQueries({ queryKey: ['project-stats', projectId] });
               toast('用例已生成', 'success');
               resolve();
             }
@@ -85,11 +102,11 @@ export default function RequirementDetail() {
       {/* Header bar — iDO 详情页顶部规范：面包屑 + 标题 + 状态 + 主操作 */}
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
         <button
-          onClick={() => navigate('/requirements')}
+          onClick={() => navigate(`/p/${projectId}/requirements`)}
           className="flex items-center gap-1 text-[12px]"
           style={{ color: 'var(--color-foreground-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}
         >
-          <Icon name="arrowLeft" size={12} />
+          <Icon name="chevronLeft" size={12} />
           返回需求列表
         </button>
         <span style={{ width: 1, height: 16, background: 'var(--color-glass-border)' }} />
@@ -98,7 +115,19 @@ export default function RequirementDetail() {
         </h1>
         <StatusPill status={req.status}>{req.status}</StatusPill>
         <div className="flex-1" />
-        <Button onClick={() => generateCases.mutate()} disabled={streaming || generateCases.isPending}>
+        <select
+          className="input-base input-sm"
+          style={{ width: 160 }}
+          value={targetGroupId}
+          onChange={(e) => setTargetGroupId(e.target.value)}
+          disabled={streaming || generateCases.isPending}
+        >
+          <option value="">目标分组…</option>
+          {(groups ?? []).map((g) => (
+            <option key={g.id} value={g.id}>{g.name}</option>
+          ))}
+        </select>
+        <Button onClick={() => generateCases.mutate()} disabled={streaming || generateCases.isPending || !targetGroupId}>
           <Icon name="bolt" size={12} />
           {streaming ? '生成中...' : 'AI 生成用例'}
         </Button>

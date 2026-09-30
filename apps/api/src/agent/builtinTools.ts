@@ -24,7 +24,7 @@ const CasesOutput = z.object({
 const StepsOutput = z.object({ steps: z.array(StepItem) });
 
 /** 保存 LLM 输出的用例集：逐条插入 test_cases（可带步骤）。输入不符合形状时抛错终止 run。 */
-export function createSaveCaseTool(opts: { requirementId: string }): AgentTool {
+export function createSaveCaseTool(opts: { requirementId: string; groupId: string }): AgentTool {
   return {
     name: 'saveCase',
     description: '保存生成的测试用例到数据库',
@@ -36,6 +36,7 @@ export function createSaveCaseTool(opts: { requirementId: string }): AgentTool {
           .insert(testCases)
           .values({
             requirementId: opts.requirementId,
+            groupId: opts.groupId,
             title: c.title,
             description: c.description,
             priority: c.priority ?? 'P1',

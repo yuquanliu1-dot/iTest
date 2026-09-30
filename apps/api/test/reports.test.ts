@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { SCHEMA_SQL } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -11,19 +12,7 @@ beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   process.env.DATABASE_URL = container.getConnectionUri();
   pool = new Pool({ connectionString: container.getConnectionUri() });
-  await pool.query(`
-    CREATE TABLE test_cases (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), title varchar(200) NOT NULL, created_at timestamp NOT NULL DEFAULT now());
-    CREATE TABLE reports (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      case_id uuid REFERENCES test_cases(id) ON DELETE CASCADE NOT NULL,
-      agent_run_id uuid,
-      status varchar(20) NOT NULL,
-      duration_ms integer,
-      step_results jsonb NOT NULL,
-      summary text,
-      created_at timestamp NOT NULL DEFAULT now()
-    );
-  `);
+  await pool.query(SCHEMA_SQL);
   const { default: express } = await import('express');
   const { reportsRoute } = await import('../src/routes/reports.js');
   const { errorHandler } = await import('../src/middleware/errorHandler.js');

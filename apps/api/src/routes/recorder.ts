@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { StepAction } from '@itest/shared';
 import { createSession, getSession } from '../recorder/ws.js';
+import { resolveCaseUrl } from '../lib/resolve-url.js';
 
 export const recorderRoute = Router();
 
@@ -15,11 +16,13 @@ recorderRoute.post('/sessions', async (req, res) => {
   const body = CreateBody.parse(req.body);
   const exists = await db.select().from(testCases).where(eq(testCases.id, body.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  const resolvedUrl = await resolveCaseUrl(exists[0]!);
   const session = createSession(body.caseId);
   res.json({
     sessionId: session.sessionId,
     wsToken: process.env.RECORDER_TOKEN_SECRET ?? 'dev-secret-change-me',
     wsUrl: `ws://127.0.0.1:${process.env.API_PORT ?? 54321}/recorder`,
+    resolvedUrl,
   });
 });
 
