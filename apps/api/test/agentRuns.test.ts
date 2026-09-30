@@ -54,4 +54,31 @@ describe('agent-runs', () => {
     const detail = await request(app).get(`/api/agent-runs/${created.body.id}`);
     expect(detail.body.status).toBe('success');
   });
+
+  it('requirement2cases run persists cases + steps via saveCase tool', async () => {
+    const r0 = await pool.query(`INSERT INTO requirements(title, content) VALUES ('persist','req') RETURNING id`);
+    const created = await request(app)
+      .post('/api/agent-runs')
+      .send({ targetType: 'requirement2cases', targetId: r0.rows[0].id, prompt: 'requirement: login' });
+    await new Promise((r) => setTimeout(r, 500));
+    const detail = await request(app).get(`/api/agent-runs/${created.body.id}`);
+    expect(detail.body.status).toBe('success');
+    const cases = await pool.query(`SELECT * FROM test_cases WHERE requirement_id = $1`, [r0.rows[0].id]);
+    expect(cases.rows.length).toBeGreaterThan(0);
+    const steps = await pool.query(`SELECT * FROM test_steps WHERE case_id = $1`, [cases.rows[0]!.id]);
+    expect(steps.rows.length).toBeGreaterThan(0);
+  });
+
+  it('case2script run appends steps via saveSteps tool', async () => {
+    const c = await pool.query(`INSERT INTO requirements(title, content) VALUES ('s','t') RETURNING id`);
+    const tc = await pool.query(`INSERT INTO test_cases(requirement_id, title) VALUES ($1, '用例A') RETURNING id`, [c.rows[0]!.id]);
+    const created = await request(app)
+      .post('/api/agent-runs')
+      .send({ targetType: 'case2script', targetId: tc.rows[0]!.id, prompt: '用例: 登录' });
+    await new Promise((r) => setTimeout(r, 500));
+    const detail = await request(app).get(`/api/agent-runs/${created.body.id}`);
+    expect(detail.body.status).toBe('success');
+    const steps = await pool.query(`SELECT * FROM test_steps WHERE case_id = $1`, [tc.rows[0]!.id]);
+    expect(steps.rows.length).toBeGreaterThan(0);
+  });
 });
