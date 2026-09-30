@@ -8,6 +8,7 @@
     <div class="container">
       <h1>iTest Recorder</h1>
       <p id="status" class="hint">检查录制状态...</p>
+      <p id="mode" class="hint" style="font-weight:600"></p>
       <button id="open">打开中台</button>
       <hr />
       <button id="pause" disabled>暂停录制</button>
@@ -17,6 +18,9 @@
       <button class="panel-btn" data-mode="assert" disabled>添加断言</button>
       <button class="panel-btn" data-mode="hover" disabled>记录悬浮</button>
       <button class="panel-btn" data-mode="ai" disabled>AI 自然语言步骤</button>
+      <hr />
+      <p class="hint">当前会话接管的多标签页：</p>
+      <ul id="tabs" style="list-style:none;padding:0;margin:0;font-size:11px"></ul>
     </div>
     <script src="popup.js"></script>
   </body>
