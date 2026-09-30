@@ -8,6 +8,8 @@ window.addEventListener('message', (e) => {
       }
     );
   } else if (e.data.type === 'stop-recording') {
-    chrome.runtime.sendMessage({ type: 'stop' });
+    chrome.runtime.sendMessage({ type: 'stop' }, (resp) => {
+      window.postMessage({ source: 'ita-ext', type: 'stop-result', ok: resp?.ok }, '*');
+    });
   }
 });

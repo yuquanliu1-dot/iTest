@@ -81,7 +81,24 @@ export default function CaseDetail() {
     mutationFn: async () => {
       const sessionId = recorder.sessionId;
       if (!sessionId) throw new Error('no active session');
-      window.postMessage({ source: 'ita-web', type: 'stop-recording', sessionId }, '*');
+      // 先走扩展的 flush 握手：等 background 把队列里的 step 发完、服务端关闭 WS，
+      // 再调 finish HTTP——否则尾部步骤可能还在 WS 飞行中，finish 会漏写。
+      await new Promise<boolean>((resolve) => {
+        let settled = false;
+        const finish = (v: boolean) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          window.removeEventListener('message', onMsg);
+          resolve(v);
+        };
+        const onMsg = (e: MessageEvent) => {
+          if (e.data?.source === 'ita-ext' && e.data?.type === 'stop-result') finish(!!e.data.ok);
+        };
+        const timer = setTimeout(() => finish(false), 5000);
+        window.addEventListener('message', onMsg);
+        window.postMessage({ source: 'ita-web', type: 'stop-recording', sessionId }, '*');
+      });
       const r = await api.recorder.finish(sessionId);
       sessionRef.current = null;
       recorder.reset();
