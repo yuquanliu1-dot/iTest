@@ -13,6 +13,7 @@ interface StepResult {
   error?: string;
   warning?: string;
   screenshot?: string;
+  tabIndex?: number;
 }
 
 export default function ReportDetail() {
@@ -36,6 +37,23 @@ export default function ReportDetail() {
   const stepResults = (data.stepResults as StepResult[]) ?? [];
   const passed = stepResults.filter((s) => s.status === 'passed').length;
   const failed = stepResults.filter((s) => s.status === 'failed').length;
+  const hasTabs = stepResults.some((s) => typeof s.tabIndex === 'number');
+  // 按 tabIndex 分组：未设置 tabIndex 的步骤归入 tab #0 组（向后兼容 phase1 报告）
+  const grouped: Array<{ tabIndex: number; steps: StepResult[] }> = [];
+  if (hasTabs) {
+    const map = new Map<number, StepResult[]>();
+    for (const s of stepResults) {
+      const idx = s.tabIndex ?? 0;
+      const arr = map.get(idx) ?? [];
+      arr.push(s);
+      map.set(idx, arr);
+    }
+    for (const [idx, arr] of [...map.entries()].sort((a, b) => a[0] - b[0])) {
+      grouped.push({ tabIndex: idx, steps: arr });
+    }
+  } else {
+    grouped.push({ tabIndex: 0, steps: stepResults });
+  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -79,43 +97,91 @@ export default function ReportDetail() {
                 <EmptyState icon="listChecks" title="无步骤结果" />
               ) : (
                 <div className="flex flex-col">
-                  {stepResults.map((s, i) => (
-                    <div
-                      key={i}
-                      className="flex gap-3 items-start px-5 py-3"
-                      style={{ borderBottom: '1px solid var(--color-muted)' }}
-                    >
-                      <span
-                        className="font-mono text-[12px] shrink-0 mt-0.5"
-                        style={{ color: s.status === 'passed' ? 'var(--color-success)' : 'var(--color-destructive)' }}
+                  {(grouped.length === 1 && grouped[0]!.tabIndex === 0 && !hasTabs
+                  ? grouped[0]!.steps.map((s, i) => (
+                      <div
+                        key={i}
+                        className="flex gap-3 items-start px-5 py-3"
+                        style={{ borderBottom: '1px solid var(--color-muted)' }}
                       >
-                        {s.status === 'passed' ? '✓' : '✕'} #{s.order}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }}>
-                          {s.durationMs} ms
+                        <span
+                          className="font-mono text-[12px] shrink-0 mt-0.5"
+                          style={{ color: s.status === 'passed' ? 'var(--color-success)' : 'var(--color-destructive)' }}
+                        >
+                          {s.status === 'passed' ? '✓' : '✕'} #{s.order}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }}>
+                            {s.durationMs} ms
+                          </div>
+                          {s.error && (
+                            <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>
+                              {s.error}
+                            </div>
+                          )}
+                          {s.warning && (
+                            <div className="text-[12px] mt-1" style={{ color: '#b45309' }}>
+                              ⚠ {s.warning}
+                            </div>
+                          )}
                         </div>
-                        {s.error && (
-                          <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>
-                            {s.error}
-                          </div>
-                        )}
-                        {s.warning && (
-                          <div className="text-[12px] mt-1" style={{ color: '#b45309' }}>
-                            ⚠ {s.warning}
-                          </div>
+                        {s.screenshot && (
+                          <img
+                            src={s.screenshot}
+                            alt={`step ${s.order}`}
+                            className="w-16 h-16 rounded-[6px] object-cover"
+                            style={{ border: '1px solid var(--color-glass-border)' }}
+                          />
                         )}
                       </div>
-                      {s.screenshot && (
-                        <img
-                          src={s.screenshot}
-                          alt={`step ${s.order}`}
-                          className="w-16 h-16 rounded-[6px] object-cover"
-                          style={{ border: '1px solid var(--color-glass-border)' }}
-                        />
-                      )}
-                    </div>
-                  ))}
+                    ))
+                  : grouped.map((group) => (
+                      <div key={group.tabIndex}>
+                        <div
+                          className="px-5 py-[6px] text-[10px] font-mono"
+                          style={{ color: 'var(--color-foreground-muted)', background: 'var(--color-background-subtle)' }}
+                        >
+                          tab #{group.tabIndex}
+                        </div>
+                        {group.steps.map((s, i) => (
+                          <div
+                            key={i}
+                            className="flex gap-3 items-start px-5 py-3"
+                            style={{ borderBottom: '1px solid var(--color-muted)' }}
+                          >
+                            <span
+                              className="font-mono text-[12px] shrink-0 mt-0.5"
+                              style={{ color: s.status === 'passed' ? 'var(--color-success)' : 'var(--color-destructive)' }}
+                            >
+                              {s.status === 'passed' ? '✓' : '✕'} #{s.order}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }}>
+                                {s.durationMs} ms
+                              </div>
+                              {s.error && (
+                                <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>
+                                  {s.error}
+                                </div>
+                              )}
+                              {s.warning && (
+                                <div className="text-[12px] mt-1" style={{ color: '#b45309' }}>
+                                  ⚠ {s.warning}
+                                </div>
+                              )}
+                            </div>
+                            {s.screenshot && (
+                              <img
+                                src={s.screenshot}
+                                alt={`step ${s.order}`}
+                                className="w-16 h-16 rounded-[6px] object-cover"
+                                style={{ border: '1px solid var(--color-glass-border)' }}
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )))}
                 </div>
               )}
             </div>
