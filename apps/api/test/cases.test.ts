@@ -184,4 +184,56 @@ describe('cases + steps', () => {
     expect(r.status).toBe(200);
     expect(r.body.groupId).toBe(b.groupId);
   });
+
+  it('PUT /api/cases/:id/steps replaces all steps with name/delayMs', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'R', groupId });
+    await request(app).post(`/api/cases/${c.body.id}/steps`).send({
+      steps: [{ order: 1, source: 'agent', action: { kind: 'navigate', url: 'https://a.com' } }],
+    });
+    const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
+      steps: [
+        { action: { kind: 'click', locator: [{ strategy: 'text', value: 'Go' }] }, source: 'recorder', name: '点 Go', delayMs: 500 },
+        { action: { kind: 'fill', locator: [{ strategy: 'css', value: '#x' }], value: 'v' }, source: 'manual' },
+      ],
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.steps).toHaveLength(2);
+    expect(r.body.steps[0].order).toBe(1);
+    expect(r.body.steps[0].name).toBe('点 Go');
+    expect(r.body.steps[0].delayMs).toBe(500);
+    expect(r.body.steps[1].name).toBeNull();
+    const g = await request(app).get(`/api/cases/${c.body.id}`);
+    expect(g.body.steps).toHaveLength(2);
+  });
+
+  it('PUT /api/cases/:id/steps compiles aiStep actions via mock LLM', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'AI', groupId });
+    const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
+      steps: [
+        { action: { kind: 'aiStep', instruction: '等待主区域', compiled: null }, source: 'manual' },
+      ],
+    });
+    expect(r.status).toBe(200);
+    const compiled = r.body.steps[0].action.compiled;
+    expect(Array.isArray(compiled)).toBe(true);
+    expect(compiled[0].kind).toBe('waitFor');
+  });
+
+  it('PUT /api/cases/:id/steps allows empty array (clear all)', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'E', groupId });
+    const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({ steps: [] });
+    expect(r.status).toBe(200);
+    expect(r.body.steps).toHaveLength(0);
+  });
+
+  it('POST /api/cases/:id/steps/recompile returns compiled or null', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'RC', groupId });
+    const ok = await request(app).post(`/api/cases/${c.body.id}/steps/recompile`).send({ instruction: '关闭弹窗' });
+    expect(ok.status).toBe(200);
+    expect(Array.isArray(ok.body.compiled)).toBe(true);
+  });
 });

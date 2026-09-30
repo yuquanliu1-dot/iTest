@@ -10,6 +10,7 @@ export const requirementsRoute = Router({ mergeParams: true });
 const CreateBody = z.object({
   title: z.string().min(1).max(200),
   content: z.string().min(1),
+  projectId: z.string().uuid().optional(),
 });
 
 /** 挂载在 /projects/:projectId/requirements —— 写操作校验项目存在并打 projectId。 */

@@ -41,6 +41,8 @@ export const testSteps = pgTable('test_steps', {
   id: uuid('id').primaryKey().defaultRandom(),
   caseId: uuid('case_id').references(() => testCases.id, { onDelete: 'cascade' }).notNull(),
   order: integer('order').notNull(),
+  name: varchar('name', { length: 200 }),
+  delayMs: integer('delay_ms'),
   source: varchar('source', { length: 20 }).notNull(),
   action: jsonb('action').notNull(),
   assertion: jsonb('assertion'),

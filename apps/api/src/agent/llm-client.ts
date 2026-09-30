@@ -26,6 +26,12 @@ export function listProviders(): LLMProvider[] {
 class MockClient implements LLMClient {
   provider = 'mock' as const;
   async complete({ userMessage }: { systemPrompt: string; userMessage: string }): Promise<LLMCompleteResult> {
+    if (userMessage.includes('ai-step')) {
+      return {
+        kind: 'json',
+        value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] },
+      };
+    }
     if (userMessage.includes('requirement') || userMessage.includes('需求')) {
       return {
         kind: 'json',
