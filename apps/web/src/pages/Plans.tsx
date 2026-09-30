@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -8,7 +8,8 @@ import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/Modal';
-import { fullDateTime } from '../lib/format';
+import StatusPill from '../components/ui/StatusPill';
+import { shortDateTime, fullDateTime } from '../lib/format';
 
 export default function Plans() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -20,6 +21,19 @@ export default function Plans() {
     queryFn: () => api.projects.plans(projectId!),
     enabled: !!projectId,
   });
+  const { data: planRuns } = useQuery({
+    queryKey: ['executions', projectId, 'plan'],
+    queryFn: () => api.executions.list({ projectId, kind: 'plan' }),
+    enabled: !!projectId,
+  });
+  const latestByPlan = useMemo(() => {
+    const m = new Map<string, { status: string; summary: string | null; createdAt: string }>();
+    for (const r of planRuns ?? []) {
+      if (r.kind !== 'plan') continue;
+      if (!m.has(r.planId)) m.set(r.planId, { status: r.status, summary: r.summary, createdAt: r.createdAt });
+    }
+    return m;
+  }, [planRuns]);
 
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState('');
@@ -92,6 +106,16 @@ export default function Plans() {
                 <div className="text-[11px] mt-1" style={{ color: 'var(--color-foreground-muted)' }}>
                   创建于 {fullDateTime(p.createdAt)}
                 </div>
+                {(() => {
+                  const last = latestByPlan.get(p.id);
+                  if (!last) return null;
+                  return (
+                    <div className="text-[11px] mt-1 flex items-center gap-2" style={{ color: 'var(--color-foreground-muted)' }}>
+                      <StatusPill status={last.status}>{last.status}</StatusPill>
+                      <span>{shortDateTime(last.createdAt)}</span>
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </div>
