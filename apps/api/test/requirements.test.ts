@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -11,16 +12,7 @@ beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   process.env.DATABASE_URL = container.getConnectionUri();
   pool = new Pool({ connectionString: container.getConnectionUri() });
-  await pool.query(`
-    CREATE TABLE requirements (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      title varchar(200) NOT NULL,
-      content text NOT NULL,
-      status varchar(20) NOT NULL DEFAULT 'draft',
-      created_at timestamp NOT NULL DEFAULT now(),
-      updated_at timestamp NOT NULL DEFAULT now()
-    )
-  `);
+  await pool.query(SCHEMA_SQL);
   const { default: express } = await import('express');
   const { requirementsRoute } = await import('../src/routes/requirements.js');
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
@@ -39,7 +31,8 @@ afterAll(async () => {
 
 describe('requirements CRUD', () => {
   it('POST creates', async () => {
-    const r = await request(app).post('/api/requirements').send({ title: '登录功能', content: '手机号+密码' });
+    const { projectId } = await seedProject(pool);
+    const r = await request(app).post('/api/requirements').send({ title: '登录功能', content: '手机号+密码', projectId });
     expect(r.status).toBe(200);
     expect(r.body.title).toBe('登录功能');
     expect(r.body.id).toBeTruthy();
@@ -53,14 +46,16 @@ describe('requirements CRUD', () => {
   });
 
   it('GET /:id returns detail', async () => {
-    const c = await request(app).post('/api/requirements').send({ title: '注册', content: '手机号注册' });
+    const { projectId } = await seedProject(pool);
+    const c = await request(app).post('/api/requirements').send({ title: '注册', content: '手机号注册', projectId });
     const r = await request(app).get(`/api/requirements/${c.body.id}`);
     expect(r.status).toBe(200);
     expect(r.body.title).toBe('注册');
   });
 
   it('POST rejects empty title', async () => {
-    const r = await request(app).post('/api/requirements').send({ title: '', content: 'x' });
+    const { projectId } = await seedProject(pool);
+    const r = await request(app).post('/api/requirements').send({ title: '', content: 'x', projectId });
     expect(r.status).toBe(400);
   });
 
