@@ -287,3 +287,30 @@ describe('recorder-manager — phase1 change events + pause', () => {
     f.remove();
   });
 });
+
+describe('RecorderManager — intent locator', () => {
+  it('emits intentLocator.semanticRole from data-testid when present', () => {
+    const btn = makeEl('<button data-testid="login-btn">登录</button>');
+    dom.window.document.body.appendChild(btn);
+    withRecorder(() => fire(btn, 'click'));
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.intentLocator?.semanticRole).toBe('login-btn');
+  });
+
+  it('falls back to name attribute when no data-testid', () => {
+    const input = makeEl('<input type="text" name="username" />');
+    dom.window.document.body.appendChild(input);
+    (input as HTMLInputElement).value = 'alice';
+    withRecorder(() => fire(input, 'input'));
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.intentLocator?.semanticRole).toBe('username');
+  });
+
+  it('omits intentLocator entirely when neither data-testid nor name exist', () => {
+    const span = makeEl('<span class="label">姓名</span>');
+    dom.window.document.body.appendChild(span);
+    withRecorder(() => fire(span, 'click'));
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.intentLocator).toBeUndefined();
+  });
+});
