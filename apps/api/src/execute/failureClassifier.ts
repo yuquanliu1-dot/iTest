@@ -1,0 +1,73 @@
+import type { FailureReason } from '@itest/shared';
+import type { StepAction } from '@itest/shared';
+
+const DEFAULT_KEYWORDS = ['请先登录', '未登录', '未授权', '登录后'];
+
+export interface ClassifiedFailure {
+  reason: FailureReason;
+  humanMessage: string;
+}
+
+const HUMAN: Record<FailureReason, string> = {
+  URLUnreachable: '起始 URL 无法访问，请检查网络或地址',
+  NotLoggedIn: '检测到登录态失效，请先登录或启用登录准备',
+  SlowLoad: '页面加载过慢，超出预期耗时',
+  ElementOccluded: '目标元素被遮挡，无法操作',
+  PageStructureChanged: '页面结构疑似变化，多步连续失败',
+  TestDataMissing: '目标测试数据不存在',
+  AssertionMismatch: '断言不匹配',
+  FixedValueConflict: '固定输入值重复导致新建失败',
+  TabMissing: '切换的目标标签页已不可用',
+  AttachmentMissing: '上传附件未绑定或已失效',
+  SecretMissing: '敏感字段未配置或解密失败',
+  DisabledTimeout: '元素被禁用，等待超时',
+  LoadingTimeout: '元素仍在加载，等待超时',
+  OverlayTimeout: '元素被遮罩覆盖，等待超时',
+  LocatorAllFailed: '所有定位候选均未命中',
+  CDPUnavailable: '真实浏览器不可用，已尝试 DOM 降级仍失败',
+  Unknown: '未知错误',
+};
+
+interface ClassifyCtx {
+  action?: StepAction | { kind?: string; value?: unknown; equals?: string };
+  durationMs?: number;
+}
+
+function asErrorWithName(err: unknown): Error & { name?: string; reason?: string } {
+  return err as Error & { name?: string; reason?: string };
+}
+
+export function classify(err: unknown, ctx: ClassifyCtx = {}): ClassifiedFailure {
+  const e = asErrorWithName(err);
+  const msg = e?.message ?? '';
+  if (e?.name === 'ElementNotStable') {
+    if (e.reason === 'disabled') return { reason: 'DisabledTimeout', humanMessage: HUMAN.DisabledTimeout };
+    if (e.reason === 'loading') return { reason: 'LoadingTimeout', humanMessage: HUMAN.LoadingTimeout };
+    if (e.reason === 'overlay') return { reason: 'OverlayTimeout', humanMessage: HUMAN.OverlayTimeout };
+  }
+  if (msg.includes('tab-missing')) return { reason: 'TabMissing', humanMessage: HUMAN.TabMissing };
+  if (msg.includes('assertText failed') || msg.includes('assertJson')) {
+    if (ctx.action && 'equals' in (ctx.action as { equals?: string }) && typeof (ctx.action as { equals?: string }).equals === 'string') {
+      const equals = (ctx.action as { equals: string }).equals;
+      if (DEFAULT_KEYWORDS.some((k) => equals.includes(k))) {
+        return { reason: 'NotLoggedIn', humanMessage: HUMAN.NotLoggedIn };
+      }
+    }
+    return { reason: 'AssertionMismatch', humanMessage: HUMAN.AssertionMismatch };
+  }
+  if (msg.includes('attachment-missing')) return { reason: 'AttachmentMissing', humanMessage: HUMAN.AttachmentMissing };
+  if (msg.includes('secret-missing')) return { reason: 'SecretMissing', humanMessage: HUMAN.SecretMissing };
+  if (msg.includes('all locator candidates failed') || msg.includes('count=0')) {
+    return { reason: 'LocatorAllFailed', humanMessage: HUMAN.LocatorAllFailed };
+  }
+  if (ctx.action && (ctx.action as { kind?: string }).kind === 'fill' &&
+      (msg.includes('unique constraint') || msg.includes('duplicate'))) {
+    return { reason: 'FixedValueConflict', humanMessage: HUMAN.FixedValueConflict };
+  }
+  if (typeof ctx.durationMs === 'number' && ctx.durationMs > 15000) {
+    return { reason: 'SlowLoad', humanMessage: HUMAN.SlowLoad };
+  }
+  return { reason: 'Unknown', humanMessage: HUMAN.Unknown };
+}
+
+export const __test = { HUMAN, DEFAULT_KEYWORDS };
