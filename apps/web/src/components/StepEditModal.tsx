@@ -13,7 +13,19 @@ interface Props {
   onClose: () => void;
 }
 
-type ValueMode = 'fixed' | 'randomString' | 'randomNumber' | 'timestamp' | 'prefixTimestamp';
+type ValueMode = 'fixed' | 'randomString' | 'randomNumber' | 'timestamp' | 'prefixTimestamp' | 'composite';
+type DateFormat = 'YYYYMMDD' | 'YYYY-MM-DD' | 'YYYY/MM/DD';
+
+interface CompositeDraft {
+  mode: 'composite';
+  fragments: Array<
+    | { mode: 'fixed'; value: string }
+    | { mode: 'date'; format: DateFormat }
+    | { mode: 'randomNumber'; min: string; max: string; length: string }
+    | { mode: 'randomString'; length: string }
+    | { mode: 'timestamp' }
+  >;
+}
 
 /** 步骤编辑弹窗：名称/等待时间 + 按 action.kind 分派的值编辑。 */
 export default function StepEditModal({ initial, availableVars = [], caseId, onSave, onClose }: Props) {
@@ -45,9 +57,55 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
   const [genMax, setGenMax] = useState(isGenerator ? String((rawValue as { max?: number }).max ?? 999999) : '999999');
   const [genPrefix, setGenPrefix] = useState(isGenerator ? String((rawValue as { prefix?: string }).prefix ?? '') : '');
 
+  // composite
+  const isComposite = valueMode === 'composite';
+  const [compositeDraft, setCompositeDraft] = useState<CompositeDraft>(() => {
+    if (isGenerator && (rawValue as { mode?: string }).mode === 'composite') {
+      const v = rawValue as { fragments: unknown[] };
+      return {
+        mode: 'composite',
+        fragments: v.fragments.map((f: unknown) => {
+          const o = f as { mode: string };
+          if (o.mode === 'fixed') return { mode: 'fixed', value: (f as { value: string }).value };
+          if (o.mode === 'date') return { mode: 'date', format: (f as { format: DateFormat }).format };
+          if (o.mode === 'randomNumber') {
+            const rn = f as { min?: number; max?: number; length?: number };
+            return {
+              mode: 'randomNumber',
+              min: String(rn.min ?? 0),
+              max: String(rn.max ?? 999999),
+              length: rn.length != null ? String(rn.length) : '',
+            };
+          }
+          if (o.mode === 'randomString') return { mode: 'randomString', length: String((f as { length?: number }).length ?? 12) };
+          return { mode: 'timestamp' };
+        }) as CompositeDraft['fragments'],
+      };
+    }
+    return { mode: 'composite', fragments: [{ mode: 'fixed', value: '' }] };
+  });
+
+  const compositeLen = compositeDraft.fragments.reduce((sum, f) => {
+    switch (f.mode) {
+      case 'fixed': return sum + f.value.length;
+      case 'date': return sum + f.format.length;
+      case 'randomNumber': return sum + (f.length ? Number(f.length) : String(Number(f.max) || 999999).length);
+      case 'randomString': return sum + Number(f.length || 12);
+      case 'timestamp': return sum + 13;
+    }
+  }, 0);
+  const compositeOver = compositeLen > 1024;
+
   // assertText/assertJson
   const [equalsText, setEqualsText] = useState(
     kind === 'assertJson' ? JSON.stringify(action.equals ?? null, null, 2) : String(action.equals ?? ''),
+  );
+  // assertText target/match
+  const [assertTarget, setAssertTarget] = useState<'specifiedElement' | 'page' | 'errorMessage' | 'url'>(
+    ((action as { target?: 'specifiedElement' | 'page' | 'errorMessage' | 'url' }).target) ?? 'specifiedElement',
+  );
+  const [assertMatch, setAssertMatch] = useState<'equals' | 'contains' | 'notContains' | 'regex'>(
+    ((action as { match?: 'equals' | 'contains' | 'notContains' | 'regex' }).match) ?? 'equals',
   );
   // extract
   const [varName, setVarName] = useState(String(action.varName ?? ''));
@@ -98,12 +156,41 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
         return { mode: 'timestamp' };
       case 'prefixTimestamp':
         return { mode: 'prefixTimestamp', prefix: genPrefix };
+      case 'composite':
+        return { mode: 'composite', fragments: compositeDraft.fragments };
     }
   };
 
   const handleSave = () => {
     const next: Record<string, unknown> = { ...action };
-    if (kind === 'fill' || kind === 'select') next.value = buildValue();
+    if (kind === 'fill' || kind === 'select') {
+      if (valueMode === 'composite') {
+        if (compositeOver) {
+          setError('CompositeValue 总长度超过 1024');
+          return;
+        }
+        next.value = {
+          mode: 'composite',
+          fragments: compositeDraft.fragments.map((f) => {
+            if (f.mode === 'fixed') return { mode: 'fixed', value: f.value };
+            if (f.mode === 'date') return { mode: 'date', format: f.format };
+            if (f.mode === 'randomNumber') {
+              const out: { mode: 'randomNumber'; min: number; max: number; length?: number } = {
+                mode: 'randomNumber',
+                min: Number(f.min) || 0,
+                max: Number(f.max) || 999999,
+              };
+              if (f.length) out.length = Number(f.length);
+              return out;
+            }
+            if (f.mode === 'randomString') return { mode: 'randomString', length: Number(f.length) || 12 };
+            return { mode: 'timestamp' };
+          }),
+        };
+      } else {
+        next.value = buildValue();
+      }
+    }
     if (kind === 'fill') {
       if (sensitive) {
         if (!pwdDraft) {
@@ -123,7 +210,12 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
       }
       next.fileId = fileId;
     }
-    if (kind === 'assertText') next.equals = equalsText;
+    if (kind === 'assertText') {
+      next.equals = equalsText;
+      next.target = assertTarget;
+      next.match = assertMatch;
+      if (assertTarget !== 'specifiedElement') next.locator = [];
+    }
     if (kind === 'assertJson') {
       try {
         next.equals = JSON.parse(equalsText);
@@ -218,7 +310,7 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
                 <>
                   <span style={labelStyle}>值</span>
                   <div className="flex gap-1 flex-wrap">
-                    {(['fixed', 'randomString', 'randomNumber', 'timestamp', 'prefixTimestamp'] as ValueMode[]).map((m) => (
+                    {(['fixed', 'randomString', 'randomNumber', 'timestamp', 'prefixTimestamp', 'composite'] as ValueMode[]).map((m) => (
                       <button
                         key={m}
                         onClick={() => setValueMode(m)}
@@ -229,7 +321,7 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
                           color: valueMode === m ? '#fff' : 'var(--color-foreground-secondary)',
                         }}
                       >
-                        {{ fixed: '固定值', randomString: '随机字符串', randomNumber: '随机数字', timestamp: '时间戳', prefixTimestamp: '前缀+时间戳' }[m]}
+                        {{ fixed: '固定值', randomString: '随机字符串', randomNumber: '随机数字', timestamp: '时间戳', prefixTimestamp: '前缀+时间戳', composite: '组合值' }[m]}
                       </button>
                     ))}
                   </div>
@@ -255,16 +347,130 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
                   {valueMode === 'prefixTimestamp' && (
                     <input style={inputStyle} value={genPrefix} onChange={(e) => setGenPrefix(e.target.value)} placeholder="前缀，如 测试-" />
                   )}
+                  {valueMode === 'composite' && (
+                    <div className="flex flex-col gap-2">
+                      {compositeDraft.fragments.map((f, idx) => (
+                        <div key={idx} className="flex items-center gap-2">
+                          <select
+                            style={{ ...inputStyle, marginTop: 0, width: 110 }}
+                            value={f.mode}
+                            onChange={(e) => {
+                              const mode = e.target.value as CompositeDraft['fragments'][number]['mode'];
+                              const next = [...compositeDraft.fragments];
+                              if (mode === 'fixed') next[idx] = { mode: 'fixed', value: '' };
+                              else if (mode === 'date') next[idx] = { mode: 'date', format: 'YYYYMMDD' };
+                              else if (mode === 'randomNumber') next[idx] = { mode: 'randomNumber', min: '0', max: '999999', length: '' };
+                              else if (mode === 'randomString') next[idx] = { mode: 'randomString', length: '12' };
+                              else next[idx] = { mode: 'timestamp' };
+                              setCompositeDraft({ ...compositeDraft, fragments: next });
+                            }}
+                          >
+                            <option value="fixed">固定值</option>
+                            <option value="date">日期</option>
+                            <option value="randomNumber">随机数字</option>
+                            <option value="randomString">随机字符串</option>
+                            <option value="timestamp">时间戳</option>
+                          </select>
+                          {f.mode === 'fixed' && (
+                            <input style={{ ...inputStyle, marginTop: 0, flex: 1 }} value={f.value} onChange={(e) => {
+                              const next = [...compositeDraft.fragments];
+                              next[idx] = { mode: 'fixed', value: e.target.value };
+                              setCompositeDraft({ ...compositeDraft, fragments: next });
+                            }} />
+                          )}
+                          {f.mode === 'date' && (
+                            <select style={{ ...inputStyle, marginTop: 0, flex: 1 }} value={f.format} onChange={(e) => {
+                              const next = [...compositeDraft.fragments];
+                              next[idx] = { mode: 'date', format: e.target.value as DateFormat };
+                              setCompositeDraft({ ...compositeDraft, fragments: next });
+                            }}>
+                              <option value="YYYYMMDD">YYYYMMDD</option>
+                              <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+                              <option value="YYYY/MM/DD">YYYY/MM/DD</option>
+                            </select>
+                          )}
+                          {f.mode === 'randomNumber' && (
+                            <>
+                              <input style={{ ...inputStyle, marginTop: 0, width: 70 }} placeholder="min" inputMode="numeric" value={f.min} onChange={(e) => {
+                                const next = [...compositeDraft.fragments];
+                                next[idx] = { mode: 'randomNumber', min: e.target.value, max: f.max, length: f.length };
+                                setCompositeDraft({ ...compositeDraft, fragments: next });
+                              }} />
+                              <input style={{ ...inputStyle, marginTop: 0, width: 70 }} placeholder="max" inputMode="numeric" value={f.max} onChange={(e) => {
+                                const next = [...compositeDraft.fragments];
+                                next[idx] = { mode: 'randomNumber', min: f.min, max: e.target.value, length: f.length };
+                                setCompositeDraft({ ...compositeDraft, fragments: next });
+                              }} />
+                              <input style={{ ...inputStyle, marginTop: 0, width: 70 }} placeholder="位数" inputMode="numeric" value={f.length} onChange={(e) => {
+                                const next = [...compositeDraft.fragments];
+                                next[idx] = { mode: 'randomNumber', min: f.min, max: f.max, length: e.target.value };
+                                setCompositeDraft({ ...compositeDraft, fragments: next });
+                              }} />
+                            </>
+                          )}
+                          {f.mode === 'randomString' && (
+                            <input style={{ ...inputStyle, marginTop: 0, width: 100 }} placeholder="长度" inputMode="numeric" value={f.length} onChange={(e) => {
+                              const next = [...compositeDraft.fragments];
+                              next[idx] = { mode: 'randomString', length: e.target.value };
+                              setCompositeDraft({ ...compositeDraft, fragments: next });
+                            }} />
+                          )}
+                          {f.mode === 'timestamp' && <span style={{ ...labelStyle, flex: 1 }}>当前 ms 时间戳</span>}
+                          <button
+                            onClick={() => {
+                              const next = compositeDraft.fragments.filter((_, i) => i !== idx);
+                              setCompositeDraft({ ...compositeDraft, fragments: next });
+                            }}
+                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 2 }}
+                            title="删除片段"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => setCompositeDraft({ ...compositeDraft, fragments: [...compositeDraft.fragments, { mode: 'fixed', value: '' }] })}
+                        style={{ fontSize: 11, padding: '4px 8px', borderRadius: 5, border: '1px dashed var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)', cursor: 'pointer', alignSelf: 'flex-start' }}
+                      >
+                        + 添加片段
+                      </button>
+                      <p className="text-[11px]" style={{ color: compositeOver ? 'var(--color-destructive)' : 'var(--color-foreground-muted)' }}>
+                        当前长度估算：{compositeLen} / 1024{compositeOver ? ' · 超过上限' : ''}
+                      </p>
+                    </div>
+                  )}
                 </>
               )}
             </div>
           )}
 
           {kind === 'assertText' && (
-            <label style={labelStyle}>
-              期望文本
-              <textarea style={{ ...inputStyle, fontFamily: 'inherit' }} rows={3} value={equalsText} onChange={(e) => setEqualsText(e.target.value)} />
-            </label>
+            <>
+              <div className="flex gap-2">
+                <label style={{ ...labelStyle, flex: 1 }}>
+                  断言目标
+                  <select style={inputStyle} value={assertTarget} onChange={(e) => setAssertTarget(e.target.value as typeof assertTarget)}>
+                    <option value="specifiedElement">指定元素（locator 必填）</option>
+                    <option value="page">整页文本</option>
+                    <option value="errorMessage">错误提示区</option>
+                    <option value="url">当前 URL</option>
+                  </select>
+                </label>
+                <label style={{ ...labelStyle, flex: 1 }}>
+                  匹配方式
+                  <select style={inputStyle} value={assertMatch} onChange={(e) => setAssertMatch(e.target.value as typeof assertMatch)}>
+                    <option value="equals">等于（trim）</option>
+                    <option value="contains">包含</option>
+                    <option value="notContains">不包含</option>
+                    <option value="regex">正则匹配</option>
+                  </select>
+                </label>
+              </div>
+              <label style={labelStyle}>
+                期望文本
+                <textarea style={{ ...inputStyle, fontFamily: 'inherit' }} rows={3} value={equalsText} onChange={(e) => setEqualsText(e.target.value)} />
+              </label>
+            </>
           )}
           {kind === 'assertJson' && (
             <label style={labelStyle}>
