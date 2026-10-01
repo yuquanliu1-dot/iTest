@@ -52,7 +52,7 @@ describe('materializeValue', () => {
         mode: 'composite',
         fragments: [
           { mode: 'fixed', value: 'CS' },
-          { mode: 'randomNumber', length: 3 },
+          { mode: 'randomNumber', min: 0, max: 999, length: 3 },
           { mode: 'randomString', length: 4 },
         ],
       },
