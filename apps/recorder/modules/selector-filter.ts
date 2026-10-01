@@ -47,7 +47,9 @@ export function filterCssPath(path: string): string {
 }
 
 function filterSegment(seg: string): string {
-  const parts = seg.split(/(?=[.#[])/);
+  // 去掉运行时 id（如 #login-7f9c3a）— 整段只剩 tag 时仍保留片段。
+  let cleaned = stripRuntimeId(seg);
+  const parts = cleaned.split(/(?=[.#[])/);
   const kept = parts.filter((tok) => {
     if (!tok.startsWith('.')) return true;
     const cls = tok.slice(1);
@@ -59,6 +61,16 @@ function filterSegment(seg: string): string {
   });
   const joined = kept.join('');
   return stripRuntimeAria(joined);
+}
+
+function stripRuntimeId(seg: string): string {
+  return seg.replace(/#([\w-]+)/g, (m, id) => {
+    if (/^\d+$/.test(id)) return '';
+    if (BV_ID_RE.test(id)) return '';
+    if (RUNTIME_ID_RE.test(id)) return '';
+    if (IVU_PREFIX.test(id)) return '';
+    return m;
+  });
 }
 
 export function stripRuntimeAria(path: string): string {
