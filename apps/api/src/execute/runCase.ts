@@ -1,7 +1,7 @@
 import { eq, asc } from 'drizzle-orm';
 import { logger } from '../logger.js';
 import { db } from '../db/client.js';
-import { testCases, testSteps, reports } from '../db/schema.js';
+import { testCases, testSteps, reports, groups } from '../db/schema.js';
 import { executeCaseReal, writePlaceholderScreenshot, type ExecStepResult } from './cdp.js';
 
 /**
@@ -16,6 +16,12 @@ export async function runCase(
 ): Promise<{ reportId: string; status: string }> {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
   if (!caseRow) throw new Error('case not found');
+
+  // Resolve projectId for project-scoped attachment resolution during playback.
+  const group = caseRow.groupId
+    ? (await db.select({ projectId: groups.projectId }).from(groups).where(eq(groups.id, caseRow.groupId)))[0]
+    : undefined;
+  const projectId = group?.projectId;
 
   const steps = await db
     .select()
@@ -44,7 +50,7 @@ export async function runCase(
         componentKind: s.componentKind,
         sensitive: s.sensitive,
       })),
-      { reportId },
+      { reportId, projectId },
       undefined,
       opts?.storageState,
     );
