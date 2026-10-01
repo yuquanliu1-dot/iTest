@@ -1,0 +1,48 @@
+import { eq, inArray } from 'drizzle-orm';
+import { db } from '../db/client.js';
+import { groups, projects, testCases } from '../db/schema.js';
+import { HttpError } from '../middleware/errorHandler.js';
+import type { AuthUser } from './auth.service.js';
+import { visibleOrgIdsFor } from './orgTree.js';
+
+/**
+ * 项目可见性断言：不存在与不可见统一 404，不泄露存在性。
+ * 所有按 id 访问项目及其子资源的入口都必须先过这道检查。
+ */
+export async function assertProjectVisible(projectId: string, user: AuthUser): Promise<void> {
+  const rows = await db.select({ organizationId: projects.organizationId }).from(projects).where(eq(projects.id, projectId)).limit(1);
+  const orgId = rows[0]?.organizationId;
+  if (!orgId) throw new HttpError(404, 'not_found', 'project not found');
+  const visible = await visibleOrgIdsFor(user);
+  if (!visible.has(orgId)) throw new HttpError(404, 'not_found', 'project not found');
+}
+
+/** 解析 case 所属项目 id（case → group → project）；链路不存在返回 null。 */
+export async function resolveCaseProjectId(caseId: string): Promise<string | null> {
+  const rows = await db
+    .select({ projectId: groups.projectId })
+    .from(testCases)
+    .innerJoin(groups, eq(testCases.groupId, groups.id))
+    .where(eq(testCases.id, caseId))
+    .limit(1);
+  return rows[0]?.projectId ?? null;
+}
+
+/** case 可见性断言：经所属项目判定，404 文案不区分「不存在」与「不可见」。 */
+export async function assertCaseVisible(caseId: string, user: AuthUser): Promise<void> {
+  const projectId = await resolveCaseProjectId(caseId);
+  if (!projectId) throw new HttpError(404, 'not_found', 'case not found');
+  const rows = await db.select({ organizationId: projects.organizationId }).from(projects).where(eq(projects.id, projectId)).limit(1);
+  const orgId = rows[0]?.organizationId;
+  if (!orgId) throw new HttpError(404, 'not_found', 'case not found');
+  const visible = await visibleOrgIdsFor(user);
+  if (!visible.has(orgId)) throw new HttpError(404, 'not_found', 'case not found');
+}
+
+/** 用户可见的全部项目 id（列表接口无组织维度过滤参数时用）。 */
+export async function visibleProjectIds(user: AuthUser): Promise<string[]> {
+  const visibleOrgs = await visibleOrgIdsFor(user);
+  if (visibleOrgs.size === 0) return [];
+  const rows = await db.select({ id: projects.id }).from(projects).where(inArray(projects.organizationId, [...visibleOrgs]));
+  return rows.map((r) => r.id);
+}

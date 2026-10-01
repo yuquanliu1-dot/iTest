@@ -18,12 +18,19 @@ import { executionsRoute } from './routes/executions.js';
 import { attachmentsRoute } from './routes/attachments.js';
 import { secretsRoute } from './routes/secrets.js';
 import { attachRecorderWs } from './recorder/ws.js';
+import { authRoute } from './routes/auth.js';
+import { organizationsRoute } from './routes/organizations.js';
+import { requireAuth } from './middleware/auth.js';
 
 const app = express();
 app.use(express.raw({ type: 'application/octet-stream', limit: '60mb' }));
 app.use(express.json({ limit: '2mb' }));
 app.use('/screenshots', express.static(join(process.cwd(), 'screenshots')));
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
+app.use('/api/auth', authRoute);
+// 毯子登录守卫：/api/auth 的公开端点（login/change-password）在其之前；扩展自鉴权端点在守卫内放行
+app.use('/api', requireAuth);
+app.use('/api/organizations', organizationsRoute);
 app.use('/api/settings', settingsRoute);
 app.use('/api/requirements', requirementsRoute);
 app.use('/api/projects/:projectId/requirements', requirementsRoute);

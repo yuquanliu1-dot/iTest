@@ -1,11 +1,18 @@
 const BASE = '/api';
 
+// 401 时跳登录页的豁免路径（登录/首登改密本身、/me 探测——这些 401 由调用方自行处理）
+const AUTH_EXEMPT_PATHS = new Set(['/auth/login', '/auth/change-password', '/auth/me']);
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   });
   if (!res.ok) {
+    if (res.status === 401 && !AUTH_EXEMPT_PATHS.has(path)) {
+      // 会话过期：整页跳登录（不 import authStore，避免循环依赖）
+      window.location.assign('/login');
+    }
     const body = await res.json().catch(() => ({}));
     throw new Error(body.message ?? `HTTP ${res.status}`);
   }
@@ -21,6 +28,8 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ key, value }),
       }),
+    testConnection: (body: { provider: string; apiKey: string; model: string; baseUrl: string }) =>
+      request<LlmTestResult>('/settings/llm/test', { method: 'POST', body: JSON.stringify(body) }),
   },
   projects: {
     list: () => request<ProjectWithCount[]>('/projects'),
@@ -224,6 +233,41 @@ export const api = {
         `/cases/${caseId}/attachments`,
       ),
   },
+  auth: {
+    login: (username: string, password: string) =>
+      request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+    // 首登强制改密：成功即自动登录（响应同登录 ok 分支并种下新 cookie）
+    changePassword: (passwordChangeToken: string, newPassword: string) =>
+      request<Extract<LoginResponse, { status: 'ok' }>>('/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ passwordChangeToken, newPassword }),
+      }),
+    me: () => request<MeResponse>('/auth/me'),
+    // 切换组织：服务端重铸会话 cookie（新 JWT 携带新组织上下文）
+    switchOrg: (organizationId: string) =>
+      request<{ organization: { id: string; name: string }; isManager: boolean; isUser: boolean }>('/auth/switch-org', {
+        method: 'POST',
+        body: JSON.stringify({ organizationId }),
+      }),
+    logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+    updateMyPassword: (currentPassword: string, newPassword: string) =>
+      request<{ status: string }>('/auth/me/password', {
+        method: 'PATCH',
+        body: JSON.stringify({ currentPassword, newPassword }),
+      }),
+  },
+  orgs: {
+    list: () => request<OrgSummary[]>('/organizations'),
+    createSubOrg: (name: string, parentId: string) =>
+      request<Organization>('/organizations', { method: 'POST', body: JSON.stringify({ name, parentId }) }),
+    members: (orgId: string) => request<{ items: MemberRow[] }>(`/organizations/${orgId}/members`),
+    addMember: (orgId: string, body: { username: string; isManager?: boolean; isUser?: boolean }) =>
+      request<{ ok: boolean }>(`/organizations/${orgId}/members`, { method: 'POST', body: JSON.stringify(body) }),
+    updateMember: (orgId: string, userId: string, body: { isManager?: boolean; isUser?: boolean }) =>
+      request<{ ok: boolean }>(`/organizations/${orgId}/members/${userId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    removeMember: (orgId: string, userId: string) =>
+      request<{ ok: boolean }>(`/organizations/${orgId}/members/${userId}`, { method: 'DELETE' }),
+  },
   secrets: {
     fetch: (caseId: string, stepId: string, token: string) =>
       request<{ plaintext: string }>(
@@ -233,9 +277,18 @@ export const api = {
   },
 };
 
+export interface LlmTestResult {
+  ok: boolean;
+  provider: string;
+  latencyMs?: number;
+  error?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
+  description: string | null;
+  organizationId: string;
   defaultUrl: string | null;
   createdAt: string;
   updatedAt: string;
@@ -398,4 +451,60 @@ export interface VariableReport {
   forwardRefs: Array<{ stepOrder: number; field: string; name: string }>;
   regexIssues: Array<{ stepOrder: number; reason: string }>;
   invalidNames: Array<{ stepOrder: number; field: string; name: string; reason: string }>;
+}
+
+// ---------- 认证与组织 ----------
+
+/** 脱敏后的当前用户（不含 passwordHash）。 */
+export interface SafeUser {
+  id: string;
+  username: string;
+  displayName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 登录成功 → 自动已登录；否则进入首登强制改密流程（passwordChangeToken 一次性、5 分钟有效）。 */
+export type LoginResponse =
+  | { status: 'ok'; user: SafeUser; organization: { id: string; name: string; isManager: boolean; isUser: boolean } }
+  | { status: 'password_change_required'; passwordChangeToken: string; username: string };
+
+export interface OrgMembership {
+  id: string;
+  name: string;
+  parentId: string | null;
+  path: string;
+  isManager: boolean;
+  isUser: boolean;
+}
+
+export interface MeResponse {
+  user: SafeUser;
+  activeOrganizationId: string;
+  organizations: OrgMembership[];
+}
+
+/** 组织列表项（可见组织：自己加入的 ∪ 管理的子树）。 */
+export interface OrgSummary extends OrgMembership {
+  description: string | null;
+  memberCount: number;
+}
+
+export interface Organization {
+  id: string;
+  name: string;
+  parentId: string | null;
+  path: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemberRow {
+  userId: string;
+  username: string;
+  displayName: string;
+  isManager: boolean;
+  isUser: boolean;
+  joinedAt: string;
 }

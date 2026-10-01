@@ -5,12 +5,14 @@ import { planRuns, planRunCases, executionPlans } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { requestCancel, subscribeRun } from '../execute/runPlan.js';
 import { sseHeaders } from '../sse/agentRunStream.js';
+import { assertProjectVisible } from '../services/projectAccess.js';
 
 export const planRunsRoute = Router();
 
 planRunsRoute.get('/:id', async (req, res) => {
   const run = (await db.select().from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
   if (!run) throw new HttpError(404, 'not_found', 'plan run not found');
+  await assertProjectVisible(run.projectId, req.user!);
   const cases = await db
     .select()
     .from(planRunCases)
@@ -27,6 +29,7 @@ planRunsRoute.get('/:id', async (req, res) => {
 planRunsRoute.post('/:id/cancel', async (req, res) => {
   const run = (await db.select().from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
   if (!run) throw new HttpError(404, 'not_found', 'plan run not found');
+  await assertProjectVisible(run.projectId, req.user!);
   requestCancel(run.id);
   await db.update(planRuns).set({ cancelRequested: true }).where(eq(planRuns.id, run.id));
   res.json({ ok: true });
@@ -36,6 +39,13 @@ planRunsRoute.get('/:id/events', async (req, res) => {
   sseHeaders(res);
   const run = (await db.select().from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
   if (!run) {
+    res.status(404).end();
+    return;
+  }
+  // EventSource 无法带自定义头，靠 cookie 鉴权；不可见一律断开
+  try {
+    await assertProjectVisible(run.projectId, req.user!);
+  } catch {
     res.status(404).end();
     return;
   }

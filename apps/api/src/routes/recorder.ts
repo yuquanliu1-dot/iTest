@@ -8,6 +8,7 @@ import { StepAction } from '@itest/shared';
 import { createSession, getSession } from '../recorder/ws.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { compileAiStepsInPlace } from '../agent/aiStepCompile.js';
+import { assertCaseVisible } from '../services/projectAccess.js';
 
 export const recorderRoute = Router();
 
@@ -22,6 +23,7 @@ recorderRoute.post('/sessions', async (req, res) => {
   const body = CreateBody.parse(req.body);
   const exists = await db.select().from(testCases).where(eq(testCases.id, body.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  await assertCaseVisible(body.caseId, req.user!);
   if (body.mode === 'resume') {
     const steps = await db.select().from(testSteps).where(eq(testSteps.caseId, body.caseId));
     // resumeFromOrder 是第一条新步骤的 order；之前的步骤只做校验（回放由扩展侧驱动）。
@@ -65,6 +67,7 @@ recorderRoute.post('/sessions', async (req, res) => {
 recorderRoute.post('/sessions/:id/finish', async (req, res) => {
   const session = getSession(req.params.id);
   if (!session) throw new HttpError(404, 'not_found', 'session not found');
+  await assertCaseVisible(session.caseId, req.user!);
   session.ws?.close(1000, 'finished');
   await compileAiStepsInPlace(
     session.steps.map((s) => {

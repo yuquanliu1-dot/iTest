@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { eq, desc, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { reports, planRuns, groups, testCases } from '../db/schema.js';
+import { assertProjectVisible, visibleProjectIds } from '../services/projectAccess.js';
 
 export const executionsRoute = Router();
 
@@ -32,27 +33,37 @@ type Entry = CaseEntry | PlanEntry;
 executionsRoute.get('/', async (req, res) => {
   const { projectId, kind = 'all' } = req.query as { projectId?: string; kind?: 'case' | 'plan' | 'all' };
 
+  if (projectId) await assertProjectVisible(projectId, req.user!);
+  // 无 projectId 时按可见项目过滤
+  const visiblePids = projectId ? null : await visibleProjectIds(req.user!);
+
   let caseRows: CaseEntry[] = [];
   let planRows: PlanEntry[] = [];
 
   if (kind === 'case' || kind === 'all') {
+    let gids: string[] = [];
     if (projectId) {
       const gs = await db.select().from(groups).where(eq(groups.projectId, projectId));
-      const gids = gs.map((g) => g.id);
-      const cs = gids.length ? await db.select({ id: testCases.id }).from(testCases).where(inArray(testCases.groupId, gids)) : [];
-      caseRows = cs.length
-        ? ((await db.select().from(reports).where(inArray(reports.caseId, cs.map((c) => c.id))).orderBy(desc(reports.createdAt))) as unknown as CaseEntry[]).map((r) => ({ ...r, kind: 'case' as const }))
-        : [];
-    } else {
-      caseRows = ((await db.select().from(reports).orderBy(desc(reports.createdAt))) as unknown as CaseEntry[]).map((r) => ({ ...r, kind: 'case' as const }));
+      gids = gs.map((g) => g.id);
+    } else if (visiblePids && visiblePids.length > 0) {
+      const gs = await db.select().from(groups).where(inArray(groups.projectId, visiblePids));
+      gids = gs.map((g) => g.id);
     }
+    const cs = gids.length ? await db.select({ id: testCases.id }).from(testCases).where(inArray(testCases.groupId, gids)) : [];
+    caseRows = cs.length
+      ? ((await db.select().from(reports).where(inArray(reports.caseId, cs.map((c) => c.id))).orderBy(desc(reports.createdAt))) as unknown as CaseEntry[]).map((r) => ({ ...r, kind: 'case' as const }))
+      : [];
   }
 
   if (kind === 'plan' || kind === 'all') {
-    const q = projectId ? eq(planRuns.projectId, projectId) : undefined;
+    const q = projectId
+      ? eq(planRuns.projectId, projectId)
+      : visiblePids && visiblePids.length > 0
+        ? inArray(planRuns.projectId, visiblePids)
+        : undefined;
     const rows = q
       ? await db.select().from(planRuns).where(q).orderBy(desc(planRuns.startedAt))
-      : await db.select().from(planRuns).orderBy(desc(planRuns.startedAt));
+      : [];
     planRows = rows.map((r) => ({
       ...r,
       kind: 'plan' as const,

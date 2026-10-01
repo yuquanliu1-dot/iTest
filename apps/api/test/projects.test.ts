@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { SCHEMA_SQL, seedProject } from './helpers/db.js';
+import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -19,6 +19,14 @@ beforeAll(async () => {
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
   app = express();
   app.use(express.json());
+  const { userId, username, orgId, orgPath } = await seedOrg(pool);
+  // 注入种子组织管理员身份（跳过真实登录；可见性判定依赖 managerOrgPaths 子树）。
+  // helpers/auth 依赖 src 服务链（连带加载 db client），须等 DATABASE_URL 指向测试容器后再动态加载。
+  const { managerUserOf } = await import('./helpers/auth.js');
+  app.use('/api', (req, _res, next) => {
+    req.user = managerUserOf(userId, username, orgId, orgPath);
+    next();
+  });
   app.use('/api/projects', projectsRoute);
   app.use('/api/groups', groupsRoute);
   app.use(errorHandler);
@@ -33,9 +41,10 @@ afterAll(async () => {
 
 describe('projects', () => {
   it('POST creates, GET lists with caseCount', async () => {
-    const created = await request(app).post('/api/projects').send({ name: 'CueCast 官网', defaultUrl: 'https://cuecast.test' });
+    const created = await request(app).post('/api/projects').send({ name: 'CueCast 官网', description: '官网回归', defaultUrl: 'https://cuecast.test' });
     expect(created.status).toBe(200);
     expect(created.body.name).toBe('CueCast 官网');
+    expect(created.body.description).toBe('官网回归');
 
     await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, 'g1')`, [created.body.id]);
     const g = await pool.query(`SELECT id FROM "groups" WHERE project_id = $1`, [created.body.id]);
@@ -51,8 +60,9 @@ describe('projects', () => {
 
   it('PATCH renames and updates defaultUrl', async () => {
     const created = await request(app).post('/api/projects').send({ name: 'P' });
-    const r = await request(app).patch(`/api/projects/${created.body.id}`).send({ name: 'P2', defaultUrl: 'https://x.test' });
+    const r = await request(app).patch(`/api/projects/${created.body.id}`).send({ name: 'P2', description: '新描述', defaultUrl: 'https://x.test' });
     expect(r.body.name).toBe('P2');
+    expect(r.body.description).toBe('新描述');
     expect(r.body.defaultUrl).toBe('https://x.test');
   });
 
