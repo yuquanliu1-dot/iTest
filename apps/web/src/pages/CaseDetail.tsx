@@ -144,14 +144,24 @@ export default function CaseDetail() {
     enabled: !!id,
   });
 
+  // 执行设置有未保存的本地编辑时，避免被 caseDetail refetch 静默覆盖
+  const runtimeSyncRef = useRef<string | null>(null);
   useEffect(() => {
-    if (caseDetail) {
-      setWindowStrategy((caseDetail.windowStrategy as 'maximize' | 'current' | 'custom') ?? 'maximize');
-      setWindowWidth(caseDetail.windowWidth ?? undefined);
-      setWindowHeight(caseDetail.windowHeight ?? undefined);
-      setIncognito(!!caseDetail.incognito);
-    }
-  }, [caseDetail]);
+    if (!caseDetail) return;
+    const serverKey = JSON.stringify([
+      (caseDetail.windowStrategy as 'maximize' | 'current' | 'custom') ?? 'maximize',
+      caseDetail.windowWidth ?? undefined,
+      caseDetail.windowHeight ?? undefined,
+      !!caseDetail.incognito,
+    ]);
+    const localKey = JSON.stringify([windowStrategy, windowWidth, windowHeight, incognito]);
+    if (runtimeSyncRef.current !== null && localKey !== runtimeSyncRef.current) return;
+    runtimeSyncRef.current = serverKey;
+    setWindowStrategy((caseDetail.windowStrategy as 'maximize' | 'current' | 'custom') ?? 'maximize');
+    setWindowWidth(caseDetail.windowWidth ?? undefined);
+    setWindowHeight(caseDetail.windowHeight ?? undefined);
+    setIncognito(!!caseDetail.incognito);
+  }, [caseDetail, windowStrategy, windowWidth, windowHeight, incognito]);
 
   const { data: groups } = useQuery({
     queryKey: ['groups', projectId],
@@ -442,7 +452,7 @@ export default function CaseDetail() {
                     </span>
                   </div>
                   <div className="flex justify-end">
-                    <Button onClick={() => saveRuntime.mutate()}>保存</Button>
+                    <Button onClick={() => saveRuntime.mutate()} disabled={saveRuntime.isPending}>保存</Button>
                   </div>
                 </div>
                 <AgentStreamPanel
