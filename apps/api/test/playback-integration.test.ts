@@ -1,13 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { PreflightReport } from '@itest/shared';
 
-// 可变 mock 状态：count 决定定位候选是否命中（0 = 全部未命中 → LocatorAllFailed；1 = 首候选命中）
-const mockState = vi.hoisted(() => ({ locatorCount: 0 }));
+// 可变 mock 状态：count 决定定位候选是否命中（0 = 全部未命中 → LocatorAllFailed；1 = 首候选命中）；
+// clickReject = false 时 click 成功，覆盖「命中且步骤通过」的 hitLocator 记录路径。
+const mockState = vi.hoisted(() => ({ locatorCount: 0, clickReject: true }));
 
 vi.mock('playwright-core', () => {
   const makeLocator = () => ({
     count: vi.fn().mockResolvedValue(mockState.locatorCount),
-    click: vi.fn().mockRejectedValue(new Error('not found')),
+    click: vi.fn().mockImplementation(() =>
+      mockState.clickReject ? Promise.reject(new Error('not found')) : Promise.resolve(undefined),
+    ),
     first: vi.fn().mockReturnThis(),
   });
   const makePage = () => ({
@@ -37,6 +40,7 @@ import { executeCaseReal } from '../src/execute/cdp.js';
 describe('playback integration', () => {
   it('failure path writes failureReason + humanMessage', async () => {
     mockState.locatorCount = 0;
+    mockState.clickReject = true;
     const preflights: PreflightReport[] = [];
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000099',
@@ -57,6 +61,7 @@ describe('playback integration', () => {
 
   it('records hitLocator when a locator candidate hits', async () => {
     mockState.locatorCount = 1;
+    mockState.clickReject = false;
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000098',
       [{
@@ -69,6 +74,7 @@ describe('playback integration', () => {
       }],
       { reportId: 'r-hit' },
     );
+    expect(results[0]!.status).toBe('passed');
     expect(results[0]!.hitLocator?.kind).toBe('intent-testid');
     expect(results[0]!.hitLocator?.value).toBe('[data-testid="loginBtn"]');
   });
