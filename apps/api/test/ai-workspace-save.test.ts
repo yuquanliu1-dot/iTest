@@ -99,4 +99,39 @@ describe('ai-thread + ai-workspace + save', () => {
       .send({ groupId: og.rows[0]!.id, scenarioIds: ['s1'], caseIds: ['c1'] });
     expect(r2.status).toBe(404);
   });
+
+  it('loose caseIds do NOT pull in unselected-scenario cases (regression)', async () => {
+    const ws = await import('../src/pi/workspace.js');
+    const { projectId, groupId } = await seedProject(pool);
+    const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
+    const rid = r.rows[0]!.id as string;
+    // 一个场景 s1 含两个用例 c1, c2；再添一个散用例 c-loose。
+    await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
+      { id: 'c1', title: 'C1', description: null, priority: 'P0', steps: [] },
+      { id: 'c2', title: 'C2', description: null, priority: 'P1', steps: [] },
+    ] });
+    await ws.upsertCase(rid, null, { id: 'c-loose', title: 'Loose', description: null, priority: 'P2', steps: [] });
+    // 只勾选 s1 + 显式勾选 c-loose。预期：c1, c2, c-loose 都被保存（场景全选 + 显式 loose）。
+    const ok = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
+      .send({ groupId, scenarioIds: ['s1'], caseIds: ['c-loose'] });
+    expect(ok.status).toBe(200);
+    expect(ok.body.savedCases).toBe(3);
+
+    // 关键反向验证：仅勾选散用例 c-loose，s1 未选，预期只保存 c-loose 这一个。
+    const ws2 = await import('../src/pi/workspace.js');
+    const { projectId: pid2, groupId: gid2 } = await seedProject(pool);
+    const r2 = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r2','c',$1) RETURNING id`, [pid2]);
+    const rid2 = r2.rows[0]!.id as string;
+    await ws2.upsertScenario(rid2, { id: 's1', title: 'S', description: null, cases: [
+      { id: 'c1', title: 'C1', description: null, priority: 'P0', steps: [] },
+      { id: 'c2', title: 'C2', description: null, priority: 'P1', steps: [] },
+    ] });
+    await ws2.upsertCase(rid2, null, { id: 'c-loose', title: 'Loose', description: null, priority: 'P2', steps: [] });
+    const onlyLoose = await request(app).post(`/api/requirements/${rid2}/ai-workspace/save`)
+      .send({ groupId: gid2, scenarioIds: [], caseIds: ['c-loose'] });
+    expect(onlyLoose.status).toBe(200);
+    expect(onlyLoose.body.savedCases).toBe(1);
+    const cases = await pool.query(`SELECT title FROM test_cases WHERE requirement_id = $1 ORDER BY title`, [rid2]);
+    expect(cases.rows.map((row) => row.title)).toEqual(['Loose']);
+  });
 });
