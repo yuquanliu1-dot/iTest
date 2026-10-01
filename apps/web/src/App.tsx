@@ -10,6 +10,7 @@ import ProjectsHome from './pages/ProjectsHome';
 import Dashboard from './pages/Dashboard';
 import Requirements from './pages/Requirements';
 import RequirementDetail from './pages/RequirementDetail';
+import AiWorkspacePage from './pages/AiWorkspacePage';
 import GroupsPage from './pages/GroupsPage';
 import CaseDetail from './pages/CaseDetail';
 import Plans from './pages/Plans';
@@ -44,6 +45,7 @@ export default function App() {
           <Route path="cases/:id" element={<CaseDetail />} />
           <Route path="requirements" element={<Requirements />} />
           <Route path="requirements/:id" element={<RequirementDetail />} />
+          <Route path="requirements/:id/ai" element={<AiWorkspacePage />} />
           <Route path="plans" element={<Plans />} />
           <Route path="plans/:id" element={<PlanDetail />} />
           <Route path="plans/:id/runs/:runId" element={<PlanRunDetail />} />

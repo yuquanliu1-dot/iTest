@@ -124,8 +124,19 @@ export default function Requirements() {
                   className={`grid ${GRID_COLS} items-center px-5 py-[12px] cursor-pointer transition-colors list-row-clickable`}
                   style={{ borderBottom: '1px solid var(--color-muted)' }}
                 >
-                  <span className="text-[13px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>
-                    {r.title}
+                  <span className="flex items-center gap-2">
+                    <span className="text-[13px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>
+                      {r.title}
+                    </span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); navigate(`/p/${projectId}/requirements/${r.id}/ai`); }}
+                      className="flex items-center gap-1 px-2 py-[2px] rounded text-[11px]"
+                      style={{ background: 'var(--color-accent)', color: 'var(--color-accent-foreground)', border: 'none', cursor: 'pointer' }}
+                      title="AI 创建用例"
+                    >
+                      <Icon name="bolt" size={10} />
+                      AI
+                    </button>
                   </span>
                   <span>
                     <StatusPill status={r.status}>{r.status}</StatusPill>
