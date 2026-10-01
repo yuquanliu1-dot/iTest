@@ -1,6 +1,6 @@
 import { chromium, type Browser, type Page } from 'playwright-core';
 import type { StepAction, Locator, IntentLocator } from '@itest/shared';
-import { deepEqual, materializeValue } from '@itest/shared';
+import { deepEqual, materializeValue, substituteVars } from '@itest/shared';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { testAttachments, testSteps } from '../db/schema.js';
@@ -108,9 +108,12 @@ function locatorToPlaywright(page: Page, loc: Locator) {
 async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
   const { page, vars } = opts;
   switch (action.kind) {
-    case 'navigate':
-      await page.goto(action.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    case 'navigate': {
+      const { value, missing } = substituteVars(action.url, vars);
+      if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.url}")`);
+      await page.goto(value, { waitUntil: 'domcontentloaded', timeout: 30000 });
       return;
+    }
     case 'click':
       await (await tryFirstMatch(page, action.locator, action.intentLocator)).click({ timeout: 5000 });
       return;
@@ -123,6 +126,12 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
         if (secret == null) throw new Error(`secret-missing: step ${opts.stepId ?? '(no id)'}`);
         value = secret;
       } else {
+        if (typeof action.value === 'string') {
+          const sub = substituteVars(action.value, vars);
+          if (sub.missing.length > 0) {
+            throw new Error(`var-missing: {{${sub.missing[0]!}}} (template="${action.value}")`);
+          }
+        }
         value = materializeValue(action.value, vars);
       }
       await (await tryFirstMatch(page, action.locator, action.intentLocator)).fill(value, { timeout: 5000 });
@@ -141,14 +150,23 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       return;
     case 'assertText': {
       const a = action as StepAction & { kind: 'assertText' };
+      const { value, missing } = substituteVars(a.equals, vars);
+      if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${a.equals}")`);
       const actual = await resolveAssertTextActual(page, a);
-      const ok = matchAssertText(actual, a.equals, a.match ?? 'equals');
+      const ok = matchAssertText(actual, value, a.match ?? 'equals');
       if (!ok) {
-        throw new Error(`assertText failed (${a.target ?? 'specifiedElement'}/${a.match ?? 'equals'}): expected ${JSON.stringify(a.equals)}, actual ${JSON.stringify(actual.slice(0, 100))}`);
+        throw new Error(`assertText failed (${a.target ?? 'specifiedElement'}/${a.match ?? 'equals'}): expected ${JSON.stringify(value)}, actual ${JSON.stringify(actual.slice(0, 100))}`);
       }
       return;
     }
     case 'assertJson': {
+      const { value: textTemplate, missing: missingJson } = substituteVars(
+        JSON.stringify(action.equals ?? null),
+        vars,
+      );
+      if (missingJson.length > 0) {
+        throw new Error(`var-missing: {{${missingJson[0]!}}} (template="${JSON.stringify(action.equals).slice(0, 100)}")`);
+      }
       const text = (await (await tryFirstMatch(page, action.locator, action.intentLocator)).innerText({ timeout: 5000 })).trim();
       let parsed: unknown;
       try {
@@ -156,14 +174,23 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       } catch {
         throw new Error(`assertJson: 元素文本不是合法 JSON: ${text.slice(0, 100)}`);
       }
-      if (!deepEqual(parsed, action.equals)) {
+      let expected: unknown;
+      try {
+        expected = JSON.parse(textTemplate);
+      } catch {
+        throw new Error(`assertJson: 变量替换后期望值不是合法 JSON: ${textTemplate.slice(0, 100)}`);
+      }
+      if (!deepEqual(parsed, expected)) {
         throw new Error(`assertJson 深比较失败: 实际 ${text.slice(0, 100)}`);
       }
       return;
     }
-    case 'screenshot':
-      await page.screenshot({ path: action.name || 'snap' });
+    case 'screenshot': {
+      const { value, missing } = substituteVars(action.name, vars);
+      if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.name}")`);
+      await page.screenshot({ path: value || 'snap' });
       return;
+    }
     case 'check': {
       const loc = await tryFirstMatch(page, action.locator, action.intentLocator);
       const current = await loc.isChecked({ timeout: 5000 });
@@ -173,9 +200,12 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       }
       return;
     }
-    case 'select':
-      await (await tryFirstMatch(page, action.locator, action.intentLocator)).selectOption(materializeValue(action.value, vars), { timeout: 5000 });
+    case 'select': {
+      const { value, missing } = substituteVars(action.value, vars);
+      if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.value}")`);
+      await (await tryFirstMatch(page, action.locator, action.intentLocator)).selectOption(value, { timeout: 5000 });
       return;
+    }
     case 'upload': {
       const meta = opts.ctx.attachmentResolver
         ? await opts.ctx.attachmentResolver(action.fileId)
@@ -200,11 +230,29 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       } catch {
         text = await loc.innerText({ timeout: 5000 });
       }
-      vars[action.varName] = text.trim();
+      const raw = text.trim();
+      let resolved = raw;
+      if (action.mode === 'regex') {
+        if (!action.pattern) throw new Error(`extract-missing: var=${action.varName} 未配置 pattern`);
+        const re = new RegExp(action.pattern, 'g');
+        const matches = [...raw.matchAll(re)];
+        if (matches.length === 0) {
+          throw new Error(`extract-missing: var=${action.varName} pattern=${action.pattern} 无匹配 (raw="${raw.slice(0, 100)}")`);
+        }
+        const group = action.group ?? 0;
+        const m = matches[0]!;
+        resolved = group === 0 ? (m[0] ?? '') : (m[group] ?? '');
+      }
+      // completeValue 与 smartExtract 都用 raw；smartExtract 已编译为 regex 但保留 mode 字段以便 UI 标注
+      vars[action.varName] = resolved;
       return;
     }
     case 'aiStep': {
       if (!action.compiled) throw new Error('AI 步骤未编译');
+      const { missing } = substituteVars(action.instruction, vars);
+      if (missing.length > 0) {
+        throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.instruction}")`);
+      }
       for (const sub of action.compiled) {
         await dispatch(sub, opts);
       }
