@@ -1,0 +1,117 @@
+import { collectVarRefs, safeRegex, validateVariableName } from '@itest/shared';
+import type { StepAction } from '@itest/shared';
+
+export interface VariableIssue {
+  stepOrder: number;
+  field: string;
+  name: string;
+}
+
+export interface DuplicateIssue {
+  name: string;
+  definedAt: number[];
+}
+
+export interface RegexIssue {
+  stepOrder: number;
+  reason: string;
+}
+
+export interface VarNameIssue {
+  stepOrder: number;
+  field: string;
+  name: string;
+  reason: string;
+}
+
+export interface VariableReport {
+  undefined: VariableIssue[];
+  duplicates: DuplicateIssue[];
+  forwardRefs: VariableIssue[];
+  regexIssues: RegexIssue[];
+  invalidNames: VarNameIssue[];
+}
+
+/** 从 step 抓可被 substitute 的所有字符串字段路径。 */
+function stringFields(step: StepAction): Array<{ field: string; text: string }> {
+  const out: Array<{ field: string; text: string }> = [];
+  const a = step as Record<string, unknown>;
+  switch (a.kind) {
+    case 'fill':
+      if (typeof a.value === 'string') out.push({ field: 'fill.value', text: a.value });
+      break;
+    case 'select':
+      if (typeof a.value === 'string') out.push({ field: 'select.value', text: a.value });
+      break;
+    case 'assertText':
+      if (typeof a.equals === 'string') out.push({ field: 'assertText.equals', text: a.equals });
+      break;
+    case 'assertJson':
+      out.push({ field: 'assertJson.equals', text: JSON.stringify(a.equals ?? null) });
+      break;
+    case 'navigate':
+      if (typeof a.url === 'string') out.push({ field: 'navigate.url', text: a.url });
+      break;
+    case 'screenshot':
+      if (typeof a.name === 'string') out.push({ field: 'screenshot.name', text: a.name });
+      break;
+    case 'aiStep':
+      if (typeof a.instruction === 'string') out.push({ field: 'aiStep.instruction', text: a.instruction });
+      break;
+  }
+  return out;
+}
+
+export function buildVariableReport(steps: StepAction[]): VariableReport {
+  const definedOrder = new Map<string, number>();
+  const duplicates = new Map<string, number[]>();
+  const undef: VariableIssue[] = [];
+  const forward: VariableIssue[] = [];
+  const regexIssues: RegexIssue[] = [];
+  const invalidNames: VarNameIssue[] = [];
+
+  // First pass: register all extract varName → earliest definition order.
+  for (let i = 0; i < steps.length; i++) {
+    const a = steps[i]!;
+    if (a.kind !== 'extract') continue;
+    const nameCheck = validateVariableName(a.varName);
+    if (!nameCheck.ok) {
+      invalidNames.push({ stepOrder: i, field: 'extract.varName', name: a.varName, reason: nameCheck.reason ?? 'invalid' });
+    }
+    const name = a.varName;
+    if (definedOrder.has(name)) {
+      const arr = duplicates.get(name) ?? [definedOrder.get(name)!];
+      arr.push(i);
+      duplicates.set(name, arr);
+    } else {
+      definedOrder.set(name, i);
+    }
+    if (a.mode === 'regex' && a.pattern) {
+      const r = safeRegex(a.pattern);
+      if (!r.ok) regexIssues.push({ stepOrder: i, reason: r.reason });
+    }
+  }
+
+  // Second pass: walk string fields and classify refs.
+  for (let i = 0; i < steps.length; i++) {
+    const a = steps[i]!;
+    if (a.kind === 'extract') continue;
+    for (const { field, text } of stringFields(a)) {
+      for (const name of collectVarRefs(text)) {
+        if (!definedOrder.has(name)) {
+          undef.push({ stepOrder: i, field, name });
+        } else if (definedOrder.get(name)! > i) {
+          forward.push({ stepOrder: i, field, name });
+        }
+      }
+    }
+  }
+
+  return {
+    undefined: undef,
+    duplicates: [...duplicates.entries()].map(([name, definedAt]) => ({ name, definedAt })),
+    forwardRefs: forward,
+    regexIssues,
+    invalidNames,
+  };
+}
