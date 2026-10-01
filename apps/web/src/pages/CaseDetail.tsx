@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api/client';
+import { api, type VariableReport } from '../api/client';
 import { useUIStore } from '../stores/ui';
 import { useRecorderStore } from '../stores/recorder';
 import { useAgentRunStore } from '../stores/agentRun';
@@ -77,6 +77,7 @@ export default function CaseDetail() {
   const clipboard = useStepClipboard();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<StepClip | null>(null);
+  const [varReport, setVarReport] = useState<VariableReport | null>(null);
   const editingIdxRef = useRef<number>(-1);
   const editingSnapshotRef = useRef<StepClip | null>(null);
   const historyRef = useRef<StepClip[][]>([]);
@@ -94,7 +95,10 @@ export default function CaseDetail() {
         id!,
         steps.map((s) => ({ ...s, name: s.name ?? undefined, delayMs: s.delayMs ?? undefined })),
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }),
+    onSuccess: (r) => {
+      setVarReport(r.variableReport ?? null);
+      qc.invalidateQueries({ queryKey: ['case', id] });
+    },
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
@@ -435,6 +439,40 @@ export default function CaseDetail() {
                     撤销
                   </button>
                 </div>
+                {varReport &&
+                  (varReport.undefined.length > 0 ||
+                    varReport.forwardRefs.length > 0 ||
+                    varReport.duplicates.length > 0 ||
+                    varReport.invalidNames.length > 0) && (
+                  <div
+                    className="rounded-[8px] px-3 py-2 mb-3 text-[11px]"
+                    style={{ border: '1px solid #b45309', color: '#b45309', background: 'rgba(180, 83, 9, 0.08)' }}
+                  >
+                    <div className="font-semibold mb-1">变量体检提示（不阻断保存，回放时未定义变量会报错）</div>
+                    <ul className="list-disc pl-4 flex flex-col gap-0.5">
+                      {varReport.undefined.map((i, k) => (
+                        <li key={`u${k}`}>
+                          步骤 {i.stepOrder + 1} 引用了未定义变量 {`{{${i.name}}}`}（{i.field}）
+                        </li>
+                      ))}
+                      {varReport.forwardRefs.map((i, k) => (
+                        <li key={`f${k}`}>
+                          步骤 {i.stepOrder + 1} 前向引用 {`{{${i.name}}}`}（定义在后面的步骤）
+                        </li>
+                      ))}
+                      {varReport.duplicates.map((i, k) => (
+                        <li key={`d${k}`}>
+                          变量 {i.name} 在步骤 {i.definedAt.map((n) => n + 1).join('、')} 重复定义，回放取最后一次赋值
+                        </li>
+                      ))}
+                      {varReport.invalidNames.map((i, k) => (
+                        <li key={`n${k}`}>
+                          步骤 {i.stepOrder + 1} 变量名 {i.name} 不合法：{i.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 {caseDetail.steps.length === 0 ? (
                   <EmptyState
                     icon="listChecks"
@@ -469,6 +507,15 @@ export default function CaseDetail() {
                         <code className="text-[12px] font-mono flex-1 break-all" style={{ color: 'var(--color-foreground)' }}>
                           {JSON.stringify(s.action)}
                         </code>
+                        {(s.action as { kind?: string; varName?: string }).kind === 'extract' && (
+                          <span
+                            className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-mono"
+                            style={{ border: '1px solid var(--color-accent)', color: 'var(--color-accent)', background: 'transparent' }}
+                            title="抽取变量，供后续步骤 {{引用}}"
+                          >
+                            → {`{{${(s.action as { varName?: string }).varName ?? ''}}}`}
+                          </span>
+                        )}
                         {(s.action as { kind?: string; compiled?: unknown[] | null }).kind === 'aiStep' &&
                           (s.action as { compiled?: unknown[] | null }).compiled == null && (
                             <button
