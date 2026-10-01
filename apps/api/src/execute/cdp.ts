@@ -9,6 +9,9 @@ import { logger } from '../logger.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildCandidates } from './locator-resolver.js';
+import { planVision } from '../agent/aiStepVision.js';
+import { compileAiStepVision } from '../agent/aiStepCompile.js';
+import { resolveLlmClient } from '../agent/llmSettings.js';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
 
@@ -206,6 +209,25 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       return;
     }
     case 'aiStep': {
+      const instruction = String(action.instruction ?? '');
+      const plan = planVision(instruction);
+      if (plan.useVision) {
+        const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
+        const sourceLoc = page.locator(plan.sourceSelector!).first();
+        await sourceLoc.waitFor({ state: 'visible', timeout: 5000 });
+        const buffer = await sourceLoc.screenshot({ timeout: 5000 });
+        const text = await compileAiStepVision(
+          instruction,
+          { image: { base64: buffer.toString('base64'), mime: 'image/png' } },
+          client,
+        );
+        if (plan.outputSelector) {
+          const targetLoc = page.locator(plan.outputSelector).first();
+          await targetLoc.waitFor({ state: 'visible', timeout: 5000 });
+          await targetLoc.fill(text, { timeout: 5000 });
+        }
+        return;
+      }
       if (!action.compiled) throw new Error('AI 步骤未编译');
       for (const sub of action.compiled) {
         await dispatch(sub, opts);

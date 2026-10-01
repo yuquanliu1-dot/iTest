@@ -15,6 +15,7 @@ vi.mock('playwright-core', () => {
     selectOption: vi.fn().mockResolvedValue(undefined),
     innerText: vi.fn().mockResolvedValue('{"code":0}'),
     inputValue: vi.fn().mockResolvedValue('input-val'),
+    screenshot: vi.fn().mockResolvedValue(Buffer.from('fake-image')),
     filter: vi.fn().mockReturnThis(),
     first: vi.fn().mockReturnThis(),
     count: vi.fn().mockResolvedValue(1),
