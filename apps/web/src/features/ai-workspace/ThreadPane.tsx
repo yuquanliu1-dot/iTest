@@ -1,15 +1,10 @@
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { AssistantRuntimeProvider, ThreadPrimitive } from '@assistant-ui/react';
-import { usePiRuntime, usePiRuntimeExtras, createPiHttpClient } from '@assistant-ui/react-pi';
-import { useQuery } from '@tanstack/react-query';
+import { usePiRuntime, createPiHttpClient } from '@assistant-ui/react-pi';
 
 interface Props {
   requirementId: string;
   threadId: string;
-}
-
-interface PiModelInfo {
-  id: string;
 }
 
 /**
@@ -17,26 +12,9 @@ interface PiModelInfo {
  * renders the messages. We render only the structural primitives — the Pi
  * runtime wires composer + thread state from `usePiRuntime`.
  */
-export default function ThreadPane({ requirementId, threadId }: Props) {
-  const { data: models = [] } = useQuery({
-    queryKey: ['pi-models'],
-    queryFn: () =>
-      fetch('/api/pi/models').then(
-        (r) => r.json() as Promise<PiModelInfo[]>,
-      ),
-    refetchInterval: 30_000,
-  });
-
+export default function ThreadPane({ threadId }: Props) {
   const client = useMemo(() => createPiHttpClient(), []);
   const runtime = usePiRuntime({ client, initialThreadId: threadId });
-  // acknowledge extras as part of the runtime surface
-  usePiRuntimeExtras();
-
-  useEffect(() => {
-    // assistant-ui manages thread lifecycle internally; nothing to wire here.
-    void requirementId;
-    void models;
-  }, [requirementId, models]);
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
