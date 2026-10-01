@@ -32,7 +32,7 @@ vi.mock('playwright-core', () => {
     screenshot: vi.fn().mockResolvedValue(undefined),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
     url: vi.fn(() => 'https://example.com/path'),
-    evaluate: vi.fn().mockResolvedValue('{"code":0}'),
+    evaluate: vi.fn().mockResolvedValue('登录成功'),
   };
 
   return {
@@ -335,6 +335,7 @@ describe('phase3 — three-tier locator', () => {
     mocked.__locator.mockImplementationOnce(() => ({
       click: vi.fn().mockImplementation(() => Promise.reject(new Error('not found'))),
       first: vi.fn().mockReturnThis(),
+      count: vi.fn().mockResolvedValue(0),
     }) as never);
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000021',
@@ -360,6 +361,11 @@ describe('phase3 — three-tier locator', () => {
 describe('phase3 — assertText target×match', () => {
   it('specifiedElement + equals (default)', async () => {
     mocked.__locator.mockClear();
+    const fillMock = (mocked.__locator as unknown as { mockImplementationOnce: (fn: () => unknown) => unknown }).mockImplementationOnce(() => ({
+      innerText: vi.fn().mockResolvedValue('ok'),
+      first: vi.fn().mockReturnThis(),
+      count: vi.fn().mockResolvedValue(1),
+    } as never));
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000022',
       [
@@ -466,7 +472,9 @@ describe('phase3 — composite value at execute', () => {
       { reportId: 'r-composite' },
     );
     expect(results[0]!.status).toBe('passed');
-    const lastCall = (mocked.__locator.mock.results[0]!.value as { fill: ReturnType<typeof vi.fn> }).fill.mock.calls[0]?.[0];
-    expect(lastCall).toMatch(/^CS\d{3}$/);
+    // 找出本次 composite 的最后一次 fill 调用（其它 case 残留 mock.results 会被前序 test 污染）
+    const fillCalls = (mocked.__locator.mock.results[mocked.__locator.mock.results.length - 1]!.value as { fill: ReturnType<typeof vi.fn> }).fill.mock.calls;
+    const lastFillArg = fillCalls[fillCalls.length - 1]?.[0];
+    expect(lastFillArg).toMatch(/^CS\d{3}$/);
   });
 });

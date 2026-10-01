@@ -45,14 +45,14 @@ export function buildCandidates(page: Page, action: ResolverInput): Array<{ kind
     }
   }
 
-  // 3: 稳定 #id CSS
+  // 3+4+5: 稳定 #id CSS 在前，XPath 与普通 CSS / role / text / testId 在后，按输入顺序
+  // 注意：稳定 #id 在最前是为了让一级 CSS 失败时能立刻回落到稳定的 #id，避免不必要的 XPath / 普通 CSS 重试。
   for (const l of action.locator) {
     if (l.strategy === 'css' && isPureStableCss(l.value)) {
       push('stable-css', page.locator(l.value));
     }
   }
 
-  // 4+5: XPath 与普通 CSS / role / text / testId，按输入顺序
   for (const l of action.locator) {
     if (l.strategy === 'css' && !isPureStableCss(l.value)) {
       push('css', page.locator(l.value));

@@ -1,5 +1,5 @@
 import { chromium, type Browser, type Page } from 'playwright-core';
-import type { StepAction, Locator } from '@itest/shared';
+import type { StepAction, Locator, IntentLocator } from '@itest/shared';
 import { deepEqual, materializeValue } from '@itest/shared';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -8,8 +8,18 @@ import { decrypt } from '../lib/secret-crypto.js';
 import { logger } from '../logger.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { buildCandidates } from './locator-resolver.js';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
+
+/** 弹层/通知类元素 selector 兜底；用于 assertText errorMessage 目标。 */
+const ERROR_MESSAGE_SELECTORS = [
+  '.ant-message',
+  '.toast',
+  '[role="alert"]',
+  '.el-message',
+  '.ivu-message',
+];
 
 /** Postgres uuid 列形状校验，避免非法 id 触发 22P02。 */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -102,7 +112,7 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       await page.goto(action.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
       return;
     case 'click':
-      await firstMatch(page, action.locator).click({ timeout: 5000 });
+      await (await tryFirstMatch(page, action.locator, action.intentLocator)).click({ timeout: 5000 });
       return;
     case 'fill': {
       let value: string;
@@ -115,25 +125,31 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       } else {
         value = materializeValue(action.value, vars);
       }
-      await firstMatch(page, action.locator).fill(value, { timeout: 5000 });
+      await (await tryFirstMatch(page, action.locator, action.intentLocator)).fill(value, { timeout: 5000 });
       return;
     }
     case 'hover':
-      await firstMatch(page, action.locator).hover({ timeout: 5000 });
+      await (await tryFirstMatch(page, action.locator, undefined)).hover({ timeout: 5000 });
       return;
     case 'waitFor':
-      await firstMatch(page, action.locator).waitFor({ state: 'visible', timeout: action.timeoutMs ?? 5000 });
+      await (await tryFirstMatch(page, action.locator, action.intentLocator)).waitFor({ state: 'visible', timeout: action.timeoutMs ?? 5000 });
       return;
     case 'assertVisible':
-      if (!(await firstMatch(page, action.locator).isVisible({ timeout: 5000 }))) {
+      if (!(await (await tryFirstMatch(page, action.locator, action.intentLocator)).isVisible({ timeout: 5000 }))) {
         throw new Error(`assertVisible failed: ${action.locator[0]?.value}`);
       }
       return;
-    case 'assertText':
-      await firstMatch(page, action.locator).filter({ hasText: action.equals }).first().waitFor({ state: 'visible', timeout: 5000 });
+    case 'assertText': {
+      const a = action as StepAction & { kind: 'assertText' };
+      const actual = await resolveAssertTextActual(page, a);
+      const ok = matchAssertText(actual, a.equals, a.match ?? 'equals');
+      if (!ok) {
+        throw new Error(`assertText failed (${a.target ?? 'specifiedElement'}/${a.match ?? 'equals'}): expected ${JSON.stringify(a.equals)}, actual ${JSON.stringify(actual.slice(0, 100))}`);
+      }
       return;
+    }
     case 'assertJson': {
-      const text = (await firstMatch(page, action.locator).innerText({ timeout: 5000 })).trim();
+      const text = (await (await tryFirstMatch(page, action.locator, action.intentLocator)).innerText({ timeout: 5000 })).trim();
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -149,7 +165,7 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       await page.screenshot({ path: action.name || 'snap' });
       return;
     case 'check': {
-      const loc = firstMatch(page, action.locator);
+      const loc = await tryFirstMatch(page, action.locator, action.intentLocator);
       const current = await loc.isChecked({ timeout: 5000 });
       if (current !== action.checked) {
         if (action.checked) await loc.check({ timeout: 5000 });
@@ -158,14 +174,14 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       return;
     }
     case 'select':
-      await firstMatch(page, action.locator).selectOption(materializeValue(action.value, vars), { timeout: 5000 });
+      await (await tryFirstMatch(page, action.locator, action.intentLocator)).selectOption(materializeValue(action.value, vars), { timeout: 5000 });
       return;
     case 'upload': {
       const meta = opts.ctx.attachmentResolver
         ? await opts.ctx.attachmentResolver(action.fileId)
         : await defaultAttachmentResolver(action.fileId, opts.ctx.projectId);
       if (!meta) throw new Error(`attachment-missing: ${action.fileId}`);
-      await firstMatch(page, action.locator).setInputFiles(meta.storedPath, { timeout: 5000 });
+      await (await tryFirstMatch(page, action.locator, action.intentLocator)).setInputFiles(meta.storedPath, { timeout: 5000 });
       return;
     }
     case 'switchTab': {
@@ -177,7 +193,7 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       return;
     }
     case 'extract': {
-      const loc = firstMatch(page, action.locator);
+      const loc = await tryFirstMatch(page, action.locator, action.intentLocator);
       let text: string;
       try {
         text = await loc.inputValue({ timeout: 5000 });
@@ -201,6 +217,73 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
 function firstMatch(page: Page, locators: Locator[]) {
   if (locators.length === 0) throw new Error('locator array is empty');
   return locatorToPlaywright(page, locators[0]!);
+}
+
+/**
+ * 三层定位候选顺序尝试；任一成功即返回。所有候选失败抛错。
+ * 使用 buildCandidates 构造候选；优先用 intent.testid / contextText，再稳定 #id CSS，最后是 XPath / 其它 CSS。
+ * 候选探测通过 count()，避免后续动作（如 click）抛错；text/role 路径可能没有 count()，接受即成功。
+ */
+async function tryFirstMatch(
+  page: Page,
+  locator: Locator[],
+  intentLocator?: IntentLocator,
+): Promise<ReturnType<Page['locator']>> {
+  const cands = buildCandidates(page, { locator, intentLocator });
+  if (cands.length === 0) {
+    throw new Error('locator array is empty');
+  }
+  let lastErr: unknown;
+  for (const c of cands) {
+    const probe = c.loc as unknown as { count?: () => Promise<number>; isVisible?: () => Promise<boolean> };
+    if (probe && typeof probe.count === 'function') {
+      try {
+        const n = await probe.count();
+        if (n > 0) return c.loc;
+        lastErr = new Error(`count=0 (${c.kind})`);
+      } catch (e) {
+        lastErr = e;
+      }
+      continue;
+    }
+    // 没有 count()（如 getByText 路径）直接接受
+    return c.loc;
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('all locator candidates failed');
+}
+
+/** resolveAssertTextActual: 根据 action.target 决定 actual 字符串的来源。 */
+async function resolveAssertTextActual(
+  page: Page,
+  action: StepAction & { kind: 'assertText' },
+): Promise<string> {
+  const target = action.target ?? 'specifiedElement';
+  if (target === 'page') {
+    return (await page.evaluate(() => (globalThis as { document?: { body?: { innerText?: string } } }).document?.body?.innerText ?? '')) as string;
+  }
+  if (target === 'url') {
+    return page.url();
+  }
+  if (target === 'errorMessage') {
+    const sel = ERROR_MESSAGE_SELECTORS.join(', ');
+    const loc = page.locator(sel).first();
+    await loc.waitFor({ state: 'visible', timeout: 5000 });
+    return (await loc.innerText({ timeout: 5000 })).trim();
+  }
+  // specifiedElement（默认）
+  if (action.locator.length === 0) throw new Error('assertText: specifiedElement 模式需要 locator');
+  const loc = await tryFirstMatch(page, action.locator, action.intentLocator);
+  return (await loc.innerText({ timeout: 5000 })).trim();
+}
+
+/** matchAssertText: 断言匹配规则（equals/contains/notContains/regex）。 */
+function matchAssertText(actual: string, expected: string, match: 'equals' | 'contains' | 'notContains' | 'regex'): boolean {
+  switch (match) {
+    case 'equals': return actual.trim() === expected.trim();
+    case 'contains': return actual.includes(expected);
+    case 'notContains': return !actual.includes(expected);
+    case 'regex': return new RegExp(expected).test(actual);
+  }
 }
 
 async function writeStepScreenshot(reportId: string, stepIndex: number, page: Page): Promise<string | undefined> {
