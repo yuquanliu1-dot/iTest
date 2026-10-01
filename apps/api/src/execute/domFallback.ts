@@ -21,11 +21,11 @@ async function runDomAction(
   page: Page,
   locators: Locator[],
   arg: ScriptArg,
-  script: (a: ScriptArg) => { ok: boolean; error?: string },
+  _script: (a: ScriptArg) => { ok: boolean; error?: string },
 ): Promise<DomFallbackResult> {
   const sel = locatorToCss(page, locators);
   if (!sel) return { ok: false, error: 'no-css-locator' };
-  const res = await page.evaluate((a) => {
+  const res = await page.evaluate((_a) => {
     // 这里的 fn 由调用方注入；这里只是 placeholder，真实脚本在每个 wrapper 里
     return { ok: true };
   }, arg);
