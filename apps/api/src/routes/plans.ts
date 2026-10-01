@@ -10,7 +10,7 @@ import {
   groups,
 } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
-import { runPlanAsync } from '../execute/runPlan.js';
+import { findIncognitoCaseIds, runPlanAsync } from '../execute/runPlan.js';
 import { logger } from '../logger.js';
 
 export const plansRoute = Router({ mergeParams: true });
@@ -168,6 +168,12 @@ plansRoute.post('/:id/run', async (req, res) => {
   if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
   if (plan.loginPrepareEnabled && !plan.loginCaseId) {
     throw new HttpError(422, 'login_case_required', 'login prepare enabled but no login case set');
+  }
+  if (plan.loginPrepareEnabled) {
+    const incognitoIds = await findIncognitoCaseIds(plan.id);
+    if (incognitoIds.length > 0) {
+      throw new HttpError(422, 'incognito-conflicts-with-login-prepare', `cases: ${incognitoIds.join(',')}`);
+    }
   }
   const ins = await db
     .insert(planRuns)

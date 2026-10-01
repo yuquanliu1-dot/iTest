@@ -222,4 +222,18 @@ describe('plan execution extras', () => {
     expect(['cancelled', 'passed', 'failed']).toContain(detail!.body.status);
     expect(detail!.body.cancelRequested).toBe(true);
   });
+
+  it('rejects run when plan has incognito case and loginPrepare enabled', async () => {
+    const { projectId, groupId } = await seedProject(pool);
+    const inc = await request(app).post('/api/cases').send({ title: 'inc', groupId, incognito: true });
+    const login = await makeCase(groupId, 'login');
+    const plan = await request(app)
+      .post(`/api/projects/${projectId}/plans`)
+      .send({ name: 'P', loginPrepare: { enabled: true, caseId: login } });
+    expect(plan.status).toBe(200);
+    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [inc.body.id] });
+    const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
+    expect(r.status).toBe(422);
+    expect(JSON.stringify(r.body)).toMatch(/incognito-conflicts-with-login-prepare/);
+  });
 });
