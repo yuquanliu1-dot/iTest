@@ -16,6 +16,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@google/generative-ai": "^0.21.0",
+    "@itest/recorder": "workspace:*",
     "@itest/shared": "workspace:*",
     "drizzle-orm": "^0.36.0",
     "express": "^5.2.1",
