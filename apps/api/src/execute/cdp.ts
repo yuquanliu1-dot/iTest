@@ -75,6 +75,14 @@ const DOM_FALLBACK_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 
 /** DOM 降级：元素不稳定时绕过 playwright 直接在页面里派发事件。仅支持 click/fill/check/select。 */
 async function tryDomFallback(action: StepAction, opts: DispatchOpts): Promise<{ ok: boolean; error?: string }> {
   const { page, vars } = opts;
+  // 与 playwright 路径一致：fill/select 的字符串值先过 substituteVars，缺变量直接失败，避免把 {{var}} 原样写进表单。
+  if (action.kind === 'fill' || action.kind === 'select') {
+    const tpl = typeof action.value === 'string' ? action.value : '';
+    if (tpl) {
+      const { missing } = substituteVars(tpl, vars);
+      if (missing.length > 0) return { ok: false, error: `var-missing: {{${missing[0]!}}}` };
+    }
+  }
   switch (action.kind) {
     case 'click':
       return domClick(page, action.locator);
