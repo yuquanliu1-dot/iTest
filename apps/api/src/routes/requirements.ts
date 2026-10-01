@@ -99,9 +99,10 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
   const idSet = new Set(body.caseIds);
   const scenarioIdSet = new Set(body.scenarioIds);
 
-  // 选中的用例：显式勾选的 caseIds + 勾选场景下的全部用例
+  // 选中的用例：勾选场景下的全部用例 + 显式勾选的散用例（looseCases）。两种来源合并去重。
+  // 注意：场景筛选只看 scenarioIdSet；不能用 looseCases 命中与否去反向包含场景（否则勾选任一散用例会带上所有选中场景的全部用例）。
   const selectedCases = doc.scenarios
-    .filter((s) => scenarioIdSet.has(s.id) || doc.looseCases.some((c) => c.id && idSet.has(c.id)))
+    .filter((s) => scenarioIdSet.has(s.id))
     .flatMap((s) => s.cases)
     .concat(doc.looseCases.filter((c) => idSet.has(c.id)));
   const selectedCaseById = new Map(selectedCases.map((c) => [c.id, c]));
