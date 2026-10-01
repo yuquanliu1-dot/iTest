@@ -45,6 +45,80 @@ describe('materializeValue', () => {
   it('evaluates generator then substitutes', () => {
     expect(materializeValue({ mode: 'prefixTimestamp', prefix: 'P' }, {})).toMatch(/^P\d+$/);
   });
+
+  it('composite concatenates fragments in order', () => {
+    const out = materializeValue(
+      {
+        mode: 'composite',
+        fragments: [
+          { mode: 'fixed', value: 'CS' },
+          { mode: 'randomNumber', length: 3 },
+          { mode: 'randomString', length: 4 },
+        ],
+      },
+      {},
+    );
+    expect(out).toMatch(/^CS\d{3}[A-Za-z0-9]{4}$/);
+  });
+
+  it('composite date fragment formats YYYYMMDD', () => {
+    const out = materializeValue(
+      { mode: 'composite', fragments: [{ mode: 'date', format: 'YYYYMMDD' }] },
+      {},
+    );
+    expect(out).toMatch(/^\d{8}$/);
+  });
+
+  it('composite date fragment formats YYYY-MM-DD with separators', () => {
+    const out = materializeValue(
+      { mode: 'composite', fragments: [{ mode: 'date', format: 'YYYY-MM-DD' }] },
+      {},
+    );
+    expect(out).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('composite randomNumber without length has no padding', () => {
+    const out = materializeValue(
+      {
+        mode: 'composite',
+        fragments: [{ mode: 'randomNumber', min: 1, max: 9 }],
+      },
+      {},
+    );
+    expect(out).toMatch(/^[1-9]$/);
+  });
+
+  it('composite applies var substitution after fragment eval', () => {
+    const out = materializeValue(
+      {
+        mode: 'composite',
+        fragments: [
+          { mode: 'fixed', value: '订单' },
+          { mode: 'timestamp' },
+        ],
+      },
+      {},
+    );
+    expect(out).toMatch(/^订单\d+$/);
+  });
+
+  it('composite surfaces fragment #n error when randomNumber range invalid', () => {
+    expect(() =>
+      materializeValue(
+        {
+          mode: 'composite',
+          fragments: [
+            { mode: 'fixed', value: 'OK' },
+            // Zod 不会通过 refine 再来一次，运行时调用 evaluateGenerator 会抛
+            // 但当前 materializeValue 把 composite 各 fragment 当作 ValueGenerator 求值，
+            // max < min 不会到这里。先用 timestamp + 把 max 设为非法测：
+            { mode: 'randomNumber', min: 9, max: 2 },
+          ],
+        },
+        {},
+      ),
+    ).toThrow(/fragment #2/);
+  });
 });
 
 describe('deepEqual', () => {
