@@ -172,7 +172,7 @@ plansRoute.post('/:id/run', async (req, res) => {
   if (plan.loginPrepareEnabled) {
     const incognitoIds = await findIncognitoCaseIds(plan.id);
     if (incognitoIds.length > 0) {
-      throw new HttpError(422, 'incognito-conflicts-with-login-prepare', `cases: ${incognitoIds.join(',')}`);
+      throw new HttpError(422, 'incognito_conflicts_with_login_prepare', `cases: ${incognitoIds.join(',')}`);
     }
   }
   const ins = await db

@@ -86,7 +86,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
     const incognitoIds = await findIncognitoCaseIds(plan.id);
     if (incognitoIds.length > 0) {
       await finalizeRun(planRunId, 'failed', {
-        passed: 0, failed: 1, skipped: 0,
+        passed: 0, failed: 0, skipped: cases.length,
         summary: `incognito 模式与登录准备互斥：${incognitoIds.join(',')}`,
       });
       publish(planRunId, { type: 'plan_run_complete', status: 'failed', summary: 'incognito × loginPrepare 互斥' });

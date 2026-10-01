@@ -234,6 +234,22 @@ describe('plan execution extras', () => {
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [inc.body.id] });
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(422);
-    expect(JSON.stringify(r.body)).toMatch(/incognito-conflicts-with-login-prepare/);
+    expect(r.body.error).toBe('incognito_conflicts_with_login_prepare');
+  });
+
+  it('allows run with incognito case when loginPrepare disabled', async () => {
+    const { projectId, groupId } = await seedProject(pool);
+    const inc = await request(app).post('/api/cases').send({ title: 'inc', groupId, incognito: true });
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
+    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [inc.body.id] });
+    const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
+    expect(r.status).toBe(200);
+    expect(typeof r.body.runId).toBe('string');
+    // 等待后台 run 收敛到终态，避免与 afterAll 的 pool.end 竞争
+    for (let i = 0; i < 50; i++) {
+      const detail = await request(app).get(`/api/plan-runs/${r.body.runId}`);
+      if (detail.body.status !== 'running') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   });
 });
