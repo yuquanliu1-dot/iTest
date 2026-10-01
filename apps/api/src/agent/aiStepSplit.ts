@@ -5,18 +5,17 @@
  * - 编号段之间允许空白行；段内多行用 \n 拼接
  */
 export function splitByNumber(raw: string): string[] {
-  const re = /^[ \t]*\d+[.\、][ \t]*(.+)$/;
+  const re = /^[ \t]*\d+(?:\.[ \t]+|、[ \t]*)(.+)$/;
   const lines = raw.split(/\r?\n/);
-  const matches: { index: number; text: string }[] = [];
+  const matches: number[] = [];
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i]!.match(re);
-    if (m) matches.push({ index: i, text: m[1]! });
+    if (re.test(lines[i]!)) matches.push(i);
   }
   if (matches.length < 2) return [raw];
   const result: string[] = [];
   for (let k = 0; k < matches.length; k++) {
-    const start = matches[k]!.index;
-    const end = k + 1 < matches.length ? matches[k + 1]!.index : lines.length;
+    const start = matches[k]!;
+    const end = k + 1 < matches.length ? matches[k + 1]! : lines.length;
     const inner = lines
       .slice(start, end)
       .map((line) => line.replace(re, '$1'))
@@ -27,7 +26,7 @@ export function splitByNumber(raw: string): string[] {
   return result.length >= 2 ? result : [raw];
 }
 
-/** 整批拆条；就地把 aiStep 拆为多条同 kind 步骤，并标记 originOrder。返回展开数量。 */
+/** 整批拆条；就地把 aiStep 拆为多条同 kind 步骤，保留原步骤元数据。返回展开数量。 */
 export function splitAiStepsInPlace(
   steps: Array<{ action: unknown; order?: number; name?: string; delayMs?: number; source?: string }>,
 ): { expanded: number } {
