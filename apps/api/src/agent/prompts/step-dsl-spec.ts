@@ -1,5 +1,5 @@
 /** StepAction DSL 规格：内联给 LLM（它读不到 packages/shared 的类型定义）。
- *  requirement-decompose 与 case-to-script 两个 prompt 都拼接此片段。 */
+ *  case-to-script 等 prompt 都拼接此片段。 */
 export const STEP_DSL_SPEC = `StepAction 按 kind 区分（discriminated union），只允许以下形状：
 - {"kind":"navigate","url":"https://..."}（url 必须是完整合法 URL）
 - {"kind":"click","locator":[Locator,...]}

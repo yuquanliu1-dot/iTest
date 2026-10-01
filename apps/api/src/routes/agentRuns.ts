@@ -1,12 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { agentRuns, requirements, groups, testCases } from '../db/schema.js';
+import { agentRuns, testCases, groups } from '../db/schema.js';
 import { eq, desc, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { runWorkflow } from '../agent/agentFactory.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
-import { buildRequirement2CasesWorkflow } from '../agent/workflows/requirement2cases.js';
 import { buildCase2ScriptWorkflow } from '../agent/workflows/case2script.js';
 import { sseHeaders, sseSend } from '../sse/agentRunStream.js';
 import { publishRunEvent, subscribeRun } from '../sse/runBus.js';
@@ -15,35 +14,25 @@ import { assertProjectVisible, resolveCaseProjectId, visibleProjectIds } from '.
 export const agentRunsRoute = Router();
 
 const CreateBody = z.object({
-  targetType: z.enum(['requirement2cases', 'case2script']),
+  targetType: z.enum(['case2script']),
   targetId: z.string().uuid(),
   prompt: z.string().min(1),
-  targetGroupId: z.string().uuid().optional(),
 });
 
 type RunRow = typeof agentRuns.$inferSelect;
 
 /** 解析 agent run 的 target 所属项目 id；无法解析返回 null。 */
 async function resolveRunProjectId(run: Pick<RunRow, 'targetType' | 'targetId'>): Promise<string | null> {
-  if (run.targetType === 'requirement2cases') {
-    const r = (await db.select({ projectId: requirements.projectId }).from(requirements).where(eq(requirements.id, run.targetId)).limit(1))[0];
-    return r?.projectId ?? null;
-  }
   return resolveCaseProjectId(run.targetId);
 }
 
-async function executeRun(run: RunRow, opts: { targetGroupId?: string }) {
+async function executeRun(run: RunRow) {
   // 走 settings 里的 LLM 配置；provider 未配置/无效或 apiKey 为空时，resolveLlmClient 抛错 → catch 把 error 写回 agent_runs。
   const { client, config } = await resolveLlmClient();
   const logger = (await import('../logger.js')).logger;
   try {
-    if (run.targetType === 'requirement2cases' && !opts.targetGroupId) {
-      throw new Error('targetGroupId is required for requirement2cases');
-    }
     // 工具白名单随 run.targetId 构建；落库由 step.tools 处理（见 builtinTools.ts）。
-    const wf = run.targetType === 'requirement2cases'
-      ? buildRequirement2CasesWorkflow(run.targetId, opts.targetGroupId!)
-      : buildCase2ScriptWorkflow(run.targetId);
+    const wf = buildCase2ScriptWorkflow(run.targetId);
     logger.info({ runId: run.id, provider: config.provider, model: config.model }, 'agent run start');
     const result = (await runWorkflow({
       workflowId: wf.workflowId,
@@ -68,11 +57,7 @@ agentRunsRoute.get('/', async (req, res) => {
   const rows = await db.select().from(agentRuns).orderBy(desc(agentRuns.startedAt)).limit(50);
   // 按 target 归属项目做可见性过滤（批量解析，避免逐行查询）
   const visiblePids = new Set(await visibleProjectIds(req.user!));
-  const reqIds = rows.filter((r) => r.targetType === 'requirement2cases').map((r) => r.targetId);
-  const caseIds = rows.filter((r) => r.targetType === 'case2script').map((r) => r.targetId);
-  const reqProjects = reqIds.length
-    ? await db.select({ id: requirements.id, projectId: requirements.projectId }).from(requirements).where(inArray(requirements.id, reqIds))
-    : [];
+  const caseIds = rows.map((r) => r.targetId);
   const caseProjects = caseIds.length
     ? await db
         .select({ id: testCases.id, projectId: groups.projectId })
@@ -80,9 +65,7 @@ agentRunsRoute.get('/', async (req, res) => {
         .innerJoin(groups, eq(testCases.groupId, groups.id))
         .where(inArray(testCases.id, caseIds))
     : [];
-  const pidByTarget = new Map<string, string>(
-    [...reqProjects.map((r) => [r.id, r.projectId] as const), ...caseProjects.map((r) => [r.id, r.projectId] as const)],
-  );
+  const pidByTarget = new Map<string, string>(caseProjects.map((r) => [r.id, r.projectId] as const));
   res.json(rows.filter((r) => visiblePids.has(pidByTarget.get(r.targetId) ?? '')));
 });
 
@@ -102,26 +85,15 @@ agentRunsRoute.get('/:id', async (req, res) => {
 
 agentRunsRoute.post('/', async (req, res) => {
   const body = CreateBody.parse(req.body);
-  // 目标资源与目标分组都必须可见
-  if (body.targetType === 'requirement2cases') {
-    const r = (await db.select({ projectId: requirements.projectId }).from(requirements).where(eq(requirements.id, body.targetId)).limit(1))[0];
-    if (!r) throw new HttpError(404, 'not_found', 'requirement not found');
-    await assertProjectVisible(r.projectId, req.user!);
-    if (body.targetGroupId) {
-      const g = (await db.select().from(groups).where(eq(groups.id, body.targetGroupId)).limit(1))[0];
-      if (g) await assertProjectVisible(g.projectId, req.user!);
-    }
-  } else {
-    const pid = await resolveCaseProjectId(body.targetId);
-    if (!pid) throw new HttpError(404, 'not_found', 'case not found');
-    await assertProjectVisible(pid, req.user!);
-  }
+  const pid = await resolveCaseProjectId(body.targetId);
+  if (!pid) throw new HttpError(404, 'not_found', 'case not found');
+  await assertProjectVisible(pid, req.user!);
   const rows = await db
     .insert(agentRuns)
     .values({ targetType: body.targetType, targetId: body.targetId, status: 'running', prompt: body.prompt })
     .returning();
   const run = rows[0]!;
-  void executeRun(run, { targetGroupId: body.targetGroupId });
+  void executeRun(run);
   res.json(run);
 });
 

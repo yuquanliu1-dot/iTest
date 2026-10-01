@@ -1,8 +1,27 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
+
+// mock llmSettings，让 case2script 测试不依赖真实 LLM provider；返回两条固定步骤
+vi.mock('../src/agent/llmSettings.js', () => ({
+  resolveLlmClient: async () => ({
+    config: { provider: 'openai', apiKey: 'sk-test', model: 'gpt-test', baseUrl: 'http://x' },
+    client: {
+      provider: 'openai' as const,
+      complete: async () => ({
+        kind: 'json' as const,
+        value: {
+          steps: [
+            { order: 0, action: { kind: 'navigate', url: 'https://example.com' } },
+            { order: 1, action: { kind: 'click', locator: [{ strategy: 'css', value: '#btn' }] } },
+          ],
+        },
+      }),
+    },
+  }),
+}));
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -19,8 +38,6 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   const { userId, username, orgId, orgPath } = await seedOrg(pool);
-  // 注入种子组织管理员身份（跳过真实登录；可见性判定依赖 managerOrgPaths 子树）。
-  // helpers/auth 依赖 src 服务链（连带加载 db client），须等 DATABASE_URL 指向测试容器后再动态加载。
   const { managerUserOf } = await import('./helpers/auth.js');
   app.use('/api', (req, _res, next) => {
     req.user = managerUserOf(userId, username, orgId, orgPath);
@@ -37,67 +54,41 @@ afterAll(async () => {
   await container.stop();
 });
 
-describe('agent-runs', () => {
-  it('POST creates run and returns id', async () => {
-    const { projectId } = await seedProject(pool);
-    const req = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('t','c',$1) RETURNING id`, [projectId]);
+describe('agent-runs (case2script only)', () => {
+  it('POST creates a case2script run and returns id', async () => {
+    const { projectId, groupId } = await seedProject(pool);
+    const req = await pool.query(
+      `INSERT INTO requirements(title, content, project_id) VALUES ('t','c',$1) RETURNING id`,
+      [projectId],
+    );
+    const c = await pool.query(
+      `INSERT INTO test_cases(requirement_id, title, group_id) VALUES ($1, '用例', $2) RETURNING id`,
+      [req.rows[0]!.id, groupId],
+    );
     const r = await request(app)
       .post('/api/agent-runs')
-      .send({ targetType: 'requirement2cases', targetId: req.rows[0].id, prompt: 't' });
+      .send({ targetType: 'case2script', targetId: c.rows[0]!.id, prompt: '用例: 登录' });
     expect(r.status).toBe(200);
     expect(r.body.id).toBeTruthy();
   });
 
-  it('GET /:id returns detail after finish', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const r0 = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('x','y',$1) RETURNING id`, [projectId]);
-    const created = await request(app)
-      .post('/api/agent-runs')
-      .send({ targetType: 'requirement2cases', targetId: r0.rows[0].id, prompt: 'requirement: p', targetGroupId: groupId });
-    await new Promise((r) => setTimeout(r, 500));
-    const detail = await request(app).get(`/api/agent-runs/${created.body.id}`);
-    expect(detail.body.status).toBe('success');
-  });
-
-  it('requirement2cases run persists cases + steps via saveCase tool', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const r0 = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('persist','req',$1) RETURNING id`, [projectId]);
-    const created = await request(app)
-      .post('/api/agent-runs')
-      .send({ targetType: 'requirement2cases', targetId: r0.rows[0].id, prompt: 'requirement: login', targetGroupId: groupId });
-    await new Promise((r) => setTimeout(r, 500));
-    const detail = await request(app).get(`/api/agent-runs/${created.body.id}`);
-    expect(detail.body.status).toBe('success');
-    const cases = await pool.query(`SELECT * FROM test_cases WHERE requirement_id = $1`, [r0.rows[0].id]);
-    expect(cases.rows.length).toBeGreaterThan(0);
-    expect(cases.rows[0]!.group_id).toBe(groupId);
-    const steps = await pool.query(`SELECT * FROM test_steps WHERE case_id = $1`, [cases.rows[0]!.id]);
-    expect(steps.rows.length).toBeGreaterThan(0);
-  });
-
-  it('requirement2cases without targetGroupId fails with clear error', async () => {
-    const { projectId } = await seedProject(pool);
-    const r0 = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('nog','req',$1) RETURNING id`, [projectId]);
-    const created = await request(app)
-      .post('/api/agent-runs')
-      .send({ targetType: 'requirement2cases', targetId: r0.rows[0].id, prompt: 'requirement: x' });
-    await new Promise((r) => setTimeout(r, 500));
-    const detail = await request(app).get(`/api/agent-runs/${created.body.id}`);
-    expect(detail.body.status).toBe('failed');
-    expect(detail.body.error).toMatch(/targetGroupId/);
-  });
-
   it('case2script run appends steps via saveSteps tool', async () => {
     const { projectId, groupId } = await seedProject(pool);
-    const c = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('s','t',$1) RETURNING id`, [projectId]);
-    const tc = await pool.query(`INSERT INTO test_cases(requirement_id, title, group_id) VALUES ($1, '用例A', $2) RETURNING id`, [c.rows[0]!.id, groupId]);
+    const req = await pool.query(
+      `INSERT INTO requirements(title, content, project_id) VALUES ('t','c',$1) RETURNING id`,
+      [projectId],
+    );
+    const c = await pool.query(
+      `INSERT INTO test_cases(requirement_id, title, group_id) VALUES ($1, '用例A', $2) RETURNING id`,
+      [req.rows[0]!.id, groupId],
+    );
     const created = await request(app)
       .post('/api/agent-runs')
-      .send({ targetType: 'case2script', targetId: tc.rows[0]!.id, prompt: '用例: 登录' });
+      .send({ targetType: 'case2script', targetId: c.rows[0]!.id, prompt: '用例: 登录' });
     await new Promise((r) => setTimeout(r, 500));
     const detail = await request(app).get(`/api/agent-runs/${created.body.id}`);
     expect(detail.body.status).toBe('success');
-    const steps = await pool.query(`SELECT * FROM test_steps WHERE case_id = $1`, [tc.rows[0]!.id]);
+    const steps = await pool.query(`SELECT * FROM test_steps WHERE case_id = $1`, [c.rows[0]!.id]);
     expect(steps.rows.length).toBeGreaterThan(0);
   });
 });
