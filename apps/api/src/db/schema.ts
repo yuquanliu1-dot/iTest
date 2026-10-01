@@ -54,6 +54,20 @@ export const scenarios = pgTable('scenarios', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+export const aiThreads = pgTable('ai_threads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  requirementId: uuid('requirement_id').notNull().unique().references(() => requirements.id, { onDelete: 'cascade' }),
+  piThreadId: text('pi_thread_id').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const aiWorkspaceState = pgTable('ai_workspace_state', {
+  requirementId: uuid('requirement_id').primaryKey().references(() => requirements.id, { onDelete: 'cascade' }),
+  doc: jsonb('doc').notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 export const testSteps = pgTable('test_steps', {
   id: uuid('id').primaryKey().defaultRandom(),
   caseId: uuid('case_id').references(() => testCases.id, { onDelete: 'cascade' }).notNull(),
