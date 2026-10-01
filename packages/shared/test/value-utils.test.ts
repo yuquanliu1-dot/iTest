@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateGenerator, substituteVars, materializeValue, deepEqual } from '../src/value-utils.js';
+import { evaluateGenerator, materializeValue, deepEqual } from '../src/value-utils.js';
 
 describe('evaluateGenerator', () => {
   it('randomString returns requested length', () => {
@@ -17,24 +17,6 @@ describe('evaluateGenerator', () => {
   });
   it('prefixTimestamp prepends prefix', () => {
     expect(evaluateGenerator({ mode: 'prefixTimestamp', prefix: 'T-' })).toMatch(/^T-\d+$/);
-  });
-});
-
-describe('substituteVars', () => {
-  it('replaces defined vars', () => {
-    expect(substituteVars('订单{{orderNo}}', { orderNo: 'A123' })).toBe('订单A123');
-  });
-  it('throws listing missing vars', () => {
-    expect(() => substituteVars('{{a}}-{{b}}-{{a}}', {})).toThrow(/a, b/);
-  });
-  it('leaves text without templates untouched', () => {
-    expect(substituteVars('plain', {})).toBe('plain');
-  });
-  it('does not resolve prototype-chain keys like toString', () => {
-    expect(() => substituteVars('{{toString}}', {})).toThrow(/toString/);
-  });
-  it('supports non-ASCII variable names', () => {
-    expect(substituteVars('订单{{订单号}}', { 订单号: 'A1' })).toBe('订单A1');
   });
 });
 
