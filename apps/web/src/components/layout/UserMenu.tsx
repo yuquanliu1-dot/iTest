@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { useState } from 'react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useAuthStore } from '../../stores/auth';
 import { useThemeStore } from '../../stores/theme';
@@ -12,6 +13,7 @@ import Toggle from '../ui/Toggle';
  */
 export default function UserMenu({ collapsed = false }: { collapsed?: boolean }) {
   const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
   const toast = useUIStore((s) => s.showToast);
   const user = useAuthStore((s) => s.user);
   const organizations = useAuthStore((s) => s.organizations);
@@ -29,6 +31,7 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
 
   const handleSwitch = async (orgId: string) => {
     if (orgId === activeOrgId) return;
+    setOpen(false);
     try {
       await switchOrg(orgId);
       toast('已切换组织', 'success');
@@ -39,8 +42,14 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
   };
 
   const handleLogout = async () => {
+    setOpen(false);
     await logout();
     navigate('/login', { replace: true });
+  };
+
+  const navAndClose = (path: string) => {
+    setOpen(false);
+    navigate(path);
   };
 
   // 触发器样式：折叠态仅头像磁贴，展开态整行（含名字 + 当前组织）
@@ -75,7 +84,7 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
       };
 
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger asChild>
         <button aria-label="用户菜单" style={triggerStyle}>
           <span
@@ -228,10 +237,7 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
                   {organizations.map((o) => (
                     <DropdownMenu.Item
                       key={o.id}
-                      onSelect={(e) => {
-                        e.preventDefault();
-                        void handleSwitch(o.id);
-                      }}
+                      onSelect={() => void handleSwitch(o.id)}
                       style={{
                         width: '100%',
                         padding: '8px 10px',
@@ -258,10 +264,7 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
 
           {/* 配置 */}
           <DropdownMenu.Item
-            onSelect={(e) => {
-              e.preventDefault();
-              navigate('/settings');
-            }}
+            onSelect={() => navAndClose('/settings')}
             style={{
               width: '100%',
               padding: '8px 10px',
@@ -278,16 +281,13 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
             }}
           >
             <Icon name="settings" size={14} />
-            <span style={{ flex: 1 }}>配置</span>
+            <span style={{ flex: 1 }}>系统配置</span>
           </DropdownMenu.Item>
 
           {/* 成员管理（任一可见组织的管理员才显示） */}
           {canManageMembers && (
             <DropdownMenu.Item
-              onSelect={(e) => {
-                e.preventDefault();
-                navigate('/members');
-              }}
+              onSelect={() => navAndClose('/members')}
               style={{
                 width: '100%',
                 padding: '8px 10px',
@@ -336,10 +336,7 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
 
           {/* 退出登录 */}
           <DropdownMenu.Item
-            onSelect={(e) => {
-              e.preventDefault();
-              void handleLogout();
-            }}
+            onSelect={() => void handleLogout()}
             style={{
               width: '100%',
               padding: '8px 10px',

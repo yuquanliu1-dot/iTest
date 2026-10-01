@@ -162,11 +162,12 @@ select.input-base { padding-right: 32px; }
 :focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
-  border-radius: inherit;
 }
 input:focus-visible,
 textarea:focus-visible,
-select:focus-visible { outline: none; }
+select:focus-visible {
+  outline: none;
+}
 
 /* ── List row hover ──────────────────────────────────────────────────────── */
 .list-row-clickable { transition: background 0.15s ease; }
