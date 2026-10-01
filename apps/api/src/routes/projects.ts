@@ -4,11 +4,14 @@ import { eq, asc, desc, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { projects, groups, testCases, reports, requirements } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
+import { assertProjectVisible } from '../services/projectAccess.js';
+import { visibleOrgIdsFor } from '../services/orgTree.js';
 
 export const projectsRoute = Router({ mergeParams: true });
 
 const CreateBody = z.object({
   name: z.string().min(1).max(200),
+  description: z.string().optional(),
   defaultUrl: z.string().optional(),
 });
 
@@ -20,8 +23,12 @@ async function caseCountsByGroup(): Promise<Map<string, number>> {
   return new Map(rows.map((r) => [r.groupId, Number(r.count)]));
 }
 
-projectsRoute.get('/', async (_req, res) => {
-  const ps = await db.select().from(projects).orderBy(asc(projects.createdAt));
+projectsRoute.get('/', async (req, res) => {
+  // 只列出用户可见组织下的项目
+  const visibleOrgs = await visibleOrgIdsFor(req.user!);
+  const ps = visibleOrgs.size
+    ? await db.select().from(projects).where(inArray(projects.organizationId, [...visibleOrgs])).orderBy(asc(projects.createdAt))
+    : [];
   const gs = await db.select().from(groups);
   const counts = await caseCountsByGroup();
   const byProject = new Map<string, number>();
@@ -33,17 +40,20 @@ projectsRoute.get('/', async (_req, res) => {
 
 projectsRoute.post('/', async (req, res) => {
   const body = CreateBody.parse(req.body);
-  const rows = await db.insert(projects).values(body).returning();
+  // 项目建在当前激活组织下
+  const rows = await db.insert(projects).values({ ...body, organizationId: req.user!.orgId }).returning();
   res.json(rows[0]);
 });
 
 projectsRoute.get('/:id', async (req, res) => {
+  await assertProjectVisible(req.params.id!, req.user!);
   const rows = await db.select().from(projects).where(eq(projects.id, req.params.id));
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'project not found');
   res.json(rows[0]);
 });
 
 projectsRoute.patch('/:id', async (req, res) => {
+  await assertProjectVisible(req.params.id!, req.user!);
   const body = CreateBody.partial().parse(req.body);
   const rows = await db
     .update(projects)
@@ -55,6 +65,7 @@ projectsRoute.patch('/:id', async (req, res) => {
 });
 
 projectsRoute.delete('/:id', async (req, res) => {
+  await assertProjectVisible(req.params.id!, req.user!);
   const gs = await db.select().from(groups).where(eq(groups.projectId, req.params.id));
   if (gs.length > 0) {
     const counts = await caseCountsByGroup();
@@ -67,12 +78,14 @@ projectsRoute.delete('/:id', async (req, res) => {
 });
 
 projectsRoute.get('/:id/groups', async (req, res) => {
+  await assertProjectVisible(req.params.id!, req.user!);
   const gs = await db.select().from(groups).where(eq(groups.projectId, req.params.id)).orderBy(asc(groups.createdAt));
   const counts = await caseCountsByGroup();
   res.json(gs.map((g) => ({ ...g, caseCount: counts.get(g.id) ?? 0 })));
 });
 
 projectsRoute.post('/:id/groups', async (req, res) => {
+  await assertProjectVisible(req.params.id!, req.user!);
   const body = CreateBody.parse(req.body);
   const p = await db.select().from(projects).where(eq(projects.id, req.params.id));
   if (p.length === 0) throw new HttpError(404, 'not_found', 'project not found');
@@ -81,6 +94,7 @@ projectsRoute.post('/:id/groups', async (req, res) => {
 });
 
 projectsRoute.get('/:id/stats', async (req, res) => {
+  await assertProjectVisible(req.params.id!, req.user!);
   const p = await db.select().from(projects).where(eq(projects.id, req.params.id));
   if (p.length === 0) throw new HttpError(404, 'not_found', 'project not found');
   const gs = await db.select().from(groups).where(eq(groups.projectId, req.params.id));

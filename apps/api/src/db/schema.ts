@@ -8,6 +8,7 @@ import {
   timestamp,
   boolean,
   unique,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
 export const settings = pgTable('settings', {
@@ -85,9 +86,54 @@ export const reports = pgTable('reports', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  username: varchar('username', { length: 50 }).notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  displayName: varchar('display_name', { length: 100 }).notNull(),
+  // null 表示从未改过密码（配合 must_change_password 强制首登改密）
+  passwordUpdatedAt: timestamp('password_updated_at'),
+  mustChangePassword: boolean('must_change_password').notNull().default(false),
+  // 服务端吊销版本号：登出/改密 +1，auth 中间件回查 DB 与 JWT payload 比对
+  tokenVersion: integer('token_version').notNull().default(1),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const organizations = pgTable('organizations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: varchar('name', { length: 200 }).notNull().unique(),
+  // 自引用 FK：null = 根组织（租户根仅由种子迁移创建）
+  parentId: uuid('parent_id').references((): AnyPgColumn => organizations.id, { onDelete: 'set null' }),
+  // 物化路径 /orgId/orgId/（含自身，首尾都是 /）
+  path: text('path').notNull().unique(),
+  description: text('description'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const organizationMembers = pgTable('organization_members', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id')
+    .notNull()
+    .references(() => organizations.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  isManager: boolean('is_manager').notNull().default(false),
+  isUser: boolean('is_user').notNull().default(true),
+  joinedAt: timestamp('joined_at').defaultNow().notNull(),
+}, (t) => ({
+  orgUserUq: unique('organization_members_org_user_uq').on(t.organizationId, t.userId),
+}));
+
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id')
+    .notNull()
+    .references(() => organizations.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 200 }).notNull(),
+  description: text('description'),
   defaultUrl: text('default_url'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),

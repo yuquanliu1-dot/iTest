@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { agentRuns } from '../db/schema.js';
-import { eq, desc } from 'drizzle-orm';
+import { agentRuns, requirements, groups, testCases } from '../db/schema.js';
+import { eq, desc, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { runWorkflow } from '../agent/agentFactory.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
@@ -10,6 +10,7 @@ import { buildRequirement2CasesWorkflow } from '../agent/workflows/requirement2c
 import { buildCase2ScriptWorkflow } from '../agent/workflows/case2script.js';
 import { sseHeaders, sseSend } from '../sse/agentRunStream.js';
 import { publishRunEvent, subscribeRun } from '../sse/runBus.js';
+import { assertProjectVisible, resolveCaseProjectId, visibleProjectIds } from '../services/projectAccess.js';
 
 export const agentRunsRoute = Router();
 
@@ -22,9 +23,17 @@ const CreateBody = z.object({
 
 type RunRow = typeof agentRuns.$inferSelect;
 
+/** 解析 agent run 的 target 所属项目 id；无法解析返回 null。 */
+async function resolveRunProjectId(run: Pick<RunRow, 'targetType' | 'targetId'>): Promise<string | null> {
+  if (run.targetType === 'requirement2cases') {
+    const r = (await db.select({ projectId: requirements.projectId }).from(requirements).where(eq(requirements.id, run.targetId)).limit(1))[0];
+    return r?.projectId ?? null;
+  }
+  return resolveCaseProjectId(run.targetId);
+}
+
 async function executeRun(run: RunRow, opts: { targetGroupId?: string }) {
-  // 走 settings 里的 LLM 配置；未配置 provider 默认为 mock（保持 MVP 启动体验）。
-  // 当 provider != mock 且 apiKey 为空时，resolveLlmClient 抛错 → catch 把 error 写回 agent_runs。
+  // 走 settings 里的 LLM 配置；provider 未配置/无效或 apiKey 为空时，resolveLlmClient 抛错 → catch 把 error 写回 agent_runs。
   const { client, config } = await resolveLlmClient();
   const logger = (await import('../logger.js')).logger;
   try {
@@ -55,19 +64,58 @@ async function executeRun(run: RunRow, opts: { targetGroupId?: string }) {
   }
 }
 
-agentRunsRoute.get('/', async (_req, res) => {
+agentRunsRoute.get('/', async (req, res) => {
   const rows = await db.select().from(agentRuns).orderBy(desc(agentRuns.startedAt)).limit(50);
-  res.json(rows);
+  // 按 target 归属项目做可见性过滤（批量解析，避免逐行查询）
+  const visiblePids = new Set(await visibleProjectIds(req.user!));
+  const reqIds = rows.filter((r) => r.targetType === 'requirement2cases').map((r) => r.targetId);
+  const caseIds = rows.filter((r) => r.targetType === 'case2script').map((r) => r.targetId);
+  const reqProjects = reqIds.length
+    ? await db.select({ id: requirements.id, projectId: requirements.projectId }).from(requirements).where(inArray(requirements.id, reqIds))
+    : [];
+  const caseProjects = caseIds.length
+    ? await db
+        .select({ id: testCases.id, projectId: groups.projectId })
+        .from(testCases)
+        .innerJoin(groups, eq(testCases.groupId, groups.id))
+        .where(inArray(testCases.id, caseIds))
+    : [];
+  const pidByTarget = new Map<string, string>(
+    [...reqProjects.map((r) => [r.id, r.projectId] as const), ...caseProjects.map((r) => [r.id, r.projectId] as const)],
+  );
+  res.json(rows.filter((r) => visiblePids.has(pidByTarget.get(r.targetId) ?? '')));
 });
 
 agentRunsRoute.get('/:id', async (req, res) => {
   const rows = await db.select().from(agentRuns).where(eq(agentRuns.id, req.params.id));
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'agent run not found');
-  res.json(rows[0]);
+  const run = rows[0]!;
+  const pid = await resolveRunProjectId(run);
+  if (!pid) throw new HttpError(404, 'not_found', 'agent run not found');
+  try {
+    await assertProjectVisible(pid, req.user!);
+  } catch {
+    throw new HttpError(404, 'not_found', 'agent run not found');
+  }
+  res.json(run);
 });
 
 agentRunsRoute.post('/', async (req, res) => {
   const body = CreateBody.parse(req.body);
+  // 目标资源与目标分组都必须可见
+  if (body.targetType === 'requirement2cases') {
+    const r = (await db.select({ projectId: requirements.projectId }).from(requirements).where(eq(requirements.id, body.targetId)).limit(1))[0];
+    if (!r) throw new HttpError(404, 'not_found', 'requirement not found');
+    await assertProjectVisible(r.projectId, req.user!);
+    if (body.targetGroupId) {
+      const g = (await db.select().from(groups).where(eq(groups.id, body.targetGroupId)).limit(1))[0];
+      if (g) await assertProjectVisible(g.projectId, req.user!);
+    }
+  } else {
+    const pid = await resolveCaseProjectId(body.targetId);
+    if (!pid) throw new HttpError(404, 'not_found', 'case not found');
+    await assertProjectVisible(pid, req.user!);
+  }
   const rows = await db
     .insert(agentRuns)
     .values({ targetType: body.targetType, targetId: body.targetId, status: 'running', prompt: body.prompt })
@@ -85,6 +133,14 @@ agentRunsRoute.get('/:id/events', async (req, res) => {
     return;
   }
   const run = rows[0]!;
+  try {
+    const pid = await resolveRunProjectId(run);
+    if (!pid) throw new Error('unresolvable');
+    await assertProjectVisible(pid, req.user!);
+  } catch {
+    res.status(404).end();
+    return;
+  }
 
   // 已结束的 run：直接补发终态事件后关闭（前端 EventSource 不会收到 step 流，但能拿到最终结果）。
   if (run.status === 'success' || run.status === 'failed') {

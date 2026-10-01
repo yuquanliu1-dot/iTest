@@ -11,6 +11,7 @@ import {
 } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { findIncognitoCaseIds, runPlanAsync } from '../execute/runPlan.js';
+import { assertProjectVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { logger } from '../logger.js';
 
 export const plansRoute = Router({ mergeParams: true });
@@ -42,12 +43,22 @@ const PatchBody = z.object({
 });
 
 plansRoute.get('/', async (req, res) => {
-  const { projectId } = req.params as { projectId: string };
-  const ps = await db
-    .select()
-    .from(executionPlans)
-    .where(eq(executionPlans.projectId, projectId))
-    .orderBy(asc(executionPlans.createdAt));
+  const { projectId } = req.params as { projectId?: string };
+  let ps;
+  if (projectId) {
+    await assertProjectVisible(projectId, req.user!);
+    ps = await db
+      .select()
+      .from(executionPlans)
+      .where(eq(executionPlans.projectId, projectId))
+      .orderBy(asc(executionPlans.createdAt));
+  } else {
+    // 直挂载：按可见项目过滤
+    const visiblePids = await visibleProjectIds(req.user!);
+    ps = visiblePids.length
+      ? await db.select().from(executionPlans).where(inArray(executionPlans.projectId, visiblePids)).orderBy(asc(executionPlans.createdAt))
+      : [];
+  }
   const pcs = await db.select().from(planCases);
   const countByPlan = new Map<string, number>();
   for (const pc of pcs) countByPlan.set(pc.planId, (countByPlan.get(pc.planId) ?? 0) + 1);
@@ -55,8 +66,10 @@ plansRoute.get('/', async (req, res) => {
 });
 
 plansRoute.post('/', async (req, res) => {
-  const { projectId } = req.params as { projectId: string };
+  const projectId = (req.params as { projectId?: string }).projectId;
+  if (!projectId) throw new HttpError(400, 'bad_request', 'projectId is required');
   const body = CreateBody.parse(req.body);
+  await assertProjectVisible(projectId, req.user!);
   const rows = await db
     .insert(executionPlans)
     .values({
@@ -77,6 +90,7 @@ plansRoute.post('/', async (req, res) => {
 plansRoute.get('/:id', async (req, res) => {
   const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, req.params.id)))[0];
   if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(plan.projectId, req.user!);
   const pcs = await db
     .select()
     .from(planCases)
@@ -93,6 +107,9 @@ plansRoute.get('/:id', async (req, res) => {
 });
 
 plansRoute.patch('/:id', async (req, res) => {
+  const existing = (await db.select().from(executionPlans).where(eq(executionPlans.id, req.params.id)))[0];
+  if (!existing) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(existing.projectId, req.user!);
   const body = PatchBody.parse(req.body);
   const update: Record<string, unknown> = { updatedAt: new Date() };
   if (body.name !== undefined) update.name = body.name;
@@ -111,14 +128,18 @@ plansRoute.patch('/:id', async (req, res) => {
 });
 
 plansRoute.delete('/:id', async (req, res) => {
+  const existing = (await db.select().from(executionPlans).where(eq(executionPlans.id, req.params.id)))[0];
+  if (!existing) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(existing.projectId, req.user!);
   const deleted = await db.delete(executionPlans).where(eq(executionPlans.id, req.params.id)).returning();
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'plan not found');
   res.json({ ok: true });
 });
 
-async function validateCaseProject(planId: string, caseIds: string[]) {
+async function validateCaseProject(planId: string, caseIds: string[], user: NonNullable<Express.Request['user']>) {
   const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, planId)))[0];
   if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(plan.projectId, user);
   const gs = await db.select().from(groups).where(eq(groups.projectId, plan.projectId));
   const validGids = new Set(gs.map((g) => g.id));
   const rows = await db.select().from(testCases).where(inArray(testCases.id, caseIds));
@@ -129,7 +150,7 @@ async function validateCaseProject(planId: string, caseIds: string[]) {
 
 plansRoute.put('/:id/cases', async (req, res) => {
   const { caseIds } = z.object({ caseIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
-  await validateCaseProject(req.params.id, caseIds);
+  await validateCaseProject(req.params.id!, caseIds, req.user!);
   await db.delete(planCases).where(eq(planCases.planId, req.params.id));
   await db.insert(planCases).values(caseIds.map((caseId, i) => ({ planId: req.params.id!, caseId, order: i + 1 })));
   res.json({ ok: true });
@@ -137,7 +158,7 @@ plansRoute.put('/:id/cases', async (req, res) => {
 
 plansRoute.put('/:id/cases/order', async (req, res) => {
   const { caseIds } = z.object({ caseIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
-  await validateCaseProject(req.params.id, caseIds);
+  await validateCaseProject(req.params.id!, caseIds, req.user!);
   await db.delete(planCases).where(eq(planCases.planId, req.params.id));
   await db.insert(planCases).values(caseIds.map((caseId, i) => ({ planId: req.params.id!, caseId, order: i + 1 })));
   res.json({ ok: true });
@@ -146,6 +167,7 @@ plansRoute.put('/:id/cases/order', async (req, res) => {
 plansRoute.get('/:id/login-cases', async (req, res) => {
   const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, req.params.id)))[0];
   if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(plan.projectId, req.user!);
   const q = (req.query.q as string | undefined)?.trim().toLowerCase() ?? '';
   const groupId = req.query.groupId as string | undefined;
   const gs = await db.select().from(groups).where(eq(groups.projectId, plan.projectId));
@@ -166,6 +188,7 @@ plansRoute.get('/:id/login-cases', async (req, res) => {
 plansRoute.post('/:id/run', async (req, res) => {
   const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, req.params.id)))[0];
   if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(plan.projectId, req.user!);
   if (plan.loginPrepareEnabled && !plan.loginCaseId) {
     throw new HttpError(422, 'login_case_required', 'login prepare enabled but no login case set');
   }

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { HttpError } from '../middleware/errorHandler.js';
 import { runCase } from '../execute/runCase.js';
+import { assertCaseVisible } from '../services/projectAccess.js';
 
 export const executeRoute = Router();
 
@@ -10,6 +11,7 @@ const Body = z.object({ caseId: z.string().uuid() });
 executeRoute.post('/cases/:caseId/execute', async (req, res) => {
   const { caseId } = Body.parse({ caseId: req.params.caseId });
   if (caseId !== req.params.caseId) throw new HttpError(400, 'bad_request', 'caseId mismatch');
+  await assertCaseVisible(caseId, req.user!);
   try {
     const { reportId } = await runCase(caseId);
     res.json({ reportId });

@@ -10,6 +10,7 @@ import { splitAiStepsInPlace } from '../agent/aiStepSplit.js';
 import { encrypt, ensureKeyLoaded } from '../lib/secret-crypto.js';
 import { migrateAction } from '../lib/step-migration.js';
 import { buildVariableReport } from '../lib/variable-report.js';
+import { assertCaseVisible } from '../services/projectAccess.js';
 
 export const stepsRoute = Router();
 
@@ -30,6 +31,7 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
   const body = AppendBody.parse(req.body);
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  await assertCaseVisible(req.params.caseId!, req.user!);
   splitAiStepsInPlace(body.steps);
   // 拆条后片段会复制原 order；重排为接续现有最大 order 的连续序号，避免重复。
   const maxRow = await db
@@ -74,6 +76,7 @@ const ReorderBody = z.object({ stepIds: z.array(z.string().uuid()).min(1) });
 /** 按传入的 id 顺序重排（stepIds 须恰好覆盖该用例全部步骤），order 重写为 1..n。 */
 stepsRoute.put('/:caseId/steps/reorder', async (req, res) => {
   const { stepIds } = ReorderBody.parse(req.body);
+  await assertCaseVisible(req.params.caseId!, req.user!);
   const rows = await db
     .select()
     .from(testSteps)
@@ -95,6 +98,7 @@ stepsRoute.put('/:caseId/steps/reorder', async (req, res) => {
 });
 
 stepsRoute.delete('/:caseId/steps/:stepId', async (req, res) => {
+  await assertCaseVisible(req.params.caseId!, req.user!);
   const rows = await db
     .select()
     .from(testSteps)
@@ -131,6 +135,7 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
   splitAiStepsInPlace(body.steps);
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  await assertCaseVisible(req.params.caseId!, req.user!);
   // Project-scope: resolve the case's projectId once via its group, then enforce project membership.
   const groupId = exists[0]!.groupId;
   const g = (await db.select().from(groups).where(eq(groups.id, groupId)))[0];
@@ -210,6 +215,7 @@ stepsRoute.post('/:caseId/steps/recompile', async (req, res) => {
   const { instruction } = z.object({ instruction: z.string().min(1) }).parse(req.body);
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  await assertCaseVisible(req.params.caseId!, req.user!);
   try {
     res.json({ compiled: await compileAiStep(instruction) });
   } catch {
@@ -227,6 +233,7 @@ stepsRoute.post('/:caseId/steps/extract/compile', async (req, res) => {
   const { description, sampleText } = CompileExtractBody.parse(req.body);
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  await assertCaseVisible(req.params.caseId!, req.user!);
   const { compileExtractRegex } = await import('../lib/extract-compile.js');
   try {
     const out = await compileExtractRegex(description, sampleText);

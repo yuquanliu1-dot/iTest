@@ -4,6 +4,7 @@ import { db } from '../db/client.js';
 import { testCases, testAttachments, groups } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { persistUpload, uploadMaxBytes, ensureUploadDir } from '../lib/attachments.js';
+import { assertProjectVisible } from '../services/projectAccess.js';
 
 export const attachmentsRoute = Router();
 
@@ -18,6 +19,7 @@ attachmentsRoute.post('/:caseId/attachments', async (req, res) => {
   const g = (await db.select().from(groups).where(eq(groups.id, groupId)))[0];
   if (!g) throw new HttpError(404, 'not_found', 'group not found');
   const projectId = g.projectId;
+  await assertProjectVisible(projectId, req.user!);
   const originalName = (req.header('x-filename') ?? 'upload.bin').slice(0, 200);
   const mime = req.header('content-type') ?? null;
 
@@ -60,6 +62,7 @@ attachmentsRoute.get('/:caseId/attachments', async (req, res) => {
   const g = (await db.select().from(groups).where(eq(groups.id, groupId)))[0];
   if (!g) throw new HttpError(404, 'not_found', 'group not found');
   const projectId = g.projectId;
+  await assertProjectVisible(projectId, req.user!);
   const rows = await db
     .select({
       id: testAttachments.id,
