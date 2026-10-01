@@ -66,3 +66,26 @@ describe('migrateAction — defensive', () => {
     expect(migrateAction(alien)).toEqual(alien);
   });
 });
+
+describe('migrateAction — extract mode lazy migration', () => {
+  it('adds mode=completeValue to legacy extract', () => {
+    const legacy = { kind: 'extract', locator: [{ strategy: 'css', value: '#x' }], varName: 'orderNo' };
+    const out = migrateAction(legacy) as { mode?: string; intentLocator?: unknown; varName?: string };
+    expect(out.mode).toBe('completeValue');
+    expect(out.intentLocator).toBeUndefined();
+    expect(out.varName).toBe('orderNo');
+  });
+
+  it('preserves explicit mode on extract', () => {
+    const cur = {
+      kind: 'extract',
+      locator: [{ strategy: 'css', value: '#x' }],
+      varName: 'orderNo',
+      mode: 'regex' as const,
+      pattern: '\\d+',
+    };
+    const out = migrateAction(cur) as { mode?: string; pattern?: string };
+    expect(out.mode).toBe('regex');
+    expect(out.pattern).toBe('\\d+');
+  });
+});
