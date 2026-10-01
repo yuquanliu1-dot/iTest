@@ -178,7 +178,7 @@ export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
   ExtractAction,
   z.object({
     kind: z.literal('aiStep'),
-    instruction: z.string().min(1),
+    instruction: z.string().max(2000),
     compiled: z.array(z.lazy(() => StepAction)).nullable(),
   }),
 ]) as z.ZodType<StepAction>;
