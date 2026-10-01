@@ -17,6 +17,7 @@ vi.mock('playwright-core', () => {
     inputValue: vi.fn().mockResolvedValue('input-val'),
     filter: vi.fn().mockReturnThis(),
     first: vi.fn().mockReturnThis(),
+    count: vi.fn().mockResolvedValue(1),
   });
 
   const getByRole = vi.fn().mockReturnValue(makeLocator());
@@ -30,6 +31,8 @@ vi.mock('playwright-core', () => {
     getByText,
     screenshot: vi.fn().mockResolvedValue(undefined),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
+    url: vi.fn(() => 'https://example.com/path'),
+    evaluate: vi.fn().mockResolvedValue('{"code":0}'),
   };
 
   return {
@@ -53,6 +56,8 @@ const mocked = await import('playwright-core') as unknown as {
     goto: ReturnType<typeof vi.fn>;
     screenshot: ReturnType<typeof vi.fn>;
     waitForTimeout: ReturnType<typeof vi.fn>;
+    url: ReturnType<typeof vi.fn>;
+    evaluate: ReturnType<typeof vi.fn>;
   };
   __getByRole: ReturnType<typeof vi.fn>;
   __getByText: ReturnType<typeof vi.fn>;
@@ -299,5 +304,169 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     );
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.error).toMatch(/secret-missing/);
+  });
+});
+
+describe('phase3 — three-tier locator', () => {
+  it('tries intent semanticRole before CSS fallback', async () => {
+    mocked.__locator.mockClear();
+    mocked.__getByText.mockClear();
+    await executeCaseReal(
+      '00000000-0000-0000-0000-000000000020',
+      [
+        {
+          order: 1,
+          action: {
+            kind: 'click',
+            locator: [{ strategy: 'css', value: '.btn' }],
+            intentLocator: { semanticRole: 'loginBtn' },
+          },
+        },
+      ],
+      { reportId: 'r-3loc-1' },
+    );
+    const firstCall = mocked.__locator.mock.calls[0]?.[0];
+    expect(firstCall).toBe('[data-testid="loginBtn"]');
+  });
+
+  it('falls back from primary CSS to stable #id when primary throws', async () => {
+    mocked.__locator.mockClear();
+    // 第一次 locator 调用抛错，模拟主 CSS 找不到
+    mocked.__locator.mockImplementationOnce(() => ({
+      click: vi.fn().mockImplementation(() => Promise.reject(new Error('not found'))),
+      first: vi.fn().mockReturnThis(),
+    }) as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000021',
+      [
+        {
+          order: 1,
+          action: {
+            kind: 'click',
+            locator: [
+              { strategy: 'css', value: '.primary-btn' },
+              { strategy: 'css', value: '#submit' },
+            ],
+          },
+        },
+      ],
+      { reportId: 'r-3loc-2' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(mocked.__locator.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('phase3 — assertText target×match', () => {
+  it('specifiedElement + equals (default)', async () => {
+    mocked.__locator.mockClear();
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000022',
+      [
+        {
+          order: 1,
+          action: {
+            kind: 'assertText',
+            locator: [{ strategy: 'css', value: '.msg' }],
+            equals: 'ok',
+          },
+        },
+      ],
+      { reportId: 'r-assert-eq' },
+    );
+    expect(results[0]!.status).toBe('passed');
+  });
+
+  it('page + contains matches body innerText', async () => {
+    mocked.__locator.mockClear();
+    mocked.__getByText.mockClear();
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000023',
+      [
+        {
+          order: 1,
+          action: {
+            kind: 'assertText',
+            locator: [],
+            target: 'page',
+            match: 'contains',
+            equals: '登录成功',
+          },
+        },
+      ],
+      { reportId: 'r-assert-page' },
+    );
+    expect(results[0]!.status).toBe('passed');
+  });
+
+  it('url + regex matches location.href', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000024',
+      [
+        {
+          order: 1,
+          action: {
+            kind: 'assertText',
+            locator: [],
+            target: 'url',
+            match: 'regex',
+            equals: '^https://example\\.com/',
+          },
+        },
+      ],
+      { reportId: 'r-assert-url' },
+    );
+    expect(results[0]!.status).toBe('passed');
+  });
+
+  it('errorMessage target without .ant-message throws', async () => {
+    mocked.__locator.mockClear();
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000025',
+      [
+        {
+          order: 1,
+          action: {
+            kind: 'assertText',
+            locator: [],
+            target: 'errorMessage',
+            match: 'contains',
+            equals: '权限不足',
+          },
+        },
+      ],
+      { reportId: 'r-assert-err' },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/errorMessage/);
+  });
+});
+
+describe('phase3 — composite value at execute', () => {
+  it('composite fill uses materialized fragment value', async () => {
+    mocked.__locator.mockClear();
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000026',
+      [
+        {
+          order: 1,
+          action: {
+            kind: 'fill',
+            locator: [{ strategy: 'css', value: '#name' }],
+            value: {
+              mode: 'composite',
+              fragments: [
+                { mode: 'fixed', value: 'CS' },
+                { mode: 'randomNumber', length: 3 },
+              ],
+            },
+          },
+        },
+      ],
+      { reportId: 'r-composite' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    const lastCall = (mocked.__locator.mock.results[0]!.value as { fill: ReturnType<typeof vi.fn> }).fill.mock.calls[0]?.[0];
+    expect(lastCall).toMatch(/^CS\d{3}$/);
   });
 });
