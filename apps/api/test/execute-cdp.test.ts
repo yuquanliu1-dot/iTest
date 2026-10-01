@@ -478,3 +478,39 @@ describe('phase3 — composite value at execute', () => {
     expect(lastFillArg).toMatch(/^CS\d{3}$/);
   });
 });
+
+describe('phase4 — aiStep vision path', () => {
+  it('captures #selector → mock OCR → fills output #selector', async () => {
+    // page.locator 返回 mock.first(locator)；用 #captchaImg 作为源
+    mocked.__locator.mockClear();
+    mocked.__getByText.mockClear();
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000040',
+      [
+        {
+          order: 1,
+          action: {
+            kind: 'aiStep',
+            instruction: '识别图片 #captchaImg 并输入到 #captchaInput',
+            compiled: null,
+          },
+        },
+      ],
+      {
+        reportId: 'r-vision-1',
+        llmClient: {
+          provider: 'mock',
+          complete: async () => ({
+            kind: 'text',
+            value: '识别出的文本',
+            provider: 'mock',
+            vision: true,
+          }),
+        },
+      },
+    );
+    expect(results[0]!.status).toBe('passed');
+    // 至少调用过两次 locator：一次截取 #captchaImg，一次 fill #captchaInput
+    expect(mocked.__locator.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});
