@@ -43,6 +43,8 @@ export interface ExecContext {
   attachmentResolver?: (fileId: string) => Promise<{ storedPath: string; originalName: string } | null>;
   /** stepId → 敏感字段明文；缺省回落 db 查询 + 解密 */
   secretResolver?: (stepId: string) => Promise<string | null>;
+  /** LLMClient 注入；缺省时按需 resolveLlmClient */
+  llmClient?: import('../agent/llm-client.js').LLMClient;
 }
 
 interface DispatchOpts {
