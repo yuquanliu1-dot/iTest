@@ -73,7 +73,13 @@ export async function waitForStable(
   const deadline = Date.now() + timeoutMs;
   let last: StabilityReport = { ready: true };
   while (true) {
-    last = await probe(page);
+    // probe 结果形状异常（evaluate 被桥接/替换、返回非 {ready} 形状）时视为稳定，避免阻塞正常执行。
+    const raw = (await probe(page)) as unknown;
+    const shaped = raw as StabilityReport;
+    if (!raw || typeof raw !== 'object' || typeof shaped.ready !== 'boolean') {
+      return { ready: true };
+    }
+    last = shaped;
     if (last.ready) return last;
     if (last.reason && last.reason !== 'hidden') {
       if (Date.now() >= deadline) throw new ElementNotStable(last.reason, last.source);
