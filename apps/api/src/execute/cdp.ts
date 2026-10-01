@@ -1,5 +1,13 @@
 import { chromium, type Browser, type Page } from 'playwright-core';
-import type { StepAction, Locator, IntentLocator, FailureReason, PreflightReport, HitLocator } from '@itest/shared';
+import type {
+  StepAction,
+  Locator,
+  IntentLocator,
+  FailureReason,
+  PreflightReport,
+  HitLocator,
+  WindowStrategy,
+} from '@itest/shared';
 import { deepEqual, materializeValue, substituteVars } from '@itest/shared';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -55,6 +63,13 @@ export interface ExecContext {
   attachmentResolver?: (fileId: string) => Promise<{ storedPath: string; originalName: string } | null>;
   /** stepId → 敏感字段明文；缺省回落 db 查询 + 解密 */
   secretResolver?: (stepId: string) => Promise<string | null>;
+}
+
+/** 用例级窗口策略（maximize/current/custom），custom 时携带 width/height。 */
+export interface CaseWindow {
+  strategy: WindowStrategy;
+  width?: number;
+  height?: number;
 }
 
 interface DispatchOpts {
@@ -457,7 +472,8 @@ async function writeStepScreenshot(reportId: string, stepIndex: number, page: Pa
 
 /** 真实浏览器执行用例（playwright-core 驱动 chromium）。返回 step 粒度的执行结果。
  * onPreflight：执行前 preflight 检查报告的旁路回调（由 runCase 层决定是否落库），
- * 保持既有返回签名（ExecStepResult[]）不变以兼容既有调用方。 */
+ * 保持既有返回签名（ExecStepResult[]）不变以兼容既有调用方。
+ * caseWindow/incognito：窗口策略与隐身模式；incognito 时不注入 storageState。 */
 export async function executeCaseReal(
   caseId: string,
   steps: Array<{
@@ -473,6 +489,8 @@ export async function executeCaseReal(
   targetUrl?: string,
   storageState?: unknown,
   onPreflight?: (report: PreflightReport) => void,
+  caseWindow?: CaseWindow,
+  incognito?: boolean,
 ): Promise<ExecStepResult[]> {
   let browser: Browser | undefined;
   const results: ExecStepResult[] = [];
@@ -482,9 +500,16 @@ export async function executeCaseReal(
       headless: true,
       executablePath: process.env.CHROMIUM_PATH || undefined,
     });
-    const context = await browser.newContext(
-      storageState ? { storageState: storageState as never } : undefined,
-    );
+    const viewport =
+      caseWindow?.strategy === 'custom' && caseWindow.width && caseWindow.height
+        ? { width: caseWindow.width, height: caseWindow.height }
+        : caseWindow?.strategy === 'current'
+          ? undefined
+          : { width: 1280, height: 800 }; // maximize 近似值（headless）
+    const context = await browser.newContext({
+      ...(storageState && !incognito ? { storageState: storageState as never } : {}),
+      ...(viewport ? { viewport } : {}),
+    });
     const page = await context.newPage();
     // 导航到第一个 navigate 动作或外部传入的 targetUrl，否则就让用户先 navigate。
     if (targetUrl) {

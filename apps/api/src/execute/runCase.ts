@@ -2,13 +2,14 @@ import { eq, asc } from 'drizzle-orm';
 import { logger } from '../logger.js';
 import { db } from '../db/client.js';
 import { testCases, testSteps, reports, groups } from '../db/schema.js';
-import { executeCaseReal, writePlaceholderScreenshot, type ExecStepResult } from './cdp.js';
+import { executeCaseReal, type ExecStepResult } from './cdp.js';
+import type { WindowStrategy, PreflightReport } from '@itest/shared';
 
 /**
- * 执行单条用例并落报告。真实 CDP 失败时降级 mock。
+ * 执行单条用例并落报告。CDP 失败 → 写入 CDPUnavailable 失败报告（不再降级 mock）。
  * 返回 reportId 与最终状态，供单用例路由和执行计划共用。
  * `storageState` 用于在执行计划中复用登录准备阶段导出的 cookie/localStorage。
- * `forceFail`（测试用）让 mock 路径直接返回失败，便于 fail_fast 行为测试。
+ * `forceFail`（测试用）在进入 CDP 前直接写失败报告，便于 fail_fast 行为测试。
  */
 export async function runCase(
   caseId: string,
@@ -35,8 +36,26 @@ export async function runCase(
     .returning();
   const reportId = inserted[0]!.id;
 
+  // 确定性测试钩子：不启动浏览器，直接落失败报告。
+  if (opts?.forceFail) {
+    const stepResults: ExecStepResult[] = [];
+    await db
+      .update(reports)
+      .set({ status: 'failed', durationMs: 0, stepResults: stepResults as object, summary: 'forced fail (test hook)' })
+      .where(eq(reports.id, reportId));
+    return { reportId, status: 'failed' };
+  }
+
+  const caseWindow = {
+    strategy: caseRow.windowStrategy as WindowStrategy,
+    width: caseRow.windowWidth ?? undefined,
+    height: caseRow.windowHeight ?? undefined,
+  };
+  const incognito = !!caseRow.incognito;
+
   const startedAt = Date.now();
   let stepResults: ExecStepResult[];
+  let preflightReport: PreflightReport | undefined;
   let status: 'passed' | 'failed';
   try {
     stepResults = await executeCaseReal(
@@ -53,34 +72,52 @@ export async function runCase(
       { reportId, projectId },
       undefined,
       opts?.storageState,
+      (r) => {
+        preflightReport = r;
+      },
+      caseWindow,
+      incognito,
     );
     const failed = stepResults.filter((r) => r.status === 'failed').length;
     status = failed === 0 ? 'passed' : 'failed';
   } catch (e) {
-    logger.warn({ err: e, caseId, reportId }, 'CDP unavailable, falling back to mock execution');
-    const mockResults: ExecStepResult[] = [];
-    for (let i = 0; i < steps.length; i++) {
-      const isFail = opts?.forceFail ? true : Math.random() < 0.2;
-      const screenshot = await writePlaceholderScreenshot(reportId, i + 1);
-      mockResults.push({
-        order: steps[i]!.order,
-        status: isFail ? 'failed' : 'passed',
-        durationMs: Math.floor(Math.random() * 100) + 20,
-        error: isFail ? 'CDP unavailable — mock fallback (install chromium for real path)' : undefined,
-        screenshot,
-      });
-    }
-    stepResults = mockResults;
-    status = mockResults.some((r) => r.status === 'failed') || (opts?.forceFail ?? false) ? 'failed' : 'passed';
+    logger.warn({ err: e, caseId, reportId }, 'CDP execution failed; writing CDPUnavailable failed report');
+    const msg = e instanceof Error ? e.message : String(e);
+    stepResults = [
+      {
+        order: 1,
+        status: 'failed',
+        durationMs: 0,
+        error: msg,
+        failureReason: 'CDPUnavailable',
+        humanMessage: '真实浏览器不可用，已尝试 DOM 降级仍失败',
+      },
+    ];
+    status = 'failed';
   }
 
   const durationMs = Date.now() - startedAt;
-  const passed = stepResults.filter((r) => r.status === 'passed').length;
-  const summary = `${stepResults.length} steps, ${passed} passed, ${stepResults.length - passed} failed`;
   await db
     .update(reports)
-    .set({ status, durationMs, stepResults: stepResults as object, summary })
+    .set({
+      status,
+      durationMs,
+      stepResults: stepResults as object,
+      summary: buildSummary(stepResults, preflightReport),
+      preflight: preflightReport ?? null,
+    })
     .where(eq(reports.id, reportId));
 
   return { reportId, status };
+}
+
+function buildSummary(steps: ExecStepResult[], preflight: PreflightReport | undefined): string {
+  const passed = steps.filter((r) => r.status === 'passed').length;
+  const base = `${steps.length} steps, ${passed} passed, ${steps.length - passed} failed`;
+  if (!preflight) return base;
+  const tags: string[] = [];
+  if (!preflight.urlReachable) tags.push('URLUnreachable');
+  if (!preflight.loggedIn) tags.push('NotLoggedIn');
+  if (preflight.originMismatch) tags.push('OriginMismatch');
+  return tags.length ? `${base} · preflight: ${tags.join(',')}` : base;
 }
