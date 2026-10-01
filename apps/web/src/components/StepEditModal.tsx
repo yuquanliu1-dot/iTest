@@ -1,6 +1,7 @@
 import { useState, useEffect, type CSSProperties } from 'react';
 import type { StepClip } from '../stores/stepClipboard';
 import { api } from '../api/client';
+import { formatBytes, shortDateTime } from '../lib/format';
 
 interface Props {
   initial: StepClip;
@@ -28,6 +29,9 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
 
   // upload
   const [fileId, setFileId] = useState<string | undefined>((action as { fileId?: string }).fileId);
+  const [attachments, setAttachments] = useState<
+    Array<{ id: string; originalName: string; size: number; mime: string | null; sha256: string; createdAt: string }>
+  >([]);
 
   // fill/select 值编辑
   const rawValue = (action.value ?? '') as string | Record<string, unknown>;
@@ -65,6 +69,22 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  useEffect(() => {
+    if (kind !== 'upload' || !caseId) return;
+    let cancelled = false;
+    api.attachments
+      .list(caseId)
+      .then((rows) => {
+        if (!cancelled) setAttachments(rows);
+      })
+      .catch(() => {
+        /* non-fatal; reuse list optional */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [kind, caseId]);
 
   const buildValue = (): string | Record<string, unknown> => {
     switch (valueMode) {
@@ -284,7 +304,7 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
           )}
           {kind === 'upload' && (
             <div className="flex flex-col gap-2">
-              <span style={labelStyle}>绑定回放文件（按 sha256 复用）</span>
+              <span style={labelStyle}>绑定回放文件（按 project 隔离，≤ 10 MB）</span>
               <input
                 type="file"
                 style={inputStyle}
@@ -292,22 +312,79 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
                   if (!caseId) return;
                   const f = e.target.files?.[0];
                   if (!f) return;
-                  if (f.size > 50 * 1024 * 1024) {
-                    setError('文件超过 50MB 上限');
+                  if (f.size > 10 * 1024 * 1024) {
+                    setError('文件超过 10MB 上限');
                     return;
                   }
                   try {
                     const r = await api.attachments.upload(caseId, f);
                     setFileId(r.id);
                     setError('');
+                    api.attachments
+                      .list(caseId)
+                      .then(setAttachments)
+                      .catch(() => {});
                   } catch (err) {
                     setError((err as Error).message);
                   }
                 }}
               />
+              {attachments.length > 0 && (
+                <>
+                  <span style={labelStyle}>—— 或从本 project 已上传文件选择 ——</span>
+                  <ul
+                    style={{
+                      maxHeight: 160,
+                      overflowY: 'auto',
+                      border: '1px solid var(--color-glass-border)',
+                      borderRadius: 6,
+                      padding: 0,
+                      margin: 0,
+                      listStyle: 'none',
+                    }}
+                  >
+                    {attachments.map((a) => (
+                      <li
+                        key={a.id}
+                        onClick={() => setFileId(a.id)}
+                        style={{
+                          padding: '6px 8px',
+                          cursor: 'pointer',
+                          background: fileId === a.id ? 'var(--color-accent)' : 'transparent',
+                          color: fileId === a.id ? '#fff' : 'var(--color-foreground-secondary)',
+                          fontSize: 11,
+                          display: 'flex',
+                          gap: 8,
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          borderBottom: '1px solid var(--color-glass-border)',
+                        }}
+                      >
+                        <span className="truncate" style={{ flex: 1 }}>{a.originalName}</span>
+                        <span style={{ fontFamily: 'monospace', opacity: 0.7, fontSize: 10 }}>
+                          {a.sha256.slice(0, 8)}… · {formatBytes(a.size)} · {shortDateTime(a.createdAt)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
               {fileId && (
                 <p className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
-                  已绑定 fileId：<code>{fileId.slice(0, 8)}…</code>
+                  已绑定 fileId: <code>{fileId.slice(0, 8)}…</code>
+                  <button
+                    onClick={() => setFileId(undefined)}
+                    style={{
+                      marginLeft: 8,
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--color-accent)',
+                      cursor: 'pointer',
+                      fontSize: 11,
+                    }}
+                  >
+                    更换
+                  </button>
                 </p>
               )}
             </div>
