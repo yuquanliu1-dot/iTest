@@ -23,6 +23,9 @@ importers:
       '@google/generative-ai':
         specifier: ^0.21.0
         version: 0.21.0
+      '@itest/recorder':
+        specifier: workspace:*
+        version: link:../recorder
       '@itest/shared':
         specifier: workspace:*
         version: link:../../packages/shared
