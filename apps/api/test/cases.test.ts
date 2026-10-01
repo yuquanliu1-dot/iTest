@@ -449,3 +449,49 @@ describe('steps PUT migration', () => {
     expect(detail.body.steps[0].action.match).toBe('regex');
   });
 });
+
+describe('steps PUT — aiStep split + fallback', () => {
+  it('splits numbered aiStep into multiple steps on PUT', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'split', groupId });
+    const r = await request(app)
+      .put(`/api/cases/${c.body.id}/steps`)
+      .send({
+        steps: [
+          {
+            source: 'manual',
+            action: {
+              kind: 'aiStep',
+              instruction: '1. 输入\n2. 点击\n3. 打开详情',
+              compiled: null,
+            },
+          },
+        ],
+      });
+    expect(r.status).toBe(200);
+    const detail = await request(app).get(`/api/cases/${c.body.id}`);
+    expect(detail.body.steps).toHaveLength(3);
+    expect(detail.body.steps.map((s: { action: { instruction: string } }) => s.action.instruction))
+      .toEqual(['输入', '点击', '打开详情']);
+  });
+
+  it('falls back to step.name when instruction is empty', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'fallback', groupId });
+    const r = await request(app)
+      .put(`/api/cases/${c.body.id}/steps`)
+      .send({
+        steps: [
+          {
+            source: 'manual',
+            name: '点击保存按钮',
+            action: { kind: 'aiStep', instruction: '', compiled: null },
+          },
+        ],
+      });
+    expect(r.status).toBe(200);
+    const detail = await request(app).get(`/api/cases/${c.body.id}`);
+    expect(detail.body.steps).toHaveLength(1);
+    expect(detail.body.steps[0].action.compiled).toHaveLength(1);
+  });
+});
