@@ -126,10 +126,13 @@ export const api = {
         body: JSON.stringify({ caseIds, targetGroupId }),
       }),
     appendSteps: (id: string, steps: Array<{ order: number; source: string; action: unknown }>) =>
-      request<{ count: number }>(`/cases/${id}/steps`, {
-        method: 'POST',
-        body: JSON.stringify({ steps }),
-      }),
+      request<{ count: number; steps: TestStep[]; failedAi: number; variableReport?: VariableReport }>(
+        `/cases/${id}/steps`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ steps }),
+        },
+      ),
     reorderSteps: (id: string, stepIds: string[]) =>
       request<{ steps: TestStep[] }>(`/cases/${id}/steps/reorder`, {
         method: 'PUT',
@@ -141,7 +144,7 @@ export const api = {
       id: string,
       steps: Array<{ action: unknown; source: string; name?: string; delayMs?: number }>,
     ) =>
-      request<{ steps: TestStep[]; failedAi: number }>(`/cases/${id}/steps`, {
+      request<{ steps: TestStep[]; failedAi: number; variableReport?: VariableReport }>(`/cases/${id}/steps`, {
         method: 'PUT',
         body: JSON.stringify({ steps }),
       }),
@@ -152,6 +155,11 @@ export const api = {
           method: 'POST',
           body: JSON.stringify({ instruction }),
         },
+      ),
+    compileExtract: (caseId: string, body: { description: string; sampleText: string }) =>
+      request<{ pattern: string | null; group: number; error?: string }>(
+        `/cases/${caseId}/steps/extract/compile`,
+        { method: 'POST', body: JSON.stringify(body) },
       ),
     execute: (id: string) =>
       request<{ reportId: string }>(`/cases/${id}/execute`, { method: 'POST' }),
@@ -368,4 +376,12 @@ export interface AgentRun {
   prompt: string;
   result: unknown;
   error: string | null;
+}
+
+export interface VariableReport {
+  undefined: Array<{ stepOrder: number; field: string; name: string }>;
+  duplicates: Array<{ name: string; definedAt: number[] }>;
+  forwardRefs: Array<{ stepOrder: number; field: string; name: string }>;
+  regexIssues: Array<{ stepOrder: number; reason: string }>;
+  invalidNames: Array<{ stepOrder: number; field: string; name: string; reason: string }>;
 }
