@@ -5,7 +5,7 @@
  * - 编号段之间允许空白行；段内多行用 \n 拼接
  */
 export function splitByNumber(raw: string): string[] {
-  const re = /^[ \t]*\d+[.\、][ \t]*(.+)$/;
+  const re = /^[ \t]*\d+[.、][ \t]*(.+)$/;
   const lines = raw.split(/\r?\n/);
   const matches: { index: number; text: string }[] = [];
   for (let i = 0; i < lines.length; i++) {

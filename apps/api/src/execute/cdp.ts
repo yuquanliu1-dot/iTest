@@ -160,32 +160,6 @@ async function defaultSecretResolver(stepId: string): Promise<string | null> {
   });
 }
 
-function locatorToPlaywright(page: Page, loc: Locator) {
-  // 按 strategy 顺序尝试：testId → role → text → css/xpath。
-  // 真实项目中应做 role[name=...] 等语义解析；这里取最宽松可达成的形式。
-  switch (loc.strategy) {
-    case 'testId': {
-      const v = loc.value.startsWith('[') ? loc.value : `[data-testid="${loc.value}"]`;
-      return page.locator(v);
-    }
-    case 'role': {
-      // value 形如 'button[name="登录"]' 或裸 'button'
-      const m = loc.value.match(/^([\w-]+)(?:\[name="([^"]*)"\]|\[name='([^']*)'\])$/);
-      if (m) {
-        const [, role, name1, name2] = m;
-        return page.getByRole(role as never, { name: name1 ?? name2 ?? undefined });
-      }
-      return page.getByRole(loc.value as never);
-    }
-    case 'text':
-      return page.getByText(loc.value);
-    case 'css':
-      return page.locator(loc.value);
-    case 'xpath':
-      return page.locator(`xpath=${loc.value}`);
-  }
-}
-
 /** 执行单步；返回 warning 文本（无则 undefined）。失败抛错由调用方记 failed。 */
 async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
   const { page, vars } = opts;
@@ -360,12 +334,6 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       return;
     }
   }
-}
-
-/** 多个 locator 候选中取第一个能解析的——避免主候选失效时直接报错。 */
-function firstMatch(page: Page, locators: Locator[]) {
-  if (locators.length === 0) throw new Error('locator array is empty');
-  return locatorToPlaywright(page, locators[0]!);
 }
 
 /** 依命中的候选 kind 反解出可读的定位表达式（用于报告展示）。 */
