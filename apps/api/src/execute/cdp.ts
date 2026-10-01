@@ -14,7 +14,7 @@ import { db } from '../db/client.js';
 import { testAttachments, testSteps } from '../db/schema.js';
 import { decrypt } from '../lib/secret-crypto.js';
 import { logger } from '../logger.js';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildCandidates } from './locator-resolver.js';
 import { waitForStable, ElementNotStable } from './stability.js';
@@ -566,17 +566,4 @@ export async function executeCaseReal(
     if (browser) await browser.close().catch(() => undefined);
   }
   return results;
-}
-
-/** 占位截图：CDP 未启用或浏览器启动失败时回退到 mock 路径。 */
-export async function writePlaceholderScreenshot(reportId: string, stepIndex: number): Promise<string> {
-  const TRANSPARENT_PNG = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=',
-    'base64',
-  );
-  const dir = join(SCREENSHOTS_DIR, reportId);
-  await mkdir(dir, { recursive: true });
-  const filename = `step-${stepIndex}.png`;
-  await writeFile(join(dir, filename), TRANSPARENT_PNG);
-  return `/screenshots/${reportId}/${filename}`;
 }

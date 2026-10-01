@@ -208,7 +208,7 @@ describe('plan execution extras', () => {
     expect(r.status).toBe(200);
     const runId = r.body.runId as string;
 
-    // 立即 cancel；由于 mock 路径下每条 case 极快，需在 finalize 之前命中
+    // 立即 cancel；每条 case 执行极快，需在 finalize 之前命中
     const cancel = await request(app).post(`/api/plan-runs/${runId}/cancel`);
     expect(cancel.status).toBe(200);
 
