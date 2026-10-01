@@ -268,6 +268,17 @@ export const api = {
     removeMember: (orgId: string, userId: string) =>
       request<{ ok: boolean }>(`/organizations/${orgId}/members/${userId}`, { method: 'DELETE' }),
   },
+  aiWorkspace: {
+    ensureThread: (requirementId: string) =>
+      request<{ threadId: string }>(`/requirements/${requirementId}/ai-thread`, { method: 'POST' }),
+    getWorkspace: (requirementId: string) =>
+      request<WorkspaceDoc>(`/requirements/${requirementId}/ai-workspace`),
+    save: (requirementId: string, body: { groupId: string; scenarioIds: string[]; caseIds: string[] }) =>
+      request<{ savedCases: number }>(`/requirements/${requirementId}/ai-workspace/save`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+  },
   secrets: {
     fetch: (caseId: string, stepId: string, token: string) =>
       request<{ plaintext: string }>(
@@ -507,4 +518,14 @@ export interface MemberRow {
   isManager: boolean;
   isUser: boolean;
   joinedAt: string;
+}
+
+export type Priority = 'P0' | 'P1' | 'P2' | 'P3';
+export interface StagedStep { name: string; action: string; assertion: string | null; }
+export interface StagedCase { id: string; title: string; description: string | null; priority: Priority; steps: StagedStep[]; }
+export interface StagedScenario { id: string; title: string; description: string | null; cases: StagedCase[]; }
+export interface WorkspaceDoc {
+  plan: { scenarios: number; cases: number } | null;
+  scenarios: StagedScenario[];
+  looseCases: StagedCase[];
 }
