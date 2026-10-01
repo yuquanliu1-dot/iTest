@@ -6,7 +6,9 @@ const fakeClient = (outputs: { steps?: unknown }[]): LLMClient => ({
   provider: 'mock',
   complete: async () => {
     const v = outputs.shift();
-    return v ? { kind: 'json', value: v as Record<string, unknown> } : { kind: 'text', value: '' };
+    return v
+      ? { kind: 'json', value: v as Record<string, unknown>, provider: 'mock', vision: false }
+      : { kind: 'text', value: '', provider: 'mock', vision: false };
   },
 });
 
@@ -50,8 +52,8 @@ describe('compileAiStepsInPlace', () => {
       provider: 'mock',
       complete: async () => {
         calls++;
-        if (calls === 1) return { kind: 'json', value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] } };
-        return { kind: 'text', value: 'garbage' };
+        if (calls === 1) return { kind: 'json', value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] }, provider: 'mock', vision: false };
+        return { kind: 'text', value: 'garbage', provider: 'mock', vision: false };
       },
     };
     const steps = [
