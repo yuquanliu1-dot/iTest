@@ -2,22 +2,13 @@ import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useLayoutStore } from '../../stores/layout';
-import { useThemeStore } from '../../stores/theme';
 import { useProjectStore } from '../../stores/project';
+import { useUIStore } from '../../stores/ui';
 import Icon from '../Icon';
 import SidebarGroup, { type NavGroupDef } from './SidebarGroup';
+import UserMenu from './UserMenu';
 
-// 顶层：项目外可见（项目 + 设置）。
-const WORKSPACE_GROUP: NavGroupDef = {
-  id: 'workspace',
-  label: '工作区',
-  items: [
-    { path: '/', icon: 'layers', label: '项目', end: true },
-    { path: '/settings', icon: 'settings', label: '设置' },
-  ],
-};
-
-// 选中项目后注入：项目内的二级导航。
+// 项目内的二级导航：始终显示；未选项目时点击会提示进入项目选择页。
 const PROJECT_GROUP: NavGroupDef = {
   id: 'project',
   label: '项目',
@@ -30,17 +21,16 @@ const PROJECT_GROUP: NavGroupDef = {
   ],
 };
 
-const NAV_GROUPS: NavGroupDef[] = [WORKSPACE_GROUP, PROJECT_GROUP];
+const NAV_GROUPS: NavGroupDef[] = [PROJECT_GROUP];
 
 export default function Sidebar() {
   const { projectId: urlProjectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const sidebarCollapsed = useLayoutStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useLayoutStore((s) => s.toggleSidebar);
-  const theme = useThemeStore((s) => s.theme);
-  const toggleTheme = useThemeStore((s) => s.toggleTheme);
   const current = useProjectStore((s) => s.current);
   const exit = useProjectStore((s) => s.exit);
+  const toast = useUIStore((s) => s.showToast);
 
   // URL 优先，回退到 store；保证非项目页面（如 /settings）仍带旧上下文。
   const projectId = urlProjectId ?? current?.id;
@@ -61,6 +51,12 @@ export default function Sidebar() {
 
   const handleExitProject = () => {
     exit();
+    navigate('/');
+  };
+
+  // 未选项目时点击项目内菜单：提示并回到项目选择页。
+  const handleRequireProject = () => {
+    toast('请先选择或创建项目', 'info');
     navigate('/');
   };
 
@@ -142,52 +138,19 @@ export default function Sidebar() {
               hasProject={hasProject}
               collapsed={sidebarCollapsed}
               isFirst={i === 0}
+              onRequireProject={handleRequireProject}
             />
           ))}
         </div>
 
-        {/* 退出项目（展开态，底部用户区上方） */}
-        {!sidebarCollapsed && hasProject && (
-          <div style={{ marginBottom: 4 }}>
-            <button
-              onClick={handleExitProject}
-              className="block w-full px-2 group-nav-item"
-              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', width: '100%', textAlign: 'left' }}
-              aria-label={`退出项目：${current?.name ?? ''}`}
-            >
-              <div
-                className="flex items-center gap-[10px] w-full cursor-pointer"
-                style={{
-                  height: 36,
-                  padding: '0 8px',
-                  borderRadius: 5,
-                  color: 'var(--color-foreground-secondary)',
-                  fontSize: 13,
-                }}
-              >
-                <div className="flex items-center justify-center" style={{ width: 16, flexShrink: 0 }}>
-                  <Icon name="logOut" size={16} />
-                </div>
-                <span className="flex-1 truncate">退出项目{current?.name ? `：${current.name}` : ''}</span>
-              </div>
-            </button>
-          </div>
-        )}
-
-        {/* 底部工具区：主题切换 */}
-        <div
-          style={{
-            borderTop: '1px solid var(--color-border-subtle)',
-            margin: '6px 0 10px',
-            padding: '6px 0 0',
-          }}
-        >
-          {sidebarCollapsed ? (
+        {/* 退出项目（用户菜单上方；折叠为磁贴，展开为整行） */}
+        {hasProject &&
+          (sidebarCollapsed ? (
             <Tooltip.Root>
               <Tooltip.Trigger asChild>
                 <button
-                  onClick={toggleTheme}
-                  aria-label={theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}
+                  onClick={handleExitProject}
+                  aria-label={`退出项目：${current?.name ?? ''}`}
                   className="group-nav-tile w-full flex items-center justify-center"
                   style={{
                     background: 'none',
@@ -197,9 +160,10 @@ export default function Sidebar() {
                     height: 32,
                     borderRadius: 5,
                     color: 'var(--color-foreground-secondary)',
+                    marginBottom: 4,
                   }}
                 >
-                  <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={16} />
+                  <Icon name="logOut" size={16} />
                 </button>
               </Tooltip.Trigger>
               <Tooltip.Portal>
@@ -216,25 +180,50 @@ export default function Sidebar() {
                     zIndex: 70,
                   }}
                 >
-                  {theme === 'dark' ? '浅色主题' : '深色主题'}
+                  退出项目{current?.name ? `：${current.name}` : ''}
                 </Tooltip.Content>
               </Tooltip.Portal>
             </Tooltip.Root>
           ) : (
-            <button
-              onClick={toggleTheme}
-              className="block w-full px-2 group-nav-item"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', textAlign: 'left' }}
-            >
-              <div
-                className="flex flex-row items-center gap-[10px] w-full cursor-pointer"
-                style={{ height: 36, padding: '0 8px', borderRadius: 5, color: 'var(--color-foreground-secondary)', fontSize: 13 }}
+            <div style={{ marginBottom: 4 }}>
+              <button
+                onClick={handleExitProject}
+                className="block w-full px-2 group-nav-item"
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', width: '100%', textAlign: 'left' }}
+                aria-label={`退出项目：${current?.name ?? ''}`}
               >
-                <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={16} />
-                <span className="flex-1 truncate">{theme === 'dark' ? '浅色主题' : '深色主题'}</span>
-              </div>
-            </button>
-          )}
+                <div
+                  className="flex items-center gap-[10px] w-full cursor-pointer"
+                  style={{
+                    height: 36,
+                    padding: '0 8px',
+                    borderRadius: 5,
+                    color: 'var(--color-foreground-secondary)',
+                    fontSize: 13,
+                  }}
+                >
+                  <div className="flex items-center justify-center" style={{ width: 16, flexShrink: 0 }}>
+                    <Icon name="logOut" size={16} />
+                  </div>
+                  <span className="flex-1 truncate">退出项目{current?.name ? `：${current.name}` : ''}</span>
+                </div>
+              </button>
+            </div>
+          ))}
+
+        {/* 用户菜单（展开态显示完整布局，折叠态仅显示头像） */}
+        <div
+          style={{
+            marginTop: hasProject ? 0 : 'auto',
+            paddingTop: 4,
+            borderTop: hasProject ? '1px solid var(--color-border-subtle)' : 'none',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: sidebarCollapsed ? 'center' : 'stretch',
+            gap: 4,
+          }}
+        >
+          <UserMenu collapsed={sidebarCollapsed} />
         </div>
       </nav>
     </Tooltip.Provider>
