@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testSteps, testCases, testAttachments } from '../db/schema.js';
-import { eq, asc, inArray } from 'drizzle-orm';
+import { testSteps, testCases, testAttachments, groups } from '../db/schema.js';
+import { eq, asc, and, inArray } from 'drizzle-orm';
 import { StepAction } from '@itest/shared';
 import { HttpError } from '../middleware/errorHandler.js';
 import { compileAiStep, compileAiStepsInPlace } from '../agent/aiStepCompile.js';
@@ -106,6 +106,11 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
     .parse(req.body);
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  // Project-scope: resolve the case's projectId once via its group, then enforce project membership.
+  const groupId = exists[0]!.groupId;
+  const g = (await db.select().from(groups).where(eq(groups.id, groupId)))[0];
+  if (!g) throw new HttpError(404, 'not_found', 'group not found');
+  const caseProjectId = g.projectId;
   for (const s of body.steps) {
     const a = s.action as { kind?: string; fileId?: string; sensitive?: boolean };
     if (a.kind === 'upload') {
@@ -115,7 +120,11 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileId)) {
         throw new HttpError(422, 'upload_unknown_file', `attachment ${fileId} not found`);
       }
-      const row = await db.select().from(testAttachments).where(eq(testAttachments.id, fileId));
+      // Project-scoped: fileId must belong to the same project as the case.
+      const row = await db
+        .select()
+        .from(testAttachments)
+        .where(and(eq(testAttachments.id, fileId), eq(testAttachments.projectId, caseProjectId)));
       if (row.length === 0) throw new HttpError(422, 'upload_unknown_file', `attachment ${fileId} not found`);
     }
     if (a.kind === 'fill' && a.sensitive) {
