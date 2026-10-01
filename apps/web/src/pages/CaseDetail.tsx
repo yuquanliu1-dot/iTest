@@ -12,6 +12,7 @@ import PriorityBadge from '../components/ui/PriorityBadge';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Segmented from '../components/ui/Segmented';
+import Toggle from '../components/ui/Toggle';
 import EmptyState from '../components/ui/EmptyState';
 import AgentStreamPanel from '../components/ui/AgentStreamPanel';
 import StepEditModal from '../components/StepEditModal';
@@ -78,6 +79,10 @@ export default function CaseDetail() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<StepClip | null>(null);
   const [varReport, setVarReport] = useState<VariableReport | null>(null);
+  const [windowStrategy, setWindowStrategy] = useState<'maximize' | 'current' | 'custom'>('maximize');
+  const [windowWidth, setWindowWidth] = useState<number | undefined>();
+  const [windowHeight, setWindowHeight] = useState<number | undefined>();
+  const [incognito, setIncognito] = useState(false);
   const editingIdxRef = useRef<number>(-1);
   const editingSnapshotRef = useRef<StepClip | null>(null);
   const historyRef = useRef<StepClip[][]>([]);
@@ -138,6 +143,15 @@ export default function CaseDetail() {
     queryFn: () => api.cases.get(id!),
     enabled: !!id,
   });
+
+  useEffect(() => {
+    if (caseDetail) {
+      setWindowStrategy((caseDetail.windowStrategy as 'maximize' | 'current' | 'custom') ?? 'maximize');
+      setWindowWidth(caseDetail.windowWidth ?? undefined);
+      setWindowHeight(caseDetail.windowHeight ?? undefined);
+      setIncognito(!!caseDetail.incognito);
+    }
+  }, [caseDetail]);
 
   const { data: groups } = useQuery({
     queryKey: ['groups', projectId],
@@ -312,6 +326,15 @@ export default function CaseDetail() {
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
+  const saveRuntime = useMutation({
+    mutationFn: () => api.cases.patch(id!, { windowStrategy, windowWidth, windowHeight, incognito }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['case', id] });
+      toast('已保存', 'success');
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
   useEffect(() => {
     return () => {
       if (sessionRef.current) {
@@ -378,6 +401,50 @@ export default function CaseDetail() {
           <div className="flex-1 min-w-0 flex flex-col gap-4">
             {tab === 'description' && (
               <div className="flex flex-col gap-4">
+                <div className="glass-card rounded-[12px] p-5 flex flex-col gap-4">
+                  <div className="text-[13px] font-medium" style={{ color: 'var(--color-foreground)' }}>执行设置</div>
+                  <div className="flex flex-col gap-2">
+                    <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>窗口策略</span>
+                    <Segmented
+                      value={windowStrategy}
+                      onChange={setWindowStrategy}
+                      options={[
+                        { label: '默认最大化', value: 'maximize' },
+                        { label: '当前窗口', value: 'current' },
+                        { label: '自定义', value: 'custom' },
+                      ]}
+                    />
+                  </div>
+                  {windowStrategy === 'custom' && (
+                    <div className="flex gap-3">
+                      <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                        宽
+                        <Input
+                          type="number"
+                          value={windowWidth ?? ''}
+                          onChange={(e) => setWindowWidth(e.target.value === '' ? undefined : Number(e.target.value))}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                        高
+                        <Input
+                          type="number"
+                          value={windowHeight ?? ''}
+                          onChange={(e) => setWindowHeight(e.target.value === '' ? undefined : Number(e.target.value))}
+                        />
+                      </label>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-3">
+                    <Toggle checked={incognito} onChange={setIncognito} label="无痕模式" />
+                    <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                      每次回放从新会话开始，不保留登录态
+                    </span>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button onClick={() => saveRuntime.mutate()}>保存</Button>
+                  </div>
+                </div>
                 <AgentStreamPanel
                   runId={activeRunId}
                   streaming={streaming}
