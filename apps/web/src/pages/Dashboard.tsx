@@ -7,7 +7,6 @@ import EmptyState from '../components/ui/EmptyState';
 import { fullDateTime } from '../lib/format';
 
 interface Stats {
-  requirements: number;
   cases: number;
   reports: number;
   passes: number;
@@ -29,15 +28,13 @@ export default function Dashboard() {
   const stats = useQuery({
     queryKey: ['stats', projectId],
     queryFn: async (): Promise<Stats> => {
-      const [reqs, cases, reports] = await Promise.all([
-        api.projects.requirements(projectId!),
+      const [cases, reports] = await Promise.all([
         api.cases.list({ projectId }),
         api.reports.list(projectId),
       ]);
       const passes = reports.filter((r: { status: string }) => r.status === 'passed').length;
       const failures = reports.filter((r: { status: string }) => r.status === 'failed').length;
       return {
-        requirements: reqs.length,
         cases: cases.length,
         reports: reports.length,
         passes,
@@ -69,15 +66,15 @@ export default function Dashboard() {
             总览
           </h1>
           <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
-            需求 → 用例 → 执行 全链路概览
+            用例 → 执行 全链路概览
           </p>
         </div>
       </div>
 
-      {/* Stat cards — 4 列 grid，每张卡都是 iDO glass-panel 风格 */}
-      <div className="grid grid-cols-4 gap-4 px-5 pt-4">
+      {/* Stat cards — 3 列 grid，每张卡都是 iDO glass-panel 风格 */}
+      <div className="grid grid-cols-3 gap-4 px-5 pt-4">
         {stats.isLoading ? (
-          Array.from({ length: 4 }).map((_, i) => (
+          Array.from({ length: 3 }).map((_, i) => (
             <div
               key={i}
               className="glass-panel rounded-[12px] p-5 flex items-center justify-center"
@@ -88,7 +85,6 @@ export default function Dashboard() {
           ))
         ) : (
           [
-            { label: '需求', value: stats.data?.requirements ?? 0, icon: 'listChecks', to: `/p/${projectId}/requirements`, tone: 'var(--color-accent)' },
             { label: '用例', value: stats.data?.cases ?? 0, icon: 'beaker', to: `/p/${projectId}/groups`, tone: 'var(--color-info)' },
             { label: '通过报告', value: stats.data?.passes ?? 0, icon: 'checkCircle', to: `/p/${projectId}/reports`, tone: 'var(--color-success)' },
             { label: '失败报告', value: stats.data?.failures ?? 0, icon: 'exclamationCircle', to: `/p/${projectId}/reports`, tone: 'var(--color-destructive)' },
