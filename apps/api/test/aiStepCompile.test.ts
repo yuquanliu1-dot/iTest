@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { compileAiStep, compileAiStepsInPlace } from '../src/agent/aiStepCompile.js';
-import type { LLMClient } from '../src/agent/llm-client.js';
+import type { LLMClient, LLMRequest, LLMResult } from '../src/agent/llm-client.js';
 
 const fakeClient = (outputs: { steps?: unknown }[]): LLMClient => ({
   provider: 'mock',
@@ -63,5 +63,21 @@ describe('compileAiStepsInPlace', () => {
     expect(failed).toEqual([1]);
     expect((steps[0]!.action as { compiled: unknown[] }).compiled).toHaveLength(1);
     expect((steps[1]!.action as { compiled: unknown }).compiled).toBeNull();
+  });
+});
+
+describe('LLMClient shape — vision support', () => {
+  it('LLMRequest accepts optional image', () => {
+    const req: LLMRequest = {
+      systemPrompt: 's',
+      userMessage: 'u',
+      image: { base64: 'AAA=', mime: 'image/png' },
+    };
+    expect(req.image?.mime).toBe('image/png');
+  });
+
+  it('LLMResult exposes vision flag', () => {
+    const r: LLMResult = { kind: 'text', value: 'x', provider: 'mock', vision: false };
+    expect(r.vision).toBe(false);
   });
 });
