@@ -2,10 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
 import { testSteps, testCases, testAttachments, groups } from '../db/schema.js';
-import { eq, asc, and, inArray } from 'drizzle-orm';
+import { eq, asc, and, inArray, sql } from 'drizzle-orm';
 import { StepAction } from '@itest/shared';
 import { HttpError } from '../middleware/errorHandler.js';
 import { compileAiStep, compileAiStepsInPlace } from '../agent/aiStepCompile.js';
+import { splitAiStepsInPlace } from '../agent/aiStepSplit.js';
 import { encrypt, ensureKeyLoaded } from '../lib/secret-crypto.js';
 import { migrateAction } from '../lib/step-migration.js';
 
@@ -28,6 +29,16 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
   const body = AppendBody.parse(req.body);
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  splitAiStepsInPlace(body.steps);
+  // 拆条后片段会复制原 order；重排为接续现有最大 order 的连续序号，避免重复。
+  const maxRow = await db
+    .select({ maxOrder: sql<number>`coalesce(max(${testSteps.order}), 0)` })
+    .from(testSteps)
+    .where(eq(testSteps.caseId, req.params.caseId));
+  const base = Number(maxRow[0]?.maxOrder ?? 0);
+  body.steps.forEach((s, i) => {
+    s.order = base + i + 1;
+  });
   const failedAi = await compileAiStepsInPlace(body.steps.map((s) => ({ action: s.action })));
   const rows = await db
     .insert(testSteps)
@@ -108,6 +119,7 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
   for (const s of body.steps) {
     s.action = migrateAction(s.action) as typeof s.action;
   }
+  splitAiStepsInPlace(body.steps);
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
   // Project-scope: resolve the case's projectId once via its group, then enforce project membership.
@@ -135,7 +147,9 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
       ensureKeyLoaded();
     }
   }
-  const failedAi = await compileAiStepsInPlace(body.steps.map((s) => ({ action: s.action })));
+  const failedAi = await compileAiStepsInPlace(
+    body.steps.map((s) => ({ action: s.action, name: s.name })),
+  );
   const rows = await db.transaction(async (tx) => {
     await tx.delete(testSteps).where(eq(testSteps.caseId, req.params.caseId));
     if (body.steps.length === 0) return [];
