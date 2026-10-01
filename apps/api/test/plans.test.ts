@@ -160,7 +160,7 @@ describe('plan execution extras', () => {
     expect(kinds.has('plan')).toBe(true);
   });
 
-  it('fail_fast: second case fails → remaining cases skipped, plan_run.status=failed', async () => {
+  it('fail_fast: first case fails → remaining cases skipped, plan_run.status=failed', async () => {
     const { projectId, groupId } = await seedProject(pool);
     const c1 = await makeCase(groupId, 'c1');
     const c2 = await makeCase(groupId, 'c2');
@@ -170,8 +170,8 @@ describe('plan execution extras', () => {
       .send({ name: 'P', strategy: 'fail_fast' });
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2, c3] });
 
-    // 强制 c2 失败，便于稳定测试 fail_fast 行为
-    process.env.FORCE_FAIL_CASE_IDS = c2;
+    // 强制的现在是第一条：forceFail 在 CDP 前短路，行为与有无 chromium 环境无关
+    process.env.FORCE_FAIL_CASE_IDS = c1;
     try {
       const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
       expect(r.status).toBe(200);
@@ -186,11 +186,11 @@ describe('plan execution extras', () => {
       }
       expect(detail!.body.status).toBe('failed');
       expect(detail!.body.failedCases).toBe(1);
-      expect(detail!.body.skippedCases).toBe(1);
-      expect(detail!.body.passedCases).toBe(1);
+      expect(detail!.body.skippedCases).toBe(2);
+      expect(detail!.body.passedCases).toBe(0);
       const byOrder = new Map(detail!.body.cases.map((c) => [c.order, c.status]));
-      expect(byOrder.get(1)).toBe('passed');
-      expect(byOrder.get(2)).toBe('failed');
+      expect(byOrder.get(1)).toBe('failed');
+      expect(byOrder.get(2)).toBe('skipped');
       expect(byOrder.get(3)).toBe('skipped');
     } finally {
       delete process.env.FORCE_FAIL_CASE_IDS;
