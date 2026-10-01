@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
+import Segmented from '../components/ui/Segmented';
 import { fullDateTime } from '../lib/format';
 
 interface StepResult {
@@ -14,11 +16,15 @@ interface StepResult {
   warning?: string;
   screenshot?: string;
   tabIndex?: number;
+  failureReason?: string;
+  humanMessage?: string;
+  hitLocator?: { kind: string; value: string };
 }
 
 export default function ReportDetail() {
   const { id, projectId } = useParams<{ id: string; projectId: string }>();
   const navigate = useNavigate();
+  const [view, setView] = useState<'screenshot' | 'detail'>('screenshot');
   const { data, isLoading } = useQuery({
     queryKey: ['report', id],
     queryFn: () => api.reports.get(id!),
@@ -72,6 +78,14 @@ export default function ReportDetail() {
           测试报告
         </h1>
         <StatusPill status={data.status}>{data.status.toUpperCase()}</StatusPill>
+        <Segmented
+          options={[
+            { value: 'screenshot', label: '截图模式' },
+            { value: 'detail', label: '明细模式' },
+          ]}
+          value={view}
+          onChange={setView}
+        />
         <div className="flex-1" />
         <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
           {fullDateTime(data.createdAt)} · {data.durationMs ?? 0} ms
@@ -87,6 +101,7 @@ export default function ReportDetail() {
                 {data.summary}
               </div>
             )}
+            {view === 'screenshot' ? (
             <div className="glass-card rounded-[12px] overflow-hidden">
               <div className="px-5 py-[10px]" style={{ background: 'var(--color-background-subtle)', borderBottom: '1px solid var(--color-border)' }}>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
@@ -195,6 +210,79 @@ export default function ReportDetail() {
                 </div>
               )}
             </div>
+            ) : (
+            <div className="glass-card rounded-[12px] overflow-hidden">
+              <div className="px-5 py-[10px]" style={{ background: 'var(--color-background-subtle)', borderBottom: '1px solid var(--color-border)' }}>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
+                  明细
+                </span>
+              </div>
+              {stepResults.length === 0 ? (
+                <EmptyState icon="listChecks" title="无步骤结果" />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12px]" style={{ borderCollapse: 'collapse' }}>
+                    <thead style={{ background: 'var(--color-background-subtle)' }}>
+                      <tr style={{ color: 'var(--color-foreground-muted)' }}>
+                        <th className="px-3 py-2 text-left font-medium">#</th>
+                        <th className="px-3 py-2 text-right font-medium">耗时</th>
+                        <th className="px-3 py-2 text-left font-medium">命中 Locator</th>
+                        <th className="px-3 py-2 text-left font-medium">结果</th>
+                        <th className="px-3 py-2 text-left font-medium">失败原因</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stepResults.map((s, i) => (
+                        <tr key={i} style={{ borderTop: '1px solid var(--color-muted)' }}>
+                          <td className="px-3 py-2 font-mono" style={{ color: 'var(--color-foreground-secondary)' }}>
+                            #{s.order}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono" style={{ color: 'var(--color-foreground-muted)' }}>
+                            {s.durationMs} ms
+                          </td>
+                          <td className="px-3 py-2">
+                            {s.hitLocator ? (
+                              <span
+                                className="font-mono text-[11px]"
+                                style={{ color: 'var(--color-foreground-secondary)' }}
+                                title={`${s.hitLocator.kind}: ${s.hitLocator.value}`}
+                              >
+                                {s.hitLocator.kind}
+                              </span>
+                            ) : (
+                              <span style={{ color: 'var(--color-foreground-muted)' }}>—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2" style={{ color: s.status === 'passed' ? 'var(--color-success)' : 'var(--color-destructive)' }}>
+                            {s.status === 'passed' ? '✓ 通过' : '✕ 失败'}
+                          </td>
+                          <td className="px-3 py-2">
+                            {s.status !== 'passed' ? (
+                              <div className="min-w-0">
+                                {s.failureReason && (
+                                  <div className="font-mono text-[11px]" style={{ color: 'var(--color-destructive)' }}>
+                                    {s.failureReason}
+                                  </div>
+                                )}
+                                {s.humanMessage && (
+                                  <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
+                                    {s.humanMessage}
+                                  </div>
+                                )}
+                                {!s.failureReason && !s.humanMessage && <span style={{ color: 'var(--color-foreground-muted)' }}>—</span>}
+                              </div>
+                            ) : (
+                              <span style={{ color: 'var(--color-foreground-muted)' }}>—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            )}
           </div>
 
           {/* Right rail — 统计 */}
