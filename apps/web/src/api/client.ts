@@ -115,7 +115,17 @@ export const api = {
     get: (id: string) => request<TestCaseDetail>(`/cases/${id}`),
     patch: (
       id: string,
-      body: Partial<{ title: string; priority: string; description: string; groupId: string; url: string }>,
+      body: Partial<{
+        title: string;
+        priority: string;
+        description: string;
+        groupId: string;
+        url: string;
+        windowStrategy: string;
+        windowWidth: number;
+        windowHeight: number;
+        incognito: boolean;
+      }>,
     ) => request<TestCase>(`/cases/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/cases/${id}`, { method: 'DELETE' }),
     copy: (id: string, targetGroupId: string) =>
@@ -342,6 +352,10 @@ export interface TestCase {
   requirementId?: string | null;
   createdAt?: string;
   updatedAt?: string;
+  windowStrategy?: string;
+  windowWidth?: number | null;
+  windowHeight?: number | null;
+  incognito?: boolean;
 }
 export interface TestStep {
   id: string;
