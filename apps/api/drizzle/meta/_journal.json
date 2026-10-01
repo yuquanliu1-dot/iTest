@@ -85,6 +85,13 @@
       "when": 1790919300000,
       "tag": "0011_seed-org-admin",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790920000000,
+      "tag": "0012_ai_workspace_scenarios",
+      "breakpoints": true
     }
   ]
 }

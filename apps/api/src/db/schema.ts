@@ -40,8 +40,18 @@ export const testCases = pgTable('test_cases', {
   windowWidth: integer('window_width'),
   windowHeight: integer('window_height'),
   incognito: boolean('incognito').notNull().default(false),
+  scenarioId: uuid('scenario_id').references(() => scenarios.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const scenarios = pgTable('scenarios', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  requirementId: uuid('requirement_id').notNull().references(() => requirements.id, { onDelete: 'cascade' }),
+  title: varchar('title', { length: 200 }).notNull(),
+  description: text('description'),
+  order: integer('order').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
 export const testSteps = pgTable('test_steps', {
