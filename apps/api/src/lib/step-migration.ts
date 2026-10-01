@@ -13,14 +13,21 @@ export function migrateAction(raw: unknown): unknown {
     return action;
   }
 
+  if (kind === 'extract') {
+    // phase 4: 老 extract 步骤无 mode 字段，懒迁移为 completeValue
+    if (action.mode === undefined) action.mode = 'completeValue';
+    if (!('intentLocator' in action)) action.intentLocator = undefined;
+    return action;
+  }
+
   // 含 locator 的所有 kind 都补 intentLocator=undefined（保持字段位置一致）
-  const locatorKinds = new Set(['click', 'fill', 'hover', 'waitFor', 'check', 'select', 'extract']);
+  const locatorKinds = new Set(['click', 'fill', 'hover', 'waitFor', 'check', 'select']);
   if (locatorKinds.has(String(kind))) {
     if (!('intentLocator' in action)) action.intentLocator = undefined;
     return action;
   }
 
-  // 其余 kind（navigate / upload / switchTab / screenshot / aiStep / assertJson / extract）原样返回
+  // 其余 kind（navigate / upload / switchTab / screenshot / aiStep / assertJson）原样返回
   return action;
 }
 
