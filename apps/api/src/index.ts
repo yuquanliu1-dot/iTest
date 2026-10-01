@@ -20,6 +20,7 @@ import { secretsRoute } from './routes/secrets.js';
 import { attachRecorderWs } from './recorder/ws.js';
 import { authRoute } from './routes/auth.js';
 import { organizationsRoute } from './routes/organizations.js';
+import { piRoute } from './pi/router.js';
 import { requireAuth } from './middleware/auth.js';
 
 const app = express();
@@ -48,6 +49,7 @@ app.use('/api/agent-runs', agentRunsRoute);
 app.use('/api/plan-runs', planRunsRoute);
 app.use('/api/executions', executionsRoute);
 app.use('/api/recorder', recorderRoute);
+app.use('/api/pi', piRoute);
 app.use(errorHandler);
 
 const port = Number(process.env.API_PORT ?? 54321);
