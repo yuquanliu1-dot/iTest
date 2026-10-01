@@ -1,4 +1,4 @@
-import { eq, asc } from 'drizzle-orm';
+import { eq, and, asc } from 'drizzle-orm';
 import { chromium } from 'playwright-core';
 import { db } from '../db/client.js';
 import {
@@ -6,6 +6,7 @@ import {
   planCases,
   planRuns,
   planRunCases,
+  testCases,
 } from '../db/schema.js';
 import { runCase } from './runCase.js';
 import { loginPrepare } from './loginPrepare.js';
@@ -48,6 +49,16 @@ function publish(runId: string, evt: StepEvent) {
   publishRunEvent(runId, evt);
 }
 
+/** 登录准备与 incognito 互斥：返回该 plan 下开启 incognito 的 caseId 列表。 */
+export async function findIncognitoCaseIds(planId: string): Promise<string[]> {
+  const rows = await db
+    .select({ id: testCases.id })
+    .from(testCases)
+    .innerJoin(planCases, eq(planCases.caseId, testCases.id))
+    .where(and(eq(planCases.planId, planId), eq(testCases.incognito, true)));
+  return rows.map((r) => r.id);
+}
+
 /** 启动一次计划执行（异步）。调用方立即返回 planRunId。 */
 export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   const { planRunId } = input;
@@ -72,6 +83,16 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
 
   // 登录准备
   if (run.loginPrepareEnabled) {
+    const incognitoIds = await findIncognitoCaseIds(plan.id);
+    if (incognitoIds.length > 0) {
+      await finalizeRun(planRunId, 'failed', {
+        passed: 0, failed: 1, skipped: 0,
+        summary: `incognito 模式与登录准备互斥：${incognitoIds.join(',')}`,
+      });
+      publish(planRunId, { type: 'plan_run_complete', status: 'failed', summary: 'incognito × loginPrepare 互斥' });
+      runState.delete(planRunId);
+      return;
+    }
     const loginCaseId = run.loginCaseId;
     const firstCaseId = cases[0]?.caseId ?? null;
     const result = await loginPrepare(
