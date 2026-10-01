@@ -23,6 +23,42 @@ function sameStep(a: StepClip, b: StepClip): boolean {
   return JSON.stringify(a.action) === JSON.stringify(b.action);
 }
 
+const SWITCHABLE: Record<string, string[]> = {
+  click: ['hover', 'assertText'],
+  hover: ['click'],
+  assertText: ['click'],
+  fill: ['select'],
+  select: ['fill'],
+  waitFor: ['assertVisible'],
+  assertVisible: ['waitFor'],
+};
+
+function webSwitchAction(action: StepClip, to: string): StepClip | null {
+  const from = (action.action as { kind?: string }).kind ?? '';
+  if (!SWITCHABLE[from]?.includes(to)) return null;
+  const next: StepClip = { ...action, action: { ...(action.action as object) } as Record<string, unknown> };
+  const l = (action.action as { locator?: unknown }).locator;
+  const il = (action.action as { intentLocator?: unknown }).intentLocator;
+  switch (to) {
+    case 'hover':
+    case 'click':
+    case 'assertVisible':
+      next.action = { kind: to, locator: l, intentLocator: il };
+      break;
+    case 'assertText':
+      next.action = { kind: 'assertText', locator: l, intentLocator: il, target: 'specifiedElement', match: 'equals', equals: '' };
+      break;
+    case 'fill':
+    case 'select':
+      next.action = { kind: to, locator: l, intentLocator: il, value: ((action.action as { value?: unknown }).value as string) ?? '' };
+      break;
+    case 'waitFor':
+      next.action = { kind: 'waitFor', locator: l, intentLocator: il, timeoutMs: 5000 };
+      break;
+  }
+  return next;
+}
+
 export default function CaseDetail() {
   const { id, projectId } = useParams<{ id: string; projectId: string }>();
   const navigate = useNavigate();
@@ -469,6 +505,24 @@ export default function CaseDetail() {
                             </button>
                           )}
                         <div className="flex items-center gap-1 shrink-0">
+                          <select
+                            value={(s.action as { kind?: string }).kind ?? ''}
+                            disabled={recorder.status === 'recording' || !SWITCHABLE[(s.action as { kind?: string }).kind ?? '']}
+                            onChange={(e) => {
+                              const next = webSwitchAction(toClip(s), e.target.value);
+                              if (!next) {
+                                toast('不支持的类型切换', 'info');
+                                return;
+                              }
+                              mutateSteps((cur) => cur.map((c, i) => (i === idx ? next : c)));
+                            }}
+                            style={{ fontSize: 10, padding: '2px 4px', borderRadius: 4, border: '1px solid var(--color-glass-border)', background: 'var(--color-background-subtle)', color: 'var(--color-foreground)' }}
+                            title="切换步骤类型"
+                          >
+                            {(['click', 'hover', 'fill', 'select', 'check', 'waitFor', 'assertVisible', 'assertText', 'assertJson', 'navigate', 'upload', 'extract', 'aiStep', 'switchTab', 'screenshot'] as const).map((k) => (
+                              <option key={k} value={k}>{k}</option>
+                            ))}
+                          </select>
                           <button
                             onClick={() => moveStep.mutate({ stepId: s.id, dir: -1 })}
                             disabled={idx === 0 || moveStep.isPending}
