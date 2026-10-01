@@ -1,2 +1,3 @@
 export * from './step-dsl.js';
-export * from './value-utils.js';
+export { evaluateGenerator, materializeValue, randomInt, randomString, deepEqual } from './value-utils.js';
+export * from './variable.js';
