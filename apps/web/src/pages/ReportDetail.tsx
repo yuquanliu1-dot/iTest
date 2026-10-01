@@ -119,6 +119,11 @@ export default function ReportDetail() {
                               {s.error}
                             </div>
                           )}
+                          {s.error?.includes('var-missing:') && (
+                            <div className="text-[11px] mt-1" style={{ color: '#b45309' }}>
+                              ↳ 变量未定义：请在该步骤之前添加 extract 步骤抽取该变量，或检查变量名拼写（用例页保存步骤时会显示变量体检提示）。
+                            </div>
+                          )}
                           {s.warning && (
                             <div className="text-[12px] mt-1" style={{ color: '#b45309' }}>
                               ⚠ {s.warning}
@@ -162,6 +167,11 @@ export default function ReportDetail() {
                               {s.error && (
                                 <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>
                                   {s.error}
+                                </div>
+                              )}
+                              {s.error?.includes('var-missing:') && (
+                                <div className="text-[11px] mt-1" style={{ color: '#b45309' }}>
+                                  ↳ 变量未定义：请在该步骤之前添加 extract 步骤抽取该变量，或检查变量名拼写（用例页保存步骤时会显示变量体检提示）。
                                 </div>
                               )}
                               {s.warning && (
