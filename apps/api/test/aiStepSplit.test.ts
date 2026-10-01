@@ -39,4 +39,12 @@ describe('splitByNumber', () => {
   it('keeps prose with "1" mid-sentence intact (not a list)', () => {
     expect(splitByNumber('处理完 1 个项目后点击确定')).toEqual(['处理完 1 个项目后点击确定']);
   });
+
+  it('does not split decimals like "1.5 版本上线"', () => {
+    expect(splitByNumber('1.5 版本上线\n2.3 版本下线')).toEqual(['1.5 版本上线\n2.3 版本下线']);
+  });
+
+  it('splits 、 form without trailing whitespace', () => {
+    expect(splitByNumber('1、第一步\n2、第二步')).toEqual(['第一步', '第二步']);
+  });
 });
