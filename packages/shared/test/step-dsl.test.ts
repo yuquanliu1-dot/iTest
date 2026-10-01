@@ -210,3 +210,139 @@ describe('step-dsl — phase2 new kinds', () => {
     expect(r.success).toBe(true);
   });
 });
+
+describe('step-dsl — phase3 intent locator', () => {
+  it('accepts click action with optional intentLocator', () => {
+    const r = StepAction.safeParse({
+      kind: 'click',
+      locator: [{ strategy: 'css', value: '#btn' }],
+      intentLocator: { semanticRole: 'loginSubmit', contextText: '登录' },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts click action without intentLocator (back-compat)', () => {
+    const r = StepAction.safeParse({
+      kind: 'click',
+      locator: [{ strategy: 'css', value: '#btn' }],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects intentLocator with empty semanticRole', () => {
+    const r = StepAction.safeParse({
+      kind: 'click',
+      locator: [{ strategy: 'css', value: '#btn' }],
+      intentLocator: { semanticRole: '' },
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects intentLocator with oversize contextText', () => {
+    const r = StepAction.safeParse({
+      kind: 'click',
+      locator: [{ strategy: 'css', value: '#btn' }],
+      intentLocator: { semanticRole: 'loginSubmit', contextText: 'x'.repeat(501) },
+    });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe('step-dsl — phase3 assertText target/match', () => {
+  it('accepts assertText with default target/match', () => {
+    const r = StepAction.safeParse({
+      kind: 'assertText',
+      locator: [{ strategy: 'css', value: '.msg' }],
+      equals: 'ok',
+    });
+    expect(r.success).toBe(true);
+    if (r.success && r.data.kind === 'assertText') {
+      expect(r.data.target).toBe('specifiedElement');
+      expect(r.data.match).toBe('equals');
+    }
+  });
+
+  it('accepts assertText with explicit page target + regex match', () => {
+    const r = StepAction.safeParse({
+      kind: 'assertText',
+      locator: [],
+      target: 'page',
+      match: 'regex',
+      equals: '^登录成功',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts assertText with intentLocator', () => {
+    const r = StepAction.safeParse({
+      kind: 'assertText',
+      locator: [{ strategy: 'css', value: '.msg' }],
+      target: 'specifiedElement',
+      match: 'contains',
+      equals: '成功',
+      intentLocator: { semanticRole: 'successMsg' },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects assertText with unknown target', () => {
+    const r = StepAction.safeParse({
+      kind: 'assertText',
+      locator: [{ strategy: 'css', value: '.msg' }],
+      target: 'body',
+      equals: 'x',
+    });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe('step-dsl — phase3 composite value', () => {
+  it('accepts fill with composite value of multiple fragments', () => {
+    const r = StepAction.safeParse({
+      kind: 'fill',
+      locator: [{ strategy: 'css', value: '#name' }],
+      value: {
+        mode: 'composite',
+        fragments: [
+          { mode: 'fixed', value: 'CS' },
+          { mode: 'date', format: 'YYYYMMDD' },
+          { mode: 'randomNumber', length: 3 },
+        ],
+      },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects composite with empty fragments array', () => {
+    const r = StepAction.safeParse({
+      kind: 'fill',
+      locator: [{ strategy: 'css', value: '#name' }],
+      value: { mode: 'composite', fragments: [] },
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects composite when total max length exceeds 1024', () => {
+    const r = StepAction.safeParse({
+      kind: 'fill',
+      locator: [{ strategy: 'css', value: '#name' }],
+      value: {
+        mode: 'composite',
+        fragments: [
+          { mode: 'fixed', value: 'x'.repeat(500) },
+          { mode: 'randomString', length: 1024 },
+        ],
+      },
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects composite fragment with unknown mode', () => {
+    const r = StepAction.safeParse({
+      kind: 'fill',
+      locator: [{ strategy: 'css', value: '#name' }],
+      value: { mode: 'composite', fragments: [{ mode: 'uuid' }] },
+    });
+    expect(r.success).toBe(false);
+  });
+});
