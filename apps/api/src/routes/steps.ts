@@ -202,3 +202,22 @@ stepsRoute.post('/:caseId/steps/recompile', async (req, res) => {
     res.json({ compiled: null });
   }
 });
+
+const CompileExtractBody = z.object({
+  description: z.string().min(1).max(500),
+  sampleText: z.string().min(1).max(5000),
+});
+
+/** 智能抽取编译：根据用户自然语言描述 + 样本文本，调用 LLM 生成正则。失败返回 200 + error 字段。 */
+stepsRoute.post('/:caseId/steps/extract/compile', async (req, res) => {
+  const { description, sampleText } = CompileExtractBody.parse(req.body);
+  const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
+  if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  const { compileExtractRegex } = await import('../lib/extract-compile.js');
+  try {
+    const out = await compileExtractRegex(description, sampleText);
+    res.json(out);
+  } catch (e) {
+    res.json({ pattern: null, group: 0, error: (e as Error).message });
+  }
+});
