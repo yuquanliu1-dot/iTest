@@ -35,6 +35,10 @@ export const testCases = pgTable('test_cases', {
   description: text('description'),
   priority: varchar('priority', { length: 20 }).notNull().default('P1'),
   status: varchar('status', { length: 20 }).notNull().default('draft'),
+  windowStrategy: varchar('window_strategy', { length: 16 }).notNull().default('maximize'),
+  windowWidth: integer('window_width'),
+  windowHeight: integer('window_height'),
+  incognito: boolean('incognito').notNull().default(false),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -76,6 +80,7 @@ export const reports = pgTable('reports', {
   status: varchar('status', { length: 20 }).notNull(),
   durationMs: integer('duration_ms'),
   stepResults: jsonb('step_results').notNull(),
+  preflight: jsonb('preflight'),
   summary: text('summary'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
