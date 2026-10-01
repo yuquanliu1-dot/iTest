@@ -109,6 +109,14 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
   );
   // extract
   const [varName, setVarName] = useState(String(action.varName ?? ''));
+  const [extractMode, setExtractMode] = useState<'completeValue' | 'smartExtract' | 'regex'>(
+    ((action as { mode?: 'completeValue' | 'smartExtract' | 'regex' }).mode) ?? 'completeValue',
+  );
+  const [extractPattern, setExtractPattern] = useState(String((action as { pattern?: string }).pattern ?? ''));
+  const [extractGroup, setExtractGroup] = useState(String((action as { group?: number }).group ?? '1'));
+  const [extractDescription, setExtractDescription] = useState(String((action as { description?: string }).description ?? ''));
+  const [compiling, setCompiling] = useState(false);
+  const [compileErr, setCompileErr] = useState('');
   // aiStep
   const [instruction, setInstruction] = useState(String(action.instruction ?? ''));
   // navigate
@@ -230,6 +238,34 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
         return;
       }
       next.varName = varName.trim();
+      next.mode = extractMode;
+      if (extractMode === 'regex') {
+        if (!extractPattern.trim()) {
+          setError('正则匹配需要填写正则表达式');
+          return;
+        }
+        next.pattern = extractPattern.trim();
+        next.group = Number(extractGroup) >= 0 ? Number(extractGroup) : 0;
+      } else if (extractMode === 'smartExtract') {
+        if (!extractDescription.trim() && !extractPattern.trim()) {
+          setError('智能抽取需要填写描述并生成正则');
+          return;
+        }
+        if (extractDescription.trim()) next.description = extractDescription.trim();
+        else delete next.description;
+        // 已生成的 pattern/group 保留（回放按 regex 执行）；未生成则回放走 completeValue 兜底
+        if (extractPattern.trim()) {
+          next.pattern = extractPattern.trim();
+          next.group = Number(extractGroup) >= 0 ? Number(extractGroup) : 0;
+        } else {
+          delete next.pattern;
+          delete next.group;
+        }
+      } else {
+        delete next.pattern;
+        delete next.group;
+        delete next.description;
+      }
     }
     if (kind === 'aiStep') {
       if (!instruction.trim()) {
@@ -259,6 +295,10 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
     boxSizing: 'border-box', marginTop: 4,
   };
   const labelStyle: CSSProperties = { fontSize: 11, color: 'var(--color-foreground-muted)' };
+  const buttonSecondaryStyle: CSSProperties = {
+    fontSize: 11, padding: '4px 8px', borderRadius: 5, border: '1px dashed var(--color-glass-border)',
+    background: 'transparent', color: 'var(--color-foreground-muted)', cursor: 'pointer', alignSelf: 'flex-start',
+  };
 
   return (
     <div
@@ -479,10 +519,75 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
             </label>
           )}
           {kind === 'extract' && (
-            <label style={labelStyle}>
-              变量名
-              <input style={inputStyle} value={varName} onChange={(e) => setVarName(e.target.value)} />
-            </label>
+            <div className="flex flex-col gap-2">
+              <label style={labelStyle}>
+                变量名
+                <input style={inputStyle} value={varName} onChange={(e) => setVarName(e.target.value)} />
+              </label>
+              <label style={labelStyle}>
+                抽取方式
+                <select style={inputStyle} value={extractMode} onChange={(e) => setExtractMode(e.target.value as typeof extractMode)}>
+                  <option value="completeValue">完整值（元素文本/input 值）</option>
+                  <option value="smartExtract">智能抽取（按描述生成正则）</option>
+                  <option value="regex">正则匹配</option>
+                </select>
+              </label>
+              {extractMode === 'regex' && (
+                <div className="flex gap-2">
+                  <label style={{ ...labelStyle, flex: 3 }}>
+                    正则
+                    <input style={{ ...inputStyle, fontFamily: 'monospace' }} value={extractPattern} onChange={(e) => setExtractPattern(e.target.value)} placeholder="如 ORD-\d+" />
+                  </label>
+                  <label style={{ ...labelStyle, flex: 1 }}>
+                    捕获组
+                    <input style={inputStyle} value={extractGroup} onChange={(e) => setExtractGroup(e.target.value)} inputMode="numeric" placeholder="0" />
+                  </label>
+                </div>
+              )}
+              {extractMode === 'smartExtract' && (
+                <div className="flex flex-col gap-2">
+                  <label style={labelStyle}>
+                    抽取描述（自然语言）
+                    <textarea style={{ ...inputStyle, fontFamily: 'inherit' }} rows={2} value={extractDescription} onChange={(e) => setExtractDescription(e.target.value)} placeholder="如：提取订单号" />
+                  </label>
+                  <button
+                    onClick={async () => {
+                      if (!caseId) {
+                        setCompileErr('缺少 caseId，无法编译');
+                        return;
+                      }
+                      const sampleText = window.prompt('请粘贴一段包含目标片段的样本文本', '');
+                      if (!sampleText) return;
+                      setCompiling(true);
+                      setCompileErr('');
+                      try {
+                        const r = await api.cases.compileExtract(caseId, { description: extractDescription.trim(), sampleText });
+                        if (r.pattern) {
+                          setExtractPattern(r.pattern);
+                          setExtractGroup(String(r.group ?? 0));
+                        } else {
+                          setCompileErr(r.error ?? '编译失败');
+                        }
+                      } catch (err) {
+                        setCompileErr((err as Error).message);
+                      } finally {
+                        setCompiling(false);
+                      }
+                    }}
+                    disabled={compiling}
+                    style={{ ...buttonSecondaryStyle, cursor: compiling ? 'wait' : 'pointer' }}
+                  >
+                    {compiling ? '编译中…' : '生成正则'}
+                  </button>
+                  {compileErr && <p className="text-[11px]" style={{ color: 'var(--color-destructive)' }}>{compileErr}</p>}
+                  {extractPattern && (
+                    <p className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }}>
+                      已生成正则：{extractPattern}（捕获组 {extractGroup}，保存后回放按正则执行）
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
           )}
           {kind === 'aiStep' && (
             <label style={labelStyle}>
