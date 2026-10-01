@@ -201,6 +201,10 @@ export const api = {
       }
       return r.json() as Promise<{ id: string; originalName: string; size: number; sha256: string }>;
     },
+    list: (caseId: string) =>
+      request<Array<{ id: string; originalName: string; size: number; mime: string | null; sha256: string; createdAt: string }>>(
+        `/cases/${caseId}/attachments`,
+      ),
   },
   secrets: {
     fetch: (caseId: string, stepId: string, token: string) =>

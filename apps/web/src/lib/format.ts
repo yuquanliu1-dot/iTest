@@ -8,3 +8,16 @@ export function shortDateTime(iso: string): string {
 export function fullDateTime(iso: string): string {
   return new Date(iso).toLocaleString('zh-CN');
 }
+
+/** 字节数 → 人类可读（1.2 KB / 3.4 MB）。与 iDO 文件大小同口径。 */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let v = bytes / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`;
+}
