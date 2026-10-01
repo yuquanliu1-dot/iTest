@@ -302,6 +302,55 @@ describe('cases + steps', () => {
     expect(r.status).toBe(200);
   });
 
+  it('PUT rejects upload step referencing a fileId from another project', async () => {
+    // Two separate projects → two separate groups/cases
+    const { groupId: gA } = await seedProject(pool);
+    const cA = await request(app).post('/api/cases').send({ title: 'A', groupId: gA });
+    const { groupId: gB } = await seedProject(pool);
+    const cB = await request(app).post('/api/cases').send({ title: 'B', groupId: gB });
+    // Upload under case A
+    const up = await request(app)
+      .post(`/api/cases/${cA.body.id}/attachments`)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Filename', 'a.txt')
+      .send(Buffer.from('alpha'));
+    const foreignFileId = up.body.id;
+    // Try to bind that fileId to a step on case B (different project)
+    const r = await request(app).put(`/api/cases/${cB.body.id}/steps`).send({
+      steps: [
+        {
+          action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: foreignFileId },
+          source: 'manual',
+        },
+      ],
+    });
+    expect(r.status).toBe(422);
+    expect(r.body.error).toBe('upload_unknown_file');
+  });
+
+  it('PUT accepts upload step referencing a fileId from the same project but a different case', async () => {
+    const { projectId, groupId } = await seedProject(pool);
+    const cA = await request(app).post('/api/cases').send({ title: 'A', groupId });
+    const other = await pool.query(`INSERT INTO test_cases(group_id, title) VALUES ($1, 'Other') RETURNING id`, [groupId]);
+    const caseB = other.rows[0]!.id as string;
+    const up = await request(app)
+      .post(`/api/cases/${cA.body.id}/attachments`)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Filename', 'shared.txt')
+      .send(Buffer.from('shared'));
+    const r = await request(app).put(`/api/cases/${caseB}/steps`).send({
+      steps: [
+        {
+          action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: up.body.id },
+          source: 'manual',
+        },
+      ],
+    });
+    expect(r.status).toBe(200);
+    // sanity: projectId is the same
+    expect(projectId).toBeDefined();
+  });
+
   it('GET /api/cases/:id/steps/secrets/:stepId returns plaintext for recorder token', async () => {
     process.env.RECORDER_TOKEN_SECRET = 'dev-secret-change-me';
     const { groupId } = await seedProject(pool);
