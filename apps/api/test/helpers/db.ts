@@ -34,6 +34,8 @@ DO $$ BEGIN
  ALTER TABLE test_cases ADD CONSTRAINT test_cases_scenario_id_scenarios_id_fk FOREIGN KEY (scenario_id) REFERENCES scenarios(id) ON DELETE SET NULL;
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
+CREATE TABLE ai_threads (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), requirement_id uuid REFERENCES requirements(id) ON DELETE CASCADE NOT NULL UNIQUE, pi_thread_id text NOT NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
+CREATE TABLE ai_workspace_state (requirement_id uuid PRIMARY KEY REFERENCES requirements(id) ON DELETE CASCADE, doc jsonb NOT NULL, updated_at timestamp NOT NULL DEFAULT now());
 `;
 
 export interface SeedOrg {

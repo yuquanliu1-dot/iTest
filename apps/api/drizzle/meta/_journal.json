@@ -92,6 +92,13 @@
       "when": 1790920000000,
       "tag": "0012_ai_workspace_scenarios",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790930000000,
+      "tag": "0014_ai_threads_workspace",
+      "breakpoints": true
     }
   ]
 }
