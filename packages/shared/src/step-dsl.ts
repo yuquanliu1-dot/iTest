@@ -137,12 +137,23 @@ export const AssertJsonAction = z.object({
   intentLocator: IntentLocator.optional(),
   equals: z.unknown(),
 });
+export const ExtractMode = z.enum(['completeValue', 'smartExtract', 'regex']);
+export type ExtractMode = z.infer<typeof ExtractMode>;
+
 export const ExtractAction = z.object({
   kind: z.literal('extract'),
   locator: z.array(Locator).min(1),
   intentLocator: IntentLocator.optional(),
-  varName: z.string().min(1).max(100),
+  varName: z.string().min(1).max(64),
+  mode: ExtractMode.default('completeValue'),
+  /** regex 模式必填；smartExtract 模式由后端一次编译后写入。 */
+  pattern: z.string().min(1).max(500).optional(),
+  /** regex 模式下的捕获组 1-based；0 表示整个 match。 */
+  group: z.number().int().min(0).max(10).optional(),
+  /** smartExtract 模式用户输入的自然语言描述，仅 UI 展示。 */
+  description: z.string().max(500).optional(),
 });
+export type ExtractAction = z.infer<typeof ExtractAction>;
 
 export type StepAction =
   | z.infer<typeof NavigateAction>
