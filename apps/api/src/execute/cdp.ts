@@ -1,5 +1,5 @@
 import { chromium, type Browser, type Page } from 'playwright-core';
-import type { StepAction, Locator, IntentLocator } from '@itest/shared';
+import type { StepAction, Locator, IntentLocator, FailureReason, PreflightReport, HitLocator } from '@itest/shared';
 import { deepEqual, materializeValue, substituteVars } from '@itest/shared';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -9,6 +9,10 @@ import { logger } from '../logger.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildCandidates } from './locator-resolver.js';
+import { waitForStable, ElementNotStable } from './stability.js';
+import { classify } from './failureClassifier.js';
+import { preflight } from './preflight.js';
+import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
 
@@ -31,6 +35,14 @@ export interface ExecStepResult {
   error?: string;
   screenshot?: string;
   warning?: string;
+  /** 失败归类（failureClassifier 产出）；成功步为空 */
+  failureReason?: FailureReason;
+  /** 面向用户的失败说明 */
+  humanMessage?: string;
+  /** 本步实际命中的定位 kind/value */
+  hitLocator?: HitLocator;
+  /** switchTab 目标页在 tabMap 中的序号；非 tab 步为 0 */
+  tabIndex?: number;
 }
 
 export interface ExecContext {
@@ -51,6 +63,53 @@ interface DispatchOpts {
   ctx: ExecContext;
   /** 当前步骤 id（敏感填充解密用） */
   stepId?: string;
+  /** 记录本步命中的定位 kind/value（由 tryFirstMatch 写入） */
+  hitSink?: { current: HitLocator | null };
+}
+
+/** 交互动作：执行前先做稳定性检查 */
+const INTERACTIVE_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select', 'upload'];
+/** 稳定性检查不过时可尝试 DOM 降级的动作 */
+const DOM_FALLBACK_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select'];
+
+/** DOM 降级：元素不稳定时绕过 playwright 直接在页面里派发事件。仅支持 click/fill/check/select。 */
+async function tryDomFallback(action: StepAction, opts: DispatchOpts): Promise<{ ok: boolean; error?: string }> {
+  const { page, vars } = opts;
+  switch (action.kind) {
+    case 'click':
+      return domClick(page, action.locator);
+    case 'fill':
+      return domFill(page, action.locator, materializeValue(action.value ?? '', vars));
+    case 'check':
+      return domCheck(page, action.locator, action.checked);
+    case 'select':
+      return domSelect(page, action.locator, materializeValue(action.value, vars));
+    default:
+      return { ok: false, error: 'unsupported' };
+  }
+}
+
+/** 交互动作前置稳定性检查；不稳定时尝试 DOM 降级，降级也失败则抛 ElementNotStable。 */
+async function ensureStable(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
+  try {
+    // waitForStable 的 locator 参数当前未使用；不传 page.locator('body') 以避免多余的探测调用。
+    await waitForStable(opts.page, undefined as never, { timeoutMs: 2000, pollMs: 100 });
+    return undefined;
+  } catch (e) {
+    if (!(e instanceof ElementNotStable)) {
+      // 探测本身失败（evaluate 不可用等）→ 无法评估稳定性，放行由动作自身的超时兜底。
+      return undefined;
+    }
+    if (
+      DOM_FALLBACK_KINDS.includes(action.kind) &&
+      // 敏感填充的明文只有 secretResolver 能解，DOM 降级会写入占位符，故跳过降级。
+      !(action.kind === 'fill' && action.sensitive)
+    ) {
+      const r = await tryDomFallback(action, opts);
+      if (r.ok) return 'dom-fallback';
+    }
+    throw e;
+  }
 }
 
 /** 默认附件解析：按 fileId 查 test_attachments（非 UUID 直接 miss，避免 22P02）。
@@ -107,6 +166,11 @@ function locatorToPlaywright(page: Page, loc: Locator) {
 /** 执行单步；返回 warning 文本（无则 undefined）。失败抛错由调用方记 failed。 */
 async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
   const { page, vars } = opts;
+  // 交互动作前置稳定性检查；不稳定且 DOM 降级成功时以 warning 短路返回。
+  if (INTERACTIVE_KINDS.includes(action.kind)) {
+    const stableWarning = await ensureStable(action, opts);
+    if (stableWarning) return stableWarning;
+  }
   switch (action.kind) {
     case 'navigate': {
       const { value, missing } = substituteVars(action.url, vars);
@@ -115,7 +179,7 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       return;
     }
     case 'click':
-      await (await tryFirstMatch(page, action.locator, action.intentLocator)).click({ timeout: 5000 });
+      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).click({ timeout: 5000 });
       return;
     case 'fill': {
       let value: string;
@@ -134,17 +198,17 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
         }
         value = materializeValue(action.value, vars);
       }
-      await (await tryFirstMatch(page, action.locator, action.intentLocator)).fill(value, { timeout: 5000 });
+      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).fill(value, { timeout: 5000 });
       return;
     }
     case 'hover':
-      await (await tryFirstMatch(page, action.locator, undefined)).hover({ timeout: 5000 });
+      await (await tryFirstMatch(page, action.locator, undefined, opts.hitSink)).hover({ timeout: 5000 });
       return;
     case 'waitFor':
-      await (await tryFirstMatch(page, action.locator, action.intentLocator)).waitFor({ state: 'visible', timeout: action.timeoutMs ?? 5000 });
+      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).waitFor({ state: 'visible', timeout: action.timeoutMs ?? 5000 });
       return;
     case 'assertVisible':
-      if (!(await (await tryFirstMatch(page, action.locator, action.intentLocator)).isVisible({ timeout: 5000 }))) {
+      if (!(await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).isVisible({ timeout: 5000 }))) {
         throw new Error(`assertVisible failed: ${action.locator[0]?.value}`);
       }
       return;
@@ -152,7 +216,7 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       const a = action as StepAction & { kind: 'assertText' };
       const { value, missing } = substituteVars(a.equals, vars);
       if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${a.equals}")`);
-      const actual = await resolveAssertTextActual(page, a);
+      const actual = await resolveAssertTextActual(page, a, opts.hitSink);
       const ok = matchAssertText(actual, value, a.match ?? 'equals');
       if (!ok) {
         throw new Error(`assertText failed (${a.target ?? 'specifiedElement'}/${a.match ?? 'equals'}): expected ${JSON.stringify(value)}, actual ${JSON.stringify(actual.slice(0, 100))}`);
@@ -167,7 +231,7 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       if (missingJson.length > 0) {
         throw new Error(`var-missing: {{${missingJson[0]!}}} (template="${JSON.stringify(action.equals).slice(0, 100)}")`);
       }
-      const text = (await (await tryFirstMatch(page, action.locator, action.intentLocator)).innerText({ timeout: 5000 })).trim();
+      const text = (await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).innerText({ timeout: 5000 })).trim();
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -192,7 +256,7 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       return;
     }
     case 'check': {
-      const loc = await tryFirstMatch(page, action.locator, action.intentLocator);
+      const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
       const current = await loc.isChecked({ timeout: 5000 });
       if (current !== action.checked) {
         if (action.checked) await loc.check({ timeout: 5000 });
@@ -203,7 +267,7 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
     case 'select': {
       const { value, missing } = substituteVars(action.value, vars);
       if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.value}")`);
-      await (await tryFirstMatch(page, action.locator, action.intentLocator)).selectOption(value, { timeout: 5000 });
+      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).selectOption(value, { timeout: 5000 });
       return;
     }
     case 'upload': {
@@ -211,19 +275,33 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
         ? await opts.ctx.attachmentResolver(action.fileId)
         : await defaultAttachmentResolver(action.fileId, opts.ctx.projectId);
       if (!meta) throw new Error(`attachment-missing: ${action.fileId}`);
-      await (await tryFirstMatch(page, action.locator, action.intentLocator)).setInputFiles(meta.storedPath, { timeout: 5000 });
+      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).setInputFiles(meta.storedPath, { timeout: 5000 });
       return;
     }
     case 'switchTab': {
-      const target = opts.ctx.tabMap?.get(action.tabRef);
-      if (!target) throw new Error(`tab-missing: ${action.tabRef}`);
+      let target = opts.ctx.tabMap?.get(action.tabRef);
+      if (!target) {
+        // 模糊匹配兜底：tabMap 未命中时取 context 中最后一个 page。
+        try {
+          const pages = page.context().pages();
+          if (pages.length > 0) target = pages[pages.length - 1]!;
+        } catch {
+          // context 不可用（已关闭/测试桩）→ 维持 tab-missing 语义
+        }
+        if (!target) throw new Error(`tab-missing: ${action.tabRef}`);
+        opts.ctx.tabMap?.set(action.tabRef, target);
+        await target.bringToFront();
+        // 后续步骤（含截图）都落在切换后的页面上。
+        opts.page = target;
+        return 'tab-fuzzy-match';
+      }
       await target.bringToFront();
       // 后续步骤（含截图）都落在切换后的页面上。
       opts.page = target;
       return;
     }
     case 'extract': {
-      const loc = await tryFirstMatch(page, action.locator, action.intentLocator);
+      const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
       let text: string;
       try {
         text = await loc.inputValue({ timeout: 5000 });
@@ -267,15 +345,32 @@ function firstMatch(page: Page, locators: Locator[]) {
   return locatorToPlaywright(page, locators[0]!);
 }
 
+/** 依命中的候选 kind 反解出可读的定位表达式（用于报告展示）。 */
+function locatorForCandidate(locator: Locator[], intent: IntentLocator | undefined, kind: string): string {
+  if (kind === 'intent-testid' && intent?.semanticRole) return `[data-testid="${intent.semanticRole}"]`;
+  if (kind === 'intent-text' && intent?.contextText) return `text=${intent.contextText}`;
+  for (const l of locator) {
+    if (kind === 'stable-css' && l.strategy === 'css') return l.value;
+    if (kind === 'css' && l.strategy === 'css') return l.value;
+    if (kind === 'xpath' && l.strategy === 'xpath') return l.value;
+    if (kind === 'role' && l.strategy === 'role') return l.value;
+    if (kind === 'text' && l.strategy === 'text') return l.value;
+    if (kind === 'testId' && l.strategy === 'testId') return l.value;
+  }
+  return kind;
+}
+
 /**
  * 三层定位候选顺序尝试；任一成功即返回。所有候选失败抛错。
  * 使用 buildCandidates 构造候选；优先用 intent.testid / contextText，再稳定 #id CSS，最后是 XPath / 其它 CSS。
  * 候选探测通过 count()，避免后续动作（如 click）抛错；text/role 路径可能没有 count()，接受即成功。
+ * 命中时把候选 kind/value 写入 hitSink（若提供），供 step 结果记录 hitLocator。
  */
 async function tryFirstMatch(
   page: Page,
   locator: Locator[],
   intentLocator?: IntentLocator,
+  hitSink?: { current: HitLocator | null },
 ): Promise<ReturnType<Page['locator']>> {
   const cands = buildCandidates(page, { locator, intentLocator });
   if (cands.length === 0) {
@@ -287,7 +382,10 @@ async function tryFirstMatch(
     if (probe && typeof probe.count === 'function') {
       try {
         const n = await probe.count();
-        if (n > 0) return c.loc;
+        if (n > 0) {
+          if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
+          return c.loc;
+        }
         lastErr = new Error(`count=0 (${c.kind})`);
       } catch (e) {
         lastErr = e;
@@ -295,6 +393,7 @@ async function tryFirstMatch(
       continue;
     }
     // 没有 count()（如 getByText 路径）直接接受
+    if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
     return c.loc;
   }
   throw lastErr instanceof Error ? lastErr : new Error('all locator candidates failed');
@@ -304,6 +403,7 @@ async function tryFirstMatch(
 async function resolveAssertTextActual(
   page: Page,
   action: StepAction & { kind: 'assertText' },
+  hitSink?: { current: HitLocator | null },
 ): Promise<string> {
   const target = action.target ?? 'specifiedElement';
   if (target === 'page') {
@@ -320,7 +420,7 @@ async function resolveAssertTextActual(
   }
   // specifiedElement（默认）
   if (action.locator.length === 0) throw new Error('assertText: specifiedElement 模式需要 locator');
-  const loc = await tryFirstMatch(page, action.locator, action.intentLocator);
+  const loc = await tryFirstMatch(page, action.locator, action.intentLocator, hitSink);
   return (await loc.innerText({ timeout: 5000 })).trim();
 }
 
@@ -347,7 +447,9 @@ async function writeStepScreenshot(reportId: string, stepIndex: number, page: Pa
   }
 }
 
-/** 真实浏览器执行用例（playwright-core 驱动 chromium）。返回 step 粒度的执行结果。 */
+/** 真实浏览器执行用例（playwright-core 驱动 chromium）。返回 step 粒度的执行结果。
+ * onPreflight：执行前 preflight 检查报告的旁路回调（由 runCase 层决定是否落库），
+ * 保持既有返回签名（ExecStepResult[]）不变以兼容既有调用方。 */
 export async function executeCaseReal(
   caseId: string,
   steps: Array<{
@@ -362,6 +464,7 @@ export async function executeCaseReal(
   ctx: ExecContext,
   targetUrl?: string,
   storageState?: unknown,
+  onPreflight?: (report: PreflightReport) => void,
 ): Promise<ExecStepResult[]> {
   let browser: Browser | undefined;
   const results: ExecStepResult[] = [];
@@ -379,11 +482,21 @@ export async function executeCaseReal(
     if (targetUrl) {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
+    // preflight：执行前置检查（URL 可达 / 登录态 / 标签页 / origin）。失败不阻塞执行。
+    try {
+      const report = await preflight(page, { url: targetUrl ?? null, title: '' });
+      onPreflight?.(report);
+    } catch (e) {
+      logger.warn({ err: e, caseId }, 'preflight failed; continuing');
+    }
     const opts: DispatchOpts = { page, vars, ctx };
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]!;
       const started = Date.now();
       opts.stepId = step.id;
+      opts.hitSink = { current: null };
+      const tabIndex =
+        ctx.tabMap && step.tabRef ? Array.from(ctx.tabMap.keys()).indexOf(step.tabRef) : 0;
       try {
         if (step.delayMs) await opts.page.waitForTimeout(step.delayMs);
         const warning = await dispatch(step.action as StepAction, opts);
@@ -394,15 +507,23 @@ export async function executeCaseReal(
           durationMs: Date.now() - started,
           warning,
           screenshot,
+          hitLocator: opts.hitSink.current ?? undefined,
+          tabIndex: tabIndex >= 0 ? tabIndex : 0,
         });
       } catch (e) {
+        const durationMs = Date.now() - started;
         const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
+        const classified = classify(e, { action: step.action as StepAction, durationMs });
         results.push({
           order: step.order,
           status: 'failed',
-          durationMs: Date.now() - started,
+          durationMs,
           error: e instanceof Error ? e.message : String(e),
           screenshot,
+          failureReason: classified.reason,
+          humanMessage: classified.humanMessage,
+          hitLocator: opts.hitSink.current ?? undefined,
+          tabIndex: tabIndex >= 0 ? tabIndex : 0,
         });
         // 失败立即终止，避免后续步骤被前一步污染的页面状态搞乱。
         break;
