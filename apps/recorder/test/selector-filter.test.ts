@@ -22,4 +22,12 @@ describe('selector-filter', () => {
     const out = filterCssPath('button.active');
     expect(out.length).toBeGreaterThan(0);
   });
+  it('filterCssPath strips runtime id segments but preserves tag and stable class', () => {
+    // 整段只剩 tag 时仍保留片段（不要把 button#login-7f9c3a 整段删掉）。
+    expect(filterCssPath('button#login-7f9c3a')).toBe('button');
+    expect(filterCssPath('div#__BV_btn_24.ivu-btn-large')).toBe('div.ivu-btn-large');
+    expect(filterCssPath('input#root-abc123.form-control')).toBe('input.form-control');
+    // 稳定 id 不应被误删。
+    expect(filterCssPath('button#login')).toBe('button#login');
+  });
 });
