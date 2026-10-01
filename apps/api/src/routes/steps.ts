@@ -8,6 +8,7 @@ import { HttpError } from '../middleware/errorHandler.js';
 import { compileAiStep, compileAiStepsInPlace } from '../agent/aiStepCompile.js';
 import { encrypt, ensureKeyLoaded } from '../lib/secret-crypto.js';
 import { migrateAction } from '../lib/step-migration.js';
+import { buildVariableReport } from '../lib/variable-report.js';
 
 export const stepsRoute = Router();
 
@@ -29,6 +30,14 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
   const failedAi = await compileAiStepsInPlace(body.steps.map((s) => ({ action: s.action })));
+  const variableReport = buildVariableReport(body.steps.map((s) => s.action));
+  if (variableReport.regexIssues.length > 0) {
+    throw new HttpError(
+      422,
+      'variable_regex_unsafe',
+      variableReport.regexIssues.map((i) => `step ${i.stepOrder + 1}: ${i.reason}`).join('; '),
+    );
+  }
   const rows = await db
     .insert(testSteps)
     .values(
@@ -46,7 +55,7 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
     .from(testSteps)
     .where(eq(testSteps.caseId, req.params.caseId))
     .orderBy(asc(testSteps.order));
-  res.json({ count: rows.length, steps: sorted, failedAi });
+  res.json({ count: rows.length, steps: sorted, failedAi, variableReport });
 });
 
 const ReorderBody = z.object({ stepIds: z.array(z.string().uuid()).min(1) });
@@ -136,6 +145,14 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
     }
   }
   const failedAi = await compileAiStepsInPlace(body.steps.map((s) => ({ action: s.action })));
+  const variableReport = buildVariableReport(body.steps.map((s) => s.action));
+  if (variableReport.regexIssues.length > 0) {
+    throw new HttpError(
+      422,
+      'variable_regex_unsafe',
+      variableReport.regexIssues.map((i) => `step ${i.stepOrder + 1}: ${i.reason}`).join('; '),
+    );
+  }
   const rows = await db.transaction(async (tx) => {
     await tx.delete(testSteps).where(eq(testSteps.caseId, req.params.caseId));
     if (body.steps.length === 0) return [];
@@ -171,7 +188,7 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
       )
       .returning();
   });
-  res.json({ steps: rows.sort((a, b) => a.order - b.order), failedAi });
+  res.json({ steps: rows.sort((a, b) => a.order - b.order), failedAi, variableReport });
 });
 
 /** 单独编译一条 AI 指令（步骤编辑页「重新编译」）。失败返回 compiled: null，不抛错。 */
