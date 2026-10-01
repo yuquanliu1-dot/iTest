@@ -17,10 +17,11 @@ import { shortDateTime } from '../lib/format';
 
 const PRIORITIES = ['', 'P0', 'P1', 'P2', 'P3'] as const;
 const DEFAULT_PAGE_SIZE = 20;
-const GRID_COLS = 'grid-cols-[minmax(28px,32px)_minmax(90px,70px)_minmax(200px,2fr)_minmax(120px,1fr)_minmax(90px,0.7fr)_minmax(100px,0.9fr)]';
+const GRID_COLS = 'grid-cols-[minmax(28px,32px)_minmax(90px,70px)_minmax(200px,2fr)_minmax(120px,1fr)_minmax(120px,0.9fr)_minmax(90px,0.7fr)_minmax(100px,0.9fr)_minmax(70px,80px)]';
 
 type GroupForm = { open: boolean; mode: 'create' | 'edit' | 'url'; id: string | null; name: string; defaultUrl: string };
 const EMPTY_GROUP_FORM: GroupForm = { open: false, mode: 'create', id: null, name: '', defaultUrl: '' };
+type AiForm = { open: boolean; title: string; content: string };
 
 export default function GroupsPage() {
   const { projectId, groupId } = useParams<{ projectId: string; groupId: string }>();
@@ -40,6 +41,7 @@ export default function GroupsPage() {
   const [copyTarget, setCopyTarget] = useState('');
   const [planTarget, setPlanTarget] = useState('');
   const [confirmDeleteCase, setConfirmDeleteCase] = useState<{ id: string; title: string } | null>(null);
+  const [aiForm, setAiForm] = useState<AiForm>({ open: false, title: '', content: '' });
 
   const { data: groups, isLoading: groupsLoading } = useQuery({
     queryKey: ['groups', projectId],
@@ -150,6 +152,16 @@ export default function GroupsPage() {
   const total = cases?.length ?? 0;
   const allChecked = rows.length > 0 && rows.every((c) => checked.has(c.id));
 
+  const createRequirement = useMutation({
+    mutationFn: () => api.projects.createRequirement(projectId!, { title: aiForm.title, content: aiForm.content }),
+    onSuccess: (r) => {
+      toast('已创建需求，开始 AI 会话', 'success');
+      setAiForm({ open: false, title: '', content: '' });
+      navigate(`/p/${projectId}/ai/${r.id}`);
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
   const toggleAll = () => {
     const next = new Set(checked);
     if (allChecked) rows.forEach((c) => next.delete(c.id));
@@ -258,11 +270,17 @@ export default function GroupsPage() {
               {effectiveGroupId ? (groupName.get(effectiveGroupId) ?? '分组') : '项目全部用例'} · {current?.name}
             </p>
           </div>
-          <Segmented
-            options={PRIORITIES.map((p) => ({ value: p, label: p || '全部' }))}
-            value={priority}
-            onChange={(v) => { setPriority(v); setPage(1); }}
-          />
+          <div className="flex items-center gap-3">
+            <Button onClick={() => setAiForm({ open: true, title: '', content: '' })}>
+              <Icon name="bolt" size={12} />
+              AI 创建用例
+            </Button>
+            <Segmented
+              options={PRIORITIES.map((p) => ({ value: p, label: p || '全部' }))}
+              value={priority}
+              onChange={(v) => { setPriority(v); setPage(1); }}
+            />
+          </div>
         </div>
 
         {/* 批量操作条 */}
@@ -295,7 +313,7 @@ export default function GroupsPage() {
               <span style={{ marginLeft: 8 }}>加载中...</span>
             </div>
           ) : rows.length === 0 ? (
-            <EmptyState icon="beaker" title="还没有用例" description="到需求详情页，用 AI 从需求生成用例。" />
+            <EmptyState icon="beaker" title="还没有用例" description="点击右上角「AI 创建用例」，粘贴需求让 AI 生成。" />
           ) : (
             <>
               <div className={`grid ${GRID_COLS} items-center px-5 py-[10px] shrink-0 gap-2`} style={{ background: 'var(--color-background-subtle)', borderBottom: '1px solid var(--color-border)' }}>
@@ -303,8 +321,10 @@ export default function GroupsPage() {
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>优先级</span>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>标题</span>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>所属分组</span>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>场景</span>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>状态</span>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>更新时间</span>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em] text-right" style={{ color: 'var(--color-foreground-muted)' }}>操作</span>
               </div>
 
               <div className="flex-1 min-h-0 overflow-y-auto">
@@ -323,31 +343,35 @@ export default function GroupsPage() {
                       aria-label={`选择 ${c.title}`}
                     />
                     <span><PriorityBadge priority={c.priority} /></span>
-                    <span className="flex items-center gap-2 min-w-0">
-                      <span className="text-[13px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>{c.title}</span>
-                      <span className="hidden group-hover:inline-flex" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          title="复制"
-                          onClick={() => { setCopyTarget(''); setCopyModal({ caseIds: [c.id] }); }}
-                          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
-                        >
-                          <Icon name="copy" size={12} />
-                        </button>
-                        <button
-                          title="删除"
-                          onClick={() => setConfirmDeleteCase({ id: c.id, title: c.title })}
-                          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 2 }}
-                        >
-                          <Icon name="trash" size={12} />
-                        </button>
-                      </span>
-                    </span>
+                    <span className="text-[13px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>{c.title}</span>
                     <span className="text-[12px] truncate" style={{ color: 'var(--color-foreground-secondary)' }}>
                       {c.groupId ? (groupName.get(c.groupId) ?? '-') : '-'}
+                    </span>
+                    <span className="text-[12px] truncate" style={{ color: 'var(--color-foreground-muted)' }} title={c.scenarioTitle ?? undefined}>
+                      {c.scenarioTitle ?? '-'}
                     </span>
                     <span><StatusPill status={c.status}>{c.status}</StatusPill></span>
                     <span className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }} title={c.updatedAt}>
                       {c.updatedAt ? shortDateTime(c.updatedAt) : '-'}
+                    </span>
+                    <span
+                      className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        title="复制"
+                        onClick={() => { setCopyTarget(''); setCopyModal({ caseIds: [c.id] }); }}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
+                      >
+                        <Icon name="copy" size={12} />
+                      </button>
+                      <button
+                        title="删除"
+                        onClick={() => setConfirmDeleteCase({ id: c.id, title: c.title })}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 2 }}
+                      >
+                        <Icon name="trash" size={12} />
+                      </button>
                     </span>
                   </div>
                 ))}
@@ -481,6 +505,45 @@ export default function GroupsPage() {
               onClick={() => planModal && addToPlan.mutate({ caseIds: planModal.caseIds, planId: planTarget })}
             >
               {addToPlan.isPending ? '添加中...' : '加入'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* AI 创建用例 — 收集需求标题/内容后跳到 AI 工作台 */}
+      <Dialog open={aiForm.open} onOpenChange={(open) => setAiForm((f) => ({ ...f, open }))}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>AI 创建用例</DialogTitle></DialogHeader>
+          <div className="flex flex-col gap-3 px-5 py-4">
+            <p className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+              描述要测的需求，AI 会基于此生成场景和用例。
+            </p>
+            <Input
+              label="需求标题"
+              placeholder="如：登录与账号体系"
+              value={aiForm.title}
+              onChange={(e) => setAiForm((f) => ({ ...f, title: e.target.value }))}
+            />
+            <div className="flex flex-col gap-1">
+              <label className="text-[12px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>
+                需求描述
+              </label>
+              <textarea
+                className="input-base"
+                rows={6}
+                placeholder="把要测的需求贴在这里，AI 会拆解为场景与用例。"
+                value={aiForm.content}
+                onChange={(e) => setAiForm((f) => ({ ...f, content: e.target.value }))}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+            <Button variant="plain" onClick={() => setAiForm({ open: false, title: '', content: '' })}>取消</Button>
+            <Button
+              disabled={!aiForm.title.trim() || !aiForm.content.trim() || createRequirement.isPending}
+              onClick={() => createRequirement.mutate()}
+            >
+              {createRequirement.isPending ? '创建中...' : '开始 AI 会话'}
             </Button>
           </div>
         </DialogContent>

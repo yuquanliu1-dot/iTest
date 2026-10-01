@@ -47,7 +47,6 @@ export default function AiWorkspacePage() {
     onSuccess: (r) => {
       toast(`已保存 ${r.savedCases} 个用例`, 'success');
       qc.invalidateQueries({ queryKey: ['ai-workspace', id] });
-      qc.invalidateQueries({ queryKey: ['requirements', projectId] });
       qc.invalidateQueries({ queryKey: ['cases'] });
       setSaveSelection({ open: false, scenarioIds: [], caseIds: [] });
     },
@@ -70,7 +69,7 @@ export default function AiWorkspacePage() {
         style={{ borderBottom: '1px solid var(--color-glass-border)' }}
       >
         <button
-          onClick={() => navigate(`/p/${projectId}/requirements/${id}`)}
+          onClick={() => navigate(`/p/${projectId}/groups`)}
           className="flex items-center gap-1 text-[12px]"
           style={{
             background: 'transparent',
@@ -80,7 +79,7 @@ export default function AiWorkspacePage() {
           }}
         >
           <Icon name="chevronLeft" size={12} />
-          返回需求详情
+          返回用例列表
         </button>
         <h1 className="text-[15px] font-semibold">AI 创建用例</h1>
       </div>

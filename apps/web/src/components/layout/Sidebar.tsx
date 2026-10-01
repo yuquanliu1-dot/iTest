@@ -15,7 +15,6 @@ const PROJECT_GROUP: NavGroupDef = {
   items: [
     { path: 'overview', icon: 'sparkles', label: '工作台', projectOnly: true },
     { path: 'groups', icon: 'beaker', label: '用例', projectOnly: true },
-    { path: 'requirements', icon: 'listChecks', label: '需求', projectOnly: true },
     { path: 'plans', icon: 'play', label: '执行计划', projectOnly: true },
     { path: 'reports', icon: 'flag', label: '执行历史', projectOnly: true },
   ],

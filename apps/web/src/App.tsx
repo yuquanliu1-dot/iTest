@@ -8,8 +8,6 @@ import { useThemeStore } from './stores/theme';
 import LoginPage from './pages/LoginPage';
 import ProjectsHome from './pages/ProjectsHome';
 import Dashboard from './pages/Dashboard';
-import Requirements from './pages/Requirements';
-import RequirementDetail from './pages/RequirementDetail';
 import AiWorkspacePage from './pages/AiWorkspacePage';
 import GroupsPage from './pages/GroupsPage';
 import CaseDetail from './pages/CaseDetail';
@@ -43,9 +41,7 @@ export default function App() {
           <Route path="groups" element={<GroupsPage />} />
           <Route path="groups/:groupId" element={<GroupsPage />} />
           <Route path="cases/:id" element={<CaseDetail />} />
-          <Route path="requirements" element={<Requirements />} />
-          <Route path="requirements/:id" element={<RequirementDetail />} />
-          <Route path="requirements/:id/ai" element={<AiWorkspacePage />} />
+          <Route path="ai/:id" element={<AiWorkspacePage />} />
           <Route path="plans" element={<Plans />} />
           <Route path="plans/:id" element={<PlanDetail />} />
           <Route path="plans/:id/runs/:runId" element={<PlanRunDetail />} />
