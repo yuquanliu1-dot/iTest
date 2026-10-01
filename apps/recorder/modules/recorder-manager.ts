@@ -20,9 +20,18 @@ export interface RecordedStep {
   sensitive?: boolean;
   /** upload 步骤对应的 test_attachments.id；录制时为空，由编辑器后绑定。 */
   fileId?: string;
+  /** 录制阶段确定的语义定位：semanticRole 复用 data-testid / name；contextText 取元素 innerText 第一段。 */
+  intentLocator?: { semanticRole: string; contextText?: string };
 }
 
 type StepHandler = (step: RecordedStep) => void;
+
+function buildIntentLocator(el: Element): RecordedStep['intentLocator'] {
+  const role = el.getAttribute('data-testid') ?? el.getAttribute('name') ?? null;
+  if (!role) return undefined;
+  const text = el.textContent?.trim().slice(0, 50) || undefined;
+  return text ? { semanticRole: role, contextText: text } : { semanticRole: role };
+}
 
 /**
  * 浏览器端录制协调器：
@@ -84,11 +93,13 @@ export class RecorderManager {
         return;
       }
       this.lastClick = { signature: sig, at: now };
+      const intentLocator = buildIntentLocator(target);
       this.handler?.({
         type: 'click',
         target: locs,
         url: location.href,
         timestamp: now,
+        ...(intentLocator ? { intentLocator } : {}),
       });
     };
     const onInput = (e: Event) => {
@@ -106,6 +117,7 @@ export class RecorderManager {
         || /password/i.test(target.name ?? '')
         || /password/i.test(target.id ?? '');
       this.lastInputAt = Date.now();
+      const intentLocator = buildIntentLocator(target);
       this.handler?.({
         type: 'fill',
         target: generateLocators(target),
@@ -113,6 +125,7 @@ export class RecorderManager {
         url: location.href,
         timestamp: Date.now(),
         sensitive: isSensitive || undefined,
+        ...(intentLocator ? { intentLocator } : {}),
       });
     };
     const onChange = (e: Event) => {
@@ -125,29 +138,34 @@ export class RecorderManager {
       if (tag === 'input') {
         const t = (target as HTMLInputElement).type;
         if (t === 'checkbox' || t === 'radio') {
+          const intentLocator = buildIntentLocator(target);
           this.handler?.({
             type: 'check',
             target: generateLocators(target),
             checked: (target as HTMLInputElement).checked,
             url: location.href,
             timestamp: now,
+            ...(intentLocator ? { intentLocator } : {}),
           });
           return;
         }
         if (t === 'file') {
           const files = (target as HTMLInputElement).files;
+          const intentLocator = buildIntentLocator(target);
           this.handler?.({
             type: 'upload',
             target: generateLocators(target),
             value: files?.[0]?.name ?? '',
             url: location.href,
             timestamp: now,
+            ...(intentLocator ? { intentLocator } : {}),
           });
         }
         return;
       }
       if (tag === 'select') {
         const comp = detectComponent(target as Element);
+        const intentLocator = buildIntentLocator(target);
         this.handler?.({
           type: 'select',
           target: generateLocators(target),
@@ -155,6 +173,7 @@ export class RecorderManager {
           url: location.href,
           timestamp: now,
           componentKind: comp?.kind,
+          ...(intentLocator ? { intentLocator } : {}),
         });
       }
     };
@@ -166,11 +185,13 @@ export class RecorderManager {
       if (sinceInput < RecorderManager.HOVER_SUPPRESS_AFTER_INPUT_MS) return;
       const tag = (target.tagName ?? '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      const intentLocator = buildIntentLocator(target);
       this.handler?.({
         type: 'hover',
         target: generateLocators(target),
         url: location.href,
         timestamp: Date.now(),
+        ...(intentLocator ? { intentLocator } : {}),
       });
     };
     document.addEventListener('click', onClick, true);
