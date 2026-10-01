@@ -16,7 +16,6 @@ interface Stats {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  requirement2cases: 'AI 生成用例',
   case2script: 'AI 生成步骤',
   execute: '执行用例',
 };
