@@ -397,3 +397,55 @@ describe('cases + steps', () => {
     expect(r.status).toBe(403);
   });
 });
+
+describe('steps PUT migration', () => {
+  it('upgrades legacy assertText on PUT, target=specifiedElement match=equals', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'M', groupId });
+    const r = await request(app)
+      .put(`/api/cases/${c.body.id}/steps`)
+      .send({
+        steps: [
+          {
+            source: 'manual',
+            action: {
+              kind: 'assertText',
+              locator: [{ strategy: 'css', value: '.msg' }],
+              equals: 'ok',
+            },
+          },
+        ],
+      });
+    expect(r.status).toBe(200);
+    const detail = await request(app).get(`/api/cases/${c.body.id}`);
+    const a = detail.body.steps[0].action;
+    expect(a.target).toBe('specifiedElement');
+    expect(a.match).toBe('equals');
+    expect(a.intentLocator).toBeUndefined();
+  });
+
+  it('preserves explicit target/match on PUT', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'M2', groupId });
+    const r = await request(app)
+      .put(`/api/cases/${c.body.id}/steps`)
+      .send({
+        steps: [
+          {
+            source: 'manual',
+            action: {
+              kind: 'assertText',
+              locator: [],
+              target: 'page' as const,
+              match: 'regex' as const,
+              equals: '^ok',
+            },
+          },
+        ],
+      });
+    expect(r.status).toBe(200);
+    const detail = await request(app).get(`/api/cases/${c.body.id}`);
+    expect(detail.body.steps[0].action.target).toBe('page');
+    expect(detail.body.steps[0].action.match).toBe('regex');
+  });
+});

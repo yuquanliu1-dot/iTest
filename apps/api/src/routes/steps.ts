@@ -7,6 +7,7 @@ import { StepAction } from '@itest/shared';
 import { HttpError } from '../middleware/errorHandler.js';
 import { compileAiStep, compileAiStepsInPlace } from '../agent/aiStepCompile.js';
 import { encrypt, ensureKeyLoaded } from '../lib/secret-crypto.js';
+import { migrateAction } from '../lib/step-migration.js';
 
 export const stepsRoute = Router();
 
@@ -104,6 +105,9 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
       ),
     })
     .parse(req.body);
+  for (const s of body.steps) {
+    s.action = migrateAction(s.action) as typeof s.action;
+  }
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
   // Project-scope: resolve the case's projectId once via its group, then enforce project membership.
