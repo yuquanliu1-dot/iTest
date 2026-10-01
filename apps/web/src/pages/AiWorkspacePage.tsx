@@ -42,12 +42,8 @@ export default function AiWorkspacePage() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: () =>
-      api.aiWorkspace.save(id!, {
-        groupId: saveSelection.groupId!,
-        scenarioIds: saveSelection.scenarioIds,
-        caseIds: saveSelection.caseIds,
-      }),
+    mutationFn: (vars: { groupId: string; scenarioIds: string[]; caseIds: string[] }) =>
+      api.aiWorkspace.save(id!, vars),
     onSuccess: (r) => {
       toast(`已保存 ${r.savedCases} 个用例`, 'success');
       qc.invalidateQueries({ queryKey: ['ai-workspace', id] });
@@ -108,10 +104,13 @@ export default function AiWorkspacePage() {
         onOpenChange={(o) => setSaveSelection((s) => ({ ...s, open: o }))}
         groups={groups}
         saving={saveMutation.isPending}
-        onSave={(groupId) => {
-          setSaveSelection((s) => ({ ...s, groupId }));
-          saveMutation.mutate();
-        }}
+        onSave={(groupId) =>
+          saveMutation.mutate({
+            groupId,
+            scenarioIds: saveSelection.scenarioIds,
+            caseIds: saveSelection.caseIds,
+          })
+        }
       />
     </div>
   );
