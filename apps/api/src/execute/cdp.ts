@@ -1,7 +1,7 @@
 import { chromium, type Browser, type Page } from 'playwright-core';
 import type { StepAction, Locator } from '@itest/shared';
 import { deepEqual, materializeValue } from '@itest/shared';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { testAttachments, testSteps } from '../db/schema.js';
 import { decrypt } from '../lib/secret-crypto.js';
@@ -25,6 +25,8 @@ export interface ExecStepResult {
 
 export interface ExecContext {
   reportId: string;
+  /** case 所属 project，用于 project-scoped 附件解析；缺省时不过滤（向后兼容） */
+  projectId?: string;
   /** tabRef → Page（phase2 switchTab） */
   tabMap?: Map<string, Page>;
   /** fileId → 附件元数据；缺省回落 db 查询 */
@@ -41,10 +43,14 @@ interface DispatchOpts {
   stepId?: string;
 }
 
-/** 默认附件解析：按 fileId 查 test_attachments（非 UUID 直接 miss，避免 22P02）。 */
-async function defaultAttachmentResolver(fileId: string): Promise<{ storedPath: string; originalName: string } | null> {
+/** 默认附件解析：按 fileId 查 test_attachments（非 UUID 直接 miss，避免 22P02）。
+ * 提供 projectId 时附加 project 过滤，避免跨 project 引用 fileId 解析。 */
+async function defaultAttachmentResolver(fileId: string, projectId?: string): Promise<{ storedPath: string; originalName: string } | null> {
   if (!fileId || !UUID_RE.test(fileId)) return null;
-  const rows = await db.select().from(testAttachments).where(eq(testAttachments.id, fileId));
+  const where = projectId
+    ? and(eq(testAttachments.id, fileId), eq(testAttachments.projectId, projectId))
+    : eq(testAttachments.id, fileId);
+  const rows = await db.select().from(testAttachments).where(where);
   const row = rows[0];
   return row ? { storedPath: row.storedPath, originalName: row.originalName } : null;
 }
@@ -157,7 +163,7 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
     case 'upload': {
       const meta = opts.ctx.attachmentResolver
         ? await opts.ctx.attachmentResolver(action.fileId)
-        : await defaultAttachmentResolver(action.fileId);
+        : await defaultAttachmentResolver(action.fileId, opts.ctx.projectId);
       if (!meta) throw new Error(`attachment-missing: ${action.fileId}`);
       await firstMatch(page, action.locator).setInputFiles(meta.storedPath, { timeout: 5000 });
       return;

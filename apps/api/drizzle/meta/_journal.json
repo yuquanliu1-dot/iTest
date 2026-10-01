@@ -50,6 +50,13 @@
       "when": 1790778745440,
       "tag": "0006_lyrical_the_fallen",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790820543421,
+      "tag": "0007_lame_ultron",
+      "breakpoints": true
     }
   ]
 }

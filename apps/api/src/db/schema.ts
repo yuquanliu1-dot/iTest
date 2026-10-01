@@ -7,6 +7,7 @@ import {
   jsonb,
   timestamp,
   boolean,
+  unique,
 } from 'drizzle-orm/pg-core';
 
 export const settings = pgTable('settings', {
@@ -157,14 +158,17 @@ export const planRunCases = pgTable('plan_run_cases', {
 export const testAttachments = pgTable('test_attachments', {
   id: uuid('id').primaryKey().defaultRandom(),
   caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   stepId: uuid('step_id').references(() => testSteps.id, { onDelete: 'set null' }),
   originalName: text('original_name').notNull(),
   mime: text('mime'),
   size: integer('size').notNull(),
-  sha256: varchar('sha256', { length: 64 }).notNull().unique(),
+  sha256: varchar('sha256', { length: 64 }).notNull(),
   storedPath: text('stored_path').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-});
+}, (t) => ({
+  projectShaUq: unique('test_attachments_project_sha_uq').on(t.projectId, t.sha256),
+}));
 
 export const testSessions = pgTable('test_sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
