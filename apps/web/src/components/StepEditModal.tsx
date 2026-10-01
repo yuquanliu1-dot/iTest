@@ -27,6 +27,12 @@ interface CompositeDraft {
   >;
 }
 
+/** 与服务端 aiStepSplit.splitByNumber 保持同一行匹配规则：`1. ` 需空格、`1、` 可无空格。 */
+function countNumberedSegments(text: string): number {
+  const re = /^[ \t]*\d+(?:\.[ \t]+|、[ \t]*)(.+)$/;
+  return text.split(/\r?\n/).filter((line) => re.test(line)).length;
+}
+
 /** 步骤编辑弹窗：名称/等待时间 + 按 action.kind 分派的值编辑。 */
 export default function StepEditModal({ initial, availableVars = [], caseId, onSave, onClose }: Props) {
   const action = initial.action as Record<string, unknown>;
@@ -119,6 +125,8 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
   const [compileErr, setCompileErr] = useState('');
   // aiStep
   const [instruction, setInstruction] = useState(String(action.instruction ?? ''));
+  const [showBoundary, setShowBoundary] = useState(false);
+  const splitPreview = countNumberedSegments(instruction);
   // navigate
   const [url, setUrl] = useState(String(action.url ?? ''));
   // waitFor
@@ -590,10 +598,32 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
             </div>
           )}
           {kind === 'aiStep' && (
-            <label style={labelStyle}>
-              自然语言指令（保存后自动编译）
-              <textarea style={{ ...inputStyle, fontFamily: 'inherit' }} rows={3} value={instruction} onChange={(e) => setInstruction(e.target.value)} />
-            </label>
+            <div className="flex flex-col gap-2">
+              <label style={labelStyle}>
+                自然语言指令（保存后自动编译）
+                <textarea style={{ ...inputStyle, fontFamily: 'inherit' }} rows={3} value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="可用 #cssSelector 引用页面元素，例: 识别图片 #captchaImg 并输入到 #captchaInput" />
+              </label>
+              {splitPreview >= 2 && (
+                <p className="text-[11px]" style={{ color: 'var(--color-accent)' }}>
+                  检测到 {splitPreview} 条编号，保存时将自动拆为 {splitPreview} 条独立智能步骤
+                </p>
+              )}
+              <button
+                onClick={() => setShowBoundary((v) => !v)}
+                style={{ fontSize: 11, padding: '4px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)', alignSelf: 'flex-start' }}
+                type="button"
+              >
+                {showBoundary ? '收起使用边界提示' : '查看使用边界'}
+              </button>
+              {showBoundary && (
+                <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--color-foreground-muted)' }}>
+                  <p>• 智能步骤适合复杂页面、动态选择、第一条结果等场景。</p>
+                  <p>• 不建议用于登录、支付、删除审批等高风险路径，也不用于发布准入的关键确定性步骤。</p>
+                  <p>• 强对抗验证码（滑块、点选、行为验证）不适用；仅适合测试环境中的简单图片验证码。</p>
+                  <p>• 关键结果请使用文本断言 / JSON 断言，不要把验证全部塞进智能步骤。</p>
+                </div>
+              )}
+            </div>
           )}
           {kind === 'navigate' && (
             <label style={labelStyle}>
