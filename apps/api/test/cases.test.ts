@@ -191,6 +191,34 @@ describe('cases + steps', () => {
     expect(r.body.groupId).toBe(b.groupId);
   });
 
+  it('PATCH window_strategy=custom requires width/height', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'W', groupId });
+    const r = await request(app).patch(`/api/cases/${c.body.id}`).send({ windowStrategy: 'custom' });
+    expect(r.status).toBe(400);
+    expect(JSON.stringify(r.body)).toMatch(/windowWidth/);
+  });
+
+  it('PATCH window_strategy=custom with width/height succeeds', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'W2', groupId });
+    const r = await request(app)
+      .patch(`/api/cases/${c.body.id}`)
+      .send({ windowStrategy: 'custom', windowWidth: 1024, windowHeight: 768 });
+    expect(r.status).toBe(200);
+    expect(r.body.windowStrategy).toBe('custom');
+    expect(r.body.windowWidth).toBe(1024);
+    expect(r.body.windowHeight).toBe(768);
+  });
+
+  it('PATCH incognito=true persists', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'W3', groupId });
+    const r = await request(app).patch(`/api/cases/${c.body.id}`).send({ incognito: true });
+    expect(r.status).toBe(200);
+    expect(r.body.incognito).toBe(true);
+  });
+
   it('PUT /api/cases/:id/steps replaces all steps with name/delayMs', async () => {
     const { groupId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'R', groupId });

@@ -8,14 +8,34 @@ import { resolveCaseUrl } from '../lib/resolve-url.js';
 
 export const casesRoute = Router();
 
-const CreateBody = z.object({
+const CaseBodyBase = z.object({
   title: z.string().min(1).max(200),
   description: z.string().optional(),
   priority: z.enum(['P0', 'P1', 'P2', 'P3']).default('P1'),
   requirementId: z.string().uuid().optional(),
   groupId: z.string().uuid(),
   url: z.string().optional(),
+  windowStrategy: z.enum(['maximize', 'current', 'custom']).default('maximize'),
+  windowWidth: z.number().int().min(200).max(10000).optional(),
+  windowHeight: z.number().int().min(200).max(10000).optional(),
+  incognito: z.boolean().default(false),
 });
+
+function checkWindowStrategy(
+  val: { windowStrategy?: string; windowWidth?: number; windowHeight?: number },
+  ctx: z.RefinementCtx,
+): void {
+  if (val.windowStrategy === 'custom' && (!val.windowWidth || !val.windowHeight)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['windowWidth'],
+      message: 'windowWidth and windowHeight are required when windowStrategy is custom',
+    });
+  }
+}
+
+const CreateBody = CaseBodyBase.superRefine(checkWindowStrategy);
+const PatchBody = CaseBodyBase.partial().superRefine(checkWindowStrategy);
 
 casesRoute.get('/', async (req, res) => {
   const { priority, groupId, projectId } = req.query as Record<string, string | undefined>;
@@ -59,7 +79,7 @@ casesRoute.get('/:id', async (req, res) => {
 });
 
 casesRoute.patch('/:id', async (req, res) => {
-  const body = CreateBody.partial().parse(req.body);
+  const body = PatchBody.parse(req.body);
   if (body.groupId) {
     const g = await db.select().from(groups).where(eq(groups.id, body.groupId));
     if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
