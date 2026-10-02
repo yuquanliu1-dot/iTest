@@ -191,5 +191,7 @@ export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
     kind: z.literal('aiStep'),
     instruction: z.string().max(2000),
     compiled: z.array(z.lazy(() => StepAction)).nullable(),
+    /** 可选断言描述；保存到 test_steps.assertion（assertText 形态）。可空。 */
+    assertion: z.string().max(2000).nullable().optional(),
   }),
 ]) as z.ZodType<StepAction>;

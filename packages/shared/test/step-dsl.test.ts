@@ -145,6 +145,45 @@ describe('step-dsl — phase1 new kinds', () => {
     expect(r.success).toBe(true);
   });
 
+  it('accepts aiStep with optional assertion string', () => {
+    const r = StepAction.safeParse({
+      kind: 'aiStep',
+      instruction: '提交订单',
+      compiled: null,
+      assertion: '页面显示订单提交成功',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts aiStep with assertion = null', () => {
+    const r = StepAction.safeParse({
+      kind: 'aiStep',
+      instruction: '提交订单',
+      compiled: null,
+      assertion: null,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts aiStep without assertion field (backward compat)', () => {
+    const r = StepAction.safeParse({
+      kind: 'aiStep',
+      instruction: '提交订单',
+      compiled: null,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects aiStep with non-string assertion', () => {
+    const r = StepAction.safeParse({
+      kind: 'aiStep',
+      instruction: '提交订单',
+      compiled: null,
+      assertion: 123,
+    });
+    expect(r.success).toBe(false);
+  });
+
   it('generator defaults materialize on parse', () => {
     const r = StepAction.safeParse({
       kind: 'fill',
