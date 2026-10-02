@@ -77,6 +77,6 @@ export function stepSummary(action: unknown): string {
     case 'aiStep':
       return `AI：${clip(str(a.instruction), 40)}`;
     default:
-      return clip(JSON.stringify(action), 40);
+      return clip(JSON.stringify(action) ?? String(action), 40);
   }
 }
