@@ -95,7 +95,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       return;
     }
     const loginCaseId = run.loginCaseId;
-    const firstCaseId = cases[0]?.caseId ?? null;
+    const firstCaseId = cases.find((c) => c.status !== 'deprecated')?.caseId ?? null;
     const result = await loginPrepare(
       {
         enabled: true,
