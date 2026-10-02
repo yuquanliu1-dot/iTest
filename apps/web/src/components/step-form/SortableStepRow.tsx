@@ -1,0 +1,43 @@
+import type { ReactNode } from 'react';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+
+interface Props {
+  id: string;
+  disabled?: boolean;
+  isEditing?: boolean;
+  children: ReactNode;
+}
+
+/** 可排序行容器：仅左侧手柄可发起拖拽（listeners 只绑在手柄上），行内容仍由父级渲染。 */
+export default function SortableStepRow({ id, disabled, isEditing, children }: Props) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
+    useSortable({ id, disabled });
+
+  return (
+    <li
+      ref={setNodeRef}
+      className="flex items-center gap-3 px-3 py-2 rounded-[8px]"
+      style={{
+        background: 'var(--color-background-subtle)',
+        border: `1px solid ${isEditing ? 'var(--color-accent)' : 'var(--color-glass-border)'}`,
+        transform: CSS.Transform.toString(transform),
+        transition,
+        ...(isDragging ? { zIndex: 10, opacity: 0.85, boxShadow: '0 4px 16px rgba(0,0,0,0.15)' } : {}),
+      }}
+    >
+      <button
+        ref={setActivatorNodeRef}
+        {...attributes}
+        {...listeners}
+        disabled={disabled}
+        title="拖拽排序"
+        aria-label="拖拽排序"
+        style={{ background: 'transparent', border: 'none', cursor: disabled ? 'default' : 'grab', color: 'var(--color-foreground-muted)', padding: '2px 2px', fontSize: 12, lineHeight: 1, touchAction: 'none' }}
+      >
+        ⠿
+      </button>
+      {children}
+    </li>
+  );
+}
