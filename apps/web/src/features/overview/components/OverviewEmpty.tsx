@@ -13,7 +13,7 @@ export default function OverviewEmpty({ projectId }: { projectId: string }) {
           还没有用例数据
         </h3>
         <p className="text-[12px] mt-1" style={{ color: 'var(--color-foreground-muted)' }}>
-          创建需求 → 生成用例 → 执行，所有指标都会汇聚到这里。
+          新建用例 → 执行，所有指标都会汇聚到这里。
         </p>
         <div className="flex gap-2 justify-center mt-4">
           <button className="btn-primary" onClick={() => navigate(`/p/${projectId}/groups`)}>
