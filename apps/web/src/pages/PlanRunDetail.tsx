@@ -61,6 +61,7 @@ export default function PlanRunDetail() {
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="text-[12px]" style={{ color: 'var(--color-foreground)' }}>
+                      <span className="mr-2">{c.caseTitle ?? <span style={{ color: 'var(--color-foreground-muted)' }}>已删除用例</span>}</span>
                       <span className="font-mono text-[11px] mr-2" style={{ color: 'var(--color-foreground-muted)' }}>{c.caseId.slice(0, 8)}</span>
                       <StatusPill status={c.status}>{c.status}</StatusPill>
                       <span className="ml-2 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>{c.durationMs ?? 0} ms</span>

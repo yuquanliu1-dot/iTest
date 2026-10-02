@@ -110,12 +110,13 @@ export const api = {
     get: (id: string) => request<Requirement>(`/requirements/${id}`),
   },
   cases: {
-    list: (params?: string | { priority?: string; groupId?: string; projectId?: string }) => {
+    list: (params?: string | { priority?: string; groupId?: string; projectId?: string; scenarioId?: string }) => {
       const p = typeof params === 'string' ? { priority: params } : params;
       const qs = new URLSearchParams();
       if (p?.priority) qs.set('priority', p.priority);
       if (p?.groupId) qs.set('groupId', p.groupId);
       if (p?.projectId) qs.set('projectId', p.projectId);
+      if (p?.scenarioId) qs.set('scenarioId', p.scenarioId);
       const s = qs.toString();
       return request<TestCase[]>(`/cases${s ? `?${s}` : ''}`);
     },
@@ -135,6 +136,7 @@ export const api = {
         windowHeight: number;
         incognito: boolean;
         scenarioId: string | null;
+        tagIds: string[];
       }>,
     ) => request<TestCase>(`/cases/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/cases/${id}`, { method: 'DELETE' }),
@@ -188,6 +190,15 @@ export const api = {
       ),
     execute: (id: string) =>
       request<{ reportId: string }>(`/cases/${id}/execute`, { method: 'POST' }),
+  },
+  tags: {
+    list: (projectId: string) => request<Tag[]>(`/projects/${projectId}/tags`),
+    create: (projectId: string, body: { name: string; color: string; description?: string | null }) =>
+      request<Tag>(`/projects/${projectId}/tags`, { method: 'POST', body: JSON.stringify(body) }),
+    update: (projectId: string, tagId: string, body: { name?: string; color?: string; description?: string | null }) =>
+      request<Tag>(`/projects/${projectId}/tags/${tagId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    remove: (projectId: string, tagId: string) =>
+      request<{ ok: boolean }>(`/projects/${projectId}/tags/${tagId}`, { method: 'DELETE' }),
   },
   reports: {
     list: (projectId?: string) =>
@@ -383,6 +394,7 @@ export interface PlanRunDetail {
   cases: Array<{
     id: string;
     caseId: string;
+    caseTitle: string | null;
     reportId: string | null;
     order: number;
     status: string;
@@ -398,6 +410,7 @@ export type ExecutionEntry =
       kind: 'case';
       id: string;
       caseId: string;
+      caseTitle: string | null;
       status: string;
       durationMs: number | null;
       summary: string | null;
@@ -443,6 +456,7 @@ export interface TestCase {
   requirementId?: string | null;
   scenarioId?: string | null;
   scenarioTitle?: string | null;
+  tags?: Tag[];
   createdAt?: string;
   updatedAt?: string;
   windowStrategy?: string;
@@ -457,6 +471,15 @@ export interface Scenario {
   description: string | null;
   order: number;
   createdAt: string;
+}
+export interface Tag {
+  id: string;
+  projectId: string;
+  name: string;
+  color: string;
+  description: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 export interface TestStep {
   id: string;
@@ -473,10 +496,10 @@ export interface TestCaseDetail extends TestCase {
   description?: string;
   steps: TestStep[];
   resolvedUrl: string | null;
-}
-export interface Report {
+}export interface Report {
   id: string;
   caseId: string;
+  caseTitle: string | null;
   status: string;
   durationMs: number | null;
   stepResults: unknown;

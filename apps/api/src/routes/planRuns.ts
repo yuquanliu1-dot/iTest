@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { eq, asc } from 'drizzle-orm';
+import { eq, asc, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { planRuns, planRunCases, executionPlans } from '../db/schema.js';
+import { planRuns, planRunCases, executionPlans, testCases } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { requestCancel, subscribeRun } from '../execute/runPlan.js';
 import { sseHeaders } from '../sse/agentRunStream.js';
@@ -13,12 +13,19 @@ planRunsRoute.get('/:id', async (req, res) => {
   const run = (await db.select().from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
   if (!run) throw new HttpError(404, 'not_found', 'plan run not found');
   await assertProjectVisible(run.projectId, req.user!);
-  const cases = await db
+  const caseRows = await db
     .select()
     .from(planRunCases)
     .where(eq(planRunCases.planRunId, run.id))
     .orderBy(asc(planRunCases.order));
   const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, run.planId)))[0];
+  // 批量查 case 标题，避免 N+1
+  const caseIds = Array.from(new Set(caseRows.map((c) => c.caseId)));
+  const titleRows = caseIds.length
+    ? await db.select({ id: testCases.id, title: testCases.title }).from(testCases).where(inArray(testCases.id, caseIds))
+    : [];
+  const titleMap = new Map(titleRows.map((t) => [t.id, t.title]));
+  const cases = caseRows.map((c) => ({ ...c, caseTitle: titleMap.get(c.caseId) ?? null }));
   res.json({
     ...run,
     planName: plan?.name ?? null,
