@@ -393,3 +393,6 @@ select:focus-visible {
 }
 .zoom-nav-btn:active:not(:disabled) { transform: scale(0.94); }
 .zoom-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.kpi-icon { transition: transform 180ms ease; display: inline-flex; }
+.glass-panel:hover .kpi-icon { transform: scale(1.08); }
