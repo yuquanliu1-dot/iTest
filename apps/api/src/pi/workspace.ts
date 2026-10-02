@@ -3,7 +3,13 @@ import { db } from '../db/client.js';
 import { aiWorkspaceState, aiScenarios, aiCases } from '../db/schema.js';
 import { publishWorkspaceEvent } from './bus.js';
 
-export type StagedStep = { name: string; action: string; assertion: string | null };
+export type StagedStep = {
+  name: string;
+  action: string;
+  assertion: string | null;
+  /** LLM-compiled DSL steps; null = not generated or failed. Falls back to null at replay time. */
+  compiled?: import('@itest/shared').StepAction[] | null;
+};
 export type Priority = 'P0' | 'P1' | 'P2' | 'P3';
 export interface StagedCase {
   id: string;
