@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api/client';
+import { api, type CaseStatus } from '../api/client';
 import { useProjectStore } from '../stores/project';
 import { useUIStore } from '../stores/ui';
 import Icon from '../components/Icon';
-import StatusPill from '../components/ui/StatusPill';
+import Card from '../components/ui/Card';
+import CaseStatusMenu from '../components/CaseStatusMenu';
 import PriorityBadge from '../components/ui/PriorityBadge';
 import EmptyState from '../components/ui/EmptyState';
 import Pagination from '../components/ui/Pagination';
 import Segmented from '../components/ui/Segmented';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/Modal';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import TagChip from '../components/ui/Tag';
@@ -40,6 +41,7 @@ export default function GroupsPage() {
   const [priority, setPriority] = useState<(typeof PRIORITIES)[number]>('');
   const [scenarioId, setScenarioId] = useState<string>('');
   const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
+  const [statusFilter, setStatusFilter] = useState<'' | CaseStatus>('');
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [labelsManagerOpen, setLabelsManagerOpen] = useState(false);
   const tagPickerRef = useRef<HTMLDivElement>(null);
@@ -233,10 +235,22 @@ export default function GroupsPage() {
     },
   });
 
+  const batchStatus = useMutation({
+    mutationFn: (status: CaseStatus) => api.cases.updateStatusBatch([...checked], status),
+    onSuccess: (r) => {
+      toast(`已更新 ${r.count} 条`, 'success');
+      setChecked(new Set());
+      invalidate();
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
   const filteredCases = useMemo(() => {
-    if (tagFilter.size === 0) return cases ?? [];
-    return (cases ?? []).filter((c) => (c.tags ?? []).some((t) => tagFilter.has(t.id)));
-  }, [cases, tagFilter]);
+    let list = cases ?? [];
+    if (tagFilter.size > 0) list = list.filter((c) => (c.tags ?? []).some((t) => tagFilter.has(t.id)));
+    if (statusFilter) list = list.filter((c) => c.status === statusFilter);
+    return list;
+  }, [cases, tagFilter, statusFilter]);
 
   const rows = useMemo(() => filteredCases.slice((page - 1) * pageSize, page * pageSize), [filteredCases, page, pageSize]);
   const total = filteredCases.length;
@@ -417,6 +431,25 @@ export default function GroupsPage() {
                 <option key={o.id} value={o.id}>{o.title}</option>
               ))}
             </select>
+            <select
+              aria-label="状态过滤"
+              value={statusFilter}
+              onChange={(e) => { setStatusFilter(e.target.value as '' | CaseStatus); setPage(1); }}
+              className="text-[12px] rounded-md px-2 py-1 outline-none"
+              style={{
+                border: '1px solid var(--color-border)',
+                background: 'var(--color-background-elevated)',
+                color: 'var(--color-foreground)',
+                minWidth: 140,
+              }}
+              title="按状态过滤"
+            >
+              <option value="">全部状态</option>
+              <option value="draft">草稿</option>
+              <option value="review">评审中</option>
+              <option value="ready">就绪</option>
+              <option value="deprecated">废弃</option>
+            </select>
             <div className="relative" ref={tagPickerRef}>
               <button
                 type="button"
@@ -531,6 +564,27 @@ export default function GroupsPage() {
               <Icon name="play" size={12} />
               加入计划
             </Button>
+            <select
+              className="text-[12px] rounded-md px-2 py-1 outline-none"
+              value=""
+              disabled={batchStatus.isPending}
+              onChange={(e) => {
+                if (e.target.value) batchStatus.mutate(e.target.value as CaseStatus);
+              }}
+              style={{
+                border: '1px solid var(--color-border)',
+                background: 'var(--color-background-elevated)',
+                color: 'var(--color-foreground)',
+                cursor: 'pointer',
+              }}
+              title="批量修改选中用例状态"
+            >
+              <option value="">改状态…</option>
+              <option value="draft">→ 草稿</option>
+              <option value="review">→ 评审中</option>
+              <option value="ready">→ 就绪</option>
+              <option value="deprecated">→ 废弃</option>
+            </select>
             <Button size="sm" variant="danger" onClick={() => setConfirmBatchDelete(true)}>
               <Icon name="trash" size={12} />
               批量删除
@@ -539,10 +593,7 @@ export default function GroupsPage() {
           </div>
         )}
 
-        <div
-          className="flex-1 min-h-0 mx-5 my-4 flex flex-col rounded-[12px] overflow-hidden"
-          style={{ background: 'var(--color-background-elevated)', border: '1px solid var(--color-glass-border)', boxShadow: 'var(--shadow-card)' }}
-        >
+        <Card padding="none" className="flex-1 min-h-0 mx-5 my-4 flex flex-col overflow-hidden">
           {casesLoading ? (
             <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
               <Icon name="loader" size={16} className="animate-spin" />
@@ -569,7 +620,7 @@ export default function GroupsPage() {
                   <div
                     key={c.id}
                     className={`group grid ${GRID_COLS} items-center px-5 py-[12px] gap-2 list-row-clickable`}
-                    style={{ borderBottom: '1px solid var(--color-muted)' }}
+                    style={{ borderBottom: '1px solid var(--color-muted)', opacity: c.status === 'deprecated' ? 0.55 : 1 }}
                     onClick={() => navigate(`/p/${projectId}/cases/${c.id}`)}
                   >
                     <input
@@ -603,7 +654,9 @@ export default function GroupsPage() {
                         </>
                       )}
                     </span>
-                    <span><StatusPill status={c.status}>{c.status}</StatusPill></span>
+                    <span onClick={(e) => e.stopPropagation()}>
+                      <CaseStatusMenu caseId={c.id} status={c.status} projectId={projectId} />
+                    </span>
                     <span className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }} title={c.updatedAt}>
                       {c.updatedAt ? shortDateTime(c.updatedAt) : '-'}
                     </span>
@@ -643,7 +696,7 @@ export default function GroupsPage() {
               />
             </>
           )}
-        </div>
+        </Card>
       </div>
 
       {/* 分组弹窗（新建/重命名/默认域名） */}
@@ -700,12 +753,12 @@ export default function GroupsPage() {
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
             确定删除「{confirmDeleteCase?.title}」？该用例的步骤与报告将一并删除。
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+          <DialogFooter>
             <Button variant="plain" onClick={() => setConfirmDeleteCase(null)}>取消</Button>
             <Button variant="danger" disabled={deleteCase.isPending} onClick={() => confirmDeleteCase && deleteCase.mutate(confirmDeleteCase.id)}>
               {deleteCase.isPending ? '删除中...' : '确认删除'}
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -716,7 +769,7 @@ export default function GroupsPage() {
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
             确定删除已选的 <span style={{ color: 'var(--color-destructive)', fontWeight: 600 }}>{checked.size}</span> 条用例？这些用例的步骤、报告、附件将被一并删除，且不可恢复。
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+          <DialogFooter>
             <Button variant="plain" onClick={() => setConfirmBatchDelete(false)}>取消</Button>
             <Button
               variant="danger"
@@ -725,7 +778,7 @@ export default function GroupsPage() {
             >
               {batchDeleteCases.isPending ? '删除中...' : `删除 ${checked.size} 条`}
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -745,7 +798,7 @@ export default function GroupsPage() {
               副本命名：原名 +「副本」，重名自动追加数字（副本1、副本2…）。
             </p>
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+          <DialogFooter>
             <Button variant="plain" onClick={() => setCopyModal(null)}>取消</Button>
             <Button
               disabled={!copyTarget || copyCases.isPending}
@@ -753,7 +806,7 @@ export default function GroupsPage() {
             >
               {copyCases.isPending ? '复制中...' : '复制'}
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -775,7 +828,7 @@ export default function GroupsPage() {
               </p>
             )}
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+          <DialogFooter>
             <Button variant="plain" onClick={() => setPlanModal(null)}>取消</Button>
             <Button
               disabled={!planTarget || addToPlan.isPending}
@@ -783,7 +836,7 @@ export default function GroupsPage() {
             >
               {addToPlan.isPending ? '添加中...' : '加入'}
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
