@@ -240,6 +240,7 @@ export default function GroupsPage() {
     onSuccess: (r) => {
       toast(`已更新 ${r.count} 条`, 'success');
       setChecked(new Set());
+      setPage(1);
       invalidate();
     },
     onError: (e: Error) => toast(e.message, 'error'),
@@ -565,6 +566,7 @@ export default function GroupsPage() {
               加入计划
             </Button>
             <select
+              aria-label="批量修改状态"
               className="text-[12px] rounded-md px-2 py-1 outline-none"
               value=""
               disabled={batchStatus.isPending}
