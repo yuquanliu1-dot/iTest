@@ -66,7 +66,7 @@ export default function GroupsPage() {
   });
 
   const effectiveGroupId = groupId ?? '';
-  const { data: cases, isLoading: casesLoading } = useQuery({
+  const { data: cases, isLoading: casesLoading, isError: casesError, error: casesErrorObj } = useQuery({
     queryKey: ['cases', projectId, effectiveGroupId, priority, scenarioId],
     queryFn: () =>
       api.cases.list(effectiveGroupId
@@ -608,7 +608,11 @@ export default function GroupsPage() {
         )}
 
         <Card padding="none" className="flex-1 min-h-0 mx-5 my-4 flex flex-col overflow-hidden">
-          {casesLoading ? (
+          {casesError ? (
+            <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+              加载失败：{casesErrorObj?.message ?? '未知错误'}
+            </div>
+          ) : casesLoading ? (
             <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
               <Icon name="loader" size={16} className="animate-spin" />
               <span style={{ marginLeft: 8 }}>加载中...</span>
