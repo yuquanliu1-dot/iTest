@@ -23,6 +23,8 @@ const CaseBodyBase = z.object({
   tagIds: z.array(z.string().uuid()).optional(),
 });
 
+const CaseStatusEnum = z.enum(['draft', 'review', 'ready', 'deprecated']);
+
 function checkWindowStrategy(
   val: { windowStrategy?: string; windowWidth?: number; windowHeight?: number },
   ctx: z.RefinementCtx,
@@ -40,7 +42,7 @@ const CreateBody = CaseBodyBase.superRefine(checkWindowStrategy);
 const PatchBody = CaseBodyBase.partial()
   .extend({
     scenarioId: z.string().uuid().nullable().optional(),
-    status: z.enum(['draft', 'review', 'ready', 'deprecated']).optional(),
+    status: CaseStatusEnum.optional(),
   })
   .superRefine(checkWindowStrategy);
 
@@ -325,7 +327,7 @@ casesRoute.post('/batch-status', async (req, res) => {
   const body = z
     .object({
       caseIds: z.array(z.string().uuid()).min(1),
-      status: z.enum(['draft', 'review', 'ready', 'deprecated']),
+      status: CaseStatusEnum,
     })
     .parse(req.body);
   // 与 batch-delete 一致：先按可见性逐个校验，违规直接 404
