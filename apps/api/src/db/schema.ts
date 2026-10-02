@@ -289,10 +289,10 @@ export const testSessions = pgTable('test_sessions', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
-// 项目级标签：用例可贴/摘多个；project 内 name 唯一。
+// 组织级标签：用例可贴/摘多个；同组织内 name 唯一，组织内全部项目共享可见。
 export const tags = pgTable('tags', {
   id: uuid('id').primaryKey().defaultRandom(),
-  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 80 }).notNull(),
   // hex 颜色不含 `#`，例如 '34c759'
   color: varchar('color', { length: 16 }).notNull(),
@@ -300,7 +300,7 @@ export const tags = pgTable('tags', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  projectNameUq: unique('tags_project_name_uq').on(t.projectId, t.name),
+  orgNameUq: unique('tags_org_name_uq').on(t.organizationId, t.name),
 }));
 
 // 用例 ↔ 标签 关联（case 删除或 tag 删除时 cascade 解除）

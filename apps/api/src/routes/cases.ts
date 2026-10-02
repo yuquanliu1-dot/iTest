@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testCases, testSteps, groups, scenarios, tags, caseTags } from '../db/schema.js';
+import { testCases, testSteps, groups, scenarios, tags, caseTags, projects } from '../db/schema.js';
 import { eq, asc, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
@@ -41,22 +41,24 @@ const PatchBody = CaseBodyBase.partial()
   .extend({ scenarioId: z.string().uuid().nullable().optional() })
   .superRefine(checkWindowStrategy);
 
-/** 校验 tagIds 都属于 projectId，缺失或越权都 404（不区分存在性与可见性）。 */
-async function assertTagsBelongToProject(tagIds: string[], projectId: string): Promise<void> {
+/** 校验 tagIds 都属于 projectId 所属组织；缺失或越权都 404（不区分存在性与可见性）。 */
+async function assertTagsBelongToOrg(tagIds: string[], projectId: string): Promise<void> {
   if (tagIds.length === 0) return;
-  const rows = await db.select({ id: tags.id }).from(tags).where(inArray(tags.id, tagIds));
+  // 先取 project → orgId；用同一 sql 一次完成
+  const [proj] = await db
+    .select({ organizationId: projects.organizationId })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+  if (!proj) throw new HttpError(404, 'not_found', 'project not found');
+  const orgId = proj.organizationId;
+  const rows = await db.select({ id: tags.id, organizationId: tags.organizationId }).from(tags).where(inArray(tags.id, tagIds));
   const found = new Set(rows.map((r) => r.id));
   for (const id of tagIds) {
     if (!found.has(id)) throw new HttpError(404, 'not_found', `tag ${id} not found`);
   }
-  // 过滤出不在此项目下的 tag
-  const wrong = (
-    await db
-      .select({ id: tags.id, projectId: tags.projectId })
-      .from(tags)
-      .where(inArray(tags.id, tagIds))
-  ).filter((t) => t.projectId !== projectId);
-  if (wrong.length > 0) throw new HttpError(400, 'tag_project_mismatch', 'tag belongs to another project');
+  const wrong = rows.filter((t) => t.organizationId !== orgId);
+  if (wrong.length > 0) throw new HttpError(400, 'tag_org_mismatch', 'tag belongs to another organization');
 }
 
 /** 批量取出 caseIds 关联的所有 tag，按 caseId 分组。空集合返回 Map。 */
@@ -137,8 +139,8 @@ casesRoute.post('/', async (req, res) => {
   if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
   const projectId = g[0]!.projectId;
   await assertProjectVisible(projectId, req.user!);
-  // 创建时也可附带 tagIds：必须在分组所属项目内
-  if (body.tagIds && body.tagIds.length > 0) await assertTagsBelongToProject(body.tagIds, projectId);
+  // 创建时也可附带 tagIds：必须在分组所属项目所属的 organization 内
+  if (body.tagIds && body.tagIds.length > 0) await assertTagsBelongToOrg(body.tagIds, projectId);
   const { tagIds: _ignoredTagIds, ...caseValues } = body;
   const rows = await db.insert(testCases).values(caseValues).returning();
   const created = rows[0]!;
@@ -201,7 +203,7 @@ casesRoute.patch('/:id', async (req, res) => {
     // tag 校验：用 groupId 解析的项目；未传则用 case 现有项目
     const pid = projectIdForTags ?? (await resolveCaseProjectId(req.params.id!));
     if (!pid) throw new HttpError(404, 'not_found', 'case not found');
-    await assertTagsBelongToProject(body.tagIds, pid);
+    await assertTagsBelongToOrg(body.tagIds, pid);
     projectIdForTags = pid;
   }
   const { tagIds: incomingTagIds, ...rest } = body;

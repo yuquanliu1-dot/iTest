@@ -312,6 +312,11 @@ export const api = {
       ),
   },
   scenarios: {
+    // 项目下全部场景（跨需求汇总）。供用例页场景过滤下拉——列表不会随选中项收缩。
+    listForProject: (projectId: string) =>
+      request<Array<{ id: string; title: string; requirementId: string }>>(
+        `/scenarios?projectId=${projectId}`,
+      ),
     listForRequirement: (requirementId: string) =>
       request<Scenario[]>(`/requirements/${requirementId}/scenarios`),
     create: (requirementId: string, body: { title: string; description?: string }) =>
@@ -474,7 +479,7 @@ export interface Scenario {
 }
 export interface Tag {
   id: string;
-  projectId: string;
+  organizationId: string;
   name: string;
   color: string;
   description: string | null;
