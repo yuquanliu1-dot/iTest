@@ -62,7 +62,7 @@ export default function SidebarNavItem({ icon, label, path, end, count, collapse
           </button>
         </Tooltip.Trigger>
         <Tooltip.Portal>
-          <Tooltip.Content side="right" style={tooltipContentStyle} sideOffset={6}>
+          <Tooltip.Content side="right" className="popover-in" style={tooltipContentStyle} sideOffset={6}>
             {label}
           </Tooltip.Content>
         </Tooltip.Portal>

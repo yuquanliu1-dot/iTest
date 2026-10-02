@@ -90,7 +90,13 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger asChild>
         <button aria-label="用户菜单" style={triggerStyle}>
+          {/*
+            头像 / 文字 / chevron 都是纯装饰：pointer-events: none
+            让所有 click 落到 button 自身，Radix 才能稳定取到同一个 anchor rect，
+            否则在不同位置点击头像/文字/chevron 会让 popover 锚点漂移（"异常跳转"）。
+          */}
           <span
+            aria-hidden
             style={{
               width: 28,
               height: 28,
@@ -103,12 +109,23 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
               fontSize: 12,
               fontWeight: 600,
               flexShrink: 0,
+              pointerEvents: 'none',
             }}
           >
             {initial}
           </span>
           {!collapsed && (
-            <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span
+              aria-hidden
+              style={{
+                flex: 1,
+                minWidth: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+                pointerEvents: 'none',
+              }}
+            >
               <span
                 style={{
                   fontSize: 13,
@@ -135,7 +152,11 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
               </span>
             </span>
           )}
-          {!collapsed && <Icon name="chevronUp" size={14} style={{ color: 'var(--color-foreground-muted)' }} />}
+          {!collapsed && (
+            <span aria-hidden style={{ display: 'inline-flex', pointerEvents: 'none' }}>
+              <Icon name="chevronUp" size={14} style={{ color: 'var(--color-foreground-muted)' }} />
+            </span>
+          )}
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -143,7 +164,10 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
           align="end"
           side={collapsed ? 'right' : 'top'}
           sideOffset={collapsed ? 8 : 6}
-          className="dialog-content"
+          // 复用 .dialog-content 会强制套用居中 modal 的 translate(-50%, -50%),
+          // 把 popover 拖离 Radix 算出的锚点再弹回去 -> "先出现在一个异常位置,
+          // 再跳到另一个位置"。这里只用 .popover-in: 只动 scale，不动 anchor。
+          className="popover-in"
           style={{
             minWidth: 260,
             background: 'var(--color-background-elevated)',
@@ -152,6 +176,7 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
             boxShadow: 'var(--shadow-elevated)',
             padding: 6,
             zIndex: 100,
+            transformOrigin: 'var(--radix-dropdown-menu-content-transform-origin)',
           }}
         >
           {/* 用户信息区：用户名 + 当前组织 */}
