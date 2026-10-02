@@ -33,6 +33,7 @@ vi.mock('playwright-core', () => {
     getByText,
     screenshot: vi.fn().mockResolvedValue(undefined),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
+    waitForLoadState: vi.fn().mockResolvedValue(undefined),
     url: vi.fn(() => 'https://example.com/path'),
     evaluate: vi.fn().mockResolvedValue('登录成功'),
     keyboard: { press: vi.fn().mockResolvedValue(undefined) },
@@ -239,6 +240,17 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(mocked.__page.waitForTimeout).toHaveBeenCalledWith(300);
   });
 
+  it('waits for networkidle before capturing step screenshot', async () => {
+    const waitForLoadState = (mocked.__page as unknown as { waitForLoadState: ReturnType<typeof vi.fn> }).waitForLoadState;
+    waitForLoadState.mockClear();
+    await executeCaseReal(
+      '00000000-0000-0000-0000-000000000001',
+      [{ order: 1, action: { kind: 'navigate', url: 'https://example.com' } }],
+      { reportId: 'r-settle' },
+    );
+    expect(waitForLoadState).toHaveBeenCalledWith('networkidle', expect.objectContaining({ timeout: 2000 }));
+  });
+
   it('switchTab action uses tabMap to switch the page context', async () => {
     const bringToFront = vi.fn().mockResolvedValue(undefined);
     (mocked.__page as unknown as { bringToFront: ReturnType<typeof vi.fn> }).bringToFront = bringToFront;
@@ -260,6 +272,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
       }),
       screenshot: vi.fn().mockResolvedValue(undefined),
       waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      waitForLoadState: vi.fn().mockResolvedValue(undefined),
       bringToFront: vi.fn().mockResolvedValue(undefined),
     } as unknown as Page & { locator: ReturnType<typeof vi.fn> };
     const firstPage = mocked.__page;
