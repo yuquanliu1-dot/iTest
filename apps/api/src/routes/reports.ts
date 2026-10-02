@@ -16,7 +16,12 @@ reportsRoute.get('/', async (req, res) => {
       ? await db.select({ id: testCases.id }).from(testCases).where(inArray(testCases.groupId, gs.map((g) => g.id)))
       : [];
     const rows = caseRows.length
-      ? await db.select().from(reports).where(inArray(reports.caseId, caseRows.map((c) => c.id))).orderBy(desc(reports.createdAt))
+      ? await db
+        .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, agentRunId: reports.agentRunId, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt })
+        .from(reports)
+        .leftJoin(testCases, eq(testCases.id, reports.caseId))
+        .where(inArray(reports.caseId, caseRows.map((c) => c.id)))
+        .orderBy(desc(reports.createdAt))
       : [];
     res.json(rows);
     return;
@@ -30,13 +35,22 @@ reportsRoute.get('/', async (req, res) => {
     ? await db.select({ id: testCases.id }).from(testCases).where(inArray(testCases.groupId, gs.map((g) => g.id)))
     : [];
   const rows = caseRows.length
-    ? await db.select().from(reports).where(inArray(reports.caseId, caseRows.map((c) => c.id))).orderBy(desc(reports.createdAt))
+    ? await db
+      .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, agentRunId: reports.agentRunId, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt })
+      .from(reports)
+      .leftJoin(testCases, eq(testCases.id, reports.caseId))
+      .where(inArray(reports.caseId, caseRows.map((c) => c.id)))
+      .orderBy(desc(reports.createdAt))
     : [];
   res.json(rows);
 });
 
 reportsRoute.get('/:id', async (req, res) => {
-  const rows = await db.select().from(reports).where(eq(reports.id, req.params.id));
+  const rows = await db
+    .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, agentRunId: reports.agentRunId, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt })
+    .from(reports)
+    .leftJoin(testCases, eq(testCases.id, reports.caseId))
+    .where(eq(reports.id, req.params.id));
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'report not found');
   // report → case → group → project 链路判定可见性
   const report = rows[0]!;

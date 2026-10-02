@@ -80,8 +80,15 @@ export default function Executions() {
                   style={{ borderBottom: '1px solid var(--color-muted)' }}
                 >
                   <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>{r.kind === 'plan' ? '计划' : '用例'}</span>
-                  <span className="text-[12px] font-mono truncate" style={{ color: 'var(--color-foreground-secondary)' }}>
-                    {r.kind === 'plan' ? `run ${r.id.slice(0, 8)}` : `case ${(r as { caseId: string }).caseId.slice(0, 8)}`}
+                  <span className="text-[12px] truncate" style={{ color: 'var(--color-foreground-secondary)' }}>
+                    {r.kind === 'plan' ? (
+                      <span className="font-mono">run {r.id.slice(0, 8)}</span>
+                    ) : (
+                      <>
+                        <span className="mr-2">{(r as { caseTitle: string | null }).caseTitle ?? '已删除用例'}</span>
+                        <span className="font-mono text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>case {(r as { caseId: string }).caseId.slice(0, 8)}</span>
+                      </>
+                    )}
                   </span>
                   <span><StatusPill status={r.status}>{r.status}</StatusPill></span>
                   <span className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }} title={fullDateTime(r.createdAt)}>

@@ -10,6 +10,7 @@ interface CaseEntry {
   kind: 'case';
   id: string;
   caseId: string;
+  caseTitle: string | null;
   status: string;
   durationMs: number | null;
   summary: string | null;
@@ -51,7 +52,12 @@ executionsRoute.get('/', async (req, res) => {
     }
     const cs = gids.length ? await db.select({ id: testCases.id }).from(testCases).where(inArray(testCases.groupId, gids)) : [];
     caseRows = cs.length
-      ? ((await db.select().from(reports).where(inArray(reports.caseId, cs.map((c) => c.id))).orderBy(desc(reports.createdAt))) as unknown as CaseEntry[]).map((r) => ({ ...r, kind: 'case' as const }))
+      ? ((await db
+        .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, summary: reports.summary, createdAt: reports.createdAt })
+        .from(reports)
+        .leftJoin(testCases, eq(testCases.id, reports.caseId))
+        .where(inArray(reports.caseId, cs.map((c) => c.id)))
+        .orderBy(desc(reports.createdAt))) as unknown as CaseEntry[]).map((r) => ({ ...r, kind: 'case' as const }))
       : [];
   }
 
