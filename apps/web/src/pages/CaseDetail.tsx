@@ -17,6 +17,9 @@ import Toggle from '../components/ui/Toggle';
 import EmptyState from '../components/ui/EmptyState';
 import AgentStreamPanel from '../components/ui/AgentStreamPanel';
 import StepEditDrawer from '../components/StepEditDrawer';
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
+import SortableStepRow from '../components/step-form/SortableStepRow';
 import TagChip from '../components/ui/Tag';
 import LabelsManagerDialog from '../components/labels/LabelsManagerDialog';
 import { stepKindLabel } from '../lib/format';
@@ -403,6 +406,30 @@ export default function CaseDetail() {
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+
+  const dragReorder = useMutation({
+    mutationFn: (stepIds: string[]) => api.cases.reorderSteps(id!, stepIds),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }),
+    onError: (e: Error) => {
+      toast(e.message, 'error');
+      qc.invalidateQueries({ queryKey: ['case', id] });
+    },
+  });
+
+  const onDragEnd = (e: DragEndEvent) => {
+    if (!caseDetail) return;
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const oldIdx = caseDetail.steps.findIndex((s) => s.id === active.id);
+    const newIdx = caseDetail.steps.findIndex((s) => s.id === over.id);
+    if (oldIdx < 0 || newIdx < 0) return;
+    // 拖拽走 reorder（保 step id）；撤销快照手动入栈，undo 用 replaceSteps 恢复
+    historyRef.current.push(caseDetail.steps.map(toClip));
+    if (historyRef.current.length > 20) historyRef.current.shift();
+    dragReorder.mutate(arrayMove(caseDetail.steps.map((s) => s.id), oldIdx, newIdx));
+  };
+
   const saveRuntime = useMutation({
     mutationFn: () => api.cases.patch(id!, { windowStrategy, windowWidth, windowHeight, incognito }),
     onSuccess: () => {
@@ -626,155 +653,156 @@ export default function CaseDetail() {
                     description="点击右侧「AI 补充步骤」让 Agent 起草，或用 Chrome 扩展录制。"
                   />
                 ) : (
-                  <ol className="flex flex-col gap-2">
-                    {caseDetail.steps.map((s, idx) => (
-                      <li
-                        key={s.id}
-                        className="flex items-center gap-3 px-3 py-2 rounded-[8px]"
-                        style={{
-                          background: 'var(--color-background-subtle)',
-                          border: `1px solid ${idx === editingIdx ? 'var(--color-accent)' : 'var(--color-glass-border)'}`,
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selected.has(s.id)}
-                          onChange={(e) => {
-                            const next = new Set(selected);
-                            if (e.target.checked) next.add(s.id);
-                            else next.delete(s.id);
-                            setSelected(next);
-                          }}
-                          style={{ accentColor: 'var(--color-accent)' }}
-                        />
-                        <span className="text-[10px] uppercase font-semibold tracking-wide shrink-0" style={{ color: 'var(--color-accent)' }}>
-                          {s.source}
-                        </span>
-                        <span className="text-[11px] font-mono shrink-0 w-5" style={{ color: 'var(--color-foreground-muted)' }}>
-                          {idx + 1}
-                        </span>
-                        <span className="text-[12px] flex-1 truncate" style={{ color: 'var(--color-foreground)' }} title={stepSummary(s.action)}>
-                          <span className="text-[10px] font-semibold" style={{ color: 'var(--color-accent)' }}>
-                            {stepKindLabel((s.action as { kind?: string }).kind ?? '')}
-                          </span>{' '}
-                          {stepSummary(s.action)}
-                        </span>
-                        {(s.action as { kind?: string; varName?: string }).kind === 'extract' && (
-                          <span
-                            className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-mono"
-                            style={{ border: '1px solid var(--color-accent)', color: 'var(--color-accent)', background: 'transparent' }}
-                            title="抽取变量，供后续步骤 {{引用}}"
-                          >
-                            → {`{{${(s.action as { varName?: string }).varName ?? ''}}}`}
-                          </span>
-                        )}
-                        {(s.action as { kind?: string; compiled?: unknown[] | null }).kind === 'aiStep' &&
-                          (s.action as { compiled?: unknown[] | null }).compiled == null && (
-                            <button
-                              onClick={() => {
-                                const instruction = (s.action as { instruction?: string }).instruction ?? '';
-                                api.cases
-                                  .recompileStep(id!, instruction)
-                                  .then((r) => {
-                                    if (!r.compiled) {
-                                      toast('重新编译失败', 'error');
-                                      return;
-                                    }
-                                    let applied = false;
-                                    mutateSteps((cur) => {
-                                      const i = cur.findIndex((c) => {
-                                        const a = c.action as { kind?: string; instruction?: string };
-                                        return a.kind === 'aiStep' && a.instruction === instruction;
-                                      });
-                                      if (i < 0) return cur;
-                                      applied = true;
-                                      const next = [...cur];
-                                      next[i] = { ...next[i]!, action: { ...(next[i]!.action as object), compiled: r.compiled } };
-                                      return next;
-                                    });
-                                    // applied 在 mutateSteps 内部同步置位；HTTP 失败时此路径不会跑到这里
-                                    toast(applied ? '编译成功' : '步骤已被修改，请刷新后重试', applied ? 'success' : 'error');
-                                  })
-                                  .catch((e: Error) => toast(e.message, 'error'));
+                  <DndContext
+                    sensors={recorder.status === 'recording' ? [] : sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={onDragEnd}
+                  >
+                    <SortableContext items={caseDetail.steps.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+                      <ol className="flex flex-col gap-2">
+                        {caseDetail.steps.map((s, idx) => (
+                          <SortableStepRow key={s.id} id={s.id} disabled={recorder.status === 'recording'} isEditing={idx === editingIdx}>
+                            <input
+                              type="checkbox"
+                              checked={selected.has(s.id)}
+                              onChange={(e) => {
+                                const next = new Set(selected);
+                                if (e.target.checked) next.add(s.id);
+                                else next.delete(s.id);
+                                setSelected(next);
                               }}
-                              className="text-[10px] px-2 py-0.5 rounded-full shrink-0"
-                              style={{ border: '1px solid #b45309', color: '#b45309', background: 'transparent', cursor: 'pointer' }}
-                            >
-                              AI 编译失败 · 点我重编
-                            </button>
-                          )}
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            onClick={() => {
-                              mutateSteps((cur) => {
-                                const next = [...cur];
-                                next.splice(idx + 1, 0, { ...toClip(s) });
-                                return next;
-                              });
-                            }}
-                            disabled={recorder.status === 'recording'}
-                            title="复制此步骤到下一行"
-                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
-                          >
-                            <Icon name="copy" size={12} />
-                          </button>
-                          <button
-                            onClick={() => moveStep.mutate({ stepId: s.id, dir: -1 })}
-                            disabled={idx === 0 || moveStep.isPending}
-                            title="上移"
-                            style={{ background: 'transparent', border: 'none', cursor: idx === 0 ? 'default' : 'pointer', color: 'var(--color-foreground-muted)', opacity: idx === 0 ? 0.3 : 1, padding: 2 }}
-                          >
-                            <Icon name="chevronUp" size={12} />
-                          </button>
-                          <button
-                            onClick={() => moveStep.mutate({ stepId: s.id, dir: 1 })}
-                            disabled={idx === caseDetail.steps.length - 1 || moveStep.isPending}
-                            title="下移"
-                            style={{ background: 'transparent', border: 'none', cursor: idx === caseDetail.steps.length - 1 ? 'default' : 'pointer', color: 'var(--color-foreground-muted)', opacity: idx === caseDetail.steps.length - 1 ? 0.3 : 1, padding: 2 }}
-                          >
-                            <Icon name="chevronDown" size={12} />
-                          </button>
-                          <button
-                            disabled={recorder.status === 'recording'}
-                            onClick={async () => {
-                              const ok = window.confirm('录制前是否先回放该步骤之前的步骤？');
-                              setResumeTarget({ stepId: s.id, order: idx });
-                              setMode('resume');
-                              if (!ok) {
-                                toast('已选中从此处开始，前置步骤不会回放', 'info');
-                              } else {
-                                toast('已选中，录制时会先回放前置步骤', 'info');
-                              }
-                            }}
-                            title="从这里开始录制"
-                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
-                          >
-                            <Icon name="chevronRight" size={12} />
-                          </button>
-                          <button
-                            onClick={() => {
-                              editingIdxRef.current = idx;
-                              setEditingIdx(idx);
-                              editingSnapshotRef.current = toClip(s);
-                              setEditing(toClip(s));
-                            }}
-                            title="编辑"
-                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
-                          >
-                            <Icon name="pencil" size={12} />
-                          </button>
-                          <button
-                            onClick={() => deleteStep.mutate(s.id)}
-                            disabled={deleteStep.isPending}
-                            title="删除"
-                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 2 }}
-                          >
-                            <Icon name="trash" size={12} />
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
+                              style={{ accentColor: 'var(--color-accent)' }}
+                            />
+                            <span className="text-[10px] uppercase font-semibold tracking-wide shrink-0" style={{ color: 'var(--color-accent)' }}>
+                              {s.source}
+                            </span>
+                            <span className="text-[11px] font-mono shrink-0 w-5" style={{ color: 'var(--color-foreground-muted)' }}>
+                              {idx + 1}
+                            </span>
+                            <span className="text-[12px] flex-1 truncate" style={{ color: 'var(--color-foreground)' }} title={stepSummary(s.action)}>
+                              <span className="text-[10px] font-semibold" style={{ color: 'var(--color-accent)' }}>
+                                {stepKindLabel((s.action as { kind?: string }).kind ?? '')}
+                              </span>{' '}
+                              {stepSummary(s.action)}
+                            </span>
+                            {(s.action as { kind?: string; varName?: string }).kind === 'extract' && (
+                              <span
+                                className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-mono"
+                                style={{ border: '1px solid var(--color-accent)', color: 'var(--color-accent)', background: 'transparent' }}
+                                title="抽取变量，供后续步骤 {{引用}}"
+                              >
+                                → {`{{${(s.action as { varName?: string }).varName ?? ''}}}`}
+                              </span>
+                            )}
+                            {(s.action as { kind?: string; compiled?: unknown[] | null }).kind === 'aiStep' &&
+                              (s.action as { compiled?: unknown[] | null }).compiled == null && (
+                                <button
+                                  onClick={() => {
+                                    const instruction = (s.action as { instruction?: string }).instruction ?? '';
+                                    api.cases
+                                      .recompileStep(id!, instruction)
+                                      .then((r) => {
+                                        if (!r.compiled) {
+                                          toast('重新编译失败', 'error');
+                                          return;
+                                        }
+                                        let applied = false;
+                                        mutateSteps((cur) => {
+                                          const i = cur.findIndex((c) => {
+                                            const a = c.action as { kind?: string; instruction?: string };
+                                            return a.kind === 'aiStep' && a.instruction === instruction;
+                                          });
+                                          if (i < 0) return cur;
+                                          applied = true;
+                                          const next = [...cur];
+                                          next[i] = { ...next[i]!, action: { ...(next[i]!.action as object), compiled: r.compiled } };
+                                          return next;
+                                        });
+                                        // applied 在 mutateSteps 内部同步置位；HTTP 失败时此路径不会跑到这里
+                                        toast(applied ? '编译成功' : '步骤已被修改，请刷新后重试', applied ? 'success' : 'error');
+                                      })
+                                      .catch((e: Error) => toast(e.message, 'error'));
+                                  }}
+                                  className="text-[10px] px-2 py-0.5 rounded-full shrink-0"
+                                  style={{ border: '1px solid #b45309', color: '#b45309', background: 'transparent', cursor: 'pointer' }}
+                                >
+                                  AI 编译失败 · 点我重编
+                                </button>
+                              )}
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={() => {
+                                  mutateSteps((cur) => {
+                                    const next = [...cur];
+                                    next.splice(idx + 1, 0, { ...toClip(s) });
+                                    return next;
+                                  });
+                                }}
+                                disabled={recorder.status === 'recording'}
+                                title="复制此步骤到下一行"
+                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
+                              >
+                                <Icon name="copy" size={12} />
+                              </button>
+                              <button
+                                onClick={() => moveStep.mutate({ stepId: s.id, dir: -1 })}
+                                disabled={idx === 0 || moveStep.isPending}
+                                title="上移"
+                                style={{ background: 'transparent', border: 'none', cursor: idx === 0 ? 'default' : 'pointer', color: 'var(--color-foreground-muted)', opacity: idx === 0 ? 0.3 : 1, padding: 2 }}
+                              >
+                                <Icon name="chevronUp" size={12} />
+                              </button>
+                              <button
+                                onClick={() => moveStep.mutate({ stepId: s.id, dir: 1 })}
+                                disabled={idx === caseDetail.steps.length - 1 || moveStep.isPending}
+                                title="下移"
+                                style={{ background: 'transparent', border: 'none', cursor: idx === caseDetail.steps.length - 1 ? 'default' : 'pointer', color: 'var(--color-foreground-muted)', opacity: idx === caseDetail.steps.length - 1 ? 0.3 : 1, padding: 2 }}
+                              >
+                                <Icon name="chevronDown" size={12} />
+                              </button>
+                              <button
+                                disabled={recorder.status === 'recording'}
+                                onClick={async () => {
+                                  const ok = window.confirm('录制前是否先回放该步骤之前的步骤？');
+                                  setResumeTarget({ stepId: s.id, order: idx });
+                                  setMode('resume');
+                                  if (!ok) {
+                                    toast('已选中从此处开始，前置步骤不会回放', 'info');
+                                  } else {
+                                    toast('已选中，录制时会先回放前置步骤', 'info');
+                                  }
+                                }}
+                                title="从这里开始录制"
+                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
+                              >
+                                <Icon name="chevronRight" size={12} />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  editingIdxRef.current = idx;
+                                  setEditingIdx(idx);
+                                  editingSnapshotRef.current = toClip(s);
+                                  setEditing(toClip(s));
+                                }}
+                                title="编辑"
+                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
+                              >
+                                <Icon name="pencil" size={12} />
+                              </button>
+                              <button
+                                onClick={() => deleteStep.mutate(s.id)}
+                                disabled={deleteStep.isPending}
+                                title="删除"
+                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 2 }}
+                              >
+                                <Icon name="trash" size={12} />
+                              </button>
+                            </div>
+                          </SortableStepRow>
+                        ))}
+                      </ol>
+                    </SortableContext>
+                  </DndContext>
                 )}
                 {recorder.status === 'recording' && (
                   <p className="text-[12px] mt-3 flex items-center gap-2" style={{ color: 'var(--color-info)' }}>
