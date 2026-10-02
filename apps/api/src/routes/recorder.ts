@@ -78,6 +78,21 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
   let inserted = 0;
   const existing = await db.select().from(testSteps).where(eq(testSteps.caseId, session.caseId));
   let nextOrder = existing.length > 0 ? Math.max(...existing.map((s) => s.order)) + 1 : 1;
+  // 录制会话由扩展直接打开目标页开始，初始导航不会产生步骤；而回放要求步骤里带 navigate，
+  // 否则浏览器停在 about:blank。对「空用例的录制」补一条 navigate 首步：目标取第一个录制
+  // 步骤发生的页面地址，缺省回退到用例解析链（case.url → group/project default_url）。
+  if (
+    existing.length === 0 &&
+    session.steps.length > 0 &&
+    !session.steps.some((s) => ((s as { action?: { kind?: string } }).action?.kind) === 'navigate')
+  ) {
+    const firstUrl = (session.steps[0] as { url?: string | null } | undefined)?.url ?? null;
+    const url = firstUrl
+      ?? (await resolveCaseUrl((await db.select().from(testCases).where(eq(testCases.id, session.caseId)))[0]!));
+    if (url && /^https?:\/\//.test(url)) {
+      session.steps.unshift({ action: { kind: 'navigate', url } });
+    }
+  }
   for (const step of session.steps) {
     const item = step as { action: unknown; tabRef?: string; componentKind?: string };
     StepAction.parse(item.action);

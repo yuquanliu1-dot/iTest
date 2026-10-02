@@ -3,6 +3,7 @@ import { logger } from '../logger.js';
 import { db } from '../db/client.js';
 import { testCases, testSteps, reports, groups } from '../db/schema.js';
 import { executeCaseReal, type ExecStepResult } from './cdp.js';
+import { resolveCaseUrl } from '../lib/resolve-url.js';
 import type { WindowStrategy, PreflightReport } from '@itest/shared';
 
 /**
@@ -53,6 +54,13 @@ export async function runCase(
   };
   const incognito = !!caseRow.incognito;
 
+  // 回放兜底：录制用例的初始导航由扩展在录制时完成，步骤里往往没有 navigate。
+  // 步骤里一个 navigate 都没有时，用用例解析链（case.url → group/project default_url）
+  // 作为起始 URL，避免浏览器停在 about:blank 导致首个 click/fill 必然超时失败。
+  const hasNavigate = steps.some((s) => ((s.action ?? {}) as { kind?: string }).kind === 'navigate');
+  const resolved = hasNavigate ? null : await resolveCaseUrl(caseRow);
+  const targetUrl = resolved && /^https?:\/\//.test(resolved) ? resolved : undefined;
+
   const startedAt = Date.now();
   let stepResults: ExecStepResult[];
   let preflightReport: PreflightReport | undefined;
@@ -70,7 +78,7 @@ export async function runCase(
         sensitive: s.sensitive,
       })),
       { reportId, projectId },
-      undefined,
+      targetUrl,
       opts?.storageState,
       (r) => {
         preflightReport = r;

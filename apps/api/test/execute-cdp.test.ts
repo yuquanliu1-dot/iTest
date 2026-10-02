@@ -140,6 +140,26 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(loc.selectOption).toHaveBeenCalledWith('cn', expect.objectContaining({ timeout: 5000 }));
   });
 
+  it('hover falls back to first() on strict mode violation', async () => {
+    mocked.__locator.mockClear();
+    // 录制场景常见：文本/CSS 命中多个元素（表格里重复的日期、同名链接）。
+    const okHover = vi.fn().mockResolvedValue(undefined);
+    const multi = {
+      hover: vi.fn().mockRejectedValueOnce(new Error('strict mode violation: locator(\'tr\') resolved to 3 elements')),
+      first: vi.fn().mockReturnValue({ hover: okHover }),
+      count: vi.fn().mockResolvedValue(3),
+    };
+    mocked.__locator.mockImplementationOnce(() => multi as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000027',
+      [{ order: 1, action: { kind: 'hover', locator: [{ strategy: 'css', value: 'tr' }] } }],
+      { reportId: 'r-hover-strict' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(multi.first).toHaveBeenCalled();
+    expect(okHover).toHaveBeenCalled();
+  });
+
   it('upload without bound fileId fails attachment-missing', async () => {
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
