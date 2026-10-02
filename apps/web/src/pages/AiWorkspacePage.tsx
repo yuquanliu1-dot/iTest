@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useUIStore } from '../stores/ui';
 import Icon from '../components/Icon';
+import Button from '../components/ui/Button';
 import ThreadPane from '../features/ai-workspace/ThreadPane';
 import WorkspacePanel from '../features/ai-workspace/WorkspacePanel';
 import SaveDialog from '../features/ai-workspace/SaveDialog';
@@ -82,22 +83,13 @@ export default function AiWorkspacePage() {
   return (
     <div className="flex flex-col h-full">
       <div
-        className="flex items-center gap-3 px-5 py-3 shrink-0"
+        className="flex items-center gap-3 px-5 py-3 shrink-0 fade-up"
         style={{ borderBottom: '1px solid var(--color-glass-border)' }}
       >
-        <button
-          onClick={() => navigate(`/p/${projectId}/groups`)}
-          className="flex items-center gap-1 text-[12px]"
-          style={{
-            background: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            color: 'var(--color-foreground-muted)',
-          }}
-        >
+        <Button variant="plain" size="sm" onClick={() => navigate(`/p/${projectId}/groups`)}>
           <Icon name="chevronLeft" size={12} />
           返回用例列表
-        </button>
+        </Button>
         <h1 className="text-[15px] font-semibold">AI 创建用例</h1>
       </div>
       <div className="flex-1 min-h-0 flex">

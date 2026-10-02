@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
+import Segmented from '../components/ui/Segmented';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import Pagination from '../components/ui/Pagination';
@@ -35,22 +36,16 @@ export default function Executions() {
           <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>用例执行结果与计划运行汇总</p>
         </div>
       </div>
-      <div className="px-5 pt-3 flex gap-2">
-        {(['all', 'case', 'plan'] as Tab[]).map((t) => (
-          <button
-            key={t}
-            onClick={() => { setTab(t); setPage(1); }}
-            className="px-3 py-1.5 rounded-[8px] text-[12px]"
-            style={{
-              background: tab === t ? 'var(--color-accent)' : 'var(--color-background-subtle)',
-              color: tab === t ? 'var(--color-accent-foreground)' : 'var(--color-foreground-secondary)',
-              border: 'none',
-              cursor: 'pointer',
-            }}
-          >
-            {t === 'all' ? '所有' : t === 'case' ? '单用例' : '计划运行'}
-          </button>
-        ))}
+      <div className="px-5 pt-3 fade-up">
+        <Segmented<Tab>
+          options={[
+            { value: 'all', label: '所有', icon: 'list' },
+            { value: 'case', label: '单用例', icon: 'beaker' },
+            { value: 'plan', label: '计划运行', icon: 'flag' },
+          ]}
+          value={tab}
+          onChange={(t) => { setTab(t); setPage(1); }}
+        />
       </div>
       <div
         className="flex-1 min-h-0 mx-5 mb-5 mt-4 flex flex-col rounded-[12px] overflow-hidden"
@@ -71,13 +66,13 @@ export default function Executions() {
               <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>状态</span>
               <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>时间</span>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className="flex-1 min-h-0 overflow-y-auto" data-stagger>
               {rows.map((r) => (
                 <div
                   key={r.id}
+                  data-stagger-item
                   onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/reports/${r.id}`)}
-                  className="grid grid-cols-[80px_1fr_120px_120px] items-center px-5 py-[12px] cursor-pointer transition-colors list-row-clickable"
-                  style={{ borderBottom: '1px solid var(--color-muted)' }}
+                  className="grid grid-cols-[80px_1fr_120px_120px] items-center px-5 py-[12px] cursor-pointer list-row-clickable hairline-bottom"
                 >
                   <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>{r.kind === 'plan' ? '计划' : '用例'}</span>
                   <span className="text-[12px] truncate" style={{ color: 'var(--color-foreground-secondary)' }}>

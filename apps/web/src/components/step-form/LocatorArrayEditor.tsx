@@ -1,5 +1,5 @@
-import type { CSSProperties } from 'react';
 import type { Locator } from '@itest/shared';
+import IconButton from '../ui/IconButton';
 
 interface Props {
   locators: Locator[];
@@ -12,17 +12,6 @@ const STRATEGIES: Locator['strategy'][] = ['role', 'text', 'testId', 'css', 'xpa
 
 /** locator 有序候选数组编辑器：录制会产生多个候选，顺序即回放优先级。 */
 export default function LocatorArrayEditor({ locators, onChange, errors = {} }: Props) {
-  const inputStyle: CSSProperties = {
-    flex: 1, minWidth: 0, padding: '5px 8px', fontSize: 12,
-    border: '1px solid var(--color-glass-border)', borderRadius: 6,
-    background: 'var(--color-background-subtle)', color: 'var(--color-foreground)',
-  };
-  const selectStyle: CSSProperties = { ...inputStyle, flex: '0 0 92px', width: 92 };
-  const btnStyle: CSSProperties = {
-    background: 'transparent', border: 'none', cursor: 'pointer',
-    color: 'var(--color-foreground-muted)', padding: '2px 4px', fontSize: 11,
-  };
-
   const update = (i: number, patch: Partial<Locator>) =>
     onChange(locators.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
   const remove = (i: number) => onChange(locators.filter((_, idx) => idx !== i));
@@ -43,7 +32,8 @@ export default function LocatorArrayEditor({ locators, onChange, errors = {} }: 
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] font-mono shrink-0" style={{ color: 'var(--color-foreground-muted)' }}>{i + 1}</span>
               <select
-                style={selectStyle}
+                className="input-base input-sm shrink-0"
+                style={{ width: 92 }}
                 value={l.strategy}
                 onChange={(e) => update(i, { strategy: e.target.value as Locator['strategy'] })}
               >
@@ -52,21 +42,15 @@ export default function LocatorArrayEditor({ locators, onChange, errors = {} }: 
                 ))}
               </select>
               <input
-                style={{ ...inputStyle, ...(err ? { border: '1px solid var(--color-destructive)' } : {}) }}
+                className="input-base input-sm"
+                style={{ flex: 1, minWidth: 0, ...(err ? { border: '1px solid var(--color-destructive)' } : {}) }}
                 value={l.value}
                 onChange={(e) => update(i, { value: e.target.value })}
                 placeholder="定位值"
               />
-              <button type="button" style={btnStyle} title="上移" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
-              <button type="button" style={btnStyle} title="下移" onClick={() => move(i, 1)} disabled={i === locators.length - 1}>↓</button>
-              <button
-                type="button"
-                style={{ ...btnStyle, color: 'var(--color-destructive)' }}
-                title="删除候选"
-                onClick={() => remove(i)}
-              >
-                ×
-              </button>
+              <IconButton icon="arrowUp" title="上移" disabled={i === 0} onClick={() => move(i, -1)} />
+              <IconButton icon="arrowDown" title="下移" disabled={i === locators.length - 1} onClick={() => move(i, 1)} />
+              <IconButton icon="x" title="删除候选" tone="destructive" onClick={() => remove(i)} />
             </div>
             {err && <span className="text-[11px] pl-5" style={{ color: 'var(--color-destructive)' }}>{err}</span>}
           </div>
@@ -75,7 +59,7 @@ export default function LocatorArrayEditor({ locators, onChange, errors = {} }: 
       <button
         type="button"
         onClick={() => onChange([...locators, { strategy: 'css', value: '' }])}
-        className="text-[11px] px-2 py-1 rounded-[5px] self-start"
+        className="press text-[11px] px-2 py-1 rounded-[5px] self-start"
         style={{ border: '1px dashed var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}
       >
         + 添加候选

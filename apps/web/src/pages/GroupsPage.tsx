@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import TagChip from '../components/ui/Tag';
+import IconButton from '../components/ui/IconButton';
 import LabelsManagerDialog from '../components/labels/LabelsManagerDialog';
 import { shortDateTime } from '../lib/format';
 
@@ -309,12 +310,13 @@ export default function GroupsPage() {
         </div>
 
         <button
+          data-active={!effectiveGroupId || undefined}
           onClick={() => navigate(`/p/${projectId}/groups`)}
-          className="text-left px-2 py-1.5 rounded-[6px] text-[13px]"
+          className="group-nav-item text-left px-2 py-1.5 rounded-[6px] text-[13px]"
           style={{
-            background: !effectiveGroupId ? 'var(--color-accent-light)' : 'transparent',
             color: !effectiveGroupId ? 'var(--color-accent)' : 'var(--color-foreground-secondary)',
-            border: 'none', cursor: 'pointer', fontWeight: !effectiveGroupId ? 500 : 400,
+            fontWeight: !effectiveGroupId ? 500 : 400,
+            border: 'none', cursor: 'pointer',
           }}
         >
           全部用例（{cases?.length ?? 0}）
@@ -325,47 +327,45 @@ export default function GroupsPage() {
             <Icon name="loader" size={14} className="animate-spin" />
           </div>
         ) : (
-          (groups ?? []).map((g) => (
-            <div
-              key={g.id}
-              className="group flex items-center gap-1 px-2 py-1.5 rounded-[6px] cursor-pointer"
-              style={{ background: effectiveGroupId === g.id ? 'var(--color-accent-light)' : 'transparent' }}
-              onClick={() => navigate(`/p/${projectId}/groups/${g.id}`)}
-            >
-              <Icon name="gitBranch" size={12} style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }} />
-              <span
-                className="flex-1 truncate text-[13px]"
-                style={{ color: effectiveGroupId === g.id ? 'var(--color-accent)' : 'var(--color-foreground-secondary)', fontWeight: effectiveGroupId === g.id ? 500 : 400 }}
-                title={g.defaultUrl ?? undefined}
+          (groups ?? []).map((g) => {
+            const active = effectiveGroupId === g.id;
+            return (
+              <div
+                key={g.id}
+                data-active={active || undefined}
+                onClick={() => navigate(`/p/${projectId}/groups/${g.id}`)}
+                className="group-nav-item group flex items-center gap-1 px-2 py-1.5 rounded-[6px] cursor-pointer"
               >
-                {g.name}
-              </span>
-              <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>{g.caseCount}</span>
-              <span className="hidden group-hover:flex items-center" onClick={(e) => e.stopPropagation()}>
-                <button
-                  title="重命名"
-                  onClick={() => setGroupForm({ open: true, mode: 'edit', id: g.id, name: g.name, defaultUrl: g.defaultUrl ?? '' })}
-                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
+                <Icon name="gitBranch" size={12} style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }} />
+                <span
+                  className="flex-1 truncate text-[13px]"
+                  style={{ color: active ? 'var(--color-accent)' : 'var(--color-foreground-secondary)', fontWeight: active ? 500 : 400 }}
+                  title={g.defaultUrl ?? undefined}
                 >
-                  <Icon name="pencil" size={11} />
-                </button>
-                <button
-                  title="默认域名"
-                  onClick={() => setGroupForm({ open: true, mode: 'url', id: g.id, name: g.name, defaultUrl: g.defaultUrl ?? '' })}
-                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
-                >
-                  <Icon name="externalLink" size={11} />
-                </button>
-                <button
-                  title="删除分组"
-                  onClick={() => setConfirmDeleteGroup({ id: g.id, name: g.name })}
-                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 2 }}
-                >
-                  <Icon name="trash" size={11} />
-                </button>
-              </span>
-            </div>
-          ))
+                  {g.name}
+                </span>
+                <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>{g.caseCount}</span>
+                <span className="hidden group-hover:flex items-center" onClick={(e) => e.stopPropagation()}>
+                  <IconButton
+                    icon="pencil"
+                    title="重命名"
+                    onClick={() => setGroupForm({ open: true, mode: 'edit', id: g.id, name: g.name, defaultUrl: g.defaultUrl ?? '' })}
+                  />
+                  <IconButton
+                    icon="externalLink"
+                    title="默认域名"
+                    onClick={() => setGroupForm({ open: true, mode: 'url', id: g.id, name: g.name, defaultUrl: g.defaultUrl ?? '' })}
+                  />
+                  <IconButton
+                    icon="trash"
+                    title="删除分组"
+                    tone="destructive"
+                    onClick={() => setConfirmDeleteGroup({ id: g.id, name: g.name })}
+                  />
+                </span>
+              </div>
+            );
+          })
         )}
       </div>
 
@@ -449,7 +449,7 @@ export default function GroupsPage() {
               </button>
               {tagPickerOpen && (
                 <div
-                  className="absolute right-0 top-full mt-1 z-50 rounded-[8px] overflow-hidden"
+                  className="absolute right-0 top-full mt-1 z-50 rounded-[8px] overflow-hidden popover-in"
                   style={{
                     width: 220,
                     border: '1px solid var(--color-glass-border)',
@@ -611,28 +611,24 @@ export default function GroupsPage() {
                       className="flex items-center justify-end gap-1"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <button
+                      <IconButton
+                        icon={executeCase.isPending && executeCase.variables === c.id ? 'loader' : 'play'}
                         title="执行"
+                        tone="accent"
                         disabled={executeCase.isPending && executeCase.variables === c.id}
                         onClick={() => executeCase.mutate(c.id)}
-                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-primary, #6366f1)', padding: 2 }}
-                      >
-                        <Icon name={executeCase.isPending && executeCase.variables === c.id ? 'loader' : 'play'} size={12} className={executeCase.isPending && executeCase.variables === c.id ? 'animate-spin' : undefined} />
-                      </button>
-                      <button
+                      />
+                      <IconButton
+                        icon="copy"
                         title="复制"
                         onClick={() => { setCopyTarget(''); setCopyModal({ caseIds: [c.id] }); }}
-                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
-                      >
-                        <Icon name="copy" size={12} />
-                      </button>
-                      <button
+                      />
+                      <IconButton
+                        icon="trash"
                         title="删除"
+                        tone="destructive"
                         onClick={() => setConfirmDeleteCase({ id: c.id, title: c.title })}
-                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 2 }}
-                      >
-                        <Icon name="trash" size={12} />
-                      </button>
+                      />
                     </span>
                   </div>
                 ))}
