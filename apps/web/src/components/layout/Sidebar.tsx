@@ -183,6 +183,7 @@ export default function Sidebar() {
               </Tooltip.Trigger>
               <Tooltip.Portal>
                 <Tooltip.Content
+                  className="popover-in"
                   side="right"
                   sideOffset={6}
                   style={{

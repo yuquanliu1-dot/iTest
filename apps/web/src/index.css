@@ -318,6 +318,17 @@ select:focus-visible {
   animation: dialog-content-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* ── Radix popover / dropdown / tooltip motion ─────────────────────────────
+   Only animates `transform: scale` (no translate) so Radix's anchor-rect
+   positioning is preserved; using .dialog-content here would reapply the modal's
+   translate(-50%, -50%) and cause the popover to flash at the wrong place
+   before snapping back. */
+@keyframes popover-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.popover-in { animation: popover-in 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
+
 /* ── Toast slide-in ──────────────────────────────────────────────────────── */
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px) scale(0.98); }
@@ -337,6 +348,7 @@ select:focus-visible {
   .toast-in,
   .dialog-overlay,
   .dialog-content,
+  .popover-in,
   .skeleton,
   .aurora::before,
   .aurora::after {
