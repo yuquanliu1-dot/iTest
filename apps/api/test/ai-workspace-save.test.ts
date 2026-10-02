@@ -33,7 +33,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE ai_workspace_state, ai_threads, scenarios, test_cases, test_steps, requirements, "groups", projects RESTART IDENTITY CASCADE`);
+  await pool.query(`TRUNCATE ai_workspace_state, ai_scenarios, ai_cases, ai_threads, scenarios, test_cases, test_steps, requirements, "groups", projects RESTART IDENTITY CASCADE`);
 });
 
 describe('ai-thread + ai-workspace + save', () => {
@@ -70,6 +70,41 @@ describe('ai-thread + ai-workspace + save', () => {
     expect((steps.rows[0]!.assertion as { kind: string }).kind).toBe('assertText');
     const doc = await ws.loadDoc(rid);
     expect(doc.scenarios).toEqual([]);
+  });
+
+  it('POST /:id/ai-workspace/save expands multi-step instructions and compiles aiStep when LLM mock provided', async () => {
+    const llmMod = await import('../src/agent/llmSettings.js');
+    const mockClient = {
+      provider: 'openai' as const,
+      complete: async () => ({ kind: 'json' as const, value: { steps: [{ kind: 'navigate', url: 'http://localhost/login' }] }, provider: 'openai' as const, vision: false }),
+    };
+    llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
+    try {
+      const ws = await import('../src/pi/workspace.js');
+      const { projectId, groupId } = await seedProject(pool);
+      const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
+      const rid = r.rows[0]!.id as string;
+      // instruction 用编号列表触发 splitAiStepsInPlace；同时会经过 compileAiStep -> mock 返回 navigate。
+      await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
+        { id: 'c1', title: 'C1', description: 'd', priority: 'P0', steps: [
+          { name: 'multi', action: '1. 打开登录页\n2. 输入手机号', assertion: 'assert' },
+        ] },
+      ] });
+      const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
+        .send({ groupId, scenarioIds: ['s1'], caseIds: ['c1'] });
+      expect(saved.status).toBe(200);
+      const steps = await pool.query(
+        `SELECT action FROM test_steps WHERE case_id = (SELECT id FROM test_cases WHERE requirement_id = $1 LIMIT 1) ORDER BY "order"`,
+        [rid],
+      );
+      // 拆条 + 编译后应该至少 2 条；第一条 instruction 应是拆条后的子串，compiled 应被 mock 写入。
+      expect(steps.rows.length).toBeGreaterThanOrEqual(2);
+      const first = steps.rows[0]!.action as { kind: string; instruction: string; compiled: unknown };
+      expect(first.kind).toBe('aiStep');
+      expect(first.compiled).toEqual([{ kind: 'navigate', url: 'http://localhost/login' }]);
+    } finally {
+      llmMod.__setLlmClientForTest(null);
+    }
   });
 
   it('save reuses scenario row by (requirementId, title)', async () => {
@@ -133,5 +168,24 @@ describe('ai-thread + ai-workspace + save', () => {
     expect(onlyLoose.body.savedCases).toBe(1);
     const cases = await pool.query(`SELECT title FROM test_cases WHERE requirement_id = $1 ORDER BY title`, [rid2]);
     expect(cases.rows.map((row) => row.title)).toEqual(['Loose']);
+  });
+
+  it('explicit caseId under unselected scenario saves only that case (partial selection)', async () => {
+    const ws = await import('../src/pi/workspace.js');
+    const { projectId, groupId } = await seedProject(pool);
+    const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
+    const rid = r.rows[0]!.id as string;
+    await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
+      { id: 'c1', title: 'C1', description: null, priority: 'P0', steps: [] },
+      { id: 'c2', title: 'C2', description: null, priority: 'P1', steps: [] },
+    ] });
+    // 场景 s1 未勾选，只显式勾选 c1：预期只保存 C1，且挂到场景行 S 下
+    const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
+      .send({ groupId, scenarioIds: [], caseIds: ['c1'] });
+    expect(saved.status).toBe(200);
+    expect(saved.body.savedCases).toBe(1);
+    const rows = await pool.query(`SELECT tc.title, sc.title AS scenario_title FROM test_cases tc LEFT JOIN scenarios sc ON sc.id = tc.scenario_id WHERE tc.requirement_id = $1`, [rid]);
+    expect(rows.rows.map((row) => row.title)).toEqual(['C1']);
+    expect(rows.rows[0]!.scenario_title).toBe('S');
   });
 });

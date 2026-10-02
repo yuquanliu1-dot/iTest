@@ -35,12 +35,62 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
 
   const [selectedCases, setSelectedCases] = useState<Set<string>>(new Set());
   const [selectedScenarios, setSelectedScenarios] = useState<Set<string>>(new Set());
+  // 选中语义：勾选场景 = 全选其下用例；勾/取消单个用例时父场景自动同步（全选则勾，部分则不勾）。
+  // 后端按「场景全量 + 显式 caseIds」取并集保存，因此场景下用例的部分勾选是合法操作。
+  const scenarioById = useMemo(() => new Map((doc?.scenarios ?? []).map((s) => [s.id, s])), [doc]);
+
+  const toggleScenario = (scenarioId: string, checked: boolean) => {
+    setSelectedScenarios((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(scenarioId);
+      else next.delete(scenarioId);
+      return next;
+    });
+    const s = scenarioById.get(scenarioId);
+    if (!s) return;
+    const nextCases = new Set(selectedCases);
+    for (const c of s.cases) {
+      if (checked) nextCases.add(c.id);
+      else nextCases.delete(c.id);
+    }
+    setSelectedCases(nextCases);
+  };
+
+  const toggleCase = (caseId: string, scenarioId: string, checked: boolean) => {
+    const nextCases = new Set(selectedCases);
+    if (checked) nextCases.add(caseId);
+    else nextCases.delete(caseId);
+    setSelectedCases(nextCases);
+    const s = scenarioById.get(scenarioId);
+    if (!s || s.cases.length === 0) return;
+    const allSelected = s.cases.every((c) => nextCases.has(c.id));
+    setSelectedScenarios((prev) => {
+      const next = new Set(prev);
+      if (allSelected) next.add(scenarioId);
+      else next.delete(scenarioId);
+      return next;
+    });
+  };
 
   const totalCases = useMemo(() => {
     if (!doc) return 0;
     return doc.scenarios.reduce((n, s) => n + s.cases.length, 0) + doc.looseCases.length;
   }, [doc]);
   const progress = doc?.plan ? Math.min(1, totalCases / Math.max(1, doc.plan.cases)) : 0;
+
+  // 保存后 doc 会移除已保存条目；按当前 doc 过滤掉失效的选中 id，避免计数/提交脏数据
+  const liveSelection = useMemo(() => {
+    const caseIds = new Set<string>();
+    if (doc) {
+      for (const s of doc.scenarios) for (const c of s.cases) caseIds.add(c.id);
+      for (const c of doc.looseCases) caseIds.add(c.id);
+    }
+    const scenarioIds = new Set((doc?.scenarios ?? []).map((s) => s.id));
+    return {
+      caseIds: new Set([...selectedCases].filter((id) => caseIds.has(id))),
+      scenarioIds: new Set([...selectedScenarios].filter((id) => scenarioIds.has(id))),
+    };
+  }, [doc, selectedCases, selectedScenarios]);
 
   if (!doc) return <div style={{ padding: 16 }}>加载中…</div>;
   return (
@@ -63,29 +113,28 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
         <Button
           onClick={() =>
             onOpenSave({
-              scenarioIds: [...selectedScenarios],
-              caseIds: [...selectedCases],
+              scenarioIds: [...liveSelection.scenarioIds],
+              caseIds: [...liveSelection.caseIds],
             })
           }
-          disabled={selectedCases.size === 0 && selectedScenarios.size === 0}
+          disabled={liveSelection.caseIds.size === 0 && liveSelection.scenarioIds.size === 0}
         >
-          保存所选 ({selectedCases.size + selectedScenarios.size})
+          保存所选 ({liveSelection.caseIds.size})
         </Button>
       </div>
-      {doc.scenarios.map((s) => (
+      {doc.scenarios.map((s) => {
+        const allSelected = s.cases.length > 0 && s.cases.every((c) => selectedCases.has(c.id));
+        const someSelected = s.cases.some((c) => selectedCases.has(c.id));
+        return (
         <div key={s.id} className="glass-card rounded-[12px] p-4">
           <label className="flex items-center gap-2 text-[13px] font-semibold">
             <input
               type="checkbox"
               checked={selectedScenarios.has(s.id)}
-              onChange={(e) =>
-                setSelectedScenarios((prev) => {
-                  const next = new Set(prev);
-                  if (e.target.checked) next.add(s.id);
-                  else next.delete(s.id);
-                  return next;
-                })
-              }
+              ref={(el) => {
+                if (el) el.indeterminate = !allSelected && someSelected;
+              }}
+              onChange={(e) => toggleScenario(s.id, e.target.checked)}
             />
             {s.title}
           </label>
@@ -95,14 +144,7 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
                 <input
                   type="checkbox"
                   checked={selectedCases.has(c.id)}
-                  onChange={(e) =>
-                    setSelectedCases((prev) => {
-                      const next = new Set(prev);
-                      if (e.target.checked) next.add(c.id);
-                      else next.delete(c.id);
-                      return next;
-                    })
-                  }
+                  onChange={(e) => toggleCase(c.id, s.id, e.target.checked)}
                 />
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
@@ -117,7 +159,8 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
             ))}
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
