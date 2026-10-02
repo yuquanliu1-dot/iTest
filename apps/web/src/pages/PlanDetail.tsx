@@ -7,7 +7,8 @@ import Icon from '../components/Icon';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/Modal';
+import IconButton from '../components/ui/IconButton';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
 
 type Strategy = 'run_all' | 'fail_fast';
 
@@ -24,6 +25,7 @@ export default function PlanDetail() {
   });
 
   const [showAdd, setShowAdd] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
   const [selectedAdd, setSelectedAdd] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -202,10 +204,10 @@ export default function PlanDetail() {
         )}
         <Button
           variant="secondary"
-          onClick={() => {
-            if (confirm('确认删除该执行计划？')) remove.mutate();
-          }}
+          onClick={() => setShowDelete(true)}
           style={{ color: 'var(--color-destructive)' }}
+          aria-label="删除执行计划"
+          title="删除执行计划"
         >
           <Icon name="trash" size={12} />
         </Button>
@@ -300,16 +302,17 @@ export default function PlanDetail() {
         </div>
 
         <div className="glass-card rounded-[12px] p-5">
-          <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
+          <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3 hairline-bottom pb-2" style={{ color: 'var(--color-foreground-muted)' }}>
             用例顺序 ({plan.cases.length})
           </div>
           {plan.cases.length === 0 ? (
             <EmptyState icon="flag" title="还没有用例" description="点击右上「添加用例」选择场景。" />
           ) : (
-            <ol className="flex flex-col gap-2">
+            <ol className="flex flex-col gap-2" data-stagger>
               {plan.cases.map((c, idx) => (
                 <li
                   key={c.id}
+                  data-stagger-item
                   draggable
                   onDragStart={(e) => onDragStart(e, idx)}
                   onDragOver={(e) => e.preventDefault()}
@@ -317,17 +320,13 @@ export default function PlanDetail() {
                   className="flex items-center gap-3 px-3 py-2 rounded-[8px] list-row-clickable"
                   style={{ background: 'var(--color-background-subtle)', border: '1px solid var(--color-glass-border)' }}
                 >
-                  <span className="cursor-grab text-[11px] font-mono shrink-0" style={{ color: 'var(--color-foreground-muted)' }}>⋮⋮</span>
+                  <Icon name="gripVertical" size={12} className="cursor-grab shrink-0" style={{ color: 'var(--color-foreground-muted)' }} />
                   <span className="text-[11px] font-mono shrink-0 w-5" style={{ color: 'var(--color-foreground-muted)' }}>{idx + 1}</span>
                   <span onClick={() => navigate(`/p/${projectId}/cases/${c.id}`)} className="text-[12px] flex-1 truncate cursor-pointer" style={{ color: 'var(--color-foreground)' }}>
                     {c.title}
                   </span>
-                  <button onClick={() => moveBy(idx, -1)} className="text-[11px]" style={{ background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)' }} aria-label="上移">
-                    <Icon name="chevronUp" size={12} />
-                  </button>
-                  <button onClick={() => moveBy(idx, 1)} className="text-[11px]" style={{ background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)' }} aria-label="下移">
-                    <Icon name="chevronDown" size={12} />
-                  </button>
+                  <IconButton icon="chevronUp" title="上移" onClick={() => moveBy(idx, -1)} />
+                  <IconButton icon="chevronDown" title="下移" onClick={() => moveBy(idx, 1)} />
                   <StatusPill status="default">{c.id.slice(0, 8)}</StatusPill>
                 </li>
               ))}
@@ -378,21 +377,45 @@ export default function PlanDetail() {
               })
             )}
           </div>
-          <div className="flex justify-between items-center px-5 py-3 border-t" style={{ borderColor: 'var(--color-border)' }}>
-            <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>已选 {selectedAdd.size}</span>
-            <div className="flex gap-2">
-              <Button variant="plain" onClick={() => setShowAdd(false)}>取消</Button>
-              <Button
-                disabled={selectedAdd.size === 0}
-                onClick={() => {
-                  const next = [...plan.cases.map((c) => c.id), ...Array.from(selectedAdd)];
-                  setCases.mutate(next);
-                }}
-              >
-                加入计划
-              </Button>
-            </div>
+          <DialogFooter>
+            <span className="text-[12px] mr-auto" style={{ color: 'var(--color-foreground-muted)' }}>已选 {selectedAdd.size}</span>
+            <Button variant="plain" onClick={() => setShowAdd(false)}>取消</Button>
+            <Button
+              disabled={selectedAdd.size === 0}
+              onClick={() => {
+                const next = [...plan.cases.map((c) => c.id), ...Array.from(selectedAdd)];
+                setCases.mutate(next);
+              }}
+            >
+              加入计划
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showDelete} onOpenChange={setShowDelete}>
+        <DialogContent style={{ maxWidth: 420 }}>
+          <DialogHeader>
+            <DialogTitle>删除执行计划</DialogTitle>
+          </DialogHeader>
+          <div className="px-5 py-4 flex flex-col gap-2">
+            <p className="text-[13px]" style={{ color: 'var(--color-foreground)' }}>
+              确认删除「{plan.name}」？历史执行报告将保留，但计划本身不可恢复。
+            </p>
           </div>
+          <DialogFooter>
+            <Button variant="plain" onClick={() => setShowDelete(false)}>取消</Button>
+            <Button
+              onClick={() => {
+                setShowDelete(false);
+                remove.mutate();
+              }}
+              disabled={remove.isPending}
+              style={{ background: 'var(--color-destructive)', color: '#fff', border: 'none' }}
+            >
+              {remove.isPending ? '删除中...' : '确认删除'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

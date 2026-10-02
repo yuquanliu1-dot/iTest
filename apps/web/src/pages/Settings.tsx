@@ -5,6 +5,7 @@ import { useUIStore } from '../stores/ui';
 import { useThemeStore } from '../stores/theme';
 import Icon from '../components/Icon';
 import Button from '../components/ui/Button';
+import Input from '../components/ui/Input';
 import Toggle from '../components/ui/Toggle';
 
 const PROVIDERS = [
@@ -90,11 +91,11 @@ export default function Settings() {
       {/* Two-panel card（iDO 设置页规范） */}
       <div className="flex h-full gap-3 p-3 flex-1 min-h-0">
         <div
-          className="shrink-0 flex flex-col"
-          style={{ width: 240, background: 'var(--color-background-elevated)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-glass-border)' }}
+          className="glass-card shrink-0 flex flex-col"
+          style={{ width: 240 }}
         >
-          <div className="shrink-0" style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-glass-border)' }}>
-            <h2 className="text-[14px] font-semibold" style={{ color: 'var(--color-foreground)', margin: 0 }}>
+          <div className="hairline-bottom" style={{ padding: '12px 16px' }}>
+            <h2 className="text-[14px] font-semibold m-0" style={{ color: 'var(--color-foreground)' }}>
               设置面板
             </h2>
           </div>
@@ -105,6 +106,7 @@ export default function Settings() {
                 <button
                   key={p.key}
                   onClick={() => setPanel(p.key)}
+                  data-active={active || undefined}
                   className="group-nav-item block"
                   style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', textAlign: 'left', padding: 0 }}
                 >
@@ -129,10 +131,7 @@ export default function Settings() {
           </div>
         </div>
 
-        <div
-          className="flex-1 min-w-0 overflow-y-auto"
-          style={{ background: 'var(--color-background-elevated)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-glass-border)', padding: 20 }}
-        >
+        <div className="glass-card flex-1 min-w-0 overflow-y-auto" style={{ padding: 20 }}>
           {panel === 'llm' && (
             <div className="flex flex-col gap-4 max-w-xl">
               <div>
@@ -150,24 +149,16 @@ export default function Settings() {
                   ))}
                 </select>
               </div>
+              <Input
+                type="password"
+                label="API Key"
+                placeholder="sk-..."
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
               <div>
-                <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)', display: 'block', marginBottom: 4 }}>
-                  API Key
-                </label>
-                <input
-                  className="input-base"
-                  type="password"
-                  placeholder="sk-..."
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)', display: 'block', marginBottom: 4 }}>
-                  Base URL（可选）
-                </label>
-                <input
-                  className="input-base"
+                <Input
+                  label="Base URL（可选）"
                   placeholder="https://api.anthropic.com（留空用官方地址）"
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
@@ -177,11 +168,8 @@ export default function Settings() {
                 </p>
               </div>
               <div>
-                <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)', display: 'block', marginBottom: 4 }}>
-                  Model
-                </label>
-                <input
-                  className="input-base"
+                <Input
+                  label="Model"
                   placeholder="留空使用默认模型"
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
@@ -234,9 +222,7 @@ export default function Settings() {
                 </p>
               </div>
               <div className="flex flex-col gap-3">
-                <div className="flex items-center justify-between p-4 rounded-[8px]"
-                  style={{ background: 'var(--color-background-subtle)', border: '1px solid var(--color-glass-border)' }}
-                >
+                <div className="glass-card flex items-center justify-between" style={{ padding: 16 }}>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-foreground)' }}>深色玻璃</div>
                     <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>

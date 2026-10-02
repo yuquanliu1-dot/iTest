@@ -11,6 +11,7 @@ import Icon from '../components/Icon';
 import StatusPill from '../components/ui/StatusPill';
 import PriorityBadge from '../components/ui/PriorityBadge';
 import Button from '../components/ui/Button';
+import IconButton from '../components/ui/IconButton';
 import Input from '../components/ui/Input';
 import Segmented from '../components/ui/Segmented';
 import Toggle from '../components/ui/Toggle';
@@ -631,7 +632,7 @@ export default function CaseDetail() {
                     varReport.invalidNames.length > 0) && (
                   <div
                     className="rounded-[8px] px-3 py-2 mb-3 text-[11px]"
-                    style={{ border: '1px solid #b45309', color: '#b45309', background: 'rgba(180, 83, 9, 0.08)' }}
+                    style={{ border: '1px solid var(--color-warning-border)', color: 'var(--color-warning-text)', background: 'var(--color-warning-light)' }}
                   >
                     <div className="font-semibold mb-1">变量体检提示（不阻断保存，回放时未定义变量会报错）</div>
                     <ul className="list-disc pl-4 flex flex-col gap-0.5">
@@ -735,14 +736,17 @@ export default function CaseDetail() {
                                       })
                                       .catch((e: Error) => toast(e.message, 'error'));
                                   }}
-                                  className="text-[10px] px-2 py-0.5 rounded-full shrink-0"
-                                  style={{ border: '1px solid #b45309', color: '#b45309', background: 'transparent', cursor: 'pointer' }}
+                                  className="text-[10px] px-2 py-0.5 rounded-full shrink-0 press"
+                                  style={{ border: '1px solid var(--color-warning-border)', color: 'var(--color-warning-text)', background: 'var(--color-warning-light)', cursor: 'pointer' }}
                                 >
                                   AI 编译失败 · 点我重编
                                 </button>
                               )}
                             <div className="flex items-center gap-1 shrink-0">
-                              <button
+                              <IconButton
+                                icon="copy"
+                                title="复制此步骤到下一行"
+                                disabled={recorder.status === 'recording'}
                                 onClick={() => {
                                   mutateSteps((cur) => {
                                     const next = [...cur];
@@ -750,29 +754,22 @@ export default function CaseDetail() {
                                     return next;
                                   });
                                 }}
-                                disabled={recorder.status === 'recording'}
-                                title="复制此步骤到下一行"
-                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
-                              >
-                                <Icon name="copy" size={12} />
-                              </button>
-                              <button
-                                onClick={() => moveStep.mutate({ stepId: s.id, dir: -1 })}
-                                disabled={idx === 0 || moveStep.isPending}
+                              />
+                              <IconButton
+                                icon="chevronUp"
                                 title="上移"
-                                style={{ background: 'transparent', border: 'none', cursor: idx === 0 ? 'default' : 'pointer', color: 'var(--color-foreground-muted)', opacity: idx === 0 ? 0.3 : 1, padding: 2 }}
-                              >
-                                <Icon name="chevronUp" size={12} />
-                              </button>
-                              <button
-                                onClick={() => moveStep.mutate({ stepId: s.id, dir: 1 })}
-                                disabled={idx === caseDetail.steps.length - 1 || moveStep.isPending}
+                                disabled={idx === 0 || moveStep.isPending}
+                                onClick={() => moveStep.mutate({ stepId: s.id, dir: -1 })}
+                              />
+                              <IconButton
+                                icon="chevronDown"
                                 title="下移"
-                                style={{ background: 'transparent', border: 'none', cursor: idx === caseDetail.steps.length - 1 ? 'default' : 'pointer', color: 'var(--color-foreground-muted)', opacity: idx === caseDetail.steps.length - 1 ? 0.3 : 1, padding: 2 }}
-                              >
-                                <Icon name="chevronDown" size={12} />
-                              </button>
-                              <button
+                                disabled={idx === caseDetail.steps.length - 1 || moveStep.isPending}
+                                onClick={() => moveStep.mutate({ stepId: s.id, dir: 1 })}
+                              />
+                              <IconButton
+                                icon="chevronRight"
+                                title="从这里开始录制"
                                 disabled={recorder.status === 'recording'}
                                 onClick={async () => {
                                   const ok = window.confirm('录制前是否先回放该步骤之前的步骤？');
@@ -784,31 +781,24 @@ export default function CaseDetail() {
                                     toast('已选中，录制时会先回放前置步骤', 'info');
                                   }
                                 }}
-                                title="从这里开始录制"
-                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
-                              >
-                                <Icon name="chevronRight" size={12} />
-                              </button>
-                              <button
+                              />
+                              <IconButton
+                                icon="pencil"
+                                title="编辑"
                                 onClick={() => {
                                   editingIdxRef.current = idx;
                                   setEditingIdx(idx);
                                   editingSnapshotRef.current = toClip(s);
                                   setEditing(toClip(s));
                                 }}
-                                title="编辑"
-                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
-                              >
-                                <Icon name="pencil" size={12} />
-                              </button>
-                              <button
-                                onClick={() => deleteStep.mutate(s.id)}
-                                disabled={deleteStep.isPending}
+                              />
+                              <IconButton
+                                icon="trash"
                                 title="删除"
-                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 2 }}
-                              >
-                                <Icon name="trash" size={12} />
-                              </button>
+                                tone="destructive"
+                                disabled={deleteStep.isPending}
+                                onClick={() => deleteStep.mutate(s.id)}
+                              />
                             </div>
                           </SortableStepRow>
                         ))}
@@ -875,7 +865,7 @@ export default function CaseDetail() {
               </div>
               {tagPickerOpen && tagPickerAnchor && createPortal(
                 <div
-                  className="rounded-[8px] overflow-hidden"
+                  className="rounded-[8px] overflow-hidden popover-in"
                   style={{
                     position: 'fixed',
                     top: tagPickerAnchor.top,

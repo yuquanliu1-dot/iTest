@@ -72,11 +72,12 @@ export default function Dashboard() {
       </div>
 
       {/* Stat cards — 3 列 grid，每张卡都是 iDO glass-panel 风格 */}
-      <div className="grid grid-cols-3 gap-4 px-5 pt-4">
+      <div className="grid grid-cols-3 gap-4 px-5 pt-4 fade-up" data-stagger>
         {stats.isLoading ? (
           Array.from({ length: 3 }).map((_, i) => (
             <div
               key={i}
+              data-stagger-item
               className="glass-panel rounded-[12px] p-5 flex items-center justify-center"
               style={{ minHeight: 92, color: 'var(--color-foreground-muted)' }}
             >
@@ -91,6 +92,7 @@ export default function Dashboard() {
           ].map((c) => (
             <div
               key={c.label}
+              data-stagger-item
               onClick={() => navigate(c.to)}
               className="glass-panel rounded-[12px] p-5 cursor-pointer hover-card"
               style={{ minHeight: 92 }}
@@ -124,8 +126,7 @@ export default function Dashboard() {
               <div
                 key={r.id}
                 onClick={() => navigate(`/p/${projectId}/reports/${r.id}`)}
-                className="flex items-center gap-4 px-5 py-[12px] cursor-pointer list-row-clickable"
-                style={{ borderBottom: '1px solid var(--color-muted)' }}
+                className="flex items-center gap-4 px-5 py-[12px] cursor-pointer list-row-clickable hairline-bottom"
               >
                 <Icon name="play" size={14} style={{ color: 'var(--color-foreground-muted)' }} />
                 <span className="flex-1 truncate" style={{ fontSize: 13, color: 'var(--color-foreground)' }}>

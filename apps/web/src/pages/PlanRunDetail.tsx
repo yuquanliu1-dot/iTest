@@ -2,6 +2,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
+import Button from '../components/ui/Button';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import { fullDateTime } from '../lib/format';
@@ -47,35 +48,31 @@ export default function PlanRunDetail() {
         </div>
 
         <div className="glass-card rounded-[12px] overflow-hidden">
-          <div className="px-5 py-[10px]" style={{ background: 'var(--color-background-subtle)', borderBottom: '1px solid var(--color-border)' }}>
+          <div className="px-5 py-[10px] hairline-bottom" style={{ background: 'var(--color-background-subtle)' }}>
             <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>时间线</span>
           </div>
           {run.cases.length === 0 ? (
             <EmptyState icon="listChecks" title="暂无步骤" />
           ) : (
-            <div className="flex flex-col">
+            <div className="flex flex-col" data-stagger>
               {run.cases.map((c) => (
-                <div key={c.id} className="flex items-start gap-3 px-5 py-3" style={{ borderBottom: '1px solid var(--color-muted)' }}>
-                  <span className="font-mono text-[12px] shrink-0 mt-0.5" style={{ color: c.status === 'passed' ? 'var(--color-success)' : c.status === 'failed' ? 'var(--color-destructive)' : 'var(--color-foreground-muted)' }}>
-                    {c.status === 'passed' ? '✓' : c.status === 'failed' ? '✕' : '•'} #{c.order} {c.stepKind === 'login_prepare' ? '登录' : ''}
+                <div key={c.id} data-stagger-item className="flex items-start gap-3 px-5 py-3 hairline-bottom">
+                  <span className="font-mono text-[12px] shrink-0 mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
+                    #{c.order} {c.stepKind === 'login_prepare' ? '登录' : ''}
                   </span>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[12px]" style={{ color: 'var(--color-foreground)' }}>
-                      <span className="mr-2">{c.caseTitle ?? <span style={{ color: 'var(--color-foreground-muted)' }}>已删除用例</span>}</span>
-                      <span className="font-mono text-[11px] mr-2" style={{ color: 'var(--color-foreground-muted)' }}>{c.caseId.slice(0, 8)}</span>
-                      <StatusPill status={c.status}>{c.status}</StatusPill>
-                      <span className="ml-2 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>{c.durationMs ?? 0} ms</span>
+                    <div className="text-[12px] flex items-center gap-2 flex-wrap" style={{ color: 'var(--color-foreground)' }}>
+                      <span className="mr-1">{c.caseTitle ?? <span style={{ color: 'var(--color-foreground-muted)' }}>已删除用例</span>}</span>
+                      <span className="font-mono text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>{c.caseId.slice(0, 8)}</span>
+                      <StatusPill status={c.status} pulse={c.status === 'running'}>{c.status}</StatusPill>
+                      <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>{c.durationMs ?? 0} ms</span>
                     </div>
                     {c.error && <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>{c.error}</div>}
                   </div>
                   {c.reportId && (
-                    <button
-                      onClick={() => navigate(`/p/${projectId}/reports/${c.reportId}`)}
-                      className="text-[11px]"
-                      style={{ background: 'transparent', border: 'none', color: 'var(--color-accent)', cursor: 'pointer' }}
-                    >
+                    <Button variant="plain" size="sm" onClick={() => navigate(`/p/${projectId}/reports/${c.reportId}`)}>
                       报告
-                    </button>
+                    </Button>
                   )}
                 </div>
               ))}

@@ -74,6 +74,7 @@ export default function SidebarNavItem({ icon, label, path, end, count, collapse
   return (
     <button
       onClick={handleClick}
+      data-active={isActive || undefined}
       className="block w-full px-2 group-nav-item"
       style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', textAlign: 'left' }}
     >
@@ -84,7 +85,8 @@ export default function SidebarNavItem({ icon, label, path, end, count, collapse
           padding: '0 8px',
           borderRadius: 5,
           // Inactive items leave background to the CSS :hover rule
-          // (.group-nav-item:hover > div) so hover is not masked by inline styles.
+          // (.group-nav-item:not([data-active]):hover) so hover is not masked
+          // by inline styles on the outer <button> parent.
           background: isActive ? 'var(--color-accent-light)' : undefined,
           color: isActive ? 'var(--color-accent)' : 'var(--color-foreground-secondary)',
           fontWeight: isActive ? 500 : 400,

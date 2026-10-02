@@ -7,7 +7,8 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Toggle from '../components/ui/Toggle';
 import EmptyState from '../components/ui/EmptyState';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/Modal';
+import IconButton from '../components/ui/IconButton';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
 
 /** 物化路径 '/<rootId>/<childId>/' → 树深度（根为 0）。 */
 function depthOf(path: string): number {
@@ -91,10 +92,15 @@ export default function MembersPage() {
     <div className="flex h-full overflow-hidden">
       {/* 左侧：组织树（path 排序天然父在前） */}
       <div
+        className="glass-card"
         style={{
           width: 260,
           minWidth: 260,
-          borderRight: '1px solid var(--color-border-subtle)',
+          borderRight: 'none',
+          borderTop: 'none',
+          borderBottom: 'none',
+          borderRadius: 0,
+          boxShadow: 'none',
           overflowY: 'auto',
           padding: '16px 8px',
           display: 'flex',
@@ -102,7 +108,7 @@ export default function MembersPage() {
           gap: 2,
         }}
       >
-        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-foreground-muted)', padding: '0 8px 8px' }}>
+        <div className="group-nav-header" style={{ fontSize: 12, fontWeight: 600, padding: '0 8px 8px' }}>
           组织
         </div>
         {orgs.map((o) => {
@@ -112,6 +118,7 @@ export default function MembersPage() {
             <button
               key={o.id}
               onClick={() => setSelectedOrgId(o.id)}
+              data-active={active || undefined}
               className="group-nav-item"
               style={{
                 display: 'flex',
@@ -136,25 +143,12 @@ export default function MembersPage() {
           );
         })}
         {canManage && selectedOrg && (
-          <button
-            onClick={() => setSubOrgModal({ parentId: selectedOrg.id, parentName: selectedOrg.name })}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              border: 'none',
-              background: 'transparent',
-              color: 'var(--color-foreground-muted)',
-              padding: '6px 8px',
-              marginLeft: depthOf(selectedOrg.path) * 14 + 20,
-              cursor: 'pointer',
-              fontSize: 12,
-              textAlign: 'left',
-            }}
-          >
-            <Icon name="plus" size={14} />
-            新建子组织
-          </button>
+          <div style={{ marginLeft: depthOf(selectedOrg.path) * 14 + 12, marginTop: 4 }}>
+            <Button variant="plain" size="sm" onClick={() => setSubOrgModal({ parentId: selectedOrg.id, parentName: selectedOrg.name })}>
+              <Icon name="plus" size={12} />
+              新建子组织
+            </Button>
+          </div>
         )}
       </div>
 
@@ -183,51 +177,51 @@ export default function MembersPage() {
           ) : members.length === 0 ? (
             <EmptyState icon="user" title="暂无成员" description={canManage ? '点击右上角添加成员' : '该组织还没有成员'} />
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead>
-                <tr style={{ color: 'var(--color-foreground-muted)', fontSize: 11, textAlign: 'left' }}>
-                  <th style={{ padding: '8px 12px', fontWeight: 500 }}>用户</th>
-                  <th style={{ padding: '8px 12px', fontWeight: 500 }}>管理员</th>
-                  <th style={{ padding: '8px 12px', fontWeight: 500 }}>可执行测试</th>
-                  {canManage && <th style={{ padding: '8px 12px', fontWeight: 500, width: 70 }}>操作</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {members.map((m) => (
-                  <tr key={m.userId} style={{ borderTop: '1px solid var(--color-border-subtle)' }}>
-                    <td style={{ padding: '10px 12px' }}>
-                      <div style={{ color: 'var(--color-foreground)', fontWeight: 500 }}>{m.displayName}</div>
-                      <div style={{ fontSize: 11, color: 'var(--color-foreground-muted)' }}>@{m.username}</div>
-                    </td>
-                    <td style={{ padding: '10px 12px' }}>
-                      <Toggle
-                        checked={m.isManager}
-                        disabled={!canManage}
-                        onChange={(v) => updateMember.mutate({ userId: m.userId, body: { isManager: v } })}
+            <div className="glass-card p-0 overflow-hidden" data-stagger>
+              <div className="hairline-bottom" style={{ display: 'grid', gridTemplateColumns: canManage ? '2fr 1fr 1fr 70px' : '2fr 1fr 1fr', padding: '10px 16px', fontSize: 11, fontWeight: 500, color: 'var(--color-foreground-muted)' }}>
+                <span>用户</span>
+                <span>管理员</span>
+                <span>可执行测试</span>
+                {canManage && <span>操作</span>}
+              </div>
+              {members.map((m) => (
+                <div
+                  key={m.userId}
+                  data-stagger-item
+                  className="hairline-bottom list-row-clickable"
+                  style={{ display: 'grid', gridTemplateColumns: canManage ? '2fr 1fr 1fr 70px' : '2fr 1fr 1fr', padding: '12px 16px', alignItems: 'center', fontSize: 13 }}
+                >
+                  <div>
+                    <div style={{ color: 'var(--color-foreground)', fontWeight: 500 }}>{m.displayName}</div>
+                    <div style={{ fontSize: 11, color: 'var(--color-foreground-muted)' }}>@{m.username}</div>
+                  </div>
+                  <div>
+                    <Toggle
+                      checked={m.isManager}
+                      disabled={!canManage}
+                      onChange={(v) => updateMember.mutate({ userId: m.userId, body: { isManager: v } })}
+                    />
+                  </div>
+                  <div>
+                    <Toggle
+                      checked={m.isUser}
+                      disabled={!canManage}
+                      onChange={(v) => updateMember.mutate({ userId: m.userId, body: { isUser: v } })}
+                    />
+                  </div>
+                  {canManage && (
+                    <div>
+                      <IconButton
+                        icon="trash"
+                        tone="destructive"
+                        title="移除成员"
+                        onClick={() => removeMember.mutate(m.userId)}
                       />
-                    </td>
-                    <td style={{ padding: '10px 12px' }}>
-                      <Toggle
-                        checked={m.isUser}
-                        disabled={!canManage}
-                        onChange={(v) => updateMember.mutate({ userId: m.userId, body: { isUser: v } })}
-                      />
-                    </td>
-                    {canManage && (
-                      <td style={{ padding: '10px 12px' }}>
-                        <button
-                          onClick={() => removeMember.mutate(m.userId)}
-                          title="移除成员"
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 4 }}
-                        >
-                          <Icon name="trash" size={14} />
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       </div>
@@ -238,7 +232,7 @@ export default function MembersPage() {
           <DialogHeader>
             <DialogTitle>新建子组织{subOrgModal ? `（${subOrgModal.parentName} 下）` : ''}</DialogTitle>
           </DialogHeader>
-          <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="flex flex-col gap-3 px-5 py-4">
             <Input
               label="组织名称"
               value={subOrgName}
@@ -246,15 +240,15 @@ export default function MembersPage() {
               placeholder="例如：研发部"
               autoFocus
             />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <Button variant="plain" onClick={() => setSubOrgModal(null)}>
-                取消
-              </Button>
-              <Button onClick={() => createSubOrg.mutate()} disabled={!subOrgName.trim() || createSubOrg.isPending}>
-                {createSubOrg.isPending ? '创建中…' : '创建'}
-              </Button>
-            </div>
           </div>
+          <DialogFooter>
+            <Button variant="plain" onClick={() => setSubOrgModal(null)}>
+              取消
+            </Button>
+            <Button onClick={() => createSubOrg.mutate()} disabled={!subOrgName.trim() || createSubOrg.isPending}>
+              {createSubOrg.isPending ? '创建中…' : '创建'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -264,7 +258,7 @@ export default function MembersPage() {
           <DialogHeader>
             <DialogTitle>添加成员到 {selectedOrg?.name ?? ''}</DialogTitle>
           </DialogHeader>
-          <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="flex flex-col gap-3 px-5 py-4">
             <Input
               label="用户名"
               value={addUsername}
@@ -273,15 +267,15 @@ export default function MembersPage() {
               autoFocus
             />
             <Toggle checked={addIsManager} onChange={setAddIsManager} label="设为管理员" />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <Button variant="plain" onClick={() => setAddModal(false)}>
-                取消
-              </Button>
-              <Button onClick={() => addMember.mutate()} disabled={!addUsername.trim() || addMember.isPending}>
-                {addMember.isPending ? '添加中…' : '添加'}
-              </Button>
-            </div>
           </div>
+          <DialogFooter>
+            <Button variant="plain" onClick={() => setAddModal(false)}>
+              取消
+            </Button>
+            <Button onClick={() => addMember.mutate()} disabled={!addUsername.trim() || addMember.isPending}>
+              {addMember.isPending ? '添加中…' : '添加'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

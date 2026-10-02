@@ -7,7 +7,7 @@ import Icon from '../components/Icon';
 import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/Modal';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
 import StatusPill from '../components/ui/StatusPill';
 import { shortDateTime, fullDateTime } from '../lib/format';
 
@@ -62,13 +62,10 @@ export default function Plans() {
             把用例按目标场景组合，一键运行
           </p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 px-4 py-[7px] rounded-[8px] text-[13px] font-semibold bg-accent hover:bg-accent-hover active:scale-[0.97] transition-[background-color,transform] duration-150"
-        >
+        <Button onClick={() => setShowCreate(true)}>
           <Icon name="plus" size={14} />
           新建执行计划
-        </button>
+        </Button>
       </div>
 
       <div className="flex-1 min-h-0 px-5 pt-4 pb-5 overflow-y-auto">
@@ -85,10 +82,11 @@ export default function Plans() {
             action={<Button size="sm" onClick={() => setShowCreate(true)}>+ 新建执行计划</Button>}
           />
         ) : (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-3 gap-4" data-stagger>
             {plans.map((p) => (
               <div
                 key={p.id}
+                data-stagger-item
                 onClick={() => navigate(`/p/${projectId}/plans/${p.id}`)}
                 className="glass-card rounded-[12px] p-4 cursor-pointer hover-card"
               >
@@ -131,12 +129,12 @@ export default function Plans() {
             <Input label="名称" placeholder="例如：预发冒烟" value={name} onChange={(e) => setName(e.target.value)} />
             <Input label="环境（可选）" placeholder="预发 / 生产 / staging" value={environment} onChange={(e) => setEnvironment(e.target.value)} />
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+          <DialogFooter>
             <Button variant="plain" onClick={() => setShowCreate(false)}>取消</Button>
             <Button disabled={!name || create.isPending} onClick={() => create.mutate()}>
               {create.isPending ? '创建中...' : '创建'}
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

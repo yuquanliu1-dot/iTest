@@ -153,8 +153,9 @@ select.input-base { padding-right: 32px; }
 }
 .segmented-control button:not(.active):hover { color: var(--color-foreground); }
 
-/* ── Sidebar nav hover（active 项 inline background 优先级更高） ──────────── */
-.group-nav-item:hover > div { background: var(--color-surface-secondary); }
+/* ── Sidebar nav hover（active 项通过 :not([data-active]) 避免被覆盖） ──────── */
+.group-nav-item:not([data-active]):hover { background: var(--color-surface-secondary); }
+.group-nav-item { transition: background-color 0.16s ease-out; }
 .group-nav-header { color: var(--color-foreground-muted); }
 .group-nav-header:hover { color: var(--color-foreground-secondary); }
 .group-nav-tile { color: var(--color-foreground-muted); }

@@ -1,4 +1,5 @@
-import { useState, type CSSProperties } from 'react';
+import { useState } from 'react';
+import Segmented from '../ui/Segmented';
 
 type ValueMode = 'fixed' | 'randomString' | 'randomNumber' | 'timestamp' | 'prefixTimestamp' | 'composite';
 type DateFormat = 'YYYYMMDD' | 'YYYY-MM-DD' | 'YYYY/MM/DD';
@@ -18,10 +19,14 @@ interface Props {
   availableVars?: string[];
 }
 
-const MODE_LABELS: Record<ValueMode, string> = {
-  fixed: '固定值', randomString: '随机字符串', randomNumber: '随机数字',
-  timestamp: '时间戳', prefixTimestamp: '前缀+时间戳', composite: '组合值',
-};
+const MODE_OPTIONS: Array<{ value: ValueMode; label: string }> = [
+  { value: 'fixed', label: '固定值' },
+  { value: 'randomString', label: '随机字符串' },
+  { value: 'randomNumber', label: '随机数字' },
+  { value: 'timestamp', label: '时间戳' },
+  { value: 'prefixTimestamp', label: '前缀+时间戳' },
+  { value: 'composite', label: '组合值' },
+];
 
 function draftFromValue(v: unknown): FragmentDraft[] {
   if (v && typeof v === 'object' && (v as { mode?: string }).mode === 'composite') {
@@ -54,12 +59,6 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
   const [genMax, setGenMax] = useState(isObj ? String((value as { max?: number }).max ?? 999999) : '999999');
   const [genPrefix, setGenPrefix] = useState(isObj ? String((value as { prefix?: string }).prefix ?? '') : '');
   const [fragments, setFragments] = useState<FragmentDraft[]>(() => draftFromValue(value));
-
-  const inputStyle: CSSProperties = {
-    width: '100%', padding: '6px 8px', fontSize: 12, border: '1px solid var(--color-glass-border)',
-    borderRadius: 6, background: 'var(--color-background-subtle)', color: 'var(--color-foreground)',
-    boxSizing: 'border-box', marginTop: 4,
-  };
 
   /** 片段 → 存储 shape（与 StepEditModal handleSave 的映射一致） */
   const buildFragment = (f: FragmentDraft): Record<string, unknown> => {
@@ -101,28 +100,16 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex gap-1 flex-wrap">
-        {(Object.keys(MODE_LABELS) as ValueMode[]).map((m) => (
-          <button
-            key={m}
-            type="button"
-            onClick={() => commitMode(m)}
-            style={{
-              fontSize: 11, padding: '3px 8px', borderRadius: 5, cursor: 'pointer',
-              border: '1px solid var(--color-glass-border)',
-              background: mode === m ? 'var(--color-accent)' : 'transparent',
-              color: mode === m ? '#fff' : 'var(--color-foreground-secondary)',
-            }}
-          >
-            {MODE_LABELS[m]}
-          </button>
-        ))}
-      </div>
+      <Segmented<ValueMode>
+        options={MODE_OPTIONS}
+        value={mode}
+        onChange={commitMode}
+      />
 
       {mode === 'fixed' && (
         <>
           <input
-            style={inputStyle}
+            className="input-base input-sm"
             value={fixed}
             onChange={(e) => { setFixed(e.target.value); onChange(e.target.value); }}
             placeholder="支持 {{变量名}} 引用"
@@ -136,24 +123,24 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
       {mode === 'randomString' && (
         <label className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
           长度
-          <input style={inputStyle} value={genLength} inputMode="numeric"
+          <input className="input-base input-sm" value={genLength} inputMode="numeric"
             onChange={(e) => { setGenLength(e.target.value); onChange({ mode: 'randomString', length: Number(e.target.value) || 12 }); }} />
         </label>
       )}
       {mode === 'randomNumber' && (
         <div className="flex gap-2">
           <label className="text-[11px] flex-1" style={{ color: 'var(--color-foreground-muted)' }}>最小
-            <input style={inputStyle} value={genMin} inputMode="numeric"
+            <input className="input-base input-sm" value={genMin} inputMode="numeric"
               onChange={(e) => { setGenMin(e.target.value); onChange({ mode: 'randomNumber', min: Number(e.target.value) || 0, max: Number(genMax) || 999999 }); }} />
           </label>
           <label className="text-[11px] flex-1" style={{ color: 'var(--color-foreground-muted)' }}>最大
-            <input style={inputStyle} value={genMax} inputMode="numeric"
+            <input className="input-base input-sm" value={genMax} inputMode="numeric"
               onChange={(e) => { setGenMax(e.target.value); onChange({ mode: 'randomNumber', min: Number(genMin) || 0, max: Number(e.target.value) || 999999 }); }} />
           </label>
         </div>
       )}
       {mode === 'prefixTimestamp' && (
-        <input style={inputStyle} value={genPrefix} placeholder="前缀，如 测试-"
+        <input className="input-base input-sm" value={genPrefix} placeholder="前缀，如 测试-"
           onChange={(e) => { setGenPrefix(e.target.value); onChange({ mode: 'prefixTimestamp', prefix: e.target.value }); }} />
       )}
       {mode === 'composite' && (
@@ -161,7 +148,8 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
           {fragments.map((f, i) => (
             <div key={i} className="flex items-center gap-2">
               <select
-                style={{ ...inputStyle, marginTop: 0, width: 110, flex: '0 0 110px' }}
+                className="input-base input-sm"
+                style={{ width: 110, flex: '0 0 110px' }}
                 value={f.mode}
                 onChange={(e) => {
                   const m = e.target.value as FragmentDraft['mode'];
@@ -181,11 +169,11 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
                 <option value="timestamp">时间戳</option>
               </select>
               {f.mode === 'fixed' && (
-                <input style={{ ...inputStyle, marginTop: 0, flex: 1, minWidth: 0 }} value={f.value ?? ''}
+                <input className="input-base input-sm" style={{ flex: 1, minWidth: 0 }} value={f.value ?? ''}
                   onChange={(e) => patchFragment(i, { value: e.target.value })} />
               )}
               {f.mode === 'date' && (
-                <select style={{ ...inputStyle, marginTop: 0, flex: 1 }} value={f.format}
+                <select className="input-base input-sm" style={{ flex: 1 }} value={f.format}
                   onChange={(e) => patchFragment(i, { format: e.target.value as DateFormat })}>
                   <option value="YYYYMMDD">YYYYMMDD</option>
                   <option value="YYYY-MM-DD">YYYY-MM-DD</option>
@@ -194,16 +182,16 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
               )}
               {f.mode === 'randomNumber' && (
                 <>
-                  <input style={{ ...inputStyle, marginTop: 0, width: 70 }} placeholder="min" inputMode="numeric" value={f.min ?? ''}
+                  <input className="input-base input-sm" style={{ width: 70 }} placeholder="min" inputMode="numeric" value={f.min ?? ''}
                     onChange={(e) => patchFragment(i, { min: e.target.value })} />
-                  <input style={{ ...inputStyle, marginTop: 0, width: 70 }} placeholder="max" inputMode="numeric" value={f.max ?? ''}
+                  <input className="input-base input-sm" style={{ width: 70 }} placeholder="max" inputMode="numeric" value={f.max ?? ''}
                     onChange={(e) => patchFragment(i, { max: e.target.value })} />
-                  <input style={{ ...inputStyle, marginTop: 0, width: 70 }} placeholder="位数" inputMode="numeric" value={f.length ?? ''}
+                  <input className="input-base input-sm" style={{ width: 70 }} placeholder="位数" inputMode="numeric" value={f.length ?? ''}
                     onChange={(e) => patchFragment(i, { length: e.target.value })} />
                 </>
               )}
               {f.mode === 'randomString' && (
-                <input style={{ ...inputStyle, marginTop: 0, width: 100 }} placeholder="长度" inputMode="numeric" value={f.length ?? ''}
+                <input className="input-base input-sm" style={{ width: 100 }} placeholder="长度" inputMode="numeric" value={f.length ?? ''}
                   onChange={(e) => patchFragment(i, { length: e.target.value })} />
               )}
               {f.mode === 'timestamp' && <span className="text-[11px] flex-1" style={{ color: 'var(--color-foreground-muted)' }}>当前 ms 时间戳</span>}
@@ -214,8 +202,10 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
                   setFragments(next);
                   onChange({ mode: 'composite', fragments: next.map(buildFragment) });
                 }}
-                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 2 }}
+                className="press"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 2, fontSize: 16, lineHeight: 1 }}
                 title="删除片段"
+                aria-label="删除片段"
               >
                 ×
               </button>
@@ -228,7 +218,7 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
               setFragments(next);
               onChange({ mode: 'composite', fragments: next.map(buildFragment) });
             }}
-            className="text-[11px] px-2 py-1 rounded-[5px] self-start"
+            className="text-[11px] px-2 py-1 rounded-[5px] self-start press"
             style={{ border: '1px dashed var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}
           >
             + 添加片段

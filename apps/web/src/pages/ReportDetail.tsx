@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -6,6 +6,7 @@ import Icon from '../components/Icon';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import Segmented from '../components/ui/Segmented';
+import { Dialog, DialogContent } from '../components/ui/Modal';
 import { fullDateTime } from '../lib/format';
 
 interface StepResult {
@@ -21,17 +22,20 @@ interface StepResult {
   hitLocator?: { kind: string; value: string };
 }
 
+function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-2 text-[12px] mb-2 last:mb-0">
+      <span className="shrink-0" style={{ color: 'var(--color-foreground-muted)' }}>{label}</span>
+      <span className="text-right truncate" style={{ color: 'var(--color-foreground-secondary)' }}>{value}</span>
+    </div>
+  );
+}
+
 export default function ReportDetail() {
   const { id, projectId } = useParams<{ id: string; projectId: string }>();
   const navigate = useNavigate();
   const [view, setView] = useState<'screenshot' | 'detail'>('screenshot');
   const [zoomSrc, setZoomSrc] = useState<string | null>(null);
-  useEffect(() => {
-    if (!zoomSrc) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setZoomSrc(null); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [zoomSrc]);
   const { data, isLoading } = useQuery({
     queryKey: ['report', id],
     queryFn: () => api.reports.get(id!),
@@ -67,6 +71,55 @@ export default function ReportDetail() {
   } else {
     grouped.push({ tabIndex: 0, steps: stepResults });
   }
+
+  const renderStepRow = (s: StepResult, key: string | number) => (
+    <div
+      key={key}
+      className="flex gap-3 items-start px-5 py-3 hairline-bottom"
+    >
+      <span
+        className="font-mono text-[12px] shrink-0 mt-0.5"
+        style={{ color: s.status === 'passed' ? 'var(--color-success)' : 'var(--color-destructive)' }}
+      >
+        {s.status === 'passed' ? '✓' : '✕'} #{s.order}
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }}>
+          {s.durationMs} ms
+        </div>
+        {s.error && (
+          <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>
+            {s.error}
+          </div>
+        )}
+        {s.error?.includes('var-missing:') && (
+          <div className="text-[11px] mt-1" style={{ color: 'var(--color-warning-text)' }}>
+            ↳ 变量未定义：请在该步骤之前添加 extract 步骤抽取该变量，或检查变量名拼写（用例页保存步骤时会显示变量体检提示）。
+          </div>
+        )}
+        {s.warning && (
+          <div className="text-[12px] mt-1" style={{ color: 'var(--color-warning-text)' }}>
+            ⚠ {s.warning}
+          </div>
+        )}
+      </div>
+      {s.screenshot && (
+        <button
+          type="button"
+          onClick={() => setZoomSrc(s.screenshot!)}
+          aria-label={`放大 step ${s.order} 截图`}
+          className="shrink-0 rounded-[6px] overflow-hidden press"
+          style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', padding: 0, cursor: 'zoom-in' }}
+        >
+          <img
+            src={s.screenshot}
+            alt={`step ${s.order}`}
+            className="w-16 h-16 object-cover block"
+          />
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -110,7 +163,7 @@ export default function ReportDetail() {
             )}
             {view === 'screenshot' ? (
             <div className="glass-card rounded-[12px] overflow-hidden">
-              <div className="px-5 py-[10px]" style={{ background: 'var(--color-background-subtle)', borderBottom: '1px solid var(--color-border)' }}>
+              <div className="px-5 py-[10px] hairline-bottom" style={{ background: 'var(--color-background-subtle)' }}>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
                   步骤时间线
                 </span>
@@ -118,56 +171,10 @@ export default function ReportDetail() {
               {stepResults.length === 0 ? (
                 <EmptyState icon="listChecks" title="无步骤结果" />
               ) : (
-                <div className="flex flex-col">
+                <div className="flex flex-col" data-stagger>
                   {(grouped.length === 1 && grouped[0]!.tabIndex === 0 && !hasTabs
                   ? grouped[0]!.steps.map((s, i) => (
-                      <div
-                        key={i}
-                        className="flex gap-3 items-start px-5 py-3"
-                        style={{ borderBottom: '1px solid var(--color-muted)' }}
-                      >
-                        <span
-                          className="font-mono text-[12px] shrink-0 mt-0.5"
-                          style={{ color: s.status === 'passed' ? 'var(--color-success)' : 'var(--color-destructive)' }}
-                        >
-                          {s.status === 'passed' ? '✓' : '✕'} #{s.order}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }}>
-                            {s.durationMs} ms
-                          </div>
-                          {s.error && (
-                            <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>
-                              {s.error}
-                            </div>
-                          )}
-                          {s.error?.includes('var-missing:') && (
-                            <div className="text-[11px] mt-1" style={{ color: '#b45309' }}>
-                              ↳ 变量未定义：请在该步骤之前添加 extract 步骤抽取该变量，或检查变量名拼写（用例页保存步骤时会显示变量体检提示）。
-                            </div>
-                          )}
-                          {s.warning && (
-                            <div className="text-[12px] mt-1" style={{ color: '#b45309' }}>
-                              ⚠ {s.warning}
-                            </div>
-                          )}
-                        </div>
-                        {s.screenshot && (
-                          <button
-                            type="button"
-                            onClick={() => setZoomSrc(s.screenshot!)}
-                            aria-label={`放大 step ${s.order} 截图`}
-                            className="shrink-0 rounded-[6px] overflow-hidden"
-                            style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', padding: 0, cursor: 'zoom-in' }}
-                          >
-                            <img
-                              src={s.screenshot}
-                              alt={`step ${s.order}`}
-                              className="w-16 h-16 object-cover block"
-                            />
-                          </button>
-                        )}
-                      </div>
+                      <div data-stagger-item key={i}>{renderStepRow(s, i)}</div>
                     ))
                   : grouped.map((group) => (
                       <div key={group.tabIndex}>
@@ -178,53 +185,7 @@ export default function ReportDetail() {
                           tab #{group.tabIndex}
                         </div>
                         {group.steps.map((s, i) => (
-                          <div
-                            key={i}
-                            className="flex gap-3 items-start px-5 py-3"
-                            style={{ borderBottom: '1px solid var(--color-muted)' }}
-                          >
-                            <span
-                              className="font-mono text-[12px] shrink-0 mt-0.5"
-                              style={{ color: s.status === 'passed' ? 'var(--color-success)' : 'var(--color-destructive)' }}
-                            >
-                              {s.status === 'passed' ? '✓' : '✕'} #{s.order}
-                            </span>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }}>
-                                {s.durationMs} ms
-                              </div>
-                              {s.error && (
-                                <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>
-                                  {s.error}
-                                </div>
-                              )}
-                              {s.error?.includes('var-missing:') && (
-                                <div className="text-[11px] mt-1" style={{ color: '#b45309' }}>
-                                  ↳ 变量未定义：请在该步骤之前添加 extract 步骤抽取该变量，或检查变量名拼写（用例页保存步骤时会显示变量体检提示）。
-                                </div>
-                              )}
-                              {s.warning && (
-                                <div className="text-[12px] mt-1" style={{ color: '#b45309' }}>
-                                  ⚠ {s.warning}
-                                </div>
-                              )}
-                            </div>
-                            {s.screenshot && (
-                              <button
-                                type="button"
-                                onClick={() => setZoomSrc(s.screenshot!)}
-                                aria-label={`放大 step ${s.order} 截图`}
-                                className="shrink-0 rounded-[6px] overflow-hidden"
-                                style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', padding: 0, cursor: 'zoom-in' }}
-                              >
-                                <img
-                                  src={s.screenshot}
-                                  alt={`step ${s.order}`}
-                                  className="w-16 h-16 object-cover block"
-                                />
-                              </button>
-                            )}
-                          </div>
+                          <div data-stagger-item key={i}>{renderStepRow(s, `${group.tabIndex}-${i}`)}</div>
                         ))}
                       </div>
                     )))}
@@ -312,75 +273,55 @@ export default function ReportDetail() {
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
                 汇总
               </div>
-              <div className="flex items-center justify-between mb-2">
-                <span style={{ fontSize: 12, color: 'var(--color-foreground-secondary)' }}>总步骤</span>
-                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-foreground)' }}>{stepResults.length}</span>
-              </div>
-              <div className="flex items-center justify-between mb-2">
-                <span style={{ fontSize: 12, color: 'var(--color-foreground-secondary)' }}>通过</span>
-                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-success)' }}>{passed}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span style={{ fontSize: 12, color: 'var(--color-foreground-secondary)' }}>失败</span>
-                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-destructive)' }}>{failed}</span>
-              </div>
+              <MetaRow label="总步骤" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-foreground)' }}>{stepResults.length}</span>} />
+              <MetaRow label="通过" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-success)' }}>{passed}</span>} />
+              <MetaRow label="失败" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-destructive)' }}>{failed}</span>} />
             </div>
             <div className="glass-card rounded-[12px] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
                 元数据
               </div>
-              <div className="flex justify-between text-[12px] mb-2">
-                <span style={{ color: 'var(--color-foreground-muted)' }}>用例</span>
-                <span className="text-right truncate ml-2" style={{ color: 'var(--color-foreground-secondary)' }}>
-                  {data.caseTitle ?? <span style={{ color: 'var(--color-foreground-muted)' }}>已删除用例</span>}
-                </span>
-              </div>
-              <div className="flex justify-between text-[12px] mb-2">
-                <span style={{ color: 'var(--color-foreground-muted)' }}>用例 ID</span>
-                <span className="font-mono text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>{data.caseId.slice(0, 8)}</span>
-              </div>
-              <div className="flex justify-between text-[12px]">
-                <span style={{ color: 'var(--color-foreground-muted)' }}>报告 ID</span>
-                <span className="font-mono text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>{data.id.slice(0, 8)}</span>
-              </div>
+              <MetaRow
+                label="用例"
+                value={data.caseTitle ?? <span style={{ color: 'var(--color-foreground-muted)' }}>已删除用例</span>}
+              />
+              <MetaRow label="用例 ID" value={<span className="font-mono text-[11px]">{data.caseId.slice(0, 8)}</span>} />
+              <MetaRow label="报告 ID" value={<span className="font-mono text-[11px]">{data.id.slice(0, 8)}</span>} />
             </div>
           </div>
         </div>
       </div>
 
-      {/* Lightbox — 全屏放大截图。点背景或按 Esc 关闭。 */}
-      {zoomSrc && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setZoomSrc(null)}
+      {/* Lightbox — 全屏放大截图（复用 Dialog 提供焦点陷阱 + Esc）。 */}
+      <Dialog open={!!zoomSrc} onOpenChange={(o) => !o && setZoomSrc(null)}>
+        <DialogContent
           style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.78)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
+            maxWidth: 'calc(100vw - 48px)',
+            width: 'auto',
+            background: 'transparent',
+            border: 'none',
+            boxShadow: 'none',
+            padding: 0,
             cursor: 'zoom-out',
-            padding: 24,
           }}
+          onClick={() => setZoomSrc(null)}
         >
-          <img
-            src={zoomSrc}
-            alt="放大截图"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              maxWidth: 'calc(100vw - 48px)',
-              maxHeight: 'calc(100vh - 48px)',
-              objectFit: 'contain',
-              borderRadius: 6,
-              boxShadow: '0 12px 48px rgba(0, 0, 0, 0.4)',
-              cursor: 'default',
-            }}
-          />
-        </div>
-      )}
+          {zoomSrc && (
+            <img
+              src={zoomSrc}
+              alt="放大截图"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                maxWidth: 'calc(100vw - 48px)',
+                maxHeight: 'calc(100vh - 48px)',
+                objectFit: 'contain',
+                borderRadius: 6,
+                cursor: 'default',
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
