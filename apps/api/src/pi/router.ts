@@ -3,15 +3,15 @@
  * 端点：threads 增查、messages、events(SSE)、cancel、models；其他 501。
  */
 import { Router, type Request } from 'express';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { aiThreads, requirements } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
-import { assertProjectVisible } from '../services/projectAccess.js';
+import { assertProjectVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { sseHeaders, sseSend } from '../sse/agentRunStream.js';
 import type { AuthUser } from '../services/auth.service.js';
 import {
-  cancelThread, ensureRecord, sendUserMessage, subscribeThread,
+  cancelThread, ensureRecord, sendUserMessage, snapshotOfThread, subscribeThread, threadStatus,
 } from './session.js';
 import { subscribeWorkspace } from './bus.js';
 import { readLlmConfig } from './modelBridge.js';
@@ -33,6 +33,12 @@ async function assertThreadVisible(threadId: string, user: AuthUser): Promise<vo
   await assertProjectVisible(pid, user);
 }
 
+/** react-pi 契约：POST /threads 必须返回完整 PiThreadSnapshot。 */
+function threadSnapshotResponse(threadId: string): unknown {
+  const live = snapshotOfThread(threadId);
+  return live ?? { metadata: { id: threadId, status: 'idle', messageCount: 0 }, messages: [], seq: 0 };
+}
+
 piRoute.post('/threads', async (req, res) => {
   const body = req.body as { metadata?: { requirementId?: string } };
   const rid = body.metadata?.requirementId;
@@ -41,7 +47,7 @@ piRoute.post('/threads', async (req, res) => {
   if (!r) throw new HttpError(404, 'not_found', 'requirement not found');
   await assertProjectVisible(r.projectId, req.user as AuthUser);
   // ensureRecord 内部会调 factory 建 session，未配置 LLM 时抛错；但 ai_threads 行在抛错前已 INSERT，
-  // 契约要求始终返回 threadId，前端用 id 即可订阅 SSE。
+  // 契约要求始终返回 thread snapshot，前端用 id 即可订阅 SSE。
   let threadId: string;
   try {
     const rec = await ensureRecord(rid);
@@ -51,19 +57,31 @@ piRoute.post('/threads', async (req, res) => {
     if (!row) throw new HttpError(500, 'internal_error', 'failed to create thread');
     threadId = row.id;
   }
-  res.json({ id: threadId });
+  res.json(threadSnapshotResponse(threadId));
 });
 
-piRoute.get('/threads', async (_req, res) => {
-  const all = await db.select().from(aiThreads);
-  res.json(all);
+piRoute.get('/threads', async (req, res) => {
+  // 只返回用户可见项目下的线程（可见性从项目维度判定）
+  const visiblePids = await visibleProjectIds(req.user as AuthUser);
+  if (visiblePids.length === 0) { res.json([]); return; }
+  const rows = await db
+    .select({ id: aiThreads.id, createdAt: aiThreads.createdAt, updatedAt: aiThreads.updatedAt })
+    .from(aiThreads)
+    .innerJoin(requirements, eq(aiThreads.requirementId, requirements.id))
+    .where(inArray(requirements.projectId, visiblePids));
+  res.json(rows.map((row) => ({
+    id: row.id,
+    status: threadStatus(row.id) ?? 'idle',
+    createdAt: row.createdAt?.toISOString(),
+    updatedAt: row.updatedAt?.toISOString(),
+  })));
 });
 
 piRoute.get('/threads/:id', async (req, res) => {
   await assertThreadVisible(req.params.id!, req.user as AuthUser);
-  const rows = await db.select().from(aiThreads).where(eq(aiThreads.id, req.params.id!)).limit(1);
+  const rows = await db.select({ id: aiThreads.id }).from(aiThreads).where(eq(aiThreads.id, req.params.id!)).limit(1);
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'thread not found');
-  res.json(rows[0]);
+  res.json(threadSnapshotResponse(req.params.id!));
 });
 
 piRoute.post('/threads/:id/messages', async (req, res) => {
@@ -94,7 +112,8 @@ piRoute.post('/threads/:id/cancel', async (req, res) => {
 piRoute.get('/models', async (_req, res) => {
   const cfg = await readLlmConfig();
   if (!cfg) { res.json([]); return; }
-  res.json([{ id: cfg.model, provider: cfg.provider, name: cfg.model }]);
+  // PiModelInfo 契约：非空字符串 provider + modelId
+  res.json([{ provider: cfg.provider, modelId: cfg.model }]);
 });
 
 piRoute.get('/threads/:id/events', async (req, res) => {
@@ -103,8 +122,15 @@ piRoute.get('/threads/:id/events', async (req, res) => {
   if (!rid) { res.status(404).end(); return; }
   sseHeaders(res);
   try {
-    const unsubThread = subscribeThread(req.params.id!, (e) => sseSend(res, e as unknown as Parameters<typeof sseSend>[1]), { includeSnapshot: true });
-    const unsubWs = subscribeWorkspace(rid, (e) => sseSend(res, e as unknown as Parameters<typeof sseSend>[1]));
+    const send = (e: unknown) => sseSend(res, e as unknown as Parameters<typeof sseSend>[1]);
+    // subscribeThread 自带 snapshot（无活跃 session 时发合法空快照）
+    const unsubThread = subscribeThread(req.params.id!, send, { includeSnapshot: true });
+    // workspace 事件补上 react-pi 必需的 threadId + seq 信封（未知 type 也必须带全，否则客户端断流）
+    let wsSeq = 0;
+    const unsubWs = subscribeWorkspace(rid, (e) => {
+      wsSeq += 1;
+      send({ ...e, threadId: req.params.id!, seq: wsSeq });
+    });
     req.on('close', () => { unsubThread(); unsubWs(); });
   } catch {
     res.end();

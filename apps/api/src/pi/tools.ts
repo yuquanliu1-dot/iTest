@@ -43,14 +43,15 @@ export function buildWorkspaceTools(requirementId: string): ToolExecutor[] {
     },
     {
       name: 'upsert_case',
-      description: '创建或更新用例；可属于某个场景（scenarioId）或散用例（scenarioId=null）。',
+      description: '创建或更新用例；可属于某个场景（scenarioId）或散用例（scenarioId=null）。当 scenarioId 不为空但场景尚未声明时，会自动创建一个同名（id）占位场景，以容忍 LLM 并发提交。',
       parameters: Type.Object({
         id: Type.String({ minLength: 1, maxLength: 64 }),
         title: Type.String({ minLength: 1, maxLength: 200 }),
         description: Type.Union([Type.String(), Type.Null()]),
         priority: Type.Union([Type.Literal('P0'), Type.Literal('P1'), Type.Literal('P2'), Type.Literal('P3')]),
         steps: Type.Array(Type.Object({
-          name: Type.String({ minLength: 1, maxLength: 200 }),
+          // 宽松：name 缺省时回退到 action 首句；允许 LLM 第一轮只写 action。
+          name: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
           action: Type.String({ minLength: 1, maxLength: 2000 }),
           assertion: Type.Union([Type.String(), Type.Null()]),
         })),
@@ -59,11 +60,17 @@ export function buildWorkspaceTools(requirementId: string): ToolExecutor[] {
       execute: async (input) => {
         const v = input as {
           id: string; title: string; description: string | null; priority: 'P0'|'P1'|'P2'|'P3';
-          steps: { name: string; action: string; assertion: string | null }[];
+          steps: Array<{ name?: string; action: string; assertion: string | null }>;
           scenarioId: string | null;
         };
+        // name 兜底：取 action 首句（按第一个中文/英文标点截断，长度 24）
+        const steps = v.steps.map((s) => {
+          if (s.name && s.name.trim().length > 0) return { name: s.name, action: s.action, assertion: s.assertion };
+          const first = s.action.split(/[，。！？,.!?\n]/, 1)[0]?.trim() ?? s.action.slice(0, 24);
+          return { name: first.slice(0, 200), action: s.action, assertion: s.assertion };
+        });
         await ws.upsertCase(requirementId, v.scenarioId, {
-          id: v.id, title: v.title, description: v.description, priority: v.priority, steps: v.steps,
+          id: v.id, title: v.title, description: v.description, priority: v.priority, steps,
         });
         return { ok: true };
       },

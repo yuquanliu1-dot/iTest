@@ -1,6 +1,6 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { aiWorkspaceState } from '../db/schema.js';
+import { aiWorkspaceState, aiScenarios, aiCases } from '../db/schema.js';
 import { publishWorkspaceEvent } from './bus.js';
 
 export type StagedStep = { name: string; action: string; assertion: string | null };
@@ -28,83 +28,227 @@ export function emptyDoc(): WorkspaceDoc {
   return { plan: null, scenarios: [], looseCases: [] };
 }
 
-async function readOrEmpty(requirementId: string): Promise<WorkspaceDoc> {
-  const rows = await db.select({ doc: aiWorkspaceState.doc }).from(aiWorkspaceState).where(eq(aiWorkspaceState.requirementId, requirementId)).limit(1);
-  return (rows[0]?.doc as WorkspaceDoc | undefined) ?? emptyDoc();
-}
-
-async function persist(requirementId: string, doc: WorkspaceDoc): Promise<void> {
-  await db
-    .insert(aiWorkspaceState)
-    .values({ requirementId, doc })
-    .onConflictDoUpdate({ target: aiWorkspaceState.requirementId, set: { doc, updatedAt: new Date() } });
-  publishWorkspaceEvent({ type: 'workspace_doc', requirementId });
+function publish(reqId: string): void {
+  publishWorkspaceEvent({ type: 'workspace_doc', requirementId: reqId });
 }
 
 export async function loadDoc(requirementId: string): Promise<WorkspaceDoc> {
-  return readOrEmpty(requirementId);
+  const planRow = (await db
+    .select({ doc: aiWorkspaceState.doc })
+    .from(aiWorkspaceState)
+    .where(eq(aiWorkspaceState.requirementId, requirementId))
+    .limit(1))[0];
+
+  const scenarioRows = await db
+    .select()
+    .from(aiScenarios)
+    .where(eq(aiScenarios.requirementId, requirementId))
+    .orderBy(aiScenarios.createdAt);
+
+  const caseRows = await db
+    .select()
+    .from(aiCases)
+    .where(eq(aiCases.requirementId, requirementId))
+    .orderBy(aiCases.createdAt);
+
+  const casesByScenario = new Map<string, StagedCase[]>();
+  const looseCases: StagedCase[] = [];
+  for (const row of caseRows) {
+    const c: StagedCase = {
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      priority: row.priority as Priority,
+      steps: row.steps as unknown as StagedStep[],
+    };
+    if (row.scenarioId == null) looseCases.push(c);
+    else {
+      const arr = casesByScenario.get(row.scenarioId) ?? [];
+      arr.push(c);
+      casesByScenario.set(row.scenarioId, arr);
+    }
+  }
+
+  const scenarios: StagedScenario[] = scenarioRows.map((s) => ({
+    id: s.id,
+    title: s.title,
+    description: s.description,
+    cases: casesByScenario.get(s.id) ?? [],
+  }));
+
+  const plan = (planRow?.doc as { plan?: { scenarios: number; cases: number } } | undefined)?.plan ?? null;
+  return { plan, scenarios, looseCases };
 }
 
 export async function announcePlan(requirementId: string, plan: { scenarios: number; cases: number }): Promise<void> {
-  const doc = await readOrEmpty(requirementId);
-  doc.plan = plan;
-  await persist(requirementId, doc);
+  await db
+    .insert(aiWorkspaceState)
+    .values({ requirementId, doc: { plan, scenarios: [], looseCases: [] } })
+    .onConflictDoUpdate({
+      target: aiWorkspaceState.requirementId,
+      set: { doc: { plan, scenarios: [], looseCases: [] }, updatedAt: new Date() },
+    });
+  publish(requirementId);
 }
 
 export async function upsertScenario(requirementId: string, scenario: StagedScenario): Promise<void> {
-  const doc = await readOrEmpty(requirementId);
-  const idx = doc.scenarios.findIndex((s) => s.id === scenario.id);
-  if (idx >= 0) {
-    // 合并 cases：保留 doc 中已有的 cases（AI 后续可能补充），用入参的元数据替换 title/description
-    const merged: StagedScenario = {
-      ...scenario,
-      cases: scenario.cases.length > 0 ? scenario.cases : doc.scenarios[idx]!.cases,
-    };
-    doc.scenarios[idx] = merged;
+  // 入参的 cases 被忽略（保持与旧实现一致：cases 通过 upsertCase 单独写入）。
+  // 先建场景行：SQL UPSERT 走复合主键 (requirement_id, id)；
+  // 同步把该场景下的 case 行（如果有）一并 upsert——这是对旧实现的关键兼容点：
+  // 旧版 upsertScenario({cases: [...]}) 会把 cases 一起写进 doc；新版必须自己处理，
+  // 否则 seed-staging.ts / ai-workspace-save.test.ts 里"传 cases 数组"的旧调用会丢用例。
+  if (scenario.cases.length > 0) {
+    await db.transaction(async (tx) => {
+      await tx
+        .insert(aiScenarios)
+        .values({
+          requirementId,
+          id: scenario.id,
+          title: scenario.title,
+          description: scenario.description,
+          order: 0,
+        })
+        .onConflictDoUpdate({
+          target: [aiScenarios.requirementId, aiScenarios.id],
+          set: { title: scenario.title, description: scenario.description },
+        });
+      for (const c of scenario.cases) {
+        await tx
+          .insert(aiCases)
+          .values({
+            requirementId,
+            id: c.id,
+            scenarioId: scenario.id,
+            title: c.title,
+            description: c.description,
+            priority: c.priority,
+            steps: c.steps as unknown as object,
+            position: 0,
+          })
+          .onConflictDoUpdate({
+            target: [aiCases.requirementId, aiCases.id],
+            set: {
+              scenarioId: scenario.id,
+              title: c.title,
+              description: c.description,
+              priority: c.priority,
+              steps: c.steps as unknown as object,
+            },
+          });
+      }
+    });
   } else {
-    doc.scenarios.push(scenario);
+    await db
+      .insert(aiScenarios)
+      .values({
+        requirementId,
+        id: scenario.id,
+        title: scenario.title,
+        description: scenario.description,
+        order: 0,
+      })
+      .onConflictDoUpdate({
+        target: [aiScenarios.requirementId, aiScenarios.id],
+        set: { title: scenario.title, description: scenario.description },
+      });
   }
-  await persist(requirementId, doc);
+  publish(requirementId);
 }
 
 export async function upsertCase(requirementId: string, scenarioId: string | null, c: StagedCase): Promise<void> {
-  const doc = await readOrEmpty(requirementId);
-  if (scenarioId === null) {
-    const idx = doc.looseCases.findIndex((x) => x.id === c.id);
-    if (idx >= 0) doc.looseCases[idx] = c; else doc.looseCases.push(c);
-  } else {
-    const s = doc.scenarios.find((x) => x.id === scenarioId);
-    if (!s) throw new Error(`scenario ${scenarioId} not found; call upsert_scenario first`);
-    const idx = s.cases.findIndex((x) => x.id === c.id);
-    if (idx >= 0) s.cases[idx] = c; else s.cases.push(c);
+  if (scenarioId != null) {
+    // 容忍 LLM 并发：场景尚未声明时先建占位行（title=scenarioId，后续 upsert_scenario 会覆盖）
+    await db
+      .insert(aiScenarios)
+      .values({ requirementId, id: scenarioId, title: scenarioId, description: null, order: 0 })
+      .onConflictDoNothing({ target: [aiScenarios.requirementId, aiScenarios.id] });
   }
-  await persist(requirementId, doc);
+  await db
+    .insert(aiCases)
+    .values({
+      requirementId,
+      id: c.id,
+      scenarioId,
+      title: c.title,
+      description: c.description,
+      priority: c.priority,
+      steps: c.steps as unknown as object,
+      position: 0,
+    })
+    .onConflictDoUpdate({
+      target: [aiCases.requirementId, aiCases.id],
+      set: {
+        scenarioId,
+        title: c.title,
+        description: c.description,
+        priority: c.priority,
+        steps: c.steps as unknown as object,
+      },
+    });
+  publish(requirementId);
 }
 
 export async function removeItem(requirementId: string, item: { kind: 'scenario' | 'case'; id: string; scenarioId?: string | null }): Promise<void> {
-  const doc = await readOrEmpty(requirementId);
   if (item.kind === 'scenario') {
-    doc.scenarios = doc.scenarios.filter((s) => s.id !== item.id);
+    await db.transaction(async (tx) => {
+      await tx.delete(aiCases).where(and(
+        eq(aiCases.requirementId, requirementId),
+        eq(aiCases.scenarioId, item.id),
+      ));
+      await tx.delete(aiScenarios).where(and(
+        eq(aiScenarios.requirementId, requirementId),
+        eq(aiScenarios.id, item.id),
+      ));
+    });
   } else {
-    if (item.scenarioId == null) {
-      doc.looseCases = doc.looseCases.filter((c) => c.id !== item.id);
-    } else {
-      const s = doc.scenarios.find((x) => x.id === item.scenarioId);
-      if (s) s.cases = s.cases.filter((c) => c.id !== item.id);
-    }
+    await db.delete(aiCases).where(and(
+      eq(aiCases.requirementId, requirementId),
+      eq(aiCases.id, item.id),
+    ));
   }
-  await persist(requirementId, doc);
+  publish(requirementId);
 }
 
 export async function removeSaved(requirementId: string, savedCaseIds: string[]): Promise<void> {
-  const idSet = new Set(savedCaseIds);
-  const doc = await readOrEmpty(requirementId);
-  doc.looseCases = doc.looseCases.filter((c) => !idSet.has(c.id));
-  doc.scenarios = doc.scenarios.flatMap((s) => {
-    if (s.cases.length === 0) return [s]; // 从来就没有用例的场景原样保留
-    const casesAfter = s.cases.filter((c) => !idSet.has(c.id));
-    if (casesAfter.length === 0) return []; // 整组被 save 清空时丢掉
-    return [{ ...s, cases: casesAfter }];
+  if (savedCaseIds.length === 0) return;
+  await db.transaction(async (tx) => {
+    // 1. 先抓出这次要删除的 case 行对应的 scenario_id（drain 候选集）。
+    //    这样后续只能从"曾经有过 case 行的场景"里挑掉空壳，那些"从来没收过 case 行的占位场景"
+    //    （占位行，title=id，upsertCase 在场景尚未声明时建的）不会被误删。
+    const candidates = await tx
+      .selectDistinct({ scenarioId: aiCases.scenarioId })
+      .from(aiCases)
+      .where(and(
+        eq(aiCases.requirementId, requirementId),
+        inArray(aiCases.id, savedCaseIds),
+      ));
+    const candidateSet = new Set(
+      candidates.map((r) => r.scenarioId).filter((x): x is string => x != null),
+    );
+
+    // 2. 删 case 行
+    await tx.delete(aiCases).where(and(
+      eq(aiCases.requirementId, requirementId),
+      inArray(aiCases.id, savedCaseIds),
+    ));
+
+    // 3. 在候选集里，只删那些"现在没有任何 case 行的"——即真正被排空（drained）的场景
+    if (candidateSet.size > 0) {
+      const stillHere = await tx
+        .selectDistinct({ scenarioId: aiCases.scenarioId })
+        .from(aiCases)
+        .where(eq(aiCases.requirementId, requirementId));
+      const stillHereSet = new Set(
+        stillHere.map((r) => r.scenarioId).filter((x): x is string => x != null),
+      );
+      const toDelete = [...candidateSet].filter((sid) => !stillHereSet.has(sid));
+      if (toDelete.length > 0) {
+        await tx.delete(aiScenarios).where(and(
+          eq(aiScenarios.requirementId, requirementId),
+          inArray(aiScenarios.id, toDelete),
+        ));
+      }
+    }
   });
-  await persist(requirementId, doc);
+  publish(requirementId);
 }

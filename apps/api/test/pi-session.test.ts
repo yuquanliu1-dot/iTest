@@ -29,7 +29,8 @@ beforeEach(async () => {
 class FakeSession {
   private listeners = new Set<(e: unknown) => void>();
   private _streaming = false;
-  isStreaming() { return this._streaming; }
+  // 真实 AgentSession 的 isStreaming 是 getter
+  get isStreaming() { return this._streaming; }
   messages: unknown[] = [];
   subscribe(fn: (e: unknown) => void) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   async prompt() { this._streaming = true; queueMicrotask(() => this._streaming = false); }
@@ -62,15 +63,27 @@ describe('pi supervisor', () => {
     expect(seen.length).toBe(0);          // No fan-out (no subscribe call fired in fake)
   });
 
-  it('subscribeThread emits snapshot first (seq=0)', async () => {
+  it('subscribeThread emits a wire-valid snapshot first (nested snapshot, seq=0)', async () => {
     const { setSessionFactory, ensureRecord, subscribeThread, resetSessions } = await import('../src/pi/session.js');
     resetSessions();
     setSessionFactory(async () => new FakeSession() as never);
     const r = await ensureRecord(requirementId);
     let first: unknown;
     subscribeThread(r.threadId, (e) => { if (first === undefined) first = e; }, { includeSnapshot: true });
+    // react-pi 契约：{ type:'snapshot', threadId, seq, snapshot: { metadata, messages } }
+    expect((first as { type: string }).type).toBe('snapshot');
     expect((first as { seq: number }).seq).toBe(0);
-    expect((first as { metadata: { id: string } }).metadata.id).toBe(r.threadId);
+    expect((first as { threadId: string }).threadId).toBe(r.threadId);
+    expect((first as { snapshot: { metadata: { id: string } } }).snapshot.metadata.id).toBe(r.threadId);
+  });
+
+  it('subscribeThread without a live record emits a valid empty snapshot instead of throwing', async () => {
+    const { subscribeThread } = await import('../src/pi/session.js');
+    let first: unknown;
+    const unsub = subscribeThread('00000000-0000-0000-0000-000000000000', (e) => { if (first === undefined) first = e; }, { includeSnapshot: true });
+    expect((first as { type: string }).type).toBe('snapshot');
+    expect((first as { snapshot: { messages: unknown[] } }).snapshot.messages).toEqual([]);
+    unsub();
   });
 
   it('cancelThread calls abort()', async () => {
