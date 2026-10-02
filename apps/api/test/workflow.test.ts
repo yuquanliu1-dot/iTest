@@ -1,10 +1,37 @@
 import { describe, it, expect } from 'vitest';
 import { runWorkflow } from '../src/agent/agentFactory.js';
-import { getLlmClient } from '../src/agent/llm-client.js';
+import type { LLMClient, LLMRequest, LLMResult } from '../src/agent/llm-client.js';
+
+/** 替代已删除的 MockClient：requirement 输入返回 cases JSON，其余返回 text。 */
+function fakeClient(): LLMClient {
+  return {
+    provider: 'openai',
+    async complete(req: LLMRequest): Promise<LLMResult> {
+      if (req.userMessage.includes('requirement') || req.userMessage.includes('需求')) {
+        return {
+          kind: 'json',
+          value: {
+            cases: [
+              {
+                title: 'fake 生成的用例',
+                description: 'fake client 产出',
+                priority: 'P1',
+                steps: [{ order: 1, action: { kind: 'navigate', url: 'https://example.com' } }],
+              },
+            ],
+          },
+          provider: 'openai',
+          vision: false,
+        };
+      }
+      return { kind: 'text', value: '[fake] no specific response for this input', provider: 'openai', vision: false };
+    },
+  };
+}
 
 describe('workflow', () => {
   it('runs a two-step workflow sequentially', async () => {
-    const client = getLlmClient({ provider: 'mock', apiKey: '', model: '' });
+    const client = fakeClient();
     const events: string[] = [];
     const result = await runWorkflow({
       workflowId: 'test',
@@ -22,14 +49,14 @@ describe('workflow', () => {
   });
 
   it('invokes step tools with the step output after step_complete', async () => {
-    const client = getLlmClient({ provider: 'mock', apiKey: '', model: '' });
+    const client = fakeClient();
     const calls: unknown[] = [];
     await runWorkflow({
       workflowId: 'tools',
       steps: [
         {
           id: 'a',
-          prompt: 'requirement 相关，走 mock 的 cases 分支',
+          prompt: 'requirement 相关，走 fake 的 cases 分支',
           tools: [{ name: 'probe', description: '', handler: async (input) => { calls.push(input); return { ok: true }; } }],
         },
       ],
@@ -42,7 +69,7 @@ describe('workflow', () => {
   });
 
   it('tool handler errors abort the run with a db code', async () => {
-    const client = getLlmClient({ provider: 'mock', apiKey: '', model: '' });
+    const client = fakeClient();
     const events: Array<{ type: string; code?: string }> = [];
     await expect(
       runWorkflow({

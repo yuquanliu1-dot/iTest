@@ -15,20 +15,22 @@ export interface ResolvedLLM {
   client: LLMClient;
 }
 
-const VALID_PROVIDERS: readonly LLMProvider[] = ['mock', 'openai', 'anthropic', 'google'];
+const VALID_PROVIDERS: readonly LLMProvider[] = ['openai', 'anthropic', 'google'];
 
-/** 从 settings 表读取 LLM 配置。provider 无效或缺失 → 降级为 mock（与 MVP 启动体验一致）。 */
+/** 从 settings 表读取 LLM 配置。provider 未配置/无效 → 抛错（LLM 功能需先在设置中配置）。 */
 export async function resolveLlmClient(): Promise<ResolvedLLM> {
+  if (injectedClient) return injectedClient;
   const rows = await db.select().from(settings);
   const map = new Map(rows.map((r) => [r.key, r.value as unknown]));
-  const rawProvider = String(map.get(KEYS.provider) ?? 'mock');
-  const provider: LLMProvider = (VALID_PROVIDERS as readonly string[]).includes(rawProvider)
-    ? (rawProvider as LLMProvider)
-    : 'mock';
+  const rawProvider = String(map.get(KEYS.provider) ?? '');
+  if (!(VALID_PROVIDERS as readonly string[]).includes(rawProvider)) {
+    throw new Error('LLM provider 未配置或无效，请在设置中选择 openai / anthropic / google');
+  }
+  const provider = rawProvider as LLMProvider;
   const apiKey = String(map.get(KEYS.apiKey) ?? '');
   const model = String(map.get(KEYS.model) ?? '');
   const baseUrl = String(map.get(KEYS.baseUrl) ?? '') || undefined;
-  if (provider !== 'mock' && !apiKey) {
+  if (!apiKey) {
     throw new Error(`LLM provider ${provider} selected but API key is empty`);
   }
   const config: LLMConfig = { provider, apiKey, model, baseUrl };
@@ -50,3 +52,9 @@ export async function setLlmField(key: 'llm_provider' | 'llm_api_key' | 'llm_mod
 
 // 单测可注入
 export const __testing = { KEYS, eq };
+
+/** 单元测试可注入客户端；非空时所有 resolveLlmClient() 调用直接返回它，绕过 settings 表。 */
+let injectedClient: ResolvedLLM | null = null;
+export function __setLlmClientForTest(c: ResolvedLLM | null): void {
+  injectedClient = c;
+}
