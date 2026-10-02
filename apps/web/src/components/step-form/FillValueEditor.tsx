@@ -38,7 +38,11 @@ function draftFromValue(v: unknown): FragmentDraft[] {
   return [{ mode: 'fixed', value: '' }];
 }
 
-/** fill/select 值编辑器：固定值 / 生成器 / 组合片段。受控组件，draft 只在内部做输入缓冲。 */
+/**
+ * fill/select 值编辑器：固定值 / 生成器 / 组合片段。受控组件，draft 只在内部做输入缓冲。
+ * 内部 state 仅在挂载时从 value 初始化一次，不响应后续 value prop 变化——
+ * 当 value 身份变化（切换步骤/类型）时父组件必须通过 key 重挂载本组件。
+ */
 export default function FillValueEditor({ value, onChange, availableVars = [] }: Props) {
   const isObj = typeof value === 'object' && value !== null;
   const objMode = isObj ? ((value as { mode?: string }).mode as ValueMode | undefined) : undefined;
