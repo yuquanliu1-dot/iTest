@@ -48,7 +48,7 @@ export class ElementPicker {
       if (!el || el === this.highlighted) return;
       if (this.highlighted) this.highlighted.style.outline = '';
       this.highlighted = el;
-      el.style.outline = '2px solid #7c3aed';
+      el.style.outline = '2px solid #7C5CFC';
     };
 
     this.onClick = (e: MouseEvent) => {

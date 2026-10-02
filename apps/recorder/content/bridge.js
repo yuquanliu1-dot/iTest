@@ -13,3 +13,10 @@ window.addEventListener('message', (e) => {
     });
   }
 });
+
+// 面板/弹窗发起的停止：background 通知 web 页收尾
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type === 'recording-stopped') {
+    window.postMessage({ source: 'ita-ext', type: 'recording-stopped' }, '*');
+  }
+});

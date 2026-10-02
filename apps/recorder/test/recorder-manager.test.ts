@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { JSDOM, type DOMWindow } from 'jsdom';
 import { RecorderManager, type RecordedStep } from '../modules/recorder-manager.js';
 
@@ -12,6 +12,10 @@ beforeEach(() => {
   (globalThis as { document: Document }).document = dom.window.document;
   (globalThis as unknown as { window: DOMWindow }).window = dom.window;
   captured = [];
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function makeEl(html: string): Element {
@@ -55,10 +59,14 @@ describe('RecorderManager — happy path E2E', () => {
     expect(captured[0]!.value).toBe('alice');
   });
 
-  it('emits a hover step for non-form elements', () => {
+  it('emits a hover step after dwell threshold on a non-form element', () => {
     const heading = makeEl('<h1>标题</h1>');
     dom.window.document.body.appendChild(heading);
-    withRecorder(() => fire(heading, 'mouseover'));
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(heading, 'mouseover');
+      vi.advanceTimersByTime(500);
+    });
     expect(captured).toHaveLength(1);
     expect(captured[0]!.type).toBe('hover');
   });
@@ -122,6 +130,79 @@ describe('RecorderManager — noise filtering', () => {
     (mgr as unknown as { lastInputAt: number }).lastInputAt = Date.now() - 10;
     fire(div, 'mouseover');
     mgr.stop();
+    expect(captured.filter((s) => s.type === 'hover')).toHaveLength(0);
+  });
+
+  it('does not emit hover when the cursor keeps moving across elements', () => {
+    const a = makeEl('<a href="#">A</a>');
+    const b = makeEl('<a href="#">B</a>');
+    const c = makeEl('<a href="#">C</a>');
+    dom.window.document.body.appendChild(a);
+    dom.window.document.body.appendChild(b);
+    dom.window.document.body.appendChild(c);
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(a, 'mouseover');
+      fire(b, 'mouseover');
+      fire(c, 'mouseover');
+      // 光标继续移动时各元素都到不了停留门槛；最终离开也不再触发。
+      fire(c, 'mouseleave');
+      vi.advanceTimersByTime(500);
+    });
+    expect(captured.filter((s) => s.type === 'hover')).toHaveLength(0);
+  });
+
+  it('emits hover once when dwelling despite descendant mouseover refires', () => {
+    const card = makeEl('<div data-testid="card"><span>文字</span></div>');
+    dom.window.document.body.appendChild(card);
+    const span = card.querySelector('span')!;
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(card, 'mouseover');
+      fire(span, 'mouseover');
+      fire(span, 'mouseover');
+      vi.advanceTimersByTime(500);
+    });
+    expect(captured.filter((s) => s.type === 'hover')).toHaveLength(1);
+  });
+
+  it('does not re-emit hover for micro-movements inside an already hovered element', () => {
+    const card = makeEl('<div data-testid="card"><span>文字</span></div>');
+    dom.window.document.body.appendChild(card);
+    const span = card.querySelector('span')!;
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(card, 'mouseover');
+      vi.advanceTimersByTime(500);
+      fire(span, 'mouseover');
+      vi.advanceTimersByTime(500);
+    });
+    expect(captured.filter((s) => s.type === 'hover')).toHaveLength(1);
+  });
+
+  it('cancels pending hover on click', () => {
+    const card = makeEl('<div data-testid="card"><button data-testid="go">go</button></div>');
+    dom.window.document.body.appendChild(card);
+    const btn = card.querySelector('button')!;
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(card, 'mouseover');
+      fire(btn, 'click');
+      vi.advanceTimersByTime(500);
+    });
+    expect(captured.filter((s) => s.type === 'hover')).toHaveLength(0);
+    expect(captured.filter((s) => s.type === 'click')).toHaveLength(1);
+  });
+
+  it('cancels pending hover on mouseleave', () => {
+    const card = makeEl('<div data-testid="card">卡片</div>');
+    dom.window.document.body.appendChild(card);
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(card, 'mouseover');
+      fire(card, 'mouseleave');
+      vi.advanceTimersByTime(500);
+    });
     expect(captured.filter((s) => s.type === 'hover')).toHaveLength(0);
   });
 });

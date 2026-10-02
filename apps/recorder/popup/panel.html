@@ -6,16 +6,19 @@
   </head>
   <body>
     <div class="container">
-      <h1 id="title">录制面板</h1>
+      <div class="head">
+        <span class="dot"></span>
+        <h1 id="title">录制面板</h1>
+      </div>
       <p id="status" class="hint">...</p>
       <div id="form" class="hidden">
         <label id="field1-label"></label>
         <input id="field1" type="text" />
         <label id="field2-label" class="hidden"></label>
-        <textarea id="field2" class="hidden" rows="6"></textarea>
-        <button id="submit">确定</button>
+        <textarea id="field2" class="hidden" rows="5"></textarea>
+        <button id="submit" class="btn primary">确定</button>
       </div>
-      <button id="close" class="hidden">关闭窗口</button>
+      <button id="close" class="btn ghost hidden">关闭窗口</button>
     </div>
     <script src="panel.js"></script>
   </body>
