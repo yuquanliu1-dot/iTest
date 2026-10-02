@@ -13,14 +13,13 @@ const toneStyles: Record<StatusTone, { background: string; color: string }> = {
 
 /**
  * iTest 状态 → 语义色。
- * passed/completed/ready=success，running=accent（配 pulse 点），
- * queued=pending=warning，failed=destructive，其余 muted。
+ * passed/completed/ready=success，running=accent（配 pulse 点），queued/pending/review=warning，failed=destructive，其余（draft/deprecated）=muted。
  */
 export function statusTone(status: string): StatusTone {
   switch (status) {
     case 'passed': case 'completed': case 'ready': case 'success': return 'success';
     case 'running': return 'accent';
-    case 'queued': case 'pending': return 'warning';
+    case 'queued': case 'pending': case 'review': return 'warning';
     case 'failed': case 'error': return 'destructive';
     default: return 'muted';
   }

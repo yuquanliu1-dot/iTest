@@ -44,3 +44,15 @@ export const STEP_KIND_LABELS: Record<string, string> = {
 export function stepKindLabel(kind: string): string {
   return STEP_KIND_LABELS[kind] ?? kind;
 }
+
+/** 用例状态中文名（仅展示用，存储值仍为英文）。 */
+export const CASE_STATUS_LABELS: Record<string, string> = {
+  draft: '草稿',
+  review: '评审中',
+  ready: '就绪',
+  deprecated: '废弃',
+};
+
+export function caseStatusLabel(status: string): string {
+  return CASE_STATUS_LABELS[status] ?? status;
+}
