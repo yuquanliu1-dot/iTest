@@ -41,6 +41,7 @@ export default function GroupsPage() {
   const [copyTarget, setCopyTarget] = useState('');
   const [planTarget, setPlanTarget] = useState('');
   const [confirmDeleteCase, setConfirmDeleteCase] = useState<{ id: string; title: string } | null>(null);
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [aiForm, setAiForm] = useState<AiForm>({ open: false, title: '', content: '' });
 
   const { data: groups, isLoading: groupsLoading } = useQuery({
@@ -148,6 +149,20 @@ export default function GroupsPage() {
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
+  const batchDeleteCases = useMutation({
+    mutationFn: (caseIds: string[]) => api.cases.removeBatch(caseIds),
+    onSuccess: (r) => {
+      toast(`已删除 ${r.count} 条用例`, 'success');
+      setConfirmBatchDelete(false);
+      setChecked(new Set());
+      invalidate();
+    },
+    onError: (e: Error) => {
+      toast(e.message, 'error');
+      setConfirmBatchDelete(false);
+    },
+  });
+
   const rows = useMemo(() => (cases ?? []).slice((page - 1) * pageSize, page * pageSize), [cases, page, pageSize]);
   const total = cases?.length ?? 0;
   const allChecked = rows.length > 0 && rows.every((c) => checked.has(c.id));
@@ -156,8 +171,10 @@ export default function GroupsPage() {
     mutationFn: () => api.projects.createRequirement(projectId!, { title: aiForm.title, content: aiForm.content }),
     onSuccess: (r) => {
       toast('已创建需求，开始 AI 会话', 'success');
+      // 把首条需求文本带到工作台；AiWorkspacePage 拿到 threadId 后会自动 POST /messages 启动 AI 跑活。
+      const draft = { requirementId: r.id, title: aiForm.title, content: aiForm.content };
       setAiForm({ open: false, title: '', content: '' });
-      navigate(`/p/${projectId}/ai/${r.id}`);
+      navigate(`/p/${projectId}/ai/${r.id}`, { state: { initialMessage: aiForm.content, requirement: draft } });
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -298,6 +315,10 @@ export default function GroupsPage() {
             <Button size="sm" variant="secondary" onClick={() => { setPlanTarget(''); setPlanModal({ caseIds: checkedList }); }}>
               <Icon name="play" size={12} />
               加入计划
+            </Button>
+            <Button size="sm" variant="danger" onClick={() => setConfirmBatchDelete(true)}>
+              <Icon name="trash" size={12} />
+              批量删除
             </Button>
             <Button size="sm" variant="plain" onClick={() => setChecked(new Set())}>取消选择</Button>
           </div>
@@ -447,6 +468,26 @@ export default function GroupsPage() {
             <Button variant="plain" onClick={() => setConfirmDeleteCase(null)}>取消</Button>
             <Button variant="danger" disabled={deleteCase.isPending} onClick={() => confirmDeleteCase && deleteCase.mutate(confirmDeleteCase.id)}>
               {deleteCase.isPending ? '删除中...' : '确认删除'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量删除确认 */}
+      <Dialog open={confirmBatchDelete} onOpenChange={(open) => { if (!open) setConfirmBatchDelete(false); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>批量删除用例</DialogTitle></DialogHeader>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+            确定删除已选的 <span style={{ color: 'var(--color-destructive)', fontWeight: 600 }}>{checked.size}</span> 条用例？这些用例的步骤、报告、附件将被一并删除，且不可恢复。
+          </div>
+          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+            <Button variant="plain" onClick={() => setConfirmBatchDelete(false)}>取消</Button>
+            <Button
+              variant="danger"
+              disabled={batchDeleteCases.isPending || checked.size === 0}
+              onClick={() => batchDeleteCases.mutate(checkedList)}
+            >
+              {batchDeleteCases.isPending ? '删除中...' : `删除 ${checked.size} 条`}
             </Button>
           </div>
         </DialogContent>

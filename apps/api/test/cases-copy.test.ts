@@ -104,4 +104,34 @@ describe('case copy', () => {
     const steps = await pool.query(`SELECT * FROM test_steps WHERE case_id = $1`, [src.id]);
     expect(steps.rows).toHaveLength(0);
   });
+
+  it('POST /api/cases/batch-delete removes all listed cases and their steps', async () => {
+    const { groupId } = await seedProject(pool);
+    const c1 = await makeCaseWithSteps(groupId, '批删-1');
+    const c2 = await makeCaseWithSteps(groupId, '批删-2');
+    const r = await request(app).post('/api/cases/batch-delete').send({ caseIds: [c1.id, c2.id] });
+    expect(r.status).toBe(200);
+    expect(r.body.count).toBe(2);
+    const list = await request(app).get(`/api/cases?groupId=${groupId}`);
+    expect(list.body).toHaveLength(0);
+    const steps = await pool.query(`SELECT * FROM test_steps WHERE case_id IN ($1, $2)`, [c1.id, c2.id]);
+    expect(steps.rows).toHaveLength(0);
+  });
+
+  it('POST /api/cases/batch-delete rejects the whole batch when any id is missing', async () => {
+    const { groupId } = await seedProject(pool);
+    const c1 = await makeCaseWithSteps(groupId, '存在');
+    const r = await request(app).post('/api/cases/batch-delete').send({
+      caseIds: [c1.id, '00000000-0000-0000-0000-000000000000'],
+    });
+    expect(r.status).toBe(404);
+    // 校验失败时 c1 仍然存在（未误删）
+    const list = await request(app).get(`/api/cases?groupId=${groupId}`);
+    expect(list.body).toHaveLength(1);
+  });
+
+  it('POST /api/cases/batch-delete rejects empty list with 400', async () => {
+    const r = await request(app).post('/api/cases/batch-delete').send({ caseIds: [] });
+    expect(r.status).toBe(400);
+  });
 });
