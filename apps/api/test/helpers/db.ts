@@ -36,6 +36,11 @@ EXCEPTION WHEN duplicate_object THEN null;
 END $$;
 CREATE TABLE ai_threads (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), requirement_id uuid REFERENCES requirements(id) ON DELETE CASCADE NOT NULL UNIQUE, pi_thread_id text NOT NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 CREATE TABLE ai_workspace_state (requirement_id uuid PRIMARY KEY REFERENCES requirements(id) ON DELETE CASCADE, doc jsonb NOT NULL, updated_at timestamp NOT NULL DEFAULT now());
+CREATE TABLE ai_scenarios (requirement_id uuid REFERENCES requirements(id) ON DELETE CASCADE NOT NULL, id text NOT NULL, title varchar(200) NOT NULL, description text, "order" integer NOT NULL DEFAULT 0, created_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_scenarios_requirement_id_id_pk PRIMARY KEY(requirement_id, id));
+CREATE TABLE ai_cases (requirement_id uuid REFERENCES requirements(id) ON DELETE CASCADE NOT NULL, id text NOT NULL, scenario_id text, title varchar(200) NOT NULL, description text, priority varchar(20) NOT NULL DEFAULT 'P1', steps jsonb NOT NULL DEFAULT '[]'::jsonb, position integer NOT NULL DEFAULT 0, created_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_cases_requirement_id_id_pk PRIMARY KEY(requirement_id, id));
+CREATE INDEX ai_cases_requirement_scenario_idx ON ai_cases (requirement_id, scenario_id);
+CREATE TABLE tags (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid REFERENCES projects(id) ON DELETE CASCADE NOT NULL, name varchar(80) NOT NULL, color varchar(16) NOT NULL, description text, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT tags_project_name_uq UNIQUE(project_id, name));
+CREATE TABLE case_tags (case_id uuid REFERENCES test_cases(id) ON DELETE CASCADE NOT NULL, tag_id uuid REFERENCES tags(id) ON DELETE CASCADE NOT NULL, CONSTRAINT case_tags_pk PRIMARY KEY(case_id, tag_id));
 `;
 
 export interface SeedOrg {

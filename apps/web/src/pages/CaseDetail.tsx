@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type VariableReport } from '../api/client';
@@ -16,6 +16,7 @@ import Toggle from '../components/ui/Toggle';
 import EmptyState from '../components/ui/EmptyState';
 import AgentStreamPanel from '../components/ui/AgentStreamPanel';
 import StepEditModal from '../components/StepEditModal';
+import TagChip from '../components/ui/Tag';
 
 type Tab = 'description' | 'reports' | 'recording';
 
@@ -170,6 +171,54 @@ export default function CaseDetail() {
   });
   const group = groups?.find((g) => g.id === caseDetail?.groupId);
 
+  const { data: scenarios } = useQuery({
+    queryKey: ['scenarios', caseDetail?.requirementId],
+    queryFn: () => api.scenarios.listForRequirement(caseDetail!.requirementId!),
+    enabled: !!caseDetail?.requirementId,
+  });
+
+  const { data: projectTags } = useQuery({
+    queryKey: ['tags', projectId],
+    queryFn: () => api.tags.list(projectId!),
+    enabled: !!projectId,
+  });
+
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [tagSearch, setTagSearch] = useState('');
+  const tagPickerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!tagPickerOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (tagPickerRef.current && !tagPickerRef.current.contains(e.target as Node)) setTagPickerOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [tagPickerOpen]);
+
+  const caseTagIds = useMemo(() => (caseDetail?.tags ?? []).map((t) => t.id), [caseDetail?.tags]);
+  const filteredTags = useMemo(() => {
+    const list = projectTags ?? [];
+    if (!tagSearch.trim()) return list;
+    const q = tagSearch.trim().toLowerCase();
+    return list.filter((t) => t.name.toLowerCase().includes(q));
+  }, [projectTags, tagSearch]);
+
+  const setTags = useMutation({
+    mutationFn: (nextIds: string[]) => api.cases.patch(id!, { tagIds: nextIds }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['case', id] });
+      qc.invalidateQueries({ queryKey: ['cases', projectId] });
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
+  const toggleTag = (tagId: string) => {
+    const next = caseTagIds.includes(tagId)
+      ? caseTagIds.filter((x) => x !== tagId)
+      : [...caseTagIds, tagId];
+    setTags.mutate(next);
+  };
+
   const startRecording = useMutation({
     mutationFn: async () => {
       const opts: Parameters<typeof api.recorder.createSession>[1] = { mode };
@@ -302,6 +351,16 @@ export default function CaseDetail() {
       qc.invalidateQueries({ queryKey: ['case', id] });
       qc.invalidateQueries({ queryKey: ['cases', projectId] });
       qc.invalidateQueries({ queryKey: ['groups', projectId] });
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
+  const moveScenario = useMutation({
+    mutationFn: (scenarioId: string | null) => api.cases.patch(id!, { scenarioId }),
+    onSuccess: () => {
+      toast('已切换场景', 'success');
+      qc.invalidateQueries({ queryKey: ['case', id] });
+      qc.invalidateQueries({ queryKey: ['cases', projectId] });
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -738,6 +797,79 @@ export default function CaseDetail() {
 
           {/* Right rail — 操作面板 */}
           <div className="w-[280px] shrink-0 flex flex-col gap-3">
+            <div className="glass-card rounded-[12px] p-4 relative" ref={tagPickerRef}>
+              <div
+                className="text-[11px] font-medium uppercase tracking-[0.03em] mb-2 flex items-center gap-1 cursor-pointer select-none"
+                style={{ color: 'var(--color-foreground-muted)' }}
+                onClick={() => setTagPickerOpen((v) => !v)}
+              >
+                标签
+                <Icon name="chevronDown" size={10} style={{ opacity: 0.4 }} />
+              </div>
+              <div className="flex flex-wrap gap-1.5 min-h-[24px]">
+                {(caseDetail.tags ?? []).length === 0 ? (
+                  <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>无</span>
+                ) : (
+                  (caseDetail.tags ?? []).map((t) => (
+                    <TagChip
+                      key={t.id}
+                      tag={t}
+                      onRemove={() => toggleTag(t.id)}
+                    />
+                  ))
+                )}
+              </div>
+              {tagPickerOpen && (
+                <div
+                  className="absolute left-0 right-0 top-full mt-1 z-50 rounded-[8px] overflow-hidden"
+                  style={{ border: '1px solid var(--color-glass-border)', background: 'var(--color-background-elevated)', boxShadow: 'var(--shadow-middle)' }}
+                >
+                  <div className="px-2 py-1.5 border-b" style={{ borderColor: 'var(--color-border)' }}>
+                    <input
+                      type="text"
+                      placeholder="搜索标签"
+                      value={tagSearch}
+                      onChange={(e) => setTagSearch(e.target.value)}
+                      className="input-base input-sm"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="max-h-56 overflow-y-auto py-1">
+                    {filteredTags.length === 0 ? (
+                      <div className="px-3 py-2 text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                        {(projectTags ?? []).length === 0 ? '项目内还没有标签' : '没有匹配'}
+                      </div>
+                    ) : (
+                      filteredTags.map((t) => (
+                        <label
+                          key={t.id}
+                          className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-[var(--color-background-subtle)]"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={caseTagIds.includes(t.id)}
+                            onChange={() => toggleTag(t.id)}
+                            className="w-3.5 h-3.5 rounded-[3px]"
+                            style={{ accentColor: 'var(--color-accent)' }}
+                          />
+                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: `#${t.color}` }} />
+                          <span className="text-[12px] truncate" style={{ color: 'var(--color-foreground)' }}>{t.name}</span>
+                        </label>
+                      ))
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-1.5 text-[12px] font-medium cursor-pointer hover:bg-[var(--color-background-subtle)]"
+                    style={{ color: 'var(--color-accent)', borderTop: '1px solid var(--color-border)', background: 'transparent', border: 'none' }}
+                    onClick={() => { setTagPickerOpen(false); navigate(`/p/${projectId}/labels`); }}
+                  >
+                    管理标签 →
+                  </button>
+                </div>
+              )}
+            </div>
+
             <div className="glass-card rounded-[12px] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-2" style={{ color: 'var(--color-foreground-muted)' }}>
                 所属分组
@@ -755,6 +887,28 @@ export default function CaseDetail() {
               <p className="text-[11px] mt-2" style={{ color: 'var(--color-foreground-muted)' }}>
                 录制目标 URL 解析链：用例 URL → 分组域名 → 项目域名。
               </p>
+            </div>
+
+            <div className="glass-card rounded-[12px] p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-2" style={{ color: 'var(--color-foreground-muted)' }}>
+                所属场景
+              </div>
+              <select
+                className="input-base input-sm"
+                value={caseDetail.scenarioId ?? ''}
+                disabled={moveScenario.isPending || !caseDetail.requirementId}
+                onChange={(e) => moveScenario.mutate(e.target.value || null)}
+              >
+                <option value="">（无）</option>
+                {(scenarios ?? []).map((s) => (
+                  <option key={s.id} value={s.id}>{s.title}</option>
+                ))}
+              </select>
+              {!caseDetail.requirementId && (
+                <p className="text-[11px] mt-2" style={{ color: 'var(--color-foreground-muted)' }}>
+                  该用例未绑定需求，无法关联场景。
+                </p>
+              )}
             </div>
 
             <div className="glass-card rounded-[12px] p-4">

@@ -17,6 +17,7 @@ const PROJECT_GROUP: NavGroupDef = {
     { path: 'groups', icon: 'beaker', label: '用例', projectOnly: true },
     { path: 'plans', icon: 'play', label: '执行计划', projectOnly: true },
     { path: 'reports', icon: 'flag', label: '执行历史', projectOnly: true },
+    { path: 'labels', icon: 'tag', label: '标签', projectOnly: true },
   ],
 };
 
