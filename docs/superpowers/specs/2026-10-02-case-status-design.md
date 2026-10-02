@@ -55,7 +55,7 @@ const PatchBody = CaseBodyBase.partial()
 ```
 
 - **create 不收 status**：新建用例一律 draft（CaseBodyBase 不动）
-- 非法枚举值 → 现有 zod 422 路径
+- 非法枚举值 → 现有 zod 400 路径（errorHandler 将 ZodError 映射为 400，与全仓一致；设计初稿误写 422）
 - patch handler 现有字段透传模式加一个 `status` 即可
 
 ### 2. POST /cases/batch-status（新增）
@@ -127,7 +127,7 @@ pill/行内点击 ──► PATCH /cases/:id {status} ──► invalidate ['cas
 
 - patch/batch-status 失败：toast 错误信息（现有 useMutation onError 模式）
 - 并发覆盖：状态是单字段最后写入胜出，无乐观锁（与 title/priority 等字段现状一致）
-- 非法 status 值：zod 422（前端枚举下拉不会产生，仅 API 直接调用可触发）
+- 非法 status 值：zod 400（前端枚举下拉不会产生，仅 API 直接调用可触发）
 
 ## 测试策略
 
