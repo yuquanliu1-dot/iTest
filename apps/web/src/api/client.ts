@@ -134,9 +134,15 @@ export const api = {
         windowWidth: number;
         windowHeight: number;
         incognito: boolean;
+        scenarioId: string | null;
       }>,
     ) => request<TestCase>(`/cases/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/cases/${id}`, { method: 'DELETE' }),
+    removeBatch: (caseIds: string[]) =>
+      request<{ count: number }>('/cases/batch-delete', {
+        method: 'POST',
+        body: JSON.stringify({ caseIds }),
+      }),
     copy: (id: string, targetGroupId: string) =>
       request<TestCase>(`/cases/${id}/copy`, { method: 'POST', body: JSON.stringify({ targetGroupId }) }),
     copyBatch: (caseIds: string[], targetGroupId: string) =>
@@ -271,6 +277,14 @@ export const api = {
   aiWorkspace: {
     ensureThread: (requirementId: string) =>
       request<{ threadId: string }>(`/requirements/${requirementId}/ai-thread`, { method: 'POST' }),
+    sendMessage: (threadId: string, content: string) =>
+      fetch(`${BASE}/pi/threads/${threadId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: { content } }),
+      }).then((r) => {
+        if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      }),
     getWorkspace: (requirementId: string) =>
       request<WorkspaceDoc>(`/requirements/${requirementId}/ai-workspace`),
     save: (requirementId: string, body: { groupId: string; scenarioIds: string[]; caseIds: string[] }) =>
@@ -285,6 +299,19 @@ export const api = {
         `/cases/${caseId}/steps/secrets/${stepId}`,
         { headers: { Authorization: `Bearer ${token}` } },
       ),
+  },
+  scenarios: {
+    listForRequirement: (requirementId: string) =>
+      request<Scenario[]>(`/requirements/${requirementId}/scenarios`),
+    create: (requirementId: string, body: { title: string; description?: string }) =>
+      request<Scenario>(`/requirements/${requirementId}/scenarios`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    patch: (id: string, body: Partial<{ title: string; description: string }>) =>
+      request<Scenario>(`/scenarios/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    remove: (id: string) =>
+      request<{ ok: boolean }>(`/scenarios/${id}`, { method: 'DELETE' }),
   },
 };
 
@@ -414,12 +441,22 @@ export interface TestCase {
   groupId?: string;
   url?: string | null;
   requirementId?: string | null;
+  scenarioId?: string | null;
+  scenarioTitle?: string | null;
   createdAt?: string;
   updatedAt?: string;
   windowStrategy?: string;
   windowWidth?: number | null;
   windowHeight?: number | null;
   incognito?: boolean;
+}
+export interface Scenario {
+  id: string;
+  requirementId: string;
+  title: string;
+  description: string | null;
+  order: number;
+  createdAt: string;
 }
 export interface TestStep {
   id: string;

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testCases, testSteps, groups } from '../db/schema.js';
+import { testCases, testSteps, groups, scenarios } from '../db/schema.js';
 import { eq, asc, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
@@ -36,7 +36,9 @@ function checkWindowStrategy(
 }
 
 const CreateBody = CaseBodyBase.superRefine(checkWindowStrategy);
-const PatchBody = CaseBodyBase.partial().superRefine(checkWindowStrategy);
+const PatchBody = CaseBodyBase.partial()
+  .extend({ scenarioId: z.string().uuid().nullable().optional() })
+  .superRefine(checkWindowStrategy);
 
 casesRoute.get('/', async (req, res) => {
   const { priority, groupId, projectId } = req.query as Record<string, string | undefined>;
@@ -65,7 +67,22 @@ casesRoute.get('/', async (req, res) => {
       : [];
   }
   if (priority) rows = rows.filter((r) => r.priority === priority);
-  res.json(rows);
+  // 把 scenario title 一起带回去，避免前端为每个 case 再发一次 detail 请求
+  const sids = [...new Set(rows.map((r) => r.scenarioId).filter((v): v is string => !!v))];
+  const sById = new Map<string, { id: string; title: string }>();
+  if (sids.length > 0) {
+    const scRows = await db
+      .select({ id: scenarios.id, title: scenarios.title })
+      .from(scenarios)
+      .where(inArray(scenarios.id, sids));
+    for (const s of scRows) sById.set(s.id, s);
+  }
+  res.json(
+    rows.map((r) => ({
+      ...r,
+      scenarioTitle: r.scenarioId ? (sById.get(r.scenarioId)?.title ?? null) : null,
+    })),
+  );
 });
 
 casesRoute.post('/', async (req, res) => {
@@ -101,6 +118,22 @@ casesRoute.patch('/:id', async (req, res) => {
     const g = await db.select().from(groups).where(eq(groups.id, body.groupId));
     if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
     await assertProjectVisible(g[0]!.projectId, req.user!);
+  }
+  if (body.scenarioId !== undefined && body.scenarioId !== null) {
+    const [sc] = await db
+      .select({ requirementId: scenarios.requirementId })
+      .from(scenarios)
+      .where(eq(scenarios.id, body.scenarioId))
+      .limit(1);
+    if (!sc) throw new HttpError(404, 'not_found', 'scenario not found');
+    const [tc] = await db
+      .select({ requirementId: testCases.requirementId })
+      .from(testCases)
+      .where(eq(testCases.id, req.params.id!))
+      .limit(1);
+    if (!tc || tc.requirementId !== sc.requirementId) {
+      throw new HttpError(400, 'scenario_mismatch', "scenario does not belong to this case's requirement");
+    }
   }
   const rows = await db
     .update(testCases)
@@ -183,4 +216,17 @@ casesRoute.delete('/:id', async (req, res) => {
   const deleted = await db.delete(testCases).where(eq(testCases.id, req.params.id)).returning();
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'case not found');
   res.json({ ok: true });
+});
+
+casesRoute.post('/batch-delete', async (req, res) => {
+  const body = z.object({ caseIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
+  // 与单删一致：先按可见性逐个校验，违规直接 404
+  for (const id of body.caseIds) {
+    await assertCaseVisible(id, req.user!);
+  }
+  const deleted = await db
+    .delete(testCases)
+    .where(inArray(testCases.id, body.caseIds))
+    .returning({ id: testCases.id });
+  res.json({ count: deleted.length });
 });
