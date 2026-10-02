@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -13,11 +13,13 @@ import Segmented from '../components/ui/Segmented';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
+import TagChip from '../components/ui/Tag';
 import { shortDateTime } from '../lib/format';
 
 const PRIORITIES = ['', 'P0', 'P1', 'P2', 'P3'] as const;
 const DEFAULT_PAGE_SIZE = 20;
-const GRID_COLS = 'grid-cols-[minmax(28px,32px)_minmax(90px,70px)_minmax(200px,2fr)_minmax(120px,1fr)_minmax(120px,0.9fr)_minmax(90px,0.7fr)_minmax(100px,0.9fr)_minmax(70px,80px)]';
+const MAX_TAG_CHIPS = 3;
+const GRID_COLS = 'grid-cols-[minmax(28px,32px)_minmax(90px,70px)_minmax(200px,2fr)_minmax(120px,1fr)_minmax(160px,1.1fr)_minmax(160px,1fr)_minmax(90px,0.7fr)_minmax(100px,0.9fr)_minmax(70px,80px)]';
 
 type GroupForm = { open: boolean; mode: 'create' | 'edit' | 'url'; id: string | null; name: string; defaultUrl: string };
 const EMPTY_GROUP_FORM: GroupForm = { open: false, mode: 'create', id: null, name: '', defaultUrl: '' };
@@ -31,6 +33,10 @@ export default function GroupsPage() {
   const current = useProjectStore((s) => s.current);
 
   const [priority, setPriority] = useState<(typeof PRIORITIES)[number]>('');
+  const [scenarioId, setScenarioId] = useState<string>('');
+  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const tagPickerRef = useRef<HTMLDivElement>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
@@ -52,9 +58,11 @@ export default function GroupsPage() {
 
   const effectiveGroupId = groupId ?? '';
   const { data: cases, isLoading: casesLoading } = useQuery({
-    queryKey: ['cases', projectId, effectiveGroupId, priority],
+    queryKey: ['cases', projectId, effectiveGroupId, priority, scenarioId],
     queryFn: () =>
-      api.cases.list(effectiveGroupId ? { groupId: effectiveGroupId, priority: priority || undefined } : { projectId: projectId!, priority: priority || undefined }),
+      api.cases.list(effectiveGroupId
+        ? { groupId: effectiveGroupId, priority: priority || undefined, scenarioId: scenarioId || undefined }
+        : { projectId: projectId!, priority: priority || undefined, scenarioId: scenarioId || undefined }),
     enabled: !!projectId,
   });
 
@@ -64,15 +72,49 @@ export default function GroupsPage() {
     enabled: !!projectId,
   });
 
+  const { data: projectTags } = useQuery({
+    queryKey: ['tags', projectId],
+    queryFn: () => api.tags.list(projectId!),
+    enabled: !!projectId,
+  });
+
+  const tagById = useMemo(() => new Map((projectTags ?? []).map((t) => [t.id, t])), [projectTags]);
+
+  useEffect(() => {
+    if (!tagPickerOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (tagPickerRef.current && !tagPickerRef.current.contains(e.target as Node)) setTagPickerOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [tagPickerOpen]);
+
   const groupName = useMemo(
     () => new Map((groups ?? []).map((g) => [g.id, g.name])),
     [groups],
   );
 
-  // 切换分组时清空勾选
+  // 当前列表里出现过的「场景 id + title」去重，作为下拉选项来源。
+  // 含一个 "无场景" 选项，用 sentinel 'none' 命中 scenarioId IS NULL。
+  const scenarioOptions = useMemo(() => {
+    const map = new Map<string, { id: string; title: string }>();
+    let hasNone = false;
+    for (const c of cases ?? []) {
+      if (c.scenarioId == null) { hasNone = true; continue; }
+      const t = c.scenarioTitle ?? c.scenarioId;
+      if (!map.has(c.scenarioId)) map.set(c.scenarioId, { id: c.scenarioId, title: t });
+    }
+    const opts: Array<{ id: string; title: string }> = [];
+    if (hasNone) opts.push({ id: 'none', title: '（无场景）' });
+    for (const v of map.values()) opts.push(v);
+    return opts;
+  }, [cases]);
+
+  // 切换分组时清空勾选 + 场景过滤
   useEffect(() => {
     setChecked(new Set());
     setPage(1);
+    setScenarioId('');
   }, [effectiveGroupId]);
 
   const invalidate = () => {
@@ -149,6 +191,17 @@ export default function GroupsPage() {
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
+  // 行内执行：成功后跳到报告详情，与 CaseDetail 行为一致
+  const executeCase = useMutation({
+    mutationFn: (id: string) => api.cases.execute(id),
+    onSuccess: (r) => {
+      toast('执行完成', 'success');
+      qc.invalidateQueries({ queryKey: ['reports'] });
+      navigate(`/p/${projectId}/reports/${r.reportId}`);
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
   const batchDeleteCases = useMutation({
     mutationFn: (caseIds: string[]) => api.cases.removeBatch(caseIds),
     onSuccess: (r) => {
@@ -163,8 +216,13 @@ export default function GroupsPage() {
     },
   });
 
-  const rows = useMemo(() => (cases ?? []).slice((page - 1) * pageSize, page * pageSize), [cases, page, pageSize]);
-  const total = cases?.length ?? 0;
+  const filteredCases = useMemo(() => {
+    if (tagFilter.size === 0) return cases ?? [];
+    return (cases ?? []).filter((c) => (c.tags ?? []).some((t) => tagFilter.has(t.id)));
+  }, [cases, tagFilter]);
+
+  const rows = useMemo(() => filteredCases.slice((page - 1) * pageSize, page * pageSize), [filteredCases, page, pageSize]);
+  const total = filteredCases.length;
   const allChecked = rows.length > 0 && rows.every((c) => checked.has(c.id));
 
   const createRequirement = useMutation({
@@ -297,6 +355,119 @@ export default function GroupsPage() {
               value={priority}
               onChange={(v) => { setPriority(v); setPage(1); }}
             />
+            <select
+              aria-label="场景过滤"
+              value={scenarioId}
+              onChange={(e) => { setScenarioId(e.target.value); setPage(1); }}
+              disabled={scenarioOptions.length === 0}
+              className="text-[12px] rounded-md px-2 py-1 outline-none"
+              style={{
+                border: '1px solid var(--color-border)',
+                background: 'var(--color-background-elevated)',
+                color: 'var(--color-foreground)',
+                minWidth: 140,
+              }}
+            >
+              <option value="">全部场景</option>
+              {scenarioOptions.map((o) => (
+                <option key={o.id} value={o.id}>{o.title}</option>
+              ))}
+            </select>
+            <div className="relative" ref={tagPickerRef}>
+              <button
+                type="button"
+                onClick={() => setTagPickerOpen((v) => !v)}
+                className="flex items-center gap-1.5 text-[12px] rounded-md px-2 py-1"
+                style={{
+                  border: '1px solid var(--color-border)',
+                  background: 'var(--color-background-elevated)',
+                  color: 'var(--color-foreground)',
+                  minWidth: 140,
+                  cursor: 'pointer',
+                }}
+                title="按标签过滤"
+              >
+                {tagFilter.size === 0 ? (
+                  <span style={{ color: 'var(--color-foreground-muted)' }}>全部标签</span>
+                ) : (
+                  <span className="flex items-center gap-1 truncate">
+                    {[...tagFilter].slice(0, 2).map((id) => {
+                      const t = tagById.get(id);
+                      if (!t) return null;
+                      return <TagChip key={id} tag={t} />;
+                    })}
+                    {tagFilter.size > 2 && (
+                      <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>+{tagFilter.size - 2}</span>
+                    )}
+                  </span>
+                )}
+                <Icon name="chevronDown" size={10} style={{ color: 'var(--color-foreground-muted)' }} />
+              </button>
+              {tagPickerOpen && (
+                <div
+                  className="absolute right-0 top-full mt-1 z-50 rounded-[8px] overflow-hidden"
+                  style={{
+                    width: 220,
+                    border: '1px solid var(--color-glass-border)',
+                    background: 'var(--color-background-elevated)',
+                    boxShadow: 'var(--shadow-middle)',
+                  }}
+                >
+                  <div className="max-h-56 overflow-y-auto py-1">
+                    {(projectTags ?? []).length === 0 ? (
+                      <div className="px-3 py-2 text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                        项目内还没有标签
+                      </div>
+                    ) : (
+                      (projectTags ?? []).map((t) => {
+                        const checked = tagFilter.has(t.id);
+                        return (
+                          <label
+                            key={t.id}
+                            className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-[var(--color-background-subtle)]"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                const next = new Set(tagFilter);
+                                if (checked) next.delete(t.id);
+                                else next.add(t.id);
+                                setTagFilter(next);
+                                setPage(1);
+                              }}
+                              className="w-3.5 h-3.5 rounded-[3px]"
+                              style={{ accentColor: 'var(--color-accent)' }}
+                            />
+                            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: `#${t.color}` }} />
+                            <span className="text-[12px] truncate" style={{ color: 'var(--color-foreground)' }}>{t.name}</span>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between px-3 py-1.5 border-t" style={{ borderColor: 'var(--color-border)' }}>
+                    <button
+                      type="button"
+                      className="text-[11px] cursor-pointer"
+                      style={{ background: 'transparent', border: 'none', color: tagFilter.size === 0 ? 'var(--color-foreground-muted)' : 'var(--color-accent)', opacity: tagFilter.size === 0 ? 0.5 : 1 }}
+                      disabled={tagFilter.size === 0}
+                      onClick={() => { setTagFilter(new Set()); setPage(1); }}
+                    >
+                      清空
+                    </button>
+                    <button
+                      type="button"
+                      className="text-[11px] cursor-pointer"
+                      style={{ background: 'transparent', border: 'none', color: 'var(--color-accent)' }}
+                      onClick={() => { setTagPickerOpen(false); navigate(`/p/${projectId}/labels`); }}
+                    >
+                      管理标签 →
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -343,6 +514,7 @@ export default function GroupsPage() {
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>标题</span>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>所属分组</span>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>场景</span>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>标签</span>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>状态</span>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>更新时间</span>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em] text-right" style={{ color: 'var(--color-foreground-muted)' }}>操作</span>
@@ -371,14 +543,38 @@ export default function GroupsPage() {
                     <span className="text-[12px] truncate" style={{ color: 'var(--color-foreground-muted)' }} title={c.scenarioTitle ?? undefined}>
                       {c.scenarioTitle ?? '-'}
                     </span>
+                    <span className="flex items-center gap-1 flex-wrap min-w-0">
+                      {(c.tags ?? []).length === 0 ? (
+                        <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>-</span>
+                      ) : (
+                        <>
+                          {(c.tags ?? []).slice(0, MAX_TAG_CHIPS).map((t) => (
+                            <TagChip key={t.id} tag={t} />
+                          ))}
+                          {(c.tags ?? []).length > MAX_TAG_CHIPS && (
+                            <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                              +{(c.tags ?? []).length - MAX_TAG_CHIPS}
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </span>
                     <span><StatusPill status={c.status}>{c.status}</StatusPill></span>
                     <span className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }} title={c.updatedAt}>
                       {c.updatedAt ? shortDateTime(c.updatedAt) : '-'}
                     </span>
                     <span
-                      className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="flex items-center justify-end gap-1"
                       onClick={(e) => e.stopPropagation()}
                     >
+                      <button
+                        title="执行"
+                        disabled={executeCase.isPending && executeCase.variables === c.id}
+                        onClick={() => executeCase.mutate(c.id)}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-primary, #6366f1)', padding: 2 }}
+                      >
+                        <Icon name={executeCase.isPending && executeCase.variables === c.id ? 'loader' : 'play'} size={12} className={executeCase.isPending && executeCase.variables === c.id ? 'animate-spin' : undefined} />
+                      </button>
                       <button
                         title="复制"
                         onClick={() => { setCopyTarget(''); setCopyModal({ caseIds: [c.id] }); }}
