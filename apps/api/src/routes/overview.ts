@@ -191,7 +191,7 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
     : [];
   const aiCalls7d = recentAgentRuns.filter((r) => r.startedAt >= agentSince).length;
 
-  const trend = rs7d.length === 0 ? [] : buildTrend(rs7d, today, days);
+  const trend = buildTrend(rs7d, today, days);
   const failMap = new Map<
     string,
     { caseId: string; caseTitle: string; failureCount: number; lastFailureAt: string }

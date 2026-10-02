@@ -51,7 +51,17 @@ describe('overview', () => {
     const r = await request(app).get(`/api/projects/${projectId}/overview`);
     expect(r.status).toBe(200);
     expect(r.body.kpi.totalCases).toBe(0);
-    expect(r.body.trend).toEqual([]);
+    expect(r.body.trend).toEqual(
+      Array.from({ length: 7 }).map((_, i) => {
+        const d = new Date();
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(new Date(y, d.getMonth(), d.getDate() - (6 - i)).getDate()).padStart(2, '0');
+        const mm = String(new Date(y, d.getMonth(), d.getDate() - (6 - i)).getMonth() + 1).padStart(2, '0');
+        const yy = new Date(y, d.getMonth(), d.getDate() - (6 - i)).getFullYear();
+        return { date: `${yy}-${mm}-${day}`, passed: 0, failed: 0, total: 0 };
+      }),
+    );
     expect(r.body.topFailures).toEqual([]);
     expect(r.body.priorityDistribution).toHaveLength(4);
     expect(r.body.plans).toEqual([]);
