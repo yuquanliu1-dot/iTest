@@ -39,7 +39,7 @@ export default function ReportDetail() {
   const toast = useUIStore((s) => s.showToast);
   const [zoomIndex, setZoomIndex] = useState<number | null>(null);
   const [showDelete, setShowDelete] = useState(false);
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['report', id],
     queryFn: () => api.reports.get(id!),
     enabled: !!id,
@@ -56,6 +56,14 @@ export default function ReportDetail() {
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
+
+  if (isError) {
+    return (
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+        加载失败：{error?.message ?? '未知错误'}
+      </div>
+    );
+  }
 
   if (isLoading || !data) {
     return (

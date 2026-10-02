@@ -19,7 +19,7 @@ export default function PlanDetail() {
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
 
-  const { data: plan } = useQuery({
+  const { data: plan, isError, error } = useQuery({
     queryKey: ['plan', id],
     queryFn: () => api.plans.get(id!),
     enabled: !!id,
@@ -127,6 +127,14 @@ export default function PlanDetail() {
   useEffect(() => {
     if (showAdd) setSelectedAdd(new Set());
   }, [showAdd]);
+
+  if (isError) {
+    return (
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+        加载失败：{error?.message ?? '未知错误'}
+      </div>
+    );
+  }
 
   if (!plan) {
     return (

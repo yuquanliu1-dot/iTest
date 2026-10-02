@@ -10,12 +10,20 @@ import { fullDateTime } from '../lib/format';
 export default function PlanRunDetail() {
   const { id, runId, projectId } = useParams<{ id: string; runId: string; projectId: string }>();
   const navigate = useNavigate();
-  const { data: run, isLoading } = useQuery({
+  const { data: run, isLoading, isError, error } = useQuery({
     queryKey: ['planRun', runId],
     queryFn: () => api.planRuns.get(runId!),
     enabled: !!runId,
     refetchInterval: (q) => (q.state.data?.status === 'running' ? 2000 : false),
   });
+
+  if (isError) {
+    return (
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+        加载失败：{error?.message ?? '未知错误'}
+      </div>
+    );
+  }
 
   if (isLoading || !run) {
     return (
