@@ -489,7 +489,7 @@ export default function CaseDetail() {
           {caseDetail.title}
         </h1>
         <PriorityBadge priority={caseDetail.priority} />
-        <CaseStatusMenu caseId={caseDetail.id} status={caseDetail.status} />
+        <CaseStatusMenu caseId={caseDetail.id} status={caseDetail.status} projectId={projectId} />
         <div className="flex-1" />
         <Button
           variant="secondary"
