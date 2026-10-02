@@ -99,6 +99,20 @@
       "when": 1790930000000,
       "tag": "0014_ai_threads_workspace",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790940000000,
+      "tag": "0015_ai_workspace_rows",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1790950000000,
+      "tag": "0016_case_tags",
+      "breakpoints": true
     }
   ]
 }

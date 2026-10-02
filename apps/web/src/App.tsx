@@ -18,6 +18,7 @@ import Executions from './pages/Reports';
 import ReportDetail from './pages/ReportDetail';
 import MembersPage from './pages/MembersPage';
 import Settings from './pages/Settings';
+import LabelsPage from './pages/LabelsPage';
 
 export default function App() {
   const initTheme = useThemeStore((s) => s.init);
@@ -47,6 +48,7 @@ export default function App() {
           <Route path="plans/:id/runs/:runId" element={<PlanRunDetail />} />
           <Route path="reports" element={<Executions />} />
           <Route path="reports/:id" element={<ReportDetail />} />
+          <Route path="labels" element={<LabelsPage />} />
         </Route>
         <Route path="*" element={<ProjectsHome />} />
       </Route>

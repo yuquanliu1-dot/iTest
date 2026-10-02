@@ -8,6 +8,8 @@ import {
   timestamp,
   boolean,
   unique,
+  primaryKey,
+  index,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
@@ -67,6 +69,38 @@ export const aiWorkspaceState = pgTable('ai_workspace_state', {
   doc: jsonb('doc').notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
+
+export const aiScenarios = pgTable(
+  'ai_scenarios',
+  {
+    requirementId: uuid('requirement_id').notNull().references(() => requirements.id, { onDelete: 'cascade' }),
+    id: text('id').notNull(),
+    title: varchar('title', { length: 200 }).notNull(),
+    description: text('description'),
+    order: integer('order').notNull().default(0),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.requirementId, t.id] }) }),
+);
+
+export const aiCases = pgTable(
+  'ai_cases',
+  {
+    requirementId: uuid('requirement_id').notNull().references(() => requirements.id, { onDelete: 'cascade' }),
+    id: text('id').notNull(),
+    scenarioId: text('scenario_id'),
+    title: varchar('title', { length: 200 }).notNull(),
+    description: text('description'),
+    priority: varchar('priority', { length: 20 }).notNull().default('P1'),
+    steps: jsonb('steps').notNull().default([]),
+    position: integer('position').notNull().default(0),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.requirementId, t.id] }),
+    byReqScenario: index('ai_cases_requirement_scenario_idx').on(t.requirementId, t.scenarioId),
+  }),
+);
 
 export const testSteps = pgTable('test_steps', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -254,3 +288,25 @@ export const testSessions = pgTable('test_sessions', {
   tabs: jsonb('tabs'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
+
+// 项目级标签：用例可贴/摘多个；project 内 name 唯一。
+export const tags = pgTable('tags', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 80 }).notNull(),
+  // hex 颜色不含 `#`，例如 '34c759'
+  color: varchar('color', { length: 16 }).notNull(),
+  description: text('description'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  projectNameUq: unique('tags_project_name_uq').on(t.projectId, t.name),
+}));
+
+// 用例 ↔ 标签 关联（case 删除或 tag 删除时 cascade 解除）
+export const caseTags = pgTable('case_tags', {
+  caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
+  tagId: uuid('tag_id').notNull().references(() => tags.id, { onDelete: 'cascade' }),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.caseId, t.tagId] }),
+}));
