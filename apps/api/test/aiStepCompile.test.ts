@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { compileAiStep, compileAiStepsInPlace, compileAiStepVision } from '../src/agent/aiStepCompile.js';
+import { compileAiStep, compileAiStepsBatch, compileAiStepsInPlace, compileAiStepVision } from '../src/agent/aiStepCompile.js';
 import type { LLMClient, LLMRequest, LLMResult } from '../src/agent/llm-client.js';
 
 const fakeClient = (outputs: { steps?: unknown }[]): LLMClient => ({
-  provider: 'mock',
+  provider: 'openai',
   complete: async () => {
     const v = outputs.shift();
     return v
-      ? { kind: 'json', value: v as Record<string, unknown>, provider: 'mock', vision: false }
-      : { kind: 'text', value: '', provider: 'mock', vision: false };
+      ? { kind: 'json', value: v as Record<string, unknown>, provider: 'openai', vision: false }
+      : { kind: 'text', value: '', provider: 'openai', vision: false };
   },
 });
 
@@ -49,11 +49,11 @@ describe('compileAiStepsInPlace', () => {
   it('compiles aiStep actions in place and reports failed indices', async () => {
     let calls = 0;
     const client: LLMClient = {
-      provider: 'mock',
+      provider: 'openai',
       complete: async () => {
         calls++;
-        if (calls === 1) return { kind: 'json', value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] }, provider: 'mock', vision: false };
-        return { kind: 'text', value: 'garbage', provider: 'mock', vision: false };
+        if (calls === 1) return { kind: 'json', value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] }, provider: 'openai', vision: false };
+        return { kind: 'text', value: 'garbage', provider: 'openai', vision: false };
       },
     };
     const steps = [
@@ -65,6 +65,126 @@ describe('compileAiStepsInPlace', () => {
     expect(failed).toEqual([1]);
     expect((steps[0]!.action as { compiled: unknown[] }).compiled).toHaveLength(1);
     expect((steps[1]!.action as { compiled: unknown }).compiled).toBeNull();
+  });
+
+  it('batches instructions into a single LLM call', async () => {
+    const userMessages: string[] = [];
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async (req) => {
+        userMessages.push(req.userMessage);
+        return {
+          kind: 'json',
+          value: {
+            results: [
+              { index: 1, steps: [{ kind: 'navigate', url: 'http://localhost:5173/login' }] },
+              { index: 2, steps: [{ kind: 'click', locator: [{ strategy: 'text', value: '登录' }] }] },
+            ],
+          },
+          provider: 'openai',
+          vision: false,
+        };
+      },
+    };
+    const steps = [
+      { action: { kind: 'aiStep', instruction: '打开登录页', compiled: null } },
+      { action: { kind: 'aiStep', instruction: '点击登录', compiled: null } },
+    ];
+    const failed = await compileAiStepsInPlace(steps, client);
+    expect(failed).toEqual([]);
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]).toContain('1. 指令: 打开登录页');
+    expect(userMessages[0]).toContain('2. 指令: 点击登录');
+    expect((steps[0]!.action as { compiled: unknown[] }).compiled).toEqual([
+      { kind: 'navigate', url: 'http://localhost:5173/login' },
+    ]);
+    expect((steps[1]!.action as { compiled: unknown[] }).compiled).toEqual([
+      { kind: 'click', locator: [{ strategy: 'text', value: '登录' }] },
+    ]);
+  });
+
+  it('falls back to per-step compile for indices missing from batch result', async () => {
+    let calls = 0;
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => {
+        calls++;
+        if (calls === 1) {
+          // 批量调用：只回了第 1 条，第 2 条缺失
+          return { kind: 'json', value: { results: [{ index: 1, steps: [{ kind: 'assertVisible', locator: [{ strategy: 'role', value: 'main' }] }] }] }, provider: 'openai', vision: false };
+        }
+        return { kind: 'json', value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] }, provider: 'openai', vision: false };
+      },
+    };
+    const steps = [
+      { action: { kind: 'aiStep', instruction: 'a', compiled: null } },
+      { action: { kind: 'aiStep', instruction: 'b', compiled: null } },
+    ];
+    const failed = await compileAiStepsInPlace(steps, client);
+    expect(failed).toEqual([]);
+    expect((steps[0]!.action as { compiled: unknown[] }).compiled).toHaveLength(1);
+    expect((steps[1]!.action as { compiled: unknown[] }).compiled).toHaveLength(1);
+  });
+
+  it('marks steps with empty instruction and no name as failed', async () => {
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => ({ kind: 'text', value: '', provider: 'openai', vision: false }),
+    };
+    const steps = [{ action: { kind: 'aiStep', instruction: '', compiled: null } }];
+    const failed = await compileAiStepsInPlace(steps, client);
+    expect(failed).toEqual([0]);
+    expect((steps[0]!.action as { compiled: unknown }).compiled).toBeNull();
+  });
+});
+
+describe('compileAiStepsBatch', () => {
+  it('parses batch-shaped results and validates each entry', async () => {
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => ({
+        kind: 'json',
+        value: {
+          results: [
+            { index: 1, steps: [{ kind: 'navigate', url: 'http://x' }] },
+            { index: 2, steps: [{ kind: 'bogus' }, { kind: 'check', locator: [{ strategy: 'text', value: 'OK' }], checked: true }] },
+            { index: 99, steps: [{ kind: 'navigate', url: 'http://out-of-range' }] },
+          ],
+        },
+        provider: 'openai',
+        vision: false,
+      }),
+    };
+    const out = await compileAiStepsBatch([{ text: 'a' }, { text: 'b' }], client);
+    expect(out.get(0)).toEqual([{ kind: 'navigate', url: 'http://x' }]);
+    // 非法 kind 被丢弃，合法的保留
+    expect(out.get(1)).toEqual([{ kind: 'check', locator: [{ strategy: 'text', value: 'OK' }], checked: true }]);
+    // 越界 index 被忽略
+    expect(out.has(2)).toBe(false);
+  });
+
+  it('treats single-shaped output as result for index 0', async () => {
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => ({
+        kind: 'json',
+        value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] },
+        provider: 'openai',
+        vision: false,
+      }),
+    };
+    const out = await compileAiStepsBatch([{ text: 'a' }, { text: 'b' }], client);
+    expect(out.get(0)).toHaveLength(1);
+    expect(out.has(1)).toBe(false);
+  });
+
+  it('returns empty map on non-json output', async () => {
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => ({ kind: 'text', value: 'garbage', provider: 'openai', vision: false }),
+    };
+    const out = await compileAiStepsBatch([{ text: 'a' }], client);
+    expect(out.size).toBe(0);
   });
 });
 
@@ -79,7 +199,7 @@ describe('LLMClient shape — vision support', () => {
   });
 
   it('LLMResult exposes vision flag', () => {
-    const r: LLMResult = { kind: 'text', value: 'x', provider: 'mock', vision: false };
+    const r: LLMResult = { kind: 'text', value: 'x', provider: 'openai', vision: false };
     expect(r.vision).toBe(false);
   });
 });
@@ -88,13 +208,13 @@ describe('compileAiStep — fallback on empty instruction', () => {
   it('uses step.name when instruction is empty', async () => {
     let captured = '';
     const client: LLMClient = {
-      provider: 'mock',
+      provider: 'openai',
       complete: async (req) => {
         captured = req.userMessage;
         return {
           kind: 'json',
           value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] },
-          provider: 'mock',
+          provider: 'openai',
           vision: false,
         };
       },
@@ -107,8 +227,8 @@ describe('compileAiStep — fallback on empty instruction', () => {
 
   it('throws when instruction empty and no name', async () => {
     const client: LLMClient = {
-      provider: 'mock',
-      complete: async () => ({ kind: 'text', value: '', provider: 'mock', vision: false }),
+      provider: 'openai',
+      complete: async () => ({ kind: 'text', value: '', provider: 'openai', vision: false }),
     };
     await expect(compileAiStep('', {}, client)).rejects.toThrow(/编译失败/);
   });
@@ -118,13 +238,13 @@ describe('compileAiStep — vision path', () => {
   it('forwards image to provider when placeholders are present', async () => {
     let captured: { image?: unknown; userMessage?: string } = {};
     const client: LLMClient = {
-      provider: 'mock',
+      provider: 'openai',
       complete: async (req) => {
         captured = { image: req.image, userMessage: req.userMessage };
         return {
           kind: 'text',
           value: '识别出的文本',
-          provider: 'mock',
+          provider: 'openai',
           vision: !!req.image,
         };
       },
