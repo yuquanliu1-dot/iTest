@@ -87,6 +87,11 @@ export default function CaseDetail() {
   };
 
   const undo = () => {
+    // 抽屉打开时步骤列表可能已被并发变更（行号会错位），先关抽屉再撤销
+    if (editing) {
+      toast('请先关闭编辑抽屉再撤销', 'info');
+      return;
+    }
     const snapshot = historyRef.current.pop();
     if (!snapshot) {
       toast('没有可撤销的操作', 'info');
