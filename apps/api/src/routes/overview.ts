@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { eq, desc, inArray, sql } from 'drizzle-orm';
+import { eq, desc, inArray, sql, and } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   testCases,
@@ -19,8 +19,12 @@ export const overviewRoute = Router();
 const RangeSchema = z.enum(['7d', '30d']).default('7d');
 const rangeDays = (r: '7d' | '30d') => (r === '7d' ? 7 : 30);
 
-const PRIORITIES = ['urgent', 'high', 'medium', 'low'] as const;
-type Priority = (typeof PRIORITIES)[number];
+const PRIORITY_MAP: Record<string, 'urgent' | 'high' | 'medium' | 'low'> = {
+  P0: 'urgent',
+  P1: 'high',
+  P2: 'medium',
+  P3: 'low',
+};
 
 function dateKey(d: Date): string {
   const y = d.getFullYear();
@@ -89,12 +93,9 @@ async function loadBase(projectId: string, days: number) {
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 10);
   return {
-    gids,
     cs,
     caseIds: cs.map((c) => c.id),
-    rs: caseRows,
     rs7d: caseRows.filter((r) => r.createdAt >= since),
-    since,
     recent,
   };
 }
@@ -181,7 +182,12 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
     ? await db
         .select()
         .from(agentRuns)
-        .where(inArray(agentRuns.targetId, caseIds))
+        .where(
+          and(
+            inArray(agentRuns.targetId, caseIds),
+            eq(agentRuns.targetType, 'case2script'),
+          ),
+        )
     : [];
   const aiCalls7d = recentAgentRuns.filter((r) => r.startedAt >= agentSince).length;
 
@@ -210,9 +216,9 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
     .sort((a, b) => b.failureCount - a.failureCount || (b.lastFailureAt > a.lastFailureAt ? 1 : -1))
     .slice(0, 5);
 
-  const priorityDistribution = PRIORITIES.map((p) => ({
+  const priorityDistribution = (['urgent', 'high', 'medium', 'low'] as const).map((p) => ({
     priority: p,
-    count: cs.filter((c) => (c.priority ?? '').toLowerCase().startsWith(p[0]!)).length,
+    count: cs.filter((c) => PRIORITY_MAP[c.priority ?? ''] === p).length,
   }));
 
   const aiActivity = recentAgentRuns.length === 0
