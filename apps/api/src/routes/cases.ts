@@ -38,7 +38,10 @@ function checkWindowStrategy(
 
 const CreateBody = CaseBodyBase.superRefine(checkWindowStrategy);
 const PatchBody = CaseBodyBase.partial()
-  .extend({ scenarioId: z.string().uuid().nullable().optional() })
+  .extend({
+    scenarioId: z.string().uuid().nullable().optional(),
+    status: z.enum(['draft', 'review', 'ready', 'deprecated']).optional(),
+  })
   .superRefine(checkWindowStrategy);
 
 /** 校验 tagIds 都属于 projectId 所属组织；缺失或越权都 404（不区分存在性与可见性）。 */
@@ -316,4 +319,23 @@ casesRoute.post('/batch-delete', async (req, res) => {
     .where(inArray(testCases.id, body.caseIds))
     .returning({ id: testCases.id });
   res.json({ count: deleted.length });
+});
+
+casesRoute.post('/batch-status', async (req, res) => {
+  const body = z
+    .object({
+      caseIds: z.array(z.string().uuid()).min(1),
+      status: z.enum(['draft', 'review', 'ready', 'deprecated']),
+    })
+    .parse(req.body);
+  // 与 batch-delete 一致：先按可见性逐个校验，违规直接 404
+  for (const id of body.caseIds) {
+    await assertCaseVisible(id, req.user!);
+  }
+  const updated = await db
+    .update(testCases)
+    .set({ status: body.status, updatedAt: new Date() })
+    .where(inArray(testCases.id, body.caseIds))
+    .returning({ id: testCases.id });
+  res.json({ count: updated.length });
 });
