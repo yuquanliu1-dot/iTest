@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { eq, desc, inArray, gte } from 'drizzle-orm';
+import { eq, desc, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   testCases,
   groups,
   reports,
   planRuns,
+  planCases,
   executionPlans,
   agentRuns,
 } from '../db/schema.js';
@@ -38,7 +39,7 @@ async function loadBase(projectId: string, days: number) {
         .where(inArray(testCases.groupId, gids))
     : [];
   const since = new Date(Date.now() - days * 86_400_000);
-  const rs = cs.length
+  const caseRows = cs.length
     ? await db
         .select({
           id: reports.id,
@@ -53,7 +54,20 @@ async function loadBase(projectId: string, days: number) {
         .where(inArray(reports.caseId, cs.map((c) => c.id)))
         .orderBy(desc(reports.createdAt))
     : [];
-  const recent = rs.slice(0, 10).map((r) => ({
+  const planRecentRows = await db
+    .select({
+      id: planRuns.id,
+      planId: planRuns.planId,
+      planName: executionPlans.name,
+      status: planRuns.status,
+      durationMs: planRuns.durationMs,
+      startedAt: planRuns.startedAt,
+    })
+    .from(planRuns)
+    .innerJoin(executionPlans, eq(executionPlans.id, planRuns.planId))
+    .where(eq(planRuns.projectId, projectId))
+    .orderBy(desc(planRuns.startedAt));
+  const caseRecent = caseRows.slice(0, 10).map((r) => ({
     id: r.id,
     caseId: r.caseId,
     caseTitle: r.caseTitle ?? '',
@@ -62,7 +76,27 @@ async function loadBase(projectId: string, days: number) {
     createdAt: r.createdAt.toISOString(),
     kind: 'case' as const,
   }));
-  return { gids, cs, rs, rs7d: rs.filter((r) => r.createdAt >= since), since, recent };
+  const planRecent = planRecentRows.slice(0, 10).map((r) => ({
+    id: r.id,
+    caseId: r.planId,
+    caseTitle: r.planName,
+    status: r.status,
+    durationMs: r.durationMs,
+    createdAt: r.startedAt.toISOString(),
+    kind: 'plan' as const,
+  }));
+  const recent = [...caseRecent, ...planRecent]
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 10);
+  return {
+    gids,
+    cs,
+    caseIds: cs.map((c) => c.id),
+    rs: caseRows,
+    rs7d: caseRows.filter((r) => r.createdAt >= since),
+    since,
+    recent,
+  };
 }
 
 function buildTrend(
@@ -95,7 +129,7 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
 
   const days = rangeDays(parsed.data);
   const today = new Date();
-  const { cs, rs7d, recent } = await loadBase(projectId, days);
+  const { cs, caseIds, rs7d, recent } = await loadBase(projectId, days);
 
   const totalCases = cs.length;
   const passed = rs7d.filter((r) => r.status === 'passed').length;
@@ -106,6 +140,18 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
     .select()
     .from(executionPlans)
     .where(eq(executionPlans.projectId, projectId));
+  const planIds = planRows.map((p) => p.id);
+  const caseCountRows = planIds.length
+    ? await db
+        .select({
+          planId: planCases.planId,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(planCases)
+        .where(inArray(planCases.planId, planIds))
+        .groupBy(planCases.planId)
+    : [];
+  const caseCountMap = new Map(caseCountRows.map((r) => [r.planId, r.count]));
   const plans = await Promise.all(
     planRows.map(async (p) => {
       const allRuns = await db
@@ -125,17 +171,19 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
         lastStatus: (last?.status as 'passed' | 'failed' | 'running' | 'queued') ?? null,
         lastRunAt: last?.startedAt.toISOString() ?? null,
         passRate: pr,
-        totalCases: 0,
+        totalCases: caseCountMap.get(p.id) ?? 0,
       };
     }),
   );
 
   const agentSince = new Date(Date.now() - 7 * 86_400_000);
-  const recentAgentRuns = await db
-    .select()
-    .from(agentRuns)
-    .where(gte(agentRuns.startedAt, agentSince));
-  const aiCalls7d = recentAgentRuns.length;
+  const recentAgentRuns = caseIds.length
+    ? await db
+        .select()
+        .from(agentRuns)
+        .where(inArray(agentRuns.targetId, caseIds))
+    : [];
+  const aiCalls7d = recentAgentRuns.filter((r) => r.startedAt >= agentSince).length;
 
   const trend = rs7d.length === 0 ? [] : buildTrend(rs7d, today, days);
   const failMap = new Map<
