@@ -8,7 +8,7 @@ import { useRecorderStore } from '../stores/recorder';
 import { useAgentRunStore } from '../stores/agentRun';
 import { useStepClipboard, type StepClip } from '../stores/stepClipboard';
 import Icon from '../components/Icon';
-import StatusPill from '../components/ui/StatusPill';
+import CaseStatusMenu from '../components/CaseStatusMenu';
 import PriorityBadge from '../components/ui/PriorityBadge';
 import Button from '../components/ui/Button';
 import IconButton from '../components/ui/IconButton';
@@ -16,6 +16,7 @@ import Input from '../components/ui/Input';
 import Segmented from '../components/ui/Segmented';
 import Toggle from '../components/ui/Toggle';
 import EmptyState from '../components/ui/EmptyState';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import AgentStreamPanel from '../components/ui/AgentStreamPanel';
 import StepEditDrawer from '../components/StepEditDrawer';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
@@ -48,6 +49,7 @@ export default function CaseDetail() {
   const sessionRef = useRef<string | null>(null);
   const [mode, setMode] = useState<'fresh' | 'append' | 'resume' | 'incognito'>('fresh');
   const [resumeTarget, setResumeTarget] = useState<{ stepId: string; order: number } | null>(null);
+  const [confirmResume, setConfirmResume] = useState<{ stepId: string; order: number } | null>(null);
   const clipboard = useStepClipboard();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<StepClip | null>(null);
@@ -474,24 +476,27 @@ export default function CaseDetail() {
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header bar */}
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
-        <button
+        <Button
+          variant="plain"
+          size="sm"
           onClick={() => navigate(`/p/${projectId}/groups/${caseDetail.groupId ?? ''}`)}
-          className="flex items-center gap-1 text-[12px]"
-          style={{ color: 'var(--color-foreground-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}
         >
           <Icon name="chevronLeft" size={12} />
           {group?.name ?? '用例列表'}
-        </button>
+        </Button>
         <span style={{ width: 1, height: 16, background: 'var(--color-glass-border)' }} />
         <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>
           {caseDetail.title}
         </h1>
         <PriorityBadge priority={caseDetail.priority} />
-        <StatusPill status={caseDetail.status}>{caseDetail.status}</StatusPill>
+        <CaseStatusMenu caseId={caseDetail.id} status={caseDetail.status} />
         <div className="flex-1" />
         <Button
           variant="secondary"
-          onClick={() => execute.mutate()}
+          onClick={() => {
+            if (caseDetail.status === 'deprecated' && !window.confirm('用例已废弃，仍要执行？')) return;
+            execute.mutate();
+          }}
           disabled={execute.isPending || caseDetail.steps.length === 0}
         >
           <Icon name="play" size={12} />
@@ -581,7 +586,9 @@ export default function CaseDetail() {
                     步骤 ({caseDetail.steps.length})
                   </div>
                   <div className="flex-1" />
-                  <button
+                  <Button
+                    variant="plain"
+                    size="sm"
                     onClick={() => {
                       const clips = caseDetail.steps.filter((s) => selected.has(s.id)).map(toClip);
                       if (clips.length === 0) {
@@ -592,12 +599,12 @@ export default function CaseDetail() {
                       toast(`已复制 ${clips.length} 个步骤`, 'success');
                     }}
                     disabled={selected.size === 0}
-                    className="text-[11px] px-2 py-1 rounded-[6px]"
-                    style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-secondary)', cursor: selected.size === 0 ? 'default' : 'pointer', opacity: selected.size === 0 ? 0.4 : 1 }}
                   >
                     复制选中 ({selected.size})
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="plain"
+                    size="sm"
                     onClick={() =>
                       mutateSteps((cur) => {
                         const selIdx = cur
@@ -610,20 +617,18 @@ export default function CaseDetail() {
                       })
                     }
                     disabled={clipboard.steps.length === 0}
-                    className="text-[11px] px-2 py-1 rounded-[6px]"
-                    style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-secondary)', cursor: clipboard.steps.length === 0 ? 'default' : 'pointer', opacity: clipboard.steps.length === 0 ? 0.4 : 1 }}
                     title={selected.size > 0 ? '插入到最后一个选中步骤之后' : '追加到末尾'}
                   >
                     粘贴 ({clipboard.steps.length})
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="plain"
+                    size="sm"
                     onClick={undo}
                     disabled={historyRef.current.length === 0}
-                    className="text-[11px] px-2 py-1 rounded-[6px]"
-                    style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-secondary)', cursor: 'pointer', opacity: historyRef.current.length === 0 ? 0.4 : 1 }}
                   >
                     撤销
-                  </button>
+                  </Button>
                 </div>
                 {varReport &&
                   (varReport.undefined.length > 0 ||
@@ -771,15 +776,8 @@ export default function CaseDetail() {
                                 icon="chevronRight"
                                 title="从这里开始录制"
                                 disabled={recorder.status === 'recording'}
-                                onClick={async () => {
-                                  const ok = window.confirm('录制前是否先回放该步骤之前的步骤？');
-                                  setResumeTarget({ stepId: s.id, order: idx });
-                                  setMode('resume');
-                                  if (!ok) {
-                                    toast('已选中从此处开始，前置步骤不会回放', 'info');
-                                  } else {
-                                    toast('已选中，录制时会先回放前置步骤', 'info');
-                                  }
+                                onClick={() => {
+                                  setConfirmResume({ stepId: s.id, order: idx });
                                 }}
                               />
                               <IconButton
@@ -912,14 +910,15 @@ export default function CaseDetail() {
                       ))
                     )}
                   </div>
-                  <button
-                    type="button"
-                    className="w-full text-left px-3 py-1.5 text-[12px] font-medium cursor-pointer hover:bg-[var(--color-background-subtle)]"
-                    style={{ color: 'var(--color-accent)', borderTop: '1px solid var(--color-border)', background: 'transparent', border: 'none' }}
+                  <Button
+                    variant="plain"
+                    size="sm"
+                    className="w-full justify-start"
+                    style={{ borderTop: '1px solid var(--color-border)' }}
                     onClick={() => { setTagPickerOpen(false); setLabelsManagerOpen(true); }}
                   >
                     管理标签 →
-                  </button>
+                  </Button>
                 </div>,
                 document.body
               )}
@@ -1071,6 +1070,42 @@ export default function CaseDetail() {
           onClose={() => setLabelsManagerOpen(false)}
         />
       )}
+
+      {/* 录制前确认：是否先回放前置步骤 */}
+      <Dialog open={!!confirmResume} onOpenChange={(o) => !o && setConfirmResume(null)}>
+        <DialogContent style={{ maxWidth: 420 }}>
+          <DialogHeader><DialogTitle>录制前先回放前置步骤？</DialogTitle></DialogHeader>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+            选「先回放」时，录制器会先把当前步骤之前的步骤全部跑一遍（便于基于已有登录态继续）。
+            选「不预览」则直接从该步骤开始录制，前置步骤不会回放。
+          </div>
+          <DialogFooter>
+            <Button
+              variant="plain"
+              onClick={() => {
+                if (!confirmResume) return;
+                setResumeTarget(confirmResume);
+                setMode('resume');
+                setConfirmResume(null);
+                toast('已选中从此处开始，前置步骤不会回放', 'info');
+              }}
+            >
+              不预览
+            </Button>
+            <Button
+              onClick={() => {
+                if (!confirmResume) return;
+                setResumeTarget(confirmResume);
+                setMode('resume');
+                setConfirmResume(null);
+                toast('已选中，录制时会先回放前置步骤', 'info');
+              }}
+            >
+              先回放
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
