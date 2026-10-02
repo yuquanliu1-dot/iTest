@@ -181,7 +181,18 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       return;
     }
     case 'click':
-      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).click({ timeout: 5000 });
+      try {
+        // React 受控表单的 button 经常在 onChange → setState → re-render 之前仍是 disabled。
+        // 这里用 force: true 跳过 enabled 检查直接 click（按钮在 click 时只要 password state 非空就能触发 submit）。
+        await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).click({ timeout: 5000, force: true });
+      } catch (e) {
+        if (e instanceof Error && /strict mode violation/.test(e.message)) {
+          const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
+          await loc.first().click({ timeout: 5000 });
+          return;
+        }
+        throw e;
+      }
       return;
     case 'fill': {
       let value: string;
@@ -200,7 +211,22 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
         }
         value = materializeValue(action.value, vars);
       }
-      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).fill(value, { timeout: 5000 });
+      const fillLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
+      try {
+        // React 受控表单：fill() 只改 DOM value，onChange 不一定冒泡。
+        // 先 fill('')，再用 pressSequentially 模拟真实键入，确保组件重新计算 state（disabled 状态、错误信息等）。
+        await fillLoc.fill('', { timeout: 5000 });
+        await fillLoc.pressSequentially(value, { delay: 20 });
+        // 触发 blur 让 onChange 提交（Antd 等库在 blur 时同步校验/格式化）
+        await page.keyboard.press('Tab').catch(() => undefined);
+      } catch (e) {
+        // strict-mode violation（getByRole 命中多个同名元素）→ 退到 first()
+        if (e instanceof Error && /strict mode violation/.test(e.message)) {
+          await fillLoc.first().fill(value, { timeout: 5000 });
+          return;
+        }
+        throw e;
+      }
       return;
     }
     case 'hover':

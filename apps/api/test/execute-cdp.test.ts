@@ -19,6 +19,7 @@ vi.mock('playwright-core', () => {
     filter: vi.fn().mockReturnThis(),
     first: vi.fn().mockReturnThis(),
     count: vi.fn().mockResolvedValue(1),
+    pressSequentially: vi.fn().mockResolvedValue(undefined),
   });
 
   const getByRole = vi.fn().mockReturnValue(makeLocator());
@@ -34,6 +35,7 @@ vi.mock('playwright-core', () => {
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
     url: vi.fn(() => 'https://example.com/path'),
     evaluate: vi.fn().mockResolvedValue('登录成功'),
+    keyboard: { press: vi.fn().mockResolvedValue(undefined) },
   };
 
   return {
@@ -59,6 +61,7 @@ const mocked = await import('playwright-core') as unknown as {
     waitForTimeout: ReturnType<typeof vi.fn>;
     url: ReturnType<typeof vi.fn>;
     evaluate: ReturnType<typeof vi.fn>;
+    keyboard: { press: ReturnType<typeof vi.fn> };
   };
   __getByRole: ReturnType<typeof vi.fn>;
   __getByText: ReturnType<typeof vi.fn>;
@@ -158,7 +161,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     );
     expect(results.every((r) => r.status === 'passed')).toBe(true);
     const loc = (mocked.__page.locator as ReturnType<typeof vi.fn>).mock.results[1]!.value;
-    expect(loc.fill).toHaveBeenCalledWith('input-val', expect.anything());
+    expect(loc.pressSequentially).toHaveBeenCalledWith('input-val', expect.anything());
   });
 
   it('unresolved {{var}} fails the step with missing var name', async () => {
@@ -286,14 +289,14 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
   });
 
   it('sensitive fill resolves plaintext via secretResolver', async () => {
-    const fill = vi.fn().mockResolvedValue(undefined);
-    mocked.__locator.mockReturnValueOnce({ fill } as never);
+    const pressSequentially = vi.fn().mockResolvedValue(undefined);
+    mocked.__locator.mockReturnValueOnce({ fill: vi.fn().mockResolvedValue(undefined), pressSequentially } as never);
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000014',
       [{ order: 1, action: { kind: 'fill', locator: [{ strategy: 'css', value: 'input[type=password]' }], value: '__sensitive__', sensitive: true }, id: 'step-1' }],
       { reportId: 'r-secret', secretResolver: async (stepId: string) => (stepId === 'step-1' ? 'hunter2' : null) },
     );
-    expect(fill).toHaveBeenCalledWith('hunter2', { timeout: 5000 });
+    expect(pressSequentially).toHaveBeenCalledWith('hunter2', expect.anything());
     expect(results[0]!.status).toBe('passed');
   });
 
@@ -473,8 +476,8 @@ describe('phase3 — composite value at execute', () => {
       { reportId: 'r-composite' },
     );
     expect(results[0]!.status).toBe('passed');
-    // 找出本次 composite 的最后一次 fill 调用（其它 case 残留 mock.results 会被前序 test 污染）
-    const fillCalls = (mocked.__locator.mock.results[mocked.__locator.mock.results.length - 1]!.value as { fill: ReturnType<typeof vi.fn> }).fill.mock.calls;
+    // 找出本次 composite 的最后一次 pressSequentially 调用（fill() 现在只清空，键入改走 pressSequentially）
+    const fillCalls = (mocked.__locator.mock.results[mocked.__locator.mock.results.length - 1]!.value as { pressSequentially: ReturnType<typeof vi.fn> }).pressSequentially.mock.calls;
     const lastFillArg = fillCalls[fillCalls.length - 1]?.[0];
     expect(lastFillArg).toMatch(/^CS\d{3}$/);
   });
@@ -500,11 +503,11 @@ describe('phase4 — aiStep vision path', () => {
       {
         reportId: 'r-vision-1',
         llmClient: {
-          provider: 'mock',
+          provider: 'openai',
           complete: async () => ({
             kind: 'text',
             value: '识别出的文本',
-            provider: 'mock',
+            provider: 'openai',
             vision: true,
           }),
         },
