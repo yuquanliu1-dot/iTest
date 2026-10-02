@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
-import Segmented from '../components/ui/Segmented';
-import { Dialog, DialogContent } from '../components/ui/Modal';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
+import Button from '../components/ui/Button';
+import { useUIStore } from '../stores/ui';
 import { fullDateTime } from '../lib/format';
 
 interface StepResult {
@@ -34,12 +35,26 @@ function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
 export default function ReportDetail() {
   const { id, projectId } = useParams<{ id: string; projectId: string }>();
   const navigate = useNavigate();
-  const [view, setView] = useState<'screenshot' | 'detail'>('screenshot');
-  const [zoomSrc, setZoomSrc] = useState<string | null>(null);
+  const qc = useQueryClient();
+  const toast = useUIStore((s) => s.showToast);
+  const [zoomIndex, setZoomIndex] = useState<number | null>(null);
+  const [showDelete, setShowDelete] = useState(false);
   const { data, isLoading } = useQuery({
     queryKey: ['report', id],
     queryFn: () => api.reports.get(id!),
     enabled: !!id,
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.reports.remove(id!),
+    onSuccess: () => {
+      toast('已删除', 'success');
+      qc.invalidateQueries({ queryKey: ['reports'] });
+      qc.invalidateQueries({ queryKey: ['executions'] });
+      qc.invalidateQueries({ queryKey: ['stats', projectId] });
+      navigate(`/p/${projectId}/reports`);
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
   });
 
   if (isLoading || !data) {
@@ -71,54 +86,128 @@ export default function ReportDetail() {
   } else {
     grouped.push({ tabIndex: 0, steps: stepResults });
   }
+  // 放大灯箱只看带截图的步骤，保持左右翻页在「有图步骤」之间
+  const shotSteps = stepResults
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => !!s.screenshot);
+  const zoomed = zoomIndex !== null ? shotSteps[zoomIndex] ?? null : null;
+  const gotoZoom = (next: number) => {
+    if (shotSteps.length === 0) return;
+    const wrapped = (next + shotSteps.length) % shotSteps.length;
+    setZoomIndex(wrapped);
+  };
 
-  const renderStepRow = (s: StepResult, key: string | number) => (
-    <div
-      key={key}
-      className="flex gap-3 items-start px-5 py-3 hairline-bottom"
-    >
-      <span
-        className="font-mono text-[12px] shrink-0 mt-0.5"
-        style={{ color: s.status === 'passed' ? 'var(--color-success)' : 'var(--color-destructive)' }}
+  const renderStepRow = (s: StepResult, key: string | number) => {
+    const passed = s.status === 'passed';
+    return (
+      <div
+        key={key}
+        className="flex gap-3 items-start px-5 py-3 hairline-bottom"
       >
-        {s.status === 'passed' ? '✓' : '✕'} #{s.order}
-      </span>
-      <div className="flex-1 min-w-0">
-        <div className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }}>
-          {s.durationMs} ms
+        <span
+          className="font-mono text-[12px] shrink-0 mt-0.5 w-[44px]"
+          style={{ color: passed ? 'var(--color-success)' : 'var(--color-destructive)' }}
+        >
+          {passed ? '✓' : '✕'} #{s.order}
+        </span>
+        <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+          {/* 元信息：耗时 / 定位策略 / 标签页 —— 标签在前、值在后，分项独立，可读 */}
+          <div className="flex items-center gap-2 flex-wrap text-[11px]">
+            <Meta label="耗时" value={`${s.durationMs} ms`} mono />
+            {s.hitLocator && (
+              <Meta
+                label="定位"
+                value={s.hitLocator.kind}
+                mono
+                title={`${s.hitLocator.kind}: ${s.hitLocator.value}`}
+              />
+            )}
+            {s.tabIndex !== undefined && (
+              <Meta label="标签页" value={`#${s.tabIndex}`} mono muted />
+            )}
+          </div>
+          {/* 错误 / 警告 / 变量提示 —— 用色块+图标直接说明这是什么类型的提示 */}
+          {s.error && (
+            <div
+              className="flex gap-2 items-start text-[12px] px-2 py-1 rounded-[4px]"
+              style={{ background: 'var(--color-destructive-light-strong)', color: 'var(--color-destructive-text, var(--color-destructive))' }}
+            >
+              <span className="shrink-0 font-medium">错误</span>
+              <span className="min-w-0 break-words">{s.error}</span>
+            </div>
+          )}
+          {s.error?.includes('var-missing:') && (
+            <div
+              className="flex gap-2 items-start text-[11px] px-2 py-1 rounded-[4px]"
+              style={{ background: 'var(--color-warning-light)', color: 'var(--color-warning-text)' }}
+            >
+              <span className="shrink-0 font-medium">变量</span>
+              <span>未定义：在该步骤之前添加 extract 步骤抽取该变量，或检查变量名拼写（用例页保存步骤时会显示变量体检提示）。</span>
+            </div>
+          )}
+          {s.warning && (
+            <div
+              className="flex gap-2 items-start text-[12px] px-2 py-1 rounded-[4px]"
+              style={{ background: 'var(--color-warning-light)', color: 'var(--color-warning-text)' }}
+            >
+              <span className="shrink-0 font-medium">警告</span>
+              <span className="min-w-0 break-words">{s.warning}</span>
+            </div>
+          )}
+          {s.status !== 'passed' && (s.failureReason || s.humanMessage) && (
+            <div className="flex flex-col gap-0.5 pl-2" style={{ borderLeft: '2px solid var(--color-destructive)' }}>
+              {s.failureReason && (
+                <div className="flex gap-2 items-start text-[11px]">
+                  <span className="shrink-0 font-medium" style={{ color: 'var(--color-foreground-muted)' }}>原因</span>
+                  <span className="font-mono min-w-0 break-words" style={{ color: 'var(--color-destructive)' }}>{s.failureReason}</span>
+                </div>
+              )}
+              {s.humanMessage && (
+                <div className="flex gap-2 items-start text-[11px]">
+                  <span className="shrink-0 font-medium" style={{ color: 'var(--color-foreground-muted)' }}>说明</span>
+                  <span className="min-w-0 break-words" style={{ color: 'var(--color-foreground-secondary)' }}>{s.humanMessage}</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
-        {s.error && (
-          <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>
-            {s.error}
-          </div>
-        )}
-        {s.error?.includes('var-missing:') && (
-          <div className="text-[11px] mt-1" style={{ color: 'var(--color-warning-text)' }}>
-            ↳ 变量未定义：请在该步骤之前添加 extract 步骤抽取该变量，或检查变量名拼写（用例页保存步骤时会显示变量体检提示）。
-          </div>
-        )}
-        {s.warning && (
-          <div className="text-[12px] mt-1" style={{ color: 'var(--color-warning-text)' }}>
-            ⚠ {s.warning}
-          </div>
+        {s.screenshot && (
+          <button
+            type="button"
+            onClick={() => {
+              const idx = shotSteps.findIndex((x) => x.i === stepResults.indexOf(s));
+              setZoomIndex(idx >= 0 ? idx : 0);
+            }}
+            aria-label={`放大 step ${s.order} 截图`}
+            className="shrink-0 rounded-[6px] overflow-hidden press"
+            style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', padding: 0, cursor: 'zoom-in' }}
+          >
+            <img
+              src={s.screenshot}
+              alt={`step ${s.order}`}
+              className="w-16 h-16 object-cover block"
+            />
+          </button>
         )}
       </div>
-      {s.screenshot && (
-        <button
-          type="button"
-          onClick={() => setZoomSrc(s.screenshot!)}
-          aria-label={`放大 step ${s.order} 截图`}
-          className="shrink-0 rounded-[6px] overflow-hidden press"
-          style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', padding: 0, cursor: 'zoom-in' }}
-        >
-          <img
-            src={s.screenshot}
-            alt={`step ${s.order}`}
-            className="w-16 h-16 object-cover block"
-          />
-        </button>
-      )}
-    </div>
+    );
+  };
+
+  // 单个元信息单元：标签 + 值，避免堆在一起时看不出来哪个是哪个
+  const Meta = ({ label, value, mono, muted, title }: { label: string; value: string; mono?: boolean; muted?: boolean; title?: string }) => (
+    <span
+      title={title}
+      className="inline-flex items-center gap-1"
+      style={{ color: 'var(--color-foreground-muted)' }}
+    >
+      <span style={{ color: 'var(--color-foreground-muted)' }}>{label}</span>
+      <span
+        className={mono ? 'font-mono' : ''}
+        style={{ color: muted ? 'var(--color-foreground-muted)' : 'var(--color-foreground-secondary)' }}
+      >
+        {value}
+      </span>
+    </span>
   );
 
   return (
@@ -138,21 +227,22 @@ export default function ReportDetail() {
           测试报告
         </h1>
         <StatusPill status={data.status}>{data.status.toUpperCase()}</StatusPill>
-        <Segmented
-          options={[
-            { value: 'screenshot', label: '截图模式' },
-            { value: 'detail', label: '明细模式' },
-          ]}
-          value={view}
-          onChange={setView}
-        />
+        <Button
+          variant="secondary"
+          onClick={() => setShowDelete(true)}
+          style={{ color: 'var(--color-destructive)' }}
+          aria-label="删除测试报告"
+          title="删除测试报告"
+        >
+          <Icon name="trash" size={12} />
+        </Button>
         <div className="flex-1" />
         <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
           {fullDateTime(data.createdAt)} · {data.durationMs ?? 0} ms
         </span>
       </div>
 
-      {/* Body — 步骤时间线 + 右侧 metadata */}
+      {/* Body — 步骤时间线 + 右侧 metadata。截图与明细合并为单一步骤列表，每行同时展示时长 / 命中 locator / tab / 失败原因 / 缩略图。 */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="flex gap-5 p-6">
           <div className="flex-1 min-w-0 flex flex-col gap-3">
@@ -161,7 +251,6 @@ export default function ReportDetail() {
                 {data.summary}
               </div>
             )}
-            {view === 'screenshot' ? (
             <div className="glass-card rounded-[12px] overflow-hidden">
               <div className="px-5 py-[10px] hairline-bottom" style={{ background: 'var(--color-background-subtle)' }}>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
@@ -192,79 +281,6 @@ export default function ReportDetail() {
                 </div>
               )}
             </div>
-            ) : (
-            <div className="glass-card rounded-[12px] overflow-hidden">
-              <div className="px-5 py-[10px]" style={{ background: 'var(--color-background-subtle)', borderBottom: '1px solid var(--color-border)' }}>
-                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
-                  明细
-                </span>
-              </div>
-              {stepResults.length === 0 ? (
-                <EmptyState icon="listChecks" title="无步骤结果" />
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-[12px]" style={{ borderCollapse: 'collapse' }}>
-                    <thead style={{ background: 'var(--color-background-subtle)' }}>
-                      <tr style={{ color: 'var(--color-foreground-muted)' }}>
-                        <th className="px-3 py-2 text-left font-medium">#</th>
-                        <th className="px-3 py-2 text-right font-medium">耗时</th>
-                        <th className="px-3 py-2 text-left font-medium">命中 Locator</th>
-                        <th className="px-3 py-2 text-left font-medium">结果</th>
-                        <th className="px-3 py-2 text-left font-medium">失败原因</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stepResults.map((s, i) => (
-                        <tr key={i} style={{ borderTop: '1px solid var(--color-muted)' }}>
-                          <td className="px-3 py-2 font-mono" style={{ color: 'var(--color-foreground-secondary)' }}>
-                            #{s.order}
-                          </td>
-                          <td className="px-3 py-2 text-right font-mono" style={{ color: 'var(--color-foreground-muted)' }}>
-                            {s.durationMs} ms
-                          </td>
-                          <td className="px-3 py-2">
-                            {s.hitLocator ? (
-                              <span
-                                className="font-mono text-[11px]"
-                                style={{ color: 'var(--color-foreground-secondary)' }}
-                                title={`${s.hitLocator.kind}: ${s.hitLocator.value}`}
-                              >
-                                {s.hitLocator.kind}
-                              </span>
-                            ) : (
-                              <span style={{ color: 'var(--color-foreground-muted)' }}>—</span>
-                            )}
-                          </td>
-                          <td className="px-3 py-2" style={{ color: s.status === 'passed' ? 'var(--color-success)' : 'var(--color-destructive)' }}>
-                            {s.status === 'passed' ? '✓ 通过' : '✕ 失败'}
-                          </td>
-                          <td className="px-3 py-2">
-                            {s.status !== 'passed' ? (
-                              <div className="min-w-0">
-                                {s.failureReason && (
-                                  <div className="font-mono text-[11px]" style={{ color: 'var(--color-destructive)' }}>
-                                    {s.failureReason}
-                                  </div>
-                                )}
-                                {s.humanMessage && (
-                                  <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
-                                    {s.humanMessage}
-                                  </div>
-                                )}
-                                {!s.failureReason && !s.humanMessage && <span style={{ color: 'var(--color-foreground-muted)' }}>—</span>}
-                              </div>
-                            ) : (
-                              <span style={{ color: 'var(--color-foreground-muted)' }}>—</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-            )}
           </div>
 
           {/* Right rail — 统计 */}
@@ -292,8 +308,9 @@ export default function ReportDetail() {
         </div>
       </div>
 
-      {/* Lightbox — 全屏放大截图（复用 Dialog 提供焦点陷阱 + Esc）。 */}
-      <Dialog open={!!zoomSrc} onOpenChange={(o) => !o && setZoomSrc(null)}>
+      {/* Lightbox — 全屏放大截图（复用 Dialog 提供焦点陷阱 + Esc）。
+          左侧/右侧浮层按钮 + 键盘 ← / → 在所有带截图的步骤之间翻页；底部显示当前位置。 */}
+      <Dialog open={zoomed !== null} onOpenChange={(o) => !o && setZoomIndex(null)}>
         <DialogContent
           style={{
             maxWidth: 'calc(100vw - 48px)',
@@ -302,24 +319,102 @@ export default function ReportDetail() {
             border: 'none',
             boxShadow: 'none',
             padding: 0,
-            cursor: 'zoom-out',
           }}
-          onClick={() => setZoomSrc(null)}
+          onClick={() => setZoomIndex(null)}
         >
-          {zoomSrc && (
-            <img
-              src={zoomSrc}
-              alt="放大截图"
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                maxWidth: 'calc(100vw - 48px)',
-                maxHeight: 'calc(100vh - 48px)',
-                objectFit: 'contain',
-                borderRadius: 6,
-                cursor: 'default',
-              }}
-            />
+          {zoomed && (
+            <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+              {/* 顶部一行：步骤 ID（左）+ 翻页计数（右），独立于图片容器，避免被 DialogContent overflow 裁剪 */}
+              <div
+                style={{
+                  width: 'calc(100vw - 168px)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: '#fff',
+                  textShadow: '0 1px 2px rgba(0, 0, 0, 0.55)',
+                  pointerEvents: 'none',
+                }}
+              >
+                <span style={{ paddingLeft: 2 }}>Step #{zoomed.s.order}</span>
+                <span
+                  style={{
+                    padding: '2px 10px',
+                    borderRadius: 9999,
+                    background: 'rgba(0, 0, 0, 0.55)',
+                    textShadow: 'none',
+                  }}
+                >
+                  {zoomIndex! + 1} / {shotSteps.length}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <button
+                  type="button"
+                  aria-label="上一步截图"
+                  onClick={(e) => { e.stopPropagation(); gotoZoom(zoomIndex! - 1); }}
+                  disabled={shotSteps.length <= 1}
+                  className="zoom-nav-btn"
+                >
+                  <Icon name="chevronLeft" size={20} />
+                </button>
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ cursor: 'default' }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowLeft') { e.preventDefault(); gotoZoom(zoomIndex! - 1); }
+                    else if (e.key === 'ArrowRight') { e.preventDefault(); gotoZoom(zoomIndex! + 1); }
+                  }}
+                  tabIndex={-1}
+                >
+                  <img
+                    src={zoomed.s.screenshot}
+                    alt={`step ${zoomed.s.order} 截图`}
+                    style={{
+                      maxWidth: 'calc(100vw - 168px)',
+                      maxHeight: 'calc(100vh - 140px)',
+                      objectFit: 'contain',
+                      borderRadius: 6,
+                      display: 'block',
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  aria-label="下一步截图"
+                  onClick={(e) => { e.stopPropagation(); gotoZoom(zoomIndex! + 1); }}
+                  disabled={shotSteps.length <= 1}
+                  className="zoom-nav-btn"
+                >
+                  <Icon name="chevronRight" size={20} />
+                </button>
+              </div>
+            </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 删除确认 */}
+      <Dialog open={showDelete} onOpenChange={setShowDelete}>
+        <DialogContent style={{ maxWidth: 420 }}>
+          <DialogHeader>
+            <DialogTitle>删除测试报告</DialogTitle>
+          </DialogHeader>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+            确认删除该测试报告？相关截图将一并清理，且不可恢复。
+          </div>
+          <DialogFooter>
+            <Button variant="plain" onClick={() => setShowDelete(false)}>取消</Button>
+            <Button
+              variant="danger"
+              disabled={remove.isPending}
+              onClick={() => { setShowDelete(false); remove.mutate(); }}
+            >
+              {remove.isPending ? '删除中...' : '确认删除'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
