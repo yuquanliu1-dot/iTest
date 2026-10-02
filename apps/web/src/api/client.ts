@@ -142,6 +142,7 @@ export const api = {
         windowHeight: number;
         incognito: boolean;
         scenarioId: string | null;
+        status: CaseStatus;
         tagIds: string[];
       }>,
     ) => request<TestCase>(`/cases/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
@@ -150,6 +151,11 @@ export const api = {
       request<{ count: number }>('/cases/batch-delete', {
         method: 'POST',
         body: JSON.stringify({ caseIds }),
+      }),
+    updateStatusBatch: (caseIds: string[], status: CaseStatus) =>
+      request<{ count: number }>('/cases/batch-status', {
+        method: 'POST',
+        body: JSON.stringify({ caseIds, status }),
       }),
     copy: (id: string, targetGroupId: string) =>
       request<TestCase>(`/cases/${id}/copy`, { method: 'POST', body: JSON.stringify({ targetGroupId }) }),
@@ -460,6 +466,7 @@ export interface Requirement {
   createdAt: string;
   updatedAt: string;
 }
+export type CaseStatus = 'draft' | 'review' | 'ready' | 'deprecated';
 export interface TestCase {
   id: string;
   title: string;
