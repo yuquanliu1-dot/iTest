@@ -489,6 +489,9 @@ function matchAssertText(actual: string, expected: string, match: 'equals' | 'co
 
 async function writeStepScreenshot(reportId: string, stepIndex: number, page: Page): Promise<string | undefined> {
   try {
+    // navigate/click 触发跳转后立即截图会拍到白屏（SPA 在 domcontentloaded 后才渲染）。
+    // 先等 networkidle 让渲染落地；带 2s 兜底，长连接页面等不到 idle 也不阻塞截图。
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => undefined);
     const dir = join(SCREENSHOTS_DIR, reportId);
     await mkdir(dir, { recursive: true });
     const filename = `step-${stepIndex}.png`;

@@ -20,6 +20,7 @@ vi.mock('playwright-core', () => {
     getByRole: vi.fn().mockImplementation(() => makeLocator()),
     screenshot: vi.fn().mockResolvedValue(undefined),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
+    waitForLoadState: vi.fn().mockResolvedValue(undefined),
     url: vi.fn(() => 'https://example.com/login'),
     evaluate: vi.fn().mockResolvedValue('欢迎回来'),
     bringToFront: vi.fn().mockResolvedValue(undefined),
