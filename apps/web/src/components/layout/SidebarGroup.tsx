@@ -22,6 +22,8 @@ interface SidebarGroupProps {
   hasProject: boolean;
   collapsed: boolean;
   isFirst?: boolean;
+  /** 未选项目时点击 projectOnly 菜单的拦截回调。 */
+  onRequireProject?: () => void;
 }
 
 function resolvePath(basePath: string, itemPath: string): string {
@@ -30,8 +32,12 @@ function resolvePath(basePath: string, itemPath: string): string {
   return `${basePath}${sep}${itemPath}`;
 }
 
-export default function SidebarGroup({ group, basePath, hasProject, collapsed, isFirst }: SidebarGroupProps) {
-  const visibleItems = group.items.filter((it) => hasProject || !it.projectOnly);
+export default function SidebarGroup({ group, basePath, hasProject, collapsed, isFirst, onRequireProject }: SidebarGroupProps) {
+  const renderItems = group.items.map((it) => ({
+    it,
+    path: resolvePath(basePath, it.path),
+    needPick: Boolean(it.projectOnly && !hasProject),
+  }));
 
   if (collapsed) {
     return (
@@ -45,14 +51,15 @@ export default function SidebarGroup({ group, basePath, hasProject, collapsed, i
           gap: 2,
         }}
       >
-        {visibleItems.map((item) => (
+        {renderItems.map(({ it, path, needPick }) => (
           <SidebarNavItem
-            key={item.path}
-            icon={item.icon}
-            label={item.label}
-            path={resolvePath(basePath, item.path)}
-            end={item.end}
+            key={it.path}
+            icon={it.icon}
+            label={it.label}
+            path={path}
+            end={it.end}
             collapsed
+            onClick={needPick ? onRequireProject : undefined}
           />
         ))}
       </div>
@@ -90,14 +97,15 @@ export default function SidebarGroup({ group, basePath, hasProject, collapsed, i
         </span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 1, paddingTop: 2 }}>
-        {visibleItems.map((item) => (
+        {renderItems.map(({ it, path, needPick }) => (
           <SidebarNavItem
-            key={item.path}
-            icon={item.icon}
-            label={item.label}
-            path={resolvePath(basePath, item.path)}
-            end={item.end}
+            key={it.path}
+            icon={it.icon}
+            label={it.label}
+            path={path}
+            end={it.end}
             collapsed={false}
+            onClick={needPick ? onRequireProject : undefined}
           />
         ))}
       </div>

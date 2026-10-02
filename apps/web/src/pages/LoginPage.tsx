@@ -110,6 +110,7 @@ export default function LoginPage() {
               onChange={(e) => setUsername(e.target.value)}
               placeholder="用户名"
               autoComplete="username"
+              name="username"
               autoFocus
             />
             <Input
@@ -119,6 +120,7 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="密码"
               autoComplete="current-password"
+              name="password"
             />
             <Button type="submit" size="lg" disabled={submitting || !username.trim() || !password} style={{ width: '100%' }}>
               {submitting ? '登录中…' : '登录'}
