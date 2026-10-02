@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import TagChip from '../components/ui/Tag';
+import LabelsManagerDialog from '../components/labels/LabelsManagerDialog';
 import { shortDateTime } from '../lib/format';
 
 const PRIORITIES = ['', 'P0', 'P1', 'P2', 'P3'] as const;
@@ -36,6 +37,7 @@ export default function GroupsPage() {
   const [scenarioId, setScenarioId] = useState<string>('');
   const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [labelsManagerOpen, setLabelsManagerOpen] = useState(false);
   const tagPickerRef = useRef<HTMLDivElement>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
@@ -78,6 +80,14 @@ export default function GroupsPage() {
     enabled: !!projectId,
   });
 
+  // 场景过滤下拉的选项来源 = 项目级全量场景（来自 /api/scenarios?projectId），
+  // 不再依赖当前 cases 列表 dedup，这样选中某个场景后其他选项不会消失。
+  const { data: projectScenarios } = useQuery({
+    queryKey: ['scenarios', projectId],
+    queryFn: () => api.scenarios.listForProject(projectId!),
+    enabled: !!projectId,
+  });
+
   const tagById = useMemo(() => new Map((projectTags ?? []).map((t) => [t.id, t])), [projectTags]);
 
   useEffect(() => {
@@ -94,21 +104,19 @@ export default function GroupsPage() {
     [groups],
   );
 
-  // 当前列表里出现过的「场景 id + title」去重，作为下拉选项来源。
-  // 含一个 "无场景" 选项，用 sentinel 'none' 命中 scenarioId IS NULL。
+  // 场景过滤下拉选项 = 项目下全部 scenario 去重 + 「无场景」sentinel。
+  // 「无场景」是否出现，看当前列表里有没有 scenarioId == null 的用例（仅首次观察一次）。
   const scenarioOptions = useMemo(() => {
     const map = new Map<string, { id: string; title: string }>();
-    let hasNone = false;
-    for (const c of cases ?? []) {
-      if (c.scenarioId == null) { hasNone = true; continue; }
-      const t = c.scenarioTitle ?? c.scenarioId;
-      if (!map.has(c.scenarioId)) map.set(c.scenarioId, { id: c.scenarioId, title: t });
+    for (const s of projectScenarios ?? []) {
+      if (!map.has(s.id)) map.set(s.id, { id: s.id, title: s.title });
     }
+    const hasNone = (cases ?? []).some((c) => c.scenarioId == null);
     const opts: Array<{ id: string; title: string }> = [];
     if (hasNone) opts.push({ id: 'none', title: '（无场景）' });
     for (const v of map.values()) opts.push(v);
     return opts;
-  }, [cases]);
+  }, [projectScenarios, cases]);
 
   // 切换分组时清空勾选 + 场景过滤
   useEffect(() => {
@@ -460,7 +468,7 @@ export default function GroupsPage() {
                       type="button"
                       className="text-[11px] cursor-pointer"
                       style={{ background: 'transparent', border: 'none', color: 'var(--color-accent)' }}
-                      onClick={() => { setTagPickerOpen(false); navigate(`/p/${projectId}/labels`); }}
+                      onClick={() => { setTagPickerOpen(false); setLabelsManagerOpen(true); }}
                     >
                       管理标签 →
                     </button>
@@ -785,6 +793,15 @@ export default function GroupsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* 标签管理弹窗（取代独立 /labels 页） */}
+      {projectId && (
+        <LabelsManagerDialog
+          open={labelsManagerOpen}
+          projectId={projectId}
+          onClose={() => setLabelsManagerOpen(false)}
+        />
+      )}
     </div>
   );
 }
