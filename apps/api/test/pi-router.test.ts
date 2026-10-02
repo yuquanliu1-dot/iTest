@@ -49,20 +49,46 @@ describe('pi wire contract', () => {
     expect(r.status).toBe(400);
   });
 
-  it('POST /threads with requirementId 200s and is idempotent', async () => {
+  it('POST /threads with requirementId 200s with a valid snapshot and is idempotent', async () => {
     const { projectId } = await seedProject(pool);
     const req = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
     const a = await request(app).post('/api/pi/threads').send({ metadata: { requirementId: req.rows[0]!.id } });
     const b = await request(app).post('/api/pi/threads').send({ metadata: { requirementId: req.rows[0]!.id } });
     expect(a.status).toBe(200);
-    expect(b.body.id).toBe(a.body.id);
+    // react-pi 契约：POST /threads 返回 PiThreadSnapshot
+    expect(a.body.metadata.id).toBeTruthy();
+    expect(typeof a.body.metadata.status).toBe('string');
+    expect(Array.isArray(a.body.messages)).toBe(true);
+    expect(b.body.metadata.id).toBe(a.body.metadata.id);
+  });
+
+  it('GET /threads returns PiThreadMetadata[] (id + status) for visible projects only', async () => {
+    const { projectId } = await seedProject(pool);
+    const req = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
+    const t = await request(app).post('/api/pi/threads').send({ metadata: { requirementId: req.rows[0]!.id } });
+    const list = await request(app).get('/api/pi/threads');
+    expect(list.status).toBe(200);
+    expect(Array.isArray(list.body)).toBe(true);
+    const row = list.body.find((x: { id: string }) => x.id === t.body.metadata.id);
+    expect(row).toBeTruthy();
+    expect(typeof row.status).toBe('string');
+  });
+
+  it('GET /threads/:id returns a PiThreadSnapshot', async () => {
+    const { projectId } = await seedProject(pool);
+    const req = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
+    const t = await request(app).post('/api/pi/threads').send({ metadata: { requirementId: req.rows[0]!.id } });
+    const g = await request(app).get(`/api/pi/threads/${t.body.metadata.id}`);
+    expect(g.status).toBe(200);
+    expect(g.body.metadata.id).toBe(t.body.metadata.id);
+    expect(Array.isArray(g.body.messages)).toBe(true);
   });
 
   it('POST /threads/:id/messages returns 204 even without LLM', async () => {
     const { projectId } = await seedProject(pool);
     const req = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
     const t = await request(app).post('/api/pi/threads').send({ metadata: { requirementId: req.rows[0]!.id } });
-    const m = await request(app).post(`/api/pi/threads/${t.body.id}/messages`).send({ input: { content: 'hi' } });
+    const m = await request(app).post(`/api/pi/threads/${t.body.metadata.id}/messages`).send({ input: { content: 'hi' } });
     expect(m.status).toBe(204);
   });
 

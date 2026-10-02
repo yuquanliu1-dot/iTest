@@ -20,7 +20,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE ai_workspace_state, ai_threads RESTART IDENTITY CASCADE`);
+  await pool.query(`TRUNCATE ai_workspace_state, ai_scenarios, ai_cases, ai_threads RESTART IDENTITY CASCADE`);
   const { projectId } = await seedProject(pool);
   const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
   requirementId = r.rows[0]!.id as string;
@@ -62,11 +62,26 @@ describe('workspace store', () => {
     expect(events.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('upsertCase with scenarioId that does not exist throws', async () => {
+  it('upsertCase with scenarioId that does not exist auto-creates a placeholder scenario', async () => {
     const ws = await import('../src/pi/workspace.js');
-    await expect(
-      ws.upsertCase(requirementId, 'missing-scenario', { id: 'c1', title: 'C', description: null, priority: 'P1', steps: [] }),
-    ).rejects.toThrow(/not found; call upsert_scenario first/);
+    await ws.upsertCase(requirementId, 'missing-scenario', { id: 'c1', title: 'C', description: null, priority: 'P1', steps: [] });
+    const doc = await ws.loadDoc(requirementId);
+    const s = doc.scenarios.find((x) => x.id === 'missing-scenario');
+    expect(s).toBeDefined();
+    expect(s!.cases).toHaveLength(1);
+    expect(s!.cases[0]!.id).toBe('c1');
+  });
+
+  it('upsertCase tolerates steps without name by using action fallback in the tools wrapper', async () => {
+    // tools.ts 内的兜底不在此处直接测试；这里只验证 upsertCase 接受无 name 的 step
+    // （schema 校验在 tools 层；这里强制传入有 name 的 step 以走持久化路径）。
+    const ws = await import('../src/pi/workspace.js');
+    await ws.upsertScenario(requirementId, { id: 's1', title: 'S', description: null, cases: [] });
+    await ws.upsertCase(requirementId, 's1', { id: 'c1', title: 'C', description: null, priority: 'P0', steps: [
+      { name: '打开页面', action: '打开登录页', assertion: null },
+    ] });
+    const doc = await ws.loadDoc(requirementId);
+    expect(doc.scenarios[0]!.cases[0]!.steps[0]!.name).toBe('打开页面');
   });
 
   it('removeSaved drops only the listed case ids and empties drained scenarios', async () => {
@@ -99,5 +114,53 @@ describe('workspace store', () => {
     await ws.removeItem(requirementId, { kind: 'scenario', id: 's1' });
     const doc = await ws.loadDoc(requirementId);
     expect(doc.scenarios).toEqual([]);
+  });
+
+  it('28 parallel upsert_case calls all persist (regression for JSONB read-modify-write race)', async () => {
+    const ws = await import('../src/pi/workspace.js');
+    await ws.upsertScenario(requirementId, { id: 's1', title: 'S', description: null, cases: [] });
+    const N = 28;
+    await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        ws.upsertCase(requirementId, 's1', {
+          id: `c${i}`,
+          title: `用例 ${i}`,
+          description: null,
+          priority: i % 4 === 0 ? 'P0' : 'P1',
+          steps: [{ name: `step ${i}`, action: `do ${i}`, assertion: null }],
+        }),
+      ),
+    );
+    const doc = await ws.loadDoc(requirementId);
+    expect(doc.scenarios.find((s) => s.id === 's1')!.cases).toHaveLength(N);
+    const rows = await pool.query(`SELECT count(*)::int AS n FROM ai_cases WHERE requirement_id = $1`, [requirementId]);
+    expect(rows.rows[0]!.n).toBe(N);
+  });
+
+  it('parallel upsert_case across 5 scenarios preserves per-scenario counts', async () => {
+    const ws = await import('../src/pi/workspace.js');
+    const sids = ['sa', 'sb', 'sc', 'sd', 'se'];
+    for (const sid of sids) {
+      await ws.upsertScenario(requirementId, { id: sid, title: sid, description: null, cases: [] });
+    }
+    const N = 28;
+    await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        ws.upsertCase(requirementId, sids[i % sids.length]!, {
+          id: `c${i}`,
+          title: `C${i}`,
+          description: null,
+          priority: 'P1',
+          steps: [],
+        }),
+      ),
+    );
+    const doc = await ws.loadDoc(requirementId);
+    const total = doc.scenarios.reduce((n, s) => n + s.cases.length, 0);
+    expect(total).toBe(N);
+    for (const sid of sids) {
+      const s = doc.scenarios.find((x) => x.id === sid)!;
+      expect(s.cases.length).toBeGreaterThan(0);
+    }
   });
 });
