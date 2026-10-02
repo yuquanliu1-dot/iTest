@@ -9,6 +9,7 @@ import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 import IconButton from '../components/ui/IconButton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
+import { caseStatusLabel } from '../lib/format';
 
 type Strategy = 'run_all' | 'fail_fast';
 
@@ -358,6 +359,7 @@ export default function PlanDetail() {
                   <div
                     key={c.id}
                     className="flex items-center gap-2 px-3 py-2 rounded-[6px] cursor-pointer hover-card"
+                    style={{ opacity: c.status === 'deprecated' ? 0.55 : 1 }}
                     onClick={() => {
                       const next = new Set(selectedAdd);
                       if (checked) next.delete(c.id);
@@ -367,6 +369,9 @@ export default function PlanDetail() {
                   >
                     <input type="checkbox" readOnly checked={checked} />
                     <span className="text-[12px] flex-1 truncate" style={{ color: 'var(--color-foreground)' }}>{c.title}</span>
+                    {c.status === 'deprecated' && (
+                      <StatusPill status={c.status}>{caseStatusLabel(c.status)}</StatusPill>
+                    )}
                     <span className="text-[10px]" style={{ color: 'var(--color-foreground-muted)' }}>{c.priority}</span>
                   </div>
                 );
