@@ -65,6 +65,15 @@ export function buildCandidates(page: Page, action: ResolverInput): Array<{ kind
       if (m) {
         const [, role, name1, name2] = m;
         push('role', page.getByRole(role as never, { name: name1 ?? name2 ?? undefined }));
+        // 无 name 兜底：role 单独匹配可能命中多个元素（strict mode violation）。
+        // 给出「role + 无 name」候选，让 tryFirstMatch 用 count() 探测，避免 fill 阶段才暴露。
+        if (!name1 && !name2) push('role-unnamed', page.getByRole(l.value as never));
+      } else if (l.value.includes(' ')) {
+        // 多段 role locator（"textbox 用户名"）——拆为 role + text 两段组合，分别探测。
+        const parts = l.value.split(/\s+/);
+        const role = parts[0]!;
+        const text = parts.slice(1).join(' ');
+        push('role-with-text', page.getByRole(role as never, { name: text }));
       } else {
         push('role', page.getByRole(l.value as never));
       }
