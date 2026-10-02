@@ -47,7 +47,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     return (
       <button
         ref={ref}
-        className={className}
+        className={`press ${className}`}
         disabled={disabled}
         style={{
           ...variantStyles[variant],
@@ -55,7 +55,8 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           borderRadius: 'var(--radius-md)',
           cursor: disabled ? 'not-allowed' : 'pointer',
           opacity: disabled ? 0.5 : 1,
-          transition: 'background 0.15s ease, transform 0.1s ease, opacity 0.15s ease',
+          transition:
+            'background 0.18s ease, transform 0.12s ease, opacity 0.15s ease, box-shadow 0.22s ease',
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',

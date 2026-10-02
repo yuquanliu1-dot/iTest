@@ -5,6 +5,7 @@ import { useLayoutStore } from '../../stores/layout';
 import { useProjectStore } from '../../stores/project';
 import { useUIStore } from '../../stores/ui';
 import Icon from '../Icon';
+import BrandGlyph from '../BrandGlyph';
 import SidebarGroup, { type NavGroupDef } from './SidebarGroup';
 import UserMenu from './UserMenu';
 
@@ -71,7 +72,7 @@ export default function Sidebar() {
           overflow: 'visible',
           width: sidebarCollapsed ? 60 : 240,
           minWidth: sidebarCollapsed ? 60 : 240,
-          transition: 'width 200ms ease-out, min-width 200ms ease-out',
+          transition: 'width 280ms cubic-bezier(0.16, 1, 0.3, 1), min-width 280ms cubic-bezier(0.16, 1, 0.3, 1)',
           borderRight: '1px solid var(--color-glass-panel-border)',
           padding: sidebarCollapsed ? '14px 0 0 7px' : '14px 12px 0',
         }}
@@ -85,45 +86,60 @@ export default function Sidebar() {
             justifyContent: sidebarCollapsed ? 'center' : 'space-between',
             position: 'relative',
             paddingBottom: 14,
+            gap: 8,
           }}
         >
           <div
+            className="flex items-center"
             style={{
-              width: 28,
-              height: 28,
-              borderRadius: 6,
-              background: 'var(--color-accent)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
+              gap: 10,
+              minWidth: 0,
             }}
           >
-            <span style={{ color: 'white', fontSize: 10, fontWeight: 700, letterSpacing: 0.2 }}>iTest</span>
+            <BrandGlyph size={28} animated={!sidebarCollapsed} />
+            {!sidebarCollapsed && (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  lineHeight: 1.1,
+                  minWidth: 0,
+                }}
+              >
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-foreground)', letterSpacing: '-0.01em' }}>
+                  iTest
+                </span>
+                <span style={{ fontSize: 10, fontWeight: 500, color: 'var(--color-foreground-muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                  Console
+                </span>
+              </div>
+            )}
           </div>
 
           <button
             onClick={toggleSidebar}
             aria-label={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+            className="press"
             style={{
-              width: 14,
+              width: 22,
               height: 22,
               border: 'none',
               background: 'transparent',
-              color: 'var(--color-foreground)',
+              color: 'var(--color-foreground-muted)',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               flexShrink: 0,
               padding: 0,
+              borderRadius: 5,
               position: sidebarCollapsed ? 'absolute' : 'static',
               right: sidebarCollapsed ? 0 : undefined,
               top: sidebarCollapsed ? 3 : undefined,
               zIndex: sidebarCollapsed ? 2 : undefined,
             }}
           >
-            <Icon name={sidebarCollapsed ? 'chevronRight' : 'chevronLeft'} size={10} />
+            <Icon name={sidebarCollapsed ? 'chevronRight' : 'chevronLeft'} size={12} />
           </button>
         </div>
 

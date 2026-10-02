@@ -5,6 +5,8 @@ import { useAuthStore } from '../stores/auth';
 import { useUIStore } from '../stores/ui';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
+import BrandGlyph from '../components/BrandGlyph';
+import Icon from '../components/Icon';
 
 /** 与后端 PASSWORD_POLICY 一致（auth.service.ts）。 */
 const PASSWORD_HINT = '密码需 10-64 位，且包含大小写字母、数字和特殊字符';
@@ -17,12 +19,14 @@ export default function LoginPage() {
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   // 首登强制改密阶段（passwordChangeToken 一次性、5 分钟有效）
   const [changeToken, setChangeToken] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
 
   if (isAuthenticated) return <Navigate to="/" replace />;
 
@@ -67,100 +71,277 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex h-full items-center justify-center" style={{ background: 'var(--color-background)' }}>
+    <div
+      className="relative flex h-full w-full items-center justify-center overflow-hidden"
+      style={{ background: 'var(--color-background)' }}
+    >
+      {/* Drifting aurora — sits behind the card so the brand block reads as a hero, not a sign-in form. */}
+      <div className="aurora" aria-hidden />
+
       <div
-        className="glass-panel"
+        className="relative z-10 grid w-full max-w-[920px] gap-10 px-6"
         style={{
-          width: 360,
-          padding: '32px 28px',
-          borderRadius: 'var(--radius-lg)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 16,
+          gridTemplateColumns: 'minmax(0, 1fr) minmax(320px, 380px)',
         }}
       >
-        {/* Logo */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-          <div
+        {/* Hero block — left. Visible only on lg+. */}
+        <div className="hidden lg:flex flex-col justify-center fade-up" style={{ animationDelay: '0.05s' }}>
+          <div className="flex items-center gap-3">
+            <BrandGlyph size={56} animated />
+            <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+              <span
+                style={{
+                  fontSize: 28,
+                  fontWeight: 700,
+                  color: 'var(--color-foreground)',
+                  letterSpacing: '-0.02em',
+                }}
+              >
+                iTest
+              </span>
+              <span
+                style={{
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: 'var(--color-foreground-muted)',
+                  letterSpacing: '0.12em',
+                  textTransform: 'uppercase',
+                }}
+              >
+                Console
+              </span>
+            </div>
+          </div>
+
+          <h1
             style={{
-              width: 40,
-              height: 40,
-              borderRadius: 8,
-              background: 'var(--color-accent)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
+              fontSize: 44,
+              fontWeight: 700,
+              letterSpacing: '-0.025em',
+              color: 'var(--color-foreground)',
+              lineHeight: 1.05,
+              marginTop: 32,
+              maxWidth: 480,
             }}
           >
-            <span style={{ color: 'white', fontSize: 12, fontWeight: 700, letterSpacing: 0.2 }}>iTest</span>
-          </div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-foreground)' }}>
-            {changeToken ? '设置新密码' : '登录 iTest'}
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--color-foreground-muted)' }}>
-            {changeToken ? PASSWORD_HINT : '使用组织账号登录自动化测试平台'}
-          </div>
+            把回归测试，交给一个
+            <span
+              style={{
+                background: 'var(--brand-gradient)',
+                WebkitBackgroundClip: 'text',
+                backgroundClip: 'text',
+                color: 'transparent',
+                fontStyle: 'italic',
+              }}
+            >
+              &nbsp;可控的 Agent
+            </span>
+            。
+          </h1>
+
+          <p
+            style={{
+              fontSize: 14,
+              lineHeight: 1.6,
+              color: 'var(--color-foreground-secondary)',
+              marginTop: 18,
+              maxWidth: 460,
+            }}
+          >
+            自然语言生成步骤、脚本回放、报告聚合。登录后开始组织用例、装配计划、跑一遍回归。
+          </p>
+
+          <ul
+            className="mt-8 flex flex-col gap-2 text-[12px]"
+            style={{ color: 'var(--color-foreground-secondary)', maxWidth: 460 }}
+          >
+            <li className="flex items-center gap-2">
+              <span
+                style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: 'var(--color-accent)',
+                  flexShrink: 0,
+                }}
+              />
+              用例库 + 分组 + 标签，按项目隔离
+            </li>
+            <li className="flex items-center gap-2">
+              <span
+                style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: 'var(--color-info)',
+                  flexShrink: 0,
+                }}
+              />
+              浏览器录制，AI 拆解为可编辑步骤
+            </li>
+            <li className="flex items-center gap-2">
+              <span
+                style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: 'var(--color-success)',
+                  flexShrink: 0,
+                }}
+              />
+              执行历史 + 报告聚合，问题可回溯
+            </li>
+          </ul>
         </div>
 
-        {!changeToken ? (
-          <form onSubmit={submitLogin} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Input
-              label="用户名"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="用户名"
-              autoComplete="username"
-              name="username"
-              autoFocus
-            />
-            <Input
-              label="密码"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="密码"
-              autoComplete="current-password"
-              name="password"
-            />
-            <Button type="submit" size="lg" disabled={submitting || !username.trim() || !password} style={{ width: '100%' }}>
-              {submitting ? '登录中…' : '登录'}
-            </Button>
-          </form>
-        ) : (
-          <form onSubmit={submitChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Input
-              label="新密码"
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="新密码"
-              autoComplete="new-password"
-              autoFocus
-            />
-            <Input
-              label="确认新密码"
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="再次输入新密码"
-              autoComplete="new-password"
-            />
-            <Button type="submit" size="lg" disabled={submitting || !newPassword || !confirmPassword} style={{ width: '100%' }}>
-              {submitting ? '提交中…' : '确认修改并登录'}
-            </Button>
-            <button
-              type="button"
-              onClick={() => {
-                setChangeToken(null);
-                setNewPassword('');
-                setConfirmPassword('');
-              }}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--color-foreground-muted)' }}
-            >
-              返回重新登录
-            </button>
-          </form>
-        )}
+        {/* Sign-in card — right. On <lg, spans full width. */}
+        <div
+          className="glass-panel fade-up"
+          style={{
+            padding: '32px 28px',
+            borderRadius: 'var(--radius-xl)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 18,
+            boxShadow: 'var(--shadow-elevated)',
+            animationDelay: '0.1s',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div className="flex items-center gap-2 lg:hidden">
+              <BrandGlyph size={28} animated />
+              <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-foreground)' }}>
+                iTest
+              </span>
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--color-foreground)', letterSpacing: '-0.01em' }}>
+              {changeToken ? '设置新密码' : '登录'}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--color-foreground-muted)', lineHeight: 1.5 }}>
+              {changeToken ? PASSWORD_HINT : '使用组织账号登录自动化测试平台'}
+            </div>
+          </div>
+
+          {!changeToken ? (
+            <form onSubmit={submitLogin} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <Input
+                label="用户名"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="用户名"
+                autoComplete="username"
+                name="username"
+                autoFocus
+              />
+              <div className="flex flex-col gap-1">
+                <Input
+                  label="密码"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="密码"
+                  autoComplete="current-password"
+                  name="password"
+                  trailingIcon={
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                      className="press"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        padding: 4,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        color: 'var(--color-foreground-muted)',
+                      }}
+                    >
+                      <Icon name={showPassword ? 'eyeOff' : 'eye'} size={14} />
+                    </button>
+                  }
+                />
+              </div>
+              <Button
+                type="submit"
+                size="lg"
+                disabled={submitting || !username.trim() || !password}
+                style={{ width: '100%', marginTop: 4 }}
+              >
+                {submitting ? '登录中…' : '登录'}
+              </Button>
+            </form>
+          ) : (
+            <form onSubmit={submitChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <Input
+                label="新密码"
+                type={showNewPassword ? 'text' : 'password'}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="新密码"
+                autoComplete="new-password"
+                autoFocus
+                trailingIcon={
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword((v) => !v)}
+                    aria-label={showNewPassword ? '隐藏密码' : '显示密码'}
+                    className="press"
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      padding: 4,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      color: 'var(--color-foreground-muted)',
+                    }}
+                  >
+                    <Icon name={showNewPassword ? 'eyeOff' : 'eye'} size={14} />
+                  </button>
+                }
+              />
+              <Input
+                label="确认新密码"
+                type={showNewPassword ? 'text' : 'password'}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="再次输入新密码"
+                autoComplete="new-password"
+              />
+              <Button
+                type="submit"
+                size="lg"
+                disabled={submitting || !newPassword || !confirmPassword}
+                style={{ width: '100%', marginTop: 4 }}
+              >
+                {submitting ? '提交中…' : '确认修改并登录'}
+              </Button>
+              <button
+                type="button"
+                onClick={() => {
+                  setChangeToken(null);
+                  setNewPassword('');
+                  setConfirmPassword('');
+                }}
+                className="press self-center"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  color: 'var(--color-foreground-muted)',
+                  padding: '4px 8px',
+                  marginTop: 2,
+                }}
+              >
+                返回重新登录
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
+
+      {/* Bottom-right build line — single mono token, no decoration text strip. */}
+      <div
+        className="absolute bottom-4 right-5 font-mono text-[10px] tracking-[0.04em]"
+        style={{ color: 'var(--color-foreground-muted)', zIndex: 1 }}
+        aria-hidden
+      >
+        build · itest-console
       </div>
     </div>
   );

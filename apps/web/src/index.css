@@ -38,11 +38,15 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 13px;
   padding: 7px 16px;
   border-radius: var(--radius-md);
-  transition: background 0.15s ease, transform 0.1s ease;
+  transition: background 0.18s ease, transform 0.12s ease, box-shadow 0.18s ease;
+  box-shadow: 0 0 0 0 var(--color-accent-glow);
 }
-.btn-primary:hover { background: var(--color-accent-hover); }
+.btn-primary:hover {
+  background: var(--color-accent-hover);
+  box-shadow: 0 0 0 4px var(--color-accent-glow);
+}
 .btn-primary:active { transform: scale(0.97); }
-.btn-primary:disabled { background: var(--color-foreground-disabled); cursor: not-allowed; }
+.btn-primary:disabled { background: var(--color-foreground-disabled); cursor: not-allowed; box-shadow: none; }
 
 .btn-ghost {
   background: var(--color-surface-secondary);
@@ -52,13 +56,14 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 13px;
   padding: 7px 16px;
   border-radius: var(--radius-md);
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.12s ease;
 }
 .btn-ghost:hover {
   background: var(--color-muted);
   border-color: var(--color-glass-border-hover);
   color: var(--color-foreground);
 }
+.btn-ghost:active { transform: scale(0.97); }
 .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-danger-outline {
@@ -69,7 +74,7 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 13px;
   padding: 7px 16px;
   border-radius: var(--radius-md);
-  transition: background 0.15s ease, transform 0.1s ease;
+  transition: background 0.18s ease, transform 0.12s ease;
 }
 .btn-danger-outline:hover { background: var(--color-destructive-light); }
 .btn-danger-outline:active { transform: scale(0.97); }
@@ -175,12 +180,26 @@ select:focus-visible {
 
 /* ── Card hover lift ─────────────────────────────────────────────────────── */
 .hover-card {
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .hover-card:hover {
   border-color: var(--color-glass-border-hover);
   box-shadow: var(--shadow-middle);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+}
+
+/* ── Press affordance ────────────────────────────────────────────────────── */
+.press {
+  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.press:active { transform: scale(0.97); }
+
+/* ── Subtle ink border ───────────────────────────────────────────────────── */
+.hairline-bottom {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.hairline-top {
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 /* ── Status pulse（running 状态点） ───────────────────────────────────────── */
@@ -190,10 +209,138 @@ select:focus-visible {
 }
 .status-pulse { animation: status-pulse 2s ease-in-out infinite; }
 
+/* ── Brand glyph — beam（登录页 / 侧边栏 logo 用） ──────────────────────── */
+@keyframes beam-rotate {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes beam-shift {
+  0%, 100% { stroke-dashoffset: 0; opacity: 0.85; }
+  50%      { stroke-dashoffset: -120; opacity: 1; }
+}
+
+/* ── Page entrance ───────────────────────────────────────────────────────── */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fade-up 0.42s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.fade-in { animation: fade-in 0.32s ease-out both; }
+
+/* Cascade by data-index up to 12 — list stagger, dashboards, modal bodies. */
+[data-stagger] > [data-stagger-item] {
+  animation: fade-up 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+[data-stagger] > [data-stagger-item]:nth-child(1)  { animation-delay: 0.00s; }
+[data-stagger] > [data-stagger-item]:nth-child(2)  { animation-delay: 0.04s; }
+[data-stagger] > [data-stagger-item]:nth-child(3)  { animation-delay: 0.08s; }
+[data-stagger] > [data-stagger-item]:nth-child(4)  { animation-delay: 0.12s; }
+[data-stagger] > [data-stagger-item]:nth-child(5)  { animation-delay: 0.16s; }
+[data-stagger] > [data-stagger-item]:nth-child(6)  { animation-delay: 0.20s; }
+[data-stagger] > [data-stagger-item]:nth-child(7)  { animation-delay: 0.24s; }
+[data-stagger] > [data-stagger-item]:nth-child(8)  { animation-delay: 0.28s; }
+[data-stagger] > [data-stagger-item]:nth-child(9)  { animation-delay: 0.32s; }
+[data-stagger] > [data-stagger-item]:nth-child(10) { animation-delay: 0.36s; }
+[data-stagger] > [data-stagger-item]:nth-child(11) { animation-delay: 0.40s; }
+[data-stagger] > [data-stagger-item]:nth-child(12) { animation-delay: 0.44s; }
+
+/* ── Skeleton shimmer（loading 占位） ───────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background:
+    linear-gradient(
+      90deg,
+      var(--color-muted) 0%,
+      var(--color-surface-secondary) 50%,
+      var(--color-muted) 100%
+    );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Backdrop radial blob（登录页 / Dashboard hero 用） ──────────────────── */
+.aurora {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.aurora::before,
+.aurora::after {
+  content: "";
+  position: absolute;
+  width: 520px;
+  height: 520px;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.55;
+  will-change: transform;
+}
+.aurora::before {
+  background: radial-gradient(circle at 30% 30%, var(--color-blob-purple), transparent 60%);
+  top: -120px;
+  left: -120px;
+  animation: drift-a 14s ease-in-out infinite alternate;
+}
+.aurora::after {
+  background: radial-gradient(circle at 70% 70%, var(--color-blob-blue), transparent 60%);
+  bottom: -160px;
+  right: -120px;
+  animation: drift-b 18s ease-in-out infinite alternate;
+}
+@keyframes drift-a {
+  to { transform: translate3d(40px, 60px, 0) scale(1.08); }
+}
+@keyframes drift-b {
+  to { transform: translate3d(-40px, -50px, 0) scale(1.05); }
+}
+
+/* ── Radix dialog overlay/content motion ─────────────────────────────────── */
+@keyframes dialog-overlay-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dialog-content-in  {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.97); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+.dialog-overlay {
+  animation: dialog-overlay-in 0.18s ease-out;
+}
+.dialog-content {
+  animation: dialog-content-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── Toast slide-in ──────────────────────────────────────────────────────── */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.toast-in { animation: toast-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+  [data-stagger] > [data-stagger-item],
+  .fade-up,
+  .fade-in,
+  .toast-in,
+  .dialog-overlay,
+  .dialog-content,
+  .skeleton,
+  .aurora::before,
+  .aurora::after {
+    animation: none !important;
   }
 }
 

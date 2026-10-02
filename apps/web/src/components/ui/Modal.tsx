@@ -14,7 +14,7 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Overlay
       className={cn(
         // 遮罩 rgba(0,0,0,0.3)。backdrop-filter 仅允许出现在 .glass-* 工具类里
-        'fixed inset-0 z-[1100] bg-black/30',
+        'fixed inset-0 z-[1100] bg-black/30 dialog-overlay',
         'data-[state=open]:animate-in data-[state=open]:fade-in-0',
         'data-[state=closed]:animate-out data-[state=closed]:fade-out-0',
       )}
@@ -26,7 +26,7 @@ const DialogContent = React.forwardRef<
         'fixed left-1/2 top-1/2 z-[1100] w-full max-w-lg -translate-x-1/2 -translate-y-1/2',
         'flex max-h-[90vh] flex-col overflow-hidden',
         'border bg-[var(--color-surface-overlay)] border-[var(--color-border)]',
-        'rounded-[var(--radius-lg)] shadow-[var(--shadow-modal)]',
+        'rounded-[var(--radius-lg)] shadow-[var(--shadow-modal)] dialog-content',
         className,
       )}
       {...props}
@@ -44,7 +44,11 @@ DialogContent.displayName = DialogPrimitive.Content.displayName;
 function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn('flex flex-col gap-1.5 px-5 py-4 border-b border-[var(--color-border)] text-left', className)}
+      className={cn(
+        'flex flex-col gap-1 px-5 py-4 hairline-bottom text-left',
+        className,
+      )}
+      style={{ borderColor: 'var(--color-border)' }}
       {...props}
     />
   );
@@ -53,7 +57,11 @@ function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivEleme
 function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn('flex flex-col-reverse gap-2 sm:flex-row sm:justify-end px-5 py-4 border-t border-[var(--color-border)]', className)}
+      className={cn(
+        'flex flex-col-reverse gap-2 sm:flex-row sm:justify-end px-5 py-4 hairline-top',
+        className,
+      )}
+      style={{ borderColor: 'var(--color-border)' }}
       {...props}
     />
   );
