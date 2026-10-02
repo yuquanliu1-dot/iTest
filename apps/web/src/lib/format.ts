@@ -21,3 +21,26 @@ export function formatBytes(bytes: number): string {
   }
   return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`;
 }
+
+/** 步骤类型中文名（仅展示用，存储值仍为英文 kind）。 */
+export const STEP_KIND_LABELS: Record<string, string> = {
+  click: '点击',
+  hover: '悬停',
+  fill: '输入',
+  select: '下拉选择',
+  check: '勾选',
+  waitFor: '等待元素',
+  assertVisible: '断言可见',
+  assertText: '断言文本',
+  assertJson: '断言JSON',
+  navigate: '打开页面',
+  upload: '上传文件',
+  extract: '提取变量',
+  aiStep: 'AI步骤',
+  switchTab: '切换标签页',
+  screenshot: '截图',
+};
+
+export function stepKindLabel(kind: string): string {
+  return STEP_KIND_LABELS[kind] ?? kind;
+}

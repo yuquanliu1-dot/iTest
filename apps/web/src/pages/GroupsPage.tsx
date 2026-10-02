@@ -108,6 +108,10 @@ export default function GroupsPage() {
     [groups],
   );
 
+  // 新建用例的 URL 预填：分组.defaultUrl 优先，回退项目.defaultUrl（与 resolveCaseUrl 链一致）
+  const inheritUrl = (gid: string) =>
+    (groups ?? []).find((g) => g.id === gid)?.defaultUrl || current?.defaultUrl || '';
+
   // 场景过滤下拉选项 = 项目下全部 scenario 去重 + 「无场景」sentinel。
   // 「无场景」是否出现，看当前列表里有没有 scenarioId == null 的用例（仅首次观察一次）。
   const scenarioOptions = useMemo(() => {
@@ -378,9 +382,10 @@ export default function GroupsPage() {
           </div>
           <div className="flex items-center gap-3">
             <Button
-              onClick={() =>
-                setCaseForm({ ...EMPTY_CASE_FORM, open: true, groupId: effectiveGroupId || groups?.[0]?.id || '' })
-              }
+              onClick={() => {
+                const gid = effectiveGroupId || groups?.[0]?.id || '';
+                setCaseForm({ ...EMPTY_CASE_FORM, open: true, groupId: gid, url: inheritUrl(gid) });
+              }}
             >
               <Icon name="plus" size={12} />
               新建用例
@@ -841,7 +846,17 @@ export default function GroupsPage() {
               <select
                 className="input-base"
                 value={caseForm.groupId}
-                onChange={(e) => setCaseForm((f) => ({ ...f, groupId: e.target.value }))}
+                onChange={(e) =>
+                  setCaseForm((f) => {
+                    // 换分组时：URL 为空或还是上一个分组的继承值 → 重新继承；用户已手输则保留
+                    const prev = inheritUrl(f.groupId);
+                    return {
+                      ...f,
+                      groupId: e.target.value,
+                      url: !f.url || f.url === prev ? inheritUrl(e.target.value) : f.url,
+                    };
+                  })
+                }
                 disabled={(groups ?? []).length === 0}
               >
                 {(groups ?? []).length === 0 && <option value="">请先创建分组</option>}
