@@ -6,6 +6,7 @@ import { useThemeStore } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
 import Icon from '../Icon';
 import Toggle from '../ui/Toggle';
+import BrandGlyph from '../BrandGlyph';
 
 /**
  * 侧边栏底部的用户下拉：头像 + 用户信息 + 多组织切换 + 成员管理 + 配置 + 主题 + 退出。
@@ -68,6 +69,7 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
         fontSize: 13,
         fontWeight: 600,
         padding: 0,
+        transition: 'transform 120ms ease, border-color 160ms ease',
       }
     : {
         width: '100%',
@@ -75,12 +77,13 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
         alignItems: 'center',
         gap: 10,
         padding: '8px 8px',
-        borderRadius: 'var(--radius-sm)',
+        borderRadius: 'var(--radius-md)',
         border: 'none',
         background: 'transparent',
         color: 'var(--color-foreground)',
         cursor: 'pointer',
         textAlign: 'left',
+        transition: 'background 160ms ease, transform 120ms ease',
       };
 
   return (
@@ -140,11 +143,12 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
           align="end"
           side={collapsed ? 'right' : 'top'}
           sideOffset={collapsed ? 8 : 6}
+          className="dialog-content"
           style={{
             minWidth: 260,
             background: 'var(--color-background-elevated)',
             border: '1px solid var(--color-glass-panel-border)',
-            borderRadius: 'var(--radius-md)',
+            borderRadius: 'var(--radius-lg)',
             boxShadow: 'var(--shadow-elevated)',
             padding: 6,
             zIndex: 100,

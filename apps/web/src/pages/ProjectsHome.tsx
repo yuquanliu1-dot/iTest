@@ -183,7 +183,10 @@ export default function ProjectsHome() {
               默认域名用于预填新建用例与录制的目标 URL；分组和用例可覆盖。
             </p>
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+          <div
+            className="flex justify-end gap-2 px-5 py-4 hairline-top"
+            style={{ borderColor: 'var(--color-border)' }}
+          >
             <Button variant="plain" onClick={() => setForm(EMPTY_FORM)}>取消</Button>
             <Button disabled={!form.name.trim() || save.isPending} onClick={() => save.mutate()}>
               {save.isPending ? '保存中...' : '保存'}
@@ -201,7 +204,10 @@ export default function ProjectsHome() {
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
             确定删除「{confirmDelete?.name}」？项目内存在用例时将被拒绝删除。
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+          <div
+            className="flex justify-end gap-2 px-5 py-4 hairline-top"
+            style={{ borderColor: 'var(--color-border)' }}
+          >
             <Button variant="plain" onClick={() => setConfirmDelete(null)}>取消</Button>
             <Button
               variant="danger"

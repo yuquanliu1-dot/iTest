@@ -33,7 +33,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
     enabled: open && !!projectId,
   });
 
-  // 统计每个 tag 用在多少 case 上 —— 复用 cases 接口做批查
+  // 统计每个 tag 用在多少 case 上 - 复用 cases 接口做批查
   const { data: cases } = useQuery({
     queryKey: ['cases-for-tag-count', projectId],
     queryFn: () => api.cases.list({ projectId: projectId! }),
@@ -107,8 +107,10 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
           <DialogHeader>
             <DialogTitle>管理标签</DialogTitle>
           </DialogHeader>
-
-          <div className="flex items-center gap-2 px-5 py-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
+          <div
+            className="flex items-center gap-2 px-5 py-3 hairline-bottom"
+            style={{ borderColor: 'var(--color-border)' }}
+          >
             <Input
               placeholder="搜索标签"
               value={search}
@@ -135,10 +137,18 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
                 description={search ? '试试别的关键词' : '点击右上角「新建标签」创建一个。'}
               />
             ) : (
-              <div className="divide-y" style={{ borderColor: 'var(--color-muted)' }}>
+              <div className="divide-y" style={{ borderColor: 'var(--color-muted)' }} data-stagger>
                 {filtered.map((t) => (
-                  <div key={t.id} className="flex items-center gap-3 px-5 py-3 hover:bg-[var(--color-background-subtle)]">
-                    <span className="w-3 h-3 rounded-full shrink-0" style={{ background: `#${t.color}` }} />
+                  <div
+                    key={t.id}
+                    data-stagger-item
+                    className="flex items-center gap-3 px-5 py-3 hover:bg-[var(--color-background-subtle)]"
+                    style={{ transition: 'background 0.15s ease' }}
+                  >
+                    <span
+                      className="w-3 h-3 rounded-full shrink-0"
+                      style={{ background: `#${t.color}`, boxShadow: `0 0 0 2px ${t.color}22` }}
+                    />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <TagChip tag={{ id: t.id, name: t.name, color: t.color }} />
@@ -147,20 +157,40 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
                         </span>
                       </div>
                       {t.description && (
-                        <div className="text-[11px] mt-1" style={{ color: 'var(--color-foreground-muted)' }}>{t.description}</div>
+                        <div className="text-[11px] mt-1" style={{ color: 'var(--color-foreground-muted)' }}>
+                          {t.description}
+                        </div>
                       )}
                     </div>
                     <button
                       title="编辑"
                       onClick={() => openEdit({ id: t.id, name: t.name, color: t.color, description: t.description })}
-                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 4 }}
+                      className="press"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: 'var(--color-foreground-muted)',
+                        padding: 4,
+                        borderRadius: 5,
+                        transition: 'color 0.15s ease, background 0.15s ease',
+                      }}
                     >
                       <Icon name="pencil" size={12} />
                     </button>
                     <button
                       title="删除"
                       onClick={() => setPendingDelete({ id: t.id, name: t.name })}
-                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 4 }}
+                      className="press"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: 'var(--color-destructive)',
+                        padding: 4,
+                        borderRadius: 5,
+                        transition: 'background 0.15s ease',
+                      }}
                     >
                       <Icon name="trash" size={12} />
                     </button>
@@ -185,7 +215,10 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
             确定删除「{pendingDelete?.name}」？该标签会从所有用例上解除，但不会删除用例。
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+          <div
+            className="flex justify-end gap-2 px-5 py-4 hairline-top"
+            style={{ borderColor: 'var(--color-border)' }}
+          >
             <Button variant="plain" onClick={() => setPendingDelete(null)}>取消</Button>
             <Button variant="danger" disabled={removeMut.isPending} onClick={() => pendingDelete && removeMut.mutate(pendingDelete.id)}>
               {removeMut.isPending ? '删除中...' : '确认删除'}

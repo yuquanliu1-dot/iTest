@@ -25,6 +25,7 @@ export default function Toggle({ checked, onChange, disabled = false, label }: T
         onClick={() => {
           if (!disabled) onChange(!checked);
         }}
+        className="press"
         style={{
           position: 'relative',
           width: 36,
@@ -33,10 +34,11 @@ export default function Toggle({ checked, onChange, disabled = false, label }: T
           border: 'none',
           padding: 0,
           background: checked ? 'var(--color-accent)' : 'var(--color-glass-border-hover)',
-          transition: 'background 0.2s',
+          transition: 'background 0.22s cubic-bezier(0.16, 1, 0.3, 1)',
           cursor: disabled ? 'not-allowed' : 'pointer',
           outline: 'none',
           flexShrink: 0,
+          boxShadow: checked ? '0 0 0 3px var(--color-accent-glow)' : 'none',
         }}
       >
         <span
@@ -48,7 +50,8 @@ export default function Toggle({ checked, onChange, disabled = false, label }: T
             height: 16,
             borderRadius: '50%',
             background: 'var(--color-background-elevated)',
-            transition: 'transform 0.2s',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.18)',
+            transition: 'transform 0.28s cubic-bezier(0.16, 1, 0.3, 1)',
             transform: checked ? 'translateX(16px)' : 'translateX(0)',
           }}
         />

@@ -48,13 +48,13 @@ export default function SidebarNavItem({ icon, label, path, end, count, collapse
             style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', width: '100%' }}
           >
             <div
-              className="group-nav-tile flex items-center justify-center w-full cursor-pointer"
+              className="group-nav-tile flex items-center justify-center w-full cursor-pointer press"
               style={{
                 height: 32,
                 borderRadius: 5,
                 background: isActive ? 'var(--color-accent-light)' : undefined,
                 color: isActive ? 'var(--color-accent)' : undefined,
-                transition: 'background 120ms ease-out, color 120ms ease-out',
+                transition: 'background 160ms ease-out, color 160ms ease-out, transform 120ms ease',
               }}
             >
               <Icon name={icon} size={16} />
@@ -89,7 +89,7 @@ export default function SidebarNavItem({ icon, label, path, end, count, collapse
           color: isActive ? 'var(--color-accent)' : 'var(--color-foreground-secondary)',
           fontWeight: isActive ? 500 : 400,
           fontSize: 13,
-          transition: 'background 120ms ease-out, color 120ms ease-out',
+          transition: 'background 160ms ease-out, color 160ms ease-out',
         }}
       >
         <Icon name={icon} size={16} />
@@ -97,12 +97,13 @@ export default function SidebarNavItem({ icon, label, path, end, count, collapse
         {count !== undefined && count > 0 && (
           <span
             style={{
-              background: 'var(--color-surface-secondary)',
-              color: 'var(--color-foreground-muted)',
+              background: isActive ? 'var(--color-accent)' : 'var(--color-surface-secondary)',
+              color: isActive ? 'var(--color-accent-foreground)' : 'var(--color-foreground-muted)',
               fontSize: 10,
               lineHeight: '16px',
               padding: '0 6px',
               borderRadius: 8,
+              transition: 'background 160ms ease-out, color 160ms ease-out',
             }}
           >
             {count}

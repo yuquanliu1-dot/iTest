@@ -52,40 +52,72 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
         <DialogHeader>
           <DialogTitle>{label ? '编辑标签' : '新建标签'}</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-3 px-5 py-4">
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>名称</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="如：冒烟、回归" />
+        <div className="flex flex-col gap-4 px-5 py-4">
+          <div className="flex flex-col gap-1.5">
+            <label
+              className="text-[11px] font-semibold uppercase tracking-[0.06em]"
+              style={{ color: 'var(--color-foreground-muted)' }}
+            >
+              名称
+            </label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="如：冒烟、回归"
+              autoFocus
+            />
           </div>
 
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>颜色</label>
-            <div className="flex flex-wrap gap-1.5">
-              {PRESET_COLORS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => setColor(c)}
-                  title={c}
-                  className="w-7 h-7 rounded-[6px] transition-transform hover:scale-110 focus:outline-none"
-                  style={{
-                    backgroundColor: c,
-                    boxShadow: color.toLowerCase() === c.toLowerCase()
-                      ? `0 0 0 2px var(--color-surface-overlay), 0 0 0 4px ${c}`
-                      : 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                  }}
-                />
-              ))}
+          <div className="flex flex-col gap-2">
+            <label
+              className="text-[11px] font-semibold uppercase tracking-[0.06em]"
+              style={{ color: 'var(--color-foreground-muted)' }}
+            >
+              颜色
+            </label>
+            <div className="flex flex-wrap gap-1.5" data-stagger>
+              {PRESET_COLORS.map((c) => {
+                const selected = color.toLowerCase() === c.toLowerCase();
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setColor(c)}
+                    title={c}
+                    data-stagger-item
+                    className="press"
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 8,
+                      background: c,
+                      border: 'none',
+                      cursor: 'pointer',
+                      boxShadow: selected
+                        ? `0 0 0 2px var(--color-surface-overlay), 0 0 0 4px ${c}, 0 4px 12px ${c}55`
+                        : '0 1px 2px rgba(0,0,0,0.10)',
+                      transform: selected ? 'scale(1.06)' : undefined,
+                      transition: 'transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s ease',
+                    }}
+                  />
+                );
+              })}
             </div>
             <div className="flex items-center gap-2">
               <input
                 type="color"
                 value={color}
                 onChange={(e) => setColor(e.target.value)}
-                className="shrink-0"
-                style={{ width: 44, height: 32, padding: 0, border: '1px solid var(--color-border)', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
+                className="shrink-0 press"
+                style={{
+                  width: 44,
+                  height: 32,
+                  padding: 0,
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 8,
+                  background: 'transparent',
+                  cursor: 'pointer',
+                }}
                 aria-label="自定义颜色"
               />
               <Input
@@ -105,17 +137,24 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
             </div>
             <div className="flex items-center gap-2 mt-1">
               <span
-                className="inline-block px-2 py-0.5 rounded-[6px] text-[11px] font-medium"
+                className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-150"
                 style={{ background: color, color: labelTextColor(color) }}
               >
                 {name.trim() || '标签预览'}
               </span>
-              <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>预览</span>
+              <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                预览
+              </span>
             </div>
           </div>
 
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>描述（可选）</label>
+          <div className="flex flex-col gap-1.5">
+            <label
+              className="text-[11px] font-semibold uppercase tracking-[0.06em]"
+              style={{ color: 'var(--color-foreground-muted)' }}
+            >
+              描述（可选）
+            </label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -125,7 +164,10 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
             />
           </div>
         </div>
-        <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+        <div
+          className="flex justify-end gap-2 px-5 py-4 hairline-top"
+          style={{ borderColor: 'var(--color-border)' }}
+        >
           <Button variant="plain" onClick={onClose}>取消</Button>
           <Button disabled={!name.trim() || saving} onClick={handleSave}>
             {saving ? '保存中...' : '保存'}
