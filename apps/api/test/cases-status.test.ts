@@ -76,6 +76,7 @@ describe('case status', () => {
     expect(r.status).toBe(200);
     expect(r.body.count).toBe(2);
     const list = await request(app).get(`/api/cases?groupId=${groupId}`);
+    expect(list.body).toHaveLength(2);
     expect(list.body.every((c: { status: string }) => c.status === 'ready')).toBe(true);
   });
 
