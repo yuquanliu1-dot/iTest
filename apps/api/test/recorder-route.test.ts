@@ -7,6 +7,7 @@ import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 let pg: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
+let getSession: typeof import('../src/recorder/ws.js').getSession;
 
 beforeAll(async () => {
   pg = await new PostgreSqlContainer('postgres:16-alpine').start();
@@ -18,6 +19,7 @@ beforeAll(async () => {
   const { casesRoute } = await import('../src/routes/cases.js');
   const { stepsRoute } = await import('../src/routes/steps.js');
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
+  ({ getSession } = await import('../src/recorder/ws.js'));
   app = express();
   app.use(express.json());
   const { userId, username, orgId, orgPath } = await seedOrg(pool);
@@ -107,5 +109,80 @@ describe('recorder routes', () => {
       resumeFromOrder: 1,
     });
     expect(r.status).toBe(200);
+  });
+
+  it('finish prepends navigate (first step url) for a fresh recording without one', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'NV', groupId });
+    const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
+    const session = getSession(s.body.sessionId)!;
+    session.steps.push(
+      { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'https://app.example.com/home' },
+      { action: { kind: 'fill', locator: [{ strategy: 'css', value: '#b' }], value: 'x' }, url: 'https://app.example.com/home' },
+    );
+    const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
+    expect(f.status).toBe(200);
+    expect(f.body.inserted).toBe(3);
+    const rows = await pool.query(
+      `SELECT "order", action FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
+      [c.body.id],
+    );
+    expect(rows.rows[0]!.action).toEqual({ kind: 'navigate', url: 'https://app.example.com/home' });
+    expect(rows.rows[1]!.action.kind).toBe('click');
+  });
+
+  it('finish falls back to project default_url when steps carry no url', async () => {
+    const { projectId, groupId } = await seedProject(pool);
+    await pool.query(`UPDATE projects SET default_url = $1 WHERE id = $2`, ['https://prod.example.com', projectId]);
+    const c = await request(app).post('/api/cases').send({ title: 'NVD', groupId });
+    const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'incognito' });
+    const session = getSession(s.body.sessionId)!;
+    session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] } });
+    const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
+    expect(f.status).toBe(200);
+    const rows = await pool.query(
+      `SELECT action FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
+      [c.body.id],
+    );
+    expect(rows.rows[0]!.action).toEqual({ kind: 'navigate', url: 'https://prod.example.com' });
+  });
+
+  it('finish does not prepend navigate when the case already has steps', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'NVA', groupId });
+    await request(app).put(`/api/cases/${c.body.id}/steps`).send({
+      steps: [{ action: { kind: 'navigate', url: 'https://app.example.com' }, source: 'manual' }],
+    });
+    const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'append' });
+    const session = getSession(s.body.sessionId)!;
+    session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'https://app.example.com/home' });
+    const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
+    expect(f.status).toBe(200);
+    expect(f.body.inserted).toBe(1);
+    const rows = await pool.query(
+      `SELECT action FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
+      [c.body.id],
+    );
+    expect(rows.rows).toHaveLength(2);
+    expect(rows.rows[1]!.action.kind).toBe('click');
+  });
+
+  it('finish does not duplicate navigate when the recording already starts with one', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'NVN', groupId });
+    const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
+    const session = getSession(s.body.sessionId)!;
+    session.steps.push(
+      { action: { kind: 'navigate', url: 'https://app.example.com' }, url: 'https://app.example.com' },
+      { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'https://app.example.com' },
+    );
+    const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
+    expect(f.status).toBe(200);
+    expect(f.body.inserted).toBe(2);
+    const rows = await pool.query(
+      `SELECT action FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
+      [c.body.id],
+    );
+    expect(rows.rows.filter((r: { action: { kind: string } }) => r.action.kind === 'navigate')).toHaveLength(1);
   });
 });

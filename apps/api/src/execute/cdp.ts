@@ -229,9 +229,21 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       }
       return;
     }
-    case 'hover':
-      await (await tryFirstMatch(page, action.locator, undefined, opts.hitSink)).hover({ timeout: 5000 });
+    case 'hover': {
+      const hoverLoc = await tryFirstMatch(page, action.locator, undefined, opts.hitSink);
+      try {
+        await hoverLoc.hover({ timeout: 5000 });
+      } catch (e) {
+        // strict-mode violation（文本/role 命中多个元素，录制场景常见：表格里重复的日期、同名链接）
+        // → 退到 first()，与 click/fill 的兜底一致。
+        if (e instanceof Error && /strict mode violation/.test(e.message)) {
+          await hoverLoc.first().hover({ timeout: 5000 });
+          return;
+        }
+        throw e;
+      }
       return;
+    }
     case 'waitFor':
       await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).waitFor({ state: 'visible', timeout: action.timeoutMs ?? 5000 });
       return;
