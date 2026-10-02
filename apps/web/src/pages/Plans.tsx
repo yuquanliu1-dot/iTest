@@ -16,7 +16,7 @@ export default function Plans() {
   const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
-  const { data: plans, isLoading } = useQuery({
+  const { data: plans, isLoading, isError, error } = useQuery({
     queryKey: ['plans', projectId],
     queryFn: () => api.projects.plans(projectId!),
     enabled: !!projectId,
@@ -73,6 +73,10 @@ export default function Plans() {
           <div className="flex items-center justify-center py-12" style={{ color: 'var(--color-foreground-muted)' }}>
             <Icon name="loader" size={16} className="animate-spin" />
             <span style={{ marginLeft: 8 }}>加载中...</span>
+          </div>
+        ) : isError ? (
+          <div className="flex items-center justify-center py-12" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+            加载失败：{error?.message ?? '未知错误'}
           </div>
         ) : !plans || plans.length === 0 ? (
           <EmptyState

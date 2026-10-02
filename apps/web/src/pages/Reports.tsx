@@ -28,7 +28,7 @@ export default function Executions() {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['executions', projectId, tab],
     queryFn: () => api.executions.list({ projectId, kind: tab }),
     enabled: !!projectId,
@@ -122,6 +122,10 @@ export default function Executions() {
           <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
             <Icon name="loader" size={16} className="animate-spin" />
             <span style={{ marginLeft: 8 }}>加载中...</span>
+          </div>
+        ) : isError ? (
+          <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+            加载失败：{error?.message ?? '未知错误'}
           </div>
         ) : rows.length === 0 ? (
           <EmptyState icon="flag" title="还没有执行记录" description="在执行计划或用例详情页运行测试后会出现在这里。" />
