@@ -42,6 +42,10 @@ export const api = {
     createGroup: (id: string, body: { name: string; defaultUrl?: string }) =>
       request<Group>(`/projects/${id}/groups`, { method: 'POST', body: JSON.stringify(body) }),
     stats: (id: string) => request<ProjectStats>(`/projects/${id}/stats`),
+    overview: (id: string, range: '7d' | '30d' = '7d') =>
+      request<import('../features/overview/api').OverviewResponse>(
+        `/projects/${id}/overview?range=${range}`,
+      ),
     plans: (id: string) => request<PlanWithCount[]>(`/projects/${id}/plans`),
     createPlan: (id: string, body: { name: string; environment?: string }) =>
       request<ExecutionPlan>(`/projects/${id}/plans`, { method: 'POST', body: JSON.stringify(body) }),
