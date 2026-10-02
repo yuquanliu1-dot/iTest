@@ -210,6 +210,9 @@ export const api = {
     list: (projectId?: string) =>
       request<Report[]>(`/reports${projectId ? `?projectId=${projectId}` : ''}`),
     get: (id: string) => request<Report>(`/reports/${id}`),
+    remove: (id: string) => request<{ ok: boolean }>(`/reports/${id}`, { method: 'DELETE' }),
+    removeBatch: (ids: string[]) =>
+      request<{ count: number }>('/reports/batch-delete', { method: 'POST', body: JSON.stringify({ reportIds: ids }) }),
   },
   agentRuns: {
     create: (body: { targetType: string; targetId: string; prompt: string; targetGroupId?: string }) =>

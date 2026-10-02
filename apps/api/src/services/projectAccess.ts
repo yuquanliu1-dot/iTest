@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { groups, projects, testCases } from '../db/schema.js';
+import { groups, projects, reports, testCases } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import type { AuthUser } from './auth.service.js';
 import { visibleOrgIdsFor } from './orgTree.js';
@@ -37,6 +37,20 @@ export async function assertCaseVisible(caseId: string, user: AuthUser): Promise
   if (!orgId) throw new HttpError(404, 'not_found', 'case not found');
   const visible = await visibleOrgIdsFor(user);
   if (!visible.has(orgId)) throw new HttpError(404, 'not_found', 'case not found');
+}
+
+/** report 可见性断言：经 case → group → project 链路判定，404 文案不区分「不存在」与「不可见」。 */
+export async function assertReportVisible(reportId: string, user: AuthUser): Promise<void> {
+  const rows = await db
+    .select({ projectId: groups.projectId })
+    .from(reports)
+    .innerJoin(testCases, eq(testCases.id, reports.caseId))
+    .innerJoin(groups, eq(groups.id, testCases.groupId))
+    .where(eq(reports.id, reportId))
+    .limit(1);
+  const projectId = rows[0]?.projectId;
+  if (!projectId) throw new HttpError(404, 'not_found', 'report not found');
+  await assertProjectVisible(projectId, user);
 }
 
 /** 用户可见的全部项目 id（列表接口无组织维度过滤参数时用）。 */
