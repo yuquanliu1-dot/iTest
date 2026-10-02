@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import type { Locator } from '@itest/shared';
 import type { StepClip } from '../stores/stepClipboard';
@@ -44,6 +44,8 @@ export default function StepEditDrawer({ initial, availableVars = [], caseId, on
   const [name, setName] = useState(initial.name ?? '');
   const [delayMs, setDelayMs] = useState(initial.delayMs ? String(initial.delayMs) : '');
   const kind = ((draft.action as { kind?: string })?.kind ?? 'click') as StepKind;
+  // DrawerForm 每次渲染注册最新的 buildAction；类型切换前用它把未保存的字段编辑同步进 draft
+  const buildActionRef = useRef<(() => Record<string, unknown> | null) | null>(null);
 
   return (
     <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -65,7 +67,11 @@ export default function StepEditDrawer({ initial, availableVars = [], caseId, on
             </Dialog.Title>
             <select
               value={kind}
-              onChange={(e) => setDraft(switchAction(draft, e.target.value as StepKind))}
+              onChange={(e) => {
+                // 先取 DrawerForm 当前表单状态（含未保存编辑），再切换；避免切换丢编辑
+                const current = buildActionRef.current?.() ?? draft.action;
+                setDraft(switchAction({ ...draft, action: current }, e.target.value as StepKind));
+              }}
               style={{ fontSize: 12, padding: '3px 6px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'var(--color-background-subtle)', color: 'var(--color-foreground)' }}
               title="切换操作类型（兼容字段自动保留）"
             >
@@ -87,6 +93,7 @@ export default function StepEditDrawer({ initial, availableVars = [], caseId, on
             onDelayMs={setDelayMs}
             availableVars={availableVars}
             caseId={caseId}
+            buildActionRef={buildActionRef}
             onCancel={onClose}
             onSave={(built) => onSave({ ...built, name: name.trim() || undefined, delayMs: delayMs ? Number(delayMs) : undefined })}
           />
@@ -107,11 +114,12 @@ interface FormProps {
   onDelayMs: (v: string) => void;
   availableVars: string[];
   caseId?: string;
+  buildActionRef: RefObject<(() => Record<string, unknown> | null) | null>;
   onCancel: () => void;
   onSave: (built: StepClip) => void;
 }
 
-function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVars, caseId, onCancel, onSave }: FormProps) {
+function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVars, caseId, buildActionRef, onCancel, onSave }: FormProps) {
   const action = clip.action as Record<string, unknown>;
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
@@ -170,18 +178,14 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
     return () => { cancelled = true; };
   }, [kind, caseId]);
 
-  /** 构建 action（自 StepEditModal.handleSave 迁移），再走 validateStepEdit。 */
-  const handleSave = () => {
+  /** 把当前表单状态构建为 action（含未保存编辑）；assertJson 解析失败返回 null。类型切换与保存共用。 */
+  const buildAction = (): Record<string, unknown> | null => {
     const next: Record<string, unknown> = { ...action };
 
     if (kindNeedsLocator(kind)) next.locator = locators;
     if (kind === 'fill' || kind === 'select') {
       if (kind === 'fill') {
         if (sensitive) {
-          if (!pwdDraft) {
-            setFieldErrors({ sensitive: '已加密 — 修改时请输入新密码' });
-            return;
-          }
           next.value = pwdDraft;
           next.sensitive = true;
         } else {
@@ -203,8 +207,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
       try {
         next.equals = JSON.parse(equalsText);
       } catch {
-        setFieldErrors({ 'action.equals': '期望值不是合法 JSON' });
-        return;
+        return null;
       }
     }
     if (kind === 'extract') {
@@ -215,10 +218,6 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         next.group = Number(extractGroup) >= 0 ? Number(extractGroup) : 0;
         delete next.description;
       } else if (extractMode === 'smartExtract') {
-        if (!extractDescription.trim() && !extractPattern.trim()) {
-          setFieldErrors({ 'action.description': '智能抽取需要填写描述并生成正则' });
-          return;
-        }
         if (extractDescription.trim()) next.description = extractDescription.trim();
         else delete next.description;
         if (extractPattern.trim()) {
@@ -235,10 +234,6 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
       }
     }
     if (kind === 'aiStep') {
-      if (!instruction.trim()) {
-        setFieldErrors({ 'action.instruction': '指令不能为空' });
-        return;
-      }
       next.instruction = instruction.trim();
       next.compiled = action.compiled ?? null;
     }
@@ -251,6 +246,34 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
     if (kind === 'switchTab') next.tabRef = tabRef;
     if (kind === 'screenshot') next.name = shotName;
 
+    return next;
+  };
+
+  // 每次渲染注册最新闭包（不设依赖数组）；卸载时清空，外壳只在表单挂载时取得到
+  useEffect(() => {
+    buildActionRef.current = buildAction;
+    return () => { buildActionRef.current = null; };
+  });
+
+  /** 保存：先做交互级 gate，再构建 + zod 校验（自 StepEditModal.handleSave 迁移）。 */
+  const handleSave = () => {
+    if (kind === 'fill' && sensitive && !pwdDraft) {
+      setFieldErrors({ sensitive: '已加密 — 修改时请输入新密码' });
+      return;
+    }
+    if (kind === 'extract' && extractMode === 'smartExtract' && !extractDescription.trim() && !extractPattern.trim()) {
+      setFieldErrors({ 'action.description': '智能抽取需要填写描述并生成正则' });
+      return;
+    }
+    if (kind === 'aiStep' && !instruction.trim()) {
+      setFieldErrors({ 'action.instruction': '指令不能为空' });
+      return;
+    }
+    const next = buildAction();
+    if (!next) {
+      setFieldErrors({ 'action.equals': '期望值不是合法 JSON' });
+      return;
+    }
     const v = validateStepEdit({ action: next, name: name.trim() || undefined, delayMs: delayMs ? Number(delayMs) : undefined });
     if (!v.ok) {
       setFieldErrors(v.errors);
@@ -304,7 +327,10 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
             ) : kind === 'fill' ? (
               <FillValueEditor value={fillValue} onChange={setFillValue} availableVars={availableVars} />
             ) : (
-              <input style={inputStyle} value={selectValue} onChange={(e) => setSelectValue(e.target.value)} placeholder="下拉选项值" />
+              <div className="flex flex-col gap-1">
+                <input style={{ ...inputStyle, ...(fieldErrors['action.value'] ? errStyle : {}) }} value={selectValue} onChange={(e) => setSelectValue(e.target.value)} placeholder="下拉选项值" />
+                <FieldError msg={fieldErrors['action.value']} />
+              </div>
             )}
           </div>
         )}
@@ -320,7 +346,8 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         {kind === 'waitFor' && (
           <label style={labelStyle}>
             超时 (ms，留空默认 5000)
-            <input style={inputStyle} value={timeoutMs} onChange={(e) => setTimeoutMs(e.target.value)} inputMode="numeric" />
+            <input style={{ ...inputStyle, ...(fieldErrors['action.timeoutMs'] ? errStyle : {}) }} value={timeoutMs} onChange={(e) => setTimeoutMs(e.target.value)} inputMode="numeric" />
+            <FieldError msg={fieldErrors['action.timeoutMs']} />
           </label>
         )}
 

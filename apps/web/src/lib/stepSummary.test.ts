@@ -35,6 +35,7 @@ describe('stepSummary', () => {
 
   it('check / hover / waitFor / assertVisible', () => {
     expect(stepSummary({ kind: 'check', locator: loc(), checked: true })).toBe('勾选');
+    expect(stepSummary({ kind: 'check', locator: loc(), checked: false })).toBe('取消勾选');
     expect(stepSummary({ kind: 'hover', locator: loc() })).toBe('悬停 css=#btn');
     expect(stepSummary({ kind: 'waitFor', locator: loc() })).toBe('等待元素 css=#btn');
     expect(stepSummary({ kind: 'assertVisible', locator: loc() })).toBe('断言可见 css=#btn');

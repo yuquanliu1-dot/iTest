@@ -53,7 +53,7 @@ export function stepSummary(action: unknown): string {
     case 'hover':
       return `悬停 ${clip(t, 20)}`;
     case 'check':
-      return '勾选';
+      return a.checked === false ? '取消勾选' : '勾选';
     case 'waitFor':
       return `等待元素 ${clip(t, 20)}`;
     case 'assertVisible':
