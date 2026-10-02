@@ -196,9 +196,10 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
     string,
     { caseId: string; caseTitle: string; failureCount: number; lastFailureAt: string }
   >();
-  const since14 = new Date(Date.now() - 14 * 86_400_000);
+  // Align topFailures window with the trend window (range-driven) for consistency.
+  const sinceFailures = new Date(Date.now() - days * 86_400_000);
   for (const r of rs7d) {
-    if (r.status !== 'failed' || r.createdAt < since14) continue;
+    if (r.status !== 'failed' || r.createdAt < sinceFailures) continue;
     const cur = failMap.get(r.caseId);
     if (cur) {
       cur.failureCount += 1;
