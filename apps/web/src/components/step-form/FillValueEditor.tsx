@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import Segmented from '../ui/Segmented';
+import Button from '../ui/Button';
+import IconButton from '../ui/IconButton';
 
 type ValueMode = 'fixed' | 'randomString' | 'randomNumber' | 'timestamp' | 'prefixTimestamp' | 'composite';
 type DateFormat = 'YYYYMMDD' | 'YYYY-MM-DD' | 'YYYY/MM/DD';
@@ -195,34 +197,31 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
                   onChange={(e) => patchFragment(i, { length: e.target.value })} />
               )}
               {f.mode === 'timestamp' && <span className="text-[11px] flex-1" style={{ color: 'var(--color-foreground-muted)' }}>当前 ms 时间戳</span>}
-              <button
-                type="button"
+              <IconButton
+                icon="x"
+                title="删除片段"
+                tone="destructive"
+                size="sm"
                 onClick={() => {
                   const next = fragments.filter((_, idx) => idx !== i);
                   setFragments(next);
                   onChange({ mode: 'composite', fragments: next.map(buildFragment) });
                 }}
-                className="press"
-                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 2, fontSize: 16, lineHeight: 1 }}
-                title="删除片段"
-                aria-label="删除片段"
-              >
-                ×
-              </button>
+              />
             </div>
           ))}
-          <button
-            type="button"
+          <Button
+            variant="plain"
+            size="sm"
+            className="self-start"
             onClick={() => {
               const next: FragmentDraft[] = [...fragments, { mode: 'fixed', value: '' }];
               setFragments(next);
               onChange({ mode: 'composite', fragments: next.map(buildFragment) });
             }}
-            className="text-[11px] px-2 py-1 rounded-[5px] self-start press"
-            style={{ border: '1px dashed var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}
           >
             + 添加片段
-          </button>
+          </Button>
           <p className="text-[11px]" style={{ color: over ? 'var(--color-destructive)' : 'var(--color-foreground-muted)' }}>
             当前长度估算：{estLen} / 1024{over ? ' · 超过上限' : ''}
           </p>

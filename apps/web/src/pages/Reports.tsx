@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
+import Card from '../components/ui/Card';
 import Segmented from '../components/ui/Segmented';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
@@ -116,10 +117,7 @@ export default function Executions() {
         </div>
       )}
 
-      <div
-        className="flex-1 min-h-0 mx-5 mb-5 mt-4 flex flex-col rounded-[12px] overflow-hidden"
-        style={{ background: 'var(--color-background-elevated)', border: '1px solid var(--color-glass-border)', boxShadow: 'var(--shadow-card)' }}
-      >
+      <Card padding="none" className="flex-1 min-h-0 mx-5 mb-5 mt-4 flex flex-col overflow-hidden">
         {isLoading ? (
           <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
             <Icon name="loader" size={16} className="animate-spin" />
@@ -203,7 +201,7 @@ export default function Executions() {
             />
           </>
         )}
-      </div>
+      </Card>
 
       {/* 批量删除确认 */}
       <Dialog open={confirmBatchDelete} onOpenChange={(open) => { if (!open) setConfirmBatchDelete(false); }}>

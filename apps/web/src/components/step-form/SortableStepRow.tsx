@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import Icon from '../Icon';
 
 interface Props {
   id: string;
@@ -31,11 +32,22 @@ export default function SortableStepRow({ id, disabled, isEditing, children }: P
         {...attributes}
         {...listeners}
         disabled={disabled}
+        type="button"
         title="拖拽排序"
         aria-label="拖拽排序"
-        style={{ background: 'transparent', border: 'none', cursor: disabled ? 'default' : 'grab', color: 'var(--color-foreground-muted)', padding: '2px 2px', fontSize: 12, lineHeight: 1, touchAction: 'none' }}
+        className="press inline-flex items-center justify-center"
+        style={{
+          background: 'transparent',
+          border: 'none',
+          cursor: disabled ? 'default' : 'grab',
+          color: 'var(--color-foreground-muted)',
+          padding: 2,
+          lineHeight: 1,
+          touchAction: 'none',
+          borderRadius: 'var(--radius-sm)',
+        }}
       >
-        ⠿
+        <Icon name="gripVertical" size={12} />
       </button>
       {children}
     </li>

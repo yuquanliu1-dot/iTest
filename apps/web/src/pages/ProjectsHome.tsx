@@ -6,6 +6,7 @@ import { useProjectStore } from '../stores/project';
 import { useUIStore } from '../stores/ui';
 import Icon from '../components/Icon';
 import EmptyState from '../components/ui/EmptyState';
+import IconButton from '../components/ui/IconButton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
@@ -95,20 +96,17 @@ export default function ProjectsHome() {
                     {p.name}
                   </span>
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    <button
+                    <IconButton
+                      icon="pencil"
                       title="编辑"
                       onClick={() => setForm({ open: true, mode: 'edit', id: p.id, name: p.name, description: p.description ?? '', defaultUrl: p.defaultUrl ?? '' })}
-                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 3 }}
-                    >
-                      <Icon name="pencil" size={13} />
-                    </button>
-                    <button
+                    />
+                    <IconButton
+                      icon="trash"
                       title="删除"
+                      tone="destructive"
                       onClick={() => setConfirmDelete({ id: p.id, name: p.name })}
-                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-destructive)', padding: 3 }}
-                    >
-                      <Icon name="trash" size={13} />
-                    </button>
+                    />
                   </div>
                 </div>
                 {p.description && (

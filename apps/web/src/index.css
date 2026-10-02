@@ -95,6 +95,7 @@ h1, h2, h3, h4, h5, h6 {
   outline: none;
 }
 .input-sm { height: 36px; padding: 8px 12px; font-size: 13px; }
+.input-xs { height: 26px; padding: 6px 8px; font-size: 12px; }
 .input-inline { width: auto; }
 .input-base:hover:not(:focus) { border-color: var(--color-glass-border-hover); }
 .input-base:focus {
@@ -110,7 +111,9 @@ textarea.input-base {
   padding: 10px 12px;
   resize: vertical;
 }
+textarea.input-xs { min-height: 64px; padding: 8px 10px; }
 select.input-base { padding-right: 32px; }
+select.input-xs { padding-right: 28px; }
 .input-icon {
   position: absolute;
   left: 12px;
