@@ -20,12 +20,14 @@ export interface StagedScenario {
 }
 export interface WorkspaceDoc {
   plan: { scenarios: number; cases: number } | null;
+  /** inspect_page 成功抓取过的被测页面；用于前端"已参考页面实际代码"标识与保存时 URL 优先级。 */
+  pageContext: { url: string; fetchedAt: string } | null;
   scenarios: StagedScenario[];
   looseCases: StagedCase[];
 }
 
 export function emptyDoc(): WorkspaceDoc {
-  return { plan: null, scenarios: [], looseCases: [] };
+  return { plan: null, pageContext: null, scenarios: [], looseCases: [] };
 }
 
 function publish(reqId: string): void {
@@ -76,17 +78,47 @@ export async function loadDoc(requirementId: string): Promise<WorkspaceDoc> {
     cases: casesByScenario.get(s.id) ?? [],
   }));
 
-  const plan = (planRow?.doc as { plan?: { scenarios: number; cases: number } } | undefined)?.plan ?? null;
-  return { plan, scenarios, looseCases };
+  const stateDoc = planRow?.doc as
+    | { plan?: { scenarios: number; cases: number }; pageContext?: { url: string; fetchedAt: string } }
+    | undefined;
+  const plan = stateDoc?.plan ?? null;
+  const pageContext = stateDoc?.pageContext ?? null;
+  return { plan, pageContext, scenarios, looseCases };
+}
+
+/** 读当前 doc（ai_workspace_state.doc jsonb），行不存在时返回空对象。 */
+async function readStateDoc(requirementId: string): Promise<Record<string, unknown>> {
+  const row = (await db
+    .select({ doc: aiWorkspaceState.doc })
+    .from(aiWorkspaceState)
+    .where(eq(aiWorkspaceState.requirementId, requirementId))
+    .limit(1))[0];
+  return (row?.doc as Record<string, unknown> | undefined) ?? {};
 }
 
 export async function announcePlan(requirementId: string, plan: { scenarios: number; cases: number }): Promise<void> {
+  // merge：保留 pageContext 等既有字段（read-modify-write）
+  const current = await readStateDoc(requirementId);
+  const doc = { ...current, plan };
   await db
     .insert(aiWorkspaceState)
-    .values({ requirementId, doc: { plan, scenarios: [], looseCases: [] } })
+    .values({ requirementId, doc })
     .onConflictDoUpdate({
       target: aiWorkspaceState.requirementId,
-      set: { doc: { plan, scenarios: [], looseCases: [] }, updatedAt: new Date() },
+      set: { doc, updatedAt: new Date() },
+    });
+  publish(requirementId);
+}
+
+export async function recordPageInspection(requirementId: string, url: string): Promise<void> {
+  const current = await readStateDoc(requirementId);
+  const doc = { ...current, pageContext: { url, fetchedAt: new Date().toISOString() } };
+  await db
+    .insert(aiWorkspaceState)
+    .values({ requirementId, doc })
+    .onConflictDoUpdate({
+      target: aiWorkspaceState.requirementId,
+      set: { doc, updatedAt: new Date() },
     });
   publish(requirementId);
 }

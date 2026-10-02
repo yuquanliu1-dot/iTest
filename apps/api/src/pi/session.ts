@@ -221,10 +221,12 @@ async function createPiSessionFactory(ctx: { threadId: string; requirementId: st
       label: t.name,
       description: t.description,
       parameters: t.parameters,
+      // inspect_page 等工具的成功 data（元素清单）需要回传给模型，不能只回 'ok'
+      ...(t.promptGuidelines ? { promptGuidelines: t.promptGuidelines } : {}),
       execute: async (_callId, params, _signal, _onUpdate, _ctx) => {
         const r = await t.execute(params);
         return r.ok
-          ? { content: [{ type: 'text', text: 'ok' }], details: undefined }
+          ? { content: [{ type: 'text', text: r.data ?? 'ok' }], details: undefined }
           : { content: [{ type: 'text', text: r.error }], details: undefined, isError: true };
       },
     }),

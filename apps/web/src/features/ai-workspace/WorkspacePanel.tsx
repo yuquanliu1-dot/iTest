@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api, type WorkspaceDoc } from '../../api/client';
+import { api, type StagedCase, type WorkspaceDoc } from '../../api/client';
 import Button from '../../components/ui/Button';
 import PriorityBadge from '../../components/ui/PriorityBadge';
 
@@ -72,6 +72,45 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
     });
   };
 
+  const renderCase = (c: StagedCase, scenarioId: string) => (
+    <div key={c.id} className="flex items-start gap-2 text-[12px]">
+      <input
+        type="checkbox"
+        checked={selectedCases.has(c.id)}
+        onChange={(e) => toggleCase(c.id, scenarioId, e.target.checked)}
+      />
+      <div className="flex-1">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold">{c.title}</span>
+          <PriorityBadge priority={c.priority} />
+        </div>
+        {c.description && (
+          <div style={{ color: 'var(--color-foreground-muted)' }}>{c.description}</div>
+        )}
+        {c.steps?.length > 0 && (
+          <details className="mt-1">
+            <summary
+              className="cursor-pointer select-none"
+              style={{ color: 'var(--color-foreground-muted)', fontSize: 11 }}
+            >
+              步骤（{c.steps.length}）
+            </summary>
+            <ol className="mt-1 ml-4 list-decimal">
+              {c.steps.map((s, i) => (
+                <li key={i} className="mb-0.5">
+                  <span>{s.action}</span>
+                  {s.assertion && (
+                    <span style={{ color: 'var(--color-foreground-muted)' }}> —— 断言：{s.assertion}</span>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </details>
+        )}
+      </div>
+    </div>
+  );
+
   const totalCases = useMemo(() => {
     if (!doc) return 0;
     return doc.scenarios.reduce((n, s) => n + s.cases.length, 0) + doc.looseCases.length;
@@ -94,7 +133,7 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
 
   if (!doc) return <div style={{ padding: 16 }}>加载中…</div>;
   return (
-    <div className="flex flex-col gap-4 p-5 overflow-y-auto">
+    <div className="flex flex-col h-full gap-4 p-5 overflow-y-auto">
       {doc.plan && (
         <div className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
           进度: {Math.round(progress * 100)}% · 暂存 {totalCases} / 计划 {doc.plan.cases}
@@ -109,6 +148,20 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
           </div>
         </div>
       )}
+      <div
+        className="rounded-[8px] px-3 py-2 text-[12px]"
+        style={
+          doc.pageContext
+            ? { background: 'var(--color-accent-light)', color: 'var(--color-foreground)' }
+            : { background: 'rgba(245,158,11,0.10)', color: '#92400e' }
+        }
+      >
+        {doc.pageContext ? (
+          <>已参考页面实际代码：{doc.pageContext.url}</>
+        ) : (
+          <>AI 未参考页面实际代码，以下用例基于假设生成，请人工评审。</>
+        )}
+      </div>
       <div className="flex justify-end">
         <Button
           onClick={() =>
@@ -139,28 +192,19 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
             {s.title}
           </label>
           <div className="flex flex-col gap-2 mt-3 ml-5">
-            {s.cases.map((c) => (
-              <div key={c.id} className="flex items-start gap-2 text-[12px]">
-                <input
-                  type="checkbox"
-                  checked={selectedCases.has(c.id)}
-                  onChange={(e) => toggleCase(c.id, s.id, e.target.checked)}
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold">{c.title}</span>
-                    <PriorityBadge priority={c.priority} />
-                  </div>
-                  {c.description && (
-                    <div style={{ color: 'var(--color-foreground-muted)' }}>{c.description}</div>
-                  )}
-                </div>
-              </div>
-            ))}
+            {s.cases.map((c) => renderCase(c, s.id))}
           </div>
         </div>
         );
       })}
+      {doc.looseCases.length > 0 && (
+        <div className="glass-card rounded-[12px] p-4">
+          <div className="text-[13px] font-semibold">未分组用例</div>
+          <div className="flex flex-col gap-2 mt-3 ml-5">
+            {doc.looseCases.map((c) => renderCase(c, ''))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

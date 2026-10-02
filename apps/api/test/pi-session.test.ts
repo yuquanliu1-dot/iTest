@@ -15,6 +15,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // 本文件经 session.ts 间接持有 db/client.js 的单例池，先关掉再停容器，
+  // 否则容器停止会打断残留连接报 57P01（与 pi-tools.test.ts / pi-workspace.test.ts 同款处理）。
+  const { pool: dbPool } = await import('../src/db/client.js');
+  await dbPool.end();
   await pool.end();
   await container.stop();
 });
