@@ -64,4 +64,9 @@ describe('stepSummary', () => {
     const action = { kind: 'weird', foo: 'x'.repeat(60) };
     expect(stepSummary(action)).toBe(JSON.stringify(action).slice(0, 39) + '…');
   });
+
+  it('nullish 输入回退 "undefined"/"null" 文本', () => {
+    expect(stepSummary(undefined)).toBe('undefined');
+    expect(stepSummary(null)).toBe('null');
+  });
 });
