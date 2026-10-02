@@ -1,5 +1,15 @@
 const BASE = '/api';
 
+/** 带 HTTP 状态码的请求错误；调用方可据此区分 404（不存在/不可见）等确定性失败。 */
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 // 401 时跳登录页的豁免路径（登录/首登改密本身、/me 探测——这些 401 由调用方自行处理）
 const AUTH_EXEMPT_PATHS = new Set(['/auth/login', '/auth/change-password', '/auth/me']);
 
@@ -14,7 +24,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       window.location.assign('/login');
     }
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.message ?? `HTTP ${res.status}`);
+    throw new ApiError(res.status, body.message ?? `HTTP ${res.status}`);
   }
   return res.json() as Promise<T>;
 }
