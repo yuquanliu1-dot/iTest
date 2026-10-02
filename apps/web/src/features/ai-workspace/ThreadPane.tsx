@@ -5,6 +5,9 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   useAui,
+  useAuiState,
+  type ReasoningMessagePartProps,
+  type ToolCallMessagePartProps,
 } from '@assistant-ui/react';
 import { usePiRuntime, createPiHttpClient } from '@assistant-ui/react-pi';
 
@@ -26,26 +29,30 @@ export default function ThreadPane({ threadId, initialMessage }: Props) {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <ThreadPaneBody initialMessage={initialMessage} />
+      <ThreadPaneBody threadId={threadId} initialMessage={initialMessage} />
     </AssistantRuntimeProvider>
   );
 }
 
-function ThreadPaneBody({ initialMessage }: { initialMessage?: string }) {
+function ThreadPaneBody({ threadId, initialMessage }: { threadId: string; initialMessage?: string }) {
   const aui = useAui();
+  // usePiRuntime 基于 useRemoteThreadListRuntime，初始化是异步的：mount 时主线程
+  // 还是本地临时"新线程"，此刻 append 的消息会落在临时线程里、随后被丢弃。
+  // 必须等主线程绑定到目标远端线程且历史加载完成后再发送。
+  const remoteId = useAuiState((s) => s.optional.threadListItem?.remoteId);
+  const isLoading = useAuiState((s) => s.optional.thread?.isLoading ?? false);
   const sentRef = useRef(false);
   useEffect(() => {
-    if (!initialMessage) return;
-    if (sentRef.current) return;
+    if (!initialMessage || sentRef.current) return;
+    if (remoteId !== threadId || isLoading) return;
     // aui.thread.append 走 runtime 的 _store.onNew → controller.sendMessage：
     // 会落乐观用户消息、把 runStatus 置为 running、调 client.sendMessage
     // （命中后端 POST /api/pi/threads/:id/messages）。
-    // StrictMode 双触发：ref 守护 + 仅依赖 initialMessage。
+    // StrictMode 双触发：ref 守护。
     sentRef.current = true;
-    // append 同步执行；不弹 toast：用户在聊天输入框，下一次手动发送仍可触发
     aui.thread.append(initialMessage);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMessage, aui.thread]);
+  }, [initialMessage, threadId, remoteId, isLoading]);
 
   return (
     <div className="flex flex-col h-full">
@@ -101,7 +108,78 @@ function UserMessage() {
 function AssistantMessage() {
   return (
     <div className="mb-3 text-[13px] whitespace-pre-wrap" style={{ color: 'var(--color-foreground)' }}>
-      <MessagePrimitive.Parts />
+      <MessagePrimitive.Parts
+        components={{
+          Reasoning: ThinkingPart,
+          tools: { Fallback: ToolActivity },
+        }}
+      />
+    </div>
+  );
+}
+
+/** thinking 段：进行中给"思考中…"心跳提示，完成后收起（推理文本不常驻聊天区）。 */
+function ThinkingPart({ status }: ReasoningMessagePartProps) {
+  if (status.type !== 'running') return null;
+  return (
+    <div className="mb-1 animate-pulse text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+      思考中…
+    </div>
+  );
+}
+
+const TOOL_META: Record<string, { icon: string; label: string }> = {
+  inspect_page: { icon: '🌐', label: '抓取页面实际元素' },
+  announce_plan: { icon: '📋', label: '制定生成计划' },
+  upsert_scenario: { icon: '🗂', label: '暂存场景' },
+  upsert_case: { icon: '📝', label: '暂存测试用例' },
+  remove_item: { icon: '🗑', label: '移除条目' },
+};
+
+function toolArgSummary(toolName: string, args: unknown): string {
+  const a = (args ?? {}) as Record<string, unknown>;
+  switch (toolName) {
+    case 'inspect_page': return typeof a.url === 'string' ? a.url : '';
+    case 'announce_plan': return `${a.scenarios ?? '—'} 个场景 · ${a.cases ?? '—'} 条用例`;
+    case 'upsert_scenario':
+    case 'upsert_case': {
+      const t = typeof a.title === 'string' ? a.title : (typeof a.id === 'string' ? a.id : '');
+      return t;
+    }
+    case 'remove_item': return `${a.kind === 'scenario' ? '场景' : '用例'} ${typeof a.id === 'string' ? a.id : ''}`;
+    default: return '';
+  }
+}
+
+/** 工具调用活动行：进行中/完成/失败三态，让生成过程有渐进反馈而不是只有 spinner。 */
+function ToolActivity(part: ToolCallMessagePartProps) {
+  const meta = TOOL_META[part.toolName];
+  if (!meta) return null;
+  const running = part.status.type === 'running';
+  const summary = toolArgSummary(part.toolName, part.args);
+  // inspect_page 完成后从结果清单里数出元素个数，作为最有用的完成反馈
+  let done: string | null = null;
+  if (!running) {
+    if (part.isError) done = '✗ 失败';
+    else if (part.toolName === 'inspect_page' && typeof part.result === 'string') {
+      const n = part.result.split('\n').filter((l) => l.startsWith('- ')).length;
+      done = n > 0 ? `✓ 已获取 ${n} 个元素` : '✓';
+    } else done = '✓';
+  }
+  return (
+    <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+      <span>{meta.icon}</span>
+      <span className="truncate">
+        {meta.label}
+        {summary ? `：${summary}` : ''}
+      </span>
+      {running ? (
+        <span className="animate-pulse">进行中…</span>
+      ) : (
+        <span className="shrink-0" style={{ color: part.isError ? 'var(--color-destructive)' : 'var(--color-accent)' }}>
+          {done}
+        </span>
+      )}
     </div>
   );
 }

@@ -15,6 +15,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // 本文件经 workspace.js 间接持有 db/client.js 的单例池，先关掉再停容器，
+  // 否则容器停止会打断残留连接报 57P01（与 pi-inspect-page.test.ts 同款处理）。
+  const { pool: dbPool } = await import('../src/db/client.js');
+  await dbPool.end();
   await pool.end();
   await container.stop();
 });
@@ -60,5 +64,31 @@ describe('workspace tools wrapper (upsert_case)', () => {
     const s = doc.scenarios.find((x) => x.id === 'phantom');
     expect(s).toBeDefined();
     expect(s!.cases).toHaveLength(1);
+  });
+
+  it('upsert_case 可省略 description/priority/scenarioId/assertion，执行器兜底默认值（A：消除整批验证拒绝）', async () => {
+    const { buildWorkspaceTools } = await import('../src/pi/tools.js');
+    const tools = buildWorkspaceTools(requirementId);
+    const upsert = tools.find((t) => t.name === 'upsert_case')!;
+
+    // 2026-10-02 实测 LLM 首轮只传 id/title/steps：schema 必填把整批调用拒掉，
+    // 迫使模型重试多耗一轮（15.8s）。这些字段必须不在 TypeBox required 里。
+    const schema = upsert.parameters as { required?: string[]; properties: Record<string, { items?: { required?: string[] } } > };
+    expect(schema.required).not.toContain('description');
+    expect(schema.required).not.toContain('priority');
+    expect(schema.required).not.toContain('scenarioId');
+    expect(schema.properties.steps!.items!.required).not.toContain('assertion');
+
+    // 执行器兜底：priority→P2、description→null、scenarioId→null（散用例）、assertion→null
+    const r = await upsert.execute({
+      id: 'c-loose', title: '散用例', steps: [{ action: '打开页面' }],
+    });
+    expect(r.ok).toBe(true);
+    const { loadDoc } = await import('../src/pi/workspace.js');
+    const doc = await loadDoc(requirementId);
+    const c = doc.looseCases[0]!;
+    expect(c.priority).toBe('P2');
+    expect(c.description).toBeNull();
+    expect(c.steps[0]!.assertion).toBeNull();
   });
 });

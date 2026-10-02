@@ -621,6 +621,7 @@ export interface StagedCase { id: string; title: string; description: string | n
 export interface StagedScenario { id: string; title: string; description: string | null; cases: StagedCase[]; }
 export interface WorkspaceDoc {
   plan: { scenarios: number; cases: number } | null;
+  pageContext?: { url: string; fetchedAt: string } | null;
   scenarios: StagedScenario[];
   looseCases: StagedCase[];
 }

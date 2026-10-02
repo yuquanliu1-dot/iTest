@@ -38,6 +38,9 @@ export default function AiWorkspacePage() {
 
   // 上一跳 location.state 带来的首条需求文本；下传给 ThreadPane 走 aui.thread.append 自动发送。
   const state = (location.state ?? {}) as InitialMessageState;
+  // 必须在清掉 location.state 前捕获进组件 state：ThreadPane 要等 ensure 拿到 threadId
+  // 才挂载，届时 location.state 已被下面的 effect 清空，直接传 state.initialMessage 会丢。
+  const [initialMessage] = useState(state.initialMessage);
 
   // mount 时立刻清掉 location.state（仅当非空时），避免用户从用例列表再点同一个
   // requirement 时又把 stale initialMessage 带回。
@@ -97,9 +100,9 @@ export default function AiWorkspacePage() {
           className="w-[420px] shrink-0 border-r"
           style={{ borderColor: 'var(--color-border)' }}
         >
-          <ThreadPane requirementId={id!} threadId={threadId} initialMessage={state.initialMessage} />
+          <ThreadPane requirementId={id!} threadId={threadId} initialMessage={initialMessage} />
         </div>
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
           <WorkspacePanel
             requirementId={id!}
             threadId={threadId}
