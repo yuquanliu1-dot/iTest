@@ -96,7 +96,7 @@ export async function upsertScenario(requirementId: string, scenario: StagedScen
   // 先建场景行：SQL UPSERT 走复合主键 (requirement_id, id)；
   // 同步把该场景下的 case 行（如果有）一并 upsert——这是对旧实现的关键兼容点：
   // 旧版 upsertScenario({cases: [...]}) 会把 cases 一起写进 doc；新版必须自己处理，
-  // 否则 seed-staging.ts / ai-workspace-save.test.ts 里"传 cases 数组"的旧调用会丢用例。
+  // 否则直接传入 cases 数组的旧调用会丢用例。
   if (scenario.cases.length > 0) {
     await db.transaction(async (tx) => {
       await tx
