@@ -6,21 +6,12 @@
   </head>
   <body>
     <div class="container">
-      <h1>iTest Recorder</h1>
-      <p id="status" class="hint">检查录制状态...</p>
-      <p id="mode" class="hint" style="font-weight:600"></p>
-      <button id="open">打开中台</button>
-      <hr />
-      <button id="pause" disabled>暂停录制</button>
-      <hr />
-      <p class="hint">以下操作会打开一个小窗口，在窗口里完成配置：</p>
-      <button class="panel-btn" data-mode="variable" disabled>保存变量</button>
-      <button class="panel-btn" data-mode="assert" disabled>添加断言</button>
-      <button class="panel-btn" data-mode="hover" disabled>记录悬浮</button>
-      <button class="panel-btn" data-mode="ai" disabled>AI 自然语言步骤</button>
-      <hr />
-      <p class="hint">当前会话接管的多标签页：</p>
-      <ul id="tabs" style="list-style:none;padding:0;margin:0;font-size:11px"></ul>
+      <div class="head">
+        <span class="logo-dot"></span>
+        <span class="name">iTest Recorder</span>
+      </div>
+      <p class="desc">在中台用例详情页点击「录制补充」即可开始录制，页面右下角会出现控制面板。</p>
+      <button id="open" class="btn primary">打开中台</button>
     </div>
     <script src="popup.js"></script>
   </body>

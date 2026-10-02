@@ -39,6 +39,8 @@ function buildIntentLocator(el: Element): RecordedStep['intentLocator'] {
  *  - change 细分：checkbox → check（带目标状态），select → select（带选中值），file → upload（只记文件名）。
  *  - 200ms 内的重复 click 去重（双击是用户意图但不应产生 2 个 click 步骤）。
  *  - 当 input 事件触发时，跳过紧随其后的 mouseover，避免「键入即 hover」噪声。
+ *  - mouseover 需在同一元素停留 ≥500ms 才产出 hover（停留门槛）：光标移动路径上划过的元素不记录；
+ *    已记录元素的内部微动不重复记录；click/input/离开元素会取消未到时的悬停。
  *  - 输入框上 hover 不被发射（hover-when-input 抑制）；checkbox/radio/select/file 及无 value 目标的 input 不产 fill。
  *  - setPaused(true) 期间所有事件被忽略（录制面板「暂停」/元素拾取期间使用）。
  */
@@ -49,8 +51,13 @@ export class RecorderManager {
   private listeners: Array<{ el: EventTarget; type: string; fn: EventListener }> = [];
   private lastClick: { signature: string; at: number } | null = null;
   private lastInputAt: number | null = null;
+  /** 停留门槛中的悬停：计时器到时才发射。 */
+  private pendingHover: { el: Element; timer: ReturnType<typeof setTimeout> } | null = null;
+  /** 最近一次已发射 hover 的元素：其内部微动不再重复记录。 */
+  private lastHoverEl: Element | null = null;
   private static DEDUP_WINDOW_MS = 200;
   private static HOVER_SUPPRESS_AFTER_INPUT_MS = 300;
+  private static HOVER_DWELL_MS = 500;
 
   start(handler: StepHandler) {
     this.active = true;
@@ -58,6 +65,8 @@ export class RecorderManager {
     this.handler = handler;
     this.lastClick = null;
     this.lastInputAt = null;
+    this.cancelPendingHover();
+    this.lastHoverEl = null;
     this.attachListeners();
   }
 
@@ -65,6 +74,8 @@ export class RecorderManager {
     this.active = false;
     this.paused = false;
     this.handler = null;
+    this.cancelPendingHover();
+    this.lastHoverEl = null;
     this.detachListeners();
   }
 
@@ -80,9 +91,29 @@ export class RecorderManager {
     return this.active && !this.paused;
   }
 
+  private cancelPendingHover() {
+    if (this.pendingHover) {
+      clearTimeout(this.pendingHover.timer);
+      this.pendingHover = null;
+    }
+  }
+
   private attachListeners() {
+    // 页面内控制面板（content/panel.js 注入的 #itest-recorder-panel-host）位于宿主页面 DOM 上，
+    // 拖动标题栏、悬停、点按钮都会触发 document 上的 capture 事件。统一在 handler 入口处跳过：
+    // 面板的 Shadow DOM 默认 composed=false，e.target 落在 host 上，contains 命中即可。
+    const isOnRecorderPanel = (e: Event) => {
+      const host = document.getElementById('itest-recorder-panel-host');
+      if (!host) return false;
+      const path = typeof e.composedPath === 'function' ? e.composedPath() : null;
+      if (path && path.includes(host)) return true;
+      return host.contains(e.target as Node);
+    };
+
     const onClick = (e: Event) => {
       if (!this.canRecord()) return;
+      if (isOnRecorderPanel(e)) return;
+      this.cancelPendingHover();
       const target = e.target as Element;
       if (!target) return;
       const locs = generateLocators(target);
@@ -104,6 +135,8 @@ export class RecorderManager {
     };
     const onInput = (e: Event) => {
       if (!this.canRecord()) return;
+      if (isOnRecorderPanel(e)) return;
+      this.cancelPendingHover();
       const target = e.target as HTMLInputElement;
       if (!target) return;
       // select/radio 由 change 产出 select/check 步骤，checkbox 由 change 产出 check，file 由 change 产出 upload；
@@ -130,6 +163,7 @@ export class RecorderManager {
     };
     const onChange = (e: Event) => {
       if (!this.canRecord()) return;
+      if (isOnRecorderPanel(e)) return;
       const target = e.target as HTMLInputElement | HTMLSelectElement;
       if (!target) return;
       const now = Date.now();
@@ -179,30 +213,58 @@ export class RecorderManager {
     };
     const onMouseOver = (e: Event) => {
       if (!this.canRecord()) return;
+      if (isOnRecorderPanel(e)) return;
       const target = e.target as Element;
       if (!target) return;
       const sinceInput = this.lastInputAt !== null ? Date.now() - this.lastInputAt : Infinity;
-      if (sinceInput < RecorderManager.HOVER_SUPPRESS_AFTER_INPUT_MS) return;
+      if (sinceInput < RecorderManager.HOVER_SUPPRESS_AFTER_INPUT_MS) {
+        this.cancelPendingHover();
+        return;
+      }
       const tag = (target.tagName ?? '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
-      const intentLocator = buildIntentLocator(target);
-      this.handler?.({
-        type: 'hover',
-        target: generateLocators(target),
-        url: location.href,
-        timestamp: Date.now(),
-        ...(intentLocator ? { intentLocator } : {}),
-      });
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+        this.cancelPendingHover();
+        return;
+      }
+      // 已记录过 hover 的元素内部微动不重复；停留中的元素内部划过不打断计时。
+      if (this.lastHoverEl?.contains(target)) return;
+      if (this.pendingHover?.el.contains(target)) return;
+      // 光标进入新元素：重置停留计时（移动路径上的元素到不了时门槛）。
+      this.cancelPendingHover();
+      const el = target;
+      const timer = setTimeout(() => {
+        this.pendingHover = null;
+        if (!this.canRecord()) return;
+        this.lastHoverEl = el;
+        const intentLocator = buildIntentLocator(el);
+        this.handler?.({
+          type: 'hover',
+          target: generateLocators(el),
+          url: location.href,
+          timestamp: Date.now(),
+          ...(intentLocator ? { intentLocator } : {}),
+        });
+      }, RecorderManager.HOVER_DWELL_MS);
+      this.pendingHover = { el, timer };
+    };
+    const onMouseLeave = (e: Event) => {
+      if (!this.canRecord()) return;
+      if (isOnRecorderPanel(e)) return;
+      // 离开元素（含其祖先）即离开停留目标：取消未到时的悬停（光标移出窗口/空白区时 mouseover 不会再来）。
+      const t = e.target as Element;
+      if (this.pendingHover && t.contains(this.pendingHover.el)) this.cancelPendingHover();
     };
     document.addEventListener('click', onClick, true);
     document.addEventListener('input', onInput, true);
     document.addEventListener('change', onChange, true);
     document.addEventListener('mouseover', onMouseOver, true);
+    document.addEventListener('mouseleave', onMouseLeave, true);
     this.listeners.push(
       { el: document, type: 'click', fn: onClick },
       { el: document, type: 'input', fn: onInput },
       { el: document, type: 'change', fn: onChange },
       { el: document, type: 'mouseover', fn: onMouseOver },
+      { el: document, type: 'mouseleave', fn: onMouseLeave },
     );
   }
 

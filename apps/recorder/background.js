@@ -4,6 +4,11 @@ let paused = false;
 let sessionMode = 'fresh';
 let sessionIncognito = false;
 let sessionId = null;
+// 录制步骤计数：推送给页面内控制面板（content/panel.js）展示
+let stepCount = 0;
+// 发起录制的 web 中台标签页（用例详情页）：面板/弹窗停止录制后通知其收尾；
+// 停止后保留指向，供「打开中台」切回用例详情页，下次 start 覆盖
+let webTabId = null;
 // tab 路由：opener 派生 tab 的 tabIndex；tab #0 是主 tab
 const recordingTabs = new Map(); // tabId -> tabIndex
 let nextTabIndex = 1;
@@ -23,17 +28,23 @@ function toDSL(step) {
   return dsl;
 }
 
-function attachTabInjector(tabIndex = 0) {
-  const onUpdated = (tabId, changeInfo) => {
-    if (tabId !== recordingTabId || changeInfo.status !== 'complete') return;
-    chrome.tabs.onUpdated.removeListener(onUpdated);
-    chrome.scripting
-      .executeScript({ target: { tabId }, files: ['content/recorder.js'] })
-      .then(() => chrome.tabs.sendMessage(tabId, { type: 'start', mode: sessionMode, tabRef: `${sessionId}|tab#${tabIndex}` }))
-      .catch(() => {});
-  };
-  chrome.tabs.onUpdated.addListener(onUpdated);
-}
+// 录制中的 tab（主 tab 或接管的派生 tab）每次页面加载完成后重注入 recorder/panel：
+// 同 tab 跳转新页面时内容脚本随文档销毁，不重注入则录制与面板都会丢失。
+// 注入后重发 start 握手，并把当前步数/暂停态同步给全新的面板实例。
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== 'complete' || recordingTabId === null) return;
+  const isMain = tabId === recordingTabId;
+  if (!isMain && !recordingTabs.has(tabId)) return;
+  const tabIndex = isMain ? 0 : recordingTabs.get(tabId);
+  chrome.scripting
+    .executeScript({ target: { tabId }, files: ['content/recorder.js', 'content/panel.js'] })
+    .then(() => {
+      chrome.tabs.sendMessage(tabId, { type: 'start', mode: sessionMode, tabRef: `${sessionId}|tab#${tabIndex}` });
+      chrome.tabs.sendMessage(tabId, { type: 'step-count', count: stepCount }, () => void chrome.runtime.lastError);
+      if (paused) chrome.tabs.sendMessage(tabId, { type: 'pause' });
+    })
+    .catch(() => {});
+});
 
 chrome.tabs.onCreated.addListener((tab) => {
   if (recordingTabId === null || tab.openerTabId !== recordingTabId) return;
@@ -46,8 +57,7 @@ chrome.tabs.onCreated.addListener((tab) => {
       event: { kind: 'opened', tabRef: `${sessionId}|tab#${idx}`, title: tab.title || '', url: tab.url || '' },
     }));
   }
-  // 接管新 tab
-  attachTabInjector(idx);
+  // 接管新 tab（页面加载完成后由全局 onUpdated 监听器注入）
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -68,6 +78,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sessionId = sid;
     sessionMode = mode || 'fresh';
     sessionIncognito = !!incognito;
+    stepCount = 0;
+    paused = false;
+    webTabId = sender.tab?.id ?? null;
     ws = new WebSocket(`${wsUrl}?sessionId=${sessionId}&token=${msg.session.token}`);
     ws.onopen = () => {
       sendResponse({ ok: true });
@@ -76,7 +89,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       chrome.tabs.create(createOpts, (tab) => {
         recordingTabId = tab.id;
         nextTabIndex = 1;
-        attachTabInjector(0);
       });
     };
     ws.onerror = () => sendResponse({ ok: false, error: 'ws failed' });
@@ -92,6 +104,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       type: 'step',
       step: { action: dsl, url, tabRef, componentKind },
     }));
+    stepCount++;
+    if (recordingTabId !== null) {
+      // 面板不在时静默吞掉 lastError（无回调接收方）
+      chrome.tabs.sendMessage(recordingTabId, { type: 'step-count', count: stepCount }, () => void chrome.runtime.lastError);
+    }
   }
 
   if (msg.type === 'switch-tab') {
@@ -113,6 +130,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       recordingTabs.clear();
       paused = false;
       sessionId = null;
+      stepCount = 0;
+      // 面板/弹窗发起的停止：通知 web 中台收尾（finish 会话、复位状态）
+      if (msg.from === 'panel' && webTabId !== null) {
+        chrome.tabs.sendMessage(webTabId, { type: 'recording-stopped' }, () => void chrome.runtime.lastError);
+      }
     };
     const sock = ws;
     ws = null;
@@ -126,11 +148,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'open-console') {
+    // 打开中台：优先切回发起录制的用例详情页 tab（含窗口前置）；无会话或 tab 已关则新开中台首页。
+    // 不回 sendResponse：目标窗口前置会立即关闭 popup，回调随之失效。
+    const fallback = () => chrome.tabs.create({ url: 'http://127.0.0.1:5173/' });
+    if (webTabId === null) { fallback(); return; }
+    chrome.tabs
+      .get(webTabId)
+      .then((tab) => {
+        chrome.tabs.update(tab.id, { active: true });
+        chrome.windows.update(tab.windowId, { focused: true });
+      })
+      .catch(fallback);
+    return;
+  }
+
   if (msg.type === 'get-state') {
     sendResponse({
       recording: recordingTabId !== null,
       paused,
       mode: sessionMode,
+      stepCount,
       tabs: Array.from(recordingTabs.entries()).map(([id, idx]) => ({ tabId: id, tabRef: `${sessionId}|tab#${idx}` })),
     });
     return;
@@ -140,6 +178,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     paused = msg.type === 'pause';
     if (recordingTabId !== null) chrome.tabs.sendMessage(recordingTabId, { type: msg.type });
     sendResponse({ recording: recordingTabId !== null, paused });
+    return;
+  }
+
+  if (msg.type === 'open-panel') {
+    // 页面内控制面板的功能按钮：打开对应模式的录制面板窗口（与 action 弹窗同一路径）
+    const height = msg.mode === 'assert' ? 420 : msg.mode === 'ai' ? 280 : 240;
+    chrome.windows.create({
+      url: chrome.runtime.getURL(`popup/panel.html?mode=${msg.mode}`),
+      type: 'popup',
+      width: 360,
+      height,
+    });
     return;
   }
 
