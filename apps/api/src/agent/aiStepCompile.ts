@@ -141,9 +141,93 @@ export async function compileAiStepVision(
   return out;
 }
 
+/** 启发式跳过的页面关键词 + 路径，与 routes/requirements.ts inferPageUrl 同源；
+ * 用于把「打开登录页」一类的 aiStep 直接编成 navigate，省一次 LLM 调用。 */
+const PAGE_HINT: Array<{ keywords: string[]; path: string }> = [
+  { keywords: ['登录', 'login'], path: '/login' },
+  { keywords: ['注册', 'signup', 'sign up'], path: '/signup' },
+  { keywords: ['工作台', '首页', 'home'], path: '/' },
+  { keywords: ['设置', 'settings'], path: '/settings' },
+  { keywords: ['需求', 'requirements'], path: '/requirements' },
+  { keywords: ['用例', 'cases'], path: '/cases' },
+  { keywords: ['计划', 'plans'], path: '/plans' },
+];
+
+/** 「打开/访问/进入」类动作开头，去掉后方便只对目标词匹配。 */
+const NAV_VERB_RE = /^\s*(打开|访问|进入|跳转(?:到|至)?|前往|打开到|访问到|进入到|go\s*to|navigate\s*to|open|visit|go)\s*/i;
+
+/** 把 instruction 与 step.name 拼起来小写后做关键词命中；命中返回绝对 URL，否则 undefined。 */
+function tryHeuristicNavigate(
+  instruction: string,
+  name: string | undefined,
+  baseUrl: string | undefined,
+): string | undefined {
+  // 只对 instruction 做匹配，不要把 name 拼进去——name 是后端元数据（"步骤1" 之类），
+  // 拼上后会污染 stripped，启发式会失效或误命中。
+  const text = instruction.trim().toLowerCase();
+  if (!text) return undefined;
+  if (!NAV_VERB_RE.test(text)) return undefined;
+  const stripped = text.replace(NAV_VERB_RE, '').trim();
+  // 命中条件：stripped 完全等于关键词，或 stripped 以「关键词 + 空格 / 页 / 界面 / 页面 / page / pages」开头。
+  // 这样既能挡掉「点击登录按钮」之类的按钮文案，也能识别「打开登录页」「访问工作台」「go to login page」等。
+  // 「点击登录按钮」的 stripped = "登录按钮"，不会命中任何一种尾缀；只有「打开登录页」「访问工作台」
+  // 这种 stripped = "登录页" / "工作台" / "登录" / "login page" 的才会命中。
+  // 注意：text 含 step.name 前缀（例如 "步骤1 访问首页"），匹配 stripped 而不是 text，
+  // 否则 name 部分可能抢先匹配（这里是 "步骤1 访问首页" 完整词条没有动词开头，所以命中 stripped）。
+  const matches = (k: string) => {
+    if (stripped === k) return true;
+    if (stripped.startsWith(`${k} `)) return true;
+    if (stripped.startsWith(`${k}页`)) return true;
+    if (stripped.startsWith(`${k}界面`)) return true;
+    if (stripped.startsWith(`${k}页面`)) return true;
+    if (stripped.startsWith(`${k} page`)) return true;
+    if (stripped.startsWith(`${k} pages`)) return true;
+    return false;
+  };
+  for (const { keywords, path } of PAGE_HINT) {
+    if (keywords.some(matches)) {
+      const base = (baseUrl ?? 'http://localhost:5173').replace(/\/$/, '');
+      return `${base}${path}`;
+    }
+  }
+  return undefined;
+}
+
+/** 把「断言看到工作台」「断言页面显示成功」这种纯文本断言直接编成 assertText，
+ * locator 用 text 策略 + 第一个非空短句作为 equals；含 # 选择器或动态占位的让 LLM 处理。
+ * 只看 instruction，name 是后端元数据（"步骤1"）会污染启发式。 */
+function tryHeuristicAssertText(
+  instruction: string,
+  _name: string | undefined,
+): StepActionType[] | undefined {
+  const text = instruction.trim();
+  if (!text) return undefined;
+  // 有 CSS / 视觉占位 / 长指令 → 不启发式
+  if (/#[\w-]+/.test(text)) return undefined;
+  if (text.length > 80) return undefined;
+  // 断言类关键词开头
+  if (!/^(断言|检查|确认|期望|验证|assert|expect|verify|check\s+that|should\s+see|should\s+show|应|必须|可见)/i.test(text)) {
+    return undefined;
+  }
+  // 抽出被断言的文本：去掉前缀动词
+  const equals = text
+    .replace(/^(断言|检查|确认|期望|验证|应|必须|可见)\s*[:：]?\s*/i, '')
+    .replace(/^(看到|显示|出现|为|是|等于)\s*/i, '')
+    .replace(/^(assert|expect|verify|check\s+that|should\s+see|should\s+show)\s+/i, '')
+    .trim();
+  if (!equals || equals.length > 40) return undefined;
+  return [{
+    kind: 'assertText',
+    locator: [{ strategy: 'text', value: equals }],
+    target: 'specifiedElement',
+    match: 'contains',
+    equals,
+  }];
+}
+
 /** 就地编译步骤数组里的 aiStep；返回编译失败的 index 列表。不抛错、不阻塞保存。
- * 指令按 BATCH_CHUNK 分块、块间并发走批量编译（单块一次 LLM 调用）；
- * 块失败或缺项的指令回退到单条编译（保留其一次重试语义）。 */
+ * 启发式跳过的步骤（navigate / 纯断言）不调 LLM；剩余指令按 BATCH_CHUNK 分块、
+ * 块间并发走批量编译（单块一次 LLM 调用）；块失败或缺项的指令回退到单条编译。 */
 export async function compileAiStepsInPlace(
   steps: Array<{ action: unknown; url?: string; name?: string }>,
   client?: LLMClient,
@@ -161,18 +245,38 @@ export async function compileAiStepsInPlace(
   const failed: number[] = [];
   const pending: Array<{ index: number; text: string; url?: string; name?: string }> = [];
   for (let i = 0; i < steps.length; i++) {
-    const a = steps[i]!.action as { kind?: string; instruction?: string; compiled?: unknown };
+    const step = steps[i]!;
+    const a = step.action as { kind?: string; instruction?: string; compiled?: unknown };
     if (a?.kind !== 'aiStep') continue;
+
+    const instruction = a.instruction ?? '';
+    const name = step.name;
+    const baseUrl = step.url ?? urlResolver?.(name);
+
+    // 启发式 1：navigate 类 → 直接出 navigate，省 LLM
+    const navUrl = tryHeuristicNavigate(instruction, name, baseUrl);
+    if (navUrl) {
+      a.compiled = [{ kind: 'navigate', url: navUrl }];
+      continue;
+    }
+
+    // 启发式 2：纯文本断言 → 直接出 assertText
+    const assertCompiled = tryHeuristicAssertText(instruction, name);
+    if (assertCompiled) {
+      a.compiled = assertCompiled;
+      continue;
+    }
+
     let text: string;
     try {
-      text = buildEffectiveInstruction(steps[i]!, a.instruction ?? '').text;
+      text = buildEffectiveInstruction(step, instruction).text;
     } catch (e) {
-      logger.warn({ err: e, instruction: a.instruction, index: i }, 'ai-step compile failed');
+      logger.warn({ err: e, instruction, index: i }, 'ai-step compile failed');
       a.compiled = null;
       failed.push(i);
       continue;
     }
-    pending.push({ index: i, text, url: steps[i]!.url ?? urlResolver?.(steps[i]!.name), name: steps[i]!.name });
+    pending.push({ index: i, text, url: step.url ?? urlResolver?.(name), name });
   }
   if (!llm || pending.length === 0) {
     for (const p of pending) {
