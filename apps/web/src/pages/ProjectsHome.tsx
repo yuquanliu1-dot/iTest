@@ -15,10 +15,11 @@ interface FormState {
   mode: 'create' | 'edit';
   id: string | null;
   name: string;
+  description: string;
   defaultUrl: string;
 }
 
-const EMPTY_FORM: FormState = { open: false, mode: 'create', id: null, name: '', defaultUrl: '' };
+const EMPTY_FORM: FormState = { open: false, mode: 'create', id: null, name: '', description: '', defaultUrl: '' };
 
 export default function ProjectsHome() {
   const navigate = useNavigate();
@@ -31,7 +32,7 @@ export default function ProjectsHome() {
 
   const save = useMutation({
     mutationFn: async () => {
-      const body = { name: form.name, defaultUrl: form.defaultUrl || undefined };
+      const body = { name: form.name, description: form.description || undefined, defaultUrl: form.defaultUrl || undefined };
       if (form.mode === 'create') return api.projects.create(body);
       return api.projects.patch(form.id!, body);
     },
@@ -96,7 +97,7 @@ export default function ProjectsHome() {
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     <button
                       title="编辑"
-                      onClick={() => setForm({ open: true, mode: 'edit', id: p.id, name: p.name, defaultUrl: p.defaultUrl ?? '' })}
+                      onClick={() => setForm({ open: true, mode: 'edit', id: p.id, name: p.name, description: p.description ?? '', defaultUrl: p.defaultUrl ?? '' })}
                       style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 3 }}
                     >
                       <Icon name="pencil" size={13} />
@@ -110,6 +111,11 @@ export default function ProjectsHome() {
                     </button>
                   </div>
                 </div>
+                {p.description && (
+                  <div className="text-[12px] mt-1 truncate" style={{ color: 'var(--color-foreground-secondary)' }}>
+                    {p.description}
+                  </div>
+                )}
                 <div className="text-[12px] mt-1 truncate" style={{ color: 'var(--color-foreground-muted)' }}>
                   {p.defaultUrl ?? '未设置默认域名'}
                 </div>
@@ -125,7 +131,7 @@ export default function ProjectsHome() {
 
             {/* 新建项目卡片 */}
             <button
-              onClick={() => setForm({ open: true, mode: 'create', id: null, name: '', defaultUrl: '' })}
+              onClick={() => setForm({ open: true, mode: 'create', id: null, name: '', description: '', defaultUrl: '' })}
               className="rounded-[12px] p-5 flex flex-col items-center justify-center gap-2"
               style={{
                 minHeight: 132,
@@ -157,6 +163,16 @@ export default function ProjectsHome() {
           </DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
             <Input label="名称" placeholder="如：CueCast 官网" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>描述（可空）</label>
+              <textarea
+                className="input-base"
+                placeholder="简要说明项目用途"
+                rows={3}
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              />
+            </div>
             <Input
               label="默认域名（可空）"
               placeholder="https://example.com"

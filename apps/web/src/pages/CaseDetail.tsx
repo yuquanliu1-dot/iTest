@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type VariableReport } from '../api/client';
@@ -17,6 +18,7 @@ import EmptyState from '../components/ui/EmptyState';
 import AgentStreamPanel from '../components/ui/AgentStreamPanel';
 import StepEditModal from '../components/StepEditModal';
 import TagChip from '../components/ui/Tag';
+import LabelsManagerDialog from '../components/labels/LabelsManagerDialog';
 
 type Tab = 'description' | 'reports' | 'recording';
 
@@ -184,10 +186,18 @@ export default function CaseDetail() {
   });
 
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [labelsManagerOpen, setLabelsManagerOpen] = useState(false);
   const [tagSearch, setTagSearch] = useState('');
+  const [tagPickerAnchor, setTagPickerAnchor] = useState<{ top: number; left: number } | null>(null);
   const tagPickerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!tagPickerOpen) return;
+    setTagPickerAnchor(null);
+    const trigger = tagPickerRef.current?.querySelector('[data-tag-trigger]') as HTMLElement | null;
+    if (trigger) {
+      const rect = trigger.getBoundingClientRect();
+      setTagPickerAnchor({ top: rect.bottom + 4, left: Math.max(8, rect.right - 256) });
+    }
     const onClick = (e: MouseEvent) => {
       if (tagPickerRef.current && !tagPickerRef.current.contains(e.target as Node)) setTagPickerOpen(false);
     };
@@ -797,8 +807,9 @@ export default function CaseDetail() {
 
           {/* Right rail — 操作面板 */}
           <div className="w-[280px] shrink-0 flex flex-col gap-3">
-            <div className="glass-card rounded-[12px] p-4 relative" ref={tagPickerRef}>
+            <div className="glass-card rounded-[12px] p-4 relative" ref={tagPickerRef} style={{ overflow: 'visible', zIndex: tagPickerOpen ? 30 : 'auto' }}>
               <div
+                data-tag-trigger
                 className="text-[11px] font-medium uppercase tracking-[0.03em] mb-2 flex items-center gap-1 cursor-pointer select-none"
                 style={{ color: 'var(--color-foreground-muted)' }}
                 onClick={() => setTagPickerOpen((v) => !v)}
@@ -819,10 +830,20 @@ export default function CaseDetail() {
                   ))
                 )}
               </div>
-              {tagPickerOpen && (
+              {tagPickerOpen && tagPickerAnchor && createPortal(
                 <div
-                  className="absolute left-0 right-0 top-full mt-1 z-50 rounded-[8px] overflow-hidden"
-                  style={{ border: '1px solid var(--color-glass-border)', background: 'var(--color-background-elevated)', boxShadow: 'var(--shadow-middle)' }}
+                  className="rounded-[8px] overflow-hidden"
+                  style={{
+                    position: 'fixed',
+                    top: tagPickerAnchor.top,
+                    left: tagPickerAnchor.left,
+                    width: 256,
+                    zIndex: 9999,
+                    border: '1px solid var(--color-glass-border)',
+                    background: 'var(--color-background-elevated)',
+                    boxShadow: 'var(--shadow-modal)',
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
                 >
                   <div className="px-2 py-1.5 border-b" style={{ borderColor: 'var(--color-border)' }}>
                     <input
@@ -862,11 +883,12 @@ export default function CaseDetail() {
                     type="button"
                     className="w-full text-left px-3 py-1.5 text-[12px] font-medium cursor-pointer hover:bg-[var(--color-background-subtle)]"
                     style={{ color: 'var(--color-accent)', borderTop: '1px solid var(--color-border)', background: 'transparent', border: 'none' }}
-                    onClick={() => { setTagPickerOpen(false); navigate(`/p/${projectId}/labels`); }}
+                    onClick={() => { setTagPickerOpen(false); setLabelsManagerOpen(true); }}
                   >
                     管理标签 →
                   </button>
-                </div>
+                </div>,
+                document.body
               )}
             </div>
 
@@ -1005,6 +1027,14 @@ export default function CaseDetail() {
             setEditing(null);
             editingSnapshotRef.current = null;
           }}
+        />
+      )}
+
+      {projectId && (
+        <LabelsManagerDialog
+          open={labelsManagerOpen}
+          projectId={projectId}
+          onClose={() => setLabelsManagerOpen(false)}
         />
       )}
     </div>

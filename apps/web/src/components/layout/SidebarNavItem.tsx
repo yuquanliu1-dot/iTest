@@ -10,6 +10,8 @@ interface SidebarNavItemProps {
   end?: boolean;
   count?: number;
   collapsed: boolean;
+  /** 提供时替代默认的 path 导航（用于未选项目时的拦截提示）。 */
+  onClick?: () => void;
 }
 
 const tooltipContentStyle: CSSProperties = {
@@ -26,11 +28,11 @@ function isActivePath(pathname: string, path: string, end?: boolean): boolean {
   return pathname === path || pathname.startsWith(path + '/');
 }
 
-export default function SidebarNavItem({ icon, label, path, end, count, collapsed }: SidebarNavItemProps) {
+export default function SidebarNavItem({ icon, label, path, end, count, collapsed, onClick }: SidebarNavItemProps) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const isActive = isActivePath(pathname, path, end);
-  const handleClick = () => navigate(path);
+  const handleClick = onClick ?? (() => navigate(path));
 
   if (collapsed) {
     // 折叠态纯图标磁贴：hover 走 .group-nav-tile CSS 规则，
