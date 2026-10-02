@@ -1,0 +1,88 @@
+import type { CSSProperties } from 'react';
+import type { Locator } from '@itest/shared';
+
+interface Props {
+  locators: Locator[];
+  onChange: (next: Locator[]) => void;
+  /** 以 action.locator 开头的错误，如 { 'action.locator.0.value': '…' } */
+  errors?: Record<string, string>;
+}
+
+const STRATEGIES: Locator['strategy'][] = ['role', 'text', 'testId', 'css', 'xpath'];
+
+/** locator 有序候选数组编辑器：录制会产生多个候选，顺序即回放优先级。 */
+export default function LocatorArrayEditor({ locators, onChange, errors = {} }: Props) {
+  const inputStyle: CSSProperties = {
+    flex: 1, minWidth: 0, padding: '5px 8px', fontSize: 12,
+    border: '1px solid var(--color-glass-border)', borderRadius: 6,
+    background: 'var(--color-background-subtle)', color: 'var(--color-foreground)',
+  };
+  const selectStyle: CSSProperties = { ...inputStyle, flex: '0 0 92px', width: 92 };
+  const btnStyle: CSSProperties = {
+    background: 'transparent', border: 'none', cursor: 'pointer',
+    color: 'var(--color-foreground-muted)', padding: '2px 4px', fontSize: 11,
+  };
+
+  const update = (i: number, patch: Partial<Locator>) =>
+    onChange(locators.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+  const remove = (i: number) => onChange(locators.filter((_, idx) => idx !== i));
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= locators.length) return;
+    const next = [...locators];
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    onChange(next);
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {locators.map((l, i) => {
+        const err = errors[`action.locator.${i}.value`];
+        return (
+          <div key={i} className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-mono shrink-0" style={{ color: 'var(--color-foreground-muted)' }}>{i + 1}</span>
+              <select
+                style={selectStyle}
+                value={l.strategy}
+                onChange={(e) => update(i, { strategy: e.target.value as Locator['strategy'] })}
+              >
+                {STRATEGIES.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <input
+                style={{ ...inputStyle, ...(err ? { border: '1px solid var(--color-destructive)' } : {}) }}
+                value={l.value}
+                onChange={(e) => update(i, { value: e.target.value })}
+                placeholder="定位值"
+              />
+              <button type="button" style={btnStyle} title="上移" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
+              <button type="button" style={btnStyle} title="下移" onClick={() => move(i, 1)} disabled={i === locators.length - 1}>↓</button>
+              <button
+                type="button"
+                style={{ ...btnStyle, color: 'var(--color-destructive)' }}
+                title="删除候选"
+                onClick={() => remove(i)}
+              >
+                ×
+              </button>
+            </div>
+            {err && <span className="text-[11px] pl-5" style={{ color: 'var(--color-destructive)' }}>{err}</span>}
+          </div>
+        );
+      })}
+      <button
+        type="button"
+        onClick={() => onChange([...locators, { strategy: 'css', value: '' }])}
+        className="text-[11px] px-2 py-1 rounded-[5px] self-start"
+        style={{ border: '1px dashed var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}
+      >
+        + 添加候选
+      </button>
+      {errors['action.locator'] && (
+        <span className="text-[11px]" style={{ color: 'var(--color-destructive)' }}>{errors['action.locator']}</span>
+      )}
+    </div>
+  );
+}
