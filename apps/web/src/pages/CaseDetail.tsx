@@ -407,11 +407,21 @@ export default function CaseDetail() {
   });
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  // 拖拽预压入、尚未被服务端确认的撤销快照；reorder 失败时按引用撤出，避免污染撤销栈
+  const pendingDragSnapshotsRef = useRef<StepClip[][] | null>(null);
 
   const dragReorder = useMutation({
     mutationFn: (stepIds: string[]) => api.cases.reorderSteps(id!, stepIds),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }),
+    onSuccess: () => {
+      pendingDragSnapshotsRef.current = null;
+      qc.invalidateQueries({ queryKey: ['case', id] });
+    },
     onError: (e: Error) => {
+      for (const snap of pendingDragSnapshotsRef.current ?? []) {
+        const i = historyRef.current.indexOf(snap);
+        if (i >= 0) historyRef.current.splice(i, 1);
+      }
+      pendingDragSnapshotsRef.current = null;
       toast(e.message, 'error');
       qc.invalidateQueries({ queryKey: ['case', id] });
     },
@@ -425,8 +435,10 @@ export default function CaseDetail() {
     const newIdx = caseDetail.steps.findIndex((s) => s.id === over.id);
     if (oldIdx < 0 || newIdx < 0) return;
     // 拖拽走 reorder（保 step id）；撤销快照手动入栈，undo 用 replaceSteps 恢复
-    historyRef.current.push(caseDetail.steps.map(toClip));
+    const snapshot = caseDetail.steps.map(toClip);
+    historyRef.current.push(snapshot);
     if (historyRef.current.length > 20) historyRef.current.shift();
+    pendingDragSnapshotsRef.current = [...(pendingDragSnapshotsRef.current ?? []), snapshot];
     dragReorder.mutate(arrayMove(caseDetail.steps.map((s) => s.id), oldIdx, newIdx));
   };
 
