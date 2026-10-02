@@ -41,6 +41,7 @@ export default function CaseStatusMenu({
 
   useEffect(() => {
     if (!open) return;
+    setAnchor(null);
     const rect = ref.current?.getBoundingClientRect();
     if (rect) setAnchor({ top: rect.bottom + 4, left: Math.max(8, rect.left) });
     const onClick = (e: MouseEvent) => {
@@ -85,7 +86,10 @@ export default function CaseStatusMenu({
                 key={s}
                 type="button"
                 disabled={patch.isPending}
-                onClick={() => patch.mutate(s)}
+                onClick={() => {
+                  if (s === status) { setOpen(false); return; }
+                  patch.mutate(s);
+                }}
                 className="w-full text-left px-3 py-1.5 text-[12px] cursor-pointer hover:bg-[var(--color-background-subtle)] flex items-center justify-between gap-2"
                 style={{
                   background: 'transparent',
