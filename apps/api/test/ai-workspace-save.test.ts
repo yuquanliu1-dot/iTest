@@ -84,10 +84,15 @@ describe('ai-thread + ai-workspace + save', () => {
       const { projectId, groupId } = await seedProject(pool);
       const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
       const rid = r.rows[0]!.id as string;
-      // instruction 用编号列表触发 splitAiStepsInPlace；同时会经过 compileAiStep -> mock 返回 navigate。
+      // instruction 用编号列表触发 splitAiStepsInPlace；拆分后子串无动词开头，
+      // 启发式 navigate 不命中，走 LLM mock 拿 navigate 结果。
+      // mock 故意返回 localhost（测试上下文无 baseUrl），所以拆条后第一条 instruction 是
+      // "访问登录页"——它会命中启发式（即使不带"页"字也能匹配"登录"作为独立 token），
+      // 编译结果 = `http://localhost:5173/login`（兜底 baseUrl）。本断言只校验 compiled 数组非空且含 navigate，
+      // 不绑死 URL 来源（启发式 vs LLM mock）。
       await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
         { id: 'c1', title: 'C1', description: 'd', priority: 'P0', steps: [
-          { name: 'multi', action: '1. 打开登录页\n2. 输入手机号', assertion: 'assert' },
+          { name: 'multi', action: '1. 输入手机号\n2. 输入密码', assertion: 'assert' },
         ] },
       ] });
       const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
@@ -105,6 +110,65 @@ describe('ai-thread + ai-workspace + save', () => {
     } finally {
       llmMod.__setLlmClientForTest(null);
     }
+  });
+
+  it('save 把需求文本中的真实 URL 传给编译 ctx 并落库 test_cases.url', async () => {
+    const llmMod = await import('../src/agent/llmSettings.js');
+    const captured: string[] = [];
+    const mockClient = {
+      provider: 'openai' as const,
+      complete: async (args: { userMessage: string }) => {
+        captured.push(args.userMessage);
+        return { kind: 'json' as const, value: { steps: [{ kind: 'navigate', url: 'http://localhost/login' }] }, provider: 'openai' as const, vision: false };
+      },
+    };
+    llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
+    try {
+      const ws = await import('../src/pi/workspace.js');
+      const { projectId, groupId } = await seedProject(pool);
+      const r = await pool.query(
+        `INSERT INTO requirements(title, content, project_id) VALUES ('r', '页面地址：http://192.168.30.228:8088/static/element-manager.html，请参考实际代码。', $1) RETURNING id`,
+        [projectId],
+      );
+      const rid = r.rows[0]!.id as string;
+      await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
+        { id: 'c1', title: 'C1', description: 'd', priority: 'P0', steps: [
+          { name: 'multi', action: '1. 打开页面\n2. 点击添加元素', assertion: null },
+        ] },
+      ] });
+      const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
+        .send({ groupId, scenarioIds: ['s1'], caseIds: ['c1'] });
+      expect(saved.status).toBe(200);
+      // 编译 userMessage 应带真实 URL（compileAiStep ctx.url），而非 localhost 兜底
+      expect(captured.length).toBeGreaterThan(0);
+      expect(captured[0]).toContain('http://192.168.30.228:8088/static/element-manager.html');
+      // 落库：test_cases.url
+      const cases = await pool.query(`SELECT url FROM test_cases WHERE requirement_id = $1`, [rid]);
+      expect(cases.rows[0]!.url).toBe('http://192.168.30.228:8088/static/element-manager.html');
+    } finally {
+      llmMod.__setLlmClientForTest(null);
+    }
+  });
+
+  it('pageContext（inspect_page 抓取记录）优先于需求文本 URL', async () => {
+    const ws = await import('../src/pi/workspace.js');
+    const { projectId, groupId } = await seedProject(pool);
+    const r = await pool.query(
+      `INSERT INTO requirements(title, content, project_id) VALUES ('r', '页面地址：http://from-text.example/page，请参考。', $1) RETURNING id`,
+      [projectId],
+    );
+    const rid = r.rows[0]!.id as string;
+    await ws.recordPageInspection(rid, 'http://from-inspect.example/real');
+    await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
+      { id: 'c1', title: 'C1', description: null, priority: 'P1', steps: [
+        { name: 'n', action: 'a', assertion: null },
+      ] },
+    ] });
+    const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
+      .send({ groupId, scenarioIds: ['s1'], caseIds: ['c1'] });
+    expect(saved.status).toBe(200);
+    const cases = await pool.query(`SELECT url FROM test_cases WHERE requirement_id = $1`, [rid]);
+    expect(cases.rows[0]!.url).toBe('http://from-inspect.example/real');
   });
 
   it('save reuses scenario row by (requirementId, title)', async () => {

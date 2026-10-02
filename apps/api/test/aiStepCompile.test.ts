@@ -77,8 +77,7 @@ describe('compileAiStepsInPlace', () => {
           kind: 'json',
           value: {
             results: [
-              { index: 1, steps: [{ kind: 'navigate', url: 'http://localhost:5173/login' }] },
-              { index: 2, steps: [{ kind: 'click', locator: [{ strategy: 'text', value: '登录' }] }] },
+              { index: 1, steps: [{ kind: 'click', locator: [{ strategy: 'text', value: '提交' }] }] },
             ],
           },
           provider: 'openai',
@@ -86,20 +85,21 @@ describe('compileAiStepsInPlace', () => {
         };
       },
     };
+    // "打开登录页" 命中 navigate 启发式，直接出 navigate 不调 LLM；
+    // "点击提交" 不命中启发式，走 LLM。
     const steps = [
       { action: { kind: 'aiStep', instruction: '打开登录页', compiled: null } },
-      { action: { kind: 'aiStep', instruction: '点击登录', compiled: null } },
+      { action: { kind: 'aiStep', instruction: '点击提交', compiled: null } },
     ];
     const failed = await compileAiStepsInPlace(steps, client);
     expect(failed).toEqual([]);
     expect(userMessages).toHaveLength(1);
-    expect(userMessages[0]).toContain('1. 指令: 打开登录页');
-    expect(userMessages[0]).toContain('2. 指令: 点击登录');
+    expect(userMessages[0]).toContain('1. 指令: 点击提交');
     expect((steps[0]!.action as { compiled: unknown[] }).compiled).toEqual([
       { kind: 'navigate', url: 'http://localhost:5173/login' },
     ]);
     expect((steps[1]!.action as { compiled: unknown[] }).compiled).toEqual([
-      { kind: 'click', locator: [{ strategy: 'text', value: '登录' }] },
+      { kind: 'click', locator: [{ strategy: 'text', value: '提交' }] },
     ]);
   });
 
@@ -135,6 +135,107 @@ describe('compileAiStepsInPlace', () => {
     const failed = await compileAiStepsInPlace(steps, client);
     expect(failed).toEqual([0]);
     expect((steps[0]!.action as { compiled: unknown }).compiled).toBeNull();
+  });
+});
+
+describe('compileAiStepsInPlace — heuristic shortcuts', () => {
+  it('compiles "打开登录页" to navigate without calling LLM', async () => {
+    let calls = 0;
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => {
+        calls++;
+        return { kind: 'json', value: { steps: [] }, provider: 'openai', vision: false };
+      },
+    };
+    const steps = [{ action: { kind: 'aiStep', instruction: '打开登录页', compiled: null } }];
+    const failed = await compileAiStepsInPlace(steps, client);
+    expect(failed).toEqual([]);
+    expect(calls).toBe(0);
+    expect((steps[0]!.action as { compiled: unknown[] }).compiled).toEqual([
+      { kind: 'navigate', url: 'http://localhost:5173/login' },
+    ]);
+  });
+
+  it('uses group defaultUrl as base when provided via urlResolver', async () => {
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => ({ kind: 'json', value: { steps: [] }, provider: 'openai', vision: false }),
+    };
+    const steps = [{ name: '步骤1', action: { kind: 'aiStep', instruction: '访问首页', compiled: null } }];
+    const failed = await compileAiStepsInPlace(
+      steps,
+      client,
+      () => 'https://example.com',
+    );
+    expect(failed).toEqual([]);
+    expect((steps[0]!.action as { compiled: unknown[] }).compiled).toEqual([
+      { kind: 'navigate', url: 'https://example.com/' },
+    ]);
+  });
+
+  it('does not heuristic-match when verb prefix is missing', async () => {
+    let calls = 0;
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => {
+        calls++;
+        return {
+          kind: 'json',
+          value: { steps: [{ kind: 'click', locator: [{ strategy: 'text', value: '登录' }] }] },
+          provider: 'openai',
+          vision: false,
+        };
+      },
+    };
+    // 没有"打开/访问"前缀 → 不启发式，落到 LLM
+    const steps = [{ action: { kind: 'aiStep', instruction: '登录按钮', compiled: null } }];
+    const failed = await compileAiStepsInPlace(steps, client);
+    expect(failed).toEqual([]);
+    expect(calls).toBe(1);
+  });
+
+  it('compiles "断言看到工作台" to assertText without calling LLM', async () => {
+    let calls = 0;
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => {
+        calls++;
+        return { kind: 'json', value: { steps: [] }, provider: 'openai', vision: false };
+      },
+    };
+    const steps = [{ action: { kind: 'aiStep', instruction: '断言看到工作台', compiled: null } }];
+    const failed = await compileAiStepsInPlace(steps, client);
+    expect(failed).toEqual([]);
+    expect(calls).toBe(0);
+    expect((steps[0]!.action as { compiled: unknown[] }).compiled).toEqual([
+      {
+        kind: 'assertText',
+        locator: [{ strategy: 'text', value: '工作台' }],
+        target: 'specifiedElement',
+        match: 'contains',
+        equals: '工作台',
+      },
+    ]);
+  });
+
+  it('does not heuristic-match assertion with CSS placeholder', async () => {
+    let calls = 0;
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => {
+        calls++;
+        return {
+          kind: 'json',
+          value: { steps: [{ kind: 'assertVisible', locator: [{ strategy: 'css', value: '.main' }] }] },
+          provider: 'openai',
+          vision: false,
+        };
+      },
+    };
+    const steps = [{ action: { kind: 'aiStep', instruction: '断言 #main 可见', compiled: null } }];
+    await compileAiStepsInPlace(steps, client);
+    expect(calls).toBe(1);
   });
 });
 

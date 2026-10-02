@@ -113,6 +113,12 @@ function inferPageUrl(name: string, instruction: string, fallback?: string): str
   return undefined;
 }
 
+/** 从需求文本提取第一个 http(s) URL（去掉中文标点等尾随字符）。无则 null。 */
+function extractFirstHttpUrl(text: string): string | null {
+  const m = text.match(/https?:\/\/[^\s，。；、）)】」"']+/i);
+  return m ? m[0]!.replace(/[.,;:!?]+$/, '') : null;
+}
+
 requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
   const body = SaveBody.parse(req.body);
   const rows = await db.select().from(requirements).where(eq(requirements.id, req.params.id)).limit(1);
@@ -151,6 +157,8 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
 
   // 阶段 1（事务外）：构建步骤行 + 拆条 + LLM 编译。编译是慢速网络 IO，不能占着数据库事务。
   const groupDefaultUrl = g.defaultUrl ?? null;
+  // 执行 URL 优先级：agent 实际抓取过的页面（inspect_page）> 需求文本中的真实 URL > inferPageUrl 字典兜底。
+  const requirementUrl = doc.pageContext?.url ?? extractFirstHttpUrl(rows[0]!.content);
   const prepared: Array<{ c: StagedCase; scenarioTitle: string | null; stepRows: Array<{ source: 'agent'; name: string; action: object; assertion: object | null; sensitive: boolean }> }> = [];
   for (const c of selectedCaseById.values()) {
     // 找到 c 所属场景行（按引用相等匹配）
@@ -176,20 +184,27 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
     }));
     if (stepRows.length > 0) {
       // 把 AI case 的 steps[] 当作 aiStep 数组落地前先做编号拆分（多条 aiStep）
-      // 与立即编译（fill 落定值、click locator 落 role/text），回放时不依赖 LLM。
       splitAiStepsInPlace(stepRows as unknown as Array<{ action: unknown }>);
+    }
+    prepared.push({ c, scenarioTitle: owner?.title ?? null, stepRows });
+  }
+
+  // 阶段 1.5：并发编译所有用例的 aiStep（compileAiStepsInPlace 内部按 chunk 并发，
+  // 这里再做用例间并发；编译失败不阻塞保存，原 aiStep + compiled:null 回放兜底）。
+  await Promise.all(
+    prepared.map(async (p) => {
+      if (p.stepRows.length === 0) return;
       try {
         await compileAiStepsInPlace(
-          stepRows.map((row) => ({ action: row.action, name: row.name })),
+          p.stepRows.map((row) => ({ action: row.action, name: row.name, url: requirementUrl ?? undefined })),
           undefined,
           (name) => inferPageUrl(name ?? '', '', groupDefaultUrl ?? undefined),
         );
       } catch {
-        // 编译失败不阻塞保存；保留 aiStep 原样 + compiled:null，回放时按 aiStep 路径处理
+        // ignore per-case; 失败项保留 compiled:null
       }
-    }
-    prepared.push({ c, scenarioTitle: owner?.title ?? null, stepRows });
-  }
+    }),
+  );
 
   let savedCases = 0;
   // 阶段 2（事务内）：纯写库
@@ -210,6 +225,7 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
         title: c.title,
         description: c.description,
         priority: c.priority,
+        url: requirementUrl,
       }).returning();
       if (p.stepRows.length > 0) {
         await tx.insert(testSteps).values(p.stepRows.map((row, i) => ({
