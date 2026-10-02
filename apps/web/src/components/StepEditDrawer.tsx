@@ -215,6 +215,10 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         next.group = Number(extractGroup) >= 0 ? Number(extractGroup) : 0;
         delete next.description;
       } else if (extractMode === 'smartExtract') {
+        if (!extractDescription.trim() && !extractPattern.trim()) {
+          setFieldErrors({ 'action.description': '智能抽取需要填写描述并生成正则' });
+          return;
+        }
         if (extractDescription.trim()) next.description = extractDescription.trim();
         else delete next.description;
         if (extractPattern.trim()) {
@@ -396,7 +400,10 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
               <div className="flex flex-col gap-2">
                 <label style={labelStyle}>
                   抽取描述（自然语言）
-                  <textarea style={{ ...inputStyle, fontFamily: 'inherit' }} rows={2} value={extractDescription} onChange={(e) => setExtractDescription(e.target.value)} placeholder="如：提取订单号" />
+                  <textarea style={{ ...inputStyle, fontFamily: 'inherit', ...(fieldErrors['action.description'] ? { border: '1px solid var(--color-destructive)' } : {}) }} rows={2} value={extractDescription} onChange={(e) => setExtractDescription(e.target.value)} placeholder="如：提取订单号" />
+                  {fieldErrors['action.description'] && (
+                    <span className="text-[11px]" style={{ color: 'var(--color-destructive)' }}>{fieldErrors['action.description']}</span>
+                  )}
                 </label>
                 <button
                   type="button"
