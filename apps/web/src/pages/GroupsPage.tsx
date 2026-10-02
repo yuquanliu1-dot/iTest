@@ -409,11 +409,23 @@ export default function GroupsPage() {
               <Icon name="bolt" size={12} />
               AI 创建用例
             </Button>
-            <Segmented
-              options={PRIORITIES.map((p) => ({ value: p, label: p || '全部' }))}
+            <select
+              aria-label="优先级过滤"
               value={priority}
-              onChange={(v) => { setPriority(v); setPage(1); }}
-            />
+              onChange={(e) => { setPriority(e.target.value as (typeof PRIORITIES)[number]); setPage(1); }}
+              className="text-[12px] rounded-md px-2 py-1 outline-none"
+              style={{
+                border: '1px solid var(--color-border)',
+                background: 'var(--color-background-elevated)',
+                color: 'var(--color-foreground)',
+                minWidth: 140,
+              }}
+              title="按优先级过滤"
+            >
+              {PRIORITIES.map((p) => (
+                <option key={p} value={p}>{p || '全部优先级'}</option>
+              ))}
+            </select>
             <select
               aria-label="场景过滤"
               value={scenarioId}
