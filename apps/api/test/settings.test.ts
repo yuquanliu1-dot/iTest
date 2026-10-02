@@ -60,3 +60,31 @@ describe('settings KV', () => {
     expect(r.status).toBe(400);
   });
 });
+
+describe('POST /api/settings/llm/test', () => {
+  it('provider with empty apiKey reports failure', async () => {
+    const r = await request(app).post('/api/settings/llm/test').send({
+      provider: 'openai', apiKey: '  ', model: '', baseUrl: '',
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(false);
+    expect(r.body.error).toContain('API key');
+  });
+
+  it('invalid provider is rejected with 400', async () => {
+    const r = await request(app).post('/api/settings/llm/test').send({
+      provider: 'bogus', apiKey: '', model: '', baseUrl: '',
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('unreachable baseUrl maps SDK error to ok:false', async () => {
+    const r = await request(app).post('/api/settings/llm/test').send({
+      provider: 'openai', apiKey: 'sk-test', model: 'gpt-4o-mini', baseUrl: 'http://127.0.0.1:9',
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(false);
+    expect(typeof r.body.error).toBe('string');
+    expect(r.body.error.length).toBeGreaterThan(0);
+  }, 30_000);
+});

@@ -8,7 +8,6 @@ import Button from '../components/ui/Button';
 import Toggle from '../components/ui/Toggle';
 
 const PROVIDERS = [
-  { value: 'mock', label: 'mock（推荐，无需 API key）' },
   { value: 'openai', label: 'openai' },
   { value: 'anthropic', label: 'anthropic' },
   { value: 'google', label: 'google' },
@@ -35,7 +34,7 @@ export default function Settings() {
   const [panel, setPanel] = useState<Panel>('llm');
 
   // LLM form
-  const [provider, setProvider] = useState('mock');
+  const [provider, setProvider] = useState('openai');
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -44,7 +43,7 @@ export default function Settings() {
 
   useEffect(() => {
     if (!data) return;
-    setProvider((data.llm_provider as string) ?? 'mock');
+    setProvider((data.llm_provider as string) ?? 'openai');
     setApiKey((data.llm_api_key as string) ?? '');
     setModel((data.llm_model as string) ?? '');
     setBaseUrl((data.llm_base_url as string) ?? '');
@@ -59,6 +58,10 @@ export default function Settings() {
     },
     onSuccess: () => toast('设置已保存', 'success'),
     onError: (e: Error) => toast(e.message, 'error'),
+  });
+
+  const test = useMutation({
+    mutationFn: () => api.settings.testConnection({ provider, apiKey, model, baseUrl }),
   });
 
   if (isLoading) {
@@ -137,7 +140,7 @@ export default function Settings() {
                   LLM Provider
                 </h3>
                 <p className="text-[12px] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
-                  mock 模式不消耗 token；选择具体 provider 后需填写 API key。
+                  选择 provider 并填写 API key 后即可使用。
                 </p>
                 <select className="input-base" value={provider} onChange={(e) => setProvider(e.target.value)}>
                   {PROVIDERS.map((p) => (
@@ -189,9 +192,34 @@ export default function Settings() {
                   </p>
                 )}
               </div>
-              <Button className="self-start" disabled={save.isPending} onClick={() => save.mutate()}>
-                {save.isPending ? '保存中...' : '保存'}
-              </Button>
+              <div className="flex items-center gap-3">
+                <Button disabled={save.isPending} onClick={() => save.mutate()}>
+                  {save.isPending ? '保存中...' : '保存'}
+                </Button>
+                <Button variant="secondary" disabled={test.isPending} onClick={() => test.mutate()}>
+                  {test.isPending ? '测试中...' : '测试连接'}
+                </Button>
+                {test.isPending && (
+                  <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                    正在发送探测请求...
+                  </span>
+                )}
+                {test.isSuccess && test.data.ok && (
+                  <span className="text-[12px]" style={{ color: 'var(--color-success)' }}>
+                    连接成功 · {test.data.latencyMs}ms
+                  </span>
+                )}
+                {test.isSuccess && !test.data.ok && (
+                  <span className="text-[12px]" style={{ color: 'var(--color-destructive)' }}>
+                    连接失败：{test.data.error}
+                  </span>
+                )}
+                {test.isError && (
+                  <span className="text-[12px]" style={{ color: 'var(--color-destructive)' }}>
+                    连接失败：{(test.error as Error).message}
+                  </span>
+                )}
+              </div>
             </div>
           )}
 

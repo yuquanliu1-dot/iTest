@@ -1,4 +1,4 @@
-export type LLMProvider = 'mock' | 'openai' | 'anthropic' | 'google';
+export type LLMProvider = 'openai' | 'anthropic' | 'google';
 
 export interface LLMConfig {
   provider: LLMProvider;
@@ -29,7 +29,7 @@ export interface LLMClient {
 }
 
 export function listProviders(): LLMProvider[] {
-  return ['mock', 'openai', 'anthropic', 'google'];
+  return ['openai', 'anthropic', 'google'];
 }
 
 /** 解析模型输出为 JSON：优先直接 parse，去掉 ```json 围栏、回退提取首段 {...}。 */
@@ -48,14 +48,12 @@ export function tryParseJson(raw: string): Record<string, unknown> | null {
   return null;
 }
 
-import { MockClient } from './llm-mock.js';
 import { OpenAIClient } from './llm-openai.js';
 import { AnthropicClient } from './llm-anthropic.js';
 import { GoogleClient } from './llm-google.js';
 
 export function getLlmClient(config: LLMConfig): LLMClient {
   switch (config.provider) {
-    case 'mock': return new MockClient();
     case 'openai': return new OpenAIClient(config);
     case 'anthropic': return new AnthropicClient(config);
     case 'google': return new GoogleClient(config);
