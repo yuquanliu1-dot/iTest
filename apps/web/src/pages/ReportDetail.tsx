@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -25,6 +25,13 @@ export default function ReportDetail() {
   const { id, projectId } = useParams<{ id: string; projectId: string }>();
   const navigate = useNavigate();
   const [view, setView] = useState<'screenshot' | 'detail'>('screenshot');
+  const [zoomSrc, setZoomSrc] = useState<string | null>(null);
+  useEffect(() => {
+    if (!zoomSrc) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setZoomSrc(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zoomSrc]);
   const { data, isLoading } = useQuery({
     queryKey: ['report', id],
     queryFn: () => api.reports.get(id!),
@@ -146,12 +153,19 @@ export default function ReportDetail() {
                           )}
                         </div>
                         {s.screenshot && (
-                          <img
-                            src={s.screenshot}
-                            alt={`step ${s.order}`}
-                            className="w-16 h-16 rounded-[6px] object-cover"
-                            style={{ border: '1px solid var(--color-glass-border)' }}
-                          />
+                          <button
+                            type="button"
+                            onClick={() => setZoomSrc(s.screenshot!)}
+                            aria-label={`放大 step ${s.order} 截图`}
+                            className="shrink-0 rounded-[6px] overflow-hidden"
+                            style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', padding: 0, cursor: 'zoom-in' }}
+                          >
+                            <img
+                              src={s.screenshot}
+                              alt={`step ${s.order}`}
+                              className="w-16 h-16 object-cover block"
+                            />
+                          </button>
                         )}
                       </div>
                     ))
@@ -196,12 +210,19 @@ export default function ReportDetail() {
                               )}
                             </div>
                             {s.screenshot && (
-                              <img
-                                src={s.screenshot}
-                                alt={`step ${s.order}`}
-                                className="w-16 h-16 rounded-[6px] object-cover"
-                                style={{ border: '1px solid var(--color-glass-border)' }}
-                              />
+                              <button
+                                type="button"
+                                onClick={() => setZoomSrc(s.screenshot!)}
+                                aria-label={`放大 step ${s.order} 截图`}
+                                className="shrink-0 rounded-[6px] overflow-hidden"
+                                style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', padding: 0, cursor: 'zoom-in' }}
+                              >
+                                <img
+                                  src={s.screenshot}
+                                  alt={`step ${s.order}`}
+                                  className="w-16 h-16 object-cover block"
+                                />
+                              </button>
                             )}
                           </div>
                         ))}
@@ -309,6 +330,12 @@ export default function ReportDetail() {
                 元数据
               </div>
               <div className="flex justify-between text-[12px] mb-2">
+                <span style={{ color: 'var(--color-foreground-muted)' }}>用例</span>
+                <span className="text-right truncate ml-2" style={{ color: 'var(--color-foreground-secondary)' }}>
+                  {data.caseTitle ?? <span style={{ color: 'var(--color-foreground-muted)' }}>已删除用例</span>}
+                </span>
+              </div>
+              <div className="flex justify-between text-[12px] mb-2">
                 <span style={{ color: 'var(--color-foreground-muted)' }}>用例 ID</span>
                 <span className="font-mono text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>{data.caseId.slice(0, 8)}</span>
               </div>
@@ -320,6 +347,40 @@ export default function ReportDetail() {
           </div>
         </div>
       </div>
+
+      {/* Lightbox — 全屏放大截图。点背景或按 Esc 关闭。 */}
+      {zoomSrc && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setZoomSrc(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.78)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            cursor: 'zoom-out',
+            padding: 24,
+          }}
+        >
+          <img
+            src={zoomSrc}
+            alt="放大截图"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: 'calc(100vw - 48px)',
+              maxHeight: 'calc(100vh - 48px)',
+              objectFit: 'contain',
+              borderRadius: 6,
+              boxShadow: '0 12px 48px rgba(0, 0, 0, 0.4)',
+              cursor: 'default',
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }

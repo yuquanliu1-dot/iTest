@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useUIStore } from '../stores/ui';
@@ -15,9 +15,15 @@ interface SaveSelection {
   caseIds: string[];
 }
 
+interface InitialMessageState {
+  initialMessage?: string;
+  requirement?: { requirementId: string; title: string; content: string };
+}
+
 export default function AiWorkspacePage() {
   const { projectId, id } = useParams<{ projectId: string; id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
 
@@ -28,6 +34,17 @@ export default function AiWorkspacePage() {
     if (!ensure.data && !ensure.isPending && !ensure.isError) ensure.mutate();
   }, [ensure]);
   const threadId = ensure.data?.threadId;
+
+  // 上一跳 location.state 带来的首条需求文本；下传给 ThreadPane 走 aui.thread.append 自动发送。
+  const state = (location.state ?? {}) as InitialMessageState;
+
+  // mount 时立刻清掉 location.state（仅当非空时），避免用户从用例列表再点同一个
+  // requirement 时又把 stale initialMessage 带回。
+  useEffect(() => {
+    if (!state.initialMessage) return;
+    navigate(location.pathname, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [saveSelection, setSaveSelection] = useState<SaveSelection>({
     open: false,
@@ -88,7 +105,7 @@ export default function AiWorkspacePage() {
           className="w-[420px] shrink-0 border-r"
           style={{ borderColor: 'var(--color-border)' }}
         >
-          <ThreadPane requirementId={id!} threadId={threadId} />
+          <ThreadPane requirementId={id!} threadId={threadId} initialMessage={state.initialMessage} />
         </div>
         <div className="flex-1 min-w-0">
           <WorkspacePanel
