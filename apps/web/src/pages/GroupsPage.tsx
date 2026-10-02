@@ -25,6 +25,9 @@ const GRID_COLS = 'grid-cols-[minmax(28px,32px)_minmax(90px,70px)_minmax(200px,2
 type GroupForm = { open: boolean; mode: 'create' | 'edit' | 'url'; id: string | null; name: string; defaultUrl: string };
 const EMPTY_GROUP_FORM: GroupForm = { open: false, mode: 'create', id: null, name: '', defaultUrl: '' };
 type AiForm = { open: boolean; title: string; content: string };
+type CasePriority = 'P0' | 'P1' | 'P2' | 'P3';
+type CaseForm = { open: boolean; title: string; groupId: string; priority: CasePriority; url: string; description: string };
+const EMPTY_CASE_FORM: CaseForm = { open: false, title: '', groupId: '', priority: 'P1', url: '', description: '' };
 
 export default function GroupsPage() {
   const { projectId, groupId } = useParams<{ projectId: string; groupId: string }>();
@@ -51,6 +54,7 @@ export default function GroupsPage() {
   const [confirmDeleteCase, setConfirmDeleteCase] = useState<{ id: string; title: string } | null>(null);
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [aiForm, setAiForm] = useState<AiForm>({ open: false, title: '', content: '' });
+  const [caseForm, setCaseForm] = useState<CaseForm>(EMPTY_CASE_FORM);
 
   const { data: groups, isLoading: groupsLoading } = useQuery({
     queryKey: ['groups', projectId],
@@ -245,6 +249,25 @@ export default function GroupsPage() {
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
+  // 手动新建用例：成功后跳到详情页继续编辑步骤
+  const createCase = useMutation({
+    mutationFn: () =>
+      api.cases.create({
+        title: caseForm.title.trim(),
+        groupId: caseForm.groupId,
+        priority: caseForm.priority,
+        url: caseForm.url.trim() || undefined,
+        description: caseForm.description.trim() || undefined,
+      }),
+    onSuccess: (r) => {
+      toast('用例已创建', 'success');
+      setCaseForm(EMPTY_CASE_FORM);
+      invalidate();
+      navigate(`/p/${projectId}/cases/${r.id}`);
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
   const toggleAll = () => {
     const next = new Set(checked);
     if (allChecked) rows.forEach((c) => next.delete(c.id));
@@ -354,6 +377,14 @@ export default function GroupsPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <Button
+              onClick={() =>
+                setCaseForm({ ...EMPTY_CASE_FORM, open: true, groupId: effectiveGroupId || groups?.[0]?.id || '' })
+              }
+            >
+              <Icon name="plus" size={12} />
+              新建用例
+            </Button>
             <Button onClick={() => setAiForm({ open: true, title: '', content: '' })}>
               <Icon name="bolt" size={12} />
               AI 创建用例
@@ -789,6 +820,68 @@ export default function GroupsPage() {
               onClick={() => createRequirement.mutate()}
             >
               {createRequirement.isPending ? '创建中...' : '开始 AI 会话'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 手动新建用例 */}
+      <Dialog open={caseForm.open} onOpenChange={(open) => setCaseForm((f) => ({ ...f, open }))}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>新建用例</DialogTitle></DialogHeader>
+          <div className="flex flex-col gap-3 px-5 py-4">
+            <Input
+              label="标题"
+              placeholder="如：登录 - 正确账号密码"
+              value={caseForm.title}
+              onChange={(e) => setCaseForm((f) => ({ ...f, title: e.target.value }))}
+            />
+            <div className="flex flex-col gap-1">
+              <label className="text-[12px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>分组</label>
+              <select
+                className="input-base"
+                value={caseForm.groupId}
+                onChange={(e) => setCaseForm((f) => ({ ...f, groupId: e.target.value }))}
+                disabled={(groups ?? []).length === 0}
+              >
+                {(groups ?? []).length === 0 && <option value="">请先创建分组</option>}
+                {(groups ?? []).map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[12px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>优先级</label>
+              <Segmented
+                options={(['P0', 'P1', 'P2', 'P3'] as const).map((p) => ({ value: p, label: p }))}
+                value={caseForm.priority}
+                onChange={(v) => setCaseForm((f) => ({ ...f, priority: v }))}
+              />
+            </div>
+            <Input
+              label="URL（可空）"
+              placeholder="https://example.com/login"
+              value={caseForm.url}
+              onChange={(e) => setCaseForm((f) => ({ ...f, url: e.target.value }))}
+            />
+            <div className="flex flex-col gap-1">
+              <label className="text-[12px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>描述（可空）</label>
+              <textarea
+                className="input-base"
+                rows={3}
+                placeholder="补充前置条件、测试要点等。"
+                value={caseForm.description}
+                onChange={(e) => setCaseForm((f) => ({ ...f, description: e.target.value }))}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+            <Button variant="plain" onClick={() => setCaseForm(EMPTY_CASE_FORM)}>取消</Button>
+            <Button
+              disabled={!caseForm.title.trim() || !caseForm.groupId || createCase.isPending}
+              onClick={() => createCase.mutate()}
+            >
+              {createCase.isPending ? '创建中...' : '创建'}
             </Button>
           </div>
         </DialogContent>

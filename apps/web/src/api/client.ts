@@ -120,8 +120,14 @@ export const api = {
       const s = qs.toString();
       return request<TestCase[]>(`/cases${s ? `?${s}` : ''}`);
     },
-    create: (body: { title: string; priority?: string; requirementId?: string; groupId: string; url?: string }) =>
-      request<TestCase>('/cases', { method: 'POST', body: JSON.stringify(body) }),
+    create: (body: {
+      title: string;
+      priority?: string;
+      requirementId?: string;
+      groupId: string;
+      url?: string;
+      description?: string;
+    }) => request<TestCase>('/cases', { method: 'POST', body: JSON.stringify(body) }),
     get: (id: string) => request<TestCaseDetail>(`/cases/${id}`),
     patch: (
       id: string,
