@@ -16,52 +16,17 @@ import Segmented from '../components/ui/Segmented';
 import Toggle from '../components/ui/Toggle';
 import EmptyState from '../components/ui/EmptyState';
 import AgentStreamPanel from '../components/ui/AgentStreamPanel';
-import StepEditModal from '../components/StepEditModal';
+import StepEditDrawer from '../components/StepEditDrawer';
 import TagChip from '../components/ui/Tag';
 import LabelsManagerDialog from '../components/labels/LabelsManagerDialog';
 import { stepKindLabel } from '../lib/format';
+import { stepSummary } from '../lib/stepSummary';
 
 type Tab = 'description' | 'reports' | 'recording';
 
 /** 步骤身份快照比较：用于检测并发 mutation 是否动了我们正在编辑的那一行。 */
 function sameStep(a: StepClip, b: StepClip): boolean {
   return JSON.stringify(a.action) === JSON.stringify(b.action);
-}
-
-const SWITCHABLE: Record<string, string[]> = {
-  click: ['hover', 'assertText'],
-  hover: ['click'],
-  assertText: ['click'],
-  fill: ['select'],
-  select: ['fill'],
-  waitFor: ['assertVisible'],
-  assertVisible: ['waitFor'],
-};
-
-function webSwitchAction(action: StepClip, to: string): StepClip | null {
-  const from = (action.action as { kind?: string }).kind ?? '';
-  if (!SWITCHABLE[from]?.includes(to)) return null;
-  const next: StepClip = { ...action, action: { ...(action.action as object) } as Record<string, unknown> };
-  const l = (action.action as { locator?: unknown }).locator;
-  const il = (action.action as { intentLocator?: unknown }).intentLocator;
-  switch (to) {
-    case 'hover':
-    case 'click':
-    case 'assertVisible':
-      next.action = { kind: to, locator: l, intentLocator: il };
-      break;
-    case 'assertText':
-      next.action = { kind: 'assertText', locator: l, intentLocator: il, target: 'specifiedElement', match: 'equals', equals: '' };
-      break;
-    case 'fill':
-    case 'select':
-      next.action = { kind: to, locator: l, intentLocator: il, value: ((action.action as { value?: unknown }).value as string) ?? '' };
-      break;
-    case 'waitFor':
-      next.action = { kind: 'waitFor', locator: l, intentLocator: il, timeoutMs: 5000 };
-      break;
-  }
-  return next;
 }
 
 export default function CaseDetail() {
@@ -82,6 +47,7 @@ export default function CaseDetail() {
   const clipboard = useStepClipboard();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<StepClip | null>(null);
+  const [editingIdx, setEditingIdx] = useState(-1);
   const [varReport, setVarReport] = useState<VariableReport | null>(null);
   const [windowStrategy, setWindowStrategy] = useState<'maximize' | 'current' | 'custom'>('maximize');
   const [windowWidth, setWindowWidth] = useState<number | undefined>();
@@ -589,9 +555,10 @@ export default function CaseDetail() {
                   <button
                     onClick={() =>
                       mutateSteps((cur) => {
-                        const afterIdx =
-                          selected.size === 1 ? cur.findIndex((_, i) => caseDetail.steps[i]!.id === [...selected][0]) : cur.length - 1;
-                        const at = afterIdx < 0 ? cur.length - 1 : afterIdx;
+                        const selIdx = cur
+                          .map((_, i) => (selected.has(caseDetail.steps[i]!.id) ? i : -1))
+                          .filter((i) => i >= 0);
+                        const at = selIdx.length > 0 ? selIdx[selIdx.length - 1]! : cur.length - 1;
                         const next = [...cur];
                         next.splice(at + 1, 0, ...clipboard.steps.map((c) => ({ ...c })));
                         return next;
@@ -600,6 +567,7 @@ export default function CaseDetail() {
                     disabled={clipboard.steps.length === 0}
                     className="text-[11px] px-2 py-1 rounded-[6px]"
                     style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-secondary)', cursor: clipboard.steps.length === 0 ? 'default' : 'pointer', opacity: clipboard.steps.length === 0 ? 0.4 : 1 }}
+                    title={selected.size > 0 ? '插入到最后一个选中步骤之后' : '追加到末尾'}
                   >
                     粘贴 ({clipboard.steps.length})
                   </button>
@@ -658,7 +626,10 @@ export default function CaseDetail() {
                       <li
                         key={s.id}
                         className="flex items-center gap-3 px-3 py-2 rounded-[8px]"
-                        style={{ background: 'var(--color-background-subtle)', border: '1px solid var(--color-glass-border)' }}
+                        style={{
+                          background: 'var(--color-background-subtle)',
+                          border: `1px solid ${idx === editingIdx ? 'var(--color-accent)' : 'var(--color-glass-border)'}`,
+                        }}
                       >
                         <input
                           type="checkbox"
@@ -677,9 +648,12 @@ export default function CaseDetail() {
                         <span className="text-[11px] font-mono shrink-0 w-5" style={{ color: 'var(--color-foreground-muted)' }}>
                           {idx + 1}
                         </span>
-                        <code className="text-[12px] font-mono flex-1 break-all" style={{ color: 'var(--color-foreground)' }}>
-                          {JSON.stringify(s.action)}
-                        </code>
+                        <span className="text-[12px] flex-1 truncate" style={{ color: 'var(--color-foreground)' }} title={stepSummary(s.action)}>
+                          <span className="text-[10px] font-semibold" style={{ color: 'var(--color-accent)' }}>
+                            {stepKindLabel((s.action as { kind?: string }).kind ?? '')}
+                          </span>{' '}
+                          {stepSummary(s.action)}
+                        </span>
                         {(s.action as { kind?: string; varName?: string }).kind === 'extract' && (
                           <span
                             className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-mono"
@@ -725,24 +699,20 @@ export default function CaseDetail() {
                             </button>
                           )}
                         <div className="flex items-center gap-1 shrink-0">
-                          <select
-                            value={(s.action as { kind?: string }).kind ?? ''}
-                            disabled={recorder.status === 'recording' || !SWITCHABLE[(s.action as { kind?: string }).kind ?? '']}
-                            onChange={(e) => {
-                              const next = webSwitchAction(toClip(s), e.target.value);
-                              if (!next) {
-                                toast('不支持的类型切换', 'info');
-                                return;
-                              }
-                              mutateSteps((cur) => cur.map((c, i) => (i === idx ? next : c)));
+                          <button
+                            onClick={() => {
+                              mutateSteps((cur) => {
+                                const next = [...cur];
+                                next.splice(idx + 1, 0, { ...toClip(s) });
+                                return next;
+                              });
                             }}
-                            style={{ fontSize: 10, padding: '2px 4px', borderRadius: 4, border: '1px solid var(--color-glass-border)', background: 'var(--color-background-subtle)', color: 'var(--color-foreground)' }}
-                            title="切换步骤类型"
+                            disabled={recorder.status === 'recording'}
+                            title="复制此步骤到下一行"
+                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
                           >
-                            {(['click', 'hover', 'fill', 'select', 'check', 'waitFor', 'assertVisible', 'assertText', 'assertJson', 'navigate', 'upload', 'extract', 'aiStep', 'switchTab', 'screenshot'] as const).map((k) => (
-                              <option key={k} value={k}>{stepKindLabel(k)}</option>
-                            ))}
-                          </select>
+                            <Icon name="copy" size={12} />
+                          </button>
                           <button
                             onClick={() => moveStep.mutate({ stepId: s.id, dir: -1 })}
                             disabled={idx === 0 || moveStep.isPending}
@@ -779,6 +749,7 @@ export default function CaseDetail() {
                           <button
                             onClick={() => {
                               editingIdxRef.current = idx;
+                              setEditingIdx(idx);
                               editingSnapshotRef.current = toClip(s);
                               setEditing(toClip(s));
                             }}
@@ -1029,7 +1000,7 @@ export default function CaseDetail() {
         </div>
       </div>
       {editing && (
-        <StepEditModal
+        <StepEditDrawer
           initial={editing}
           availableVars={caseDetail.steps
             .map((s) => (s.action as { kind?: string; varName?: string }).kind === 'extract'
@@ -1037,7 +1008,7 @@ export default function CaseDetail() {
               : undefined)
             .filter((v): v is string => !!v)}
           caseId={id}
-          onClose={() => setEditing(null)}
+          onClose={() => { setEditing(null); setEditingIdx(-1); editingSnapshotRef.current = null; }}
           onSave={(next) => {
             let applied = false;
             mutateSteps((cur) => {
@@ -1050,8 +1021,9 @@ export default function CaseDetail() {
               newCur[i] = next;
               return newCur;
             });
-            if (!applied) toast('步骤已被修改，请关闭弹窗重试', 'error');
+            if (!applied) toast('步骤已被修改，请关闭抽屉重试', 'error');
             setEditing(null);
+            setEditingIdx(-1);
             editingSnapshotRef.current = null;
           }}
         />
