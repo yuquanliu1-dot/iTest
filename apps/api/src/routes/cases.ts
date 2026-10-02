@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testCases, testSteps, groups, scenarios } from '../db/schema.js';
+import { testCases, testSteps, groups, scenarios, tags, caseTags } from '../db/schema.js';
 import { eq, asc, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
-import { assertCaseVisible, assertProjectVisible, visibleProjectIds } from '../services/projectAccess.js';
+import { assertCaseVisible, assertProjectVisible, resolveCaseProjectId, visibleProjectIds } from '../services/projectAccess.js';
 
 export const casesRoute = Router();
 
@@ -20,6 +20,7 @@ const CaseBodyBase = z.object({
   windowWidth: z.number().int().min(200).max(10000).optional(),
   windowHeight: z.number().int().min(200).max(10000).optional(),
   incognito: z.boolean().default(false),
+  tagIds: z.array(z.string().uuid()).optional(),
 });
 
 function checkWindowStrategy(
@@ -40,8 +41,43 @@ const PatchBody = CaseBodyBase.partial()
   .extend({ scenarioId: z.string().uuid().nullable().optional() })
   .superRefine(checkWindowStrategy);
 
+/** 校验 tagIds 都属于 projectId，缺失或越权都 404（不区分存在性与可见性）。 */
+async function assertTagsBelongToProject(tagIds: string[], projectId: string): Promise<void> {
+  if (tagIds.length === 0) return;
+  const rows = await db.select({ id: tags.id }).from(tags).where(inArray(tags.id, tagIds));
+  const found = new Set(rows.map((r) => r.id));
+  for (const id of tagIds) {
+    if (!found.has(id)) throw new HttpError(404, 'not_found', `tag ${id} not found`);
+  }
+  // 过滤出不在此项目下的 tag
+  const wrong = (
+    await db
+      .select({ id: tags.id, projectId: tags.projectId })
+      .from(tags)
+      .where(inArray(tags.id, tagIds))
+  ).filter((t) => t.projectId !== projectId);
+  if (wrong.length > 0) throw new HttpError(400, 'tag_project_mismatch', 'tag belongs to another project');
+}
+
+/** 批量取出 caseIds 关联的所有 tag，按 caseId 分组。空集合返回 Map。 */
+async function tagsForCases(caseIds: string[]): Promise<Map<string, Array<{ id: string; name: string; color: string }>>> {
+  const map = new Map<string, Array<{ id: string; name: string; color: string }>>();
+  if (caseIds.length === 0) return map;
+  const rows = await db
+    .select({ caseId: caseTags.caseId, id: tags.id, name: tags.name, color: tags.color })
+    .from(caseTags)
+    .innerJoin(tags, eq(tags.id, caseTags.tagId))
+    .where(inArray(caseTags.caseId, caseIds));
+  for (const r of rows) {
+    const arr = map.get(r.caseId) ?? [];
+    arr.push({ id: r.id, name: r.name, color: r.color });
+    map.set(r.caseId, arr);
+  }
+  return map;
+}
+
 casesRoute.get('/', async (req, res) => {
-  const { priority, groupId, projectId } = req.query as Record<string, string | undefined>;
+  const { priority, groupId, projectId, scenarioId } = req.query as Record<string, string | undefined>;
   let rows;
   if (projectId) {
     await assertProjectVisible(projectId, req.user!);
@@ -67,6 +103,12 @@ casesRoute.get('/', async (req, res) => {
       : [];
   }
   if (priority) rows = rows.filter((r) => r.priority === priority);
+  // scenarioId 过滤：'none' 命中 scenarioId IS NULL；UUID 命中具体场景
+  if (scenarioId) {
+    rows = scenarioId === 'none'
+      ? rows.filter((r) => r.scenarioId == null)
+      : rows.filter((r) => r.scenarioId === scenarioId);
+  }
   // 把 scenario title 一起带回去，避免前端为每个 case 再发一次 detail 请求
   const sids = [...new Set(rows.map((r) => r.scenarioId).filter((v): v is string => !!v))];
   const sById = new Map<string, { id: string; title: string }>();
@@ -77,10 +119,14 @@ casesRoute.get('/', async (req, res) => {
       .where(inArray(scenarios.id, sids));
     for (const s of scRows) sById.set(s.id, s);
   }
+  // 同手法：批量回填 tags（避免 N+1）
+  const caseIds = rows.map((r) => r.id);
+  const tagsByCase = await tagsForCases(caseIds);
   res.json(
     rows.map((r) => ({
       ...r,
       scenarioTitle: r.scenarioId ? (sById.get(r.scenarioId)?.title ?? null) : null,
+      tags: tagsByCase.get(r.id) ?? [],
     })),
   );
 });
@@ -89,9 +135,17 @@ casesRoute.post('/', async (req, res) => {
   const body = CreateBody.parse(req.body);
   const g = await db.select().from(groups).where(eq(groups.id, body.groupId));
   if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
-  await assertProjectVisible(g[0]!.projectId, req.user!);
-  const rows = await db.insert(testCases).values(body).returning();
-  res.json(rows[0]);
+  const projectId = g[0]!.projectId;
+  await assertProjectVisible(projectId, req.user!);
+  // 创建时也可附带 tagIds：必须在分组所属项目内
+  if (body.tagIds && body.tagIds.length > 0) await assertTagsBelongToProject(body.tagIds, projectId);
+  const { tagIds: _ignoredTagIds, ...caseValues } = body;
+  const rows = await db.insert(testCases).values(caseValues).returning();
+  const created = rows[0]!;
+  if (body.tagIds && body.tagIds.length > 0) {
+    await db.insert(caseTags).values(body.tagIds.map((tagId) => ({ caseId: created.id, tagId })));
+  }
+  res.json({ ...created, tags: body.tagIds ? body.tagIds.map((id) => ({ id })) : [] });
 });
 
 casesRoute.get('/:id', async (req, res) => {
@@ -107,17 +161,25 @@ casesRoute.get('/:id', async (req, res) => {
   // /steps/secrets/:stepId endpoint with the ws token to retrieve plaintext at execution time.
   const sanitizedSteps = steps.map(({ secretCiphertext: _sc, secretIv: _si, secretTag: _st, ...rest }) => rest);
   const resolvedUrl = await resolveCaseUrl(rows[0]!);
-  res.json({ ...rows[0], steps: sanitizedSteps, resolvedUrl });
+  const tagsByCase = await tagsForCases([req.params.id!]);
+  res.json({
+    ...rows[0],
+    steps: sanitizedSteps,
+    resolvedUrl,
+    tags: tagsByCase.get(req.params.id!) ?? [],
+  });
 });
 
 casesRoute.patch('/:id', async (req, res) => {
   const body = PatchBody.parse(req.body);
   await assertCaseVisible(req.params.id!, req.user!);
+  let projectIdForTags: string | null = null;
   if (body.groupId) {
     // 移动目标分组也必须可见
     const g = await db.select().from(groups).where(eq(groups.id, body.groupId));
     if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
-    await assertProjectVisible(g[0]!.projectId, req.user!);
+    projectIdForTags = g[0]!.projectId;
+    await assertProjectVisible(projectIdForTags, req.user!);
   }
   if (body.scenarioId !== undefined && body.scenarioId !== null) {
     const [sc] = await db
@@ -135,13 +197,31 @@ casesRoute.patch('/:id', async (req, res) => {
       throw new HttpError(400, 'scenario_mismatch', "scenario does not belong to this case's requirement");
     }
   }
+  if (body.tagIds !== undefined) {
+    // tag 校验：用 groupId 解析的项目；未传则用 case 现有项目
+    const pid = projectIdForTags ?? (await resolveCaseProjectId(req.params.id!));
+    if (!pid) throw new HttpError(404, 'not_found', 'case not found');
+    await assertTagsBelongToProject(body.tagIds, pid);
+    projectIdForTags = pid;
+  }
+  const { tagIds: incomingTagIds, ...rest } = body;
   const rows = await db
     .update(testCases)
-    .set({ ...body, updatedAt: new Date() })
+    .set({ ...rest, updatedAt: new Date() })
     .where(eq(testCases.id, req.params.id))
     .returning();
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'case not found');
-  res.json(rows[0]);
+  // tagIds：undefined 不动；[] 清空；数组全量覆盖
+  if (incomingTagIds !== undefined) {
+    await db.delete(caseTags).where(eq(caseTags.caseId, req.params.id!));
+    if (incomingTagIds.length > 0) {
+      await db
+        .insert(caseTags)
+        .values(incomingTagIds.map((tagId) => ({ caseId: req.params.id!, tagId })));
+    }
+  }
+  const tagsByCase = await tagsForCases([req.params.id!]);
+  res.json({ ...rows[0], tags: tagsByCase.get(req.params.id!) ?? [] });
 });
 
 async function nextCopyTitle(base: string, existing: string[]): Promise<string> {
@@ -188,6 +268,11 @@ async function copyOneCase(caseId: string, targetGroupId: string, user: NonNulla
         assertion: s.assertion,
       })),
     );
+  }
+  // 复制 src 的标签关联（id 不变，跨项目复制时已被 assertProjectVisible 拦截）
+  const srcTagRows = await db.select({ tagId: caseTags.tagId }).from(caseTags).where(eq(caseTags.caseId, caseId));
+  if (srcTagRows.length > 0) {
+    await db.insert(caseTags).values(srcTagRows.map((r) => ({ caseId: newCase.id, tagId: r.tagId })));
   }
   return newCase;
 }
