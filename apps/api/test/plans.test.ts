@@ -205,6 +205,33 @@ describe('plan execution extras', () => {
     }
   });
 
+  it('deprecated cases skipped without execution, plan_run.status=passed', async () => {
+    const { projectId, groupId } = await seedProject(pool);
+    const c1 = await makeCase(groupId, 'c1');
+    const c2 = await makeCase(groupId, 'c2');
+    await request(app).patch(`/api/cases/${c1}`).send({ status: 'deprecated' });
+    await request(app).patch(`/api/cases/${c2}`).send({ status: 'deprecated' });
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
+    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2] });
+
+    const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
+    expect(r.status).toBe(200);
+    const runId = r.body.runId as string;
+
+    let detail: { body: { status: string; failedCases: number | null; skippedCases: number | null; passedCases: number | null; cases: Array<{ order: number; status: string }> } };
+    for (let i = 0; i < 50; i++) {
+      detail = await request(app).get(`/api/plan-runs/${runId}`);
+      if (detail!.body.status !== 'running') break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(detail!.body.status).toBe('passed');
+    expect(detail!.body.skippedCases).toBe(2);
+    expect(detail!.body.passedCases).toBe(0);
+    const byOrder = new Map(detail!.body.cases.map((c) => [c.order, c.status]));
+    expect(byOrder.get(1)).toBe('skipped');
+    expect(byOrder.get(2)).toBe('skipped');
+  });
+
   it('cancel: cancel mid-run → plan_run.status=cancelled', async () => {
     const { projectId, groupId } = await seedProject(pool);
     const c1 = await makeCase(groupId, 'c1');

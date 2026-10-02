@@ -70,8 +70,9 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   runState.set(planRunId, { cancelRequested: false });
 
   const cases = await db
-    .select({ caseId: planCases.caseId, order: planCases.order })
+    .select({ caseId: planCases.caseId, order: planCases.order, status: testCases.status })
     .from(planCases)
+    .innerJoin(testCases, eq(testCases.id, planCases.caseId))
     .where(eq(planCases.planId, plan.id))
     .orderBy(asc(planCases.order));
 
@@ -182,6 +183,21 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       break;
     }
     const c = cases[i]!;
+    if (c.status === 'deprecated') {
+      await db.insert(planRunCases).values({
+        planRunId,
+        caseId: c.caseId,
+        order: i + 1,
+        status: 'skipped',
+        stepKind: 'business',
+        finishedAt: new Date(),
+        durationMs: 0,
+        error: 'case deprecated',
+      });
+      publish(planRunId, { type: 'plan_run_case_complete', caseId: c.caseId, stepKind: 'business', status: 'skipped' });
+      skipped += 1;
+      continue;
+    }
     const ins = await db
       .insert(planRunCases)
       .values({ planRunId, caseId: c.caseId, order: i + 1, status: 'running', stepKind: 'business' })
