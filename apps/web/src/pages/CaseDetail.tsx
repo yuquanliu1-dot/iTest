@@ -19,6 +19,7 @@ import AgentStreamPanel from '../components/ui/AgentStreamPanel';
 import StepEditModal from '../components/StepEditModal';
 import TagChip from '../components/ui/Tag';
 import LabelsManagerDialog from '../components/labels/LabelsManagerDialog';
+import { stepKindLabel } from '../lib/format';
 
 type Tab = 'description' | 'reports' | 'recording';
 
@@ -147,6 +148,11 @@ export default function CaseDetail() {
     enabled: !!id,
   });
 
+  // 录制目标 URL 为空时预填继承链（用例.url → 分组.defaultUrl → 项目.defaultUrl）解析结果
+  useEffect(() => {
+    if (caseDetail?.resolvedUrl) setTargetUrl((u) => u || caseDetail.resolvedUrl!);
+  }, [caseDetail]);
+
   // 执行设置有未保存的本地编辑时，避免被 caseDetail refetch 静默覆盖
   const runtimeSyncRef = useRef<string | null>(null);
   useEffect(() => {
@@ -258,7 +264,8 @@ export default function CaseDetail() {
             source: 'ita-web',
             type: 'start-recording',
             session: { wsUrl: session.wsUrl, sessionId: session.sessionId, token: session.wsToken, mode: opts.mode, ...(opts.incognito ? { incognito: true } : {}) },
-            targetUrl,
+            // 字段为空时回退到服务端解析的继承 URL；setTargetUrl 是异步的，不能依赖本次闭包里的 state
+            targetUrl: targetUrl || session.resolvedUrl || '',
           },
           '*',
         );
@@ -304,6 +311,26 @@ export default function CaseDetail() {
       qc.invalidateQueries({ queryKey: ['case', id] });
     },
   });
+
+  // 面板/弹窗里点「停止录制」时，扩展会通知本页收尾（与 stopRecording 的尾部逻辑一致）
+  useEffect(() => {
+    const onStopped = (e: MessageEvent) => {
+      if (e.data?.source !== 'ita-ext' || e.data?.type !== 'recording-stopped') return;
+      const sessionId = recorder.sessionId;
+      if (!sessionId) return;
+      sessionRef.current = null;
+      recorder.reset();
+      api.recorder
+        .finish(sessionId)
+        .then((r) => {
+          toast(`已写入 ${r.inserted} 个步骤`, 'success');
+          qc.invalidateQueries({ queryKey: ['case', id] });
+        })
+        .catch((err: Error) => toast(err.message, 'error'));
+    };
+    window.addEventListener('message', onStopped);
+    return () => window.removeEventListener('message', onStopped);
+  }, [recorder, id, qc, toast]);
 
   const genSteps = useMutation({
     mutationFn: async () => {
@@ -713,7 +740,7 @@ export default function CaseDetail() {
                             title="切换步骤类型"
                           >
                             {(['click', 'hover', 'fill', 'select', 'check', 'waitFor', 'assertVisible', 'assertText', 'assertJson', 'navigate', 'upload', 'extract', 'aiStep', 'switchTab', 'screenshot'] as const).map((k) => (
-                              <option key={k} value={k}>{k}</option>
+                              <option key={k} value={k}>{stepKindLabel(k)}</option>
                             ))}
                           </select>
                           <button

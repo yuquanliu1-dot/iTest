@@ -1,7 +1,7 @@
 import { useState, useEffect, type CSSProperties } from 'react';
 import type { StepClip } from '../stores/stepClipboard';
 import { api } from '../api/client';
-import { formatBytes, shortDateTime } from '../lib/format';
+import { formatBytes, shortDateTime, stepKindLabel } from '../lib/format';
 
 interface Props {
   initial: StepClip;
@@ -320,7 +320,7 @@ export default function StepEditModal({ initial, availableVars = [], caseId, onS
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-[14px] font-semibold mb-4" style={{ color: 'var(--color-foreground)' }}>
-          编辑步骤 <span className="font-mono text-[11px]">({kind})</span>
+          编辑步骤 <span className="font-mono text-[11px]">({stepKindLabel(kind)})</span>
         </h2>
 
         <div className="flex flex-col gap-3">
