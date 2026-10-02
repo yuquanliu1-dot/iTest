@@ -82,14 +82,14 @@ export default function Dashboard() {
           suffix="%"
           iconName="checkCircle"
           tone="var(--color-success)"
-          to={`/p/${projectId}/reports`}
+          to={`/p/${projectId}/reports?filter=passed-7d`}
         />
         <KpiStripCard
           label="近 7d 运行"
           value={data.kpi.totalRuns7d}
           iconName="activity"
           tone="var(--color-warning)"
-          to={`/p/${projectId}/reports`}
+          to={`/p/${projectId}/reports?range=7d`}
         />
         <KpiStripCard
           label="AI 调用"
