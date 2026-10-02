@@ -65,7 +65,7 @@ function ThreadPaneBody({ initialMessage }: { initialMessage?: string }) {
             <ThreadPrimitive.If running={false}>
               <ComposerPrimitive.Send
                 className="shrink-0 rounded-md px-3 py-2 text-[13px] text-white"
-                style={{ background: 'var(--color-primary, #6366f1)' }}
+                style={{ background: 'var(--color-accent)' }}
               >
                 发送
               </ComposerPrimitive.Send>
@@ -73,7 +73,7 @@ function ThreadPaneBody({ initialMessage }: { initialMessage?: string }) {
             <ThreadPrimitive.If running>
               <ComposerPrimitive.Cancel
                 className="shrink-0 rounded-md px-3 py-2 text-[13px] text-white"
-                style={{ background: 'var(--color-danger, #ef4444)' }}
+                style={{ background: 'var(--color-destructive)' }}
               >
                 停止
               </ComposerPrimitive.Cancel>
@@ -90,7 +90,7 @@ function UserMessage() {
     <div className="flex justify-end mb-3">
       <div
         className="max-w-[85%] rounded-lg px-3 py-2 text-[13px] whitespace-pre-wrap"
-        style={{ background: 'var(--color-primary-soft, #eef2ff)', color: 'var(--color-foreground)' }}
+        style={{ background: 'var(--color-accent-light)', color: 'var(--color-foreground)' }}
       >
         <MessagePrimitive.Parts />
       </div>

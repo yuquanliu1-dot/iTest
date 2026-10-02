@@ -174,14 +174,10 @@ export default function PlanDetail() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
-        <button
-          onClick={() => navigate(`/p/${projectId}/plans`)}
-          className="flex items-center gap-1 text-[12px]"
-          style={{ color: 'var(--color-foreground-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}
-        >
+        <Button variant="plain" size="sm" onClick={() => navigate(`/p/${projectId}/plans`)}>
           <Icon name="chevronLeft" size={12} />
           返回计划列表
-        </button>
+        </Button>
         <span style={{ width: 1, height: 16, background: 'var(--color-glass-border)' }} />
         <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>
           {plan.name}

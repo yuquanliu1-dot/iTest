@@ -5,6 +5,7 @@ import { useUIStore } from '../../stores/ui';
 import Icon from '../Icon';
 import EmptyState from '../ui/EmptyState';
 import Button from '../ui/Button';
+import IconButton from '../ui/IconButton';
 import Input from '../ui/Input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 import TagChip from '../ui/Tag';
@@ -162,38 +163,17 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
                         </div>
                       )}
                     </div>
-                    <button
+                    <IconButton
+                      icon="pencil"
                       title="编辑"
                       onClick={() => openEdit({ id: t.id, name: t.name, color: t.color, description: t.description })}
-                      className="press"
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        cursor: 'pointer',
-                        color: 'var(--color-foreground-muted)',
-                        padding: 4,
-                        borderRadius: 5,
-                        transition: 'color 0.15s ease, background 0.15s ease',
-                      }}
-                    >
-                      <Icon name="pencil" size={12} />
-                    </button>
-                    <button
+                    />
+                    <IconButton
+                      icon="trash"
                       title="删除"
+                      tone="destructive"
                       onClick={() => setPendingDelete({ id: t.id, name: t.name })}
-                      className="press"
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        cursor: 'pointer',
-                        color: 'var(--color-destructive)',
-                        padding: 4,
-                        borderRadius: 5,
-                        transition: 'background 0.15s ease',
-                      }}
-                    >
-                      <Icon name="trash" size={12} />
-                    </button>
+                    />
                   </div>
                 ))}
               </div>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/Modal';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/Modal';
 import Button from '../../components/ui/Button';
 
 interface Props {
@@ -48,17 +48,14 @@ export default function SaveDialog({ open, onOpenChange, groups, onSave, saving 
             ))}
           </select>
         </div>
-        <div
-          className="flex justify-end gap-2 px-5 py-4 border-t"
-          style={{ borderColor: 'var(--color-border)' }}
-        >
+        <DialogFooter>
           <Button variant="plain" onClick={() => onOpenChange(false)}>
             取消
           </Button>
           <Button disabled={!groupId || saving} onClick={() => onSave(groupId)}>
             {saving ? '保存中…' : '保存所选'}
           </Button>
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
