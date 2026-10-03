@@ -17,6 +17,7 @@ const CreateBody = z.object({
   description: z.string().max(500).optional(),
   ref: z.string().max(200).optional(),
   refKind: RefKindEnum.optional(),
+  defaultUrl: z.string().max(2000).optional(),
 });
 
 const PatchBody = z.object({
@@ -24,6 +25,7 @@ const PatchBody = z.object({
   description: z.string().max(500).nullable().optional(),
   ref: z.string().max(200).nullable().optional(),
   refKind: RefKindEnum.nullable().optional(),
+  defaultUrl: z.string().max(2000).nullable().optional(),
 });
 
 projectVersionsRoute.get('/projects/:projectId/versions', async (req, res) => {
@@ -67,6 +69,7 @@ projectVersionsRoute.post('/projects/:projectId/versions', async (req, res) => {
     description: body.description ?? null,
     ref: body.ref ?? null,
     refKind: body.refKind ?? null,
+    defaultUrl: body.defaultUrl ?? null,
     isDefault: false,
   }).returning();
   res.status(201).json(rows[0]);
@@ -91,6 +94,7 @@ projectVersionsRoute.patch('/project-versions/:id', async (req, res) => {
   if (body.description !== undefined) set.description = body.description;
   if (nextRef !== undefined) set.ref = nextRef;
   if (nextRefKind !== undefined) set.refKind = nextRefKind;
+  if (body.defaultUrl !== undefined) set.defaultUrl = body.defaultUrl;
   await db.update(projectVersions).set(set as Partial<typeof projectVersions.$inferInsert>).where(eq(projectVersions.id, id));
   const rows = await db.select().from(projectVersions).where(eq(projectVersions.id, id));
   res.json(rows[0]);

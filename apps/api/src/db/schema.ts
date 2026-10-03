@@ -256,6 +256,8 @@ export const projectVersions = pgTable('project_versions', {
   isDefault: boolean('is_default').notNull().default(false),
   ref: varchar('ref', { length: 200 }),
   refKind: varchar('ref_kind', { length: 16 }),
+  // 版本级默认域名：覆盖（而非替代）项目级 default_url，留空走项目级。
+  defaultUrl: text('default_url'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
