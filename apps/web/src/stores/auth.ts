@@ -26,7 +26,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   // 启动时用 /me 探测会话；401 → 清空会话（client 层对 /auth/me 豁免跳转）
   initialize: async () => {
-    if (get().isAuthenticated) return;
+    // applyLogin 已置 isAuthenticated 时（/login 直登后跳转 /）也要清掉初始 isLoading，
+    // 否则 AuthGuard 永远停在加载态（早返回不走 finally）。
+    if (get().isAuthenticated) {
+      set({ isLoading: false });
+      return;
+    }
     try {
       get().applyMe(await api.auth.me());
     } catch {
