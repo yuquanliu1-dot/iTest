@@ -13,6 +13,8 @@ import { aiThreads } from '../db/schema.js';
 import { buildWorkspaceTools } from './tools.js';
 import { readLlmConfig, type LlmProvider } from './modelBridge.js';
 import { defineTool } from '@earendil-works/pi-coding-agent';
+import { Type } from '@earendil-works/pi-ai';
+import { checkoutRepo, RepoUnavailableError, buildRepoSandboxTools } from './repo.js';
 
 export interface PiSessionLike {
   subscribe(fn: (e: unknown) => void): () => void;
@@ -26,7 +28,13 @@ export interface PiSessionLike {
   sessionFile: string | undefined;
 }
 
-export type SessionFactory = (ctx: { threadId: string; requirementId: string }) => Promise<PiSessionLike>;
+export type SessionFactory = (ctx: {
+  threadId: string;
+  requirementId: string;
+  contextMode: 'repo' | 'page' | 'auto';
+  cwd: string | null;
+  repoAvailable: boolean;
+}) => Promise<PiSessionLike>;
 
 interface ThreadRecord {
   threadId: string;
@@ -54,7 +62,7 @@ export function resetSessions(): void {
 }
 
 /** 幂等建线程并加载 Pi session；同 requirementId 复用同一 session。 */
-export async function ensureRecord(requirementId: string): Promise<ThreadRecord> {
+export async function ensureRecord(requirementId: string, opts: { contextMode?: 'repo' | 'page' | 'auto' } = {}): Promise<ThreadRecord> {
   const existing = await db.select().from(aiThreads).where(eq(aiThreads.requirementId, requirementId)).limit(1);
   let threadId: string;
   if (existing[0]) {
@@ -65,7 +73,23 @@ export async function ensureRecord(requirementId: string): Promise<ThreadRecord>
     threadId = randomUUID();
     await db.insert(aiThreads).values({ id: threadId, requirementId, piThreadId: '' });
   }
-  const session = await factory({ threadId, requirementId });
+  // 仓库可用性探测：no_repo（项目未配仓库）静默降级，其它错误抛出。
+  // 失败时 cwd=null、repoAvailable=false；后续 buildWorkspaceTools 会走 promptGuidelines 兜底。
+  let cwd: string | null = null;
+  let repoAvailable = false;
+  try {
+    cwd = await checkoutRepo(requirementId);
+    repoAvailable = true;
+  } catch (e) {
+    if (!(e instanceof RepoUnavailableError)) throw e;
+  }
+  const session = await factory({
+    threadId,
+    requirementId,
+    contextMode: opts.contextMode ?? 'auto',
+    cwd,
+    repoAvailable,
+  });
   const rec: ThreadRecord = {
     threadId,
     requirementId,
@@ -207,7 +231,13 @@ function synthesizeModel(provider: LlmProvider, modelId: string, baseUrl: string
   };
 }
 
-async function createPiSessionFactory(ctx: { threadId: string; requirementId: string }): Promise<PiSessionLike> {
+async function createPiSessionFactory(ctx: {
+  threadId: string;
+  requirementId: string;
+  contextMode: 'repo' | 'page' | 'auto';
+  cwd: string | null;
+  repoAvailable: boolean;
+}): Promise<PiSessionLike> {
   const cfg = await readLlmConfig();
   if (!cfg) throw new Error('LLM 未配置：请先到设置页配置模型');
   const { createAgentSession, SessionManager } = await import('@earendil-works/pi-coding-agent');
@@ -215,13 +245,24 @@ async function createPiSessionFactory(ctx: { threadId: string; requirementId: st
   const workspaceDir = process.env.PI_WORKSPACE_DIR ?? './.data/pi-sessions';
   await import('node:fs/promises').then((fs) => fs.mkdir(workspaceDir, { recursive: true }));
 
-  const ai_tools = buildWorkspaceTools(ctx.requirementId).map((t) =>
+  // 把 repo 工具与 workspace 工具一并注入；defineTool 包法与原样保持一致。
+  type ToolRaw = {
+    name: string; description: string; parameters: ReturnType<typeof Type.Object>;
+    execute: (input: unknown) => Promise<{ ok: true; data?: string } | { ok: false; error: string }>;
+    promptGuidelines?: string[];
+  };
+  // 形如 tools.ts / repo.ts 的 ToolExecutor 形状；声明为局部类型避免循环依赖。
+  const ai_toolsRaw: ToolRaw[] = [
+    ...buildWorkspaceTools(ctx.requirementId, { contextMode: ctx.contextMode, repoAvailable: ctx.repoAvailable }),
+    ...(ctx.repoAvailable && ctx.cwd ? buildRepoSandboxTools(ctx.cwd) : []),
+  ];
+  const ai_tools = ai_toolsRaw.map((t) =>
     defineTool({
       name: t.name,
       label: t.name,
       description: t.description,
       parameters: t.parameters,
-      // inspect_page 等工具的成功 data（元素清单）需要回传给模型，不能只回 'ok'
+      // inspect_page / repo_* 工具的成功 data（元素清单 / 源码片段）需要回传给模型，不能只回 'ok'
       ...(t.promptGuidelines ? { promptGuidelines: t.promptGuidelines } : {}),
       execute: async (_callId, params, _signal, _onUpdate, _ctx) => {
         const r = await t.execute(params);
@@ -248,7 +289,7 @@ async function createPiSessionFactory(ctx: { threadId: string; requirementId: st
   const sessionManager = SessionManager.inMemory();
 
   const { session } = await createAgentSession({
-    cwd: workspaceDir,
+    cwd: ctx.cwd ?? workspaceDir,
     noTools: 'builtin',
     customTools: ai_tools,
     model,
