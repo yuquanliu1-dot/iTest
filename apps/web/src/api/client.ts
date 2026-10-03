@@ -156,8 +156,20 @@ export const api = {
       }),
     patch: (id: string, body: Partial<{ name: string; description: string | null }>) =>
       request<ProjectVersion>(`/project-versions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-    setDefault: (id: string) => request<void>(`/project-versions/${id}/set-default`, { method: 'POST' }),
-    remove: (id: string) => request<void>(`/project-versions/${id}`, { method: 'DELETE' }),
+    setDefault: (projectId: string, id: string) =>
+      request<ProjectVersion>(`/projects/${projectId}/versions/${id}/set-default`, { method: 'POST' }),
+    remove: (projectId: string, id: string) =>
+      request<void>(`/projects/${projectId}/versions/${id}`, { method: 'DELETE' }),
+    listRefs: (projectId: string, kind: 'branch' | 'tag') =>
+      request<{ kind: 'branch' | 'tag'; refs: string[]; error?: string }>(
+        `/projects/${projectId}/refs?kind=${kind}`,
+      ),
+    /** 写入 ref/refKind（与 patch 分开，避免误改 name/description）。 */
+    setRef: (id: string, body: { ref: string | null; refKind: 'branch' | 'tag' | null }) =>
+      request<ProjectVersion>(`/project-versions/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ ref: body.ref, refKind: body.refKind }),
+      }),
   },
   environments: {
     list: (projectId: string, params?: { versionId?: string }) =>
@@ -554,6 +566,7 @@ export interface Project {
   repoUrl: string | null;
   defaultBranch: string;
   provider: string;
+  gitlabUrlOverride: string | null;
   hasPat: boolean;
   createdAt: string;
   updatedAt: string;
@@ -565,6 +578,8 @@ export interface ProjectVersion {
   name: string;
   description: string | null;
   isDefault: boolean;
+  ref: string | null;
+  refKind: 'branch' | 'tag' | null;
   createdAt: string;
   updatedAt: string;
   caseCount?: number;

@@ -127,3 +127,36 @@ export async function verifyRepoAccess(input: VerifyRepoInput): Promise<VerifyRe
     return { valid: false, error: `网络错误：${(err as Error).message}` };
   }
 }
+
+/**
+ * 列出远程 refs（branch 或 tag）。仅做存在性/可达性，不 clone。
+ *  - GitHub：REST API（带 PAT 走认证；不带走匿名 60/hr）
+ *  - Gitee / GitLab：URL 形式校验 + 头部可达性探针（Gitee/GitLab API 与 iTest 当前解耦，
+ *    真实工程上需 PAT 才能稳定列远端 refs；这里给「provider 支持但本函数不支持」的明确错误，
+ *    让 UI 显示「该 provider 暂不支持列举 refs，请手动输入」）。
+ */
+export async function listRefs(input: VerifyRepoInput & { kind: 'branch' | 'tag' }): Promise<string[]> {
+  const urlCheck = validateRepoUrl(input.repoUrl, input.provider);
+  if (!urlCheck.valid) throw new Error(urlCheck.error);
+
+  if (input.provider === 'github') {
+    const m = input.repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(\.git)?\/?$/i);
+    if (!m) throw new Error('无法解析 GitHub owner/repo');
+    const owner = m[1]!;
+    const repo = m[2]!;
+    const headers: Record<string, string> = { Accept: 'application/vnd.github+json', 'User-Agent': 'iTest' };
+    if (input.pat) headers.Authorization = `Bearer ${input.pat}`;
+    // tags 走 /repos/{owner}/{repo}/tags?per_page=100；branches 走 /repos/{owner}/{repo}/branches?per_page=100
+    const path = input.kind === 'tag'
+      ? `/repos/${owner}/${repo}/tags?per_page=100`
+      : `/repos/${owner}/${repo}/branches?per_page=100`;
+    const res = await fetch(`https://api.github.com${path}`, { headers });
+    if (res.status === 404) throw new Error('仓库不存在或无权访问（404）');
+    if (res.status === 403) throw new Error('GitHub API 限流，请提供 PAT');
+    if (!res.ok) throw new Error(`GitHub API 返回 ${res.status}`);
+    const data = (await res.json()) as Array<{ name: string }>;
+    return data.map((r) => r.name);
+  }
+  // Gitee / GitLab：当前不接 API 列远端 refs。错误提示 UI 走「手动输入」分支。
+  throw new Error(`provider ${input.provider} 暂不支持列举 ${input.kind}，请手动输入`);
+}

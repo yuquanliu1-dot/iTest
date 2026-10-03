@@ -247,12 +247,15 @@ export const groups = pgTable('groups', {
 });
 
 // 项目版本：测试环境 / 用例 / 执行计划全部按版本工作；每项目必有 1 个 is_default=true。
+// ref / refKind 指向项目仓库的具体 git ref（branch 或 tag），给 AI 工作台 checkout 时精确定位。
 export const projectVersions = pgTable('project_versions', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 80 }).notNull(),
   description: text('description'),
   isDefault: boolean('is_default').notNull().default(false),
+  ref: varchar('ref', { length: 200 }),
+  refKind: varchar('ref_kind', { length: 16 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
