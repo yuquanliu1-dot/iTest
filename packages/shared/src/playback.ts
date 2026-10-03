@@ -20,6 +20,18 @@ export const FailureReason = z.enum([
   'OverlayTimeout',
   'LocatorAllFailed',
   'CDPUnavailable',
+  'QueryDbError',
+  'QueryDbTableNotAllowed',
+  'QueryDbColumnNotAllowed',
+  'QueryDbAssertionFailed',
+  'EnvMissing',
+  'EnvDbMissing',
+  'EnvSyslogMissing',
+  'SyslogConnectFailed',
+  'SyslogAuthFailed',
+  'SyslogFileMissing',
+  'SyslogTimeout',
+  'LogAssertionFailed',
   'Unknown',
 ]);
 export type FailureReason = z.infer<typeof FailureReason>;
