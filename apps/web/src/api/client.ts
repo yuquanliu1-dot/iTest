@@ -392,11 +392,15 @@ export const api = {
   aiWorkspace: {
     ensureThread: (requirementId: string) =>
       request<{ threadId: string }>(`/requirements/${requirementId}/ai-thread`, { method: 'POST' }),
-    sendMessage: (threadId: string, content: string) =>
+    sendMessage: (
+      threadId: string,
+      content: string,
+      metadata: { contextMode: 'repo' | 'page' | 'auto' } = { contextMode: 'auto' },
+    ) =>
       fetch(`${BASE}/pi/threads/${threadId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: { content } }),
+        body: JSON.stringify({ input: { content }, metadata }),
       }).then((r) => {
         if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
       }),
@@ -406,6 +410,14 @@ export const api = {
       request<{ savedCases: number }>(`/requirements/${requirementId}/ai-workspace/save`, {
         method: 'POST',
         body: JSON.stringify(body),
+      }),
+    setContextMode: (requirementId: string, mode: 'repo' | 'page' | 'auto') =>
+      fetch(`${BASE}/requirements/${requirementId}/ai-workspace/context-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      }).then((r) => {
+        if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
       }),
   },
   registerAdmin: (body: { username: string; displayName: string; email?: string; organizationId: string }) =>
@@ -795,9 +807,12 @@ export interface StagedStep {
 }
 export interface StagedCase { id: string; title: string; description: string | null; priority: Priority; steps: StagedStep[]; }
 export interface StagedScenario { id: string; title: string; description: string | null; cases: StagedCase[]; }
+export interface RepoContext { commit: string; fetchedAt: string; mode: 'repo' | 'auto'; }
 export interface WorkspaceDoc {
   plan: { scenarios: number; cases: number } | null;
+  contextMode?: 'repo' | 'page' | 'auto';
   pageContext?: { url: string; fetchedAt: string } | null;
+  repoContext?: RepoContext | null;
   scenarios: StagedScenario[];
   looseCases: StagedCase[];
 }
