@@ -44,6 +44,7 @@ export const testCases = pgTable('test_cases', {
   windowWidth: integer('window_width'),
   windowHeight: integer('window_height'),
   incognito: boolean('incognito').notNull().default(false),
+  defaultEnvId: uuid('default_env_id').references(() => testEnvironments.id, { onDelete: 'set null' }),
   scenarioId: uuid('scenario_id').references(() => scenarios.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -247,6 +248,7 @@ export const executionPlans = pgTable('execution_plans', {
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 200 }).notNull(),
   environment: varchar('environment', { length: 100 }),
+  environmentId: uuid('environment_id').references(() => testEnvironments.id, { onDelete: 'set null' }),
   strategy: varchar('strategy', { length: 20 }).notNull().default('run_all'),
   loginPrepareEnabled: boolean('login_prepare_enabled').notNull().default(false),
   loginCaseId: uuid('login_case_id').references(() => testCases.id, { onDelete: 'set null' }),
@@ -345,4 +347,28 @@ export const caseTags = pgTable('case_tags', {
   tagId: uuid('tag_id').notNull().references(() => tags.id, { onDelete: 'cascade' }),
 }, (t) => ({
   pk: primaryKey({ columns: [t.caseId, t.tagId] }),
+}));
+
+export const testEnvironments = pgTable('test_environments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 120 }).notNull(),
+  dbHost: varchar('db_host', { length: 200 }),
+  dbPort: integer('db_port'),
+  dbName: varchar('db_name', { length: 120 }),
+  dbUser: varchar('db_user', { length: 120 }),
+  dbPasswordCiphertext: text('db_password_ciphertext'),
+  dbPasswordIv: text('db_password_iv'),
+  dbPasswordTag: text('db_password_tag'),
+  syslogHost: varchar('syslog_host', { length: 200 }),
+  syslogUser: varchar('syslog_user', { length: 120 }),
+  syslogSshPort: integer('syslog_ssh_port').default(22),
+  syslogKeyCiphertext: text('syslog_key_ciphertext'),
+  syslogKeyIv: text('syslog_key_iv'),
+  syslogKeyTag: text('syslog_key_tag'),
+  syslogFilePath: text('syslog_file_path'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  projectNameUq: unique('test_environments_project_name_uq').on(t.projectId, t.name),
 }));
