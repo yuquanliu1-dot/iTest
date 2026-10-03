@@ -34,12 +34,19 @@ export interface WorkspaceDoc {
   plan: { scenarios: number; cases: number } | null;
   /** inspect_page 成功抓取过的被测页面；用于前端"已参考页面实际代码"标识与保存时 URL 优先级。 */
   pageContext: { url: string; fetchedAt: string } | null;
+  /**
+   * 上下文模式：决定 LLM 阶段用哪份 page-context/repo-context 作为 prompt 输入。
+   * - 'repo': 仅 repo-context
+   * - 'page': 仅 page-context（默认 inspect_page 路径）
+   * - 'auto': 根据当前可用的 page/repo-context 自动切换（推荐）
+   */
+  contextMode: 'repo' | 'page' | 'auto';
   scenarios: StagedScenario[];
   looseCases: StagedCase[];
 }
 
 export function emptyDoc(): WorkspaceDoc {
-  return { plan: null, pageContext: null, scenarios: [], looseCases: [] };
+  return { plan: null, pageContext: null, contextMode: 'auto', scenarios: [], looseCases: [] };
 }
 
 function publish(reqId: string): void {
@@ -103,11 +110,12 @@ export async function loadDoc(requirementId: string): Promise<WorkspaceDoc> {
   }));
 
   const stateDoc = planRow?.doc as
-    | { plan?: { scenarios: number; cases: number }; pageContext?: { url: string; fetchedAt: string } }
+    | { plan?: { scenarios: number; cases: number }; pageContext?: { url: string; fetchedAt: string }; contextMode?: 'repo' | 'page' | 'auto' }
     | undefined;
   const plan = stateDoc?.plan ?? null;
   const pageContext = stateDoc?.pageContext ?? null;
-  return { plan, pageContext, scenarios, looseCases };
+  const contextMode = stateDoc?.contextMode ?? 'auto';
+  return { plan, pageContext, contextMode, scenarios, looseCases };
 }
 
 /** 读当前 doc（ai_workspace_state.doc jsonb），行不存在时返回空对象。 */
@@ -137,6 +145,20 @@ export async function announcePlan(requirementId: string, plan: { scenarios: num
 export async function recordPageInspection(requirementId: string, url: string): Promise<void> {
   const current = await readStateDoc(requirementId);
   const doc = { ...current, pageContext: { url, fetchedAt: new Date().toISOString() } };
+  await db
+    .insert(aiWorkspaceState)
+    .values({ requirementId, doc })
+    .onConflictDoUpdate({
+      target: aiWorkspaceState.requirementId,
+      set: { doc, updatedAt: new Date() },
+    });
+  publish(requirementId);
+}
+
+/** 写 context-mode（仅合法值 'repo' | 'page' | 'auto' 由上层 zod schema 保证）。 */
+export async function recordContextMode(requirementId: string, mode: 'repo' | 'page' | 'auto'): Promise<void> {
+  const current = await readStateDoc(requirementId);
+  const doc = { ...current, contextMode: mode };
   await db
     .insert(aiWorkspaceState)
     .values({ requirementId, doc })
