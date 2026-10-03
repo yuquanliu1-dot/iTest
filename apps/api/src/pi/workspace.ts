@@ -30,16 +30,19 @@ export interface StagedScenario {
   description: string | null;
   cases: StagedCase[];
 }
+export interface RepoContext { commit: string; fetchedAt: string; mode: 'repo' | 'auto'; }
 export interface WorkspaceDoc {
   plan: { scenarios: number; cases: number } | null;
+  contextMode: 'repo' | 'page' | 'auto';
   /** inspect_page 成功抓取过的被测页面；用于前端"已参考页面实际代码"标识与保存时 URL 优先级。 */
   pageContext: { url: string; fetchedAt: string } | null;
+  repoContext: RepoContext | null;
   scenarios: StagedScenario[];
   looseCases: StagedCase[];
 }
 
 export function emptyDoc(): WorkspaceDoc {
-  return { plan: null, pageContext: null, scenarios: [], looseCases: [] };
+  return { plan: null, contextMode: 'auto', pageContext: null, repoContext: null, scenarios: [], looseCases: [] };
 }
 
 function publish(reqId: string): void {
@@ -103,11 +106,18 @@ export async function loadDoc(requirementId: string): Promise<WorkspaceDoc> {
   }));
 
   const stateDoc = planRow?.doc as
-    | { plan?: { scenarios: number; cases: number }; pageContext?: { url: string; fetchedAt: string } }
+    | {
+        plan?: { scenarios: number; cases: number };
+        contextMode?: 'repo' | 'page' | 'auto';
+        pageContext?: { url: string; fetchedAt: string };
+        repoContext?: RepoContext;
+      }
     | undefined;
   const plan = stateDoc?.plan ?? null;
+  const contextMode = (stateDoc?.contextMode ?? 'auto') as 'repo' | 'page' | 'auto';
   const pageContext = stateDoc?.pageContext ?? null;
-  return { plan, pageContext, scenarios, looseCases };
+  const repoContext = (stateDoc?.repoContext as RepoContext | null) ?? null;
+  return { plan, contextMode, pageContext, repoContext, scenarios, looseCases };
 }
 
 /** 读当前 doc（ai_workspace_state.doc jsonb），行不存在时返回空对象。 */
@@ -137,6 +147,32 @@ export async function announcePlan(requirementId: string, plan: { scenarios: num
 export async function recordPageInspection(requirementId: string, url: string): Promise<void> {
   const current = await readStateDoc(requirementId);
   const doc = { ...current, pageContext: { url, fetchedAt: new Date().toISOString() } };
+  await db
+    .insert(aiWorkspaceState)
+    .values({ requirementId, doc })
+    .onConflictDoUpdate({
+      target: aiWorkspaceState.requirementId,
+      set: { doc, updatedAt: new Date() },
+    });
+  publish(requirementId);
+}
+
+export async function recordContextMode(requirementId: string, mode: 'repo' | 'page' | 'auto'): Promise<void> {
+  const current = await readStateDoc(requirementId);
+  const doc = { ...current, contextMode: mode };
+  await db
+    .insert(aiWorkspaceState)
+    .values({ requirementId, doc })
+    .onConflictDoUpdate({
+      target: aiWorkspaceState.requirementId,
+      set: { doc, updatedAt: new Date() },
+    });
+  publish(requirementId);
+}
+
+export async function recordRepoCheckout(requirementId: string, ctx: RepoContext): Promise<void> {
+  const current = await readStateDoc(requirementId);
+  const doc = { ...current, repoContext: ctx };
   await db
     .insert(aiWorkspaceState)
     .values({ requirementId, doc })
