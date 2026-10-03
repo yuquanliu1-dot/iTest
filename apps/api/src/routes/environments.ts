@@ -11,8 +11,8 @@ export const environmentsRoute = Router();
 
 const MASK = '••••••••';
 const SECRET_KEYS = [
-  'db_password_ciphertext', 'db_password_iv', 'db_password_tag',
-  'syslog_key_ciphertext', 'syslog_key_iv', 'syslog_key_tag',
+  'dbPasswordCiphertext', 'dbPasswordIv', 'dbPasswordTag',
+  'syslogKeyCiphertext', 'syslogKeyIv', 'syslogKeyTag',
 ] as const;
 
 function maskSecrets(row: Record<string, unknown>): Record<string, unknown> {
