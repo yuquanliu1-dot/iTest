@@ -257,9 +257,9 @@ async function dirExists(p: string): Promise<boolean> {
   return fs.stat(p).then((s) => s.isDirectory()).catch(() => false);
 }
 
-function runGit(args: string[]): Promise<string> {
+function runGit(args: string[], cwdArg: string = process.cwd()): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('git', args, { cwd: cwdArg, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
     child.stdout.on('data', (d) => { out += d.toString(); });
@@ -269,9 +269,47 @@ function runGit(args: string[]): Promise<string> {
   });
 }
 
-async function fetchAndReset(_target: string, _info: ProjectRepo): Promise<string> {
-  // 第一版占位：直接返回 target；后续 task 加上 fetch + reset + dirty stash
-  throw new Error('not yet implemented: fetchAndReset');
+function runGitIn(cwdArg: string, args: string[]): Promise<string> {
+  return runGit(args, cwdArg);
+}
+
+async function cloneFirst(target: string, info: ProjectRepo): Promise<void> {
+  try {
+    await runGit(['clone', '--depth', '1', '--branch', info.branch, injectPat(info.repoUrl, info.provider, info.pat, info.gitlabOverride), target]);
+  } catch (e) {
+    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
+    const msg = (e as Error).message;
+    const reason: RepoUnavailableReason = /401|403|auth/i.test(msg) ? 'auth_failed' : 'clone_failed';
+    throw new RepoUnavailableError(reason, msg);
+  }
+}
+
+async function fetchAndReset(target: string, info: ProjectRepo): Promise<string> {
+  // 1. dirty 检查：tracked 修改 / untracked 文件 → stash
+  const status = await runGitIn(target, ['status', '--porcelain']).catch(() => '');
+  let stashRef: string | null = null;
+  if (status.trim().length > 0) {
+    const stashOut = await runGitIn(target, ['stash', 'push', '--include-untracked', '-m', `itest-auto-${Date.now()}`]);
+    stashRef = stashOut.match(/refs\/stash\{\d+\}/)?.[0] ?? stashOut.trim();
+  }
+  // 2. fetch + reset
+  try {
+    await runGitIn(target, ['fetch', '--depth', '1', 'origin', info.branch]);
+    await runGitIn(target, ['reset', '--hard', `origin/${info.branch}`]);
+  } catch (e) {
+    const msg = (e as Error).message;
+    throw new RepoUnavailableError(/401|403/i.test(msg) ? 'auth_failed' : 'fetch_failed', msg);
+  }
+  // 3. 写 meta
+  const commit = (await runGitIn(target, ['rev-parse', 'HEAD'])).trim();
+  await fs.writeFile(path.join(target, '.itest-sandbox.json'), JSON.stringify({
+    provider: info.provider,
+    branch: info.branch,
+    commit,
+    fetchedAt: new Date().toISOString(),
+    ...(stashRef ? { stashRef } : {}),
+  }, null, 2));
+  return target;
 }
 
 /** 第一阶段：先实现 no_repo / 锁 / 目录骨架。clone / fetch / stash 后补。 */
@@ -285,7 +323,7 @@ export async function checkoutRepo(requirementId: string): Promise<string> {
   if (await dirExists(target)) {
     // 锁定；保证并发只跑一次 fetch
     try {
-      const release = await lockfile.lock(`${target}/.lock`, { retries: 0, stale: 30_000 });
+      const release = await lockfile.lock(target, { retries: 0, stale: 30_000 });
       try { return await fetchAndReset(target, info); } finally { await release(); }
     } catch (e) {
       if ((e as { code?: string }).code === 'ELOCKED') throw new LockTimeoutError('another fetch in progress');
@@ -293,18 +331,10 @@ export async function checkoutRepo(requirementId: string): Promise<string> {
     }
   } else {
     await fs.mkdir(target, { recursive: true });
-    const release = await lockfile.lock(`${target}/.lock`, { retries: 0, stale: 30_000 }).catch(() => null);
+    const release = await lockfile.lock(target, { retries: 0, stale: 30_000 }).catch(() => null);
     try {
-      // 第一版：clone 失败抛 RepoUnavailableError(clone_failed)；后续 task 细化 PAT / dirty / auth
-      try {
-        await runGit(['clone', '--depth', '1', '--branch', info.branch, injectPat(info.repoUrl, info.provider, info.pat, info.gitlabOverride), target]);
-      } catch (e) {
-        await fs.rm(target, { recursive: true, force: true }).catch(() => {});
-        const msg = (e as Error).message;
-        const reason: RepoUnavailableReason = /401|403|auth/i.test(msg) ? 'auth_failed' : 'clone_failed';
-        throw new RepoUnavailableError(reason, msg);
-      }
-      return target;
+      await cloneFirst(target, info);
+      return await fetchAndReset(target, info);
     } finally { if (release) await release(); }
   }
 }

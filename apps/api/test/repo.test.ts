@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
@@ -50,5 +51,51 @@ describe('checkoutRepo', () => {
     await pool.query(`UPDATE projects SET repo_url=$1 WHERE id=$2`, ['https://github.com/itest-nonexistent-12345-xyz/foo.git', projectId]);
     const { checkoutRepo, RepoUnavailableError } = await import('../src/pi/repo.js');
     await expect(checkoutRepo(reqId)).rejects.toBeInstanceOf(RepoUnavailableError);
+  }, 30_000);
+});
+
+async function makeBareRepo(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-bare-'));
+  spawnSync('git', ['init', '--bare', dir], { stdio: 'ignore' });
+  // 推一个 commit 到 main
+  const work = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-work-'));
+  spawnSync('git', ['init', '-b', 'main', work], { stdio: 'ignore' });
+  spawnSync('git', ['config', 'user.email', 't@t'], { cwd: work });
+  spawnSync('git', ['config', 'user.name', 't'], { cwd: work });
+  await fs.writeFile(path.join(work, 'f.txt'), 'hello');
+  spawnSync('git', ['add', '.'], { cwd: work });
+  spawnSync('git', ['commit', '-m', 'init'], { cwd: work });
+  spawnSync('git', ['remote', 'add', 'origin', dir], { cwd: work });
+  spawnSync('git', ['push', 'origin', 'main'], { cwd: work });
+  await fs.rm(work, { recursive: true, force: true });
+  return dir;
+}
+
+describe('checkoutRepo end-to-end (local bare repo)', () => {
+  it('首次 checkout 浅克隆 + 写 .itest-sandbox.json', async () => {
+    const bare = await makeBareRepo();
+    await pool.query(`UPDATE projects SET repo_url=$1, default_branch='main', provider='github' WHERE id=$2`, [bare, projectId]);
+    const { checkoutRepo } = await import('../src/pi/repo.js');
+    const target = await checkoutRepo(reqId);
+    expect(target.startsWith(reposRoot)).toBe(true);
+    const meta = JSON.parse(await fs.readFile(path.join(target, '.itest-sandbox.json'), 'utf8'));
+    expect(meta.branch).toBe('main');
+    expect(meta.provider).toBe('github');
+    expect(typeof meta.commit).toBe('string');
+    expect(meta.commit.length).toBeGreaterThanOrEqual(7);
+    await fs.rm(bare, { recursive: true, force: true });
+  }, 30_000);
+
+  it('第二次 checkout 复用本地，commit 保持一致', async () => {
+    const bare = await makeBareRepo();
+    await pool.query(`UPDATE projects SET repo_url=$1, default_branch='main', provider='github' WHERE id=$2`, [bare, projectId]);
+    const { checkoutRepo } = await import('../src/pi/repo.js');
+    const t1 = await checkoutRepo(reqId);
+    const m1 = JSON.parse(await fs.readFile(path.join(t1, '.itest-sandbox.json'), 'utf8'));
+    const t2 = await checkoutRepo(reqId);
+    expect(t1).toBe(t2);
+    const m2 = JSON.parse(await fs.readFile(path.join(t2, '.itest-sandbox.json'), 'utf8'));
+    expect(m2.commit).toBe(m1.commit);
+    await fs.rm(bare, { recursive: true, force: true });
   }, 30_000);
 });
