@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import Button from '../components/ui/Button';
 import { useUIStore } from '../stores/ui';
 import { fullDateTime } from '../lib/format';
+import type { DbQueryRowResult, ObserveLogLineResult } from '@itest/shared';
 
 interface StepResult {
   order: number;
@@ -21,6 +22,10 @@ interface StepResult {
   failureReason?: string;
   humanMessage?: string;
   hitLocator?: { kind: string; value: string };
+  /** queryDb 步骤的结果（仅 queryDb 步携带） */
+  db?: DbQueryRowResult;
+  /** observeLog 步骤的结果（仅 observeLog 步携带） */
+  log?: ObserveLogLineResult;
 }
 
 function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -178,6 +183,8 @@ export default function ReportDetail() {
               )}
             </div>
           )}
+          {s.db && <DbResultCell db={s.db} />}
+          {s.log && <LogResultCell log={s.log} />}
         </div>
         {s.screenshot && (
           <button
@@ -422,5 +429,99 @@ export default function ReportDetail() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function DbResultCell({ db }: { db: DbQueryRowResult }) {
+  return (
+    <details className="text-[11px]">
+      <summary
+        className="cursor-pointer"
+        style={{ color: 'var(--color-foreground-muted)' }}
+      >
+        DB 查询：{db.rowCount} 行{db.truncated ? '（截断）' : ''}
+        {db.assertion && (
+          <span
+            style={{
+              color: db.assertion.matched ? 'var(--color-success)' : 'var(--color-destructive)',
+              marginLeft: 8,
+            }}
+          >
+            {db.assertion.matched ? '✓ 命中' : '✕ 未命中'}「{db.assertion.expected}」
+          </span>
+        )}
+      </summary>
+      <pre
+        style={{
+          maxHeight: 240,
+          overflow: 'auto',
+          fontSize: 11,
+          margin: '4px 0',
+          padding: 8,
+          borderRadius: 4,
+          background: 'var(--color-background-subtle)',
+          color: 'var(--color-foreground-secondary)',
+          border: '1px solid var(--color-glass-border)',
+        }}
+      >
+        {JSON.stringify(db.rows.slice(0, 5), null, 2)}
+      </pre>
+    </details>
+  );
+}
+
+function LogResultCell({ log }: { log: ObserveLogLineResult }) {
+  return (
+    <details className="text-[11px]">
+      <summary
+        className="cursor-pointer"
+        style={{ color: 'var(--color-foreground-muted)' }}
+      >
+        日志：匹配 {log.matchedLineCount} 行{log.truncated ? '（截断）' : ''}
+        {log.assertion && (
+          <span
+            style={{
+              color: log.assertion.matched ? 'var(--color-success)' : 'var(--color-destructive)',
+              marginLeft: 8,
+            }}
+          >
+            {log.assertion.matched ? '✓ 命中' : '✕ 未命中'}「{log.assertion.expected}」
+          </span>
+        )}
+      </summary>
+      <div
+        style={{
+          maxHeight: 240,
+          overflow: 'auto',
+          fontSize: 11,
+          margin: '4px 0',
+          padding: 8,
+          borderRadius: 4,
+          background: 'var(--color-background-subtle)',
+          color: 'var(--color-foreground-secondary)',
+          border: '1px solid var(--color-glass-border)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1,
+        }}
+      >
+        {log.lines.slice(0, 20).map((l, i) => (
+          <div
+            key={i}
+            style={{
+              background: l.raw.includes('ERROR') ? 'var(--color-destructive-light)' : undefined,
+              padding: '1px 4px',
+              borderRadius: 2,
+              fontFamily: 'monospace',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+            }}
+          >
+            {l.ts ? <span style={{ color: 'var(--color-foreground-muted)', marginRight: 6 }}>{l.ts}</span> : null}
+            {l.raw}
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
