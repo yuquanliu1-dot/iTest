@@ -4,6 +4,8 @@ interface SegmentOption<T extends string> {
   value: T;
   label: string;
   icon?: IconName;
+  disabled?: boolean;
+  title?: string;
 }
 
 interface SegmentedProps<T extends string> {
@@ -23,6 +25,8 @@ export default function Segmented<T extends string>({ options, value, onChange }
           role="tab"
           aria-selected={opt.value === value}
           className={opt.value === value ? 'active' : undefined}
+          disabled={opt.disabled}
+          title={opt.title}
           onClick={() => onChange(opt.value)}
           style={{ gap: opt.icon ? 6 : undefined }}
         >
