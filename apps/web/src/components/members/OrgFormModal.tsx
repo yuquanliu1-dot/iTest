@@ -128,7 +128,7 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
           <button
             onClick={onClose}
             disabled={saving}
-            style={{ fontSize: 13, padding: '6px 14px', color: 'var(--color-foreground-muted)', background: 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+            style={{ fontSize: 13, padding: '6px 14px', color: 'var(--color-foreground-muted)', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 6, cursor: 'pointer' }}
           >
             取消
           </button>

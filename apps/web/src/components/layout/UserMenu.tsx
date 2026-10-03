@@ -78,12 +78,12 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
         gap: 10,
         padding: '8px 8px',
         borderRadius: 'var(--radius-md)',
-        border: 'none',
-        background: 'transparent',
+        border: '1px solid var(--color-glass-border)',
+        background: 'var(--color-background-elevated)',
         color: 'var(--color-foreground)',
         cursor: 'pointer',
         textAlign: 'left',
-        transition: 'background 160ms ease, transform 120ms ease',
+        transition: 'background 160ms ease, transform 120ms ease, border-color 160ms ease',
       };
 
   return (
@@ -241,8 +241,8 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
                   fontSize: 13,
                   color: 'var(--color-foreground)',
                   cursor: 'pointer',
-                  background: 'transparent',
-                  border: 'none',
+                  background: 'var(--color-background-elevated)',
+                  border: '1px solid transparent',
                   outline: 'none',
                 }}
               >
@@ -277,8 +277,8 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
                         fontSize: 13,
                         color: 'var(--color-foreground)',
                         cursor: 'pointer',
-                        background: 'transparent',
-                        border: 'none',
+                        background: 'var(--color-background-elevated)',
+                        border: '1px solid transparent',
                         outline: 'none',
                       }}
                     >
@@ -304,8 +304,8 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
               fontSize: 13,
               color: 'var(--color-foreground)',
               cursor: 'pointer',
-              background: 'transparent',
-              border: 'none',
+              background: 'var(--color-background-elevated)',
+              border: '1px solid transparent',
               outline: 'none',
             }}
           >
@@ -327,8 +327,8 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
                 fontSize: 13,
                 color: 'var(--color-foreground)',
                 cursor: 'pointer',
-                background: 'transparent',
-                border: 'none',
+                background: 'var(--color-background-elevated)',
+                border: '1px solid transparent',
                 outline: 'none',
               }}
             >
@@ -376,8 +376,8 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
               fontSize: 13,
               color: 'var(--color-destructive)',
               cursor: 'pointer',
-              background: 'transparent',
-              border: 'none',
+              background: 'var(--color-background-elevated)',
+              border: '1px solid transparent',
               outline: 'none',
             }}
           >

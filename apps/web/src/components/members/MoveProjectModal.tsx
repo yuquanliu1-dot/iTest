@@ -66,7 +66,7 @@ export default function MoveProjectModal({ visible, projectId, projectName, curr
             ))}
           </select>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
-            <button onClick={onClose} disabled={saving} style={{ padding: '6px 14px', background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}>取消</button>
+            <button onClick={onClose} disabled={saving} style={{ padding: '6px 14px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
             <button onClick={() => void handleSubmit()} disabled={saving || !target} style={{
               padding: '6px 14px', border: 'none', background: 'var(--color-accent)', color: 'var(--color-accent-foreground)', borderRadius: 6,
               cursor: saving || !target ? 'default' : 'pointer', opacity: saving || !target ? 0.6 : 1,

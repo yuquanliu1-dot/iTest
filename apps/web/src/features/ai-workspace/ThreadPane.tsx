@@ -95,7 +95,7 @@ function ThreadPaneBody({ threadId, initialMessage }: { threadId: string; initia
               maxRows={6}
               placeholder="描述你的需求，AI 将生成测试用例…"
               className="flex-1 resize-none rounded-md border px-3 py-2 text-[13px] outline-none"
-              style={{ borderColor: 'var(--color-border)', background: 'transparent', color: 'var(--color-foreground)' }}
+              style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground)' }}
             />
             <ThreadPrimitive.If running={false}>
               <ComposerPrimitive.Send

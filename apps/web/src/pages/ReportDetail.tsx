@@ -195,7 +195,7 @@ export default function ReportDetail() {
             }}
             aria-label={`放大 step ${s.order} 截图`}
             className="shrink-0 rounded-[var(--radius-sm)] overflow-hidden press"
-            style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', padding: 0, cursor: 'zoom-in' }}
+            style={{ border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', padding: 0, cursor: 'zoom-in' }}
           >
             <img
               src={s.screenshot}

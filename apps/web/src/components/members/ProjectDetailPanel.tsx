@@ -119,7 +119,7 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
             {project && (
               <button
                 className="text-[11px]"
-                style={{ marginLeft: 'auto', padding: '3px 10px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}
+                style={{ marginLeft: 'auto', padding: '3px 10px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}
                 onClick={() => setMoving(true)}
               >
                 移动组织
@@ -133,7 +133,7 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
             <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-foreground-muted)', flex: 1 }}>已分配用户（{total}）</span>
             <button
               className="text-[11px]"
-              style={{ padding: '3px 10px', borderRadius: 6, border: '1px solid var(--color-accent)', background: 'transparent', color: 'var(--color-accent)', cursor: 'pointer' }}
+              style={{ padding: '3px 10px', borderRadius: 6, border: '1px solid var(--color-accent)', background: 'var(--color-surface-overlay)', color: 'var(--color-accent)', cursor: 'pointer' }}
               onClick={openAdd}
             >
               + 批量添加
@@ -148,7 +148,7 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
                 <span className="truncate" style={{ flex: 1, color: 'var(--color-foreground)' }}>
                   {a.displayName ?? a.username} <span style={{ color: 'var(--color-foreground-disabled)' }}>@{a.username}</span>
                 </span>
-                <button className="text-[11px]" style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)', cursor: 'pointer' }} onClick={() => void removeOne(a.userId)}>
+                <button className="text-[11px]" style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)', cursor: 'pointer' }} onClick={() => void removeOne(a.userId)}>
                   移出
                 </button>
               </div>
@@ -183,7 +183,7 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
               ))}
             </div>
             <div className="flex justify-end gap-2" style={{ marginTop: 12 }}>
-              <button onClick={closeAdd} disabled={submitting} style={{ padding: '6px 14px', background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}>取消</button>
+              <button onClick={closeAdd} disabled={submitting} style={{ padding: '6px 14px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
               <button onClick={() => void submitBatch()} disabled={picked.size === 0 || submitting} style={{
                 padding: '6px 14px', border: 'none', background: 'var(--color-accent)', color: 'var(--color-accent-foreground)', borderRadius: 6,
                 cursor: picked.size === 0 || submitting ? 'default' : 'pointer',

@@ -115,7 +115,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
                   padding: 0,
                   border: '1px solid var(--color-border)',
                   borderRadius: 8,
-                  background: 'transparent',
+                  background: 'var(--color-surface-overlay)',
                   cursor: 'pointer',
                 }}
                 aria-label="自定义颜色"

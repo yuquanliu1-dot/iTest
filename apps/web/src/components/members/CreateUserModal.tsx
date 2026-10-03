@@ -91,7 +91,7 @@ export default function CreateUserModal({ visible, orgId, orgName, onClose, onCr
               <div>临时密码（仅展示一次，请立即转交给用户）：</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
                 <code style={{ flex: 1, padding: '6px 10px', borderRadius: 6, background: 'var(--color-background)', color: 'var(--color-foreground)', fontFamily: 'var(--font-mono)', fontSize: 13, overflowWrap: 'anywhere' }}>{temporaryPassword}</code>
-                <button onClick={copyPassword} style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-accent)', cursor: 'pointer' }}>复制</button>
+                <button onClick={copyPassword} style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-accent)', cursor: 'pointer' }}>复制</button>
               </div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
@@ -109,7 +109,7 @@ export default function CreateUserModal({ visible, orgId, orgName, onClose, onCr
               <input type="text" value={form.displayName} onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))} placeholder="显示名" className="input-base" />
               <input type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} placeholder="邮箱（可选）" className="input-base" />
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
-                <button onClick={onClose} disabled={saving} style={{ padding: '6px 14px', background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}>取消</button>
+                <button onClick={onClose} disabled={saving} style={{ padding: '6px 14px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
                 <button onClick={() => void handleSubmit()} disabled={saving || !form.username.trim()} style={{
                   padding: '6px 14px', border: 'none', background: 'var(--color-accent)', color: 'var(--color-accent-foreground)', borderRadius: 6,
                   cursor: saving || !form.username.trim() ? 'default' : 'pointer',

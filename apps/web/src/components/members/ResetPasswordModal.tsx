@@ -61,7 +61,7 @@ export default function ResetPasswordModal({ visible, userId, userName, onClose 
               <div>临时密码（仅展示一次）：</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
                 <code style={{ flex: 1, padding: '6px 10px', borderRadius: 6, background: 'var(--color-background)', color: 'var(--color-foreground)', fontFamily: 'var(--font-mono)', fontSize: 13, overflowWrap: 'anywhere' }}>{temporaryPassword}</code>
-                <button onClick={copyPassword} style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-accent)', cursor: 'pointer' }}>复制</button>
+                <button onClick={copyPassword} style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-accent)', cursor: 'pointer' }}>复制</button>
               </div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
@@ -77,7 +77,7 @@ export default function ResetPasswordModal({ visible, userId, userName, onClose 
               确定重置「{userName}」的密码？该用户将被迫下线并需重设密码。
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={onClose} disabled={saving} style={{ padding: '6px 14px', background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}>取消</button>
+              <button onClick={onClose} disabled={saving} style={{ padding: '6px 14px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
               <button onClick={() => void handleConfirm()} disabled={saving} style={{
                 padding: '6px 14px', background: 'var(--color-accent)', color: 'var(--color-accent-foreground)', border: 'none', borderRadius: 6,
                 cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1,
