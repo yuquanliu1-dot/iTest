@@ -101,7 +101,6 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
               ok: true,
               data: asData({
                 content: slice.length > MAX_OUTPUT_CHARS ? slice.slice(0, MAX_OUTPUT_CHARS) + '…(truncated)' : slice,
-                lines: sliced,
                 totalLines: lines.length,
                 truncated: lines.length > offset + cap,
               }),
