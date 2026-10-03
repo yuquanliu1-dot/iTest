@@ -6,11 +6,14 @@ export interface CurrentProject {
   id: string;
   name: string;
   defaultUrl: string | null;
+  versionId: string | null;
+  versionName: string | null;
 }
 
 interface ProjectState {
   current: CurrentProject | null;
   enter: (p: CurrentProject) => void;
+  switchVersion: (versionId: string, versionName: string) => void;
   exit: () => void;
 }
 
@@ -28,18 +31,33 @@ function readStored(): CurrentProject | null {
     const v = localStorage.getItem(STORAGE_KEY);
     if (!v) return null;
     const parsed = JSON.parse(v) as CurrentProject;
-    return typeof parsed.id === 'string' && typeof parsed.name === 'string' ? parsed : null;
+    if (typeof parsed.id !== 'string' || typeof parsed.name !== 'string') return null;
+    return {
+      id: parsed.id,
+      name: parsed.name,
+      defaultUrl: parsed.defaultUrl ?? null,
+      versionId: parsed.versionId ?? null,
+      versionName: parsed.versionName ?? null,
+    };
   } catch {
     return null;
   }
 }
 
-export const useProjectStore = create<ProjectState>((set) => ({
+export const useProjectStore = create<ProjectState>((set, get) => ({
   current: readStored(),
 
   enter: (p) => {
     set({ current: p });
     persist(p);
+  },
+
+  switchVersion: (versionId, versionName) => {
+    const cur = get().current;
+    if (!cur) return;
+    const next: CurrentProject = { ...cur, versionId, versionName };
+    set({ current: next });
+    persist(next);
   },
 
   exit: () => {
