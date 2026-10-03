@@ -32,6 +32,8 @@ export const FailureReason = z.enum([
   'SyslogFileMissing',
   'SyslogTimeout',
   'LogAssertionFailed',
+  'EnvMissing',
+  'EnvProjectMismatch',
   'Unknown',
 ]);
 export type FailureReason = z.infer<typeof FailureReason>;

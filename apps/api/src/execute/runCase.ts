@@ -11,10 +11,11 @@ import type { WindowStrategy, PreflightReport } from '@itest/shared';
  * 返回 reportId 与最终状态，供单用例路由和执行计划共用。
  * `storageState` 用于在执行计划中复用登录准备阶段导出的 cookie/localStorage。
  * `forceFail`（测试用）在进入 CDP 前直接写失败报告，便于 fail_fast 行为测试。
+ * `envOverride`（计划级）覆盖用例 defaultEnvId，用于执行计划上下文。
  */
 export async function runCase(
   caseId: string,
-  opts?: { storageState?: unknown; forceFail?: boolean },
+  opts?: { storageState?: unknown; forceFail?: boolean; envOverride?: { envId: string } | null },
 ): Promise<{ reportId: string; status: string }> {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
   if (!caseRow) throw new Error('case not found');
@@ -54,6 +55,48 @@ export async function runCase(
   };
   const incognito = !!caseRow.incognito;
 
+  // Resolve envCtx before any CDP launch: planEnv > case defaultEnv. EnvMissing/EnvProjectMismatch
+  // are surfaced as a single failed stepResult (no 500). DecryptError propagates as a real error.
+  const { resolveEnv } = await import('./envContext.js');
+  let envCtx: import('./envContext.js').EnvCtx | undefined;
+  try {
+    envCtx = await resolveEnv(
+      {
+        planEnvId: opts?.envOverride?.envId ?? null,
+        caseEnvId: caseRow.defaultEnvId ?? null,
+      },
+      projectId ? { expectedProjectId: projectId } : undefined,
+    );
+  } catch (e) {
+    const errName = e instanceof Error ? e.name : '';
+    if (errName === 'EnvMissing' || errName === 'EnvProjectMismatch') {
+      const failureReason = errName as 'EnvMissing' | 'EnvProjectMismatch';
+      const humanMessage =
+        errName === 'EnvProjectMismatch'
+          ? '环境所属项目与当前用例不匹配'
+          : '缺少环境配置，请到项目设置配置测试环境';
+      const stepResults: ExecStepResult[] = [{
+        order: 1,
+        status: 'failed',
+        durationMs: 0,
+        error: e instanceof Error ? e.message : String(e),
+        failureReason,
+        humanMessage,
+      }];
+      await db
+        .update(reports)
+        .set({
+          status: 'failed',
+          durationMs: 0,
+          stepResults: stepResults as object,
+          summary: e instanceof Error ? e.message : String(e),
+        })
+        .where(eq(reports.id, reportId));
+      return { reportId, status: 'failed' };
+    }
+    throw e;
+  }
+
   // 初始导航由用例级 init URL（test_cases.url → 分组 → 项目）保证。回放前 always goto 一次，
   // 执行器内部对首条同 URL navigate 做去重（cdp.ts init-goto dedupe），避免与录制残留的首步重复。
   const resolved = await resolveCaseUrl(caseRow);
@@ -76,7 +119,7 @@ export async function runCase(
         componentKind: s.componentKind,
         sensitive: s.sensitive,
       })),
-      { reportId, projectId },
+      { reportId, projectId, envCtx },
       targetUrl,
       opts?.storageState,
       (r) => {
@@ -101,6 +144,8 @@ export async function runCase(
       },
     ];
     status = 'failed';
+  } finally {
+    if (envCtx) envCtx.close().catch(() => undefined);
   }
 
   const durationMs = Date.now() - startedAt;

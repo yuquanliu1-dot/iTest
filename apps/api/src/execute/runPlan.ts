@@ -1,5 +1,6 @@
 import { eq, and, asc } from 'drizzle-orm';
 import { chromium } from 'playwright-core';
+import { logger } from '../logger.js';
 import { db } from '../db/client.js';
 import {
   executionPlans,
@@ -82,6 +83,28 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   let failed = 0;
   let skipped = 0;
 
+  // Plan-level env override: validate the env exists & belongs to the plan's project (no 500 on mismatch —
+  // fall back to per-case defaultEnv). The ctx is closed immediately — per-case runCase will re-resolve
+  // the same envId to obtain a fresh pg.Pool when it actually needs one.
+  let planEnv: { envId: string } | undefined;
+  if (plan.environmentId) {
+    try {
+      const { resolveEnv } = await import('./envContext.js');
+      const ctx = await resolveEnv(
+        { planEnvId: plan.environmentId },
+        { expectedProjectId: plan.projectId },
+      );
+      planEnv = { envId: ctx.envId };
+      await ctx.close();
+    } catch (e) {
+      logger.warn(
+        { err: e, planId: plan.id },
+        'plan env resolve failed; cases will use their own defaultEnv',
+      );
+      planEnv = undefined;
+    }
+  }
+
   // 登录准备
   if (run.loginPrepareEnabled) {
     const incognitoIds = await findIncognitoCaseIds(plan.id);
@@ -115,7 +138,9 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
           const row = ins[0]!;
           publish(planRunId, { type: 'plan_run_login', caseId: cid, stepKind: 'login_prepare', status: 'running' });
           try {
-            const r = await runCase(cid);
+            const r = await runCase(cid, {
+              ...(planEnv ? { envOverride: { envId: planEnv.envId } } : {}),
+            });
             await db
               .update(planRunCases)
               .set({
@@ -207,6 +232,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       const r = await runCase(c.caseId, {
         storageState: loginState,
         forceFail: forceFailIds.has(c.caseId),
+        ...(planEnv ? { envOverride: { envId: planEnv.envId } } : {}),
       });
       await db
         .update(planRunCases)
