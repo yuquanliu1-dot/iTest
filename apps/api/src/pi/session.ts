@@ -7,6 +7,8 @@
  * 再用我们自己的 router.ts 把 AgentSession 事件映射到 react-pi 的 HTTP+SSE 契约上。
  */
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { aiThreads } from '../db/schema.js';
@@ -15,6 +17,7 @@ import { readLlmConfig, type LlmProvider } from './modelBridge.js';
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
 import { checkoutRepo, RepoUnavailableError, buildRepoSandboxTools } from './repo.js';
+import { recordRepoCheckout } from './workspace.js';
 
 export interface PiSessionLike {
   subscribe(fn: (e: unknown) => void): () => void;
@@ -80,6 +83,18 @@ export async function ensureRecord(requirementId: string, opts: { contextMode?: 
   try {
     cwd = await checkoutRepo(requirementId);
     repoAvailable = true;
+    // checkout 成功后把 commit/fetchedAt 写进 workspace doc（右栏「已参考源码 v<sha>」chip 数据源）。
+    // best-effort：读 meta / 写 doc 失败不阻塞会话创建。
+    try {
+      const meta = JSON.parse(await fs.readFile(path.join(cwd, '.itest-sandbox.json'), 'utf8')) as { commit?: string; fetchedAt?: string };
+      if (meta.commit) {
+        await recordRepoCheckout(requirementId, {
+          commit: meta.commit,
+          fetchedAt: meta.fetchedAt ?? new Date().toISOString(),
+          mode: opts.contextMode === 'repo' ? 'repo' : 'auto',
+        });
+      }
+    } catch { /* doc.repoContext 更新失败不阻塞会话 */ }
   } catch (e) {
     if (!(e instanceof RepoUnavailableError)) throw e;
   }
