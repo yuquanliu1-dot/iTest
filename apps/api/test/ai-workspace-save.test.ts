@@ -54,7 +54,7 @@ describe('ai-thread + ai-workspace + save', () => {
     const rid = r.rows[0]!.id as string;
     await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
       { id: 'c1', title: 'C1', description: 'd', priority: 'P0', steps: [
-        { name: 'step1', action: 'do X', assertion: 'check Y' },
+        { name: 'step1', action: 'do X', assertion: '断言看见工作台' },
       ] },
     ] });
     const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
@@ -68,6 +68,9 @@ describe('ai-thread + ai-workspace + save', () => {
     expect(steps.rows[0]!.source).toBe('agent');
     expect((steps.rows[0]!.action as { kind: string }).kind).toBe('aiStep');
     expect((steps.rows[0]!.assertion as { kind: string }).kind).toBe('assertText');
+    // 新写入路径要落规范 assertText 形态（target=page, equals=text），否则回放引擎 dispatch 不认识。
+    expect((steps.rows[0]!.assertion as { target: string }).target).toBe('page');
+    expect((steps.rows[0]!.assertion as { equals: string }).equals).toBe('断言看见工作台');
     const doc = await ws.loadDoc(rid);
     expect(doc.scenarios).toEqual([]);
   });
@@ -232,6 +235,53 @@ describe('ai-thread + ai-workspace + save', () => {
     expect(onlyLoose.body.savedCases).toBe(1);
     const cases = await pool.query(`SELECT title FROM test_cases WHERE requirement_id = $1 ORDER BY title`, [rid2]);
     expect(cases.rows.map((row) => row.title)).toEqual(['Loose']);
+  });
+
+  it('upsertCase persists compiled field into staged step', async () => {
+    const ws = await import('../src/pi/workspace.js');
+    const { projectId } = await seedProject(pool);
+    const r = await pool.query(
+      `INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`,
+      [projectId],
+    );
+    const rid = r.rows[0]!.id as string;
+    await ws.upsertCase(rid, null, {
+      id: 'c1',
+      title: 'T',
+      description: null,
+      priority: 'P0',
+      steps: [
+        {
+          name: 's1',
+          action: 'click submit',
+          assertion: null,
+          compiled: [{ kind: 'click', locator: [{ strategy: 'text', value: 'submit' }] }],
+        },
+      ],
+    });
+    const doc = await ws.loadDoc(rid);
+    expect(doc.looseCases[0]!.steps[0]!.compiled).toEqual([
+      { kind: 'click', locator: [{ strategy: 'text', value: 'submit' }] },
+    ]);
+  });
+
+  it('upsertCase defaults missing compiled to null', async () => {
+    const ws = await import('../src/pi/workspace.js');
+    const { projectId } = await seedProject(pool);
+    const r = await pool.query(
+      `INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`,
+      [projectId],
+    );
+    const rid = r.rows[0]!.id as string;
+    await ws.upsertCase(rid, null, {
+      id: 'c1',
+      title: 'T',
+      description: null,
+      priority: 'P0',
+      steps: [{ name: 's1', action: 'click submit', assertion: null }],
+    });
+    const doc = await ws.loadDoc(rid);
+    expect(doc.looseCases[0]!.steps[0]!.compiled).toBeNull();
   });
 
   it('explicit caseId under unselected scenario saves only that case (partial selection)', async () => {

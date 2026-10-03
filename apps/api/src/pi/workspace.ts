@@ -68,7 +68,12 @@ export async function loadDoc(requirementId: string): Promise<WorkspaceDoc> {
       title: row.title,
       description: row.description,
       priority: row.priority as Priority,
-      steps: row.steps as unknown as StagedStep[],
+      steps: (row.steps as unknown as StagedStep[]).map((s) => ({
+        name: s.name,
+        action: s.action,
+        assertion: s.assertion ?? null,
+        compiled: s.compiled ?? null,
+      })),
     };
     if (row.scenarioId == null) looseCases.push(c);
     else {
