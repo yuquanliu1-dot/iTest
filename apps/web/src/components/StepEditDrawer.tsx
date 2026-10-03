@@ -74,7 +74,7 @@ export default function StepEditDrawer({ initial, availableVars = [], caseId, on
             </select>
             <div className="flex-1" />
             <Dialog.Close asChild>
-              <button type="button" className="press" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', fontSize: 16 }} title="关闭">✕</button>
+              <button type="button" className="press" style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', cursor: 'pointer', color: 'var(--color-foreground-muted)', fontSize: 16, borderRadius: 6 }} title="关闭">✕</button>
             </Dialog.Close>
           </div>
 
@@ -568,7 +568,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
                   }}
                   disabled={compiling}
                   className="press self-start text-[11px] px-2 py-1 rounded-[var(--radius-sm)] border border-dashed"
-                  style={{ borderColor: 'var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)', cursor: compiling ? 'wait' : 'pointer' }}
+                  style={{ borderColor: 'var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)', cursor: compiling ? 'wait' : 'pointer' }}
                 >
                   {compiling ? '编译中…' : '生成正则'}
                 </button>
@@ -616,7 +616,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
               type="button"
               onClick={() => setShowBoundary((v) => !v)}
               className="press self-start text-[11px] px-2 py-1 rounded-[var(--radius-sm)] border"
-              style={{ cursor: 'pointer', borderColor: 'var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)' }}
+              style={{ cursor: 'pointer', borderColor: 'var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)' }}
             >
               {showBoundary ? '收起使用边界提示' : '查看使用边界'}
             </button>
@@ -690,7 +690,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
                   type="button"
                   onClick={() => setFileId(undefined)}
                   className="press ml-2 text-[11px] underline-offset-2 hover:underline"
-                  style={{ background: 'transparent', border: 'none', color: 'var(--color-accent)', cursor: 'pointer' }}
+                  style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-accent)', cursor: 'pointer', borderRadius: 4 }}
                 >
                   更换
                 </button>
@@ -747,11 +747,11 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
                   <input className="input-base input-xs flex-1" value={w.equals} placeholder="等于" onChange={(e) => {
                     const next = [...queryWhere]; next[i] = { ...w, equals: e.target.value }; setQueryWhere(next);
                   }} />
-                  <button type="button" className="text-[11px] press" style={{ background: 'transparent', border: 'none', color: 'var(--color-destructive)', cursor: 'pointer' }} onClick={() => setQueryWhere(queryWhere.filter((_, j) => j !== i))}>✕</button>
+                  <button type="button" className="text-[11px] press" style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-destructive)', cursor: 'pointer', borderRadius: 4 }} onClick={() => setQueryWhere(queryWhere.filter((_, j) => j !== i))}>✕</button>
                 </div>
               ))}
               {queryWhere.length < 10 && (
-                <button type="button" className="text-[11px] self-start press" style={{ background: 'transparent', border: 'none', color: 'var(--color-accent)', cursor: 'pointer' }} onClick={() => setQueryWhere([...queryWhere, { column: queryTableCols[0] ?? '', equals: '' }])}>
+                <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--color-surface-overlay)', border: '1px dashed var(--color-glass-border)', color: 'var(--color-accent)', cursor: 'pointer', borderRadius: 4, padding: '4px 8px' }} onClick={() => setQueryWhere([...queryWhere, { column: queryTableCols[0] ?? '', equals: '' }])}>
                   + 增加条件
                 </button>
               )}
@@ -794,7 +794,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
 function DbAssertionEditor({ value, onChange, columns }: { value: { match: 'equals' | 'contains' | 'regex'; expected: string; column?: string } | undefined; onChange: (v: typeof value) => void; columns?: string[] }) {
   if (!value) {
     return (
-      <button type="button" className="text-[11px] self-start press" style={{ background: 'transparent', border: '1px dashed var(--color-glass-border)', color: 'var(--color-foreground-muted)', cursor: 'pointer', padding: '4px 8px', borderRadius: 5 }} onClick={() => onChange({ match: 'contains', expected: '' })}>
+      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--color-surface-overlay)', border: '1px dashed var(--color-glass-border)', color: 'var(--color-foreground-muted)', cursor: 'pointer', padding: '4px 8px', borderRadius: 5 }} onClick={() => onChange({ match: 'contains', expected: '' })}>
         + 附加断言
       </button>
     );
@@ -816,7 +816,7 @@ function DbAssertionEditor({ value, onChange, columns }: { value: { match: 'equa
           {columns.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       )}
-      <button type="button" className="text-[11px] self-start press" style={{ background: 'transparent', border: 'none', color: 'var(--color-destructive)', cursor: 'pointer' }} onClick={() => onChange(undefined)}>移除断言</button>
+      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-destructive)', color: 'var(--color-destructive)', cursor: 'pointer', borderRadius: 4, padding: '2px 8px' }} onClick={() => onChange(undefined)}>移除断言</button>
     </div>
   );
 }

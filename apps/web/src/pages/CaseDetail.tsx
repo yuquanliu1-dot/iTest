@@ -771,7 +771,7 @@ export default function CaseDetail() {
                             {(s.action as { kind?: string; varName?: string }).kind === 'extract' && (
                               <span
                                 className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-mono"
-                                style={{ border: '1px solid var(--color-accent)', color: 'var(--color-accent)', background: 'transparent' }}
+                                style={{ border: '1px solid var(--color-accent)', color: 'var(--color-accent)', background: 'var(--color-surface-overlay)' }}
                                 title="抽取变量，供后续步骤 {{引用}}"
                               >
                                 → {`{{${(s.action as { varName?: string }).varName ?? ''}}}`}

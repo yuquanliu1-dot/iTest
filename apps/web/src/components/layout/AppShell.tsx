@@ -3,7 +3,7 @@ import Sidebar from './Sidebar';
 
 export default function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="flex h-dvh overflow-hidden" style={{ background: 'transparent' }}>
+    <div className="flex h-dvh overflow-hidden" style={{ background: 'var(--color-background)' }}>
       {/* Keyboard-only skip link — 第一个可聚焦元素，越过侧边栏直达主内容 */}
       <a
         href="#main-content"

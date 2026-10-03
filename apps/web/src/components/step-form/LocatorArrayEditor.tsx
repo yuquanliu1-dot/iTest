@@ -60,7 +60,7 @@ export default function LocatorArrayEditor({ locators, onChange, errors = {} }: 
         type="button"
         onClick={() => onChange([...locators, { strategy: 'css', value: '' }])}
         className="press text-[11px] px-2 py-1 rounded-[var(--radius-sm)] self-start"
-        style={{ border: '1px dashed var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}
+        style={{ border: '1px dashed var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}
       >
         + 添加候选
       </button>

@@ -149,14 +149,14 @@ export default function OrgDetailPanel({
             <button
               onClick={() => setAddMemberOpen(true)}
               className="rounded text-[12px]"
-              style={{ padding: '4px 10px', whiteSpace: 'nowrap', border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-accent)', cursor: 'pointer' }}
+              style={{ padding: '4px 10px', whiteSpace: 'nowrap', border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-accent)', cursor: 'pointer' }}
             >
               + 添加成员
             </button>
             <button
               onClick={() => setCreateUserOpen(true)}
               className="rounded text-[12px]"
-              style={{ padding: '4px 10px', whiteSpace: 'nowrap', border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-accent)', cursor: 'pointer' }}
+              style={{ padding: '4px 10px', whiteSpace: 'nowrap', border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-accent)', cursor: 'pointer' }}
             >
               + 创建用户
             </button>
@@ -216,7 +216,7 @@ export default function OrgDetailPanel({
               确定删除「{orgDetails?.name}」？子组织或项目非空时会被后端拒删。
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setConfirmDelete(false)} style={{ padding: '6px 12px', background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}>取消</button>
+              <button onClick={() => setConfirmDelete(false)} style={{ padding: '6px 12px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
               <button onClick={() => void handleDelete()} style={{ padding: '6px 12px', background: 'var(--color-destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>删除</button>
             </div>
           </div>

@@ -147,7 +147,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
                 disabled={isSelf || detail.organizations.length <= 1}
                 style={{
                   padding: '2px 8px', borderRadius: 6, border: '1px solid var(--color-glass-border)',
-                  background: 'transparent', color: 'var(--color-foreground-muted)',
+                  background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)',
                   cursor: isSelf || detail.organizations.length <= 1 ? 'default' : 'pointer',
                   opacity: isSelf || detail.organizations.length <= 1 ? 0.5 : 1,
                 }}
@@ -171,7 +171,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
                     <div className="truncate" style={{ fontSize: 11, color: 'var(--color-foreground-disabled)' }}>{p.description}</div>
                   )}
                 </div>
-                <button className="text-[11px]" style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)', cursor: 'pointer' }} onClick={() => void removeFromProject(p.id)}>
+                <button className="text-[11px]" style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)', cursor: 'pointer' }} onClick={() => void removeFromProject(p.id)}>
                   移出
                 </button>
               </div>
@@ -195,7 +195,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
               将「{detail.displayName}」移出「{pendingRemove.organizationName}」？
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setPendingRemove(null)} style={{ padding: '6px 12px', background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}>取消</button>
+              <button onClick={() => setPendingRemove(null)} style={{ padding: '6px 12px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
               <button onClick={() => void removeFromOrg()} style={{ padding: '6px 12px', background: 'var(--color-destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>确认</button>
             </div>
           </div>
@@ -210,7 +210,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
               停用「{detail.displayName}」？账号将无法登录、组织与项目授权一并清理。
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setDeleteAccountOpen(false)} style={{ padding: '6px 12px', background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}>取消</button>
+              <button onClick={() => setDeleteAccountOpen(false)} style={{ padding: '6px 12px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
               <button onClick={() => void deleteAccount()} style={{ padding: '6px 12px', background: 'var(--color-destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>确认停用</button>
             </div>
           </div>
@@ -272,7 +272,7 @@ function EditProfileDialog({ initial, onClose, onSaved }: { initial: { displayNa
           <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="显示名" className="input-base" />
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="邮箱（可留空）" className="input-base" />
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
-            <button onClick={onClose} style={{ padding: '6px 14px', background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}>取消</button>
+            <button onClick={onClose} style={{ padding: '6px 14px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
             <button onClick={() => onSaved({ displayName: displayName.trim(), email: email.trim() })} style={{ padding: '6px 14px', background: 'var(--color-accent)', color: 'var(--color-accent-foreground)', border: 'none', borderRadius: 6, cursor: 'pointer' }}>保存</button>
           </div>
         </div>

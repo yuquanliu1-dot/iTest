@@ -68,7 +68,7 @@ export default function OrgTree({ selectedOrgId, onSelect, canManage, onCreate, 
             <button
               onClick={() => setAttempt((a) => a + 1)}
               className="rounded text-[12px]"
-              style={{ marginTop: 8, padding: '4px 12px', border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-accent)', cursor: 'pointer' }}
+              style={{ marginTop: 8, padding: '4px 12px', border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-accent)', cursor: 'pointer' }}
             >
               重试
             </button>
@@ -112,7 +112,7 @@ export default function OrgTree({ selectedOrgId, onSelect, canManage, onCreate, 
           <button
             onClick={() => onCreate(null)}
             className="w-full rounded text-[12px]"
-            style={{ padding: '6px 0', border: '1px solid var(--color-glass-border)', background: 'transparent', color: 'var(--color-accent)', cursor: 'pointer' }}
+            style={{ padding: '6px 0', border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-accent)', cursor: 'pointer' }}
           >
             + 新建组织
           </button>

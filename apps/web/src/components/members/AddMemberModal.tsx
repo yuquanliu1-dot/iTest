@@ -120,7 +120,7 @@ export default function AddMemberModal({ visible, orgId, orgName, onClose, onAdd
         </div>
 
         <div className="flex justify-end gap-2" style={{ marginTop: 14 }}>
-          <button onClick={onClose} disabled={saving} style={{ padding: '6px 14px', background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}>取消</button>
+          <button onClick={onClose} disabled={saving} style={{ padding: '6px 14px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
           <button onClick={() => void handleSubmit()} disabled={!canSubmit} style={{
             padding: '6px 14px', border: 'none', background: 'var(--color-accent)',
             color: 'var(--color-accent-foreground)', borderRadius: 6,
