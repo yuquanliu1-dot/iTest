@@ -336,6 +336,22 @@ describe('compileAiStep — fallback on empty instruction', () => {
   });
 });
 
+describe('compileAiStep — prompt includes trailing-assertText guidance', () => {
+  it('user message or system prompt mentions 末尾 assertText or trailing assertion guidance', async () => {
+    let captured = '';
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async (req) => {
+        captured = req.systemPrompt + '\n' + req.userMessage;
+        return { kind: 'json', value: { steps: [{ kind: 'click', locator: [{ strategy: 'text', value: 'X' }] }] }, provider: 'openai', vision: false };
+      },
+    };
+    await compileAiStep('click submit', {}, client);
+    // Either "末尾 assertText" or "断言" + "assertText" hint should appear somewhere in the prompt context
+    expect(captured).toMatch(/末尾.*assertText|assertText.*末尾|断言.*assertText/);
+  });
+});
+
 describe('compileAiStepsInPlace — short-circuit pre-compiled', () => {
   it('does not call LLM for steps that already have compiled array', async () => {
     let calls = 0;
