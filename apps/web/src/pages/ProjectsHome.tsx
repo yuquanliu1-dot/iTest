@@ -222,7 +222,6 @@ export default function ProjectsHome() {
                   })
                 }
                 onDelete={() => setConfirmDelete({ id: p.id, name: p.name })}
-                onManageVersions={() => navigate(`/p/${p.id}/versions`)}
                 onAddVersion={() => setVersionForm({ open: true, projectId: p.id, projectName: p.name, name: '', description: '' })}
                 onEnterVersion={(v) => enterVersion(p.id, p.name, p.defaultUrl, v)}
                 onSetDefaultVersion={(v) => setDefaultVersion.mutate({ projectId: p.id, versionId: v.id })}
@@ -498,7 +497,6 @@ interface ProjectRowProps {
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
-  onManageVersions: () => void;
   onAddVersion: () => void;
   onEnterVersion: (v: ProjectVersion) => void;
   onSetDefaultVersion: (v: ProjectVersion) => void;
@@ -512,7 +510,6 @@ function ProjectRow({
   onToggle,
   onEdit,
   onDelete,
-  onManageVersions,
   onAddVersion,
   onEnterVersion,
   onSetDefaultVersion,
@@ -649,7 +646,7 @@ function ProjectRow({
                   ))}
                 </ul>
               )}
-              <div className="flex items-center justify-between px-3 py-2" style={{ background: 'var(--color-background-subtle)' }}>
+              <div className="flex items-center px-3 py-2" style={{ background: 'var(--color-background-subtle)' }}>
                 <button
                   type="button"
                   onClick={onAddVersion}
@@ -658,14 +655,6 @@ function ProjectRow({
                 >
                   <Icon name="plus" size={12} />
                   添加版本
-                </button>
-                <button
-                  type="button"
-                  onClick={onManageVersions}
-                  className="text-[11px]"
-                  style={{ background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)', cursor: 'pointer', padding: 0 }}
-                >
-                  管理版本 →
                 </button>
               </div>
             </div>
