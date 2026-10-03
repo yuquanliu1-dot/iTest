@@ -44,6 +44,7 @@ export default function SidebarNavItem({ icon, label, path, end, count, collapse
             onClick={handleClick}
             aria-label={label}
             aria-current={isActive ? 'page' : undefined}
+            data-active={isActive || undefined}
             className="w-full flex justify-center"
             style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', width: '100%' }}
           >
@@ -51,7 +52,7 @@ export default function SidebarNavItem({ icon, label, path, end, count, collapse
               className="group-nav-tile flex items-center justify-center w-full cursor-pointer press"
               style={{
                 height: 32,
-                borderRadius: 5,
+                borderRadius: 'var(--radius-sm)',
                 background: isActive ? 'var(--color-accent-light)' : undefined,
                 color: isActive ? 'var(--color-accent)' : undefined,
                 transition: 'background 160ms ease-out, color 160ms ease-out, transform 120ms ease',
@@ -83,7 +84,7 @@ export default function SidebarNavItem({ icon, label, path, end, count, collapse
         style={{
           height: 36,
           padding: '0 8px',
-          borderRadius: 5,
+          borderRadius: 'var(--radius-sm)',
           // Inactive items leave background to the CSS :hover rule
           // (.group-nav-item:not([data-active]):hover) so hover is not masked
           // by inline styles on the outer <button> parent.

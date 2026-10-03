@@ -19,7 +19,7 @@ export default function TopFailuresChart({
   if (data.length === 0) {
     return (
       <div
-        className="glass-panel rounded-[12px] p-5 flex flex-col items-center justify-center"
+        className="glass-panel rounded-[var(--radius-md)] p-5 flex flex-col items-center justify-center"
         style={{ minHeight: 220 }}
       >
         <h3 className="text-[14px] font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>
@@ -39,7 +39,7 @@ export default function TopFailuresChart({
   }));
 
   return (
-    <div className="glass-panel rounded-[12px] p-5" style={{ boxShadow: 'var(--shadow-card)' }}>
+    <div className="glass-panel rounded-[var(--radius-md)] p-5" style={{ boxShadow: 'var(--shadow-card)' }}>
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-[14px] font-semibold" style={{ color: 'var(--color-foreground)' }}>
           失败 Top 5

@@ -26,7 +26,7 @@ const DialogContent = React.forwardRef<
         'fixed left-1/2 top-1/2 z-[1100] w-full max-w-lg -translate-x-1/2 -translate-y-1/2',
         'flex max-h-[90vh] flex-col overflow-hidden',
         'border bg-[var(--color-surface-overlay)] border-[var(--color-border)]',
-        'rounded-[var(--radius-lg)] shadow-[var(--shadow-modal)] dialog-content',
+        'rounded-[var(--radius-md)] shadow-[var(--shadow-modal)] dialog-content',
         className,
       )}
       {...props}

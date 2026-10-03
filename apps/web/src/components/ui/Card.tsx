@@ -32,8 +32,8 @@ export default function Card({
       onClick={onClick}
       style={{
         background: 'var(--color-background-elevated)',
-        border: '1px solid var(--color-glass-border)',
-        borderRadius: 'var(--radius-lg)',
+        border: '1px solid var(--color-border-subtle)',
+        borderRadius: 'var(--radius-md)',
         boxShadow: 'var(--shadow-card)',
         padding: paddingMap[padding],
         ...(interactive ? { cursor: 'pointer' } : {}),

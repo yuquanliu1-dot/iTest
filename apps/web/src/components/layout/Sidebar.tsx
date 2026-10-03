@@ -70,8 +70,8 @@ export default function Sidebar() {
           display: 'flex',
           flexDirection: 'column',
           overflow: 'visible',
-          width: sidebarCollapsed ? 60 : 240,
-          minWidth: sidebarCollapsed ? 60 : 240,
+          width: sidebarCollapsed ? 60 : 220,
+          minWidth: sidebarCollapsed ? 60 : 220,
           transition: 'width 280ms cubic-bezier(0.16, 1, 0.3, 1), min-width 280ms cubic-bezier(0.16, 1, 0.3, 1)',
           borderRight: '1px solid var(--color-glass-panel-border)',
           padding: sidebarCollapsed ? '14px 0 0 7px' : '14px 12px 0',
@@ -132,7 +132,7 @@ export default function Sidebar() {
               justifyContent: 'center',
               flexShrink: 0,
               padding: 0,
-              borderRadius: 5,
+              borderRadius: 'var(--radius-sm)',
               position: sidebarCollapsed ? 'absolute' : 'static',
               right: sidebarCollapsed ? 0 : undefined,
               top: sidebarCollapsed ? 3 : undefined,
@@ -173,7 +173,7 @@ export default function Sidebar() {
                     padding: 0,
                     cursor: 'pointer',
                     height: 32,
-                    borderRadius: 5,
+                    borderRadius: 'var(--radius-sm)',
                     color: 'var(--color-foreground-secondary)',
                     marginBottom: 4,
                   }}
@@ -213,7 +213,7 @@ export default function Sidebar() {
                   style={{
                     height: 36,
                     padding: '0 8px',
-                    borderRadius: 5,
+                    borderRadius: 'var(--radius-sm)',
                     color: 'var(--color-foreground-secondary)',
                     fontSize: 13,
                   }}

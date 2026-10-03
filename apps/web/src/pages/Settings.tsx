@@ -88,7 +88,7 @@ export default function Settings() {
       {/* Header */}
       <div className="flex items-center justify-between px-5 pt-4 pb-0">
         <div>
-          <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--color-foreground)' }}>
+          <h1 className="text-[22px] font-semibold tracking-[-0.03em] leading-[1.1]" style={{ color: 'var(--color-foreground)' }}>
             设置
           </h1>
           <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
@@ -124,7 +124,7 @@ export default function Settings() {
                     style={{
                       height: 36,
                       padding: '0 8px',
-                      borderRadius: 5,
+                      borderRadius: 'var(--radius-sm)',
                       background: active ? 'var(--color-accent-light)' : undefined,
                       color: active ? 'var(--color-accent)' : 'var(--color-foreground-secondary)',
                       fontWeight: active ? 500 : 400,
