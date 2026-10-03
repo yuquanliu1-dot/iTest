@@ -19,6 +19,8 @@ export class DecryptError extends Error {
 export interface EnvCtx {
   envId: string;
   db?: { host: string; port: number; database: string; user: string; password: string };
+  /** 已建立好的 pg 连接池；缺省表示该环境未配置 DB。close() 时统一 end()。 */
+  pool?: pg.Pool;
   syslog?: { host: string; port: number; user: string; privateKey: Buffer; filePath: string };
   close(): Promise<void>;
 }
@@ -94,6 +96,7 @@ export async function resolveEnv(
   return {
     envId,
     db: dbCfg,
+    pool,
     syslog: syslogCfg,
     async close() {
       if (pool) await pool.end();

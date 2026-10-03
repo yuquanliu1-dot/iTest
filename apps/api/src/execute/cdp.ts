@@ -7,6 +7,8 @@ import type {
   PreflightReport,
   HitLocator,
   WindowStrategy,
+  DbQueryRowResult,
+  ObserveLogLineResult,
 } from '@itest/shared';
 import { deepEqual, materializeValue, substituteVars } from '@itest/shared';
 import { eq, and } from 'drizzle-orm';
@@ -25,6 +27,9 @@ import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
 import { planVision } from '../agent/aiStepVision.js';
 import { compileAiStepVision } from '../agent/aiStepCompile.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
+import type { EnvCtx } from './envContext.js';
+import { runQueryDb } from './dbQuery.js';
+import { runObserveLog } from './syslogReader.js';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
 
@@ -55,6 +60,10 @@ export interface ExecStepResult {
   hitLocator?: HitLocator;
   /** switchTab 目标页在 tabMap 中的序号；非 tab 步为 0 */
   tabIndex?: number;
+  /** queryDb 步骤的结果（仅 queryDb 步携带，其它步 undefined） */
+  db?: DbQueryRowResult;
+  /** observeLog 步骤的结果（仅 observeLog 步携带，其它步 undefined） */
+  log?: ObserveLogLineResult;
 }
 
 export interface ExecContext {
@@ -69,6 +78,8 @@ export interface ExecContext {
   secretResolver?: (stepId: string) => Promise<string | null>;
   /** LLMClient 注入；缺省时按需 resolveLlmClient */
   llmClient?: import('../agent/llm-client.js').LLMClient;
+  /** 环境上下文（含 pg.Pool / syslog 连接）；由 runCase 层注入，跨步骤复用。 */
+  envCtx?: EnvCtx;
 }
 
 /** 用例级窗口策略（maximize/current/custom），custom 时携带 width/height。 */
@@ -86,6 +97,10 @@ interface DispatchOpts {
   stepId?: string;
   /** 记录本步命中的定位 kind/value（由 tryFirstMatch 写入） */
   hitSink?: { current: HitLocator | null };
+  /** 记录本步 queryDb 结果（由 queryDb 分支写入） */
+  dbSink?: { current: DbQueryRowResult | null };
+  /** 记录本步 observeLog 结果（由 observeLog 分支写入） */
+  logSink?: { current: ObserveLogLineResult | null };
 }
 
 /** 交互动作：执行前先做稳定性检查 */
@@ -396,6 +411,33 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       }
       return;
     }
+    case 'queryDb': {
+      const envCtx = opts.ctx.envCtx;
+      if (!envCtx?.pool) {
+        const e = new Error('env db missing'); e.name = 'EnvDbMissing'; throw e;
+      }
+      const result = await runQueryDb({ pool: envCtx.pool, action });
+      if (result.assertion && !result.assertion.matched) {
+        // 先把结果写到 sink，调用方即便抛错也能在 step.result.db 里看到 rows
+        if (opts.dbSink) opts.dbSink.current = result;
+        const e = new Error('queryDb assertion failed'); e.name = 'QueryDbAssertionFailed'; throw e;
+      }
+      if (opts.dbSink) opts.dbSink.current = result;
+      return;
+    }
+    case 'observeLog': {
+      const envCtx = opts.ctx.envCtx;
+      if (!envCtx?.syslog) {
+        const e = new Error('env syslog missing'); e.name = 'EnvSyslogMissing'; throw e;
+      }
+      const result = await runObserveLog({ env: envCtx.syslog, action, since: new Date() });
+      if (result.assertion && !result.assertion.matched) {
+        if (opts.logSink) opts.logSink.current = result;
+        const e = new Error('observeLog assertion failed'); e.name = 'LogAssertionFailed'; throw e;
+      }
+      if (opts.logSink) opts.logSink.current = result;
+      return;
+    }
   }
 }
 
@@ -580,6 +622,8 @@ export async function executeCaseReal(
       const started = Date.now();
       opts.stepId = step.id;
       opts.hitSink = { current: null };
+      opts.dbSink = { current: null };
+      opts.logSink = { current: null };
       const tabIndex =
         ctx.tabMap && step.tabRef ? Array.from(ctx.tabMap.keys()).indexOf(step.tabRef) : 0;
       const assertionAction = normalizeStepAssertion(step.assertion);
@@ -599,6 +643,8 @@ export async function executeCaseReal(
           screenshot,
           hitLocator: opts.hitSink.current ?? undefined,
           tabIndex: tabIndex >= 0 ? tabIndex : 0,
+          db: opts.dbSink.current ?? undefined,
+          log: opts.logSink.current ?? undefined,
         });
       } catch (e) {
         const durationMs = Date.now() - started;
@@ -617,6 +663,8 @@ export async function executeCaseReal(
           humanMessage: classified.humanMessage,
           hitLocator: opts.hitSink.current ?? undefined,
           tabIndex: tabIndex >= 0 ? tabIndex : 0,
+          db: opts.dbSink.current ?? undefined,
+          log: opts.logSink.current ?? undefined,
         });
         // 失败立即终止，避免后续步骤被前一步污染的页面状态搞乱。
         break;
