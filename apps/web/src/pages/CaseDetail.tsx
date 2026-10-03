@@ -59,6 +59,7 @@ export default function CaseDetail() {
   const [windowWidth, setWindowWidth] = useState<number | undefined>();
   const [windowHeight, setWindowHeight] = useState<number | undefined>();
   const [incognito, setIncognito] = useState(false);
+  const [defaultEnvId, setDefaultEnvId] = useState<string | null>(null);
   const editingIdxRef = useRef<number>(-1);
   const editingSnapshotRef = useRef<StepClip | null>(null);
   const historyRef = useRef<StepClip[][]>([]);
@@ -139,15 +140,17 @@ export default function CaseDetail() {
       caseDetail.windowWidth ?? undefined,
       caseDetail.windowHeight ?? undefined,
       !!caseDetail.incognito,
+      caseDetail.defaultEnvId ?? null,
     ]);
-    const localKey = JSON.stringify([windowStrategy, windowWidth, windowHeight, incognito]);
+    const localKey = JSON.stringify([windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId]);
     if (runtimeSyncRef.current !== null && localKey !== runtimeSyncRef.current) return;
     runtimeSyncRef.current = serverKey;
     setWindowStrategy((caseDetail.windowStrategy as 'maximize' | 'current' | 'custom') ?? 'maximize');
     setWindowWidth(caseDetail.windowWidth ?? undefined);
     setWindowHeight(caseDetail.windowHeight ?? undefined);
     setIncognito(!!caseDetail.incognito);
-  }, [caseDetail, windowStrategy, windowWidth, windowHeight, incognito]);
+    setDefaultEnvId(caseDetail.defaultEnvId ?? null);
+  }, [caseDetail, windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId]);
 
   const { data: groups } = useQuery({
     queryKey: ['groups', projectId],
@@ -165,6 +168,12 @@ export default function CaseDetail() {
   const { data: projectTags } = useQuery({
     queryKey: ['tags', projectId],
     queryFn: () => api.tags.list(projectId!),
+    enabled: !!projectId,
+  });
+
+  const { data: environments } = useQuery({
+    queryKey: ['environments', projectId],
+    queryFn: () => api.environments.list(projectId!),
     enabled: !!projectId,
   });
 
@@ -447,7 +456,7 @@ export default function CaseDetail() {
   };
 
   const saveRuntime = useMutation({
-    mutationFn: () => api.cases.patch(id!, { windowStrategy, windowWidth, windowHeight, incognito }),
+    mutationFn: () => api.cases.patch(id!, { windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['case', id] });
       toast('已保存', 'success');
@@ -486,7 +495,7 @@ export default function CaseDetail() {
       {/* Header bar */}
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
         <Button
-          variant="plain"
+          variant="ghost"
           size="sm"
           onClick={() => navigate(`/p/${projectId}/groups/${caseDetail.groupId ?? ''}`)}
         >
@@ -501,7 +510,7 @@ export default function CaseDetail() {
         <CaseStatusMenu caseId={caseDetail.id} status={caseDetail.status} projectId={projectId} />
         <div className="flex-1" />
         <Button
-          variant="secondary"
+          variant="ghost"
           onClick={() => {
             if (caseDetail.status === 'deprecated' && !window.confirm('用例已废弃，仍要执行？')) return;
             execute.mutate();
@@ -572,6 +581,22 @@ export default function CaseDetail() {
                       每次回放从新会话开始，不保留登录态
                     </span>
                   </div>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>默认环境</span>
+                    <select
+                      className="input-base input-sm"
+                      value={defaultEnvId ?? ''}
+                      onChange={(e) => setDefaultEnvId(e.target.value || null)}
+                      disabled={(environments ?? []).length === 0}
+                    >
+                      <option value="">跟随 plan</option>
+                      {(environments ?? []).map((e) => (
+                        <option key={e.id} value={e.id}>
+                          {e.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <div className="flex justify-end">
                     <Button onClick={() => saveRuntime.mutate()} disabled={saveRuntime.isPending}>保存</Button>
                   </div>
@@ -604,7 +629,7 @@ export default function CaseDetail() {
                     {caseDetail.resolvedUrl ?? '未配置（回放将以 about:blank 开始）'}
                   </span>
                   <Button
-                    variant="plain"
+                    variant="ghost"
                     size="sm"
                     onClick={() => {
                       const next = window.prompt('覆盖用例的初始化 URL（留空清除）', caseDetail.url ?? '');
@@ -627,7 +652,7 @@ export default function CaseDetail() {
                   </div>
                   <div className="flex-1" />
                   <Button
-                    variant="plain"
+                    variant="ghost"
                     size="sm"
                     onClick={() => {
                       const clips = caseDetail.steps.filter((s) => selected.has(s.id)).map(toClip);
@@ -643,7 +668,7 @@ export default function CaseDetail() {
                     复制选中 ({selected.size})
                   </Button>
                   <Button
-                    variant="plain"
+                    variant="ghost"
                     size="sm"
                     onClick={() =>
                       mutateSteps((cur) => {
@@ -662,7 +687,7 @@ export default function CaseDetail() {
                     粘贴 ({clipboard.steps.length})
                   </Button>
                   <Button
-                    variant="plain"
+                    variant="ghost"
                     size="sm"
                     onClick={undo}
                     disabled={historyRef.current.length === 0}
@@ -951,7 +976,7 @@ export default function CaseDetail() {
                     )}
                   </div>
                   <Button
-                    variant="plain"
+                    variant="ghost"
                     size="sm"
                     className="w-full justify-start"
                     style={{ borderTop: '1px solid var(--color-border)' }}
@@ -1047,7 +1072,7 @@ export default function CaseDetail() {
                 className="mb-3"
               />
               {recorder.status === 'recording' ? (
-                <Button variant="secondary" onClick={() => stopRecording.mutate()} className="w-full">
+                <Button variant="ghost" onClick={() => stopRecording.mutate()} className="w-full">
                   <Icon name="pause" size={12} />
                   停止录制
                 </Button>
@@ -1121,7 +1146,7 @@ export default function CaseDetail() {
           </div>
           <DialogFooter>
             <Button
-              variant="plain"
+              variant="ghost"
               onClick={() => {
                 if (!confirmResume) return;
                 setResumeTarget(confirmResume);
