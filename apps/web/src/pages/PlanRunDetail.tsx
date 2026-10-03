@@ -37,7 +37,7 @@ export default function PlanRunDetail() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
-        <Button variant="plain" size="sm" onClick={() => navigate(`/p/${projectId}/plans/${id}`)}>
+        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/plans/${id}`)}>
           <Icon name="chevronLeft" size={12} />
           返回计划详情
         </Button>
@@ -51,11 +51,11 @@ export default function PlanRunDetail() {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-4">
-        <div className="glass-card rounded-[12px] p-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+        <div className="glass-card rounded-[var(--radius-md)] p-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
           {run.summary ?? '执行中...'}
         </div>
 
-        <div className="glass-card rounded-[12px] overflow-hidden">
+        <div className="glass-card rounded-[var(--radius-md)] overflow-hidden">
           <div className="px-5 py-[10px] hairline-bottom" style={{ background: 'var(--color-background-subtle)' }}>
             <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>时间线</span>
           </div>
@@ -78,7 +78,7 @@ export default function PlanRunDetail() {
                     {c.error && <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>{c.error}</div>}
                   </div>
                   {c.reportId && (
-                    <Button variant="plain" size="sm" onClick={() => navigate(`/p/${projectId}/reports/${c.reportId}`)}>
+                    <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/reports/${c.reportId}`)}>
                       报告
                     </Button>
                   )}

@@ -66,7 +66,7 @@ export default function MembersPage() {
 
   return (
     <div className="flex h-full gap-3 p-3">
-      <div className="shrink-0 flex flex-col" style={{ width: 260, background: 'var(--color-background-elevated)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-glass-border)' }}>
+      <div className="shrink-0 flex flex-col" style={{ width: 260, background: 'var(--color-background-elevated)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-glass-border)' }}>
         <OrgTree
           selectedOrgId={orgId}
           onSelect={handleSelectOrg}
@@ -76,7 +76,7 @@ export default function MembersPage() {
         />
       </div>
 
-      <div className="flex-1 min-w-0 flex flex-col" style={{ background: 'var(--color-background-elevated)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-glass-border)' }}>
+      <div className="flex-1 min-w-0 flex flex-col" style={{ background: 'var(--color-background-elevated)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-glass-border)' }}>
         <GlobalUserSearch onPick={(userId) => openDetail('user', userId)} />
 
         <div style={{ flex: 1, minHeight: 0 }}>

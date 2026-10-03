@@ -75,9 +75,6 @@ export default function LoginPage() {
       className="relative flex h-full w-full items-center justify-center overflow-hidden"
       style={{ background: 'var(--color-background)' }}
     >
-      {/* Drifting aurora — sits behind the card so the brand block reads as a hero, not a sign-in form. */}
-      <div className="aurora" aria-hidden />
-
       <div
         className="relative z-10 grid w-full max-w-[920px] gap-10 px-6"
         style={{
@@ -91,8 +88,8 @@ export default function LoginPage() {
             <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
               <span
                 style={{
-                  fontSize: 28,
-                  fontWeight: 700,
+                  fontSize: 22,
+                  fontWeight: 600,
                   color: 'var(--color-foreground)',
                   letterSpacing: '-0.02em',
                 }}
@@ -116,10 +113,10 @@ export default function LoginPage() {
           <h1
             style={{
               fontSize: 44,
-              fontWeight: 700,
-              letterSpacing: '-0.025em',
+              fontWeight: 600,
+              letterSpacing: '-0.03em',
               color: 'var(--color-foreground)',
-              lineHeight: 1.05,
+              lineHeight: 1.1,
               marginTop: 32,
               maxWidth: 480,
             }}
@@ -193,11 +190,11 @@ export default function LoginPage() {
           className="glass-panel fade-up"
           style={{
             padding: '32px 28px',
-            borderRadius: 'var(--radius-xl)',
+            borderRadius: 'var(--radius-md)',
             display: 'flex',
             flexDirection: 'column',
             gap: 18,
-            boxShadow: 'var(--shadow-elevated)',
+            boxShadow: 'var(--shadow-modal)',
             animationDelay: '0.1s',
           }}
         >

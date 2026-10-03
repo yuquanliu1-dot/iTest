@@ -16,7 +16,7 @@ type AI = OverviewResponse['aiActivity'];
 
 export default function AiActivityChart({ data }: { data: AI }) {
   return (
-    <div className="glass-panel rounded-[12px] p-5" style={{ boxShadow: 'var(--shadow-card)' }}>
+    <div className="glass-panel rounded-[var(--radius-md)] p-5" style={{ boxShadow: 'var(--shadow-card)' }}>
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-[14px] font-semibold" style={{ color: 'var(--color-foreground)' }}>
           AI 活动

@@ -167,7 +167,7 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
 
       {adding && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) closeAdd(); }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', padding: 16, width: 480, maxWidth: 'calc(100vw - 32px)' }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 16, width: 480, maxWidth: 'calc(100vw - 32px)' }}>
             <h2 style={{ margin: 0, marginBottom: 12, fontSize: 15, fontWeight: 600 }}>批量添加用户</h2>
             <input value={candidateQ} onChange={(e) => setCandidateQ(e.target.value)} placeholder="搜索用户…" className="input-base input-sm" />
             <div style={{ maxHeight: 300, overflowY: 'auto', marginTop: 8, minHeight: 120 }}>

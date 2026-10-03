@@ -71,7 +71,7 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
         onClick={(e) => e.stopPropagation()}
         style={{
           background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)',
-          borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-modal)',
+          borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-modal)',
           width: 420, maxWidth: 'calc(100vw - 32px)', padding: 16,
           display: 'flex', flexDirection: 'column', gap: 10,
         }}

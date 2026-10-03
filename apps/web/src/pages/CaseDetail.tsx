@@ -541,7 +541,7 @@ export default function CaseDetail() {
           <div className="flex-1 min-w-0 flex flex-col gap-4">
             {tab === 'description' && (
               <div className="flex flex-col gap-4">
-                <div className="glass-card rounded-[12px] p-5 flex flex-col gap-4">
+                <div className="glass-card rounded-[var(--radius-md)] p-5 flex flex-col gap-4">
                   <div className="text-[13px] font-medium" style={{ color: 'var(--color-foreground)' }}>执行设置</div>
                   <div className="flex flex-col gap-2">
                     <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>窗口策略</span>
@@ -606,7 +606,7 @@ export default function CaseDetail() {
                   streaming={streaming}
                   errorMessage={(genSteps.error as Error | null)?.message}
                 />
-                <div className="glass-card rounded-[12px] p-5">
+                <div className="glass-card rounded-[var(--radius-md)] p-5">
                 <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
                   {caseDetail.description ? '描述' : '（无描述）'}
                 </div>
@@ -616,7 +616,7 @@ export default function CaseDetail() {
                   </p>
                 )}
                 <div
-                  className="rounded-[8px] px-3 py-2 mb-4 flex items-center gap-2 text-[11px]"
+                  className="rounded-[var(--radius-sm)] px-3 py-2 mb-4 flex items-center gap-2 text-[11px]"
                   style={{
                     border: '1px solid var(--color-glass-border)',
                     color: 'var(--color-foreground-secondary)',
@@ -701,7 +701,7 @@ export default function CaseDetail() {
                     varReport.duplicates.length > 0 ||
                     varReport.invalidNames.length > 0) && (
                   <div
-                    className="rounded-[8px] px-3 py-2 mb-3 text-[11px]"
+                    className="rounded-[var(--radius-sm)] px-3 py-2 mb-3 text-[11px]"
                     style={{ border: '1px solid var(--color-warning-border)', color: 'var(--color-warning-text)', background: 'var(--color-warning-light)' }}
                   >
                     <div className="font-semibold mb-1">变量体检提示（不阻断保存，回放时未定义变量会报错）</div>
@@ -885,7 +885,7 @@ export default function CaseDetail() {
             )}
 
             {tab === 'reports' && (
-              <div className="glass-card rounded-[12px] p-5">
+              <div className="glass-card rounded-[var(--radius-md)] p-5">
                 <EmptyState icon="flag" title="前往报告列表查看" description="该用例所有执行报告已汇总到报告页。" action={
                   <Button size="sm" onClick={() => navigate(`/p/${projectId}/reports`)}>打开报告页</Button>
                 } />
@@ -893,7 +893,7 @@ export default function CaseDetail() {
             )}
 
             {tab === 'recording' && (
-              <div className="glass-card rounded-[12px] p-5">
+              <div className="glass-card rounded-[var(--radius-md)] p-5">
                 <p className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
                   录制历史（占位，未来按时间序列展示每次录制会话）。
                 </p>
@@ -903,7 +903,7 @@ export default function CaseDetail() {
 
           {/* Right rail — 操作面板 */}
           <div className="w-[280px] shrink-0 flex flex-col gap-3">
-            <div className="glass-card rounded-[12px] p-4 relative" ref={tagPickerRef} style={{ overflow: 'visible', zIndex: tagPickerOpen ? 30 : 'auto' }}>
+            <div className="glass-card rounded-[var(--radius-md)] p-4 relative" ref={tagPickerRef} style={{ overflow: 'visible', zIndex: tagPickerOpen ? 30 : 'auto' }}>
               <div
                 data-tag-trigger
                 className="text-[11px] font-medium uppercase tracking-[0.03em] mb-2 flex items-center gap-1 cursor-pointer select-none"
@@ -928,7 +928,7 @@ export default function CaseDetail() {
               </div>
               {tagPickerOpen && tagPickerAnchor && createPortal(
                 <div
-                  className="rounded-[8px] overflow-hidden popover-in"
+                  className="rounded-[var(--radius-sm)] overflow-hidden popover-in"
                   style={{
                     position: 'fixed',
                     top: tagPickerAnchor.top,
@@ -989,7 +989,7 @@ export default function CaseDetail() {
               )}
             </div>
 
-            <div className="glass-card rounded-[12px] p-4">
+            <div className="glass-card rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-2" style={{ color: 'var(--color-foreground-muted)' }}>
                 所属分组
               </div>
@@ -1008,7 +1008,7 @@ export default function CaseDetail() {
               </p>
             </div>
 
-            <div className="glass-card rounded-[12px] p-4">
+            <div className="glass-card rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-2" style={{ color: 'var(--color-foreground-muted)' }}>
                 所属场景
               </div>
@@ -1030,7 +1030,7 @@ export default function CaseDetail() {
               )}
             </div>
 
-            <div className="glass-card rounded-[12px] p-4">
+            <div className="glass-card rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
                 AI 补充
               </div>
@@ -1043,7 +1043,7 @@ export default function CaseDetail() {
               </Button>
             </div>
 
-            <div className="glass-card rounded-[12px] p-4">
+            <div className="glass-card rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
                 浏览器录制
               </div>

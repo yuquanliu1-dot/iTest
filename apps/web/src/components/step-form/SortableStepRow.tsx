@@ -18,7 +18,7 @@ export default function SortableStepRow({ id, disabled, isEditing, children }: P
   return (
     <li
       ref={setNodeRef}
-      className="flex items-center gap-3 px-3 py-2 rounded-[8px]"
+      className="flex items-center gap-3 px-3 py-2 rounded-[var(--radius-sm)]"
       style={{
         background: 'var(--color-background-subtle)',
         border: `1px solid ${isEditing ? 'var(--color-accent)' : 'var(--color-glass-border)'}`,

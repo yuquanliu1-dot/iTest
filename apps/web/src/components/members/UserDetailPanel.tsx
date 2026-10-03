@@ -189,7 +189,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
 
       {pendingRemove && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) setPendingRemove(null); }}>
-          <div style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
+          <div style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
             <h3 style={{ margin: 0, marginBottom: 8, fontSize: 14, fontWeight: 600 }}>移出组织</h3>
             <div style={{ fontSize: 13, color: 'var(--color-foreground-muted)', marginBottom: 12 }}>
               将「{detail.displayName}」移出「{pendingRemove.organizationName}」？
@@ -204,7 +204,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
 
       {deleteAccountOpen && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) setDeleteAccountOpen(false); }}>
-          <div style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
+          <div style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
             <h3 style={{ margin: 0, marginBottom: 8, fontSize: 14, fontWeight: 600 }}>停用账号</h3>
             <div style={{ fontSize: 13, color: 'var(--color-foreground-muted)', marginBottom: 12 }}>
               停用「{detail.displayName}」？账号将无法登录、组织与项目授权一并清理。
@@ -266,7 +266,7 @@ function EditProfileDialog({ initial, onClose, onSaved }: { initial: { displayNa
   const [email, setEmail] = useState(initial.email);
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', padding: 16, width: 420, maxWidth: 'calc(100vw - 32px)' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 16, width: 420, maxWidth: 'calc(100vw - 32px)' }}>
         <h3 style={{ margin: 0, marginBottom: 12, fontSize: 14, fontWeight: 600 }}>编辑档案</h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="显示名" className="input-base" />

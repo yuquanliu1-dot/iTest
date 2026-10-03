@@ -211,7 +211,7 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
             </div>
           ))}
           <Button
-            variant="plain"
+            variant="ghost"
             size="sm"
             className="self-start"
             onClick={() => {
