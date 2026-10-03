@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -30,6 +30,7 @@ export default function PlanDetail() {
   const [selectedAdd, setSelectedAdd] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [environmentId, setEnvironmentId] = useState<string | null>(null);
 
   const { data: allCases } = useQuery({
     queryKey: ['cases', projectId],
@@ -50,6 +51,22 @@ export default function PlanDetail() {
     queryFn: () => api.plans.loginCases(id!, loginQ),
     enabled: !!id && (plan?.loginPrepareEnabled ?? false),
   });
+
+  const { data: environments } = useQuery({
+    queryKey: ['environments', plan?.projectId],
+    queryFn: () => api.environments.list(plan!.projectId),
+    enabled: !!plan?.projectId,
+  });
+
+  // plan 重新加载时同步 serverValue；本地未保存改动时（如保存其他字段）避免被覆盖
+  const envSyncRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!plan) return;
+    const serverValue = plan.environmentId ?? null;
+    if (envSyncRef.current !== null && envSyncRef.current !== serverValue && environmentId !== serverValue) return;
+    envSyncRef.current = serverValue;
+    setEnvironmentId(serverValue);
+  }, [plan, environmentId]);
 
   const patchPlan = useMutation({
     mutationFn: (body: Parameters<typeof api.plans.patch>[1]) => api.plans.patch(id!, body),
@@ -183,7 +200,7 @@ export default function PlanDetail() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
-        <Button variant="plain" size="sm" onClick={() => navigate(`/p/${projectId}/plans`)}>
+        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/plans`)}>
           <Icon name="chevronLeft" size={12} />
           返回计划列表
         </Button>
@@ -192,12 +209,12 @@ export default function PlanDetail() {
           {plan.name}
         </h1>
         <div className="flex-1" />
-        <Button variant="secondary" onClick={() => setShowAdd(true)}>
+        <Button variant="ghost" onClick={() => setShowAdd(true)}>
           <Icon name="plus" size={12} />
           添加用例
         </Button>
         {isRunning ? (
-          <Button variant="secondary" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
+          <Button variant="ghost" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
             <Icon name="pause" size={12} />
             中止
           </Button>
@@ -208,7 +225,7 @@ export default function PlanDetail() {
           </Button>
         )}
         <Button
-          variant="secondary"
+          variant="ghost"
           onClick={() => setShowDelete(true)}
           style={{ color: 'var(--color-destructive)' }}
           aria-label="删除执行计划"
@@ -231,6 +248,29 @@ export default function PlanDetail() {
               <option value="run_all">全部执行完成</option>
               <option value="fail_fast">失败即停止</option>
             </select>
+            <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>目标环境</span>
+            <select
+              value={environmentId ?? ''}
+              onChange={(e) => setEnvironmentId(e.target.value || null)}
+              className="input-base input-sm"
+              style={{ minWidth: 180 }}
+              disabled={(environments ?? []).length === 0}
+            >
+              <option value="">跟随 case</option>
+              {(environments ?? []).map((env) => (
+                <option key={env.id} value={env.id}>
+                  {env.name}
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={patchPlan.isPending}
+              onClick={() => patchPlan.mutate({ environmentId })}
+            >
+              保存
+            </Button>
           </div>
           <div className="mt-4">
             <label className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--color-foreground-secondary)' }}>
@@ -388,7 +428,7 @@ export default function PlanDetail() {
           </div>
           <DialogFooter>
             <span className="text-[12px] mr-auto" style={{ color: 'var(--color-foreground-muted)' }}>已选 {selectedAdd.size}</span>
-            <Button variant="plain" onClick={() => setShowAdd(false)}>取消</Button>
+            <Button variant="ghost" onClick={() => setShowAdd(false)}>取消</Button>
             <Button
               disabled={selectedAdd.size === 0}
               onClick={() => {
@@ -413,7 +453,7 @@ export default function PlanDetail() {
             </p>
           </div>
           <DialogFooter>
-            <Button variant="plain" onClick={() => setShowDelete(false)}>取消</Button>
+            <Button variant="ghost" onClick={() => setShowDelete(false)}>取消</Button>
             <Button
               onClick={() => {
                 setShowDelete(false);

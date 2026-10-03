@@ -541,6 +541,7 @@ export interface ExecutionPlan {
   projectId: string;
   name: string;
   environment: string | null;
+  environmentId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -644,6 +645,7 @@ export interface TestCase {
   windowWidth?: number | null;
   windowHeight?: number | null;
   incognito?: boolean;
+  defaultEnvId?: string | null;
 }
 export interface Scenario {
   id: string;

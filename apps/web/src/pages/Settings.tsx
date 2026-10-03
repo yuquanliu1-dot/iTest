@@ -7,6 +7,7 @@ import Icon from '../components/Icon';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Toggle from '../components/ui/Toggle';
+import ProjectEnvironments from './ProjectEnvironments';
 
 const PROVIDERS = [
   { value: 'openai', label: 'openai' },
@@ -21,11 +22,12 @@ const DEFAULT_MODELS: Record<string, string> = {
   google: 'gemini-2.0-flash',
 };
 
-type Panel = 'llm' | 'appearance';
+type Panel = 'llm' | 'appearance' | 'environments';
 
-const PANELS: Array<{ key: Panel; label: string; icon: 'beaker' | 'sparkles' }> = [
+const PANELS: Array<{ key: Panel; label: string; icon: 'beaker' | 'sparkles' | 'layers' }> = [
   { key: 'llm', label: 'LLM Provider', icon: 'beaker' },
   { key: 'appearance', label: '外观', icon: 'sparkles' },
+  { key: 'environments', label: '测试环境', icon: 'layers' },
 ];
 
 export default function Settings() {
@@ -33,6 +35,7 @@ export default function Settings() {
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
   const [panel, setPanel] = useState<Panel>('llm');
+  const [envProjectId, setEnvProjectId] = useState<string | null>(null);
 
   // LLM form
   const [provider, setProvider] = useState('openai');
@@ -41,6 +44,12 @@ export default function Settings() {
   const [baseUrl, setBaseUrl] = useState('');
 
   const { data, isLoading } = useQuery({ queryKey: ['settings'], queryFn: api.settings.list });
+
+  const { data: projects } = useQuery({
+    queryKey: ['projects'],
+    queryFn: api.projects.list,
+    enabled: panel === 'environments',
+  });
 
   useEffect(() => {
     if (!data) return;
@@ -184,7 +193,7 @@ export default function Settings() {
                 <Button disabled={save.isPending} onClick={() => save.mutate()}>
                   {save.isPending ? '保存中...' : '保存'}
                 </Button>
-                <Button variant="secondary" disabled={test.isPending} onClick={() => test.mutate()}>
+                <Button variant="ghost" disabled={test.isPending} onClick={() => test.mutate()}>
                   {test.isPending ? '测试中...' : '测试连接'}
                 </Button>
                 {test.isPending && (
@@ -232,6 +241,38 @@ export default function Settings() {
                   <Toggle checked={theme === 'dark'} onChange={() => toggleTheme()} />
                 </div>
               </div>
+            </div>
+          )}
+
+          {panel === 'environments' && (
+            <div className="flex flex-col gap-4 max-w-xl">
+              <div>
+                <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--color-foreground)' }}>
+                  测试环境
+                </h3>
+                <p className="text-[12px] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
+                  选择一个项目来管理该项目的数据库 / syslog 环境，绑定到用例与计划。
+                </p>
+                <select
+                  className="input-base input-sm"
+                  value={envProjectId ?? ''}
+                  onChange={(e) => setEnvProjectId(e.target.value || null)}
+                >
+                  <option value="">— 请选择项目 —</option>
+                  {(projects ?? []).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {envProjectId ? (
+                <ProjectEnvironments projectId={envProjectId} />
+              ) : (
+                <p className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                  请先选择项目。
+                </p>
+              )}
             </div>
           )}
         </div>
