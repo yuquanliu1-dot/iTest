@@ -45,6 +45,8 @@ const PatchBody = CaseBodyBase.partial()
     status: CaseStatusEnum.optional(),
     // 用例级 init URL 允许置空（清除覆盖，回到分组/项目继承链）
     url: z.string().url().nullable().optional(),
+    // 用例默认 environment id；null 表示清空，undefined 表示不动
+    defaultEnvId: z.string().uuid().nullable().optional(),
   })
   .superRefine(checkWindowStrategy);
 
@@ -205,6 +207,10 @@ casesRoute.patch('/:id', async (req, res) => {
     if (!tc || tc.requirementId !== sc.requirementId) {
       throw new HttpError(400, 'scenario_mismatch', "scenario does not belong to this case's requirement");
     }
+  }
+  if (body.defaultEnvId !== undefined && body.defaultEnvId !== null) {
+    const { assertEnvironmentVisible } = await import('../services/projectAccess.js');
+    await assertEnvironmentVisible(body.defaultEnvId, req.user!);
   }
   if (body.tagIds !== undefined) {
     // tag 校验：用 groupId 解析的项目；未传则用 case 现有项目

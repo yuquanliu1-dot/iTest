@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { groups, projects, reports, testCases } from '../db/schema.js';
+import { groups, projects, reports, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import type { AuthUser } from './auth.service.js';
 import { visibleOrgIdsFor } from './orgTree.js';
@@ -59,4 +59,22 @@ export async function visibleProjectIds(user: AuthUser): Promise<string[]> {
   if (visibleOrgs.size === 0) return [];
   const rows = await db.select({ id: projects.id }).from(projects).where(inArray(projects.organizationId, [...visibleOrgs]));
   return rows.map((r) => r.id);
+}
+
+/** 解析 environment 所属项目 id（env → project）；链路不存在返回 null。 */
+export async function resolveEnvironmentProjectId(envId: string): Promise<string | null> {
+  const rows = await db
+    .select({ projectId: testEnvironments.projectId })
+    .from(testEnvironments)
+    .where(eq(testEnvironments.id, envId))
+    .limit(1);
+  return rows[0]?.projectId ?? null;
+}
+
+/** environment 可见性断言：经所属项目判定，404 文案不区分「不存在」与「不可见」。 */
+export async function assertEnvironmentVisible(envId: string, user: AuthUser): Promise<{ projectId: string }> {
+  const projectId = await resolveEnvironmentProjectId(envId);
+  if (!projectId) throw new HttpError(404, 'not_found', 'environment not found');
+  await assertProjectVisible(projectId, user);
+  return { projectId };
 }

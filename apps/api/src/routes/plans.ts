@@ -38,6 +38,7 @@ const CreateBody = z.object({
 const PatchBody = z.object({
   name: z.string().min(1).max(200).optional(),
   environment: z.string().max(100).optional(),
+  environmentId: z.string().uuid().nullable().optional(),
   strategy: StrategyEnum.optional(),
   loginPrepare: LoginPrepareBody,
 });
@@ -114,6 +115,11 @@ plansRoute.patch('/:id', async (req, res) => {
   const update: Record<string, unknown> = { updatedAt: new Date() };
   if (body.name !== undefined) update.name = body.name;
   if (body.environment !== undefined) update.environment = body.environment;
+  if (body.environmentId !== undefined) update.environmentId = body.environmentId;
+  if (body.environmentId !== undefined && body.environmentId !== null) {
+    const { assertEnvironmentVisible } = await import('../services/projectAccess.js');
+    await assertEnvironmentVisible(body.environmentId, req.user!);
+  }
   if (body.strategy !== undefined) update.strategy = body.strategy;
   if (body.loginPrepare !== undefined) {
     update.loginPrepareEnabled = body.loginPrepare.enabled;
