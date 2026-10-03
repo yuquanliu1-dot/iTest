@@ -8,7 +8,6 @@ import Icon from '../Icon';
 import BrandGlyph from '../BrandGlyph';
 import SidebarGroup, { type NavGroupDef } from './SidebarGroup';
 import UserMenu from './UserMenu';
-import VersionChip from './VersionChip';
 
 // 项目内的二级导航：始终显示；未选项目时点击会提示进入项目选择页。
 const PROJECT_GROUP: NavGroupDef = {
@@ -60,6 +59,11 @@ export default function Sidebar() {
     toast('请先选择或创建项目', 'info');
     navigate('/');
   };
+
+  // 退出按钮文案：项目名 + 版本号（如「CueCast · v1.0」）。
+  const exitLabel = current?.name
+    ? `退出项目：${current.name}${current.versionName ? ` · ${current.versionName}` : ''}`
+    : '退出项目';
 
   return (
     <Tooltip.Provider delayDuration={300}>
@@ -144,15 +148,6 @@ export default function Sidebar() {
           </button>
         </div>
 
-        {/* 版本切换 chip（仅在选中项目后可见；折叠态紧凑展示） */}
-        {hasProject && (
-          sidebarCollapsed ? (
-            <VersionChip />
-          ) : (
-            <VersionChip />
-          )
-        )}
-
         {/* Navigation groups */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 1, marginTop: 6, overflowY: 'auto' }}>
           {NAV_GROUPS.map((g, i) => (
@@ -175,7 +170,7 @@ export default function Sidebar() {
               <Tooltip.Trigger asChild>
                 <button
                   onClick={handleExitProject}
-                  aria-label={`退出项目：${current?.name ?? ''}`}
+                  aria-label={exitLabel}
                   className="group-nav-tile w-full flex items-center justify-center"
                   style={{
                     background: 'none',
@@ -206,7 +201,7 @@ export default function Sidebar() {
                     zIndex: 70,
                   }}
                 >
-                  退出项目{current?.name ? `：${current.name}` : ''}
+                  {exitLabel}
                 </Tooltip.Content>
               </Tooltip.Portal>
             </Tooltip.Root>
@@ -216,7 +211,7 @@ export default function Sidebar() {
                 onClick={handleExitProject}
                 className="block w-full px-2 group-nav-item"
                 style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', width: '100%', textAlign: 'left' }}
-                aria-label={`退出项目：${current?.name ?? ''}`}
+                aria-label={exitLabel}
               >
                 <div
                   className="flex items-center gap-[10px] w-full cursor-pointer"
@@ -231,7 +226,7 @@ export default function Sidebar() {
                   <div className="flex items-center justify-center" style={{ width: 16, flexShrink: 0 }}>
                     <Icon name="logOut" size={16} />
                   </div>
-                  <span className="flex-1 truncate">退出项目{current?.name ? `：${current.name}` : ''}</span>
+                  <span className="flex-1 truncate">{exitLabel}</span>
                 </div>
               </button>
             </div>
