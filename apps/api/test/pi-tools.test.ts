@@ -91,4 +91,55 @@ describe('workspace tools wrapper (upsert_case)', () => {
     expect(c.description).toBeNull();
     expect(c.steps[0]!.assertion).toBeNull();
   });
+
+  // 2026-10-02 第二轮实测：LLM 把"放弃"写成空数组 [] 会被回放视作"什么都不做"，
+  // 隐藏失败；必须归一化为 null（短路不再重试）。同样兜底 locator 形状异常：
+  // LLM 偶尔写成 {item:{strategy,value}} 单对象外壳或直接给单元素对象。
+  // 2026-10-02 第三轮实测：LLM 进一步把每个候选多包一层数组（[[{...}]]），
+  // 应剥到只剩 [{...},{...}]。
+  it('upsert_case 防御性归一化：空数组→null、{item:{...}}→[{...}]、{strategy,value}→[{strategy,value}]、[[{...}]]→[{...}]', async () => {
+    const { buildWorkspaceTools } = await import('../src/pi/tools.js');
+    const tools = buildWorkspaceTools(requirementId);
+    const upsert = tools.find((t) => t.name === 'upsert_case')!;
+    await upsert.execute({
+      id: 'c-shape', title: '形状测试', priority: 'P1',
+      steps: [
+        // 1. 空数组 → null
+        { name: '空数组放弃', action: '看不太清的验证码', compiled: [] },
+        // 2. {item:{...}} → [{...}]
+        { name: 'item外壳', action: '点击登录',
+          compiled: [{ kind: 'click', locator: { item: { strategy: 'css', value: "button[type='submit']" } } }] },
+        // 3. {strategy,value} → [{strategy,value}]
+        { name: '单对象locator', action: '填用户名',
+          compiled: [{ kind: 'fill', value: 'admin', locator: { strategy: 'css', value: "input[name='username']" } }] },
+        // 4. 双层嵌套 [[{...},{...}]] → [{...},{...}]
+        { name: '双层嵌套', action: '填密码',
+          compiled: [{ kind: 'fill', value: 'admin123',
+            locator: [[{ strategy: 'css', value: "input[name='password']" }, { strategy: 'css', value: "input[type='password']" }]] }] },
+        // 5. 正常数组（对照）
+        { name: '正常数组', action: '访问登录页',
+          compiled: [{ kind: 'navigate', url: 'http://192.168.30.228:8088/static/login.html' }] },
+        // 6. 显式 null 透传
+        { name: '显式null', action: '模糊指令', compiled: null },
+      ],
+    });
+    const { loadDoc } = await import('../src/pi/workspace.js');
+    const doc = await loadDoc(requirementId);
+    const steps = doc.looseCases[0]!.steps;
+    expect(steps[0]!.compiled).toBeNull();                      // 空数组 → null
+    expect(steps[1]!.compiled).toEqual([                          // {item:{...}} → [{...}]
+      { kind: 'click', locator: [{ strategy: 'css', value: "button[type='submit']" }] },
+    ]);
+    expect(steps[2]!.compiled).toEqual([                          // {strategy,value} → [{...}]
+      { kind: 'fill', value: 'admin', locator: [{ strategy: 'css', value: "input[name='username']" }] },
+    ]);
+    expect(steps[3]!.compiled).toEqual([                          // [[{...}]] → [{...},{...}]
+      { kind: 'fill', value: 'admin123',
+        locator: [{ strategy: 'css', value: "input[name='password']" }, { strategy: 'css', value: "input[type='password']" }] },
+    ]);
+    expect(steps[4]!.compiled).toEqual([                          // 正常数组保持
+      { kind: 'navigate', url: 'http://192.168.30.228:8088/static/login.html' },
+    ]);
+    expect(steps[5]!.compiled).toBeNull();                       // 显式 null 透传
+  });
 });

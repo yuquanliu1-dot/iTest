@@ -333,9 +333,11 @@ describe('ai-thread + ai-workspace + save', () => {
         `SELECT action FROM test_steps WHERE case_id = (SELECT id FROM test_cases WHERE requirement_id = $1 LIMIT 1) ORDER BY "order"`,
         [rid],
       );
-      const a = steps.rows[0]!.action as { kind: string; compiled: unknown };
-      expect(a.kind).toBe('aiStep');
-      expect(a.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'text', value: 'submit' }] }]);
+      // 2026-10-02 起：save 路径会把已编译的 aiStep 展开为具体 DSL（click / fill / ...），
+      // 让 UI 能直接编辑定位器、回放少一层 aiStep 递归。所以这里期望 kind='click' 而非 'aiStep'。
+      const a = steps.rows[0]!.action as { kind: string; locator: unknown };
+      expect(a.kind).toBe('click');
+      expect(a.locator).toEqual([{ strategy: 'text', value: 'submit' }]);
     } finally {
       llmMod.__setLlmClientForTest(null);
     }

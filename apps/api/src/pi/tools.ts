@@ -16,6 +16,47 @@ export interface ToolExecutor {
   promptGuidelines?: string[];
 }
 
+/**
+ * 把 LLM 输出的单个 compiled 步骤归一化为回放可识别的形状。
+ * 历史实测 LLM 偶尔会产出异常形状：
+ *  1) locator 写成 {item:{strategy,value}} 单对象外壳 → 还原成 [{strategy,value}]
+ *  2) locator 直接写成 {strategy,value} 单对象 → 包成数组
+ *  3) locator 每个候选又被多包一层数组（[[{...},{...}]]）→ 剥到只剩 [{...},{...}]
+ *  navigate / screenshot / aiStep 等无 locator 字段原样透传。
+ */
+function normalizeCompiledStep(step: unknown): unknown {
+  if (!step || typeof step !== 'object') return step;
+  const s = step as Record<string, unknown>;
+  const loc = s.locator;
+  if (Array.isArray(loc)) {
+    // locator 是数组 → 检查是否 [[{...}]] 双层嵌套（LLM 误把每个候选当数组再包了一层）
+    const flat: unknown[] = [];
+    for (const item of loc) {
+      if (Array.isArray(item)) {
+        for (const inner of item) flat.push(inner);
+      } else if (item && typeof item === 'object' && 'item' in (item as Record<string, unknown>)) {
+        flat.push((item as { item: unknown }).item);
+      } else {
+        flat.push(item);
+      }
+    }
+    s.locator = flat.map((item) => normalizeLocatorItem(item));
+  } else if (loc && typeof loc === 'object') {
+    s.locator = [normalizeLocatorItem(loc)];
+  }
+  return s;
+}
+
+/** 把单个 locator 候选归一化为 {strategy,value} 对象；非对象/缺字段透传。 */
+function normalizeLocatorItem(item: unknown): unknown {
+  if (!item || typeof item !== 'object') return item;
+  const obj = item as Record<string, unknown>;
+  if ('item' in obj && obj.item && typeof obj.item === 'object') {
+    return normalizeLocatorItem(obj.item);
+  }
+  return obj;
+}
+
 export function buildWorkspaceTools(requirementId: string): ToolExecutor[] {
   return [
     {
@@ -72,9 +113,18 @@ export function buildWorkspaceTools(requirementId: string): ToolExecutor[] {
         scenarioId: Type.Optional(Type.Union([Type.String({ maxLength: 64 }), Type.Null()])),
       }),
       // C（减少串行 LLM 往返）：整批用例同一轮并行提交，且不等待场景先行声明（占位场景兜底）
+      // D（双字段落库）：必须输出 compiled DSL；未输出由 save 兜底编译——但实操里没编译=UI 显示「未编译」，
+      // 拖慢评审节奏。所以把每条 step 的 compiled 输出规则直接写进 promptGuidelines，与共享 SYSTEM_PROMPT 一源。
       promptGuidelines: [
         '尽量在同一轮并行发出全部工具调用：announce_plan、upsert_scenario 与每条用例一个 upsert_case 一起提交，不要逐条等待结果再发下一批。',
         '每条用例都应显式提供 description（说明验证点）与 priority（P0-P3）。',
+        '每条 step 必须输出 compiled 字段（DSL 步骤数组，可执行回放）。规则与共享 SYSTEM_PROMPT 完全一致：',
+        '- compiled 是 JSON 数组，元素形如 {"kind": "...", ...}；允许 kind：navigate {url} / click {locator} / fill {locator, value} / hover {locator} / waitFor {locator, timeoutMs?} / assertText {locator, equals} / assertVisible {locator} / check {locator, checked} / select {locator, value} / extract {locator, varName}。禁止输出 aiStep。',
+        '- locator 必须是数组，每个元素是单个 {strategy, value} 对象，strategy 限 role/text/testId/css/xpath；至少 1 个候选。正确示例：locator:[{strategy:"css", value:"button[type=\'submit\']"}, {strategy:"css", value:".login-btn"}] —— 注意 locator **只有一层数组**，每个元素直接是 {strategy,value} 对象，不要把每个候选再嵌一层数组。完整 step 示例：{kind:"click", locator:[{strategy:"css", value:"button[type=\'submit\']"}]}。禁止把 locator 写成对象（如 {item:{...}} 或 {strategy:"...",value:"..."} 直接放在 locator 槽），回放无法识别。',
+        '- navigate 的 url 必须是绝对 URL，且必须使用用户消息上下文里给的真实页面 URL（host:port/path 原样保留），禁止臆造 http://localhost:5173/...。如果你没有拿到 URL，请在生成用例前先调用 inspect_page 抓取真实页面，从抓取结果里取真实 URL。',
+        '- 末尾断言（强约束）：步骤执行后若有可观察结果，断言必须基于真实可见元素——优先 assertVisible（元素级，不依赖文案）；次之 assertText + locator+match:"contains"。禁止使用 target:"page" equals:模糊自由文本（例「登录页正常加载」「看到工作台」），它对任何页面都命中，掩盖回放失败。',
+        '- 若 step 没有可观察结果（如「打开某页」），不要补任何断言。',
+        '- 若你判断无法可靠编译（如指令过于模糊、需要视觉识别但无 #cssSelector 占位），把 compiled 设为 null 表示「已放弃」，保存时不会再 LLM 重试。注意：null ≠ []，空数组 [] 在回放里等价于「什么都不做」，会隐藏失败；放弃语义必须用 null。',
       ],
       execute: async (input) => {
         const v = input as {
@@ -90,12 +140,29 @@ export function buildWorkspaceTools(requirementId: string): ToolExecutor[] {
           // 三态：undefined = 未尝试（保存时由 compileAiStepsInPlace 兜底）；
           // null = AI 已放弃（短路不再重试）；array = 已编译（短路不再重试）。
           // 仅当 LLM 显式提供 compiled（数组或 null）时才写入字段，避免老用法下"字段缺失"误为"已放弃"。
+          // 防御性归一化：
+          //  1) 空数组 [] → null（LLM 把"放弃"误写成空数组会隐藏失败，必须映射为放弃语义）；
+          //  2) locator 形状 {item:{strategy,value}} → [{strategy,value}]（LLM 把候选数组误写成单对象外壳）；
+          //  3) locator 是非数组对象（含 strategy+value）→ [obj]（LLM 直接给单元素）。
+          //  这三种历史实测都出现过；继续保留纯单步结构，其它情况原样透传（保存时仍由 zod 兜底）。
+          let compiled: unknown[] | null | undefined;
+          if ('compiled' in s && s.compiled !== undefined) {
+            if (Array.isArray(s.compiled)) {
+              if (s.compiled.length === 0) {
+                compiled = null;
+              } else {
+                compiled = s.compiled.map(normalizeCompiledStep);
+              }
+            } else {
+              compiled = s.compiled as unknown;
+            }
+          }
           const out: { name: string; action: string; assertion: string | null; compiled?: unknown[] | null } = {
             name,
             action: s.action,
             assertion: s.assertion ?? null,
           };
-          if ('compiled' in s && s.compiled !== undefined) out.compiled = s.compiled;
+          if (compiled !== undefined) out.compiled = compiled as unknown[] | null;
           return out;
         });
         await ws.upsertCase(requirementId, v.scenarioId ?? null, {
