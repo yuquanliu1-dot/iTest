@@ -15,7 +15,7 @@ export const READ_MAX_LINES_HARD_CAP = 500;
 
 const WHITELIST_TOP = new Set(['ls', 'cat', 'tree', 'find', 'head', 'tail', 'wc', 'grep', 'rg', 'git']);
 const WHITELIST_GIT_SUBCMD = new Set(['log', 'show', 'diff', 'ls-files', 'grep', 'status']);
-const BLOCKED_CHARS = /[;&|`$()<>]/;
+const BLOCKED_CHARS = /[;&|`$()<>\n\r]/;
 
 export type RepoUnavailableReason = 'no_repo' | 'clone_failed' | 'auth_failed' | 'dirty' | 'fetch_failed';
 
@@ -184,7 +184,7 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
           }
         }
         try {
-          const { stdout, code } = await new Promise<{ stdout: string; code: number }>((resolve, reject) => {
+          const { stdout, stderr, code } = await new Promise<{ stdout: string; stderr: string; code: number }>((resolve, reject) => {
             const child = spawn(top, parts.slice(1), { cwd: cwdRoot, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
             let out = '';
             let err = '';
@@ -192,9 +192,13 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
             child.stdout.on('data', (d) => { out += d.toString(); });
             child.stderr.on('data', (d) => { err += d.toString(); });
             child.on('error', (e) => { clearTimeout(t); reject(e); });
-            child.on('close', (c) => { clearTimeout(t); resolve({ stdout: out, code: c ?? 0 }); });
+            child.on('close', (c) => { clearTimeout(t); resolve({ stdout: out, stderr: err, code: typeof c === 'number' ? c : -1 }); });
           });
-          return { ok: code === 0, data: stdout.slice(0, MAX_OUTPUT_CHARS), error: code !== 0 ? `exit ${code}` : undefined };
+          return {
+            ok: code === 0,
+            data: stdout.slice(0, MAX_OUTPUT_CHARS),
+            error: code !== 0 ? `exit ${code}${stderr ? ': ' + stderr.trim().slice(0, 200) : ''}` : undefined,
+          };
         } catch (e) {
           return { ok: false, error: (e as Error).message };
         }

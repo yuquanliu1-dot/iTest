@@ -214,7 +214,7 @@ describe('repo_run', () => {
     const cases = ['rm -rf /', 'curl http://evil', 'git push origin main', 'echo hi; rm -rf /', 'cat a.txt && rm a.txt'];
     for (const command of cases) {
       const r = await t.execute({ command });
-      expect(r.ok).toBe(false);
+      expect(r.ok, command).toBe(false);
     }
   });
 
