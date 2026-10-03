@@ -222,7 +222,6 @@ async function loadProjectRepo(requirementId: string): Promise<ProjectRepo | nul
       provider: projects.provider,
       pat: projects.patOverride,
       gitlabOverride: projects.gitlabUrlOverride,
-      pid: projects.id,
     })
     .from(requirements)
     .innerJoin(projects, eq(requirements.projectId, projects.id))
@@ -286,7 +285,7 @@ export async function checkoutRepo(requirementId: string): Promise<string> {
   if (await dirExists(target)) {
     // 锁定；保证并发只跑一次 fetch
     try {
-      const release = await lockfile.lock(`${target}/.lock`, { retries: { retries: 0, minTimeout: 50, maxTimeout: 200, factor: 1 }, stale: 30_000 });
+      const release = await lockfile.lock(`${target}/.lock`, { retries: 0, stale: 30_000 });
       try { return await fetchAndReset(target, info); } finally { await release(); }
     } catch (e) {
       if ((e as { code?: string }).code === 'ELOCKED') throw new LockTimeoutError('another fetch in progress');
