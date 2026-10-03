@@ -91,7 +91,7 @@ export const api = {
         `/projects/${id}/overview?range=${range}`,
       ),
     plans: (id: string) => request<PlanWithCount[]>(`/projects/${id}/plans`),
-    createPlan: (id: string, body: { name: string; environment?: string }) =>
+    createPlan: (id: string, body: { name: string; environment?: string; versionId?: string }) =>
       request<ExecutionPlan>(`/projects/${id}/plans`, { method: 'POST', body: JSON.stringify(body) }),
     requirements: (id: string) => request<Requirement[]>(`/projects/${id}/requirements`),
     createRequirement: (id: string, body: { title: string; content: string }) =>
@@ -146,12 +146,27 @@ export const api = {
     cancel: (id: string) => request<{ ok: boolean }>(`/plan-runs/${id}/cancel`, { method: 'POST' }),
     eventsUrl: (id: string) => `${BASE}/plan-runs/${id}/events`,
   },
+  versions: {
+    list: (projectId: string) =>
+      request<ProjectVersion[]>(`/projects/${projectId}/versions`),
+    create: (projectId: string, body: { name: string; description?: string }) =>
+      request<ProjectVersion>(`/projects/${projectId}/versions`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    patch: (id: string, body: Partial<{ name: string; description: string | null }>) =>
+      request<ProjectVersion>(`/project-versions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    setDefault: (id: string) => request<void>(`/project-versions/${id}/set-default`, { method: 'POST' }),
+    remove: (id: string) => request<void>(`/project-versions/${id}`, { method: 'DELETE' }),
+  },
   environments: {
-    list: (projectId: string) => request<Environment[]>(`/projects/${projectId}/environments`),
+    list: (projectId: string, params?: { versionId?: string }) =>
+      request<Environment[]>(`/projects/${projectId}/environments${qs({ versionId: params?.versionId })}`),
     create: (
       projectId: string,
       body: Partial<{
         name: string;
+        versionId: string;
         dbHost: string;
         dbPort: number;
         dbName: string;
@@ -205,13 +220,14 @@ export const api = {
     get: (id: string) => request<Requirement>(`/requirements/${id}`),
   },
   cases: {
-    list: (params?: string | { priority?: string; groupId?: string; projectId?: string; scenarioId?: string }) => {
+    list: (params?: string | { priority?: string; groupId?: string; projectId?: string; scenarioId?: string; versionId?: string }) => {
       const p = typeof params === 'string' ? { priority: params } : params;
       const qs = new URLSearchParams();
       if (p?.priority) qs.set('priority', p.priority);
       if (p?.groupId) qs.set('groupId', p.groupId);
       if (p?.projectId) qs.set('projectId', p.projectId);
       if (p?.scenarioId) qs.set('scenarioId', p.scenarioId);
+      if (p?.versionId) qs.set('versionId', p.versionId);
       const s = qs.toString();
       return request<TestCase[]>(`/cases${s ? `?${s}` : ''}`);
     },
@@ -220,6 +236,7 @@ export const api = {
       priority?: string;
       requirementId?: string;
       groupId: string;
+      versionId?: string;
       url?: string;
       description?: string;
     }) => request<TestCase>('/cases', { method: 'POST', body: JSON.stringify(body) }),
@@ -253,12 +270,12 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ caseIds, status }),
       }),
-    copy: (id: string, targetGroupId: string) =>
-      request<TestCase>(`/cases/${id}/copy`, { method: 'POST', body: JSON.stringify({ targetGroupId }) }),
-    copyBatch: (caseIds: string[], targetGroupId: string) =>
+    copy: (id: string, targetGroupId: string, targetVersionId?: string) =>
+      request<TestCase>(`/cases/${id}/copy`, { method: 'POST', body: JSON.stringify({ targetGroupId, targetVersionId }) }),
+    copyBatch: (caseIds: string[], targetGroupId: string, targetVersionId?: string) =>
       request<{ count: number }>('/cases/copy', {
         method: 'POST',
-        body: JSON.stringify({ caseIds, targetGroupId }),
+        body: JSON.stringify({ caseIds, targetGroupId, targetVersionId }),
       }),
     appendSteps: (id: string, steps: Array<{ order: number; source: string; action: unknown }>) =>
       request<{ count: number; steps: TestStep[]; failedAi: number; variableReport?: VariableReport }>(
@@ -454,7 +471,10 @@ export const api = {
       }),
     getWorkspace: (requirementId: string) =>
       request<WorkspaceDoc>(`/requirements/${requirementId}/ai-workspace`),
-    save: (requirementId: string, body: { groupId: string; scenarioIds: string[]; caseIds: string[] }) =>
+    save: (
+      requirementId: string,
+      body: { groupId: string; scenarioIds: string[]; caseIds: string[]; targetVersionId?: string },
+    ) =>
       request<{ savedCases: number }>(`/requirements/${requirementId}/ai-workspace/save`, {
         method: 'POST',
         body: JSON.stringify(body),
@@ -537,6 +557,19 @@ export interface Project {
   hasPat: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProjectVersion {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+  caseCount?: number;
+  environmentCount?: number;
+  planCount?: number;
 }
 export interface ProjectWithCount extends Project {
   caseCount: number;
@@ -655,6 +688,8 @@ export interface TestCase {
   scenarioId?: string | null;
   scenarioTitle?: string | null;
   tags?: Tag[];
+  versionId?: string;
+  versionName?: string;
   createdAt?: string;
   updatedAt?: string;
   windowStrategy?: string;
