@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { buildRepoSandboxTools } from '../src/pi/repo.js';
 
 let cwd: string;
 beforeAll(async () => {
@@ -35,5 +36,34 @@ describe('assertInCwd', () => {
     } finally {
       await fs.rm(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe('repo_ls', () => {
+  it('列出 cwd 根目录', async () => {
+    const tools = buildRepoSandboxTools(cwd);
+    const ls = tools.find((t) => t.name === 'repo_ls')!;
+    const r = await ls.execute({ path: '.' });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    const names = data.entries.map((e: { name: string }) => e.name);
+    expect(names).toContain('a.txt');
+    expect(names).toContain('sub');
+  });
+
+  it('列子目录', async () => {
+    const tools = buildRepoSandboxTools(cwd);
+    const ls = tools.find((t) => t.name === 'repo_ls')!;
+    const r = await ls.execute({ path: 'sub' });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.entries[0].name).toBe('b.txt');
+  });
+
+  it('路径穿越返回 ok:false', async () => {
+    const tools = buildRepoSandboxTools(cwd);
+    const ls = tools.find((t) => t.name === 'repo_ls')!;
+    const r = await ls.execute({ path: '../' });
+    expect(r.ok).toBe(false);
   });
 });
