@@ -30,6 +30,7 @@ const HUMAN: Record<FailureReason, string> = {
   QueryDbColumnNotAllowed: '该列不在允许查询的列表中',
   QueryDbAssertionFailed: '数据库断言未命中',
   EnvMissing: '缺少环境配置，请到项目设置配置测试环境',
+  EnvProjectMismatch: '环境所属项目与当前用例不匹配',
   EnvDbMissing: '当前环境未配置数据库连接',
   EnvSyslogMissing: '当前环境未配置 syslog 连接',
   SyslogConnectFailed: '连接 syslog 服务器失败',
