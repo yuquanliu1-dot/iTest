@@ -66,6 +66,8 @@ export function buildWorkspaceTools(requirementId: string): ToolExecutor[] {
           name: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
           action: Type.String({ minLength: 1, maxLength: 2000 }),
           assertion: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          /** LLM-compiled DSL steps; missing or null = not generated. */
+          compiled: Type.Optional(Type.Array(Type.Unknown())),
         })),
         scenarioId: Type.Optional(Type.Union([Type.String({ maxLength: 64 }), Type.Null()])),
       }),
@@ -77,18 +79,24 @@ export function buildWorkspaceTools(requirementId: string): ToolExecutor[] {
       execute: async (input) => {
         const v = input as {
           id: string; title: string; description?: string | null; priority?: 'P0'|'P1'|'P2'|'P3';
-          steps: Array<{ name?: string; action: string; assertion?: string | null }>;
+          steps: Array<{ name?: string; action: string; assertion?: string | null; compiled?: unknown[] | null }>;
           scenarioId?: string | null;
         };
         // name 兜底：取 action 首句（按第一个中文/英文标点截断，长度 24）
         const steps = v.steps.map((s) => {
-          if (s.name && s.name.trim().length > 0) return { name: s.name, action: s.action, assertion: s.assertion ?? null };
-          const first = s.action.split(/[，。！？,.!?\n]/, 1)[0]?.trim() ?? s.action.slice(0, 24);
-          return { name: first.slice(0, 200), action: s.action, assertion: s.assertion ?? null };
+          const name = (s.name && s.name.trim().length > 0)
+            ? s.name
+            : (s.action.split(/[，。！？,.!?\n]/, 1)[0]?.trim() ?? s.action.slice(0, 24)).slice(0, 200);
+          return {
+            name,
+            action: s.action,
+            assertion: s.assertion ?? null,
+            compiled: s.compiled ?? null,
+          };
         });
         await ws.upsertCase(requirementId, v.scenarioId ?? null, {
           id: v.id, title: v.title, description: v.description ?? null,
-          priority: v.priority ?? 'P2', steps,
+          priority: v.priority ?? 'P2', steps: steps as Parameters<typeof ws.upsertCase>[2]['steps'],
         });
         return { ok: true };
       },
