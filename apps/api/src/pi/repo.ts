@@ -146,7 +146,7 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
         try {
           const { stdout } = await runRg(cwdRoot, args);
           if (!stdout) return { ok: true, data: asData({ matches: [] }) };
-          const lines = stdout.split('\n').filter(Boolean).slice(0, maxMatches);
+          const lines = stdout.split('\n').filter(Boolean);
           const matches = lines.map((l) => {
             const idx1 = l.indexOf(':');
             const idx2 = idx1 >= 0 ? l.indexOf(':', idx1 + 1) : -1;

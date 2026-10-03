@@ -185,16 +185,16 @@ describe('repo_grep', () => {
     expect(data.matches).toEqual([]);
   });
 
-  it('rg 不存在时返回明确错误', async () => {
+  it('rg 不存在时 (PATH 强制覆盖) 返回明确错误', async () => {
     const tools = buildRepoSandboxTools(cwd);
     const t = tools.find((x) => x.name === 'repo_grep')!;
-    // force rg 找不到：通过 env PATH 强制覆盖
+    // rg 可执行文件不在 PATH 中 → spawn 触发 ENOENT，经 runRg 抛出，被 execute 捕获为 ok:false。
     const prev = process.env.PATH;
     process.env.PATH = '/nonexistent-dir';
     try {
       const r = await t.execute({ pattern: 'hi' });
       expect(r.ok).toBe(false);
-      expect((r as { error: string }).error).toMatch(/rg|ripgrep|ENOENT/i);
+      expect((r as { error: string }).error).toContain('ENOENT');
     } finally { process.env.PATH = prev; }
   });
 });
