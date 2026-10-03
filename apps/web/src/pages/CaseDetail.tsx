@@ -217,6 +217,7 @@ export default function CaseDetail() {
       const opts: Parameters<typeof api.recorder.createSession>[1] = { mode };
       if (mode === 'resume' && resumeTarget) opts.resumeFromOrder = resumeTarget.order + 1;
       if (mode === 'incognito') opts.incognito = true;
+      if (targetUrl) opts.targetUrl = targetUrl;
       const session = await api.recorder.createSession(id!, opts);
       recorder.setStatus('recording');
       recorder.setSession(session.sessionId);
@@ -589,6 +590,37 @@ export default function CaseDetail() {
                     {caseDetail.description}
                   </p>
                 )}
+                <div
+                  className="rounded-[8px] px-3 py-2 mb-4 flex items-center gap-2 text-[11px]"
+                  style={{
+                    border: '1px solid var(--color-glass-border)',
+                    color: 'var(--color-foreground-secondary)',
+                    background: 'var(--color-background-subtle)',
+                  }}
+                >
+                  <Icon name="link" size={11} style={{ opacity: 0.6 }} />
+                  <span className="font-medium" style={{ color: 'var(--color-foreground-muted)' }}>初始化导航 URL</span>
+                  <span className="flex-1 truncate font-mono" title={caseDetail.resolvedUrl ?? ''}>
+                    {caseDetail.resolvedUrl ?? '未配置（回放将以 about:blank 开始）'}
+                  </span>
+                  <Button
+                    variant="plain"
+                    size="sm"
+                    onClick={() => {
+                      const next = window.prompt('覆盖用例的初始化 URL（留空清除）', caseDetail.url ?? '');
+                      if (next === null) return;
+                      api.cases
+                        .patch(id!, { url: next.trim() ? next.trim() : null })
+                        .then(() => {
+                          qc.invalidateQueries({ queryKey: ['case', id] });
+                          toast('已保存', 'success');
+                        })
+                        .catch((e: Error) => toast(e.message, 'error'));
+                    }}
+                  >
+                    {caseDetail.url ? '编辑覆盖' : '设为独立 URL'}
+                  </Button>
+                </div>
                 <div className="flex items-center gap-2 mb-3">
                   <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
                     步骤 ({caseDetail.steps.length})

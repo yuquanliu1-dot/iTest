@@ -54,11 +54,9 @@ export async function runCase(
   };
   const incognito = !!caseRow.incognito;
 
-  // 回放兜底：录制用例的初始导航由扩展在录制时完成，步骤里往往没有 navigate。
-  // 步骤里一个 navigate 都没有时，用用例解析链（case.url → group/project default_url）
-  // 作为起始 URL，避免浏览器停在 about:blank 导致首个 click/fill 必然超时失败。
-  const hasNavigate = steps.some((s) => ((s.action ?? {}) as { kind?: string }).kind === 'navigate');
-  const resolved = hasNavigate ? null : await resolveCaseUrl(caseRow);
+  // 初始导航由用例级 init URL（test_cases.url → 分组 → 项目）保证。回放前 always goto 一次，
+  // 执行器内部对首条同 URL navigate 做去重（cdp.ts init-goto dedupe），避免与录制残留的首步重复。
+  const resolved = await resolveCaseUrl(caseRow);
   const targetUrl = resolved && /^https?:\/\//.test(resolved) ? resolved : undefined;
 
   const startedAt = Date.now();
@@ -71,6 +69,7 @@ export async function runCase(
       steps.map((s) => ({
         order: s.order,
         action: s.action,
+        assertion: s.assertion,
         delayMs: s.delayMs,
         id: s.id,
         tabRef: s.tabRef,

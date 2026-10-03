@@ -111,7 +111,7 @@ describe('recorder routes', () => {
     expect(r.status).toBe(200);
   });
 
-  it('finish prepends navigate (first step url) for a fresh recording without one', async () => {
+  it('finish writes test_cases.url from first step url for a fresh recording', async () => {
     const { groupId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'NV', groupId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
@@ -122,13 +122,15 @@ describe('recorder routes', () => {
     );
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
-    expect(f.body.inserted).toBe(3);
+    expect(f.body.inserted).toBe(2);
     const rows = await pool.query(
       `SELECT "order", action FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
       [c.body.id],
     );
-    expect(rows.rows[0]!.action).toEqual({ kind: 'navigate', url: 'https://app.example.com/home' });
-    expect(rows.rows[1]!.action.kind).toBe('click');
+    // 不再落 navigate 步骤：首步是 click，初始导航写到 test_cases.url
+    expect(rows.rows[0]!.action.kind).toBe('click');
+    const tcRows = await pool.query(`SELECT url FROM test_cases WHERE id = $1`, [c.body.id]);
+    expect(tcRows.rows[0]!.url).toBe('https://app.example.com/home');
   });
 
   it('finish falls back to project default_url when steps carry no url', async () => {
@@ -140,16 +142,18 @@ describe('recorder routes', () => {
     session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] } });
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
-    const rows = await pool.query(
+    const tcRows = await pool.query(`SELECT url FROM test_cases WHERE id = $1`, [c.body.id]);
+    expect(tcRows.rows[0]!.url).toBe('https://prod.example.com');
+    const stepRows = await pool.query(
       `SELECT action FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
       [c.body.id],
     );
-    expect(rows.rows[0]!.action).toEqual({ kind: 'navigate', url: 'https://prod.example.com' });
+    expect(stepRows.rows.filter((r: { action: { kind: string } }) => r.action.kind === 'navigate')).toHaveLength(0);
   });
 
-  it('finish does not prepend navigate when the case already has steps', async () => {
+  it('finish does not overwrite existing case.url on append', async () => {
     const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'NVA', groupId });
+    const c = await request(app).post('/api/cases').send({ title: 'NVA', url: 'https://pinned.example.com', groupId });
     await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [{ action: { kind: 'navigate', url: 'https://app.example.com' }, source: 'manual' }],
     });
@@ -159,30 +163,30 @@ describe('recorder routes', () => {
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
     expect(f.body.inserted).toBe(1);
-    const rows = await pool.query(
+    const tcRows = await pool.query(`SELECT url FROM test_cases WHERE id = $1`, [c.body.id]);
+    expect(tcRows.rows[0]!.url).toBe('https://pinned.example.com');
+    const stepRows = await pool.query(
       `SELECT action FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
       [c.body.id],
     );
-    expect(rows.rows).toHaveLength(2);
-    expect(rows.rows[1]!.action.kind).toBe('click');
+    expect(stepRows.rows).toHaveLength(2);
+    expect(stepRows.rows[1]!.action.kind).toBe('click');
   });
 
-  it('finish does not duplicate navigate when the recording already starts with one', async () => {
+  it('finish writes session.targetUrl to test_cases.url when steps have no url', async () => {
     const { groupId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'NVN', groupId });
-    const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
+    const s = await request(app).post('/api/recorder/sessions').send({
+      caseId: c.body.id,
+      mode: 'fresh',
+      targetUrl: 'https://web-passed.example.com',
+    });
     const session = getSession(s.body.sessionId)!;
-    session.steps.push(
-      { action: { kind: 'navigate', url: 'https://app.example.com' }, url: 'https://app.example.com' },
-      { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'https://app.example.com' },
-    );
+    session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] } });
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
-    expect(f.body.inserted).toBe(2);
-    const rows = await pool.query(
-      `SELECT action FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
-      [c.body.id],
-    );
-    expect(rows.rows.filter((r: { action: { kind: string } }) => r.action.kind === 'navigate')).toHaveLength(1);
+    expect(f.body.inserted).toBe(1);
+    const tcRows = await pool.query(`SELECT url FROM test_cases WHERE id = $1`, [c.body.id]);
+    expect(tcRows.rows[0]!.url).toBe('https://web-passed.example.com');
   });
 });

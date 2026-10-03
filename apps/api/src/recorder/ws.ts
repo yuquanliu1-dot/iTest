@@ -18,6 +18,8 @@ export interface RecorderSession {
   incognito?: boolean;
   resumeFromOrder?: number;
   tabs?: RecorderTabEvent[];
+  /** web 中台启动录制时传入的目标 URL；finish() 用作 test_cases.url 的来源之一。 */
+  targetUrl?: string | null;
   /** test_sessions audit row id, set by the route that persisted it. */
   dbSessionId?: string;
 }
@@ -63,7 +65,7 @@ export function attachRecorderWs(server: Server) {
 
 export function createSession(
   caseId: string,
-  opts: { mode?: 'fresh' | 'append' | 'resume' | 'incognito'; incognito?: boolean; resumeFromOrder?: number } = {},
+  opts: { mode?: 'fresh' | 'append' | 'resume' | 'incognito'; incognito?: boolean; resumeFromOrder?: number; targetUrl?: string | null } = {},
 ): RecorderSession {
   const session: RecorderSession = {
     sessionId: crypto.randomUUID(),
@@ -73,6 +75,7 @@ export function createSession(
     incognito: opts.incognito ?? false,
     resumeFromOrder: opts.resumeFromOrder,
     tabs: [],
+    targetUrl: opts.targetUrl ?? null,
   };
   sessions.set(session.sessionId, session);
   return session;
