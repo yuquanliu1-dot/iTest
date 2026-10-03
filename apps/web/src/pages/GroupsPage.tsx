@@ -32,7 +32,8 @@ type CaseForm = { open: boolean; title: string; groupId: string; priority: CaseP
 const EMPTY_CASE_FORM: CaseForm = { open: false, title: '', groupId: '', priority: 'P1', url: '', description: '' };
 
 export default function GroupsPage() {
-  const { projectId, groupId } = useParams<{ projectId: string; groupId: string }>();
+  const { projectId, groupId, versionId: vidParam } = useParams<{ projectId: string; groupId: string; versionId: string }>();
+  const versionId = vidParam ?? null;
   const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
@@ -67,11 +68,11 @@ export default function GroupsPage() {
 
   const effectiveGroupId = groupId ?? '';
   const { data: cases, isLoading: casesLoading, isError: casesError, error: casesErrorObj } = useQuery({
-    queryKey: ['cases', projectId, effectiveGroupId, priority, scenarioId],
+    queryKey: ['cases', projectId, versionId, effectiveGroupId, priority, scenarioId],
     queryFn: () =>
       api.cases.list(effectiveGroupId
-        ? { groupId: effectiveGroupId, priority: priority || undefined, scenarioId: scenarioId || undefined }
-        : { projectId: projectId!, priority: priority || undefined, scenarioId: scenarioId || undefined }),
+        ? { groupId: effectiveGroupId, versionId: versionId ?? undefined, priority: priority || undefined, scenarioId: scenarioId || undefined }
+        : { projectId: projectId!, versionId: versionId ?? undefined, priority: priority || undefined, scenarioId: scenarioId || undefined }),
     enabled: !!projectId,
   });
 
@@ -172,8 +173,9 @@ export default function GroupsPage() {
 
   const copyCases = useMutation({
     mutationFn: async ({ caseIds, targetGroupId }: { caseIds: string[]; targetGroupId: string }) => {
-      if (caseIds.length === 1) return api.cases.copy(caseIds[0]!, targetGroupId);
-      return api.cases.copyBatch(caseIds, targetGroupId);
+      // 复制时把当前版本带过去（同版本复制；切版本复制由用户在 VersionsSelectPage 重新进入）
+      if (caseIds.length === 1) return api.cases.copy(caseIds[0]!, targetGroupId, versionId ?? undefined);
+      return api.cases.copyBatch(caseIds, targetGroupId, versionId ?? undefined);
     },
     onSuccess: () => {
       toast('复制完成', 'success');
@@ -216,7 +218,7 @@ export default function GroupsPage() {
     onSuccess: (r) => {
       toast('执行完成', 'success');
       qc.invalidateQueries({ queryKey: ['reports'] });
-      navigate(`/p/${projectId}/reports/${r.reportId}`);
+      navigate(versionId ? `/p/${projectId}/v/${versionId}/reports/${r.reportId}` : `/p/${projectId}/versions/select`);
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -264,7 +266,7 @@ export default function GroupsPage() {
       // 把首条需求文本带到工作台；AiWorkspacePage 拿到 threadId 后会自动 POST /messages 启动 AI 跑活。
       const draft = { requirementId: r.id, title: aiForm.title, content: aiForm.content };
       setAiForm({ open: false, title: '', content: '' });
-      navigate(`/p/${projectId}/ai/${r.id}`, { state: { initialMessage: aiForm.content, requirement: draft } });
+      navigate(versionId ? `/p/${projectId}/v/${versionId}/ai/${r.id}` : `/p/${projectId}/versions/select`, { state: { initialMessage: aiForm.content, requirement: draft } });
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -275,6 +277,7 @@ export default function GroupsPage() {
       api.cases.create({
         title: caseForm.title.trim(),
         groupId: caseForm.groupId,
+        versionId: versionId ?? undefined,
         priority: caseForm.priority,
         url: caseForm.url.trim() || undefined,
         description: caseForm.description.trim() || undefined,
@@ -283,7 +286,7 @@ export default function GroupsPage() {
       toast('用例已创建', 'success');
       setCaseForm(EMPTY_CASE_FORM);
       invalidate();
-      navigate(`/p/${projectId}/cases/${r.id}`);
+      navigate(versionId ? `/p/${projectId}/v/${versionId}/cases/${r.id}` : `/p/${projectId}/versions/select`);
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -326,7 +329,7 @@ export default function GroupsPage() {
 
         <button
           data-active={!effectiveGroupId || undefined}
-          onClick={() => navigate(`/p/${projectId}/groups`)}
+          onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups` : `/p/${projectId}/versions/select`)}
           className="group-nav-item text-left px-2 py-1.5 rounded-[var(--radius-sm)] text-[13px]"
           style={{
             color: !effectiveGroupId ? 'var(--color-accent)' : 'var(--color-foreground-secondary)',
@@ -348,7 +351,7 @@ export default function GroupsPage() {
               <div
                 key={g.id}
                 data-active={active || undefined}
-                onClick={() => navigate(`/p/${projectId}/groups/${g.id}`)}
+                onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups/${g.id}` : `/p/${projectId}/versions/select`)}
                 className="group-nav-item group flex items-center gap-1 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer"
               >
                 <Icon name="gitBranch" size={12} style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }} />
@@ -642,7 +645,7 @@ export default function GroupsPage() {
                     key={c.id}
                     className={`group grid ${GRID_COLS} items-center px-5 py-[12px] gap-2 list-row-clickable`}
                     style={{ borderBottom: '1px solid var(--color-muted)', opacity: c.status === 'deprecated' ? 0.55 : 1 }}
-                    onClick={() => navigate(`/p/${projectId}/cases/${c.id}`)}
+                    onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/cases/${c.id}` : `/p/${projectId}/versions/select`)}
                   >
                     <input
                       type="checkbox"

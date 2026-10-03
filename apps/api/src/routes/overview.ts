@@ -127,6 +127,9 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
   const parsed = RangeSchema.safeParse(req.query.range);
   if (!parsed.success) throw new HttpError(400, 'bad_request', 'range must be 7d or 30d');
   await assertProjectVisible(projectId, req.user!);
+  // ?versionId= 透传：当前 dashboard 不做范围过滤（保持 KPI 与图表语义稳定），
+  // 仅允许前端带上来证明 URL 与上下文一致。
+  void (typeof req.query.versionId === 'string' ? req.query.versionId : null);
 
   const days = rangeDays(parsed.data);
   const today = new Date();

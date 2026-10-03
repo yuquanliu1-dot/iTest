@@ -588,6 +588,8 @@ export interface GroupWithCount extends Group {
 export interface ExecutionPlan {
   id: string;
   projectId: string;
+  versionId: string | null;
+  versionName?: string | null;
   name: string;
   environment: string | null;
   environmentId?: string | null;
@@ -598,7 +600,7 @@ export interface PlanWithCount extends ExecutionPlan {
   caseCount: number;
 }
 export interface PlanDetail extends ExecutionPlan {
-  cases: Array<{ id: string; order: number; title: string; url: string | null }>;
+  cases: Array<{ id: string; order: number; title: string; url: string | null; versionId: string | null }>;
   strategy: 'run_all' | 'fail_fast';
   loginPrepareEnabled: boolean;
   loginCaseId: string | null;
@@ -641,6 +643,8 @@ export type ExecutionEntry =
       id: string;
       caseId: string;
       caseTitle: string | null;
+      versionId: string | null;
+      versionName: string | null;
       status: string;
       durationMs: number | null;
       summary: string | null;
@@ -650,6 +654,8 @@ export type ExecutionEntry =
       kind: 'plan';
       id: string;
       planId: string;
+      versionId: string | null;
+      versionName: string | null;
       status: string;
       summary: string | null;
       totalCases: number;

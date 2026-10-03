@@ -66,7 +66,15 @@ plansRoute.get('/', async (req, res) => {
   const pcs = await db.select().from(planCases);
   const countByPlan = new Map<string, number>();
   for (const pc of pcs) countByPlan.set(pc.planId, (countByPlan.get(pc.planId) ?? 0) + 1);
-  res.json(ps.map((p) => ({ ...p, caseCount: countByPlan.get(p.id) ?? 0 })));
+  // 取 version 名称
+  const vIds = Array.from(new Set(ps.map((p) => p.versionId).filter((v): v is string => !!v)));
+  const vRows = vIds.length ? await db.select().from(projectVersions).where(inArray(projectVersions.id, vIds)) : [];
+  const vName = new Map(vRows.map((v) => [v.id, v.name] as const));
+  res.json(ps.map((p) => ({
+    ...p,
+    versionName: p.versionId ? vName.get(p.versionId) ?? null : null,
+    caseCount: countByPlan.get(p.id) ?? 0,
+  })));
 });
 
 plansRoute.post('/', async (req, res) => {
@@ -117,9 +125,21 @@ plansRoute.get('/:id', async (req, res) => {
     ? await db.select().from(testCases).where(inArray(testCases.id, pcs.map((p) => p.caseId)))
     : [];
   const byId = new Map(cases.map((c) => [c.id, c]));
+  let versionName: string | null = null;
+  if (plan.versionId) {
+    const v = (await db.select().from(projectVersions).where(eq(projectVersions.id, plan.versionId)))[0];
+    versionName = v?.name ?? null;
+  }
   res.json({
     ...plan,
-    cases: pcs.map((pc) => ({ id: pc.caseId, order: pc.order, title: byId.get(pc.caseId)?.title ?? 'unknown', url: byId.get(pc.caseId)?.url ?? null })),
+    versionName,
+    cases: pcs.map((pc) => ({
+      id: pc.caseId,
+      order: pc.order,
+      title: byId.get(pc.caseId)?.title ?? 'unknown',
+      url: byId.get(pc.caseId)?.url ?? null,
+      versionId: byId.get(pc.caseId)?.versionId ?? null,
+    })),
   });
 });
 

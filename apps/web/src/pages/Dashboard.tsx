@@ -16,7 +16,8 @@ import AiActivityChart from '../features/overview/components/AiActivityChart';
 
 export default function Dashboard() {
   const qc = useQueryClient();
-  const { projectId } = useParams<{ projectId: string }>();
+  const { projectId, versionId: vidParam } = useParams<{ projectId: string; versionId?: string }>();
+  const versionId = vidParam ?? null;
   const [range, setRange] = useState<Range>('7d');
   const { data, isLoading, isError } = useOverviewQuery(projectId, range);
 
@@ -54,6 +55,10 @@ export default function Dashboard() {
     }
   }
 
+  // 内部链接在带版本上下文时使用版本化路由，否则回退到 /versions/select 引导用户选版本
+  const link = (path: string) =>
+    versionId ? `/p/${projectId}/v/${versionId}${path}` : `/p/${projectId}/versions/select`;
+
   return (
     <div className="flex flex-col h-full overflow-y-auto">
       <div>
@@ -67,14 +72,14 @@ export default function Dashboard() {
           value={data.kpi.totalCases}
           iconName="beaker"
           tone="var(--color-info)"
-          to={`/p/${projectId}/groups`}
+          to={link('/groups')}
         />
         <KpiStripCard
           label="计划数"
           value={data.kpi.totalPlans}
           iconName="flag"
           tone="var(--color-accent)"
-          to={`/p/${projectId}/plans`}
+          to={link('/plans')}
         />
         <KpiStripCard
           label="通过率"
@@ -82,21 +87,21 @@ export default function Dashboard() {
           suffix="%"
           iconName="checkCircle"
           tone="var(--color-success)"
-          to={`/p/${projectId}/reports?filter=passed-7d`}
+          to={link('/reports?filter=passed-7d')}
         />
         <KpiStripCard
           label="近 7d 运行"
           value={data.kpi.totalRuns7d}
           iconName="activity"
           tone="var(--color-warning)"
-          to={`/p/${projectId}/reports?range=7d`}
+          to={link('/reports?range=7d')}
         />
         <KpiStripCard
           label="AI 调用"
           value={data.kpi.aiCalls7d}
           iconName="sparkles"
           tone="var(--color-chart-5)"
-          to={`/p/${projectId}/groups`}
+          to={link('/groups')}
         />
       </div>
 
