@@ -402,7 +402,7 @@ export const api = {
       orgId: string,
       params?: { q?: string; includeSubtree?: boolean; page?: number; limit?: number },
     ) => request<Paged<OrgProjectSummary>>(`/organizations/${orgId}/projects${qs(params ?? {})}`),
-    addMember: (orgId: string, body: { userId: string; isManager?: boolean; isUser?: boolean }) =>
+    addMember: (orgId: string, body: { username: string; isManager?: boolean; isUser?: boolean }) =>
       request<{ ok: boolean }>(`/organizations/${orgId}/members`, { method: 'POST', body: JSON.stringify(body) }),
     updateMember: (orgId: string, userId: string, body: { isManager?: boolean; isUser?: boolean }) =>
       request<{ ok: boolean }>(`/organizations/${orgId}/members/${userId}`, { method: 'PATCH', body: JSON.stringify(body) }),
@@ -440,11 +440,15 @@ export const api = {
   aiWorkspace: {
     ensureThread: (requirementId: string) =>
       request<{ threadId: string }>(`/requirements/${requirementId}/ai-thread`, { method: 'POST' }),
-    sendMessage: (threadId: string, content: string) =>
+    sendMessage: (
+      threadId: string,
+      content: string,
+      metadata: { contextMode: 'repo' | 'page' | 'auto' } = { contextMode: 'auto' },
+    ) =>
       fetch(`${BASE}/pi/threads/${threadId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: { content } }),
+        body: JSON.stringify({ input: { content }, metadata }),
       }).then((r) => {
         if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
       }),
@@ -454,6 +458,14 @@ export const api = {
       request<{ savedCases: number }>(`/requirements/${requirementId}/ai-workspace/save`, {
         method: 'POST',
         body: JSON.stringify(body),
+      }),
+    setContextMode: (requirementId: string, mode: 'repo' | 'page' | 'auto') =>
+      fetch(`${BASE}/requirements/${requirementId}/ai-workspace/context-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      }).then((r) => {
+        if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
       }),
   },
   registerAdmin: (body: { username: string; displayName: string; email?: string; organizationId: string }) =>
@@ -519,6 +531,10 @@ export interface Project {
   description: string | null;
   organizationId: string;
   defaultUrl: string | null;
+  repoUrl: string | null;
+  defaultBranch: string;
+  provider: string;
+  hasPat: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -863,9 +879,12 @@ export interface StagedStep {
 }
 export interface StagedCase { id: string; title: string; description: string | null; priority: Priority; steps: StagedStep[]; }
 export interface StagedScenario { id: string; title: string; description: string | null; cases: StagedCase[]; }
+export interface RepoContext { commit: string; fetchedAt: string; mode: 'repo' | 'auto'; }
 export interface WorkspaceDoc {
   plan: { scenarios: number; cases: number } | null;
+  contextMode?: 'repo' | 'page' | 'auto';
   pageContext?: { url: string; fetchedAt: string } | null;
+  repoContext?: RepoContext | null;
   scenarios: StagedScenario[];
   looseCases: StagedCase[];
 }

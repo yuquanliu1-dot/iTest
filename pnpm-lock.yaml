@@ -65,6 +65,12 @@ importers:
       playwright-core:
         specifier: ^1.49.0
         version: 1.63.0
+      proper-lockfile:
+        specifier: ^4.1.2
+        version: 4.1.2
+      ssh2:
+        specifier: ^1.17.0
+        version: 1.17.0
       ws:
         specifier: ^8.18.0
         version: 8.22.0
@@ -87,6 +93,9 @@ importers:
       '@types/pg':
         specifier: ^8.11.10
         version: 8.23.1
+      '@types/ssh2':
+        specifier: ^1.15.6
+        version: 1.15.6
       '@types/supertest':
         specifier: ^6.0.2
         version: 6.0.3

@@ -15,6 +15,7 @@ import {
 } from './session.js';
 import { subscribeWorkspace } from './bus.js';
 import { readLlmConfig } from './modelBridge.js';
+import * as ws from './workspace.js';
 
 export const piRoute = Router();
 
@@ -90,11 +91,13 @@ piRoute.post('/threads/:id/messages', async (req, res) => {
   if (!ridRow) throw new HttpError(404, 'not_found', 'thread not found');
   // 不阻塞响应：先回 204，再后台 ensureRecord + 派发消息；
   // ensureRecord 在 LLM 未配置时会抛错，我们 swallow 后让上层 UI 通过 SSE 提示。
-  const body = req.body as { input?: { content?: string } };
+  const body = req.body as { input?: { content?: string }; metadata?: { contextMode?: 'repo' | 'page' | 'auto' } };
   const content = body.input?.content ?? '';
+  const contextMode = body.metadata?.contextMode ?? 'auto';
   void (async () => {
     try {
-      await ensureRecord(ridRow.requirementId);
+      await ws.recordContextMode(ridRow.requirementId, contextMode);
+      await ensureRecord(ridRow.requirementId, { contextMode });
       await sendUserMessage(req.params.id!, { content });
     } catch {
       // 配置缺失或线程未就绪：忽略；前端通过 SSE/快照可见 status。

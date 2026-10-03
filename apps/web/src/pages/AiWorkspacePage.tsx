@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -8,6 +8,7 @@ import Button from '../components/ui/Button';
 import ThreadPane from '../features/ai-workspace/ThreadPane';
 import WorkspacePanel from '../features/ai-workspace/WorkspacePanel';
 import SaveDialog from '../features/ai-workspace/SaveDialog';
+import type { ContextMode } from '../features/ai-workspace/ContextModeSelector';
 
 interface SaveSelection {
   open: boolean;
@@ -62,6 +63,27 @@ export default function AiWorkspacePage() {
     enabled: !!projectId,
   });
 
+  // contextMode 在此层共享给 WorkspacePanel（chip + selector）与 ThreadPane（任务16用）。
+  // 初始值取 ai-workspace doc，切换时本地先更、再异步 POST 持久化。
+  const { data: workspace } = useQuery({
+    queryKey: ['ai-workspace', id],
+    queryFn: () => api.aiWorkspace.getWorkspace(id!),
+    enabled: !!id && !!threadId,
+  });
+  const [contextMode, setContextMode] = useState<ContextMode>(workspace?.contextMode ?? 'auto');
+  const contextModeRef = useRef(contextMode);
+  contextModeRef.current = contextMode;
+  useEffect(() => {
+    const serverMode = workspace?.contextMode;
+    if (serverMode && serverMode !== contextModeRef.current) {
+      setContextMode(serverMode);
+    }
+  }, [workspace?.contextMode]);
+  const onContextModeChange = (m: ContextMode) => {
+    setContextMode(m);
+    if (id) void api.aiWorkspace.setContextMode(id, m);
+  };
+
   const saveMutation = useMutation({
     mutationFn: (vars: { groupId: string; scenarioIds: string[]; caseIds: string[] }) =>
       api.aiWorkspace.save(id!, vars),
@@ -100,12 +122,15 @@ export default function AiWorkspacePage() {
           className="w-[420px] shrink-0 border-r"
           style={{ borderColor: 'var(--color-border)' }}
         >
-          <ThreadPane requirementId={id!} threadId={threadId} initialMessage={initialMessage} />
+          <ThreadPane requirementId={id!} threadId={threadId} initialMessage={initialMessage} contextMode={contextMode} />
         </div>
         <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
           <WorkspacePanel
             requirementId={id!}
+            projectId={projectId ?? ''}
             threadId={threadId}
+            contextMode={contextMode}
+            onContextModeChange={onContextModeChange}
             onOpenSave={(sel) => setSaveSelection({ open: true, ...sel })}
           />
         </div>
