@@ -19,6 +19,8 @@ import ReportDetail from './pages/ReportDetail';
 import MembersPage from './pages/MembersPage';
 import Settings from './pages/Settings';
 import Environments from './pages/Environments';
+import VersionsSelectPage from './pages/VersionsSelectPage';
+import ProjectVersionsPage from './pages/ProjectVersionsPage';
 
 export default function App() {
   const initTheme = useThemeStore((s) => s.init);
@@ -38,18 +40,37 @@ export default function App() {
         <Route path="/members/*" element={<MembersPage />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/p/:projectId" element={<ProjectGuard />}>
-          <Route index element={<Navigate to="overview" replace />} />
-          <Route path="overview" element={<Dashboard />} />
-          <Route path="groups" element={<GroupsPage />} />
-          <Route path="groups/:groupId" element={<GroupsPage />} />
-          <Route path="cases/:id" element={<CaseDetail />} />
-          <Route path="ai/:id" element={<AiWorkspacePage />} />
-          <Route path="plans" element={<Plans />} />
-          <Route path="plans/:id" element={<PlanDetail />} />
-          <Route path="plans/:id/runs/:runId" element={<PlanRunDetail />} />
-          <Route path="reports" element={<Executions />} />
-          <Route path="reports/:id" element={<ReportDetail />} />
-          <Route path="environments" element={<Environments />} />
+          {/* 版本选择 + 管理：只需项目可见（ProjectGuard 已校验）；不进版本号 */}
+          <Route path="versions/select" element={<VersionsSelectPage />} />
+          <Route path="versions" element={<ProjectVersionsPage />} />
+          {/* 版本化二级路径 /v/:versionId/... 需 store.versionId 已设置（VersionsSelectPage 写入） */}
+          <Route path="v/:versionId">
+            <Route index element={<Navigate to="overview" replace />} />
+            <Route path="overview" element={<Dashboard />} />
+            <Route path="groups" element={<GroupsPage />} />
+            <Route path="groups/:groupId" element={<GroupsPage />} />
+            <Route path="cases/:id" element={<CaseDetail />} />
+            <Route path="ai/:id" element={<AiWorkspacePage />} />
+            <Route path="plans" element={<Plans />} />
+            <Route path="plans/:id" element={<PlanDetail />} />
+            <Route path="plans/:id/runs/:runId" element={<PlanRunDetail />} />
+            <Route path="reports" element={<Executions />} />
+            <Route path="reports/:id" element={<ReportDetail />} />
+            <Route path="environments" element={<Environments />} />
+          </Route>
+          {/* 旧路径兼容：未带版本号直接进项目 → 弹到 versions select */}
+          <Route index element={<Navigate to="versions/select" replace />} />
+          <Route path="overview" element={<Navigate to="../versions/select" replace />} />
+          <Route path="groups" element={<Navigate to="../versions/select" replace />} />
+          <Route path="groups/:groupId" element={<Navigate to="../../versions/select" replace />} />
+          <Route path="cases/:id" element={<Navigate to="../../versions/select" replace />} />
+          <Route path="ai/:id" element={<Navigate to="../../versions/select" replace />} />
+          <Route path="plans" element={<Navigate to="../versions/select" replace />} />
+          <Route path="plans/:id" element={<Navigate to="../../versions/select" replace />} />
+          <Route path="plans/:id/runs/:runId" element={<Navigate to="../../../versions/select" replace />} />
+          <Route path="reports" element={<Navigate to="../versions/select" replace />} />
+          <Route path="reports/:id" element={<Navigate to="../../versions/select" replace />} />
+          <Route path="environments" element={<Navigate to="../versions/select" replace />} />
         </Route>
         <Route path="*" element={<ProjectsHome />} />
       </Route>

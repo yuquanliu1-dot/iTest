@@ -5,7 +5,8 @@ import { api } from '../../api/client';
 import { useProjectStore } from '../../stores/project';
 import Icon from '../Icon';
 
-/** 除「store 与 URL 一致」外，还校验项目真实存在且对当前用户可见。
+/** ProjectGuard 仅校验项目可见性（与 store.id 一致 + 服务端存在）。
+ *  版本选择已抽到独立路由（versions/select）；版本化二级路径由 /v/:versionId 段负责。
  *  与 ProjectsHome 共用 ['projects'] 缓存，常规导航命中缓存不会多发请求。 */
 export default function ProjectGuard() {
   const { projectId } = useParams<{ projectId: string }>();
