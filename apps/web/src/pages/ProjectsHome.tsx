@@ -63,6 +63,11 @@ export default function ProjectsHome() {
     navigate(`/p/${p.id}/overview`);
   };
 
+  const openEnvironments = (p: { id: string; name: string; defaultUrl: string | null }) => {
+    enter({ id: p.id, name: p.name, defaultUrl: p.defaultUrl });
+    navigate(`/p/${p.id}/environments`);
+  };
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center justify-between px-5 pt-4 pb-0">
@@ -100,6 +105,11 @@ export default function ProjectsHome() {
                       icon="pencil"
                       title="编辑"
                       onClick={() => setForm({ open: true, mode: 'edit', id: p.id, name: p.name, description: p.description ?? '', defaultUrl: p.defaultUrl ?? '' })}
+                    />
+                    <IconButton
+                      icon="layers"
+                      title="环境"
+                      onClick={() => openEnvironments(p)}
                     />
                     <IconButton
                       icon="trash"
