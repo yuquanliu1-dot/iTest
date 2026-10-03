@@ -15,3 +15,6 @@ apps/recorder/modules/*.js
 *.jpg
 *.jpeg
 verify-*.jpeg
+
+# local worktrees
+.worktrees/
