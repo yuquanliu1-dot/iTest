@@ -23,8 +23,10 @@ interface FormState {
 }
 interface VersionFormState {
   open: boolean;
+  mode: 'create' | 'edit';
   projectId: string;
   projectName: string;
+  versionId: string | null;
   name: string;
   description: string;
 }
@@ -44,7 +46,15 @@ const EMPTY_FORM: FormState = {
   defaultUrl: '',
   repo: EMPTY_REPO,
 };
-const EMPTY_VERSION_FORM: VersionFormState = { open: false, projectId: '', projectName: '', name: '', description: '' };
+const EMPTY_VERSION_FORM: VersionFormState = {
+  open: false,
+  mode: 'create',
+  projectId: '',
+  projectName: '',
+  versionId: null,
+  name: '',
+  description: '',
+};
 const EMPTY_REF_FORM: RefFormState = { open: false, projectId: '', version: null };
 
 export default function ProjectsHome() {
@@ -115,6 +125,20 @@ export default function ProjectsHome() {
     mutationFn: () => api.versions.create(versionForm.projectId, { name: versionForm.name, description: versionForm.description || undefined }),
     onSuccess: (v) => {
       toast(`已新建版本 ${v.name}`, 'success');
+      setVersionForm(EMPTY_VERSION_FORM);
+      qc.invalidateQueries({ queryKey: ['versions', versionForm.projectId] });
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
+  const editVersion = useMutation({
+    mutationFn: () =>
+      api.versions.patch(versionForm.versionId!, {
+        name: versionForm.name.trim(),
+        description: versionForm.description.trim() ? versionForm.description.trim() : null,
+      }),
+    onSuccess: (v) => {
+      toast(`已更新版本 ${v.name}`, 'success');
       setVersionForm(EMPTY_VERSION_FORM);
       qc.invalidateQueries({ queryKey: ['versions', versionForm.projectId] });
     },
@@ -222,7 +246,28 @@ export default function ProjectsHome() {
                   })
                 }
                 onDelete={() => setConfirmDelete({ id: p.id, name: p.name })}
-                onAddVersion={() => setVersionForm({ open: true, projectId: p.id, projectName: p.name, name: '', description: '' })}
+                onAddVersion={() =>
+                  setVersionForm({
+                    open: true,
+                    mode: 'create',
+                    projectId: p.id,
+                    projectName: p.name,
+                    versionId: null,
+                    name: '',
+                    description: '',
+                  })
+                }
+                onEditVersion={(v) =>
+                  setVersionForm({
+                    open: true,
+                    mode: 'edit',
+                    projectId: p.id,
+                    projectName: p.name,
+                    versionId: v.id,
+                    name: v.name,
+                    description: v.description ?? '',
+                  })
+                }
                 onEnterVersion={(v) => enterVersion(p.id, p.name, p.defaultUrl, v)}
                 onSetDefaultVersion={(v) => setDefaultVersion.mutate({ projectId: p.id, versionId: v.id })}
                 onRemoveVersion={(v) => removeVersion.mutate({ projectId: p.id, versionId: v.id })}
@@ -275,15 +320,15 @@ export default function ProjectsHome() {
         </DialogContent>
       </Dialog>
 
-      {/* 版本新建弹窗 */}
+      {/* 版本新建/编辑弹窗 */}
       <Dialog open={versionForm.open} onOpenChange={(open) => setVersionForm((f) => ({ ...f, open }))}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>新建版本</DialogTitle>
+            <DialogTitle>{versionForm.mode === 'create' ? '新建版本' : '编辑版本'}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
             <p className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
-              为「{versionForm.projectName}」添加新版本。
+              {versionForm.mode === 'create' ? '为' : '编辑「'}{versionForm.projectName}{versionForm.mode === 'create' ? '」添加新版本' : '」'}
             </p>
             <Input
               label="版本名"
@@ -308,10 +353,15 @@ export default function ProjectsHome() {
           >
             <Button variant="ghost" onClick={() => setVersionForm(EMPTY_VERSION_FORM)}>取消</Button>
             <Button
-              disabled={!versionForm.name.trim() || createVersion.isPending}
-              onClick={() => createVersion.mutate()}
+              disabled={
+                !versionForm.name.trim() ||
+                (versionForm.mode === 'create' ? createVersion.isPending : editVersion.isPending)
+              }
+              onClick={() => (versionForm.mode === 'create' ? createVersion.mutate() : editVersion.mutate())}
             >
-              {createVersion.isPending ? '创建中...' : '创建'}
+              {versionForm.mode === 'create'
+                ? createVersion.isPending ? '创建中...' : '创建'
+                : editVersion.isPending ? '保存中...' : '保存'}
             </Button>
           </div>
         </DialogContent>
@@ -498,6 +548,7 @@ interface ProjectRowProps {
   onEdit: () => void;
   onDelete: () => void;
   onAddVersion: () => void;
+  onEditVersion: (v: ProjectVersion) => void;
   onEnterVersion: (v: ProjectVersion) => void;
   onSetDefaultVersion: (v: ProjectVersion) => void;
   onRemoveVersion: (v: ProjectVersion) => void;
@@ -511,6 +562,7 @@ function ProjectRow({
   onEdit,
   onDelete,
   onAddVersion,
+  onEditVersion,
   onEnterVersion,
   onSetDefaultVersion,
   onRemoveVersion,
@@ -628,6 +680,7 @@ function ProjectRow({
                       )}
                       <div className="flex-1" />
                       <div className="flex items-center gap-1">
+                        <IconButton icon="pencil" title="编辑版本" onClick={() => onEditVersion(v)} />
                         <IconButton
                           icon="gitBranch"
                           title={p.repoUrl ? '编辑 ref' : '请先配置仓库'}
