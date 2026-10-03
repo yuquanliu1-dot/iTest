@@ -143,3 +143,27 @@ describe('workspace tools wrapper (upsert_case)', () => {
     expect(steps[5]!.compiled).toBeNull();                       // 显式 null 透传
   });
 });
+
+// Task 10: contextMode-aware promptGuidelines
+describe('buildWorkspaceTools promptGuidelines', () => {
+  it('contextMode=repo 时提示优先 repo_*', async () => {
+    const { buildWorkspaceTools } = await import('../src/pi/tools.js');
+    const tools = buildWorkspaceTools(requirementId, { contextMode: 'repo', repoAvailable: true });
+    const upsert = tools.find((t) => t.name === 'upsert_case')!;
+    expect(upsert.promptGuidelines?.join('\n')).toMatch(/repo_(ls|read|grep)/);
+  });
+
+  it('contextMode=page 时提示优先 inspect_page', async () => {
+    const { buildWorkspaceTools } = await import('../src/pi/tools.js');
+    const tools = buildWorkspaceTools(requirementId, { contextMode: 'page', repoAvailable: false });
+    const upsert = tools.find((t) => t.name === 'upsert_case')!;
+    expect(upsert.promptGuidelines?.join('\n')).toMatch(/inspect_page/);
+  });
+
+  it('repoAvailable=false 时不引导用 repo_*', async () => {
+    const { buildWorkspaceTools } = await import('../src/pi/tools.js');
+    const tools = buildWorkspaceTools(requirementId, { contextMode: 'repo', repoAvailable: false });
+    const upsert = tools.find((t) => t.name === 'upsert_case')!;
+    expect(upsert.promptGuidelines?.join('\n')).toMatch(/inspect_page/);
+  });
+});
