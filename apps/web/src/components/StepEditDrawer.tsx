@@ -158,6 +158,9 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
 
   // aiStep / navigate / waitFor / check / switchTab / screenshot
   const [instruction, setInstruction] = useState(String(action.instruction ?? ''));
+  // aiStep 可选断言：与 instruction 解耦；保存后落到 test_steps.assertion（assertText 形态）。
+  // 后端在 save 路径会做 migrateAssertion，老数据缺这字段时会回填空字符串而非报错。
+  const [aiAssertion, setAiAssertion] = useState(String(action.assertion ?? ''));
   const [showBoundary, setShowBoundary] = useState(false);
   const [url, setUrl] = useState(String(action.url ?? ''));
   const [timeoutMs, setTimeoutMs] = useState(String(action.timeoutMs ?? ''));
@@ -230,6 +233,9 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
     if (kind === 'aiStep') {
       next.instruction = instruction.trim();
       next.compiled = action.compiled ?? null;
+      const a = aiAssertion.trim();
+      if (a) next.assertion = a;
+      else delete next.assertion;
     }
     if (kind === 'navigate') next.url = url.trim();
     if (kind === 'waitFor') {
@@ -539,6 +545,16 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
                 placeholder="可用 #cssSelector 引用页面元素，例: 识别图片 #captchaImg 并输入到 #captchaInput"
               />
               <FieldError msg={fieldErrors['action.instruction']} />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+              <span>断言（可选，保存后落入 assertText）</span>
+              <textarea
+                className="input-base input-xs"
+                rows={2}
+                value={aiAssertion}
+                onChange={(e) => setAiAssertion(e.target.value)}
+                placeholder="例：看见验证码识别结果；留空则不生成断言"
+              />
             </label>
             {countNumberedSegments(instruction) >= 2 && (
               <p className="text-[11px]" style={{ color: 'var(--color-accent)' }}>
