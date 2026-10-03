@@ -9,6 +9,7 @@ import { assertProjectVisible, visibleProjectIds } from '../services/projectAcce
 import { compileAiStepsInPlace } from '../agent/aiStepCompile.js';
 import { splitAiStepsInPlace } from '../agent/aiStepSplit.js';
 import { migrateAssertion } from '../lib/step-migration.js';
+import { expandCompiledAiStepsInPlace } from '../lib/ai-step-expand.js';
 import { loadDoc, removeSaved, type StagedCase } from '../pi/workspace.js';
 
 export const requirementsRoute = Router({ mergeParams: true });
@@ -215,6 +216,11 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
       }
     }),
   );
+
+  // 阶段 1.6：把"已编译"的 aiStep 就地展开为多条具体 DSL 步骤（navigate/click/fill/...），
+  // 让 LLM 在生成阶段就已经出 compiled 的用例保存后能在 UI 上直接编辑、回放时少一层 aiStep 递归。
+  // "放弃"（compiled:null）和"未尝试"（无 compiled 字段）的 aiStep 原样保留，行为不变。
+  expandCompiledAiStepsInPlace(prepared);
 
   let savedCases = 0;
   // 阶段 2（事务内）：纯写库

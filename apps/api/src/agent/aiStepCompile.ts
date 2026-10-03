@@ -11,6 +11,11 @@ navigate {url} | click {locator} | fill {locator, value} | hover {locator} |
 waitFor {locator, timeoutMs?} | assertText {locator, equals} | assertVisible {locator} |
 check {locator, checked} | select {locator, value} | extract {locator, varName}。
 locator 是 [{"strategy": "...", "value": "..."}] 数组，规则：
+- locator 必须**只有一层数组**：每个元素直接是单个 {strategy, value} 对象。
+  正例：[{strategy:"css", value:"button[type='submit']"}]
+  反例：[[{strategy:"css", value:"..."}]]（把每个候选再嵌一层数组）
+  反例：{strategy:"css", value:"..."}（locator 直接是对象，应是数组）
+  反例：{item:{strategy:"css", value:"..."}}（外套 item，应剥掉）
 - strategy 只能是 "role" | "text" | "testId" | "css" | "xpath"。
 - role 的 value 形如 "textbox" 或 "textbox[name='用户名']"。role 必须小写。
 - text 的 value 是元素可见文字。
@@ -18,13 +23,19 @@ locator 是 [{"strategy": "...", "value": "..."}] 数组，规则：
 - css 的 value 是 CSS 选择器。
 - xpath 的 value 是 xpath 表达式。
 - locator 数组里给出多个候选，回放时按顺序探测；至少 1 个。
-navigate 的 url 必须是绝对 URL（如 http://localhost:5173/login），不要用相对路径。
+navigate 的 url 必须是绝对 URL，禁止凭「典型实现」臆造 localhost：
+- 用户消息里的「页面 URL」字段是被测页唯一真实地址；如 http://192.168.30.228:8088/static/login.html。
+- 你必须把这条 URL 原样作为 navigate.url（保留 host:port/path），不要替换 host、不要省略 path、不要套用本机 localhost。
+- 用户消息里没有「页面 URL」时，才用「打开/访问/进入 X」启发式匹配 → http://localhost:5173/<X>，且 fallback 仅作为最后手段。
 value 字段：固定字符串直接给字符串；"Abc@123456" 之类密码占位直接用占位字符串。
 不要输出 aiStep kind。
-末尾 assertText 引导：如果该 step 跑完后页面应该有可观察结果（例如填表后的成功提示、点击后的列表项出现），
-请在 compiled 末尾补一条 assertText：{locator:[{strategy:'text', value:'<片段>'}],
-target:'specifiedElement', match:'contains', equals:'<片段>'}。
-不要为 navigate 步骤本身补 assertText（navigate 后的状态由下一条 step 断言）。`;
+末尾断言引导（强约束，避免弱断言回放假阳性）：
+- 步骤执行后必须有可观察结果时，断言必须基于真实可见元素：
+  1) 优先 assertVisible 元素级（例：assertVisible input[name='username'] / button[type='submit']），不依赖文案；
+  2) 其次 assertText 带 locator+match:'contains'（例：登录按钮点完后等待可见的「登录成功」提示）；
+  3) 禁止使用 target:'page' equals:「登录页正常加载」这种整页模糊自由文本断言——它对任何页面都命中，掩盖回放失败。
+- 不要为 navigate 步骤本身补断言（navigate 后的状态由下一条 step 断言）。
+- 若该步骤没有可观察结果（例如「打开某页」「进入某页」），不要补任何断言。`;
 
 const BATCH_SYSTEM_PROMPT = `${SYSTEM_PROMPT}
 
