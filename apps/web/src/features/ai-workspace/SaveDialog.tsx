@@ -49,7 +49,7 @@ export default function SaveDialog({ open, onOpenChange, groups, onSave, saving 
           </select>
         </div>
         <DialogFooter>
-          <Button variant="plain" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
             取消
           </Button>
           <Button disabled={!groupId || saving} onClick={() => onSave(groupId)}>

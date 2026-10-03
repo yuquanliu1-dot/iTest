@@ -1,7 +1,7 @@
 function SkeletonBlock({ h = 92 }: { h?: number }) {
   return (
     <div
-      className="rounded-[12px] animate-pulse"
+      className="rounded-[var(--radius-md)] animate-pulse"
       style={{ minHeight: h, background: 'var(--color-muted)' }}
     />
   );

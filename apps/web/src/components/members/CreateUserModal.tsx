@@ -80,7 +80,7 @@ export default function CreateUserModal({ visible, orgId, orgName, onClose, onCr
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget && !temporaryPassword) onClose(); }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-modal)', padding: 16, width: 420, maxWidth: 'calc(100vw - 32px)' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-modal)', padding: 16, width: 420, maxWidth: 'calc(100vw - 32px)' }}>
         <h2 style={{ margin: 0, marginBottom: 12, fontSize: 15, fontWeight: 600, color: 'var(--color-foreground)' }}>
           {temporaryPassword ? '用户已创建' : '创建用户'}
         </h2>

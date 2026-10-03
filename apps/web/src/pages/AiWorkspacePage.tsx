@@ -89,7 +89,7 @@ export default function AiWorkspacePage() {
         className="flex items-center gap-3 px-5 py-3 shrink-0 fade-up"
         style={{ borderBottom: '1px solid var(--color-glass-border)' }}
       >
-        <Button variant="plain" size="sm" onClick={() => navigate(`/p/${projectId}/groups`)}>
+        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/groups`)}>
           <Icon name="chevronLeft" size={12} />
           返回用例列表
         </Button>

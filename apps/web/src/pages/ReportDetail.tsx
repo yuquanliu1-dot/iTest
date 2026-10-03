@@ -194,7 +194,7 @@ export default function ReportDetail() {
               setZoomIndex(idx >= 0 ? idx : 0);
             }}
             aria-label={`放大 step ${s.order} 截图`}
-            className="shrink-0 rounded-[6px] overflow-hidden press"
+            className="shrink-0 rounded-[var(--radius-sm)] overflow-hidden press"
             style={{ border: '1px solid var(--color-glass-border)', background: 'transparent', padding: 0, cursor: 'zoom-in' }}
           >
             <img
@@ -229,7 +229,7 @@ export default function ReportDetail() {
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header bar */}
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
-        <Button variant="plain" size="sm" onClick={() => navigate(`/p/${projectId}/reports`)}>
+        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/reports`)}>
           <Icon name="chevronLeft" size={12} />
           返回报告列表
         </Button>
@@ -239,7 +239,7 @@ export default function ReportDetail() {
         </h1>
         <StatusPill status={data.status}>{data.status.toUpperCase()}</StatusPill>
         <Button
-          variant="secondary"
+          variant="ghost"
           onClick={() => setShowDelete(true)}
           style={{ color: 'var(--color-destructive)' }}
           aria-label="删除测试报告"
@@ -258,11 +258,11 @@ export default function ReportDetail() {
         <div className="flex gap-5 p-6">
           <div className="flex-1 min-w-0 flex flex-col gap-3">
             {data.summary && (
-              <div className="glass-card rounded-[12px] p-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+              <div className="glass-card rounded-[var(--radius-md)] p-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
                 {data.summary}
               </div>
             )}
-            <div className="glass-card rounded-[12px] overflow-hidden">
+            <div className="glass-card rounded-[var(--radius-md)] overflow-hidden">
               <div className="px-5 py-[10px] hairline-bottom" style={{ background: 'var(--color-background-subtle)' }}>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
                   步骤时间线
@@ -296,7 +296,7 @@ export default function ReportDetail() {
 
           {/* Right rail — 统计 */}
           <div className="w-[280px] shrink-0 flex flex-col gap-3">
-            <div className="glass-card rounded-[12px] p-4">
+            <div className="glass-card rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
                 汇总
               </div>
@@ -304,7 +304,7 @@ export default function ReportDetail() {
               <MetaRow label="通过" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-success)' }}>{passed}</span>} />
               <MetaRow label="失败" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-destructive)' }}>{failed}</span>} />
             </div>
-            <div className="glass-card rounded-[12px] p-4">
+            <div className="glass-card rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
                 元数据
               </div>
@@ -417,7 +417,7 @@ export default function ReportDetail() {
             确认删除该测试报告？相关截图将一并清理，且不可恢复。
           </div>
           <DialogFooter>
-            <Button variant="plain" onClick={() => setShowDelete(false)}>取消</Button>
+            <Button variant="ghost" onClick={() => setShowDelete(false)}>取消</Button>
             <Button
               variant="danger"
               disabled={remove.isPending}

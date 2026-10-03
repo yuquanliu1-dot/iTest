@@ -168,7 +168,7 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
         </div>
       )}
       <div
-        className="rounded-[8px] px-3 py-2 text-[12px]"
+        className="rounded-[var(--radius-sm)] px-3 py-2 text-[12px]"
         style={
           doc.pageContext
             ? { background: 'var(--color-accent-light)', color: 'var(--color-foreground)' }
@@ -198,7 +198,7 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
         const allSelected = s.cases.length > 0 && s.cases.every((c) => selectedCases.has(c.id));
         const someSelected = s.cases.some((c) => selectedCases.has(c.id));
         return (
-        <div key={s.id} className="glass-card rounded-[12px] p-4">
+        <div key={s.id} className="glass-card rounded-[var(--radius-md)] p-4">
           <label className="flex items-center gap-2 text-[13px] font-semibold">
             <input
               type="checkbox"
@@ -217,7 +217,7 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
         );
       })}
       {doc.looseCases.length > 0 && (
-        <div className="glass-card rounded-[12px] p-4">
+        <div className="glass-card rounded-[var(--radius-md)] p-4">
           <div className="text-[13px] font-semibold">未分组用例</div>
           <div className="flex flex-col gap-2 mt-3 ml-5">
             {doc.looseCases.map((c) => renderCase(c, ''))}

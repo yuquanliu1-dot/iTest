@@ -9,7 +9,7 @@ export default function PlanStatusLine({ plans, projectId }: { plans: Plan[]; pr
 
   if (plans.length === 0) {
     return (
-      <div className="glass-panel rounded-[12px] p-5">
+      <div className="glass-panel rounded-[var(--radius-md)] p-5">
         <h3 className="text-[14px] font-semibold mb-3" style={{ color: 'var(--color-foreground)' }}>
           计划列表
         </h3>
@@ -22,7 +22,7 @@ export default function PlanStatusLine({ plans, projectId }: { plans: Plan[]; pr
 
   return (
     <div
-      className="glass-panel rounded-[12px] p-5 flex flex-col"
+      className="glass-panel rounded-[var(--radius-md)] p-5 flex flex-col"
       style={{ boxShadow: 'var(--shadow-card)' }}
     >
       <h3 className="text-[14px] font-semibold mb-3" style={{ color: 'var(--color-foreground)' }}>

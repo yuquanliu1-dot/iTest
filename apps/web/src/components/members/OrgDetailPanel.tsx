@@ -210,7 +210,7 @@ export default function OrgDetailPanel({
 
       {confirmDelete && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) setConfirmDelete(false); }}>
-          <div style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-modal)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
+          <div style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-modal)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
             <h3 style={{ margin: 0, marginBottom: 8, fontSize: 14, fontWeight: 600 }}>删除组织</h3>
             <div style={{ fontSize: 13, color: 'var(--color-foreground-muted)', marginBottom: 12 }}>
               确定删除「{orgDetails?.name}」？子组织或项目非空时会被后端拒删。

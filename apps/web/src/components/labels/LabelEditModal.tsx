@@ -127,7 +127,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
                 style={{ fontFamily: 'var(--font-mono, monospace)' }}
               />
               <Button
-                variant="secondary"
+                variant="ghost"
                 size="sm"
                 type="button"
                 onClick={() => setColor(PRESET_COLORS[Math.floor(Math.random() * PRESET_COLORS.length)]!)}
@@ -168,7 +168,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
           className="flex justify-end gap-2 px-5 py-4 hairline-top"
           style={{ borderColor: 'var(--color-border)' }}
         >
-          <Button variant="plain" onClick={onClose}>取消</Button>
+          <Button variant="ghost" onClick={onClose}>取消</Button>
           <Button disabled={!name.trim() || saving} onClick={handleSave}>
             {saving ? '保存中...' : '保存'}
           </Button>

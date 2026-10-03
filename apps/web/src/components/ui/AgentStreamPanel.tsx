@@ -29,7 +29,7 @@ export default function AgentStreamPanel({ runId, streaming, errorMessage }: Pro
   const status = useMemo(() => deriveStatus(events, streaming, errorMessage ?? null), [events, streaming, errorMessage]);
 
   return (
-    <div className="glass-card rounded-[12px] p-4">
+    <div className="glass-card rounded-[var(--radius-md)] p-4">
       <div className="flex items-center gap-2 mb-3">
         <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
           Agent 进度

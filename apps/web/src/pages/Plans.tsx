@@ -92,7 +92,7 @@ export default function Plans() {
                 key={p.id}
                 data-stagger-item
                 onClick={() => navigate(`/p/${projectId}/plans/${p.id}`)}
-                className="glass-card rounded-[12px] p-4 cursor-pointer hover-card"
+                className="glass-card rounded-[var(--radius-md)] p-4 cursor-pointer hover-card"
               >
                 <div className="flex items-center justify-between">
                   <div className="text-[14px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>
@@ -134,7 +134,7 @@ export default function Plans() {
             <Input label="环境（可选）" placeholder="预发 / 生产 / staging" value={environment} onChange={(e) => setEnvironment(e.target.value)} />
           </div>
           <DialogFooter>
-            <Button variant="plain" onClick={() => setShowCreate(false)}>取消</Button>
+            <Button variant="ghost" onClick={() => setShowCreate(false)}>取消</Button>
             <Button disabled={!name || create.isPending} onClick={() => create.mutate()}>
               {create.isPending ? '创建中...' : '创建'}
             </Button>

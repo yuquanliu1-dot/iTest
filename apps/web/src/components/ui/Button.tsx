@@ -1,6 +1,6 @@
 import { forwardRef } from 'react';
 
-type ButtonVariant = 'primary' | 'secondary' | 'plain' | 'danger';
+type ButtonVariant = 'primary' | 'ghost' | 'danger';
 type ButtonSize = 'sm' | 'md' | 'lg';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -14,18 +14,11 @@ const variantStyles: Record<ButtonVariant, React.CSSProperties> = {
     color: 'var(--color-accent-foreground)',
     border: 'none',
     fontWeight: 500,
-    boxShadow: 'var(--shadow-accent)',
   },
-  secondary: {
+  ghost: {
     background: 'transparent',
-    color: 'var(--color-accent)',
-    border: '1px solid var(--color-accent)',
-    fontWeight: 500,
-  },
-  plain: {
-    background: 'transparent',
-    color: 'var(--color-foreground-muted)',
-    border: 'none',
+    color: 'var(--color-foreground-secondary)',
+    border: '1px solid var(--color-border-subtle)',
     fontWeight: 500,
   },
   danger: {
@@ -47,6 +40,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     return (
       <button
         ref={ref}
+        data-variant={variant}
         className={`press ${className}`}
         disabled={disabled}
         style={{
@@ -56,7 +50,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           cursor: disabled ? 'not-allowed' : 'pointer',
           opacity: disabled ? 0.5 : 1,
           transition:
-            'background 0.18s ease, transform 0.12s ease, opacity 0.15s ease, box-shadow 0.22s ease',
+            'background 0.18s ease, transform 0.12s ease, opacity 0.15s ease, box-shadow 0.22s ease, border-color 0.18s ease, color 0.18s ease',
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',

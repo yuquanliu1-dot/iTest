@@ -87,7 +87,7 @@ export default function ProjectsHome() {
             {(data ?? []).map((p) => (
               <div
                 key={p.id}
-                className="glass-panel rounded-[12px] p-5 cursor-pointer hover-card flex flex-col"
+                className="glass-panel rounded-[var(--radius-md)] p-5 cursor-pointer hover-card flex flex-col"
                 style={{ minHeight: 132 }}
                 onClick={() => openProject(p)}
               >
@@ -130,7 +130,7 @@ export default function ProjectsHome() {
             {/* 新建项目卡片 */}
             <button
               onClick={() => setForm({ open: true, mode: 'create', id: null, name: '', description: '', defaultUrl: '' })}
-              className="rounded-[12px] p-5 flex flex-col items-center justify-center gap-2"
+              className="rounded-[var(--radius-md)] p-5 flex flex-col items-center justify-center gap-2"
               style={{
                 minHeight: 132,
                 border: '1px dashed var(--color-glass-border)',
@@ -185,7 +185,7 @@ export default function ProjectsHome() {
             className="flex justify-end gap-2 px-5 py-4 hairline-top"
             style={{ borderColor: 'var(--color-border)' }}
           >
-            <Button variant="plain" onClick={() => setForm(EMPTY_FORM)}>取消</Button>
+            <Button variant="ghost" onClick={() => setForm(EMPTY_FORM)}>取消</Button>
             <Button disabled={!form.name.trim() || save.isPending} onClick={() => save.mutate()}>
               {save.isPending ? '保存中...' : '保存'}
             </Button>
@@ -206,7 +206,7 @@ export default function ProjectsHome() {
             className="flex justify-end gap-2 px-5 py-4 hairline-top"
             style={{ borderColor: 'var(--color-border)' }}
           >
-            <Button variant="plain" onClick={() => setConfirmDelete(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setConfirmDelete(null)}>取消</Button>
             <Button
               variant="danger"
               disabled={remove.isPending}

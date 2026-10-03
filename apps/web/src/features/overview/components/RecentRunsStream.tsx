@@ -10,7 +10,7 @@ export default function RecentRunsStream({ runs, projectId }: { runs: Run[]; pro
 
   return (
     <div
-      className="glass-panel rounded-[12px] p-5 flex flex-col"
+      className="glass-panel rounded-[var(--radius-md)] p-5 flex flex-col"
       style={{ boxShadow: 'var(--shadow-card)' }}
     >
       <h3 className="text-[14px] font-semibold mb-3" style={{ color: 'var(--color-foreground)' }}>

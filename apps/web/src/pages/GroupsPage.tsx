@@ -327,7 +327,7 @@ export default function GroupsPage() {
         <button
           data-active={!effectiveGroupId || undefined}
           onClick={() => navigate(`/p/${projectId}/groups`)}
-          className="group-nav-item text-left px-2 py-1.5 rounded-[6px] text-[13px]"
+          className="group-nav-item text-left px-2 py-1.5 rounded-[var(--radius-sm)] text-[13px]"
           style={{
             color: !effectiveGroupId ? 'var(--color-accent)' : 'var(--color-foreground-secondary)',
             fontWeight: !effectiveGroupId ? 500 : 400,
@@ -349,7 +349,7 @@ export default function GroupsPage() {
                 key={g.id}
                 data-active={active || undefined}
                 onClick={() => navigate(`/p/${projectId}/groups/${g.id}`)}
-                className="group-nav-item group flex items-center gap-1 px-2 py-1.5 rounded-[6px] cursor-pointer"
+                className="group-nav-item group flex items-center gap-1 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer"
               >
                 <Icon name="gitBranch" size={12} style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }} />
                 <span
@@ -418,6 +418,7 @@ export default function GroupsPage() {
                 border: '1px solid var(--color-border)',
                 background: 'var(--color-background-elevated)',
                 color: 'var(--color-foreground)',
+                height: 30,
                 minWidth: 140,
               }}
               title="按优先级过滤"
@@ -436,6 +437,7 @@ export default function GroupsPage() {
                 border: '1px solid var(--color-border)',
                 background: 'var(--color-background-elevated)',
                 color: 'var(--color-foreground)',
+                height: 30,
                 minWidth: 140,
               }}
             >
@@ -453,6 +455,7 @@ export default function GroupsPage() {
                 border: '1px solid var(--color-border)',
                 background: 'var(--color-background-elevated)',
                 color: 'var(--color-foreground)',
+                height: 30,
                 minWidth: 140,
               }}
               title="按状态过滤"
@@ -495,12 +498,12 @@ export default function GroupsPage() {
               </button>
               {tagPickerOpen && (
                 <div
-                  className="absolute right-0 top-full mt-1 z-50 rounded-[8px] overflow-hidden popover-in"
+                  className="absolute right-0 top-full mt-1 z-50 rounded-[var(--radius-sm)] overflow-hidden popover-in"
                   style={{
                     width: 220,
                     border: '1px solid var(--color-glass-border)',
                     background: 'var(--color-background-elevated)',
-                    boxShadow: 'var(--shadow-middle)',
+                    boxShadow: 'var(--shadow-card)',
                   }}
                 >
                   <div className="max-h-56 overflow-y-auto py-1">
@@ -564,16 +567,16 @@ export default function GroupsPage() {
         {/* 批量操作条 */}
         {checked.size > 0 && (
           <div
-            className="flex items-center gap-2 mx-5 mt-3 px-3 py-2 rounded-[8px]"
+            className="flex items-center gap-2 mx-5 mt-3 px-3 py-2 rounded-[var(--radius-sm)]"
             style={{ background: 'var(--color-accent-light)', border: '1px solid var(--color-glass-border)' }}
           >
             <span className="text-[12px]" style={{ color: 'var(--color-accent)' }}>已选 {checked.size} 条</span>
             <div className="flex-1" />
-            <Button size="sm" variant="secondary" onClick={() => { setCopyTarget(''); setCopyModal({ caseIds: checkedList }); }}>
+            <Button size="sm" variant="ghost" onClick={() => { setCopyTarget(''); setCopyModal({ caseIds: checkedList }); }}>
               <Icon name="copy" size={12} />
               批量复制
             </Button>
-            <Button size="sm" variant="secondary" onClick={() => { setPlanTarget(''); setPlanModal({ caseIds: checkedList }); }}>
+            <Button size="sm" variant="ghost" onClick={() => { setPlanTarget(''); setPlanModal({ caseIds: checkedList }); }}>
               <Icon name="play" size={12} />
               加入计划
             </Button>
@@ -603,7 +606,7 @@ export default function GroupsPage() {
               <Icon name="trash" size={12} />
               批量删除
             </Button>
-            <Button size="sm" variant="plain" onClick={() => setChecked(new Set())}>取消选择</Button>
+            <Button size="sm" variant="ghost" onClick={() => setChecked(new Set())}>取消选择</Button>
           </div>
         )}
 
@@ -737,7 +740,7 @@ export default function GroupsPage() {
             />
           </div>
           <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
-            <Button variant="plain" onClick={() => setGroupForm(EMPTY_GROUP_FORM)}>取消</Button>
+            <Button variant="ghost" onClick={() => setGroupForm(EMPTY_GROUP_FORM)}>取消</Button>
             <Button
               disabled={(groupForm.mode !== 'url' && !groupForm.name.trim()) || saveGroup.isPending}
               onClick={() => saveGroup.mutate()}
@@ -756,7 +759,7 @@ export default function GroupsPage() {
             确定删除「{confirmDeleteGroup?.name}」？分组内存在用例时将被拒绝删除。
           </div>
           <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
-            <Button variant="plain" onClick={() => setConfirmDeleteGroup(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setConfirmDeleteGroup(null)}>取消</Button>
             <Button variant="danger" disabled={deleteGroup.isPending} onClick={() => confirmDeleteGroup && deleteGroup.mutate(confirmDeleteGroup.id)}>
               {deleteGroup.isPending ? '删除中...' : '确认删除'}
             </Button>
@@ -772,7 +775,7 @@ export default function GroupsPage() {
             确定删除「{confirmDeleteCase?.title}」？该用例的步骤与报告将一并删除。
           </div>
           <DialogFooter>
-            <Button variant="plain" onClick={() => setConfirmDeleteCase(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setConfirmDeleteCase(null)}>取消</Button>
             <Button variant="danger" disabled={deleteCase.isPending} onClick={() => confirmDeleteCase && deleteCase.mutate(confirmDeleteCase.id)}>
               {deleteCase.isPending ? '删除中...' : '确认删除'}
             </Button>
@@ -788,7 +791,7 @@ export default function GroupsPage() {
             确定删除已选的 <span style={{ color: 'var(--color-destructive)', fontWeight: 600 }}>{checked.size}</span> 条用例？这些用例的步骤、报告、附件将被一并删除，且不可恢复。
           </div>
           <DialogFooter>
-            <Button variant="plain" onClick={() => setConfirmBatchDelete(false)}>取消</Button>
+            <Button variant="ghost" onClick={() => setConfirmBatchDelete(false)}>取消</Button>
             <Button
               variant="danger"
               disabled={batchDeleteCases.isPending || checked.size === 0}
@@ -817,7 +820,7 @@ export default function GroupsPage() {
             </p>
           </div>
           <DialogFooter>
-            <Button variant="plain" onClick={() => setCopyModal(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setCopyModal(null)}>取消</Button>
             <Button
               disabled={!copyTarget || copyCases.isPending}
               onClick={() => copyModal && copyCases.mutate({ caseIds: copyModal.caseIds, targetGroupId: copyTarget })}
@@ -847,7 +850,7 @@ export default function GroupsPage() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="plain" onClick={() => setPlanModal(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setPlanModal(null)}>取消</Button>
             <Button
               disabled={!planTarget || addToPlan.isPending}
               onClick={() => planModal && addToPlan.mutate({ caseIds: planModal.caseIds, planId: planTarget })}
@@ -886,7 +889,7 @@ export default function GroupsPage() {
             </div>
           </div>
           <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
-            <Button variant="plain" onClick={() => setAiForm({ open: false, title: '', content: '' })}>取消</Button>
+            <Button variant="ghost" onClick={() => setAiForm({ open: false, title: '', content: '' })}>取消</Button>
             <Button
               disabled={!aiForm.title.trim() || !aiForm.content.trim() || createRequirement.isPending}
               onClick={() => createRequirement.mutate()}
@@ -958,7 +961,7 @@ export default function GroupsPage() {
             </div>
           </div>
           <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
-            <Button variant="plain" onClick={() => setCaseForm(EMPTY_CASE_FORM)}>取消</Button>
+            <Button variant="ghost" onClick={() => setCaseForm(EMPTY_CASE_FORM)}>取消</Button>
             <Button
               disabled={!caseForm.title.trim() || !caseForm.groupId || createCase.isPending}
               onClick={() => createCase.mutate()}
