@@ -100,3 +100,51 @@ describe('repo_ls', () => {
     expect(names).not.toContain('.hidden');
   });
 });
+
+describe('repo_read', () => {
+  it('读文本文件返回行号+内容', async () => {
+    await fs.writeFile(path.join(cwd, 'lines.txt'), 'a\nb\nc\n');
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_read')!;
+    const r = await t.execute({ path: 'lines.txt' });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.content).toBe('a\nb\nc\n');
+    expect(data.totalLines).toBe(3);
+  });
+
+  it('offset / maxLines 切片', async () => {
+    await fs.writeFile(path.join(cwd, 'big.txt'), Array.from({ length: 100 }, (_, i) => `L${i}`).join('\n'));
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_read')!;
+    const r = await t.execute({ path: 'big.txt', offset: 10, maxLines: 5 });
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.content).toBe('L10\nL11\nL12\nL13\nL14');
+    expect(data.truncated).toBe(true);
+  });
+
+  it('maxLines > 500 强制截断到 500', async () => {
+    await fs.writeFile(path.join(cwd, 'huge.txt'), 'x\n'.repeat(2000));
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_read')!;
+    const r = await t.execute({ path: 'huge.txt', maxLines: 9999 });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.lines.length).toBeLessThanOrEqual(500);
+  });
+
+  it('二进制文件返回 ok:false', async () => {
+    await fs.writeFile(path.join(cwd, 'blob.bin'), Buffer.from([0, 1, 2, 0, 5]));
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_read')!;
+    const r = await t.execute({ path: 'blob.bin' });
+    expect(r.ok).toBe(false);
+  });
+
+  it('路径穿越返回 ok:false', async () => {
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_read')!;
+    const r = await t.execute({ path: '../../etc/passwd' });
+    expect(r.ok).toBe(false);
+  });
+});
