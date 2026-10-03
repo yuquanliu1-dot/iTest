@@ -335,21 +335,6 @@ casesRoute.post('/copy', async (req, res) => {
   res.json({ count: body.caseIds.length });
 });
 
-casesRoute.post('/copy', async (req, res) => {
-  const body = z.object({
-    caseIds: z.array(z.string().uuid()).min(1),
-    targetGroupId: z.string().uuid(),
-    targetVersionId: z.string().uuid().optional(),
-  }).parse(req.body);
-  const g = await db.select().from(groups).where(eq(groups.id, body.targetGroupId));
-  if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
-  await assertProjectVisible(g[0]!.projectId, req.user!);
-  for (const id of body.caseIds) {
-    await copyOneCase(id, body.targetGroupId, body.targetVersionId ?? null, req.user!);
-  }
-  res.json({ count: body.caseIds.length });
-});
-
 casesRoute.delete('/:id', async (req, res) => {
   await assertCaseVisible(req.params.id!, req.user!);
   const deleted = await db.delete(testCases).where(eq(testCases.id, req.params.id)).returning();
