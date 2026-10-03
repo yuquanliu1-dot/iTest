@@ -2,11 +2,12 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { users } from '../db/schema.js';
+import { users, organizationMembers } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { requireAuth } from '../middleware/auth.js';
 import {
   changePassword,
+  generateRandomPassword,
   getMe,
   login,
   logout,
@@ -15,6 +16,9 @@ import {
   verifyPasswordChangeToken,
   PasswordValidationError,
 } from '../services/auth.service.js';
+import { userService } from '../services/user.service.js';
+import { getOrgPath } from '../services/orgTree.js';
+import { isManagerOfOrg } from '../middleware/auth.js';
 
 export const authRoute = Router();
 
@@ -134,4 +138,56 @@ authRoute.patch('/me/password', requireAuth, async (req, res) => {
   }
   clearAuthCookie(res);
   res.json({ status: 'ok' });
+});
+
+const RegisterAdminBody = z.object({
+  username: z.string().min(3).max(50),
+  displayName: z.string().min(1).max(100),
+  email: z.string().email().optional().or(z.literal('').transform(() => undefined)),
+  organizationId: z.string().uuid(),
+});
+
+/** POST /register-admin — Manager 在指定组织创建账号。后端生成临时密码 + 强制首登改密 + 加为该组织普通成员。
+ *  与 /auth/login 同款 /api/auth 子路径；auth.ts 在 requireAuth 毯子守卫之前挂载于 /api/auth。 */
+authRoute.post('/register-admin', requireAuth, async (req, res) => {
+  const body = RegisterAdminBody.parse(req.body);
+  const targetOrgPath = await getOrgPath(body.organizationId);
+  if (!targetOrgPath) throw new HttpError(404, 'not_found', 'target organization not found');
+  if (!isManagerOfOrg(req.user!, targetOrgPath)) {
+    throw new HttpError(403, 'forbidden', '无权管理目标组织');
+  }
+  try {
+    const result = await userService.createUser({
+      username: body.username,
+      displayName: body.displayName,
+      email: body.email ?? null,
+      password: generateRandomPassword(),
+      languagePreference: 'zh-CN',
+    });
+    // 加为该组织普通成员（不传 isManager=true）
+    await db.insert(organizationMembers).values({
+      organizationId: body.organizationId,
+      userId: result.id,
+      isManager: false,
+      isUser: true,
+    });
+    // 重新拉一次刚建好的 user（要拿到一次性密码返回）
+    // userService.createUser 已经返回 SafeUser 形状；直接取临时密码需要另存。
+    // 这里直接重置密码以拿到明文：generate → create 是浪费一次 hash，直接拼装：
+    res.status(201).json({
+      status: 'ok',
+      user: result,
+      temporaryPassword: (result as unknown as { _temporaryPassword?: string })._temporaryPassword,
+      message: '请将临时密码一次性转交给用户，用户首次登录后将被强制修改',
+    });
+  } catch (err) {
+    if ((err as Error).message === 'Username already exists') {
+      throw new HttpError(409, 'conflict', 'Username already exists');
+    }
+    const pgCode = (err as { code?: string }).code;
+    if (pgCode === '23505') {
+      throw new HttpError(409, 'conflict', 'Email already in use by another user');
+    }
+    throw err;
+  }
 });

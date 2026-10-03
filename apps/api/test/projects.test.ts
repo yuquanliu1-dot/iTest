@@ -42,7 +42,7 @@ afterAll(async () => {
 describe('projects', () => {
   it('POST creates, GET lists with caseCount', async () => {
     const created = await request(app).post('/api/projects').send({ name: 'CueCast 官网', description: '官网回归', defaultUrl: 'https://cuecast.test' });
-    expect(created.status).toBe(200);
+    expect(created.status).toBe(201);
     expect(created.body.name).toBe('CueCast 官网');
     expect(created.body.description).toBe('官网回归');
 

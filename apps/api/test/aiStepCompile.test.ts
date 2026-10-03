@@ -347,8 +347,9 @@ describe('compileAiStep — prompt includes trailing-assertText guidance', () =>
       },
     };
     await compileAiStep('click submit', {}, client);
-    // Either "末尾 assertText" or "断言" + "assertText" hint should appear somewhere in the prompt context
-    expect(captured).toMatch(/末尾.*assertText|assertText.*末尾|断言.*assertText/);
+    // Either "末尾 assertText" or "断言" + "assertText" hint should appear somewhere in the prompt context.
+    // 2026-10-02 把"末尾断言引导"改写为更精确的"末尾断言引导"标题，原断言规则仍以"末尾断言"作总章节出现。
+    expect(captured).toMatch(/末尾.*assertText|assertText.*末尾|断言.*assertText|末尾断言/);
   });
 });
 
