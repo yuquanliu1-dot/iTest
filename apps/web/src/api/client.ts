@@ -354,7 +354,7 @@ export const api = {
       orgId: string,
       params?: { q?: string; includeSubtree?: boolean; page?: number; limit?: number },
     ) => request<Paged<OrgProjectSummary>>(`/organizations/${orgId}/projects${qs(params ?? {})}`),
-    addMember: (orgId: string, body: { userId: string; isManager?: boolean; isUser?: boolean }) =>
+    addMember: (orgId: string, body: { username: string; isManager?: boolean; isUser?: boolean }) =>
       request<{ ok: boolean }>(`/organizations/${orgId}/members`, { method: 'POST', body: JSON.stringify(body) }),
     updateMember: (orgId: string, userId: string, body: { isManager?: boolean; isUser?: boolean }) =>
       request<{ ok: boolean }>(`/organizations/${orgId}/members/${userId}`, { method: 'PATCH', body: JSON.stringify(body) }),
@@ -465,6 +465,10 @@ export interface Project {
   description: string | null;
   organizationId: string;
   defaultUrl: string | null;
+  repoUrl: string | null;
+  defaultBranch: string;
+  provider: string;
+  hasPat: boolean;
   createdAt: string;
   updatedAt: string;
 }
