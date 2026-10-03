@@ -56,9 +56,10 @@ describe('compileAiStepsInPlace', () => {
         return { kind: 'text', value: 'garbage', provider: 'openai', vision: false };
       },
     };
+    // no compiled field on these — original behavior is "always try to compile"
     const steps = [
-      { action: { kind: 'aiStep', instruction: 'ok', compiled: null } },
-      { action: { kind: 'aiStep', instruction: 'bad', compiled: null } },
+      { action: { kind: 'aiStep', instruction: 'ok' } },
+      { action: { kind: 'aiStep', instruction: 'bad' } },
       { action: { kind: 'click', locator: [{ strategy: 'text', value: 'OK' }] } },
     ];
     const failed = await compileAiStepsInPlace(steps, client);
@@ -88,8 +89,8 @@ describe('compileAiStepsInPlace', () => {
     // "打开登录页" 命中 navigate 启发式，直接出 navigate 不调 LLM；
     // "点击提交" 不命中启发式，走 LLM。
     const steps = [
-      { action: { kind: 'aiStep', instruction: '打开登录页', compiled: null } },
-      { action: { kind: 'aiStep', instruction: '点击提交', compiled: null } },
+      { action: { kind: 'aiStep', instruction: '打开登录页' } },
+      { action: { kind: 'aiStep', instruction: '点击提交' } },
     ];
     const failed = await compileAiStepsInPlace(steps, client);
     expect(failed).toEqual([]);
@@ -117,8 +118,8 @@ describe('compileAiStepsInPlace', () => {
       },
     };
     const steps = [
-      { action: { kind: 'aiStep', instruction: 'a', compiled: null } },
-      { action: { kind: 'aiStep', instruction: 'b', compiled: null } },
+      { action: { kind: 'aiStep', instruction: 'a' } },
+      { action: { kind: 'aiStep', instruction: 'b' } },
     ];
     const failed = await compileAiStepsInPlace(steps, client);
     expect(failed).toEqual([]);
@@ -131,7 +132,7 @@ describe('compileAiStepsInPlace', () => {
       provider: 'openai',
       complete: async () => ({ kind: 'text', value: '', provider: 'openai', vision: false }),
     };
-    const steps = [{ action: { kind: 'aiStep', instruction: '', compiled: null } }];
+    const steps = [{ action: { kind: 'aiStep', instruction: '' } }];
     const failed = await compileAiStepsInPlace(steps, client);
     expect(failed).toEqual([0]);
     expect((steps[0]!.action as { compiled: unknown }).compiled).toBeNull();
@@ -148,7 +149,7 @@ describe('compileAiStepsInPlace — heuristic shortcuts', () => {
         return { kind: 'json', value: { steps: [] }, provider: 'openai', vision: false };
       },
     };
-    const steps = [{ action: { kind: 'aiStep', instruction: '打开登录页', compiled: null } }];
+    const steps = [{ action: { kind: 'aiStep', instruction: '打开登录页' } }];
     const failed = await compileAiStepsInPlace(steps, client);
     expect(failed).toEqual([]);
     expect(calls).toBe(0);
@@ -162,7 +163,7 @@ describe('compileAiStepsInPlace — heuristic shortcuts', () => {
       provider: 'openai',
       complete: async () => ({ kind: 'json', value: { steps: [] }, provider: 'openai', vision: false }),
     };
-    const steps = [{ name: '步骤1', action: { kind: 'aiStep', instruction: '访问首页', compiled: null } }];
+    const steps = [{ name: '步骤1', action: { kind: 'aiStep', instruction: '访问首页' } }];
     const failed = await compileAiStepsInPlace(
       steps,
       client,
@@ -189,7 +190,7 @@ describe('compileAiStepsInPlace — heuristic shortcuts', () => {
       },
     };
     // 没有"打开/访问"前缀 → 不启发式，落到 LLM
-    const steps = [{ action: { kind: 'aiStep', instruction: '登录按钮', compiled: null } }];
+    const steps = [{ action: { kind: 'aiStep', instruction: '登录按钮' } }];
     const failed = await compileAiStepsInPlace(steps, client);
     expect(failed).toEqual([]);
     expect(calls).toBe(1);
@@ -204,7 +205,7 @@ describe('compileAiStepsInPlace — heuristic shortcuts', () => {
         return { kind: 'json', value: { steps: [] }, provider: 'openai', vision: false };
       },
     };
-    const steps = [{ action: { kind: 'aiStep', instruction: '断言看到工作台', compiled: null } }];
+    const steps = [{ action: { kind: 'aiStep', instruction: '断言看到工作台' } }];
     const failed = await compileAiStepsInPlace(steps, client);
     expect(failed).toEqual([]);
     expect(calls).toBe(0);
@@ -233,7 +234,7 @@ describe('compileAiStepsInPlace — heuristic shortcuts', () => {
         };
       },
     };
-    const steps = [{ action: { kind: 'aiStep', instruction: '断言 #main 可见', compiled: null } }];
+    const steps = [{ action: { kind: 'aiStep', instruction: '断言 #main 可见' } }];
     await compileAiStepsInPlace(steps, client);
     expect(calls).toBe(1);
   });
@@ -332,6 +333,69 @@ describe('compileAiStep — fallback on empty instruction', () => {
       complete: async () => ({ kind: 'text', value: '', provider: 'openai', vision: false }),
     };
     await expect(compileAiStep('', {}, client)).rejects.toThrow(/编译失败/);
+  });
+});
+
+describe('compileAiStepsInPlace — short-circuit pre-compiled', () => {
+  it('does not call LLM for steps that already have compiled array', async () => {
+    let calls = 0;
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => {
+        calls++;
+        return { kind: 'json', value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] }, provider: 'openai', vision: false };
+      },
+    };
+    const pre = [{ kind: 'click', locator: [{ strategy: 'text', value: 'A' }] }];
+    const steps = [
+      { action: { kind: 'aiStep', instruction: 'click A', compiled: pre } },
+      { action: { kind: 'aiStep', instruction: 'click B', compiled: pre } },
+    ];
+    const failed = await compileAiStepsInPlace(steps, client);
+    expect(failed).toEqual([]);
+    expect(calls).toBe(0);
+    expect((steps[0]!.action as { compiled: unknown }).compiled).toBe(pre);
+    expect((steps[1]!.action as { compiled: unknown }).compiled).toBe(pre);
+  });
+
+  it('does not call LLM for steps with compiled=null (AI tried, gave up)', async () => {
+    let calls = 0;
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => {
+        calls++;
+        return { kind: 'json', value: { steps: [] }, provider: 'openai', vision: false };
+      },
+    };
+    const steps = [
+      { action: { kind: 'aiStep', instruction: 'any', compiled: null } },
+    ];
+    const failed = await compileAiStepsInPlace(steps, client);
+    expect(failed).toEqual([0]);
+    expect(calls).toBe(0);
+    expect((steps[0]!.action as { compiled: unknown }).compiled).toBeNull();
+  });
+
+  it('mixed batch: pre-compiled skipped, un-compiled invoked', async () => {
+    let calls = 0;
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => {
+        calls++;
+        return { kind: 'json', value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] }, provider: 'openai', vision: false };
+      },
+    };
+    const pre = [{ kind: 'click', locator: [{ strategy: 'text', value: 'A' }] }];
+    const steps = [
+      { action: { kind: 'aiStep', instruction: 'click A', compiled: pre } },
+      { action: { kind: 'aiStep', instruction: 'click B' } },
+    ];
+    await compileAiStepsInPlace(steps, client);
+    expect(calls).toBe(1);
+    expect((steps[0]!.action as { compiled: unknown }).compiled).toBe(pre);
+    expect((steps[1]!.action as { compiled: unknown }).compiled).toEqual([
+      { kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] },
+    ]);
   });
 });
 
