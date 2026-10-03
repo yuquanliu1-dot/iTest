@@ -57,7 +57,32 @@ function normalizeLocatorItem(item: unknown): unknown {
   return obj;
 }
 
-export function buildWorkspaceTools(requirementId: string): ToolExecutor[] {
+export function buildWorkspaceTools(
+  requirementId: string,
+  ctx: { contextMode: 'repo' | 'page' | 'auto'; repoAvailable: boolean } = { contextMode: 'auto', repoAvailable: false },
+): ToolExecutor[] {
+  const ctxGuideline: string[] = (() => {
+    if (ctx.contextMode === 'repo' && ctx.repoAvailable) {
+      return [
+        '生成用例前必须先调用 repo_ls/repo_read/repo_grep 看真实源码再决定 locator / navigate URL。',
+        'locator 必须基于源码中真实存在的元素（className / data-testid / role），禁止臆造。',
+      ];
+    }
+    if (ctx.contextMode === 'page') {
+      return ['生成用例前先调 inspect_page 抓取真实页面元素清单。'];
+    }
+    if (ctx.contextMode === 'repo' && !ctx.repoAvailable) {
+      return ['本项目源码仓库不可用，请改用 inspect_page 抓取页面。'];
+    }
+    // auto + 仓库可用 / 不可用 两种
+    if (ctx.repoAvailable) {
+      return [
+        'auto 模式：若需求含明确被测页面 URL，先 inspect_page；若同时暗示内部行为（接口、状态机、表单提交后跳转），可调 repo_*。',
+        '仓库可用时优先 repo_ls 列目录、repo_read 读关键文件、repo_grep 找关键实现。',
+      ];
+    }
+    return ['auto 模式：本项目无仓库配置，直接 inspect_page。'];
+  })();
   return [
     {
       name: 'announce_plan',
@@ -116,6 +141,7 @@ export function buildWorkspaceTools(requirementId: string): ToolExecutor[] {
       // D（双字段落库）：必须输出 compiled DSL；未输出由 save 兜底编译——但实操里没编译=UI 显示「未编译」，
       // 拖慢评审节奏。所以把每条 step 的 compiled 输出规则直接写进 promptGuidelines，与共享 SYSTEM_PROMPT 一源。
       promptGuidelines: [
+        ...ctxGuideline,
         '尽量在同一轮并行发出全部工具调用：announce_plan、upsert_scenario 与每条用例一个 upsert_case 一起提交，不要逐条等待结果再发下一批。',
         '每条用例都应显式提供 description（说明验证点）与 priority（P0-P3）。',
         '每条 step 必须输出 compiled 字段（DSL 步骤数组，可执行回放）。规则与共享 SYSTEM_PROMPT 完全一致：',
