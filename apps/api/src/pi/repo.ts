@@ -1,7 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { eq } from 'drizzle-orm';
 import { Type } from '@earendil-works/pi-ai';
+// @ts-expect-error proper-lockfile ships no .d.ts; lock/release signature is obvious
+import lockfile from 'proper-lockfile';
+import { db } from '../db/client.js';
+import { projects, requirements } from '../db/schema.js';
 import type { ToolExecutor } from './tools.js';
 
 const DATA_DIR = process.env.PI_DATA_DIR ?? path.resolve(process.cwd(), '.data');
@@ -205,4 +210,102 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
       },
     },
   ];
+}
+
+interface ProjectRepo { repoUrl: string; branch: string; provider: string; pat: string | null; gitlabOverride: string | null; }
+
+async function loadProjectRepo(requirementId: string): Promise<ProjectRepo | null> {
+  const row = (await db
+    .select({
+      repoUrl: projects.repoUrl,
+      branch: projects.defaultBranch,
+      provider: projects.provider,
+      pat: projects.patOverride,
+      gitlabOverride: projects.gitlabUrlOverride,
+      pid: projects.id,
+    })
+    .from(requirements)
+    .innerJoin(projects, eq(requirements.projectId, projects.id))
+    .where(eq(requirements.id, requirementId))
+    .limit(1))[0];
+  if (!row || !row.repoUrl) return null;
+  return { repoUrl: row.repoUrl, branch: row.branch, provider: row.provider, pat: row.pat, gitlabOverride: row.gitlabOverride };
+}
+
+function injectPat(url: string, provider: string, pat: string | null, gitlabOverride: string | null): string {
+  if (!pat) return url;
+  if (provider === 'github') {
+    const u = new URL(url);
+    u.username = 'x-access-token';
+    u.password = pat;
+    return u.toString();
+  }
+  if (provider === 'gitee') {
+    const u = new URL(url);
+    u.username = 'oauth2';
+    u.password = pat;
+    return u.toString();
+  }
+  // gitlab
+  const base = gitlabOverride ?? url;
+  const u = new URL(base);
+  u.username = 'oauth2';
+  u.password = pat;
+  return u.toString();
+}
+
+async function dirExists(p: string): Promise<boolean> {
+  return fs.stat(p).then((s) => s.isDirectory()).catch(() => false);
+}
+
+function runGit(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', args, { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => { out += d.toString(); });
+    child.stderr.on('data', (d) => { err += d.toString(); });
+    child.on('error', reject);
+    child.on('close', (code) => code === 0 ? resolve(out) : reject(new Error(err.trim() || `git exit ${code}`)));
+  });
+}
+
+async function fetchAndReset(_target: string, _info: ProjectRepo): Promise<string> {
+  // 第一版占位：直接返回 target；后续 task 加上 fetch + reset + dirty stash
+  throw new Error('not yet implemented: fetchAndReset');
+}
+
+/** 第一阶段：先实现 no_repo / 锁 / 目录骨架。clone / fetch / stash 后补。 */
+export async function checkoutRepo(requirementId: string): Promise<string> {
+  const info = await loadProjectRepo(requirementId);
+  if (!info) throw new RepoUnavailableError('no_repo', 'project has no repoUrl configured');
+
+  await fs.mkdir(REPOS_ROOT, { recursive: true });
+  const target = path.join(REPOS_ROOT, requirementId);
+
+  if (await dirExists(target)) {
+    // 锁定；保证并发只跑一次 fetch
+    try {
+      const release = await lockfile.lock(`${target}/.lock`, { retries: { retries: 0, minTimeout: 50, maxTimeout: 200, factor: 1 }, stale: 30_000 });
+      try { return await fetchAndReset(target, info); } finally { await release(); }
+    } catch (e) {
+      if ((e as { code?: string }).code === 'ELOCKED') throw new LockTimeoutError('another fetch in progress');
+      throw e;
+    }
+  } else {
+    await fs.mkdir(target, { recursive: true });
+    const release = await lockfile.lock(`${target}/.lock`, { retries: 0, stale: 30_000 }).catch(() => null);
+    try {
+      // 第一版：clone 失败抛 RepoUnavailableError(clone_failed)；后续 task 细化 PAT / dirty / auth
+      try {
+        await runGit(['clone', '--depth', '1', '--branch', info.branch, injectPat(info.repoUrl, info.provider, info.pat, info.gitlabOverride), target]);
+      } catch (e) {
+        await fs.rm(target, { recursive: true, force: true }).catch(() => {});
+        const msg = (e as Error).message;
+        const reason: RepoUnavailableReason = /401|403|auth/i.test(msg) ? 'auth_failed' : 'clone_failed';
+        throw new RepoUnavailableError(reason, msg);
+      }
+      return target;
+    } finally { if (release) await release(); }
+  }
 }
