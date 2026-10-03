@@ -8,10 +8,11 @@ import {
   planRuns,
   testCases,
   groups,
+  projectVersions,
 } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { findIncognitoCaseIds, runPlanAsync } from '../execute/runPlan.js';
-import { assertProjectVisible, visibleProjectIds } from '../services/projectAccess.js';
+import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { logger } from '../logger.js';
 
 export const plansRoute = Router({ mergeParams: true });
@@ -31,6 +32,7 @@ const LoginPrepareBody = z
 const CreateBody = z.object({
   name: z.string().min(1).max(200),
   environment: z.string().max(100).optional(),
+  versionId: z.string().uuid().optional(),
   strategy: StrategyEnum.default('run_all'),
   loginPrepare: LoginPrepareBody,
 });
@@ -39,6 +41,7 @@ const PatchBody = z.object({
   name: z.string().min(1).max(200).optional(),
   environment: z.string().max(100).optional(),
   environmentId: z.string().uuid().nullable().optional(),
+  versionId: z.string().uuid().nullable().optional(),
   strategy: StrategyEnum.optional(),
   loginPrepare: LoginPrepareBody,
 });
@@ -71,11 +74,24 @@ plansRoute.post('/', async (req, res) => {
   if (!projectId) throw new HttpError(400, 'bad_request', 'projectId is required');
   const body = CreateBody.parse(req.body);
   await assertProjectVisible(projectId, req.user!);
+  // 解析 versionId：未传 → 默认版本；传了 → 必须同 project
+  let versionId = body.versionId;
+  if (!versionId) {
+    const row = (await db.select({ id: projectVersions.id }).from(projectVersions)
+      .where(eq(projectVersions.projectId, projectId))
+      .limit(1))[0];
+    if (!row) throw new HttpError(404, 'not_found', 'project has no version');
+    versionId = row.id;
+  } else {
+    const { projectId: vp } = await assertVersionVisible(versionId, req.user!);
+    if (vp !== projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
+  }
   const rows = await db
     .insert(executionPlans)
     .values({
       projectId,
       name: body.name,
+      versionId,
       environment: body.environment,
       strategy: body.strategy,
       loginPrepareEnabled: body.loginPrepare?.enabled ?? false,
@@ -116,9 +132,23 @@ plansRoute.patch('/:id', async (req, res) => {
   if (body.name !== undefined) update.name = body.name;
   if (body.environment !== undefined) update.environment = body.environment;
   if (body.environmentId !== undefined) update.environmentId = body.environmentId;
+  if (body.versionId !== undefined) {
+    if (body.versionId === null) {
+      update.versionId = null;
+    } else {
+      const { projectId: vp } = await assertVersionVisible(body.versionId, req.user!);
+      if (vp !== existing.projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
+      update.versionId = body.versionId;
+    }
+  }
   if (body.environmentId !== undefined && body.environmentId !== null) {
     const { assertEnvironmentVisible } = await import('../services/projectAccess.js');
-    await assertEnvironmentVisible(body.environmentId, req.user!);
+    const env = await assertEnvironmentVisible(body.environmentId, req.user!);
+    // 环境必须属于计划当前版本；计划 versionId 为 null 时跳过（跨版本引用允许，但默认行为是锁同版本）
+    const targetVersionId = (update.versionId as string | null | undefined) ?? existing.versionId;
+    if (targetVersionId && env.versionId !== targetVersionId) {
+      throw new HttpError(400, 'env_version_mismatch', 'environment does not belong to the plan version');
+    }
   }
   if (body.strategy !== undefined) update.strategy = body.strategy;
   if (body.loginPrepare !== undefined) {
