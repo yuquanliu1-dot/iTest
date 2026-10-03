@@ -10,7 +10,7 @@ import { compileAiStepsInPlace } from '../agent/aiStepCompile.js';
 import { splitAiStepsInPlace } from '../agent/aiStepSplit.js';
 import { migrateAssertion } from '../lib/step-migration.js';
 import { expandCompiledAiStepsInPlace } from '../lib/ai-step-expand.js';
-import { loadDoc, removeSaved, type StagedCase } from '../pi/workspace.js';
+import { loadDoc, recordContextMode, removeSaved, type StagedCase } from '../pi/workspace.js';
 
 export const requirementsRoute = Router({ mergeParams: true });
 
@@ -87,6 +87,19 @@ requirementsRoute.get('/:id/ai-workspace', async (req, res) => {
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'requirement not found');
   await assertProjectVisible(rows[0]!.projectId, req.user!);
   res.json(await loadDoc(req.params.id));
+});
+
+const ContextModeBody = z.object({
+  mode: z.enum(['repo', 'page', 'auto']),
+});
+
+requirementsRoute.post('/:id/ai-workspace/context-mode', async (req, res) => {
+  const body = ContextModeBody.parse(req.body);
+  const rows = await db.select().from(requirements).where(eq(requirements.id, req.params.id)).limit(1);
+  if (rows.length === 0) throw new HttpError(404, 'not_found', 'requirement not found');
+  await assertProjectVisible(rows[0]!.projectId, req.user!);
+  await recordContextMode(req.params.id, body.mode);
+  res.status(204).end();
 });
 
 const SaveBody = z.object({
