@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Environment } from '../api/client';
 import { useUIStore } from '../stores/ui';
@@ -38,16 +38,16 @@ const FIELDS: ReadonlyArray<FieldKey> = [
 
 const FIELD_LABELS: Record<FieldKey, string> = {
   name: '名称',
-  dbHost: 'DB Host',
-  dbPort: 'DB Port',
-  dbName: 'DB Name',
-  dbUser: 'DB User',
-  dbPassword: 'DB Password',
-  syslogHost: 'Syslog Host',
-  syslogUser: 'Syslog User',
-  syslogSshPort: 'Syslog SSH Port',
-  syslogKey: 'Syslog SSH Key (PEM)',
-  syslogFilePath: 'Syslog File Path',
+  dbHost: '数据库主机',
+  dbPort: '数据库端口',
+  dbName: '数据库名',
+  dbUser: '数据库用户',
+  dbPassword: '数据库密码',
+  syslogHost: 'syslog 主机',
+  syslogUser: 'syslog 用户',
+  syslogSshPort: 'syslog SSH 端口',
+  syslogKey: 'syslog SSH 私钥（PEM）',
+  syslogFilePath: 'syslog 文件路径',
 };
 
 type EnvBody = Parameters<typeof api.environments.create>[1];
@@ -126,20 +126,11 @@ export default function ProjectEnvironments({ projectId }: Props) {
         const ok = window.confirm(
           `有 ${r.caseCount ?? 0} 个用例与 ${r.planCount ?? 0} 个计划引用此环境，确认删除？引用将自动解除。`,
         );
-        if (ok) {
-          remove.mutate({ id: vars.id, confirm: true });
-          return;
-        }
+        if (ok) remove.mutate({ id: vars.id, confirm: true });
         return;
       }
-      if (!r.requiresConfirm) {
-        toast('环境已删除', 'success');
-        qc.invalidateQueries({ queryKey: ['environments', projectId] });
-      } else {
-        // confirmed delete returned; refetch to reflect removed row
-        toast('环境已删除', 'success');
-        qc.invalidateQueries({ queryKey: ['environments', projectId] });
-      }
+      toast('环境已删除', 'success');
+      qc.invalidateQueries({ queryKey: ['environments', projectId] });
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -236,11 +227,6 @@ interface DrawerProps {
 
 function EnvDrawer({ initial, isEdit, onClose, onSubmit }: DrawerProps) {
   const [form, setForm] = useState<FormState>(initial);
-
-  // Reset form if `initial` reference changes (drawer reused for new row).
-  useEffect(() => {
-    setForm(initial);
-  }, [initial]);
 
   const update = (k: FieldKey) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setForm({ ...form, [k]: e.target.value });
