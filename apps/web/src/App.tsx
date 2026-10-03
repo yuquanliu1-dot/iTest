@@ -20,7 +20,6 @@ import MembersPage from './pages/MembersPage';
 import Settings from './pages/Settings';
 import Environments from './pages/Environments';
 import VersionsSelectPage from './pages/VersionsSelectPage';
-import ProjectVersionsPage from './pages/ProjectVersionsPage';
 
 export default function App() {
   const initTheme = useThemeStore((s) => s.init);
@@ -40,9 +39,8 @@ export default function App() {
         <Route path="/members/*" element={<MembersPage />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/p/:projectId" element={<ProjectGuard />}>
-          {/* 版本选择 + 管理：只需项目可见（ProjectGuard 已校验）；不进版本号 */}
+          {/* 版本选择中间页：只需项目可见（ProjectGuard 已校验）；不进版本号 */}
           <Route path="versions/select" element={<VersionsSelectPage />} />
-          <Route path="versions" element={<ProjectVersionsPage />} />
           {/* 版本化二级路径 /v/:versionId/... 需 store.versionId 已设置（VersionsSelectPage 写入） */}
           <Route path="v/:versionId">
             <Route index element={<Navigate to="overview" replace />} />
