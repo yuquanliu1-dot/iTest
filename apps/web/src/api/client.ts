@@ -112,6 +112,7 @@ export const api = {
       body: Partial<{
         name: string;
         environment: string;
+        environmentId: string | null;
         strategy: 'run_all' | 'fail_fast';
         loginPrepare: {
           enabled: boolean;
@@ -144,6 +145,52 @@ export const api = {
     get: (id: string) => request<PlanRunDetail>(`/plan-runs/${id}`),
     cancel: (id: string) => request<{ ok: boolean }>(`/plan-runs/${id}/cancel`, { method: 'POST' }),
     eventsUrl: (id: string) => `${BASE}/plan-runs/${id}/events`,
+  },
+  environments: {
+    list: (projectId: string) => request<Environment[]>(`/projects/${projectId}/environments`),
+    create: (
+      projectId: string,
+      body: Partial<{
+        name: string;
+        dbHost: string;
+        dbPort: number;
+        dbName: string;
+        dbUser: string;
+        dbPassword: string;
+        syslogHost: string;
+        syslogUser: string;
+        syslogSshPort: number;
+        syslogKey: string;
+        syslogFilePath: string;
+      }>,
+    ) =>
+      request<Environment>(`/projects/${projectId}/environments`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    patch: (
+      id: string,
+      body: Partial<{
+        name: string;
+        dbHost: string;
+        dbPort: number;
+        dbName: string;
+        dbUser: string;
+        dbPassword: string;
+        syslogHost: string;
+        syslogUser: string;
+        syslogSshPort: number;
+        syslogKey: string;
+        syslogFilePath: string;
+      }>,
+    ) =>
+      request<Environment>(`/environments/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    remove: (id: string, opts?: { confirm?: boolean }) =>
+      request<{ ok: boolean; requiresConfirm?: boolean; caseCount?: number; planCount?: number }>(
+        `/environments/${id}${opts?.confirm ? '?confirm=true' : ''}`,
+        { method: 'DELETE' },
+      ),
+    allowedTables: () => request<Record<string, string[]>>('/environments/allowed-tables'),
   },
   executions: {
     list: (params?: { projectId?: string; kind?: 'case' | 'plan' | 'all' }) => {
@@ -192,6 +239,7 @@ export const api = {
         scenarioId: string | null;
         status: CaseStatus;
         tagIds: string[];
+        defaultEnvId: string | null;
       }>,
     ) => request<TestCase>(`/cases/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/cases/${id}`, { method: 'DELETE' }),
@@ -445,6 +493,24 @@ export interface LlmTestResult {
   provider: string;
   latencyMs?: number;
   error?: string;
+}
+
+export interface Environment {
+  id: string;
+  projectId: string;
+  name: string;
+  dbHost: string | null;
+  dbPort: number | null;
+  dbName: string | null;
+  dbUser: string | null;
+  dbPasswordCiphertext: string | null;
+  syslogHost: string | null;
+  syslogUser: string | null;
+  syslogSshPort: number | null;
+  syslogKeyCiphertext: string | null;
+  syslogFilePath: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Project {
