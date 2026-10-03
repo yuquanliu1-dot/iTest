@@ -68,7 +68,7 @@ export default function CaseStatusMenu({
         anchor &&
         createPortal(
           <div
-            className="rounded-[8px] overflow-hidden popover-in"
+            className="rounded-[var(--radius-sm)] overflow-hidden popover-in"
             style={{
               position: 'fixed',
               top: anchor.top,

@@ -199,7 +199,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
             className="flex justify-end gap-2 px-5 py-4 hairline-top"
             style={{ borderColor: 'var(--color-border)' }}
           >
-            <Button variant="plain" onClick={() => setPendingDelete(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setPendingDelete(null)}>取消</Button>
             <Button variant="danger" disabled={removeMut.isPending} onClick={() => pendingDelete && removeMut.mutate(pendingDelete.id)}>
               {removeMut.isPending ? '删除中...' : '确认删除'}
             </Button>

@@ -567,7 +567,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
                     }
                   }}
                   disabled={compiling}
-                  className="press self-start text-[11px] px-2 py-1 rounded-[5px] border border-dashed"
+                  className="press self-start text-[11px] px-2 py-1 rounded-[var(--radius-sm)] border border-dashed"
                   style={{ borderColor: 'var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)', cursor: compiling ? 'wait' : 'pointer' }}
                 >
                   {compiling ? '编译中…' : '生成正则'}
@@ -615,7 +615,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
             <button
               type="button"
               onClick={() => setShowBoundary((v) => !v)}
-              className="press self-start text-[11px] px-2 py-1 rounded-[5px] border"
+              className="press self-start text-[11px] px-2 py-1 rounded-[var(--radius-sm)] border"
               style={{ cursor: 'pointer', borderColor: 'var(--color-glass-border)', background: 'transparent', color: 'var(--color-foreground-muted)' }}
             >
               {showBoundary ? '收起使用边界提示' : '查看使用边界'}
@@ -784,7 +784,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
       </div>
 
       <div className="flex items-center gap-2 justify-end px-5 py-4 shrink-0" style={{ borderTop: '1px solid var(--color-glass-border)' }}>
-        <Button variant="plain" size="sm" onClick={onCancel}>取消</Button>
+        <Button variant="ghost" size="sm" onClick={onCancel}>取消</Button>
         <Button size="sm" onClick={handleSave}>保存</Button>
       </div>
     </div>
@@ -800,7 +800,7 @@ function DbAssertionEditor({ value, onChange, columns }: { value: { match: 'equa
     );
   }
   return (
-    <div className="flex flex-col gap-1.5 p-2 rounded-[6px]" style={{ border: '1px solid var(--color-glass-border)', background: 'var(--color-background-subtle)' }}>
+    <div className="flex flex-col gap-1.5 p-2 rounded-[var(--radius-sm)]" style={{ border: '1px solid var(--color-glass-border)', background: 'var(--color-background-subtle)' }}>
       <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>断言（不命中则步骤失败）</span>
       <div className="flex gap-1.5">
         <select className="input-base input-xs" value={value.match} onChange={(e) => onChange({ ...value, match: e.target.value as 'equals' | 'contains' | 'regex' })}>

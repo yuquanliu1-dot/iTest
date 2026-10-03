@@ -236,7 +236,7 @@ export default function PlanDetail() {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-4">
-        <div className="glass-card rounded-[12px] p-5">
+        <div className="glass-card rounded-[var(--radius-md)] p-5">
           <div className="flex items-center gap-4">
             <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>执行策略</span>
             <select
@@ -346,7 +346,7 @@ export default function PlanDetail() {
           </div>
         </div>
 
-        <div className="glass-card rounded-[12px] p-5">
+        <div className="glass-card rounded-[var(--radius-md)] p-5">
           <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3 hairline-bottom pb-2" style={{ color: 'var(--color-foreground-muted)' }}>
             用例顺序 ({plan.cases.length})
           </div>
@@ -362,7 +362,7 @@ export default function PlanDetail() {
                   onDragStart={(e) => onDragStart(e, idx)}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => onDrop(e, idx)}
-                  className="flex items-center gap-3 px-3 py-2 rounded-[8px] list-row-clickable"
+                  className="flex items-center gap-3 px-3 py-2 rounded-[var(--radius-sm)] list-row-clickable"
                   style={{ background: 'var(--color-background-subtle)', border: '1px solid var(--color-glass-border)' }}
                 >
                   <Icon name="gripVertical" size={12} className="cursor-grab shrink-0" style={{ color: 'var(--color-foreground-muted)' }} />
@@ -406,7 +406,7 @@ export default function PlanDetail() {
                 return (
                   <div
                     key={c.id}
-                    className="flex items-center gap-2 px-3 py-2 rounded-[6px] cursor-pointer hover-card"
+                    className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-sm)] cursor-pointer hover-card"
                     style={{ opacity: c.status === 'deprecated' ? 0.55 : 1 }}
                     onClick={() => {
                       const next = new Set(selectedAdd);

@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import Button from '../../../components/ui/Button';
 import Icon from '../../../components/Icon';
 
 export default function OverviewEmpty({ projectId }: { projectId: string }) {
@@ -16,12 +17,12 @@ export default function OverviewEmpty({ projectId }: { projectId: string }) {
           新建用例 → 执行，所有指标都会汇聚到这里。
         </p>
         <div className="flex gap-2 justify-center mt-4">
-          <button className="btn-primary" onClick={() => navigate(`/p/${projectId}/groups`)}>
+          <Button onClick={() => navigate(`/p/${projectId}/groups`)}>
             去新建用例
-          </button>
-          <button className="btn-ghost" onClick={() => navigate(`/p/${projectId}/plans`)}>
+          </Button>
+          <Button variant="ghost" onClick={() => navigate(`/p/${projectId}/plans`)}>
             去新建计划
-          </button>
+          </Button>
         </div>
       </div>
     </div>

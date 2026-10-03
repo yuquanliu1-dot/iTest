@@ -85,7 +85,7 @@ export default function Executions() {
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center justify-between px-5 pt-4 pb-0">
         <div>
-          <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--color-foreground)' }}>执行历史</h1>
+          <h1 className="text-[22px] font-semibold tracking-[-0.03em] leading-[1.1]" style={{ color: 'var(--color-foreground)' }}>执行历史</h1>
           <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>用例执行结果与计划运行汇总</p>
         </div>
       </div>
@@ -104,7 +104,7 @@ export default function Executions() {
       {/* 批量操作条 —— 仅在有勾选时显示；计划运行行不在勾选范围 */}
       {checked.size > 0 && (
         <div
-          className="flex items-center gap-2 mx-5 mt-3 px-3 py-2 rounded-[8px]"
+          className="flex items-center gap-2 mx-5 mt-3 px-3 py-2 rounded-[var(--radius-sm)]"
           style={{ background: 'var(--color-accent-light)', border: '1px solid var(--color-glass-border)' }}
         >
           <span className="text-[12px]" style={{ color: 'var(--color-accent)' }}>已选 {checked.size} 条</span>
@@ -113,7 +113,7 @@ export default function Executions() {
             <Icon name="trash" size={12} />
             批量删除
           </Button>
-          <Button size="sm" variant="plain" onClick={() => setChecked(new Set())}>取消选择</Button>
+          <Button size="sm" variant="ghost" onClick={() => setChecked(new Set())}>取消选择</Button>
         </div>
       )}
 
@@ -215,7 +215,7 @@ export default function Executions() {
             确定删除已选的 <span style={{ color: 'var(--color-destructive)', fontWeight: 600 }}>{checked.size}</span> 条测试报告？相关截图将一并清理，且不可恢复。
           </div>
           <DialogFooter>
-            <Button variant="plain" onClick={() => setConfirmBatchDelete(false)}>取消</Button>
+            <Button variant="ghost" onClick={() => setConfirmBatchDelete(false)}>取消</Button>
             <Button
               variant="danger"
               disabled={batchDeleteReports.isPending || checked.size === 0}

@@ -54,7 +54,7 @@ export default function ToastRenderer() {
               fontSize: 12,
               fontWeight: 500,
               lineHeight: 1.4,
-              boxShadow: 'var(--shadow-middle)',
+              boxShadow: 'var(--shadow-card)',
               display: 'flex',
               alignItems: 'center',
               gap: 8,

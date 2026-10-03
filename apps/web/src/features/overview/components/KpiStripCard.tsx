@@ -19,7 +19,7 @@ export default function KpiStripCard({ label, value, iconName, tone, to, suffix 
       onClick={() => navigate(to)}
       onKeyDown={(e) => { if (e.key === 'Enter') navigate(to); }}
       data-stagger-item
-      className="glass-panel rounded-[12px] p-5 cursor-pointer hover-card"
+      className="glass-panel rounded-[var(--radius-md)] p-5 cursor-pointer hover-card"
       style={{ minHeight: 92 }}
     >
       <div className="flex items-center justify-between">
