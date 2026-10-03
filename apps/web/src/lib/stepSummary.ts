@@ -76,6 +76,12 @@ export function stepSummary(action: unknown): string {
       return `提取 → {{${clip(str(a.varName), 30)}}}`;
     case 'aiStep':
       return `AI：${clip(str(a.instruction), 40)}`;
+    case 'queryDb':
+      return `查 ${str(a.table)}`;
+    case 'observeLog': {
+      const kw = Array.isArray(a.keywords) ? (a.keywords as unknown[]).map((v) => str(v)).filter(Boolean) : [];
+      return `观察日志${kw.length ? ' · ' + kw.join('/') : ''}`;
+    }
     default:
       return clip(JSON.stringify(action) ?? String(action), 40);
   }
