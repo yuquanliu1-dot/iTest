@@ -70,5 +70,47 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
         }
       },
     },
+    {
+      name: 'repo_read',
+      description: '读取 cwd 下文本文件的指定行范围（默认前 200 行，最多 500 行）。',
+      parameters: Type.Object({
+        path: Type.String({ minLength: 1 }),
+        offset: Type.Optional(Type.Number({ minimum: 0 })),
+        maxLines: Type.Optional(Type.Number({ minimum: 1 })),
+      }),
+      execute: async (input) => {
+        const { path: p, offset = 0, maxLines = DEFAULT_READ_MAX_LINES } = input as { path: string; offset?: number; maxLines?: number };
+        const cap = Math.min(maxLines, READ_MAX_LINES_HARD_CAP);
+        try {
+          const real = await assertInCwd(cwdRoot, p);
+          const stat = await fs.stat(real);
+          if (!stat.isFile()) return { ok: false, error: 'not a file' };
+          const fh = await fs.open(real, 'r');
+          try {
+            const head = Buffer.alloc(Math.min(512, stat.size));
+            await fh.read(head, 0, head.length, 0);
+            if (head.includes(0)) return { ok: false, error: 'binary file' };
+            const all = await fh.readFile('utf8');
+            const hasTrailingNl = all.endsWith('\n');
+            const rawLines = all.split('\n');
+            const lines = hasTrailingNl ? rawLines.slice(0, -1) : rawLines;
+            const sliced = lines.slice(offset, offset + cap);
+            const joined = sliced.join('\n');
+            const slice = hasTrailingNl ? joined + '\n' : joined;
+            return {
+              ok: true,
+              data: asData({
+                content: slice.length > MAX_OUTPUT_CHARS ? slice.slice(0, MAX_OUTPUT_CHARS) + '…(truncated)' : slice,
+                lines: sliced,
+                totalLines: lines.length,
+                truncated: lines.length > offset + cap,
+              }),
+            };
+          } finally { await fh.close(); }
+        } catch (e) {
+          return { ok: false, error: (e as Error).message };
+        }
+      },
+    },
   ];
 }
