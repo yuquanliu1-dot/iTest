@@ -13,6 +13,10 @@ export const MAX_REPO_ENTRIES = 500;
 export const DEFAULT_READ_MAX_LINES = 200;
 export const READ_MAX_LINES_HARD_CAP = 500;
 
+const WHITELIST_TOP = new Set(['ls', 'cat', 'tree', 'find', 'head', 'tail', 'wc', 'grep', 'rg', 'git']);
+const WHITELIST_GIT_SUBCMD = new Set(['log', 'show', 'diff', 'ls-files', 'grep', 'status']);
+const BLOCKED_CHARS = /[;&|`$()<>]/;
+
 export type RepoUnavailableReason = 'no_repo' | 'clone_failed' | 'auth_failed' | 'dirty' | 'fetch_failed';
 
 export class RepoUnavailableError extends Error {
@@ -154,6 +158,43 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
             return { path: l.slice(0, idx1), line: Number(l.slice(idx1 + 1, idx2)), text: l.slice(idx2 + 1) };
           });
           return { ok: true, data: asData({ matches, truncated: matches.length >= maxMatches }) };
+        } catch (e) {
+          return { ok: false, error: (e as Error).message };
+        }
+      },
+    },
+    {
+      name: 'repo_run',
+      description: '在 cwd 下执行白名单单命令；用于 git log/show/diff/ls-files/grep/status 等二级需求。',
+      parameters: Type.Object({
+        command: Type.String({ minLength: 1, maxLength: 1024 }),
+      }),
+      execute: async (input) => {
+        const { command } = input as { command: string };
+        if (BLOCKED_CHARS.test(command)) {
+          return { ok: false, error: 'shell metacharacters not allowed' };
+        }
+        const parts = command.trim().split(/\s+/);
+        const top = parts[0]!;
+        if (!WHITELIST_TOP.has(top)) return { ok: false, error: `command not whitelisted: ${top}` };
+        if (top === 'git') {
+          const sub = parts[1];
+          if (!sub || !WHITELIST_GIT_SUBCMD.has(sub)) {
+            return { ok: false, error: `git subcommand not whitelisted: ${sub ?? '(none)'}` };
+          }
+        }
+        try {
+          const { stdout, code } = await new Promise<{ stdout: string; code: number }>((resolve, reject) => {
+            const child = spawn(top, parts.slice(1), { cwd: cwdRoot, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '';
+            let err = '';
+            const t = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('command timeout')); }, REPO_RUN_TIMEOUT_MS);
+            child.stdout.on('data', (d) => { out += d.toString(); });
+            child.stderr.on('data', (d) => { err += d.toString(); });
+            child.on('error', (e) => { clearTimeout(t); reject(e); });
+            child.on('close', (c) => { clearTimeout(t); resolve({ stdout: out, code: c ?? 0 }); });
+          });
+          return { ok: code === 0, data: stdout.slice(0, MAX_OUTPUT_CHARS), error: code !== 0 ? `exit ${code}` : undefined };
         } catch (e) {
           return { ok: false, error: (e as Error).message };
         }

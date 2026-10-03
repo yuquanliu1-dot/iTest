@@ -198,3 +198,38 @@ describe('repo_grep', () => {
     } finally { process.env.PATH = prev; }
   });
 });
+
+describe('repo_run', () => {
+  it('白名单 ls 返回 cwd 根目录列表', async () => {
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_run')!;
+    const r = await t.execute({ command: 'ls' });
+    expect(r.ok).toBe(true);
+    expect((r as { data: string }).data).toContain('a.txt');
+  });
+
+  it('黑名单命令直接拒绝', async () => {
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_run')!;
+    const cases = ['rm -rf /', 'curl http://evil', 'git push origin main', 'echo hi; rm -rf /', 'cat a.txt && rm a.txt'];
+    for (const command of cases) {
+      const r = await t.execute({ command });
+      expect(r.ok).toBe(false);
+    }
+  });
+
+  it('git 子命令二次白名单', async () => {
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_run')!;
+    // 'git init' 不在二次白名单
+    const r = await t.execute({ command: 'git init' });
+    expect(r.ok).toBe(false);
+  });
+
+  it('chain operators 拒绝（&& / ; / |）', async () => {
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_run')!;
+    const r = await t.execute({ command: 'ls | cat' });
+    expect(r.ok).toBe(false);
+  });
+});
