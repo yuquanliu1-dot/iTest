@@ -8,6 +8,7 @@ import Icon from '../Icon';
 import BrandGlyph from '../BrandGlyph';
 import SidebarGroup, { type NavGroupDef } from './SidebarGroup';
 import UserMenu from './UserMenu';
+import VersionChip from './VersionChip';
 
 // 项目内的二级导航：始终显示；未选项目时点击会提示进入项目选择页。
 const PROJECT_GROUP: NavGroupDef = {
@@ -142,6 +143,15 @@ export default function Sidebar() {
             <Icon name={sidebarCollapsed ? 'chevronRight' : 'chevronLeft'} size={12} />
           </button>
         </div>
+
+        {/* 版本切换 chip（仅在选中项目后可见；折叠态紧凑展示） */}
+        {hasProject && (
+          sidebarCollapsed ? (
+            <VersionChip />
+          ) : (
+            <VersionChip />
+          )
+        )}
 
         {/* Navigation groups */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 1, marginTop: 6, overflowY: 'auto' }}>
