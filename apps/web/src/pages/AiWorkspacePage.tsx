@@ -122,7 +122,7 @@ export default function AiWorkspacePage() {
           className="w-[420px] shrink-0 border-r"
           style={{ borderColor: 'var(--color-border)' }}
         >
-          <ThreadPane requirementId={id!} threadId={threadId} initialMessage={initialMessage} />
+          <ThreadPane requirementId={id!} threadId={threadId} initialMessage={initialMessage} contextMode={contextMode} />
         </div>
         <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
           <WorkspacePanel

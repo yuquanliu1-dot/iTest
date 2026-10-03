@@ -9,13 +9,16 @@ import {
   type ReasoningMessagePartProps,
   type ToolCallMessagePartProps,
 } from '@assistant-ui/react';
-import { usePiRuntime, createPiHttpClient } from '@assistant-ui/react-pi';
+import { usePiRuntime, createPiHttpClient, type PiSendMessageInput } from '@assistant-ui/react-pi';
+import type { ContextMode } from './ContextModeSelector';
 
 interface Props {
   requirementId: string;
   threadId: string;
   /** 来自上一跳 location.state 的首条需求文本；非空时挂载后自动发给 AI（仅一次）。 */
   initialMessage?: string;
+  /** 父页面持有的上下文模式，会随每条 aui.thread.append 透传到后端 metadata.contextMode。 */
+  contextMode: ContextMode;
 }
 
 /**
@@ -23,8 +26,33 @@ interface Props {
  * renders the messages. We render only the structural primitives — the Pi
  * runtime wires thread state from `usePiRuntime`.
  */
-export default function ThreadPane({ threadId, initialMessage }: Props) {
-  const client = useMemo(() => createPiHttpClient(), []);
+export default function ThreadPane({ threadId, initialMessage, contextMode }: Props) {
+  // contextMode 透传到每条 sendMessage：aui.thread.append 走 ThreadController.sendMessage
+  // → client.sendMessage → POST /api/pi/threads/:id/messages，
+  // 后端 router 把 metadata.contextMode 落到 workspace doc + 影响 system prompt 注入。
+  // react-pi 默认 sendMessage 把 input 包成 { input }，会丢掉任何附在 input 上的 metadata；
+  // 用 wrapper client 在 sendMessage 路径直接 fetch，把 metadata 提到 body 顶层（与 router 期望的
+  // shape 对齐）。contextModeRef 保证每条消息发出去时用的是当时选中的 mode，不是 mount 时的快照。
+  const contextModeRef = useRef(contextMode);
+  contextModeRef.current = contextMode;
+  const client = useMemo(() => {
+    const base = createPiHttpClient();
+    return {
+      ...base,
+      sendMessage: async (threadId: string, input: PiSendMessageInput) => {
+        await fetch(`/api/pi/threads/${encodeURIComponent(threadId)}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            input: { content: input.content, ...(input.attachments ? { attachments: input.attachments } : {}) },
+            metadata: { contextMode: contextModeRef.current },
+          }),
+        }).then((r) => {
+          if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+        });
+      },
+    };
+  }, []);
   const runtime = usePiRuntime({ client, initialThreadId: threadId });
 
   return (
