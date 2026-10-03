@@ -10,6 +10,19 @@ export class ApiError extends Error {
   }
 }
 
+/** 只拼接有值的参数：undefined / 空串 / false 一律跳过。
+ *  空 q 会被后端当成「搜索空字符串」；false 也跳过是因为后端统一用 `=== 'true'`
+ *  判定布尔参数，省略与 false 等价。 */
+export function qs(params: Record<string, string | number | boolean | undefined>): string {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === '' || v === false) continue;
+    sp.set(k, String(v));
+  }
+  const s = sp.toString();
+  return s ? `?${s}` : '';
+}
+
 // 401 时跳登录页的豁免路径（登录/首登改密本身、/me 探测——这些 401 由调用方自行处理）
 const AUTH_EXEMPT_PATHS = new Set(['/auth/login', '/auth/change-password', '/auth/me']);
 
@@ -48,6 +61,25 @@ export const api = {
     patch: (id: string, body: Partial<{ name: string; defaultUrl: string }>) =>
       request<Project>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/projects/${id}`, { method: 'DELETE' }),
+    get: (id: string) => request<Project>(`/projects/${id}`),
+    move: (id: string, organizationId: string) =>
+      request<Project>(`/projects/${id}/move`, { method: 'POST', body: JSON.stringify({ organizationId }) }),
+    verifyRepo: (body: {
+      repoUrl: string;
+      provider?: 'github' | 'gitee' | 'gitlab';
+      patOverride?: string;
+      branch?: string;
+      projectName?: string;
+    }) => request<VerifyRepoResult>(`/projects/verify-repo`, { method: 'POST', body: JSON.stringify(body) }),
+    assignments: (id: string, params?: { q?: string; page?: number; limit?: number }) =>
+      request<Paged<AssignedUser>>(`/projects/${id}/assignments${qs(params ?? {})}`),
+    assignUsers: (id: string, userIds: string[]) =>
+      request<{ id: string; projectId: string; userId: string }[]>(`/projects/${id}/assignments`, {
+        method: 'POST',
+        body: JSON.stringify({ userIds }),
+      }),
+    unassignUser: (id: string, userId: string) =>
+      request<void>(`/projects/${id}/assignments/${userId}`, { method: 'DELETE' }),
     groups: (id: string) => request<GroupWithCount[]>(`/projects/${id}/groups`),
     createGroup: (id: string, body: { name: string; defaultUrl?: string }) =>
       request<Group>(`/projects/${id}/groups`, { method: 'POST', body: JSON.stringify(body) }),
@@ -150,7 +182,7 @@ export const api = {
         priority: string;
         description: string;
         groupId: string;
-        url: string;
+        url: string | null;
         windowStrategy: string;
         windowWidth: number;
         windowHeight: number;
@@ -243,7 +275,7 @@ export const api = {
   recorder: {
     createSession: (
       caseId: string,
-      opts?: { mode?: 'fresh' | 'append' | 'resume' | 'incognito'; incognito?: boolean; resumeFromOrder?: number },
+      opts?: { mode?: 'fresh' | 'append' | 'resume' | 'incognito'; incognito?: boolean; resumeFromOrder?: number; targetUrl?: string },
     ) =>
       request<{ sessionId: string; wsUrl: string; wsToken: string; resolvedUrl: string | null; mode: string }>(
         '/recorder/sessions',
@@ -306,13 +338,54 @@ export const api = {
     list: () => request<OrgSummary[]>('/organizations'),
     createSubOrg: (name: string, parentId: string) =>
       request<Organization>('/organizations', { method: 'POST', body: JSON.stringify({ name, parentId }) }),
-    members: (orgId: string) => request<{ items: MemberRow[] }>(`/organizations/${orgId}/members`),
-    addMember: (orgId: string, body: { username: string; isManager?: boolean; isUser?: boolean }) =>
+    get: (id: string) => request<OrgDetail>('/organizations/${id}'.replace('${id}', id)),
+    update: (id: string, body: { name?: string; description?: string }) =>
+      request<OrgDetail>('/organizations/${id}'.replace('${id}', id), { method: 'PATCH', body: JSON.stringify(body) }),
+    remove: (id: string) => request<{ ok: boolean }>('/organizations/${id}'.replace('${id}', id), { method: 'DELETE' }),
+    managedSubtree: () =>
+      request<OrgManagedNode[]>('/organizations/managed-subtree'),
+    members: (
+      orgId: string,
+      params?: { q?: string; includeSubtree?: boolean; page?: number; limit?: number },
+    ) => request<Paged<OrgMemberRow>>(`/organizations/${orgId}/members${qs(params ?? {})}`),
+    projects: (
+      orgId: string,
+      params?: { q?: string; includeSubtree?: boolean; page?: number; limit?: number },
+    ) => request<Paged<OrgProjectSummary>>(`/organizations/${orgId}/projects${qs(params ?? {})}`),
+    addMember: (orgId: string, body: { userId: string; isManager?: boolean; isUser?: boolean }) =>
       request<{ ok: boolean }>(`/organizations/${orgId}/members`, { method: 'POST', body: JSON.stringify(body) }),
     updateMember: (orgId: string, userId: string, body: { isManager?: boolean; isUser?: boolean }) =>
       request<{ ok: boolean }>(`/organizations/${orgId}/members/${userId}`, { method: 'PATCH', body: JSON.stringify(body) }),
     removeMember: (orgId: string, userId: string) =>
       request<{ ok: boolean }>(`/organizations/${orgId}/members/${userId}`, { method: 'DELETE' }),
+    lookupUser: (username: string) =>
+      request<{ id: string; username: string; displayName: string }>(
+        `/organizations/lookup-user?username=${encodeURIComponent(username)}`,
+      ),
+  },
+  users: {
+    list: (params?: { q?: string; orgId?: string; includeSubtree?: boolean; excludeOrgId?: string; page?: number; limit?: number }) =>
+      request<Paged<UserSummary>>(`/users${qs(params ?? {})}`),
+    get: (id: string) => request<UserDetail>(`/users/${id}`),
+    getProjects: (id: string, params?: { page?: number; limit?: number }) =>
+      request<Paged<UserProjectSummary>>(`/users/${id}/projects${qs(params ?? {})}`),
+    update: (
+      id: string,
+      patch: { displayName?: string; email?: string | null; languagePreference?: 'zh-CN' | 'en-US' },
+    ) => request<UserDetail>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+    remove: (id: string) => request<void>(`/users/${id}`, { method: 'DELETE' }),
+    resetPassword: (id: string) =>
+      request<{ temporaryPassword: string }>(`/users/${id}/reset-password`, { method: 'POST' }),
+    create: (body: {
+      username: string;
+      displayName: string;
+      email?: string;
+      organizationId: string;
+    }) =>
+      request<{ temporaryPassword: string; user: UserSummary }>(`/auth/register-admin`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
   },
   aiWorkspace: {
     ensureThread: (requirementId: string) =>
@@ -333,6 +406,11 @@ export const api = {
         body: JSON.stringify(body),
       }),
   },
+  registerAdmin: (body: { username: string; displayName: string; email?: string; organizationId: string }) =>
+    request<{ temporaryPassword: string; user: SafeUser }>('/auth/register-admin', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   secrets: {
     fetch: (caseId: string, stepId: string, token: string) =>
       request<{ plaintext: string }>(
@@ -606,17 +684,113 @@ export interface Organization {
   updatedAt: string;
 }
 
-export interface MemberRow {
-  userId: string;
+/** 分页返回形状，与后端 design-systems / users 等接口一致 */
+export interface Paged<T> { items: T[]; total: number; page: number; limit: number }
+
+export interface UserSummary {
+  id: string;
   username: string;
   displayName: string;
+  email: string | null;
+}
+
+export interface UserOrgMembership {
+  organizationId: string;
+  organizationName: string;
+  organizationPath: string;
+  isManager: boolean;
+  isUser: boolean;
+}
+
+export interface UserDetail extends UserSummary {
+  createdAt: string;
+  disabledAt: string | null;
+  organizations: UserOrgMembership[];
+  projectCount: number;
+}
+
+export interface UserProjectSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  organizationId: string | null;
+}
+
+export interface AssignedUser {
+  userId: string;
+  username: string;
+  displayName: string | null;
+}
+
+export interface OrgDetail extends OrgSummary {
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OrgManagedNode {
+  id: string;
+  name: string;
+  parentId: string | null;
+  path: string;
+  description: string | null;
+  memberCount: number;
+  projectCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OrgMemberRow {
+  id: string;
+  userId: string;
+  organizationId: string;
+  organizationName: string | null;
+  username: string;
+  displayName: string;
+  email: string | null;
   isManager: boolean;
   isUser: boolean;
   joinedAt: string;
 }
 
+export interface OrgProjectSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  organizationId: string;
+  repoUrl: string | null;
+  assignedCount: number;
+}
+
+export interface VerifyRepoResult {
+  valid: boolean;
+  error?: string;
+  branchExists?: boolean;
+  defaultBranch?: string;
+}
+
 export type Priority = 'P0' | 'P1' | 'P2' | 'P3';
-export interface StagedStep { name: string; action: string; assertion: string | null; }
+export type CompiledAction =
+  | { kind: 'navigate'; url: string }
+  | { kind: 'click'; locator: Array<{ strategy: string; value: string }> }
+  | { kind: 'fill'; locator: Array<{ strategy: string; value: string }>; value: unknown }
+  | { kind: 'waitFor'; locator: Array<{ strategy: string; value: string }> }
+  | { kind: 'assertText'; target?: string; equals?: string; contains?: string }
+  | { kind: 'assertVisible'; locator: Array<{ strategy: string; value: string }> }
+  | { kind: 'check'; locator: Array<{ strategy: string; value: string }>; checked: boolean }
+  | { kind: 'select'; locator: Array<{ strategy: string; value: string }>; value: string }
+  | { kind: 'hover'; locator: Array<{ strategy: string; value: string }> }
+  | { kind: 'screenshot'; name: string }
+  | { kind: 'switchTab'; tabRef: string }
+  | { kind: 'extract'; varName: string; mode?: string; pattern?: string }
+  | { kind: string; [k: string]: unknown };
+
+export interface StagedStep {
+  name: string;
+  action: string;
+  assertion: string | null;
+  /** 三态：undefined = 未尝试（保存时由后端兜底编译）；null = AI 已放弃；array = 已编译 */
+  compiled?: CompiledAction[] | null;
+}
 export interface StagedCase { id: string; title: string; description: string | null; priority: Priority; steps: StagedStep[]; }
 export interface StagedScenario { id: string; title: string; description: string | null; cases: StagedCase[]; }
 export interface WorkspaceDoc {
