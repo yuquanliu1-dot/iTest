@@ -10,8 +10,10 @@ import {
   unique,
   primaryKey,
   index,
+  uniqueIndex,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 export const settings = pgTable('settings', {
   key: varchar('key', { length: 100 }).primaryKey(),
@@ -154,9 +156,19 @@ export const users = pgTable('users', {
   mustChangePassword: boolean('must_change_password').notNull().default(false),
   // 服务端吊销版本号：登出/改密 +1，auth 中间件回查 DB 与 JWT payload 比对
   tokenVersion: integer('token_version').notNull().default(1),
+  // 邮箱（PG 唯一但 NULL 不参与判定；与 iDO 同源，便于「撞邮箱」409 而非用户内重复）
+  email: varchar('email', { length: 255 }),
+  // UI 语言偏好：'zh-CN' | 'en-US'
+  languagePreference: varchar('language_preference', { length: 16 }).notNull().default('zh-CN'),
+  // 软删除时间戳：非 null 即账号已停用——禁止登录、不出现在用户目录中。
+  // 硬删会被 automations/sprints/pipeline* 的 NOT NULL created_by FK 拒掉。
+  disabledAt: timestamp('disabled_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (t) => ({
+  // 与 drizzle/0039 中「email 唯一」声明同源；drizzle-kit migrate 同步建索引
+  emailUq: uniqueIndex('users_email_uq').on(t.email).where(sql`${t.email} IS NOT NULL`),
+}));
 
 export const organizations = pgTable('organizations', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -193,9 +205,33 @@ export const projects = pgTable('projects', {
   name: varchar('name', { length: 200 }).notNull(),
   description: text('description'),
   defaultUrl: text('default_url'),
+  // 仓库元数据：与 iDO 同源（AI 生成用例步骤需要看代码）。当前只存元数据 + 验证可达性，
+  // 后续接入 dispatch-gateway 的 github.service.ts 后才会有 clone / file read。
+  repoUrl: text('repo_url'),
+  defaultBranch: varchar('default_branch', { length: 200 }).notNull().default('main'),
+  provider: varchar('provider', { length: 16 }).notNull().default('github'),
+  gitlabUrlOverride: text('gitlab_url_override'),
+  // 仓库 PAT：明文存盘仅为最小迁移代价；后续接 dispatch 时应改 encrypted column。
+  // 现 read 路径全部 mask（projectsRoute / ProjectDetailPanel 都不得回传）。
+  patOverride: text('pat_override'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
+
+// 项目分配：user ⇄ project 多对多。
+// organizationId 是冗余快照，固定在「分配发生时项目所属的组织」——
+// 后续即便项目被 moveProject 改到别的组织，assignment 仍指认当时分配到的组织身份，便于跨组织追溯。
+export const projectAssignments = pgTable('project_assignments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id),
+  assignedAt: timestamp('assigned_at').defaultNow().notNull(),
+}, (t) => ({
+  projectUserUq: unique('project_assignments_project_user_uq').on(t.projectId, t.userId),
+  byUser: index('project_assignments_user_idx').on(t.userId),
+  byOrg: index('project_assignments_org_idx').on(t.organizationId),
+}));
 
 export const groups = pgTable('groups', {
   id: uuid('id').primaryKey().defaultRandom(),

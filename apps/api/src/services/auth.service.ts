@@ -267,3 +267,27 @@ export async function findUserByUsername(username: string): Promise<{ id: string
     .limit(1);
   return rows[0] ?? null;
 }
+
+/**
+ * 生成一次性临时密码（admin/manager 重置他人密码用）。满足 PASSWORD_POLICY：
+ *   - 长度 12（介于 10-64 之间）
+ *   - 含小写、大写、数字、特殊字符
+ * 字符集避开易混淆字符（0/O、1/l/I），密码在控制台/聊天里复述不易抄错。
+ */
+const TEMP_PASSWORD_LENGTH = 12;
+const TEMP_PASSWORD_CHARSET =
+  'abcdefghijkmnpqrstuvwxyz' + // 去掉 l
+  'ABCDEFGHJKLMNPQRSTUVWXYZ' + // 去掉 I, O
+  '23456789' + // 去掉 0, 1
+  '!@#$%^&*';
+export function generateRandomPassword(): string {
+  // crypto.randomInt 在 Node 22 是同步的，避免 callback 形态的额外开销
+  const buf = new Uint32Array(TEMP_PASSWORD_LENGTH);
+  // Node 全局 crypto 在 19+ 暴露 randomUUID / getRandomValues
+  (globalThis.crypto as Crypto).getRandomValues(buf);
+  let out = '';
+  for (let i = 0; i < TEMP_PASSWORD_LENGTH; i++) {
+    out += TEMP_PASSWORD_CHARSET[buf[i]! % TEMP_PASSWORD_CHARSET.length];
+  }
+  return out;
+}

@@ -34,6 +34,7 @@ export default function App() {
       <Route element={<AppShell><AuthGuard /></AppShell>}>
         <Route path="/" element={<ProjectsHome />} />
         <Route path="/members" element={<MembersPage />} />
+        <Route path="/members/*" element={<MembersPage />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/p/:projectId" element={<ProjectGuard />}>
           <Route index element={<Navigate to="overview" replace />} />

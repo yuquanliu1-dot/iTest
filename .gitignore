@@ -9,3 +9,9 @@ coverage
 apps/api/screenshots
 apps/api/.data
 apps/recorder/modules/*.js
+# local assets / verify screenshots
+.claude/
+*.png
+*.jpg
+*.jpeg
+verify-*.jpeg
