@@ -236,31 +236,28 @@ export default function ProjectsHome() {
 
       {/* 项目新建/编辑弹窗 */}
       <Dialog open={form.open} onOpenChange={(open) => setForm((f) => ({ ...f, open }))}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>{form.mode === 'create-project' ? '新建项目' : '编辑项目'}</DialogTitle>
           </DialogHeader>
-          <div className="flex flex-col gap-3 px-5 py-4">
+          <div className="flex-1 min-h-0 flex flex-col gap-3 px-5 py-4 overflow-y-auto">
             <Input label="名称" placeholder="如：CueCast 官网" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>描述（可空）</label>
-              <textarea
-                className="input-base"
-                placeholder="简要说明项目用途"
-                rows={3}
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              />
-            </div>
             <Input
               label="默认域名（可空）"
               placeholder="https://example.com"
               value={form.defaultUrl}
               onChange={(e) => setForm((f) => ({ ...f, defaultUrl: e.target.value }))}
             />
-            <p className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
-              默认域名用于预填新建用例与录制的目标 URL；分组和用例可覆盖。
-            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>描述（可空）</label>
+              <textarea
+                className="input-base"
+                placeholder="简要说明项目用途"
+                rows={2}
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              />
+            </div>
             <RepoFields
               value={form.repo}
               onChange={(repo) => setForm((f) => ({ ...f, repo }))}
@@ -268,7 +265,7 @@ export default function ProjectsHome() {
             />
           </div>
           <div
-            className="flex justify-end gap-2 px-5 py-4 hairline-top"
+            className="flex justify-end gap-2 px-5 py-3 hairline-top shrink-0"
             style={{ borderColor: 'var(--color-border)' }}
           >
             <Button variant="ghost" onClick={() => setForm(EMPTY_FORM)}>取消</Button>
