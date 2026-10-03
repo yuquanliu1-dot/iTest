@@ -1,9 +1,9 @@
 .env-page { padding: 16px 24px; }
 .env-table { width: 100%; border-collapse: collapse; }
-.env-table th, .env-table td { padding: 8px 12px; border-bottom: 1px solid #eee; text-align: left; }
-.env-mask { font-family: monospace; color: #888; }
-.env-drawer-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.3); }
-.env-drawer { position: fixed; right: 0; top: 0; bottom: 0; width: 480px; background: #fff; padding: 16px; overflow-y: auto; box-shadow: -2px 0 8px rgba(0,0,0,0.1); }
+.env-table th, .env-table td { padding: 8px 12px; border-bottom: 1px solid var(--color-glass-border); text-align: left; }
+.env-mask { font-family: monospace; color: var(--color-foreground-muted); }
+.env-drawer-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.4); }
+.env-drawer { position: fixed; right: 0; top: 0; bottom: 0; width: 480px; background: var(--color-background-elevated); padding: 16px; overflow-y: auto; box-shadow: -2px 0 8px rgba(0,0,0,0.1); }
 .env-form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-.env-form-row label { font-size: 13px; color: #555; }
-.env-form-row input, .env-form-row textarea { padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+.env-form-row label { font-size: 13px; color: var(--color-foreground-muted); }
+.env-form-row input, .env-form-row textarea { padding: 6px 8px; border: 1px solid var(--color-glass-border); border-radius: 4px; font-size: 14px; }
