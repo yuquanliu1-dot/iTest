@@ -18,7 +18,6 @@ import Executions from './pages/Reports';
 import ReportDetail from './pages/ReportDetail';
 import MembersPage from './pages/MembersPage';
 import Settings from './pages/Settings';
-import Environments from './pages/Environments';
 import VersionsSelectPage from './pages/VersionsSelectPage';
 
 export default function App() {
@@ -54,7 +53,6 @@ export default function App() {
             <Route path="plans/:id/runs/:runId" element={<PlanRunDetail />} />
             <Route path="reports" element={<Executions />} />
             <Route path="reports/:id" element={<ReportDetail />} />
-            <Route path="environments" element={<Environments />} />
           </Route>
           {/* 旧路径兼容：未带版本号直接进项目 → 弹到 versions select */}
           <Route index element={<Navigate to="versions/select" replace />} />
@@ -68,7 +66,7 @@ export default function App() {
           <Route path="plans/:id/runs/:runId" element={<Navigate to="../../../versions/select" replace />} />
           <Route path="reports" element={<Navigate to="../versions/select" replace />} />
           <Route path="reports/:id" element={<Navigate to="../../versions/select" replace />} />
-          <Route path="environments" element={<Navigate to="../versions/select" replace />} />
+          <Route path="environments" element={<Navigate to="versions/select" replace />} />
         </Route>
         <Route path="*" element={<ProjectsHome />} />
       </Route>

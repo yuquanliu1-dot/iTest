@@ -149,12 +149,12 @@ export const api = {
   versions: {
     list: (projectId: string) =>
       request<ProjectVersion[]>(`/projects/${projectId}/versions`),
-    create: (projectId: string, body: { name: string; description?: string }) =>
+    create: (projectId: string, body: { name: string; description?: string; defaultUrl?: string }) =>
       request<ProjectVersion>(`/projects/${projectId}/versions`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    patch: (id: string, body: Partial<{ name: string; description: string | null }>) =>
+    patch: (id: string, body: Partial<{ name: string; description: string | null; defaultUrl: string | null }>) =>
       request<ProjectVersion>(`/project-versions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     setDefault: (projectId: string, id: string) =>
       request<ProjectVersion>(`/projects/${projectId}/versions/${id}/set-default`, { method: 'POST' }),
@@ -580,6 +580,7 @@ export interface ProjectVersion {
   isDefault: boolean;
   ref: string | null;
   refKind: 'branch' | 'tag' | null;
+  defaultUrl: string | null;
   createdAt: string;
   updatedAt: string;
   caseCount?: number;
