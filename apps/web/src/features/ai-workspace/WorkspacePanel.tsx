@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { api, type StagedCase, type WorkspaceDoc } from '../../api/client';
 import Button from '../../components/ui/Button';
 import PriorityBadge from '../../components/ui/PriorityBadge';
+import { stepKindLabel } from '../../lib/format';
+import { stepSummary } from '../../lib/stepSummary';
 
 interface Props {
   requirementId: string;
@@ -97,11 +99,28 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
             </summary>
             <ol className="mt-1 ml-4 list-decimal">
               {c.steps.map((s, i) => (
-                <li key={i} className="mb-0.5">
-                  <span>{s.action}</span>
+                <li key={i} className="mb-1">
+                  <div>{s.action}</div>
                   {s.assertion && (
-                    <span style={{ color: 'var(--color-foreground-muted)' }}> —— 断言：{s.assertion}</span>
+                    <div className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                      断言：{s.assertion}
+                    </div>
                   )}
+                  <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
+                    编译：
+                    {s.compiled == null ? (
+                      <span style={{ color: '#92400e' }}>未编译，保存时由后端补编译</span>
+                    ) : (
+                      <ol className="ml-4 list-decimal">
+                        {s.compiled.map((sub, j) => (
+                          <li key={j}>
+                            <span style={{ color: 'var(--color-accent)' }}>{stepKindLabel(sub.kind)}</span>{' '}
+                            {stepSummary(sub)}
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </div>
                 </li>
               ))}
             </ol>
