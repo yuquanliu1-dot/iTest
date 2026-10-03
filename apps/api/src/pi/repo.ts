@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { Type } from '@earendil-works/pi-ai';
 import type { ToolExecutor } from './tools.js';
 
@@ -45,6 +46,24 @@ export async function assertInCwd(cwdRoot: string, target: string): Promise<stri
     throw new SandboxViolationError(`path escapes cwd: ${target}`);
   }
   return real;
+}
+
+function runRg(cwdRoot: string, args: string[]): Promise<{ stdout: string; code: number }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('rg', args, { cwd: cwdRoot, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('rg timeout')); }, REPO_RUN_TIMEOUT_MS);
+    child.stdout.on('data', (d) => { out += d.toString(); });
+    child.stderr.on('data', (d) => { err += d.toString(); });
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      // code=1 表示无匹配（rg 约定），仍算成功
+      if (code === 0 || code === 1) resolve({ stdout: out, code });
+      reject(new Error(`rg exited ${code}: ${err}`));
+    });
+  });
 }
 
 export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
@@ -106,6 +125,35 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
               }),
             };
           } finally { await fh.close(); }
+        } catch (e) {
+          return { ok: false, error: (e as Error).message };
+        }
+      },
+    },
+    {
+      name: 'repo_grep',
+      description: '在 cwd 下用 ripgrep 搜索；输出形如 file:line:text。maxMatches 默认 200。',
+      parameters: Type.Object({
+        pattern: Type.String({ minLength: 1 }),
+        glob: Type.Optional(Type.String()),
+        maxMatches: Type.Optional(Type.Number({ minimum: 1 })),
+      }),
+      execute: async (input) => {
+        const { pattern, glob, maxMatches = 200 } = input as { pattern: string; glob?: string; maxMatches?: number };
+        const args = ['--no-heading', '-n', '-S', `--max-count=${maxMatches}`];
+        if (glob) args.push('--glob', glob);
+        args.push('--', pattern, '.');
+        try {
+          const { stdout } = await runRg(cwdRoot, args);
+          if (!stdout) return { ok: true, data: asData({ matches: [] }) };
+          const lines = stdout.split('\n').filter(Boolean).slice(0, maxMatches);
+          const matches = lines.map((l) => {
+            const idx1 = l.indexOf(':');
+            const idx2 = idx1 >= 0 ? l.indexOf(':', idx1 + 1) : -1;
+            if (idx1 < 0 || idx2 < 0) return { raw: l };
+            return { path: l.slice(0, idx1), line: Number(l.slice(idx1 + 1, idx2)), text: l.slice(idx2 + 1) };
+          });
+          return { ok: true, data: asData({ matches, truncated: matches.length >= maxMatches }) };
         } catch (e) {
           return { ok: false, error: (e as Error).message };
         }

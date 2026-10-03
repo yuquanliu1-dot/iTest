@@ -151,3 +151,50 @@ describe('repo_read', () => {
     expect(r.error).toContain('path escapes cwd');
   });
 });
+
+describe('repo_grep', () => {
+  beforeAll(async () => {
+    await fs.writeFile(path.join(cwd, 'a.ts'), 'export function hello() {\n  return "hi";\n}\n');
+    await fs.writeFile(path.join(cwd, 'b.ts'), 'export const greeting = "hi";\n');
+  });
+
+  it('基本匹配返回 { matches: [{ path, line, text }] }', async () => {
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_grep')!;
+    const r = await t.execute({ pattern: 'greeting' });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.matches.length).toBeGreaterThan(0);
+    expect(data.matches.some((m: { path: string }) => m.path.endsWith('b.ts'))).toBe(true);
+  });
+
+  it('glob 过滤文件', async () => {
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_grep')!;
+    const r = await t.execute({ pattern: 'hi', glob: '*.ts' });
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.matches.length).toBeGreaterThan(0);
+  });
+
+  it('找不到匹配返回空数组', async () => {
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_grep')!;
+    const r = await t.execute({ pattern: '__nonexistent_xyz__' });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.matches).toEqual([]);
+  });
+
+  it('rg 不存在时返回明确错误', async () => {
+    const tools = buildRepoSandboxTools(cwd);
+    const t = tools.find((x) => x.name === 'repo_grep')!;
+    // force rg 找不到：通过 env PATH 强制覆盖
+    const prev = process.env.PATH;
+    process.env.PATH = '/nonexistent-dir';
+    try {
+      const r = await t.execute({ pattern: 'hi' });
+      expect(r.ok).toBe(false);
+      expect((r as { error: string }).error).toMatch(/rg|ripgrep|ENOENT/i);
+    } finally { process.env.PATH = prev; }
+  });
+});
