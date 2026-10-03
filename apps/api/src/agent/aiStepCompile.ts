@@ -20,7 +20,11 @@ locator 是 [{"strategy": "...", "value": "..."}] 数组，规则：
 - locator 数组里给出多个候选，回放时按顺序探测；至少 1 个。
 navigate 的 url 必须是绝对 URL（如 http://localhost:5173/login），不要用相对路径。
 value 字段：固定字符串直接给字符串；"Abc@123456" 之类密码占位直接用占位字符串。
-不要输出 aiStep kind。`;
+不要输出 aiStep kind。
+末尾 assertText 引导：如果该 step 跑完后页面应该有可观察结果（例如填表后的成功提示、点击后的列表项出现），
+请在 compiled 末尾补一条 assertText：{locator:[{strategy:'text', value:'<片段>'}],
+target:'specifiedElement', match:'contains', equals:'<片段>'}。
+不要为 navigate 步骤本身补 assertText（navigate 后的状态由下一条 step 断言）。`;
 
 const BATCH_SYSTEM_PROMPT = `${SYSTEM_PROMPT}
 
