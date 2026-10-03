@@ -180,7 +180,7 @@ export function buildWorkspaceTools(
                 compiled = s.compiled.map(normalizeCompiledStep);
               }
             } else {
-              compiled = s.compiled as unknown;
+              compiled = s.compiled as unknown[] | null;
             }
           }
           const out: { name: string; action: string; assertion: string | null; compiled?: unknown[] | null } = {

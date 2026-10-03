@@ -199,11 +199,11 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
             child.on('error', (e) => { clearTimeout(t); reject(e); });
             child.on('close', (c) => { clearTimeout(t); resolve({ stdout: out, stderr: err, code: typeof c === 'number' ? c : -1 }); });
           });
-          return {
-            ok: code === 0,
-            data: stdout.slice(0, MAX_OUTPUT_CHARS),
-            error: code !== 0 ? `exit ${code}${stderr ? ': ' + stderr.trim().slice(0, 200) : ''}` : undefined,
-          };
+          const ok = code === 0;
+          const result: { ok: true; data?: string } | { ok: false; error: string } = ok
+            ? { ok: true, data: stdout.slice(0, MAX_OUTPUT_CHARS) }
+            : { ok: false, error: `exit ${code}${stderr ? ': ' + stderr.trim().slice(0, 200) : ''}` };
+          return result;
         } catch (e) {
           return { ok: false, error: (e as Error).message };
         }
