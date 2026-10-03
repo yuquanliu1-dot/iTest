@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Type } from '@earendil-works/pi-ai';
+import type { ToolExecutor } from './tools.js';
 
 const DATA_DIR = process.env.PI_DATA_DIR ?? path.resolve(process.cwd(), '.data');
 export const REPOS_ROOT = path.join(DATA_DIR, 'repos');
@@ -21,14 +22,6 @@ export class SandboxViolationError extends Error {
 }
 export class LockTimeoutError extends Error {
   constructor(message: string) { super(message); this.name = 'LockTimeoutError'; }
-}
-
-export interface ToolExecutor {
-  name: string;
-  description: string;
-  parameters: ReturnType<typeof Type.Object>;
-  execute: (input: unknown) => Promise<{ ok: true; data?: string } | { ok: false; error: string }>;
-  promptGuidelines?: string[];
 }
 
 /** 把任意结果安全序列化为 data 字符串（截断到 MAX_OUTPUT_CHARS）。 */

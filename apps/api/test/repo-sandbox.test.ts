@@ -65,5 +65,38 @@ describe('repo_ls', () => {
     const ls = tools.find((t) => t.name === 'repo_ls')!;
     const r = await ls.execute({ path: '../' });
     expect(r.ok).toBe(false);
+    expect(r.error).toContain('path escapes cwd');
+  });
+
+  it('501 个非隐藏文件 → truncated:true 且 entries 长度 = 500', async () => {
+    const bigdir = path.join(cwd, 'bigdir');
+    await fs.mkdir(bigdir);
+    try {
+      await Promise.all(
+        Array.from({ length: 501 }, (_, i) => i.toString()).map((i) =>
+          fs.writeFile(path.join(bigdir, `f${i}`), ''),
+        ),
+      );
+      const tools = buildRepoSandboxTools(cwd);
+      const ls = tools.find((t) => t.name === 'repo_ls')!;
+      const r = await ls.execute({ path: 'bigdir' });
+      expect(r.ok).toBe(true);
+      const data = JSON.parse((r as { data: string }).data);
+      expect(data.truncated).toBe(true);
+      expect(data.entries.length).toBe(500);
+    } finally {
+      await fs.rm(bigdir, { recursive: true, force: true });
+    }
+  });
+
+  it('隐藏文件被过滤', async () => {
+    await fs.writeFile(path.join(cwd, '.hidden'), 'secret');
+    const tools = buildRepoSandboxTools(cwd);
+    const ls = tools.find((t) => t.name === 'repo_ls')!;
+    const r = await ls.execute({ path: '.' });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    const names = data.entries.map((e: { name: string }) => e.name);
+    expect(names).not.toContain('.hidden');
   });
 });
