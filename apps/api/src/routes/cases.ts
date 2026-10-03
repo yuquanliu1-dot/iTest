@@ -43,6 +43,8 @@ const PatchBody = CaseBodyBase.partial()
   .extend({
     scenarioId: z.string().uuid().nullable().optional(),
     status: CaseStatusEnum.optional(),
+    // 用例级 init URL 允许置空（清除覆盖，回到分组/项目继承链）
+    url: z.string().url().nullable().optional(),
   })
   .superRefine(checkWindowStrategy);
 

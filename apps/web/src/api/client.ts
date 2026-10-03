@@ -39,6 +39,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await res.json().catch(() => ({}));
     throw new ApiError(res.status, body.message ?? `HTTP ${res.status}`);
   }
+  // 204 No Content：DELETE 等空响应直接返回 undefined，不尝试解析 JSON。
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 

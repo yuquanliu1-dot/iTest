@@ -299,6 +299,49 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(results[0]!.error).toMatch(/tab-missing/);
   });
 
+  it('init goto is skipped when step 0 is a navigate with the same url', async () => {
+    mocked.__page.goto.mockClear();
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000050',
+      [{ order: 1, action: { kind: 'navigate', url: 'https://init.example.com' } }],
+      { reportId: 'r-dedupe' },
+      'https://init.example.com',
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0]!.status).toBe('passed');
+    // init goto 被跳过；只剩 step 自身的 navigate + preflight 的二次 goto
+    expect(mocked.__page.goto).toHaveBeenCalledTimes(2);
+    expect(mocked.__page.goto).toHaveBeenCalledWith('https://init.example.com', expect.anything());
+  });
+
+  it('init goto fires when step 0 is a navigate with a different url', async () => {
+    mocked.__page.goto.mockClear();
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000051',
+      [{ order: 1, action: { kind: 'navigate', url: 'https://other.example.com' } }],
+      { reportId: 'r-dedupe-2' },
+      'https://init.example.com',
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0]!.status).toBe('passed');
+    // init + step + preflight
+    expect(mocked.__page.goto).toHaveBeenCalledTimes(3);
+  });
+
+  it('init goto fires when steps[0] is not a navigate', async () => {
+    mocked.__page.goto.mockClear();
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000052',
+      [{ order: 1, action: { kind: 'click', locator: [{ strategy: 'css', value: '#x' }] } }],
+      { reportId: 'r-init-only' },
+      'https://init.example.com',
+    );
+    expect(results).toHaveLength(1);
+    // init + preflight（没有 step navigate）
+    expect(mocked.__page.goto).toHaveBeenCalledTimes(2);
+    expect(mocked.__page.goto).toHaveBeenCalledWith('https://init.example.com', expect.anything());
+  });
+
   it('upload action calls setInputFiles with stored_path', async () => {
     const setInputFiles = vi.fn().mockResolvedValue(undefined);
     mocked.__locator.mockReturnValueOnce({ setInputFiles } as never);
@@ -482,6 +525,104 @@ describe('phase3 — assertText target×match', () => {
     );
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.error).toMatch(/errorMessage/);
+  });
+});
+
+describe('phase3 — step-level assertion (test_steps.assertion)', () => {
+  it('passes step when assertion matches body innerText (canonical shape)', async () => {
+    // mock 的 page.evaluate 返回 '登录成功'，body contains 断言应当 pass。
+    mocked.__locator.mockClear();
+    // 用 mockImplementation 把整段测试里所有 evaluate 都钉成期望值，
+    // 否则 mockClear/mockResolvedValueOnce 的组合会让前序测试残留状态干扰本次。
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve('登录成功'));
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000030',
+      [
+        {
+          order: 1,
+          action: { kind: 'navigate', url: 'https://example.com' },
+          assertion: {
+            kind: 'assertText',
+            locator: [],
+            target: 'page',
+            match: 'contains',
+            equals: '登录成功',
+          },
+        },
+      ],
+      { reportId: 'r-step-assert-pass' },
+    );
+    expect(results[0]!.status).toBe('passed');
+  });
+
+  it('fails step when assertion text is not in body (canonical shape)', async () => {
+    mocked.__locator.mockClear();
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve('不匹配的页面'));
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000031',
+      [
+        {
+          order: 1,
+          action: { kind: 'navigate', url: 'https://example.com' },
+          assertion: {
+            kind: 'assertText',
+            locator: [],
+            target: 'page',
+            match: 'contains',
+            equals: '登录成功',
+          },
+        },
+      ],
+      { reportId: 'r-step-assert-fail' },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/登录成功/);
+  });
+
+  it('legacy assertion shape {kind,text} is normalised to canonical and runs', async () => {
+    // 老 AI 保存路径留下的 {kind:'assertText', text:'...'}; 不走 save 也能跑通。
+    mocked.__locator.mockClear();
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve('页面标题显示为"元素管理 - 低代码测试平台"'));
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000032',
+      [
+        {
+          order: 1,
+          action: { kind: 'navigate', url: 'https://example.com' },
+          assertion: { kind: 'assertText', text: '页面标题显示为"元素管理 - 低代码测试平台"' },
+        },
+      ],
+      { reportId: 'r-step-assert-legacy' },
+    );
+    expect(results[0]!.status).toBe('passed');
+  });
+
+  it('action failure short-circuits before assertion runs', async () => {
+    // action 失败时（navigate reject）→ 直接 failed；断言不会"补救"成功。
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.goto.mockImplementationOnce(() => Promise.reject(new Error('net down')));
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000033',
+      [
+        {
+          order: 1,
+          action: { kind: 'navigate', url: 'https://example.com' },
+          assertion: {
+            kind: 'assertText',
+            locator: [],
+            target: 'page',
+            match: 'contains',
+            equals: 'anything',
+          },
+        },
+      ],
+      { reportId: 'r-step-assert-action-fails' },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/net down/);
   });
 });
 

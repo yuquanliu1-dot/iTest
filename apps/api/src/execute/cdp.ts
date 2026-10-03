@@ -13,6 +13,7 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { testAttachments, testSteps } from '../db/schema.js';
 import { decrypt } from '../lib/secret-crypto.js';
+import { migrateAssertion } from '../lib/step-migration.js';
 import { logger } from '../logger.js';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -398,6 +399,16 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
   }
 }
 
+/** 把 test_steps.assertion 规整为 dispatch 认识的 StepAction；非法形态返回 undefined 表示跳过断言。 */
+function normalizeStepAssertion(raw: unknown): StepAction | undefined {
+  if (raw == null) return undefined;
+  const migrated = migrateAssertion(raw);
+  if (!migrated || typeof migrated !== 'object') return undefined;
+  // 只放行 assertText（唯一支持的步骤级断言类型）；其它 kind 当作未设置以免污染错误信息。
+  if ((migrated as { kind?: string }).kind !== 'assertText') return undefined;
+  return migrated as StepAction;
+}
+
 /** 依命中的候选 kind 反解出可读的定位表达式（用于报告展示）。 */
 function locatorForCandidate(locator: Locator[], intent: IntentLocator | undefined, kind: string): string {
   if (kind === 'intent-testid' && intent?.semanticRole) return `[data-testid="${intent.semanticRole}"]`;
@@ -512,6 +523,8 @@ export async function executeCaseReal(
   steps: Array<{
     order: number;
     action: unknown;
+    /** 可选步骤级断言（任意 StepAction 子集）；为 null/undefined 时跳过。 */
+    assertion?: unknown;
     delayMs?: number | null;
     id?: string;
     tabRef?: string | null;
@@ -544,8 +557,14 @@ export async function executeCaseReal(
       ...(viewport ? { viewport } : {}),
     });
     const page = await context.newPage();
-    // 导航到第一个 navigate 动作或外部传入的 targetUrl，否则就让用户先 navigate。
-    if (targetUrl) {
+    // 初始导航：用例级 init URL（targetUrl）始终先 goto 一次。
+    // 若首条 step 也是 navigate 且 URL 与 init 相同，让 step 来做这一步，避免重复加载。
+    const firstStepIsSameNav =
+      steps.length > 0
+      && (steps[0]!.action as { kind?: string }).kind === 'navigate'
+      && typeof (steps[0]!.action as { url?: string }).url === 'string'
+      && (steps[0]!.action as { url: string }).url === targetUrl;
+    if (targetUrl && !firstStepIsSameNav) {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
     // preflight：执行前置检查（URL 可达 / 登录态 / 标签页 / origin）。失败不阻塞执行。
@@ -563,9 +582,14 @@ export async function executeCaseReal(
       opts.hitSink = { current: null };
       const tabIndex =
         ctx.tabMap && step.tabRef ? Array.from(ctx.tabMap.keys()).indexOf(step.tabRef) : 0;
+      const assertionAction = normalizeStepAssertion(step.assertion);
       try {
         if (step.delayMs) await opts.page.waitForTimeout(step.delayMs);
         const warning = await dispatch(step.action as StepAction, opts);
+        // action 通过后才执行步骤级断言；断言失败同样记 failed 并终止后续。
+        if (assertionAction) {
+          await dispatch(assertionAction, opts);
+        }
         const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
         results.push({
           order: step.order,
@@ -579,7 +603,10 @@ export async function executeCaseReal(
       } catch (e) {
         const durationMs = Date.now() - started;
         const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
-        const classified = classify(e, { action: step.action as StepAction, durationMs });
+        // 断言失败时 classify 应拿到 assertion 的形态（若归类器关心 action.kind）；
+        // 把实际跑的那条作为归类输入更准确——失败于 action 还是 assertion 一目了然。
+        const failedAction = (assertionAction ?? (step.action as StepAction));
+        const classified = classify(e, { action: failedAction, durationMs });
         results.push({
           order: step.order,
           status: 'failed',
