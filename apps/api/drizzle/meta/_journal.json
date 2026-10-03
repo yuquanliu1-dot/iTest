@@ -127,6 +127,20 @@
       "when": 1790991117503,
       "tag": "0017_absent_cloak",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1759612800000,
+      "tag": "0019_test_environments",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1759612800001,
+      "tag": "0020_project_versions",
+      "breakpoints": true
     }
   ]
 }

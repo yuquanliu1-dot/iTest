@@ -2,10 +2,10 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { db } from '../db/client.js';
-import { requirements, groups, aiThreads, aiWorkspaceState, scenarios, testCases, testSteps } from '../db/schema.js';
-import { eq, asc, inArray } from 'drizzle-orm';
+import { requirements, groups, aiThreads, aiWorkspaceState, scenarios, testCases, testSteps, projectVersions } from '../db/schema.js';
+import { eq, asc, inArray, and } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
-import { assertProjectVisible, visibleProjectIds } from '../services/projectAccess.js';
+import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { compileAiStepsInPlace } from '../agent/aiStepCompile.js';
 import { splitAiStepsInPlace } from '../agent/aiStepSplit.js';
 import { migrateAssertion } from '../lib/step-migration.js';
@@ -106,6 +106,7 @@ const SaveBody = z.object({
   groupId: z.string().uuid(),
   scenarioIds: z.array(z.string()).default([]),
   caseIds: z.array(z.string()).default([]),
+  targetVersionId: z.string().uuid().optional(),
 });
 
 /** 把「打开 X 页」「访问 X」「打开登录页」等指令翻译成默认 URL。供 compileAiStep 当 ctx.url 兜底。 */
@@ -141,6 +142,17 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
   await assertProjectVisible(rows[0]!.projectId, req.user!);
   const g = (await db.select().from(groups).where(eq(groups.id, body.groupId)).limit(1))[0];
   if (!g || g.projectId !== rows[0]!.projectId) throw new HttpError(404, 'not_found', 'group not found');
+  // 解析 targetVersionId：未传 → 默认版本；传了 → 必须同 project
+  let versionId = body.targetVersionId;
+  if (versionId) {
+    const { projectId: vp } = await assertVersionVisible(versionId, req.user!);
+    if (vp !== rows[0]!.projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to requirement project');
+  } else {
+    const def = (await db.select({ id: projectVersions.id }).from(projectVersions)
+      .where(and(eq(projectVersions.projectId, rows[0]!.projectId), eq(projectVersions.isDefault, true))).limit(1))[0];
+    if (!def) throw new HttpError(404, 'not_found', 'project has no default version');
+    versionId = def.id;
+  }
 
   const doc = await loadDoc(req.params.id);
   const idSet = new Set(body.caseIds);
@@ -250,6 +262,7 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
       const tc = await tx.insert(testCases).values({
         requirementId: req.params.id,
         groupId: body.groupId,
+        versionId,
         scenarioId,
         title: c.title,
         description: c.description,

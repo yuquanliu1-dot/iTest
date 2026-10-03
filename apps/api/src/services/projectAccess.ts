@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { groups, projects, reports, testCases, testEnvironments } from '../db/schema.js';
+import { groups, projects, projectVersions, reports, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import type { AuthUser } from './auth.service.js';
 import { visibleOrgIdsFor } from './orgTree.js';
@@ -75,6 +75,24 @@ export async function resolveEnvironmentProjectId(envId: string): Promise<string
 export async function assertEnvironmentVisible(envId: string, user: AuthUser): Promise<{ projectId: string }> {
   const projectId = await resolveEnvironmentProjectId(envId);
   if (!projectId) throw new HttpError(404, 'not_found', 'environment not found');
+  await assertProjectVisible(projectId, user);
+  return { projectId };
+}
+
+/** 解析 version 所属项目 id（version → project）；链路不存在返回 null。 */
+export async function resolveVersionProjectId(versionId: string): Promise<string | null> {
+  const rows = await db
+    .select({ projectId: projectVersions.projectId })
+    .from(projectVersions)
+    .where(eq(projectVersions.id, versionId))
+    .limit(1);
+  return rows[0]?.projectId ?? null;
+}
+
+/** version 可见性断言：经 version → project 链路判定，404 文案不区分「不存在」与「不可见」。 */
+export async function assertVersionVisible(versionId: string, user: AuthUser): Promise<{ projectId: string }> {
+  const projectId = await resolveVersionProjectId(versionId);
+  if (!projectId) throw new HttpError(404, 'not_found', 'version not found');
   await assertProjectVisible(projectId, user);
   return { projectId };
 }

@@ -54,6 +54,24 @@ DO $$ BEGIN
  ALTER TABLE execution_plans ADD COLUMN environment_id uuid REFERENCES test_environments(id) ON DELETE SET NULL;
 EXCEPTION WHEN duplicate_column THEN null;
 END $$;
+CREATE TABLE project_versions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid REFERENCES projects(id) ON DELETE CASCADE NOT NULL, name varchar(80) NOT NULL, description text, is_default boolean NOT NULL DEFAULT false, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT project_versions_project_name_uq UNIQUE(project_id, name));
+CREATE INDEX project_versions_project_idx ON project_versions(project_id);
+DO $$ BEGIN
+  ALTER TABLE test_cases        ADD COLUMN version_id uuid REFERENCES project_versions(id) ON DELETE RESTRICT;
+EXCEPTION WHEN duplicate_column THEN null;
+END $$;
+DO $$ BEGIN
+  ALTER TABLE test_environments ADD COLUMN version_id uuid REFERENCES project_versions(id) ON DELETE RESTRICT;
+EXCEPTION WHEN duplicate_column THEN null;
+END $$;
+DO $$ BEGIN
+  ALTER TABLE execution_plans   ADD COLUMN version_id uuid REFERENCES project_versions(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_column THEN null;
+END $$;
+-- 测试 schema 不强制 NOT NULL，简化旧测试插入（无 version_id 时由 seedProject 注入）
+CREATE INDEX test_cases_version_idx        ON test_cases(version_id);
+CREATE INDEX test_environments_version_idx ON test_environments(version_id);
+CREATE INDEX execution_plans_version_idx   ON execution_plans(version_id);
 `;
 
 export interface SeedOrg {
@@ -67,6 +85,11 @@ export interface SeedOrg {
 export const SEED_USER_PASSWORD = 'Test1234!@#$';
 
 const seedOrgCache = new WeakMap<Pool, Promise<SeedOrg>>();
+
+/** 清空缓存（TRUNCATE 后必须重置，避免 nextSeed 复用已被删的 orgId 触发 FK 违反）。 */
+export function resetSeedOrgCache(pool: Pool): void {
+  seedOrgCache.delete(pool);
+}
 
 /**
  * 每个 pool 惰性创建一次 组织+管理员用户（幂等复用），所有 seedProject 落到同一组织，
@@ -96,12 +119,48 @@ export async function seedOrg(pool: Pool): Promise<SeedOrg> {
   return p;
 }
 
-/** 造一个项目+默认分组（挂在 pool 级种子组织下），返回 id 对。所有需要 group_id/project_id 的测试都用它。 */
-export async function seedProject(pool: Pool): Promise<{ projectId: string; groupId: string } & SeedOrg> {
+/** 造一个项目+默认分组+默认版本（挂在 pool 级种子组织下），返回 id 对。所有需要 group_id/project_id/version_id 的测试都用它。 */
+export async function seedProject(pool: Pool): Promise<{ projectId: string; groupId: string; versionId: string } & SeedOrg> {
   const org = await seedOrg(pool);
   const p = await pool.query(`INSERT INTO projects(organization_id, name) VALUES ($1, '测试项目') RETURNING id`, [org.orgId]);
-  const g = await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, '默认分组') RETURNING id`, [
-    p.rows[0]!.id,
-  ]);
-  return { projectId: p.rows[0]!.id as string, groupId: g.rows[0]!.id as string, ...org };
+  const projectId = p.rows[0]!.id as string;
+  const g = await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, '默认分组') RETURNING id`, [projectId]);
+  const v = await pool.query(
+    `INSERT INTO project_versions(project_id, name, is_default) VALUES ($1, 'v0', true) RETURNING id`,
+    [projectId],
+  );
+  return {
+    projectId,
+    groupId: g.rows[0]!.id as string,
+    versionId: v.rows[0]!.id as string,
+    ...org,
+  };
+}
+
+import jwt from 'jsonwebtoken';
+
+export const SEED_AUTH_SECRET = process.env.AUTH_JWT_SECRET ?? 'dev-auth-secret-change-me';
+
+/** 签发一个会话 token；用 seedOrg 返回的 user/org 信息。 */
+export async function seedUserAndToken(pool: Pool, opts: { role?: 'admin' | 'member' } = {}): Promise<string> {
+  const org = await seedOrg(pool);
+  const role = opts.role ?? 'admin';
+  const isManager = role === 'admin';
+  const token = jwt.sign(
+    {
+      sub: org.userId,
+      username: org.username,
+      orgId: org.orgId,
+      orgPath: org.orgPath,
+      isManager,
+      isUser: true,
+      managerOrgPaths: [org.orgPath],
+      tokenVersion: 1,
+    },
+    SEED_AUTH_SECRET,
+    { expiresIn: '1h' },
+  );
+  // 抑制未使用参数 lint
+  void pool;
+  return token;
 }
