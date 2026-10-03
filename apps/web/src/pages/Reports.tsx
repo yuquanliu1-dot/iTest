@@ -18,7 +18,8 @@ const DEFAULT_PAGE_SIZE = 20;
 
 export default function Executions() {
   const navigate = useNavigate();
-  const { projectId } = useParams<{ projectId: string }>();
+  const { projectId, versionId: vidParam } = useParams<{ projectId: string; versionId?: string }>();
+  const versionId = vidParam ?? null;
   const qc = useQueryClient();
   const toast = useUIStore((s) => s.showToast);
   const [tab, setTab] = useState<Tab>('all');
@@ -29,7 +30,7 @@ export default function Executions() {
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['executions', projectId, tab],
+    queryKey: ['executions', projectId, versionId, tab],
     queryFn: () => api.executions.list({ projectId, kind: tab }),
     enabled: !!projectId,
   });
@@ -132,7 +133,7 @@ export default function Executions() {
         ) : (
           <>
             <div
-              className={`grid items-center px-5 py-[10px] shrink-0 ${tab === 'plan' ? 'grid-cols-[80px_1fr_120px_120px]' : 'grid-cols-[32px_80px_1fr_120px_120px]'}`}
+              className={`grid items-center px-5 py-[10px] shrink-0 ${tab === 'plan' ? 'grid-cols-[80px_1fr_120px_120px_120px]' : 'grid-cols-[32px_80px_1fr_120px_120px_120px]'}`}
               style={{ background: 'var(--color-background-subtle)', borderBottom: '1px solid var(--color-border)' }}
             >
               {tab !== 'plan' ? (
@@ -142,6 +143,7 @@ export default function Executions() {
               )}
               <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>类型</span>
               <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>标识</span>
+              <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>版本</span>
               <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>状态</span>
               <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>时间</span>
             </div>
@@ -150,7 +152,7 @@ export default function Executions() {
                 <div
                   key={r.id}
                   data-stagger-item
-                  className={`grid items-center px-5 py-[12px] cursor-pointer list-row-clickable hairline-bottom ${tab === 'plan' ? 'grid-cols-[80px_1fr_120px_120px]' : 'grid-cols-[32px_80px_1fr_120px_120px]'}`}
+                  className={`grid items-center px-5 py-[12px] cursor-pointer list-row-clickable hairline-bottom ${tab === 'plan' ? 'grid-cols-[80px_1fr_120px_120px_120px]' : 'grid-cols-[32px_80px_1fr_120px_120px_120px]'}`}
                 >
                   {tab !== 'plan' && r.kind === 'case' ? (
                     <input
@@ -183,6 +185,13 @@ export default function Executions() {
                         <span className="font-mono text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>case {(r as { caseId: string }).caseId.slice(0, 8)}</span>
                       </>
                     )}
+                  </span>
+                  <span
+                    className="text-[11px]"
+                    style={{ color: 'var(--color-foreground-muted)' }}
+                    title={(r as { versionName?: string | null }).versionName ?? undefined}
+                  >
+                    {(r as { versionName?: string | null }).versionName ?? '—'}
                   </span>
                   <span onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/reports/${r.id}`)}><StatusPill status={r.status}>{r.status}</StatusPill></span>
                   <span

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, type Environment } from '../api/client';
+import { api, type Environment, type ProjectVersion } from '../api/client';
+import { useProjectStore } from '../stores/project';
 import { useUIStore } from '../stores/ui';
 import Icon from '../components/Icon';
 import './ProjectEnvironments.css';
@@ -52,13 +53,14 @@ const FIELD_LABELS: Record<FieldKey, string> = {
 
 type EnvBody = Parameters<typeof api.environments.create>[1];
 
-function buildSubmitBody(form: FormState): EnvBody {
+function buildSubmitBody(form: FormState, versionId: string | null): EnvBody {
   const num = (v: string): number | undefined => {
     const n = Number(v);
     return Number.isFinite(n) && v.trim() !== '' ? n : undefined;
   };
   return {
     name: form.name,
+    versionId: versionId ?? undefined,
     dbHost: form.dbHost || undefined,
     dbPort: num(form.dbPort),
     dbName: form.dbName || undefined,
@@ -91,10 +93,21 @@ function initialFormFromRecord(record: Environment | null): FormState {
 export default function ProjectEnvironments({ projectId }: Props) {
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
+  const currentVersionId = useProjectStore((s) => s.current?.versionId ?? null);
+  const currentVersionName = useProjectStore((s) => s.current?.versionName ?? null);
+
+  const versions = useQuery({
+    queryKey: ['versions', projectId],
+    queryFn: () => api.versions.list(projectId),
+    enabled: !!projectId,
+  });
+  const versionById = new Map<string, ProjectVersion>(
+    (versions.data ?? []).map((v) => [v.id, v] as const),
+  );
 
   const list = useQuery({
-    queryKey: ['environments', projectId],
-    queryFn: () => api.environments.list(projectId),
+    queryKey: ['environments', projectId, currentVersionId],
+    queryFn: () => api.environments.list(projectId, { versionId: currentVersionId ?? undefined }),
     enabled: !!projectId,
   });
 
@@ -140,7 +153,7 @@ export default function ProjectEnvironments({ projectId }: Props) {
   const closeDrawer = () => setEditing(null);
 
   const handleSubmit = (form: FormState) => {
-    const body = buildSubmitBody(form);
+    const body = buildSubmitBody(form, currentVersionId);
     if (!body.name) {
       toast('名称不能为空', 'error');
       return;
@@ -155,8 +168,22 @@ export default function ProjectEnvironments({ projectId }: Props) {
 
   return (
     <div className="env-page">
-      <div style={{ marginBottom: 12 }}>
-        <button onClick={openCreate}>新建环境</button>
+      <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ color: 'var(--color-foreground-muted)', fontSize: 12 }}>
+          {currentVersionId ? (
+            <>
+              当前版本 <strong style={{ color: 'var(--color-foreground)' }}>{currentVersionName ?? versionById.get(currentVersionId)?.name ?? '…'}</strong>
+              {versionById.get(currentVersionId)?.isDefault ? (
+                <span style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 999, background: 'var(--color-accent-soft)', color: 'var(--color-accent)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  默认
+                </span>
+              ) : null}
+            </>
+          ) : (
+            '请选择版本后查看环境'
+          )}
+        </div>
+        <button onClick={openCreate} disabled={!currentVersionId}>新建环境</button>
       </div>
 
       {list.isLoading ? (

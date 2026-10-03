@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { eq, desc, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { reports, planRuns, groups, testCases } from '../db/schema.js';
+import { reports, planRuns, groups, testCases, executionPlans, projectVersions } from '../db/schema.js';
 import { assertProjectVisible, visibleProjectIds } from '../services/projectAccess.js';
 
 export const executionsRoute = Router();
@@ -11,6 +11,8 @@ interface CaseEntry {
   id: string;
   caseId: string;
   caseTitle: string | null;
+  versionId: string | null;
+  versionName: string | null;
   status: string;
   durationMs: number | null;
   summary: string | null;
@@ -20,6 +22,8 @@ interface PlanEntry {
   kind: 'plan';
   id: string;
   planId: string;
+  versionId: string | null;
+  versionName: string | null;
   status: string;
   summary: string | null;
   totalCases: number;
@@ -50,15 +54,24 @@ executionsRoute.get('/', async (req, res) => {
       const gs = await db.select().from(groups).where(inArray(groups.projectId, visiblePids));
       gids = gs.map((g) => g.id);
     }
-    const cs = gids.length ? await db.select({ id: testCases.id }).from(testCases).where(inArray(testCases.groupId, gids)) : [];
+    const cs = gids.length ? await db.select({ id: testCases.id, versionId: testCases.versionId }).from(testCases).where(inArray(testCases.groupId, gids)) : [];
     caseRows = cs.length
       ? ((await db
         .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, summary: reports.summary, createdAt: reports.createdAt })
         .from(reports)
         .leftJoin(testCases, eq(testCases.id, reports.caseId))
         .where(inArray(reports.caseId, cs.map((c) => c.id)))
-        .orderBy(desc(reports.createdAt))) as unknown as CaseEntry[]).map((r) => ({ ...r, kind: 'case' as const }))
+        .orderBy(desc(reports.createdAt))) as unknown as CaseEntry[]).map((r) => {
+          const c = cs.find((x) => x.id === r.caseId);
+          return { ...r, versionId: c?.versionId ?? null, versionName: null, kind: 'case' as const };
+        })
       : [];
+    const vIds = Array.from(new Set(caseRows.map((r) => r.versionId).filter((v): v is string => !!v)));
+    if (vIds.length) {
+      const vrs = await db.select().from(projectVersions).where(inArray(projectVersions.id, vIds));
+      const vName = new Map(vrs.map((v) => [v.id, v.name] as const));
+      caseRows = caseRows.map((r) => ({ ...r, versionName: r.versionId ? vName.get(r.versionId) ?? null : null }));
+    }
   }
 
   if (kind === 'plan' || kind === 'all') {
@@ -68,13 +81,34 @@ executionsRoute.get('/', async (req, res) => {
         ? inArray(planRuns.projectId, visiblePids)
         : undefined;
     const rows = q
-      ? await db.select().from(planRuns).where(q).orderBy(desc(planRuns.startedAt))
+      ? await db
+          .select({ id: planRuns.id, planId: planRuns.planId, status: planRuns.status, summary: planRuns.summary, totalCases: planRuns.totalCases, passedCases: planRuns.passedCases, failedCases: planRuns.failedCases, skippedCases: planRuns.skippedCases, durationMs: planRuns.durationMs, startedAt: planRuns.startedAt, versionId: executionPlans.versionId })
+          .from(planRuns)
+          .innerJoin(executionPlans, eq(executionPlans.id, planRuns.planId))
+          .where(q)
+          .orderBy(desc(planRuns.startedAt))
       : [];
     planRows = rows.map((r) => ({
-      ...r,
       kind: 'plan' as const,
+      id: r.id,
+      planId: r.planId,
+      versionId: r.versionId ?? null,
+      versionName: null,
+      status: r.status,
+      summary: r.summary,
+      totalCases: r.totalCases,
+      passedCases: r.passedCases,
+      failedCases: r.failedCases,
+      skippedCases: r.skippedCases,
+      durationMs: r.durationMs,
       createdAt: r.startedAt,
     }));
+    const pVids = Array.from(new Set(planRows.map((r) => r.versionId).filter((v): v is string => !!v)));
+    if (pVids.length) {
+      const vrs = await db.select().from(projectVersions).where(inArray(projectVersions.id, pVids));
+      const vName = new Map(vrs.map((v) => [v.id, v.name] as const));
+      planRows = planRows.map((r) => ({ ...r, versionName: r.versionId ? vName.get(r.versionId) ?? null : null }));
+    }
   }
 
   const merged: Entry[] = [...caseRows, ...planRows].sort((a, b) => {

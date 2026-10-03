@@ -14,7 +14,8 @@ import { caseStatusLabel } from '../lib/format';
 type Strategy = 'run_all' | 'fail_fast';
 
 export default function PlanDetail() {
-  const { id, projectId } = useParams<{ id: string; projectId: string }>();
+  const { id, projectId, versionId: vidParam } = useParams<{ id: string; projectId: string; versionId?: string }>();
+  const versionId = vidParam ?? null;
   const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
@@ -33,8 +34,8 @@ export default function PlanDetail() {
   const [environmentId, setEnvironmentId] = useState<string | null>(null);
 
   const { data: allCases } = useQuery({
-    queryKey: ['cases', projectId],
-    queryFn: () => api.cases.list({ projectId }),
+    queryKey: ['cases', projectId, versionId],
+    queryFn: () => api.cases.list({ projectId, versionId: versionId ?? undefined }),
     enabled: !!projectId,
   });
 
@@ -53,8 +54,8 @@ export default function PlanDetail() {
   });
 
   const { data: environments } = useQuery({
-    queryKey: ['environments', plan?.projectId],
-    queryFn: () => api.environments.list(plan!.projectId),
+    queryKey: ['environments', plan?.projectId, plan?.versionId ?? null],
+    queryFn: () => api.environments.list(plan!.projectId, { versionId: plan?.versionId ?? undefined }),
     enabled: !!plan?.projectId,
   });
 
@@ -101,7 +102,7 @@ export default function PlanDetail() {
     onSuccess: () => {
       toast('已删除', 'success');
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
-      navigate(`/p/${projectId}/plans`);
+      navigate(versionId ? `/p/${projectId}/v/${versionId}/plans` : `/p/${projectId}/versions/select`);
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -132,14 +133,17 @@ export default function PlanDetail() {
           qc.invalidateQueries({ queryKey: ['plans', projectId] });
           qc.invalidateQueries({ queryKey: ['executions'] });
           toast(`执行完成：${data.summary ?? ''}`, data.status === 'passed' ? 'success' : 'error');
-          navigate(`/p/${projectId}/plans/${id}/runs/${activeRunId}`);
+          const dest = versionId
+            ? `/p/${projectId}/v/${versionId}/plans/${id}/runs/${activeRunId}`
+            : `/p/${projectId}/versions/select`;
+          navigate(dest);
         }
       } catch {
         /* ignore */
       }
     };
     return () => es.close();
-  }, [activeRunId, id, navigate, projectId, qc, toast]);
+  }, [activeRunId, id, navigate, projectId, qc, toast, versionId]);
 
   useEffect(() => {
     if (showAdd) setSelectedAdd(new Set());
@@ -200,7 +204,11 @@ export default function PlanDetail() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
-        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/plans`)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/plans` : `/p/${projectId}/versions/select`)}
+        >
           <Icon name="chevronLeft" size={12} />
           返回计划列表
         </Button>
@@ -208,6 +216,15 @@ export default function PlanDetail() {
         <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>
           {plan.name}
         </h1>
+        {plan.versionId && plan.versionName ? (
+          <span
+            className="text-[10px] font-semibold uppercase px-2 py-[2px] rounded-full"
+            style={{ background: 'var(--color-accent-soft)', color: 'var(--color-accent)', letterSpacing: '0.04em' }}
+            title="所属版本"
+          >
+            {plan.versionName}
+          </span>
+        ) : null}
         <div className="flex-1" />
         <Button variant="ghost" onClick={() => setShowAdd(true)}>
           <Icon name="plus" size={12} />
@@ -354,28 +371,44 @@ export default function PlanDetail() {
             <EmptyState icon="flag" title="还没有用例" description="点击右上「添加用例」选择场景。" />
           ) : (
             <ol className="flex flex-col gap-2" data-stagger>
-              {plan.cases.map((c, idx) => (
-                <li
-                  key={c.id}
-                  data-stagger-item
-                  draggable
-                  onDragStart={(e) => onDragStart(e, idx)}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => onDrop(e, idx)}
-                  className="flex items-center gap-3 px-3 py-2 rounded-[var(--radius-sm)] list-row-clickable"
-                  style={{ background: 'var(--color-background-subtle)', border: '1px solid var(--color-glass-border)' }}
-                >
-                  <Icon name="gripVertical" size={12} className="cursor-grab shrink-0" style={{ color: 'var(--color-foreground-muted)' }} />
-                  <span className="text-[11px] font-mono shrink-0 w-5" style={{ color: 'var(--color-foreground-muted)' }}>{idx + 1}</span>
-                  <span onClick={() => navigate(`/p/${projectId}/cases/${c.id}`)} className="text-[12px] flex-1 truncate cursor-pointer" style={{ color: 'var(--color-foreground)' }}>
-                    {c.title}
-                  </span>
-                  <IconButton icon="chevronUp" title="上移" onClick={() => moveBy(idx, -1)} />
-                  <IconButton icon="chevronDown" title="下移" onClick={() => moveBy(idx, 1)} />
-                  <StatusPill status="default">{c.id.slice(0, 8)}</StatusPill>
-                </li>
-              ))}
-            </ol>
+              {plan.cases.map((c, idx) => {
+                  const crossVersion = plan.versionId && c.versionId && c.versionId !== plan.versionId;
+                  return (
+                    <li
+                      key={c.id}
+                      data-stagger-item
+                      draggable
+                      onDragStart={(e) => onDragStart(e, idx)}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => onDrop(e, idx)}
+                      className="flex items-center gap-3 px-3 py-2 rounded-[var(--radius-sm)] list-row-clickable"
+                      style={{ background: 'var(--color-background-subtle)', border: '1px solid var(--color-glass-border)' }}
+                    >
+                      <Icon name="gripVertical" size={12} className="cursor-grab shrink-0" style={{ color: 'var(--color-foreground-muted)' }} />
+                      <span className="text-[11px] font-mono shrink-0 w-5" style={{ color: 'var(--color-foreground-muted)' }}>{idx + 1}</span>
+                      <span
+                        onClick={() => navigate(c.versionId ? `/p/${projectId}/v/${c.versionId}/cases/${c.id}` : `/p/${projectId}/versions/select`)}
+                        className="text-[12px] flex-1 truncate cursor-pointer"
+                        style={{ color: 'var(--color-foreground)' }}
+                      >
+                        {c.title}
+                      </span>
+                      {crossVersion ? (
+                        <span
+                          className="text-[10px] font-semibold uppercase px-1.5 py-[1px] rounded"
+                          style={{ background: 'var(--color-warning-soft, var(--color-accent-soft))', color: 'var(--color-warning, var(--color-accent))', letterSpacing: '0.04em' }}
+                          title="此用例属于其他版本"
+                        >
+                          跨版本
+                        </span>
+                      ) : null}
+                      <IconButton icon="chevronUp" title="上移" onClick={() => moveBy(idx, -1)} />
+                      <IconButton icon="chevronDown" title="下移" onClick={() => moveBy(idx, 1)} />
+                      <StatusPill status="default">{c.id.slice(0, 8)}</StatusPill>
+                    </li>
+                  );
+                })}
+              </ol>
           )}
         </div>
       </div>

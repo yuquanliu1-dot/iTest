@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
+import { useProjectStore } from '../stores/project';
 import { useUIStore } from '../stores/ui';
 import Icon from '../components/Icon';
 import EmptyState from '../components/ui/EmptyState';
@@ -12,15 +13,18 @@ import StatusPill from '../components/ui/StatusPill';
 import { shortDateTime, fullDateTime } from '../lib/format';
 
 export default function Plans() {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { projectId, versionId } = useParams<{ projectId: string; versionId?: string }>();
   const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
+  const currentVersionName = useProjectStore((s) => s.current?.versionName ?? null);
   const { data: plans, isLoading, isError, error } = useQuery({
-    queryKey: ['plans', projectId],
+    queryKey: ['plans', projectId, versionId ?? 'all'],
     queryFn: () => api.projects.plans(projectId!),
     enabled: !!projectId,
   });
+  // 按当前 versionId 过滤（NULL 版本 = 跨版本计划也展示，但用副标记）
+  const filteredPlans = (plans ?? []).filter((p) => !versionId || p.versionId == null || p.versionId === versionId);
   const { data: planRuns } = useQuery({
     queryKey: ['executions', projectId, 'plan'],
     queryFn: () => api.executions.list({ projectId, kind: 'plan' }),
@@ -40,7 +44,7 @@ export default function Plans() {
   const [environment, setEnvironment] = useState('');
 
   const create = useMutation({
-    mutationFn: () => api.projects.createPlan(projectId!, { name, environment: environment || undefined }),
+    mutationFn: () => api.projects.createPlan(projectId!, { name, environment: environment || undefined, versionId: versionId ?? undefined }),
     onSuccess: () => {
       setName('');
       setEnvironment('');
@@ -60,6 +64,12 @@ export default function Plans() {
           </h1>
           <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
             把用例按目标场景组合，一键运行
+            {currentVersionName ? (
+              <>
+                {' · '}
+                <span style={{ color: 'var(--color-foreground-secondary)' }}>{currentVersionName}</span>
+              </>
+            ) : null}
           </p>
         </div>
         <Button onClick={() => setShowCreate(true)}>
@@ -87,11 +97,11 @@ export default function Plans() {
           />
         ) : (
           <div className="grid grid-cols-3 gap-4" data-stagger>
-            {plans.map((p) => (
+            {filteredPlans.map((p) => (
               <div
                 key={p.id}
                 data-stagger-item
-                onClick={() => navigate(`/p/${projectId}/plans/${p.id}`)}
+                onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/plans/${p.id}` : `/p/${projectId}/versions/select`)}
                 className="glass-card rounded-[var(--radius-md)] p-4 cursor-pointer hover-card"
               >
                 <div className="flex items-center justify-between">

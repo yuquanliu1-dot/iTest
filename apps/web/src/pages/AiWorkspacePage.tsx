@@ -23,7 +23,8 @@ interface InitialMessageState {
 }
 
 export default function AiWorkspacePage() {
-  const { projectId, id } = useParams<{ projectId: string; id: string }>();
+  const { projectId, id, versionId: vidParam } = useParams<{ projectId: string; id: string; versionId?: string }>();
+  const versionId = vidParam ?? null;
   const navigate = useNavigate();
   const location = useLocation();
   const toast = useUIStore((s) => s.showToast);
@@ -86,7 +87,7 @@ export default function AiWorkspacePage() {
 
   const saveMutation = useMutation({
     mutationFn: (vars: { groupId: string; scenarioIds: string[]; caseIds: string[] }) =>
-      api.aiWorkspace.save(id!, vars),
+      api.aiWorkspace.save(id!, { ...vars, targetVersionId: versionId ?? undefined }),
     onSuccess: (r) => {
       toast(`已保存 ${r.savedCases} 个用例`, 'success');
       qc.invalidateQueries({ queryKey: ['ai-workspace', id] });
@@ -111,7 +112,11 @@ export default function AiWorkspacePage() {
         className="flex items-center gap-3 px-5 py-3 shrink-0 fade-up"
         style={{ borderBottom: '1px solid var(--color-glass-border)' }}
       >
-        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/groups`)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups` : `/p/${projectId}/versions/select`)}
+        >
           <Icon name="chevronLeft" size={12} />
           返回用例列表
         </Button>
