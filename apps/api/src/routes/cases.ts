@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testCases, testSteps, groups, scenarios, tags, caseTags, projects } from '../db/schema.js';
-import { eq, asc, inArray } from 'drizzle-orm';
+import { testCases, testSteps, groups, scenarios, tags, caseTags, projects, projectVersions } from '../db/schema.js';
+import { eq, asc, inArray, and } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
-import { assertCaseVisible, assertProjectVisible, resolveCaseProjectId, visibleProjectIds } from '../services/projectAccess.js';
+import { assertCaseVisible, assertProjectVisible, assertVersionVisible, resolveCaseProjectId, visibleProjectIds } from '../services/projectAccess.js';
 
 export const casesRoute = Router();
 
@@ -15,6 +15,7 @@ const CaseBodyBase = z.object({
   priority: z.enum(['P0', 'P1', 'P2', 'P3']).default('P1'),
   requirementId: z.string().uuid().optional(),
   groupId: z.string().uuid(),
+  versionId: z.string().uuid().optional(),
   url: z.string().optional(),
   windowStrategy: z.enum(['maximize', 'current', 'custom']).default('maximize'),
   windowWidth: z.number().int().min(200).max(10000).optional(),
@@ -148,10 +149,21 @@ casesRoute.post('/', async (req, res) => {
   if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
   const projectId = g[0]!.projectId;
   await assertProjectVisible(projectId, req.user!);
+  // 解析 versionId：未传 → 默认版本；传了 → 必须同 project
+  let versionId = body.versionId;
+  if (!versionId) {
+    const row = (await db.select({ id: projectVersions.id }).from(projectVersions)
+      .where(and(eq(projectVersions.projectId, projectId), eq(projectVersions.isDefault, true))).limit(1))[0];
+    if (!row) throw new HttpError(404, 'not_found', 'project has no default version');
+    versionId = row.id;
+  } else {
+    const { projectId: vp } = await assertVersionVisible(versionId, req.user!);
+    if (vp !== projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
+  }
   // 创建时也可附带 tagIds：必须在分组所属项目所属的 organization 内
   if (body.tagIds && body.tagIds.length > 0) await assertTagsBelongToOrg(body.tagIds, projectId);
-  const { tagIds: _ignoredTagIds, ...caseValues } = body;
-  const rows = await db.insert(testCases).values(caseValues).returning();
+  const { tagIds: _ignoredTagIds, versionId: _ignoredV, ...caseValues } = body;
+  const rows = await db.insert(testCases).values({ ...caseValues, versionId }).returning();
   const created = rows[0]!;
   if (body.tagIds && body.tagIds.length > 0) {
     await db.insert(caseTags).values(body.tagIds.map((tagId) => ({ caseId: created.id, tagId })));
@@ -248,13 +260,20 @@ async function nextCopyTitle(base: string, existing: string[]): Promise<string> 
   return `${base} 副本${n}`;
 }
 
-async function copyOneCase(caseId: string, targetGroupId: string, user: NonNullable<Express.Request['user']>): Promise<unknown> {
+async function copyOneCase(caseId: string, targetGroupId: string, targetVersionId: string | null, user: NonNullable<Express.Request['user']>): Promise<unknown> {
   const src = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
   if (!src) throw new HttpError(404, 'not_found', 'case not found');
   // 源 case 与目标分组所在项目都必须可见
   await assertCaseVisible(caseId, user);
   const targetGroup = (await db.select().from(groups).where(eq(groups.id, targetGroupId)))[0];
   if (targetGroup) await assertProjectVisible(targetGroup.projectId, user);
+  // versionId 未传 → 同版本复制；否则校验属于 targetGroup.projectId
+  let versionId = src.versionId;
+  if (targetVersionId) {
+    const { projectId: vp } = await assertVersionVisible(targetVersionId, user);
+    if (targetGroup && vp !== targetGroup.projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to target project');
+    versionId = targetVersionId;
+  }
   const siblings = await db.select({ title: testCases.title }).from(testCases).where(eq(testCases.groupId, targetGroupId));
   const title = await nextCopyTitle(src.title, siblings.map((s) => s.title));
   const steps = await db
@@ -269,6 +288,7 @@ async function copyOneCase(caseId: string, targetGroupId: string, user: NonNulla
       description: src.description,
       priority: src.priority,
       groupId: targetGroupId,
+      versionId,
       url: src.url,
     })
     .returning();
@@ -293,20 +313,39 @@ async function copyOneCase(caseId: string, targetGroupId: string, user: NonNulla
 }
 
 casesRoute.post('/:id/copy', async (req, res) => {
-  const body = z.object({ targetGroupId: z.string().uuid() }).parse(req.body);
+  const body = z.object({ targetGroupId: z.string().uuid(), targetVersionId: z.string().uuid().optional() }).parse(req.body);
   const g = await db.select().from(groups).where(eq(groups.id, body.targetGroupId));
   if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
   await assertProjectVisible(g[0]!.projectId, req.user!);
-  res.json(await copyOneCase(req.params.id!, body.targetGroupId, req.user!));
+  res.json(await copyOneCase(req.params.id!, body.targetGroupId, body.targetVersionId ?? null, req.user!));
 });
 
 casesRoute.post('/copy', async (req, res) => {
-  const body = z.object({ caseIds: z.array(z.string().uuid()).min(1), targetGroupId: z.string().uuid() }).parse(req.body);
+  const body = z.object({
+    caseIds: z.array(z.string().uuid()).min(1),
+    targetGroupId: z.string().uuid(),
+    targetVersionId: z.string().uuid().optional(),
+  }).parse(req.body);
   const g = await db.select().from(groups).where(eq(groups.id, body.targetGroupId));
   if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
   await assertProjectVisible(g[0]!.projectId, req.user!);
   for (const id of body.caseIds) {
-    await copyOneCase(id, body.targetGroupId, req.user!);
+    await copyOneCase(id, body.targetGroupId, body.targetVersionId ?? null, req.user!);
+  }
+  res.json({ count: body.caseIds.length });
+});
+
+casesRoute.post('/copy', async (req, res) => {
+  const body = z.object({
+    caseIds: z.array(z.string().uuid()).min(1),
+    targetGroupId: z.string().uuid(),
+    targetVersionId: z.string().uuid().optional(),
+  }).parse(req.body);
+  const g = await db.select().from(groups).where(eq(groups.id, body.targetGroupId));
+  if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
+  await assertProjectVisible(g[0]!.projectId, req.user!);
+  for (const id of body.caseIds) {
+    await copyOneCase(id, body.targetGroupId, body.targetVersionId ?? null, req.user!);
   }
   res.json({ count: body.caseIds.length });
 });

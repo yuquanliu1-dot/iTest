@@ -35,6 +35,7 @@ export const testCases = pgTable('test_cases', {
   id: uuid('id').primaryKey().defaultRandom(),
   requirementId: uuid('requirement_id').references(() => requirements.id, { onDelete: 'cascade' }),
   groupId: uuid('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
+  versionId: uuid('version_id').notNull().references(() => projectVersions.id, { onDelete: 'restrict' }),
   url: text('url'),
   title: varchar('title', { length: 200 }).notNull(),
   description: text('description'),
@@ -48,7 +49,9 @@ export const testCases = pgTable('test_cases', {
   scenarioId: uuid('scenario_id').references(() => scenarios.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (t) => ({
+  versionIdIdx: index('test_cases_version_idx').on(t.versionId),
+}));
 
 export const scenarios = pgTable('scenarios', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -243,9 +246,24 @@ export const groups = pgTable('groups', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
+// 项目版本：测试环境 / 用例 / 执行计划全部按版本工作；每项目必有 1 个 is_default=true。
+export const projectVersions = pgTable('project_versions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 80 }).notNull(),
+  description: text('description'),
+  isDefault: boolean('is_default').notNull().default(false),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  projectNameUq: unique('project_versions_project_name_uq').on(t.projectId, t.name),
+  projectIdIdx: index('project_versions_project_idx').on(t.projectId),
+}));
+
 export const executionPlans = pgTable('execution_plans', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  versionId: uuid('version_id').references(() => projectVersions.id, { onDelete: 'set null' }),
   name: varchar('name', { length: 200 }).notNull(),
   environment: varchar('environment', { length: 100 }),
   environmentId: uuid('environment_id').references(() => testEnvironments.id, { onDelete: 'set null' }),
@@ -257,7 +275,9 @@ export const executionPlans = pgTable('execution_plans', {
   loginUnauthorizedKeywords: jsonb('login_unauthorized_keywords'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (t) => ({
+  versionIdIdx: index('execution_plans_version_idx').on(t.versionId),
+}));
 
 export const planCases = pgTable('plan_cases', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -352,6 +372,7 @@ export const caseTags = pgTable('case_tags', {
 export const testEnvironments = pgTable('test_environments', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  versionId: uuid('version_id').notNull().references(() => projectVersions.id, { onDelete: 'restrict' }),
   name: varchar('name', { length: 120 }).notNull(),
   dbHost: varchar('db_host', { length: 200 }),
   dbPort: integer('db_port'),
@@ -371,4 +392,5 @@ export const testEnvironments = pgTable('test_environments', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
   projectNameUq: unique('test_environments_project_name_uq').on(t.projectId, t.name),
+  versionIdIdx: index('test_environments_version_idx').on(t.versionId),
 }));
