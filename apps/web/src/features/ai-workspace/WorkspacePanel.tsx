@@ -5,10 +5,15 @@ import Button from '../../components/ui/Button';
 import PriorityBadge from '../../components/ui/PriorityBadge';
 import { stepKindLabel } from '../../lib/format';
 import { stepSummary } from '../../lib/stepSummary';
+import ContextModeSelector, { type ContextMode } from './ContextModeSelector';
 
 interface Props {
   requirementId: string;
+  projectId: string;
   threadId: string;
+  /** 父页持有的 contextMode，初始值与回写都通过 props 同步（让 ThreadPane 也能读到）。 */
+  contextMode: ContextMode;
+  onContextModeChange: (m: ContextMode) => void;
   onOpenSave: (selection: { scenarioIds: string[]; caseIds: string[] }) => void;
 }
 
@@ -28,12 +33,58 @@ function useSseWorkspace(threadId: string, onEvent: () => void) {
   }, [threadId, onEvent]);
 }
 
-export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: Props) {
+/** 上下文状态 chip：repo > page > 空。 */
+function RepoChip({ doc }: { doc: WorkspaceDoc | undefined }) {
+  if (doc?.repoContext) {
+    return (
+      <span
+        className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium"
+        style={{ background: 'var(--color-accent-light)', color: 'var(--color-accent)' }}
+      >
+        已参考源码 v{doc.repoContext.commit.slice(0, 7)}
+      </span>
+    );
+  }
+  if (doc?.pageContext) {
+    return (
+      <span
+        className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium"
+        style={{ background: 'var(--color-accent-light)', color: 'var(--color-accent)' }}
+      >
+        已抓取页面 {doc.pageContext.url}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium"
+      style={{ background: 'var(--color-muted)', color: 'var(--color-foreground-muted)' }}
+    >
+      未参考任何上下文
+    </span>
+  );
+}
+
+export default function WorkspacePanel({
+  requirementId,
+  projectId,
+  threadId,
+  contextMode,
+  onContextModeChange,
+  onOpenSave,
+}: Props) {
   const { data: doc, refetch } = useQuery<WorkspaceDoc>({
     queryKey: ['ai-workspace', requirementId],
     queryFn: () => api.aiWorkspace.getWorkspace(requirementId),
   });
   useSseWorkspace(threadId, refetch);
+
+  const { data: project } = useQuery({
+    queryKey: ['project', projectId],
+    queryFn: () => api.projects.get(projectId),
+    enabled: !!projectId,
+  });
+  const hasRepo = !!project?.repoUrl;
 
   const [selectedCases, setSelectedCases] = useState<Set<string>>(new Set());
   const [selectedScenarios, setSelectedScenarios] = useState<Set<string>>(new Set());
@@ -150,10 +201,15 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
     };
   }, [doc, selectedCases, selectedScenarios]);
 
-  if (!doc) return <div style={{ padding: 16 }}>加载中…</div>;
   return (
     <div className="flex flex-col h-full gap-4 p-5 overflow-y-auto">
-      {doc.plan && (
+      <div className="flex items-center gap-2 text-[12px] flex-wrap" style={{ color: 'var(--color-foreground-muted)' }}>
+        <span>上下文：</span>
+        <ContextModeSelector value={contextMode} onChange={onContextModeChange} hasRepo={hasRepo} />
+        <RepoChip doc={doc} />
+      </div>
+      {doc === undefined && <div style={{ padding: 16 }}>加载中…</div>}
+      {doc && doc.plan && (
         <div className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
           进度: {Math.round(progress * 100)}% · 暂存 {totalCases} / 计划 {doc.plan.cases}
           <div
@@ -167,34 +223,38 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
           </div>
         </div>
       )}
-      <div
-        className="rounded-[8px] px-3 py-2 text-[12px]"
-        style={
-          doc.pageContext
-            ? { background: 'var(--color-accent-light)', color: 'var(--color-foreground)' }
-            : { background: 'rgba(245,158,11,0.10)', color: '#92400e' }
-        }
-      >
-        {doc.pageContext ? (
-          <>已参考页面实际代码：{doc.pageContext.url}</>
-        ) : (
-          <>AI 未参考页面实际代码，以下用例基于假设生成，请人工评审。</>
-        )}
-      </div>
-      <div className="flex justify-end">
-        <Button
-          onClick={() =>
-            onOpenSave({
-              scenarioIds: [...liveSelection.scenarioIds],
-              caseIds: [...liveSelection.caseIds],
-            })
+      {doc && (
+        <div
+          className="rounded-[8px] px-3 py-2 text-[12px]"
+          style={
+            doc.pageContext
+              ? { background: 'var(--color-accent-light)', color: 'var(--color-foreground)' }
+              : { background: 'rgba(245,158,11,0.10)', color: '#92400e' }
           }
-          disabled={liveSelection.caseIds.size === 0 && liveSelection.scenarioIds.size === 0}
         >
-          保存所选 ({liveSelection.caseIds.size})
-        </Button>
-      </div>
-      {doc.scenarios.map((s) => {
+          {doc.pageContext ? (
+            <>已参考页面实际代码：{doc.pageContext.url}</>
+          ) : (
+            <>AI 未参考页面实际代码，以下用例基于假设生成，请人工评审。</>
+          )}
+        </div>
+      )}
+      {doc && (
+        <div className="flex justify-end">
+          <Button
+            onClick={() =>
+              onOpenSave({
+                scenarioIds: [...liveSelection.scenarioIds],
+                caseIds: [...liveSelection.caseIds],
+              })
+            }
+            disabled={liveSelection.caseIds.size === 0 && liveSelection.scenarioIds.size === 0}
+          >
+            保存所选 ({liveSelection.caseIds.size})
+          </Button>
+        </div>
+      )}
+      {doc && doc.scenarios.map((s) => {
         const allSelected = s.cases.length > 0 && s.cases.every((c) => selectedCases.has(c.id));
         const someSelected = s.cases.some((c) => selectedCases.has(c.id));
         return (
@@ -216,7 +276,7 @@ export default function WorkspacePanel({ requirementId, threadId, onOpenSave }: 
         </div>
         );
       })}
-      {doc.looseCases.length > 0 && (
+      {doc && doc.looseCases.length > 0 && (
         <div className="glass-card rounded-[12px] p-4">
           <div className="text-[13px] font-semibold">未分组用例</div>
           <div className="flex flex-col gap-2 mt-3 ml-5">

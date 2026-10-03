@@ -167,4 +167,29 @@ describe('workspace store', () => {
       expect(s.cases.length).toBeGreaterThan(0);
     }
   });
+
+  it('emptyDoc 默认 contextMode=auto, repoContext=null', async () => {
+    const { emptyDoc } = await import('../src/pi/workspace.js');
+    const d = emptyDoc();
+    expect(d.contextMode).toBe('auto');
+    expect(d.repoContext).toBeNull();
+  });
+
+  it('recordContextMode 持久化 + 不覆盖 pageContext', async () => {
+    const ws = await import('../src/pi/workspace.js');
+    await ws.recordPageInspection(requirementId, 'http://x');
+    await ws.recordContextMode(requirementId, 'repo');
+    const d = await ws.loadDoc(requirementId);
+    expect(d.contextMode).toBe('repo');
+    expect(d.pageContext?.url).toBe('http://x');
+  });
+
+  it('recordRepoCheckout 写入 commit + 保留其他字段', async () => {
+    const ws = await import('../src/pi/workspace.js');
+    await ws.recordContextMode(requirementId, 'auto');
+    await ws.recordRepoCheckout(requirementId, { commit: 'abc1234', fetchedAt: '2026-10-03T00:00:00Z', mode: 'auto' });
+    const d = await ws.loadDoc(requirementId);
+    expect(d.repoContext?.commit).toBe('abc1234');
+    expect(d.contextMode).toBe('auto');
+  });
 });
