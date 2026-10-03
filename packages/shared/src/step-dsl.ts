@@ -155,6 +155,41 @@ export const ExtractAction = z.object({
 });
 export type ExtractAction = z.infer<typeof ExtractAction>;
 
+export const DbAssertionMatch = z.enum(['equals', 'contains', 'regex']);
+export type DbAssertionMatch = z.infer<typeof DbAssertionMatch>;
+
+export const QueryDbAction = z.object({
+  kind: z.literal('queryDb'),
+  table: z.enum([
+    'projects', 'groups', 'users', 'test_cases', 'test_steps',
+    'reports', 'execution_plans', 'plan_runs', 'plan_run_cases', 'test_attachments',
+  ]),
+  where: z.array(z.object({
+    column: z.string().min(1).max(64),
+    equals: z.union([z.string().max(500), z.number(), z.boolean()]),
+  })).max(10).default([]),
+  columns: z.array(z.string().min(1).max(64)).max(40).default([]),
+  limit: z.number().int().min(1).max(200).default(50),
+  assertion: z.object({
+    match: DbAssertionMatch.default('contains'),
+    expected: z.string().max(2000),
+    column: z.string().max(64).optional(),
+  }).optional(),
+});
+export type QueryDbAction = z.infer<typeof QueryDbAction>;
+
+export const ObserveLogAction = z.object({
+  kind: z.literal('observeLog'),
+  windowMs: z.number().int().min(1000).max(600000).default(60000),
+  keywords: z.array(z.string().min(1).max(200)).max(10).default([]),
+  fromLine: z.number().int().min(1).max(10000).default(200),
+  assertion: z.object({
+    match: DbAssertionMatch.default('contains'),
+    expected: z.string().max(2000),
+  }).optional(),
+});
+export type ObserveLogAction = z.infer<typeof ObserveLogAction>;
+
 export type StepAction =
   | z.infer<typeof NavigateAction>
   | z.infer<typeof ClickAction>
@@ -170,6 +205,8 @@ export type StepAction =
   | z.infer<typeof SwitchTabAction>
   | z.infer<typeof AssertJsonAction>
   | z.infer<typeof ExtractAction>
+  | z.infer<typeof QueryDbAction>
+  | z.infer<typeof ObserveLogAction>
   | { kind: 'aiStep'; instruction: string; compiled: StepAction[] | null };
 
 export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
@@ -187,6 +224,8 @@ export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
   SwitchTabAction,
   AssertJsonAction,
   ExtractAction,
+  QueryDbAction,
+  ObserveLogAction,
   z.object({
     kind: z.literal('aiStep'),
     instruction: z.string().max(2000),
