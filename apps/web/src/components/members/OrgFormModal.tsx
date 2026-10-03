@@ -37,6 +37,8 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
     return () => cancelAnimationFrame(id);
   }, [visible, org, parentId]);
 
+  if (!visible) return null;
+
   const handleSubmit = async () => {
     if (!form.name.trim()) return;
     setSaving(true);
