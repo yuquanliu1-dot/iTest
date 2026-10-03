@@ -8,7 +8,12 @@ export type StagedStep = {
   name: string;
   action: string;
   assertion: string | null;
-  /** LLM-compiled DSL steps; null = not generated or failed. loadDoc normalizes missing field to null. */
+  /**
+   * LLM-compiled DSL steps; 三态：
+   *  - undefined: 未尝试（save 路径会兜底编译）
+   *  - null: AI 已尝试但放弃（短路不再重试）
+   *  - array: 已编译（短路不再重试）
+   */
   compiled?: StepAction[] | null;
 };
 export type Priority = 'P0' | 'P1' | 'P2' | 'P3';
@@ -68,12 +73,19 @@ export async function loadDoc(requirementId: string): Promise<WorkspaceDoc> {
       title: row.title,
       description: row.description,
       priority: row.priority as Priority,
-      steps: (row.steps as unknown as StagedStep[]).map((s) => ({
-        name: s.name,
-        action: s.action,
-        assertion: s.assertion ?? null,
-        compiled: s.compiled ?? null,
-      })),
+      steps: (row.steps as unknown as StagedStep[]).map((s) => {
+        // 三态：undefined = 未尝试（保留字段缺失语义，触发 save 路径兜底编译）；
+        // null = AI 已尝试但放弃（短路不再重试）；array = 已编译（短路不再重试）。
+        // 注意：loadDoc 不主动把 undefined 规范为 null——否则 workspace 自身就读不到三态语义。
+        // 测试/外部 API 想要 null 视图请自行处理（见 step-migration 与 ai-workspace-save.test.ts）。
+        const out: StagedStep = {
+          name: s.name,
+          action: s.action,
+          assertion: s.assertion ?? null,
+        };
+        if ('compiled' in s) out.compiled = s.compiled ?? null;
+        return out;
+      }),
     };
     if (row.scenarioId == null) looseCases.push(c);
     else {

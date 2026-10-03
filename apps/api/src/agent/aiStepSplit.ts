@@ -45,12 +45,17 @@ export function splitAiStepsInPlace(
     }
     expanded += parts.length - 1;
     parts.forEach((p, idx) => {
+      // 拆条后只有第一条保留"已尝试"语义（首条带原 compiled：null=放弃 / array=已编译 / undefined=未尝试）；
+      // 后续子串全部标记为 undefined（未尝试），让 compileAiStepsInPlace 走兜底编译。
+      // 否则一条"已放弃"的 aiStep 拆条后所有子串都被短路，回放时全跳。
+      const inherited: { compiled?: unknown } = {};
+      if (idx === 0) inherited.compiled = a.compiled;
       out.push({
         ...s,
         action: {
           kind: 'aiStep',
           instruction: p,
-          compiled: idx === 0 ? (a.compiled ?? null) : null,
+          ...inherited,
         },
       });
     });

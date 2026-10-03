@@ -87,12 +87,16 @@ export function buildWorkspaceTools(requirementId: string): ToolExecutor[] {
           const name = (s.name && s.name.trim().length > 0)
             ? s.name
             : (s.action.split(/[，。！？,.!?\n]/, 1)[0]?.trim() ?? s.action.slice(0, 24)).slice(0, 200);
-          return {
+          // 三态：undefined = 未尝试（保存时由 compileAiStepsInPlace 兜底）；
+          // null = AI 已放弃（短路不再重试）；array = 已编译（短路不再重试）。
+          // 仅当 LLM 显式提供 compiled（数组或 null）时才写入字段，避免老用法下"字段缺失"误为"已放弃"。
+          const out: { name: string; action: string; assertion: string | null; compiled?: unknown[] | null } = {
             name,
             action: s.action,
             assertion: s.assertion ?? null,
-            compiled: s.compiled ?? null,
           };
+          if ('compiled' in s && s.compiled !== undefined) out.compiled = s.compiled;
+          return out;
         });
         await ws.upsertCase(requirementId, v.scenarioId ?? null, {
           id: v.id, title: v.title, description: v.description ?? null,
