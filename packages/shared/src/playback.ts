@@ -51,3 +51,21 @@ export interface PreflightReport {
   tabsObserved?: number[];
   durationMs: number;
 }
+
+/** queryDb 步骤执行结果：行数 / 耗时 / 命中行（最多 50 行）/ 断言命中情况。 */
+export interface DbQueryRowResult {
+  rowCount: number;
+  durationMs: number;
+  rows: Record<string, unknown>[];
+  truncated?: boolean;
+  assertion?: { matched: boolean; expected: string; match: 'equals' | 'contains' | 'regex' };
+}
+
+/** observeLog 步骤执行结果：匹配行数 / 耗时 / 行内容（带可选 ts）/ 断言命中情况。 */
+export interface ObserveLogLineResult {
+  matchedLineCount: number;
+  durationMs: number;
+  lines: { ts?: string; raw: string }[];
+  truncated?: boolean;
+  assertion?: { matched: boolean; expected: string; match: 'equals' | 'contains' | 'regex' };
+}
