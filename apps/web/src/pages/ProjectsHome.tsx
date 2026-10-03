@@ -59,13 +59,14 @@ export default function ProjectsHome() {
   });
 
   const openProject = (p: { id: string; name: string; defaultUrl: string | null }) => {
-    enter({ id: p.id, name: p.name, defaultUrl: p.defaultUrl });
-    navigate(`/p/${p.id}/overview`);
+    // 写入 store 时 versionId/versionName 留空，由 ProjectGuard / 版本选择页填入。
+    enter({ id: p.id, name: p.name, defaultUrl: p.defaultUrl, versionId: null, versionName: null });
+    navigate(`/p/${p.id}/versions/select`);
   };
 
   const openEnvironments = (p: { id: string; name: string; defaultUrl: string | null }) => {
-    enter({ id: p.id, name: p.name, defaultUrl: p.defaultUrl });
-    navigate(`/p/${p.id}/environments`);
+    enter({ id: p.id, name: p.name, defaultUrl: p.defaultUrl, versionId: null, versionName: null });
+    navigate(`/p/${p.id}/versions/select`);
   };
 
   return (
