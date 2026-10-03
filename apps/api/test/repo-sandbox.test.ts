@@ -130,7 +130,8 @@ describe('repo_read', () => {
     const r = await t.execute({ path: 'huge.txt', maxLines: 9999 });
     expect(r.ok).toBe(true);
     const data = JSON.parse((r as { data: string }).data);
-    expect(data.lines.length).toBeLessThanOrEqual(500);
+    expect(data.truncated).toBe(true);
+    expect((data.content.match(/\n/g) ?? []).length).toBe(500);
   });
 
   it('二进制文件返回 ok:false', async () => {
@@ -139,6 +140,7 @@ describe('repo_read', () => {
     const t = tools.find((x) => x.name === 'repo_read')!;
     const r = await t.execute({ path: 'blob.bin' });
     expect(r.ok).toBe(false);
+    expect(r.error).toBe('binary file');
   });
 
   it('路径穿越返回 ok:false', async () => {
@@ -146,5 +148,6 @@ describe('repo_read', () => {
     const t = tools.find((x) => x.name === 'repo_read')!;
     const r = await t.execute({ path: '../../etc/passwd' });
     expect(r.ok).toBe(false);
+    expect(r.error).toContain('path escapes cwd');
   });
 });
