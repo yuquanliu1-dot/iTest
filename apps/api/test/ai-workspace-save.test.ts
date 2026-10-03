@@ -284,6 +284,57 @@ describe('ai-thread + ai-workspace + save', () => {
     expect(doc.looseCases[0]!.steps[0]!.compiled).toBeNull();
   });
 
+  it('save does NOT invoke LLM when staged step already has compiled array', async () => {
+    const llmMod = await import('../src/agent/llmSettings.js');
+    let calls = 0;
+    const mockClient = {
+      provider: 'openai' as const,
+      complete: async () => {
+        calls++;
+        return { kind: 'json' as const, value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] }, provider: 'openai' as const, vision: false };
+      },
+    };
+    llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
+    try {
+      const ws = await import('../src/pi/workspace.js');
+      const { projectId, groupId } = await seedProject(pool);
+      const r = await pool.query(
+        `INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`,
+        [projectId],
+      );
+      const rid = r.rows[0]!.id as string;
+      await ws.upsertScenario(rid, {
+        id: 's1', title: 'S', description: null, cases: [
+          {
+            id: 'c1', title: 'C1', description: 'd', priority: 'P0',
+            steps: [
+              {
+                name: 's1',
+                action: 'click submit',
+                assertion: null,
+                compiled: [{ kind: 'click', locator: [{ strategy: 'text', value: 'submit' }] }],
+              },
+            ],
+          },
+        ],
+      });
+      const saved = await request(app)
+        .post(`/api/requirements/${rid}/ai-workspace/save`)
+        .send({ groupId, scenarioIds: ['s1'], caseIds: ['c1'] });
+      expect(saved.status).toBe(200);
+      expect(calls).toBe(0); // short-circuit: no LLM call
+      const steps = await pool.query(
+        `SELECT action FROM test_steps WHERE case_id = (SELECT id FROM test_cases WHERE requirement_id = $1 LIMIT 1) ORDER BY "order"`,
+        [rid],
+      );
+      const a = steps.rows[0]!.action as { kind: string; compiled: unknown };
+      expect(a.kind).toBe('aiStep');
+      expect(a.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'text', value: 'submit' }] }]);
+    } finally {
+      llmMod.__setLlmClientForTest(null);
+    }
+  });
+
   it('explicit caseId under unselected scenario saves only that case (partial selection)', async () => {
     const ws = await import('../src/pi/workspace.js');
     const { projectId, groupId } = await seedProject(pool);
