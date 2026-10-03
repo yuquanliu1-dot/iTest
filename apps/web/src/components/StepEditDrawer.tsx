@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import type { Locator } from '@itest/shared';
+import type { Locator, QueryDbAction, ObserveLogAction } from '@itest/shared';
+import { useQuery } from '@tanstack/react-query';
 import type { StepClip } from '../stores/stepClipboard';
 import { api } from '../api/client';
 import { formatBytes, shortDateTime, stepKindLabel } from '../lib/format';
@@ -168,6 +169,33 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
   const [tabRef, setTabRef] = useState(String(action.tabRef ?? ''));
   const [shotName, setShotName] = useState(String(action.name ?? ''));
 
+  // queryDb / observeLog
+  const { data: allowedTablesData } = useQuery({
+    queryKey: ['env-allowed-tables'],
+    queryFn: () => api.environments.allowedTables(),
+    staleTime: 5 * 60_000,
+  });
+  const queryTableCols = allowedTablesData?.[String(action.table ?? '')] ?? [];
+
+  // queryDb
+  const [queryTable, setQueryTable] = useState(String(action.table ?? 'test_cases'));
+  const [queryColumns, setQueryColumns] = useState<string[]>(Array.isArray(action.columns) ? (action.columns as string[]) : []);
+  const [queryWhere, setQueryWhere] = useState<Array<{ column: string; equals: string }>>(
+    Array.isArray(action.where) ? (action.where as Array<{ column: string; equals: unknown }>).map((w) => ({ column: String(w.column ?? ''), equals: String(w.equals ?? '') })) : [],
+  );
+  const [queryLimit, setQueryLimit] = useState(String(action.limit ?? 50));
+  const [queryAssertion, setQueryAssertion] = useState<{ match: 'equals' | 'contains' | 'regex'; expected: string; column?: string } | undefined>(
+    action.assertion as { match: 'equals' | 'contains' | 'regex'; expected: string; column?: string } | undefined,
+  );
+
+  // observeLog
+  const [observeWindowMs, setObserveWindowMs] = useState(String(action.windowMs ?? 60000));
+  const [observeKeywords, setObserveKeywords] = useState(Array.isArray(action.keywords) ? (action.keywords as string[]).join(', ') : '');
+  const [observeFromLine, setObserveFromLine] = useState(String(action.fromLine ?? 200));
+  const [logAssertion, setLogAssertion] = useState<{ match: 'equals' | 'contains' | 'regex'; expected: string } | undefined>(
+    action.assertion as { match: 'equals' | 'contains' | 'regex'; expected: string } | undefined,
+  );
+
   useEffect(() => {
     if (kind !== 'upload' || !caseId) return;
     let cancelled = false;
@@ -245,6 +273,29 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
     if (kind === 'check') next.checked = checked;
     if (kind === 'switchTab') next.tabRef = tabRef;
     if (kind === 'screenshot') next.name = shotName;
+    if (kind === 'queryDb') {
+      next.table = queryTable;
+      next.columns = queryColumns.slice(0, 40);
+      next.limit = Math.max(1, Math.min(200, Number(queryLimit) || 50));
+      next.where = queryWhere
+        .filter((w) => w.column && String(w.equals) !== '')
+        .slice(0, 10)
+        .map((w) => {
+          const raw = w.equals;
+          const n = Number(raw);
+          const eq: string | number | boolean = raw === 'true' ? true : raw === 'false' ? false : Number.isFinite(n) && raw.trim() !== '' ? n : raw;
+          return { column: w.column, equals: eq };
+        });
+      if (queryAssertion) next.assertion = queryAssertion;
+      else delete next.assertion;
+    }
+    if (kind === 'observeLog') {
+      next.windowMs = Math.max(1000, Math.min(600000, Number(observeWindowMs) || 60000));
+      next.keywords = observeKeywords.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 10);
+      next.fromLine = Math.max(1, Math.min(10000, Number(observeFromLine) || 200));
+      if (logAssertion) next.assertion = logAssertion;
+      else delete next.assertion;
+    }
 
     return next;
   };
@@ -668,12 +719,104 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
             <input className="input-base input-xs" value={shotName} onChange={(e) => setShotName(e.target.value)} placeholder="可选" />
           </label>
         )}
+
+        {kind === 'queryDb' && (
+          <div className="flex flex-col gap-2">
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+              <span>表名（白名单）</span>
+              <select className="input-base input-xs" value={queryTable} onChange={(e) => setQueryTable(e.target.value)}>
+                {(allowedTablesData ? Object.keys(allowedTablesData) : ['test_cases']).map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+              <span>返回列（按住 Ctrl/Cmd 多选；留空表示 *）</span>
+              <select multiple className="input-base input-xs" style={{ minHeight: 80 }} value={queryColumns} onChange={(e) => setQueryColumns(Array.from(e.target.selectedOptions).map((o) => o.value))}>
+                {queryTableCols.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>WHERE 条件（最多 10 条）</span>
+              {queryWhere.map((w, i) => (
+                <div key={i} className="flex gap-1 items-center">
+                  <select className="input-base input-xs flex-1" value={w.column} onChange={(e) => {
+                    const next = [...queryWhere]; next[i] = { ...w, column: e.target.value }; setQueryWhere(next);
+                  }}>
+                    <option value="">— 列 —</option>
+                    {queryTableCols.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <input className="input-base input-xs flex-1" value={w.equals} placeholder="等于" onChange={(e) => {
+                    const next = [...queryWhere]; next[i] = { ...w, equals: e.target.value }; setQueryWhere(next);
+                  }} />
+                  <button type="button" className="text-[11px] press" style={{ background: 'transparent', border: 'none', color: 'var(--color-destructive)', cursor: 'pointer' }} onClick={() => setQueryWhere(queryWhere.filter((_, j) => j !== i))}>✕</button>
+                </div>
+              ))}
+              {queryWhere.length < 10 && (
+                <button type="button" className="text-[11px] self-start press" style={{ background: 'transparent', border: 'none', color: 'var(--color-accent)', cursor: 'pointer' }} onClick={() => setQueryWhere([...queryWhere, { column: queryTableCols[0] ?? '', equals: '' }])}>
+                  + 增加条件
+                </button>
+              )}
+            </div>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+              <span>limit（1-200）</span>
+              <input className="input-base input-xs" type="number" min={1} max={200} value={queryLimit} onChange={(e) => setQueryLimit(e.target.value)} />
+            </label>
+            <DbAssertionEditor value={queryAssertion} onChange={setQueryAssertion} columns={queryTableCols} />
+          </div>
+        )}
+
+        {kind === 'observeLog' && (
+          <div className="flex flex-col gap-2">
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+              <span>时间窗 (ms, 1000-600000)</span>
+              <input className="input-base input-xs" type="number" min={1000} max={600000} value={observeWindowMs} onChange={(e) => setObserveWindowMs(e.target.value)} />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+              <span>关键字（逗号分隔，最多 10 个）</span>
+              <input className="input-base input-xs" value={observeKeywords} onChange={(e) => setObserveKeywords(e.target.value)} />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+              <span>起始行数（1-10000）</span>
+              <input className="input-base input-xs" type="number" min={1} max={10000} value={observeFromLine} onChange={(e) => setObserveFromLine(e.target.value)} />
+            </label>
+            <DbAssertionEditor value={logAssertion} onChange={setLogAssertion} />
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-2 justify-end px-5 py-4 shrink-0" style={{ borderTop: '1px solid var(--color-glass-border)' }}>
         <Button variant="plain" size="sm" onClick={onCancel}>取消</Button>
         <Button size="sm" onClick={handleSave}>保存</Button>
       </div>
+    </div>
+  );
+}
+
+function DbAssertionEditor({ value, onChange, columns }: { value: { match: 'equals' | 'contains' | 'regex'; expected: string; column?: string } | undefined; onChange: (v: typeof value) => void; columns?: string[] }) {
+  if (!value) {
+    return (
+      <button type="button" className="text-[11px] self-start press" style={{ background: 'transparent', border: '1px dashed var(--color-glass-border)', color: 'var(--color-foreground-muted)', cursor: 'pointer', padding: '4px 8px', borderRadius: 5 }} onClick={() => onChange({ match: 'contains', expected: '' })}>
+        + 附加断言
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1.5 p-2 rounded-[6px]" style={{ border: '1px solid var(--color-glass-border)', background: 'var(--color-background-subtle)' }}>
+      <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>断言（不命中则步骤失败）</span>
+      <div className="flex gap-1.5">
+        <select className="input-base input-xs" value={value.match} onChange={(e) => onChange({ ...value, match: e.target.value as 'equals' | 'contains' | 'regex' })}>
+          <option value="equals">等于</option>
+          <option value="contains">包含</option>
+          <option value="regex">正则</option>
+        </select>
+        <input className="input-base input-xs flex-1" value={value.expected} placeholder="期望文本" onChange={(e) => onChange({ ...value, expected: e.target.value })} />
+      </div>
+      {columns && columns.length > 0 && (
+        <select className="input-base input-xs" value={value.column ?? ''} onChange={(e) => onChange({ ...value, column: e.target.value || undefined })}>
+          <option value="">任意列</option>
+          {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+      )}
+      <button type="button" className="text-[11px] self-start press" style={{ background: 'transparent', border: 'none', color: 'var(--color-destructive)', cursor: 'pointer' }} onClick={() => onChange(undefined)}>移除断言</button>
     </div>
   );
 }

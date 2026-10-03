@@ -3,7 +3,7 @@ import type { StepClip } from '../../stores/stepClipboard';
 export const STEP_KINDS = [
   'navigate', 'click', 'fill', 'select', 'check', 'hover', 'waitFor',
   'assertVisible', 'assertText', 'assertJson', 'extract', 'upload',
-  'switchTab', 'screenshot', 'aiStep',
+  'switchTab', 'screenshot', 'aiStep', 'queryDb', 'observeLog',
 ] as const;
 export type StepKind = (typeof STEP_KINDS)[number];
 
@@ -70,6 +70,12 @@ export function switchAction(clip: StepClip, to: StepKind): StepClip {
       break;
     case 'aiStep':
       action = { kind: 'aiStep', instruction: '', compiled: null };
+      break;
+    case 'queryDb':
+      action = { kind: 'queryDb', table: 'test_cases', where: [], columns: [], limit: 50 };
+      break;
+    case 'observeLog':
+      action = { kind: 'observeLog', windowMs: 60000, keywords: [], fromLine: 200 };
       break;
   }
 

@@ -39,6 +39,8 @@ export const STEP_KIND_LABELS: Record<string, string> = {
   aiStep: 'AI步骤',
   switchTab: '切换标签页',
   screenshot: '截图',
+  queryDb: '数据库查询',
+  observeLog: '日志观察',
 };
 
 export function stepKindLabel(kind: string): string {
