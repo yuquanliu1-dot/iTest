@@ -25,6 +25,18 @@ const HUMAN: Record<FailureReason, string> = {
   OverlayTimeout: '元素被遮罩覆盖，等待超时',
   LocatorAllFailed: '所有定位候选均未命中',
   CDPUnavailable: '真实浏览器不可用，已尝试 DOM 降级仍失败',
+  QueryDbError: '数据库查询失败',
+  QueryDbTableNotAllowed: '该表不在允许查询的列表中',
+  QueryDbColumnNotAllowed: '该列不在允许查询的列表中',
+  QueryDbAssertionFailed: '数据库断言未命中',
+  EnvMissing: '缺少环境配置，请到项目设置配置测试环境',
+  EnvDbMissing: '当前环境未配置数据库连接',
+  EnvSyslogMissing: '当前环境未配置 syslog 连接',
+  SyslogConnectFailed: '连接 syslog 服务器失败',
+  SyslogAuthFailed: 'syslog 鉴权失败',
+  SyslogFileMissing: 'syslog 日志文件不可访问',
+  SyslogTimeout: '读取 syslog 超时',
+  LogAssertionFailed: '日志断言未命中',
   Unknown: '未知错误',
 };
 
@@ -60,6 +72,18 @@ export function classify(err: unknown, ctx: ClassifyCtx = {}): ClassifiedFailure
   if (msg.includes('all locator candidates failed') || msg.includes('count=0')) {
     return { reason: 'LocatorAllFailed', humanMessage: HUMAN.LocatorAllFailed };
   }
+  if (e?.name === 'QueryDbError') return { reason: 'QueryDbError', humanMessage: HUMAN.QueryDbError };
+  if (e?.name === 'QueryDbTableNotAllowed') return { reason: 'QueryDbTableNotAllowed', humanMessage: HUMAN.QueryDbTableNotAllowed };
+  if (e?.name === 'QueryDbColumnNotAllowed') return { reason: 'QueryDbColumnNotAllowed', humanMessage: HUMAN.QueryDbColumnNotAllowed };
+  if (e?.name === 'QueryDbAssertionFailed') return { reason: 'QueryDbAssertionFailed', humanMessage: HUMAN.QueryDbAssertionFailed };
+  if (e?.name === 'EnvMissing') return { reason: 'EnvMissing', humanMessage: HUMAN.EnvMissing };
+  if (e?.name === 'EnvDbMissing') return { reason: 'EnvDbMissing', humanMessage: HUMAN.EnvDbMissing };
+  if (e?.name === 'EnvSyslogMissing') return { reason: 'EnvSyslogMissing', humanMessage: HUMAN.EnvSyslogMissing };
+  if (e?.name === 'SyslogConnectFailed') return { reason: 'SyslogConnectFailed', humanMessage: HUMAN.SyslogConnectFailed };
+  if (e?.name === 'SyslogAuthFailed') return { reason: 'SyslogAuthFailed', humanMessage: HUMAN.SyslogAuthFailed };
+  if (e?.name === 'SyslogFileMissing') return { reason: 'SyslogFileMissing', humanMessage: HUMAN.SyslogFileMissing };
+  if (e?.name === 'SyslogTimeout') return { reason: 'SyslogTimeout', humanMessage: HUMAN.SyslogTimeout };
+  if (e?.name === 'LogAssertionFailed') return { reason: 'LogAssertionFailed', humanMessage: HUMAN.LogAssertionFailed };
   if (ctx.action && (ctx.action as { kind?: string }).kind === 'fill' &&
       (msg.includes('unique constraint') || msg.includes('duplicate'))) {
     return { reason: 'FixedValueConflict', humanMessage: HUMAN.FixedValueConflict };
