@@ -248,6 +248,13 @@ export async function compileAiStepsInPlace(
     const step = steps[i]!;
     const a = step.action as { kind?: string; instruction?: string; compiled?: unknown };
     if (a?.kind !== 'aiStep') continue;
+    // Short-circuit: skip LLM if 'compiled' key is present (array OR null).
+    // array means it was already compiled — keep as-is. null means LLM
+    // already attempted and gave up — don't retry, but still report as failed.
+    if ('compiled' in a) {
+      if (a.compiled === null) failed.push(i);
+      continue;
+    }
 
     const instruction = a.instruction ?? '';
     const name = step.name;
