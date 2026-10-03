@@ -8,6 +8,7 @@ import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { compileAiStepsInPlace } from '../agent/aiStepCompile.js';
 import { splitAiStepsInPlace } from '../agent/aiStepSplit.js';
+import { migrateAssertion } from '../lib/step-migration.js';
 import { loadDoc, removeSaved, type StagedCase } from '../pi/workspace.js';
 
 export const requirementsRoute = Router({ mergeParams: true });
@@ -175,13 +176,22 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
       secretCiphertext?: string;
       secretIv?: string;
       secretTag?: string;
-    }> = c.steps.map((s) => ({
-      source: 'agent' as const,
-      name: s.name,
-      action: { kind: 'aiStep', instruction: s.action, compiled: null } as object,
-      assertion: s.assertion ? ({ kind: 'assertText', text: s.assertion } as object) : null,
-      sensitive: false,
-    }));
+    }> = c.steps.map((s) => {
+      // 三态：undefined = 未尝试（不写 compiled 字段，触发 compileAiStepsInPlace 兜底）；
+      // null = AI 已放弃（短路不再重试）；array = 已编译（短路不再重试）。
+      const a: { kind: 'aiStep'; instruction: string; compiled?: unknown } = {
+        kind: 'aiStep',
+        instruction: s.action,
+      };
+      if (s.compiled !== undefined) a.compiled = s.compiled;
+      return {
+        source: 'agent' as const,
+        name: s.name,
+        action: a as object,
+        assertion: s.assertion ? ({ kind: 'assertText', text: s.assertion } as object) : null,
+        sensitive: false,
+      };
+    });
     if (stepRows.length > 0) {
       // 把 AI case 的 steps[] 当作 aiStep 数组落地前先做编号拆分（多条 aiStep）
       splitAiStepsInPlace(stepRows as unknown as Array<{ action: unknown }>);
@@ -234,7 +244,7 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
           source: row.source,
           name: row.name,
           action: row.action,
-          assertion: row.assertion,
+          assertion: row.assertion ? migrateAssertion(row.assertion) : null,
           sensitive: row.sensitive,
         })));
       }
