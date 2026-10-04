@@ -1,11 +1,12 @@
 /**
  * 版本空间 AI 助手线程 supervisor(pi/space)。
  * 与 requirement 级 pi/session.ts 并列:绑定 versionId、一线程一 session、一版本可多线程。
- * 事件→react-pi 契约的映射与 pi/session.ts 保持一致;上下文摘要随首条用户消息注入。
+ * 事件→react-pi 契约的映射与 pi/session.ts 保持一致;上下文摘要经 system prompt 注入(session 创建时)。
  */
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import { aiThreads, projectVersions } from '../../db/schema.js';
+import { logger } from '../../logger.js';
 import { buildSpaceTools } from './tools/index.js';
 import { buildSpaceSummary } from './summary.js';
 import { readLlmConfig } from '../modelBridge.js';
@@ -201,17 +202,12 @@ export function spaceRepoIssue(threadId: string): string | null {
 export async function sendSpaceUserMessage(threadId: string, content: string): Promise<void> {
   const rec = records.get(threadId);
   if (!rec) throw new Error('thread not found');
-  let out = content;
-  if (rec.session.messages.length === 0) {
-    const summary = await buildSpaceSummary(rec.versionId);
-    out = `【版本空间上下文】\n${summary.text}\n\n【用户消息】\n${content}`;
-  }
-  // 首条消息落线程标题(取用户原文截断,不含注入的上下文块)
+  // 首条消息落线程标题(取用户原文截断)
   const row = (await db.select({ title: aiThreads.title }).from(aiThreads).where(eq(aiThreads.id, threadId)).limit(1))[0];
   if (row && !row.title) {
     await db.update(aiThreads).set({ title: Array.from(content.trim()).slice(0, 40).join(''), updatedAt: new Date() }).where(eq(aiThreads.id, threadId));
   }
-  await rec.session.prompt(out);
+  await rec.session.prompt(content);
 }
 
 export function cancelThread(threadId: string): void {
@@ -224,12 +220,18 @@ export function cancelThread(threadId: string): void {
 // Real factory:注入空间工具(Plan 1 = repo 沙箱)并建 AgentSession
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** 空间助手 system prompt:版本上下文摘要;无摘要时返回空串(resourceLoader 追加空段无副作用)。 */
+export function buildSpaceSystemPrompt(summaryText: string | null): string {
+  if (!summaryText) return '';
+  return `## 版本空间上下文\n${summaryText}`;
+}
+
 async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<SpaceSessionLike> {
   const cfg = await readLlmConfig();
   if (!cfg) {
     throw new HttpError(502, 'llm_not_configured', 'LLM 未配置:请先到设置页配置模型');
   }
-  const { createAgentSession, SessionManager } = await import('@earendil-works/pi-coding-agent');
+  const { createAgentSession, SessionManager, DefaultResourceLoader, getAgentDir } = await import('@earendil-works/pi-coding-agent');
   const { getBuiltinModel } = await import('@earendil-works/pi-ai/providers/all');
   const workspaceDir = process.env.PI_WORKSPACE_DIR ?? './.data/pi-sessions';
   await import('node:fs/promises').then((fs) => fs.mkdir(workspaceDir, { recursive: true }));
@@ -262,6 +264,21 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
   if (envKey && !process.env[envKey]) process.env[envKey] = cfg.apiKey;
   const model = { ...base, ...(cfg.baseUrl ? { baseUrl: cfg.baseUrl } : {}) } as never;
 
+  // 上下文摘要注入 system prompt(而非包装首条用户消息):包装会让服务端回显与
+  // 前端乐观气泡文本不一致,react-pi 的 reconcile 无法去重 → 气泡重复且内部上下文泄漏到聊天区。
+  let summaryText: string | null = null;
+  try {
+    summaryText = (await buildSpaceSummary(ctx.versionId)).text;
+  } catch (e) {
+    logger.warn({ err: e, versionId: ctx.versionId }, 'space summary build failed; continuing without context');
+  }
+  const loader = new DefaultResourceLoader({
+    cwd: ctx.cwd ?? workspaceDir,
+    agentDir: getAgentDir(),
+    appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText)],
+  });
+  await loader.reload();
+
   const sessionManager = SessionManager.inMemory();
   const { session } = await createAgentSession({
     cwd: ctx.cwd ?? workspaceDir,
@@ -269,6 +286,7 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
     customTools: tools,
     model,
     sessionManager,
+    resourceLoader: loader,
   });
 
   await db.update(aiThreads).set({ piThreadId: session.sessionFile ?? '', updatedAt: new Date() }).where(eq(aiThreads.id, ctx.threadId));

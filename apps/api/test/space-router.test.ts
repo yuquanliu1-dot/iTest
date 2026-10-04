@@ -120,6 +120,12 @@ describe('space wire contract', () => {
     expect(row.title).toBe('查一下环境');
   });
 
+  it('GET /threads 无 versionId 返回空列表(react-pi 运行时机制不带参调用,不 400)', async () => {
+    const r = await request(app).get('/api/assistant/threads');
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([]);
+  });
+
   it('GET /threads/:id 返回快照;requirement 线程 404(本契约只管 version 线程)', async () => {
     const { projectId, versionId } = await seedProject(pool);
     const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });

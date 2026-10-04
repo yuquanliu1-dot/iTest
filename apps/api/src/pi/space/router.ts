@@ -66,7 +66,9 @@ spaceRoute.post('/threads', async (req, res) => {
 spaceRoute.get('/threads', async (req, res) => {
   const raw = req.query.versionId;
   const versionId = typeof raw === 'string' ? raw : '';
-  if (!versionId) throw new HttpError(400, 'bad_request', 'versionId query required');
+  // 无 versionId → 空列表(react-pi 运行时的线程列表机制按 Pi 契约不带参调用;
+  // 页面级列表始终带 versionId)。不越权返回跨版本数据。
+  if (!versionId) { res.json([]); return; }
   await assertVersionVisible(versionId, req.user as AuthUser);
   const rows = await db
     .select({ id: aiThreads.id, title: aiThreads.title, createdAt: aiThreads.createdAt, updatedAt: aiThreads.updatedAt })

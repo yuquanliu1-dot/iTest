@@ -70,7 +70,7 @@ async function insertSpaceThread(versionId: string): Promise<string> {
 }
 
 describe('space session supervisor', () => {
-  it('ensureSpaceRecord 绑定版本上下文;no_repo 静默降级;首条消息注入摘要+落标题', async () => {
+  it('ensureSpaceRecord 绑定版本上下文;no_repo 静默降级;消息原文透传+落标题', async () => {
     const { projectId, versionId } = await seedProject(pool);
     const threadId = await insertSpaceThread(versionId);
     const { ensureSpaceRecord, sendSpaceUserMessage } = await import('../src/pi/space/session.js');
@@ -81,16 +81,23 @@ describe('space session supervisor', () => {
     expect(captured[0]!.ctx).toMatchObject({ threadId, versionId, projectId, repoAvailable: false, cwd: null });
 
     await sendSpaceUserMessage(threadId, '帮我建三个登录用例');
-    const first = captured[0]!.prompts[0]!;
-    expect(first).toContain('【版本空间上下文】');
-    expect(first).toContain('帮我建三个登录用例');
+    // 原文透传:服务端回显与前端乐观气泡逐字一致,react-pi 的 reconcile 才能去重
+    expect(captured[0]!.prompts[0]).toBe('帮我建三个登录用例');
     const row = (await pool.query(`SELECT title FROM ai_threads WHERE id=$1`, [threadId])).rows[0] as { title: string | null };
     expect(row.title).toBe('帮我建三个登录用例');
 
-    // 第二条消息不再注入摘要
+    // 后续消息同样原文透传(上下文摘要改走 system prompt,不进消息流)
     await sendSpaceUserMessage(threadId, '再建一个');
-    expect(captured[0]!.prompts[1]!).not.toContain('【版本空间上下文】');
+    expect(captured[0]!.prompts[1]).toBe('再建一个');
   }, 30_000);
+
+  it('buildSpaceSystemPrompt:无摘要返回空串;有摘要带版本空间上下文标题', async () => {
+    const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
+    expect(buildSpaceSystemPrompt(null)).toBe('');
+    const out = buildSpaceSystemPrompt('X');
+    expect(out).toContain('X');
+    expect(out).toContain('版本空间上下文');
+  });
 
   it('requirement 线程不能走空间 supervisor', async () => {
     const { projectId } = await seedProject(pool);
