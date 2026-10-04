@@ -131,6 +131,31 @@ describe('space wire contract', () => {
     await expect(p).resolves.toBe(true);
   });
 
+  it('POST /threads/:id/cancel 调 session.abort;无 session 记录时静默 204', async () => {
+    const { versionId } = await seedProject(pool);
+    const { setSpaceSessionFactory } = await import('../src/pi/space/session.js');
+    let aborted = 0;
+    setSpaceSessionFactory(async () => {
+      const s = makeFakeSession() as unknown as { abort: () => void };
+      s.abort = () => { aborted += 1; };
+      return s as never;
+    });
+    const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    const threadId = t.body.metadata.id as string;
+    const ok = await request(app).post(`/api/assistant/threads/${threadId}/cancel`);
+    expect(ok.status).toBe(204);
+    expect(aborted).toBe(1);
+    // 完全未知的 id:路由可见性校验 404(不入 DB 不存在静默通道)
+    expect((await request(app).post(`/api/assistant/threads/${crypto.randomUUID()}/cancel`)).status).toBe(404);
+    // 无 session 记录的孤儿线程(已落库但建 session 失败,如 LLM 未配置)同样 204(静默 no-op)
+    const orphanId = crypto.randomUUID();
+    await pool.query(`INSERT INTO ai_threads(id, kind, version_id, pi_thread_id) VALUES ($1,'version',$2,'')`, [orphanId, versionId]);
+    expect((await request(app).post(`/api/assistant/threads/${orphanId}/cancel`)).status).toBe(204);
+    expect(aborted).toBe(1);
+    // 恢复默认 stub
+    setSpaceSessionFactory(async () => makeFakeSession() as never);
+  });
+
   it('GET /threads/:id/events 是 SSE:先 snapshot,confirm_request 可扇出', async () => {
     const { versionId } = await seedProject(pool);
     const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
