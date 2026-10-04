@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 import Input from '../ui/Input';
 import Button from '../ui/Button';
-import { labelTextColor } from '../../lib/labelColor';
+import TagChip from '../ui/Tag';
 
 const PRESET_COLORS = [
   '#34c759', '#007aff', '#ff9500', '#ff3b30', '#af52de', '#5856d6', '#ffcc00',
@@ -136,12 +136,8 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
               </Button>
             </div>
             <div className="flex items-center gap-2 mt-1">
-              <span
-                className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-150"
-                style={{ background: color, color: labelTextColor(color) }}
-              >
-                {name.trim() || '标签预览'}
-              </span>
+              {/* 预览直接复用 TagChip，保证与列表渲染所见即所得 */}
+              <TagChip tag={{ id: 'preview', name: name.trim() || '标签预览', color: color.replace('#', '') }} size="md" />
               <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                 预览
               </span>

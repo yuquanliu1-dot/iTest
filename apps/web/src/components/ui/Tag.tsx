@@ -1,5 +1,4 @@
 import Icon from '../Icon';
-import { labelTextColor } from '../../lib/labelColor';
 
 export interface TagChipData {
   id: string;
@@ -14,16 +13,23 @@ interface TagChipProps {
   className?: string;
 }
 
-/** 圆角 chip 渲染：背景 `#${color}`，前景自动选黑/白。点击 X 触发 onRemove。 */
+/**
+ * soft 风格 chip，与 StatusPill 的浅底深字语言一致：
+ * 底色 = 标签色低比例混入 var(--card)（color-mix 随主题深浅自动适配），
+ * 文字 = 标签色混入少量前景色保证对比度。
+ */
 export default function TagChip({ tag, onRemove, size = 'sm', className }: TagChipProps) {
-  const bg = `#${tag.color}`;
-  const fg = labelTextColor(tag.color);
   const padding = size === 'md' ? '3px 10px' : '2px 8px';
-  const fontSize = size === 'md' ? 12 : 11;
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full font-medium ${className ?? ''}`}
-      style={{ background: bg, color: fg, padding, fontSize, lineHeight: 1.4 }}
+      style={{
+        background: `color-mix(in srgb, #${tag.color} 14%, var(--card))`,
+        color: `color-mix(in srgb, #${tag.color} 75%, var(--foreground))`,
+        padding,
+        fontSize: 12,
+        lineHeight: 1.4,
+      }}
     >
       <span className="truncate max-w-[160px]">{tag.name}</span>
       {onRemove && (
@@ -35,7 +41,7 @@ export default function TagChip({ tag, onRemove, size = 'sm', className }: TagCh
           }}
           aria-label={`移除标签 ${tag.name}`}
           className="inline-flex items-center justify-center"
-          style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, color: fg, opacity: 0.7 }}
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, color: 'inherit', opacity: 0.7 }}
         >
           <Icon name="close" size={10} />
         </button>
