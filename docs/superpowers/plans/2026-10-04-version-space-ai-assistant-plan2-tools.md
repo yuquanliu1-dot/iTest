@@ -345,7 +345,14 @@ export interface AiStepInput {
 export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiStepInput[] }) {
   const created = await createCase(input);
   if (input.steps?.length) {
-    const stepRows = input.steps.map((s) => {
+    const stepRows: Array<{
+      source: 'agent';
+      name: string;
+      action: object;
+      assertion: object | null;
+      componentKind?: string;
+      sensitive: boolean;
+    }> = input.steps.map((s) => {
       const name = (s.instruction.split(/[，。！？,.!?\n]/, 1)[0]?.trim() ?? '').slice(0, 200) || s.instruction.slice(0, 200);
       const action: Record<string, unknown> = { kind: 'aiStep', instruction: s.instruction };
       if (s.compiled !== undefined) {
@@ -354,14 +361,16 @@ export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiS
       return {
         source: 'agent' as const,
         name,
-        action: action as unknown,
+        action: action as object,
         assertion: s.assertion ? migrateAssertion({ kind: 'assertText', text: s.assertion }) : null,
         sensitive: false,
       };
     });
-    expandCompiledAiStepsInPlace([{ stepRows }]);
+    // 注意:expand 内部是 p.stepRows = out(重赋值到包装对象)→ 必须经 prepared 读回展开结果
+    const prepared = [{ stepRows }];
+    expandCompiledAiStepsInPlace(prepared);
     await db.insert(testSteps).values(
-      stepRows.map((r, i) => ({
+      prepared[0]!.stepRows.map((r, i) => ({
         caseId: created.id,
         order: i,
         source: r.source,
@@ -369,7 +378,7 @@ export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiS
         action: r.action,
         assertion: r.assertion,
         sensitive: r.sensitive,
-        componentKind: (r.componentKind as string | undefined) ?? null,
+        componentKind: r.componentKind ?? null,
       })),
     );
   }
