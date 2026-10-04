@@ -44,6 +44,7 @@ interface ThreadRecord {
 }
 
 const records = new Map<string, ThreadRecord>();
+const inflight = new Map<string, Promise<ThreadRecord>>();
 
 let factory: SpaceSessionFactory = createSpaceSessionFactory;
 
@@ -51,16 +52,25 @@ export function setSpaceSessionFactory(f: SpaceSessionFactory): void { factory =
 
 export function resetSpaceSessions(): void {
   for (const r of records.values()) {
-    try { void r.session.dispose(); } catch { /* ignore */ }
+    r.session.dispose().catch(() => { /* ignore */ });
     try { r.unsub(); } catch { /* ignore */ }
   }
   records.clear();
+  inflight.clear();
 }
 
-/** 幂等加载 version 级线程的 session(已缓存直接返回;requirement 线程拒绝)。 */
-export async function ensureSpaceRecord(threadId: string): Promise<ThreadRecord> {
+/** 幂等加载 version 级线程的 session(已缓存直接返回;并发首调共享同一构建;requirement 线程拒绝)。 */
+export function ensureSpaceRecord(threadId: string): Promise<ThreadRecord> {
   const cached = records.get(threadId);
-  if (cached) return cached;
+  if (cached) return Promise.resolve(cached);
+  const pending = inflight.get(threadId);
+  if (pending) return pending;
+  const p = buildSpaceRecord(threadId).finally(() => inflight.delete(threadId));
+  inflight.set(threadId, p);
+  return p;
+}
+
+async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
   const row = (await db.select().from(aiThreads).where(and(eq(aiThreads.id, threadId), eq(aiThreads.kind, 'version'))).limit(1))[0];
   if (!row || !row.versionId) throw new Error('space thread not found');
   const v = (await db.select({ projectId: projectVersions.projectId }).from(projectVersions).where(eq(projectVersions.id, row.versionId)).limit(1))[0];
@@ -187,7 +197,7 @@ export async function sendSpaceUserMessage(threadId: string, content: string): P
   // 首条消息落线程标题(取用户原文截断,不含注入的上下文块)
   const row = (await db.select({ title: aiThreads.title }).from(aiThreads).where(eq(aiThreads.id, threadId)).limit(1))[0];
   if (row && !row.title) {
-    await db.update(aiThreads).set({ title: content.trim().slice(0, 40), updatedAt: new Date() }).where(eq(aiThreads.id, threadId));
+    await db.update(aiThreads).set({ title: Array.from(content.trim()).slice(0, 40).join(''), updatedAt: new Date() }).where(eq(aiThreads.id, threadId));
   }
   await rec.session.prompt(out);
 }
