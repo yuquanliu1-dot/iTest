@@ -58,8 +58,13 @@ export default function AssistantPage() {
       <PageShellHeader>
         <PageShellTitle>AI 助手</PageShellTitle>
         <PageShellActions>
+          {/* select 定宽：input-base 的 width:100% 会把按钮挤换行 */}
+          <Button size="sm" disabled={create.isPending} onClick={() => create.mutate()}>
+            {create.isPending ? '创建中…' : '新对话'}
+          </Button>
           <select
-            className="input-base input-sm max-w-[280px]"
+            className="input-base input-sm"
+            style={{ width: 260 }}
             value={threadId ?? ''}
             onChange={(e) => {
               setInitError(null);
@@ -76,9 +81,6 @@ export default function AssistantPage() {
               <option key={t.id} value={t.id}>{t.title || '新对话'}</option>
             ))}
           </select>
-          <Button size="sm" disabled={create.isPending} onClick={() => create.mutate()}>
-            {create.isPending ? '创建中…' : '新对话'}
-          </Button>
         </PageShellActions>
         <PageShellDescription>用一句话管理用例、环境与计划;意图不明时 AI 会主动追问</PageShellDescription>
       </PageShellHeader>
