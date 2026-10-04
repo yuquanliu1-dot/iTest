@@ -196,6 +196,8 @@ export default function LoginPage() {
             gap: 18,
             boxShadow: 'var(--shadow-2xl)',
             animationDelay: '0.1s',
+            // 不随 grid 行拉伸（左侧 hero 更高）：按内容自适应并垂直居中
+            alignSelf: 'center',
           }}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -216,7 +218,7 @@ export default function LoginPage() {
           {!changeToken ? (
             <form onSubmit={submitLogin} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <Input
-                label="用户名"
+                aria-label="用户名"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="用户名"
@@ -224,35 +226,33 @@ export default function LoginPage() {
                 name="username"
                 autoFocus
               />
-              <div className="flex flex-col gap-1">
-                <Input
-                  label="密码"
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="密码"
-                  autoComplete="current-password"
-                  name="password"
-                  trailingIcon={
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword((v) => !v)}
-                      aria-label={showPassword ? '隐藏密码' : '显示密码'}
-                      className="press"
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        padding: 4,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        color: 'var(--muted-foreground)',
-                      }}
-                    >
-                      <Icon name={showPassword ? 'eyeOff' : 'eye'} size={14} />
-                    </button>
-                  }
-                />
-              </div>
+              <Input
+                aria-label="密码"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="密码"
+                autoComplete="current-password"
+                name="password"
+                trailingIcon={
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                    className="press"
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      padding: 4,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      color: 'var(--muted-foreground)',
+                    }}
+                  >
+                    <Icon name={showPassword ? 'eyeOff' : 'eye'} size={14} />
+                  </button>
+                }
+              />
               <Button
                 type="submit"
                 size="lg"
@@ -265,7 +265,7 @@ export default function LoginPage() {
           ) : (
             <form onSubmit={submitChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <Input
-                label="新密码"
+                aria-label="新密码"
                 type={showNewPassword ? 'text' : 'password'}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
@@ -292,7 +292,7 @@ export default function LoginPage() {
                 }
               />
               <Input
-                label="确认新密码"
+                aria-label="确认新密码"
                 type={showNewPassword ? 'text' : 'password'}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
