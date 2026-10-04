@@ -35,6 +35,7 @@ describe('environments.service', () => {
     expect(list[0]!.objects).toHaveLength(1);
     expect(JSON.stringify(list[0]!.objects)).not.toContain('SUPER-SECRET');
     expect(JSON.stringify(list[0]!.objects)).toContain('••••••••');
+    expect(list[0]!.objects[0]!.hasSecret).toBe(true);
   }, 30_000);
 
   it('updateEnvironment:isDefault 互斥;upsertEnvironmentObject 合并保留旧密文,set_secret 换新密文', async () => {
@@ -99,6 +100,7 @@ describe('environments.service', () => {
     expect((obj.payload as { user: string }).user).toBe('tom');
     expect((obj.payload as { loginUrl: string }).loginUrl).toBe('https://x.example.com/login');
     expect((obj.payload as { secret: string }).secret).toBe('••••••••');
+    expect(obj.hasSecret).toBe(true);
     const raw = (await pool.query(`SELECT payload FROM environment_objects WHERE id=$1`, [obj.id])).rows[0]!.payload as { secret?: { c?: string } };
     expect(JSON.stringify(raw)).not.toContain('LOGIN-PASS');
     expect(raw.secret?.c).toBeTruthy();

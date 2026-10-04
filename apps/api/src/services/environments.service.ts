@@ -13,11 +13,14 @@ export const OBJECT_MASK = '••••••••';
 const OBJECT_TYPES = ['db', 'syslog', 'login'] as const;
 export type ObjectType = (typeof OBJECT_TYPES)[number];
 
-/** 出参掩码:payload.secret(AES 三元组)→ OBJECT_MASK。 */
+/** 出参掩码:payload.secret(AES 三元组)→ OBJECT_MASK,同时输出 hasSecret 标志位
+ *  让前端可判定"已加密保存",不依赖反向解析被 mask 的 secret。 */
 export function maskObjectPayload(row: typeof environmentObjects.$inferSelect) {
-  const payload = { ...((row.payload ?? {}) as Record<string, unknown>) };
-  if (payload.secret) payload.secret = OBJECT_MASK;
-  return { ...row, payload };
+  const raw = (row.payload ?? {}) as Record<string, unknown>;
+  const hasSecret = Boolean(raw.secret);
+  const payload = { ...raw };
+  if (hasSecret) payload.secret = OBJECT_MASK;
+  return { ...row, payload, hasSecret };
 }
 
 /**

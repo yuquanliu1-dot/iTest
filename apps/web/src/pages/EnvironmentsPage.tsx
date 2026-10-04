@@ -106,10 +106,9 @@ function objectSummary(o: EnvironmentObject): string {
   return [p.host, p.filePath].filter(Boolean).join(' · ');
 }
 
-/** 该对象是否已配置访问凭据（db/syslog/login 的 secret 已加密入 payload）。 */
+/** 该对象是否已配置访问凭据：以后端出参的 hasSecret 标志位为准（不再依赖反向解析被 mask 的 secret）。 */
 function objectHasSecret(o: EnvironmentObject): boolean {
-  const s = (o.payload ?? {}) as { secret?: { c?: string; i?: string; t?: string } };
-  return Boolean(s.secret?.c && s.secret?.i && s.secret?.t);
+  return Boolean(o.hasSecret);
 }
 
 export default function EnvironmentsPage() {
@@ -127,6 +126,8 @@ export default function EnvironmentsPage() {
   const [envForm, setEnvForm] = useState<EnvFormState>(EMPTY_ENV_FORM);
   const [objForm, setObjForm] = useState<ObjFormState>(EMPTY_OBJ_FORM);
   const [confirmEnv, setConfirmEnv] = useState<{ env: Environment; caseCount: number; planCount: number } | null>(null);
+  /** 删除对象前一律先弹 modal —— 任何引用计数都是 0 也要点确认才走请求。 */
+  const [confirmObj, setConfirmObj] = useState<{ id: string; label: string } | null>(null);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['environments', projectId] });
 
@@ -159,6 +160,7 @@ export default function EnvironmentsPage() {
     mutationFn: ({ id, confirm }: { id: string; confirm: boolean }) =>
       api.environments.remove(id, { confirm }),
     onSuccess: (r, vars) => {
+      // 后端返回 requiresConfirm 时,前端弹二次确认 modal 显示引用计数;否则 done。
       if (r.requiresConfirm) {
         const env = envsQ.data?.find((e) => e.id === vars.id);
         if (env) setConfirmEnv({ env, caseCount: r.caseCount ?? 0, planCount: r.planCount ?? 0 });
@@ -307,7 +309,12 @@ export default function EnvironmentsPage() {
                       disabled={env.isDefault}
                     />
                     <IconButton icon="pencil" title="编辑环境" onClick={() => setEnvForm({ open: true, mode: 'edit', id: env.id, name: env.name, baseUrl: env.baseUrl ?? '' })} />
-                    <IconButton icon="trash" title="删除环境" tone="destructive" onClick={() => removeEnv.mutate({ id: env.id, confirm: false })} />
+                    <IconButton
+                      icon="trash"
+                      title="删除环境"
+                      tone="destructive"
+                      onClick={() => setConfirmEnv({ env, caseCount: 0, planCount: 0 })}
+                    />
                   </div>
                 </div>
                 <div className="px-3 py-2 flex flex-col">
@@ -368,7 +375,12 @@ export default function EnvironmentsPage() {
                       <div className="flex-1" />
                       <div className="flex items-center gap-1">
                         <IconButton icon="pencil" title="编辑对象" onClick={() => openObjForm(env, o.objectType, o)} />
-                        <IconButton icon="trash" title="删除对象" tone="destructive" onClick={() => removeObj.mutate(o.id)} />
+                        <IconButton
+                          icon="trash"
+                          title="删除对象"
+                          tone="destructive"
+                          onClick={() => setConfirmObj({ id: o.id, label: `${o.objectType === 'db' ? '数据库' : o.objectType === 'login' ? '登录凭据' : 'syslog'}${o.label ? ` · ${o.label}` : ''}` })}
+                        />
                       </div>
                     </div>
                   ))}
@@ -567,13 +579,14 @@ export default function EnvironmentsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* 删除环境确认（被用例/计划引用时两段确认） */}
+      {/* 删除环境确认:前端一律先弹 modal,再发请求;后端 requiresConfirm 作为双保险保留。 */}
       <Dialog open={!!confirmEnv} onOpenChange={(open) => { if (!open) setConfirmEnv(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>删除环境</DialogTitle></DialogHeader>
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            「{confirmEnv?.env.name}」被 {confirmEnv?.caseCount} 个用例、{confirmEnv?.planCount} 个计划引用。
-            删除后这些引用会自动清空，执行时回退到项目默认环境。确定删除？
+            确认删除「{confirmEnv?.env.name}」？{confirmEnv && (confirmEnv.caseCount > 0 || confirmEnv.planCount > 0)
+              ? `该环境被 ${confirmEnv.caseCount} 个用例、${confirmEnv.planCount} 个计划引用，删除后这些引用会自动清空，执行时回退到项目默认环境。`
+              : '该环境当前未被任何用例或计划引用。'}
           </div>
           <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
             <Button variant="ghost" onClick={() => setConfirmEnv(null)}>取消</Button>
@@ -583,6 +596,29 @@ export default function EnvironmentsPage() {
               onClick={() => confirmEnv && removeEnv.mutate({ id: confirmEnv.env.id, confirm: true })}
             >
               {removeEnv.isPending ? '删除中...' : '确认删除'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    {/* 删除对象确认弹窗 —— 不论引用计数,先弹再发请求,避免误点。 */}
+      <Dialog open={!!confirmObj} onOpenChange={(open) => { if (!open) setConfirmObj(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>删除对象</DialogTitle></DialogHeader>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+            删除「{confirmObj?.label}」？已配置的访问凭据会同时清除,执行期将无法再解析。
+          </div>
+          <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
+            <Button variant="ghost" onClick={() => setConfirmObj(null)}>取消</Button>
+            <Button
+              variant="danger"
+              disabled={removeObj.isPending}
+              onClick={() => {
+                if (!confirmObj) return;
+                removeObj.mutate(confirmObj.id);
+                setConfirmObj(null);
+              }}
+            >
+              {removeObj.isPending ? '删除中...' : '确认删除'}
             </Button>
           </div>
         </DialogContent>
