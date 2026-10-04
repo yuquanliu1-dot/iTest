@@ -30,8 +30,8 @@ type ProjectNavItem = {
 };
 
 const PROJECT_ITEMS: ProjectNavItem[] = [
-  { title: 'AI 助手', path: 'assistant', icon: 'message' },
   { title: '工作台', path: 'overview', icon: 'sparkles' },
+  { title: 'AI 助手', path: 'assistant', icon: 'message' },
   { title: '用例', path: 'groups', icon: 'beaker', related: ['cases', 'ai'] },
   { title: '执行计划', path: 'plans', icon: 'play' },
   { title: '执行历史', path: 'reports', icon: 'flag' },
