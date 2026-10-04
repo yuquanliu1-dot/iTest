@@ -106,6 +106,12 @@ function objectSummary(o: EnvironmentObject): string {
   return [p.host, p.filePath].filter(Boolean).join(' · ');
 }
 
+/** 该对象是否已配置访问凭据（db/syslog/login 的 secret 已加密入 payload）。 */
+function objectHasSecret(o: EnvironmentObject): boolean {
+  const s = (o.payload ?? {}) as { secret?: { c?: string; i?: string; t?: string } };
+  return Boolean(s.secret?.c && s.secret?.i && s.secret?.t);
+}
+
 export default function EnvironmentsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -336,6 +342,29 @@ export default function EnvironmentsPage() {
                       <span className="text-[11px] truncate" style={{ color: 'var(--muted-foreground)' }}>
                         {objectSummary(o) || '未填写'}
                       </span>
+                      {objectHasSecret(o) ? (
+                        <span
+                          className="text-[10px] px-1.5 py-[1px] rounded"
+                          style={{
+                            background: 'var(--success-soft, rgba(16, 185, 129, 0.12))',
+                            color: 'var(--success, #16a34a)',
+                          }}
+                          title="已加密保存访问凭据"
+                        >
+                          已配置
+                        </span>
+                      ) : (
+                        <span
+                          className="text-[10px] px-1.5 py-[1px] rounded"
+                          style={{
+                            background: 'var(--warning-soft, rgba(234, 179, 8, 0.12))',
+                            color: 'var(--warning, #ca8a04)',
+                          }}
+                          title="尚未设置访问凭据（编辑对象 → 输入密码/私钥保存）"
+                        >
+                          未配置凭据
+                        </span>
+                      )}
                       <div className="flex-1" />
                       <div className="flex items-center gap-1">
                         <IconButton icon="pencil" title="编辑对象" onClick={() => openObjForm(env, o.objectType, o)} />
