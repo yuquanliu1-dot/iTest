@@ -236,9 +236,11 @@ select:focus-visible {
 
 /* ── Radix dialog overlay/content motion ─────────────────────────────────── */
 @keyframes dialog-overlay-in  { from { opacity: 0; } to { opacity: 1; } }
+/* Tailwind v4 的 -translate-x/y-1/2 是原生 translate 属性，与 keyframes 里的
+   transform 叠加会把弹窗推偏再跳回中心；因此这里只动 scale，不写 translate。 */
 @keyframes dialog-content-in  {
-  from { opacity: 0; transform: translate(-50%, -48%) scale(0.97); }
-  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
 }
 .dialog-overlay {
   animation: dialog-overlay-in 0.18s ease-out;
