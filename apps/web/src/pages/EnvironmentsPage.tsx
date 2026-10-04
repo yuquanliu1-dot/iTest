@@ -1,0 +1,407 @@
+import { useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api, type Environment, type EnvironmentObject } from '../api/client';
+import { useUIStore } from '../stores/ui';
+import Icon from '../components/Icon';
+import EmptyState from '../components/ui/EmptyState';
+import IconButton from '../components/ui/IconButton';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/Modal';
+import Input from '../components/ui/Input';
+import Button from '../components/ui/Button';
+
+interface EnvFormState {
+  open: boolean;
+  mode: 'create' | 'edit';
+  id: string | null;
+  name: string;
+}
+const EMPTY_ENV_FORM: EnvFormState = { open: false, mode: 'create', id: null, name: '' };
+
+type ObjType = 'db' | 'syslog';
+interface ObjFormState {
+  open: boolean;
+  envId: string;
+  envName: string;
+  objectType: ObjType;
+  /** null → 新建对象 */
+  object: EnvironmentObject | null;
+  host: string;
+  port: string;
+  dbName: string;
+  user: string;
+  password: string;
+  sshPort: string;
+  filePath: string;
+  privateKey: string;
+}
+const EMPTY_OBJ_FORM: ObjFormState = {
+  open: false, envId: '', envName: '', objectType: 'db', object: null,
+  host: '', port: '', dbName: '', user: '', password: '', sshPort: '22', filePath: '', privateKey: '',
+};
+
+/** 组装对象 payload：密码/私钥字段原样上送，留空由后端保留旧密文（不覆盖语义）。 */
+function buildObjectPayload(f: ObjFormState): Record<string, unknown> {
+  if (f.objectType === 'db') {
+    return {
+      host: f.host.trim(),
+      ...(f.port.trim() ? { port: Number(f.port) } : {}),
+      dbName: f.dbName.trim(),
+      user: f.user.trim(),
+      password: f.password,
+    };
+  }
+  return {
+    host: f.host.trim(),
+    user: f.user.trim(),
+    ...(f.sshPort.trim() ? { sshPort: Number(f.sshPort) } : {}),
+    filePath: f.filePath.trim(),
+    privateKey: f.privateKey,
+  };
+}
+
+function objectSummary(o: EnvironmentObject): string {
+  const p = (o.payload ?? {}) as Record<string, unknown>;
+  if (o.objectType === 'db') {
+    return [p.host, p.port != null ? String(p.port) : null, p.dbName].filter(Boolean).join(':');
+  }
+  return [p.host, p.filePath].filter(Boolean).join(' · ');
+}
+
+export default function EnvironmentsPage() {
+  const { projectId } = useParams<{ projectId: string }>();
+  const navigate = useNavigate();
+  const toast = useUIStore((s) => s.showToast);
+  const qc = useQueryClient();
+
+  const envsQ = useQuery({
+    queryKey: ['environments', projectId],
+    queryFn: () => api.environments.list(projectId!),
+    enabled: !!projectId,
+  });
+
+  const [envForm, setEnvForm] = useState<EnvFormState>(EMPTY_ENV_FORM);
+  const [objForm, setObjForm] = useState<ObjFormState>(EMPTY_OBJ_FORM);
+  const [confirmEnv, setConfirmEnv] = useState<{ env: Environment; caseCount: number; planCount: number } | null>(null);
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['environments', projectId] });
+
+  const saveEnv = useMutation({
+    mutationFn: () =>
+      envForm.mode === 'create'
+        ? api.environments.create(projectId!, { name: envForm.name.trim() })
+        : api.environments.patch(envForm.id!, { name: envForm.name.trim() }),
+    onSuccess: () => {
+      toast(envForm.mode === 'create' ? '环境已创建' : '环境已更新', 'success');
+      setEnvForm(EMPTY_ENV_FORM);
+      invalidate();
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
+  const setDefault = useMutation({
+    mutationFn: (id: string) => api.environments.patch(id, { isDefault: true }),
+    onSuccess: () => {
+      toast('默认环境已更新', 'success');
+      invalidate();
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
+  const removeEnv = useMutation({
+    mutationFn: ({ id, confirm }: { id: string; confirm: boolean }) =>
+      api.environments.remove(id, { confirm }),
+    onSuccess: (r, vars) => {
+      if (r.requiresConfirm) {
+        const env = envsQ.data?.find((e) => e.id === vars.id);
+        if (env) setConfirmEnv({ env, caseCount: r.caseCount ?? 0, planCount: r.planCount ?? 0 });
+        return;
+      }
+      toast('环境已删除', 'success');
+      setConfirmEnv(null);
+      invalidate();
+    },
+    onError: (e: Error) => {
+      toast(e.message, 'error');
+      setConfirmEnv(null);
+    },
+  });
+
+  const saveObj = useMutation({
+    mutationFn: () => {
+      const payload = buildObjectPayload(objForm);
+      if (objForm.object) return api.environments.patchObject(objForm.object.id, { payload });
+      const env = envsQ.data?.find((e) => e.id === objForm.envId);
+      const typeHasDefault = env?.objects.some((o) => o.objectType === objForm.objectType && o.isDefault) ?? false;
+      return api.environments.createObject(objForm.envId, {
+        objectType: objForm.objectType,
+        payload,
+        isDefault: !typeHasDefault,
+      });
+    },
+    onSuccess: () => {
+      toast(objForm.object ? '配置已保存' : '对象已添加', 'success');
+      setObjForm(EMPTY_OBJ_FORM);
+      invalidate();
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
+  const removeObj = useMutation({
+    mutationFn: (id: string) => api.environments.removeObject(id),
+    onSuccess: () => {
+      toast('对象已删除', 'success');
+      invalidate();
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
+  const openObjForm = (env: Environment, objectType: ObjType, object: EnvironmentObject | null) => {
+    const p = (object?.payload ?? {}) as Record<string, unknown>;
+    setObjForm({
+      ...EMPTY_OBJ_FORM,
+      open: true,
+      envId: env.id,
+      envName: env.name,
+      objectType,
+      object,
+      host: String(p.host ?? ''),
+      port: p.port != null ? String(p.port) : '',
+      dbName: String(p.dbName ?? ''),
+      user: String(p.user ?? ''),
+      // 密码/私钥永不回显：留空提交即保留旧密文
+      sshPort: p.sshPort != null ? String(p.sshPort) : '22',
+      filePath: String(p.filePath ?? ''),
+    });
+  };
+
+  const envs = envsQ.data ?? [];
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="flex items-center justify-between px-5 pt-4 pb-0">
+        <div className="flex items-center gap-2">
+          <IconButton icon="chevronLeft" title="返回项目" onClick={() => navigate('/')} />
+          <div>
+            <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--color-foreground)' }}>
+              环境管理
+            </h1>
+            <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
+              项目级维护 DB / syslog 对象；未被用例、计划、版本显式指定时使用默认环境
+            </p>
+          </div>
+        </div>
+        <Button onClick={() => setEnvForm({ open: true, mode: 'create', id: null, name: '' })}>
+          <Icon name="plus" size={14} />
+          新建环境
+        </Button>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+        {envsQ.isLoading ? (
+          <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+            <Icon name="loader" size={16} className="animate-spin" />
+            <span style={{ marginLeft: 8 }}>加载中...</span>
+          </div>
+        ) : envsQ.isError ? (
+          <div className="text-[13px]" style={{ color: 'var(--color-destructive)' }}>
+            加载失败：{(envsQ.error as Error | null)?.message ?? '未知错误'}
+          </div>
+        ) : envs.length === 0 ? (
+          <EmptyState icon="database" title="还没有环境" description="创建环境并录入数据库 / syslog 对象，供执行时解析连接信息。" />
+        ) : (
+          <div className="flex flex-col gap-3" data-stagger>
+            {envs.map((env) => (
+              <div
+                key={env.id}
+                className="rounded-[var(--radius-sm)] overflow-hidden"
+                style={{ border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-elevated)' }}
+              >
+                <div className="flex items-center gap-3 px-3 py-2" style={{ background: 'var(--color-background-subtle)' }}>
+                  <Icon name="database" size={13} style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }} />
+                  <span className="text-[13px] font-semibold" style={{ color: 'var(--color-foreground)' }}>
+                    {env.name}
+                  </span>
+                  {env.isDefault && (
+                    <span
+                      className="text-[10px] font-semibold uppercase px-1.5 py-[1px] rounded"
+                      style={{ background: 'var(--color-accent-soft)', color: 'var(--color-accent)', letterSpacing: '0.04em' }}
+                    >
+                      默认
+                    </span>
+                  )}
+                  <div className="flex-1" />
+                  <div className="flex items-center gap-1">
+                    <IconButton
+                      icon="star"
+                      title={env.isDefault ? '已是默认环境' : '设为默认环境'}
+                      onClick={() => setDefault.mutate(env.id)}
+                      disabled={env.isDefault}
+                    />
+                    <IconButton icon="pencil" title="重命名" onClick={() => setEnvForm({ open: true, mode: 'edit', id: env.id, name: env.name })} />
+                    <IconButton icon="trash" title="删除环境" tone="destructive" onClick={() => removeEnv.mutate({ id: env.id, confirm: false })} />
+                  </div>
+                </div>
+                <div className="px-3 py-2 flex flex-col">
+                  {env.objects.length === 0 && (
+                    <div className="text-[12px] py-1" style={{ color: 'var(--color-foreground-muted)' }}>
+                      暂无对象，可添加数据库或 syslog 配置
+                    </div>
+                  )}
+                  {env.objects.map((o) => (
+                    <div
+                      key={o.id}
+                      className="flex items-center gap-3 py-1.5 hairline-top"
+                      style={{ borderColor: 'var(--color-muted)' }}
+                    >
+                      <Icon
+                        name={o.objectType === 'db' ? 'database' : 'terminal'}
+                        size={12}
+                        style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }}
+                      />
+                      <span className="text-[12px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>
+                        {o.objectType === 'db' ? '数据库' : 'syslog'}
+                        {o.label ? ` · ${o.label}` : ''}
+                      </span>
+                      {o.isDefault && (
+                        <span
+                          className="text-[10px] px-1.5 py-[1px] rounded"
+                          style={{ background: 'var(--color-accent-soft)', color: 'var(--color-accent)' }}
+                        >
+                          默认
+                        </span>
+                      )}
+                      <span className="text-[11px] truncate" style={{ color: 'var(--color-foreground-muted)' }}>
+                        {objectSummary(o) || '未填写'}
+                      </span>
+                      <div className="flex-1" />
+                      <div className="flex items-center gap-1">
+                        <IconButton icon="pencil" title="编辑对象" onClick={() => openObjForm(env, o.objectType, o)} />
+                        <IconButton icon="trash" title="删除对象" tone="destructive" onClick={() => removeObj.mutate(o.id)} />
+                      </div>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => openObjForm(env, 'db', null)}
+                      className="flex items-center gap-1.5 text-[12px]"
+                      style={{ background: 'transparent', border: 'none', color: 'var(--color-accent)', cursor: 'pointer', padding: 0 }}
+                    >
+                      <Icon name="plus" size={12} />
+                      数据库
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openObjForm(env, 'syslog', null)}
+                      className="flex items-center gap-1.5 text-[12px]"
+                      style={{ background: 'transparent', border: 'none', color: 'var(--color-accent)', cursor: 'pointer', padding: 0 }}
+                    >
+                      <Icon name="plus" size={12} />
+                      syslog
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 环境新建/重命名弹窗 */}
+      <Dialog open={envForm.open} onOpenChange={(open) => setEnvForm((f) => ({ ...f, open }))}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{envForm.mode === 'create' ? '新建环境' : '重命名环境'}</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 px-5 py-4">
+            <Input
+              label="环境名"
+              placeholder="如：开发测试、预生产"
+              value={envForm.name}
+              onChange={(e) => setEnvForm((f) => ({ ...f, name: e.target.value }))}
+            />
+          </div>
+          <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--color-border)' }}>
+            <Button variant="ghost" onClick={() => setEnvForm(EMPTY_ENV_FORM)}>取消</Button>
+            <Button disabled={!envForm.name.trim() || saveEnv.isPending} onClick={() => saveEnv.mutate()}>
+              {saveEnv.isPending ? '保存中...' : '保存'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 对象（DB / syslog）编辑弹窗 */}
+      <Dialog open={objForm.open} onOpenChange={(open) => setObjForm((f) => ({ ...f, open }))}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {objForm.object ? '编辑' : '添加'}{objForm.objectType === 'db' ? '数据库' : ' syslog'} · {objForm.envName}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 min-h-0 px-5 py-4 overflow-y-auto flex flex-col gap-3">
+            {objForm.objectType === 'db' ? (
+              <>
+                <Input label="数据库主机" value={objForm.host} onChange={(e) => setObjForm((f) => ({ ...f, host: e.target.value }))} placeholder="db.example.com" />
+                <Input label="数据库端口" value={objForm.port} onChange={(e) => setObjForm((f) => ({ ...f, port: e.target.value }))} placeholder="5432" />
+                <Input label="数据库名" value={objForm.dbName} onChange={(e) => setObjForm((f) => ({ ...f, dbName: e.target.value }))} />
+                <Input label="数据库用户" value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
+                <Input
+                  label="数据库密码"
+                  type="password"
+                  value={objForm.password}
+                  onChange={(e) => setObjForm((f) => ({ ...f, password: e.target.value }))}
+                  placeholder={objForm.object ? '留空表示不修改' : '留空表示不设置'}
+                />
+              </>
+            ) : (
+              <>
+                <Input label="syslog 主机" value={objForm.host} onChange={(e) => setObjForm((f) => ({ ...f, host: e.target.value }))} placeholder="logs.example.com" />
+                <Input label="syslog 用户" value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
+                <Input label="SSH 端口" value={objForm.sshPort} onChange={(e) => setObjForm((f) => ({ ...f, sshPort: e.target.value }))} placeholder="22" />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>SSH 私钥（PEM）</label>
+                  <textarea
+                    className="input-base"
+                    rows={6}
+                    value={objForm.privateKey}
+                    onChange={(e) => setObjForm((f) => ({ ...f, privateKey: e.target.value }))}
+                    placeholder={objForm.object ? '留空表示不修改' : '首次添加时填写'}
+                  />
+                </div>
+                <Input label="syslog 文件路径" value={objForm.filePath} onChange={(e) => setObjForm((f) => ({ ...f, filePath: e.target.value }))} placeholder="/var/log/syslog" />
+              </>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 px-5 py-3 hairline-top shrink-0" style={{ borderColor: 'var(--color-border)' }}>
+            <Button variant="ghost" onClick={() => setObjForm(EMPTY_OBJ_FORM)} disabled={saveObj.isPending}>取消</Button>
+            <Button disabled={saveObj.isPending} onClick={() => saveObj.mutate()}>
+              {saveObj.isPending ? '保存中...' : objForm.object ? '保存' : '添加'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 删除环境确认（被用例/计划引用时两段确认） */}
+      <Dialog open={!!confirmEnv} onOpenChange={(open) => { if (!open) setConfirmEnv(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>删除环境</DialogTitle></DialogHeader>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+            「{confirmEnv?.env.name}」被 {confirmEnv?.caseCount} 个用例、{confirmEnv?.planCount} 个计划引用。
+            删除后这些引用会自动清空，执行时回退到项目默认环境。确定删除？
+          </div>
+          <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--color-border)' }}>
+            <Button variant="ghost" onClick={() => setConfirmEnv(null)}>取消</Button>
+            <Button
+              variant="danger"
+              disabled={removeEnv.isPending}
+              onClick={() => confirmEnv && removeEnv.mutate({ id: confirmEnv.env.id, confirm: true })}
+            >
+              {removeEnv.isPending ? '删除中...' : '确认删除'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

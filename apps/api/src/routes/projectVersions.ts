@@ -2,9 +2,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { eq, sql, and } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { projects, projectVersions, testCases, testEnvironments, executionPlans } from '../db/schema.js';
+import { projects, projectVersions, testCases, executionPlans } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
-import { assertProjectVisible, assertVersionVisible } from '../services/projectAccess.js';
+import { assertEnvironmentVisible, assertProjectVisible, assertVersionVisible } from '../services/projectAccess.js';
 import { listRefs, type GitProviderName } from '../services/gitProvider.js';
 import { requireManager } from '../middleware/auth.js';
 
@@ -26,6 +26,7 @@ const PatchBody = z.object({
   ref: z.string().max(200).nullable().optional(),
   refKind: RefKindEnum.nullable().optional(),
   defaultUrl: z.string().max(2000).nullable().optional(),
+  environmentId: z.string().uuid().nullable().optional(),
 });
 
 projectVersionsRoute.get('/projects/:projectId/versions', async (req, res) => {
@@ -34,25 +35,25 @@ projectVersionsRoute.get('/projects/:projectId/versions', async (req, res) => {
   const rows = await db.select().from(projectVersions).where(eq(projectVersions.projectId, pid)).orderBy(projectVersions.createdAt);
   const counts = await db.execute(sql`
     SELECT v.id,
-      (SELECT count(*) FROM test_cases c WHERE c.version_id = v.id)         AS case_count,
-      (SELECT count(*) FROM test_environments e WHERE e.version_id = v.id)  AS environment_count,
-      (SELECT count(*) FROM execution_plans p WHERE p.version_id = v.id)    AS plan_count
+      (SELECT count(*) FROM test_cases c WHERE c.version_id = v.id)          AS case_count,
+      (SELECT count(*) FROM execution_plans p WHERE p.version_id = v.id)     AS plan_count,
+      (SELECT e.name FROM test_environments e WHERE e.id = v.environment_id) AS environment_name
     FROM project_versions v
     WHERE v.project_id = ${pid}
   `);
-  const byId = new Map<string, { case_count: number; environment_count: number; plan_count: number }>();
-  for (const r of counts.rows as Array<{ id: string; case_count: string; environment_count: string; plan_count: string }>) {
+  const byId = new Map<string, { case_count: number; plan_count: number; environment_name: string | null }>();
+  for (const r of counts.rows as Array<{ id: string; case_count: string; plan_count: string; environment_name: string | null }>) {
     byId.set(r.id, {
       case_count: Number(r.case_count),
-      environment_count: Number(r.environment_count),
       plan_count: Number(r.plan_count),
+      environment_name: r.environment_name,
     });
   }
   res.json(rows.map((v) => ({
     ...v,
     caseCount: byId.get(v.id)?.case_count ?? 0,
-    environmentCount: byId.get(v.id)?.environment_count ?? 0,
     planCount: byId.get(v.id)?.plan_count ?? 0,
+    environmentName: byId.get(v.id)?.environment_name ?? null,
   })));
 });
 
@@ -70,7 +71,6 @@ projectVersionsRoute.post('/projects/:projectId/versions', async (req, res) => {
     ref: body.ref ?? null,
     refKind: body.refKind ?? null,
     defaultUrl: body.defaultUrl ?? null,
-    isDefault: false,
   }).returning();
   res.status(201).json(rows[0]);
 });
@@ -86,6 +86,11 @@ projectVersionsRoute.patch('/project-versions/:id', async (req, res) => {
       throw new HttpError(409, 'version_name_taken', `version name "${body.name}" already exists`);
     }
   }
+  // 关联环境必须属于同项目；null 表示清除关联（回退项目默认环境）
+  if (body.environmentId != null) {
+    const { projectId: envPid } = await assertEnvironmentVisible(body.environmentId, req.user!);
+    if (envPid !== projectId) throw new HttpError(400, 'env_project_mismatch', 'environment does not belong to this project');
+  }
   // ref 和 refKind 强相关：ref 非空时 refKind 必填；refKind 置空时 ref 也清空
   const nextRef = body.ref === undefined ? undefined : body.ref;
   const nextRefKind = body.refKind === undefined ? undefined : body.refKind;
@@ -95,6 +100,7 @@ projectVersionsRoute.patch('/project-versions/:id', async (req, res) => {
   if (nextRef !== undefined) set.ref = nextRef;
   if (nextRefKind !== undefined) set.refKind = nextRefKind;
   if (body.defaultUrl !== undefined) set.defaultUrl = body.defaultUrl;
+  if (body.environmentId !== undefined) set.environmentId = body.environmentId;
   await db.update(projectVersions).set(set as Partial<typeof projectVersions.$inferInsert>).where(eq(projectVersions.id, id));
   const rows = await db.select().from(projectVersions).where(eq(projectVersions.id, id));
   res.json(rows[0]);
@@ -122,21 +128,6 @@ projectVersionsRoute.get('/projects/:projectId/refs', requireManager, async (req
   }
 });
 
-projectVersionsRoute.post('/projects/:projectId/versions/:id/set-default', async (req, res) => {
-  const pid = String(req.params.projectId);
-  const id = String(req.params.id);
-  await assertProjectVisible(pid, req.user!);
-  await assertVersionVisible(id, req.user!);
-  await db.transaction(async (tx) => {
-    await tx.update(projectVersions).set({ isDefault: false, updatedAt: new Date() })
-      .where(eq(projectVersions.projectId, pid));
-    await tx.update(projectVersions).set({ isDefault: true, updatedAt: new Date() })
-      .where(eq(projectVersions.id, id));
-  });
-  const rows = await db.select().from(projectVersions).where(eq(projectVersions.id, id));
-  res.json(rows[0]);
-});
-
 projectVersionsRoute.delete('/projects/:projectId/versions/:id', async (req, res) => {
   const pid = String(req.params.projectId);
   const id = String(req.params.id);
@@ -145,33 +136,14 @@ projectVersionsRoute.delete('/projects/:projectId/versions/:id', async (req, res
   const all = await db.select({ id: projectVersions.id }).from(projectVersions).where(eq(projectVersions.projectId, pid));
   if (all.length <= 1) throw new HttpError(400, 'last_version', 'cannot delete the last version of a project');
   const caseCount = (await db.select({ id: testCases.id }).from(testCases).where(eq(testCases.versionId, id))).length;
-  const envCount = (await db.select({ id: testEnvironments.id }).from(testEnvironments).where(eq(testEnvironments.versionId, id))).length;
   const planCount = (await db.select({ id: executionPlans.id }).from(executionPlans).where(eq(executionPlans.versionId, id))).length;
-  if (caseCount + envCount + planCount > 0) {
-    throw new HttpError(400, 'version_not_empty', `version has ${caseCount} cases, ${envCount} environments, ${planCount} plans`, {
-      caseCount, envCount, planCount,
+  if (caseCount + planCount > 0) {
+    throw new HttpError(400, 'version_not_empty', `version has ${caseCount} cases, ${planCount} plans`, {
+      caseCount, planCount,
     } as Record<string, unknown>);
   }
   await db.transaction(async (tx) => {
-    const [v] = await tx.select().from(projectVersions).where(eq(projectVersions.id, id)).limit(1);
-    if (v?.isDefault) {
-      const next = await tx.select({ id: projectVersions.id }).from(projectVersions)
-        .where(and(eq(projectVersions.projectId, pid))).orderBy(projectVersions.createdAt).limit(1);
-      if (next[0]) await tx.update(projectVersions).set({ isDefault: true, updatedAt: new Date() }).where(eq(projectVersions.id, next[0].id));
-    }
     await tx.delete(projectVersions).where(eq(projectVersions.id, id));
-  });
-  res.status(204).end();
-});
-
-projectVersionsRoute.post('/project-versions/:id/set-default', async (req, res) => {
-  const id = String(req.params.id);
-  const { projectId } = await assertVersionVisible(id, req.user!);
-  await db.transaction(async (tx) => {
-    await tx.update(projectVersions).set({ isDefault: false, updatedAt: new Date() })
-      .where(eq(projectVersions.projectId, projectId));
-    await tx.update(projectVersions).set({ isDefault: true, updatedAt: new Date() })
-      .where(eq(projectVersions.id, id));
   });
   res.status(204).end();
 });
@@ -182,20 +154,13 @@ projectVersionsRoute.delete('/project-versions/:id', async (req, res) => {
   const all = await db.select({ id: projectVersions.id }).from(projectVersions).where(eq(projectVersions.projectId, projectId));
   if (all.length <= 1) throw new HttpError(400, 'last_version', 'cannot delete the last version of a project');
   const caseCount = (await db.select({ id: testCases.id }).from(testCases).where(eq(testCases.versionId, id))).length;
-  const envCount = (await db.select({ id: testEnvironments.id }).from(testEnvironments).where(eq(testEnvironments.versionId, id))).length;
   const planCount = (await db.select({ id: executionPlans.id }).from(executionPlans).where(eq(executionPlans.versionId, id))).length;
-  if (caseCount + envCount + planCount > 0) {
-    throw new HttpError(400, 'version_not_empty', `version has ${caseCount} cases, ${envCount} environments, ${planCount} plans`, {
-      caseCount, envCount, planCount,
+  if (caseCount + planCount > 0) {
+    throw new HttpError(400, 'version_not_empty', `version has ${caseCount} cases, ${planCount} plans`, {
+      caseCount, planCount,
     } as Record<string, unknown>);
   }
   await db.transaction(async (tx) => {
-    const [v] = await tx.select().from(projectVersions).where(eq(projectVersions.id, id)).limit(1);
-    if (v?.isDefault) {
-      const next = await tx.select({ id: projectVersions.id }).from(projectVersions)
-        .where(and(eq(projectVersions.projectId, projectId))).orderBy(projectVersions.createdAt).limit(1);
-      if (next[0]) await tx.update(projectVersions).set({ isDefault: true, updatedAt: new Date() }).where(eq(projectVersions.id, next[0].id));
-    }
     await tx.delete(projectVersions).where(eq(projectVersions.id, id));
   });
   res.status(204).end();

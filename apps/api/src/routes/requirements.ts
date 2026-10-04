@@ -2,8 +2,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { db } from '../db/client.js';
-import { requirements, groups, aiThreads, aiWorkspaceState, scenarios, testCases, testSteps, projectVersions } from '../db/schema.js';
-import { eq, asc, inArray, and } from 'drizzle-orm';
+import { requirements, groups, aiThreads, aiWorkspaceState, scenarios, testCases, testSteps } from '../db/schema.js';
+import { eq, asc, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { compileAiStepsInPlace } from '../agent/aiStepCompile.js';
@@ -142,16 +142,12 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
   await assertProjectVisible(rows[0]!.projectId, req.user!);
   const g = (await db.select().from(groups).where(eq(groups.id, body.groupId)).limit(1))[0];
   if (!g || g.projectId !== rows[0]!.projectId) throw new HttpError(404, 'not_found', 'group not found');
-  // 解析 targetVersionId：未传 → 默认版本；传了 → 必须同 project
-  let versionId = body.targetVersionId;
-  if (versionId) {
+  // targetVersionId 必填：前端所有入口都显式带版本，无默认版本回退；传了则必须同 project
+  const versionId = body.targetVersionId;
+  if (!versionId) throw new HttpError(400, 'version_required', 'targetVersionId is required');
+  {
     const { projectId: vp } = await assertVersionVisible(versionId, req.user!);
     if (vp !== rows[0]!.projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to requirement project');
-  } else {
-    const def = (await db.select({ id: projectVersions.id }).from(projectVersions)
-      .where(and(eq(projectVersions.projectId, rows[0]!.projectId), eq(projectVersions.isDefault, true))).limit(1))[0];
-    if (!def) throw new HttpError(404, 'not_found', 'project has no default version');
-    versionId = def.id;
   }
 
   const doc = await loadDoc(req.params.id);

@@ -35,22 +35,22 @@ afterAll(async () => {
   await container.stop();
 });
 
-async function makeCase(groupId: string, title: string): Promise<{ id: string }> {
-  const c = await request(app).post('/api/cases').send({ title, groupId });
+async function makeCase(groupId: string, versionId: string, title: string): Promise<{ id: string }> {
+  const c = await request(app).post('/api/cases').send({ title, groupId, versionId });
   return c.body as { id: string };
 }
 
 describe('case status', () => {
   it('create 默认 draft', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await makeCase(groupId, '默认态');
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await makeCase(groupId, versionId, '默认态');
     const detail = await request(app).get(`/api/cases/${c.id}`);
     expect(detail.body.status).toBe('draft');
   });
 
   it('PATCH 合法 status 更新成功', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await makeCase(groupId, '流转');
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await makeCase(groupId, versionId, '流转');
     const r = await request(app).patch(`/api/cases/${c.id}`).send({ status: 'review' });
     expect(r.status).toBe(200);
     expect(r.body.status).toBe('review');
@@ -62,16 +62,16 @@ describe('case status', () => {
   });
 
   it('PATCH 非法 status 400', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await makeCase(groupId, '非法值');
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await makeCase(groupId, versionId, '非法值');
     const r = await request(app).patch(`/api/cases/${c.id}`).send({ status: 'done' });
     expect(r.status).toBe(400);
   });
 
   it('batch-status 批量更新并返回 count', async () => {
-    const { groupId } = await seedProject(pool);
-    const c1 = await makeCase(groupId, 'a');
-    const c2 = await makeCase(groupId, 'b');
+    const { groupId, versionId } = await seedProject(pool);
+    const c1 = await makeCase(groupId, versionId, 'a');
+    const c2 = await makeCase(groupId, versionId, 'b');
     const r = await request(app).post('/api/cases/batch-status').send({ caseIds: [c1.id, c2.id], status: 'ready' });
     expect(r.status).toBe(200);
     expect(r.body.count).toBe(2);
@@ -81,8 +81,8 @@ describe('case status', () => {
   });
 
   it('batch-status 含未知 id 404；空数组 400；非法枚举 400', async () => {
-    const { groupId } = await seedProject(pool);
-    const c1 = await makeCase(groupId, 'x');
+    const { groupId, versionId } = await seedProject(pool);
+    const c1 = await makeCase(groupId, versionId, 'x');
     const unknown = await request(app)
       .post('/api/cases/batch-status')
       .send({ caseIds: [c1.id, '00000000-0000-0000-0000-000000000000'], status: 'ready' });

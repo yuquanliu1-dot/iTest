@@ -47,15 +47,15 @@ afterAll(async () => {
 
 describe('cases + steps', () => {
   it('POST /api/cases creates', async () => {
-    const { groupId } = await seedProject(pool);
-    const r = await request(app).post('/api/cases').send({ title: '登录成功', priority: 'P1', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const r = await request(app).post('/api/cases').send({ title: '登录成功', priority: 'P1', groupId, versionId });
     expect(r.status).toBe(200);
     expect(r.body.title).toBe('登录成功');
   });
 
   it('GET /api/cases/:id returns case with steps', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'X', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'X', groupId, versionId });
     const r = await request(app).get(`/api/cases/${c.body.id}`);
     expect(r.status).toBe(200);
     expect(Array.isArray(r.body.steps)).toBe(true);
@@ -63,8 +63,8 @@ describe('cases + steps', () => {
   });
 
   it('POST /api/cases/:id/steps appends', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'Y', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'Y', groupId, versionId });
     const r = await request(app).post(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         { order: 1, source: 'agent', action: { kind: 'navigate', url: 'https://example.com/login' } },
@@ -76,8 +76,8 @@ describe('cases + steps', () => {
   });
 
   it('POST /api/cases/:id/steps validates DSL', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'Z', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'Z', groupId, versionId });
     const r = await request(app).post(`/api/cases/${c.body.id}/steps`).send({
       steps: [{ order: 1, source: 'agent', action: { kind: 'click', locator: [] } }],
     });
@@ -85,8 +85,8 @@ describe('cases + steps', () => {
   });
 
   it('PUT reorder rewrites order to 1..n', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'R', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'R', groupId, versionId });
     const appended = await request(app).post(`/api/cases/${c.body.id}/steps`).send({
       steps: [1, 2, 3].map((order) => ({
         order,
@@ -105,8 +105,8 @@ describe('cases + steps', () => {
   });
 
   it('PUT reorder rejects partial id list', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'P', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'P', groupId, versionId });
     const appended = await request(app).post(`/api/cases/${c.body.id}/steps`).send({
       steps: [1, 2].map((order) => ({
         order,
@@ -122,8 +122,8 @@ describe('cases + steps', () => {
   });
 
   it('DELETE step removes it and compacts order', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'D', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'D', groupId, versionId });
     const appended = await request(app).post(`/api/cases/${c.body.id}/steps`).send({
       steps: [1, 2, 3].map((order) => ({
         order,
@@ -140,8 +140,8 @@ describe('cases + steps', () => {
   });
 
   it('DELETE unknown step returns 404', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'N', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'N', groupId, versionId });
     const r = await request(app).delete(`/api/cases/${c.body.id}/steps/00000000-0000-0000-0000-000000000000`);
     expect(r.status).toBe(404);
   });
@@ -157,27 +157,27 @@ describe('cases + steps', () => {
   it('GET /api/cases?groupId filters', async () => {
     const a = await seedProject(pool);
     const b = await seedProject(pool);
-    await request(app).post('/api/cases').send({ title: 'in A', groupId: a.groupId });
-    await request(app).post('/api/cases').send({ title: 'in B', groupId: b.groupId });
+    await request(app).post('/api/cases').send({ title: 'in A', groupId: a.groupId, versionId: a.versionId });
+    await request(app).post('/api/cases').send({ title: 'in B', groupId: b.groupId, versionId: b.versionId });
     const r = await request(app).get(`/api/cases?groupId=${a.groupId}`);
     expect(r.body).toHaveLength(1);
     expect(r.body[0].title).toBe('in A');
   });
 
   it('GET /api/cases?projectId filters across groups', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    await request(app).post('/api/cases').send({ title: 'p1', groupId });
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    await request(app).post('/api/cases').send({ title: 'p1', groupId, versionId });
     const other = await seedProject(pool);
-    await request(app).post('/api/cases').send({ title: 'p2', groupId: other.groupId });
+    await request(app).post('/api/cases').send({ title: 'p2', groupId: other.groupId, versionId: other.versionId });
     const r = await request(app).get(`/api/cases?projectId=${projectId}`);
     expect(r.body).toHaveLength(1);
     expect(r.body[0].title).toBe('p1');
   });
 
   it('GET /api/cases/:id resolves url by chain case > group > project', async () => {
-    const { projectId, groupId } = await seedProject(pool);
+    const { projectId, groupId, versionId } = await seedProject(pool);
     await pool.query(`UPDATE projects SET default_url = 'https://proj.test' WHERE id = $1`, [projectId]);
-    const c1 = await request(app).post('/api/cases').send({ title: 'inherit', groupId });
+    const c1 = await request(app).post('/api/cases').send({ title: 'inherit', groupId, versionId });
     const d1 = await request(app).get(`/api/cases/${c1.body.id}`);
     expect(d1.body.resolvedUrl).toBe('https://proj.test');
 
@@ -185,7 +185,7 @@ describe('cases + steps', () => {
     const d2 = await request(app).get(`/api/cases/${c1.body.id}`);
     expect(d2.body.resolvedUrl).toBe('https://group.test');
 
-    const c2 = await request(app).post('/api/cases').send({ title: 'own', groupId, url: 'https://case.test' });
+    const c2 = await request(app).post('/api/cases').send({ title: 'own', groupId, versionId, url: 'https://case.test' });
     const d3 = await request(app).get(`/api/cases/${c2.body.id}`);
     expect(d3.body.resolvedUrl).toBe('https://case.test');
   });
@@ -193,23 +193,23 @@ describe('cases + steps', () => {
   it('PATCH /api/cases/:id moves case to another group', async () => {
     const a = await seedProject(pool);
     const b = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'move', groupId: a.groupId });
+    const c = await request(app).post('/api/cases').send({ title: 'move', groupId: a.groupId, versionId: a.versionId });
     const r = await request(app).patch(`/api/cases/${c.body.id}`).send({ groupId: b.groupId });
     expect(r.status).toBe(200);
     expect(r.body.groupId).toBe(b.groupId);
   });
 
   it('PATCH window_strategy=custom requires width/height', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'W', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'W', groupId, versionId });
     const r = await request(app).patch(`/api/cases/${c.body.id}`).send({ windowStrategy: 'custom' });
     expect(r.status).toBe(400);
     expect(JSON.stringify(r.body)).toMatch(/windowWidth/);
   });
 
   it('PATCH window_strategy=custom with width/height succeeds', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'W2', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'W2', groupId, versionId });
     const r = await request(app)
       .patch(`/api/cases/${c.body.id}`)
       .send({ windowStrategy: 'custom', windowWidth: 1024, windowHeight: 768 });
@@ -220,16 +220,16 @@ describe('cases + steps', () => {
   });
 
   it('PATCH incognito=true persists', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'W3', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'W3', groupId, versionId });
     const r = await request(app).patch(`/api/cases/${c.body.id}`).send({ incognito: true });
     expect(r.status).toBe(200);
     expect(r.body.incognito).toBe(true);
   });
 
   it('PUT /api/cases/:id/steps replaces all steps with name/delayMs', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'R', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'R', groupId, versionId });
     await request(app).post(`/api/cases/${c.body.id}/steps`).send({
       steps: [{ order: 1, source: 'agent', action: { kind: 'navigate', url: 'https://a.com' } }],
     });
@@ -262,8 +262,8 @@ describe('cases + steps', () => {
     };
     llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
     try {
-      const { groupId } = await seedProject(pool);
-      const c = await request(app).post('/api/cases').send({ title: 'AI', groupId });
+      const { groupId, versionId } = await seedProject(pool);
+      const c = await request(app).post('/api/cases').send({ title: 'AI', groupId, versionId });
       const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
         steps: [
           // 不用「等待主区域」这种会被启发式误匹配的文本；走 LLM 兜底
@@ -280,8 +280,8 @@ describe('cases + steps', () => {
   });
 
   it('PUT /api/cases/:id/steps allows empty array (clear all)', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'E', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'E', groupId, versionId });
     const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({ steps: [] });
     expect(r.status).toBe(200);
     expect(r.body.steps).toHaveLength(0);
@@ -300,8 +300,8 @@ describe('cases + steps', () => {
     };
     llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
     try {
-      const { groupId } = await seedProject(pool);
-      const c = await request(app).post('/api/cases').send({ title: 'RC', groupId });
+      const { groupId, versionId } = await seedProject(pool);
+      const c = await request(app).post('/api/cases').send({ title: 'RC', groupId, versionId });
       // "关闭弹窗" 不命中任何 navigate / assert 启发式，走 LLM 兜底
       const ok = await request(app).post(`/api/cases/${c.body.id}/steps/recompile`).send({ instruction: '关闭弹窗' });
       expect(ok.status).toBe(200);
@@ -314,8 +314,8 @@ describe('cases + steps', () => {
   it('PUT stores sensitive fill as ciphertext and never echoes plaintext', async () => {
     const { ensureKeyLoaded } = await import('../src/lib/secret-crypto.js');
     ensureKeyLoaded();
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'S', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'S', groupId, versionId });
     const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
@@ -337,8 +337,8 @@ describe('cases + steps', () => {
   });
 
   it('PUT rejects upload step with unknown fileId', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'U', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'U', groupId, versionId });
     const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
@@ -351,8 +351,8 @@ describe('cases + steps', () => {
   });
 
   it('PUT accepts upload step with valid fileId', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'U2', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'U2', groupId, versionId });
     const buf = Buffer.from('file-body');
     const up = await request(app)
       .post(`/api/cases/${c.body.id}/attachments`)
@@ -372,10 +372,10 @@ describe('cases + steps', () => {
 
   it('PUT rejects upload step referencing a fileId from another project', async () => {
     // Two separate projects → two separate groups/cases
-    const { groupId: gA } = await seedProject(pool);
-    const cA = await request(app).post('/api/cases').send({ title: 'A', groupId: gA });
-    const { groupId: gB } = await seedProject(pool);
-    const cB = await request(app).post('/api/cases').send({ title: 'B', groupId: gB });
+    const { groupId: gA, versionId: vA } = await seedProject(pool);
+    const cA = await request(app).post('/api/cases').send({ title: 'A', groupId: gA, versionId: vA });
+    const { groupId: gB, versionId: vB } = await seedProject(pool);
+    const cB = await request(app).post('/api/cases').send({ title: 'B', groupId: gB, versionId: vB });
     // Upload under case A
     const up = await request(app)
       .post(`/api/cases/${cA.body.id}/attachments`)
@@ -397,8 +397,8 @@ describe('cases + steps', () => {
   });
 
   it('PUT accepts upload step referencing a fileId from the same project but a different case', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const cA = await request(app).post('/api/cases').send({ title: 'A', groupId });
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const cA = await request(app).post('/api/cases').send({ title: 'A', groupId, versionId });
     const other = await pool.query(`INSERT INTO test_cases(group_id, title) VALUES ($1, 'Other') RETURNING id`, [groupId]);
     const caseB = other.rows[0]!.id as string;
     const up = await request(app)
@@ -421,8 +421,8 @@ describe('cases + steps', () => {
 
   it('GET /api/cases/:id/steps/secrets/:stepId returns plaintext for recorder token', async () => {
     process.env.RECORDER_TOKEN_SECRET = 'dev-secret-change-me';
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'SC', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'SC', groupId, versionId });
     const put = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
@@ -445,8 +445,8 @@ describe('cases + steps', () => {
   });
 
   it('GET secrets without token returns 403', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'SN', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'SN', groupId, versionId });
     const put = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
@@ -468,8 +468,8 @@ describe('cases + steps', () => {
 
 describe('steps PUT migration', () => {
   it('upgrades legacy assertText on PUT, target=specifiedElement match=equals', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'M', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'M', groupId, versionId });
     const r = await request(app)
       .put(`/api/cases/${c.body.id}/steps`)
       .send({
@@ -493,8 +493,8 @@ describe('steps PUT migration', () => {
   });
 
   it('preserves explicit target/match on PUT', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'M2', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'M2', groupId, versionId });
     const r = await request(app)
       .put(`/api/cases/${c.body.id}/steps`)
       .send({
@@ -520,8 +520,8 @@ describe('steps PUT migration', () => {
 
 describe('steps PUT — aiStep split + fallback', () => {
   it('splits numbered aiStep into multiple steps on PUT', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'split', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'split', groupId, versionId });
     const r = await request(app)
       .put(`/api/cases/${c.body.id}/steps`)
       .send({
@@ -556,8 +556,8 @@ describe('steps PUT — aiStep split + fallback', () => {
     };
     llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
     try {
-      const { groupId } = await seedProject(pool);
-      const c = await request(app).post('/api/cases').send({ title: 'fallback', groupId });
+      const { groupId, versionId } = await seedProject(pool);
+      const c = await request(app).post('/api/cases').send({ title: 'fallback', groupId, versionId });
       const r = await request(app)
         .put(`/api/cases/${c.body.id}/steps`)
         .send({

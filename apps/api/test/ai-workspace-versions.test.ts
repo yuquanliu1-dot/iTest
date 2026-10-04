@@ -56,25 +56,24 @@ async function makeRequirement(projectId: string, content = 'c'): Promise<string
 }
 
 describe('ai-workspace save targetVersionId', () => {
-  it('未传 targetVersionId 时用例落到默认版本', async () => {
+  it('未传 targetVersionId 返回 400 version_required', async () => {
     const ws = await import('../src/pi/workspace.js');
-    const { projectId, groupId, versionId } = await seedProject(pool);
+    const { projectId, groupId } = await seedProject(pool);
     const rid = await makeRequirement(projectId);
     await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
       { id: 'c1', title: 'C1', description: null, priority: 'P1', steps: [{ name: 'n', action: 'a', assertion: null }] },
     ] });
     const r = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
       .send({ groupId, scenarioIds: ['s1'], caseIds: ['c1'] });
-    expect(r.status).toBe(200);
-    const cases = await pool.query(`SELECT version_id FROM test_cases WHERE requirement_id = $1`, [rid]);
-    expect(cases.rows[0]!.version_id).toBe(versionId);
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('version_required');
   });
 
   it('显式传 targetVersionId 时用例落到指定版本', async () => {
     const ws = await import('../src/pi/workspace.js');
     const { projectId, groupId } = await seedProject(pool);
     const v1 = await pool.query(
-      `INSERT INTO project_versions(project_id, name, is_default) VALUES ($1, 'v1.0', false) RETURNING id`,
+      `INSERT INTO project_versions(project_id, name) VALUES ($1, 'v1.0') RETURNING id`,
       [projectId],
     );
     const v1Id = v1.rows[0]!.id as string;

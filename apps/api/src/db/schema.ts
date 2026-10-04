@@ -246,18 +246,19 @@ export const groups = pgTable('groups', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-// 项目版本：测试环境 / 用例 / 执行计划全部按版本工作；每项目必有 1 个 is_default=true。
+// 项目版本：测试环境 / 用例 / 执行计划全部按版本工作；前端操作一律显式携带 versionId，无默认版本。
 // ref / refKind 指向项目仓库的具体 git ref（branch 或 tag），给 AI 工作台 checkout 时精确定位。
 export const projectVersions = pgTable('project_versions', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 80 }).notNull(),
   description: text('description'),
-  isDefault: boolean('is_default').notNull().default(false),
   ref: varchar('ref', { length: 200 }),
   refKind: varchar('ref_kind', { length: 16 }),
   // 版本级默认域名：覆盖（而非替代）项目级 default_url，留空走项目级。
   defaultUrl: text('default_url'),
+  // 版本关联环境：空 → 执行期回退项目默认环境（test_environments.is_default）
+  environmentId: uuid('environment_id').references(() => testEnvironments.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
@@ -377,25 +378,26 @@ export const caseTags = pgTable('case_tags', {
 export const testEnvironments = pgTable('test_environments', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  versionId: uuid('version_id').notNull().references(() => projectVersions.id, { onDelete: 'restrict' }),
   name: varchar('name', { length: 120 }).notNull(),
-  dbHost: varchar('db_host', { length: 200 }),
-  dbPort: integer('db_port'),
-  dbName: varchar('db_name', { length: 120 }),
-  dbUser: varchar('db_user', { length: 120 }),
-  dbPasswordCiphertext: text('db_password_ciphertext'),
-  dbPasswordIv: text('db_password_iv'),
-  dbPasswordTag: text('db_password_tag'),
-  syslogHost: varchar('syslog_host', { length: 200 }),
-  syslogUser: varchar('syslog_user', { length: 120 }),
-  syslogSshPort: integer('syslog_ssh_port').default(22),
-  syslogKeyCiphertext: text('syslog_key_ciphertext'),
-  syslogKeyIv: text('syslog_key_iv'),
-  syslogKeyTag: text('syslog_key_tag'),
-  syslogFilePath: text('syslog_file_path'),
+  // 项目默认环境：未被 case/plan/version 显式指定环境时的兜底；项目内至多一个
+  isDefault: boolean('is_default').notNull().default(false),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
   projectNameUq: unique('test_environments_project_name_uq').on(t.projectId, t.name),
-  versionIdIdx: index('test_environments_version_idx').on(t.versionId),
+}));
+
+// 环境对象：一个环境下的多类资源（db / syslog，未来可扩展），每类可多条、有唯一默认。
+// 秘密（db 密码 / syslog SSH 私钥）以 { c, i, t } base64 三元组存于 payload.secret，AES-256-GCM。
+export const environmentObjects = pgTable('environment_objects', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  environmentId: uuid('environment_id').notNull().references(() => testEnvironments.id, { onDelete: 'cascade' }),
+  objectType: varchar('object_type', { length: 32 }).notNull(),
+  label: varchar('label', { length: 120 }).notNull().default('默认'),
+  payload: jsonb('payload').notNull().default({}),
+  isDefault: boolean('is_default').notNull().default(false),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  envIdx: index('environment_objects_env_idx').on(t.environmentId),
 }));

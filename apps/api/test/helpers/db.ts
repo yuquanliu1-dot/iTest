@@ -45,7 +45,11 @@ CREATE TABLE ai_cases (requirement_id uuid REFERENCES requirements(id) ON DELETE
 CREATE INDEX ai_cases_requirement_scenario_idx ON ai_cases (requirement_id, scenario_id);
 CREATE TABLE tags (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid REFERENCES projects(id) ON DELETE CASCADE NOT NULL, name varchar(80) NOT NULL, color varchar(16) NOT NULL, description text, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT tags_project_name_uq UNIQUE(project_id, name));
 CREATE TABLE case_tags (case_id uuid REFERENCES test_cases(id) ON DELETE CASCADE NOT NULL, tag_id uuid REFERENCES tags(id) ON DELETE CASCADE NOT NULL, CONSTRAINT case_tags_pk PRIMARY KEY(case_id, tag_id));
-CREATE TABLE test_environments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid REFERENCES projects(id) ON DELETE CASCADE NOT NULL, name varchar(120) NOT NULL, db_host varchar(200), db_port integer, db_name varchar(120), db_user varchar(120), db_password_ciphertext text, db_password_iv text, db_password_tag text, syslog_host varchar(200), syslog_user varchar(120), syslog_ssh_port integer DEFAULT 22, syslog_key_ciphertext text, syslog_key_iv text, syslog_key_tag text, syslog_file_path text, created_at timestamp NOT NULL DEFAULT NOW(), updated_at timestamp NOT NULL DEFAULT NOW(), CONSTRAINT test_environments_project_name_uq UNIQUE(project_id, name));
+CREATE TABLE test_environments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid REFERENCES projects(id) ON DELETE CASCADE NOT NULL, name varchar(120) NOT NULL, is_default boolean NOT NULL DEFAULT false, created_at timestamp NOT NULL DEFAULT NOW(), updated_at timestamp NOT NULL DEFAULT NOW(), CONSTRAINT test_environments_project_name_uq UNIQUE(project_id, name));
+CREATE UNIQUE INDEX test_environments_project_default_uq ON test_environments(project_id) WHERE is_default;
+CREATE TABLE environment_objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), environment_id uuid REFERENCES test_environments(id) ON DELETE CASCADE NOT NULL, object_type varchar(32) NOT NULL, label varchar(120) NOT NULL DEFAULT '默认', payload jsonb NOT NULL DEFAULT '{}', is_default boolean NOT NULL DEFAULT false, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
+CREATE INDEX environment_objects_env_idx ON environment_objects(environment_id);
+CREATE UNIQUE INDEX environment_objects_env_type_default_uq ON environment_objects(environment_id, object_type) WHERE is_default;
 DO $$ BEGIN
  ALTER TABLE test_cases ADD COLUMN default_env_id uuid REFERENCES test_environments(id) ON DELETE SET NULL;
 EXCEPTION WHEN duplicate_column THEN null;
@@ -54,14 +58,10 @@ DO $$ BEGIN
  ALTER TABLE execution_plans ADD COLUMN environment_id uuid REFERENCES test_environments(id) ON DELETE SET NULL;
 EXCEPTION WHEN duplicate_column THEN null;
 END $$;
-CREATE TABLE project_versions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid REFERENCES projects(id) ON DELETE CASCADE NOT NULL, name varchar(80) NOT NULL, description text, is_default boolean NOT NULL DEFAULT false, ref varchar(200), ref_kind varchar(16), default_url text, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT project_versions_project_name_uq UNIQUE(project_id, name));
+CREATE TABLE project_versions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid REFERENCES projects(id) ON DELETE CASCADE NOT NULL, name varchar(80) NOT NULL, description text, ref varchar(200), ref_kind varchar(16), default_url text, environment_id uuid REFERENCES test_environments(id) ON DELETE SET NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT project_versions_project_name_uq UNIQUE(project_id, name));
 CREATE INDEX project_versions_project_idx ON project_versions(project_id);
 DO $$ BEGIN
   ALTER TABLE test_cases        ADD COLUMN version_id uuid REFERENCES project_versions(id) ON DELETE RESTRICT;
-EXCEPTION WHEN duplicate_column THEN null;
-END $$;
-DO $$ BEGIN
-  ALTER TABLE test_environments ADD COLUMN version_id uuid REFERENCES project_versions(id) ON DELETE RESTRICT;
 EXCEPTION WHEN duplicate_column THEN null;
 END $$;
 DO $$ BEGIN
@@ -70,7 +70,6 @@ EXCEPTION WHEN duplicate_column THEN null;
 END $$;
 -- 测试 schema 不强制 NOT NULL，简化旧测试插入（无 version_id 时由 seedProject 注入）
 CREATE INDEX test_cases_version_idx        ON test_cases(version_id);
-CREATE INDEX test_environments_version_idx ON test_environments(version_id);
 CREATE INDEX execution_plans_version_idx   ON execution_plans(version_id);
 `;
 
@@ -126,7 +125,7 @@ export async function seedProject(pool: Pool): Promise<{ projectId: string; grou
   const projectId = p.rows[0]!.id as string;
   const g = await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, '默认分组') RETURNING id`, [projectId]);
   const v = await pool.query(
-    `INSERT INTO project_versions(project_id, name, is_default) VALUES ($1, 'v0', true) RETURNING id`,
+    `INSERT INTO project_versions(project_id, name) VALUES ($1, 'v0') RETURNING id`,
     [projectId],
   );
   return {

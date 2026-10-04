@@ -154,10 +154,8 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    patch: (id: string, body: Partial<{ name: string; description: string | null; defaultUrl: string | null }>) =>
+    patch: (id: string, body: Partial<{ name: string; description: string | null; defaultUrl: string | null; environmentId: string | null }>) =>
       request<ProjectVersion>(`/project-versions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-    setDefault: (projectId: string, id: string) =>
-      request<ProjectVersion>(`/projects/${projectId}/versions/${id}/set-default`, { method: 'POST' }),
     remove: (projectId: string, id: string) =>
       request<void>(`/projects/${projectId}/versions/${id}`, { method: 'DELETE' }),
     listRefs: (projectId: string, kind: 'branch' | 'tag') =>
@@ -172,51 +170,37 @@ export const api = {
       }),
   },
   environments: {
-    list: (projectId: string, params?: { versionId?: string }) =>
-      request<Environment[]>(`/projects/${projectId}/environments${qs({ versionId: params?.versionId })}`),
+    list: (projectId: string) => request<Environment[]>(`/projects/${projectId}/environments`),
     create: (
       projectId: string,
-      body: Partial<{
+      body: {
         name: string;
-        versionId: string;
-        dbHost: string;
-        dbPort: number;
-        dbName: string;
-        dbUser: string;
-        dbPassword: string;
-        syslogHost: string;
-        syslogUser: string;
-        syslogSshPort: number;
-        syslogKey: string;
-        syslogFilePath: string;
-      }>,
+        objects?: Array<{ objectType: 'db' | 'syslog'; label?: string; payload: Record<string, unknown>; isDefault?: boolean }>;
+      },
     ) =>
       request<Environment>(`/projects/${projectId}/environments`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    patch: (
-      id: string,
-      body: Partial<{
-        name: string;
-        dbHost: string;
-        dbPort: number;
-        dbName: string;
-        dbUser: string;
-        dbPassword: string;
-        syslogHost: string;
-        syslogUser: string;
-        syslogSshPort: number;
-        syslogKey: string;
-        syslogFilePath: string;
-      }>,
-    ) =>
+    patch: (id: string, body: Partial<{ name: string; isDefault: boolean }>) =>
       request<Environment>(`/environments/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string, opts?: { confirm?: boolean }) =>
       request<{ ok: boolean; requiresConfirm?: boolean; caseCount?: number; planCount?: number }>(
         `/environments/${id}${opts?.confirm ? '?confirm=true' : ''}`,
         { method: 'DELETE' },
       ),
+    createObject: (
+      envId: string,
+      body: { objectType: 'db' | 'syslog'; label?: string; payload: Record<string, unknown>; isDefault?: boolean },
+    ) =>
+      request<EnvironmentObject>(`/environments/${envId}/objects`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    patchObject: (id: string, body: Partial<{ label: string; payload: Record<string, unknown> }>) =>
+      request<EnvironmentObject>(`/environment-objects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    removeObject: (id: string) =>
+      request<{ ok: boolean }>(`/environment-objects/${id}`, { method: 'DELETE' }),
     allowedTables: () => request<Record<string, string[]>>('/environments/allowed-tables'),
   },
   executions: {
@@ -539,20 +523,25 @@ export interface LlmTestResult {
   error?: string;
 }
 
+export interface EnvironmentObject {
+  id: string;
+  environmentId: string;
+  objectType: 'db' | 'syslog';
+  label: string;
+  /** db: { host, port, dbName, user, password?, secret? }；syslog: { host, user, sshPort, filePath, privateKey?, secret? }。
+   *  出参里 secret 为 '••••••••' 掩码；入参传明文 password/privateKey，留空不覆盖旧密文。 */
+  payload: Record<string, unknown>;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Environment {
   id: string;
   projectId: string;
   name: string;
-  dbHost: string | null;
-  dbPort: number | null;
-  dbName: string | null;
-  dbUser: string | null;
-  dbPasswordCiphertext: string | null;
-  syslogHost: string | null;
-  syslogUser: string | null;
-  syslogSshPort: number | null;
-  syslogKeyCiphertext: string | null;
-  syslogFilePath: string | null;
+  isDefault: boolean;
+  objects: EnvironmentObject[];
   createdAt: string;
   updatedAt: string;
 }
@@ -577,14 +566,14 @@ export interface ProjectVersion {
   projectId: string;
   name: string;
   description: string | null;
-  isDefault: boolean;
   ref: string | null;
   refKind: 'branch' | 'tag' | null;
   defaultUrl: string | null;
+  environmentId: string | null;
   createdAt: string;
   updatedAt: string;
   caseCount?: number;
-  environmentCount?: number;
+  environmentName?: string | null;
   planCount?: number;
 }
 export interface ProjectWithCount extends Project {

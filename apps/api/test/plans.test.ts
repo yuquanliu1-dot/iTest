@@ -44,17 +44,17 @@ afterAll(async () => {
   await container.stop();
 });
 
-async function makeCase(groupId: string, title: string): Promise<string> {
-  const c = await request(app).post('/api/cases').send({ title, groupId });
+async function makeCase(groupId: string, versionId: string, title: string): Promise<string> {
+  const c = await request(app).post('/api/cases').send({ title, groupId, versionId });
   return c.body.id as string;
 }
 
 describe('execution plans', () => {
   it('create/list under project', async () => {
-    const { projectId } = await seedProject(pool);
+    const { projectId, versionId } = await seedProject(pool);
     const created = await request(app)
       .post(`/api/projects/${projectId}/plans`)
-      .send({ name: '预发冒烟', environment: '预发' });
+      .send({ name: '预发冒烟', environment: '预发', versionId });
     expect(created.status).toBe(200);
     const list = await request(app).get(`/api/projects/${projectId}/plans`);
     expect(list.body).toHaveLength(1);
@@ -63,10 +63,10 @@ describe('execution plans', () => {
   });
 
   it('PUT cases sets ordered list, detail returns cases in order', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
-    const c1 = await makeCase(groupId, 'c1');
-    const c2 = await makeCase(groupId, 'c2');
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    const c1 = await makeCase(groupId, versionId, 'c1');
+    const c2 = await makeCase(groupId, versionId, 'c2');
     const r = await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c2, c1] });
     expect(r.status).toBe(200);
     const detail = await request(app).get(`/api/plans/${plan.body.id}`);
@@ -75,16 +75,16 @@ describe('execution plans', () => {
 
   it('PUT cases rejects cross-project case with 409', async () => {
     const a = await seedProject(pool);
-    const plan = await request(app).post(`/api/projects/${a.projectId}/plans`).send({ name: 'P' });
+    const plan = await request(app).post(`/api/projects/${a.projectId}/plans`).send({ name: 'P', versionId: a.versionId });
     const b = await seedProject(pool);
-    const foreign = await makeCase(b.groupId, 'foreign');
+    const foreign = await makeCase(b.groupId, b.versionId, 'foreign');
     const r = await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [foreign] });
     expect(r.status).toBe(409);
   });
 
   it('PATCH renames, DELETE removes', async () => {
-    const { projectId } = await seedProject(pool);
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
+    const { projectId, versionId } = await seedProject(pool);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
     const patched = await request(app).patch(`/api/plans/${plan.body.id}`).send({ name: 'P2' });
     expect(patched.body.name).toBe('P2');
     const deleted = await request(app).delete(`/api/plans/${plan.body.id}`);
@@ -92,9 +92,9 @@ describe('execution plans', () => {
   });
 
   it('run creates plan_run row and returns runId', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'run' });
-    const c1 = await makeCase(groupId, 'r1');
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'run', versionId });
+    const c1 = await makeCase(groupId, versionId, 'r1');
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1] });
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(200);
@@ -107,12 +107,13 @@ describe('execution plans', () => {
 
 describe('plan execution extras', () => {
   it('POST/PATCH persists strategy + loginPrepare config', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const loginCase = await makeCase(groupId, 'login');
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const loginCase = await makeCase(groupId, versionId, 'login');
     const r = await request(app)
       .post(`/api/projects/${projectId}/plans`)
       .send({
         name: 'P',
+        versionId,
         strategy: 'fail_fast',
         loginPrepare: { enabled: true, caseId: loginCase, unauthorizedKeywords: ['请先登录', '未登录'] },
       });
@@ -132,11 +133,11 @@ describe('plan execution extras', () => {
   });
 
   it('PUT /plans/:id/cases/order persists new order', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
-    const c1 = await makeCase(groupId, 'c1');
-    const c2 = await makeCase(groupId, 'c2');
-    const c3 = await makeCase(groupId, 'c3');
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    const c1 = await makeCase(groupId, versionId, 'c1');
+    const c2 = await makeCase(groupId, versionId, 'c2');
+    const c3 = await makeCase(groupId, versionId, 'c3');
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2, c3] });
     const r = await request(app).put(`/api/plans/${plan.body.id}/cases/order`).send({ caseIds: [c3, c1, c2] });
     expect(r.status).toBe(200);
@@ -145,8 +146,8 @@ describe('plan execution extras', () => {
   });
 
   it('login prepare enabled without caseId returns 422', async () => {
-    const { projectId } = await seedProject(pool);
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
+    const { projectId, versionId } = await seedProject(pool);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
     const patched = await request(app).patch(`/api/plans/${plan.body.id}`).send({
       loginPrepare: { enabled: true },
     });
@@ -156,9 +157,9 @@ describe('plan execution extras', () => {
   });
 
   it('GET /executions returns mixed entries with kind=case or kind=plan', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
-    const c1 = await makeCase(groupId, 'c1');
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    const c1 = await makeCase(groupId, versionId, 'c1');
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1] });
     await request(app).post(`/api/plans/${plan.body.id}/run`);
     const list = await request(app).get(`/api/executions?projectId=${projectId}&kind=all`);
@@ -169,13 +170,13 @@ describe('plan execution extras', () => {
   });
 
   it('fail_fast: first case fails → remaining cases skipped, plan_run.status=failed', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const c1 = await makeCase(groupId, 'c1');
-    const c2 = await makeCase(groupId, 'c2');
-    const c3 = await makeCase(groupId, 'c3');
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const c1 = await makeCase(groupId, versionId, 'c1');
+    const c2 = await makeCase(groupId, versionId, 'c2');
+    const c3 = await makeCase(groupId, versionId, 'c3');
     const plan = await request(app)
       .post(`/api/projects/${projectId}/plans`)
-      .send({ name: 'P', strategy: 'fail_fast' });
+      .send({ name: 'P', versionId, strategy: 'fail_fast' });
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2, c3] });
 
     // 强制的现在是第一条：forceFail 在 CDP 前短路，行为与有无 chromium 环境无关
@@ -206,12 +207,12 @@ describe('plan execution extras', () => {
   });
 
   it('deprecated cases skipped without execution, plan_run.status=passed', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const c1 = await makeCase(groupId, 'c1');
-    const c2 = await makeCase(groupId, 'c2');
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const c1 = await makeCase(groupId, versionId, 'c1');
+    const c2 = await makeCase(groupId, versionId, 'c2');
     await request(app).patch(`/api/cases/${c1}`).send({ status: 'deprecated' });
     await request(app).patch(`/api/cases/${c2}`).send({ status: 'deprecated' });
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2] });
 
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
@@ -233,10 +234,10 @@ describe('plan execution extras', () => {
   });
 
   it('cancel: cancel mid-run → plan_run.status=cancelled', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const c1 = await makeCase(groupId, 'c1');
-    const c2 = await makeCase(groupId, 'c2');
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const c1 = await makeCase(groupId, versionId, 'c1');
+    const c2 = await makeCase(groupId, versionId, 'c2');
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2] });
 
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
@@ -259,12 +260,12 @@ describe('plan execution extras', () => {
   });
 
   it('rejects run when plan has incognito case and loginPrepare enabled', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const inc = await request(app).post('/api/cases').send({ title: 'inc', groupId, incognito: true });
-    const login = await makeCase(groupId, 'login');
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const inc = await request(app).post('/api/cases').send({ title: 'inc', groupId, versionId, incognito: true });
+    const login = await makeCase(groupId, versionId, 'login');
     const plan = await request(app)
       .post(`/api/projects/${projectId}/plans`)
-      .send({ name: 'P', loginPrepare: { enabled: true, caseId: login } });
+      .send({ name: 'P', versionId, loginPrepare: { enabled: true, caseId: login } });
     expect(plan.status).toBe(200);
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [inc.body.id] });
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
@@ -273,9 +274,9 @@ describe('plan execution extras', () => {
   });
 
   it('allows run with incognito case when loginPrepare disabled', async () => {
-    const { projectId, groupId } = await seedProject(pool);
-    const inc = await request(app).post('/api/cases').send({ title: 'inc', groupId, incognito: true });
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const inc = await request(app).post('/api/cases').send({ title: 'inc', groupId, versionId, incognito: true });
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [inc.body.id] });
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(200);

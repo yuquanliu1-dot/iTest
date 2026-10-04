@@ -13,7 +13,6 @@ let orgId: string;
 let orgPath: string;
 let projectId: string;
 let defaultVersionId: string;
-let v1Id: string;
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
@@ -58,53 +57,43 @@ beforeEach(async () => {
   const s = await seedProject(pool);
   projectId = s.projectId;
   defaultVersionId = s.versionId;
-  // 新建一个非默认版本
-  const v = await pool.query(
-    `INSERT INTO project_versions(project_id, name, is_default) VALUES ($1, 'v1.0', false) RETURNING id`,
-    [projectId],
-  );
-  v1Id = v.rows[0]!.id as string;
 });
 
-describe('environments versionId filtering', () => {
-  it('GET 未传 versionId 时返回默认版本下的环境', async () => {
-    const a = await request(app).post(`/api/projects/${projectId}/environments`).send({ name: 'env-default' });
-    expect(a.status).toBe(200);
+describe('environments project-level model', () => {
+  it('POST 创建项目级环境（不再有 versionId 语义）', async () => {
+    const r = await request(app).post(`/api/projects/${projectId}/environments`).send({ name: 'dev-test' });
+    expect(r.status).toBe(200);
+    expect(r.body.projectId).toBe(projectId);
+    expect(r.body.versionId).toBeUndefined();
+    expect(r.body.objects).toEqual([]);
+  });
+
+  it('GET 返回项目全部环境（跨版本共享，无 versionId 过滤）', async () => {
+    await request(app).post(`/api/projects/${projectId}/environments`).send({ name: 'dev-test' });
+    await request(app).post(`/api/projects/${projectId}/environments`).send({ name: 'pre-prod' });
     const r = await request(app).get(`/api/projects/${projectId}/environments`);
     expect(r.status).toBe(200);
-    expect(r.body).toHaveLength(1);
-    expect(r.body[0].name).toBe('env-default');
-    expect(r.body[0].versionId).toBe(defaultVersionId);
+    expect(r.body.map((e: { name: string }) => e.name).sort()).toEqual(['dev-test', 'pre-prod']);
   });
 
-  it('GET ?versionId= 过滤到指定版本', async () => {
-    const a = await request(app).post(`/api/projects/${projectId}/environments`).send({ name: 'env-default' });
-    expect(a.status).toBe(200);
-    const b = await request(app)
-      .post(`/api/projects/${projectId}/environments`)
-      .send({ name: 'env-v1', versionId: v1Id });
-    expect(b.status).toBe(200);
-    const r = await request(app).get(`/api/projects/${projectId}/environments?versionId=${v1Id}`);
+  it('项目内至多一个默认环境（切换默认互斥）', async () => {
+    const a = await request(app).post(`/api/projects/${projectId}/environments`).send({ name: 'dev-test' });
+    const b = await request(app).post(`/api/projects/${projectId}/environments`).send({ name: 'pre-prod' });
+    await request(app).patch(`/api/environments/${a.body.id}`).send({ isDefault: true });
+    await request(app).patch(`/api/environments/${b.body.id}`).send({ isDefault: true });
+    const r = await request(app).get(`/api/projects/${projectId}/environments`);
+    const defaults = r.body.filter((e: { isDefault: boolean }) => e.isDefault);
+    expect(defaults).toHaveLength(1);
+    expect(defaults[0].id).toBe(b.body.id);
+  });
+
+  it('DELETE 后 project_versions.environment_id 自动置空（SET NULL）', async () => {
+    const env = await request(app).post(`/api/projects/${projectId}/environments`).send({ name: 'linked-env' });
+    await pool.query(`UPDATE project_versions SET environment_id=$1 WHERE id=$2`, [env.body.id, defaultVersionId]);
+    const r = await request(app).delete(`/api/environments/${env.body.id}?confirm=true`);
     expect(r.status).toBe(200);
-    expect(r.body).toHaveLength(1);
-    expect(r.body[0].name).toBe('env-v1');
-  });
-
-  it('POST 传非本项目 versionId 返回 400 version_mismatch', async () => {
-    // 第二个项目，独立版本
-    const other = await seedProject(pool);
-    const r = await request(app)
-      .post(`/api/projects/${projectId}/environments`)
-      .send({ name: 'env-bad', versionId: other.versionId });
-    expect(r.status).toBe(400);
-    expect(r.body.error).toBe('version_mismatch');
-  });
-
-  it('POST 不传 versionId 时落入默认版本', async () => {
-    const r = await request(app)
-      .post(`/api/projects/${projectId}/environments`)
-      .send({ name: 'env-no-version' });
-    expect(r.status).toBe(200);
-    expect(r.body.versionId).toBe(defaultVersionId);
+    expect(r.body.ok).toBe(true);
+    const v = await pool.query(`SELECT environment_id FROM project_versions WHERE id=$1`, [defaultVersionId]);
+    expect(v.rows[0]!.environment_id).toBeNull();
   });
 });
