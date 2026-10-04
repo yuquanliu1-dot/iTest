@@ -149,6 +149,7 @@ export function buildWorkspaceTools(
         '- locator 必须是数组，每个元素是单个 {strategy, value} 对象，strategy 限 role/text/testId/css/xpath；至少 1 个候选。正确示例：locator:[{strategy:"css", value:"button[type=\'submit\']"}, {strategy:"css", value:".login-btn"}] —— 注意 locator **只有一层数组**，每个元素直接是 {strategy,value} 对象，不要把每个候选再嵌一层数组。完整 step 示例：{kind:"click", locator:[{strategy:"css", value:"button[type=\'submit\']"}]}。禁止把 locator 写成对象（如 {item:{...}} 或 {strategy:"...",value:"..."} 直接放在 locator 槽），回放无法识别。',
         '- navigate 的 url 必须是绝对 URL，且必须使用用户消息上下文里给的真实页面 URL（host:port/path 原样保留），禁止臆造 http://localhost:5173/...。如果你没有拿到 URL，请在生成用例前先调用 inspect_page 抓取真实页面，从抓取结果里取真实 URL。',
         '- 末尾断言（强约束）：步骤执行后若有可观察结果，断言必须基于真实可见元素——优先 assertVisible（元素级，不依赖文案）；次之 assertText + locator+match:"contains"。禁止使用 target:"page" equals:模糊自由文本（例「登录页正常加载」「看到工作台」），它对任何页面都命中，掩盖回放失败。',
+        '- inspect_page 快照仅为页面初始状态：点击/提交后才出现的元素（结果区、错误提示）不在清单中。断言这类元素必须先触发对应操作再断言，或断言清单中其稳定的父容器；快照与动态都确认不了的元素，用 role/text 定位，绝对禁止编造 testid/id。',
         '- 若 step 没有可观察结果（如「打开某页」），不要补任何断言。',
         '- 若你判断无法可靠编译（如指令过于模糊、需要视觉识别但无 #cssSelector 占位），把 compiled 设为 null 表示「已放弃」，保存时不会再 LLM 重试。注意：null ≠ []，空数组 [] 在回放里等价于「什么都不做」，会隐藏失败；放弃语义必须用 null。',
       ],
@@ -215,7 +216,7 @@ export function buildWorkspaceTools(
     {
       name: 'inspect_page',
       description:
-        '抓取被测页面并返回实际的可交互元素清单（按钮/输入框/链接/选择器/文案）。当需求文本包含被测页面 URL 时，生成用例前必须先调用本工具参考页面真实实现，禁止凭"典型实现"臆造页面功能；只有抓取失败时才可退回基于功能点假设生成，并在用例描述中注明"基于假设，未验证页面"。',
+        '抓取被测页面并返回实际的可交互元素清单（按钮/输入框/链接/选择器/文案，含 data-testid 元素）。当需求文本包含被测页面 URL 时，生成用例前必须先调用本工具参考页面真实实现，禁止凭"典型实现"臆造页面功能；只有抓取失败时才可退回基于功能点假设生成，并在用例描述中注明"基于假设，未验证页面"。快照仅为页面初始状态，操作后才出现的元素不在其中。',
       parameters: Type.Object({
         url: Type.String({ minLength: 8, maxLength: 2000 }),
       }),

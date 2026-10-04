@@ -20,7 +20,7 @@ const EXTRACT_JS = `(() => {
   const maxElements = ${MAX_ELEMENTS};
   const title = document.title || '';
   const nodes = document.querySelectorAll(
-    'a, button, input, select, textarea, summary, [contenteditable="true"], [role]',
+    'a, button, input, select, textarea, summary, [contenteditable="true"], [role], [data-testid]',
   );
   const visible = (el) => {
     const rects = el.getClientRects();
@@ -34,6 +34,8 @@ const EXTRACT_JS = `(() => {
     if (tid) return '[data-testid="' + tid + '"]';
     const name = el.getAttribute('name');
     if (name) return el.tagName.toLowerCase() + '[name="' + name + '"]';
+    const aria = el.getAttribute('aria-label');
+    if (aria) return el.tagName.toLowerCase() + '[aria-label="' + aria + '"]';
     const text = (el.innerText || el.getAttribute('placeholder') || '').trim().slice(0, 30);
     if (text) return 'text=' + text;
     return el.tagName.toLowerCase();
@@ -94,6 +96,7 @@ export async function inspectPage(rawUrl: string): Promise<string> {
     const lines = [
       `页面: ${url.toString()}`,
       `标题: ${extracted.title || '(无)'}`,
+      '注意: 此快照仅为页面初始状态。点击/提交后才出现的元素（结果区、错误提示等）不在清单中——断言这类元素必须先触发相应操作，或断言清单中其稳定的父容器；清单里不存在的 testid/id 绝对禁止编造。',
       `可交互元素 (${extracted.elements.length}${extracted.truncated ? `，已截断至 ${MAX_ELEMENTS}` : ''}):`,
       ...extracted.elements,
     ];

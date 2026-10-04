@@ -78,6 +78,9 @@ describe('inspectPage', () => {
     expect(out).toContain('标题: 元素管理');
     expect(out).toContain('button#add "添加元素"');
     expect(out).toContain('可交互元素 (2)');
+    // 快照范围说明必须存在：告知 LLM 快照仅为初始状态、清单外禁止编造 testid
+    expect(out).toContain('仅为页面初始状态');
+    expect(out).toContain('禁止编造');
   });
 });
 
