@@ -13,6 +13,7 @@ import {
 import { HttpError } from '../middleware/errorHandler.js';
 import { findIncognitoCaseIds, runPlanAsync } from '../execute/runPlan.js';
 import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
+import { createPlan, updatePlan, getPlanDetail, replacePlanCases, planProjectId } from '../services/plans.service.js';
 import { logger } from '../logger.js';
 
 export const plansRoute = Router({ mergeParams: true });
@@ -89,53 +90,15 @@ plansRoute.post('/', async (req, res) => {
     const { projectId: vp } = await assertVersionVisible(versionId, req.user!);
     if (vp !== projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
   }
-  const rows = await db
-    .insert(executionPlans)
-    .values({
-      projectId,
-      name: body.name,
-      versionId,
-      environment: body.environment,
-      strategy: body.strategy,
-      loginPrepareEnabled: body.loginPrepare?.enabled ?? false,
-      loginCaseId: body.loginPrepare?.caseId ?? null,
-      detectionUrl: body.loginPrepare?.detectionUrl ?? null,
-      loginSuccessSelector: body.loginPrepare?.successSelector ?? null,
-      loginUnauthorizedKeywords: body.loginPrepare?.unauthorizedKeywords ?? null,
-    })
-    .returning();
-  res.json(rows[0]);
+  // 归属校验在 service 内重复一遍(有意冗余):AI 工具绕过 HTTP 层直调时无路由校验兜底
+  res.json(await createPlan(projectId, { ...body, versionId }));
 });
 
 plansRoute.get('/:id', async (req, res) => {
-  const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, req.params.id)))[0];
-  if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
-  await assertProjectVisible(plan.projectId, req.user!);
-  const pcs = await db
-    .select()
-    .from(planCases)
-    .where(eq(planCases.planId, plan.id))
-    .orderBy(asc(planCases.order));
-  const cases = pcs.length
-    ? await db.select().from(testCases).where(inArray(testCases.id, pcs.map((p) => p.caseId)))
-    : [];
-  const byId = new Map(cases.map((c) => [c.id, c]));
-  let versionName: string | null = null;
-  if (plan.versionId) {
-    const v = (await db.select().from(projectVersions).where(eq(projectVersions.id, plan.versionId)))[0];
-    versionName = v?.name ?? null;
-  }
-  res.json({
-    ...plan,
-    versionName,
-    cases: pcs.map((pc) => ({
-      id: pc.caseId,
-      order: pc.order,
-      title: byId.get(pc.caseId)?.title ?? 'unknown',
-      url: byId.get(pc.caseId)?.url ?? null,
-      versionId: byId.get(pc.caseId)?.versionId ?? null,
-    })),
-  });
+  const detail = await getPlanDetail(req.params.id!);
+  if (!detail) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(detail.projectId, req.user!);
+  res.json(detail);
 });
 
 plansRoute.patch('/:id', async (req, res) => {
@@ -143,37 +106,8 @@ plansRoute.patch('/:id', async (req, res) => {
   if (!existing) throw new HttpError(404, 'not_found', 'plan not found');
   await assertProjectVisible(existing.projectId, req.user!);
   const body = PatchBody.parse(req.body);
-  const update: Record<string, unknown> = { updatedAt: new Date() };
-  if (body.name !== undefined) update.name = body.name;
-  if (body.environment !== undefined) update.environment = body.environment;
-  if (body.environmentId !== undefined) update.environmentId = body.environmentId;
-  if (body.versionId !== undefined) {
-    if (body.versionId === null) {
-      update.versionId = null;
-    } else {
-      const { projectId: vp } = await assertVersionVisible(body.versionId, req.user!);
-      if (vp !== existing.projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
-      update.versionId = body.versionId;
-    }
-  }
-  if (body.environmentId !== undefined && body.environmentId !== null) {
-    const { assertEnvironmentVisible } = await import('../services/projectAccess.js');
-    const { projectId: envProjectId } = await assertEnvironmentVisible(body.environmentId, req.user!);
-    if (envProjectId !== existing.projectId) {
-      throw new HttpError(400, 'env_project_mismatch', 'environment does not belong to this project');
-    }
-  }
-  if (body.strategy !== undefined) update.strategy = body.strategy;
-  if (body.loginPrepare !== undefined) {
-    update.loginPrepareEnabled = body.loginPrepare.enabled;
-    update.loginCaseId = body.loginPrepare.caseId ?? null;
-    update.detectionUrl = body.loginPrepare.detectionUrl ?? null;
-    update.loginSuccessSelector = body.loginPrepare.successSelector ?? null;
-    update.loginUnauthorizedKeywords = body.loginPrepare.unauthorizedKeywords ?? null;
-  }
-  const rows = await db.update(executionPlans).set(update).where(eq(executionPlans.id, req.params.id)).returning();
-  if (rows.length === 0) throw new HttpError(404, 'not_found', 'plan not found');
-  res.json(rows[0]);
+  // version/environment 归属(∈ 计划所属 project)由 service 兜底
+  res.json(await updatePlan(req.params.id!, body));
 });
 
 plansRoute.delete('/:id', async (req, res) => {
@@ -185,31 +119,23 @@ plansRoute.delete('/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-async function validateCaseProject(planId: string, caseIds: string[], user: NonNullable<Express.Request['user']>) {
-  const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, planId)))[0];
-  if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
-  await assertProjectVisible(plan.projectId, user);
-  const gs = await db.select().from(groups).where(eq(groups.projectId, plan.projectId));
-  const validGids = new Set(gs.map((g) => g.id));
-  const rows = await db.select().from(testCases).where(inArray(testCases.id, caseIds));
-  if (rows.length !== caseIds.length || !rows.every((r) => validGids.has(r.groupId))) {
-    throw new HttpError(409, 'cross_project', 'all cases must belong to the plan project');
-  }
-}
-
+// caseIds 归属(∈ 计划所属 project,409 cross_project)由 service assertCasesInProject 承接;
+// 路由仅保留计划级 per-user 可见性。
 plansRoute.put('/:id/cases', async (req, res) => {
   const { caseIds } = z.object({ caseIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
-  await validateCaseProject(req.params.id!, caseIds, req.user!);
-  await db.delete(planCases).where(eq(planCases.planId, req.params.id));
-  await db.insert(planCases).values(caseIds.map((caseId, i) => ({ planId: req.params.id!, caseId, order: i + 1 })));
+  const pid = await planProjectId(req.params.id!);
+  if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(pid, req.user!);
+  await replacePlanCases(req.params.id!, caseIds);
   res.json({ ok: true });
 });
 
 plansRoute.put('/:id/cases/order', async (req, res) => {
   const { caseIds } = z.object({ caseIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
-  await validateCaseProject(req.params.id!, caseIds, req.user!);
-  await db.delete(planCases).where(eq(planCases.planId, req.params.id));
-  await db.insert(planCases).values(caseIds.map((caseId, i) => ({ planId: req.params.id!, caseId, order: i + 1 })));
+  const pid = await planProjectId(req.params.id!);
+  if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(pid, req.user!);
+  await replacePlanCases(req.params.id!, caseIds);
   res.json({ ok: true });
 });
 
