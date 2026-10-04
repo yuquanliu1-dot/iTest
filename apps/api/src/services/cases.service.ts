@@ -170,9 +170,16 @@ export interface UpdateCasePatch {
 export async function updateCase(caseId: string, patch: UpdateCasePatch) {
   const existing = (await db.select().from(testCases).where(eq(testCases.id, caseId)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'case not found');
-  // 目标项目:移动分组时取新分组,否则用例现属分组
-  let targetPid = patch.groupId !== undefined ? await groupProjectId(patch.groupId) : await groupProjectId(existing.groupId);
-  if (!targetPid) throw new HttpError(404, 'not_found', 'group not found');
+  // 用例现属项目始终以其分组为准;移动分组时目标分组必须仍在同一项目
+  const currentPid = await groupProjectId(existing.groupId);
+  if (!currentPid) throw new HttpError(404, 'not_found', 'group not found');
+  let targetPid = currentPid;
+  if (patch.groupId !== undefined) {
+    const nextPid = await groupProjectId(patch.groupId);
+    if (!nextPid) throw new HttpError(404, 'not_found', 'group not found');
+    if (nextPid !== currentPid) throw new HttpError(400, 'cross_project_move', 'cannot move a case to a group in another project');
+    targetPid = nextPid;
+  }
   if (patch.priority !== undefined) assertEnum('priority', patch.priority, PRIORITIES);
   if (patch.status !== undefined) assertEnum('status', patch.status, STATUSES);
   assertWindowCustom(patch);

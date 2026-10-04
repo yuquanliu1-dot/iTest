@@ -192,11 +192,11 @@ describe('cases + steps', () => {
 
   it('PATCH /api/cases/:id moves case to another group', async () => {
     const a = await seedProject(pool);
-    const b = await seedProject(pool);
+    const g2 = (await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, '第二分组') RETURNING id`, [a.projectId])).rows[0]!.id as string;
     const c = await request(app).post('/api/cases').send({ title: 'move', groupId: a.groupId, versionId: a.versionId });
-    const r = await request(app).patch(`/api/cases/${c.body.id}`).send({ groupId: b.groupId });
+    const r = await request(app).patch(`/api/cases/${c.body.id}`).send({ groupId: g2 });
     expect(r.status).toBe(200);
-    expect(r.body.groupId).toBe(b.groupId);
+    expect(r.body.groupId).toBe(g2);
   });
 
   it('PATCH window_strategy=custom requires width/height', async () => {
