@@ -252,25 +252,27 @@ export default function PlanDetail() {
         </Button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-4">
+      {/* 内容列限宽居中（同 PageShell max-w-7xl），宽屏下表单不散成一整行 */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-4 mx-auto w-full max-w-7xl">
         <div className="bg-card border rounded-[var(--radius-md)] p-5">
+          {/* input-base 默认 width:100%，flex 行内会把标签挤到竖排；控件 flex-1 弹性填充 + 标签 shrink-0 */}
           <div className="flex items-center gap-4">
-            <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>执行策略</span>
+            <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>执行策略</span>
             <select
               value={plan.strategy}
               onChange={(e) => updateStrategy(e.target.value as Strategy)}
-              className="input-base input-sm"
-              style={{ minWidth: 180 }}
+              className="input-base input-sm flex-1"
+              style={{ minWidth: 160 }}
             >
               <option value="run_all">全部执行完成</option>
               <option value="fail_fast">失败即停止</option>
             </select>
-            <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>目标环境</span>
+            <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>目标环境</span>
             <select
               value={environmentId ?? ''}
               onChange={(e) => setEnvironmentId(e.target.value || null)}
-              className="input-base input-sm"
-              style={{ minWidth: 180 }}
+              className="input-base input-sm flex-1"
+              style={{ minWidth: 160 }}
               disabled={(environments ?? []).length === 0}
             >
               <option value="">跟随 case</option>
@@ -301,12 +303,12 @@ export default function PlanDetail() {
             {plan.loginPrepareEnabled && (
               <div className="mt-3 flex flex-col gap-2 pl-5">
                 <div className="flex items-center gap-2">
-                  <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>登录用例</span>
+                  <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>登录用例</span>
                   <select
                     value={plan.loginCaseId ?? ''}
                     onChange={(e) => updateLoginPrepare({ caseId: e.target.value || null })}
-                    className="input-base input-sm"
-                    style={{ minWidth: 240 }}
+                    className="input-base input-sm flex-1"
+                    style={{ minWidth: 220 }}
                   >
                     <option value="">— 请选择 —</option>
                     {(loginCases ?? []).map((c) => (
@@ -318,12 +320,13 @@ export default function PlanDetail() {
                     placeholder="搜索用例或分组"
                     value={loginQ}
                     onChange={(e) => setLoginQ(e.target.value)}
-                    className="input-base input-sm"
+                    className="input-base input-sm flex-1"
+                    style={{ minWidth: 180 }}
                   />
                 </div>
                 <details className="text-[12px]">
                   <summary className="cursor-pointer" style={{ color: 'var(--muted-foreground)' }}>高级配置</summary>
-                  <div className="mt-2 flex flex-col gap-2 pl-4">
+                  <div className="mt-2 flex flex-col gap-2 pl-4 max-w-[520px]">
                     <label className="flex flex-col gap-1">
                       <span style={{ color: 'var(--muted-foreground)' }}>检测页面 URL</span>
                       <input
