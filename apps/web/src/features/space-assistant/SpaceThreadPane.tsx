@@ -1,5 +1,6 @@
 import {
   ComposerPrimitive,
+  ErrorPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
   type ReasoningMessagePartProps,
@@ -76,6 +77,15 @@ function AssistantMessage() {
           Text: TextPart,
           Reasoning: ThinkingPart,
           tools: { Fallback: ToolActivity },
+        }}
+      />
+      {/* LLM 失败(stopReason=error):错误原文必须可见,否则用户看到的是零反馈 */}
+      <ErrorPrimitive.Message
+        className="mt-1.5 block w-fit max-w-full break-all rounded-[var(--radius-md)] px-2.5 py-1.5 text-[12px]"
+        style={{
+          background: 'var(--destructive-soft)',
+          border: '1px solid var(--destructive-soft-border)',
+          color: 'var(--destructive)',
         }}
       />
     </div>
