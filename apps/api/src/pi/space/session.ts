@@ -9,6 +9,7 @@ import { aiThreads, projectVersions } from '../../db/schema.js';
 import { buildSpaceTools } from './tools/index.js';
 import { buildSpaceSummary } from './summary.js';
 import { readLlmConfig } from '../modelBridge.js';
+import { HttpError } from '../../middleware/errorHandler.js';
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
 import { checkoutRepoForVersion, RepoUnavailableError } from '../repo.js';
@@ -226,8 +227,6 @@ export function cancelThread(threadId: string): void {
 async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<SpaceSessionLike> {
   const cfg = await readLlmConfig();
   if (!cfg) {
-    // 与 router 同一错误通道(HttpError 经 errorHandler 透出);动态导入避免模块加载顺序变化
-    const { HttpError } = await import('../../middleware/errorHandler.js');
     throw new HttpError(502, 'llm_not_configured', 'LLM 未配置:请先到设置页配置模型');
   }
   const { createAgentSession, SessionManager } = await import('@earendil-works/pi-coding-agent');
