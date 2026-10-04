@@ -220,10 +220,11 @@ export function cancelThread(threadId: string): void {
 // Real factory:注入空间工具(Plan 1 = repo 沙箱)并建 AgentSession
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** 空间助手 system prompt:版本上下文摘要;无摘要时返回空串(resourceLoader 追加空段无副作用)。 */
+/** 空间助手 system prompt:风格约束 + 版本上下文摘要;无摘要时仅风格段(resourceLoader 追加空段无副作用)。 */
 export function buildSpaceSystemPrompt(summaryText: string | null): string {
-  if (!summaryText) return '';
-  return `## 版本空间上下文\n${summaryText}`;
+  const style = '## 输出风格\n- 不要使用 emoji;强调用 markdown 加粗,列举用列表/表格。';
+  if (!summaryText) return style;
+  return `${style}\n\n## 版本空间上下文\n${summaryText}`;
 }
 
 async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<SpaceSessionLike> {
