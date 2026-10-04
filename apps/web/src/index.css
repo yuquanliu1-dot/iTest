@@ -203,6 +203,52 @@ select:focus-visible {
 }
 .popover-in { animation: popover-in 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
 
+/* ── AI 消息 markdown 排版（.md-body × react-markdown + gfm） ─────────────── */
+.md-body { font-size: 13px; line-height: 1.65; color: var(--foreground); overflow-wrap: break-word; }
+.md-body > :first-child { margin-top: 0; }
+.md-body > :last-child { margin-bottom: 0; }
+.md-body p { margin: 6px 0; }
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 { margin: 14px 0 6px; font-weight: 600; line-height: 1.4; letter-spacing: -0.01em; }
+.md-body h1 { font-size: 16px; }
+.md-body h2 { font-size: 15px; }
+.md-body h3 { font-size: 14px; }
+.md-body h4 { font-size: 13px; }
+.md-body ul, .md-body ol { margin: 6px 0; padding-left: 20px; display: flex; flex-direction: column; gap: 3px; }
+.md-body ul { list-style: disc; }
+.md-body ol { list-style: decimal; }
+.md-body li > ul, .md-body li > ol { margin: 3px 0 0; }
+.md-body li::marker { color: var(--muted-foreground); }
+.md-body code {
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px;
+  background: var(--muted); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 1px 5px;
+}
+.md-body pre {
+  margin: 8px 0; padding: 10px 12px; overflow-x: auto;
+  background: var(--muted); border: 1px solid var(--border); border-radius: var(--radius-md);
+}
+.md-body pre code { background: transparent; border: none; padding: 0; font-size: 12px; line-height: 1.55; }
+.md-body blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--border); color: var(--muted-foreground); }
+.md-body a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.md-body hr { margin: 12px 0; border: none; border-top: 1px solid var(--border); }
+.md-body table { margin: 8px 0; border-collapse: collapse; font-size: 12px; display: block; overflow-x: auto; }
+.md-body th, .md-body td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
+.md-body th { background: var(--muted); font-weight: 600; }
+.md-body img { max-width: 100%; border-radius: var(--radius-md); }
+
+/* ── 思考中三点（.thinking-dot，currentColor 着色） ────────────────────────── */
+@keyframes thinking-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+.thinking-dot {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: currentColor; display: inline-block;
+  animation: thinking-dot 1.2s ease-in-out infinite;
+}
+.thinking-dot:nth-child(2) { animation-delay: 0.15s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.3s; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

@@ -54,6 +54,7 @@ import Upload from '@carbon/icons-react/es/Upload';
 import User from '@carbon/icons-react/es/User';
 import WarningAlt from '@carbon/icons-react/es/WarningAlt';
 import Close from '@carbon/icons-react/es/Close';
+import Globe from '@carbon/icons-react/es/Globe';
 
 import type { CarbonIconType } from '@carbon/icons-react/es/CarbonIcon';
 
@@ -88,6 +89,7 @@ const iconMap: Record<string, CarbonIconType> = {
   file: Document,
   flag: Flag,
   gitBranch: Branch,
+  globe: Globe,
   gripVertical: Draggable,
   layers: Layers,
   list: List,
