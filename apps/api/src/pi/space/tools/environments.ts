@@ -21,12 +21,12 @@ const Actions = z.object({
   baseUrl: z.string().max(2000).nullable().optional(),
   isDefault: z.boolean().optional(),
   objects: z.array(z.object({
-    objectType: z.enum(['db', 'syslog']),
+    objectType: z.enum(['db', 'syslog', 'login']),
     label: z.string().max(120).optional(),
     payload: z.record(z.unknown()),
     isDefault: z.boolean().optional(),
   })).max(10).optional(),
-  objectType: z.enum(['db', 'syslog']).optional(), // set_secret 用
+  objectType: z.enum(['db', 'syslog', 'login']).optional(), // set_secret 用
   label: z.string().max(120).optional(), // set_secret 用(缺省「默认」)
   value: z.string().min(1).max(8000).optional(), // set_secret 明文(仅进加密,不进任何输出)
 });
@@ -44,18 +44,18 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
         baseUrl: Type.Optional(Type.Union([Type.String(), Type.Null()])),
         isDefault: Type.Optional(Type.Boolean()),
         objects: Type.Optional(Type.Array(Type.Object({
-          objectType: Type.Union([Type.Literal('db'), Type.Literal('syslog')]),
+          objectType: Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('login')]),
           label: Type.Optional(Type.String()),
           payload: Type.Record(Type.String(), Type.Unknown()),
           isDefault: Type.Optional(Type.Boolean()),
         }), { maxItems: 10 })),
-        objectType: Type.Optional(Type.Union([Type.Literal('db'), Type.Literal('syslog')])),
+        objectType: Type.Optional(Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('login')])),
         label: Type.Optional(Type.String()),
         value: Type.Optional(Type.String()),
       }),
       promptGuidelines: [
-        'db 对象 payload 常用字段:host/port/dbName/user(authType 缺省按密码认证);syslog 对象:host/sshPort/user/filePath/authType("key"|"password")。',
-        '凭据(password/privateKey)严禁放进 upsert 的 payload:先 upsert 其它字段,再单独调 set_secret(会请用户确认)。',
+        'db 对象 payload 常用字段:host/port/dbName/user;syslog 对象:host/sshPort/user/filePath/authType("key"|"password");login 对象(应用登录凭据):user/loginUrl(登录页地址,可空=计划检测页),密码用 set_secret 设置。',
+        '凭据(db/syslog 的 password/privateKey、login 的 password)严禁放进 upsert 的 payload:先 upsert 其它字段,再单独调 set_secret(会请用户确认)。',
         'set_secret 的 value 是明文凭据,只会被加密保存,不会出现在任何输出里;用户拒绝即放弃。',
       ],
       execute: async (input) => {

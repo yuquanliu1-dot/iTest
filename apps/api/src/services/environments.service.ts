@@ -22,7 +22,8 @@ export function maskObjectPayload(row: typeof environmentObjects.$inferSelect) {
 
 /**
  * 入参归一:payload.password / payload.privateKey 明文 → 加密写入 payload.secret;
- * 未提供(留空)→ 沿用 prev 旧密文(不覆盖语义)。入参中的 secret 字段一律丢弃。
+ * 未提供(留空)→ 沿用 prev 旧密文(不覆盖语义)。入参中的 secret 字段一律丢弃
+ * (含 OBJECT_MASK 占位串——这是脱敏值,绝不能当作真值写回)。
  * syslog 按 authType 决定加密哪个明文字段(password / privateKey);db / login 用 password。
  */
 export function normalizeObjectPayload(
@@ -31,6 +32,7 @@ export function normalizeObjectPayload(
   prev?: Record<string, unknown>,
 ): Record<string, unknown> {
   const out = { ...payload };
+  // 入参里的 secret 一律丢弃——可能是脱敏串,绝不写回
   delete out.secret;
   const plain = objectType === 'syslog'
     ? (out.authType === 'password' ? out.password : out.privateKey)
@@ -40,7 +42,8 @@ export function normalizeObjectPayload(
   if (typeof plain === 'string' && plain.length > 0) {
     const e = encrypt(plain);
     out.secret = { c: e.ciphertext.toString('base64'), i: e.iv.toString('base64'), t: e.tag.toString('base64') };
-  } else if (prev?.secret) {
+  } else if (prev?.secret && typeof prev.secret === 'object') {
+    // 仅当 prev.secret 是合法 AES 三元组时才沿用(过滤掉历史脏数据里的占位串)
     out.secret = prev.secret;
   }
   return out;
@@ -171,6 +174,8 @@ export async function upsertEnvironmentObject(
       .limit(1))[0];
     if (existing) {
       const prev = (existing.payload ?? {}) as Record<string, unknown>;
+      // prev 是从 DB 直读的原始行（含密文三元组），不是掩码后行——直接传进 normalizeObjectPayload 即可
+      // input.payload 通常来自调用方（AI 工具 / HTTP 入参），不含 secret
       const payload = normalizeObjectPayload(input.objectType, { ...prev, ...input.payload }, prev);
       const update: Record<string, unknown> = { payload, updatedAt: new Date() };
       if (input.isDefault !== undefined) update.isDefault = input.isDefault;
