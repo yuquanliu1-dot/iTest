@@ -64,11 +64,19 @@ export const scenarios = pgTable('scenarios', {
 
 export const aiThreads = pgTable('ai_threads', {
   id: uuid('id').primaryKey().defaultRandom(),
-  requirementId: uuid('requirement_id').notNull().unique().references(() => requirements.id, { onDelete: 'cascade' }),
+  /** 'requirement'(存量需求级生成会话)| 'version'(版本空间助手线程)。 */
+  kind: varchar('kind', { length: 20 }).notNull().default('requirement'),
+  // requirement 线程 1:1 需求;version 线程此列为 NULL(Postgres 唯一索引不约束 NULL,多条 version 线程合法)
+  requirementId: uuid('requirement_id').references(() => requirements.id, { onDelete: 'cascade' }),
+  versionId: uuid('version_id').references(() => projectVersions.id, { onDelete: 'cascade' }),
+  title: text('title'),
   piThreadId: text('pi_thread_id').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (t) => ({
+  requirementUq: uniqueIndex('ai_threads_requirement_uq').on(t.requirementId),
+  versionIdx: index('ai_threads_version_idx').on(t.versionId),
+}));
 
 export const aiWorkspaceState = pgTable('ai_workspace_state', {
   requirementId: uuid('requirement_id').primaryKey().references(() => requirements.id, { onDelete: 'cascade' }),

@@ -38,7 +38,6 @@ DO $$ BEGIN
  ALTER TABLE test_cases ADD CONSTRAINT test_cases_scenario_id_scenarios_id_fk FOREIGN KEY (scenario_id) REFERENCES scenarios(id) ON DELETE SET NULL;
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
-CREATE TABLE ai_threads (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), requirement_id uuid REFERENCES requirements(id) ON DELETE CASCADE NOT NULL UNIQUE, pi_thread_id text NOT NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 CREATE TABLE ai_workspace_state (requirement_id uuid PRIMARY KEY REFERENCES requirements(id) ON DELETE CASCADE, doc jsonb NOT NULL, updated_at timestamp NOT NULL DEFAULT now());
 CREATE TABLE ai_scenarios (requirement_id uuid REFERENCES requirements(id) ON DELETE CASCADE NOT NULL, id text NOT NULL, title varchar(200) NOT NULL, description text, "order" integer NOT NULL DEFAULT 0, created_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_scenarios_requirement_id_id_pk PRIMARY KEY(requirement_id, id));
 CREATE TABLE ai_cases (requirement_id uuid REFERENCES requirements(id) ON DELETE CASCADE NOT NULL, id text NOT NULL, scenario_id text, title varchar(200) NOT NULL, description text, priority varchar(20) NOT NULL DEFAULT 'P1', steps jsonb NOT NULL DEFAULT '[]'::jsonb, position integer NOT NULL DEFAULT 0, created_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_cases_requirement_id_id_pk PRIMARY KEY(requirement_id, id));
@@ -60,6 +59,9 @@ EXCEPTION WHEN duplicate_column THEN null;
 END $$;
 CREATE TABLE project_versions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid REFERENCES projects(id) ON DELETE CASCADE NOT NULL, name varchar(80) NOT NULL, description text, ref varchar(200), ref_kind varchar(16), environment_id uuid REFERENCES test_environments(id) ON DELETE SET NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT project_versions_project_name_uq UNIQUE(project_id, name));
 CREATE INDEX project_versions_project_idx ON project_versions(project_id);
+CREATE TABLE ai_threads (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), kind varchar(20) NOT NULL DEFAULT 'requirement', requirement_id uuid REFERENCES requirements(id) ON DELETE CASCADE, version_id uuid REFERENCES project_versions(id) ON DELETE CASCADE, title text, pi_thread_id text NOT NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX ai_threads_requirement_uq ON ai_threads(requirement_id);
+CREATE INDEX ai_threads_version_idx ON ai_threads(version_id);
 DO $$ BEGIN
   ALTER TABLE test_cases        ADD COLUMN version_id uuid REFERENCES project_versions(id) ON DELETE RESTRICT;
 EXCEPTION WHEN duplicate_column THEN null;
