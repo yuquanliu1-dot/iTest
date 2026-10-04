@@ -3,6 +3,7 @@ import { testEnvironments, environmentObjects, projectVersions } from '../db/sch
 import { eq, and } from 'drizzle-orm';
 import { decrypt } from '../lib/secret-crypto.js';
 import pg from 'pg';
+import mysql from 'mysql2/promise';
 
 export class EnvMissing extends Error {
   constructor() { super('no environment configured for case, plan, version, or project'); this.name = 'EnvMissing'; }
@@ -16,14 +17,71 @@ export class DecryptError extends Error {
   constructor(cause: string) { super(`decrypt failed: ${cause}`); this.name = 'DecryptError'; }
 }
 
+export type DbDialect = 'postgres' | 'mysql';
+
+/** 方言归一的查询池：queryDb 步骤与连接测试共用，屏蔽 pg / mysql2 的结果形状差异。 */
+export interface QueryPool {
+  dialect: DbDialect;
+  query(sql: string, params: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+  end(): Promise<void>;
+}
+
+export function createQueryPool(cfg: {
+  dialect: DbDialect;
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+}): QueryPool {
+  if (cfg.dialect === 'mysql') {
+    const pool = mysql.createPool({
+      host: cfg.host,
+      port: cfg.port,
+      database: cfg.database,
+      user: cfg.user,
+      password: cfg.password,
+      connectionLimit: 2,
+      connectTimeout: 5000,
+    });
+    return {
+      dialect: 'mysql',
+      async query(sql, params) {
+        const [rows] = await pool.query(sql, params);
+        return { rows: rows as unknown as Record<string, unknown>[] };
+      },
+      end: () => pool.end(),
+    };
+  }
+  const pool = new pg.Pool({ host: cfg.host, port: cfg.port, database: cfg.database, user: cfg.user, password: cfg.password, max: 2, connectionTimeoutMillis: 5000 });
+  return {
+    dialect: 'postgres',
+    async query(sql, params) {
+      const result = await pool.query(sql, params);
+      return { rows: result.rows as Record<string, unknown>[] };
+    },
+    end: () => pool.end(),
+  };
+}
+
+export interface SyslogCtx {
+  host: string;
+  port: number;
+  user: string;
+  filePath: string;
+  authType: 'key' | 'password';
+  privateKey?: Buffer;
+  password?: string;
+}
+
 export interface EnvCtx {
   envId: string;
   /** 部署入口 URL：执行期导航兜底用（用例.url → 分组.defaultUrl → 环境.base_url → 项目.defaultUrl） */
   baseUrl: string | null;
   db?: { host: string; port: number; database: string; user: string; password: string };
-  /** 已建立好的 pg 连接池；缺省表示该环境未配置 DB。close() 时统一 end()。 */
-  pool?: pg.Pool;
-  syslog?: { host: string; port: number; user: string; privateKey: Buffer; filePath: string };
+  /** 已建立好的查询池；缺省表示该环境未配置 DB。close() 时统一 end()。 */
+  pool?: QueryPool;
+  syslog?: SyslogCtx;
   close(): Promise<void>;
 }
 
@@ -32,6 +90,8 @@ interface DbPayload {
   host?: string | null;
   port?: number | null;
   dbName?: string | null;
+  /** 缺省按 postgres 处理（老数据兼容）。 */
+  dbType?: 'postgres' | 'mysql';
   user?: string | null;
   secret?: { c?: string | null; i?: string | null; t?: string | null } | null;
 }
@@ -40,10 +100,12 @@ interface SyslogPayload {
   user?: string | null;
   sshPort?: number | null;
   filePath?: string | null;
+  /** 缺省按 key（PEM 私钥）处理（老数据兼容）。 */
+  authType?: 'key' | 'password';
   secret?: { c?: string | null; i?: string | null; t?: string | null } | null;
 }
 
-function safeDecrypt(secret: { c?: string | null; i?: string | null; t?: string | null }): string {
+export function safeDecrypt(secret: { c?: string | null; i?: string | null; t?: string | null }): string {
   try {
     return decrypt({
       ciphertext: Buffer.from(secret.c ?? '', 'base64'),
@@ -91,16 +153,17 @@ export async function resolveEnv(
   const pick = (type: string) =>
     objects.find((o) => o.objectType === type && o.isDefault) ?? objects.find((o) => o.objectType === type);
 
-  let pool: pg.Pool | undefined;
+  let pool: QueryPool | undefined;
   let dbCfg: EnvCtx['db'];
   const dbObj = pick('db');
   if (dbObj) {
     const p = (dbObj.payload ?? {}) as DbPayload;
     if (p.host && p.dbName && p.user) {
-      const port = p.port ?? 5432;
+      const dialect: DbDialect = p.dbType === 'mysql' ? 'mysql' : 'postgres';
+      const port = p.port ?? (dialect === 'mysql' ? 3306 : 5432);
       const password = p.secret?.c && p.secret?.i && p.secret?.t ? safeDecrypt(p.secret) : '';
       dbCfg = { host: p.host, port, database: p.dbName, user: p.user, password };
-      pool = new pg.Pool({ host: p.host, port, database: p.dbName, user: p.user, password, max: 2 });
+      pool = createQueryPool({ dialect, host: p.host, port, database: p.dbName, user: p.user, password });
     }
   }
 
@@ -109,13 +172,15 @@ export async function resolveEnv(
   if (syslogObj) {
     const p = (syslogObj.payload ?? {}) as SyslogPayload;
     if (p.host && p.user && p.filePath && p.secret?.c && p.secret?.i && p.secret?.t) {
-      const privateKey = safeDecrypt(p.secret);
+      const authType: SyslogCtx['authType'] = p.authType === 'password' ? 'password' : 'key';
+      const secret = safeDecrypt(p.secret);
       syslogCfg = {
         host: p.host,
         port: p.sshPort ?? 22,
         user: p.user,
-        privateKey: Buffer.from(privateKey),
         filePath: p.filePath,
+        authType,
+        ...(authType === 'password' ? { password: secret } : { privateKey: Buffer.from(secret) }),
       };
     }
   }

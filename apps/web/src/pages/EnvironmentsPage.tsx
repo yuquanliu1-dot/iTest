@@ -9,6 +9,7 @@ import IconButton from '../components/ui/IconButton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
+import Segmented from '../components/ui/Segmented';
 
 interface EnvFormState {
   open: boolean;
@@ -27,6 +28,8 @@ interface ObjFormState {
   objectType: ObjType;
   /** null → 新建对象 */
   object: EnvironmentObject | null;
+  dbType: 'postgres' | 'mysql';
+  syslogAuth: 'key' | 'password';
   host: string;
   port: string;
   dbName: string;
@@ -38,27 +41,42 @@ interface ObjFormState {
 }
 const EMPTY_OBJ_FORM: ObjFormState = {
   open: false, envId: '', envName: '', objectType: 'db', object: null,
+  dbType: 'postgres', syslogAuth: 'key',
   host: '', port: '', dbName: '', user: '', password: '', sshPort: '22', filePath: '', privateKey: '',
 };
 
-/** 组装对象 payload：密码/私钥字段原样上送，留空由后端保留旧密文（不覆盖语义）。 */
-function buildObjectPayload(f: ObjFormState): Record<string, unknown> {
-  if (f.objectType === 'db') {
-    return {
-      host: f.host.trim(),
-      ...(f.port.trim() ? { port: Number(f.port) } : {}),
-      dbName: f.dbName.trim(),
-      user: f.user.trim(),
-      password: f.password,
-    };
-  }
+/** db 表单 → 连接参数：保存 payload 与「测试连接」共用同一映射。密码留空不上送（后端保留旧密文）。 */
+function dbFormConn(f: ObjFormState) {
+  return {
+    dbType: f.dbType,
+    host: f.host.trim(),
+    ...(f.port.trim() ? { port: Number(f.port) } : {}),
+    dbName: f.dbName.trim(),
+    user: f.user.trim(),
+    ...(f.password ? { password: f.password } : {}),
+  };
+}
+
+/** syslog 表单 → 连接参数：保存 payload 与「测试连接」共用同一映射。凭据留空不上送（后端保留旧密文）。 */
+function syslogFormConn(f: ObjFormState) {
   return {
     host: f.host.trim(),
     user: f.user.trim(),
     ...(f.sshPort.trim() ? { sshPort: Number(f.sshPort) } : {}),
     filePath: f.filePath.trim(),
-    privateKey: f.privateKey,
+    authType: f.syslogAuth,
+    ...(f.syslogAuth === 'password'
+      ? (f.password ? { password: f.password } : {})
+      : (f.privateKey ? { privateKey: f.privateKey } : {})),
   };
+}
+
+/** 组装对象 payload：密码/私钥字段原样上送，留空由后端保留旧密文（不覆盖语义）。 */
+function buildObjectPayload(f: ObjFormState): Record<string, unknown> {
+  if (f.objectType === 'db') {
+    return dbFormConn(f);
+  }
+  return syslogFormConn(f);
 }
 
 function objectSummary(o: EnvironmentObject): string {
@@ -160,7 +178,18 @@ export default function EnvironmentsPage() {
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
+  // 连接测试：用表单当前值（未保存也可）；编辑态凭据留空由后端回退已存密文
+  const testConn = useMutation({
+    mutationFn: () => {
+      if (objForm.objectType === 'db') {
+        return api.environments.testDb({ objectId: objForm.object?.id, ...dbFormConn(objForm) });
+      }
+      return api.environments.testSyslog({ objectId: objForm.object?.id, ...syslogFormConn(objForm) });
+    },
+  });
+
   const openObjForm = (env: Environment, objectType: ObjType, object: EnvironmentObject | null) => {
+    testConn.reset();
     const p = (object?.payload ?? {}) as Record<string, unknown>;
     setObjForm({
       ...EMPTY_OBJ_FORM,
@@ -169,6 +198,8 @@ export default function EnvironmentsPage() {
       envName: env.name,
       objectType,
       object,
+      dbType: p.dbType === 'mysql' ? 'mysql' : 'postgres',
+      syslogAuth: p.authType === 'password' ? 'password' : 'key',
       host: String(p.host ?? ''),
       port: p.port != null ? String(p.port) : '',
       dbName: String(p.dbName ?? ''),
@@ -359,8 +390,19 @@ export default function EnvironmentsPage() {
           <div className="flex-1 min-h-0 px-5 py-4 overflow-y-auto flex flex-col gap-3">
             {objForm.objectType === 'db' ? (
               <>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>数据库类型</label>
+                  <Segmented
+                    value={objForm.dbType}
+                    onChange={(v) => setObjForm((f) => ({ ...f, dbType: v }))}
+                    options={[
+                      { value: 'postgres', label: 'PostgreSQL' },
+                      { value: 'mysql', label: 'MySQL' },
+                    ]}
+                  />
+                </div>
                 <Input label="数据库主机" value={objForm.host} onChange={(e) => setObjForm((f) => ({ ...f, host: e.target.value }))} placeholder="db.example.com" />
-                <Input label="数据库端口" value={objForm.port} onChange={(e) => setObjForm((f) => ({ ...f, port: e.target.value }))} placeholder="5432" />
+                <Input label="数据库端口" value={objForm.port} onChange={(e) => setObjForm((f) => ({ ...f, port: e.target.value }))} placeholder={objForm.dbType === 'mysql' ? '3306' : '5432'} />
                 <Input label="数据库名" value={objForm.dbName} onChange={(e) => setObjForm((f) => ({ ...f, dbName: e.target.value }))} />
                 <Input label="数据库用户" value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
                 <Input
@@ -377,22 +419,66 @@ export default function EnvironmentsPage() {
                 <Input label="syslog 用户" value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
                 <Input label="SSH 端口" value={objForm.sshPort} onChange={(e) => setObjForm((f) => ({ ...f, sshPort: e.target.value }))} placeholder="22" />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>SSH 私钥（PEM）</label>
-                  <textarea
-                    className="input-base"
-                    rows={6}
-                    value={objForm.privateKey}
-                    onChange={(e) => setObjForm((f) => ({ ...f, privateKey: e.target.value }))}
-                    placeholder={objForm.object ? '留空表示不修改' : '首次添加时填写'}
+                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>认证方式</label>
+                  <Segmented
+                    value={objForm.syslogAuth}
+                    onChange={(v) => setObjForm((f) => ({ ...f, syslogAuth: v }))}
+                    options={[
+                      { value: 'key', label: 'SSH 私钥' },
+                      { value: 'password', label: '密码' },
+                    ]}
                   />
                 </div>
+                {objForm.syslogAuth === 'password' ? (
+                  <Input
+                    label="SSH 密码"
+                    type="password"
+                    value={objForm.password}
+                    onChange={(e) => setObjForm((f) => ({ ...f, password: e.target.value }))}
+                    placeholder={objForm.object ? '留空表示不修改' : '留空表示不设置'}
+                  />
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>SSH 私钥（PEM）</label>
+                    <textarea
+                      className="input-base"
+                      rows={6}
+                      value={objForm.privateKey}
+                      onChange={(e) => setObjForm((f) => ({ ...f, privateKey: e.target.value }))}
+                      placeholder={objForm.object ? '留空表示不修改' : '首次添加时填写'}
+                    />
+                  </div>
+                )}
                 <Input label="syslog 文件路径" value={objForm.filePath} onChange={(e) => setObjForm((f) => ({ ...f, filePath: e.target.value }))} placeholder="/var/log/syslog" />
               </>
             )}
           </div>
-          <div className="flex justify-end gap-2 px-5 py-3 hairline-top shrink-0" style={{ borderColor: 'var(--color-border)' }}>
-            <Button variant="ghost" onClick={() => setObjForm(EMPTY_OBJ_FORM)} disabled={saveObj.isPending}>取消</Button>
-            <Button disabled={saveObj.isPending} onClick={() => saveObj.mutate()}>
+          <div className="flex items-center gap-2 px-5 py-3 hairline-top shrink-0" style={{ borderColor: 'var(--color-border)' }}>
+            <Button
+              variant="ghost"
+              className="shrink-0"
+              disabled={
+                testConn.isPending ||
+                !objForm.host.trim() ||
+                !objForm.user.trim() ||
+                (objForm.objectType === 'db' ? !objForm.dbName.trim() : !objForm.filePath.trim())
+              }
+              onClick={() => testConn.mutate()}
+            >
+              {testConn.isPending ? '测试中...' : '测试连接'}
+            </Button>
+            {testConn.isPending && (
+              <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--color-foreground-muted)' }}>正在连接...</span>
+            )}
+            {testConn.isSuccess && testConn.data.ok && (
+              <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--color-success)' }}>连接成功 · {testConn.data.latencyMs}ms</span>
+            )}
+            {testConn.isSuccess && !testConn.data.ok && (
+              <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--color-destructive)' }}>连接失败：{testConn.data.error}</span>
+            )}
+            <div className="flex-1" />
+            <Button variant="ghost" className="shrink-0" onClick={() => setObjForm(EMPTY_OBJ_FORM)} disabled={saveObj.isPending}>取消</Button>
+            <Button className="shrink-0" disabled={saveObj.isPending} onClick={() => saveObj.mutate()}>
               {saveObj.isPending ? '保存中...' : objForm.object ? '保存' : '添加'}
             </Button>
           </div>

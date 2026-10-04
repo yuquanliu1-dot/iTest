@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { QueryDbError, QueryDbColumnNotAllowed, QueryDbTableNotAllowed, assertColumnsAllowed, ALLOWED_QUERY_COLUMNS } from './dbQuery.js';
+import { QueryDbError, QueryDbColumnNotAllowed, QueryDbTableNotAllowed, assertColumnsAllowed, ALLOWED_QUERY_COLUMNS, buildSelectSql } from './dbQuery.js';
 
 describe('assertColumnsAllowed', () => {
   it('accepts known columns', () => {
@@ -25,4 +25,34 @@ describe('ALLOWED_QUERY_COLUMNS', () => {
 
 describe('runQueryDb (integration placeholder)', () => {
   it('placeholder', () => { expect(QueryDbError).toBeDefined(); });
+});
+
+describe('buildSelectSql', () => {
+  it('postgres: double-quoted identifiers + $n placeholders', () => {
+    const { sql, params } = buildSelectSql('postgres', 'reports', ['id', 'status'], [{ column: 'status', equals: 'failed' }], 10);
+    expect(sql).toBe('SELECT "id", "status" FROM "reports" WHERE "status" = $1 LIMIT 10');
+    expect(params).toEqual(['failed']);
+  });
+
+  it('postgres: escapes embedded double quotes in identifiers', () => {
+    const { sql } = buildSelectSql('postgres', 'reports', ['we"ird'], [], 5);
+    expect(sql).toContain('"we""ird"');
+  });
+
+  it('mysql: backtick identifiers + ? placeholders', () => {
+    const { sql, params } = buildSelectSql('mysql', 'reports', ['id'], [{ column: 'status', equals: 'failed' }, { column: 'case_id', equals: 'c1' }], 10);
+    expect(sql).toBe('SELECT `id` FROM `reports` WHERE `status` = ? AND `case_id` = ? LIMIT 10');
+    expect(params).toEqual(['failed', 'c1']);
+  });
+
+  it('mysql: escapes embedded backticks in identifiers', () => {
+    const { sql } = buildSelectSql('mysql', 'reports', ['we`ird'], [], 5);
+    expect(sql).toContain('`we``ird`');
+  });
+
+  it('empty where → no WHERE clause, empty params', () => {
+    const { sql, params } = buildSelectSql('postgres', 'reports', ['id'], [], 7);
+    expect(sql).toBe('SELECT "id" FROM "reports" LIMIT 7');
+    expect(params).toEqual([]);
+  });
 });

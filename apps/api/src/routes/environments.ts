@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -6,6 +6,8 @@ import { environmentObjects, executionPlans, testCases, testEnvironments } from 
 import { HttpError } from '../middleware/errorHandler.js';
 import { encrypt } from '../lib/secret-crypto.js';
 import { assertEnvironmentVisible, assertProjectVisible } from '../services/projectAccess.js';
+import { createQueryPool, safeDecrypt, type SyslogCtx } from '../execute/envContext.js';
+import { probeSyslog } from '../execute/syslogReader.js';
 
 export const environmentsRoute = Router();
 
@@ -30,6 +32,7 @@ async function listEnvObjects(environmentId: string) {
 /**
  * 入参归一：payload.password / payload.privateKey 明文 → 加密写入 payload.secret；
  * 未提供（留空）→ 沿用 prev 旧密文（不覆盖语义）。入参中的 secret 字段一律丢弃。
+ * syslog 按 authType 决定加密哪个明文字段（password / privateKey）。
  */
 function normalizeObjectPayload(
   objectType: ObjectType,
@@ -38,7 +41,9 @@ function normalizeObjectPayload(
 ): Record<string, unknown> {
   const out = { ...payload };
   delete out.secret;
-  const plain = objectType === 'db' ? out.password : out.privateKey;
+  const plain = objectType === 'db'
+    ? out.password
+    : out.authType === 'password' ? out.password : out.privateKey;
   delete out.password;
   delete out.privateKey;
   if (typeof plain === 'string' && plain.length > 0) {
@@ -211,4 +216,104 @@ environmentsRoute.get('/environments/allowed-tables', async (_req, res) => {
   const out: Record<string, string[]> = {};
   for (const [k, v] of Object.entries(ALLOWED_QUERY_COLUMNS)) out[k] = Array.from(v);
   res.json(out);
+});
+
+type SecretTriple = { c?: string; i?: string; t?: string } | null | undefined;
+
+/** objectId 回退：取该对象已存密文解出明文（凭据留空走旧密文，与保存语义一致）。
+ *  对象不存在 → 404；无密文 → ''；解密失败 → error（调用方回 200 ok:false）。 */
+async function storedSecret(objectId: string, req: Request): Promise<{ secret: string; error?: string }> {
+  const row = (await db.select().from(environmentObjects).where(eq(environmentObjects.id, objectId)).limit(1))[0];
+  if (!row) throw new HttpError(404, 'not_found', 'environment object not found');
+  await assertEnvironmentVisible(row.environmentId, req.user!);
+  const p = (row.payload ?? {}) as { secret?: SecretTriple };
+  if (p.secret?.c && p.secret?.i && p.secret?.t) {
+    try {
+      return { secret: safeDecrypt(p.secret) };
+    } catch (e) {
+      return { secret: '', error: `凭据解密失败：${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
+  return { secret: '' };
+}
+
+const TestDbBody = z.object({
+  objectId: z.string().uuid().optional(), // 编辑态：密码留空时回退该对象已存密文
+  host: z.string().min(1),
+  port: z.number().int().min(1).max(65535).optional(),
+  dbName: z.string().min(1),
+  user: z.string().min(1),
+  password: z.string().optional(), // 明文留空 → 沿用旧密文（与保存语义一致）
+  dbType: z.enum(['postgres', 'mysql']).optional(), // 缺省 postgres（老数据兼容）
+});
+
+// 用表单当前值（未保存也可）探测 DB 连通性；HTTP 200 + ok:false 表示探测失败（与 /settings/llm/test 约定一致）
+environmentsRoute.post('/environments/test-db', async (req, res) => {
+  const body = TestDbBody.parse(req.body);
+  let password = body.password ?? '';
+  if (!password && body.objectId) {
+    const stored = await storedSecret(body.objectId, req);
+    if (stored.error) {
+      res.json({ ok: false, error: stored.error });
+      return;
+    }
+    password = stored.secret;
+  }
+  const dialect = body.dbType ?? 'postgres';
+  const pool = createQueryPool({
+    dialect,
+    host: body.host,
+    port: body.port ?? (dialect === 'mysql' ? 3306 : 5432),
+    database: body.dbName,
+    user: body.user,
+    password,
+  });
+  const startedAt = Date.now();
+  try {
+    await pool.query('SELECT 1', []);
+    res.json({ ok: true, latencyMs: Date.now() - startedAt });
+  } catch (e) {
+    res.json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  } finally {
+    await pool.end().catch(() => undefined);
+  }
+});
+
+const TestSyslogBody = z.object({
+  objectId: z.string().uuid().optional(), // 编辑态：凭据留空时回退该对象已存密文
+  host: z.string().min(1),
+  sshPort: z.number().int().min(1).max(65535).optional(), // 与 payload.sshPort 同名：表单同一映射共用
+  user: z.string().min(1),
+  filePath: z.string().min(1),
+  authType: z.enum(['key', 'password']),
+  privateKey: z.string().optional(),
+  password: z.string().optional(),
+});
+
+// 用表单当前值（未保存也可）探测 syslog（SSH tail 校验文件可读）；200 + ok:false 表示探测失败
+environmentsRoute.post('/environments/test-syslog', async (req, res) => {
+  const body = TestSyslogBody.parse(req.body);
+  let secret = body.authType === 'password' ? (body.password ?? '') : (body.privateKey ?? '');
+  if (!secret && body.objectId) {
+    const stored = await storedSecret(body.objectId, req);
+    if (stored.error) {
+      res.json({ ok: false, error: stored.error });
+      return;
+    }
+    secret = stored.secret;
+  }
+  const env: SyslogCtx = {
+    host: body.host,
+    port: body.sshPort ?? 22,
+    user: body.user,
+    filePath: body.filePath,
+    authType: body.authType,
+    ...(body.authType === 'password' ? { password: secret } : { privateKey: Buffer.from(secret) }),
+  };
+  try {
+    const latencyMs = await probeSyslog(env);
+    res.json({ ok: true, latencyMs });
+  } catch (e) {
+    res.json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
 });

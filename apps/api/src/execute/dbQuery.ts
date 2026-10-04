@@ -1,5 +1,5 @@
-import type pg_ from 'pg';
 import type { QueryDbAction, DbAssertionMatch } from '@itest/shared';
+import type { QueryPool, DbDialect } from './envContext.js';
 
 export class QueryDbError extends Error {
   constructor(msg: string) { super(msg); this.name = 'QueryDbError'; }
@@ -44,8 +44,36 @@ export interface DbQueryRowResult {
 
 const TRUNCATE = 50;
 
+/** 双方言 SELECT 构造：标识符 pg `"col"`（`""` 转义）/ mysql `` `col` ``（`` `` `` 转义）；占位符 pg `$n` / mysql `?`。 */
+export function buildSelectSql(
+  dialect: DbDialect,
+  table: string,
+  columns: string[],
+  where: ReadonlyArray<{ column: string; equals: unknown }>,
+  limit: number,
+): { sql: string; params: unknown[] } {
+  const quote = (id: string) =>
+    dialect === 'mysql' ? `\`${id.replace(/`/g, '``')}\`` : `"${id.replace(/"/g, '""')}"`;
+  const placeholder = (i: number) => (dialect === 'mysql' ? '?' : `$${i + 1}`);
+
+  const params: unknown[] = [];
+  const whereParts = where.map((w, i) => {
+    params.push(w.equals);
+    return `${quote(w.column)} = ${placeholder(i)}`;
+  });
+
+  const sql = [
+    'SELECT',
+    columns.map(quote).join(', '),
+    `FROM ${quote(table)}`,
+    whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '',
+    `LIMIT ${limit}`,
+  ].filter(Boolean).join(' ');
+  return { sql, params };
+}
+
 export async function runQueryDb(opts: {
-  pool: pg_.Pool;
+  pool: QueryPool;
   action: QueryDbAction;
 }): Promise<DbQueryRowResult> {
   const { pool, action } = opts;
@@ -54,29 +82,18 @@ export async function runQueryDb(opts: {
   assertColumnsAllowed(table, requestedCols);
 
   const where = action.where;
-  const params: unknown[] = [];
-  const whereParts: string[] = [];
-  for (let i = 0; i < where.length; i++) {
-    const { column, equals } = where[i]!;
+  for (const { column } of where) {
     if (!ALLOWED_QUERY_COLUMNS[table]!.has(column)) throw new QueryDbColumnNotAllowed(column);
-    params.push(equals);
-    whereParts.push(`"${column.replace(/"/g, '""')}" = $${i + 1}`);
   }
 
   const limit = Math.min(action.limit, 200);
-  const sql = [
-    'SELECT',
-    requestedCols.map((c) => `"${c.replace(/"/g, '""')}"`).join(', '),
-    `FROM "${table}"`,
-    whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '',
-    `LIMIT ${limit}`,
-  ].filter(Boolean).join(' ');
+  const { sql, params } = buildSelectSql(pool.dialect, table, requestedCols, where, limit);
 
   const t0 = Date.now();
   let rows: Record<string, unknown>[];
   try {
     const result = await pool.query(sql, params);
-    rows = result.rows as Record<string, unknown>[];
+    rows = result.rows;
   } catch (e) {
     throw new QueryDbError(e instanceof Error ? e.message : String(e));
   }

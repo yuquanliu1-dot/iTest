@@ -165,7 +165,7 @@ describe('resolveEnv', () => {
     const env = await resolveEnv({ caseEnvId: 'env-1' });
     expect(env.syslog?.host).toBe('log.example.com');
     expect(env.syslog?.port).toBe(2222);
-    expect(env.syslog?.privateKey.toString()).toBe('KEY');
+    expect(env.syslog?.privateKey?.toString()).toBe('KEY');
     expect(env.db).toBeUndefined();
   });
 
@@ -182,6 +182,65 @@ describe('resolveEnv', () => {
     });
     const env = await resolveEnv({ caseEnvId: 'env-1' });
     expect(env.db?.host).toBe('b.db');
+    await env.close();
+  });
+
+  it('mysql payload → pool dialect mysql, port defaults 3306', async () => {
+    const enc = encrypt('mypass');
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [{
+        id: 'obj-db', environmentId: 'env-1', objectType: 'db', label: '默认', isDefault: true,
+        payload: {
+          dbType: 'mysql', host: 'mysql.example.com', dbName: 'app', user: 'app',
+          secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') },
+        },
+      }],
+      project_versions: [],
+    });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.pool?.dialect).toBe('mysql');
+    expect(env.db?.port).toBe(3306);
+    expect(env.db?.password).toBe('mypass');
+    await env.close();
+  });
+
+  it('postgres payload (dbType absent) → pool dialect postgres, port 5432', async () => {
+    const enc = encrypt('pgpass');
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [{
+        id: 'obj-db', environmentId: 'env-1', objectType: 'db', label: '默认', isDefault: true,
+        payload: {
+          host: 'pg.example.com', dbName: 'app', user: 'app',
+          secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') },
+        },
+      }],
+      project_versions: [],
+    });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.pool?.dialect).toBe('postgres');
+    expect(env.db?.port).toBe(5432);
+    await env.close();
+  });
+
+  it('syslog password authType → password ctx without privateKey', async () => {
+    const enc = encrypt('s3cret');
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [{
+        id: 'obj-log', environmentId: 'env-1', objectType: 'syslog', label: '默认', isDefault: true,
+        payload: {
+          host: 'log.example.com', user: 'root', sshPort: 2222, filePath: '/var/log/app.log', authType: 'password',
+          secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') },
+        },
+      }],
+      project_versions: [],
+    });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.syslog?.authType).toBe('password');
+    expect(env.syslog?.password).toBe('s3cret');
+    expect(env.syslog?.privateKey).toBeUndefined();
     await env.close();
   });
 });
