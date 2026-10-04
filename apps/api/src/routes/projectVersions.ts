@@ -17,6 +17,7 @@ const CreateBody = z.object({
   description: z.string().max(500).optional(),
   ref: z.string().max(200).optional(),
   refKind: RefKindEnum.optional(),
+  environmentId: z.string().uuid().nullable().optional(),
 });
 
 const PatchBody = z.object({
@@ -62,12 +63,18 @@ projectVersionsRoute.post('/projects/:projectId/versions', async (req, res) => {
   const dup = await db.select({ id: projectVersions.id }).from(projectVersions)
     .where(and(eq(projectVersions.projectId, pid), eq(projectVersions.name, body.name))).limit(1);
   if (dup.length > 0) throw new HttpError(409, 'version_name_taken', `version name "${body.name}" already exists in this project`);
+  // 关联环境必须属于同项目；null/缺省 = 不指定（回退项目默认环境）
+  if (body.environmentId != null) {
+    const { projectId: envPid } = await assertEnvironmentVisible(body.environmentId, req.user!);
+    if (envPid !== pid) throw new HttpError(400, 'env_project_mismatch', 'environment does not belong to this project');
+  }
   const rows = await db.insert(projectVersions).values({
     projectId: pid,
     name: body.name,
     description: body.description ?? null,
     ref: body.ref ?? null,
     refKind: body.refKind ?? null,
+    environmentId: body.environmentId ?? null,
   }).returning();
   res.status(201).json(rows[0]);
 });

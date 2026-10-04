@@ -149,7 +149,7 @@ export const api = {
   versions: {
     list: (projectId: string) =>
       request<ProjectVersion[]>(`/projects/${projectId}/versions`),
-    create: (projectId: string, body: { name: string; description?: string }) =>
+    create: (projectId: string, body: { name: string; description?: string; environmentId?: string | null }) =>
       request<ProjectVersion>(`/projects/${projectId}/versions`, {
         method: 'POST',
         body: JSON.stringify(body),

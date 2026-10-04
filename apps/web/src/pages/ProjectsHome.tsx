@@ -149,6 +149,7 @@ export default function ProjectsHome() {
       api.versions.create(versionForm.projectId, {
         name: versionForm.name,
         description: versionForm.description || undefined,
+        environmentId: versionForm.environmentId || null,
       }),
     onSuccess: (v) => {
       toast(`已新建版本 ${v.name}`, 'success');
@@ -348,23 +349,21 @@ export default function ProjectsHome() {
               value={versionForm.name}
               onChange={(e) => setVersionForm((f) => ({ ...f, name: e.target.value }))}
             />
-            {versionForm.mode === 'edit' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>关联环境（可空，留空走项目默认）</label>
-                <select
-                  className="input-base input-sm"
-                  value={versionForm.environmentId}
-                  onChange={(e) => setVersionForm((f) => ({ ...f, environmentId: e.target.value }))}
-                >
-                  <option value="">跟随项目默认环境</option>
-                  {(envsQ.data ?? []).map((env) => (
-                    <option key={env.id} value={env.id}>
-                      {env.name}{env.isDefault ? '（默认）' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>关联环境（可空，留空走项目默认）</label>
+              <select
+                className="input-base input-sm"
+                value={versionForm.environmentId}
+                onChange={(e) => setVersionForm((f) => ({ ...f, environmentId: e.target.value }))}
+              >
+                <option value="">跟随项目默认环境</option>
+                {(envsQ.data ?? []).map((env) => (
+                  <option key={env.id} value={env.id}>
+                    {env.name}{env.isDefault ? '（默认）' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>描述（可空）</label>
               <textarea
