@@ -39,7 +39,7 @@ recorderRoute.post('/sessions', async (req, res) => {
       }
     }
   }
-  const resolvedUrl = await resolveCaseUrl(exists[0]!);
+  const resolvedUrl = await resolveCaseUrl(exists[0]!, { defaultEnvFallback: true });
   const session = createSession(body.caseId, {
     mode: body.mode,
     incognito: body.incognito ?? body.mode === 'incognito',
@@ -87,7 +87,7 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, session.caseId)))[0];
   if (caseRow && !caseRow.url) {
     const firstStepUrl = (session.steps[0] as { url?: string | null } | undefined)?.url ?? null;
-    const candidate = session.targetUrl ?? firstStepUrl ?? (await resolveCaseUrl(caseRow));
+    const candidate = session.targetUrl ?? firstStepUrl ?? (await resolveCaseUrl(caseRow, { defaultEnvFallback: true }));
     if (candidate && /^https?:\/\//.test(candidate)) {
       await db.update(testCases).set({ url: candidate, updatedAt: new Date() }).where(eq(testCases.id, session.caseId));
     }

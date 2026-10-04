@@ -174,9 +174,9 @@ describe('cases + steps', () => {
     expect(r.body[0].title).toBe('p1');
   });
 
-  it('GET /api/cases/:id resolves url by chain case > group > project', async () => {
+  it('GET /api/cases/:id resolves url by chain case > group > default env', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
-    await pool.query(`UPDATE projects SET default_url = 'https://proj.test' WHERE id = $1`, [projectId]);
+    await pool.query(`INSERT INTO test_environments(project_id, name, is_default, base_url) VALUES ($1, '默认', true, 'https://proj.test')`, [projectId]);
     const c1 = await request(app).post('/api/cases').send({ title: 'inherit', groupId, versionId });
     const d1 = await request(app).get(`/api/cases/${c1.body.id}`);
     expect(d1.body.resolvedUrl).toBe('https://proj.test');

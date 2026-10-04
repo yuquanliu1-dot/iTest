@@ -208,7 +208,6 @@ export const projects = pgTable('projects', {
     .references(() => organizations.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 200 }).notNull(),
   description: text('description'),
-  defaultUrl: text('default_url'),
   // 仓库元数据：与 iDO 同源（AI 生成用例步骤需要看代码）。当前只存元数据 + 验证可达性，
   // 后续接入 dispatch-gateway 的 github.service.ts 后才会有 clone / file read。
   repoUrl: text('repo_url'),

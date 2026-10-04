@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { eq, asc, desc, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { projects, groups, testCases, reports, requirements } from '../db/schema.js';
+import { projects, groups, testCases, reports, requirements, projectVersions, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible } from '../services/projectAccess.js';
 import { visibleOrgIdsFor } from '../services/orgTree.js';
@@ -17,7 +17,6 @@ const ProviderEnum = z.enum(['github', 'gitee', 'gitlab']);
 const CreateBody = z.object({
   name: z.string().min(1).max(200),
   description: z.string().optional(),
-  defaultUrl: z.string().optional(),
   repoUrl: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   defaultBranch: z.string().max(200).optional(),
   provider: ProviderEnum.optional(),
@@ -55,7 +54,24 @@ projectsRoute.get('/', async (req, res) => {
   for (const g of gs) {
     byProject.set(g.projectId, (byProject.get(g.projectId) ?? 0) + (counts.get(g.id) ?? 0));
   }
-  res.json(ps.map((p) => ({ ...maskProject(p), caseCount: byProject.get(p.id) ?? 0 })));
+  const vs = await db
+    .select({ projectId: projectVersions.projectId, count: sql<number>`count(*)` })
+    .from(projectVersions)
+    .groupBy(projectVersions.projectId);
+  const es = await db
+    .select({ projectId: testEnvironments.projectId, count: sql<number>`count(*)` })
+    .from(testEnvironments)
+    .groupBy(testEnvironments.projectId);
+  const vByProject = new Map(vs.map((r) => [r.projectId, Number(r.count)]));
+  const eByProject = new Map(es.map((r) => [r.projectId, Number(r.count)]));
+  res.json(
+    ps.map((p) => ({
+      ...maskProject(p),
+      caseCount: byProject.get(p.id) ?? 0,
+      versionCount: vByProject.get(p.id) ?? 0,
+      environmentCount: eByProject.get(p.id) ?? 0,
+    })),
+  );
 });
 
 projectsRoute.post('/', requireManager, async (req, res) => {
@@ -65,7 +81,6 @@ projectsRoute.post('/', requireManager, async (req, res) => {
     .values({
       name: body.name,
       description: body.description,
-      defaultUrl: body.defaultUrl,
       repoUrl: body.repoUrl,
       defaultBranch: body.defaultBranch?.trim() || 'main',
       provider: body.provider ?? 'github',
@@ -92,7 +107,6 @@ projectsRoute.patch('/:id', requireManager, async (req, res) => {
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (body.name !== undefined) set.name = body.name;
   if (body.description !== undefined) set.description = body.description;
-  if (body.defaultUrl !== undefined) set.defaultUrl = body.defaultUrl;
   if (body.repoUrl !== undefined) set.repoUrl = body.repoUrl;
   if (body.defaultBranch !== undefined) set.defaultBranch = body.defaultBranch?.trim() || 'main';
   if (body.provider !== undefined) set.provider = body.provider;

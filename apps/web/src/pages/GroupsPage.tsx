@@ -112,9 +112,9 @@ export default function GroupsPage() {
     [groups],
   );
 
-  // 新建用例的 URL 预填：分组.defaultUrl 优先，回退项目.defaultUrl（与 resolveCaseUrl 链一致）
+  // 新建用例的 URL 预填：分组.defaultUrl；环境兜底由服务端 resolvedUrl 负责（录制/详情链）
   const inheritUrl = (gid: string) =>
-    (groups ?? []).find((g) => g.id === gid)?.defaultUrl || current?.defaultUrl || '';
+    (groups ?? []).find((g) => g.id === gid)?.defaultUrl || '';
 
   // 场景过滤下拉选项 = 项目下全部 scenario 去重 + 「无场景」sentinel。
   // 「无场景」是否出现，看当前列表里有没有 scenarioId == null 的用例（仅首次观察一次）。

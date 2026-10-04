@@ -177,7 +177,7 @@ casesRoute.get('/:id', async (req, res) => {
   // Redact secret material from the GET response; the recorder uses the dedicated
   // /steps/secrets/:stepId endpoint with the ws token to retrieve plaintext at execution time.
   const sanitizedSteps = steps.map(({ secretCiphertext: _sc, secretIv: _si, secretTag: _st, ...rest }) => rest);
-  const resolvedUrl = await resolveCaseUrl(rows[0]!);
+  const resolvedUrl = await resolveCaseUrl(rows[0]!, { defaultEnvFallback: true });
   const tagsByCase = await tagsForCases([req.params.id!]);
   res.json({
     ...rows[0],

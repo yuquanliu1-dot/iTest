@@ -20,7 +20,6 @@ interface FormState {
   id: string | null;
   name: string;
   description: string;
-  defaultUrl: string;
   repo: RepoFieldsValue;
 }
 interface VersionFormState {
@@ -53,7 +52,6 @@ const EMPTY_FORM: FormState = {
   id: null,
   name: '',
   description: '',
-  defaultUrl: '',
   repo: EMPTY_REPO,
 };
 const EMPTY_VERSION_FORM: VersionFormState = {
@@ -110,7 +108,6 @@ export default function ProjectsHome() {
       const baseBody = {
         name: form.name,
         description: form.description || undefined,
-        defaultUrl: form.defaultUrl || undefined,
         repoUrl: r.repoUrl.trim() || undefined,
         defaultBranch: r.defaultBranch.trim() || undefined,
         provider: r.repoUrl.trim() ? r.provider : undefined,
@@ -197,8 +194,8 @@ export default function ProjectsHome() {
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
-  const enterVersion = (projectId: string, projectName: string, projectDefaultUrl: string | null, v: ProjectVersion) => {
-    enter({ id: projectId, name: projectName, defaultUrl: projectDefaultUrl, versionId: v.id, versionName: v.name });
+  const enterVersion = (projectId: string, projectName: string, v: ProjectVersion) => {
+    enter({ id: projectId, name: projectName, versionId: v.id, versionName: v.name });
     switchVersion(v.id, v.name);
     navigate(`/p/${projectId}/v/${v.id}/overview`);
   };
@@ -222,7 +219,6 @@ export default function ProjectsHome() {
               id: null,
               name: '',
               description: '',
-              defaultUrl: '',
               repo: EMPTY_REPO,
             })
           }
@@ -255,7 +251,6 @@ export default function ProjectsHome() {
                     id: p.id,
                     name: p.name,
                     description: p.description ?? '',
-                    defaultUrl: p.defaultUrl ?? '',
                     repo: {
                       repoUrl: p.repoUrl ?? '',
                       provider: (p.provider as 'github' | 'gitee' | 'gitlab') ?? 'github',
@@ -291,7 +286,7 @@ export default function ProjectsHome() {
                     environmentId: v.environmentId ?? '',
                   })
                 }
-                onEnterVersion={(v) => enterVersion(p.id, p.name, p.defaultUrl, v)}
+                onEnterVersion={(v) => enterVersion(p.id, p.name, v)}
                 onRemoveVersion={(v) => removeVersion.mutate({ projectId: p.id, versionId: v.id })}
                 onEditVersionRef={(v) => setRefForm({ open: true, projectId: p.id, version: v })}
                 onOpenEnvironments={() => navigate(`/p/${p.id}/environments`)}
@@ -309,12 +304,6 @@ export default function ProjectsHome() {
           </DialogHeader>
           <div className="flex-1 min-h-0 flex flex-col gap-3 px-5 py-4 overflow-y-auto">
             <Input label="名称" placeholder="如：CueCast 官网" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
-            <Input
-              label="默认域名（可空）"
-              placeholder="https://example.com"
-              value={form.defaultUrl}
-              onChange={(e) => setForm((f) => ({ ...f, defaultUrl: e.target.value }))}
-            />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>描述（可空）</label>
               <textarea
@@ -446,7 +435,7 @@ export default function ProjectsHome() {
 }
 
 interface ProjectRowProps {
-  project: { id: string; name: string; description: string | null; defaultUrl: string | null; caseCount: number; repoUrl: string | null };
+  project: { id: string; name: string; description: string | null; caseCount: number; versionCount: number; environmentCount: number; repoUrl: string | null };
   expanded: boolean;
   onToggle: () => void;
   onEdit: () => void;
@@ -475,6 +464,12 @@ function ProjectRow({
   const versionsQ = useQuery({
     queryKey: ['versions', p.id],
     queryFn: () => api.versions.list(p.id),
+    enabled: expanded,
+  });
+  // 版本行「打开环境域名」需要环境 baseUrl；展开时拉一次（与版本弹窗共享缓存）
+  const envsQ = useQuery({
+    queryKey: ['environments', p.id],
+    queryFn: () => api.environments.list(p.id),
     enabled: expanded,
   });
 
@@ -513,8 +508,11 @@ function ProjectRow({
         <span className="text-[12px] shrink-0" style={{ color: 'var(--color-foreground-muted)' }}>
           {p.caseCount} 条用例
         </span>
+        <span className="text-[12px] shrink-0" style={{ color: 'var(--color-foreground-muted)' }}>
+          {p.versionCount} 版本
+        </span>
         <span className="text-[12px] shrink-0 hidden md:inline" style={{ color: 'var(--color-foreground-muted)' }}>
-          {p.defaultUrl ?? '未设置域名'}
+          {p.environmentCount} 环境
         </span>
         <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
           <IconButton icon="pencil" title="编辑项目" onClick={onEdit} />
@@ -545,7 +543,12 @@ function ProjectRow({
                 </div>
               ) : (
                 <ul>
-                  {(versionsQ.data ?? []).map((v) => (
+                  {(versionsQ.data ?? []).map((v) => {
+                    // 版本显式绑定的环境优先，未绑定走项目默认环境（与执行期解析一致）
+                    const envs = envsQ.data ?? [];
+                    const env = envs.find((e) => e.id === v.environmentId) ?? envs.find((e) => e.isDefault);
+                    const envUrl = env?.baseUrl ?? null;
+                    return (
                     <li
                       key={v.id}
                       className="flex items-center gap-3 px-3 py-2 list-row-clickable"
@@ -556,7 +559,10 @@ function ProjectRow({
                         {v.name}
                       </span>
                       <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
-                        用例 {v.caseCount ?? 0} · 环境 {v.environmentName ?? '项目默认'} · 计划 {v.planCount ?? 0}
+                        用例 {v.caseCount ?? 0} · 计划 {v.planCount ?? 0}
+                      </span>
+                      <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                        环境 {v.environmentName ?? '项目默认'}
                       </span>
                       {v.ref && v.refKind && (
                         <span
@@ -576,9 +582,15 @@ function ProjectRow({
                         <IconButton icon="pencil" title="编辑版本" onClick={() => onEditVersion(v)} />
                         <IconButton
                           icon="gitBranch"
-                          title={p.repoUrl ? '编辑 ref' : '请先配置仓库'}
+                          title={p.repoUrl ? '设置分支' : '请先配置仓库'}
                           onClick={() => onEditVersionRef(v)}
                           disabled={!p.repoUrl}
+                        />
+                        <IconButton
+                          icon="externalLink"
+                          title={envUrl ? `打开 ${envUrl}` : '环境未配置域名'}
+                          onClick={() => envUrl && window.open(envUrl, '_blank', 'noopener')}
+                          disabled={!envUrl}
                         />
                         <IconButton icon="trash" title="删除版本" tone="destructive" onClick={() => onRemoveVersion(v)} />
                         <Button size="sm" onClick={() => onEnterVersion(v)}>
@@ -586,7 +598,8 @@ function ProjectRow({
                         </Button>
                       </div>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
               <div className="flex items-center px-3 py-2" style={{ background: 'var(--color-background-subtle)' }}>

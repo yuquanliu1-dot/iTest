@@ -32,29 +32,37 @@ beforeEach(async () => {
   const s = await seedProject(pool);
   projectId = s.projectId;
   groupId = s.groupId;
-  await pool.query(`UPDATE projects SET default_url='https://proj.test' WHERE id=$1`, [projectId]);
 });
 
 describe('resolveCaseUrl 解析链', () => {
   it('用例.url 优先于一切', async () => {
     await pool.query(`UPDATE "groups" SET default_url='https://group.test' WHERE id=$1`, [groupId]);
-    const url = await resolveCaseUrl({ url: 'https://case.test', groupId }, 'https://env.test');
+    const url = await resolveCaseUrl({ url: 'https://case.test', groupId }, { envBaseUrl: 'https://env.test' });
     expect(url).toBe('https://case.test');
   });
 
   it('分组.default_url 次之（环境 URL 不越过分组）', async () => {
     await pool.query(`UPDATE "groups" SET default_url='https://group.test' WHERE id=$1`, [groupId]);
-    const url = await resolveCaseUrl({ url: null, groupId }, 'https://env.test');
+    await pool.query(`INSERT INTO test_environments(project_id, name, is_default, base_url) VALUES ($1, '默认', true, 'https://env.test')`, [projectId]);
+    const url = await resolveCaseUrl({ url: null, groupId }, { envBaseUrl: 'https://plan-env.test', defaultEnvFallback: true });
     expect(url).toBe('https://group.test');
   });
 
-  it('环境.base_url 压过项目.default_url（执行期传入 envBaseUrl）', async () => {
-    const url = await resolveCaseUrl({ url: null, groupId }, 'https://env.test');
+  it('录制/展示链兜底到项目默认环境.base_url', async () => {
+    await pool.query(`INSERT INTO test_environments(project_id, name, is_default, base_url) VALUES ($1, '默认', true, 'https://env.test')`, [projectId]);
+    const url = await resolveCaseUrl({ url: null, groupId }, { defaultEnvFallback: true });
     expect(url).toBe('https://env.test');
   });
 
-  it('不传环境 URL 时项目.default_url 兜底（录制/详情链）', async () => {
-    const url = await resolveCaseUrl({ url: null, groupId });
-    expect(url).toBe('https://proj.test');
+  it('执行链 envBaseUrl（已解析环境）优先于默认环境兜底', async () => {
+    await pool.query(`INSERT INTO test_environments(project_id, name, is_default, base_url) VALUES ($1, '默认', true, 'https://env.test')`, [projectId]);
+    const url = await resolveCaseUrl({ url: null, groupId }, { envBaseUrl: 'https://plan-env.test', defaultEnvFallback: true });
+    expect(url).toBe('https://plan-env.test');
+  });
+
+  it('无环境 URL 且不兜底时返回 null（默认环境 base_url 为空同样 null）', async () => {
+    expect(await resolveCaseUrl({ url: null, groupId })).toBeNull();
+    await pool.query(`INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认', true)`, [projectId]);
+    expect(await resolveCaseUrl({ url: null, groupId }, { defaultEnvFallback: true })).toBeNull();
   });
 });

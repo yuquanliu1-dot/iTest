@@ -36,7 +36,7 @@ async function resolveDetectionUrl(c: LoginPrepareConfig): Promise<string | null
   if (!c.firstCaseId) return null;
   const row = (await db.select().from(testCases).where(eq(testCases.id, c.firstCaseId)))[0];
   if (!row) return null;
-  return resolveCaseUrl(row);
+  return resolveCaseUrl(row, { defaultEnvFallback: true });
 }
 
 async function openDetectionPage(browser: BrowserContext, url: string, timeoutMs = 5000): Promise<Page | null> {
