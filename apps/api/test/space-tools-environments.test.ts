@@ -35,7 +35,7 @@ afterAll(async () => {
 function makeCtx(over: Partial<SpaceToolsContext> = {}): { ctx: SpaceToolsContext; events: Array<Record<string, unknown>> } {
   const events: Array<Record<string, unknown>> = [];
   const ctx: SpaceToolsContext = {
-    threadId: randomUUID(), versionId: '', projectId: '', cwd: null, repoAvailable: false,
+    threadId: randomUUID(), versionId: '', projectId: '', repo: { cwd: null, issue: null, noRepo: false },
     emit: (e) => events.push(e), ...over,
   };
   return { ctx, events };

@@ -9,8 +9,7 @@ function makeCtx(over: Partial<SpaceToolsContext> = {}): { ctx: SpaceToolsContex
     threadId: randomUUID(),
     versionId: randomUUID(),
     projectId: randomUUID(),
-    cwd: null,
-    repoAvailable: false,
+    repo: { cwd: null, issue: null, noRepo: false },
     emit: (e) => events.push(e),
     ...over,
   };
@@ -18,16 +17,17 @@ function makeCtx(over: Partial<SpaceToolsContext> = {}): { ctx: SpaceToolsContex
 }
 
 describe('buildSpaceTools(骨架)', () => {
-  it('repo 不可用时不注入 repo 工具;注入 announce_plan 与 inspect_page', () => {
+  it('repo 未就绪时恒注入 repo 工具(cwd 动态解析);注入 announce_plan 与 inspect_page', () => {
     const { ctx } = makeCtx();
     const names = buildSpaceTools(ctx).map((t) => t.name);
     expect(names).toContain('announce_plan');
     expect(names).toContain('inspect_page');
-    expect(names.filter((n) => n.startsWith('repo_'))).toEqual([]);
+    // repo 工具恒注册,运行时再解析 cwd;未就绪时调用报「仓库尚未就绪」
+    expect(names.filter((n) => n.startsWith('repo_'))).toEqual(['repo_ls', 'repo_read', 'repo_grep', 'repo_run']);
   });
 
-  it('repo 可用时注入 repo 沙箱工具', () => {
-    const { ctx } = makeCtx({ repoAvailable: true, cwd: '/tmp' });
+  it('repo 就绪(cwd 已有)时同样注入 repo 沙箱工具', () => {
+    const { ctx } = makeCtx({ repo: { cwd: '/tmp', issue: null, noRepo: false } });
     const names = buildSpaceTools(ctx).map((t) => t.name);
     expect(names.some((n) => n.startsWith('repo_'))).toBe(true);
   });
