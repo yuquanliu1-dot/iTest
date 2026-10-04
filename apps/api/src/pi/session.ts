@@ -224,7 +224,7 @@ export function cancelThread(threadId: string): void {
  * undefined）。此时按 provider 合成一个最小合法 Model：api 必须是 pi-ai 的 KnownApi 之一，
  * baseUrl 用 settings 的值（网关）或 provider 默认值。
  */
-function synthesizeModel(provider: LlmProvider, modelId: string, baseUrl: string | null): Record<string, unknown> {
+export function synthesizeModel(provider: LlmProvider, modelId: string, baseUrl: string | null): Record<string, unknown> {
   const defaults: Record<LlmProvider, { api: string; baseUrl: string }> = {
     anthropic: { api: 'anthropic-messages', baseUrl: 'https://api.anthropic.com' },
     openai: { api: 'openai-completions', baseUrl: 'https://api.openai.com/v1' },
@@ -245,6 +245,8 @@ function synthesizeModel(provider: LlmProvider, modelId: string, baseUrl: string
     type: 'chat',
   };
 }
+
+export const ENV_BY_PROVIDER = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', google: 'GEMINI_API_KEY' } as const;
 
 async function createPiSessionFactory(ctx: {
   threadId: string;
@@ -295,7 +297,6 @@ async function createPiSessionFactory(ctx: {
     ?? synthesizeModel(cfg.provider, cfg.model, cfg.baseUrl);
   // 凭据：pi-ai 走 ambient env 兜底（ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY），
   // 这里把 settings 里的 key 种进 env；自定义 baseUrl 直接覆盖 catalog model 的 baseUrl。
-  const ENV_BY_PROVIDER = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', google: 'GEMINI_API_KEY' } as const;
   const envKey = ENV_BY_PROVIDER[cfg.provider];
   if (envKey && !process.env[envKey]) process.env[envKey] = cfg.apiKey;
   const model = { ...base, ...(cfg.baseUrl ? { baseUrl: cfg.baseUrl } : {}) } as Parameters<typeof createAgentSession>[0] extends infer O ? O extends { model?: infer M } ? M : never : never;
