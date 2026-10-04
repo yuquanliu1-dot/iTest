@@ -11,6 +11,7 @@ import { buildInspectTool } from './inspect.js';
 import { buildCasesTools } from './cases.js';
 import { buildScenariosTools } from './scenarios.js';
 import { buildEnvironmentsTools } from './environments.js';
+import { buildPlansTools } from './plans.js';
 
 export type { SpaceToolsContext } from './context.js';
 export { emitStage, type StageKind } from './stage.js';
@@ -23,5 +24,6 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   tools.push(...buildCasesTools(ctx));
   tools.push(...buildScenariosTools(ctx));
   tools.push(...buildEnvironmentsTools(ctx));
+  tools.push(...buildPlansTools(ctx));
   return tools;
 }
