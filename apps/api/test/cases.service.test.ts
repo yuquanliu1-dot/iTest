@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -83,5 +84,39 @@ describe('cases.service', () => {
     expect(await svc.groupProjectId(g.id)).toBe(projectId);
     await expect(svc.createGroup('00000000-0000-0000-0000-000000000000', { name: 'x' }))
       .rejects.toMatchObject({ status: 404 });
+  }, 30_000);
+
+  it('tagIds:组织内创建带 tags 返回完整行;缺失 tag → 404;跨组织 tag → 400', async () => {
+    const seed = await seedProject(pool);
+    const svc = await import('../src/services/cases.service.js');
+    const t1 = (await pool.query(`INSERT INTO tags(organization_id, name, color) VALUES ($1,'冒烟','34c759') RETURNING id`, [seed.orgId])).rows[0]!.id as string;
+
+    const c = await svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: '带标签用例', tagIds: [t1] });
+    expect(c.tags).toEqual([{ id: t1, name: '冒烟', color: '34c759' }]);
+    expect((await pool.query(`SELECT tag_id FROM case_tags WHERE case_id=$1`, [c.id])).rowCount).toBe(1);
+
+    await expect(svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: 'x', tagIds: ['00000000-0000-0000-0000-000000000000'] }))
+      .rejects.toMatchObject({ status: 404 });
+
+    // 第二个组织的 tag → 400 tag_org_mismatch
+    const otherOrg = randomUUID();
+    await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1,'他组织',$2)`, [otherOrg, `/${otherOrg}/`]);
+    const foreignTag = (await pool.query(`INSERT INTO tags(organization_id, name, color) VALUES ($1,'外标签','ff0000') RETURNING id`, [otherOrg])).rows[0]!.id as string;
+    await expect(svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: 'y', tagIds: [foreignTag] }))
+      .rejects.toMatchObject({ status: 400, code: 'tag_org_mismatch' });
+  }, 30_000);
+
+  it('updateCase:跨项目移动分组 → 400 cross_project_move;同项目换分组成功', async () => {
+    const a = await seedProject(pool);
+    const b = await seedProject(pool);
+    const svc = await import('../src/services/cases.service.js');
+    const c = await svc.createCase({ groupId: a.groupId, versionId: a.versionId, title: '搬运工' });
+
+    await expect(svc.updateCase(c.id, { groupId: b.groupId }))
+      .rejects.toMatchObject({ status: 400, code: 'cross_project_move' });
+
+    const g2 = (await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1,'第二分组') RETURNING id`, [a.projectId])).rows[0]!.id as string;
+    const moved = await svc.updateCase(c.id, { groupId: g2 });
+    expect(moved.groupId).toBe(g2);
   }, 30_000);
 });
