@@ -18,6 +18,8 @@ describe('confirm gate', () => {
     resolveConfirmation(confirmId, true);
     await expect(p).resolves.toBe(true);
     expect(pendingCountForTesting()).toBe(0);
+    // 已消费的 confirmId 不可二次 resolve(重放点击 → 404 的契约基础)
+    expect(resolveConfirmation(confirmId, true)).toBe(false);
   });
 
   it('用户取消 → resolve(false)', async () => {

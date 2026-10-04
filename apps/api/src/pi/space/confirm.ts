@@ -33,7 +33,8 @@ const pending = new Map<string, PendingEntry>();
 
 /**
  * 发起一次确认并挂起。emit 负责把 confirm_request 事件扇出到线程 SSE
- * (session.ts 的 emitThreadEvent);事件体自动带 confirmId。
+ * (session.ts 的 emitThreadEvent);事件体自动带 confirmId。emit 不得抛异常
+ * (emitThreadEvent 对无订阅者静默丢弃,天然满足)——抛出会留下悬空挂起项。
  * 超时/取消一律 resolve(false),调用方把它当 { ok:false, error:'用户取消了该操作' } 返回给 LLM。
  */
 export function requestConfirmation(req: ConfirmRequestInput, emit: (e: Record<string, unknown>) => void): Promise<boolean> {
