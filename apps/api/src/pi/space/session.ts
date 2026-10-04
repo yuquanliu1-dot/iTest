@@ -13,7 +13,8 @@ import { readLlmConfig } from '../modelBridge.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
-import { checkoutRepoForVersion, RepoUnavailableError } from '../repo.js';
+import { checkoutRepoForVersion, LockTimeoutError, RepoUnavailableError } from '../repo.js';
+import { emptyRepoState, type RepoState } from './tools/context.js';
 import { synthesizeModel, ENV_BY_PROVIDER } from '../session.js';
 
 export interface SpaceSessionLike {
@@ -29,8 +30,8 @@ export interface SpaceThreadContext {
   threadId: string;
   versionId: string;
   projectId: string;
-  cwd: string | null;
-  repoAvailable: boolean;
+  /** 仓库后台检出状态(session 建立时通常未就绪;检出完成/失败后字段就位)。 */
+  repo: RepoState;
 }
 
 export type SpaceSessionFactory = (ctx: SpaceThreadContext) => Promise<SpaceSessionLike>;
@@ -43,8 +44,8 @@ interface ThreadRecord {
   unsub: () => void;
   seq: number;
   turnIndex: number;
-  /** 非 no_repo 的仓库不可用原因说明(auth_failed 等);null = 正常或未配仓库(no_repo 静默)。 */
-  repoIssue: string | null;
+  /** 仓库后台检出状态(与工厂/工具共享同一可变引用)。 */
+  repo: RepoState;
 }
 
 const records = new Map<string, ThreadRecord>();
@@ -80,20 +81,11 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
   const v = (await db.select({ projectId: projectVersions.projectId }).from(projectVersions).where(eq(projectVersions.id, row.versionId)).limit(1))[0];
   if (!v) throw new Error('space thread version missing');
 
-  // repo 探测:no_repo 完全静默;其它失败 session 照常建立(repoAvailable=false),
-  // 原因记在 record 上由 router 随建线程响应透出(前端黄条警告,不阻断对话)
-  let cwd: string | null = null;
-  let repoAvailable = false;
-  let repoIssue: string | null = null;
-  try {
-    cwd = await checkoutRepoForVersion(row.versionId);
-    repoAvailable = true;
-  } catch (e) {
-    if (!(e instanceof RepoUnavailableError)) throw e;
-    if (e.reason !== 'no_repo') repoIssue = `${e.message}(${e.reason})`;
-  }
-
-  const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, cwd, repoAvailable });
+  // repo 后台异步检出:session 立即构建(新会话秒开,不等 git fetch 的网络往返),
+  // repo 工具经共享 RepoState 每次调用动态解析 cwd;no_repo 静默(仅影响工具错误语态),
+  // 其它失败记 repo.issue 供诊断,均不阻断会话。
+  const repo = emptyRepoState();
+  const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo });
   const rec: ThreadRecord = {
     threadId,
     versionId: row.versionId,
@@ -102,12 +94,35 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
     unsub: () => { /* assigned below */ },
     seq: 0,
     turnIndex: -1,
-    repoIssue,
+    repo,
   };
   const unsub = session.subscribe((event) => fanOut(rec, event));
   rec.unsub = unsub;
   records.set(threadId, rec);
+  void checkoutInBackground(row.versionId, repo);
   return rec;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** 后台检出:与 session 构建解耦;锁冲突(并发建线程共享同一次 fetch)等锁后重试,至多 3 次。 */
+async function checkoutInBackground(versionId: string, repo: RepoState): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      repo.cwd = await checkoutRepoForVersion(versionId);
+      return;
+    } catch (e) {
+      if (e instanceof LockTimeoutError) { await sleep(2_000); continue; }
+      if (e instanceof RepoUnavailableError) {
+        if (e.reason !== 'no_repo') repo.issue = `${e.message}(${e.reason})`;
+        else repo.noRepo = true;
+        return;
+      }
+      logger.warn({ err: e, versionId }, 'space repo checkout failed');
+      repo.issue = e instanceof Error ? e.message : String(e);
+      return;
+    }
+  }
 }
 
 /** Pi AgentSession 事件 → react-pi body 的最小映射(与 pi/session.ts 一致)。 */
@@ -194,9 +209,9 @@ export function threadStatus(threadId: string): 'running' | 'idle' | undefined {
   return rec.session.isStreaming ? 'running' : 'idle';
 }
 
-/** 线程构建时记录的仓库问题(非 no_repo);无 record 或无问题返回 null。 */
+/** 线程构建后记录的仓库检出问题(非 no_repo);无 record 或检出未失败返回 null。 */
 export function spaceRepoIssue(threadId: string): string | null {
-  return records.get(threadId)?.repoIssue ?? null;
+  return records.get(threadId)?.repo.issue ?? null;
 }
 
 export async function sendSpaceUserMessage(threadId: string, content: string): Promise<void> {
@@ -273,8 +288,10 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
   } catch (e) {
     logger.warn({ err: e, versionId: ctx.versionId }, 'space summary build failed; continuing without context');
   }
+  // session cwd 固定用平台工作目录:repo 沙箱目录只活在 repo 工具的动态解析里
+  // (后台检出,完成时点不定),不再作为 session 根;loader 因此不读仓库内 CLAUDE.md。
   const loader = new DefaultResourceLoader({
-    cwd: ctx.cwd ?? workspaceDir,
+    cwd: workspaceDir,
     agentDir: getAgentDir(),
     appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText)],
   });
@@ -282,7 +299,7 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
 
   const sessionManager = SessionManager.inMemory();
   const { session } = await createAgentSession({
-    cwd: ctx.cwd ?? workspaceDir,
+    cwd: workspaceDir,
     noTools: 'builtin',
     customTools: tools,
     model,

@@ -75,7 +75,10 @@ function runRg(cwdRoot: string, args: string[]): Promise<{ stdout: string; code:
   });
 }
 
-export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
+/** cwdRoot 传静态目录(requirement 级)或 () => string(动态解析,空间级后台异步检出:
+ *  未就绪/不可用时 throw,由各工具既有 try/catch 转为错误结果)。 */
+export function buildRepoSandboxTools(cwdRoot: string | (() => string)): ToolExecutor[] {
+  const resolveCwd = (): string => (typeof cwdRoot === 'function' ? cwdRoot() : cwdRoot);
   return [
     {
       name: 'repo_ls',
@@ -86,7 +89,7 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
       execute: async (input) => {
         const { path: p } = input as { path?: string };
         try {
-          const real = await assertInCwd(cwdRoot, p ?? '.');
+          const real = await assertInCwd(resolveCwd(), p ?? '.');
           const entries = await fs.readdir(real, { withFileTypes: true });
           const list = entries
             .filter((e) => !e.name.startsWith('.'))
@@ -110,7 +113,7 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
         const { path: p, offset = 0, maxLines = DEFAULT_READ_MAX_LINES } = input as { path: string; offset?: number; maxLines?: number };
         const cap = Math.min(maxLines, READ_MAX_LINES_HARD_CAP);
         try {
-          const real = await assertInCwd(cwdRoot, p);
+          const real = await assertInCwd(resolveCwd(), p);
           const stat = await fs.stat(real);
           if (!stat.isFile()) return { ok: false, error: 'not a file' };
           const fh = await fs.open(real, 'r');
@@ -153,7 +156,7 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
         if (glob) args.push('--glob', glob);
         args.push('--', pattern, '.');
         try {
-          const { stdout } = await runRg(cwdRoot, args);
+          const { stdout } = await runRg(resolveCwd(), args);
           if (!stdout) return { ok: true, data: asData({ matches: [] }) };
           const lines = stdout.split('\n').filter(Boolean);
           const matches = lines.map((l) => {
@@ -190,7 +193,7 @@ export function buildRepoSandboxTools(cwdRoot: string): ToolExecutor[] {
         }
         try {
           const { stdout, stderr, code } = await new Promise<{ stdout: string; stderr: string; code: number }>((resolve, reject) => {
-            const child = spawn(top, parts.slice(1), { cwd: cwdRoot, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+            const child = spawn(top, parts.slice(1), { cwd: resolveCwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
             let out = '';
             let err = '';
             const t = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('command timeout')); }, REPO_RUN_TIMEOUT_MS);

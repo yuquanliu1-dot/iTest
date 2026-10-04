@@ -77,8 +77,9 @@ describe('space session supervisor', () => {
 
     const rec = await ensureSpaceRecord(threadId);
     expect(rec.versionId).toBe(versionId);
-    // 项目未配 repoUrl → RepoUnavailableError('no_repo') 被吞,工厂收到 repoAvailable=false
-    expect(captured[0]!.ctx).toMatchObject({ threadId, versionId, projectId, repoAvailable: false, cwd: null });
+    // 项目未配 repoUrl → RepoUnavailableError('no_repo') 被吞,工厂收到 repo.noRepo=true 且 cwd/issue 未填
+    // (后台检出尚未完成;不等其结束,保证会话秒开)
+    expect(captured[0]!.ctx).toMatchObject({ threadId, versionId, projectId, repo: { cwd: null, issue: null } });
 
     await sendSpaceUserMessage(threadId, '帮我建三个登录用例');
     // 原文透传:服务端回显与前端乐观气泡逐字一致,react-pi 的 reconcile 才能去重
@@ -91,9 +92,10 @@ describe('space session supervisor', () => {
     expect(captured[0]!.prompts[1]).toBe('再建一个');
   }, 30_000);
 
-  it('buildSpaceSystemPrompt:无摘要返回空串;有摘要带版本空间上下文标题', async () => {
+  it('buildSpaceSystemPrompt:始终含风格段;有摘要追加版本空间上下文标题', async () => {
     const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
-    expect(buildSpaceSystemPrompt(null)).toBe('');
+    const base = buildSpaceSystemPrompt(null);
+    expect(base).toContain('输出风格');
     const out = buildSpaceSystemPrompt('X');
     expect(out).toContain('X');
     expect(out).toContain('版本空间上下文');
@@ -131,7 +133,7 @@ describe('space session supervisor', () => {
     expect(captured).toHaveLength(1);
   }, 30_000);
 
-  it('checkout 失败(非 no_repo):session 照常建立但记录 repoIssue;no_repo 仍完全静默', async () => {
+  it('checkout 失败(非 no_repo):session 照常建立,后台检出失败后 repo.issue 落值', async () => {
     const { versionId } = await seedProject(pool);
     const threadId = await insertSpaceThread(versionId);
     const { ensureSpaceRecord, spaceRepoIssue } = await import('../src/pi/space/session.js');
@@ -140,7 +142,14 @@ describe('space session supervisor', () => {
     try {
       const rec = await ensureSpaceRecord(threadId);
       expect(rec.versionId).toBe(versionId);
-      expect(spaceRepoIssue(threadId)).toContain('auth_failed');
+      // 后台检出在 session 建立后异步跑;轮询直到 issue 落值(替代固定 sleep,在慢机上避免 flake)
+      let issue: string | null = null;
+      for (let i = 0; i < 30; i++) {
+        issue = spaceRepoIssue(threadId);
+        if (issue) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(issue).toContain('auth_failed');
     } finally {
       mockCheckout.impl = undefined;
     }
