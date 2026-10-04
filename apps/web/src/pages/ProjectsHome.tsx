@@ -84,6 +84,8 @@ export default function ProjectsHome() {
   const [versionForm, setVersionForm] = useState<VersionFormState>(EMPTY_VERSION_FORM);
   const [refForm, setRefForm] = useState<RefFormState>(EMPTY_REF_FORM);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
+  /** 删除版本前一律先弹 modal —— 误点会丢该版本下所有用例、计划与历史报告。 */
+  const [confirmDeleteVersion, setConfirmDeleteVersion] = useState<{ projectId: string; versionId: string; versionName: string } | null>(null);
   // 版本弹窗的环境下拉数据源：仅弹窗打开时拉取
   const envsQ = useQuery({
     queryKey: ['environments', versionForm.projectId],
@@ -187,9 +189,13 @@ export default function ProjectsHome() {
       api.versions.remove(projectId, versionId),
     onSuccess: () => {
       toast('版本已删除', 'success');
+      setConfirmDeleteVersion(null);
       qc.invalidateQueries({ queryKey: ['versions'] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => {
+      toast(e.message, 'error');
+      setConfirmDeleteVersion(null);
+    },
   });
 
   const saveRef = useMutation({
@@ -292,7 +298,7 @@ export default function ProjectsHome() {
                   })
                 }
                 onEnterVersion={(v) => enterVersion(p.id, p.name, v)}
-                onRemoveVersion={(v) => removeVersion.mutate({ projectId: p.id, versionId: v.id })}
+                onRemoveVersion={(v) => setConfirmDeleteVersion({ projectId: p.id, versionId: v.id, versionName: v.name })}
                 onEditVersionRef={(v) => setRefForm({ open: true, projectId: p.id, version: v })}
                 onOpenEnvironments={() => navigate(`/p/${p.id}/environments`)}
               />
@@ -417,6 +423,29 @@ export default function ProjectsHome() {
               onClick={() => confirmDelete && remove.mutate(confirmDelete.id)}
             >
               {remove.isPending ? '删除中...' : '确认删除'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 删除版本确认:数据丢失风险最大,前端一律先弹再发请求 */}
+      <Dialog open={!!confirmDeleteVersion} onOpenChange={(open) => { if (!open) setConfirmDeleteVersion(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>删除版本</DialogTitle></DialogHeader>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+            确认删除版本「{confirmDeleteVersion?.versionName}」？该版本下的用例、计划与历史执行报告将一并被删除,不可恢复。
+          </div>
+          <div
+            className="flex justify-end gap-2 px-5 py-4 hairline-top"
+            style={{ borderColor: 'var(--border)' }}
+          >
+            <Button variant="ghost" onClick={() => setConfirmDeleteVersion(null)}>取消</Button>
+            <Button
+              variant="danger"
+              disabled={removeVersion.isPending}
+              onClick={() => confirmDeleteVersion && removeVersion.mutate({ projectId: confirmDeleteVersion.projectId, versionId: confirmDeleteVersion.versionId })}
+            >
+              {removeVersion.isPending ? '删除中...' : '确认删除'}
             </Button>
           </div>
         </DialogContent>

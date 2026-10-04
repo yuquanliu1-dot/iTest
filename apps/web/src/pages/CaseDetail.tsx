@@ -50,6 +50,8 @@ export default function CaseDetail() {
   const [mode, setMode] = useState<'fresh' | 'append' | 'resume' | 'incognito'>('fresh');
   const [resumeTarget, setResumeTarget] = useState<{ stepId: string; order: number } | null>(null);
   const [confirmResume, setConfirmResume] = useState<{ stepId: string; order: number } | null>(null);
+  /** 删除步骤前一律先弹 modal —— 步骤误删需重新录制或编辑回填。 */
+  const [confirmDeleteStep, setConfirmDeleteStep] = useState<{ stepId: string; order: number; instruction: string } | null>(null);
   const clipboard = useStepClipboard();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<StepClip | null>(null);
@@ -404,8 +406,14 @@ export default function CaseDetail() {
 
   const deleteStep = useMutation({
     mutationFn: (stepId: string) => api.cases.deleteStep(id!, stepId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }),
-    onError: (e: Error) => toast(e.message, 'error'),
+    onSuccess: () => {
+      setConfirmDeleteStep(null);
+      qc.invalidateQueries({ queryKey: ['case', id] });
+    },
+    onError: (e: Error) => {
+      toast(e.message, 'error');
+      setConfirmDeleteStep(null);
+    },
   });
 
   const moveStep = useMutation({
@@ -856,7 +864,7 @@ export default function CaseDetail() {
                                 title="删除"
                                 tone="destructive"
                                 disabled={deleteStep.isPending}
-                                onClick={() => deleteStep.mutate(s.id)}
+                                onClick={() => setConfirmDeleteStep({ stepId: s.id, order: s.order, instruction: s.name ?? `第 ${s.order} 步` })}
                               />
                             </div>
                           </SortableStepRow>
@@ -1202,6 +1210,26 @@ export default function CaseDetail() {
               }}
             >
               先回放
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 删除步骤确认:误删需重新录制或编辑回填,前端一律先弹再发请求 */}
+      <Dialog open={!!confirmDeleteStep} onOpenChange={(o) => !o && setConfirmDeleteStep(null)}>
+        <DialogContent style={{ maxWidth: 420 }}>
+          <DialogHeader><DialogTitle>删除步骤</DialogTitle></DialogHeader>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+            确认删除第 {confirmDeleteStep?.order} 步「{confirmDeleteStep?.instruction}」？删除后需重新录制或编辑回填,不可恢复。
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmDeleteStep(null)}>取消</Button>
+            <Button
+              variant="danger"
+              disabled={deleteStep.isPending}
+              onClick={() => confirmDeleteStep && deleteStep.mutate(confirmDeleteStep.stepId)}
+            >
+              {deleteStep.isPending ? '删除中...' : '确认删除'}
             </Button>
           </DialogFooter>
         </DialogContent>
