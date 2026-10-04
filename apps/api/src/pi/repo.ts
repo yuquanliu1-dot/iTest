@@ -6,7 +6,7 @@ import { Type } from '@earendil-works/pi-ai';
 // @ts-expect-error proper-lockfile ships no .d.ts; lock/release signature is obvious
 import lockfile from 'proper-lockfile';
 import { db } from '../db/client.js';
-import { projects, requirements } from '../db/schema.js';
+import { projects, projectVersions, requirements } from '../db/schema.js';
 import type { ToolExecutor } from './tools.js';
 
 const DATA_DIR = process.env.PI_DATA_DIR ?? path.resolve(process.cwd(), '.data');
@@ -284,7 +284,7 @@ async function cloneFirst(target: string, info: ProjectRepo): Promise<void> {
   }
 }
 
-async function fetchAndReset(target: string, info: ProjectRepo): Promise<string> {
+async function fetchAndReset(target: string, info: ProjectRepo, ref: string): Promise<string> {
   // 1. dirty 检查：tracked 修改 / untracked 文件 → stash
   const status = await runGitIn(target, ['status', '--porcelain']).catch(() => '');
   let stashRef: string | null = null;
@@ -292,19 +292,19 @@ async function fetchAndReset(target: string, info: ProjectRepo): Promise<string>
     const stashOut = await runGitIn(target, ['stash', 'push', '--include-untracked', '-m', `itest-auto-${Date.now()}`]);
     stashRef = stashOut.match(/refs\/stash\{\d+\}/)?.[0] ?? stashOut.trim();
   }
-  // 2. fetch + reset
+  // 2. fetch + reset（FETCH_HEAD 对 branch / tag 通用）
   try {
-    await runGitIn(target, ['fetch', '--depth', '1', 'origin', info.branch]);
-    await runGitIn(target, ['reset', '--hard', `origin/${info.branch}`]);
+    await runGitIn(target, ['fetch', '--depth', '1', 'origin', ref]);
+    await runGitIn(target, ['reset', '--hard', 'FETCH_HEAD']);
   } catch (e) {
     const msg = (e as Error).message;
     throw new RepoUnavailableError(/401|403/i.test(msg) ? 'auth_failed' : 'fetch_failed', msg);
   }
-  // 3. 写 meta
+  // 3. 写 meta（branch 记录实际 ref）
   const commit = (await runGitIn(target, ['rev-parse', 'HEAD'])).trim();
   await fs.writeFile(path.join(target, '.itest-sandbox.json'), JSON.stringify({
     provider: info.provider,
-    branch: info.branch,
+    branch: ref,
     commit,
     fetchedAt: new Date().toISOString(),
     ...(stashRef ? { stashRef } : {}),
@@ -324,7 +324,7 @@ export async function checkoutRepo(requirementId: string): Promise<string> {
     // 锁定；保证并发只跑一次 fetch
     try {
       const release = await lockfile.lock(target, { retries: 0, stale: 30_000 });
-      try { return await fetchAndReset(target, info); } finally { await release(); }
+      try { return await fetchAndReset(target, info, info.branch); } finally { await release(); }
     } catch (e) {
       if ((e as { code?: string }).code === 'ELOCKED') throw new LockTimeoutError('another fetch in progress');
       throw e;
@@ -334,7 +334,52 @@ export async function checkoutRepo(requirementId: string): Promise<string> {
     const release = await lockfile.lock(target, { retries: 0, stale: 30_000 }).catch(() => null);
     try {
       await cloneFirst(target, info);
-      return await fetchAndReset(target, info);
+      return await fetchAndReset(target, info, info.branch);
+    } finally { if (release) await release(); }
+  }
+}
+
+async function loadVersionRepo(versionId: string): Promise<ProjectRepo | null> {
+  const row = (await db
+    .select({
+      repoUrl: projects.repoUrl,
+      branch: projects.defaultBranch,
+      provider: projects.provider,
+      pat: projects.patOverride,
+      gitlabOverride: projects.gitlabUrlOverride,
+      versionRef: projectVersions.ref,
+    })
+    .from(projectVersions)
+    .innerJoin(projects, eq(projectVersions.projectId, projects.id))
+    .where(eq(projectVersions.id, versionId))
+    .limit(1))[0];
+  if (!row || !row.repoUrl) return null;
+  return { repoUrl: row.repoUrl, branch: row.versionRef ?? row.branch, provider: row.provider, pat: row.pat, gitlabOverride: row.gitlabOverride };
+}
+
+/** 版本级 checkout：沙箱目录 v-<versionId> 与需求级隔离；ref 取 version.ref，缺省回落项目默认分支。tag 亦可用（fetch FETCH_HEAD）。 */
+export async function checkoutRepoForVersion(versionId: string): Promise<string> {
+  const info = await loadVersionRepo(versionId);
+  if (!info) throw new RepoUnavailableError('no_repo', 'project has no repoUrl configured');
+
+  await fs.mkdir(REPOS_ROOT, { recursive: true });
+  const target = path.join(REPOS_ROOT, `v-${versionId}`);
+
+  if (await dirExists(target)) {
+    // 锁定；保证并发只跑一次 fetch
+    try {
+      const release = await lockfile.lock(target, { retries: 0, stale: 30_000 });
+      try { return await fetchAndReset(target, info, info.branch); } finally { await release(); }
+    } catch (e) {
+      if ((e as { code?: string }).code === 'ELOCKED') throw new LockTimeoutError('another fetch in progress');
+      throw e;
+    }
+  } else {
+    await fs.mkdir(target, { recursive: true });
+    const release = await lockfile.lock(target, { retries: 0, stale: 30_000 }).catch(() => null);
+    try {
+      await cloneFirst(target, info);
+      return await fetchAndReset(target, info, info.branch);
     } finally { if (release) await release(); }
   }
 }
