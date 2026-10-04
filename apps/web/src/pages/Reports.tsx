@@ -168,14 +168,14 @@ export default function Executions() {
                   <span
                     className="text-[12px]"
                     style={{ color: 'var(--color-foreground-muted)' }}
-                    onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/reports/${r.id}`)}
+                    onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/v/${versionId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/v/${versionId}/reports/${r.id}`)}
                   >
                     {r.kind === 'plan' ? '计划' : '用例'}
                   </span>
                   <span
                     className="text-[12px] truncate"
                     style={{ color: 'var(--color-foreground-secondary)' }}
-                    onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/reports/${r.id}`)}
+                    onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/v/${versionId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/v/${versionId}/reports/${r.id}`)}
                   >
                     {r.kind === 'plan' ? (
                       <span className="font-mono">run {r.id.slice(0, 8)}</span>
@@ -193,12 +193,12 @@ export default function Executions() {
                   >
                     {(r as { versionName?: string | null }).versionName ?? '—'}
                   </span>
-                  <span onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/reports/${r.id}`)}><StatusPill status={r.status}>{r.status}</StatusPill></span>
+                  <span onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/v/${versionId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/v/${versionId}/reports/${r.id}`)}><StatusPill status={r.status}>{r.status}</StatusPill></span>
                   <span
                     className="text-[11px] font-mono"
                     style={{ color: 'var(--color-foreground-muted)' }}
                     title={fullDateTime(r.createdAt)}
-                    onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/reports/${r.id}`)}
+                    onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/v/${versionId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/v/${versionId}/reports/${r.id}`)}
                   >
                     {shortDateTime(r.createdAt)}
                   </span>

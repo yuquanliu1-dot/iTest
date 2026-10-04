@@ -394,7 +394,7 @@ export default function CaseDetail() {
     onSuccess: (r) => {
       toast('执行完成', 'success');
       qc.invalidateQueries({ queryKey: ['reports'] });
-      navigate(`/p/${projectId}/reports/${r.reportId}`);
+      navigate(`/p/${projectId}/v/${versionId}/reports/${r.reportId}`);
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -497,7 +497,7 @@ export default function CaseDetail() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => navigate(`/p/${projectId}/groups/${caseDetail.groupId ?? ''}`)}
+          onClick={() => navigate(`/p/${projectId}/v/${versionId}/groups/${caseDetail.groupId ?? ''}`)}
         >
           <Icon name="chevronLeft" size={12} />
           {group?.name ?? '用例列表'}
@@ -887,7 +887,7 @@ export default function CaseDetail() {
             {tab === 'reports' && (
               <div className="glass-card rounded-[var(--radius-md)] p-5">
                 <EmptyState icon="flag" title="前往报告列表查看" description="该用例所有执行报告已汇总到报告页。" action={
-                  <Button size="sm" onClick={() => navigate(`/p/${projectId}/reports`)}>打开报告页</Button>
+                  <Button size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports`)}>打开报告页</Button>
                 } />
               </div>
             )}

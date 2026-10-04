@@ -1,9 +1,10 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import Button from '../../../components/ui/Button';
 import Icon from '../../../components/Icon';
 
 export default function OverviewEmpty({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
+  const { versionId } = useParams<{ versionId: string }>();
   return (
     <div className="flex flex-1 items-center justify-center">
       <div className="text-center max-w-md">
@@ -17,10 +18,10 @@ export default function OverviewEmpty({ projectId }: { projectId: string }) {
           新建用例 → 执行，所有指标都会汇聚到这里。
         </p>
         <div className="flex gap-2 justify-center mt-4">
-          <Button onClick={() => navigate(`/p/${projectId}/groups`)}>
+          <Button onClick={() => navigate(`/p/${projectId}/v/${versionId}/groups`)}>
             去新建用例
           </Button>
-          <Button variant="ghost" onClick={() => navigate(`/p/${projectId}/plans`)}>
+          <Button variant="ghost" onClick={() => navigate(`/p/${projectId}/v/${versionId}/plans`)}>
             去新建计划
           </Button>
         </div>

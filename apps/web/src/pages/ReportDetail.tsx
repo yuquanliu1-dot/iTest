@@ -38,7 +38,7 @@ function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 export default function ReportDetail() {
-  const { id, projectId } = useParams<{ id: string; projectId: string }>();
+  const { id, projectId, versionId } = useParams<{ id: string; projectId: string; versionId: string }>();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const toast = useUIStore((s) => s.showToast);
@@ -57,7 +57,7 @@ export default function ReportDetail() {
       qc.invalidateQueries({ queryKey: ['reports'] });
       qc.invalidateQueries({ queryKey: ['executions'] });
       qc.invalidateQueries({ queryKey: ['stats', projectId] });
-      navigate(`/p/${projectId}/reports`);
+      navigate(`/p/${projectId}/v/${versionId}/reports`);
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -229,7 +229,7 @@ export default function ReportDetail() {
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header bar */}
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
-        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/reports`)}>
+        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports`)}>
           <Icon name="chevronLeft" size={12} />
           返回报告列表
         </Button>
