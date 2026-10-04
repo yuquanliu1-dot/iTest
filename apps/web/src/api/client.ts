@@ -558,6 +558,8 @@ export interface EnvironmentObject {
    *  login: { user, loginUrl?, password?, secret? }。
    *  出参里 secret 为 '••••••••' 掩码；入参传明文 password/privateKey，留空不覆盖旧密文。 */
   payload: Record<string, unknown>;
+  /** 后端基于 DB 行加上的标志：原 payload.secret 是否存在；前端用此判定"已配置凭据"，不依赖反向解析被 mask 的 secret。 */
+  hasSecret: boolean;
   isDefault: boolean;
   createdAt: string;
   updatedAt: string;
