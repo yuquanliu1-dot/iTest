@@ -157,12 +157,13 @@ async function assertCasesInProject(projectId: string, caseIds: string[]): Promi
  */
 export async function replacePlanCases(planId: string, caseIds: string[]): Promise<void> {
   if (caseIds.length === 0) throw new HttpError(400, 'cases_required', 'caseIds must not be empty');
+  const ids = [...new Set(caseIds)];
   await db.transaction(async (tx) => {
     const plan = (await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update'))[0];
     if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
-    await assertCasesInProject(plan.projectId, caseIds);
+    await assertCasesInProject(plan.projectId, ids);
     await tx.delete(planCases).where(eq(planCases.planId, planId));
-    await tx.insert(planCases).values(caseIds.map((caseId, i) => ({ planId, caseId, order: i + 1 })));
+    await tx.insert(planCases).values(ids.map((caseId, i) => ({ planId, caseId, order: i + 1 })));
   });
 }
 
