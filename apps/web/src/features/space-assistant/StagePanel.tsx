@@ -48,14 +48,15 @@ export default function StagePanel({ projectId, versionId }: Props) {
   }, [latest]);
   const selected = stageHistory.find((o) => o.key === selectedKey) ?? latest;
 
+  // queryKey 混入 stage key:同对象重复 update 时每次事件都强制 refetch,避免展示陈旧缓存
   const caseQ = useQuery({
-    queryKey: ['cases', selected?.id],
+    queryKey: ['case', selected?.id, selected?.key],
     queryFn: () => api.cases.get(selected!.id),
     enabled: selected?.kind === 'case',
     retry: false,
   });
   const planQ = useQuery({
-    queryKey: ['plans', selected?.id],
+    queryKey: ['plan', selected?.id, selected?.key],
     queryFn: () => api.plans.get(selected!.id),
     enabled: selected?.kind === 'plan',
     retry: false,
@@ -71,45 +72,58 @@ export default function StagePanel({ projectId, versionId }: Props) {
     enabled: selected?.kind === 'scenario',
   });
 
-  // 选中对象的展示标题(取不到时不渲染「就此提问」)
+  // 选中对象的展示标题(取不到时不渲染「就此提问」)。
+  // body 约定:查询进行中留 null(兜底渲染 loader),其余状态必须显式给出内容或「已不存在」文案。
   let title: string | null = null;
   let body: ReactNode = null;
   if (selected?.kind === 'case') {
-    const c = caseQ.data;
-    if (c) {
-      title = c.title;
-      body = (
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] px-1.5 py-[1px] rounded" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>{c.priority}</span>
-            <span className="text-[10px] px-1.5 py-[1px] rounded" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>{c.status}</span>
+    if (caseQ.isPending) {
+      body = null;
+    } else {
+      const c = caseQ.data;
+      if (c) {
+        title = c.title;
+        body = (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] px-1.5 py-[1px] rounded" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>{c.priority}</span>
+              <span className="text-[10px] px-1.5 py-[1px] rounded" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>{c.status}</span>
+            </div>
+            {c.url && <div className="text-[12px] break-all" style={{ color: 'var(--muted-foreground)' }}>{c.url}</div>}
+            {c.description && <p className="text-[12px] whitespace-pre-wrap" style={{ color: 'var(--muted-foreground)' }}>{c.description}</p>}
           </div>
-          {c.url && <div className="text-[12px] break-all" style={{ color: 'var(--muted-foreground)' }}>{c.url}</div>}
-          {c.description && <p className="text-[12px] whitespace-pre-wrap" style={{ color: 'var(--muted-foreground)' }}>{c.description}</p>}
-        </div>
-      );
-    } else if (caseQ.isError) {
-      body = <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>用例已不存在(可能已被删除)。</p>;
+        );
+      } else {
+        // isError 或 404:对象已不存在
+        body = <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>用例已不存在(可能已被删除)。</p>;
+      }
     }
   } else if (selected?.kind === 'plan') {
-    const p = planQ.data;
-    if (p) {
-      title = p.name;
-      body = (
-        <div className="flex flex-col gap-1.5">
-          <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>编排 {p.cases.length} 条用例</div>
-          <ol className="text-[12px] pl-4 list-decimal" style={{ color: 'var(--muted-foreground)' }}>
-            {p.cases.slice(0, 10).map((c) => <li key={c.id} className="truncate">{c.title}</li>)}
-          </ol>
-          {p.cases.length > 10 && <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>…等 {p.cases.length} 条</div>}
-        </div>
-      );
-    } else if (planQ.isError) {
-      body = <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>计划已不存在。</p>;
+    if (planQ.isPending) {
+      body = null;
+    } else {
+      const p = planQ.data;
+      if (p) {
+        title = p.name;
+        body = (
+          <div className="flex flex-col gap-1.5">
+            <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>编排 {p.cases.length} 条用例</div>
+            <ol className="text-[12px] pl-4 list-decimal" style={{ color: 'var(--muted-foreground)' }}>
+              {p.cases.slice(0, 10).map((c) => <li key={c.id} className="truncate">{c.title}</li>)}
+            </ol>
+            {p.cases.length > 10 && <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>…等 {p.cases.length} 条</div>}
+          </div>
+        );
+      } else {
+        // isError 或 404:对象已不存在
+        body = <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>计划已不存在。</p>;
+      }
     }
   } else if (selected?.kind === 'environment') {
     const env = (envsQ.data ?? []).find((e) => e.id === selected.id);
-    if (env) {
+    if (envsQ.isPending) {
+      body = null;
+    } else if (env) {
       title = env.name;
       body = (
         <div className="flex flex-col gap-1.5">
@@ -120,11 +134,21 @@ export default function StagePanel({ projectId, versionId }: Props) {
           </div>
         </div>
       );
+    } else {
+      // isError 或列表中找不到:对象已不存在
+      body = <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>环境已不存在。</p>;
     }
   } else if (selected?.kind === 'scenario') {
     const sc = (scenariosQ.data ?? []).find((x) => x.id === selected.id);
-    if (sc) {
+    if (scenariosQ.isPending) {
+      body = null;
+    } else if (sc) {
       title = sc.title;
+      // 场景无详情接口,命中时给短文案,避免落进 loader 兜底
+      body = <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>场景已保存,可在用例库查看。</p>;
+    } else {
+      // isError 或列表中找不到:对象已不存在
+      body = <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>场景已不存在。</p>;
     }
   } else if (selected) {
     // group:无单查接口,展示 diff 或引导文案
