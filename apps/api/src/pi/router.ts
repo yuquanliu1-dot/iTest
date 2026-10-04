@@ -19,7 +19,7 @@ import * as ws from './workspace.js';
 
 export const piRoute = Router();
 
-/** 解析 threadId → requirementId；不存在 → 404。 */
+/** 解析 threadId → requirementId；不存在 → 404。requirementId 为 NULL(version 线程)同样按 404 拒绝 —— 本 router 仅服务 requirement 线程。 */
 async function resolveRequirementForThread(threadId: string): Promise<string> {
   const rows = await db.select({ requirementId: aiThreads.requirementId }).from(aiThreads).where(eq(aiThreads.id, threadId)).limit(1);
   const rid = rows[0]?.requirementId;
@@ -68,7 +68,7 @@ piRoute.get('/threads', async (req, res) => {
   const rows = await db
     .select({ id: aiThreads.id, createdAt: aiThreads.createdAt, updatedAt: aiThreads.updatedAt })
     .from(aiThreads)
-    .innerJoin(requirements, eq(aiThreads.requirementId, requirements.id))
+    .innerJoin(requirements, eq(aiThreads.requirementId, requirements.id)) // inner join 天然排除 version 线程(它们由 /api/assistant 提供)
     .where(inArray(requirements.projectId, visiblePids));
   res.json(rows.map((row) => ({
     id: row.id,
@@ -88,7 +88,7 @@ piRoute.get('/threads/:id', async (req, res) => {
 piRoute.post('/threads/:id/messages', async (req, res) => {
   await assertThreadVisible(req.params.id!, req.user as AuthUser);
   const ridRow = (await db.select({ requirementId: aiThreads.requirementId }).from(aiThreads).where(eq(aiThreads.id, req.params.id!)).limit(1))[0];
-  // requirementId 可空(version 线程),此类端点仅服务 requirement 线程
+  // version 线程已在 assertThreadVisible 处 404;此处兜底防删除竞态(类型上 requirementId 亦可空)
   const rid = ridRow?.requirementId;
   if (!rid) throw new HttpError(404, 'not_found', 'thread not found');
   // 不阻塞响应：先回 204，再后台 ensureRecord + 派发消息；
