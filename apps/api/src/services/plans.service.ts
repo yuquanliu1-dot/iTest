@@ -108,6 +108,7 @@ export async function updatePlan(planId: string, patch: UpdatePlanPatch) {
     update.loginUnauthorizedKeywords = patch.loginPrepare.unauthorizedKeywords ?? null;
   }
   const rows = await db.update(executionPlans).set(update).where(eq(executionPlans.id, planId)).returning();
+  if (rows.length === 0) throw new HttpError(404, 'not_found', 'plan not found');
   return rows[0]!;
 }
 
@@ -138,55 +139,65 @@ export async function getPlanDetail(planId: string) {
   };
 }
 
-/** 所有 caseIds 必须属于计划所属项目(经分组归属)。 */
+/** 所有 caseIds 必须属于计划所属项目(经分组归属);重复 id 去重后校验,避免误报 409。 */
 async function assertCasesInProject(projectId: string, caseIds: string[]): Promise<void> {
   if (caseIds.length === 0) return;
+  const ids = [...new Set(caseIds)];
   const gs = await db.select({ id: groups.id }).from(groups).where(eq(groups.projectId, projectId));
   const validGids = new Set(gs.map((g) => g.id));
-  const rows = await db.select({ groupId: testCases.groupId }).from(testCases).where(inArray(testCases.id, caseIds));
-  if (rows.length !== caseIds.length || !rows.every((r) => validGids.has(r.groupId))) {
+  const rows = await db.select({ groupId: testCases.groupId }).from(testCases).where(inArray(testCases.id, ids));
+  if (rows.length !== ids.length || !rows.every((r) => validGids.has(r.groupId))) {
     throw new HttpError(409, 'cross_project', 'all cases must belong to the plan project');
   }
 }
 
-async function requirePlan(planId: string) {
-  const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
-  if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
-  return plan;
-}
-
+/**
+ * 事务内第一步锁计划行(SELECT ... FOR UPDATE):同计划的所有编排串行化,
+ * 消除查-算-插竞态与 order 撞号;行不存在 → 404(requirePlan 语义并入锁步骤)。
+ */
 export async function replacePlanCases(planId: string, caseIds: string[]): Promise<void> {
-  const plan = await requirePlan(planId);
-  await assertCasesInProject(plan.projectId, caseIds);
-  await db.delete(planCases).where(eq(planCases.planId, planId));
-  await db.insert(planCases).values(caseIds.map((caseId, i) => ({ planId, caseId, order: i + 1 })));
+  if (caseIds.length === 0) throw new HttpError(400, 'cases_required', 'caseIds must not be empty');
+  await db.transaction(async (tx) => {
+    const plan = (await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update'))[0];
+    if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
+    await assertCasesInProject(plan.projectId, caseIds);
+    await tx.delete(planCases).where(eq(planCases.planId, planId));
+    await tx.insert(planCases).values(caseIds.map((caseId, i) => ({ planId, caseId, order: i + 1 })));
+  });
 }
 
-/** 追加用例(已存在的跳过),返回实际新增数;order 接 max+1。 */
+/** 追加用例(已存在的跳过),返回实际新增数;order 接 max+1。事务 + 计划行锁,查-算-插原子化。 */
 export async function addPlanCases(planId: string, caseIds: string[]): Promise<number> {
-  const plan = await requirePlan(planId);
-  await assertCasesInProject(plan.projectId, caseIds);
-  const existing = await db.select({ caseId: planCases.caseId }).from(planCases).where(eq(planCases.planId, planId));
-  const have = new Set(existing.map((e) => e.caseId));
-  const fresh = [...new Set(caseIds)].filter((c) => !have.has(c));
-  if (fresh.length === 0) return 0;
-  const base = Number((await db.select({ m: sql<number>`coalesce(max("order"), 0)` }).from(planCases).where(eq(planCases.planId, planId)))[0]?.m ?? 0);
-  await db.insert(planCases).values(fresh.map((caseId, i) => ({ planId, caseId, order: base + i + 1 })));
-  return fresh.length;
+  return db.transaction(async (tx) => {
+    const plan = (await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update'))[0];
+    if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
+    await assertCasesInProject(plan.projectId, caseIds);
+    const existing = await tx.select({ caseId: planCases.caseId }).from(planCases).where(eq(planCases.planId, planId));
+    const have = new Set(existing.map((e) => e.caseId));
+    const fresh = [...new Set(caseIds)].filter((c) => !have.has(c));
+    if (fresh.length === 0) return 0;
+    const base = Number((await tx.select({ m: sql<number>`coalesce(max("order"), 0)` }).from(planCases).where(eq(planCases.planId, planId)))[0]?.m ?? 0);
+    await tx.insert(planCases).values(fresh.map((caseId, i) => ({ planId, caseId, order: base + i + 1 })));
+    return fresh.length;
+  });
 }
 
-/** 移除用例并把剩余重排为 1..m,返回移除数。 */
+/** 移除用例并把剩余重排为 1..m,返回移除数;事务 + 计划行锁,无命中直接返回(免无效全删重插)。 */
 export async function removePlanCases(planId: string, caseIds: string[]): Promise<number> {
-  await requirePlan(planId);
   if (caseIds.length === 0) return 0;
-  const removed = await db.delete(planCases)
-    .where(and(eq(planCases.planId, planId), inArray(planCases.caseId, caseIds)))
-    .returning({ id: planCases.id });
-  const rest = await db.select({ caseId: planCases.caseId }).from(planCases)
-    .where(eq(planCases.planId, planId)).orderBy(asc(planCases.order));
-  if (rest.length > 0) {
-    await db.delete(planCases).where(eq(planCases.planId, planId));
-    await db.insert(planCases).values(rest.map((r, i) => ({ planId, caseId: r.caseId, order: i + 1 })));
-  }
-  return removed.length;
+  return db.transaction(async (tx) => {
+    const plan = (await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update'))[0];
+    if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
+    const removed = await tx.delete(planCases)
+      .where(and(eq(planCases.planId, planId), inArray(planCases.caseId, caseIds)))
+      .returning({ id: planCases.id });
+    if (removed.length === 0) return 0;
+    const rest = await tx.select({ caseId: planCases.caseId }).from(planCases)
+      .where(eq(planCases.planId, planId)).orderBy(asc(planCases.order));
+    if (rest.length > 0) {
+      await tx.delete(planCases).where(eq(planCases.planId, planId));
+      await tx.insert(planCases).values(rest.map((r, i) => ({ planId, caseId: r.caseId, order: i + 1 })));
+    }
+    return removed.length;
+  });
 }
