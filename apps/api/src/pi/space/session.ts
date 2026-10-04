@@ -6,7 +6,7 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import { aiThreads, projectVersions } from '../../db/schema.js';
-import { buildSpaceTools } from './tools.js';
+import { buildSpaceTools } from './tools/index.js';
 import { buildSpaceSummary } from './summary.js';
 import { readLlmConfig } from '../modelBridge.js';
 import { defineTool } from '@earendil-works/pi-coding-agent';
