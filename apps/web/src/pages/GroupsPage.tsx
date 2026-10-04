@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type CaseStatus } from '../api/client';
@@ -16,7 +16,6 @@ import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import TagChip from '../components/ui/Tag';
 import IconButton from '../components/ui/IconButton';
-import LabelsManagerDialog from '../components/labels/LabelsManagerDialog';
 import { shortDateTime } from '../lib/format';
 
 const PRIORITIES = ['', 'P0', 'P1', 'P2', 'P3'] as const;
@@ -58,11 +57,8 @@ export default function GroupsPage() {
 
   const [priority, setPriority] = useState<(typeof PRIORITIES)[number]>('');
   const [scenarioId, setScenarioId] = useState<string>('');
-  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
+  const [tagFilter, setTagFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<'' | CaseStatus>('');
-  const [tagPickerOpen, setTagPickerOpen] = useState(false);
-  const [labelsManagerOpen, setLabelsManagerOpen] = useState(false);
-  const tagPickerRef = useRef<HTMLDivElement>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
@@ -112,17 +108,6 @@ export default function GroupsPage() {
     queryFn: () => api.scenarios.listForProject(projectId!),
     enabled: !!projectId,
   });
-
-  const tagById = useMemo(() => new Map((projectTags ?? []).map((t) => [t.id, t])), [projectTags]);
-
-  useEffect(() => {
-    if (!tagPickerOpen) return;
-    const onClick = (e: MouseEvent) => {
-      if (tagPickerRef.current && !tagPickerRef.current.contains(e.target as Node)) setTagPickerOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [tagPickerOpen]);
 
   const groupName = useMemo(
     () => new Map((groups ?? []).map((g) => [g.id, g.name])),
@@ -267,7 +252,7 @@ export default function GroupsPage() {
 
   const filteredCases = useMemo(() => {
     let list = cases ?? [];
-    if (tagFilter.size > 0) list = list.filter((c) => (c.tags ?? []).some((t) => tagFilter.has(t.id)));
+    if (tagFilter) list = list.filter((c) => (c.tags ?? []).some((t) => t.id === tagFilter));
     if (statusFilter) list = list.filter((c) => c.status === statusFilter);
     return list;
   }, [cases, tagFilter, statusFilter]);
@@ -484,101 +469,25 @@ export default function GroupsPage() {
               <option value="ready">就绪</option>
               <option value="deprecated">废弃</option>
             </select>
-            <div className="relative" ref={tagPickerRef}>
-              <button
-                type="button"
-                onClick={() => setTagPickerOpen((v) => !v)}
-                className="flex items-center gap-1.5 text-[12px] rounded-md px-2 py-1"
-                style={{
-                  border: '1px solid var(--border)',
-                  background: 'var(--card)',
-                  color: 'var(--foreground)',
-                  minWidth: 140,
-                  cursor: 'pointer',
-                }}
-                title="按标签过滤"
-              >
-                {tagFilter.size === 0 ? (
-                  <span style={{ color: 'var(--muted-foreground)' }}>全部标签</span>
-                ) : (
-                  <span className="flex items-center gap-1 truncate">
-                    {[...tagFilter].slice(0, 2).map((id) => {
-                      const t = tagById.get(id);
-                      if (!t) return null;
-                      return <TagChip key={id} tag={t} />;
-                    })}
-                    {tagFilter.size > 2 && (
-                      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>+{tagFilter.size - 2}</span>
-                    )}
-                  </span>
-                )}
-                <Icon name="chevronDown" size={10} style={{ color: 'var(--muted-foreground)' }} />
-              </button>
-              {tagPickerOpen && (
-                <div
-                  className="absolute right-0 top-full mt-1 z-50 rounded-[var(--radius-sm)] overflow-hidden popover-in"
-                  style={{
-                    width: 220,
-                    border: '1px solid var(--border)',
-                    background: 'var(--card)',
-                    boxShadow: 'var(--shadow-sm)',
-                  }}
-                >
-                  <div className="max-h-56 overflow-y-auto py-1">
-                    {(projectTags ?? []).length === 0 ? (
-                      <div className="px-3 py-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-                        项目内还没有标签
-                      </div>
-                    ) : (
-                      (projectTags ?? []).map((t) => {
-                        const checked = tagFilter.has(t.id);
-                        return (
-                          <label
-                            key={t.id}
-                            className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-[var(--muted)]"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => {
-                                const next = new Set(tagFilter);
-                                if (checked) next.delete(t.id);
-                                else next.add(t.id);
-                                setTagFilter(next);
-                                setPage(1);
-                              }}
-                              className="w-3.5 h-3.5 rounded-[3px]"
-                              style={{ accentColor: 'var(--primary)' }}
-                            />
-                            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: `#${t.color}` }} />
-                            <span className="text-[12px] truncate" style={{ color: 'var(--foreground)' }}>{t.name}</span>
-                          </label>
-                        );
-                      })
-                    )}
-                  </div>
-                  <div className="flex items-center justify-between px-3 py-1.5 border-t" style={{ borderColor: 'var(--border)' }}>
-                    <button
-                      type="button"
-                      className="text-[11px] cursor-pointer"
-                      style={{ background: 'transparent', border: 'none', color: tagFilter.size === 0 ? 'var(--muted-foreground)' : 'var(--primary)', opacity: tagFilter.size === 0 ? 0.5 : 1 }}
-                      disabled={tagFilter.size === 0}
-                      onClick={() => { setTagFilter(new Set()); setPage(1); }}
-                    >
-                      清空
-                    </button>
-                    <button
-                      type="button"
-                      className="text-[11px] cursor-pointer"
-                      style={{ background: 'transparent', border: 'none', color: 'var(--primary)' }}
-                      onClick={() => { setTagPickerOpen(false); setLabelsManagerOpen(true); }}
-                    >
-                      管理标签 →
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            <select
+              aria-label="标签过滤"
+              value={tagFilter}
+              onChange={(e) => { setTagFilter(e.target.value); setPage(1); }}
+              className="text-[12px] rounded-md px-2 py-1 outline-none"
+              style={{
+                border: '1px solid var(--border)',
+                background: 'var(--card)',
+                color: 'var(--foreground)',
+                height: 30,
+                minWidth: 140,
+              }}
+              title="按标签过滤"
+            >
+              <option value="">全部标签</option>
+              {(projectTags ?? []).map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -1011,15 +920,6 @@ export default function GroupsPage() {
           </div>
         </DialogContent>
       </Dialog>
-
-      {/* 标签管理弹窗（取代独立 /labels 页） */}
-      {projectId && (
-        <LabelsManagerDialog
-          open={labelsManagerOpen}
-          projectId={projectId}
-          onClose={() => setLabelsManagerOpen(false)}
-        />
-      )}
     </div>
   );
 }
