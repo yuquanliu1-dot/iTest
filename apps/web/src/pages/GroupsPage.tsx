@@ -26,7 +26,24 @@ const GRID_COLS = 'grid-cols-[minmax(28px,32px)_minmax(90px,70px)_minmax(200px,2
 
 type GroupForm = { open: boolean; mode: 'create' | 'edit' | 'url'; id: string | null; name: string; defaultUrl: string };
 const EMPTY_GROUP_FORM: GroupForm = { open: false, mode: 'create', id: null, name: '', defaultUrl: '' };
-type AiForm = { open: boolean; title: string; content: string };
+type AiForm = { open: boolean; title: string; content: string; coverage: string[] };
+/** 覆盖类型多选：勾选 = 必须覆盖，拼入首条用户消息；未勾选不禁止（AI 自行判断）。 */
+const COVERAGE_TYPES = [
+  { key: 'functional', label: '功能（正常流）' },
+  { key: 'exception', label: '异常场景' },
+  { key: 'boundary', label: '边界值' },
+  { key: 'security', label: '安全（SQL 注入·XSS·越权·未授权等）' },
+  { key: 'uiux', label: 'UI/UX（呈现·交互）' },
+] as const;
+const DEFAULT_COVERAGE = ['functional', 'exception'];
+const EMPTY_AI_FORM: AiForm = { open: false, title: '', content: '', coverage: DEFAULT_COVERAGE };
+
+/** 勾选项 → 首条消息尾部的覆盖要求块；全不勾 = 不加约束（返回空串）。 */
+function coveragePrompt(keys: string[]): string {
+  const labels = COVERAGE_TYPES.filter((t) => keys.includes(t.key)).map((t) => t.label);
+  if (labels.length === 0) return '';
+  return `\n\n【覆盖要求】本次生成必须覆盖以下测试类型：${labels.join('、')}；每类至少 1 条用例，未列出的类型自行判断。`;
+}
 type CasePriority = 'P0' | 'P1' | 'P2' | 'P3';
 type CaseForm = { open: boolean; title: string; groupId: string; priority: CasePriority; url: string; description: string };
 const EMPTY_CASE_FORM: CaseForm = { open: false, title: '', groupId: '', priority: 'P1', url: '', description: '' };
@@ -57,7 +74,7 @@ export default function GroupsPage() {
   const [planTarget, setPlanTarget] = useState('');
   const [confirmDeleteCase, setConfirmDeleteCase] = useState<{ id: string; title: string } | null>(null);
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
-  const [aiForm, setAiForm] = useState<AiForm>({ open: false, title: '', content: '' });
+  const [aiForm, setAiForm] = useState<AiForm>(EMPTY_AI_FORM);
   const [caseForm, setCaseForm] = useState<CaseForm>(EMPTY_CASE_FORM);
 
   const { data: groups, isLoading: groupsLoading } = useQuery({
@@ -264,9 +281,12 @@ export default function GroupsPage() {
     onSuccess: (r) => {
       toast('已创建需求，开始 AI 会话', 'success');
       // 把首条需求文本带到工作台；AiWorkspacePage 拿到 threadId 后会自动 POST /messages 启动 AI 跑活。
+      // 覆盖类型只拼进首条消息（生成指令），不写入需求正文。
       const draft = { requirementId: r.id, title: aiForm.title, content: aiForm.content };
-      setAiForm({ open: false, title: '', content: '' });
-      navigate(versionId ? `/p/${projectId}/v/${versionId}/ai/${r.id}` : `/`, { state: { initialMessage: aiForm.content, requirement: draft } });
+      setAiForm(EMPTY_AI_FORM);
+      navigate(versionId ? `/p/${projectId}/v/${versionId}/ai/${r.id}` : `/`, {
+        state: { initialMessage: aiForm.content + coveragePrompt(aiForm.coverage), requirement: draft },
+      });
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -408,7 +428,7 @@ export default function GroupsPage() {
               <Icon name="plus" size={12} />
               新建用例
             </Button>
-            <Button onClick={() => setAiForm({ open: true, title: '', content: '' })}>
+            <Button onClick={() => setAiForm({ ...EMPTY_AI_FORM, open: true })}>
               <Icon name="bolt" size={12} />
               AI 创建用例
             </Button>
@@ -890,9 +910,34 @@ export default function GroupsPage() {
                 onChange={(e) => setAiForm((f) => ({ ...f, content: e.target.value }))}
               />
             </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
+                覆盖类型（勾选 = 必须覆盖，未勾选由 AI 自行判断）
+              </label>
+              <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                {COVERAGE_TYPES.map((t) => (
+                  <label key={t.key} className="flex items-center gap-1.5 text-[13px] cursor-pointer" style={{ color: 'var(--foreground)' }}>
+                    <input
+                      type="checkbox"
+                      checked={aiForm.coverage.includes(t.key)}
+                      onChange={() =>
+                        setAiForm((f) => ({
+                          ...f,
+                          coverage: f.coverage.includes(t.key)
+                            ? f.coverage.filter((x) => x !== t.key)
+                            : [...f.coverage, t.key],
+                        }))
+                      }
+                    />
+                    {t.label}
+                  </label>
+                ))}
+              </div>
+            </div>
           </div>
           <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
-            <Button variant="ghost" onClick={() => setAiForm({ open: false, title: '', content: '' })}>取消</Button>
+          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--border)' }}>
+            <Button variant="ghost" onClick={() => setAiForm(EMPTY_AI_FORM)}>取消</Button>
             <Button
               disabled={!aiForm.title.trim() || !aiForm.content.trim() || createRequirement.isPending}
               onClick={() => createRequirement.mutate()}
