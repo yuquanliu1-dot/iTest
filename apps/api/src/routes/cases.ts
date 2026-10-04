@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testCases, testSteps, groups, scenarios, tags, caseTags, projects } from '../db/schema.js';
+import { testCases, testSteps, groups, scenarios, caseTags } from '../db/schema.js';
 import { eq, asc, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
-import { resolveCaseUrl } from '../lib/resolve-url.js';
-import { assertCaseVisible, assertProjectVisible, assertVersionVisible, resolveCaseProjectId, visibleProjectIds } from '../services/projectAccess.js';
+import { assertCaseVisible, assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
+import { createCase, deleteCase, getCaseDetail, groupProjectId, tagsForCases, updateCase } from '../services/cases.service.js';
 
 export const casesRoute = Router();
 
@@ -50,43 +50,6 @@ const PatchBody = CaseBodyBase.partial()
     defaultEnvId: z.string().uuid().nullable().optional(),
   })
   .superRefine(checkWindowStrategy);
-
-/** 校验 tagIds 都属于 projectId 所属组织；缺失或越权都 404（不区分存在性与可见性）。 */
-async function assertTagsBelongToOrg(tagIds: string[], projectId: string): Promise<void> {
-  if (tagIds.length === 0) return;
-  // 先取 project → orgId；用同一 sql 一次完成
-  const [proj] = await db
-    .select({ organizationId: projects.organizationId })
-    .from(projects)
-    .where(eq(projects.id, projectId))
-    .limit(1);
-  if (!proj) throw new HttpError(404, 'not_found', 'project not found');
-  const orgId = proj.organizationId;
-  const rows = await db.select({ id: tags.id, organizationId: tags.organizationId }).from(tags).where(inArray(tags.id, tagIds));
-  const found = new Set(rows.map((r) => r.id));
-  for (const id of tagIds) {
-    if (!found.has(id)) throw new HttpError(404, 'not_found', `tag ${id} not found`);
-  }
-  const wrong = rows.filter((t) => t.organizationId !== orgId);
-  if (wrong.length > 0) throw new HttpError(400, 'tag_org_mismatch', 'tag belongs to another organization');
-}
-
-/** 批量取出 caseIds 关联的所有 tag，按 caseId 分组。空集合返回 Map。 */
-async function tagsForCases(caseIds: string[]): Promise<Map<string, Array<{ id: string; name: string; color: string }>>> {
-  const map = new Map<string, Array<{ id: string; name: string; color: string }>>();
-  if (caseIds.length === 0) return map;
-  const rows = await db
-    .select({ caseId: caseTags.caseId, id: tags.id, name: tags.name, color: tags.color })
-    .from(caseTags)
-    .innerJoin(tags, eq(tags.id, caseTags.tagId))
-    .where(inArray(caseTags.caseId, caseIds));
-  for (const r of rows) {
-    const arr = map.get(r.caseId) ?? [];
-    arr.push({ id: r.id, name: r.name, color: r.color });
-    map.set(r.caseId, arr);
-  }
-  return map;
-}
 
 casesRoute.get('/', async (req, res) => {
   const { priority, groupId, projectId, scenarioId } = req.query as Record<string, string | undefined>;
@@ -145,104 +108,39 @@ casesRoute.get('/', async (req, res) => {
 
 casesRoute.post('/', async (req, res) => {
   const body = CreateBody.parse(req.body);
-  const g = await db.select().from(groups).where(eq(groups.id, body.groupId));
-  if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
-  const projectId = g[0]!.projectId;
-  await assertProjectVisible(projectId, req.user!);
+  const pid = await groupProjectId(body.groupId);
+  if (!pid) throw new HttpError(404, 'not_found', 'group not found');
+  await assertProjectVisible(pid, req.user!);
   // versionId 必填：前端所有入口都显式带版本，无默认版本回退；传了则必须同 project
   const versionId = body.versionId;
   if (!versionId) throw new HttpError(400, 'version_required', 'versionId is required');
   const { projectId: vp } = await assertVersionVisible(versionId, req.user!);
-  if (vp !== projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
-  // 创建时也可附带 tagIds：必须在分组所属项目所属的 organization 内
-  if (body.tagIds && body.tagIds.length > 0) await assertTagsBelongToOrg(body.tagIds, projectId);
-  const { tagIds: _ignoredTagIds, versionId: _ignoredV, ...caseValues } = body;
-  const rows = await db.insert(testCases).values({ ...caseValues, versionId }).returning();
-  const created = rows[0]!;
-  if (body.tagIds && body.tagIds.length > 0) {
-    await db.insert(caseTags).values(body.tagIds.map((tagId) => ({ caseId: created.id, tagId })));
-  }
-  res.json({ ...created, tags: body.tagIds ? body.tagIds.map((id) => ({ id })) : [] });
+  if (vp !== pid) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
+  res.json(await createCase({ ...body, versionId }));
 });
 
 casesRoute.get('/:id', async (req, res) => {
   await assertCaseVisible(req.params.id!, req.user!);
-  const rows = await db.select().from(testCases).where(eq(testCases.id, req.params.id));
-  if (rows.length === 0) throw new HttpError(404, 'not_found', 'case not found');
-  const steps = await db
-    .select()
-    .from(testSteps)
-    .where(eq(testSteps.caseId, req.params.id))
-    .orderBy(asc(testSteps.order));
-  // Redact secret material from the GET response; the recorder uses the dedicated
-  // /steps/secrets/:stepId endpoint with the ws token to retrieve plaintext at execution time.
-  const sanitizedSteps = steps.map(({ secretCiphertext: _sc, secretIv: _si, secretTag: _st, ...rest }) => rest);
-  const resolvedUrl = await resolveCaseUrl(rows[0]!, { defaultEnvFallback: true });
-  const tagsByCase = await tagsForCases([req.params.id!]);
-  res.json({
-    ...rows[0],
-    steps: sanitizedSteps,
-    resolvedUrl,
-    tags: tagsByCase.get(req.params.id!) ?? [],
-  });
+  const detail = await getCaseDetail(req.params.id!);
+  if (!detail) throw new HttpError(404, 'not_found', 'case not found');
+  res.json(detail);
 });
 
 casesRoute.patch('/:id', async (req, res) => {
   const body = PatchBody.parse(req.body);
   await assertCaseVisible(req.params.id!, req.user!);
-  let projectIdForTags: string | null = null;
-  if (body.groupId) {
+  if (body.groupId !== undefined) {
     // 移动目标分组也必须可见
-    const g = await db.select().from(groups).where(eq(groups.id, body.groupId));
-    if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
-    projectIdForTags = g[0]!.projectId;
-    await assertProjectVisible(projectIdForTags, req.user!);
-  }
-  if (body.scenarioId !== undefined && body.scenarioId !== null) {
-    const [sc] = await db
-      .select({ requirementId: scenarios.requirementId })
-      .from(scenarios)
-      .where(eq(scenarios.id, body.scenarioId))
-      .limit(1);
-    if (!sc) throw new HttpError(404, 'not_found', 'scenario not found');
-    const [tc] = await db
-      .select({ requirementId: testCases.requirementId })
-      .from(testCases)
-      .where(eq(testCases.id, req.params.id!))
-      .limit(1);
-    if (!tc || tc.requirementId !== sc.requirementId) {
-      throw new HttpError(400, 'scenario_mismatch', "scenario does not belong to this case's requirement");
-    }
+    const pid = await groupProjectId(body.groupId);
+    if (!pid) throw new HttpError(404, 'not_found', 'group not found');
+    await assertProjectVisible(pid, req.user!);
   }
   if (body.defaultEnvId !== undefined && body.defaultEnvId !== null) {
     const { assertEnvironmentVisible } = await import('../services/projectAccess.js');
     await assertEnvironmentVisible(body.defaultEnvId, req.user!);
   }
-  if (body.tagIds !== undefined) {
-    // tag 校验：用 groupId 解析的项目；未传则用 case 现有项目
-    const pid = projectIdForTags ?? (await resolveCaseProjectId(req.params.id!));
-    if (!pid) throw new HttpError(404, 'not_found', 'case not found');
-    await assertTagsBelongToOrg(body.tagIds, pid);
-    projectIdForTags = pid;
-  }
-  const { tagIds: incomingTagIds, ...rest } = body;
-  const rows = await db
-    .update(testCases)
-    .set({ ...rest, updatedAt: new Date() })
-    .where(eq(testCases.id, req.params.id))
-    .returning();
-  if (rows.length === 0) throw new HttpError(404, 'not_found', 'case not found');
-  // tagIds：undefined 不动；[] 清空；数组全量覆盖
-  if (incomingTagIds !== undefined) {
-    await db.delete(caseTags).where(eq(caseTags.caseId, req.params.id!));
-    if (incomingTagIds.length > 0) {
-      await db
-        .insert(caseTags)
-        .values(incomingTagIds.map((tagId) => ({ caseId: req.params.id!, tagId })));
-    }
-  }
-  const tagsByCase = await tagsForCases([req.params.id!]);
-  res.json({ ...rows[0], tags: tagsByCase.get(req.params.id!) ?? [] });
+  // scenario 匹配 / env 归属 / tag 组织校验由 service 兜底
+  res.json(await updateCase(req.params.id!, body));
 });
 
 async function nextCopyTitle(base: string, existing: string[]): Promise<string> {
@@ -331,8 +229,7 @@ casesRoute.post('/copy', async (req, res) => {
 
 casesRoute.delete('/:id', async (req, res) => {
   await assertCaseVisible(req.params.id!, req.user!);
-  const deleted = await db.delete(testCases).where(eq(testCases.id, req.params.id)).returning();
-  if (deleted.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  await deleteCase(req.params.id!);
   res.json({ ok: true });
 });
 

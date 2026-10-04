@@ -24,7 +24,7 @@ export interface ToolExecutor {
  *  3) locator 每个候选又被多包一层数组（[[{...},{...}]]）→ 剥到只剩 [{...},{...}]
  *  navigate / screenshot / aiStep 等无 locator 字段原样透传。
  */
-function normalizeCompiledStep(step: unknown): unknown {
+export function normalizeCompiledStep(step: unknown): unknown {
   if (!step || typeof step !== 'object') return step;
   const s = step as Record<string, unknown>;
   const loc = s.locator;

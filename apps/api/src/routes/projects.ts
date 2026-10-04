@@ -9,6 +9,7 @@ import { visibleOrgIdsFor } from '../services/orgTree.js';
 import { isManagerOfOrg, requireManager } from '../middleware/auth.js';
 import { getOrgPath } from '../services/orgTree.js';
 import { verifyRepoAccess } from '../services/gitProvider.js';
+import { createGroup } from '../services/cases.service.js';
 
 export const projectsRoute = Router({ mergeParams: true });
 
@@ -170,10 +171,7 @@ projectsRoute.post('/:id/groups', async (req, res) => {
   const projectId = String(req.params.id);
   await assertProjectVisible(projectId, req.user!);
   const body = CreateBody.parse(req.body);
-  const p = await db.select().from(projects).where(eq(projects.id, projectId));
-  if (p.length === 0) throw new HttpError(404, 'not_found', 'project not found');
-  const rows = await db.insert(groups).values({ ...body, projectId }).returning();
-  res.json(rows[0]);
+  res.json(await createGroup(projectId, { name: body.name }));
 });
 
 /** POST /verify-repo — 仓库元数据可达性 + 分支存在性 + 项目名/仓库短名校验。仅 manager。 */
