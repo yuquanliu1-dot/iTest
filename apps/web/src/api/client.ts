@@ -495,6 +495,21 @@ export const api = {
         if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
       }),
   },
+  assistant: {
+    listThreads: (versionId: string) =>
+      request<AssistantThread[]>(`/assistant/threads${qs({ versionId })}`),
+    /** 返回 Pi 快照;lastError=建线程时的非阻断警告(repo 不可用等)。 */
+    createThread: (versionId: string) =>
+      request<{ metadata: { id: string }; lastError?: string }>('/assistant/threads', {
+        method: 'POST',
+        body: JSON.stringify({ metadata: { versionId } }),
+      }),
+    confirm: (threadId: string, confirmId: string, approved: boolean) =>
+      request<void>(`/assistant/threads/${threadId}/confirm`, {
+        method: 'POST',
+        body: JSON.stringify({ confirmId, approved }),
+      }),
+  },
   registerAdmin: (body: { username: string; displayName: string; email?: string; organizationId: string }) =>
     request<{ temporaryPassword: string; user: SafeUser }>('/auth/register-admin', {
       method: 'POST',
@@ -729,6 +744,13 @@ export interface Scenario {
   description: string | null;
   order: number;
   createdAt: string;
+}
+export interface AssistantThread {
+  id: string;
+  title: string | null;
+  status: 'running' | 'idle';
+  createdAt?: string;
+  updatedAt?: string;
 }
 export interface Tag {
   id: string;

@@ -206,7 +206,7 @@ export default function ProjectsHome() {
   const enterVersion = (projectId: string, projectName: string, v: ProjectVersion) => {
     enter({ id: projectId, name: projectName, versionId: v.id, versionName: v.name });
     switchVersion(v.id, v.name);
-    navigate(`/p/${projectId}/v/${v.id}/overview`);
+    navigate(`/p/${projectId}/v/${v.id}/assistant`);
   };
 
   return (
