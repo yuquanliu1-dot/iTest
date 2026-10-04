@@ -18,3 +18,4 @@ verify-*.jpeg
 
 # local worktrees
 .worktrees/
+.superpowers/
