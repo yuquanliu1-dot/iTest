@@ -168,7 +168,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
         className="px-4 py-2.5 text-[12px] font-medium shrink-0"
         style={{ borderBottom: '1px solid var(--border)', color: 'var(--muted-foreground)' }}
       >
-        舞台
+        预览
       </div>
       {announce && (
         <div className="px-4 py-2.5 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
