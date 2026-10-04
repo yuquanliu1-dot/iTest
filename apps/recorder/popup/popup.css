@@ -14,6 +14,19 @@ body {
 
 .desc { font-size: 11px; color: #6e6a8a; margin: 0; line-height: 1.5; }
 
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 11px; color: #6e6a8a; }
+.row { display: flex; gap: 6px; }
+.row input {
+  flex: 1; min-width: 0; padding: 6px 8px; font-size: 11px; font-family: inherit;
+  border: 1px solid #d8d4ee; border-radius: 8px; background: #fff; color: #232038;
+}
+.row input:focus { outline: none; border-color: #7c5cfc; }
+.btn:not(.primary) { background: #fff; border: 1px solid #d8d4ee; color: #4e4a66; }
+.btn:not(.primary):hover { border-color: #7c5cfc; color: #7c5cfc; }
+.status { font-size: 11px; min-height: 14px; color: #2aa45f; }
+.status.err { color: #d64545; }
+
 .btn {
   padding: 7px 12px; font-size: 12px; border-radius: 8px; cursor: pointer;
   font-family: inherit; transition: background 0.15s ease;
