@@ -74,7 +74,7 @@ describe('manage_plans 工具', () => {
     expect(list.find((p) => p.name === '冒烟')!.caseCount).toBe(2);
   }, 30_000);
 
-  it('add_cases 跨项目 → 确认后失败文案含归属;remove_cases/update 需确认,stage 带确认时同一 diff', async () => {
+  it('add_cases 跨项目 → 门控前报错不出确认卡;remove_cases/update 需确认,stage 带确认时同一 diff', async () => {
     const seed = await seedProject(pool);
     const other = await seedProject(pool);
     const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
@@ -85,11 +85,17 @@ describe('manage_plans 工具', () => {
     await tool.execute({ action: 'create', name: '全量', caseIds: [c1, c2] });
     const planId = (await pool.query(`SELECT id FROM execution_plans WHERE name='全量'`)).rows[0]!.id as string;
 
-    const cross = tool.execute({ action: 'add_cases', planId, caseIds: [foreign] });
-    resolveConfirmation(await untilConfirm(events), true); // 门控后才到 service 的归属校验
-    const crossRes = (await cross) as { ok: boolean; error: string };
+    // 归属校验在门控前:直接报错并点名越界用例,不出确认卡、数据不变
+    const crossRes = (await tool.execute({ action: 'add_cases', planId, caseIds: [foreign] })) as { ok: boolean; error: string };
     expect(crossRes).toMatchObject({ ok: false });
-    expect(crossRes.error).toContain('belong to the plan project');
+    expect(crossRes.error).toContain(foreign);
+    expect(events.find((e) => e.type === 'confirm_request')).toBeUndefined();
+    expect((await pool.query(`SELECT count(*)::int AS n FROM plan_cases WHERE plan_id=$1`, [planId])).rows[0]!.n).toBe(2);
+    // 混合传入只点名越界者,不误伤本项目的用例
+    const mixed = (await tool.execute({ action: 'add_cases', planId, caseIds: [c2, foreign] })) as { ok: boolean; error: string };
+    expect(mixed.ok).toBe(false);
+    expect(mixed.error).toContain(foreign);
+    expect(mixed.error).not.toContain(c2);
 
     events.length = 0;
     const rm = tool.execute({ action: 'remove_cases', planId, caseIds: [c1] });

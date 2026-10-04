@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
-import { api } from '../../api/client';
+import { ApiError, api } from '../../api/client';
 import { useUIStore } from '../../stores/ui';
 import { useSpaceEventsStore, type SpaceConfirmRequest } from './spaceEventsStore';
 
@@ -11,7 +11,7 @@ const RISK_META: Record<SpaceConfirmRequest['risk'], { label: string; color: str
   secret: { label: '密钥', color: 'var(--warning)', bg: 'var(--warning-soft)' },
 };
 
-/** 确认卡:钉在 composer 上方;确认/取消 → POST /confirm,404(过期)也收卡并提示。 */
+/** 确认卡:钉在 composer 上方;确认/取消 → POST /confirm;仅 404(确已过期)收卡,其余错误保留卡片供重试。 */
 export default function ConfirmCard({ threadId }: { threadId: string }) {
   const confirms = useSpaceEventsStore((s) => s.confirms);
   const removeConfirm = useSpaceEventsStore((s) => s.removeConfirm);
@@ -21,7 +21,8 @@ export default function ConfirmCard({ threadId }: { threadId: string }) {
       api.assistant.confirm(threadId, v.confirmId, v.approved),
     onSuccess: (_r, v) => removeConfirm(v.confirmId),
     onError: (e: Error, v) => {
-      removeConfirm(v.confirmId);
+      // 仅确认确已过期(404)才收卡;网络瞬断等保留卡片供重试(点了确认不该因挂起项超时被记为取消)
+      if (e instanceof ApiError && e.status === 404) removeConfirm(v.confirmId);
       toast(e.message, 'error');
     },
   });
