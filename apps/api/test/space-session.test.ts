@@ -102,4 +102,13 @@ describe('space session supervisor', () => {
     expect(typeof events[1]!.seq).toBe('number');
     unsub();
   }, 30_000);
+
+  it('并发 ensureSpaceRecord 单飞:工厂只调一次,双方拿到同一 record', async () => {
+    const { projectId, versionId } = await seedProject(pool);
+    const threadId = await insertSpaceThread(versionId);
+    const { ensureSpaceRecord } = await import('../src/pi/space/session.js');
+    const [a, b] = await Promise.all([ensureSpaceRecord(threadId), ensureSpaceRecord(threadId)]);
+    expect(a).toBe(b);
+    expect(captured).toHaveLength(1);
+  }, 30_000);
 });
