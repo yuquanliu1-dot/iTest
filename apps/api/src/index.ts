@@ -28,6 +28,7 @@ import { tagsRoute } from './routes/tags.js';
 import usersRoute from './routes/users.js';
 import assignmentsRoute from './routes/assignments.js';
 import { piRoute } from './pi/router.js';
+import { spaceRoute } from './pi/space/router.js';
 import { requireAuth } from './middleware/auth.js';
 
 const app = express();
@@ -65,6 +66,7 @@ app.use('/api/plan-runs', planRunsRoute);
 app.use('/api/executions', executionsRoute);
 app.use('/api/recorder', recorderRoute);
 app.use('/api/pi', piRoute);
+app.use('/api/assistant', spaceRoute);
 app.use(errorHandler);
 
 const port = Number(process.env.API_PORT ?? 54321);
