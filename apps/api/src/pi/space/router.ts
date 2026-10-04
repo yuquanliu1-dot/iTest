@@ -32,7 +32,7 @@ async function assertSpaceThreadVisible(threadId: string, user: AuthUser): Promi
   return row.versionId;
 }
 
-/** react-pi 契约:POST/GET threads 必须返回完整 PiThreadSnapshot。 */
+/** react-pi 契约:POST/GET threads 必须返回完整 PiThreadSnapshot;兜底空快照刻意无 seq(requirement 级 /api/pi 兜底带 legacy seq:0,勿同步)。 */
 function threadSnapshotResponse(threadId: string): unknown {
   const live = snapshotOfThread(threadId);
   return live ?? { metadata: { id: threadId, status: 'idle', messageCount: 0 }, messages: [] };
@@ -43,7 +43,8 @@ spaceRoute.post('/threads', async (req, res) => {
   const versionId = body.metadata?.versionId;
   if (!versionId) throw new HttpError(400, 'bad_request', 'metadata.versionId required');
   await assertVersionVisible(versionId, req.user as AuthUser);
-  // 每次调用新建一线程(一版本多线程);行先落库,LLM 未配置时 session 建不起来也照常返回快照
+  // 每次调用新建一线程(一版本多线程);行先落库,LLM 未配置时 session 建不起来也照常返回快照;
+  // 客户端重试可能留下无 session 的孤儿线程(可 GC),属预期行为
   const threadId = randomUUID();
   await db.insert(aiThreads).values({ id: threadId, kind: 'version', versionId, piThreadId: '' });
   try { await ensureSpaceRecord(threadId); } catch { /* LLM 未配置等;前端经 SSE/快照感知 */ }
@@ -51,7 +52,8 @@ spaceRoute.post('/threads', async (req, res) => {
 });
 
 spaceRoute.get('/threads', async (req, res) => {
-  const versionId = (req.query.versionId as string | undefined) ?? '';
+  const raw = req.query.versionId;
+  const versionId = typeof raw === 'string' ? raw : '';
   if (!versionId) throw new HttpError(400, 'bad_request', 'versionId query required');
   await assertVersionVisible(versionId, req.user as AuthUser);
   const rows = await db
