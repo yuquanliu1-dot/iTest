@@ -9,6 +9,7 @@ import LoginPage from './pages/LoginPage';
 import ProjectsHome from './pages/ProjectsHome';
 import EnvironmentsPage from './pages/EnvironmentsPage';
 import Dashboard from './pages/Dashboard';
+import AssistantPage from './pages/AssistantPage';
 import AiWorkspacePage from './pages/AiWorkspacePage';
 import GroupsPage from './pages/GroupsPage';
 import CaseDetail from './pages/CaseDetail';
@@ -42,7 +43,8 @@ export default function App() {
         <Route path="/p/:projectId" element={<ProjectGuard />}>
           {/* 版本化二级路径 /v/:versionId/...：版本号由 ProjectsHome 行「进入」写入 store */}
           <Route path="v/:versionId">
-            <Route index element={<Navigate to="overview" replace />} />
+            <Route index element={<Navigate to="assistant" replace />} />
+            <Route path="assistant" element={<AssistantPage />} />
             <Route path="overview" element={<Dashboard />} />
             <Route path="groups" element={<GroupsPage />} />
             <Route path="groups/:groupId" element={<GroupsPage />} />
