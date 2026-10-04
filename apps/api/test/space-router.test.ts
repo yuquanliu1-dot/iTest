@@ -126,6 +126,20 @@ describe('space wire contract', () => {
     expect(r.body).toEqual([]);
   });
 
+  it('GET /threads?versionId= 无会话记录的线程不进列表(未发过消息/record 已失)', async () => {
+    const { versionId } = await seedProject(pool);
+    // 建了线程但从未发消息:内存 messages 为空
+    await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    // 已落库且带标题、但内存无 record(模拟进程重启丢记录):同样不进列表
+    await pool.query(
+      `INSERT INTO ai_threads(id, kind, version_id, pi_thread_id, title) VALUES ($1,'version',$2,'','旧会话')`,
+      [crypto.randomUUID(), versionId],
+    );
+    const list = await request(app).get(`/api/assistant/threads?versionId=${versionId}`);
+    expect(list.status).toBe(200);
+    expect(list.body).toEqual([]);
+  });
+
   it('GET /threads/:id 返回快照;requirement 线程 404(本契约只管 version 线程)', async () => {
     const { projectId, versionId } = await seedProject(pool);
     const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });

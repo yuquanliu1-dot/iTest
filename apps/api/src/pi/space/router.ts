@@ -76,7 +76,10 @@ spaceRoute.get('/threads', async (req, res) => {
     .where(and(eq(aiThreads.kind, 'version'), eq(aiThreads.versionId, versionId)))
     .orderBy(desc(aiThreads.updatedAt))
     .limit(20);
-  res.json(rows.map((row) => ({
+  // 只列出确有会话记录的线程:消息全内存(SessionManager.inMemory),从未发过消息
+  // 或记录已随进程重启丢失的线程不进下拉框(前端对当前不在列表的 threadId 有占位选项)。
+  const withRecords = rows.filter((row) => (snapshotOfThread(row.id)?.metadata.messageCount ?? 0) > 0);
+  res.json(withRecords.map((row) => ({
     id: row.id,
     title: row.title,
     status: threadStatus(row.id) ?? 'idle',
