@@ -37,6 +37,7 @@ async function makeFixtureRepo(): Promise<string> {
   GIT('git checkout -b feature', seed);
   await fs.writeFile(path.join(seed, 'app.txt'), 'feature-content');
   GIT("git add -A && git -c user.email=t@t -c user.name=t commit -m feature", seed);
+  GIT('git tag v1', seed);
   GIT(`git clone --bare . ${bareParent}/repo.git`, seed);
   return `${bareParent}/repo.git`;
 }
@@ -97,5 +98,25 @@ describe('checkoutRepoForVersion', () => {
     const cwd = await checkoutRepoForVersion(v1);
     expect(await fs.readFile(path.join(cwd, 'app.txt'), 'utf8')).toBe('main-content');
     await expect(checkoutRepoForVersion(v2)).rejects.toBeInstanceOf(RepoUnavailableError);
+  }, 30_000);
+
+  it('version.ref_kind=tag 时按 tag checkout', async () => {
+    const repoUrl = await makeFixtureRepo();
+    const { orgId } = await seedOrg(pool);
+    const projectId = (await pool.query(
+      `INSERT INTO projects(organization_id, name, repo_url, provider, default_branch) VALUES ($1,'pt',$2,'github','main') RETURNING id`,
+      [orgId, `file://${repoUrl}`],
+    )).rows[0]!.id as string;
+    // ref_kind 仅是展示语义;checkout 只认 ref 值 —— 用 tag 名验证 fetch FETCH_HEAD 对 tag 生效
+    const versionId = (await pool.query(
+      `INSERT INTO project_versions(project_id, name, ref, ref_kind) VALUES ($1,'vt','v1','tag') RETURNING id`,
+      [projectId],
+    )).rows[0]!.id as string;
+
+    const { checkoutRepoForVersion } = await import('../src/pi/repo.js');
+    const cwd = await checkoutRepoForVersion(versionId);
+    expect(await fs.readFile(path.join(cwd, 'app.txt'), 'utf8')).toBe('feature-content');
+    const meta = JSON.parse(await fs.readFile(path.join(cwd, '.itest-sandbox.json'), 'utf8')) as { branch: string };
+    expect(meta.branch).toBe('v1');
   }, 30_000);
 });
