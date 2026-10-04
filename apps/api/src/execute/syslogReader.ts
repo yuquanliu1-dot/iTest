@@ -43,13 +43,16 @@ function connectSsh(env: SyslogCtx): Promise<Client> {
   const client = new Client();
   return new Promise((resolve, reject) => {
     client.once('ready', () => resolve(client));
-    client.once('error', (err) =>
+    // ssh2 的 socket 错误常只有 code（如 ECONNREFUSED）而 message 为空 → 两者拼接保证可读
+    client.once('error', (err) => {
+      const code = (err as { code?: string }).code;
+      const detail = [err.message, code].filter(Boolean).join(' ') || 'connection failed';
       reject(
         err.message.toLowerCase().includes('auth')
           ? new SyslogAuthFailed()
-          : new SyslogConnectFailed(err.message),
-      ),
-    );
+          : new SyslogConnectFailed(detail),
+      );
+    });
     client.connect({
       host: env.host,
       port: env.port,
