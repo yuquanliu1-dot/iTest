@@ -55,9 +55,9 @@ export default function Dashboard() {
     }
   }
 
-  // 内部链接在带版本上下文时使用版本化路由，否则回退到 /versions/select 引导用户选版本
+  // 内部链接在带版本上下文时使用版本化路由，否则回退到首页选项目
   const link = (path: string) =>
-    versionId ? `/p/${projectId}/v/${versionId}${path}` : `/p/${projectId}/versions/select`;
+    versionId ? `/p/${projectId}/v/${versionId}${path}` : `/`;
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">

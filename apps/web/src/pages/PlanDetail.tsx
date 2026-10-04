@@ -102,7 +102,7 @@ export default function PlanDetail() {
     onSuccess: () => {
       toast('已删除', 'success');
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
-      navigate(versionId ? `/p/${projectId}/v/${versionId}/plans` : `/p/${projectId}/versions/select`);
+      navigate(versionId ? `/p/${projectId}/v/${versionId}/plans` : `/`);
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -135,7 +135,7 @@ export default function PlanDetail() {
           toast(`执行完成：${data.summary ?? ''}`, data.status === 'passed' ? 'success' : 'error');
           const dest = versionId
             ? `/p/${projectId}/v/${versionId}/plans/${id}/runs/${activeRunId}`
-            : `/p/${projectId}/versions/select`;
+            : `/`;
           navigate(dest);
         }
       } catch {
@@ -207,7 +207,7 @@ export default function PlanDetail() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/plans` : `/p/${projectId}/versions/select`)}
+          onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/plans` : `/`)}
         >
           <Icon name="chevronLeft" size={12} />
           返回计划列表
@@ -387,7 +387,7 @@ export default function PlanDetail() {
                       <Icon name="gripVertical" size={12} className="cursor-grab shrink-0" style={{ color: 'var(--color-foreground-muted)' }} />
                       <span className="text-[11px] font-mono shrink-0 w-5" style={{ color: 'var(--color-foreground-muted)' }}>{idx + 1}</span>
                       <span
-                        onClick={() => navigate(c.versionId ? `/p/${projectId}/v/${c.versionId}/cases/${c.id}` : `/p/${projectId}/versions/select`)}
+                        onClick={() => navigate(c.versionId ? `/p/${projectId}/v/${c.versionId}/cases/${c.id}` : `/`)}
                         className="text-[12px] flex-1 truncate cursor-pointer"
                         style={{ color: 'var(--color-foreground)' }}
                       >

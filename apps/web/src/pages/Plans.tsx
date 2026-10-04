@@ -101,7 +101,7 @@ export default function Plans() {
               <div
                 key={p.id}
                 data-stagger-item
-                onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/plans/${p.id}` : `/p/${projectId}/versions/select`)}
+                onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/plans/${p.id}` : `/`)}
                 className="glass-card rounded-[var(--radius-md)] p-4 cursor-pointer hover-card"
               >
                 <div className="flex items-center justify-between">
