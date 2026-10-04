@@ -21,7 +21,7 @@ interface Props {
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
   pageSizeOptions?: number[];
-  /** 页脚左侧插槽（如状态统计）；不传则保持原有右对齐布局。 */
+  /** 页脚左侧插槽（如状态统计）；控件本体始终右对齐。 */
   left?: ReactNode;
 }
 
@@ -64,12 +64,8 @@ export default function Pagination({
         color: 'var(--muted-foreground)',
       }}
     >
-      {left ? (
-        <>
-          {left}
-          <div className="flex-1" />
-        </>
-      ) : null}
+      {left}
+      <div className="flex-1" />
       <div className="flex items-center justify-end gap-3">
       <span>共 {total} 条</span>
 

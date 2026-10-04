@@ -21,6 +21,9 @@ function PageShell({
         data-slot="page-shell"
         className={cn(
           'mx-auto flex w-full min-w-0 max-w-7xl flex-1 flex-col gap-6',
+          // contained 模式下必须允许收缩，否则 min-height:auto 使内容撑破
+          // overflow-hidden 的滚动容器，底部（如分页器）被裁掉且无法滚动。
+          contained && 'min-h-0',
           className,
         )}
         {...props}

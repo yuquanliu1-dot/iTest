@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -9,6 +9,7 @@ import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
+import Pagination from '../components/ui/Pagination';
 import StatusPill from '../components/ui/StatusPill';
 import { shortDateTime, fullDateTime } from '../lib/format';
 import {
@@ -33,6 +34,12 @@ export default function Plans() {
   });
   // 按当前 versionId 过滤（NULL 版本 = 跨版本计划也展示，但用副标记）
   const filteredPlans = (plans ?? []).filter((p) => !versionId || p.versionId == null || p.versionId === versionId);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  useEffect(() => {
+    setPage(1);
+  }, [versionId]);
+  const visiblePlans = filteredPlans.slice((page - 1) * pageSize, page * pageSize);
   const { data: planRuns } = useQuery({
     queryKey: ['executions', projectId, 'plan'],
     queryFn: () => api.executions.list({ projectId, kind: 'plan' }),
@@ -64,7 +71,7 @@ export default function Plans() {
   });
 
   return (
-    <PageShell>
+    <PageShell contained>
       <PageShellHeader>
         <PageShellTitle>执行计划</PageShellTitle>
         <PageShellActions>
@@ -97,41 +104,58 @@ export default function Plans() {
             action={<Button size="sm" onClick={() => setShowCreate(true)}>+ 新建执行计划</Button>}
           />
         ) : (
-          <div className="grid grid-cols-3 gap-4" data-stagger>
-            {filteredPlans.map((p) => (
-              <div
-                key={p.id}
-                data-stagger-item
-                onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/plans/${p.id}` : `/`)}
-                className="bg-card border rounded-[var(--radius-md)] p-4 cursor-pointer hover-card"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="text-[14px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>
-                    {p.name}
-                  </div>
-                  <span className="text-[10px] uppercase font-semibold px-2 py-[2px] rounded-full" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>
-                    {p.environment ?? '默认'}
-                  </span>
-                </div>
-                <div className="text-[12px] mt-2" style={{ color: 'var(--muted-foreground)' }}>
-                  {p.caseCount} 个用例
-                </div>
-                <div className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
-                  创建于 {fullDateTime(p.createdAt)}
-                </div>
-                {(() => {
-                  const last = latestByPlan.get(p.id);
-                  if (!last) return null;
-                  return (
-                    <div className="text-[11px] mt-1 flex items-center gap-2" style={{ color: 'var(--muted-foreground)' }}>
-                      <StatusPill status={last.status}>{last.status}</StatusPill>
-                      <span>{shortDateTime(last.createdAt)}</span>
+          <>
+            <div
+              className="grid grid-cols-3 gap-4 content-start flex-1 min-h-0 overflow-y-auto"
+              data-stagger
+            >
+              {visiblePlans.map((p) => (
+                <div
+                  key={p.id}
+                  data-stagger-item
+                  onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/plans/${p.id}` : `/`)}
+                  className="bg-card border rounded-[var(--radius-md)] p-4 cursor-pointer hover-card"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="text-[14px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>
+                      {p.name}
                     </div>
-                  );
-                })()}
-              </div>
-            ))}
-          </div>
+                    <span className="text-[10px] uppercase font-semibold px-2 py-[2px] rounded-full" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>
+                      {p.environment ?? '默认'}
+                    </span>
+                  </div>
+                  <div className="text-[12px] mt-2" style={{ color: 'var(--muted-foreground)' }}>
+                    {p.caseCount} 个用例
+                  </div>
+                  <div className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
+                    创建于 {fullDateTime(p.createdAt)}
+                  </div>
+                  {(() => {
+                    const last = latestByPlan.get(p.id);
+                    if (!last) return null;
+                    return (
+                      <div className="text-[11px] mt-1 flex items-center gap-2" style={{ color: 'var(--muted-foreground)' }}>
+                        <StatusPill status={last.status}>{last.status}</StatusPill>
+                        <span>{shortDateTime(last.createdAt)}</span>
+                      </div>
+                    );
+                  })()}
+                </div>
+              ))}
+            </div>
+            <div className="mt-4">
+              <Pagination
+                page={page}
+                pageSize={pageSize}
+                total={filteredPlans.length}
+                onPageChange={setPage}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setPage(1);
+                }}
+              />
+            </div>
+          </>
         )}
       </PageShellContent>
 
