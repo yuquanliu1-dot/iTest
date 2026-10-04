@@ -10,6 +10,7 @@ import { buildAnnounceTool } from './announce.js';
 import { buildInspectTool } from './inspect.js';
 import { buildCasesTools } from './cases.js';
 import { buildScenariosTools } from './scenarios.js';
+import { buildEnvironmentsTools } from './environments.js';
 
 export type { SpaceToolsContext } from './context.js';
 export { emitStage, type StageKind } from './stage.js';
@@ -21,5 +22,6 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   tools.push(buildAnnounceTool(ctx), buildInspectTool(ctx));
   tools.push(...buildCasesTools(ctx));
   tools.push(...buildScenariosTools(ctx));
+  tools.push(...buildEnvironmentsTools(ctx));
   return tools;
 }
