@@ -1,5 +1,0 @@
-@keyframes drawer-slide-in {
-  from { transform: translateX(24px); opacity: 0.6; }
-  to { transform: translateX(0); opacity: 1; }
-}
-.drawer-slide-in { animation: drawer-slide-in 200ms ease-out; }

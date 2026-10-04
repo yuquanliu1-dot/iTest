@@ -19,11 +19,11 @@ export default function KpiStripCard({ label, value, iconName, tone, to, suffix 
       onClick={() => navigate(to)}
       onKeyDown={(e) => { if (e.key === 'Enter') navigate(to); }}
       data-stagger-item
-      className="glass-panel rounded-[var(--radius-md)] p-5 cursor-pointer hover-card"
+      className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5 cursor-pointer hover-card"
       style={{ minHeight: 92 }}
     >
       <div className="flex items-center justify-between">
-        <span style={{ fontSize: 12, color: 'var(--color-foreground-secondary)' }}>{label}</span>
+        <span style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>{label}</span>
         <span className="kpi-icon" style={{ color: tone, display: 'inline-flex' }}>
           <Icon name={iconName as 'beaker'} size={14} />
         </span>

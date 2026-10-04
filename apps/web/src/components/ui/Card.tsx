@@ -31,10 +31,9 @@ export default function Card({
       className={`${interactive ? 'hover-card ' : ''}${className}`}
       onClick={onClick}
       style={{
-        background: 'var(--color-background-elevated)',
-        border: '1px solid var(--color-border-subtle)',
-        borderRadius: 'var(--radius-md)',
-        boxShadow: 'var(--shadow-card)',
+        background: 'var(--card)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-lg)',
         padding: paddingMap[padding],
         ...(interactive ? { cursor: 'pointer' } : {}),
         ...style,

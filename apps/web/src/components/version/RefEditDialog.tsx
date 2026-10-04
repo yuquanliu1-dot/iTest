@@ -58,9 +58,9 @@ export default function RefEditDialog({
               onClick={() => { setRefKind('branch'); loadRefs('branch'); }}
               className="px-3 py-1 rounded text-[12px]"
               style={{
-                background: refKind === 'branch' ? 'var(--color-accent-soft)' : 'var(--color-surface-elevated)',
-                color: refKind === 'branch' ? 'var(--color-accent)' : 'var(--color-foreground)',
-                border: '1px solid var(--color-glass-border)',
+                background: refKind === 'branch' ? 'var(--primary-soft)' : 'var(--card)',
+                color: refKind === 'branch' ? 'var(--primary)' : 'var(--foreground)',
+                border: '1px solid var(--border)',
               }}
             >
               分支 (branch)
@@ -70,9 +70,9 @@ export default function RefEditDialog({
               onClick={() => { setRefKind('tag'); loadRefs('tag'); }}
               className="px-3 py-1 rounded text-[12px]"
               style={{
-                background: refKind === 'tag' ? 'var(--color-accent-soft)' : 'var(--color-surface-elevated)',
-                color: refKind === 'tag' ? 'var(--color-accent)' : 'var(--color-foreground)',
-                border: '1px solid var(--color-glass-border)',
+                background: refKind === 'tag' ? 'var(--primary-soft)' : 'var(--card)',
+                color: refKind === 'tag' ? 'var(--primary)' : 'var(--foreground)',
+                border: '1px solid var(--border)',
               }}
             >
               标签 (tag)
@@ -80,16 +80,16 @@ export default function RefEditDialog({
           </div>
           {refKind && (
             <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-medium" style={{ color: 'var(--color-foreground-muted)' }}>
+              <label className="text-[11px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
                 远端 {refKind}（项目未配置仓库时不可用）
               </label>
               {loadingRefs ? (
-                <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
                   加载中…
                 </span>
               ) : refsError ? (
                 <div className="flex flex-col gap-1">
-                  <span className="text-[11px]" style={{ color: 'var(--color-destructive)' }}>
+                  <span className="text-[11px]" style={{ color: 'var(--destructive)' }}>
                     {refsError}
                   </span>
                   <Input
@@ -125,7 +125,7 @@ export default function RefEditDialog({
             <button
               type="button"
               className="text-[11px]"
-              style={{ background: 'transparent', border: 'none', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}
+              style={{ background: 'transparent', border: 'none', color: 'var(--muted-foreground)', cursor: 'pointer' }}
               onClick={() => { setRefKind(null); setRefValue(''); }}
             >
               清空 ref（不绑定）
@@ -134,7 +134,7 @@ export default function RefEditDialog({
         </div>
         <div
           className="flex justify-end gap-2 px-5 py-4 hairline-top"
-          style={{ borderColor: 'var(--color-border)' }}
+          style={{ borderColor: 'var(--border)' }}
         >
           <Button variant="ghost" onClick={onClose}>取消</Button>
           <Button

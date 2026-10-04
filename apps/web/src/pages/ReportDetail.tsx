@@ -31,8 +31,8 @@ interface StepResult {
 function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-2 text-[12px] mb-2 last:mb-0">
-      <span className="shrink-0" style={{ color: 'var(--color-foreground-muted)' }}>{label}</span>
-      <span className="text-right truncate" style={{ color: 'var(--color-foreground-secondary)' }}>{value}</span>
+      <span className="shrink-0" style={{ color: 'var(--muted-foreground)' }}>{label}</span>
+      <span className="text-right truncate" style={{ color: 'var(--muted-foreground)' }}>{value}</span>
     </div>
   );
 }
@@ -64,7 +64,7 @@ export default function ReportDetail() {
 
   if (isError) {
     return (
-      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
         加载失败：{error?.message ?? '未知错误'}
       </div>
     );
@@ -72,7 +72,7 @@ export default function ReportDetail() {
 
   if (isLoading || !data) {
     return (
-      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)' }}>
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)' }}>
         <Icon name="loader" size={16} className="animate-spin" />
         <span style={{ marginLeft: 8 }}>加载中...</span>
       </div>
@@ -119,7 +119,7 @@ export default function ReportDetail() {
       >
         <span
           className="font-mono text-[12px] shrink-0 mt-0.5 w-[44px]"
-          style={{ color: passed ? 'var(--color-success)' : 'var(--color-destructive)' }}
+          style={{ color: passed ? 'var(--success)' : 'var(--destructive)' }}
         >
           {passed ? '✓' : '✕'} #{s.order}
         </span>
@@ -143,7 +143,7 @@ export default function ReportDetail() {
           {s.error && (
             <div
               className="flex gap-2 items-start text-[12px] px-2 py-1 rounded-[4px]"
-              style={{ background: 'var(--color-destructive-light-strong)', color: 'var(--color-destructive-text, var(--color-destructive))' }}
+              style={{ background: 'var(--destructive-soft-strong)', color: 'var(--destructive, var(--destructive))' }}
             >
               <span className="shrink-0 font-medium">错误</span>
               <span className="min-w-0 break-words">{s.error}</span>
@@ -152,7 +152,7 @@ export default function ReportDetail() {
           {s.error?.includes('var-missing:') && (
             <div
               className="flex gap-2 items-start text-[11px] px-2 py-1 rounded-[4px]"
-              style={{ background: 'var(--color-warning-light)', color: 'var(--color-warning-text)' }}
+              style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}
             >
               <span className="shrink-0 font-medium">变量</span>
               <span>未定义：在该步骤之前添加 extract 步骤抽取该变量，或检查变量名拼写（用例页保存步骤时会显示变量体检提示）。</span>
@@ -161,24 +161,24 @@ export default function ReportDetail() {
           {s.warning && (
             <div
               className="flex gap-2 items-start text-[12px] px-2 py-1 rounded-[4px]"
-              style={{ background: 'var(--color-warning-light)', color: 'var(--color-warning-text)' }}
+              style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}
             >
               <span className="shrink-0 font-medium">警告</span>
               <span className="min-w-0 break-words">{s.warning}</span>
             </div>
           )}
           {s.status !== 'passed' && (s.failureReason || s.humanMessage) && (
-            <div className="flex flex-col gap-0.5 pl-2" style={{ borderLeft: '2px solid var(--color-destructive)' }}>
+            <div className="flex flex-col gap-0.5 pl-2" style={{ borderLeft: '2px solid var(--destructive)' }}>
               {s.failureReason && (
                 <div className="flex gap-2 items-start text-[11px]">
-                  <span className="shrink-0 font-medium" style={{ color: 'var(--color-foreground-muted)' }}>原因</span>
-                  <span className="font-mono min-w-0 break-words" style={{ color: 'var(--color-destructive)' }}>{s.failureReason}</span>
+                  <span className="shrink-0 font-medium" style={{ color: 'var(--muted-foreground)' }}>原因</span>
+                  <span className="font-mono min-w-0 break-words" style={{ color: 'var(--destructive)' }}>{s.failureReason}</span>
                 </div>
               )}
               {s.humanMessage && (
                 <div className="flex gap-2 items-start text-[11px]">
-                  <span className="shrink-0 font-medium" style={{ color: 'var(--color-foreground-muted)' }}>说明</span>
-                  <span className="min-w-0 break-words" style={{ color: 'var(--color-foreground-secondary)' }}>{s.humanMessage}</span>
+                  <span className="shrink-0 font-medium" style={{ color: 'var(--muted-foreground)' }}>说明</span>
+                  <span className="min-w-0 break-words" style={{ color: 'var(--muted-foreground)' }}>{s.humanMessage}</span>
                 </div>
               )}
             </div>
@@ -195,7 +195,7 @@ export default function ReportDetail() {
             }}
             aria-label={`放大 step ${s.order} 截图`}
             className="shrink-0 rounded-[var(--radius-sm)] overflow-hidden press"
-            style={{ border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', padding: 0, cursor: 'zoom-in' }}
+            style={{ border: '1px solid var(--border)', background: 'var(--popover)', padding: 0, cursor: 'zoom-in' }}
           >
             <img
               src={s.screenshot}
@@ -213,12 +213,12 @@ export default function ReportDetail() {
     <span
       title={title}
       className="inline-flex items-center gap-1"
-      style={{ color: 'var(--color-foreground-muted)' }}
+      style={{ color: 'var(--muted-foreground)' }}
     >
-      <span style={{ color: 'var(--color-foreground-muted)' }}>{label}</span>
+      <span style={{ color: 'var(--muted-foreground)' }}>{label}</span>
       <span
         className={mono ? 'font-mono' : ''}
-        style={{ color: muted ? 'var(--color-foreground-muted)' : 'var(--color-foreground-secondary)' }}
+        style={{ color: muted ? 'var(--muted-foreground)' : 'var(--muted-foreground)' }}
       >
         {value}
       </span>
@@ -228,27 +228,27 @@ export default function ReportDetail() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header bar */}
-      <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
+      <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
         <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports`)}>
           <Icon name="chevronLeft" size={12} />
           返回报告列表
         </Button>
-        <span style={{ width: 1, height: 16, background: 'var(--color-glass-border)' }} />
-        <h1 className="text-[16px] font-semibold" style={{ color: 'var(--color-foreground)' }}>
+        <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
+        <h1 className="text-[16px] font-semibold" style={{ color: 'var(--foreground)' }}>
           测试报告
         </h1>
         <StatusPill status={data.status}>{data.status.toUpperCase()}</StatusPill>
         <Button
           variant="ghost"
           onClick={() => setShowDelete(true)}
-          style={{ color: 'var(--color-destructive)' }}
+          style={{ color: 'var(--destructive)' }}
           aria-label="删除测试报告"
           title="删除测试报告"
         >
           <Icon name="trash" size={12} />
         </Button>
         <div className="flex-1" />
-        <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+        <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
           {fullDateTime(data.createdAt)} · {data.durationMs ?? 0} ms
         </span>
       </div>
@@ -258,13 +258,13 @@ export default function ReportDetail() {
         <div className="flex gap-5 p-6">
           <div className="flex-1 min-w-0 flex flex-col gap-3">
             {data.summary && (
-              <div className="glass-card rounded-[var(--radius-md)] p-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+              <div className="bg-card border rounded-[var(--radius-md)] p-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
                 {data.summary}
               </div>
             )}
-            <div className="glass-card rounded-[var(--radius-md)] overflow-hidden">
-              <div className="px-5 py-[10px] hairline-bottom" style={{ background: 'var(--color-background-subtle)' }}>
-                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <div className="bg-card border rounded-[var(--radius-md)] overflow-hidden">
+              <div className="px-5 py-[10px] hairline-bottom" style={{ background: 'var(--muted)' }}>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
                   步骤时间线
                 </span>
               </div>
@@ -280,7 +280,7 @@ export default function ReportDetail() {
                       <div key={group.tabIndex}>
                         <div
                           className="px-5 py-[6px] text-[10px] font-mono"
-                          style={{ color: 'var(--color-foreground-muted)', background: 'var(--color-background-subtle)' }}
+                          style={{ color: 'var(--muted-foreground)', background: 'var(--muted)' }}
                         >
                           tab #{group.tabIndex}
                         </div>
@@ -296,21 +296,21 @@ export default function ReportDetail() {
 
           {/* Right rail — 统计 */}
           <div className="w-[280px] shrink-0 flex flex-col gap-3">
-            <div className="glass-card rounded-[var(--radius-md)] p-4">
-              <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
+            <div className="bg-card border rounded-[var(--radius-md)] p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
                 汇总
               </div>
-              <MetaRow label="总步骤" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-foreground)' }}>{stepResults.length}</span>} />
-              <MetaRow label="通过" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-success)' }}>{passed}</span>} />
-              <MetaRow label="失败" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-destructive)' }}>{failed}</span>} />
+              <MetaRow label="总步骤" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{stepResults.length}</span>} />
+              <MetaRow label="通过" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--success)' }}>{passed}</span>} />
+              <MetaRow label="失败" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--destructive)' }}>{failed}</span>} />
             </div>
-            <div className="glass-card rounded-[var(--radius-md)] p-4">
-              <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
+            <div className="bg-card border rounded-[var(--radius-md)] p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
                 元数据
               </div>
               <MetaRow
                 label="用例"
-                value={data.caseTitle ?? <span style={{ color: 'var(--color-foreground-muted)' }}>已删除用例</span>}
+                value={data.caseTitle ?? <span style={{ color: 'var(--muted-foreground)' }}>已删除用例</span>}
               />
               <MetaRow label="用例 ID" value={<span className="font-mono text-[11px]">{data.caseId.slice(0, 8)}</span>} />
               <MetaRow label="报告 ID" value={<span className="font-mono text-[11px]">{data.id.slice(0, 8)}</span>} />
@@ -413,7 +413,7 @@ export default function ReportDetail() {
           <DialogHeader>
             <DialogTitle>删除测试报告</DialogTitle>
           </DialogHeader>
-          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
             确认删除该测试报告？相关截图将一并清理，且不可恢复。
           </div>
           <DialogFooter>
@@ -437,13 +437,13 @@ function DbResultCell({ db }: { db: DbQueryRowResult }) {
     <details className="text-[11px]">
       <summary
         className="cursor-pointer"
-        style={{ color: 'var(--color-foreground-muted)' }}
+        style={{ color: 'var(--muted-foreground)' }}
       >
         DB 查询：{db.rowCount} 行{db.truncated ? '（截断）' : ''}
         {db.assertion && (
           <span
             style={{
-              color: db.assertion.matched ? 'var(--color-success)' : 'var(--color-destructive)',
+              color: db.assertion.matched ? 'var(--success)' : 'var(--destructive)',
               marginLeft: 8,
             }}
           >
@@ -459,9 +459,9 @@ function DbResultCell({ db }: { db: DbQueryRowResult }) {
           margin: '4px 0',
           padding: 8,
           borderRadius: 4,
-          background: 'var(--color-background-subtle)',
-          color: 'var(--color-foreground-secondary)',
-          border: '1px solid var(--color-glass-border)',
+          background: 'var(--muted)',
+          color: 'var(--muted-foreground)',
+          border: '1px solid var(--border)',
         }}
       >
         {JSON.stringify(db.rows.slice(0, 5), null, 2)}
@@ -475,13 +475,13 @@ function LogResultCell({ log }: { log: ObserveLogLineResult }) {
     <details className="text-[11px]">
       <summary
         className="cursor-pointer"
-        style={{ color: 'var(--color-foreground-muted)' }}
+        style={{ color: 'var(--muted-foreground)' }}
       >
         日志：匹配 {log.matchedLineCount} 行{log.truncated ? '（截断）' : ''}
         {log.assertion && (
           <span
             style={{
-              color: log.assertion.matched ? 'var(--color-success)' : 'var(--color-destructive)',
+              color: log.assertion.matched ? 'var(--success)' : 'var(--destructive)',
               marginLeft: 8,
             }}
           >
@@ -497,9 +497,9 @@ function LogResultCell({ log }: { log: ObserveLogLineResult }) {
           margin: '4px 0',
           padding: 8,
           borderRadius: 4,
-          background: 'var(--color-background-subtle)',
-          color: 'var(--color-foreground-secondary)',
-          border: '1px solid var(--color-glass-border)',
+          background: 'var(--muted)',
+          color: 'var(--muted-foreground)',
+          border: '1px solid var(--border)',
           display: 'flex',
           flexDirection: 'column',
           gap: 1,
@@ -509,7 +509,7 @@ function LogResultCell({ log }: { log: ObserveLogLineResult }) {
           <div
             key={i}
             style={{
-              background: l.raw.includes('ERROR') ? 'var(--color-destructive-light)' : undefined,
+              background: l.raw.includes('ERROR') ? 'var(--destructive-soft)' : undefined,
               padding: '1px 4px',
               borderRadius: 2,
               fontFamily: 'monospace',
@@ -517,7 +517,7 @@ function LogResultCell({ log }: { log: ObserveLogLineResult }) {
               wordBreak: 'break-all',
             }}
           >
-            {l.ts ? <span style={{ color: 'var(--color-foreground-muted)', marginRight: 6 }}>{l.ts}</span> : null}
+            {l.ts ? <span style={{ color: 'var(--muted-foreground)', marginRight: 6 }}>{l.ts}</span> : null}
             {l.raw}
           </div>
         ))}

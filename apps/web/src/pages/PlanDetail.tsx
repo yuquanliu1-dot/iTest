@@ -151,7 +151,7 @@ export default function PlanDetail() {
 
   if (isError) {
     return (
-      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
         加载失败：{error?.message ?? '未知错误'}
       </div>
     );
@@ -159,7 +159,7 @@ export default function PlanDetail() {
 
   if (!plan) {
     return (
-      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)' }}>
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)' }}>
         <Icon name="loader" size={16} className="animate-spin" />
         <span style={{ marginLeft: 8 }}>加载中...</span>
       </div>
@@ -203,7 +203,7 @@ export default function PlanDetail() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
+      <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
         <Button
           variant="ghost"
           size="sm"
@@ -212,14 +212,14 @@ export default function PlanDetail() {
           <Icon name="chevronLeft" size={12} />
           返回计划列表
         </Button>
-        <span style={{ width: 1, height: 16, background: 'var(--color-glass-border)' }} />
-        <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>
+        <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
+        <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>
           {plan.name}
         </h1>
         {plan.versionId && plan.versionName ? (
           <span
             className="text-[10px] font-semibold uppercase px-2 py-[2px] rounded-full"
-            style={{ background: 'var(--color-accent-soft)', color: 'var(--color-accent)', letterSpacing: '0.04em' }}
+            style={{ background: 'var(--primary-soft)', color: 'var(--primary)', letterSpacing: '0.04em' }}
             title="所属版本"
           >
             {plan.versionName}
@@ -244,7 +244,7 @@ export default function PlanDetail() {
         <Button
           variant="ghost"
           onClick={() => setShowDelete(true)}
-          style={{ color: 'var(--color-destructive)' }}
+          style={{ color: 'var(--destructive)' }}
           aria-label="删除执行计划"
           title="删除执行计划"
         >
@@ -253,9 +253,9 @@ export default function PlanDetail() {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-4">
-        <div className="glass-card rounded-[var(--radius-md)] p-5">
+        <div className="bg-card border rounded-[var(--radius-md)] p-5">
           <div className="flex items-center gap-4">
-            <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>执行策略</span>
+            <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>执行策略</span>
             <select
               value={plan.strategy}
               onChange={(e) => updateStrategy(e.target.value as Strategy)}
@@ -265,7 +265,7 @@ export default function PlanDetail() {
               <option value="run_all">全部执行完成</option>
               <option value="fail_fast">失败即停止</option>
             </select>
-            <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>目标环境</span>
+            <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>目标环境</span>
             <select
               value={environmentId ?? ''}
               onChange={(e) => setEnvironmentId(e.target.value || null)}
@@ -290,7 +290,7 @@ export default function PlanDetail() {
             </Button>
           </div>
           <div className="mt-4">
-            <label className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+            <label className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
               <input
                 type="checkbox"
                 checked={plan.loginPrepareEnabled}
@@ -301,7 +301,7 @@ export default function PlanDetail() {
             {plan.loginPrepareEnabled && (
               <div className="mt-3 flex flex-col gap-2 pl-5">
                 <div className="flex items-center gap-2">
-                  <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>登录用例</span>
+                  <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>登录用例</span>
                   <select
                     value={plan.loginCaseId ?? ''}
                     onChange={(e) => updateLoginPrepare({ caseId: e.target.value || null })}
@@ -322,10 +322,10 @@ export default function PlanDetail() {
                   />
                 </div>
                 <details className="text-[12px]">
-                  <summary className="cursor-pointer" style={{ color: 'var(--color-foreground-muted)' }}>高级配置</summary>
+                  <summary className="cursor-pointer" style={{ color: 'var(--muted-foreground)' }}>高级配置</summary>
                   <div className="mt-2 flex flex-col gap-2 pl-4">
                     <label className="flex flex-col gap-1">
-                      <span style={{ color: 'var(--color-foreground-muted)' }}>检测页面 URL</span>
+                      <span style={{ color: 'var(--muted-foreground)' }}>检测页面 URL</span>
                       <input
                         type="text"
                         placeholder="留空使用第一个业务用例的 URL"
@@ -335,7 +335,7 @@ export default function PlanDetail() {
                       />
                     </label>
                     <label className="flex flex-col gap-1">
-                      <span style={{ color: 'var(--color-foreground-muted)' }}>登录成功标识（CSS 选择器）</span>
+                      <span style={{ color: 'var(--muted-foreground)' }}>登录成功标识（CSS 选择器）</span>
                       <input
                         type="text"
                         placeholder="例如 .user-menu"
@@ -345,7 +345,7 @@ export default function PlanDetail() {
                       />
                     </label>
                     <label className="flex flex-col gap-1">
-                      <span style={{ color: 'var(--color-foreground-muted)' }}>未授权关键字（一行一个）</span>
+                      <span style={{ color: 'var(--muted-foreground)' }}>未授权关键字（一行一个）</span>
                       <textarea
                         defaultValue={((plan.loginUnauthorizedKeywords as string[] | null) ?? []).join('\n')}
                         onBlur={(e) => {
@@ -363,8 +363,8 @@ export default function PlanDetail() {
           </div>
         </div>
 
-        <div className="glass-card rounded-[var(--radius-md)] p-5">
-          <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3 hairline-bottom pb-2" style={{ color: 'var(--color-foreground-muted)' }}>
+        <div className="bg-card border rounded-[var(--radius-md)] p-5">
+          <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3 hairline-bottom pb-2" style={{ color: 'var(--muted-foreground)' }}>
             用例顺序 ({plan.cases.length})
           </div>
           {plan.cases.length === 0 ? (
@@ -382,21 +382,21 @@ export default function PlanDetail() {
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={(e) => onDrop(e, idx)}
                       className="flex items-center gap-3 px-3 py-2 rounded-[var(--radius-sm)] list-row-clickable"
-                      style={{ background: 'var(--color-background-subtle)', border: '1px solid var(--color-glass-border)' }}
+                      style={{ background: 'var(--muted)', border: '1px solid var(--border)' }}
                     >
-                      <Icon name="gripVertical" size={12} className="cursor-grab shrink-0" style={{ color: 'var(--color-foreground-muted)' }} />
-                      <span className="text-[11px] font-mono shrink-0 w-5" style={{ color: 'var(--color-foreground-muted)' }}>{idx + 1}</span>
+                      <Icon name="gripVertical" size={12} className="cursor-grab shrink-0" style={{ color: 'var(--muted-foreground)' }} />
+                      <span className="text-[11px] font-mono shrink-0 w-5" style={{ color: 'var(--muted-foreground)' }}>{idx + 1}</span>
                       <span
                         onClick={() => navigate(c.versionId ? `/p/${projectId}/v/${c.versionId}/cases/${c.id}` : `/`)}
                         className="text-[12px] flex-1 truncate cursor-pointer"
-                        style={{ color: 'var(--color-foreground)' }}
+                        style={{ color: 'var(--foreground)' }}
                       >
                         {c.title}
                       </span>
                       {crossVersion ? (
                         <span
                           className="text-[10px] font-semibold uppercase px-1.5 py-[1px] rounded"
-                          style={{ background: 'var(--color-warning-soft, var(--color-accent-soft))', color: 'var(--color-warning, var(--color-accent))', letterSpacing: '0.04em' }}
+                          style={{ background: 'var(--warning-soft, var(--primary-soft))', color: 'var(--warning, var(--primary))', letterSpacing: '0.04em' }}
                           title="此用例属于其他版本"
                         >
                           跨版本
@@ -432,7 +432,7 @@ export default function PlanDetail() {
           </div>
           <div className="px-5 pb-4 max-h-[400px] overflow-y-auto flex flex-col gap-1">
             {candidates.length === 0 ? (
-              <div className="text-[12px] py-8 text-center" style={{ color: 'var(--color-foreground-muted)' }}>没有可添加的用例</div>
+              <div className="text-[12px] py-8 text-center" style={{ color: 'var(--muted-foreground)' }}>没有可添加的用例</div>
             ) : (
               candidates.map((c) => {
                 const checked = selectedAdd.has(c.id);
@@ -449,18 +449,18 @@ export default function PlanDetail() {
                     }}
                   >
                     <input type="checkbox" readOnly checked={checked} />
-                    <span className="text-[12px] flex-1 truncate" style={{ color: 'var(--color-foreground)' }}>{c.title}</span>
+                    <span className="text-[12px] flex-1 truncate" style={{ color: 'var(--foreground)' }}>{c.title}</span>
                     {c.status === 'deprecated' && (
                       <StatusPill status={c.status}>{caseStatusLabel(c.status)}</StatusPill>
                     )}
-                    <span className="text-[10px]" style={{ color: 'var(--color-foreground-muted)' }}>{c.priority}</span>
+                    <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>{c.priority}</span>
                   </div>
                 );
               })
             )}
           </div>
           <DialogFooter>
-            <span className="text-[12px] mr-auto" style={{ color: 'var(--color-foreground-muted)' }}>已选 {selectedAdd.size}</span>
+            <span className="text-[12px] mr-auto" style={{ color: 'var(--muted-foreground)' }}>已选 {selectedAdd.size}</span>
             <Button variant="ghost" onClick={() => setShowAdd(false)}>取消</Button>
             <Button
               disabled={selectedAdd.size === 0}
@@ -481,7 +481,7 @@ export default function PlanDetail() {
             <DialogTitle>删除执行计划</DialogTitle>
           </DialogHeader>
           <div className="px-5 py-4 flex flex-col gap-2">
-            <p className="text-[13px]" style={{ color: 'var(--color-foreground)' }}>
+            <p className="text-[13px]" style={{ color: 'var(--foreground)' }}>
               确认删除「{plan.name}」？历史执行报告将保留，但计划本身不可恢复。
             </p>
           </div>
@@ -493,7 +493,7 @@ export default function PlanDetail() {
                 remove.mutate();
               }}
               disabled={remove.isPending}
-              style={{ background: 'var(--color-destructive)', color: '#fff', border: 'none' }}
+              style={{ background: 'var(--destructive)', color: '#fff', border: 'none' }}
             >
               {remove.isPending ? '删除中...' : '确认删除'}
             </Button>

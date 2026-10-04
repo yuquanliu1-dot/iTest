@@ -24,7 +24,7 @@ const DEFAULT_PAGE_SIZE = 20;
 const MAX_TAG_CHIPS = 3;
 const GRID_COLS = 'grid-cols-[minmax(28px,32px)_minmax(90px,70px)_minmax(200px,2fr)_minmax(120px,1fr)_minmax(160px,1.1fr)_minmax(160px,1fr)_minmax(90px,0.7fr)_minmax(100px,0.9fr)_minmax(70px,80px)]';
 
-type GroupForm = { open: boolean; mode: 'create' | 'edit' | 'url'; id: string | null; name: string; defaultUrl: string };
+type GroupForm = { open: boolean; mode: 'create' | 'edit'; id: string | null; name: string; defaultUrl: string };
 const EMPTY_GROUP_FORM: GroupForm = { open: false, mode: 'create', id: null, name: '', defaultUrl: '' };
 type AiForm = { open: boolean; title: string; content: string; coverage: string[] };
 /** 覆盖类型多选：勾选 = 必须覆盖，拼入首条用户消息；未勾选不禁止（AI 自行判断）。 */
@@ -332,16 +332,16 @@ export default function GroupsPage() {
       {/* 左侧分组树 */}
       <div
         className="shrink-0 flex flex-col overflow-y-auto"
-        style={{ width: 216, borderRight: '1px solid var(--color-glass-border)', padding: '10px 8px' }}
+        style={{ width: 216, borderRight: '1px solid var(--border)', padding: '10px 8px' }}
       >
         <div className="flex items-center justify-between px-2 py-1">
-          <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
+          <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
             分组
           </span>
           <button
             title="新建分组"
             onClick={() => setGroupForm({ open: true, mode: 'create', id: null, name: '', defaultUrl: '' })}
-            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-foreground-muted)', padding: 2 }}
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 2 }}
           >
             <Icon name="plus" size={13} />
           </button>
@@ -352,7 +352,7 @@ export default function GroupsPage() {
           onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups` : `/`)}
           className="group-nav-item text-left px-2 py-1.5 rounded-[var(--radius-sm)] text-[13px]"
           style={{
-            color: !effectiveGroupId ? 'var(--color-accent)' : 'var(--color-foreground-secondary)',
+            color: !effectiveGroupId ? 'var(--primary)' : 'var(--muted-foreground)',
             fontWeight: !effectiveGroupId ? 500 : 400,
             border: 'none', cursor: 'pointer',
           }}
@@ -361,7 +361,7 @@ export default function GroupsPage() {
         </button>
 
         {groupsLoading ? (
-          <div className="flex justify-center py-4" style={{ color: 'var(--color-foreground-muted)' }}>
+          <div className="flex justify-center py-4" style={{ color: 'var(--muted-foreground)' }}>
             <Icon name="loader" size={14} className="animate-spin" />
           </div>
         ) : (
@@ -374,25 +374,20 @@ export default function GroupsPage() {
                 onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups/${g.id}` : `/`)}
                 className="group-nav-item group flex items-center gap-1 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer"
               >
-                <Icon name="gitBranch" size={12} style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }} />
+                <Icon name="gitBranch" size={12} style={{ color: 'var(--muted-foreground)', flexShrink: 0 }} />
                 <span
                   className="flex-1 truncate text-[13px]"
-                  style={{ color: active ? 'var(--color-accent)' : 'var(--color-foreground-secondary)', fontWeight: active ? 500 : 400 }}
+                  style={{ color: active ? 'var(--primary)' : 'var(--muted-foreground)', fontWeight: active ? 500 : 400 }}
                   title={g.defaultUrl ?? undefined}
                 >
                   {g.name}
                 </span>
-                <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>{g.caseCount}</span>
+                <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{g.caseCount}</span>
                 <span className="hidden group-hover:flex items-center" onClick={(e) => e.stopPropagation()}>
                   <IconButton
                     icon="pencil"
                     title="重命名"
                     onClick={() => setGroupForm({ open: true, mode: 'edit', id: g.id, name: g.name, defaultUrl: g.defaultUrl ?? '' })}
-                  />
-                  <IconButton
-                    icon="externalLink"
-                    title="默认域名"
-                    onClick={() => setGroupForm({ open: true, mode: 'url', id: g.id, name: g.name, defaultUrl: g.defaultUrl ?? '' })}
                   />
                   <IconButton
                     icon="trash"
@@ -411,10 +406,10 @@ export default function GroupsPage() {
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-5 pt-4 pb-0">
           <div>
-            <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--color-foreground)' }}>
+            <h1 className="text-2xl font-medium tracking-tight md:text-3xl" style={{ color: 'var(--foreground)' }}>
               用例
             </h1>
-            <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
+            <p className="text-[13px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
               {effectiveGroupId ? (groupName.get(effectiveGroupId) ?? '分组') : '项目全部用例'} · {current?.name}
             </p>
           </div>
@@ -438,9 +433,9 @@ export default function GroupsPage() {
               onChange={(e) => { setPriority(e.target.value as (typeof PRIORITIES)[number]); setPage(1); }}
               className="text-[12px] rounded-md px-2 py-1 outline-none"
               style={{
-                border: '1px solid var(--color-border)',
-                background: 'var(--color-background-elevated)',
-                color: 'var(--color-foreground)',
+                border: '1px solid var(--border)',
+                background: 'var(--card)',
+                color: 'var(--foreground)',
                 height: 30,
                 minWidth: 140,
               }}
@@ -457,9 +452,9 @@ export default function GroupsPage() {
               disabled={scenarioOptions.length === 0}
               className="text-[12px] rounded-md px-2 py-1 outline-none"
               style={{
-                border: '1px solid var(--color-border)',
-                background: 'var(--color-background-elevated)',
-                color: 'var(--color-foreground)',
+                border: '1px solid var(--border)',
+                background: 'var(--card)',
+                color: 'var(--foreground)',
                 height: 30,
                 minWidth: 140,
               }}
@@ -475,9 +470,9 @@ export default function GroupsPage() {
               onChange={(e) => { setStatusFilter(e.target.value as '' | CaseStatus); setPage(1); }}
               className="text-[12px] rounded-md px-2 py-1 outline-none"
               style={{
-                border: '1px solid var(--color-border)',
-                background: 'var(--color-background-elevated)',
-                color: 'var(--color-foreground)',
+                border: '1px solid var(--border)',
+                background: 'var(--card)',
+                color: 'var(--foreground)',
                 height: 30,
                 minWidth: 140,
               }}
@@ -495,16 +490,16 @@ export default function GroupsPage() {
                 onClick={() => setTagPickerOpen((v) => !v)}
                 className="flex items-center gap-1.5 text-[12px] rounded-md px-2 py-1"
                 style={{
-                  border: '1px solid var(--color-border)',
-                  background: 'var(--color-background-elevated)',
-                  color: 'var(--color-foreground)',
+                  border: '1px solid var(--border)',
+                  background: 'var(--card)',
+                  color: 'var(--foreground)',
                   minWidth: 140,
                   cursor: 'pointer',
                 }}
                 title="按标签过滤"
               >
                 {tagFilter.size === 0 ? (
-                  <span style={{ color: 'var(--color-foreground-muted)' }}>全部标签</span>
+                  <span style={{ color: 'var(--muted-foreground)' }}>全部标签</span>
                 ) : (
                   <span className="flex items-center gap-1 truncate">
                     {[...tagFilter].slice(0, 2).map((id) => {
@@ -513,25 +508,25 @@ export default function GroupsPage() {
                       return <TagChip key={id} tag={t} />;
                     })}
                     {tagFilter.size > 2 && (
-                      <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>+{tagFilter.size - 2}</span>
+                      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>+{tagFilter.size - 2}</span>
                     )}
                   </span>
                 )}
-                <Icon name="chevronDown" size={10} style={{ color: 'var(--color-foreground-muted)' }} />
+                <Icon name="chevronDown" size={10} style={{ color: 'var(--muted-foreground)' }} />
               </button>
               {tagPickerOpen && (
                 <div
                   className="absolute right-0 top-full mt-1 z-50 rounded-[var(--radius-sm)] overflow-hidden popover-in"
                   style={{
                     width: 220,
-                    border: '1px solid var(--color-glass-border)',
-                    background: 'var(--color-background-elevated)',
-                    boxShadow: 'var(--shadow-card)',
+                    border: '1px solid var(--border)',
+                    background: 'var(--card)',
+                    boxShadow: 'var(--shadow-sm)',
                   }}
                 >
                   <div className="max-h-56 overflow-y-auto py-1">
                     {(projectTags ?? []).length === 0 ? (
-                      <div className="px-3 py-2 text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                      <div className="px-3 py-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
                         项目内还没有标签
                       </div>
                     ) : (
@@ -540,7 +535,7 @@ export default function GroupsPage() {
                         return (
                           <label
                             key={t.id}
-                            className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-[var(--color-background-subtle)]"
+                            className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-[var(--muted)]"
                           >
                             <input
                               type="checkbox"
@@ -553,20 +548,20 @@ export default function GroupsPage() {
                                 setPage(1);
                               }}
                               className="w-3.5 h-3.5 rounded-[3px]"
-                              style={{ accentColor: 'var(--color-accent)' }}
+                              style={{ accentColor: 'var(--primary)' }}
                             />
                             <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: `#${t.color}` }} />
-                            <span className="text-[12px] truncate" style={{ color: 'var(--color-foreground)' }}>{t.name}</span>
+                            <span className="text-[12px] truncate" style={{ color: 'var(--foreground)' }}>{t.name}</span>
                           </label>
                         );
                       })
                     )}
                   </div>
-                  <div className="flex items-center justify-between px-3 py-1.5 border-t" style={{ borderColor: 'var(--color-border)' }}>
+                  <div className="flex items-center justify-between px-3 py-1.5 border-t" style={{ borderColor: 'var(--border)' }}>
                     <button
                       type="button"
                       className="text-[11px] cursor-pointer"
-                      style={{ background: 'transparent', border: 'none', color: tagFilter.size === 0 ? 'var(--color-foreground-muted)' : 'var(--color-accent)', opacity: tagFilter.size === 0 ? 0.5 : 1 }}
+                      style={{ background: 'transparent', border: 'none', color: tagFilter.size === 0 ? 'var(--muted-foreground)' : 'var(--primary)', opacity: tagFilter.size === 0 ? 0.5 : 1 }}
                       disabled={tagFilter.size === 0}
                       onClick={() => { setTagFilter(new Set()); setPage(1); }}
                     >
@@ -575,7 +570,7 @@ export default function GroupsPage() {
                     <button
                       type="button"
                       className="text-[11px] cursor-pointer"
-                      style={{ background: 'transparent', border: 'none', color: 'var(--color-accent)' }}
+                      style={{ background: 'transparent', border: 'none', color: 'var(--primary)' }}
                       onClick={() => { setTagPickerOpen(false); setLabelsManagerOpen(true); }}
                     >
                       管理标签 →
@@ -591,9 +586,9 @@ export default function GroupsPage() {
         {checked.size > 0 && (
           <div
             className="flex items-center gap-2 mx-5 mt-3 px-3 py-2 rounded-[var(--radius-sm)]"
-            style={{ background: 'var(--color-accent-light)', border: '1px solid var(--color-glass-border)' }}
+            style={{ background: 'var(--primary-soft)', border: '1px solid var(--border)' }}
           >
-            <span className="text-[12px]" style={{ color: 'var(--color-accent)' }}>已选 {checked.size} 条</span>
+            <span className="text-[12px]" style={{ color: 'var(--primary)' }}>已选 {checked.size} 条</span>
             <div className="flex-1" />
             <Button size="sm" variant="ghost" onClick={() => { setCopyTarget(''); setCopyModal({ caseIds: checkedList }); }}>
               <Icon name="copy" size={12} />
@@ -612,9 +607,9 @@ export default function GroupsPage() {
                 if (e.target.value) batchStatus.mutate(e.target.value as CaseStatus);
               }}
               style={{
-                border: '1px solid var(--color-border)',
-                background: 'var(--color-background-elevated)',
-                color: 'var(--color-foreground)',
+                border: '1px solid var(--border)',
+                background: 'var(--card)',
+                color: 'var(--foreground)',
                 cursor: 'pointer',
               }}
               title="批量修改选中用例状态"
@@ -635,11 +630,11 @@ export default function GroupsPage() {
 
         <Card padding="none" className="flex-1 min-h-0 mx-5 my-4 flex flex-col overflow-hidden">
           {casesError ? (
-            <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+            <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
               加载失败：{casesErrorObj?.message ?? '未知错误'}
             </div>
           ) : casesLoading ? (
-            <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+            <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
               <Icon name="loader" size={16} className="animate-spin" />
               <span style={{ marginLeft: 8 }}>加载中...</span>
             </div>
@@ -647,16 +642,16 @@ export default function GroupsPage() {
             <EmptyState icon="beaker" title="还没有用例" description="点击右上角「AI 创建用例」，粘贴需求让 AI 生成。" />
           ) : (
             <>
-              <div className={`grid ${GRID_COLS} items-center px-5 py-[10px] shrink-0 gap-2`} style={{ background: 'var(--color-background-subtle)', borderBottom: '1px solid var(--color-border)' }}>
+              <div className={`grid ${GRID_COLS} items-center px-5 py-[10px] shrink-0 gap-2`} style={{ background: 'var(--muted)', borderBottom: '1px solid var(--border)' }}>
                 <input type="checkbox" checked={allChecked} onChange={toggleAll} aria-label="全选" />
-                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>优先级</span>
-                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>标题</span>
-                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>所属分组</span>
-                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>场景</span>
-                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>标签</span>
-                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>状态</span>
-                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>更新时间</span>
-                <span className="text-[11px] font-medium uppercase tracking-[0.03em] text-right" style={{ color: 'var(--color-foreground-muted)' }}>操作</span>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>优先级</span>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>标题</span>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>所属分组</span>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>场景</span>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>标签</span>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>状态</span>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>更新时间</span>
+                <span className="text-[11px] font-medium uppercase tracking-[0.03em] text-right" style={{ color: 'var(--muted-foreground)' }}>操作</span>
               </div>
 
               <div className="flex-1 min-h-0 overflow-y-auto">
@@ -664,7 +659,7 @@ export default function GroupsPage() {
                   <div
                     key={c.id}
                     className={`group grid ${GRID_COLS} items-center px-5 py-[12px] gap-2 list-row-clickable`}
-                    style={{ borderBottom: '1px solid var(--color-muted)', opacity: c.status === 'deprecated' ? 0.55 : 1 }}
+                    style={{ borderBottom: '1px solid var(--muted)', opacity: c.status === 'deprecated' ? 0.55 : 1 }}
                     onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/cases/${c.id}` : `/`)}
                   >
                     <input
@@ -675,23 +670,23 @@ export default function GroupsPage() {
                       aria-label={`选择 ${c.title}`}
                     />
                     <span><PriorityBadge priority={c.priority} /></span>
-                    <span className="text-[13px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>{c.title}</span>
-                    <span className="text-[12px] truncate" style={{ color: 'var(--color-foreground-secondary)' }}>
+                    <span className="text-[13px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>{c.title}</span>
+                    <span className="text-[12px] truncate" style={{ color: 'var(--muted-foreground)' }}>
                       {c.groupId ? (groupName.get(c.groupId) ?? '-') : '-'}
                     </span>
-                    <span className="text-[12px] truncate" style={{ color: 'var(--color-foreground-muted)' }} title={c.scenarioTitle ?? undefined}>
+                    <span className="text-[12px] truncate" style={{ color: 'var(--muted-foreground)' }} title={c.scenarioTitle ?? undefined}>
                       {c.scenarioTitle ?? '-'}
                     </span>
                     <span className="flex items-center gap-1 flex-wrap min-w-0">
                       {(c.tags ?? []).length === 0 ? (
-                        <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>-</span>
+                        <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>-</span>
                       ) : (
                         <>
                           {(c.tags ?? []).slice(0, MAX_TAG_CHIPS).map((t) => (
                             <TagChip key={t.id} tag={t} />
                           ))}
                           {(c.tags ?? []).length > MAX_TAG_CHIPS && (
-                            <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                            <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                               +{(c.tags ?? []).length - MAX_TAG_CHIPS}
                             </span>
                           )}
@@ -701,7 +696,7 @@ export default function GroupsPage() {
                     <span onClick={(e) => e.stopPropagation()}>
                       <CaseStatusMenu caseId={c.id} status={c.status} projectId={projectId} />
                     </span>
-                    <span className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }} title={c.updatedAt}>
+                    <span className="text-[11px] font-mono" style={{ color: 'var(--muted-foreground)' }} title={c.updatedAt}>
                       {c.updatedAt ? shortDateTime(c.updatedAt) : '-'}
                     </span>
                     <span
@@ -748,13 +743,11 @@ export default function GroupsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {groupForm.mode === 'create' ? '新建分组' : groupForm.mode === 'edit' ? '重命名分组' : '分组默认域名'}
+              {groupForm.mode === 'create' ? '新建分组' : '重命名分组'}
             </DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
-            {groupForm.mode !== 'url' && (
-              <Input label="名称" placeholder="如：登录与账号" value={groupForm.name} onChange={(e) => setGroupForm((f) => ({ ...f, name: e.target.value }))} />
-            )}
+            <Input label="名称" placeholder="如：登录与账号" value={groupForm.name} onChange={(e) => setGroupForm((f) => ({ ...f, name: e.target.value }))} />
             <Input
               label="默认域名（可空）"
               placeholder="https://example.com"
@@ -762,10 +755,10 @@ export default function GroupsPage() {
               onChange={(e) => setGroupForm((f) => ({ ...f, defaultUrl: e.target.value }))}
             />
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--border)' }}>
             <Button variant="ghost" onClick={() => setGroupForm(EMPTY_GROUP_FORM)}>取消</Button>
             <Button
-              disabled={(groupForm.mode !== 'url' && !groupForm.name.trim()) || saveGroup.isPending}
+              disabled={!groupForm.name.trim() || saveGroup.isPending}
               onClick={() => saveGroup.mutate()}
             >
               {saveGroup.isPending ? '保存中...' : '保存'}
@@ -778,10 +771,10 @@ export default function GroupsPage() {
       <Dialog open={!!confirmDeleteGroup} onOpenChange={(open) => { if (!open) setConfirmDeleteGroup(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>删除分组</DialogTitle></DialogHeader>
-          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
             确定删除「{confirmDeleteGroup?.name}」？分组内存在用例时将被拒绝删除。
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--border)' }}>
             <Button variant="ghost" onClick={() => setConfirmDeleteGroup(null)}>取消</Button>
             <Button variant="danger" disabled={deleteGroup.isPending} onClick={() => confirmDeleteGroup && deleteGroup.mutate(confirmDeleteGroup.id)}>
               {deleteGroup.isPending ? '删除中...' : '确认删除'}
@@ -794,7 +787,7 @@ export default function GroupsPage() {
       <Dialog open={!!confirmDeleteCase} onOpenChange={(open) => { if (!open) setConfirmDeleteCase(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>删除用例</DialogTitle></DialogHeader>
-          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
             确定删除「{confirmDeleteCase?.title}」？该用例的步骤与报告将一并删除。
           </div>
           <DialogFooter>
@@ -810,8 +803,8 @@ export default function GroupsPage() {
       <Dialog open={confirmBatchDelete} onOpenChange={(open) => { if (!open) setConfirmBatchDelete(false); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>批量删除用例</DialogTitle></DialogHeader>
-          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
-            确定删除已选的 <span style={{ color: 'var(--color-destructive)', fontWeight: 600 }}>{checked.size}</span> 条用例？这些用例的步骤、报告、附件将被一并删除，且不可恢复。
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+            确定删除已选的 <span style={{ color: 'var(--destructive)', fontWeight: 600 }}>{checked.size}</span> 条用例？这些用例的步骤、报告、附件将被一并删除，且不可恢复。
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setConfirmBatchDelete(false)}>取消</Button>
@@ -831,14 +824,14 @@ export default function GroupsPage() {
         <DialogContent>
           <DialogHeader><DialogTitle>复制用例（{copyModal?.caseIds.length} 条）</DialogTitle></DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
-            <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>目标分组</label>
+            <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>目标分组</label>
             <select className="input-base" value={copyTarget} onChange={(e) => setCopyTarget(e.target.value)}>
               <option value="">请选择</option>
               {(groups ?? []).map((g) => (
                 <option key={g.id} value={g.id}>{g.name}</option>
               ))}
             </select>
-            <p className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               副本命名：原名 +「副本」，重名自动追加数字（副本1、副本2…）。
             </p>
           </div>
@@ -859,7 +852,7 @@ export default function GroupsPage() {
         <DialogContent>
           <DialogHeader><DialogTitle>加入执行计划（{planModal?.caseIds.length} 条）</DialogTitle></DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
-            <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>选择计划</label>
+            <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>选择计划</label>
             <select className="input-base" value={planTarget} onChange={(e) => setPlanTarget(e.target.value)}>
               <option value="">请选择</option>
               {(plans ?? []).map((p) => (
@@ -867,7 +860,7 @@ export default function GroupsPage() {
               ))}
             </select>
             {(plans ?? []).length === 0 && (
-              <p className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+              <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                 还没有执行计划，请先到「执行计划」页创建。
               </p>
             )}
@@ -889,7 +882,7 @@ export default function GroupsPage() {
         <DialogContent>
           <DialogHeader><DialogTitle>AI 创建用例</DialogTitle></DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
-            <p className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
               描述要测的需求，AI 会基于此生成场景和用例。
             </p>
             <Input
@@ -899,7 +892,7 @@ export default function GroupsPage() {
               onChange={(e) => setAiForm((f) => ({ ...f, title: e.target.value }))}
             />
             <div className="flex flex-col gap-1">
-              <label className="text-[12px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>
+              <label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
                 需求描述
               </label>
               <textarea
@@ -935,7 +928,6 @@ export default function GroupsPage() {
               </div>
             </div>
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
           <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--border)' }}>
             <Button variant="ghost" onClick={() => setAiForm(EMPTY_AI_FORM)}>取消</Button>
             <Button
@@ -960,7 +952,7 @@ export default function GroupsPage() {
               onChange={(e) => setCaseForm((f) => ({ ...f, title: e.target.value }))}
             />
             <div className="flex flex-col gap-1">
-              <label className="text-[12px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>分组</label>
+              <label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>分组</label>
               <select
                 className="input-base"
                 value={caseForm.groupId}
@@ -984,7 +976,7 @@ export default function GroupsPage() {
               </select>
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-[12px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>优先级</label>
+              <label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>优先级</label>
               <Segmented
                 options={(['P0', 'P1', 'P2', 'P3'] as const).map((p) => ({ value: p, label: p }))}
                 value={caseForm.priority}
@@ -998,7 +990,7 @@ export default function GroupsPage() {
               onChange={(e) => setCaseForm((f) => ({ ...f, url: e.target.value }))}
             />
             <div className="flex flex-col gap-1">
-              <label className="text-[12px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>描述（可空）</label>
+              <label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>描述（可空）</label>
               <textarea
                 className="input-base"
                 rows={3}
@@ -1008,7 +1000,7 @@ export default function GroupsPage() {
               />
             </div>
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+          <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--border)' }}>
             <Button variant="ghost" onClick={() => setCaseForm(EMPTY_CASE_FORM)}>取消</Button>
             <Button
               disabled={!caseForm.title.trim() || !caseForm.groupId || createCase.isPending}

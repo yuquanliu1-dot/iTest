@@ -31,10 +31,10 @@ export default function ProjectListTab({ orgId, includeSubtree, q, page, pageSiz
   }, [orgId, includeSubtree, q, page, pageSize, onTotal]);
 
   if (loading && items.length === 0) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--color-foreground-disabled)', fontSize: 13 }}>加载中…</div>;
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>加载中…</div>;
   }
   if (items.length === 0) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--color-foreground-disabled)', fontSize: 13 }}>暂无项目</div>;
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>暂无项目</div>;
   }
   return (
     <>
@@ -43,12 +43,12 @@ export default function ProjectListTab({ orgId, includeSubtree, q, page, pageSiz
           key={p.id}
           onClick={() => onOpen(p.id)}
           className="flex items-center gap-2 rounded"
-          style={{ minHeight: 56, padding: '8px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--color-foreground)' }}
+          style={{ minHeight: 56, padding: '8px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--foreground)' }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="truncate">{p.name}</div>
             {p.description && (
-              <div className="truncate" style={{ fontSize: 11, color: 'var(--color-foreground-disabled)' }}>{p.description}</div>
+              <div className="truncate" style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{p.description}</div>
             )}
           </div>
           <Badge label={`已分配 ${p.assignedCount}`} />

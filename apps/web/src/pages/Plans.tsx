@@ -11,6 +11,14 @@ import Input from '../components/ui/Input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
 import StatusPill from '../components/ui/StatusPill';
 import { shortDateTime, fullDateTime } from '../lib/format';
+import {
+  PageShell,
+  PageShellActions,
+  PageShellContent,
+  PageShellDescription,
+  PageShellHeader,
+  PageShellTitle,
+} from '../components/layout/PageShell';
 
 export default function Plans() {
   const { projectId, versionId } = useParams<{ projectId: string; versionId?: string }>();
@@ -56,36 +64,29 @@ export default function Plans() {
   });
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex items-center justify-between px-5 pt-4 pb-0">
-        <div>
-          <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--color-foreground)' }}>
-            执行计划
-          </h1>
-          <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
-            把用例按目标场景组合，一键运行
-            {currentVersionName ? (
-              <>
-                {' · '}
-                <span style={{ color: 'var(--color-foreground-secondary)' }}>{currentVersionName}</span>
-              </>
-            ) : null}
-          </p>
-        </div>
-        <Button onClick={() => setShowCreate(true)}>
-          <Icon name="plus" size={14} />
-          新建执行计划
-        </Button>
-      </div>
+    <PageShell>
+      <PageShellHeader>
+        <PageShellTitle>执行计划</PageShellTitle>
+        <PageShellActions>
+          <Button onClick={() => setShowCreate(true)}>
+            <Icon name="plus" size={14} />
+            新建执行计划
+          </Button>
+        </PageShellActions>
+        <PageShellDescription>
+          把用例按目标场景组合，一键运行
+          {currentVersionName ? ` · ${currentVersionName}` : null}
+        </PageShellDescription>
+      </PageShellHeader>
 
-      <div className="flex-1 min-h-0 px-5 pt-4 pb-5 overflow-y-auto">
+      <PageShellContent>
         {isLoading ? (
-          <div className="flex items-center justify-center py-12" style={{ color: 'var(--color-foreground-muted)' }}>
+          <div className="flex items-center justify-center py-12" style={{ color: 'var(--muted-foreground)' }}>
             <Icon name="loader" size={16} className="animate-spin" />
             <span style={{ marginLeft: 8 }}>加载中...</span>
           </div>
         ) : isError ? (
-          <div className="flex items-center justify-center py-12" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+          <div className="flex items-center justify-center py-12" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
             加载失败：{error?.message ?? '未知错误'}
           </div>
         ) : !plans || plans.length === 0 ? (
@@ -102,27 +103,27 @@ export default function Plans() {
                 key={p.id}
                 data-stagger-item
                 onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/plans/${p.id}` : `/`)}
-                className="glass-card rounded-[var(--radius-md)] p-4 cursor-pointer hover-card"
+                className="bg-card border rounded-[var(--radius-md)] p-4 cursor-pointer hover-card"
               >
                 <div className="flex items-center justify-between">
-                  <div className="text-[14px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>
+                  <div className="text-[14px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>
                     {p.name}
                   </div>
-                  <span className="text-[10px] uppercase font-semibold px-2 py-[2px] rounded-full" style={{ background: 'var(--color-background-subtle)', color: 'var(--color-foreground-muted)' }}>
+                  <span className="text-[10px] uppercase font-semibold px-2 py-[2px] rounded-full" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>
                     {p.environment ?? '默认'}
                   </span>
                 </div>
-                <div className="text-[12px] mt-2" style={{ color: 'var(--color-foreground-secondary)' }}>
+                <div className="text-[12px] mt-2" style={{ color: 'var(--muted-foreground)' }}>
                   {p.caseCount} 个用例
                 </div>
-                <div className="text-[11px] mt-1" style={{ color: 'var(--color-foreground-muted)' }}>
+                <div className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
                   创建于 {fullDateTime(p.createdAt)}
                 </div>
                 {(() => {
                   const last = latestByPlan.get(p.id);
                   if (!last) return null;
                   return (
-                    <div className="text-[11px] mt-1 flex items-center gap-2" style={{ color: 'var(--color-foreground-muted)' }}>
+                    <div className="text-[11px] mt-1 flex items-center gap-2" style={{ color: 'var(--muted-foreground)' }}>
                       <StatusPill status={last.status}>{last.status}</StatusPill>
                       <span>{shortDateTime(last.createdAt)}</span>
                     </div>
@@ -132,7 +133,7 @@ export default function Plans() {
             ))}
           </div>
         )}
-      </div>
+      </PageShellContent>
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent>
@@ -151,6 +152,6 @@ export default function Plans() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   );
 }

@@ -6,12 +6,12 @@ type Trend = OverviewResponse['trend'];
 
 export default function PassRateTrendChart({ data }: { data: Trend }) {
   return (
-    <div className="glass-panel rounded-[var(--radius-md)] p-5" style={{ boxShadow: 'var(--shadow-card)' }}>
+    <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-[14px] font-semibold" style={{ color: 'var(--color-foreground)' }}>
+        <h3 className="text-[14px] font-semibold" style={{ color: 'var(--foreground)' }}>
           通过率趋势
         </h3>
-        <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
           近 {data.length} 天
         </span>
       </div>

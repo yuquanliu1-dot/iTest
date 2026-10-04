@@ -15,10 +15,10 @@ export default function EmptyState({
   return (
     <div
       className="flex flex-col items-center justify-center gap-2 py-16 text-center"
-      style={{ color: 'var(--color-foreground-muted)' }}
+      style={{ color: 'var(--muted-foreground)' }}
     >
-      <Icon name={icon} size={28} style={{ color: 'var(--color-foreground-disabled)' }} />
-      <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>{title}</div>
+      <Icon name={icon} size={28} style={{ color: 'var(--muted-foreground)' }} />
+      <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--muted-foreground)' }}>{title}</div>
       {description && <div style={{ fontSize: 12, maxWidth: 320 }}>{description}</div>}
       {action && <div className="mt-2">{action}</div>}
     </div>

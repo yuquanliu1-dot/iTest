@@ -110,7 +110,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
           </DialogHeader>
           <div
             className="flex items-center gap-2 px-5 py-3 hairline-bottom"
-            style={{ borderColor: 'var(--color-border)' }}
+            style={{ borderColor: 'var(--border)' }}
           >
             <Input
               placeholder="搜索标签"
@@ -127,7 +127,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
 
           <div className="flex-1 min-h-0 overflow-y-auto" style={{ maxHeight: 420 }}>
             {isLoading ? (
-              <div className="flex items-center justify-center py-8" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+              <div className="flex items-center justify-center py-8" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
                 <Icon name="loader" size={16} className="animate-spin" />
                 <span style={{ marginLeft: 8 }}>加载中...</span>
               </div>
@@ -138,12 +138,12 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
                 description={search ? '试试别的关键词' : '点击右上角「新建标签」创建一个。'}
               />
             ) : (
-              <div className="divide-y" style={{ borderColor: 'var(--color-muted)' }} data-stagger>
+              <div className="divide-y" style={{ borderColor: 'var(--muted)' }} data-stagger>
                 {filtered.map((t) => (
                   <div
                     key={t.id}
                     data-stagger-item
-                    className="flex items-center gap-3 px-5 py-3 hover:bg-[var(--color-background-subtle)]"
+                    className="flex items-center gap-3 px-5 py-3 hover:bg-[var(--muted)]"
                     style={{ transition: 'background 0.15s ease' }}
                   >
                     <span
@@ -153,12 +153,12 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <TagChip tag={{ id: t.id, name: t.name, color: t.color }} />
-                        <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                           {tagCount.get(t.id) ?? 0} 个用例
                         </span>
                       </div>
                       {t.description && (
-                        <div className="text-[11px] mt-1" style={{ color: 'var(--color-foreground-muted)' }}>
+                        <div className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
                           {t.description}
                         </div>
                       )}
@@ -192,12 +192,12 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
       <Dialog open={!!pendingDelete} onOpenChange={(v) => { if (!v) setPendingDelete(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>删除标签</DialogTitle></DialogHeader>
-          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
             确定删除「{pendingDelete?.name}」？该标签会从所有用例上解除，但不会删除用例。
           </div>
           <div
             className="flex justify-end gap-2 px-5 py-4 hairline-top"
-            style={{ borderColor: 'var(--color-border)' }}
+            style={{ borderColor: 'var(--border)' }}
           >
             <Button variant="ghost" onClick={() => setPendingDelete(null)}>取消</Button>
             <Button variant="danger" disabled={removeMut.isPending} onClick={() => pendingDelete && removeMut.mutate(pendingDelete.id)}>

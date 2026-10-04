@@ -75,9 +75,9 @@ export default function CaseStatusMenu({
               left: anchor.left,
               minWidth: 120,
               zIndex: 9999,
-              border: '1px solid var(--color-glass-border)',
-              background: 'var(--color-background-elevated)',
-              boxShadow: 'var(--shadow-modal)',
+              border: '1px solid var(--border)',
+              background: 'var(--card)',
+              boxShadow: 'var(--shadow-2xl)',
             }}
             onMouseDown={(e) => e.stopPropagation()}
           >
@@ -90,11 +90,11 @@ export default function CaseStatusMenu({
                   if (s === status) { setOpen(false); return; }
                   patch.mutate(s);
                 }}
-                className="w-full text-left px-3 py-1.5 text-[12px] cursor-pointer hover:bg-[var(--color-background-subtle)] flex items-center justify-between gap-2"
+                className="w-full text-left px-3 py-1.5 text-[12px] cursor-pointer hover:bg-[var(--muted)] flex items-center justify-between gap-2"
                 style={{
                   background: 'transparent',
                   border: 'none',
-                  color: s === status ? 'var(--color-accent)' : 'var(--color-foreground)',
+                  color: s === status ? 'var(--primary)' : 'var(--foreground)',
                 }}
               >
                 {caseStatusLabel(s)}

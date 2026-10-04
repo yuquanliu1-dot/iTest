@@ -23,7 +23,7 @@ export default function ProjectGuard() {
 
   if (isError) {
     return (
-      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
         加载失败：{error?.message ?? '未知错误'}
       </div>
     );
@@ -31,7 +31,7 @@ export default function ProjectGuard() {
 
   if (isLoading) {
     return (
-      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
         <Icon name="loader" size={16} className="animate-spin" />
         <span style={{ marginLeft: 8 }}>加载中...</span>
       </div>

@@ -37,7 +37,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
   }, [userId, projectPage]);
 
   if (!detail) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--color-foreground-disabled)', fontSize: 13 }}>加载中…</div>;
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>加载中…</div>;
   }
 
   const projectPages = Math.max(1, Math.ceil(projectTotal / projectPageSize));
@@ -91,11 +91,11 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="shrink-0 flex items-center gap-2" style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-glass-border)' }}>
-        <button onClick={onBack} style={{ background: 'none', border: 'none', color: 'var(--color-accent)', cursor: 'pointer', fontSize: 13 }}>
+      <div className="shrink-0 flex items-center gap-2" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+        <button onClick={onBack} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 13 }}>
           ‹ 返回
         </button>
-        <span style={{ color: 'var(--color-foreground-disabled)', fontSize: 13 }}>
+        <span style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
           {detail.displayName}
         </span>
       </div>
@@ -103,19 +103,19 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
       <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
         <Card>
           <div className="flex items-center gap-2">
-            <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-foreground)' }}>
+            <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--foreground)' }}>
               {detail.displayName}
             </span>
-            <span style={{ fontSize: 12, color: 'var(--color-foreground-disabled)' }}>@{detail.username}</span>
+            <span style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>@{detail.username}</span>
             <button
               className="text-[12px]"
-              style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--color-accent)', cursor: 'pointer' }}
+              style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer' }}
               onClick={() => setEditOpen(true)}
             >
               编辑
             </button>
             {canReset && (
-              <button className="text-[12px]" style={{ background: 'none', border: 'none', color: 'var(--color-accent)', cursor: 'pointer' }} onClick={() => setResetOpen(true)}>
+              <button className="text-[12px]" style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer' }} onClick={() => setResetOpen(true)}>
                 重置密码
               </button>
             )}
@@ -123,7 +123,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
               className="text-[12px]"
               disabled={isSelf}
               style={{
-                background: 'none', border: 'none', color: 'var(--color-destructive-text)',
+                background: 'none', border: 'none', color: 'var(--destructive)',
                 cursor: isSelf ? 'default' : 'pointer', opacity: isSelf ? 0.5 : 1,
               }}
               onClick={() => setDeleteAccountOpen(true)}
@@ -131,7 +131,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
               删除账号
             </button>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--color-foreground-disabled)', marginTop: 6 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginTop: 6 }}>
             {detail.email || '无邮箱'} · 注册于 {new Date(detail.createdAt).toLocaleDateString()}
           </div>
         </Card>
@@ -139,15 +139,15 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
         <Card title={`组织与角色（${detail.organizations.length}）`}>
           {detail.organizations.map((o) => (
             <div key={o.organizationId} className="flex items-center gap-2" style={{ padding: '6px 4px', fontSize: 13 }}>
-              <span className="truncate" style={{ flex: 1, color: 'var(--color-foreground)' }}>{o.organizationName}</span>
+              <span className="truncate" style={{ flex: 1, color: 'var(--foreground)' }}>{o.organizationName}</span>
               <RoleToggle label="管理员" checked={o.isManager} onChange={(v) => toggleRole(o.organizationId, 'isManager', v)} />
               <RoleToggle label="可执行" checked={o.isUser} onChange={(v) => toggleRole(o.organizationId, 'isUser', v)} />
               <button
                 className="text-[11px]"
                 disabled={isSelf || detail.organizations.length <= 1}
                 style={{
-                  padding: '2px 8px', borderRadius: 6, border: '1px solid var(--color-glass-border)',
-                  background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)',
+                  padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)',
+                  background: 'var(--popover)', color: 'var(--muted-foreground)',
                   cursor: isSelf || detail.organizations.length <= 1 ? 'default' : 'pointer',
                   opacity: isSelf || detail.organizations.length <= 1 ? 0.5 : 1,
                 }}
@@ -162,26 +162,26 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
         <Card title={`可访问项目（${projectTotal}）`}>
           <div style={{ maxHeight: 220, overflowY: 'auto' }}>
             {projects.length === 0 ? (
-              <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--color-foreground-disabled)' }}>暂无项目</div>
+              <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>暂无项目</div>
             ) : projects.map((p) => (
               <div key={p.id} className="flex items-center gap-2" style={{ padding: '6px 4px', fontSize: 13 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="truncate" style={{ color: 'var(--color-foreground)' }}>{p.name}</div>
+                  <div className="truncate" style={{ color: 'var(--foreground)' }}>{p.name}</div>
                   {p.description && (
-                    <div className="truncate" style={{ fontSize: 11, color: 'var(--color-foreground-disabled)' }}>{p.description}</div>
+                    <div className="truncate" style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{p.description}</div>
                   )}
                 </div>
-                <button className="text-[11px]" style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)', cursor: 'pointer' }} onClick={() => void removeFromProject(p.id)}>
+                <button className="text-[11px]" style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: 'pointer' }} onClick={() => void removeFromProject(p.id)}>
                   移出
                 </button>
               </div>
             ))}
           </div>
           {projectPages > 1 && (
-            <div className="flex items-center justify-center gap-3" style={{ paddingTop: 8, fontSize: 12, color: 'var(--color-foreground-disabled)' }}>
-              <button disabled={projectPage <= 1} onClick={() => setProjectPage(projectPage - 1)} style={{ border: 'none', background: 'none', cursor: projectPage <= 1 ? 'default' : 'pointer', color: projectPage <= 1 ? 'var(--color-foreground-disabled)' : 'var(--color-accent)' }}>←</button>
+            <div className="flex items-center justify-center gap-3" style={{ paddingTop: 8, fontSize: 12, color: 'var(--muted-foreground)' }}>
+              <button disabled={projectPage <= 1} onClick={() => setProjectPage(projectPage - 1)} style={{ border: 'none', background: 'none', cursor: projectPage <= 1 ? 'default' : 'pointer', color: projectPage <= 1 ? 'var(--muted-foreground)' : 'var(--primary)' }}>←</button>
               <span>{projectPage} / {projectPages}</span>
-              <button disabled={projectPage >= projectPages} onClick={() => setProjectPage(projectPage + 1)} style={{ border: 'none', background: 'none', cursor: projectPage >= projectPages ? 'default' : 'pointer', color: projectPage >= projectPages ? 'var(--color-foreground-disabled)' : 'var(--color-accent)' }}>→</button>
+              <button disabled={projectPage >= projectPages} onClick={() => setProjectPage(projectPage + 1)} style={{ border: 'none', background: 'none', cursor: projectPage >= projectPages ? 'default' : 'pointer', color: projectPage >= projectPages ? 'var(--muted-foreground)' : 'var(--primary)' }}>→</button>
             </div>
           )}
         </Card>
@@ -189,14 +189,14 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
 
       {pendingRemove && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) setPendingRemove(null); }}>
-          <div style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
+          <div style={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
             <h3 style={{ margin: 0, marginBottom: 8, fontSize: 14, fontWeight: 600 }}>移出组织</h3>
-            <div style={{ fontSize: 13, color: 'var(--color-foreground-muted)', marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: 'var(--muted-foreground)', marginBottom: 12 }}>
               将「{detail.displayName}」移出「{pendingRemove.organizationName}」？
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setPendingRemove(null)} style={{ padding: '6px 12px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
-              <button onClick={() => void removeFromOrg()} style={{ padding: '6px 12px', background: 'var(--color-destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>确认</button>
+              <button onClick={() => setPendingRemove(null)} style={{ padding: '6px 12px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
+              <button onClick={() => void removeFromOrg()} style={{ padding: '6px 12px', background: 'var(--destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>确认</button>
             </div>
           </div>
         </div>
@@ -204,14 +204,14 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
 
       {deleteAccountOpen && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) setDeleteAccountOpen(false); }}>
-          <div style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
+          <div style={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
             <h3 style={{ margin: 0, marginBottom: 8, fontSize: 14, fontWeight: 600 }}>停用账号</h3>
-            <div style={{ fontSize: 13, color: 'var(--color-foreground-muted)', marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: 'var(--muted-foreground)', marginBottom: 12 }}>
               停用「{detail.displayName}」？账号将无法登录、组织与项目授权一并清理。
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setDeleteAccountOpen(false)} style={{ padding: '6px 12px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
-              <button onClick={() => void deleteAccount()} style={{ padding: '6px 12px', background: 'var(--color-destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>确认停用</button>
+              <button onClick={() => setDeleteAccountOpen(false)} style={{ padding: '6px 12px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
+              <button onClick={() => void deleteAccount()} style={{ padding: '6px 12px', background: 'var(--destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>确认停用</button>
             </div>
           </div>
         </div>
@@ -241,9 +241,9 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
 
 function Card({ title, children }: { title?: string; children: React.ReactNode }) {
   return (
-    <div style={{ border: '1px solid var(--color-glass-border)', borderRadius: 'var(--radius-md)', marginBottom: 12, overflow: 'hidden' }}>
+    <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', marginBottom: 12, overflow: 'hidden' }}>
       {title && (
-        <div style={{ padding: '6px 10px', background: 'var(--color-background)', fontSize: 12, fontWeight: 600, color: 'var(--color-foreground-muted)' }}>
+        <div style={{ padding: '6px 10px', background: 'var(--background)', fontSize: 12, fontWeight: 600, color: 'var(--muted-foreground)' }}>
           {title}
         </div>
       )}
@@ -254,7 +254,7 @@ function Card({ title, children }: { title?: string; children: React.ReactNode }
 
 function RoleToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label className="flex items-center gap-1 text-[11px]" style={{ color: checked ? 'var(--color-accent)' : 'var(--color-foreground-disabled)', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+    <label className="flex items-center gap-1 text-[11px]" style={{ color: checked ? 'var(--primary)' : 'var(--muted-foreground)', whiteSpace: 'nowrap', cursor: 'pointer' }}>
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
       {label}
     </label>
@@ -266,14 +266,14 @@ function EditProfileDialog({ initial, onClose, onSaved }: { initial: { displayNa
   const [email, setEmail] = useState(initial.email);
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 16, width: 420, maxWidth: 'calc(100vw - 32px)' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16, width: 420, maxWidth: 'calc(100vw - 32px)' }}>
         <h3 style={{ margin: 0, marginBottom: 12, fontSize: 14, fontWeight: 600 }}>编辑档案</h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="显示名" className="input-base" />
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="邮箱（可留空）" className="input-base" />
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
-            <button onClick={onClose} style={{ padding: '6px 14px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
-            <button onClick={() => onSaved({ displayName: displayName.trim(), email: email.trim() })} style={{ padding: '6px 14px', background: 'var(--color-accent)', color: 'var(--color-accent-foreground)', border: 'none', borderRadius: 6, cursor: 'pointer' }}>保存</button>
+            <button onClick={onClose} style={{ padding: '6px 14px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
+            <button onClick={() => onSaved({ displayName: displayName.trim(), email: email.trim() })} style={{ padding: '6px 14px', background: 'var(--primary)', color: 'var(--primary-foreground)', border: 'none', borderRadius: 6, cursor: 'pointer' }}>保存</button>
           </div>
         </div>
       </div>

@@ -29,9 +29,9 @@ export default function AgentStreamPanel({ runId, streaming, errorMessage }: Pro
   const status = useMemo(() => deriveStatus(events, streaming, errorMessage ?? null), [events, streaming, errorMessage]);
 
   return (
-    <div className="glass-card rounded-[var(--radius-md)] p-4">
+    <div className="bg-card border rounded-[var(--radius-md)] p-4">
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--color-foreground-muted)' }}>
+        <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
           Agent 进度
         </span>
         <div className="flex-1" />
@@ -40,7 +40,7 @@ export default function AgentStreamPanel({ runId, streaming, errorMessage }: Pro
         </StatusPill>
       </div>
       {events.length === 0 ? (
-        <div className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+        <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
           {streaming ? '准备中...' : '点击上方按钮启动 Agent。'}
         </div>
       ) : (
@@ -58,19 +58,19 @@ function EventRow({ event }: { event: AgentRunEvent }) {
   switch (event.type) {
     case 'step_start':
       return (
-        <li className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--color-foreground-secondary)' }}>
-          <Icon name="play" size={11} style={{ color: 'var(--color-info)' }} />
+        <li className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+          <Icon name="play" size={11} style={{ color: 'var(--info)' }} />
           <span className="font-mono">{(event.payload as { stepId?: string }).stepId ?? 'step'}</span>
-          <span style={{ color: 'var(--color-foreground-muted)' }}>started</span>
+          <span style={{ color: 'var(--muted-foreground)' }}>started</span>
         </li>
       );
     case 'step_text':
       return (
         <li className="flex items-start gap-2 text-[12px]">
-          <Icon name="chevronRight" size={11} style={{ color: 'var(--color-foreground-muted)', marginTop: 4 }} />
+          <Icon name="chevronRight" size={11} style={{ color: 'var(--muted-foreground)', marginTop: 4 }} />
           <pre
             className="flex-1 min-w-0 whitespace-pre-wrap font-mono"
-            style={{ color: 'var(--color-foreground-secondary)', maxHeight: 80, overflow: 'auto' }}
+            style={{ color: 'var(--muted-foreground)', maxHeight: 80, overflow: 'auto' }}
           >
             {((event.payload as { delta?: string }).delta ?? '').slice(-400)}
           </pre>
@@ -78,22 +78,22 @@ function EventRow({ event }: { event: AgentRunEvent }) {
       );
     case 'step_complete':
       return (
-        <li className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--color-success)' }}>
+        <li className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--success)' }}>
           <Icon name="checkCircle" size={11} />
           <span className="font-mono">{(event.payload as { stepId?: string }).stepId ?? 'step'}</span>
-          <span style={{ color: 'var(--color-foreground-muted)' }}>completed</span>
+          <span style={{ color: 'var(--muted-foreground)' }}>completed</span>
         </li>
       );
     case 'workflow_complete':
       return (
-        <li className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--color-success)' }}>
+        <li className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--success)' }}>
           <Icon name="checkCircle" size={11} />
           已完成
         </li>
       );
     case 'workflow_error':
       return (
-        <li className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--color-destructive)' }}>
+        <li className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--destructive)' }}>
           <Icon name="exclamationCircle" size={11} />
           <span>{(event.payload as { error?: string }).error ?? '失败'}</span>
         </li>

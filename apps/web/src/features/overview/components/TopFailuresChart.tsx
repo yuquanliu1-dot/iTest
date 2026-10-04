@@ -20,13 +20,13 @@ export default function TopFailuresChart({
   if (data.length === 0) {
     return (
       <div
-        className="glass-panel rounded-[var(--radius-md)] p-5 flex flex-col items-center justify-center"
+        className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5 flex flex-col items-center justify-center"
         style={{ minHeight: 220 }}
       >
-        <h3 className="text-[14px] font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>
+        <h3 className="text-[14px] font-semibold mb-2" style={{ color: 'var(--foreground)' }}>
           失败 Top 5
         </h3>
-        <p className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+        <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
           近 14 天无失败用例 🎉
         </p>
       </div>
@@ -40,12 +40,12 @@ export default function TopFailuresChart({
   }));
 
   return (
-    <div className="glass-panel rounded-[var(--radius-md)] p-5" style={{ boxShadow: 'var(--shadow-card)' }}>
+    <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-[14px] font-semibold" style={{ color: 'var(--color-foreground)' }}>
+        <h3 className="text-[14px] font-semibold" style={{ color: 'var(--foreground)' }}>
           失败 Top 5
         </h3>
-        <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
           近 14 天
         </span>
       </div>

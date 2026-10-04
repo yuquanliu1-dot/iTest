@@ -39,7 +39,7 @@ function RepoChip({ doc }: { doc: WorkspaceDoc | undefined }) {
     return (
       <span
         className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium"
-        style={{ background: 'var(--color-accent-light)', color: 'var(--color-accent)' }}
+        style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}
       >
         已参考源码 v{doc.repoContext.commit.slice(0, 7)}
       </span>
@@ -49,7 +49,7 @@ function RepoChip({ doc }: { doc: WorkspaceDoc | undefined }) {
     return (
       <span
         className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium"
-        style={{ background: 'var(--color-accent-light)', color: 'var(--color-accent)' }}
+        style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}
       >
         已抓取页面 {doc.pageContext.url}
       </span>
@@ -58,7 +58,7 @@ function RepoChip({ doc }: { doc: WorkspaceDoc | undefined }) {
   return (
     <span
       className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium"
-      style={{ background: 'var(--color-muted)', color: 'var(--color-foreground-muted)' }}
+      style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
     >
       未参考任何上下文
     </span>
@@ -138,13 +138,13 @@ export default function WorkspacePanel({
           <PriorityBadge priority={c.priority} />
         </div>
         {c.description && (
-          <div style={{ color: 'var(--color-foreground-muted)' }}>{c.description}</div>
+          <div style={{ color: 'var(--muted-foreground)' }}>{c.description}</div>
         )}
         {c.steps?.length > 0 && (
           <details className="mt-1">
             <summary
               className="cursor-pointer select-none"
-              style={{ color: 'var(--color-foreground-muted)', fontSize: 11 }}
+              style={{ color: 'var(--muted-foreground)', fontSize: 11 }}
             >
               步骤（{c.steps.length}）
             </summary>
@@ -153,11 +153,11 @@ export default function WorkspacePanel({
                 <li key={i} className="mb-1">
                   <div>{s.action}</div>
                   {s.assertion && (
-                    <div className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                    <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                       断言：{s.assertion}
                     </div>
                   )}
-                  <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
+                  <div className="text-[11px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
                     编译：
                     {s.compiled == null ? (
                       <span style={{ color: '#92400e' }}>未编译，保存时由后端补编译</span>
@@ -165,7 +165,7 @@ export default function WorkspacePanel({
                       <ol className="ml-4 list-decimal">
                         {s.compiled.map((sub, j) => (
                           <li key={j}>
-                            <span style={{ color: 'var(--color-accent)' }}>{stepKindLabel(sub.kind)}</span>{' '}
+                            <span style={{ color: 'var(--primary)' }}>{stepKindLabel(sub.kind)}</span>{' '}
                             {stepSummary(sub)}
                           </li>
                         ))}
@@ -203,22 +203,22 @@ export default function WorkspacePanel({
 
   return (
     <div className="flex flex-col h-full gap-4 p-5 overflow-y-auto">
-      <div className="flex items-center gap-2 text-[12px] flex-wrap" style={{ color: 'var(--color-foreground-muted)' }}>
+      <div className="flex items-center gap-2 text-[12px] flex-wrap" style={{ color: 'var(--muted-foreground)' }}>
         <span>上下文：</span>
         <ContextModeSelector value={contextMode} onChange={onContextModeChange} hasRepo={hasRepo} />
         <RepoChip doc={doc} />
       </div>
       {doc === undefined && <div style={{ padding: 16 }}>加载中…</div>}
       {doc && doc.plan && (
-        <div className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+        <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
           进度: {Math.round(progress * 100)}% · 暂存 {totalCases} / 计划 {doc.plan.cases}
           <div
             className="h-[3px] mt-1 rounded"
-            style={{ background: 'var(--color-muted)' }}
+            style={{ background: 'var(--muted)' }}
           >
             <div
               className="h-full rounded"
-              style={{ width: `${progress * 100}%`, background: 'var(--color-accent)' }}
+              style={{ width: `${progress * 100}%`, background: 'var(--primary)' }}
             />
           </div>
         </div>
@@ -228,7 +228,7 @@ export default function WorkspacePanel({
           className="rounded-[var(--radius-sm)] px-3 py-2 text-[12px]"
           style={
             doc.pageContext
-              ? { background: 'var(--color-accent-light)', color: 'var(--color-foreground)' }
+              ? { background: 'var(--primary-soft)', color: 'var(--foreground)' }
               : { background: 'rgba(245,158,11,0.10)', color: '#92400e' }
           }
         >
@@ -258,7 +258,7 @@ export default function WorkspacePanel({
         const allSelected = s.cases.length > 0 && s.cases.every((c) => selectedCases.has(c.id));
         const someSelected = s.cases.some((c) => selectedCases.has(c.id));
         return (
-        <div key={s.id} className="glass-card rounded-[var(--radius-md)] p-4">
+        <div key={s.id} className="bg-card border rounded-[var(--radius-md)] p-4">
           <label className="flex items-center gap-2 text-[13px] font-semibold">
             <input
               type="checkbox"
@@ -277,7 +277,7 @@ export default function WorkspacePanel({
         );
       })}
       {doc && doc.looseCases.length > 0 && (
-        <div className="glass-card rounded-[var(--radius-md)] p-4">
+        <div className="bg-card border rounded-[var(--radius-md)] p-4">
           <div className="text-[13px] font-semibold">未分组用例</div>
           <div className="flex flex-col gap-2 mt-3 ml-5">
             {doc.looseCases.map((c) => renderCase(c, ''))}

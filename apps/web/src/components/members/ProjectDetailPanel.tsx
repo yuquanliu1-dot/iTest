@@ -106,20 +106,20 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
 
   return (
     <div className="flex flex-col h-full">
-      <div className="shrink-0 flex items-center gap-2" style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-glass-border)' }}>
-        <button onClick={onBack} style={{ background: 'none', border: 'none', color: 'var(--color-accent)', cursor: 'pointer', fontSize: 13 }}>‹ 返回</button>
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-foreground)' }}>{project?.name ?? ''}</span>
+      <div className="shrink-0 flex items-center gap-2" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+        <button onClick={onBack} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 13 }}>‹ 返回</button>
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--foreground)' }}>{project?.name ?? ''}</span>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-        <div style={{ border: '1px solid var(--color-glass-border)', borderRadius: 'var(--radius-md)', marginBottom: 12, padding: 12 }}>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', marginBottom: 12, padding: 12 }}>
           <div className="flex items-center gap-2">
-            <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-foreground)' }}>{project?.name ?? ''}</span>
-            <span style={{ fontSize: 12, color: 'var(--color-foreground-muted)' }}>已分配 {total}</span>
+            <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--foreground)' }}>{project?.name ?? ''}</span>
+            <span style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>已分配 {total}</span>
             {project && (
               <button
                 className="text-[11px]"
-                style={{ marginLeft: 'auto', padding: '3px 10px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}
+                style={{ marginLeft: 'auto', padding: '3px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: 'pointer' }}
                 onClick={() => setMoving(true)}
               >
                 移动组织
@@ -128,12 +128,12 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
           </div>
         </div>
 
-        <div style={{ border: '1px solid var(--color-glass-border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          <div className="flex items-center gap-2" style={{ padding: '6px 10px', background: 'var(--color-background)' }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-foreground-muted)', flex: 1 }}>已分配用户（{total}）</span>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+          <div className="flex items-center gap-2" style={{ padding: '6px 10px', background: 'var(--background)' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted-foreground)', flex: 1 }}>已分配用户（{total}）</span>
             <button
               className="text-[11px]"
-              style={{ padding: '3px 10px', borderRadius: 6, border: '1px solid var(--color-accent)', background: 'var(--color-surface-overlay)', color: 'var(--color-accent)', cursor: 'pointer' }}
+              style={{ padding: '3px 10px', borderRadius: 6, border: '1px solid var(--primary)', background: 'var(--popover)', color: 'var(--primary)', cursor: 'pointer' }}
               onClick={openAdd}
             >
               + 批量添加
@@ -142,13 +142,13 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
 
           <div style={{ padding: '4px 8px' }}>
             {assigned.length === 0 ? (
-              <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--color-foreground-disabled)' }}>暂无已分配用户</div>
+              <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>暂无已分配用户</div>
             ) : assigned.map((a) => (
               <div key={a.userId} className="flex items-center gap-2" style={{ padding: '6px 4px', fontSize: 13 }}>
-                <span className="truncate" style={{ flex: 1, color: 'var(--color-foreground)' }}>
-                  {a.displayName ?? a.username} <span style={{ color: 'var(--color-foreground-disabled)' }}>@{a.username}</span>
+                <span className="truncate" style={{ flex: 1, color: 'var(--foreground)' }}>
+                  {a.displayName ?? a.username} <span style={{ color: 'var(--muted-foreground)' }}>@{a.username}</span>
                 </span>
-                <button className="text-[11px]" style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)', cursor: 'pointer' }} onClick={() => void removeOne(a.userId)}>
+                <button className="text-[11px]" style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: 'pointer' }} onClick={() => void removeOne(a.userId)}>
                   移出
                 </button>
               </div>
@@ -156,10 +156,10 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
           </div>
 
           {assignedPages > 1 && (
-            <div className="flex items-center justify-center gap-3" style={{ padding: '8px 16px', borderTop: '1px solid var(--color-glass-border)', fontSize: 12, color: 'var(--color-foreground-disabled)' }}>
-              <button disabled={page <= 1} onClick={() => setPage(page - 1)} style={{ border: 'none', background: 'none', cursor: page <= 1 ? 'default' : 'pointer', color: page <= 1 ? 'var(--color-foreground-disabled)' : 'var(--color-accent)' }}>←</button>
+            <div className="flex items-center justify-center gap-3" style={{ padding: '8px 16px', borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--muted-foreground)' }}>
+              <button disabled={page <= 1} onClick={() => setPage(page - 1)} style={{ border: 'none', background: 'none', cursor: page <= 1 ? 'default' : 'pointer', color: page <= 1 ? 'var(--muted-foreground)' : 'var(--primary)' }}>←</button>
               <span>{page} / {assignedPages}</span>
-              <button disabled={page >= assignedPages} onClick={() => setPage(page + 1)} style={{ border: 'none', background: 'none', cursor: page >= assignedPages ? 'default' : 'pointer', color: page >= assignedPages ? 'var(--color-foreground-disabled)' : 'var(--color-accent)' }}>→</button>
+              <button disabled={page >= assignedPages} onClick={() => setPage(page + 1)} style={{ border: 'none', background: 'none', cursor: page >= assignedPages ? 'default' : 'pointer', color: page >= assignedPages ? 'var(--muted-foreground)' : 'var(--primary)' }}>→</button>
             </div>
           )}
         </div>
@@ -167,25 +167,25 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
 
       {adding && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) closeAdd(); }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 16, width: 480, maxWidth: 'calc(100vw - 32px)' }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16, width: 480, maxWidth: 'calc(100vw - 32px)' }}>
             <h2 style={{ margin: 0, marginBottom: 12, fontSize: 15, fontWeight: 600 }}>批量添加用户</h2>
             <input value={candidateQ} onChange={(e) => setCandidateQ(e.target.value)} placeholder="搜索用户…" className="input-base input-sm" />
             <div style={{ maxHeight: 300, overflowY: 'auto', marginTop: 8, minHeight: 120 }}>
               {candidateLoading ? (
-                <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--color-foreground-disabled)' }}>搜索中…</div>
+                <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>搜索中…</div>
               ) : candidates.length === 0 ? (
-                <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--color-foreground-disabled)' }}>无可添加的用户</div>
+                <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>无可添加的用户</div>
               ) : candidates.map((u) => (
-                <label key={u.id} className="flex items-center gap-2" style={{ padding: '6px 2px', fontSize: 13, color: 'var(--color-foreground)', cursor: 'pointer' }}>
+                <label key={u.id} className="flex items-center gap-2" style={{ padding: '6px 2px', fontSize: 13, color: 'var(--foreground)', cursor: 'pointer' }}>
                   <input type="checkbox" checked={picked.has(u.id)} onChange={() => togglePick(u.id)} />
-                  <span className="truncate">{u.displayName} <span style={{ color: 'var(--color-foreground-disabled)' }}>@{u.username}</span></span>
+                  <span className="truncate">{u.displayName} <span style={{ color: 'var(--muted-foreground)' }}>@{u.username}</span></span>
                 </label>
               ))}
             </div>
             <div className="flex justify-end gap-2" style={{ marginTop: 12 }}>
-              <button onClick={closeAdd} disabled={submitting} style={{ padding: '6px 14px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
+              <button onClick={closeAdd} disabled={submitting} style={{ padding: '6px 14px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
               <button onClick={() => void submitBatch()} disabled={picked.size === 0 || submitting} style={{
-                padding: '6px 14px', border: 'none', background: 'var(--color-accent)', color: 'var(--color-accent-foreground)', borderRadius: 6,
+                padding: '6px 14px', border: 'none', background: 'var(--primary)', color: 'var(--primary-foreground)', borderRadius: 6,
                 cursor: picked.size === 0 || submitting ? 'default' : 'pointer',
                 opacity: picked.size === 0 || submitting ? 0.6 : 1,
               }}>{submitting ? '提交中…' : `分配选中 (${picked.size})`}</button>

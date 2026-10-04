@@ -6,8 +6,7 @@
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./tokens.css": "./src/tokens.css",
-    "./glass.css": "./src/glass.css"
+    "./tokens.css": "./src/tokens.css"
   },
   "scripts": { "typecheck": "tsc --noEmit" },
   "peerDependencies": {

@@ -72,18 +72,18 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)',
-          borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-modal)',
+          background: 'var(--popover)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-2xl)',
           width: 420, maxWidth: 'calc(100vw - 32px)', padding: 16,
           display: 'flex', flexDirection: 'column', gap: 10,
         }}
       >
-        <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--color-foreground)' }}>
+        <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--foreground)' }}>
           {isEdit ? '编辑组织' : '新建组织'}
         </h2>
 
         {error && (
-          <div style={{ background: 'var(--color-destructive-light)', color: 'var(--color-destructive)', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
+          <div style={{ background: 'var(--destructive-soft)', color: 'var(--destructive)', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
             {error}
           </div>
         )}
@@ -108,7 +108,7 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
               onKeyDown={(e) => { if (e.key === 'Enter') void handleSubmit(); }}
               className="input-base"
             />
-            <div style={{ fontSize: 11, color: 'var(--color-foreground-disabled)' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
               上级组织：{allOrgs.find((o) => o.id === editParentId)?.name ?? '（无）'}
             </div>
           </>
@@ -128,7 +128,7 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
           <button
             onClick={onClose}
             disabled={saving}
-            style={{ fontSize: 13, padding: '6px 14px', color: 'var(--color-foreground-muted)', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 6, cursor: 'pointer' }}
+            style={{ fontSize: 13, padding: '6px 14px', color: 'var(--muted-foreground)', background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' }}
           >
             取消
           </button>
@@ -136,8 +136,8 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
             onClick={() => void handleSubmit()}
             disabled={saving || !form.name.trim()}
             style={{
-              fontSize: 13, padding: '6px 14px', color: 'var(--color-accent-foreground)',
-              background: 'var(--color-accent)', border: 'none', borderRadius: 6,
+              fontSize: 13, padding: '6px 14px', color: 'var(--primary-foreground)',
+              background: 'var(--primary)', border: 'none', borderRadius: 6,
               cursor: saving || !form.name.trim() ? 'default' : 'pointer',
               opacity: saving || !form.name.trim() ? 0.6 : 1,
             }}

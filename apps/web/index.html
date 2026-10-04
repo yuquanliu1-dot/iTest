@@ -7,6 +7,14 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // 首帧前恢复主题，避免暗色用户看到亮色闪烁（与 stores/theme.ts 的存储键一致）
+      try {
+        if (localStorage.getItem('itest-theme') === 'dark') {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

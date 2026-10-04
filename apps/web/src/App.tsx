@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import AppShell from './components/layout/AppShell';
-import ToastRenderer from './components/layout/ToastRenderer';
+import { Toaster } from './components/ui/shadcn/sonner';
 import AuthGuard from './components/auth/AuthGuard';
 import ProjectGuard from './components/layout/ProjectGuard';
 import { useThemeStore } from './stores/theme';
@@ -27,7 +27,7 @@ export default function App() {
   return (
     <>
       {/* 全局 toast 容器：必须挂在 Routes 之外，登录页（无 AppShell）也能显示错误提示 */}
-      <ToastRenderer />
+      <Toaster />
       <Routes>
       {/* 公开路由：登录（含首登强制改密） */}
       <Route path="/login" element={<LoginPage />} />

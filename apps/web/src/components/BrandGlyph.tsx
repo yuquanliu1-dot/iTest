@@ -21,8 +21,8 @@ export default function BrandGlyph({
   className,
   style,
 }: BrandGlyphProps) {
-  const stroke = foreground === 'on-accent' ? '#ffffff' : 'var(--color-accent)';
-  const beam = foreground === 'on-accent' ? 'rgba(255,255,255,0.65)' : 'var(--color-accent)';
+  const stroke = foreground === 'on-accent' ? '#ffffff' : 'var(--primary)';
+  const beam = foreground === 'on-accent' ? 'rgba(255,255,255,0.65)' : 'var(--primary)';
 
   return (
     <svg
@@ -36,9 +36,9 @@ export default function BrandGlyph({
     >
       <defs>
         <linearGradient id="brand-accent" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#4E7BFF" />
-          <stop offset="60%" stopColor="#7C5CFC" />
-          <stop offset="100%" stopColor="#B14CFF" />
+          <stop offset="0%" stopColor="#00915f" />
+          <stop offset="60%" stopColor="#006b4f" />
+          <stop offset="100%" stopColor="#025e46" />
         </linearGradient>
       </defs>
       {/* accent rounded square — drawn so glyph is self-contained on any backdrop */}

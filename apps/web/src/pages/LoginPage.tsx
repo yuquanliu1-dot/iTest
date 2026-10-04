@@ -73,7 +73,7 @@ export default function LoginPage() {
   return (
     <div
       className="relative flex h-full w-full items-center justify-center overflow-hidden"
-      style={{ background: 'var(--color-background)' }}
+      style={{ background: 'var(--background)' }}
     >
       <div
         className="relative z-10 grid w-full max-w-[920px] gap-10 px-6"
@@ -90,7 +90,7 @@ export default function LoginPage() {
                 style={{
                   fontSize: 22,
                   fontWeight: 600,
-                  color: 'var(--color-foreground)',
+                  color: 'var(--foreground)',
                   letterSpacing: '-0.02em',
                 }}
               >
@@ -100,7 +100,7 @@ export default function LoginPage() {
                 style={{
                   fontSize: 12,
                   fontWeight: 500,
-                  color: 'var(--color-foreground-muted)',
+                  color: 'var(--muted-foreground)',
                   letterSpacing: '0.12em',
                   textTransform: 'uppercase',
                 }}
@@ -115,7 +115,7 @@ export default function LoginPage() {
               fontSize: 44,
               fontWeight: 600,
               letterSpacing: '-0.03em',
-              color: 'var(--color-foreground)',
+              color: 'var(--foreground)',
               lineHeight: 1.1,
               marginTop: 32,
               maxWidth: 480,
@@ -140,75 +140,75 @@ export default function LoginPage() {
             style={{
               fontSize: 14,
               lineHeight: 1.6,
-              color: 'var(--color-foreground-secondary)',
+              color: 'var(--muted-foreground)',
               marginTop: 18,
               maxWidth: 460,
             }}
           >
-            自然语言生成步骤、脚本回放、报告聚合。登录后开始组织用例、装配计划、跑一遍回归。
+            从需求生成用例、浏览器录制回放、计划一键回归。登录后按项目与版本组织你的测试资产。
           </p>
 
           <ul
             className="mt-8 flex flex-col gap-2 text-[12px]"
-            style={{ color: 'var(--color-foreground-secondary)', maxWidth: 460 }}
+            style={{ color: 'var(--muted-foreground)', maxWidth: 460 }}
           >
             <li className="flex items-center gap-2">
               <span
                 style={{
                   width: 6, height: 6, borderRadius: '50%',
-                  background: 'var(--color-accent)',
+                  background: 'var(--primary)',
                   flexShrink: 0,
                 }}
               />
-              用例库 + 分组 + 标签，按项目隔离
+              AI 拆解需求为场景与用例，可绑定 Git 仓库参考真实源码
             </li>
             <li className="flex items-center gap-2">
               <span
                 style={{
                   width: 6, height: 6, borderRadius: '50%',
-                  background: 'var(--color-info)',
+                  background: 'var(--info)',
                   flexShrink: 0,
                 }}
               />
-              浏览器录制，AI 拆解为可编辑步骤
+              浏览器录制转为可编辑步骤，可控 Agent 回放并截图留证
             </li>
             <li className="flex items-center gap-2">
               <span
                 style={{
                   width: 6, height: 6, borderRadius: '50%',
-                  background: 'var(--color-success)',
+                  background: 'var(--success)',
                   flexShrink: 0,
                 }}
               />
-              执行历史 + 报告聚合，问题可回溯
+              项目 × 版本管理用例，执行计划一键回归，报告全程可回溯
             </li>
           </ul>
         </div>
 
         {/* Sign-in card — right. On <lg, spans full width. */}
         <div
-          className="glass-panel fade-up"
+          className="bg-card fade-up"
           style={{
             padding: '32px 28px',
             borderRadius: 'var(--radius-md)',
             display: 'flex',
             flexDirection: 'column',
             gap: 18,
-            boxShadow: 'var(--shadow-modal)',
+            boxShadow: 'var(--shadow-2xl)',
             animationDelay: '0.1s',
           }}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div className="flex items-center gap-2 lg:hidden">
               <BrandGlyph size={28} animated />
-              <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-foreground)' }}>
+              <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--foreground)' }}>
                 iTest
               </span>
             </div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--color-foreground)', letterSpacing: '-0.01em' }}>
+            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--foreground)', letterSpacing: '-0.01em' }}>
               {changeToken ? '设置新密码' : '登录'}
             </div>
-            <div style={{ fontSize: 12, color: 'var(--color-foreground-muted)', lineHeight: 1.5 }}>
+            <div style={{ fontSize: 12, color: 'var(--muted-foreground)', lineHeight: 1.5 }}>
               {changeToken ? PASSWORD_HINT : '使用组织账号登录自动化测试平台'}
             </div>
           </div>
@@ -245,7 +245,7 @@ export default function LoginPage() {
                         padding: 4,
                         cursor: 'pointer',
                         display: 'inline-flex',
-                        color: 'var(--color-foreground-muted)',
+                        color: 'var(--muted-foreground)',
                       }}
                     >
                       <Icon name={showPassword ? 'eyeOff' : 'eye'} size={14} />
@@ -284,7 +284,7 @@ export default function LoginPage() {
                       padding: 4,
                       cursor: 'pointer',
                       display: 'inline-flex',
-                      color: 'var(--color-foreground-muted)',
+                      color: 'var(--muted-foreground)',
                     }}
                   >
                     <Icon name={showNewPassword ? 'eyeOff' : 'eye'} size={14} />
@@ -320,7 +320,7 @@ export default function LoginPage() {
                   border: 'none',
                   cursor: 'pointer',
                   fontSize: 12,
-                  color: 'var(--color-foreground-muted)',
+                  color: 'var(--muted-foreground)',
                   padding: '4px 8px',
                   marginTop: 2,
                 }}
@@ -335,7 +335,7 @@ export default function LoginPage() {
       {/* Bottom-right build line — single mono token, no decoration text strip. */}
       <div
         className="absolute bottom-4 right-5 font-mono text-[10px] tracking-[0.04em]"
-        style={{ color: 'var(--color-foreground-muted)', zIndex: 1 }}
+        style={{ color: 'var(--muted-foreground)', zIndex: 1 }}
         aria-hidden
       >
         build · itest-console

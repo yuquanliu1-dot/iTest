@@ -49,19 +49,19 @@ export default function Pagination({
   };
 
   const navBtnCls =
-    'flex items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] ' +
-    'bg-[var(--color-background-elevated)] text-[var(--color-foreground-secondary)] ' +
-    'hover:not-disabled:bg-[var(--color-muted)] disabled:cursor-not-allowed ' +
-    'disabled:text-[var(--color-foreground-disabled)] disabled:opacity-60';
+    'flex items-center justify-center rounded-[var(--radius-md)] border border-[var(--border)] ' +
+    'bg-[var(--card)] text-[var(--muted-foreground)] ' +
+    'hover:not-disabled:bg-[var(--muted)] disabled:cursor-not-allowed ' +
+    'disabled:text-[var(--muted-foreground)] disabled:opacity-60';
 
   return (
     <div
       className="flex shrink-0 items-center gap-3"
       style={{
         padding: '8px 20px',
-        borderTop: '1px solid var(--color-border)',
+        borderTop: '1px solid var(--border)',
         fontSize: 12,
-        color: 'var(--color-foreground-secondary)',
+        color: 'var(--muted-foreground)',
       }}
     >
       {left ? (
@@ -102,7 +102,7 @@ export default function Pagination({
 
           {paginationRange(page, totalPages).map((item, i) =>
             item === 'gap' ? (
-              <span key={`gap-${i}`} style={{ padding: '0 2px', color: 'var(--color-foreground-disabled)' }}>
+              <span key={`gap-${i}`} style={{ padding: '0 2px', color: 'var(--muted-foreground)' }}>
                 …
               </span>
             ) : (
@@ -115,15 +115,15 @@ export default function Pagination({
                 className={
                   item === page
                     ? 'rounded-[var(--radius-md)] font-semibold'
-                    : 'rounded-[var(--radius-md)] hover:bg-[var(--color-muted)]'
+                    : 'rounded-[var(--radius-md)] hover:bg-[var(--muted)]'
                 }
                 style={{
                   height: CONTROL_H,
                   minWidth: CONTROL_H,
                   padding: '0 8px',
                   border: 'none',
-                  background: item === page ? 'var(--color-accent)' : 'transparent',
-                  color: item === page ? 'var(--color-accent-foreground)' : 'var(--color-foreground-secondary)',
+                  background: item === page ? 'var(--primary)' : 'transparent',
+                  color: item === page ? 'var(--primary-foreground)' : 'var(--muted-foreground)',
                   fontSize: 12,
                   cursor: 'pointer',
                 }}
