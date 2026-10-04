@@ -203,6 +203,16 @@ export const api = {
     removeObject: (id: string) =>
       request<{ ok: boolean }>(`/environment-objects/${id}`, { method: 'DELETE' }),
     allowedTables: () => request<Record<string, string[]>>('/environments/allowed-tables'),
+    testDb: (body: { objectId?: string; dbType?: 'postgres' | 'mysql'; host: string; port?: number; dbName: string; user: string; password?: string }) =>
+      request<{ ok: boolean; latencyMs?: number; error?: string }>('/environments/test-db', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    testSyslog: (body: { objectId?: string; host: string; sshPort?: number; user: string; filePath: string; authType: 'key' | 'password'; privateKey?: string; password?: string }) =>
+      request<{ ok: boolean; latencyMs?: number; error?: string }>('/environments/test-syslog', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
   },
   executions: {
     list: (params?: { projectId?: string; kind?: 'case' | 'plan' | 'all' }) => {
