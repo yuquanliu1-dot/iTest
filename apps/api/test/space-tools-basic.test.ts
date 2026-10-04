@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { buildSpaceTools, type SpaceToolsContext } from '../src/pi/space/tools/index.js';
+import { diffText } from '../src/pi/space/tools/diff.js';
 
 function makeCtx(over: Partial<SpaceToolsContext> = {}): { ctx: SpaceToolsContext; events: Array<Record<string, unknown>> } {
   const events: Array<Record<string, unknown>> = [];
@@ -39,5 +40,31 @@ describe('buildSpaceTools(骨架)', () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: 'announce', summary: '配置登录模块', total: 3 });
     expect((events[0] as { steps: string[] }).steps).toEqual(['建分组', '建用例A', '建用例B']);
+  });
+
+  it('装配完整:四个领域工具全部注入', () => {
+    const { ctx } = makeCtx();
+    const names = buildSpaceTools(ctx).map((t) => t.name);
+    for (const n of ['announce_plan', 'inspect_page', 'manage_cases', 'manage_scenarios', 'manage_environments', 'manage_plans']) {
+      expect(names).toContain(n);
+    }
+    // 顺序约定:repo_*(若有)在最前,领域工具其后(与 session.ts 注入顺序一致)
+    expect(names.indexOf('manage_cases')).toBeLessThan(names.indexOf('manage_plans'));
+  });
+});
+
+describe('diffText', () => {
+  it('标量变化输出 k: before → after;updatedAt 跳过', () => {
+    const d = diffText(
+      { title: '旧名', priority: 'P1', updatedAt: new Date(0) },
+      { title: '新名', priority: 'P1', updatedAt: new Date(1) },
+    );
+    expect(d).toBe('title: 旧名 → 新名');
+  });
+
+  it('对象/数组值跳过;无变化返回 undefined', () => {
+    expect(diffText({ a: { x: 1 } }, { a: { x: 2 } })).toBeUndefined();
+    expect(diffText({ b: [1] }, { b: [2] })).toBeUndefined();
+    expect(diffText({ k: 1, m: 'x' }, { k: 1, m: 'x' })).toBeUndefined();
   });
 });
