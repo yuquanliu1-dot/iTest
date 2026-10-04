@@ -9,8 +9,26 @@ import { createSession, getSession } from '../recorder/ws.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { compileAiStepsInPlace } from '../agent/aiStepCompile.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
+import { logger } from '../logger.js';
 
 export const recorderRoute = Router();
+
+// 录制 WS 地址：扩展所在机器必须能直连该地址（不能指向 web 端口——/recorder 不走 vite proxy）。
+// RECORDER_PUBLIC_WS_URL 为完整 endpoint，path 为空时补 /recorder；非法值回落本机默认。
+export function buildRecorderWsUrl(): string {
+  const fallback = `ws://127.0.0.1:${process.env.API_PORT ?? 54321}/recorder`;
+  const raw = process.env.RECORDER_PUBLIC_WS_URL;
+  if (!raw) return fallback;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'ws:' && u.protocol !== 'wss:') throw new Error('scheme must be ws/wss');
+    if (u.pathname === '' || u.pathname === '/') u.pathname = '/recorder';
+    return `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}`;
+  } catch (err) {
+    logger.warn({ raw, err }, 'invalid RECORDER_PUBLIC_WS_URL, falling back to localhost');
+    return fallback;
+  }
+}
 
 const CreateBody = z.object({
   caseId: z.string().uuid(),
@@ -60,7 +78,7 @@ recorderRoute.post('/sessions', async (req, res) => {
   res.json({
     sessionId: session.sessionId,
     wsToken: process.env.RECORDER_TOKEN_SECRET ?? 'dev-secret-change-me',
-    wsUrl: `ws://127.0.0.1:${process.env.API_PORT ?? 54321}/recorder`,
+    wsUrl: buildRecorderWsUrl(),
     resolvedUrl,
     mode: body.mode,
   });

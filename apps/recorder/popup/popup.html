@@ -11,8 +11,16 @@
         <span class="name">iTest Recorder</span>
       </div>
       <p class="desc">在中台用例详情页点击「录制补充」即可开始录制，页面右下角会出现控制面板。</p>
+      <div class="field">
+        <label for="console-origin">中台地址（跨机器访问时改为实际地址）</label>
+        <div class="row">
+          <input id="console-origin" type="text" spellcheck="false" placeholder="http://localhost:5173" />
+          <button id="save" class="btn">保存</button>
+        </div>
+        <span id="save-status" class="status"></span>
+      </div>
       <button id="open" class="btn primary">打开中台</button>
     </div>
-    <script src="popup.js"></script>
+    <script type="module" src="popup.js"></script>
   </body>
 </html>

@@ -70,7 +70,8 @@ app.use('/api/assistant', spaceRoute);
 app.use(errorHandler);
 
 const port = Number(process.env.API_PORT ?? 54321);
-const server = app.listen(port, '127.0.0.1', () => {
-  logger.info({ port }, 'api listening on 127.0.0.1');
+const host = process.env.API_HOST ?? '127.0.0.1';
+const server = app.listen(port, host, () => {
+  logger.info({ port, host }, 'api listening');
 });
 attachRecorderWs(server);

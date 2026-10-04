@@ -1,3 +1,5 @@
+import { DEFAULT_CONSOLE_ORIGIN, originToMatchPattern } from './modules/console-config.js';
+
 let ws = null;
 let recordingTabId = null;
 let paused = false;
@@ -71,6 +73,50 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     }));
   }
 });
+
+// ---- 中台地址配置（popup 写 chrome.storage.sync，非默认时动态注册 bridge 注入）----
+
+const BRIDGE_SCRIPT_ID = 'ita-bridge-dynamic';
+
+async function getConsoleOrigin() {
+  try {
+    const { consoleOrigin } = await chrome.storage.sync.get('consoleOrigin');
+    return consoleOrigin || DEFAULT_CONSOLE_ORIGIN;
+  } catch {
+    return DEFAULT_CONSOLE_ORIGIN;
+  }
+}
+
+// manifest 静态只注入 localhost 的 bridge；中台配成其他地址时在此动态注册（先注销再注册，幂等）。
+// SW 顶层执行是兜底：扩展更新会清空动态注册。
+async function syncBridgeRegistration() {
+  try {
+    const origin = await getConsoleOrigin();
+    const existing = await chrome.scripting.getRegisteredContentScripts();
+    if (existing.some((s) => s.id === BRIDGE_SCRIPT_ID)) {
+      await chrome.scripting.unregisterContentScripts({ ids: [BRIDGE_SCRIPT_ID] });
+    }
+    if (origin !== DEFAULT_CONSOLE_ORIGIN) {
+      await chrome.scripting.registerContentScripts([{
+        id: BRIDGE_SCRIPT_ID,
+        matches: [originToMatchPattern(origin)],
+        js: ['content/bridge.js'],
+        runAt: 'document_start',
+        persistAcrossSessions: true,
+      }]);
+    }
+  } catch (err) {
+    console.warn('syncBridgeRegistration failed', err);
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  syncBridgeRegistration();
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'sync' && changes.consoleOrigin) syncBridgeRegistration();
+});
+syncBridgeRegistration();
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'start' && msg.session) {
@@ -151,7 +197,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'open-console') {
     // 打开中台：优先切回发起录制的用例详情页 tab（含窗口前置）；无会话或 tab 已关则新开中台首页。
     // 不回 sendResponse：目标窗口前置会立即关闭 popup，回调随之失效。
-    const fallback = () => chrome.tabs.create({ url: 'http://127.0.0.1:5173/' });
+    const fallback = () => getConsoleOrigin().then((origin) => chrome.tabs.create({ url: `${origin}/` }));
     if (webTabId === null) { fallback(); return; }
     chrome.tabs
       .get(webTabId)
