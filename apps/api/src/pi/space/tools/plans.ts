@@ -108,6 +108,9 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (!v.planId || !v.caseIds?.length) return { ok: false, error: 'add_cases 需要 planId 与 caseIds' };
               const pid = await svc.planProjectId(v.planId);
               if (pid !== ctx.projectId) return { ok: false, error: '计划不存在或不属于当前项目' };
+              // 门控前校验用例归属:跨项目用例直接报错并点名,不弹确认卡(否则用户确认的是必然失败的操作)
+              const outside = await svc.caseIdsOutsideProject(ctx.projectId, v.caseIds);
+              if (outside.length > 0) return { ok: false, error: `用例不属于当前项目:${outside.join('、')}` };
               // 挂起前算精确增量(重复 id 去重、已在计划中的跳过);N=0 短路不执行
               const detail = await svc.getPlanDetail(v.planId);
               const have = new Set((detail?.cases ?? []).map((c) => c.id));

@@ -151,6 +151,18 @@ async function assertCasesInProject(projectId: string, caseIds: string[]): Promi
   }
 }
 
+/** assertCasesInProject 的只读预检版:返回不属于该项目的 caseId(含不存在者),空数组即全部通过。供工具在弹确认卡前校验,避免用户确认必然失败的操作。 */
+export async function caseIdsOutsideProject(projectId: string, caseIds: string[]): Promise<string[]> {
+  const ids = [...new Set(caseIds)];
+  if (ids.length === 0) return [];
+  const gs = await db.select({ id: groups.id }).from(groups).where(eq(groups.projectId, projectId));
+  const validGids = new Set(gs.map((g) => g.id));
+  const rows = await db.select({ id: testCases.id, groupId: testCases.groupId }).from(testCases).where(inArray(testCases.id, ids));
+  const found = new Set(rows.map((r) => r.id));
+  const invalid = rows.filter((r) => !validGids.has(r.groupId)).map((r) => r.id);
+  return [...ids.filter((id) => !found.has(id)), ...new Set(invalid)];
+}
+
 /**
  * 事务内第一步锁计划行(SELECT ... FOR UPDATE):同计划的所有编排串行化,
  * 消除查-算-插竞态与 order 撞号;行不存在 → 404(requirePlan 语义并入锁步骤)。
