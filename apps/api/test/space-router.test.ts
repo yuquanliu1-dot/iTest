@@ -71,16 +71,35 @@ describe('space wire contract', () => {
     expect(r.status).toBe(404);
   });
 
-  it('POST /threads:工厂抛错(LLM 未配置等)仍返回空快照', async () => {
+  it('POST /threads:LLM 未配置 → 502 llm_not_configured,线程行不残留', async () => {
     const { versionId } = await seedProject(pool);
     const { setSpaceSessionFactory } = await import('../src/pi/space/session.js');
-    setSpaceSessionFactory(async () => { throw new Error('LLM 未配置'); });
+    const { HttpError } = await import('../src/middleware/errorHandler.js');
+    setSpaceSessionFactory(async () => {
+      throw new HttpError(502, 'llm_not_configured', 'LLM 未配置:请先到设置页配置模型');
+    });
+    const r = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    expect(r.status).toBe(502);
+    expect(r.body.error).toBe('llm_not_configured');
+    expect(r.body.message).toContain('LLM 未配置');
+    // 初始化失败的线程行必须清掉,不进列表
+    const rows = await pool.query(`SELECT count(*)::int AS n FROM ai_threads WHERE kind='version'`);
+    expect(rows.rows[0]!.n).toBe(0);
+    // 其它初始化错误 → 500 session_init_failed
+    setSpaceSessionFactory(async () => { throw new Error('boom'); });
+    const r2 = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    expect(r2.status).toBe(500);
+    expect(r2.body.error).toBe('session_init_failed');
+    setSpaceSessionFactory(async () => makeFakeSession() as never);
+  });
+
+  it('POST /threads:无 repo issue 时响应不带 lastError 字段污染', async () => {
+    const { versionId } = await seedProject(pool);
+    const { setSpaceSessionFactory } = await import('../src/pi/space/session.js');
+    setSpaceSessionFactory(async () => makeFakeSession() as never);
     const r = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
     expect(r.status).toBe(200);
-    expect(r.body.metadata.id).toBeTruthy();
-    expect(r.body.messages).toEqual([]);
-    // 恢复默认 stub,避免影响后续用例
-    setSpaceSessionFactory(async () => makeFakeSession() as never);
+    expect(r.body.lastError).toBeUndefined();
   });
 
   it('GET /threads?versionId= 返回该版本的线程列表(带标题/状态)', async () => {
@@ -178,6 +197,30 @@ describe('space wire contract', () => {
       await reader.cancel();
     } finally {
       // SSE 连接是长连接,closeAllConnections 确保 server.close() 不挂起
+      server.close();
+      server.closeAllConnections();
+    }
+  });
+
+  it('events 对无 record 的持久化线程先 ensure:后续自定义事件可达(修复早订阅竞态)', async () => {
+    const { versionId } = await seedProject(pool);
+    const id = crypto.randomUUID();
+    // 直接 SQL 落行:resetSpaceSessions 后 record 不存在 —— 旧实现订阅到 noop 上,emit 会丢
+    await pool.query(`INSERT INTO ai_threads(id, kind, version_id, pi_thread_id) VALUES ($1,'version',$2,'')`, [id, versionId]);
+
+    const server = app.listen(0);
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/assistant/threads/${id}/events`);
+      expect(res.status).toBe(200);
+      const reader = res.body!.getReader();
+      expect(Buffer.from((await reader.read()).value!).toString('utf8')).toContain('snapshot');
+      const { emitThreadEvent } = await import('../src/pi/space/session.js');
+      emitThreadEvent(id, { type: 'stage', kind: 'case', id: 'c1', action: 'create' });
+      const second = await reader.read();
+      expect(Buffer.from(second.value!).toString('utf8')).toContain('stage');
+      await reader.cancel();
+    } finally {
       server.close();
       server.closeAllConnections();
     }

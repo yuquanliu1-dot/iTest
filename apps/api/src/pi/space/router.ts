@@ -15,7 +15,7 @@ import type { AuthUser } from '../../services/auth.service.js';
 import { readLlmConfig } from '../modelBridge.js';
 import { resolveConfirmation } from './confirm.js';
 import {
-  cancelThread, ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, subscribeThread, threadStatus,
+  cancelThread, ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, spaceRepoIssue, subscribeThread, threadStatus,
 } from './session.js';
 
 export const spaceRoute = Router();
@@ -43,12 +43,21 @@ spaceRoute.post('/threads', async (req, res) => {
   const versionId = body.metadata?.versionId;
   if (!versionId) throw new HttpError(400, 'bad_request', 'metadata.versionId required');
   await assertVersionVisible(versionId, req.user as AuthUser);
-  // 每次调用新建一线程(一版本多线程);行先落库,LLM 未配置时 session 建不起来也照常返回快照;
-  // 客户端重试可能留下无 session 的孤儿线程(可 GC),属预期行为
+  // 每次调用新建一线程(一版本多线程)。初始化失败(LLM 未配置等)→ 删行并透出错误,
+  // 前端引导设置页;repo 不可用不阻断(session 照常建,原因经 lastError 透出)。
   const threadId = randomUUID();
   await db.insert(aiThreads).values({ id: threadId, kind: 'version', versionId, piThreadId: '' });
-  try { await ensureSpaceRecord(threadId); } catch { /* LLM 未配置等;前端经 SSE/快照感知 */ }
-  res.json(threadSnapshotResponse(threadId));
+  try {
+    await ensureSpaceRecord(threadId);
+  } catch (e) {
+    await db.delete(aiThreads).where(eq(aiThreads.id, threadId));
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(500, 'session_init_failed', e instanceof Error ? e.message : '会话初始化失败');
+  }
+  const snap = threadSnapshotResponse(threadId) as { lastError?: string };
+  const issue = spaceRepoIssue(threadId);
+  if (issue) snap.lastError = `仓库暂不可用:${issue};对话可用,repo 类工具在修复仓库配置前会失败`;
+  res.json(snap);
 });
 
 spaceRoute.get('/threads', async (req, res) => {
@@ -118,6 +127,10 @@ spaceRoute.get('/models', async (_req, res) => {
 spaceRoute.get('/threads/:id/events', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
   sseHeaders(res);
+  // 订阅前先确保 session 已构建:SSE 早于首条消息时若无 record,listener 会注册到
+  // noop 上,后续 confirm_request/stage 全丢;ensure 幂等单飞,已有缓存直接返回。
+  // 失败(LLM 未配置等)保留空快照语义,不中断连接。
+  try { await ensureSpaceRecord(req.params.id!); } catch { /* 线程无法活跃,仍可接收快照 */ }
   try {
     const send = (e: unknown) => sseSend(res, e as unknown as Parameters<typeof sseSend>[1]);
     // subscribeThread 自带 snapshot(无活跃 session 时发合法空快照);
