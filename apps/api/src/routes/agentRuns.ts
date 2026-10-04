@@ -32,7 +32,7 @@ async function executeRun(run: RunRow) {
   const logger = (await import('../logger.js')).logger;
   try {
     // 工具白名单随 run.targetId 构建；落库由 step.tools 处理（见 builtinTools.ts）。
-    const wf = buildCase2ScriptWorkflow(run.targetId);
+    const wf = await buildCase2ScriptWorkflow(run.targetId);
     logger.info({ runId: run.id, provider: config.provider, model: config.model }, 'agent run start');
     const result = (await runWorkflow({
       workflowId: wf.workflowId,

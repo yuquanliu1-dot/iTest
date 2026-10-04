@@ -22,14 +22,14 @@ ValueGenerator（fill.value 动态取值，可选其一）：
 
 规则：
 1. action 必须是对象，绝不能是纯字符串描述。
-2. 优先 role / testId 定位，避免 css/xpath。
+2. 优先 role / text 定位；testId 仅限上下文提供的页面快照中确认存在的 testid，禁止编造 id/testid。
 3. 关键路径末尾必须有断言（assertVisible 或 assertText）。
 4. 页面跳转后先 waitFor 再操作。
 
 完整示例 steps：
 [
   {"order":1,"action":{"kind":"navigate","url":"https://example.com/login"}},
-  {"order":2,"action":{"kind":"fill","locator":[{"strategy":"testId","value":"phone-input"}],"value":"13800000000"}},
+  {"order":2,"action":{"kind":"fill","locator":[{"strategy":"css","value":"input[type='tel']"},{"strategy":"role","value":"textbox[name=\\"手机号\\"]"}],"value":"13800000000"}},
   {"order":3,"action":{"kind":"click","locator":[{"strategy":"role","value":"button[name=\\"登录\\"]"}]}},
   {"order":4,"action":{"kind":"waitFor","locator":[{"strategy":"text","value":"工作台"}]}},
   {"order":5,"action":{"kind":"assertVisible","locator":[{"strategy":"role","value":"main"}]}}
