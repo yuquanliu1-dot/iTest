@@ -5,12 +5,13 @@ import {
   type ReasoningMessagePartProps,
   type ToolCallMessagePartProps,
 } from '@assistant-ui/react';
+import ConfirmCard from './ConfirmCard';
 
 /**
  * 空间助手对话流:只渲染 pi 契约的结构原语,运行时由 SpaceWorkspace 的
- * AssistantRuntimeProvider 提供。composer 上方为确认卡插槽(Task 4 接入)。
+ * AssistantRuntimeProvider 提供。composer 上方为确认卡(confirm_request 事件驱动)。
  */
-export default function SpaceThreadPane() {
+export default function SpaceThreadPane({ threadId }: { threadId: string }) {
   return (
     <div className="flex flex-col h-full">
       <ThreadPrimitive.Root className="flex flex-col h-full">
@@ -18,6 +19,7 @@ export default function SpaceThreadPane() {
           <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
         </ThreadPrimitive.Viewport>
         <ThreadPrimitive.ViewportFooter className="border-t p-3" style={{ borderColor: 'var(--border)' }}>
+          <ConfirmCard threadId={threadId} />
           <ComposerPrimitive.Root className="flex items-end gap-2">
             <ComposerPrimitive.Input
               minRows={1}
