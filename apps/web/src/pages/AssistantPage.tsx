@@ -12,6 +12,7 @@ import {
   PageShellHeader,
   PageShellTitle,
 } from '../components/layout/PageShell';
+import SpaceWorkspace from '../features/space-assistant/SpaceWorkspace';
 
 /**
  * 版本空间 AI 助手(AI-First 主入口):进入版本空间落地即对话。
@@ -60,7 +61,11 @@ export default function AssistantPage() {
           <select
             className="input-base input-sm max-w-[280px]"
             value={threadId ?? ''}
-            onChange={(e) => setThreadId(e.target.value || null)}
+            onChange={(e) => {
+              setInitError(null);
+              setWarning(null);
+              setThreadId(e.target.value || null);
+            }}
             aria-label="历史对话"
           >
             {!threadId && <option value="">开始新对话</option>}
@@ -95,15 +100,13 @@ export default function AssistantPage() {
             {warning && (
               <div
                 className="rounded-[var(--radius-sm)] px-4 py-2.5 text-[12px] shrink-0"
-                style={{ border: '1px solid rgba(217,119,6,0.45)', color: '#b45309', background: 'rgba(217,119,6,0.08)' }}
+                style={{ border: '1px solid var(--warning-soft-border)', color: 'var(--warning)', background: 'var(--warning-soft)' }}
               >
                 {warning}
               </div>
             )}
             {threadId ? (
-              <div className="flex-1 min-h-0 flex items-center justify-center text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-                对话区载入中…
-              </div>
+              <SpaceWorkspace key={threadId} threadId={threadId} />
             ) : (
               <EmptyState
                 icon="message"
