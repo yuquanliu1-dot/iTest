@@ -14,7 +14,7 @@ export default function AuthGuard() {
 
   if (isLoading) {
     return (
-      <div className="flex h-full items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+      <div className="flex h-full items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
         加载中…
       </div>
     );

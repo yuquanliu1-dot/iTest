@@ -88,14 +88,14 @@ export default function OrgDetailPanel({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="shrink-0 flex items-center gap-2" style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-glass-border)' }}>
-        <h2 className="text-[15px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>{orgDetails?.name ?? ''}</h2>
+      <div className="shrink-0 flex items-center gap-2" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+        <h2 className="text-[15px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>{orgDetails?.name ?? ''}</h2>
         <div className="ml-auto flex gap-2">
           {canManageMembers && (
             <>
               <button
                 className="text-[12px]"
-                style={{ color: 'var(--color-accent)', background: 'none', border: 'none', cursor: 'pointer' }}
+                style={{ color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer' }}
                 disabled={!orgDetails}
                 onClick={() => { if (orgDetails) {
                   setEditOpen(true);
@@ -110,7 +110,7 @@ export default function OrgDetailPanel({
               </button>
               <button
                 className="text-[12px]"
-                style={{ color: 'var(--color-destructive-text)', background: 'none', border: 'none', cursor: 'pointer' }}
+                style={{ color: 'var(--destructive)', background: 'none', border: 'none', cursor: 'pointer' }}
                 onClick={() => setConfirmDelete(true)}
               >
                 删除
@@ -120,7 +120,7 @@ export default function OrgDetailPanel({
         </div>
       </div>
 
-      <div className="shrink-0 flex" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
+      <div className="shrink-0 flex" style={{ borderBottom: '1px solid var(--border)' }}>
         <TabButton active={tab === 'users'} onClick={() => onPatchParams({ tab: 'users', page: '1' })}>
           成员 ({memberTotal})
         </TabButton>
@@ -129,14 +129,14 @@ export default function OrgDetailPanel({
         </TabButton>
       </div>
 
-      <div className="shrink-0 flex items-center gap-2" style={{ padding: '8px 16px', borderBottom: '1px solid var(--color-glass-border)' }}>
+      <div className="shrink-0 flex items-center gap-2" style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)' }}>
         <input
           value={q}
           onChange={(e) => onPatchParams({ q: e.target.value || null, page: '1' })}
           placeholder={tab === 'users' ? '搜索成员' : '搜索项目'}
           className="flex-1 input-base input-sm"
         />
-        <label className="flex items-center gap-1.5 text-[12px]" style={{ color: 'var(--color-foreground-muted)', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+        <label className="flex items-center gap-1.5 text-[12px]" style={{ color: 'var(--muted-foreground)', whiteSpace: 'nowrap', cursor: 'pointer' }}>
           <input
             type="checkbox"
             checked={includeSubtree}
@@ -149,14 +149,14 @@ export default function OrgDetailPanel({
             <button
               onClick={() => setAddMemberOpen(true)}
               className="rounded text-[12px]"
-              style={{ padding: '4px 10px', whiteSpace: 'nowrap', border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-accent)', cursor: 'pointer' }}
+              style={{ padding: '4px 10px', whiteSpace: 'nowrap', border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--primary)', cursor: 'pointer' }}
             >
               + 添加成员
             </button>
             <button
               onClick={() => setCreateUserOpen(true)}
               className="rounded text-[12px]"
-              style={{ padding: '4px 10px', whiteSpace: 'nowrap', border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-accent)', cursor: 'pointer' }}
+              style={{ padding: '4px 10px', whiteSpace: 'nowrap', border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--primary)', cursor: 'pointer' }}
             >
               + 创建用户
             </button>
@@ -176,7 +176,7 @@ export default function OrgDetailPanel({
       </div>
 
       {totalPages > 1 && (
-        <div className="shrink-0 flex items-center justify-center gap-3" style={{ padding: '8px 16px', borderTop: '1px solid var(--color-glass-border)', fontSize: 12, color: 'var(--color-foreground-disabled)' }}>
+        <div className="shrink-0 flex items-center justify-center gap-3" style={{ padding: '8px 16px', borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--muted-foreground)' }}>
           <button disabled={page <= 1} onClick={() => onPatchParams({ page: String(page - 1) })} style={pagerBtn(page <= 1)}>←</button>
           <span>{page} / {totalPages}（共 {total}）</span>
           <button disabled={page >= totalPages} onClick={() => onPatchParams({ page: String(page + 1) })} style={pagerBtn(page >= totalPages)}>→</button>
@@ -210,14 +210,14 @@ export default function OrgDetailPanel({
 
       {confirmDelete && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) setConfirmDelete(false); }}>
-          <div style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-modal)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
+          <div style={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-2xl)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
             <h3 style={{ margin: 0, marginBottom: 8, fontSize: 14, fontWeight: 600 }}>删除组织</h3>
-            <div style={{ fontSize: 13, color: 'var(--color-foreground-muted)', marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: 'var(--muted-foreground)', marginBottom: 12 }}>
               确定删除「{orgDetails?.name}」？子组织或项目非空时会被后端拒删。
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setConfirmDelete(false)} style={{ padding: '6px 12px', background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-foreground-muted)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
-              <button onClick={() => void handleDelete()} style={{ padding: '6px 12px', background: 'var(--color-destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>删除</button>
+              <button onClick={() => setConfirmDelete(false)} style={{ padding: '6px 12px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
+              <button onClick={() => void handleDelete()} style={{ padding: '6px 12px', background: 'var(--destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>删除</button>
             </div>
           </div>
         </div>
@@ -230,8 +230,8 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   return (
     <button onClick={onClick} style={{
       padding: '8px 16px', fontSize: 13, fontWeight: active ? 600 : 400,
-      color: active ? 'var(--color-accent)' : 'var(--color-foreground-muted)',
-      background: 'none', border: 'none', borderBottom: `2px solid ${active ? 'var(--color-accent)' : 'transparent'}`,
+      color: active ? 'var(--primary)' : 'var(--muted-foreground)',
+      background: 'none', border: 'none', borderBottom: `2px solid ${active ? 'var(--primary)' : 'transparent'}`,
       cursor: 'pointer', marginBottom: -1,
     }}>{children}</button>
   );
@@ -241,6 +241,6 @@ function pagerBtn(disabled: boolean): React.CSSProperties {
   return {
     border: 'none', background: 'none', fontSize: 12, padding: '2px 6px',
     cursor: disabled ? 'default' : 'pointer',
-    color: disabled ? 'var(--color-foreground-disabled)' : 'var(--color-accent)',
+    color: disabled ? 'var(--muted-foreground)' : 'var(--primary)',
   };
 }

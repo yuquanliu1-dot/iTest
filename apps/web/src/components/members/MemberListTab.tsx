@@ -32,10 +32,10 @@ export default function MemberListTab({ orgId, includeSubtree, q, page, pageSize
   }, [orgId, includeSubtree, q, page, pageSize, onTotal, reloadToken]);
 
   if (loading && items.length === 0) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--color-foreground-disabled)', fontSize: 13 }}>加载中…</div>;
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>加载中…</div>;
   }
   if (items.length === 0) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--color-foreground-disabled)', fontSize: 13 }}>暂无成员</div>;
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>暂无成员</div>;
   }
   return (
     <>
@@ -44,11 +44,11 @@ export default function MemberListTab({ orgId, includeSubtree, q, page, pageSize
           key={m.id}
           onClick={() => onOpen(m.userId)}
           className="flex items-center gap-2 rounded"
-          style={{ minHeight: 56, padding: '8px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--color-foreground)' }}
+          style={{ minHeight: 56, padding: '8px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--foreground)' }}
         >
           <span className="truncate" style={{ flex: 1 }}>
             {m.displayName}{' '}
-            <span style={{ color: 'var(--color-foreground-disabled)' }}>@{m.username}</span>
+            <span style={{ color: 'var(--muted-foreground)' }}>@{m.username}</span>
           </span>
           {includeSubtree && m.organizationName && <Badge label={m.organizationName} />}
           {m.isManager && <Badge label="管理员" accent />}

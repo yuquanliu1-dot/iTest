@@ -5,8 +5,8 @@ export default function Badge({ label, accent }: Props) {
   return (
     <span style={{
       fontSize: 10, padding: '1px 6px', borderRadius: 999,
-      border: `1px solid ${accent ? 'var(--color-accent)' : 'var(--color-glass-border)'}`,
-      color: accent ? 'var(--color-accent)' : 'var(--color-foreground-muted)',
+      border: `1px solid ${accent ? 'var(--primary)' : 'var(--border)'}`,
+      color: accent ? 'var(--primary)' : 'var(--muted-foreground)',
       whiteSpace: 'nowrap',
     }}>{label}</span>
   );

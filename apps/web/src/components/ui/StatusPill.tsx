@@ -3,12 +3,12 @@ import type { ReactNode } from 'react';
 export type StatusTone = 'success' | 'accent' | 'warning' | 'destructive' | 'muted' | 'info';
 
 const toneStyles: Record<StatusTone, { background: string; color: string }> = {
-  success: { background: 'var(--color-success-light)', color: 'var(--color-success-text)' },
-  accent: { background: 'var(--color-accent-light)', color: 'var(--color-accent)' },
-  warning: { background: 'var(--color-warning-light)', color: 'var(--color-warning-text)' },
-  destructive: { background: 'var(--color-destructive-light)', color: 'var(--color-destructive-text)' },
-  info: { background: 'var(--color-info-light)', color: 'var(--color-info-text)' },
-  muted: { background: 'var(--color-muted)', color: 'var(--color-foreground-secondary)' },
+  success: { background: 'var(--success-soft)', color: 'var(--success)' },
+  accent: { background: 'var(--primary-soft)', color: 'var(--primary)' },
+  warning: { background: 'var(--warning-soft)', color: 'var(--warning)' },
+  destructive: { background: 'var(--destructive-soft)', color: 'var(--destructive)' },
+  info: { background: 'var(--info-soft)', color: 'var(--info)' },
+  muted: { background: 'var(--muted)', color: 'var(--muted-foreground)' },
 };
 
 /**

@@ -7,6 +7,12 @@ import Icon from '../components/Icon';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Toggle from '../components/ui/Toggle';
+import {
+  PageShell,
+  PageShellDescription,
+  PageShellHeader,
+  PageShellTitle,
+} from '../components/layout/PageShell';
 
 const PROVIDERS = [
   { value: 'openai', label: 'openai' },
@@ -67,7 +73,7 @@ export default function Settings() {
 
   if (isLoading) {
     return (
-      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)' }}>
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)' }}>
         <Icon name="loader" size={16} className="animate-spin" />
         <span style={{ marginLeft: 8 }}>加载中...</span>
       </div>
@@ -75,27 +81,20 @@ export default function Settings() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 pt-4 pb-0">
-        <div>
-          <h1 className="text-[22px] font-semibold tracking-[-0.03em] leading-[1.1]" style={{ color: 'var(--color-foreground)' }}>
-            设置
-          </h1>
-          <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
-            LLM provider 与偏好配置
-          </p>
-        </div>
-      </div>
+    <PageShell contained className="gap-4">
+      <PageShellHeader>
+        <PageShellTitle>设置</PageShellTitle>
+        <PageShellDescription>LLM provider 与偏好配置</PageShellDescription>
+      </PageShellHeader>
 
       {/* Two-panel card（iDO 设置页规范） */}
-      <div className="flex h-full gap-3 p-3 flex-1 min-h-0">
+      <div className="flex gap-3 flex-1 min-h-0">
         <div
-          className="glass-card shrink-0 flex flex-col"
+          className="bg-card border shrink-0 flex flex-col"
           style={{ width: 240 }}
         >
           <div className="hairline-bottom" style={{ padding: '12px 16px' }}>
-            <h2 className="text-[14px] font-semibold m-0" style={{ color: 'var(--color-foreground)' }}>
+            <h2 className="text-[14px] font-semibold m-0" style={{ color: 'var(--foreground)' }}>
               设置面板
             </h2>
           </div>
@@ -116,8 +115,8 @@ export default function Settings() {
                       height: 36,
                       padding: '0 8px',
                       borderRadius: 'var(--radius-sm)',
-                      background: active ? 'var(--color-accent-light)' : undefined,
-                      color: active ? 'var(--color-accent)' : 'var(--color-foreground-secondary)',
+                      background: active ? 'var(--primary-soft)' : undefined,
+                      color: active ? 'var(--primary)' : 'var(--muted-foreground)',
                       fontWeight: active ? 500 : 400,
                       fontSize: 13,
                     }}
@@ -131,14 +130,14 @@ export default function Settings() {
           </div>
         </div>
 
-        <div className="glass-card flex-1 min-w-0 overflow-y-auto" style={{ padding: 20 }}>
+        <div className="bg-card border flex-1 min-w-0 overflow-y-auto" style={{ padding: 20 }}>
           {panel === 'llm' && (
             <div className="flex flex-col gap-4 max-w-xl">
               <div>
-                <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--color-foreground)' }}>
+                <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--foreground)' }}>
                   LLM Provider
                 </h3>
-                <p className="text-[12px] mb-3" style={{ color: 'var(--color-foreground-muted)' }}>
+                <p className="text-[12px] mb-3" style={{ color: 'var(--muted-foreground)' }}>
                   选择 provider 并填写 API key 后即可使用。
                 </p>
                 <select className="input-base" value={provider} onChange={(e) => setProvider(e.target.value)}>
@@ -163,7 +162,7 @@ export default function Settings() {
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
                 />
-                <p className="text-[11px] mt-1" style={{ color: 'var(--color-foreground-muted)' }}>
+                <p className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
                   内网网关 / 代理地址，如 http://192.168.2.197:3000
                 </p>
               </div>
@@ -175,7 +174,7 @@ export default function Settings() {
                   onChange={(e) => setModel(e.target.value)}
                 />
                 {DEFAULT_MODELS[provider] && (
-                  <p className="text-[11px] mt-1" style={{ color: 'var(--color-foreground-muted)' }}>
+                  <p className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
                     默认：{DEFAULT_MODELS[provider]}（留空时服务端自动使用）
                   </p>
                 )}
@@ -188,22 +187,22 @@ export default function Settings() {
                   {test.isPending ? '测试中...' : '测试连接'}
                 </Button>
                 {test.isPending && (
-                  <span className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                  <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
                     正在发送探测请求...
                   </span>
                 )}
                 {test.isSuccess && test.data.ok && (
-                  <span className="text-[12px]" style={{ color: 'var(--color-success)' }}>
+                  <span className="text-[12px]" style={{ color: 'var(--success)' }}>
                     连接成功 · {test.data.latencyMs}ms
                   </span>
                 )}
                 {test.isSuccess && !test.data.ok && (
-                  <span className="text-[12px]" style={{ color: 'var(--color-destructive)' }}>
+                  <span className="text-[12px]" style={{ color: 'var(--destructive)' }}>
                     连接失败：{test.data.error}
                   </span>
                 )}
                 {test.isError && (
-                  <span className="text-[12px]" style={{ color: 'var(--color-destructive)' }}>
+                  <span className="text-[12px]" style={{ color: 'var(--destructive)' }}>
                     连接失败：{(test.error as Error).message}
                   </span>
                 )}
@@ -214,18 +213,18 @@ export default function Settings() {
           {panel === 'appearance' && (
             <div className="flex flex-col gap-4 max-w-xl">
               <div>
-                <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--color-foreground)' }}>
+                <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--foreground)' }}>
                   外观
                 </h3>
-                <p className="text-[12px] mb-4" style={{ color: 'var(--color-foreground-muted)' }}>
+                <p className="text-[12px] mb-4" style={{ color: 'var(--muted-foreground)' }}>
                   当前主题：{theme === 'dark' ? '深色玻璃' : '浅色玻璃'}
                 </p>
               </div>
               <div className="flex flex-col gap-3">
-                <div className="glass-card flex items-center justify-between" style={{ padding: 16 }}>
+                <div className="bg-card border flex items-center justify-between" style={{ padding: 16 }}>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-foreground)' }}>深色玻璃</div>
-                    <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>深色玻璃</div>
+                    <div className="text-[11px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
                       高对比，适合长时间使用
                     </div>
                   </div>
@@ -236,6 +235,6 @@ export default function Settings() {
           )}
         </div>
       </div>
-    </div>
+    </PageShell>
   );
 }

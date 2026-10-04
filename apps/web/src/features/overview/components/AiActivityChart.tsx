@@ -16,12 +16,12 @@ type AI = OverviewResponse['aiActivity'];
 
 export default function AiActivityChart({ data }: { data: AI }) {
   return (
-    <div className="glass-panel rounded-[var(--radius-md)] p-5" style={{ boxShadow: 'var(--shadow-card)' }}>
+    <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-[14px] font-semibold" style={{ color: 'var(--color-foreground)' }}>
+        <h3 className="text-[14px] font-semibold" style={{ color: 'var(--foreground)' }}>
           AI 活动
         </h3>
-        <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
           近 7 天
         </span>
       </div>

@@ -99,7 +99,7 @@ export default function AiWorkspacePage() {
 
   if (!threadId) {
     return (
-      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)' }}>
+      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)' }}>
         <Icon name="loader" size={16} className="animate-spin" />
         <span style={{ marginLeft: 8 }}>初始化会话…</span>
       </div>
@@ -110,7 +110,7 @@ export default function AiWorkspacePage() {
     <div className="flex flex-col h-full">
       <div
         className="flex items-center gap-3 px-5 py-3 shrink-0 fade-up"
-        style={{ borderBottom: '1px solid var(--color-glass-border)' }}
+        style={{ borderBottom: '1px solid var(--border)' }}
       >
         <Button
           variant="ghost"
@@ -125,7 +125,7 @@ export default function AiWorkspacePage() {
       <div className="flex-1 min-h-0 flex">
         <div
           className="w-[420px] shrink-0 border-r"
-          style={{ borderColor: 'var(--color-border)' }}
+          style={{ borderColor: 'var(--border)' }}
         >
           <ThreadPane requirementId={id!} threadId={threadId} initialMessage={initialMessage} contextMode={contextMode} />
         </div>

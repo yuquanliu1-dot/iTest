@@ -36,7 +36,7 @@ export default function GlobalUserSearch({ onPick }: Props) {
   }, []);
 
   return (
-    <div ref={boxRef} className="shrink-0 relative" style={{ padding: '10px 16px', borderBottom: '1px solid var(--color-glass-border)' }}>
+    <div ref={boxRef} className="shrink-0 relative" style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
       <input
         value={input}
         onChange={(e) => setInput(e.target.value)}
@@ -47,18 +47,18 @@ export default function GlobalUserSearch({ onPick }: Props) {
       {open && (
         <div style={{
           position: 'absolute', left: 16, right: 16, top: '100%', zIndex: 20,
-          background: 'var(--color-background-elevated)', border: '1px solid var(--color-glass-border)',
-          borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-card)', maxHeight: 260, overflowY: 'auto',
+          background: 'var(--card)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-sm)', maxHeight: 260, overflowY: 'auto',
         }}>
           {results.length === 0 ? (
-            <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--color-foreground-disabled)' }}>无匹配</div>
+            <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>无匹配</div>
           ) : results.map((u) => (
             <div
               key={u.id}
               onClick={() => { setOpen(false); setInput(''); onPick(u.id); }}
-              style={{ padding: '7px 12px', fontSize: 13, cursor: 'pointer', color: 'var(--color-foreground)' }}
+              style={{ padding: '7px 12px', fontSize: 13, cursor: 'pointer', color: 'var(--foreground)' }}
             >
-              {u.displayName} <span style={{ color: 'var(--color-foreground-disabled)' }}>@{u.username}</span>
+              {u.displayName} <span style={{ color: 'var(--muted-foreground)' }}>@{u.username}</span>
             </div>
           ))}
         </div>

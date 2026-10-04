@@ -1,18 +1,28 @@
 import { useNavigate } from 'react-router-dom';
 import { useState } from 'react';
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '../ui/shadcn/dropdown-menu';
+import { Button } from '../ui/shadcn/button';
 import { useAuthStore } from '../../stores/auth';
 import { useThemeStore } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
 import Icon from '../Icon';
-import Toggle from '../ui/Toggle';
-import BrandGlyph from '../BrandGlyph';
 
 /**
- * 侧边栏底部的用户下拉：头像 + 用户信息 + 多组织切换 + 成员管理 + 配置 + 主题 + 退出。
- * collapsed=true 时只显示头像圆点（磁贴形式）。
+ * 顶栏头像菜单（CRM app-header UserMenu 模式）：
+ * 头像触发 → 用户信息 / 切换组织 / 主题切换 / 退出登录。
+ * 系统配置与成员管理入口已上移到 icon rail。
  */
-export default function UserMenu({ collapsed = false }: { collapsed?: boolean }) {
+export default function UserMenu() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const toast = useUIStore((s) => s.showToast);
@@ -23,7 +33,6 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
   const logout = useAuthStore((s) => s.logout);
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
-  const canManageMembers = useAuthStore((s) => s.organizations.some((o) => o.isManager));
 
   const activeOrg = organizations.find((o) => o.id === activeOrgId);
   const showOrgList = organizations.length > 1;
@@ -48,344 +57,71 @@ export default function UserMenu({ collapsed = false }: { collapsed?: boolean })
     navigate('/login', { replace: true });
   };
 
-  const navAndClose = (path: string) => {
-    setOpen(false);
-    navigate(path);
-  };
-
-  // 触发器样式：折叠态仅头像磁贴，展开态整行（含名字 + 当前组织）
-  const triggerStyle: React.CSSProperties = collapsed
-    ? {
-        width: 32,
-        height: 32,
-        borderRadius: '50%',
-        border: '1px solid var(--color-glass-panel-border)',
-        background: 'var(--color-accent-light)',
-        color: 'var(--color-accent)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: 'pointer',
-        fontSize: 13,
-        fontWeight: 600,
-        padding: 0,
-        transition: 'transform 120ms ease, border-color 160ms ease',
-      }
-    : {
-        width: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '8px 8px',
-        borderRadius: 'var(--radius-md)',
-        border: '1px solid var(--color-glass-border)',
-        background: 'var(--color-background-elevated)',
-        color: 'var(--color-foreground)',
-        cursor: 'pointer',
-        textAlign: 'left',
-        transition: 'background 160ms ease, transform 120ms ease, border-color 160ms ease',
-      };
-
   return (
-    <DropdownMenu.Root open={open} onOpenChange={setOpen}>
-      <DropdownMenu.Trigger asChild>
-        <button aria-label="用户菜单" style={triggerStyle}>
-          {/*
-            头像 / 文字 / chevron 都是纯装饰：pointer-events: none
-            让所有 click 落到 button 自身，Radix 才能稳定取到同一个 anchor rect，
-            否则在不同位置点击头像/文字/chevron 会让 popover 锚点漂移（"异常跳转"）。
-          */}
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="用户菜单"
+          className="rounded-full hover:bg-transparent aria-expanded:bg-transparent"
+        >
           <span
             aria-hidden
-            style={{
-              width: 28,
-              height: 28,
-              borderRadius: '50%',
-              background: 'var(--color-accent-light)',
-              color: 'var(--color-accent)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 12,
-              fontWeight: 600,
-              flexShrink: 0,
-              pointerEvents: 'none',
-            }}
+            className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[var(--primary-soft)] text-xs font-semibold text-[var(--primary)]"
           >
             {initial}
           </span>
-          {!collapsed && (
-            <span
-              aria-hidden
-              style={{
-                flex: 1,
-                minWidth: 0,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 2,
-                pointerEvents: 'none',
-              }}
-            >
-              <span
-                style={{
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: 'var(--color-foreground)',
-                  lineHeight: 1.2,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {user?.displayName || user?.username}
-              </span>
-              <span
-                style={{
-                  fontSize: 11,
-                  color: 'var(--color-foreground-muted)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {activeOrg?.name ?? ''}
-              </span>
-            </span>
-          )}
-          {!collapsed && (
-            <span aria-hidden style={{ display: 'inline-flex', pointerEvents: 'none' }}>
-              <Icon name="chevronUp" size={14} style={{ color: 'var(--color-foreground-muted)' }} />
-            </span>
-          )}
-        </button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          align="end"
-          side={collapsed ? 'right' : 'top'}
-          sideOffset={collapsed ? 8 : 6}
-          // 复用 .dialog-content 会强制套用居中 modal 的 translate(-50%, -50%),
-          // 把 popover 拖离 Radix 算出的锚点再弹回去 -> "先出现在一个异常位置,
-          // 再跳到另一个位置"。这里只用 .popover-in: 只动 scale，不动 anchor。
-          className="popover-in"
-          style={{
-            minWidth: 260,
-            background: 'var(--color-background-elevated)',
-            border: '1px solid var(--color-glass-panel-border)',
-            borderRadius: 'var(--radius-md)',
-            boxShadow: 'var(--shadow-modal)',
-            padding: 6,
-            zIndex: 100,
-            transformOrigin: 'var(--radix-dropdown-menu-content-transform-origin)',
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={8} className="min-w-56">
+        <DropdownMenuLabel className="flex flex-col gap-0.5">
+          <span className="truncate text-sm font-semibold">{user?.displayName || user?.username}</span>
+          <span className="truncate text-xs font-normal text-[var(--muted-foreground)]">
+            @{user?.username}
+            {activeOrg ? ` · ${activeOrg.name}` : ''}
+          </span>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+
+        {/* 切换组织（多组织时显示） */}
+        {showOrgList && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <Icon name="layers" size={14} />
+              切换组织
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="min-w-44">
+              {organizations.map((o) => (
+                <DropdownMenuItem key={o.id} onSelect={() => void handleSwitch(o.id)}>
+                  <span className="flex-1 truncate">{o.name}</span>
+                  {o.id === activeOrgId && <Icon name="check" size={14} />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        )}
+
+        {/* 主题切换（CRM：单击切换，图标随状态变化） */}
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault();
+            toggleTheme();
           }}
         >
-          {/* 用户信息区：用户名 + 当前组织 */}
-          <div
-            style={{
-              padding: '10px 10px 12px',
-              borderBottom: '1px solid var(--color-border-subtle)',
-              marginBottom: 4,
-            }}
-          >
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: 'var(--color-foreground)',
-                lineHeight: 1.3,
-              }}
-            >
-              {user?.displayName || user?.username}
-            </div>
-            <div
-              style={{
-                fontSize: 11,
-                color: 'var(--color-foreground-muted)',
-                marginTop: 2,
-              }}
-            >
-              @{user?.username}
-            </div>
-            {activeOrg && (
-              <div
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  marginTop: 8,
-                  padding: '2px 8px',
-                  borderRadius: 999,
-                  background: 'var(--color-accent-light)',
-                  color: 'var(--color-accent)',
-                  fontSize: 11,
-                  fontWeight: 500,
-                }}
-              >
-                <Icon name="layers" size={11} />
-                {activeOrg.name}
-              </div>
-            )}
-          </div>
+          <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} />
+          {theme === 'dark' ? '浅色主题' : '深色主题'}
+        </DropdownMenuItem>
 
-          {/* 切换组织（多组织时显示） */}
-          {showOrgList && (
-            <DropdownMenu.Sub>
-              <DropdownMenu.SubTrigger
-                style={{
-                  width: '100%',
-                  padding: '8px 10px',
-                  borderRadius: 'var(--radius-sm)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  fontSize: 13,
-                  color: 'var(--color-foreground)',
-                  cursor: 'pointer',
-                  background: 'var(--color-background-elevated)',
-                  border: '1px solid transparent',
-                  outline: 'none',
-                }}
-              >
-                <Icon name="layers" size={14} />
-                <span style={{ flex: 1, textAlign: 'left' }}>切换组织</span>
-                <Icon name="chevronRight" size={12} />
-              </DropdownMenu.SubTrigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.SubContent
-                  sideOffset={6}
-                  style={{
-                    minWidth: 200,
-                    background: 'var(--color-background-elevated)',
-                    border: '1px solid var(--color-glass-panel-border)',
-                    borderRadius: 'var(--radius-md)',
-                    boxShadow: 'var(--shadow-modal)',
-                    padding: 6,
-                    zIndex: 110,
-                  }}
-                >
-                  {organizations.map((o) => (
-                    <DropdownMenu.Item
-                      key={o.id}
-                      onSelect={() => void handleSwitch(o.id)}
-                      style={{
-                        width: '100%',
-                        padding: '8px 10px',
-                        borderRadius: 'var(--radius-sm)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        fontSize: 13,
-                        color: 'var(--color-foreground)',
-                        cursor: 'pointer',
-                        background: 'var(--color-background-elevated)',
-                        border: '1px solid transparent',
-                        outline: 'none',
-                      }}
-                    >
-                      <span style={{ flex: 1 }}>{o.name}</span>
-                      {o.id === activeOrgId && <Icon name="check" size={14} />}
-                    </DropdownMenu.Item>
-                  ))}
-                </DropdownMenu.SubContent>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Sub>
-          )}
-
-          {/* 配置 */}
-          <DropdownMenu.Item
-            onSelect={() => navAndClose('/settings')}
-            style={{
-              width: '100%',
-              padding: '8px 10px',
-              borderRadius: 'var(--radius-sm)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              fontSize: 13,
-              color: 'var(--color-foreground)',
-              cursor: 'pointer',
-              background: 'var(--color-background-elevated)',
-              border: '1px solid transparent',
-              outline: 'none',
-            }}
-          >
-            <Icon name="settings" size={14} />
-            <span style={{ flex: 1 }}>系统配置</span>
-          </DropdownMenu.Item>
-
-          {/* 成员管理（任一可见组织的管理员才显示） */}
-          {canManageMembers && (
-            <DropdownMenu.Item
-              onSelect={() => navAndClose('/members')}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                borderRadius: 'var(--radius-sm)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                fontSize: 13,
-                color: 'var(--color-foreground)',
-                cursor: 'pointer',
-                background: 'var(--color-background-elevated)',
-                border: '1px solid transparent',
-                outline: 'none',
-              }}
-            >
-              <Icon name="user" size={14} />
-              <span style={{ flex: 1 }}>成员管理</span>
-            </DropdownMenu.Item>
-          )}
-
-          {/* 主题切换（行内控制，不可跟随 Dropdown 关闭） */}
-          <div
-            style={{
-              padding: '8px 10px',
-              borderRadius: 'var(--radius-sm)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              fontSize: 13,
-              color: 'var(--color-foreground)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} />
-            <span style={{ flex: 1 }}>{theme === 'dark' ? '深色主题' : '浅色主题'}</span>
-            <Toggle checked={theme === 'dark'} onChange={() => toggleTheme()} />
-          </div>
-
-          <DropdownMenu.Separator
-            style={{
-              height: 1,
-              background: 'var(--color-border-subtle)',
-              margin: '6px 4px',
-            }}
-          />
-
-          {/* 退出登录 */}
-          <DropdownMenu.Item
-            onSelect={() => void handleLogout()}
-            style={{
-              width: '100%',
-              padding: '8px 10px',
-              borderRadius: 'var(--radius-sm)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              fontSize: 13,
-              color: 'var(--color-destructive)',
-              cursor: 'pointer',
-              background: 'var(--color-background-elevated)',
-              border: '1px solid transparent',
-              outline: 'none',
-            }}
-          >
-            <Icon name="logOut" size={14} />
-            <span style={{ flex: 1 }}>退出登录</span>
-          </DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          className="text-[var(--destructive)] data-[highlighted]:text-[var(--destructive)]"
+          onSelect={() => void handleLogout()}
+        >
+          <Icon name="logOut" size={14} />
+          退出登录
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

@@ -1,25 +1,17 @@
 import { create } from 'zustand';
+import { toast } from 'sonner';
 
-interface Toast {
-  id: number;
-  message: string;
-  kind: 'success' | 'error' | 'info';
-}
+type ToastKind = 'success' | 'error' | 'info';
 
 interface UIState {
-  toasts: Toast[];
-  showToast: (message: string, kind?: Toast['kind']) => void;
-  dismiss: (id: number) => void;
+  showToast: (message: string, kind?: ToastKind) => void;
 }
 
-let nextId = 1;
-
-export const useUIStore = create<UIState>((set) => ({
-  toasts: [],
+// 渲染交给 shadcn/sonner Toaster（App.tsx 挂载）；store 只保留 showToast API。
+export const useUIStore = create<UIState>(() => ({
   showToast: (message, kind = 'info') => {
-    const id = nextId++;
-    set((s) => ({ toasts: [...s.toasts, { id, message, kind }] }));
-    setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 3500);
+    if (kind === 'success') toast.success(message, { duration: 3500 });
+    else if (kind === 'error') toast.error(message, { duration: 3500 });
+    else toast(message, { duration: 3500 });
   },
-  dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 }));

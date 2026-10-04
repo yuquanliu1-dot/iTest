@@ -56,7 +56,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
           <div className="flex flex-col gap-1.5">
             <label
               className="text-[11px] font-semibold uppercase tracking-[0.06em]"
-              style={{ color: 'var(--color-foreground-muted)' }}
+              style={{ color: 'var(--muted-foreground)' }}
             >
               名称
             </label>
@@ -71,7 +71,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
           <div className="flex flex-col gap-2">
             <label
               className="text-[11px] font-semibold uppercase tracking-[0.06em]"
-              style={{ color: 'var(--color-foreground-muted)' }}
+              style={{ color: 'var(--muted-foreground)' }}
             >
               颜色
             </label>
@@ -94,7 +94,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
                       border: 'none',
                       cursor: 'pointer',
                       boxShadow: selected
-                        ? `0 0 0 2px var(--color-surface-overlay), 0 0 0 4px ${c}, 0 4px 12px ${c}55`
+                        ? `0 0 0 2px var(--popover), 0 0 0 4px ${c}, 0 4px 12px ${c}55`
                         : '0 1px 2px rgba(0,0,0,0.10)',
                       transform: selected ? 'scale(1.06)' : undefined,
                       transition: 'transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s ease',
@@ -113,9 +113,9 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
                   width: 44,
                   height: 32,
                   padding: 0,
-                  border: '1px solid var(--color-border)',
+                  border: '1px solid var(--border)',
                   borderRadius: 8,
-                  background: 'var(--color-surface-overlay)',
+                  background: 'var(--popover)',
                   cursor: 'pointer',
                 }}
                 aria-label="自定义颜色"
@@ -142,7 +142,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
               >
                 {name.trim() || '标签预览'}
               </span>
-              <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                 预览
               </span>
             </div>
@@ -151,7 +151,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
           <div className="flex flex-col gap-1.5">
             <label
               className="text-[11px] font-semibold uppercase tracking-[0.06em]"
-              style={{ color: 'var(--color-foreground-muted)' }}
+              style={{ color: 'var(--muted-foreground)' }}
             >
               描述（可选）
             </label>
@@ -166,7 +166,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
         </div>
         <div
           className="flex justify-end gap-2 px-5 py-4 hairline-top"
-          style={{ borderColor: 'var(--color-border)' }}
+          style={{ borderColor: 'var(--border)' }}
         >
           <Button variant="ghost" onClick={onClose}>取消</Button>
           <Button disabled={!name.trim() || saving} onClick={handleSave}>

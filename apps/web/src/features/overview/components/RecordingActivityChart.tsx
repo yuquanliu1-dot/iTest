@@ -17,11 +17,11 @@ const KIND_LABEL: Record<string, string> = {
 export default function RecordingActivityChart({ data }: { data: Rec }) {
   if (data.length === 0) {
     return (
-      <div className="glass-panel rounded-[var(--radius-md)] p-5">
-        <h3 className="text-[14px] font-semibold mb-3" style={{ color: 'var(--color-foreground)' }}>
+      <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
+        <h3 className="text-[14px] font-semibold mb-3" style={{ color: 'var(--foreground)' }}>
           录制活动
         </h3>
-        <p className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+        <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
           录制活动统计将在后续版本接入
         </p>
       </div>
@@ -34,8 +34,8 @@ export default function RecordingActivityChart({ data }: { data: Rec }) {
   }));
 
   return (
-    <div className="glass-panel rounded-[var(--radius-md)] p-5" style={{ boxShadow: 'var(--shadow-card)' }}>
-      <h3 className="text-[14px] font-semibold mb-3" style={{ color: 'var(--color-foreground)' }}>
+    <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
+      <h3 className="text-[14px] font-semibold mb-3" style={{ color: 'var(--foreground)' }}>
         录制活动
       </h3>
       <div style={{ width: '100%', height: 200 }}>

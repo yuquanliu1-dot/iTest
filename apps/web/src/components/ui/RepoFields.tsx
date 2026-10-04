@@ -69,9 +69,9 @@ export default function RepoFields({ value, onChange, projectNameHint }: Props) 
   return (
     <div
       style={{
-        border: '1px solid var(--color-glass-border)',
+        border: '1px solid var(--border)',
         borderRadius: 'var(--radius-sm)',
-        background: 'var(--color-surface-elevated)',
+        background: 'var(--card)',
       }}
     >
       <button
@@ -80,15 +80,15 @@ export default function RepoFields({ value, onChange, projectNameHint }: Props) 
         className="flex items-center justify-between w-full px-3 py-2"
         style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
       >
-        <span className="text-[12px] font-medium" style={{ color: 'var(--color-foreground)' }}>
+        <span className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
           仓库配置（可选，用于 AI 工作台参考源码）
         </span>
-        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} style={{ color: 'var(--color-foreground-muted)' }} />
+        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} style={{ color: 'var(--muted-foreground)' }} />
       </button>
       {open && (
-        <div className="grid grid-cols-2 gap-x-3 gap-y-2 px-3 pb-3" style={{ borderTop: '1px solid var(--color-glass-border)' }}>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2 px-3 pb-3" style={{ borderTop: '1px solid var(--border)' }}>
           <div className="flex flex-col gap-1" style={{ marginTop: 10 }}>
-            <label className="text-[11px] font-medium" style={{ color: 'var(--color-foreground-muted)' }}>
+            <label className="text-[11px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
               Git 提供方
             </label>
             <select
@@ -146,17 +146,17 @@ export default function RepoFields({ value, onChange, projectNameHint }: Props) 
               {verify.isPending ? '测试中...' : '测试连接'}
             </Button>
             {verifyState.kind === 'ok' && (
-              <span className="text-[11px]" style={{ color: 'var(--color-success, #16a34a)' }}>
+              <span className="text-[11px]" style={{ color: 'var(--success, #16a34a)' }}>
                 ✓ 连接成功{verifyState.defaultBranch ? ` · 默认分支 ${verifyState.defaultBranch}` : ''}
               </span>
             )}
             {verifyState.kind === 'fail' && (
-              <span className="text-[11px]" style={{ color: 'var(--color-destructive)' }}>
+              <span className="text-[11px]" style={{ color: 'var(--destructive)' }}>
                 {verifyState.error}
               </span>
             )}
           </div>
-          <p className="col-span-2 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+          <p className="col-span-2 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             PAT 仅用于仓库元数据 + 测试连接；列表查询会返回 hasPat，原始值不会回传前端。
           </p>
         </div>

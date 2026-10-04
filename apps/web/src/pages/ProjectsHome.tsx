@@ -13,6 +13,14 @@ import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import RepoFields, { EMPTY_REPO, type RepoFieldsValue } from '../components/ui/RepoFields';
 import RefEditDialog, { EMPTY_REF_FORM, type RefFormState } from '../components/version/RefEditDialog';
+import {
+  PageShell,
+  PageShellActions,
+  PageShellContent,
+  PageShellDescription,
+  PageShellHeader,
+  PageShellTitle,
+} from '../components/layout/PageShell';
 
 interface FormState {
   open: boolean;
@@ -202,36 +210,32 @@ export default function ProjectsHome() {
   };
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex items-center justify-between px-5 pt-4 pb-0">
-        <div>
-          <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--color-foreground)' }}>
-            项目
-          </h1>
-          <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
-            选择一个项目进入工作区，或创建新项目
-          </p>
-        </div>
-        <Button
-          onClick={() =>
-            setForm({
-              open: true,
-              mode: 'create-project',
-              id: null,
-              name: '',
-              description: '',
-              repo: EMPTY_REPO,
-            })
-          }
-        >
-          <Icon name="plus" size={14} />
-          新建项目
-        </Button>
-      </div>
+    <PageShell>
+      <PageShellHeader>
+        <PageShellTitle>项目</PageShellTitle>
+        <PageShellActions>
+          <Button
+            onClick={() =>
+              setForm({
+                open: true,
+                mode: 'create-project',
+                id: null,
+                name: '',
+                description: '',
+                repo: EMPTY_REPO,
+              })
+            }
+          >
+            <Icon name="plus" size={14} />
+            新建项目
+          </Button>
+        </PageShellActions>
+        <PageShellDescription>选择一个项目进入工作区，或创建新项目</PageShellDescription>
+      </PageShellHeader>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+      <PageShellContent>
         {isLoading ? (
-          <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+          <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
             <Icon name="loader" size={16} className="animate-spin" />
             <span style={{ marginLeft: 8 }}>加载中...</span>
           </div>
@@ -295,7 +299,7 @@ export default function ProjectsHome() {
             ))}
           </div>
         )}
-      </div>
+      </PageShellContent>
 
       {/* 项目新建/编辑弹窗 */}
       <Dialog open={form.open} onOpenChange={(open) => setForm((f) => ({ ...f, open }))}>
@@ -306,7 +310,7 @@ export default function ProjectsHome() {
           <div className="flex-1 min-h-0 flex flex-col gap-3 px-5 py-4 overflow-y-auto">
             <Input label="名称" placeholder="如：CueCast 官网" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>描述（可空）</label>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>描述（可空）</label>
               <textarea
                 className="input-base"
                 placeholder="简要说明项目用途"
@@ -323,7 +327,7 @@ export default function ProjectsHome() {
           </div>
           <div
             className="flex justify-end gap-2 px-5 py-3 hairline-top shrink-0"
-            style={{ borderColor: 'var(--color-border)' }}
+            style={{ borderColor: 'var(--border)' }}
           >
             <Button variant="ghost" onClick={() => setForm(EMPTY_FORM)}>取消</Button>
             <Button disabled={!form.name.trim() || save.isPending} onClick={() => save.mutate()}>
@@ -340,7 +344,7 @@ export default function ProjectsHome() {
             <DialogTitle>{versionForm.mode === 'create' ? '新建版本' : '编辑版本'}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
-            <p className="text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
               {versionForm.mode === 'create' ? '为' : '编辑「'}{versionForm.projectName}{versionForm.mode === 'create' ? '」添加新版本' : '」'}
             </p>
             <Input
@@ -350,7 +354,7 @@ export default function ProjectsHome() {
               onChange={(e) => setVersionForm((f) => ({ ...f, name: e.target.value }))}
             />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>关联环境（可空，留空走项目默认）</label>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>关联环境（可空，留空走项目默认）</label>
               <select
                 className="input-base input-sm"
                 value={versionForm.environmentId}
@@ -365,7 +369,7 @@ export default function ProjectsHome() {
               </select>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>描述（可空）</label>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>描述（可空）</label>
               <textarea
                 className="input-base"
                 placeholder="如：双十一大促版本"
@@ -377,7 +381,7 @@ export default function ProjectsHome() {
           </div>
           <div
             className="flex justify-end gap-2 px-5 py-4 hairline-top"
-            style={{ borderColor: 'var(--color-border)' }}
+            style={{ borderColor: 'var(--border)' }}
           >
             <Button variant="ghost" onClick={() => setVersionForm(EMPTY_VERSION_FORM)}>取消</Button>
             <Button
@@ -399,12 +403,12 @@ export default function ProjectsHome() {
       <Dialog open={!!confirmDelete} onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>删除项目</DialogTitle></DialogHeader>
-          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
             确定删除「{confirmDelete?.name}」？项目内存在用例时将被拒绝删除。
           </div>
           <div
             className="flex justify-end gap-2 px-5 py-4 hairline-top"
-            style={{ borderColor: 'var(--color-border)' }}
+            style={{ borderColor: 'var(--border)' }}
           >
             <Button variant="ghost" onClick={() => setConfirmDelete(null)}>取消</Button>
             <Button
@@ -429,7 +433,7 @@ export default function ProjectsHome() {
         }}
         saving={saveRef.isPending}
       />
-    </div>
+    </PageShell>
   );
 }
 
@@ -476,7 +480,7 @@ function ProjectRow({
     <div
       data-stagger-item
       className="hairline-bottom"
-      style={{ borderColor: 'var(--color-muted)' }}
+      style={{ borderColor: 'var(--muted)' }}
     >
       <div
         role="button"
@@ -485,32 +489,32 @@ function ProjectRow({
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
         className="flex items-center gap-3 px-3 py-3 cursor-pointer"
         style={{
-          background: expanded ? 'var(--color-background-subtle)' : 'transparent',
+          background: expanded ? 'var(--muted)' : 'transparent',
           transition: 'background 120ms ease',
         }}
       >
         <Icon
           name={expanded ? 'chevronDown' : 'chevronRight'}
           size={12}
-          style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }}
+          style={{ color: 'var(--muted-foreground)', flexShrink: 0 }}
         />
         <div className="flex-1 min-w-0 flex items-center gap-3">
-          <span className="text-[14px] font-semibold truncate" style={{ color: 'var(--color-foreground)' }}>
+          <span className="text-[14px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>
             {p.name}
           </span>
           {p.description && (
-            <span className="text-[12px] truncate hidden sm:inline" style={{ color: 'var(--color-foreground-secondary)' }}>
+            <span className="text-[12px] truncate hidden sm:inline" style={{ color: 'var(--muted-foreground)' }}>
               {p.description}
             </span>
           )}
         </div>
-        <span className="text-[12px] shrink-0" style={{ color: 'var(--color-foreground-muted)' }}>
+        <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>
           {p.caseCount} 条用例
         </span>
-        <span className="text-[12px] shrink-0" style={{ color: 'var(--color-foreground-muted)' }}>
+        <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>
           {p.versionCount} 版本
         </span>
-        <span className="text-[12px] shrink-0 hidden md:inline" style={{ color: 'var(--color-foreground-muted)' }}>
+        <span className="text-[12px] shrink-0 hidden md:inline" style={{ color: 'var(--muted-foreground)' }}>
           {p.environmentCount} 环境
         </span>
         <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -523,21 +527,21 @@ function ProjectRow({
       {expanded && (
         <div className="px-3 pb-3">
           {versionsQ.isLoading ? (
-            <div className="flex items-center gap-2 px-3 py-3 text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <div className="flex items-center gap-2 px-3 py-3 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
               <Icon name="loader" size={14} className="animate-spin" />
               加载版本…
             </div>
           ) : versionsQ.isError ? (
-            <div className="px-3 py-3 text-[12px]" style={{ color: 'var(--color-destructive)' }}>
+            <div className="px-3 py-3 text-[12px]" style={{ color: 'var(--destructive)' }}>
               加载失败：{(versionsQ.error as Error | null)?.message ?? '未知错误'}
             </div>
           ) : (
             <div
               className="rounded-[var(--radius-sm)] overflow-hidden"
-              style={{ border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-elevated)' }}
+              style={{ border: '1px solid var(--border)', background: 'var(--card)' }}
             >
               {(versionsQ.data ?? []).length === 0 ? (
-                <div className="px-3 py-3 text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                <div className="px-3 py-3 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
                   暂无版本
                 </div>
               ) : (
@@ -551,25 +555,25 @@ function ProjectRow({
                     <li
                       key={v.id}
                       className="flex items-center gap-3 px-3 py-2 list-row-clickable"
-                      style={{ borderBottom: '1px solid var(--color-muted)' }}
+                      style={{ borderBottom: '1px solid var(--muted)' }}
                     >
-                      <Icon name="tag" size={12} style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }} />
-                      <span className="text-[13px] font-medium" style={{ color: 'var(--color-foreground)' }}>
+                      <Icon name="tag" size={12} style={{ color: 'var(--muted-foreground)', flexShrink: 0 }} />
+                      <span className="text-[13px] font-medium" style={{ color: 'var(--foreground)' }}>
                         {v.name}
                       </span>
-                      <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                         用例 {v.caseCount ?? 0} · 计划 {v.planCount ?? 0}
                       </span>
-                      <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                         环境 {v.environmentName ?? '项目默认'}
                       </span>
                       {v.ref && v.refKind && (
                         <span
                           className="text-[10px] px-1.5 py-[1px] rounded"
                           style={{
-                            background: 'var(--color-surface-elevated)',
-                            border: '1px solid var(--color-glass-border)',
-                            color: 'var(--color-foreground-secondary)',
+                            background: 'var(--card)',
+                            border: '1px solid var(--border)',
+                            color: 'var(--muted-foreground)',
                           }}
                           title={`绑定的 git ${v.refKind}`}
                         >
@@ -601,12 +605,12 @@ function ProjectRow({
                   })}
                 </ul>
               )}
-              <div className="flex items-center px-3 py-2" style={{ background: 'var(--color-background-subtle)' }}>
+              <div className="flex items-center px-3 py-2" style={{ background: 'var(--muted)' }}>
                 <button
                   type="button"
                   onClick={onAddVersion}
                   className="flex items-center gap-1.5 text-[12px]"
-                  style={{ background: 'transparent', border: 'none', color: 'var(--color-accent)', cursor: 'pointer', padding: 0 }}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
                 >
                   <Icon name="plus" size={12} />
                   添加版本

@@ -20,8 +20,8 @@ export default function SortableStepRow({ id, disabled, isEditing, children }: P
       ref={setNodeRef}
       className="flex items-center gap-3 px-3 py-2 rounded-[var(--radius-sm)]"
       style={{
-        background: 'var(--color-background-subtle)',
-        border: `1px solid ${isEditing ? 'var(--color-accent)' : 'var(--color-glass-border)'}`,
+        background: 'var(--muted)',
+        border: `1px solid ${isEditing ? 'var(--primary)' : 'var(--border)'}`,
         transform: CSS.Transform.toString(transform),
         transition,
         ...(isDragging ? { zIndex: 10, opacity: 0.85, boxShadow: '0 4px 16px rgba(0,0,0,0.15)' } : {}),
@@ -40,7 +40,7 @@ export default function SortableStepRow({ id, disabled, isEditing, children }: P
           background: 'transparent',
           border: 'none',
           cursor: disabled ? 'default' : 'grab',
-          color: 'var(--color-foreground-muted)',
+          color: 'var(--muted-foreground)',
           padding: 2,
           lineHeight: 1,
           touchAction: 'none',

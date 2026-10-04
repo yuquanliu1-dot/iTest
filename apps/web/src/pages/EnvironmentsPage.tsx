@@ -10,6 +10,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import Segmented from '../components/ui/Segmented';
+import {
+  PageShell,
+  PageShellActions,
+  PageShellContent,
+  PageShellDescription,
+  PageShellHeader,
+} from '../components/layout/PageShell';
 
 interface EnvFormState {
   open: boolean;
@@ -213,33 +220,33 @@ export default function EnvironmentsPage() {
   const envs = envsQ.data ?? [];
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex items-center justify-between px-5 pt-4 pb-0">
-        <div className="flex items-center gap-2">
+    <PageShell>
+      <PageShellHeader>
+        <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2 self-center">
           <IconButton icon="chevronLeft" title="返回项目" onClick={() => navigate('/')} />
-          <div>
-            <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--color-foreground)' }}>
-              环境管理
-            </h1>
-            <p className="text-[13px] mt-0.5" style={{ color: 'var(--color-foreground-muted)' }}>
-              项目级维护 DB / syslog 对象；未被用例、计划、版本显式指定时使用默认环境
-            </p>
-          </div>
+          <h1 className="min-w-0 truncate text-2xl font-medium tracking-tight md:text-3xl">
+            环境管理
+          </h1>
         </div>
-        <Button onClick={() => setEnvForm({ open: true, mode: 'create', id: null, name: '', baseUrl: '' })}>
-          <Icon name="plus" size={14} />
-          新建环境
-        </Button>
-      </div>
+        <PageShellActions>
+          <Button onClick={() => setEnvForm({ open: true, mode: 'create', id: null, name: '', baseUrl: '' })}>
+            <Icon name="plus" size={14} />
+            新建环境
+          </Button>
+        </PageShellActions>
+        <PageShellDescription>
+          项目级维护 DB / syslog 对象；未被用例、计划、版本显式指定时使用默认环境
+        </PageShellDescription>
+      </PageShellHeader>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+      <PageShellContent>
         {envsQ.isLoading ? (
-          <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
+          <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
             <Icon name="loader" size={16} className="animate-spin" />
             <span style={{ marginLeft: 8 }}>加载中...</span>
           </div>
         ) : envsQ.isError ? (
-          <div className="text-[13px]" style={{ color: 'var(--color-destructive)' }}>
+          <div className="text-[13px]" style={{ color: 'var(--destructive)' }}>
             加载失败：{(envsQ.error as Error | null)?.message ?? '未知错误'}
           </div>
         ) : envs.length === 0 ? (
@@ -250,16 +257,16 @@ export default function EnvironmentsPage() {
               <div
                 key={env.id}
                 className="rounded-[var(--radius-sm)] overflow-hidden"
-                style={{ border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-elevated)' }}
+                style={{ border: '1px solid var(--border)', background: 'var(--card)' }}
               >
-                <div className="flex items-center gap-3 px-3 py-2" style={{ background: 'var(--color-background-subtle)' }}>
-                  <Icon name="database" size={13} style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }} />
+                <div className="flex items-center gap-3 px-3 py-2" style={{ background: 'var(--muted)' }}>
+                  <Icon name="database" size={13} style={{ color: 'var(--muted-foreground)', flexShrink: 0 }} />
                   <div className="flex flex-col min-w-0">
-                    <span className="text-[13px] font-semibold" style={{ color: 'var(--color-foreground)' }}>
+                    <span className="text-[13px] font-semibold" style={{ color: 'var(--foreground)' }}>
                       {env.name}
                     </span>
                     {env.baseUrl && (
-                      <span className="text-[11px] font-mono truncate" style={{ color: 'var(--color-foreground-muted)' }}>
+                      <span className="text-[11px] font-mono truncate" style={{ color: 'var(--muted-foreground)' }}>
                         {env.baseUrl}
                       </span>
                     )}
@@ -267,7 +274,7 @@ export default function EnvironmentsPage() {
                   {env.isDefault && (
                     <span
                       className="text-[10px] font-semibold uppercase px-1.5 py-[1px] rounded"
-                      style={{ background: 'var(--color-accent-soft)', color: 'var(--color-accent)', letterSpacing: '0.04em' }}
+                      style={{ background: 'var(--primary-soft)', color: 'var(--primary)', letterSpacing: '0.04em' }}
                     >
                       默认
                     </span>
@@ -286,7 +293,7 @@ export default function EnvironmentsPage() {
                 </div>
                 <div className="px-3 py-2 flex flex-col">
                   {env.objects.length === 0 && (
-                    <div className="text-[12px] py-1" style={{ color: 'var(--color-foreground-muted)' }}>
+                    <div className="text-[12px] py-1" style={{ color: 'var(--muted-foreground)' }}>
                       暂无对象，可添加数据库或 syslog 配置
                     </div>
                   )}
@@ -294,26 +301,26 @@ export default function EnvironmentsPage() {
                     <div
                       key={o.id}
                       className="flex items-center gap-3 py-1.5 hairline-top"
-                      style={{ borderColor: 'var(--color-muted)' }}
+                      style={{ borderColor: 'var(--muted)' }}
                     >
                       <Icon
                         name={o.objectType === 'db' ? 'database' : 'terminal'}
                         size={12}
-                        style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }}
+                        style={{ color: 'var(--muted-foreground)', flexShrink: 0 }}
                       />
-                      <span className="text-[12px] font-medium" style={{ color: 'var(--color-foreground-secondary)' }}>
+                      <span className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
                         {o.objectType === 'db' ? '数据库' : 'syslog'}
                         {o.label ? ` · ${o.label}` : ''}
                       </span>
                       {o.isDefault && (
                         <span
                           className="text-[10px] px-1.5 py-[1px] rounded"
-                          style={{ background: 'var(--color-accent-soft)', color: 'var(--color-accent)' }}
+                          style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}
                         >
                           默认
                         </span>
                       )}
-                      <span className="text-[11px] truncate" style={{ color: 'var(--color-foreground-muted)' }}>
+                      <span className="text-[11px] truncate" style={{ color: 'var(--muted-foreground)' }}>
                         {objectSummary(o) || '未填写'}
                       </span>
                       <div className="flex-1" />
@@ -328,7 +335,7 @@ export default function EnvironmentsPage() {
                       type="button"
                       onClick={() => openObjForm(env, 'db', null)}
                       className="flex items-center gap-1.5 text-[12px]"
-                      style={{ background: 'transparent', border: 'none', color: 'var(--color-accent)', cursor: 'pointer', padding: 0 }}
+                      style={{ background: 'transparent', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
                     >
                       <Icon name="plus" size={12} />
                       数据库
@@ -337,7 +344,7 @@ export default function EnvironmentsPage() {
                       type="button"
                       onClick={() => openObjForm(env, 'syslog', null)}
                       className="flex items-center gap-1.5 text-[12px]"
-                      style={{ background: 'transparent', border: 'none', color: 'var(--color-accent)', cursor: 'pointer', padding: 0 }}
+                      style={{ background: 'transparent', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
                     >
                       <Icon name="plus" size={12} />
                       syslog
@@ -348,7 +355,7 @@ export default function EnvironmentsPage() {
             ))}
           </div>
         )}
-      </div>
+      </PageShellContent>
 
       {/* 环境新建/重命名弹窗 */}
       <Dialog open={envForm.open} onOpenChange={(open) => setEnvForm((f) => ({ ...f, open }))}>
@@ -370,7 +377,7 @@ export default function EnvironmentsPage() {
               onChange={(e) => setEnvForm((f) => ({ ...f, baseUrl: e.target.value }))}
             />
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--color-border)' }}>
+          <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
             <Button variant="ghost" onClick={() => setEnvForm(EMPTY_ENV_FORM)}>取消</Button>
             <Button disabled={!envForm.name.trim() || saveEnv.isPending} onClick={() => saveEnv.mutate()}>
               {saveEnv.isPending ? '保存中...' : '保存'}
@@ -391,7 +398,7 @@ export default function EnvironmentsPage() {
             {objForm.objectType === 'db' ? (
               <>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>数据库类型</label>
+                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>数据库类型</label>
                   <Segmented
                     value={objForm.dbType}
                     onChange={(v) => setObjForm((f) => ({ ...f, dbType: v }))}
@@ -419,7 +426,7 @@ export default function EnvironmentsPage() {
                 <Input label="syslog 用户" value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
                 <Input label="SSH 端口" value={objForm.sshPort} onChange={(e) => setObjForm((f) => ({ ...f, sshPort: e.target.value }))} placeholder="22" />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>认证方式</label>
+                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>认证方式</label>
                   <Segmented
                     value={objForm.syslogAuth}
                     onChange={(v) => setObjForm((f) => ({ ...f, syslogAuth: v }))}
@@ -439,7 +446,7 @@ export default function EnvironmentsPage() {
                   />
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>SSH 私钥（PEM）</label>
+                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>SSH 私钥（PEM）</label>
                     <textarea
                       className="input-base"
                       rows={6}
@@ -453,7 +460,7 @@ export default function EnvironmentsPage() {
               </>
             )}
           </div>
-          <div className="flex items-center gap-2 px-5 py-3 hairline-top shrink-0" style={{ borderColor: 'var(--color-border)' }}>
+          <div className="flex items-center gap-2 px-5 py-3 hairline-top shrink-0" style={{ borderColor: 'var(--border)' }}>
             <Button
               variant="ghost"
               className="shrink-0"
@@ -468,13 +475,13 @@ export default function EnvironmentsPage() {
               {testConn.isPending ? '测试中...' : '测试连接'}
             </Button>
             {testConn.isPending && (
-              <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--color-foreground-muted)' }}>正在连接...</span>
+              <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--muted-foreground)' }}>正在连接...</span>
             )}
             {testConn.isSuccess && testConn.data.ok && (
-              <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--color-success)' }}>连接成功 · {testConn.data.latencyMs}ms</span>
+              <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--success)' }}>连接成功 · {testConn.data.latencyMs}ms</span>
             )}
             {testConn.isSuccess && !testConn.data.ok && (
-              <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--color-destructive)' }}>连接失败：{testConn.data.error}</span>
+              <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--destructive)' }}>连接失败：{testConn.data.error}</span>
             )}
             <div className="flex-1" />
             <Button variant="ghost" className="shrink-0" onClick={() => setObjForm(EMPTY_OBJ_FORM)} disabled={saveObj.isPending}>取消</Button>
@@ -489,11 +496,11 @@ export default function EnvironmentsPage() {
       <Dialog open={!!confirmEnv} onOpenChange={(open) => { if (!open) setConfirmEnv(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>删除环境</DialogTitle></DialogHeader>
-          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--color-foreground-secondary)' }}>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
             「{confirmEnv?.env.name}」被 {confirmEnv?.caseCount} 个用例、{confirmEnv?.planCount} 个计划引用。
             删除后这些引用会自动清空，执行时回退到项目默认环境。确定删除？
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--color-border)' }}>
+          <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
             <Button variant="ghost" onClick={() => setConfirmEnv(null)}>取消</Button>
             <Button
               variant="danger"
@@ -505,6 +512,6 @@ export default function EnvironmentsPage() {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   );
 }

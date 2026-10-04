@@ -11,10 +11,9 @@ export default function RecentRunsStream({ runs, projectId }: { runs: Run[]; pro
 
   return (
     <div
-      className="glass-panel rounded-[var(--radius-md)] p-5 flex flex-col"
-      style={{ boxShadow: 'var(--shadow-card)' }}
+      className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5 flex flex-col"
     >
-      <h3 className="text-[14px] font-semibold mb-3" style={{ color: 'var(--color-foreground)' }}>
+      <h3 className="text-[14px] font-semibold mb-3" style={{ color: 'var(--foreground)' }}>
         最近运行
       </h3>
       <div className="flex-1 min-h-0 overflow-y-auto">
@@ -37,7 +36,7 @@ export default function RecentRunsStream({ runs, projectId }: { runs: Run[]; pro
             >
               <span
                 className="flex-1 truncate text-[13px]"
-                style={{ color: 'var(--color-foreground)' }}
+                style={{ color: 'var(--foreground)' }}
               >
                 {r.caseTitle || r.caseId.slice(0, 8)}
               </span>
@@ -46,7 +45,7 @@ export default function RecentRunsStream({ runs, projectId }: { runs: Run[]; pro
               </StatusPill>
               <span
                 className="text-[11px] font-mono shrink-0"
-                style={{ color: 'var(--color-foreground-muted)' }}
+                style={{ color: 'var(--muted-foreground)' }}
               >
                 {new Date(r.createdAt).toLocaleTimeString('zh-CN', {
                   hour: '2-digit',

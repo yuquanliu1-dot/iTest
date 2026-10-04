@@ -1,3 +1,4 @@
+import { ToggleGroup, ToggleGroupItem } from './shadcn/toggle-group';
 import Icon, { type IconName } from '../Icon';
 
 interface SegmentOption<T extends string> {
@@ -14,26 +15,29 @@ interface SegmentedProps<T extends string> {
   onChange: (value: T) => void;
 }
 
-/** macOS/iDO 分段控件：样式单一来源 index.css 的 .segmented-control */
+/**
+ * 分段控件：shadcn toggle-group 单选内核（spacing=0 连体 outline 样式）。
+ * CRM 对齐；调用点 API（options/value/onChange）不变。
+ */
 export default function Segmented<T extends string>({ options, value, onChange }: SegmentedProps<T>) {
   return (
-    <div className="segmented-control" role="tablist">
+    <ToggleGroup
+      type="single"
+      variant="outline"
+      size="sm"
+      spacing={0}
+      value={value}
+      onValueChange={(v) => {
+        // 单选 toggle-group 清空选中时返回 ''，忽略以保持受控值
+        if (v) onChange(v as T);
+      }}
+    >
       {options.map((opt) => (
-        <button
-          key={opt.value}
-          type="button"
-          role="tab"
-          aria-selected={opt.value === value}
-          className={opt.value === value ? 'active' : undefined}
-          disabled={opt.disabled}
-          title={opt.title}
-          onClick={() => onChange(opt.value)}
-          style={{ gap: opt.icon ? 6 : undefined }}
-        >
+        <ToggleGroupItem key={opt.value} value={opt.value} disabled={opt.disabled} title={opt.title}>
           {opt.icon && <Icon name={opt.icon} size={12} />}
           {opt.label}
-        </button>
+        </ToggleGroupItem>
       ))}
-    </div>
+    </ToggleGroup>
   );
 }

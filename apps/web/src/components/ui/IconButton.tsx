@@ -1,5 +1,6 @@
-import type { CSSProperties, MouseEvent, KeyboardEvent } from 'react';
+import type { CSSProperties, MouseEvent } from 'react';
 import Icon, { type IconName } from '../Icon';
+import { Button } from './shadcn/button';
 
 type Tone = 'muted' | 'accent' | 'destructive';
 type Size = 'sm' | 'md';
@@ -16,23 +17,21 @@ interface IconButtonProps {
   onClick?: (e: MouseEvent<HTMLButtonElement>) => void;
 }
 
-const toneColor: Record<Tone, string> = {
-  muted: 'var(--color-foreground-muted)',
-  accent: 'var(--color-accent)',
-  destructive: 'var(--color-destructive)',
+const toneClass: Record<Tone, string> = {
+  muted: 'text-[var(--muted-foreground)]',
+  accent: 'text-[var(--primary)] hover:text-[var(--primary)]',
+  destructive: 'text-[var(--destructive)] hover:text-[var(--destructive)]',
 };
 
-const sizeMap: Record<Size, { box: number; icon: number; padding: number }> = {
-  sm: { box: 22, icon: 12, padding: 2 },
-  md: { box: 28, icon: 14, padding: 4 },
+// 尺寸对齐 CRM icon 档：sm→icon-xs(24px/12px 图标)、md→icon-sm(28px/14px 图标)
+const sizeMap: Record<Size, { shadcn: 'icon-xs' | 'icon-sm'; icon: number }> = {
+  sm: { shadcn: 'icon-xs', icon: 12 },
+  md: { shadcn: 'icon-sm', icon: 14 },
 };
 
 /**
  * Tiny icon-only action: 面板内迁 / 上 / 下 / 编辑 / 删除等行内按钮的唯一规范。
- * - 始终带 .press 类（按下微缩放）和 title（hover tooltip + a11y label）。
- * - hover 时 tone 颜色提亮一档（accent → accent-hover，muted → foreground-secondary）。
- * - disabled: opacity 0.3 + cursor not-allowed。
- * - 折叠按钮如需整行可达，把 onClick 接到外层容器即可。
+ * 内核为 CRM shadcn ghost icon button（hover bg-muted），tone 只决定文字色。
  */
 export default function IconButton({
   icon,
@@ -44,47 +43,20 @@ export default function IconButton({
   style,
   onClick,
 }: IconButtonProps) {
-  const { box, icon: iconSize, padding } = sizeMap[size];
   const aria = title ?? icon;
-
-  // Disabled 时 onClick 阻断，但要把 a11y 留住；用 button disabled.
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size={sizeMap[size].shadcn}
       aria-label={aria}
       title={title ?? aria}
       disabled={disabled}
-      onClick={(e: MouseEvent<HTMLButtonElement>) => {
-        if (disabled) return;
-        onClick?.(e);
-      }}
-      onKeyDown={(e: KeyboardEvent<HTMLButtonElement>) => {
-        if (disabled) return;
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          (e.currentTarget as HTMLButtonElement).click();
-        }
-      }}
-      className={`press ${className}`}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: box,
-        height: box,
-        padding,
-        border: 'none',
-        background: 'transparent',
-        color: toneColor[tone],
-        borderRadius: 'var(--radius-sm)',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.3 : 1,
-        transition: 'color 0.15s ease, background 0.15s ease',
-        flexShrink: 0,
-        ...style,
-      }}
+      onClick={onClick}
+      className={`${toneClass[tone]} ${className}`}
+      style={style}
     >
-      <Icon name={icon} size={iconSize} />
-    </button>
+      <Icon name={icon} size={sizeMap[size].icon} />
+    </Button>
   );
 }

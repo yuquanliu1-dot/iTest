@@ -123,7 +123,7 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
         </>
       )}
       {mode === 'randomString' && (
-        <label className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+        <label className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
           长度
           <input className="input-base input-sm" value={genLength} inputMode="numeric"
             onChange={(e) => { setGenLength(e.target.value); onChange({ mode: 'randomString', length: Number(e.target.value) || 12 }); }} />
@@ -131,11 +131,11 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
       )}
       {mode === 'randomNumber' && (
         <div className="flex gap-2">
-          <label className="text-[11px] flex-1" style={{ color: 'var(--color-foreground-muted)' }}>最小
+          <label className="text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>最小
             <input className="input-base input-sm" value={genMin} inputMode="numeric"
               onChange={(e) => { setGenMin(e.target.value); onChange({ mode: 'randomNumber', min: Number(e.target.value) || 0, max: Number(genMax) || 999999 }); }} />
           </label>
-          <label className="text-[11px] flex-1" style={{ color: 'var(--color-foreground-muted)' }}>最大
+          <label className="text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>最大
             <input className="input-base input-sm" value={genMax} inputMode="numeric"
               onChange={(e) => { setGenMax(e.target.value); onChange({ mode: 'randomNumber', min: Number(genMin) || 0, max: Number(e.target.value) || 999999 }); }} />
           </label>
@@ -196,7 +196,7 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
                 <input className="input-base input-sm" style={{ width: 100 }} placeholder="长度" inputMode="numeric" value={f.length ?? ''}
                   onChange={(e) => patchFragment(i, { length: e.target.value })} />
               )}
-              {f.mode === 'timestamp' && <span className="text-[11px] flex-1" style={{ color: 'var(--color-foreground-muted)' }}>当前 ms 时间戳</span>}
+              {f.mode === 'timestamp' && <span className="text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>当前 ms 时间戳</span>}
               <IconButton
                 icon="x"
                 title="删除片段"
@@ -222,7 +222,7 @@ export default function FillValueEditor({ value, onChange, availableVars = [] }:
           >
             + 添加片段
           </Button>
-          <p className="text-[11px]" style={{ color: over ? 'var(--color-destructive)' : 'var(--color-foreground-muted)' }}>
+          <p className="text-[11px]" style={{ color: over ? 'var(--destructive)' : 'var(--muted-foreground)' }}>
             当前长度估算：{estLen} / 1024{over ? ' · 超过上限' : ''}
           </p>
         </div>

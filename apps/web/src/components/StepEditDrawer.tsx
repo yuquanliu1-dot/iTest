@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
 import type { Locator, QueryDbAction, ObserveLogAction } from '@itest/shared';
 import { useQuery } from '@tanstack/react-query';
 import type { StepClip } from '../stores/stepClipboard';
@@ -10,8 +9,9 @@ import { STEP_KINDS, switchAction, kindNeedsLocator, type StepKind } from './ste
 import LocatorArrayEditor from './step-form/LocatorArrayEditor';
 import FillValueEditor from './step-form/FillValueEditor';
 import Button from './ui/Button';
+import { Sheet, SheetClose, SheetContent, SheetTitle } from './ui/shadcn/sheet';
+import IconButton from './ui/IconButton';
 import { cn } from '../lib/cn';
-import './StepEditDrawer.css';
 
 interface Props {
   initial: StepClip;
@@ -29,7 +29,7 @@ function countNumberedSegments(text: string): number {
 
 function FieldError({ msg }: { msg?: string }) {
   if (!msg) return null;
-  return <span className="text-[11px]" style={{ color: 'var(--color-destructive)' }}>{msg}</span>;
+  return <span className="text-[11px]" style={{ color: 'var(--destructive)' }}>{msg}</span>;
 }
 
 /** 步骤编辑抽屉：外壳管类型切换 + 通用字段；DrawerForm 按 kind 重挂载管差异字段。 */
@@ -43,58 +43,49 @@ export default function StepEditDrawer({ initial, availableVars = [], caseId, on
   const buildActionRef = useRef<(() => Record<string, unknown> | null) | null>(null);
 
   return (
-    <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <Dialog.Portal>
-        <Dialog.Overlay style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60 }} />
-        <Dialog.Content
-          style={{
-            position: 'fixed', top: 0, right: 0, bottom: 0, width: 520, maxWidth: '92vw', zIndex: 61,
-            background: 'var(--color-background)', borderLeft: '1px solid var(--color-glass-border)',
-            boxShadow: 'var(--shadow-modal, 0 8px 32px rgba(0,0,0,0.18))',
-            display: 'flex', flexDirection: 'column', overflow: 'hidden',
-          }}
-          className="drawer-slide-in"
-          aria-describedby={undefined}
-        >
-          <div className="flex items-center gap-3 px-5 py-4 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
-            <Dialog.Title className="text-[14px] font-semibold" style={{ color: 'var(--color-foreground)' }}>
-              编辑步骤
-            </Dialog.Title>
-            <select
-              value={kind}
-              onChange={(e) => {
-                // 先取 DrawerForm 当前表单状态（含未保存编辑），再切换；避免切换丢编辑
-                const current = buildActionRef.current?.() ?? draft.action;
-                setDraft(switchAction({ ...draft, action: current }, e.target.value as StepKind));
-              }}
-              className="input-base input-xs input-inline"
-              title="切换操作类型（兼容字段自动保留）"
-            >
-              {STEP_KINDS.map((k) => <option key={k} value={k}>{stepKindLabel(k)}</option>)}
-            </select>
-            <div className="flex-1" />
-            <Dialog.Close asChild>
-              <button type="button" className="press" style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', cursor: 'pointer', color: 'var(--color-foreground-muted)', fontSize: 16, borderRadius: 6 }} title="关闭">✕</button>
-            </Dialog.Close>
-          </div>
+    <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent
+        side="right"
+        showCloseButton={false}
+        className="w-[520px] sm:max-w-[92vw] p-0 gap-0"
+        aria-describedby={undefined}
+      >
+        <div className="flex items-center gap-3 px-5 py-4 shrink-0 border-b">
+          <SheetTitle className="text-sm font-semibold">编辑步骤</SheetTitle>
+          <select
+            value={kind}
+            onChange={(e) => {
+              // 先取 DrawerForm 当前表单状态（含未保存编辑），再切换；避免切换丢编辑
+              const current = buildActionRef.current?.() ?? draft.action;
+              setDraft(switchAction({ ...draft, action: current }, e.target.value as StepKind));
+            }}
+            className="input-base input-xs input-inline"
+            title="切换操作类型（兼容字段自动保留）"
+          >
+            {STEP_KINDS.map((k) => <option key={k} value={k}>{stepKindLabel(k)}</option>)}
+          </select>
+          <div className="flex-1" />
+          <SheetClose asChild>
+            <IconButton icon="close" title="关闭" />
+          </SheetClose>
+        </div>
 
-          <DrawerForm
-            key={kind}
-            clip={draft}
-            kind={kind}
-            name={name}
-            delayMs={delayMs}
-            onName={setName}
-            onDelayMs={setDelayMs}
-            availableVars={availableVars}
-            caseId={caseId}
-            buildActionRef={buildActionRef}
-            onCancel={onClose}
-            onSave={(built) => onSave({ ...built, name: name.trim() || undefined, delayMs: delayMs ? Number(delayMs) : undefined })}
-          />
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        <DrawerForm
+          key={kind}
+          clip={draft}
+          kind={kind}
+          name={name}
+          delayMs={delayMs}
+          onName={setName}
+          onDelayMs={setDelayMs}
+          availableVars={availableVars}
+          caseId={caseId}
+          buildActionRef={buildActionRef}
+          onCancel={onClose}
+          onSave={(built) => onSave({ ...built, name: name.trim() || undefined, delayMs: delayMs ? Number(delayMs) : undefined })}
+        />
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -338,7 +329,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3">
-        <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+        <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
           <span>步骤名称</span>
           <input
             className={cn('input-base input-xs')}
@@ -349,7 +340,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
           />
           <FieldError msg={fieldErrors.name} />
         </label>
-        <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+        <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
           <span>执行前等待 (ms)</span>
           <input
             className="input-base input-xs"
@@ -364,7 +355,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
 
         {showLocator && (
           <div className="flex flex-col gap-1.5">
-            <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>定位候选（按顺序尝试，录制产生的语义定位优先）</span>
+            <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>定位候选（按顺序尝试，录制产生的语义定位优先）</span>
             <LocatorArrayEditor locators={locators} onChange={setLocators} errors={fieldErrors} />
           </div>
         )}
@@ -372,7 +363,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         {(kind === 'fill' || kind === 'select') && (
           <div className="flex flex-col gap-2">
             {kind === 'fill' && (
-              <label className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+              <label className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                 <input type="checkbox" checked={sensitive} onChange={(e) => setSensitive(e.target.checked)} />
                 敏感值（密码，加密保存，明文不显示）
               </label>
@@ -407,7 +398,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         )}
 
         {kind === 'navigate' && (
-          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             <span>URL</span>
             <input
               className="input-base input-xs"
@@ -421,7 +412,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         )}
 
         {kind === 'waitFor' && (
-          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             <span>超时 (ms，留空默认 5000)</span>
             <input
               className="input-base input-xs"
@@ -435,7 +426,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         )}
 
         {kind === 'check' && (
-          <label className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+          <label className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
             勾选（取消勾选则为取消勾选操作）
           </label>
@@ -444,7 +435,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         {kind === 'assertText' && (
           <>
             <div className="flex gap-2">
-              <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--color-foreground-muted)' }}>
+              <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
                 <span>断言目标</span>
                 <select className="input-base input-xs" value={assertTarget} onChange={(e) => setAssertTarget(e.target.value as typeof assertTarget)}>
                   <option value="specifiedElement">指定元素（需定位候选）</option>
@@ -453,7 +444,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
                   <option value="url">当前 URL</option>
                 </select>
               </label>
-              <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--color-foreground-muted)' }}>
+              <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
                 <span>匹配方式</span>
                 <select className="input-base input-xs" value={assertMatch} onChange={(e) => setAssertMatch(e.target.value as typeof assertMatch)}>
                   <option value="equals">等于（trim）</option>
@@ -463,7 +454,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
                 </select>
               </label>
             </div>
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               <span>期望文本</span>
               <textarea className="input-base input-xs" rows={3} value={equalsText} onChange={(e) => setEqualsText(e.target.value)} />
             </label>
@@ -471,7 +462,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         )}
 
         {kind === 'assertJson' && (
-          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             <span>期望 JSON（整段深比较）</span>
             <textarea
               className="input-base input-xs font-mono"
@@ -486,7 +477,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
 
         {kind === 'extract' && (
           <div className="flex flex-col gap-2">
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               <span>变量名</span>
               <input
                 className="input-base input-xs"
@@ -497,7 +488,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
               />
               <FieldError msg={fieldErrors['action.varName']} />
             </label>
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               <span>抽取方式</span>
               <select className="input-base input-xs" value={extractMode} onChange={(e) => setExtractMode(e.target.value as typeof extractMode)}>
                 <option value="completeValue">完整值（元素文本/input 值）</option>
@@ -507,7 +498,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
             </label>
             {extractMode === 'regex' && (
               <div className="flex gap-2">
-                <label className="flex flex-col gap-1 text-[11px] flex-[3]" style={{ color: 'var(--color-foreground-muted)' }}>
+                <label className="flex flex-col gap-1 text-[11px] flex-[3]" style={{ color: 'var(--muted-foreground)' }}>
                   <span>正则</span>
                   <input
                     className="input-base input-xs font-mono"
@@ -518,7 +509,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
                   />
                   <FieldError msg={fieldErrors['action.pattern']} />
                 </label>
-                <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--color-foreground-muted)' }}>
+                <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
                   <span>捕获组</span>
                   <input
                     className="input-base input-xs"
@@ -532,7 +523,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
             )}
             {extractMode === 'smartExtract' && (
               <div className="flex flex-col gap-2">
-                <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+                <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                   <span>抽取描述（自然语言）</span>
                   <textarea
                     className="input-base input-xs"
@@ -568,13 +559,13 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
                   }}
                   disabled={compiling}
                   className="press self-start text-[11px] px-2 py-1 rounded-[var(--radius-sm)] border border-dashed"
-                  style={{ borderColor: 'var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)', cursor: compiling ? 'wait' : 'pointer' }}
+                  style={{ borderColor: 'var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: compiling ? 'wait' : 'pointer' }}
                 >
                   {compiling ? '编译中…' : '生成正则'}
                 </button>
-                {compileErr && <p className="text-[11px]" style={{ color: 'var(--color-destructive)' }}>{compileErr}</p>}
+                {compileErr && <p className="text-[11px]" style={{ color: 'var(--destructive)' }}>{compileErr}</p>}
                 {extractPattern && (
-                  <p className="text-[11px] font-mono" style={{ color: 'var(--color-foreground-muted)' }}>
+                  <p className="text-[11px] font-mono" style={{ color: 'var(--muted-foreground)' }}>
                     已生成正则：{extractPattern}（捕获组 {extractGroup}，保存后回放按正则执行）
                   </p>
                 )}
@@ -585,7 +576,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
 
         {kind === 'aiStep' && (
           <div className="flex flex-col gap-2">
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               <span>自然语言指令（保存后自动编译）</span>
               <textarea
                 className="input-base input-xs"
@@ -597,7 +588,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
               />
               <FieldError msg={fieldErrors['action.instruction']} />
             </label>
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               <span>断言（可选，保存后落入 assertText）</span>
               <textarea
                 className="input-base input-xs"
@@ -608,7 +599,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
               />
             </label>
             {countNumberedSegments(instruction) >= 2 && (
-              <p className="text-[11px]" style={{ color: 'var(--color-accent)' }}>
+              <p className="text-[11px]" style={{ color: 'var(--primary)' }}>
                 检测到 {countNumberedSegments(instruction)} 条编号，保存时将自动拆为 {countNumberedSegments(instruction)} 条独立智能步骤
               </p>
             )}
@@ -616,12 +607,12 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
               type="button"
               onClick={() => setShowBoundary((v) => !v)}
               className="press self-start text-[11px] px-2 py-1 rounded-[var(--radius-sm)] border"
-              style={{ cursor: 'pointer', borderColor: 'var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)' }}
+              style={{ cursor: 'pointer', borderColor: 'var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)' }}
             >
               {showBoundary ? '收起使用边界提示' : '查看使用边界'}
             </button>
             {showBoundary && (
-              <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--color-foreground-muted)' }}>
+              <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--muted-foreground)' }}>
                 <p>• 智能步骤适合复杂页面、动态选择、第一条结果等场景。</p>
                 <p>• 不建议用于登录、支付、删除审批等高风险路径，也不用于发布准入的关键确定性步骤。</p>
                 <p>• 强对抗验证码（滑块、点选、行为验证）不适用；仅适合测试环境中的简单图片验证码。</p>
@@ -633,12 +624,12 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
 
         {kind === 'upload' && (
           <div className="flex flex-col gap-2">
-            <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>绑定回放文件（按 project 隔离，≤ 10 MB）</span>
+            <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>绑定回放文件（按 project 隔离，≤ 10 MB）</span>
             <input
               type="file"
               aria-invalid={!!fieldErrors['action.fileId']}
               className="block text-[11px]"
-              style={{ color: 'var(--color-foreground-muted)' }}
+              style={{ color: 'var(--muted-foreground)' }}
               onChange={async (e) => {
                 if (!caseId) return;
                 const f = e.target.files?.[0];
@@ -660,18 +651,18 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
             <FieldError msg={fieldErrors['action.fileId']} />
             {attachments.length > 0 && (
               <>
-                <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>—— 或从本 project 已上传文件选择 ——</span>
-                <ul style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--color-glass-border)', borderRadius: 6, padding: 0, margin: 0, listStyle: 'none' }}>
+                <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>—— 或从本 project 已上传文件选择 ——</span>
+                <ul style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 0, margin: 0, listStyle: 'none' }}>
                   {attachments.map((a) => (
                     <li
                       key={a.id}
                       onClick={() => setFileId(a.id)}
                       style={{
                         padding: '6px 8px', cursor: 'pointer',
-                        background: fileId === a.id ? 'var(--color-accent)' : 'transparent',
-                        color: fileId === a.id ? '#fff' : 'var(--color-foreground-secondary)',
+                        background: fileId === a.id ? 'var(--primary)' : 'transparent',
+                        color: fileId === a.id ? '#fff' : 'var(--muted-foreground)',
                         fontSize: 11, display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'center',
-                        borderBottom: '1px solid var(--color-glass-border)',
+                        borderBottom: '1px solid var(--border)',
                       }}
                     >
                       <span className="truncate" style={{ flex: 1 }}>{a.originalName}</span>
@@ -684,13 +675,13 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
               </>
             )}
             {fileId && (
-              <p className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+              <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                 已绑定 fileId: <code>{fileId.slice(0, 8)}…</code>
                 <button
                   type="button"
                   onClick={() => setFileId(undefined)}
                   className="press ml-2 text-[11px] underline-offset-2 hover:underline"
-                  style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-accent)', cursor: 'pointer', borderRadius: 4 }}
+                  style={{ background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--primary)', cursor: 'pointer', borderRadius: 4 }}
                 >
                   更换
                 </button>
@@ -700,7 +691,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         )}
 
         {kind === 'switchTab' && (
-          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             <span>标签引用（tabRef）</span>
             <input
               className="input-base input-xs"
@@ -714,7 +705,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         )}
 
         {kind === 'screenshot' && (
-          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             <span>截图名称</span>
             <input className="input-base input-xs" value={shotName} onChange={(e) => setShotName(e.target.value)} placeholder="可选" />
           </label>
@@ -722,20 +713,20 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
 
         {kind === 'queryDb' && (
           <div className="flex flex-col gap-2">
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               <span>表名（白名单）</span>
               <select className="input-base input-xs" value={queryTable} onChange={(e) => setQueryTable(e.target.value)}>
                 {(allowedTablesData ? Object.keys(allowedTablesData) : ['test_cases']).map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             </label>
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               <span>返回列（按住 Ctrl/Cmd 多选；留空表示 *）</span>
               <select multiple className="input-base input-xs" style={{ minHeight: 80 }} value={queryColumns} onChange={(e) => setQueryColumns(Array.from(e.target.selectedOptions).map((o) => o.value))}>
                 {queryTableCols.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </label>
             <div className="flex flex-col gap-1">
-              <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>WHERE 条件（最多 10 条）</span>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>WHERE 条件（最多 10 条）</span>
               {queryWhere.map((w, i) => (
                 <div key={i} className="flex gap-1 items-center">
                   <select className="input-base input-xs flex-1" value={w.column} onChange={(e) => {
@@ -747,16 +738,16 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
                   <input className="input-base input-xs flex-1" value={w.equals} placeholder="等于" onChange={(e) => {
                     const next = [...queryWhere]; next[i] = { ...w, equals: e.target.value }; setQueryWhere(next);
                   }} />
-                  <button type="button" className="text-[11px] press" style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)', color: 'var(--color-destructive)', cursor: 'pointer', borderRadius: 4 }} onClick={() => setQueryWhere(queryWhere.filter((_, j) => j !== i))}>✕</button>
+                  <button type="button" className="text-[11px] press" style={{ background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4 }} onClick={() => setQueryWhere(queryWhere.filter((_, j) => j !== i))}>✕</button>
                 </div>
               ))}
               {queryWhere.length < 10 && (
-                <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--color-surface-overlay)', border: '1px dashed var(--color-glass-border)', color: 'var(--color-accent)', cursor: 'pointer', borderRadius: 4, padding: '4px 8px' }} onClick={() => setQueryWhere([...queryWhere, { column: queryTableCols[0] ?? '', equals: '' }])}>
+                <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px dashed var(--border)', color: 'var(--primary)', cursor: 'pointer', borderRadius: 4, padding: '4px 8px' }} onClick={() => setQueryWhere([...queryWhere, { column: queryTableCols[0] ?? '', equals: '' }])}>
                   + 增加条件
                 </button>
               )}
             </div>
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               <span>limit（1-200）</span>
               <input className="input-base input-xs" type="number" min={1} max={200} value={queryLimit} onChange={(e) => setQueryLimit(e.target.value)} />
             </label>
@@ -766,15 +757,15 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
 
         {kind === 'observeLog' && (
           <div className="flex flex-col gap-2">
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               <span>时间窗 (ms, 1000-600000)</span>
               <input className="input-base input-xs" type="number" min={1000} max={600000} value={observeWindowMs} onChange={(e) => setObserveWindowMs(e.target.value)} />
             </label>
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               <span>关键字（逗号分隔，最多 10 个）</span>
               <input className="input-base input-xs" value={observeKeywords} onChange={(e) => setObserveKeywords(e.target.value)} />
             </label>
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               <span>起始行数（1-10000）</span>
               <input className="input-base input-xs" type="number" min={1} max={10000} value={observeFromLine} onChange={(e) => setObserveFromLine(e.target.value)} />
             </label>
@@ -783,7 +774,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         )}
       </div>
 
-      <div className="flex items-center gap-2 justify-end px-5 py-4 shrink-0" style={{ borderTop: '1px solid var(--color-glass-border)' }}>
+      <div className="flex items-center gap-2 justify-end px-5 py-4 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
         <Button variant="ghost" size="sm" onClick={onCancel}>取消</Button>
         <Button size="sm" onClick={handleSave}>保存</Button>
       </div>
@@ -794,14 +785,14 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
 function DbAssertionEditor({ value, onChange, columns }: { value: { match: 'equals' | 'contains' | 'regex'; expected: string; column?: string } | undefined; onChange: (v: typeof value) => void; columns?: string[] }) {
   if (!value) {
     return (
-      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--color-surface-overlay)', border: '1px dashed var(--color-glass-border)', color: 'var(--color-foreground-muted)', cursor: 'pointer', padding: '4px 8px', borderRadius: 5 }} onClick={() => onChange({ match: 'contains', expected: '' })}>
+      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px dashed var(--border)', color: 'var(--muted-foreground)', cursor: 'pointer', padding: '4px 8px', borderRadius: 5 }} onClick={() => onChange({ match: 'contains', expected: '' })}>
         + 附加断言
       </button>
     );
   }
   return (
-    <div className="flex flex-col gap-1.5 p-2 rounded-[var(--radius-sm)]" style={{ border: '1px solid var(--color-glass-border)', background: 'var(--color-background-subtle)' }}>
-      <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>断言（不命中则步骤失败）</span>
+    <div className="flex flex-col gap-1.5 p-2 rounded-[var(--radius-sm)]" style={{ border: '1px solid var(--border)', background: 'var(--muted)' }}>
+      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>断言（不命中则步骤失败）</span>
       <div className="flex gap-1.5">
         <select className="input-base input-xs" value={value.match} onChange={(e) => onChange({ ...value, match: e.target.value as 'equals' | 'contains' | 'regex' })}>
           <option value="equals">等于</option>
@@ -816,7 +807,7 @@ function DbAssertionEditor({ value, onChange, columns }: { value: { match: 'equa
           {columns.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       )}
-      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--color-surface-overlay)', border: '1px solid var(--color-destructive)', color: 'var(--color-destructive)', cursor: 'pointer', borderRadius: 4, padding: '2px 8px' }} onClick={() => onChange(undefined)}>移除断言</button>
+      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px solid var(--destructive)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4, padding: '2px 8px' }} onClick={() => onChange(undefined)}>移除断言</button>
     </div>
   );
 }

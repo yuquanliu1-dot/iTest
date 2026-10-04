@@ -88,19 +88,19 @@ function ThreadPaneBody({ threadId, initialMessage }: { threadId: string; initia
         <ThreadPrimitive.Viewport className="flex-1 min-h-0 overflow-y-auto p-4">
           <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
         </ThreadPrimitive.Viewport>
-        <ThreadPrimitive.ViewportFooter className="border-t p-3" style={{ borderColor: 'var(--color-border)' }}>
+        <ThreadPrimitive.ViewportFooter className="border-t p-3" style={{ borderColor: 'var(--border)' }}>
           <ComposerPrimitive.Root className="flex items-end gap-2">
             <ComposerPrimitive.Input
               minRows={1}
               maxRows={6}
               placeholder="描述你的需求，AI 将生成测试用例…"
               className="flex-1 resize-none rounded-md border px-3 py-2 text-[13px] outline-none"
-              style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground)' }}
+              style={{ borderColor: 'var(--border)', background: 'var(--popover)', color: 'var(--foreground)' }}
             />
             <ThreadPrimitive.If running={false}>
               <ComposerPrimitive.Send
                 className="shrink-0 rounded-md px-3 py-2 text-[13px] text-white"
-                style={{ background: 'var(--color-accent)' }}
+                style={{ background: 'var(--primary)' }}
               >
                 发送
               </ComposerPrimitive.Send>
@@ -108,7 +108,7 @@ function ThreadPaneBody({ threadId, initialMessage }: { threadId: string; initia
             <ThreadPrimitive.If running>
               <ComposerPrimitive.Cancel
                 className="shrink-0 rounded-md px-3 py-2 text-[13px] text-white"
-                style={{ background: 'var(--color-destructive)' }}
+                style={{ background: 'var(--destructive)' }}
               >
                 停止
               </ComposerPrimitive.Cancel>
@@ -125,7 +125,7 @@ function UserMessage() {
     <div className="flex justify-end mb-3">
       <div
         className="max-w-[85%] rounded-lg px-3 py-2 text-[13px] whitespace-pre-wrap"
-        style={{ background: 'var(--color-accent-light)', color: 'var(--color-foreground)' }}
+        style={{ background: 'var(--primary-soft)', color: 'var(--foreground)' }}
       >
         <MessagePrimitive.Parts />
       </div>
@@ -135,7 +135,7 @@ function UserMessage() {
 
 function AssistantMessage() {
   return (
-    <div className="mb-3 text-[13px] whitespace-pre-wrap" style={{ color: 'var(--color-foreground)' }}>
+    <div className="mb-3 text-[13px] whitespace-pre-wrap" style={{ color: 'var(--foreground)' }}>
       <MessagePrimitive.Parts
         components={{
           Reasoning: ThinkingPart,
@@ -150,7 +150,7 @@ function AssistantMessage() {
 function ThinkingPart({ status }: ReasoningMessagePartProps) {
   if (status.type !== 'running') return null;
   return (
-    <div className="mb-1 animate-pulse text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+    <div className="mb-1 animate-pulse text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
       思考中…
     </div>
   );
@@ -195,7 +195,7 @@ function ToolActivity(part: ToolCallMessagePartProps) {
     } else done = '✓';
   }
   return (
-    <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[12px]" style={{ color: 'var(--color-foreground-muted)' }}>
+    <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
       <span>{meta.icon}</span>
       <span className="truncate">
         {meta.label}
@@ -204,7 +204,7 @@ function ToolActivity(part: ToolCallMessagePartProps) {
       {running ? (
         <span className="animate-pulse">进行中…</span>
       ) : (
-        <span className="shrink-0" style={{ color: part.isError ? 'var(--color-destructive)' : 'var(--color-accent)' }}>
+        <span className="shrink-0" style={{ color: part.isError ? 'var(--destructive)' : 'var(--primary)' }}>
           {done}
         </span>
       )}

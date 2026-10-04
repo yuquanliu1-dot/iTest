@@ -13,6 +13,7 @@ import PlanStatusLine from '../features/overview/components/PlanStatusLine';
 import RecentRunsStream from '../features/overview/components/RecentRunsStream';
 import RecordingActivityChart from '../features/overview/components/RecordingActivityChart';
 import AiActivityChart from '../features/overview/components/AiActivityChart';
+import { PageShell, PageShellContent } from '../components/layout/PageShell';
 
 export default function Dashboard() {
   const qc = useQueryClient();
@@ -25,9 +26,11 @@ export default function Dashboard() {
 
   if (isError) {
     return (
-      <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--color-foreground-muted)', fontSize: 13 }}>
-        概览暂时不可用,请稍后重试
-      </div>
+      <PageShell>
+        <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
+          概览暂时不可用,请稍后重试
+        </div>
+      </PageShell>
     );
   }
 
@@ -39,12 +42,12 @@ export default function Dashboard() {
 
   if (isEmpty) {
     return (
-      <div className="flex flex-col h-full overflow-hidden">
-        <div>
-          <OverviewHeader range={range} onRangeChange={setRange} onRefresh={refresh} />
-        </div>
-        <OverviewEmpty projectId={projectId} />
-      </div>
+      <PageShell>
+        <OverviewHeader range={range} onRangeChange={setRange} onRefresh={refresh} />
+        <PageShellContent>
+          <OverviewEmpty projectId={projectId} />
+        </PageShellContent>
+      </PageShell>
     );
   }
 
@@ -60,25 +63,23 @@ export default function Dashboard() {
     versionId ? `/p/${projectId}/v/${versionId}${path}` : `/`;
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto">
-      <div>
-        <OverviewHeader range={range} onRangeChange={setRange} onRefresh={refresh} />
-      </div>
+    <PageShell>
+      <OverviewHeader range={range} onRangeChange={setRange} onRefresh={refresh} />
 
       {/* KPI strip — 5 cards */}
-      <div className="grid grid-cols-5 gap-4 px-5 pt-4 fade-up" data-stagger>
+      <div className="grid grid-cols-5 gap-4 fade-up" data-stagger>
         <KpiStripCard
           label="用例总数"
           value={data.kpi.totalCases}
           iconName="beaker"
-          tone="var(--color-info)"
+          tone="var(--info)"
           to={link('/groups')}
         />
         <KpiStripCard
           label="计划数"
           value={data.kpi.totalPlans}
           iconName="flag"
-          tone="var(--color-accent)"
+          tone="var(--primary)"
           to={link('/plans')}
         />
         <KpiStripCard
@@ -86,27 +87,27 @@ export default function Dashboard() {
           value={Math.round(data.kpi.passRate * 100)}
           suffix="%"
           iconName="checkCircle"
-          tone="var(--color-success)"
+          tone="var(--success)"
           to={link('/reports?filter=passed-7d')}
         />
         <KpiStripCard
           label="近 7d 运行"
           value={data.kpi.totalRuns7d}
           iconName="activity"
-          tone="var(--color-warning)"
+          tone="var(--warning)"
           to={link('/reports?range=7d')}
         />
         <KpiStripCard
           label="AI 调用"
           value={data.kpi.aiCalls7d}
           iconName="sparkles"
-          tone="var(--color-chart-5)"
+          tone="var(--chart-5)"
           to={link('/groups')}
         />
       </div>
 
       {/* Main grid — charts left, activity right */}
-      <div className="grid grid-cols-12 gap-4 px-5 pt-4 fade-up" data-stagger>
+      <div className="grid grid-cols-12 gap-4 fade-up" data-stagger>
         <div className="col-span-8 flex flex-col gap-4">
           <PassRateTrendChart data={data.trend} />
           <div className="grid grid-cols-2 gap-4">
@@ -125,7 +126,7 @@ export default function Dashboard() {
       </div>
 
       {/* Bottom row — recording + AI activity */}
-      <div className="grid grid-cols-12 gap-4 px-5 pt-4 pb-5 fade-up" data-stagger>
+      <div className="grid grid-cols-12 gap-4 fade-up" data-stagger>
         <div className="col-span-6">
           <RecordingActivityChart data={data.recordingActivity} />
         </div>
@@ -133,6 +134,6 @@ export default function Dashboard() {
           <AiActivityChart data={data.aiActivity} />
         </div>
       </div>
-    </div>
+    </PageShell>
   );
 }

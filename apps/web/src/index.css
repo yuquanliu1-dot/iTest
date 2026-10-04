@@ -1,16 +1,22 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
 @import "@itest/ui/tokens.css";
-@import "@itest/ui/glass.css";
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+}
 
 body {
   margin: 0;
-  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: var(--color-background);
-  background-image: var(--app-gradient);
-  background-attachment: fixed;
-  color: var(--color-foreground);
   font-size: 14px;
 }
 
@@ -20,54 +26,73 @@ h1, h2, h3, h4, h5, h6 {
 
 #root { width: 100%; height: 100dvh; }
 
-/* Scrollbar — hairline */
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.10); border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.18); }
-:root[data-theme="dark"] ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); }
-:root[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+/* Scrollbar — CRM thin 风格（细轨道圆角滑块，颜色随主题令牌） */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted-foreground);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
 
-/* ── Button hover rings (primary accent glow replaces retired --shadow-accent) ── */
-button[data-variant="primary"]:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-  box-shadow: 0 0 0 4px var(--color-accent-glow);
-}
-button[data-variant="ghost"]:hover:not(:disabled) {
-  background: var(--color-muted);
-  border-color: var(--color-glass-border-hover);
-  color: var(--color-foreground);
-}
-button[data-variant="danger"]:hover:not(:disabled) {
-  background: var(--color-destructive-light);
-}
-
-/* ── Inputs — 全站唯一输入框规范（灰底 → focus 白底 + accent 边框，无 ring） ── */
+/* ── Inputs — 全站唯一输入框规范（对齐 CRM shadcn input：h-8 白底 border-input，focus 主色 ring） ── */
 .input-wrap { position: relative; }
 .input-base {
   width: 100%;
-  height: 44px;
-  padding: 12px;
+  height: 32px;
+  min-width: 0;
+  padding: 4px 10px;
   border-radius: var(--radius-md);
-  border: 1px solid var(--color-glass-border);
-  background: var(--color-background-subtle);
-  color: var(--color-foreground);
-  font-size: 14px;
+  border: 1px solid var(--input);
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
   line-height: 1.4;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
   outline: none;
 }
-.input-sm { height: 36px; padding: 8px 12px; font-size: 13px; }
-.input-xs { height: 26px; padding: 6px 8px; font-size: 12px; }
+.input-sm { height: 28px; }
+.input-xs { height: 24px; padding: 2px 8px; font-size: 11px; }
 .input-inline { width: auto; }
-.input-base:hover:not(:focus) { border-color: var(--color-glass-border-hover); }
-.input-base:focus {
-  border-color: var(--color-accent);
-  background: var(--color-background-elevated);
+.input-base:hover:not(:focus) {
+  border-color: color-mix(in oklch, var(--ring) 40%, transparent);
 }
-.input-base:focus-visible { outline: none; }
-.input-base::placeholder { color: var(--color-foreground-muted); }
-.input-base[aria-invalid='true'] { border-color: var(--color-destructive); }
+.input-base:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring) 40%, transparent);
+}
+.input-base:disabled {
+  pointer-events: none;
+  cursor: not-allowed;
+  background: var(--muted);
+  opacity: 0.6;
+}
+.input-base::placeholder { color: var(--muted-foreground); }
+.input-base[aria-invalid='true'] {
+  border-color: var(--destructive);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--destructive) 25%, transparent);
+}
+.dark .input-base {
+  background: var(--muted);
+  box-shadow: inset 0 1px 1px rgb(0 0 0 / 0.3);
+}
+.dark .input-base:focus { box-shadow: inset 0 1px 1px rgb(0 0 0 / 0.3), 0 0 0 2px color-mix(in oklch, var(--ring) 40%, transparent); }
 textarea.input-base {
   height: auto;
   min-height: 80px;
@@ -79,60 +104,23 @@ select.input-base { padding-right: 32px; }
 select.input-xs { padding-right: 28px; }
 .input-icon {
   position: absolute;
-  left: 12px;
+  left: 10px;
   top: 50%;
   transform: translateY(-50%);
-  color: var(--color-foreground-muted);
+  color: var(--muted-foreground);
   pointer-events: none;
   display: inline-flex;
   align-items: center;
 }
-.input-with-leading { padding-left: 36px; }
-.input-with-trailing { padding-right: 40px; }
-
-/* ── Segmented Control — Apple HIG ───────────────────────────────────────── */
-.segmented-control {
-  display: inline-flex;
-  background: var(--color-muted);
-  border-radius: var(--radius-md);
-  padding: 2px;
-}
-.segmented-control button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 32px;
-  padding: 0 14px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  border: none;
-  cursor: pointer;
-  color: var(--color-foreground-secondary);
-  background: transparent;
-  transition: all 0.15s ease;
-}
-.segmented-control button.active {
-  background: var(--color-background-elevated);
-  color: var(--color-foreground);
-  box-shadow: var(--shadow-card);
-}
-.segmented-control button:not(.active):hover { color: var(--color-foreground); }
+.input-with-leading { padding-left: 32px; }
 
 /* ── Sidebar nav hover（active 项通过 :not([data-active]) 避免被覆盖） ──────── */
-.group-nav-item:not([data-active]):hover { background: var(--color-surface-secondary); }
+.group-nav-item:not([data-active]):hover { background: var(--accent); }
 .group-nav-item { transition: background-color 0.16s ease-out; }
-.group-nav-header { color: var(--color-foreground-muted); }
-.group-nav-header:hover { color: var(--color-foreground-secondary); }
-.group-nav-tile { color: var(--color-foreground-muted); }
-.group-nav-tile:hover {
-  background: var(--color-surface-secondary);
-  color: var(--color-foreground-secondary);
-}
 
 /* ── Focus ring — keyboard only ──────────────────────────────────────────── */
 :focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 input:focus-visible,
@@ -143,30 +131,30 @@ select:focus-visible {
 
 /* ── List row hover ──────────────────────────────────────────────────────── */
 .list-row-clickable { transition: background 0.15s ease; }
-.list-row-clickable:hover { background: var(--color-muted); }
+.list-row-clickable:hover { background: var(--muted); }
 
-/* ── Card hover lift ─────────────────────────────────────────────────────── */
+/* ── Card hover lift（幅度收敛，与 CRM 克制的阴影一致） ───────────────────── */
 .hover-card {
   transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .hover-card:hover {
-  border-color: var(--color-glass-border-hover);
-  box-shadow: var(--shadow-modal);
-  transform: translateY(-2px);
+  border-color: var(--muted-foreground);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-1px);
 }
 
-/* ── Press affordance ────────────────────────────────────────────────────── */
+/* ── Press affordance（按钮/可点行按下微缩） ─────────────────────────────── */
 .press {
   transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
 }
 .press:active { transform: scale(0.97); }
 
-/* ── Subtle ink border ───────────────────────────────────────────────────── */
+/* ── Hairline dividers ───────────────────────────────────────────────────── */
 .hairline-bottom {
-  border-bottom: 1px solid var(--color-border-subtle);
+  border-bottom: 1px solid var(--border);
 }
 .hairline-top {
-  border-top: 1px solid var(--color-border-subtle);
+  border-top: 1px solid var(--border);
 }
 
 /* ── Status pulse（running 状态点） ───────────────────────────────────────── */
@@ -181,10 +169,6 @@ select:focus-visible {
   0%   { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
 }
-@keyframes beam-shift {
-  0%, 100% { stroke-dashoffset: 0; opacity: 0.85; }
-  50%      { stroke-dashoffset: -120; opacity: 1; }
-}
 
 /* ── Page entrance ───────────────────────────────────────────────────────── */
 @keyframes fade-up {
@@ -192,12 +176,6 @@ select:focus-visible {
   to   { opacity: 1; transform: translateY(0); }
 }
 .fade-up { animation: fade-up 0.42s cubic-bezier(0.16, 1, 0.3, 1) both; }
-
-@keyframes fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-.fade-in { animation: fade-in 0.32s ease-out both; }
 
 /* Cascade by data-index up to 12 — list stagger, dashboards, modal bodies. */
 [data-stagger] > [data-stagger-item] {
@@ -216,56 +194,14 @@ select:focus-visible {
 [data-stagger] > [data-stagger-item]:nth-child(11) { animation-delay: 0.40s; }
 [data-stagger] > [data-stagger-item]:nth-child(12) { animation-delay: 0.44s; }
 
-/* ── Skeleton shimmer（loading 占位） ───────────────────────────────────── */
-@keyframes shimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-.skeleton {
-  background:
-    linear-gradient(
-      90deg,
-      var(--color-muted) 0%,
-      var(--color-surface-secondary) 50%,
-      var(--color-muted) 100%
-    );
-  background-size: 200% 100%;
-  animation: shimmer 1.4s ease-in-out infinite;
-  border-radius: var(--radius-sm);
-}
-
-/* ── Radix dialog overlay/content motion ─────────────────────────────────── */
-@keyframes dialog-overlay-in  { from { opacity: 0; } to { opacity: 1; } }
-/* Tailwind v4 的 -translate-x/y-1/2 是原生 translate 属性，与 keyframes 里的
-   transform 叠加会把弹窗推偏再跳回中心；因此这里只动 scale，不写 translate。 */
-@keyframes dialog-content-in  {
-  from { opacity: 0; transform: scale(0.97); }
-  to   { opacity: 1; transform: scale(1); }
-}
-.dialog-overlay {
-  animation: dialog-overlay-in 0.18s ease-out;
-}
-.dialog-content {
-  animation: dialog-content-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
 /* ── Radix popover / dropdown / tooltip motion ─────────────────────────────
    Only animates `transform: scale` (no translate) so Radix's anchor-rect
-   positioning is preserved; using .dialog-content here would reapply the modal's
-   translate(-50%, -50%) and cause the popover to flash at the wrong place
-   before snapping back. */
+   positioning is preserved. */
 @keyframes popover-in {
   from { opacity: 0; transform: scale(0.96); }
   to   { opacity: 1; transform: scale(1); }
 }
 .popover-in { animation: popover-in 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
-
-/* ── Toast slide-in ──────────────────────────────────────────────────────── */
-@keyframes toast-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-.toast-in { animation: toast-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -275,27 +211,9 @@ select:focus-visible {
   }
   [data-stagger] > [data-stagger-item],
   .fade-up,
-  .fade-in,
-  .toast-in,
-  .dialog-overlay,
-  .dialog-content,
-  .popover-in,
-  .skeleton {
+  .popover-in {
     animation: none !important;
   }
-}
-
-/* sr-only */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 /* ── Lightbox nav buttons (ReportDetail 截图放大) ─────────────────────────── */
@@ -323,4 +241,4 @@ select:focus-visible {
 .zoom-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .kpi-icon { transition: transform 180ms ease; display: inline-flex; }
-.glass-panel:hover .kpi-icon { transform: scale(1.08); }
+.hover-card:hover .kpi-icon { transform: scale(1.08); }

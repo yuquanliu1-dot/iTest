@@ -30,7 +30,7 @@ export default function LocatorArrayEditor({ locators, onChange, errors = {} }: 
         return (
           <div key={i} className="flex flex-col gap-0.5">
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-mono shrink-0" style={{ color: 'var(--color-foreground-muted)' }}>{i + 1}</span>
+              <span className="text-[10px] font-mono shrink-0" style={{ color: 'var(--muted-foreground)' }}>{i + 1}</span>
               <select
                 className="input-base input-sm shrink-0"
                 style={{ width: 92 }}
@@ -43,7 +43,7 @@ export default function LocatorArrayEditor({ locators, onChange, errors = {} }: 
               </select>
               <input
                 className="input-base input-sm"
-                style={{ flex: 1, minWidth: 0, ...(err ? { border: '1px solid var(--color-destructive)' } : {}) }}
+                style={{ flex: 1, minWidth: 0, ...(err ? { border: '1px solid var(--destructive)' } : {}) }}
                 value={l.value}
                 onChange={(e) => update(i, { value: e.target.value })}
                 placeholder="定位值"
@@ -52,7 +52,7 @@ export default function LocatorArrayEditor({ locators, onChange, errors = {} }: 
               <IconButton icon="arrowDown" title="下移" disabled={i === locators.length - 1} onClick={() => move(i, 1)} />
               <IconButton icon="x" title="删除候选" tone="destructive" onClick={() => remove(i)} />
             </div>
-            {err && <span className="text-[11px] pl-5" style={{ color: 'var(--color-destructive)' }}>{err}</span>}
+            {err && <span className="text-[11px] pl-5" style={{ color: 'var(--destructive)' }}>{err}</span>}
           </div>
         );
       })}
@@ -60,12 +60,12 @@ export default function LocatorArrayEditor({ locators, onChange, errors = {} }: 
         type="button"
         onClick={() => onChange([...locators, { strategy: 'css', value: '' }])}
         className="press text-[11px] px-2 py-1 rounded-[var(--radius-sm)] self-start"
-        style={{ border: '1px dashed var(--color-glass-border)', background: 'var(--color-surface-overlay)', color: 'var(--color-foreground-muted)', cursor: 'pointer' }}
+        style={{ border: '1px dashed var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: 'pointer' }}
       >
         + 添加候选
       </button>
       {errors['action.locator'] && (
-        <span className="text-[11px]" style={{ color: 'var(--color-destructive)' }}>{errors['action.locator']}</span>
+        <span className="text-[11px]" style={{ color: 'var(--destructive)' }}>{errors['action.locator']}</span>
       )}
     </div>
   );
