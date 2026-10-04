@@ -1,7 +1,19 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
+
+// checkoutRepoForVersion 可注入桩;impl 为 undefined 时走真实实现(既有 no_repo 用例不受影响)
+const mockCheckout = { impl: undefined as undefined | ((versionId: string) => Promise<string>) };
+
+vi.mock('../src/pi/repo.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/pi/repo.js')>();
+  return {
+    ...actual,
+    checkoutRepoForVersion: (versionId: string) =>
+      mockCheckout.impl ? mockCheckout.impl(versionId) : actual.checkoutRepoForVersion(versionId),
+  };
+});
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -110,5 +122,20 @@ describe('space session supervisor', () => {
     const [a, b] = await Promise.all([ensureSpaceRecord(threadId), ensureSpaceRecord(threadId)]);
     expect(a).toBe(b);
     expect(captured).toHaveLength(1);
+  }, 30_000);
+
+  it('checkout 失败(非 no_repo):session 照常建立但记录 repoIssue;no_repo 仍完全静默', async () => {
+    const { versionId } = await seedProject(pool);
+    const threadId = await insertSpaceThread(versionId);
+    const { ensureSpaceRecord, spaceRepoIssue } = await import('../src/pi/space/session.js');
+    const { RepoUnavailableError } = await import('../src/pi/repo.js');
+    mockCheckout.impl = async () => { throw new RepoUnavailableError('auth_failed', 'PAT 无效'); };
+    try {
+      const rec = await ensureSpaceRecord(threadId);
+      expect(rec.versionId).toBe(versionId);
+      expect(spaceRepoIssue(threadId)).toContain('auth_failed');
+    } finally {
+      mockCheckout.impl = undefined;
+    }
   }, 30_000);
 });

@@ -41,6 +41,8 @@ interface ThreadRecord {
   unsub: () => void;
   seq: number;
   turnIndex: number;
+  /** 非 no_repo 的仓库不可用原因说明(auth_failed 等);null = 正常或未配仓库(no_repo 静默)。 */
+  repoIssue: string | null;
 }
 
 const records = new Map<string, ThreadRecord>();
@@ -76,14 +78,17 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
   const v = (await db.select({ projectId: projectVersions.projectId }).from(projectVersions).where(eq(projectVersions.id, row.versionId)).limit(1))[0];
   if (!v) throw new Error('space thread version missing');
 
-  // repo 探测:no_repo 静默降级(与 requirement 流一致);其它错误抛出
+  // repo 探测:no_repo 完全静默;其它失败 session 照常建立(repoAvailable=false),
+  // 原因记在 record 上由 router 随建线程响应透出(前端黄条警告,不阻断对话)
   let cwd: string | null = null;
   let repoAvailable = false;
+  let repoIssue: string | null = null;
   try {
     cwd = await checkoutRepoForVersion(row.versionId);
     repoAvailable = true;
   } catch (e) {
     if (!(e instanceof RepoUnavailableError)) throw e;
+    if (e.reason !== 'no_repo') repoIssue = `${e.message}(${e.reason})`;
   }
 
   const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, cwd, repoAvailable });
@@ -95,6 +100,7 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
     unsub: () => { /* assigned below */ },
     seq: 0,
     turnIndex: -1,
+    repoIssue,
   };
   const unsub = session.subscribe((event) => fanOut(rec, event));
   rec.unsub = unsub;
@@ -186,6 +192,11 @@ export function threadStatus(threadId: string): 'running' | 'idle' | undefined {
   return rec.session.isStreaming ? 'running' : 'idle';
 }
 
+/** 线程构建时记录的仓库问题(非 no_repo);无 record 或无问题返回 null。 */
+export function spaceRepoIssue(threadId: string): string | null {
+  return records.get(threadId)?.repoIssue ?? null;
+}
+
 export async function sendSpaceUserMessage(threadId: string, content: string): Promise<void> {
   const rec = records.get(threadId);
   if (!rec) throw new Error('thread not found');
@@ -214,7 +225,11 @@ export function cancelThread(threadId: string): void {
 
 async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<SpaceSessionLike> {
   const cfg = await readLlmConfig();
-  if (!cfg) throw new Error('LLM 未配置:请先到设置页配置模型');
+  if (!cfg) {
+    // 与 router 同一错误通道(HttpError 经 errorHandler 透出);动态导入避免模块加载顺序变化
+    const { HttpError } = await import('../../middleware/errorHandler.js');
+    throw new HttpError(502, 'llm_not_configured', 'LLM 未配置:请先到设置页配置模型');
+  }
   const { createAgentSession, SessionManager } = await import('@earendil-works/pi-coding-agent');
   const { getBuiltinModel } = await import('@earendil-works/pi-ai/providers/all');
   const workspaceDir = process.env.PI_WORKSPACE_DIR ?? './.data/pi-sessions';
