@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import { aiThreads } from '../../db/schema.js';
+import { logger } from '../../logger.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import { assertVersionVisible } from '../../services/projectAccess.js';
 import { sseHeaders, sseSend } from '../../sse/agentRunStream.js';
@@ -17,6 +18,7 @@ import { resolveConfirmation } from './confirm.js';
 import {
   cancelThread, ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, spaceRepoIssue, subscribeThread, threadStatus,
 } from './session.js';
+import type { ThreadSnapshot } from './session.js';
 
 export const spaceRoute = Router();
 
@@ -33,7 +35,7 @@ async function assertSpaceThreadVisible(threadId: string, user: AuthUser): Promi
 }
 
 /** react-pi 契约:POST/GET threads 必须返回完整 PiThreadSnapshot;兜底空快照刻意无 seq(requirement 级 /api/pi 兜底带 legacy seq:0,勿同步)。 */
-function threadSnapshotResponse(threadId: string): unknown {
+function threadSnapshotResponse(threadId: string): ThreadSnapshot {
   const live = snapshotOfThread(threadId);
   return live ?? { metadata: { id: threadId, status: 'idle', messageCount: 0 }, messages: [] };
 }
@@ -50,11 +52,12 @@ spaceRoute.post('/threads', async (req, res) => {
   try {
     await ensureSpaceRecord(threadId);
   } catch (e) {
+    logger.error({ err: e, threadId, versionId }, 'space thread init failed');
     await db.delete(aiThreads).where(eq(aiThreads.id, threadId));
     if (e instanceof HttpError) throw e;
     throw new HttpError(500, 'session_init_failed', e instanceof Error ? e.message : '会话初始化失败');
   }
-  const snap = threadSnapshotResponse(threadId) as { lastError?: string };
+  const snap: ThreadSnapshot & { lastError?: string } = threadSnapshotResponse(threadId);
   const issue = spaceRepoIssue(threadId);
   if (issue) snap.lastError = `仓库暂不可用:${issue};对话可用,repo 类工具在修复仓库配置前会失败`;
   res.json(snap);
@@ -127,16 +130,22 @@ spaceRoute.get('/models', async (_req, res) => {
 spaceRoute.get('/threads/:id/events', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
   sseHeaders(res);
+  // close 句柄先于 ensure 注册:建 session 可能耗时数十秒,期间客户端断开时
+  // close 事件已触发过、之后再注册的 unsub 永远不会执行 → 监听器泄漏。
+  let closed = false;
+  let unsub: (() => void) | null = null;
+  req.on('close', () => { closed = true; unsub?.(); });
   // 订阅前先确保 session 已构建:SSE 早于首条消息时若无 record,listener 会注册到
   // noop 上,后续 confirm_request/stage 全丢;ensure 幂等单飞,已有缓存直接返回。
   // 失败(LLM 未配置等)保留空快照语义,不中断连接。
   try { await ensureSpaceRecord(req.params.id!); } catch { /* 线程无法活跃,仍可接收快照 */ }
+  if (closed) return;
   try {
     const send = (e: unknown) => sseSend(res, e as unknown as Parameters<typeof sseSend>[1]);
     // subscribeThread 自带 snapshot(无活跃 session 时发合法空快照);
     // confirm_request / 舞台事件经 emitThreadEvent 走同一 listeners 通道。
-    const unsub = subscribeThread(req.params.id!, send, { includeSnapshot: true });
-    req.on('close', () => { unsub(); });
+    // subscribeThread 同步返回 unsub:自上方的 closed 检查到赋值之间无 await,无竞态窗口。
+    unsub = subscribeThread(req.params.id!, send, { includeSnapshot: true });
   } catch {
     res.end();
   }
