@@ -62,12 +62,14 @@ ALTER TABLE ai_threads ADD COLUMN kind varchar(20) NOT NULL DEFAULT 'requirement
 ALTER TABLE ai_threads ADD COLUMN version_id uuid REFERENCES project_versions(id) ON DELETE CASCADE;
 ALTER TABLE ai_threads ADD COLUMN title text;
 ALTER TABLE ai_threads ALTER COLUMN requirement_id DROP NOT NULL;
-ALTER TABLE ai_threads DROP CONSTRAINT ai_threads_requirement_id_key;
+-- 列级唯一约束:真实库走 0014 的 drizzle 显式名;测试 SCHEMA_SQL 的列级 UNIQUE 生成 Postgres 默认名。两个名字都防御性删除。
+ALTER TABLE ai_threads DROP CONSTRAINT IF EXISTS ai_threads_requirement_id_unique;
+ALTER TABLE ai_threads DROP CONSTRAINT IF EXISTS ai_threads_requirement_id_key;
 CREATE UNIQUE INDEX ai_threads_requirement_uq ON ai_threads(requirement_id);
 CREATE INDEX ai_threads_version_idx ON ai_threads(version_id);
 ```
 
-注意:约束名 `ai_threads_requirement_id_key` 是 Postgres 对列级 `UNIQUE` 的默认命名,迁移与测试 SCHEMA_SQL 两侧一致。
+注意:0014 建表用的是 drizzle 显式约束名 `ai_threads_requirement_id_unique`;测试 SCHEMA_SQL 的列级 `UNIQUE` 生成 Postgres 默认名 `ai_threads_requirement_id_key`。迁移对两个名字都 `DROP CONSTRAINT IF EXISTS`,两侧路径都能应用。
 
 - [ ] **Step 2: 更新 `src/db/schema.ts` 的 aiThreads**
 
