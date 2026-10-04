@@ -146,4 +146,37 @@ describe('project versions', () => {
     const v = list.body.find((x: { id: string }) => x.id === cr.body.id);
     expect(v.environmentName).toBeNull();
   });
+
+  it('POST 带 environmentId 创建关联并随 GET 返回 environmentName', async () => {
+    const env = await pool.query(
+      `INSERT INTO test_environments(project_id, name) VALUES ($1, 'staging-env') RETURNING id`,
+      [projectId],
+    );
+    const envId = env.rows[0]!.id as string;
+    const r = await request(app).post(`/api/projects/${projectId}/versions`).send({ name: 'v2.0', environmentId: envId });
+    expect(r.status).toBe(201);
+    expect(r.body.environmentId).toBe(envId);
+    const list = await request(app).get(`/api/projects/${projectId}/versions`);
+    const v = list.body.find((x: { id: string }) => x.id === r.body.id);
+    expect(v.environmentName).toBe('staging-env');
+  });
+
+  it('POST 缺省 environmentId → null', async () => {
+    const r = await request(app).post(`/api/projects/${projectId}/versions`).send({ name: 'v2.0' });
+    expect(r.status).toBe(201);
+    expect(r.body.environmentId).toBeNull();
+  });
+
+  it('POST 跨项目环境返回 400 env_project_mismatch', async () => {
+    const other = await seedProject(pool);
+    const env = await pool.query(
+      `INSERT INTO test_environments(project_id, name) VALUES ($1, 'other-env') RETURNING id`,
+      [other.projectId],
+    );
+    const r = await request(app)
+      .post(`/api/projects/${projectId}/versions`)
+      .send({ name: 'v2.0', environmentId: env.rows[0]!.id });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('env_project_mismatch');
+  });
 });
