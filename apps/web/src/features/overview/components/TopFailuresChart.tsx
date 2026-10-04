@@ -1,5 +1,5 @@
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { chartColors, tooltipContentStyle } from '../chartTheme';
 import type { OverviewResponse } from '../api';
 
@@ -15,6 +15,7 @@ export default function TopFailuresChart({
   projectId: string;
 }) {
   const navigate = useNavigate();
+  const { versionId } = useParams<{ versionId: string }>();
 
   if (data.length === 0) {
     return (
@@ -76,7 +77,7 @@ export default function TopFailuresChart({
               onClick={(d) => {
                 const payload = d as { caseId?: string };
                 const reportId = payload.caseId ? latestReportByCase.get(payload.caseId) : undefined;
-                if (reportId) navigate(`/p/${projectId}/reports/${reportId}`);
+                if (reportId) navigate(`/p/${projectId}/v/${versionId}/reports/${reportId}`);
               }}
             />
           </BarChart>

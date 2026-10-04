@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import StatusPill from '../../../components/ui/StatusPill';
 import EmptyState from '../../../components/ui/EmptyState';
 import type { OverviewResponse } from '../api';
@@ -7,6 +7,7 @@ type Run = OverviewResponse['recentRuns'][number];
 
 export default function RecentRunsStream({ runs, projectId }: { runs: Run[]; projectId: string }) {
   const navigate = useNavigate();
+  const { versionId } = useParams<{ versionId: string }>();
 
   return (
     <div
@@ -29,8 +30,8 @@ export default function RecentRunsStream({ runs, projectId }: { runs: Run[]; pro
               key={r.id}
               onClick={() =>
                 r.kind === 'plan'
-                  ? navigate(`/p/${projectId}/plans/${r.caseId}/runs/${r.id}`)
-                  : navigate(`/p/${projectId}/reports/${r.id}`)
+                  ? navigate(`/p/${projectId}/v/${versionId}/plans/${r.caseId}/runs/${r.id}`)
+                  : navigate(`/p/${projectId}/v/${versionId}/reports/${r.id}`)
               }
               className="flex items-center gap-3 py-2 cursor-pointer list-row-clickable hairline-bottom"
             >

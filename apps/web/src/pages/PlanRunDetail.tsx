@@ -8,7 +8,7 @@ import EmptyState from '../components/ui/EmptyState';
 import { fullDateTime } from '../lib/format';
 
 export default function PlanRunDetail() {
-  const { id, runId, projectId } = useParams<{ id: string; runId: string; projectId: string }>();
+  const { id, runId, projectId, versionId } = useParams<{ id: string; runId: string; projectId: string; versionId: string }>();
   const navigate = useNavigate();
   const { data: run, isLoading, isError, error } = useQuery({
     queryKey: ['planRun', runId],
@@ -37,7 +37,7 @@ export default function PlanRunDetail() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
-        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/plans/${id}`)}>
+        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/plans/${id}`)}>
           <Icon name="chevronLeft" size={12} />
           返回计划详情
         </Button>
@@ -78,7 +78,7 @@ export default function PlanRunDetail() {
                     {c.error && <div className="text-[12px] mt-1" style={{ color: 'var(--color-destructive)' }}>{c.error}</div>}
                   </div>
                   {c.reportId && (
-                    <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/reports/${c.reportId}`)}>
+                    <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports/${c.reportId}`)}>
                       报告
                     </Button>
                   )}

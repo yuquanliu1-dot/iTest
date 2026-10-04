@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import StatusPill from '../../../components/ui/StatusPill';
 import type { OverviewResponse } from '../api';
 
@@ -6,6 +6,7 @@ type Plan = OverviewResponse['plans'][number];
 
 export default function PlanStatusLine({ plans, projectId }: { plans: Plan[]; projectId: string }) {
   const navigate = useNavigate();
+  const { versionId } = useParams<{ versionId: string }>();
 
   if (plans.length === 0) {
     return (
@@ -32,7 +33,7 @@ export default function PlanStatusLine({ plans, projectId }: { plans: Plan[]; pr
         {plans.map((p) => (
           <div
             key={p.id}
-            onClick={() => navigate(`/p/${projectId}/plans/${p.id}`)}
+            onClick={() => navigate(`/p/${projectId}/v/${versionId}/plans/${p.id}`)}
             className="flex items-center gap-3 py-2 cursor-pointer list-row-clickable hairline-bottom"
           >
             <span

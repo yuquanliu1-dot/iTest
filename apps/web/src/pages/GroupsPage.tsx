@@ -162,7 +162,7 @@ export default function GroupsPage() {
     onSuccess: () => {
       toast('分组已删除', 'success');
       setConfirmDeleteGroup(null);
-      if (effectiveGroupId) navigate(`/p/${projectId}/groups`);
+      if (effectiveGroupId) navigate(`/p/${projectId}/v/${vidParam}/groups`);
       qc.invalidateQueries({ queryKey: ['groups', projectId] });
     },
     onError: (e: Error) => {
