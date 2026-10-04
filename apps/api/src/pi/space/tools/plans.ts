@@ -34,6 +34,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
       promptGuidelines: [
         'caseIds 必须来自 manage_cases 的 search/get 结果,禁止臆造;加入计划的用例必须属于当前项目。',
         '本工具不会执行计划,只做配置;需要执行时告知用户去执行页操作。',
+        'create 时若用例编排失败(如 caseIds 跨项目),已建的计划不会回滚:按错误信息中的 planId 用 add_cases 补齐,勿重复 create。',
       ],
       execute: async (input) => {
         let v: z.infer<typeof Actions>;
@@ -66,9 +67,17 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
                 environmentId: v.environmentId ?? undefined,
                 strategy: v.strategy,
               });
-              if (v.caseIds?.length) await svc.replacePlanCases(plan.id, v.caseIds);
+              let added = 0;
+              if (v.caseIds?.length) {
+                try {
+                  added = await svc.replacePlanCases(plan.id, v.caseIds);
+                } catch (e) {
+                  const reason = e instanceof HttpError ? e.message : `操作失败:${e instanceof Error ? e.message : String(e)}`;
+                  return { ok: false, error: `计划已创建但用例编排失败(计划 ${plan.id}):${reason};可对该 planId 调 add_cases 补齐,勿重复 create` };
+                }
+              }
               emitStage(ctx, { kind: 'plan', id: plan.id, action: 'create' });
-              return { ok: true, data: `已创建计划「${plan.name}」(${plan.id})${v.caseIds?.length ? `,含 ${v.caseIds.length} 个用例` : ''}` };
+              return { ok: true, data: `已创建计划「${plan.name}」(${plan.id})${added > 0 ? `,含 ${added} 个用例` : ''}` };
             }
             case 'update': {
               if (!v.planId) return { ok: false, error: 'update 需要 planId' };
