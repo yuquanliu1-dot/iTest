@@ -88,7 +88,9 @@ piRoute.get('/threads/:id', async (req, res) => {
 piRoute.post('/threads/:id/messages', async (req, res) => {
   await assertThreadVisible(req.params.id!, req.user as AuthUser);
   const ridRow = (await db.select({ requirementId: aiThreads.requirementId }).from(aiThreads).where(eq(aiThreads.id, req.params.id!)).limit(1))[0];
-  if (!ridRow) throw new HttpError(404, 'not_found', 'thread not found');
+  // requirementId 可空(version 线程),此类端点仅服务 requirement 线程
+  const rid = ridRow?.requirementId;
+  if (!rid) throw new HttpError(404, 'not_found', 'thread not found');
   // 不阻塞响应：先回 204，再后台 ensureRecord + 派发消息；
   // ensureRecord 在 LLM 未配置时会抛错，我们 swallow 后让上层 UI 通过 SSE 提示。
   const body = req.body as { input?: { content?: string }; metadata?: { contextMode?: 'repo' | 'page' | 'auto' } };
@@ -96,8 +98,8 @@ piRoute.post('/threads/:id/messages', async (req, res) => {
   const contextMode = body.metadata?.contextMode ?? 'auto';
   void (async () => {
     try {
-      await ws.recordContextMode(ridRow.requirementId, contextMode);
-      await ensureRecord(ridRow.requirementId, { contextMode });
+      await ws.recordContextMode(rid, contextMode);
+      await ensureRecord(rid, { contextMode });
       await sendUserMessage(req.params.id!, { content });
     } catch {
       // 配置缺失或线程未就绪：忽略；前端通过 SSE/快照可见 status。
