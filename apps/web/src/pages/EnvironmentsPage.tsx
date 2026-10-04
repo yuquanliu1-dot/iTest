@@ -15,8 +15,9 @@ interface EnvFormState {
   mode: 'create' | 'edit';
   id: string | null;
   name: string;
+  baseUrl: string;
 }
-const EMPTY_ENV_FORM: EnvFormState = { open: false, mode: 'create', id: null, name: '' };
+const EMPTY_ENV_FORM: EnvFormState = { open: false, mode: 'create', id: null, name: '', baseUrl: '' };
 
 type ObjType = 'db' | 'syslog';
 interface ObjFormState {
@@ -87,10 +88,13 @@ export default function EnvironmentsPage() {
   const invalidate = () => qc.invalidateQueries({ queryKey: ['environments', projectId] });
 
   const saveEnv = useMutation({
-    mutationFn: () =>
-      envForm.mode === 'create'
-        ? api.environments.create(projectId!, { name: envForm.name.trim() })
-        : api.environments.patch(envForm.id!, { name: envForm.name.trim() }),
+    mutationFn: () => {
+      const name = envForm.name.trim();
+      const baseUrl = envForm.baseUrl.trim();
+      return envForm.mode === 'create'
+        ? api.environments.create(projectId!, { name, baseUrl: baseUrl || undefined })
+        : api.environments.patch(envForm.id!, { name, baseUrl: baseUrl || null });
+    },
     onSuccess: () => {
       toast(envForm.mode === 'create' ? '环境已创建' : '环境已更新', 'success');
       setEnvForm(EMPTY_ENV_FORM);
@@ -191,7 +195,7 @@ export default function EnvironmentsPage() {
             </p>
           </div>
         </div>
-        <Button onClick={() => setEnvForm({ open: true, mode: 'create', id: null, name: '' })}>
+        <Button onClick={() => setEnvForm({ open: true, mode: 'create', id: null, name: '', baseUrl: '' })}>
           <Icon name="plus" size={14} />
           新建环境
         </Button>
@@ -219,9 +223,16 @@ export default function EnvironmentsPage() {
               >
                 <div className="flex items-center gap-3 px-3 py-2" style={{ background: 'var(--color-background-subtle)' }}>
                   <Icon name="database" size={13} style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }} />
-                  <span className="text-[13px] font-semibold" style={{ color: 'var(--color-foreground)' }}>
-                    {env.name}
-                  </span>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-[13px] font-semibold" style={{ color: 'var(--color-foreground)' }}>
+                      {env.name}
+                    </span>
+                    {env.baseUrl && (
+                      <span className="text-[11px] font-mono truncate" style={{ color: 'var(--color-foreground-muted)' }}>
+                        {env.baseUrl}
+                      </span>
+                    )}
+                  </div>
                   {env.isDefault && (
                     <span
                       className="text-[10px] font-semibold uppercase px-1.5 py-[1px] rounded"
@@ -238,7 +249,7 @@ export default function EnvironmentsPage() {
                       onClick={() => setDefault.mutate(env.id)}
                       disabled={env.isDefault}
                     />
-                    <IconButton icon="pencil" title="重命名" onClick={() => setEnvForm({ open: true, mode: 'edit', id: env.id, name: env.name })} />
+                    <IconButton icon="pencil" title="编辑环境" onClick={() => setEnvForm({ open: true, mode: 'edit', id: env.id, name: env.name, baseUrl: env.baseUrl ?? '' })} />
                     <IconButton icon="trash" title="删除环境" tone="destructive" onClick={() => removeEnv.mutate({ id: env.id, confirm: false })} />
                   </div>
                 </div>
@@ -312,7 +323,7 @@ export default function EnvironmentsPage() {
       <Dialog open={envForm.open} onOpenChange={(open) => setEnvForm((f) => ({ ...f, open }))}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{envForm.mode === 'create' ? '新建环境' : '重命名环境'}</DialogTitle>
+            <DialogTitle>{envForm.mode === 'create' ? '新建环境' : '编辑环境'}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
             <Input
@@ -320,6 +331,12 @@ export default function EnvironmentsPage() {
               placeholder="如：开发测试、预生产"
               value={envForm.name}
               onChange={(e) => setEnvForm((f) => ({ ...f, name: e.target.value }))}
+            />
+            <Input
+              label="基础 URL（可空，执行期导航兜底）"
+              placeholder="https://example.com"
+              value={envForm.baseUrl}
+              onChange={(e) => setEnvForm((f) => ({ ...f, baseUrl: e.target.value }))}
             />
           </div>
           <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--color-border)' }}>

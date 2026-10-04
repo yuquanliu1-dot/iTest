@@ -149,12 +149,12 @@ export const api = {
   versions: {
     list: (projectId: string) =>
       request<ProjectVersion[]>(`/projects/${projectId}/versions`),
-    create: (projectId: string, body: { name: string; description?: string; defaultUrl?: string }) =>
+    create: (projectId: string, body: { name: string; description?: string }) =>
       request<ProjectVersion>(`/projects/${projectId}/versions`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    patch: (id: string, body: Partial<{ name: string; description: string | null; defaultUrl: string | null; environmentId: string | null }>) =>
+    patch: (id: string, body: Partial<{ name: string; description: string | null; environmentId: string | null }>) =>
       request<ProjectVersion>(`/project-versions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (projectId: string, id: string) =>
       request<void>(`/projects/${projectId}/versions/${id}`, { method: 'DELETE' }),
@@ -175,6 +175,7 @@ export const api = {
       projectId: string,
       body: {
         name: string;
+        baseUrl?: string;
         objects?: Array<{ objectType: 'db' | 'syslog'; label?: string; payload: Record<string, unknown>; isDefault?: boolean }>;
       },
     ) =>
@@ -182,7 +183,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    patch: (id: string, body: Partial<{ name: string; isDefault: boolean }>) =>
+    patch: (id: string, body: Partial<{ name: string; baseUrl: string | null; isDefault: boolean }>) =>
       request<Environment>(`/environments/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string, opts?: { confirm?: boolean }) =>
       request<{ ok: boolean; requiresConfirm?: boolean; caseCount?: number; planCount?: number }>(
@@ -541,6 +542,8 @@ export interface Environment {
   projectId: string;
   name: string;
   isDefault: boolean;
+  /** 部署入口 URL：执行期导航兜底（用例.url → 分组.defaultUrl → 环境.baseUrl → 项目.defaultUrl） */
+  baseUrl: string | null;
   objects: EnvironmentObject[];
   createdAt: string;
   updatedAt: string;
@@ -568,7 +571,6 @@ export interface ProjectVersion {
   description: string | null;
   ref: string | null;
   refKind: 'branch' | 'tag' | null;
-  defaultUrl: string | null;
   environmentId: string | null;
   createdAt: string;
   updatedAt: string;

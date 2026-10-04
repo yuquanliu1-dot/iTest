@@ -255,8 +255,6 @@ export const projectVersions = pgTable('project_versions', {
   description: text('description'),
   ref: varchar('ref', { length: 200 }),
   refKind: varchar('ref_kind', { length: 16 }),
-  // 版本级默认域名：覆盖（而非替代）项目级 default_url，留空走项目级。
-  defaultUrl: text('default_url'),
   // 版本关联环境：空 → 执行期回退项目默认环境（test_environments.is_default）
   environmentId: uuid('environment_id').references(() => testEnvironments.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -381,6 +379,8 @@ export const testEnvironments = pgTable('test_environments', {
   name: varchar('name', { length: 120 }).notNull(),
   // 项目默认环境：未被 case/plan/version 显式指定环境时的兜底；项目内至多一个
   isDefault: boolean('is_default').notNull().default(false),
+  // 部署入口 URL：执行期导航兜底（用例.url → 分组.defaultUrl → 环境.base_url → 项目.defaultUrl）
+  baseUrl: text('base_url'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({

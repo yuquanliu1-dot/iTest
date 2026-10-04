@@ -73,31 +73,6 @@ describe('project versions', () => {
     expect(r.body.name).toBe('v1.0');
   });
 
-  it('POST /projects/:id/versions defaultUrl 落库并随 GET 返回', async () => {
-    const cr = await request(app)
-      .post(`/api/projects/${projectId}/versions`)
-      .send({ name: 'v1.0', defaultUrl: 'https://staging.example.com' });
-    expect(cr.status).toBe(201);
-    expect(cr.body.defaultUrl).toBe('https://staging.example.com');
-
-    const list = await request(app).get(`/api/projects/${projectId}/versions`);
-    const v = list.body.find((x: { id: string }) => x.id === cr.body.id);
-    expect(v.defaultUrl).toBe('https://staging.example.com');
-  });
-
-  it('PATCH /project-versions/:id 清空 defaultUrl（空串 → null）', async () => {
-    const cr = await request(app)
-      .post(`/api/projects/${projectId}/versions`)
-      .send({ name: 'v1.0', defaultUrl: 'https://staging.example.com' });
-    expect(cr.status).toBe(201);
-
-    const r = await request(app)
-      .patch(`/api/project-versions/${cr.body.id}`)
-      .send({ defaultUrl: null });
-    expect(r.status).toBe(200);
-    expect(r.body.defaultUrl).toBeNull();
-  });
-
   it('同名 version 返回 409 version_name_taken', async () => {
     const r = await request(app)
       .post(`/api/projects/${projectId}/versions`)
