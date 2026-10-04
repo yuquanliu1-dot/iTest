@@ -68,6 +68,21 @@ describe('plans.service', () => {
     expect(detail!.cases.map((c) => c.order)).toEqual([1, 2]); // c1, c3 重排
   }, 30_000);
 
+  it('重复 caseIds 去重不误报 409;remove 清空到 0;replace 空数组 400', async () => {
+    const { groupId, versionId, projectId } = await seedProject(pool);
+    const svc = await import('../src/services/plans.service.js');
+    const c1 = await makeCase(groupId, versionId, 'rc1');
+    const c2 = await makeCase(groupId, versionId, 'rc2');
+    const plan = await svc.createPlan(projectId, { name: '重复', versionId });
+    expect(await svc.addPlanCases(plan.id, [c1, c1])).toBe(1); // 重复去重,只加 1
+    expect(await svc.addPlanCases(plan.id, [c1, c2])).toBe(1); // c1 已在,补 c2
+    expect(await svc.removePlanCases(plan.id, [c1, c2])).toBe(2); // 清空
+    const detail = await svc.getPlanDetail(plan.id);
+    expect(detail!.cases).toEqual([]);
+    expect(await svc.removePlanCases(plan.id, [c1])).toBe(0); // 空计划再删 → 0
+    await expect(svc.replacePlanCases(plan.id, [])).rejects.toMatchObject({ status: 400 });
+  }, 30_000);
+
   it('listPlansByVersion 带 caseCount;updatePlan 归属校验', async () => {
     const { groupId, versionId, projectId } = await seedProject(pool);
     const svc = await import('../src/services/plans.service.js');
