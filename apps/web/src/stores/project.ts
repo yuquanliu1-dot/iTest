@@ -5,7 +5,6 @@ const STORAGE_KEY = 'itest-current-project';
 export interface CurrentProject {
   id: string;
   name: string;
-  defaultUrl: string | null;
   versionId: string | null;
   versionName: string | null;
 }
@@ -35,7 +34,6 @@ function readStored(): CurrentProject | null {
     return {
       id: parsed.id,
       name: parsed.name,
-      defaultUrl: parsed.defaultUrl ?? null,
       versionId: parsed.versionId ?? null,
       versionName: parsed.versionName ?? null,
     };

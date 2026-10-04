@@ -12,7 +12,7 @@ export class QueryDbColumnNotAllowed extends Error {
 }
 
 export const ALLOWED_QUERY_COLUMNS: Record<string, ReadonlySet<string>> = {
-  projects: new Set(['id', 'organization_id', 'name', 'description', 'default_url', 'repo_url', 'default_branch', 'provider', 'gitlab_url_override', 'created_at', 'updated_at']),
+  projects: new Set(['id', 'organization_id', 'name', 'description', 'repo_url', 'default_branch', 'provider', 'gitlab_url_override', 'created_at', 'updated_at']),
   groups: new Set(['id', 'project_id', 'name', 'default_url', 'created_at', 'updated_at']),
   users: new Set(['id', 'username', 'display_name', 'email', 'language_preference', 'created_at', 'updated_at']),
   test_cases: new Set(['id', 'requirement_id', 'group_id', 'title', 'priority', 'status', 'scenario_id', 'default_env_id', 'created_at', 'updated_at']),

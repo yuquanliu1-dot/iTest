@@ -133,9 +133,9 @@ describe('recorder routes', () => {
     expect(tcRows.rows[0]!.url).toBe('https://app.example.com/home');
   });
 
-  it('finish falls back to project default_url when steps carry no url', async () => {
+  it('finish falls back to default env base_url when steps carry no url', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
-    await pool.query(`UPDATE projects SET default_url = $1 WHERE id = $2`, ['https://prod.example.com', projectId]);
+    await pool.query(`INSERT INTO test_environments(project_id, name, is_default, base_url) VALUES ($1, '默认', true, $2)`, [projectId, 'https://prod.example.com']);
     const c = await request(app).post('/api/cases').send({ title: 'NVD', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'incognito' });
     const session = getSession(s.body.sessionId)!;

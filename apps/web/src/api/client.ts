@@ -58,9 +58,9 @@ export const api = {
   },
   projects: {
     list: () => request<ProjectWithCount[]>('/projects'),
-    create: (body: { name: string; defaultUrl?: string }) =>
+    create: (body: { name: string }) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify(body) }),
-    patch: (id: string, body: Partial<{ name: string; defaultUrl: string }>) =>
+    patch: (id: string, body: Partial<{ name: string }>) =>
       request<Project>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/projects/${id}`, { method: 'DELETE' }),
     get: (id: string) => request<Project>(`/projects/${id}`),
@@ -554,7 +554,6 @@ export interface Project {
   name: string;
   description: string | null;
   organizationId: string;
-  defaultUrl: string | null;
   repoUrl: string | null;
   defaultBranch: string;
   provider: string;
@@ -580,6 +579,8 @@ export interface ProjectVersion {
 }
 export interface ProjectWithCount extends Project {
   caseCount: number;
+  versionCount: number;
+  environmentCount: number;
 }
 export interface Group {
   id: string;

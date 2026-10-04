@@ -126,7 +126,7 @@ export default function CaseDetail() {
     enabled: !!id,
   });
 
-  // 录制目标 URL 为空时预填继承链（用例.url → 分组.defaultUrl → 项目.defaultUrl）解析结果
+  // 录制目标 URL 为空时预填继承链（用例.url → 分组.defaultUrl → 项目默认环境.base_url）解析结果
   useEffect(() => {
     if (caseDetail?.resolvedUrl) setTargetUrl((u) => u || caseDetail.resolvedUrl!);
   }, [caseDetail]);

@@ -98,10 +98,10 @@ export async function runCase(
     throw e;
   }
 
-  // 初始导航由用例级 init URL（test_cases.url → 分组 → 解析出的环境.base_url → 项目）保证。
+  // 初始导航由用例级 init URL（test_cases.url → 分组.default_url → 已解析环境.base_url）保证。
   // 回放前 always goto 一次，执行器内部对首条同 URL navigate 做去重（cdp.ts init-goto dedupe），
   // 避免与录制残留的首步重复。
-  const resolved = await resolveCaseUrl(caseRow, envCtx?.baseUrl);
+  const resolved = await resolveCaseUrl(caseRow, { envBaseUrl: envCtx?.baseUrl });
   const targetUrl = resolved && /^https?:\/\//.test(resolved) ? resolved : undefined;
 
   const startedAt = Date.now();
