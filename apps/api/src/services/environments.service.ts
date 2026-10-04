@@ -10,7 +10,7 @@ import { HttpError } from '../middleware/errorHandler.js';
 import { encrypt } from '../lib/secret-crypto.js';
 
 export const OBJECT_MASK = '••••••••';
-const OBJECT_TYPES = ['db', 'syslog'] as const;
+const OBJECT_TYPES = ['db', 'syslog', 'login'] as const;
 export type ObjectType = (typeof OBJECT_TYPES)[number];
 
 /** 出参掩码:payload.secret(AES 三元组)→ OBJECT_MASK。 */
@@ -23,7 +23,7 @@ export function maskObjectPayload(row: typeof environmentObjects.$inferSelect) {
 /**
  * 入参归一:payload.password / payload.privateKey 明文 → 加密写入 payload.secret;
  * 未提供(留空)→ 沿用 prev 旧密文(不覆盖语义)。入参中的 secret 字段一律丢弃。
- * syslog 按 authType 决定加密哪个明文字段(password / privateKey)。
+ * syslog 按 authType 决定加密哪个明文字段(password / privateKey);db / login 用 password。
  */
 export function normalizeObjectPayload(
   objectType: ObjectType,
@@ -32,9 +32,9 @@ export function normalizeObjectPayload(
 ): Record<string, unknown> {
   const out = { ...payload };
   delete out.secret;
-  const plain = objectType === 'db'
-    ? out.password
-    : out.authType === 'password' ? out.password : out.privateKey;
+  const plain = objectType === 'syslog'
+    ? (out.authType === 'password' ? out.password : out.privateKey)
+    : out.password;
   delete out.password;
   delete out.privateKey;
   if (typeof plain === 'string' && plain.length > 0) {

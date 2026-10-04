@@ -74,6 +74,14 @@ export interface SyslogCtx {
   password?: string;
 }
 
+/** 被测系统的登录凭据（environment_objects objectType=login）。 */
+export interface LoginCtx {
+  user: string;
+  password: string;
+  /** 登录页地址；null 表示用检测页/当前页直接填表。 */
+  loginUrl: string | null;
+}
+
 export interface EnvCtx {
   envId: string;
   /** 部署入口 URL：执行期导航兜底用（用例.url → 分组.defaultUrl → 环境.base_url → 项目.defaultUrl） */
@@ -82,6 +90,7 @@ export interface EnvCtx {
   /** 已建立好的查询池；缺省表示该环境未配置 DB。close() 时统一 end()。 */
   pool?: QueryPool;
   syslog?: SyslogCtx;
+  login?: LoginCtx;
   close(): Promise<void>;
 }
 
@@ -102,6 +111,11 @@ interface SyslogPayload {
   filePath?: string | null;
   /** 缺省按 key（PEM 私钥）处理（老数据兼容）。 */
   authType?: 'key' | 'password';
+  secret?: { c?: string | null; i?: string | null; t?: string | null } | null;
+}
+interface LoginPayload {
+  user?: string | null;
+  loginUrl?: string | null;
   secret?: { c?: string | null; i?: string | null; t?: string | null } | null;
 }
 
@@ -185,12 +199,22 @@ export async function resolveEnv(
     }
   }
 
+  let loginCfg: EnvCtx['login'];
+  const loginObj = pick('login');
+  if (loginObj) {
+    const p = (loginObj.payload ?? {}) as LoginPayload;
+    if (p.user && p.secret?.c && p.secret?.i && p.secret?.t) {
+      loginCfg = { user: p.user, password: safeDecrypt(p.secret), loginUrl: p.loginUrl ?? null };
+    }
+  }
+
   return {
     envId,
     baseUrl: env.baseUrl ?? null,
     db: dbCfg,
     pool,
     syslog: syslogCfg,
+    login: loginCfg,
     async close() {
       if (pool) await pool.end();
     },

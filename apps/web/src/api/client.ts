@@ -176,7 +176,7 @@ export const api = {
       body: {
         name: string;
         baseUrl?: string;
-        objects?: Array<{ objectType: 'db' | 'syslog'; label?: string; payload: Record<string, unknown>; isDefault?: boolean }>;
+        objects?: Array<{ objectType: 'db' | 'syslog' | 'login'; label?: string; payload: Record<string, unknown>; isDefault?: boolean }>;
       },
     ) =>
       request<Environment>(`/projects/${projectId}/environments`, {
@@ -192,7 +192,7 @@ export const api = {
       ),
     createObject: (
       envId: string,
-      body: { objectType: 'db' | 'syslog'; label?: string; payload: Record<string, unknown>; isDefault?: boolean },
+      body: { objectType: 'db' | 'syslog' | 'login'; label?: string; payload: Record<string, unknown>; isDefault?: boolean },
     ) =>
       request<EnvironmentObject>(`/environments/${envId}/objects`, {
         method: 'POST',
@@ -552,9 +552,10 @@ export interface LlmTestResult {
 export interface EnvironmentObject {
   id: string;
   environmentId: string;
-  objectType: 'db' | 'syslog';
+  objectType: 'db' | 'syslog' | 'login';
   label: string;
-  /** db: { host, port, dbName, user, password?, secret? }；syslog: { host, user, sshPort, filePath, privateKey?, secret? }。
+  /** db: { host, port, dbName, user, password?, secret? }；syslog: { host, user, sshPort, filePath, privateKey?, secret? }；
+   *  login: { user, loginUrl?, password?, secret? }。
    *  出参里 secret 为 '••••••••' 掩码；入参传明文 password/privateKey，留空不覆盖旧密文。 */
   payload: Record<string, unknown>;
   isDefault: boolean;

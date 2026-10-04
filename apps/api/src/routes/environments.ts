@@ -15,7 +15,7 @@ import { probeSyslog } from '../execute/syslogReader.js';
 
 export const environmentsRoute = Router();
 
-const OBJECT_TYPES = ['db', 'syslog'] as const;
+const OBJECT_TYPES = ['db', 'syslog', 'login'] as const;
 
 environmentsRoute.get('/projects/:projectId/environments', async (req, res) => {
   const projectId = (req.params as { projectId: string }).projectId;
