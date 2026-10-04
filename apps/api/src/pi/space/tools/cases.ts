@@ -1,7 +1,7 @@
 /**
  * manage_cases:版本内用例检索/详情/创建/改元数据/删除/移动分组/建分组。
  * 归属校验(实体 ∈ ctx.projectId / ctx.versionId)在这里;per-user 可见性在 HTTP 边界。
- * delete 走阻塞确认;其余写操作广播 stage 事件(非阻塞)。
+ * delete/update 走阻塞确认;其余写操作广播 stage 事件(非阻塞)。
  */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
@@ -118,8 +118,17 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (v.status !== undefined) patch.status = v.status;
               if (v.url !== undefined) patch.url = v.url;
               if (Object.keys(patch).length === 0) return { ok: false, error: 'update 未提供任何要修改的字段(title/description/priority/status/url)' };
+              // 挂起前预计算 diff(旧值 vs 合成新值),确认卡与实际执行共用一份数据
+              const diff = diffText(before, { ...before, ...patch });
+              if (diff !== undefined) {
+                const approved = await requestConfirmation(
+                  { threadId: ctx.threadId, toolName: 'manage_cases', action: 'update', summary: `更新用例「${before.title}」`, risk: 'update', diff },
+                  ctx.emit,
+                );
+                if (!approved) return { ok: false, error: '用户取消了该操作' };
+              }
               const after = await svc.updateCase(v.caseId, patch);
-              emitStage(ctx, { kind: 'case', id: v.caseId, action: 'update', diff: diffText(before, after) });
+              emitStage(ctx, { kind: 'case', id: v.caseId, action: 'update', diff });
               return { ok: true, data: `已更新用例「${after.title}」` };
             }
             case 'delete': {

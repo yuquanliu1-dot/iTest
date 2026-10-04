@@ -121,6 +121,41 @@ describe('manage_environments 工具', () => {
     expect(raw.secret).toBeUndefined();
   }, 30_000);
 
+  it('upsert 更新:拒绝 → 取消且环境不变;确认 → 生效且 stage 用确认时同一 diff;仅对象合并(patch 空)不进确认', async () => {
+    const seed = await seedProject(pool);
+    const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx);
+    await tool.execute({ action: 'upsert', name: '灰度环境', baseUrl: 'https://old.example.com' });
+    const envId = (await pool.query(`SELECT id FROM test_environments WHERE name='灰度环境'`)).rows[0]!.id as string;
+
+    events.length = 0;
+    const rejected = tool.execute({ action: 'upsert', environmentId: envId, name: '改名环境', baseUrl: 'https://new.example.com' });
+    await untilConfirm(events);
+    const req = events.find((e) => e.type === 'confirm_request') as Record<string, unknown>;
+    expect(req).toMatchObject({ toolName: 'manage_environments', action: 'upsert', risk: 'update', summary: '更新环境「灰度环境」' });
+    expect(String(req.diff)).toContain('name: 灰度环境 → 改名环境');
+    expect(String(req.diff)).toContain('baseUrl: https://old.example.com → https://new.example.com');
+    resolveConfirmation(String(req.confirmId), false);
+    expect(await rejected).toMatchObject({ ok: false, error: '用户取消了该操作' });
+    const row = (await pool.query(`SELECT name, base_url FROM test_environments WHERE id=$1`, [envId])).rows[0]!;
+    expect(row.name).toBe('灰度环境');
+    expect(row.base_url).toBe('https://old.example.com');
+
+    events.length = 0;
+    const approved = tool.execute({ action: 'upsert', environmentId: envId, name: '改名环境', baseUrl: 'https://new.example.com' });
+    resolveConfirmation(await untilConfirm(events), true);
+    expect(await approved).toMatchObject({ ok: true });
+    const stage = events.find((e) => e.type === 'stage') as { diff?: string };
+    expect(stage.diff).toContain('name: 灰度环境 → 改名环境');
+    expect((await pool.query(`SELECT name, base_url FROM test_environments WHERE id=$1`, [envId])).rows[0]).toMatchObject({ name: '改名环境', base_url: 'https://new.example.com' });
+
+    // patch 为空、仅 objects 合并 → 保持自动执行,不进确认
+    events.length = 0;
+    const objOnly = await tool.execute({ action: 'upsert', environmentId: envId, objects: [{ objectType: 'db', payload: { host: 'h' } }] });
+    expect(objOnly).toMatchObject({ ok: true });
+    expect(events.find((e) => e.type === 'confirm_request')).toBeUndefined();
+  }, 30_000);
+
   it('delete:summary 带引用计数;确认后环境删除且用例引用置空', async () => {
     const seed = await seedProject(pool);
     const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });

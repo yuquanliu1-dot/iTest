@@ -1,4 +1,4 @@
-/** manage_plans:计划列表/详情/创建/更新/加用例/移用例。无阻塞确认(改组合是可逆更新),变更走 stage 事件。 */
+/** manage_plans:计划列表/详情/创建/更新/加用例/移用例。创建自动执行;update/add_cases/remove_cases 走阻塞确认,变更走 stage 事件。 */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
 import * as svc from '../../../services/plans.service.js';
@@ -7,6 +7,7 @@ import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 import { emitStage } from './stage.js';
 import { diffText } from './diff.js';
+import { requestConfirmation } from '../confirm.js';
 
 const Actions = z.object({
   action: z.enum(['list', 'get', 'create', 'update', 'add_cases', 'remove_cases']),
@@ -89,26 +90,63 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (v.environmentId !== undefined) patch.environmentId = v.environmentId;
               if (v.strategy !== undefined) patch.strategy = v.strategy;
               if (Object.keys(patch).length === 0) return { ok: false, error: 'update 未提供任何要修改的字段(name/environmentId/strategy)' };
+              // 挂起前预计算 diff(旧值 vs 合成新值),确认卡与实际执行共用一份数据
+              const diff = diffText(before ?? {}, { ...(before ?? {}), ...patch });
+              if (diff !== undefined) {
+                const approved = await requestConfirmation(
+                  { threadId: ctx.threadId, toolName: 'manage_plans', action: 'update', summary: `更新计划「${before?.name ?? v.planId}」`, risk: 'update', diff },
+                  ctx.emit,
+                );
+                if (!approved) return { ok: false, error: '用户取消了该操作' };
+              }
               await svc.updatePlan(v.planId, patch);
               const after = await svc.getPlanDetail(v.planId);
-              emitStage(ctx, { kind: 'plan', id: v.planId, action: 'update', diff: diffText(before ?? {}, after ?? {}) });
+              emitStage(ctx, { kind: 'plan', id: v.planId, action: 'update', diff });
               return { ok: true, data: `已更新计划「${after?.name ?? v.planId}」` };
             }
             case 'add_cases': {
               if (!v.planId || !v.caseIds?.length) return { ok: false, error: 'add_cases 需要 planId 与 caseIds' };
               const pid = await svc.planProjectId(v.planId);
               if (pid !== ctx.projectId) return { ok: false, error: '计划不存在或不属于当前项目' };
-              const added = await svc.addPlanCases(v.planId, v.caseIds);
-              emitStage(ctx, { kind: 'plan', id: v.planId, action: 'add_cases', diff: `cases: +${added}` });
-              return { ok: true, data: `已向计划追加 ${added} 个用例` };
+              // 挂起前算精确增量(重复 id 去重、已在计划中的跳过);N=0 短路不执行
+              const detail = await svc.getPlanDetail(v.planId);
+              const have = new Set((detail?.cases ?? []).map((c) => c.id));
+              const pendingCount = [...new Set(v.caseIds)].filter((c) => !have.has(c)).length;
+              if (pendingCount === 0) return { ok: true, data: '所列用例均已在计划中,无需追加' };
+              const diff = `cases: +${pendingCount}`;
+              const approved = await requestConfirmation(
+                {
+                  threadId: ctx.threadId, toolName: 'manage_plans', action: 'add_cases',
+                  summary: `向计划「${detail?.name ?? v.planId}」添加 ${pendingCount} 个用例`, risk: 'update', diff,
+                },
+                ctx.emit,
+              );
+              if (!approved) return { ok: false, error: '用户取消了该操作' };
+              await svc.addPlanCases(v.planId, v.caseIds);
+              emitStage(ctx, { kind: 'plan', id: v.planId, action: 'add_cases', diff });
+              return { ok: true, data: `已向计划追加 ${pendingCount} 个用例` };
             }
             case 'remove_cases': {
               if (!v.planId || !v.caseIds?.length) return { ok: false, error: 'remove_cases 需要 planId 与 caseIds' };
               const pid = await svc.planProjectId(v.planId);
               if (pid !== ctx.projectId) return { ok: false, error: '计划不存在或不属于当前项目' };
-              const removed = await svc.removePlanCases(v.planId, v.caseIds);
-              emitStage(ctx, { kind: 'plan', id: v.planId, action: 'remove_cases', diff: `cases: -${removed}` });
-              return { ok: true, data: `已从计划移除 ${removed} 个用例` };
+              // 挂起前算精确增量(重复 id 去重、只计在计划中的);N=0 短路不执行
+              const detail = await svc.getPlanDetail(v.planId);
+              const have = new Set((detail?.cases ?? []).map((c) => c.id));
+              const pendingCount = [...new Set(v.caseIds)].filter((c) => have.has(c)).length;
+              if (pendingCount === 0) return { ok: true, data: '所列用例均不在计划中,无需移除' };
+              const diff = `cases: -${pendingCount}`;
+              const approved = await requestConfirmation(
+                {
+                  threadId: ctx.threadId, toolName: 'manage_plans', action: 'remove_cases',
+                  summary: `从计划「${detail?.name ?? v.planId}」移除 ${pendingCount} 个用例`, risk: 'update', diff,
+                },
+                ctx.emit,
+              );
+              if (!approved) return { ok: false, error: '用户取消了该操作' };
+              await svc.removePlanCases(v.planId, v.caseIds);
+              emitStage(ctx, { kind: 'plan', id: v.planId, action: 'remove_cases', diff });
+              return { ok: true, data: `已从计划移除 ${pendingCount} 个用例` };
             }
           }
         } catch (e) {

@@ -1,5 +1,5 @@
 /**
- * manage_environments:环境列表/详情/upsert(含对象,但拒绝明文凭据)/set_secret(阻塞确认)/删除(阻塞确认)。
+ * manage_environments:环境列表/详情/upsert(含对象,但拒绝明文凭据;更新标量字段走阻塞确认)/set_secret(阻塞确认)/删除(阻塞确认)。
  * 明文凭据只能走 set_secret:summary 不回显值;工具返回与 stage 事件均只有掩码。
  * findEnvironmentObject 返回含密文的原始行,仅限内部定位 id,严禁序列化进任何输出。
  */
@@ -11,6 +11,7 @@ import { resolveEnvironmentProjectId } from '../../../services/projectAccess.js'
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 import { emitStage } from './stage.js';
+import { diffText } from './diff.js';
 import { requestConfirmation } from '../confirm.js';
 
 const Actions = z.object({
@@ -87,6 +88,7 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
                 }
               }
               let envId: string;
+              let upsertDiff: string | undefined;
               if (v.environmentId) {
                 const pid = await resolveEnvironmentProjectId(v.environmentId);
                 if (pid !== ctx.projectId) return { ok: false, error: '环境不存在或不属于当前项目' };
@@ -94,14 +96,29 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
                 if (v.name !== undefined) patch.name = v.name;
                 if (v.baseUrl !== undefined) patch.baseUrl = v.baseUrl;
                 if (v.isDefault !== undefined) patch.isDefault = v.isDefault;
-                if (Object.keys(patch).length > 0) await svc.updateEnvironment(v.environmentId, patch);
+                if (Object.keys(patch).length > 0) {
+                  // 更新路径走阻塞确认:挂起前预计算 diff(旧值 vs 合成新值),确认卡与实际执行共用一份数据
+                  const before = await svc.getEnvironment(v.environmentId);
+                  upsertDiff = diffText(before ?? {}, { ...(before ?? {}), ...patch });
+                  if (upsertDiff !== undefined) {
+                    const approved = await requestConfirmation(
+                      {
+                        threadId: ctx.threadId, toolName: 'manage_environments', action: 'upsert',
+                        summary: `更新环境「${before?.name ?? v.environmentId}」`, risk: 'update', diff: upsertDiff,
+                      },
+                      ctx.emit,
+                    );
+                    if (!approved) return { ok: false, error: '用户取消了该操作' };
+                  }
+                  await svc.updateEnvironment(v.environmentId, patch);
+                }
                 envId = v.environmentId;
               } else {
                 if (!v.name) return { ok: false, error: 'upsert 新建环境需要 name' };
                 envId = (await svc.createEnvironment(ctx.projectId, { name: v.name, baseUrl: v.baseUrl ?? null })).id;
               }
               for (const o of v.objects ?? []) await svc.upsertEnvironmentObject(envId, o);
-              emitStage(ctx, { kind: 'environment', id: envId, action: 'upsert' });
+              emitStage(ctx, { kind: 'environment', id: envId, action: 'upsert', diff: upsertDiff });
               return { ok: true, data: JSON.stringify(await svc.getEnvironment(envId), null, 2) };
             }
             case 'set_secret': {

@@ -72,18 +72,33 @@ describe('manage_cases 工具', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'stage', kind: 'case', action: 'create' }));
   }, 30_000);
 
-  it('update:字段生效且 stage 带 diff;跨版本 caseId 拒绝', async () => {
+  it('update:拒绝 → 取消且数据不变;确认 → 生效且 stage 用确认时同一 diff;跨版本 caseId 拒绝', async () => {
     const seed = await seedProject(pool);
     const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await buildCasesToolsLazy(ctx);
     await tool.execute({ action: 'create', title: '旧名', groupId: seed.groupId });
     const caseId = (await pool.query(`SELECT id FROM test_cases WHERE title='旧名'`)).rows[0]!.id as string;
+
+    // 拒绝:confirm_request 携带预计算 diff,取消后数据不变
     events.length = 0;
-    const r = await tool.execute({ action: 'update', caseId, title: '新名', priority: 'P0' });
-    expect(r.ok).toBe(true);
+    const rejected = tool.execute({ action: 'update', caseId, title: '新名', priority: 'P0' });
+    await untilConfirm(events);
+    const req = events.find((e) => e.type === 'confirm_request') as Record<string, unknown>;
+    expect(req).toMatchObject({ toolName: 'manage_cases', action: 'update', risk: 'update', summary: '更新用例「旧名」' });
+    expect(String(req.diff)).toContain('title: 旧名 → 新名');
+    resolveConfirmation(String(req.confirmId), false);
+    expect(await rejected).toMatchObject({ ok: false, error: '用户取消了该操作' });
+    expect((await pool.query(`SELECT title FROM test_cases WHERE id=$1`, [caseId])).rows[0]!.title).toBe('旧名');
+
+    // 确认:字段生效,stage 用确认时的同一 diff
+    events.length = 0;
+    const approved = tool.execute({ action: 'update', caseId, title: '新名', priority: 'P0' });
+    resolveConfirmation(await untilConfirm(events), true);
+    expect(await approved).toMatchObject({ ok: true });
     const stage = events.find((e) => e.type === 'stage') as { diff?: string };
     expect(stage.diff).toContain('title: 旧名 → 新名');
     expect(stage.diff).toContain('priority: P1 → P0');
+    expect((await pool.query(`SELECT title, priority FROM test_cases WHERE id=$1`, [caseId])).rows[0]).toMatchObject({ title: '新名', priority: 'P0' });
 
     const other = await seedProject(pool);
     const { ctx: ctx2 } = makeCtx({ projectId: other.projectId, versionId: other.versionId });
