@@ -1,0 +1,237 @@
+/**
+ * 环境领域服务:环境与对象(db/syslog)的增删改查。
+ * 秘密以 AES-256-GCM {c,i,t} 存 payload.secret;出参一律经 maskObjectPayload 脱敏。
+ * 用户可见性(assertProjectVisible/assertEnvironmentVisible)由调用方(HTTP 边界)负责。
+ */
+import { and, asc, eq, inArray } from 'drizzle-orm';
+import { db } from '../db/client.js';
+import { environmentObjects, executionPlans, testCases, testEnvironments } from '../db/schema.js';
+import { HttpError } from '../middleware/errorHandler.js';
+import { encrypt } from '../lib/secret-crypto.js';
+
+export const OBJECT_MASK = '••••••••';
+const OBJECT_TYPES = ['db', 'syslog'] as const;
+export type ObjectType = (typeof OBJECT_TYPES)[number];
+
+/** 出参掩码:payload.secret(AES 三元组)→ OBJECT_MASK。 */
+export function maskObjectPayload(row: typeof environmentObjects.$inferSelect) {
+  const payload = { ...((row.payload ?? {}) as Record<string, unknown>) };
+  if (payload.secret) payload.secret = OBJECT_MASK;
+  return { ...row, payload };
+}
+
+/**
+ * 入参归一:payload.password / payload.privateKey 明文 → 加密写入 payload.secret;
+ * 未提供(留空)→ 沿用 prev 旧密文(不覆盖语义)。入参中的 secret 字段一律丢弃。
+ * syslog 按 authType 决定加密哪个明文字段(password / privateKey)。
+ */
+export function normalizeObjectPayload(
+  objectType: ObjectType,
+  payload: Record<string, unknown>,
+  prev?: Record<string, unknown>,
+): Record<string, unknown> {
+  const out = { ...payload };
+  delete out.secret;
+  const plain = objectType === 'db'
+    ? out.password
+    : out.authType === 'password' ? out.password : out.privateKey;
+  delete out.password;
+  delete out.privateKey;
+  if (typeof plain === 'string' && plain.length > 0) {
+    const e = encrypt(plain);
+    out.secret = { c: e.ciphertext.toString('base64'), i: e.iv.toString('base64'), t: e.tag.toString('base64') };
+  } else if (prev?.secret) {
+    out.secret = prev.secret;
+  }
+  return out;
+}
+
+export function isUniqueViolation(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as { code?: string }).code === '23505';
+}
+
+async function objectsOf(environmentId: string) {
+  const rows = await db.select().from(environmentObjects)
+    .where(eq(environmentObjects.environmentId, environmentId))
+    .orderBy(asc(environmentObjects.createdAt));
+  return rows.map(maskObjectPayload);
+}
+
+export async function listEnvironments(projectId: string) {
+  const envs = await db.select().from(testEnvironments)
+    .where(eq(testEnvironments.projectId, projectId))
+    .orderBy(asc(testEnvironments.createdAt));
+  const objs = envs.length
+    ? await db.select().from(environmentObjects)
+        .where(inArray(environmentObjects.environmentId, envs.map((e) => e.id)))
+        .orderBy(asc(environmentObjects.createdAt))
+    : [];
+  const byEnv = new Map<string, typeof objs>();
+  for (const o of objs) {
+    const list = byEnv.get(o.environmentId) ?? [];
+    list.push(o);
+    byEnv.set(o.environmentId, list);
+  }
+  return envs.map((e) => ({ ...e, objects: (byEnv.get(e.id) ?? []).map(maskObjectPayload) }));
+}
+
+export async function getEnvironment(environmentId: string) {
+  const env = (await db.select().from(testEnvironments).where(eq(testEnvironments.id, environmentId)).limit(1))[0];
+  if (!env) return null;
+  return { ...env, objects: await objectsOf(env.id) };
+}
+
+export async function createEnvironment(
+  projectId: string,
+  input: { name: string; baseUrl?: string | null; objects?: Array<{ objectType: ObjectType; label?: string; payload: Record<string, unknown>; isDefault?: boolean }> },
+) {
+  return db.transaction(async (tx) => {
+    const inserted = (await tx.insert(testEnvironments).values({ projectId, name: input.name, baseUrl: input.baseUrl ?? null }).returning())[0]!;
+    if (input.objects?.length) {
+      await tx.insert(environmentObjects).values(input.objects.map((o) => ({
+        environmentId: inserted.id,
+        objectType: o.objectType,
+        label: o.label ?? '默认',
+        payload: normalizeObjectPayload(o.objectType, o.payload),
+        isDefault: o.isDefault ?? false,
+      })));
+    }
+    return inserted;
+  }).catch((e) => {
+    if (isUniqueViolation(e)) throw new HttpError(409, 'name_conflict', 'environment name already exists in this project');
+    throw e;
+  });
+}
+
+export async function updateEnvironment(environmentId: string, patch: { name?: string; baseUrl?: string | null; isDefault?: boolean }) {
+  const row = await db.transaction(async (tx) => {
+    const env = (await tx.select().from(testEnvironments).where(eq(testEnvironments.id, environmentId)).limit(1))[0];
+    if (!env) throw new HttpError(404, 'not_found', 'environment not found');
+    if (patch.isDefault === true) {
+      await tx.update(testEnvironments).set({ isDefault: false }).where(eq(testEnvironments.projectId, env.projectId));
+    }
+    const update: Record<string, unknown> = { updatedAt: new Date() };
+    if (patch.name !== undefined) update.name = patch.name;
+    if (patch.baseUrl !== undefined) update.baseUrl = patch.baseUrl;
+    if (patch.isDefault !== undefined) update.isDefault = patch.isDefault;
+    return (await tx.update(testEnvironments).set(update).where(eq(testEnvironments.id, environmentId)).returning())[0]!;
+  }).catch((e) => {
+    if (isUniqueViolation(e)) throw new HttpError(409, 'name_conflict', 'environment name already exists in this project');
+    throw e;
+  });
+  return { ...row, objects: await objectsOf(row.id) };
+}
+
+/** 删除前的引用计数(用例默认环境 + 计划环境)。 */
+export async function environmentUsage(environmentId: string): Promise<{ caseCount: number; planCount: number }> {
+  const caseCount = (await db.select({ id: testCases.id }).from(testCases).where(eq(testCases.defaultEnvId, environmentId))).length;
+  const planCount = (await db.select({ id: executionPlans.id }).from(executionPlans).where(eq(executionPlans.environmentId, environmentId))).length;
+  return { caseCount, planCount };
+}
+
+export async function deleteEnvironment(environmentId: string): Promise<void> {
+  const deleted = await db.delete(testEnvironments).where(eq(testEnvironments.id, environmentId)).returning({ id: testEnvironments.id });
+  if (deleted.length === 0) throw new HttpError(404, 'not_found', 'environment not found');
+}
+
+/** 新建对象(insert 语义,与原路由 POST /environments/:id/objects 一致)。 */
+export async function insertEnvironmentObject(
+  environmentId: string,
+  input: { objectType: ObjectType; label?: string; payload: Record<string, unknown>; isDefault?: boolean },
+) {
+  const row = await db.transaction(async (tx) => {
+    if (input.isDefault) {
+      await tx.update(environmentObjects).set({ isDefault: false })
+        .where(and(eq(environmentObjects.environmentId, environmentId), eq(environmentObjects.objectType, input.objectType)));
+    }
+    return (await tx.insert(environmentObjects).values({
+      environmentId,
+      objectType: input.objectType,
+      label: input.label ?? '默认',
+      payload: normalizeObjectPayload(input.objectType, input.payload),
+      isDefault: input.isDefault ?? false,
+    }).returning())[0]!;
+  });
+  return maskObjectPayload(row);
+}
+
+/** upsert(工具语义):同 (environmentId, objectType, label) 存在则合并 payload(旧密文沿用),否则新建。 */
+export async function upsertEnvironmentObject(
+  environmentId: string,
+  input: { objectType: ObjectType; label?: string; payload: Record<string, unknown>; isDefault?: boolean },
+) {
+  const label = input.label ?? '默认';
+  const row = await db.transaction(async (tx) => {
+    if (input.isDefault) {
+      await tx.update(environmentObjects).set({ isDefault: false })
+        .where(and(eq(environmentObjects.environmentId, environmentId), eq(environmentObjects.objectType, input.objectType)));
+    }
+    const existing = (await tx.select().from(environmentObjects)
+      .where(and(eq(environmentObjects.environmentId, environmentId), eq(environmentObjects.objectType, input.objectType), eq(environmentObjects.label, label)))
+      .limit(1))[0];
+    if (existing) {
+      const prev = (existing.payload ?? {}) as Record<string, unknown>;
+      const payload = normalizeObjectPayload(input.objectType, { ...prev, ...input.payload }, prev);
+      const update: Record<string, unknown> = { payload, updatedAt: new Date() };
+      if (input.isDefault !== undefined) update.isDefault = input.isDefault;
+      return (await tx.update(environmentObjects).set(update).where(eq(environmentObjects.id, existing.id)).returning())[0]!;
+    }
+    return (await tx.insert(environmentObjects).values({
+      environmentId,
+      objectType: input.objectType,
+      label,
+      payload: normalizeObjectPayload(input.objectType, input.payload),
+      isDefault: input.isDefault ?? false,
+    }).returning())[0]!;
+  });
+  return maskObjectPayload(row);
+}
+
+export async function updateEnvironmentObject(objectId: string, patch: { label?: string; payload?: Record<string, unknown> }) {
+  const existing = (await db.select().from(environmentObjects).where(eq(environmentObjects.id, objectId)).limit(1))[0];
+  if (!existing) throw new HttpError(404, 'not_found', 'environment object not found');
+  const payload = patch.payload !== undefined
+    ? normalizeObjectPayload(existing.objectType as ObjectType, patch.payload, (existing.payload ?? {}) as Record<string, unknown>)
+    : undefined;
+  const rows = await db.update(environmentObjects).set({
+    ...(patch.label !== undefined ? { label: patch.label } : {}),
+    ...(payload !== undefined ? { payload: payload as object, updatedAt: new Date() } : {}),
+  }).where(eq(environmentObjects.id, objectId)).returning();
+  return maskObjectPayload(rows[0]!);
+}
+
+export async function deleteEnvironmentObject(objectId: string): Promise<void> {
+  const existing = (await db.select().from(environmentObjects).where(eq(environmentObjects.id, objectId)).limit(1))[0];
+  if (!existing) throw new HttpError(404, 'not_found', 'environment object not found');
+  await db.transaction(async (tx) => {
+    await tx.delete(environmentObjects).where(eq(environmentObjects.id, objectId));
+    if (existing.isDefault) {
+      const sibling = (await tx.select({ id: environmentObjects.id }).from(environmentObjects)
+        .where(and(eq(environmentObjects.environmentId, existing.environmentId), eq(environmentObjects.objectType, existing.objectType)))
+        .orderBy(asc(environmentObjects.createdAt)).limit(1))[0];
+      if (sibling) await tx.update(environmentObjects).set({ isDefault: true }).where(eq(environmentObjects.id, sibling.id));
+    }
+  });
+}
+
+/** 工具 set_secret:直接替换 payload.secret(加密),其余字段不动。返回脱敏行。 */
+export async function setEnvironmentObjectSecret(objectId: string, plain: string) {
+  const existing = (await db.select().from(environmentObjects).where(eq(environmentObjects.id, objectId)).limit(1))[0];
+  if (!existing) throw new HttpError(404, 'not_found', 'environment object not found');
+  const e = encrypt(plain);
+  const payload = {
+    ...((existing.payload ?? {}) as Record<string, unknown>),
+    secret: { c: e.ciphertext.toString('base64'), i: e.iv.toString('base64'), t: e.tag.toString('base64') },
+  };
+  const updated = (await db.update(environmentObjects).set({ payload: payload as object, updatedAt: new Date() })
+    .where(eq(environmentObjects.id, objectId)).returning())[0]!;
+  return maskObjectPayload(updated);
+}
+
+/** 按 (environmentId, objectType, label) 定位对象(工具 set_secret 用)。返回原始行(含密文)。 */
+export async function findEnvironmentObject(environmentId: string, objectType: ObjectType, label?: string) {
+  const row = (await db.select().from(environmentObjects)
+    .where(and(eq(environmentObjects.environmentId, environmentId), eq(environmentObjects.objectType, objectType), eq(environmentObjects.label, label ?? '默认')))
+    .limit(1))[0];
+  return row ?? null;
+}
