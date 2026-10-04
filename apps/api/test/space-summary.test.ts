@@ -48,4 +48,24 @@ describe('buildSpaceSummary', () => {
     const { buildSpaceSummary } = await import('../src/pi/space/summary.js');
     await expect(buildSpaceSummary('00000000-0000-0000-0000-000000000000')).rejects.toThrow();
   }, 30_000);
+
+  it('溢出省略号:恰好 20 条需求无省略号,21 条截断加 …', async () => {
+    const { projectId, versionId } = await seedProject(pool);
+    const reqs = Array.from({ length: 21 }, (_, i) => `需求${String(i + 1).padStart(2, '0')}`);
+    await pool.query(
+      `INSERT INTO requirements(project_id, title, content) SELECT $1, t.title, 'c' FROM unnest($2::text[]) AS t(title)`,
+      [projectId, reqs],
+    );
+
+    const { buildSpaceSummary } = await import('../src/pi/space/summary.js');
+    const over = await buildSpaceSummary(versionId);
+    expect(over.text).toContain('需求20=');
+    expect(over.text).toContain('…');
+    expect(over.text).not.toContain('需求21=');
+
+    await pool.query(`DELETE FROM requirements WHERE project_id=$1 AND title='需求21'`, [projectId]);
+    const exact = await buildSpaceSummary(versionId);
+    expect(exact.text).toContain('需求20=');
+    expect(exact.text).not.toContain('…');
+  }, 30_000);
 });

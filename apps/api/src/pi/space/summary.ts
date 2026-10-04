@@ -60,9 +60,9 @@ export async function buildSpaceSummary(versionId: string): Promise<SpaceSummary
     .select({ id: requirements.id, title: requirements.title })
     .from(requirements)
     .where(eq(requirements.projectId, v.projectId))
-    .limit(MAX_REQS);
+    .limit(MAX_REQS + 1);
   if (reqs.length > 0) {
-    lines.push(`需求(操作场景时引用其 id):${reqs.map((r) => `${r.title}=${r.id}`).join('、')}`);
+    lines.push(`需求(操作场景时引用其 id):${reqs.slice(0, MAX_REQS).map((r) => `${r.title}=${r.id}`).join('、')}${reqs.length > MAX_REQS ? ' …' : ''}`);
   }
 
   const caseCount = (await db.select({ id: testCases.id }).from(testCases).where(eq(testCases.versionId, versionId))).length;
