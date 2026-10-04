@@ -237,6 +237,14 @@ async function storedSecret(objectId: string, req: Request): Promise<{ secret: s
   return { secret: '' };
 }
 
+// mysql2/ssh2 的网络错误常只有 code（如 ETIMEDOUT/ECONNREFUSED）而 message 为空 → 拼接保证可读
+function probeErrorText(e: unknown): string {
+  if (e instanceof Error) {
+    return [e.message, (e as NodeJS.ErrnoException).code].filter(Boolean).join(' ') || '未知错误';
+  }
+  return String(e) || '未知错误';
+}
+
 const TestDbBody = z.object({
   objectId: z.string().uuid().optional(), // 编辑态：密码留空时回退该对象已存密文
   host: z.string().min(1),
@@ -273,7 +281,7 @@ environmentsRoute.post('/environments/test-db', async (req, res) => {
     await pool.query('SELECT 1', []);
     res.json({ ok: true, latencyMs: Date.now() - startedAt });
   } catch (e) {
-    res.json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    res.json({ ok: false, error: probeErrorText(e) });
   } finally {
     await pool.end().catch(() => undefined);
   }
@@ -314,6 +322,6 @@ environmentsRoute.post('/environments/test-syslog', async (req, res) => {
     const latencyMs = await probeSyslog(env);
     res.json({ ok: true, latencyMs });
   } catch (e) {
-    res.json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    res.json({ ok: false, error: probeErrorText(e) });
   }
 });
