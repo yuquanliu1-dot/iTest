@@ -155,7 +155,7 @@ async function assertCasesInProject(projectId: string, caseIds: string[]): Promi
  * 事务内第一步锁计划行(SELECT ... FOR UPDATE):同计划的所有编排串行化,
  * 消除查-算-插竞态与 order 撞号;行不存在 → 404(requirePlan 语义并入锁步骤)。
  */
-export async function replacePlanCases(planId: string, caseIds: string[]): Promise<void> {
+export async function replacePlanCases(planId: string, caseIds: string[]): Promise<number> {
   if (caseIds.length === 0) throw new HttpError(400, 'cases_required', 'caseIds must not be empty');
   const ids = [...new Set(caseIds)];
   await db.transaction(async (tx) => {
@@ -165,6 +165,7 @@ export async function replacePlanCases(planId: string, caseIds: string[]): Promi
     await tx.delete(planCases).where(eq(planCases.planId, planId));
     await tx.insert(planCases).values(ids.map((caseId, i) => ({ planId, caseId, order: i + 1 })));
   });
+  return ids.length;
 }
 
 /** 追加用例(已存在的跳过),返回实际新增数;order 接 max+1。事务 + 计划行锁,查-算-插原子化。 */

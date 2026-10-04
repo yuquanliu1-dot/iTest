@@ -106,4 +106,38 @@ describe('manage_plans 工具', () => {
     const cross = await tool.execute({ action: 'get', planId: otherPlan.id });
     expect(cross).toMatchObject({ ok: false });
   }, 30_000);
+
+  it('create 部分失败:计划已建不回滚,错误含 planId 且不重复建;add_cases 可补齐', async () => {
+    const seed = await seedProject(pool);
+    const other = await seedProject(pool);
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx);
+    const foreign = await makeCase(other.groupId, other.versionId, '外来的');
+    const r = await tool.execute({ action: 'create', name: '半成品', caseIds: [foreign] });
+    expect(r).toMatchObject({ ok: false });
+    const err = (r as { error: string }).error;
+    expect(err).toContain('勿重复 create');
+    const planId = (await pool.query(`SELECT id FROM execution_plans WHERE name='半成品'`)).rows[0]!.id as string;
+    expect(err).toContain(planId);
+    const count = (await pool.query(`SELECT count(*)::int AS n FROM execution_plans WHERE name='半成品'`)).rows[0]!.n as number;
+    expect(count).toBe(1);
+
+    const c1 = await makeCase(seed.groupId, seed.versionId, '补齐用例');
+    const fix = await tool.execute({ action: 'add_cases', planId, caseIds: [c1] });
+    expect(fix).toMatchObject({ ok: true });
+  }, 30_000);
+
+  it('add_cases 幂等:重复追加 → 0,不产生重复行', async () => {
+    const seed = await seedProject(pool);
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx);
+    const c1 = await makeCase(seed.groupId, seed.versionId, 'ac1');
+    await tool.execute({ action: 'create', name: '幂等计划', caseIds: [c1] });
+    const planId = (await pool.query(`SELECT id FROM execution_plans WHERE name='幂等计划'`)).rows[0]!.id as string;
+    const again = await tool.execute({ action: 'add_cases', planId, caseIds: [c1] });
+    expect(again).toMatchObject({ ok: true });
+    expect((again as { data: string }).data).toContain('追加 0 个用例');
+    const n = (await pool.query(`SELECT count(*)::int AS n FROM plan_cases WHERE plan_id=$1 AND case_id=$2`, [planId, c1])).rows[0]!.n as number;
+    expect(n).toBe(1);
+  }, 30_000);
 });
