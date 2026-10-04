@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { eq, asc, inArray } from 'drizzle-orm';
+import { eq, and, asc, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
+  environmentObjects,
   executionPlans,
   planCases,
   planRuns,
@@ -165,7 +166,17 @@ plansRoute.post('/:id/run', async (req, res) => {
   if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
   await assertProjectVisible(plan.projectId, req.user!);
   if (plan.loginPrepareEnabled && !plan.loginCaseId) {
-    throw new HttpError(422, 'login_case_required', 'login prepare enabled but no login case set');
+    // 无登录用例时允许环境登录凭据自动登录；计划环境连 login 对象都没有才算配置缺失
+    let hasEnvLogin = false;
+    if (plan.environmentId) {
+      const objs = await db.select({ id: environmentObjects.id }).from(environmentObjects)
+        .where(and(eq(environmentObjects.environmentId, plan.environmentId), eq(environmentObjects.objectType, 'login')))
+        .limit(1);
+      hasEnvLogin = objs.length > 0;
+    }
+    if (!hasEnvLogin) {
+      throw new HttpError(422, 'login_case_required', '登录准备已开启：需选择登录用例，或在计划环境中配置登录凭据');
+    }
   }
   if (plan.loginPrepareEnabled) {
     const incognitoIds = await findIncognitoCaseIds(plan.id);

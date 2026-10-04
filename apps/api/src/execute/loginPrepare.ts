@@ -4,6 +4,7 @@ import { db } from '../db/client.js';
 import { testCases } from '../db/schema.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { logger } from '../logger.js';
+import type { LoginCtx } from './envContext.js';
 
 const DEFAULT_KEYWORDS = ['请先登录', '未登录', '未授权', '登录后'];
 
@@ -77,18 +78,85 @@ async function detectLoginState(page: Page, c: LoginPrepareConfig): Promise<Dete
 }
 
 /**
+ * 环境凭据自动填表登录：定位密码框，取其文档序之前最后一个可见文本类输入框填用户名，
+ * 提交（表单 submit 按钮 → 页面 submit → 密码框 Enter 三级兜底）后复检登录态。
+ * 全程不截图、错误文案不含凭据值。
+ */
+async function autoFillLogin(
+  ctx: BrowserContext,
+  page: Page,
+  cfg: LoginPrepareConfig,
+  cred: LoginCtx,
+): Promise<LoginPrepareResult> {
+  try {
+    // 检测页未被重定向到登录页时，先去配置的登录页
+    if (cred.loginUrl && !URL_LOGIN_HINTS.test(page.url())) {
+      await page.goto(cred.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    }
+    const inputs = page.locator('input');
+    // IIFE 字符串表达式（tsx/esbuild 会给函数形式回调注入 __name 助手致页面炸；且 evaluateAll
+    // 的字符串形式在本版本静默返回 undefined，只有 page.evaluate + IIFE 实测可用）
+    const usernameIdx = await page.evaluate<number>(`(() => {
+      const els = Array.from(document.querySelectorAll('input'));
+      const visible = (el) => el.offsetParent !== null || el.getClientRects().length > 0;
+      const pi = els.findIndex((el) => el.type === 'password' && visible(el));
+      if (pi < 0) return -1;
+      for (let i = pi - 1; i >= 0; i--) {
+        const el = els[i];
+        const t = (el.type || 'text').toLowerCase();
+        if (['text', 'email', 'tel', 'username'].includes(t) && visible(el)) return i;
+      }
+      return -1;
+    })()`);
+    if (usernameIdx < 0) {
+      return { status: 'failed', reason: 'auto login: no username/password inputs on login page' };
+    }
+    const password = page.locator('input[type="password"]').first();
+    await inputs.nth(usernameIdx).fill(cred.user);
+    await password.fill(cred.password);
+
+    const formSubmit = page
+      .locator('form:has(input[type="password"]) button[type="submit"], form:has(input[type="password"]) input[type="submit"]')
+      .first();
+    if ((await formSubmit.count().catch(() => 0)) > 0) {
+      await formSubmit.click({ timeout: 5000 });
+    } else {
+      const pageSubmit = page.locator('button[type="submit"]:visible, input[type="submit"]:visible').first();
+      if ((await pageSubmit.count().catch(() => 0)) > 0) {
+        await pageSubmit.click({ timeout: 5000 });
+      } else {
+        await password.press('Enter');
+      }
+    }
+    await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => undefined);
+
+    const redetect = await detectLoginState(page, cfg);
+    if (!redetect.alreadyLoggedIn) {
+      return { status: 'failed', reason: 'auto login: still on login page after submit' };
+    }
+    const ss = await ctx.storageState();
+    return { status: 'passed', reason: 'auto login', storageState: ss };
+  } catch (e) {
+    logger.warn({ err: e }, 'auto login failed');
+    return { status: 'failed', reason: 'auto login failed (see api logs)' };
+  }
+}
+
+/**
  * 登录准备入口：在调用方提供的 browser context 中探测；如已登录返回 skipped；
- * 否则执行登录用例（由调用方传入的 loginCaseRunner 处理）。
+ * 否则优先执行登录用例（loginCaseRunner），未配登录用例且提供环境凭据（autoLogin）时自动填表登录。
  */
 export async function loginPrepare(
   cfg: LoginPrepareConfig,
   opts: {
     /** 启动新 chromium；返回 browser + 是否已登录 + storageState。 */
     loginCaseRunner: (caseId: string, ctx: BrowserContext) => Promise<{ passed: boolean; storageState: unknown }>;
+    /** 环境登录凭据：未配登录用例（cfg.caseId 为空）时的自动填表登录。 */
+    autoLogin?: LoginCtx;
   },
 ): Promise<LoginPrepareResult> {
   if (!cfg.enabled) return { status: 'skipped', reason: 'disabled' };
-  if (!cfg.caseId) return { status: 'skipped', reason: 'no login case' };
+  if (!cfg.caseId && !opts.autoLogin) return { status: 'skipped', reason: 'no login case' };
 
   const url = await resolveDetectionUrl(cfg);
   if (!url) {
@@ -102,13 +170,19 @@ export async function loginPrepare(
     if (!page) return { status: 'failed', reason: 'detection page navigation failed' };
 
     const detect = await detectLoginState(page, cfg);
-    await page.close().catch(() => undefined);
-
     if (detect.alreadyLoggedIn) {
+      await page.close().catch(() => undefined);
       const ss = await ctx.storageState();
       return { status: 'skipped', reason: detect.reason, storageState: ss };
     }
 
+    if (!cfg.caseId && opts.autoLogin) {
+      const result = await autoFillLogin(ctx, page, cfg, opts.autoLogin);
+      await page.close().catch(() => undefined);
+      return result;
+    }
+
+    await page.close().catch(() => undefined);
     const loginRun = await opts.loginCaseRunner(cfg.caseId!, ctx);
     if (!loginRun.passed) {
       return { status: 'failed', reason: 'login case failed' };

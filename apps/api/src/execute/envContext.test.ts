@@ -243,4 +243,50 @@ describe('resolveEnv', () => {
     expect(env.syslog?.privateKey).toBeUndefined();
     await env.close();
   });
+
+  it('builds login ctx from default login object payload', async () => {
+    const enc = encrypt('p@ss');
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [{
+        id: 'obj-login', environmentId: 'env-1', objectType: 'login', label: '默认', isDefault: true,
+        payload: {
+          user: 'tom', loginUrl: 'https://staging.example.com/login',
+          secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') },
+        },
+      }],
+      project_versions: [],
+    });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.login).toEqual({ user: 'tom', password: 'p@ss', loginUrl: 'https://staging.example.com/login' });
+    await env.close();
+  });
+
+  it('login object without secret → login undefined', async () => {
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [{
+        id: 'obj-login', environmentId: 'env-1', objectType: 'login', label: '默认', isDefault: true,
+        payload: { user: 'tom' },
+      }],
+      project_versions: [],
+    });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.login).toBeUndefined();
+  });
+
+  it('login without loginUrl → loginUrl null', async () => {
+    const enc = encrypt('p@ss');
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [{
+        id: 'obj-login', environmentId: 'env-1', objectType: 'login', label: '默认', isDefault: true,
+        payload: { user: 'tom', secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') } },
+      }],
+      project_versions: [],
+    });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.login).toEqual({ user: 'tom', password: 'p@ss', loginUrl: null });
+    await env.close();
+  });
 });

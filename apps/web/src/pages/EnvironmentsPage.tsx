@@ -27,7 +27,7 @@ interface EnvFormState {
 }
 const EMPTY_ENV_FORM: EnvFormState = { open: false, mode: 'create', id: null, name: '', baseUrl: '' };
 
-type ObjType = 'db' | 'syslog';
+type ObjType = 'db' | 'syslog' | 'login';
 interface ObjFormState {
   open: boolean;
   envId: string;
@@ -45,11 +45,13 @@ interface ObjFormState {
   sshPort: string;
   filePath: string;
   privateKey: string;
+  loginUrl: string;
 }
 const EMPTY_OBJ_FORM: ObjFormState = {
   open: false, envId: '', envName: '', objectType: 'db', object: null,
   dbType: 'postgres', syslogAuth: 'key',
   host: '', port: '', dbName: '', user: '', password: '', sshPort: '22', filePath: '', privateKey: '',
+  loginUrl: '',
 };
 
 /** db 表单 → 连接参数：保存 payload 与「测试连接」共用同一映射。密码留空不上送（后端保留旧密文）。 */
@@ -83,6 +85,13 @@ function buildObjectPayload(f: ObjFormState): Record<string, unknown> {
   if (f.objectType === 'db') {
     return dbFormConn(f);
   }
+  if (f.objectType === 'login') {
+    return {
+      user: f.user.trim(),
+      ...(f.loginUrl.trim() ? { loginUrl: f.loginUrl.trim() } : {}),
+      ...(f.password ? { password: f.password } : {}),
+    };
+  }
   return syslogFormConn(f);
 }
 
@@ -90,6 +99,9 @@ function objectSummary(o: EnvironmentObject): string {
   const p = (o.payload ?? {}) as Record<string, unknown>;
   if (o.objectType === 'db') {
     return [p.host, p.port != null ? String(p.port) : null, p.dbName].filter(Boolean).join(':');
+  }
+  if (o.objectType === 'login') {
+    return String(p.user ?? '');
   }
   return [p.host, p.filePath].filter(Boolean).join(' · ');
 }
@@ -214,6 +226,7 @@ export default function EnvironmentsPage() {
       // 密码/私钥永不回显：留空提交即保留旧密文
       sshPort: p.sshPort != null ? String(p.sshPort) : '22',
       filePath: String(p.filePath ?? ''),
+      loginUrl: String(p.loginUrl ?? ''),
     });
   };
 
@@ -235,7 +248,7 @@ export default function EnvironmentsPage() {
           </Button>
         </PageShellActions>
         <PageShellDescription>
-          项目级维护 DB / syslog 对象；未被用例、计划、版本显式指定时使用默认环境
+          项目级维护 DB / syslog / 登录凭据对象；未被用例、计划、版本显式指定时使用默认环境
         </PageShellDescription>
       </PageShellHeader>
 
@@ -294,7 +307,7 @@ export default function EnvironmentsPage() {
                 <div className="px-3 py-2 flex flex-col">
                   {env.objects.length === 0 && (
                     <div className="text-[12px] py-1" style={{ color: 'var(--muted-foreground)' }}>
-                      暂无对象，可添加数据库或 syslog 配置
+                      暂无对象，可添加数据库、syslog 或登录凭据配置
                     </div>
                   )}
                   {env.objects.map((o) => (
@@ -304,12 +317,12 @@ export default function EnvironmentsPage() {
                       style={{ borderColor: 'var(--muted)' }}
                     >
                       <Icon
-                        name={o.objectType === 'db' ? 'database' : 'terminal'}
+                        name={o.objectType === 'db' ? 'database' : o.objectType === 'login' ? 'user' : 'terminal'}
                         size={12}
                         style={{ color: 'var(--muted-foreground)', flexShrink: 0 }}
                       />
                       <span className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
-                        {o.objectType === 'db' ? '数据库' : 'syslog'}
+                        {o.objectType === 'db' ? '数据库' : o.objectType === 'login' ? '登录凭据' : 'syslog'}
                         {o.label ? ` · ${o.label}` : ''}
                       </span>
                       {o.isDefault && (
@@ -348,6 +361,15 @@ export default function EnvironmentsPage() {
                     >
                       <Icon name="plus" size={12} />
                       syslog
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openObjForm(env, 'login', null)}
+                      className="flex items-center gap-1.5 text-[12px]"
+                      style={{ background: 'transparent', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
+                    >
+                      <Icon name="plus" size={12} />
+                      登录凭据
                     </button>
                   </div>
                 </div>
@@ -391,7 +413,7 @@ export default function EnvironmentsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {objForm.object ? '编辑' : '添加'}{objForm.objectType === 'db' ? '数据库' : ' syslog'} · {objForm.envName}
+              {objForm.object ? '编辑' : '添加'}{objForm.objectType === 'db' ? ' 数据库' : objForm.objectType === 'login' ? ' 登录凭据' : ' syslog'} · {objForm.envName}
             </DialogTitle>
           </DialogHeader>
           <div className="flex-1 min-h-0 px-5 py-4 overflow-y-auto flex flex-col gap-3">
@@ -419,6 +441,26 @@ export default function EnvironmentsPage() {
                   onChange={(e) => setObjForm((f) => ({ ...f, password: e.target.value }))}
                   placeholder={objForm.object ? '留空表示不修改' : '留空表示不设置'}
                 />
+              </>
+            ) : objForm.objectType === 'login' ? (
+              <>
+                <Input
+                  label="登录页地址（可选）"
+                  value={objForm.loginUrl}
+                  onChange={(e) => setObjForm((f) => ({ ...f, loginUrl: e.target.value }))}
+                  placeholder="留空用计划检测页，如 https://example.com/login"
+                />
+                <Input label="用户名" value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
+                <Input
+                  label="密码"
+                  type="password"
+                  value={objForm.password}
+                  onChange={(e) => setObjForm((f) => ({ ...f, password: e.target.value }))}
+                  placeholder={objForm.object ? '留空表示不修改' : '留空表示不设置'}
+                />
+                <p className="text-[11px] m-0" style={{ color: 'var(--muted-foreground)' }}>
+                  计划开启「登录准备」且未选登录用例时，执行将用此凭据自动填表登录。
+                </p>
               </>
             ) : (
               <>
@@ -461,27 +503,31 @@ export default function EnvironmentsPage() {
             )}
           </div>
           <div className="flex items-center gap-2 px-5 py-3 hairline-top shrink-0" style={{ borderColor: 'var(--border)' }}>
-            <Button
-              variant="ghost"
-              className="shrink-0"
-              disabled={
-                testConn.isPending ||
-                !objForm.host.trim() ||
-                !objForm.user.trim() ||
-                (objForm.objectType === 'db' ? !objForm.dbName.trim() : !objForm.filePath.trim())
-              }
-              onClick={() => testConn.mutate()}
-            >
-              {testConn.isPending ? '测试中...' : '测试连接'}
-            </Button>
-            {testConn.isPending && (
-              <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--muted-foreground)' }}>正在连接...</span>
-            )}
-            {testConn.isSuccess && testConn.data.ok && (
-              <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--success)' }}>连接成功 · {testConn.data.latencyMs}ms</span>
-            )}
-            {testConn.isSuccess && !testConn.data.ok && (
-              <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--destructive)' }}>连接失败：{testConn.data.error}</span>
+            {objForm.objectType !== 'login' && (
+              <>
+                <Button
+                  variant="ghost"
+                  className="shrink-0"
+                  disabled={
+                    testConn.isPending ||
+                    !objForm.host.trim() ||
+                    !objForm.user.trim() ||
+                    (objForm.objectType === 'db' ? !objForm.dbName.trim() : !objForm.filePath.trim())
+                  }
+                  onClick={() => testConn.mutate()}
+                >
+                  {testConn.isPending ? '测试中...' : '测试连接'}
+                </Button>
+                {testConn.isPending && (
+                  <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--muted-foreground)' }}>正在连接...</span>
+                )}
+                {testConn.isSuccess && testConn.data.ok && (
+                  <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--success)' }}>连接成功 · {testConn.data.latencyMs}ms</span>
+                )}
+                {testConn.isSuccess && !testConn.data.ok && (
+                  <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--destructive)' }}>连接失败：{testConn.data.error}</span>
+                )}
+              </>
             )}
             <div className="flex-1" />
             <Button variant="ghost" className="shrink-0" onClick={() => setObjForm(EMPTY_OBJ_FORM)} disabled={saveObj.isPending}>取消</Button>

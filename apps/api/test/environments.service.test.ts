@@ -85,4 +85,34 @@ describe('environments.service', () => {
     const raw = await pool.query(`SELECT default_env_id FROM test_cases WHERE title='c'`);
     expect(raw.rows[0]!.default_env_id).toBeNull(); // FK SET NULL
   }, 30_000);
+
+  it('login 对象:密码加密进 secret,user/loginUrl 明文;留空沿用旧密文;入参 secret 丢弃', async () => {
+    const { projectId } = await seedProject(pool);
+    const svc = await import('../src/services/environments.service.js');
+    const env = await svc.createEnvironment(projectId, { name: 'L' });
+    const obj = await svc.insertEnvironmentObject(env.id, {
+      objectType: 'login',
+      payload: { user: 'tom', loginUrl: 'https://x.example.com/login', password: 'LOGIN-PASS' },
+      isDefault: true,
+    });
+    // 出参脱敏,明文字段保留
+    expect((obj.payload as { user: string }).user).toBe('tom');
+    expect((obj.payload as { loginUrl: string }).loginUrl).toBe('https://x.example.com/login');
+    expect((obj.payload as { secret: string }).secret).toBe('••••••••');
+    const raw = (await pool.query(`SELECT payload FROM environment_objects WHERE id=$1`, [obj.id])).rows[0]!.payload as { secret?: { c?: string } };
+    expect(JSON.stringify(raw)).not.toContain('LOGIN-PASS');
+    expect(raw.secret?.c).toBeTruthy();
+
+    // 更新不带密码 → 旧密文沿用;入参 secret 一律丢弃
+    const before = raw.secret!.c;
+    const up = await svc.updateEnvironmentObject(obj.id, {
+      payload: { user: 'jerry', loginUrl: 'https://x.example.com/login', secret: 'evil-plain' } as Record<string, unknown>,
+    });
+    expect((up.payload as { user: string }).user).toBe('jerry');
+    const raw2 = (await pool.query(`SELECT payload FROM environment_objects WHERE id=$1`, [obj.id])).rows[0]!.payload as { secret?: { c?: string } };
+    expect(raw2.secret?.c).toBeTruthy();
+    expect(raw2.secret!.c).not.toContain('evil-plain');
+    // 密钥未变 → 密文不变（沿用而非重新加密）
+    expect(raw2.secret!.c).toBe(before);
+  }, 30_000);
 });
