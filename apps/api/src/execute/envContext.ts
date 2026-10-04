@@ -18,6 +18,8 @@ export class DecryptError extends Error {
 
 export interface EnvCtx {
   envId: string;
+  /** 部署入口 URL：执行期导航兜底用（用例.url → 分组.defaultUrl → 环境.base_url → 项目.defaultUrl） */
+  baseUrl: string | null;
   db?: { host: string; port: number; database: string; user: string; password: string };
   /** 已建立好的 pg 连接池；缺省表示该环境未配置 DB。close() 时统一 end()。 */
   pool?: pg.Pool;
@@ -120,6 +122,7 @@ export async function resolveEnv(
 
   return {
     envId,
+    baseUrl: env.baseUrl ?? null,
     db: dbCfg,
     pool,
     syslog: syslogCfg,

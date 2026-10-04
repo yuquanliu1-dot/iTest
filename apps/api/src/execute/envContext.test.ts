@@ -13,7 +13,7 @@ import { resolveEnv, EnvMissing, EnvProjectMismatch, DecryptError } from './envC
 import { db } from '../db/client.js';
 import { encrypt } from '../lib/secret-crypto.js';
 
-const ENV_ROW = { id: 'env-1', projectId: 'proj-1', name: 'staging', isDefault: false };
+const ENV_ROW = { id: 'env-1', projectId: 'proj-1', name: 'staging', isDefault: false, baseUrl: 'https://staging.example.com' };
 
 /** 按 from(表名) 路由的 mock：where() 结果既可 await 也可 .limit()。 */
 function mockTables(tables: Record<string, unknown[]>) {
@@ -36,6 +36,21 @@ beforeEach(() => {
 });
 
 describe('resolveEnv', () => {
+  it('passes baseUrl through to ctx', async () => {
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.baseUrl).toBe('https://staging.example.com');
+  });
+
+  it('returns null baseUrl when env row has none', async () => {
+    mockTables({
+      test_environments: [{ ...ENV_ROW, baseUrl: null }],
+      environment_objects: [],
+      project_versions: [],
+    });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.baseUrl).toBeNull();
+  });
+
   it('prefers planEnvId over caseEnvId', async () => {
     const { envId } = await resolveEnv({ planEnvId: 'env-plan', caseEnvId: 'env-case' });
     expect(envId).toBe('env-plan');

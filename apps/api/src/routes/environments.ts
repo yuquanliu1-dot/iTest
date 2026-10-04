@@ -83,6 +83,7 @@ const ObjectBody = z.object({
 });
 const CreateBody = z.object({
   name: z.string().min(1).max(120),
+  baseUrl: z.string().max(2000).optional(),
   objects: z.array(ObjectBody).max(10).optional(),
 });
 
@@ -91,7 +92,7 @@ environmentsRoute.post('/projects/:projectId/environments', async (req, res) => 
   await assertProjectVisible(projectId, req.user!);
   const body = CreateBody.parse(req.body);
   const env = await db.transaction(async (tx) => {
-    const inserted = (await tx.insert(testEnvironments).values({ projectId, name: body.name }).returning())[0]!;
+    const inserted = (await tx.insert(testEnvironments).values({ projectId, name: body.name, baseUrl: body.baseUrl ?? null }).returning())[0]!;
     if (body.objects?.length) {
       await tx.insert(environmentObjects).values(body.objects.map((o) => ({
         environmentId: inserted.id,
@@ -111,6 +112,7 @@ environmentsRoute.post('/projects/:projectId/environments', async (req, res) => 
 
 const EnvPatchBody = z.object({
   name: z.string().min(1).max(120).optional(),
+  baseUrl: z.string().max(2000).nullable().optional(),
   isDefault: z.boolean().optional(),
 });
 
@@ -123,6 +125,7 @@ environmentsRoute.patch('/environments/:id', async (req, res) => {
     }
     const update: Record<string, unknown> = { updatedAt: new Date() };
     if (body.name !== undefined) update.name = body.name;
+    if (body.baseUrl !== undefined) update.baseUrl = body.baseUrl;
     if (body.isDefault !== undefined) update.isDefault = body.isDefault;
     const rows = await tx.update(testEnvironments).set(update)
       .where(and(eq(testEnvironments.id, req.params.id), eq(testEnvironments.projectId, projectId)))

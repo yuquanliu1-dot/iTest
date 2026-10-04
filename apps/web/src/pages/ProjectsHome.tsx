@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type ProjectVersion } from '../api/client';
 import { useProjectStore } from '../stores/project';
 import { useUIStore } from '../stores/ui';
+import { useAuthStore } from '../stores/auth';
 import Icon from '../components/Icon';
 import EmptyState from '../components/ui/EmptyState';
 import IconButton from '../components/ui/IconButton';
@@ -30,11 +31,20 @@ interface VersionFormState {
   versionId: string | null;
   name: string;
   description: string;
-  defaultUrl: string;
   /** 关联环境 id；空串 = 跟随项目默认环境 */
   environmentId: string;
-  /** 当前所属项目的 defaultUrl，作为版本留空时的回退占位提示用 */
-  projectDefaultUrl: string | null;
+}
+
+/** 按用户记忆的项目展开状态（localStorage）；AuthGuard 保证挂载时 user 已就绪。 */
+function readExpandedProjects(userId: string | null): Set<string> {
+  if (!userId) return new Set();
+  try {
+    const raw = localStorage.getItem(`itest-expanded-projects:${userId}`);
+    const list: unknown = raw ? JSON.parse(raw) : null;
+    return Array.isArray(list) ? new Set(list.filter((x): x is string => typeof x === 'string')) : new Set();
+  } catch {
+    return new Set();
+  }
 }
 
 const EMPTY_FORM: FormState = {
@@ -54,9 +64,7 @@ const EMPTY_VERSION_FORM: VersionFormState = {
   versionId: null,
   name: '',
   description: '',
-  defaultUrl: '',
   environmentId: '',
-  projectDefaultUrl: null,
 };
 
 export default function ProjectsHome() {
@@ -76,8 +84,18 @@ export default function ProjectsHome() {
     queryFn: () => api.environments.list(versionForm.projectId),
     enabled: versionForm.open && !!versionForm.projectId,
   });
-  // 展开状态：默认全部收起，避免大量项目时首屏刷屏
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // 展开状态：默认全部收起，避免大量项目时首屏刷屏；展开过的项目按用户记忆
+  const userId = useAuthStore((s) => s.user?.id ?? null);
+  const expandedKey = userId ? `itest-expanded-projects:${userId}` : null;
+  const [expanded, setExpanded] = useState<Set<string>>(() => readExpandedProjects(userId));
+  useEffect(() => {
+    if (!expandedKey) return;
+    try {
+      localStorage.setItem(expandedKey, JSON.stringify([...expanded]));
+    } catch {
+      // localStorage 不可用时展开状态仅内存有效。
+    }
+  }, [expanded, expandedKey]);
   const toggleExpanded = (id: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -134,7 +152,6 @@ export default function ProjectsHome() {
       api.versions.create(versionForm.projectId, {
         name: versionForm.name,
         description: versionForm.description || undefined,
-        defaultUrl: versionForm.defaultUrl.trim() || undefined,
       }),
     onSuccess: (v) => {
       toast(`已新建版本 ${v.name}`, 'success');
@@ -149,7 +166,6 @@ export default function ProjectsHome() {
       api.versions.patch(versionForm.versionId!, {
         name: versionForm.name.trim(),
         description: versionForm.description.trim() ? versionForm.description.trim() : null,
-        defaultUrl: versionForm.defaultUrl.trim() ? versionForm.defaultUrl.trim() : null,
         environmentId: versionForm.environmentId || null,
       }),
     onSuccess: (v) => {
@@ -260,9 +276,7 @@ export default function ProjectsHome() {
                     versionId: null,
                     name: '',
                     description: '',
-                    defaultUrl: '',
                     environmentId: '',
-                    projectDefaultUrl: p.defaultUrl,
                   })
                 }
                 onEditVersion={(v) =>
@@ -274,29 +288,13 @@ export default function ProjectsHome() {
                     versionId: v.id,
                     name: v.name,
                     description: v.description ?? '',
-                    defaultUrl: v.defaultUrl ?? '',
                     environmentId: v.environmentId ?? '',
-                    projectDefaultUrl: p.defaultUrl,
                   })
                 }
                 onEnterVersion={(v) => enterVersion(p.id, p.name, p.defaultUrl, v)}
                 onRemoveVersion={(v) => removeVersion.mutate({ projectId: p.id, versionId: v.id })}
                 onEditVersionRef={(v) => setRefForm({ open: true, projectId: p.id, version: v })}
                 onOpenEnvironments={() => navigate(`/p/${p.id}/environments`)}
-                onEditVersionDefaultUrl={(v) =>
-                  setVersionForm({
-                    open: true,
-                    mode: 'edit',
-                    projectId: p.id,
-                    projectName: p.name,
-                    versionId: v.id,
-                    name: v.name,
-                    description: v.description ?? '',
-                    defaultUrl: v.defaultUrl ?? '',
-                    environmentId: v.environmentId ?? '',
-                    projectDefaultUrl: p.defaultUrl,
-                  })
-                }
               />
             ))}
           </div>
@@ -360,12 +358,6 @@ export default function ProjectsHome() {
               placeholder="如：v1.0、需求-0421"
               value={versionForm.name}
               onChange={(e) => setVersionForm((f) => ({ ...f, name: e.target.value }))}
-            />
-            <Input
-              label="默认域名（可空，留空走项目级）"
-              placeholder={versionForm.projectDefaultUrl ?? 'https://example.com'}
-              value={versionForm.defaultUrl}
-              onChange={(e) => setVersionForm((f) => ({ ...f, defaultUrl: e.target.value }))}
             />
             {versionForm.mode === 'edit' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -465,7 +457,6 @@ interface ProjectRowProps {
   onRemoveVersion: (v: ProjectVersion) => void;
   onEditVersionRef: (v: ProjectVersion) => void;
   onOpenEnvironments: () => void;
-  onEditVersionDefaultUrl: (v: ProjectVersion) => void;
 }
 
 function ProjectRow({
@@ -480,7 +471,6 @@ function ProjectRow({
   onRemoveVersion,
   onEditVersionRef,
   onOpenEnvironments,
-  onEditVersionDefaultUrl,
 }: ProjectRowProps) {
   const versionsQ = useQuery({
     queryKey: ['versions', p.id],
@@ -590,7 +580,6 @@ function ProjectRow({
                           onClick={() => onEditVersionRef(v)}
                           disabled={!p.repoUrl}
                         />
-                        <IconButton icon="externalLink" title="版本默认域名（留空走项目级）" onClick={() => onEditVersionDefaultUrl(v)} />
                         <IconButton icon="trash" title="删除版本" tone="destructive" onClick={() => onRemoveVersion(v)} />
                         <Button size="sm" onClick={() => onEnterVersion(v)}>
                           进入
