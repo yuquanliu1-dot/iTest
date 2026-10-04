@@ -1,127 +1,139 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { testEnvironments, testCases, executionPlans, projectVersions } from '../db/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { environmentObjects, executionPlans, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { encrypt } from '../lib/secret-crypto.js';
-import { assertProjectVisible, assertEnvironmentVisible, assertVersionVisible } from '../services/projectAccess.js';
-import type { AuthUser } from '../services/auth.service.js';
+import { assertEnvironmentVisible, assertProjectVisible } from '../services/projectAccess.js';
 
 export const environmentsRoute = Router();
 
 const MASK = '••••••••';
-const SECRET_KEYS = [
-  'dbPasswordCiphertext', 'dbPasswordIv', 'dbPasswordTag',
-  'syslogKeyCiphertext', 'syslogKeyIv', 'syslogKeyTag',
-] as const;
+const OBJECT_TYPES = ['db', 'syslog'] as const;
+type ObjectType = (typeof OBJECT_TYPES)[number];
 
-function maskSecrets(row: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...row };
-  for (const k of SECRET_KEYS) if (out[k]) out[k] = MASK;
+/** 出参掩码：payload.secret（AES 三元组）→ MASK。 */
+function maskObjectPayload(row: typeof environmentObjects.$inferSelect) {
+  const payload = { ...((row.payload ?? {}) as Record<string, unknown>) };
+  if (payload.secret) payload.secret = MASK;
+  return { ...row, payload };
+}
+
+async function listEnvObjects(environmentId: string) {
+  const rows = await db.select().from(environmentObjects)
+    .where(eq(environmentObjects.environmentId, environmentId))
+    .orderBy(asc(environmentObjects.createdAt));
+  return rows.map(maskObjectPayload);
+}
+
+/**
+ * 入参归一：payload.password / payload.privateKey 明文 → 加密写入 payload.secret；
+ * 未提供（留空）→ 沿用 prev 旧密文（不覆盖语义）。入参中的 secret 字段一律丢弃。
+ */
+function normalizeObjectPayload(
+  objectType: ObjectType,
+  payload: Record<string, unknown>,
+  prev?: Record<string, unknown>,
+): Record<string, unknown> {
+  const out = { ...payload };
+  delete out.secret;
+  const plain = objectType === 'db' ? out.password : out.privateKey;
+  delete out.password;
+  delete out.privateKey;
+  if (typeof plain === 'string' && plain.length > 0) {
+    const e = encrypt(plain);
+    out.secret = { c: e.ciphertext.toString('base64'), i: e.iv.toString('base64'), t: e.tag.toString('base64') };
+  } else if (prev?.secret) {
+    out.secret = prev.secret;
+  }
   return out;
 }
 
-/** 解析 versionId：未传 → 默认版本；传了 → 必须同 project。 */
-async function resolveEnvVersionId(projectId: string, bodyVersionId: string | undefined, user: AuthUser): Promise<string> {
-  if (bodyVersionId) {
-    const { projectId: vp } = await assertVersionVisible(bodyVersionId, user);
-    if (vp !== projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
-    return bodyVersionId;
-  }
-  const row = (await db.select({ id: projectVersions.id }).from(projectVersions)
-    .where(and(eq(projectVersions.projectId, projectId), eq(projectVersions.isDefault, true))).limit(1))[0];
-  if (!row) throw new HttpError(404, 'not_found', 'project has no default version');
-  return row.id;
+function isUniqueViolation(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as { code?: string }).code === '23505';
 }
 
 environmentsRoute.get('/projects/:projectId/environments', async (req, res) => {
   const projectId = (req.params as { projectId: string }).projectId;
   await assertProjectVisible(projectId, req.user!);
-  const qVersionId = typeof req.query.versionId === 'string' ? req.query.versionId : undefined;
-  const versionId = await resolveEnvVersionId(projectId, qVersionId, req.user!);
-  const rows = await db
-    .select()
-    .from(testEnvironments)
-    .where(and(eq(testEnvironments.projectId, projectId), eq(testEnvironments.versionId, versionId)))
-    .orderBy(testEnvironments.createdAt);
-  res.json(rows.map((r) => maskSecrets({ ...r })));
+  const envs = await db.select().from(testEnvironments)
+    .where(eq(testEnvironments.projectId, projectId))
+    .orderBy(asc(testEnvironments.createdAt));
+  const objs = envs.length
+    ? await db.select().from(environmentObjects)
+        .where(inArray(environmentObjects.environmentId, envs.map((e) => e.id)))
+        .orderBy(asc(environmentObjects.createdAt))
+    : [];
+  const byEnv = new Map<string, typeof objs>();
+  for (const o of objs) {
+    const list = byEnv.get(o.environmentId) ?? [];
+    list.push(o);
+    byEnv.set(o.environmentId, list);
+  }
+  res.json(envs.map((e) => ({ ...e, objects: (byEnv.get(e.id) ?? []).map(maskObjectPayload) })));
 });
 
-const EnvBody = z.object({
+const ObjectTypeEnum = z.enum(OBJECT_TYPES);
+const ObjectBody = z.object({
+  objectType: ObjectTypeEnum,
+  label: z.string().max(120).optional(),
+  payload: z.record(z.unknown()).default({}),
+  isDefault: z.boolean().optional(),
+});
+const CreateBody = z.object({
   name: z.string().min(1).max(120),
-  versionId: z.string().uuid().optional(),
-  dbHost: z.string().max(200).optional(),
-  dbPort: z.number().int().min(1).max(65535).optional(),
-  dbName: z.string().max(120).optional(),
-  dbUser: z.string().max(120).optional(),
-  dbPassword: z.string().max(500).optional(),
-  syslogHost: z.string().max(200).optional(),
-  syslogUser: z.string().max(120).optional(),
-  syslogSshPort: z.number().int().min(1).max(65535).optional(),
-  syslogKey: z.string().max(8000).optional(),
-  syslogFilePath: z.string().max(500).optional(),
+  objects: z.array(ObjectBody).max(10).optional(),
 });
 
 environmentsRoute.post('/projects/:projectId/environments', async (req, res) => {
   const projectId = (req.params as { projectId: string }).projectId;
   await assertProjectVisible(projectId, req.user!);
-  const body = EnvBody.parse(req.body);
-  const versionId = await resolveEnvVersionId(projectId, body.versionId, req.user!);
-  const dbPwd = body.dbPassword ? encrypt(body.dbPassword) : null;
-  const sshKey = body.syslogKey ? encrypt(body.syslogKey) : null;
-  const inserted = await db.insert(testEnvironments).values({
-    projectId,
-    versionId,
-    name: body.name,
-    dbHost: body.dbHost ?? null,
-    dbPort: body.dbPort ?? null,
-    dbName: body.dbName ?? null,
-    dbUser: body.dbUser ?? null,
-    dbPasswordCiphertext: dbPwd?.ciphertext.toString('base64') ?? null,
-    dbPasswordIv: dbPwd?.iv.toString('base64') ?? null,
-    dbPasswordTag: dbPwd?.tag.toString('base64') ?? null,
-    syslogHost: body.syslogHost ?? null,
-    syslogUser: body.syslogUser ?? null,
-    syslogSshPort: body.syslogSshPort ?? null,
-    syslogKeyCiphertext: sshKey?.ciphertext.toString('base64') ?? null,
-    syslogKeyIv: sshKey?.iv.toString('base64') ?? null,
-    syslogKeyTag: sshKey?.tag.toString('base64') ?? null,
-    syslogFilePath: body.syslogFilePath ?? null,
-  }).returning();
-  res.json(maskSecrets({ ...inserted[0]! }));
+  const body = CreateBody.parse(req.body);
+  const env = await db.transaction(async (tx) => {
+    const inserted = (await tx.insert(testEnvironments).values({ projectId, name: body.name }).returning())[0]!;
+    if (body.objects?.length) {
+      await tx.insert(environmentObjects).values(body.objects.map((o) => ({
+        environmentId: inserted.id,
+        objectType: o.objectType,
+        label: o.label ?? '默认',
+        payload: normalizeObjectPayload(o.objectType, o.payload),
+        isDefault: o.isDefault ?? false,
+      })));
+    }
+    return inserted;
+  }).catch((e) => {
+    if (isUniqueViolation(e)) throw new HttpError(409, 'name_conflict', 'environment name already exists in this project');
+    throw e;
+  });
+  res.json({ ...env, objects: await listEnvObjects(env.id) });
 });
 
-const EnvPatchBody = EnvBody.partial();
+const EnvPatchBody = z.object({
+  name: z.string().min(1).max(120).optional(),
+  isDefault: z.boolean().optional(),
+});
 
 environmentsRoute.patch('/environments/:id', async (req, res) => {
   const { projectId } = await assertEnvironmentVisible(req.params.id!, req.user!);
   const body = EnvPatchBody.parse(req.body);
-  const update: Record<string, unknown> = { updatedAt: new Date() };
-  if (body.name !== undefined) update.name = body.name;
-  if (body.dbHost !== undefined) update.dbHost = body.dbHost;
-  if (body.dbPort !== undefined) update.dbPort = body.dbPort;
-  if (body.dbName !== undefined) update.dbName = body.dbName;
-  if (body.dbUser !== undefined) update.dbUser = body.dbUser;
-  if (body.syslogHost !== undefined) update.syslogHost = body.syslogHost;
-  if (body.syslogUser !== undefined) update.syslogUser = body.syslogUser;
-  if (body.syslogSshPort !== undefined) update.syslogSshPort = body.syslogSshPort;
-  if (body.syslogFilePath !== undefined) update.syslogFilePath = body.syslogFilePath;
-  if (body.dbPassword) {
-    const e = encrypt(body.dbPassword);
-    update.dbPasswordCiphertext = e.ciphertext.toString('base64');
-    update.dbPasswordIv = e.iv.toString('base64');
-    update.dbPasswordTag = e.tag.toString('base64');
-  }
-  if (body.syslogKey) {
-    const e = encrypt(body.syslogKey);
-    update.syslogKeyCiphertext = e.ciphertext.toString('base64');
-    update.syslogKeyIv = e.iv.toString('base64');
-    update.syslogKeyTag = e.tag.toString('base64');
-  }
-  await db.update(testEnvironments).set(update).where(and(eq(testEnvironments.id, req.params.id), eq(testEnvironments.projectId, projectId)));
-  const row = (await db.select().from(testEnvironments).where(eq(testEnvironments.id, req.params.id)))[0];
-  res.json(maskSecrets({ ...row! }));
+  const row = await db.transaction(async (tx) => {
+    if (body.isDefault === true) {
+      await tx.update(testEnvironments).set({ isDefault: false }).where(eq(testEnvironments.projectId, projectId));
+    }
+    const update: Record<string, unknown> = { updatedAt: new Date() };
+    if (body.name !== undefined) update.name = body.name;
+    if (body.isDefault !== undefined) update.isDefault = body.isDefault;
+    const rows = await tx.update(testEnvironments).set(update)
+      .where(and(eq(testEnvironments.id, req.params.id), eq(testEnvironments.projectId, projectId)))
+      .returning();
+    if (rows.length === 0) throw new HttpError(404, 'not_found', 'environment not found');
+    return rows[0]!;
+  }).catch((e) => {
+    if (isUniqueViolation(e)) throw new HttpError(409, 'name_conflict', 'environment name already exists in this project');
+    throw e;
+  });
+  res.json({ ...row, objects: await listEnvObjects(row.id) });
 });
 
 environmentsRoute.delete('/environments/:id', async (req, res) => {
@@ -134,6 +146,61 @@ environmentsRoute.delete('/environments/:id', async (req, res) => {
   }
   await db.delete(testEnvironments).where(and(eq(testEnvironments.id, req.params.id), eq(testEnvironments.projectId, projectId)));
   res.json({ ok: true, caseCount, planCount });
+});
+
+environmentsRoute.post('/environments/:id/objects', async (req, res) => {
+  const environmentId = req.params.id!;
+  await assertEnvironmentVisible(environmentId, req.user!);
+  const body = ObjectBody.parse(req.body);
+  const row = await db.transaction(async (tx) => {
+    if (body.isDefault) {
+      await tx.update(environmentObjects).set({ isDefault: false })
+        .where(and(eq(environmentObjects.environmentId, environmentId), eq(environmentObjects.objectType, body.objectType)));
+    }
+    return (await tx.insert(environmentObjects).values({
+      environmentId,
+      objectType: body.objectType,
+      label: body.label ?? '默认',
+      payload: normalizeObjectPayload(body.objectType, body.payload),
+      isDefault: body.isDefault ?? false,
+    }).returning())[0]!;
+  });
+  res.json(maskObjectPayload(row));
+});
+
+environmentsRoute.patch('/environment-objects/:id', async (req, res) => {
+  const existing = (await db.select().from(environmentObjects).where(eq(environmentObjects.id, req.params.id)))[0];
+  if (!existing) throw new HttpError(404, 'not_found', 'environment object not found');
+  await assertEnvironmentVisible(existing.environmentId, req.user!);
+  const body = z.object({
+    label: z.string().max(120).optional(),
+    payload: z.record(z.unknown()).optional(),
+  }).parse(req.body);
+  const objectType = existing.objectType as ObjectType;
+  const payload = body.payload !== undefined
+    ? normalizeObjectPayload(objectType, body.payload, (existing.payload ?? {}) as Record<string, unknown>)
+    : undefined;
+  const rows = await db.update(environmentObjects).set({
+    ...(body.label !== undefined ? { label: body.label } : {}),
+    ...(payload !== undefined ? { payload: payload as object, updatedAt: new Date() } : {}),
+  }).where(eq(environmentObjects.id, req.params.id)).returning();
+  res.json(maskObjectPayload(rows[0]!));
+});
+
+environmentsRoute.delete('/environment-objects/:id', async (req, res) => {
+  const existing = (await db.select().from(environmentObjects).where(eq(environmentObjects.id, req.params.id)))[0];
+  if (!existing) throw new HttpError(404, 'not_found', 'environment object not found');
+  await assertEnvironmentVisible(existing.environmentId, req.user!);
+  await db.transaction(async (tx) => {
+    await tx.delete(environmentObjects).where(eq(environmentObjects.id, req.params.id));
+    if (existing.isDefault) {
+      const sibling = (await tx.select({ id: environmentObjects.id }).from(environmentObjects)
+        .where(and(eq(environmentObjects.environmentId, existing.environmentId), eq(environmentObjects.objectType, existing.objectType)))
+        .orderBy(asc(environmentObjects.createdAt)).limit(1))[0];
+      if (sibling) await tx.update(environmentObjects).set({ isDefault: true }).where(eq(environmentObjects.id, sibling.id));
+    }
+  });
+  res.json({ ok: true });
 });
 
 environmentsRoute.get('/environments/allowed-tables', async (_req, res) => {

@@ -66,17 +66,17 @@ beforeEach(async () => {
   groupId = s.groupId;
   defaultVersionId = s.versionId;
   const v = await pool.query(
-    `INSERT INTO project_versions(project_id, name, is_default) VALUES ($1, 'v1.0', false) RETURNING id`,
+    `INSERT INTO project_versions(project_id, name) VALUES ($1, 'v1.0') RETURNING id`,
     [projectId],
   );
   v1Id = v.rows[0]!.id as string;
 });
 
 describe('plan versionId', () => {
-  it('POST 不传 versionId 时落入默认版本', async () => {
+  it('POST 不传 versionId 返回 400 version_required', async () => {
     const r = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
-    expect(r.status).toBe(200);
-    expect(r.body.versionId).toBe(defaultVersionId);
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('version_required');
   });
 
   it('POST 显式传 versionId 落到指定版本', async () => {
@@ -92,39 +92,37 @@ describe('plan versionId', () => {
     expect(r.body.error).toBe('version_mismatch');
   });
 
-  it('PATCH environmentId 同 versionId 通过', async () => {
+  it('PATCH environmentId 同项目环境通过', async () => {
     const env = await request(app).post(`/api/projects/${projectId}/environments`).send({ name: 'e1' });
     expect(env.status).toBe(200);
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId: defaultVersionId });
     expect(plan.status).toBe(200);
     const r = await request(app).patch(`/api/plans/${plan.body.id}`).send({ environmentId: env.body.id });
     expect(r.status).toBe(200);
     expect(r.body.environmentId).toBe(env.body.id);
   });
 
-  it('PATCH environmentId 跨 versionId 返回 400 env_version_mismatch', async () => {
-    // env 在 v1Id，plan 在默认版本
-    const env = await request(app)
-      .post(`/api/projects/${projectId}/environments`)
-      .send({ name: 'e1', versionId: v1Id });
+  it('PATCH environmentId 跨项目环境返回 400 env_project_mismatch', async () => {
+    const other = await seedProject(pool);
+    const env = await request(app).post(`/api/projects/${other.projectId}/environments`).send({ name: 'other-env' });
     expect(env.status).toBe(200);
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId: defaultVersionId });
     expect(plan.status).toBe(200);
     const r = await request(app).patch(`/api/plans/${plan.body.id}`).send({ environmentId: env.body.id });
     expect(r.status).toBe(400);
-    expect(r.body.error).toBe('env_version_mismatch');
+    expect(r.body.error).toBe('env_project_mismatch');
   });
 
   it('PUT cases 跨版本引用允许', async () => {
     // 创建两个版本下的用例
-    const c1 = await request(app).post('/api/cases').send({ title: 'v0', groupId });
+    const c1 = await request(app).post('/api/cases').send({ title: 'v0', groupId, versionId: defaultVersionId });
     const c2 = await request(app).post('/api/cases').send({ title: 'v1', groupId, versionId: v1Id });
     expect(c1.status).toBe(200);
     expect(c2.status).toBe(200);
-    // 计划绑定到 v1（默认）
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P' });
+    // 计划绑定到 v0（defaultVersionId）
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId: defaultVersionId });
     expect(plan.status).toBe(200);
-    // 跨版本引用 c1（v0）到 plan（默认版本 v0 → 通过）；c2 也允许
+    // 跨版本引用 c2（v1）到 plan（v0 → 允许）
     const r = await request(app)
       .put(`/api/plans/${plan.body.id}/cases`)
       .send({ caseIds: [c1.body.id, c2.body.id] });

@@ -12,8 +12,6 @@ import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import RepoFields, { EMPTY_REPO, type RepoFieldsValue } from '../components/ui/RepoFields';
 import RefEditDialog, { EMPTY_REF_FORM, type RefFormState } from '../components/version/RefEditDialog';
-import VersionDbConfigDialog from '../components/version/VersionDbConfigDialog';
-import VersionSyslogConfigDialog from '../components/version/VersionSyslogConfigDialog';
 
 interface FormState {
   open: boolean;
@@ -33,6 +31,8 @@ interface VersionFormState {
   name: string;
   description: string;
   defaultUrl: string;
+  /** 关联环境 id；空串 = 跟随项目默认环境 */
+  environmentId: string;
   /** 当前所属项目的 defaultUrl，作为版本留空时的回退占位提示用 */
   projectDefaultUrl: string | null;
 }
@@ -55,6 +55,7 @@ const EMPTY_VERSION_FORM: VersionFormState = {
   name: '',
   description: '',
   defaultUrl: '',
+  environmentId: '',
   projectDefaultUrl: null,
 };
 
@@ -68,9 +69,13 @@ export default function ProjectsHome() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [versionForm, setVersionForm] = useState<VersionFormState>(EMPTY_VERSION_FORM);
   const [refForm, setRefForm] = useState<RefFormState>(EMPTY_REF_FORM);
-  const [dbTarget, setDbTarget] = useState<ProjectVersion | null>(null);
-  const [syslogTarget, setSyslogTarget] = useState<ProjectVersion | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
+  // 版本弹窗的环境下拉数据源：仅弹窗打开时拉取
+  const envsQ = useQuery({
+    queryKey: ['environments', versionForm.projectId],
+    queryFn: () => api.environments.list(versionForm.projectId),
+    enabled: versionForm.open && !!versionForm.projectId,
+  });
   // 展开状态：默认全部收起，避免大量项目时首屏刷屏
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleExpanded = (id: string) =>
@@ -145,21 +150,12 @@ export default function ProjectsHome() {
         name: versionForm.name.trim(),
         description: versionForm.description.trim() ? versionForm.description.trim() : null,
         defaultUrl: versionForm.defaultUrl.trim() ? versionForm.defaultUrl.trim() : null,
+        environmentId: versionForm.environmentId || null,
       }),
     onSuccess: (v) => {
       toast(`已更新版本 ${v.name}`, 'success');
       setVersionForm(EMPTY_VERSION_FORM);
       qc.invalidateQueries({ queryKey: ['versions', versionForm.projectId] });
-    },
-    onError: (e: Error) => toast(e.message, 'error'),
-  });
-
-  const setDefaultVersion = useMutation({
-    mutationFn: ({ projectId, versionId }: { projectId: string; versionId: string }) =>
-      api.versions.setDefault(projectId, versionId),
-    onSuccess: () => {
-      toast('默认版本已更新', 'success');
-      qc.invalidateQueries({ queryKey: ['versions'] });
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -265,6 +261,7 @@ export default function ProjectsHome() {
                     name: '',
                     description: '',
                     defaultUrl: '',
+                    environmentId: '',
                     projectDefaultUrl: p.defaultUrl,
                   })
                 }
@@ -278,15 +275,14 @@ export default function ProjectsHome() {
                     name: v.name,
                     description: v.description ?? '',
                     defaultUrl: v.defaultUrl ?? '',
+                    environmentId: v.environmentId ?? '',
                     projectDefaultUrl: p.defaultUrl,
                   })
                 }
                 onEnterVersion={(v) => enterVersion(p.id, p.name, p.defaultUrl, v)}
-                onSetDefaultVersion={(v) => setDefaultVersion.mutate({ projectId: p.id, versionId: v.id })}
                 onRemoveVersion={(v) => removeVersion.mutate({ projectId: p.id, versionId: v.id })}
                 onEditVersionRef={(v) => setRefForm({ open: true, projectId: p.id, version: v })}
-                onEditVersionDb={(v) => setDbTarget(v)}
-                onEditVersionSyslog={(v) => setSyslogTarget(v)}
+                onOpenEnvironments={() => navigate(`/p/${p.id}/environments`)}
                 onEditVersionDefaultUrl={(v) =>
                   setVersionForm({
                     open: true,
@@ -297,6 +293,7 @@ export default function ProjectsHome() {
                     name: v.name,
                     description: v.description ?? '',
                     defaultUrl: v.defaultUrl ?? '',
+                    environmentId: v.environmentId ?? '',
                     projectDefaultUrl: p.defaultUrl,
                   })
                 }
@@ -370,6 +367,23 @@ export default function ProjectsHome() {
               value={versionForm.defaultUrl}
               onChange={(e) => setVersionForm((f) => ({ ...f, defaultUrl: e.target.value }))}
             />
+            {versionForm.mode === 'edit' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>关联环境（可空，留空走项目默认）</label>
+                <select
+                  className="input-base input-sm"
+                  value={versionForm.environmentId}
+                  onChange={(e) => setVersionForm((f) => ({ ...f, environmentId: e.target.value }))}
+                >
+                  <option value="">跟随项目默认环境</option>
+                  {(envsQ.data ?? []).map((env) => (
+                    <option key={env.id} value={env.id}>
+                      {env.name}{env.isDefault ? '（默认）' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-foreground-secondary)' }}>描述（可空）</label>
               <textarea
@@ -435,28 +449,6 @@ export default function ProjectsHome() {
         }}
         saving={saveRef.isPending}
       />
-
-      {/* 数据库配置 */}
-      {dbTarget && (
-        <VersionDbConfigDialog
-          open={!!dbTarget}
-          projectId={dbTarget.projectId}
-          versionId={dbTarget.id}
-          versionName={dbTarget.name}
-          onClose={() => setDbTarget(null)}
-        />
-      )}
-
-      {/* syslog 配置 */}
-      {syslogTarget && (
-        <VersionSyslogConfigDialog
-          open={!!syslogTarget}
-          projectId={syslogTarget.projectId}
-          versionId={syslogTarget.id}
-          versionName={syslogTarget.name}
-          onClose={() => setSyslogTarget(null)}
-        />
-      )}
     </div>
   );
 }
@@ -470,11 +462,9 @@ interface ProjectRowProps {
   onAddVersion: () => void;
   onEditVersion: (v: ProjectVersion) => void;
   onEnterVersion: (v: ProjectVersion) => void;
-  onSetDefaultVersion: (v: ProjectVersion) => void;
   onRemoveVersion: (v: ProjectVersion) => void;
   onEditVersionRef: (v: ProjectVersion) => void;
-  onEditVersionDb: (v: ProjectVersion) => void;
-  onEditVersionSyslog: (v: ProjectVersion) => void;
+  onOpenEnvironments: () => void;
   onEditVersionDefaultUrl: (v: ProjectVersion) => void;
 }
 
@@ -487,11 +477,9 @@ function ProjectRow({
   onAddVersion,
   onEditVersion,
   onEnterVersion,
-  onSetDefaultVersion,
   onRemoveVersion,
   onEditVersionRef,
-  onEditVersionDb,
-  onEditVersionSyslog,
+  onOpenEnvironments,
   onEditVersionDefaultUrl,
 }: ProjectRowProps) {
   const versionsQ = useQuery({
@@ -540,6 +528,7 @@ function ProjectRow({
         </span>
         <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
           <IconButton icon="pencil" title="编辑项目" onClick={onEdit} />
+          <IconButton icon="database" title="环境管理" onClick={onOpenEnvironments} />
           <IconButton icon="trash" title="删除项目" tone="destructive" onClick={onDelete} />
         </div>
       </div>
@@ -576,20 +565,8 @@ function ProjectRow({
                       <span className="text-[13px] font-medium" style={{ color: 'var(--color-foreground)' }}>
                         {v.name}
                       </span>
-                      {v.isDefault && (
-                        <span
-                          className="text-[10px] font-semibold uppercase px-1.5 py-[1px] rounded"
-                          style={{
-                            background: 'var(--color-accent-soft)',
-                            color: 'var(--color-accent)',
-                            letterSpacing: '0.04em',
-                          }}
-                        >
-                          默认
-                        </span>
-                      )}
                       <span className="text-[11px]" style={{ color: 'var(--color-foreground-muted)' }}>
-                        用例 {v.caseCount ?? 0} · 环境 {v.environmentCount ?? 0} · 计划 {v.planCount ?? 0}
+                        用例 {v.caseCount ?? 0} · 环境 {v.environmentName ?? '项目默认'} · 计划 {v.planCount ?? 0}
                       </span>
                       {v.ref && v.refKind && (
                         <span
@@ -613,11 +590,6 @@ function ProjectRow({
                           onClick={() => onEditVersionRef(v)}
                           disabled={!p.repoUrl}
                         />
-                        {!v.isDefault && (
-                          <IconButton icon="star" title="设为默认" onClick={() => onSetDefaultVersion(v)} />
-                        )}
-                        <IconButton icon="database" title="数据库配置" onClick={() => onEditVersionDb(v)} />
-                        <IconButton icon="terminal" title="syslog 配置" onClick={() => onEditVersionSyslog(v)} />
                         <IconButton icon="externalLink" title="版本默认域名（留空走项目级）" onClick={() => onEditVersionDefaultUrl(v)} />
                         <IconButton icon="trash" title="删除版本" tone="destructive" onClick={() => onRemoveVersion(v)} />
                         <Button size="sm" onClick={() => onEnterVersion(v)}>

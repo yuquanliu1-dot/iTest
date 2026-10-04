@@ -55,7 +55,7 @@ beforeEach(async () => {
   orgPath = org.orgPath;
   const s = await seedProject(pool);
   projectId = s.projectId;
-});
+}, 30_000);
 
 describe('project versions', () => {
   it('GET /projects/:id/versions 列出 v0', async () => {
@@ -63,7 +63,6 @@ describe('project versions', () => {
     expect(r.status).toBe(200);
     expect(r.body).toHaveLength(1);
     expect(r.body[0].name).toBe('v0');
-    expect(r.body[0].isDefault).toBe(true);
   });
 
   it('POST /projects/:id/versions 新建并返回 201', async () => {
@@ -72,7 +71,6 @@ describe('project versions', () => {
       .send({ name: 'v1.0', description: 'first release' });
     expect(r.status).toBe(201);
     expect(r.body.name).toBe('v1.0');
-    expect(r.body.isDefault).toBe(false);
   });
 
   it('POST /projects/:id/versions defaultUrl 落库并随 GET 返回', async () => {
@@ -108,18 +106,6 @@ describe('project versions', () => {
     expect(r.body.error).toBe('version_name_taken');
   });
 
-  it('POST /project-versions/:id/set-default 切换默认', async () => {
-    const cr = await request(app)
-      .post(`/api/projects/${projectId}/versions`)
-      .send({ name: 'v1.0' });
-    const newId = cr.body.id as string;
-    const r = await request(app).post(`/api/project-versions/${newId}/set-default`);
-    expect(r.status).toBe(204);
-    const list = await request(app).get(`/api/projects/${projectId}/versions`);
-    const def = list.body.find((v: { isDefault: boolean }) => v.isDefault);
-    expect(def.id).toBe(newId);
-  });
-
   it('删除最后一个版本返回 400 last_version', async () => {
     const list = await request(app).get(`/api/projects/${projectId}/versions`);
     const r = await request(app).delete(`/api/project-versions/${list.body[0].id}`);
@@ -133,7 +119,7 @@ describe('project versions', () => {
       .post(`/api/projects/${projectId}/versions`)
       .send({ name: 'v1.0' });
     await pool.query(
-      `INSERT INTO test_cases(group_id, version_id, title) VALUES ((SELECT id FROM "groups" WHERE project_id=$1), (SELECT id FROM project_versions WHERE project_id=$1 AND is_default), 'x')`,
+      `INSERT INTO test_cases(group_id, version_id, title) VALUES ((SELECT id FROM "groups" WHERE project_id=$1), (SELECT id FROM project_versions WHERE project_id=$1 AND name='v0'), 'x')`,
       [projectId],
     );
     const list = await request(app).get(`/api/projects/${projectId}/versions`);
@@ -141,5 +127,48 @@ describe('project versions', () => {
     expect(r.status).toBe(400);
     expect(r.body.error).toBe('version_not_empty');
     expect(r.body.details?.caseCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('PATCH environmentId 关联环境并随 GET 返回 environmentName', async () => {
+    const env = await pool.query(
+      `INSERT INTO test_environments(project_id, name) VALUES ($1, 'staging-env') RETURNING id`,
+      [projectId],
+    );
+    const envId = env.rows[0]!.id as string;
+    const cr = await request(app).post(`/api/projects/${projectId}/versions`).send({ name: 'v1.0' });
+    expect(cr.status).toBe(201);
+    const r = await request(app).patch(`/api/project-versions/${cr.body.id}`).send({ environmentId: envId });
+    expect(r.status).toBe(200);
+    expect(r.body.environmentId).toBe(envId);
+    const list = await request(app).get(`/api/projects/${projectId}/versions`);
+    const v = list.body.find((x: { id: string }) => x.id === cr.body.id);
+    expect(v.environmentName).toBe('staging-env');
+  });
+
+  it('PATCH environmentId 跨项目环境返回 400 env_project_mismatch', async () => {
+    const other = await seedProject(pool);
+    const env = await pool.query(
+      `INSERT INTO test_environments(project_id, name) VALUES ($1, 'other-env') RETURNING id`,
+      [other.projectId],
+    );
+    const cr = await request(app).post(`/api/projects/${projectId}/versions`).send({ name: 'v1.0' });
+    const r = await request(app).patch(`/api/project-versions/${cr.body.id}`).send({ environmentId: env.rows[0]!.id });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('env_project_mismatch');
+  });
+
+  it('PATCH environmentId null 清除关联', async () => {
+    const env = await pool.query(
+      `INSERT INTO test_environments(project_id, name) VALUES ($1, 'staging-env') RETURNING id`,
+      [projectId],
+    );
+    const cr = await request(app).post(`/api/projects/${projectId}/versions`).send({ name: 'v1.0' });
+    await request(app).patch(`/api/project-versions/${cr.body.id}`).send({ environmentId: env.rows[0]!.id });
+    const r = await request(app).patch(`/api/project-versions/${cr.body.id}`).send({ environmentId: null });
+    expect(r.status).toBe(200);
+    expect(r.body.environmentId).toBeNull();
+    const list = await request(app).get(`/api/projects/${projectId}/versions`);
+    const v = list.body.find((x: { id: string }) => x.id === cr.body.id);
+    expect(v.environmentName).toBeNull();
   });
 });

@@ -7,6 +7,7 @@ import ProjectGuard from './components/layout/ProjectGuard';
 import { useThemeStore } from './stores/theme';
 import LoginPage from './pages/LoginPage';
 import ProjectsHome from './pages/ProjectsHome';
+import EnvironmentsPage from './pages/EnvironmentsPage';
 import Dashboard from './pages/Dashboard';
 import AiWorkspacePage from './pages/AiWorkspacePage';
 import GroupsPage from './pages/GroupsPage';
@@ -37,6 +38,8 @@ export default function App() {
         <Route path="/members/*" element={<MembersPage />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/p/:projectId" element={<ProjectGuard />}>
+          {/* 项目级环境维护：不依赖版本上下文 */}
+          <Route path="environments" element={<EnvironmentsPage />} />
           {/* 版本化二级路径 /v/:versionId/...：版本号由 ProjectsHome 行「进入」写入 store */}
           <Route path="v/:versionId">
             <Route index element={<Navigate to="overview" replace />} />

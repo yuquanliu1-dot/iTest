@@ -35,7 +35,7 @@ function sameStep(a: StepClip, b: StepClip): boolean {
 }
 
 export default function CaseDetail() {
-  const { id, projectId } = useParams<{ id: string; projectId: string }>();
+  const { id, projectId, versionId } = useParams<{ id: string; projectId: string; versionId?: string }>();
   const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();

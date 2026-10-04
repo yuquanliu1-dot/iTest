@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testCases, testSteps, groups, scenarios, tags, caseTags, projects, projectVersions } from '../db/schema.js';
-import { eq, asc, inArray, and } from 'drizzle-orm';
+import { testCases, testSteps, groups, scenarios, tags, caseTags, projects } from '../db/schema.js';
+import { eq, asc, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { assertCaseVisible, assertProjectVisible, assertVersionVisible, resolveCaseProjectId, visibleProjectIds } from '../services/projectAccess.js';
@@ -149,17 +149,11 @@ casesRoute.post('/', async (req, res) => {
   if (g.length === 0) throw new HttpError(404, 'not_found', 'group not found');
   const projectId = g[0]!.projectId;
   await assertProjectVisible(projectId, req.user!);
-  // 解析 versionId：未传 → 默认版本；传了 → 必须同 project
-  let versionId = body.versionId;
-  if (!versionId) {
-    const row = (await db.select({ id: projectVersions.id }).from(projectVersions)
-      .where(and(eq(projectVersions.projectId, projectId), eq(projectVersions.isDefault, true))).limit(1))[0];
-    if (!row) throw new HttpError(404, 'not_found', 'project has no default version');
-    versionId = row.id;
-  } else {
-    const { projectId: vp } = await assertVersionVisible(versionId, req.user!);
-    if (vp !== projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
-  }
+  // versionId 必填：前端所有入口都显式带版本，无默认版本回退；传了则必须同 project
+  const versionId = body.versionId;
+  if (!versionId) throw new HttpError(400, 'version_required', 'versionId is required');
+  const { projectId: vp } = await assertVersionVisible(versionId, req.user!);
+  if (vp !== projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
   // 创建时也可附带 tagIds：必须在分组所属项目所属的 organization 内
   if (body.tagIds && body.tagIds.length > 0) await assertTagsBelongToOrg(body.tagIds, projectId);
   const { tagIds: _ignoredTagIds, versionId: _ignoredV, ...caseValues } = body;

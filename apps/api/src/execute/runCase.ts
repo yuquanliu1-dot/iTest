@@ -55,8 +55,8 @@ export async function runCase(
   };
   const incognito = !!caseRow.incognito;
 
-  // Resolve envCtx before any CDP launch: planEnv > case defaultEnv. EnvMissing/EnvProjectMismatch
-  // are surfaced as a single failed stepResult (no 500). DecryptError propagates as a real error.
+  // Resolve envCtx before any CDP launch: planEnv > case defaultEnv > version link > project default.
+  // EnvMissing/EnvProjectMismatch are surfaced as a single failed stepResult (no 500). DecryptError propagates.
   const { resolveEnv } = await import('./envContext.js');
   let envCtx: import('./envContext.js').EnvCtx | undefined;
   try {
@@ -64,6 +64,7 @@ export async function runCase(
       {
         planEnvId: opts?.envOverride?.envId ?? null,
         caseEnvId: caseRow.defaultEnvId ?? null,
+        versionId: caseRow.versionId ?? null,
       },
       projectId ? { expectedProjectId: projectId } : undefined,
     );
@@ -74,7 +75,7 @@ export async function runCase(
       const humanMessage =
         errName === 'EnvProjectMismatch'
           ? '环境所属项目与当前用例不匹配'
-          : '缺少环境配置，请到项目设置配置测试环境';
+          : '缺少环境配置，请到项目环境页配置默认环境';
       const stepResults: ExecStepResult[] = [{
         order: 1,
         status: 'failed',

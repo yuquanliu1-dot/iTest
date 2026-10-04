@@ -62,17 +62,17 @@ beforeEach(async () => {
   groupId = s.groupId;
   defaultVersionId = s.versionId;
   const v = await pool.query(
-    `INSERT INTO project_versions(project_id, name, is_default) VALUES ($1, 'v1.0', false) RETURNING id`,
+    `INSERT INTO project_versions(project_id, name) VALUES ($1, 'v1.0') RETURNING id`,
     [projectId],
   );
   v1Id = v.rows[0]!.id as string;
 });
 
 describe('cases versionId', () => {
-  it('POST 不传 versionId 时落入默认版本', async () => {
+  it('POST 不传 versionId 返回 400 version_required', async () => {
     const r = await request(app).post('/api/cases').send({ title: '默认版本用例', groupId });
-    expect(r.status).toBe(200);
-    expect(r.body.versionId).toBe(defaultVersionId);
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('version_required');
   });
 
   it('POST 显式传 versionId 落到指定版本', async () => {
@@ -109,7 +109,7 @@ describe('cases cross-version copy', () => {
 
   it('单条 copy 传跨项目 versionId 返回 400 version_mismatch', async () => {
     const other = await seedProject(pool);
-    const created = await request(app).post('/api/cases').send({ title: '源', groupId });
+    const created = await request(app).post('/api/cases').send({ title: '源', groupId, versionId: v1Id });
     const r = await request(app)
       .post(`/api/cases/${created.body.id}/copy`)
       .send({ targetGroupId: groupId, targetVersionId: other.versionId });
@@ -118,8 +118,8 @@ describe('cases cross-version copy', () => {
   });
 
   it('批量 copy 接受 targetVersionId', async () => {
-    const c1 = await request(app).post('/api/cases').send({ title: 'A', groupId });
-    const c2 = await request(app).post('/api/cases').send({ title: 'B', groupId });
+    const c1 = await request(app).post('/api/cases').send({ title: 'A', groupId, versionId: v1Id });
+    const c2 = await request(app).post('/api/cases').send({ title: 'B', groupId, versionId: v1Id });
     const r = await request(app).post('/api/cases/copy').send({
       caseIds: [c1.body.id, c2.body.id],
       targetGroupId: groupId,

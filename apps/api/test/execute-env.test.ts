@@ -37,10 +37,15 @@ beforeAll(async () => {
   const c = await pool.query(`INSERT INTO test_cases(group_id, title) VALUES ($1, 'env-case') RETURNING id`, [group.rows[0]!.id]);
   caseId = c.rows[0]!.id;
   const e = await pool.query(
-    `INSERT INTO test_environments(project_id, name, db_host, db_port, db_name, db_user) VALUES ($1, 'staging', 'localhost', 5432, 'app', 'app') RETURNING id`,
+    `INSERT INTO test_environments(project_id, name) VALUES ($1, 'staging') RETURNING id`,
     [projectId],
   );
   envId = e.rows[0]!.id;
+  await pool.query(
+    `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default)
+     VALUES ($1, 'db', '默认', $2::jsonb, true)`,
+    [envId, JSON.stringify({ host: 'localhost', port: 5432, dbName: 'app', user: 'app' })],
+  );
   app.use('/api', (req, _res, next) => {
     req.user = managerUserOf(userId, username, orgId, orgPath);
     next();

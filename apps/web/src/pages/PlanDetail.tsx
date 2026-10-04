@@ -54,8 +54,8 @@ export default function PlanDetail() {
   });
 
   const { data: environments } = useQuery({
-    queryKey: ['environments', plan?.projectId, plan?.versionId ?? null],
-    queryFn: () => api.environments.list(plan!.projectId, { versionId: plan?.versionId ?? undefined }),
+    queryKey: ['environments', plan?.projectId],
+    queryFn: () => api.environments.list(plan!.projectId),
     enabled: !!plan?.projectId,
   });
 

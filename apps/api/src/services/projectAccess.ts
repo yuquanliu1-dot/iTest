@@ -72,17 +72,16 @@ export async function resolveEnvironmentProjectId(envId: string): Promise<string
 }
 
 /** environment 可见性断言：经所属项目判定，404 文案不区分「不存在」与「不可见」。 */
-export async function assertEnvironmentVisible(envId: string, user: AuthUser): Promise<{ projectId: string; versionId: string }> {
+export async function assertEnvironmentVisible(envId: string, user: AuthUser): Promise<{ projectId: string }> {
   const rows = await db
-    .select({ projectId: testEnvironments.projectId, versionId: testEnvironments.versionId })
+    .select({ projectId: testEnvironments.projectId })
     .from(testEnvironments)
     .where(eq(testEnvironments.id, envId))
     .limit(1);
   const projectId = rows[0]?.projectId;
-  const versionId = rows[0]?.versionId;
-  if (!projectId || !versionId) throw new HttpError(404, 'not_found', 'environment not found');
+  if (!projectId) throw new HttpError(404, 'not_found', 'environment not found');
   await assertProjectVisible(projectId, user);
-  return { projectId, versionId };
+  return { projectId };
 }
 
 /** 解析 version 所属项目 id（version → project）；链路不存在返回 null。 */

@@ -38,7 +38,7 @@ beforeEach(async () => {
 
 describe('ai-thread + ai-workspace + save', () => {
   it('POST /:id/ai-thread is idempotent', async () => {
-    const { projectId } = await seedProject(pool);
+    const { projectId, versionId } = await seedProject(pool);
     const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
     const rid = r.rows[0]!.id as string;
     const a = await request(app).post(`/api/requirements/${rid}/ai-thread`).send({});
@@ -49,7 +49,7 @@ describe('ai-thread + ai-workspace + save', () => {
 
   it('POST /:id/ai-workspace/save persists scenarios + cases + steps', async () => {
     const ws = await import('../src/pi/workspace.js');
-    const { projectId, groupId } = await seedProject(pool);
+    const { projectId, groupId, versionId } = await seedProject(pool);
     const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
     const rid = r.rows[0]!.id as string;
     await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
@@ -58,7 +58,7 @@ describe('ai-thread + ai-workspace + save', () => {
       ] },
     ] });
     const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
-      .send({ groupId, scenarioIds: ['s1'], caseIds: ['c1'] });
+      .send({ groupId, targetVersionId: versionId, scenarioIds: ['s1'], caseIds: ['c1'] });
     expect(saved.status).toBe(200);
     expect(saved.body.savedCases).toBe(1);
     const cases = await pool.query(`SELECT * FROM test_cases WHERE requirement_id = $1`, [rid]);
@@ -84,7 +84,7 @@ describe('ai-thread + ai-workspace + save', () => {
     llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
     try {
       const ws = await import('../src/pi/workspace.js');
-      const { projectId, groupId } = await seedProject(pool);
+      const { projectId, groupId, versionId } = await seedProject(pool);
       const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
       const rid = r.rows[0]!.id as string;
       // instruction 用编号列表触发 splitAiStepsInPlace；拆分后子串无动词开头，
@@ -99,7 +99,7 @@ describe('ai-thread + ai-workspace + save', () => {
         ] },
       ] });
       const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
-        .send({ groupId, scenarioIds: ['s1'], caseIds: ['c1'] });
+        .send({ groupId, targetVersionId: versionId, scenarioIds: ['s1'], caseIds: ['c1'] });
       expect(saved.status).toBe(200);
       const steps = await pool.query(
         `SELECT action FROM test_steps WHERE case_id = (SELECT id FROM test_cases WHERE requirement_id = $1 LIMIT 1) ORDER BY "order"`,
@@ -132,7 +132,7 @@ describe('ai-thread + ai-workspace + save', () => {
     llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
     try {
       const ws = await import('../src/pi/workspace.js');
-      const { projectId, groupId } = await seedProject(pool);
+      const { projectId, groupId, versionId } = await seedProject(pool);
       const r = await pool.query(
         `INSERT INTO requirements(title, content, project_id) VALUES ('r', '页面地址：http://192.168.30.228:8088/static/element-manager.html，请参考实际代码。', $1) RETURNING id`,
         [projectId],
@@ -144,7 +144,7 @@ describe('ai-thread + ai-workspace + save', () => {
         ] },
       ] });
       const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
-        .send({ groupId, scenarioIds: ['s1'], caseIds: ['c1'] });
+        .send({ groupId, targetVersionId: versionId, scenarioIds: ['s1'], caseIds: ['c1'] });
       expect(saved.status).toBe(200);
       // 编译 userMessage 应带真实 URL（compileAiStep ctx.url），而非 localhost 兜底
       expect(captured.length).toBeGreaterThan(0);
@@ -159,7 +159,7 @@ describe('ai-thread + ai-workspace + save', () => {
 
   it('pageContext（inspect_page 抓取记录）优先于需求文本 URL', async () => {
     const ws = await import('../src/pi/workspace.js');
-    const { projectId, groupId } = await seedProject(pool);
+    const { projectId, groupId, versionId } = await seedProject(pool);
     const r = await pool.query(
       `INSERT INTO requirements(title, content, project_id) VALUES ('r', '页面地址：http://from-text.example/page，请参考。', $1) RETURNING id`,
       [projectId],
@@ -172,7 +172,7 @@ describe('ai-thread + ai-workspace + save', () => {
       ] },
     ] });
     const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
-      .send({ groupId, scenarioIds: ['s1'], caseIds: ['c1'] });
+      .send({ groupId, targetVersionId: versionId, scenarioIds: ['s1'], caseIds: ['c1'] });
     expect(saved.status).toBe(200);
     const cases = await pool.query(`SELECT url FROM test_cases WHERE requirement_id = $1`, [rid]);
     expect(cases.rows[0]!.url).toBe('http://from-inspect.example/real');
@@ -180,20 +180,20 @@ describe('ai-thread + ai-workspace + save', () => {
 
   it('save reuses scenario row by (requirementId, title)', async () => {
     const ws = await import('../src/pi/workspace.js');
-    const { projectId, groupId } = await seedProject(pool);
+    const { projectId, groupId, versionId } = await seedProject(pool);
     const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
     const rid = r.rows[0]!.id as string;
     await ws.upsertScenario(rid, { id: 's1', title: 'Same', description: null, cases: [] });
     await ws.upsertScenario(rid, { id: 's2', title: 'Same', description: null, cases: [] });
     await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
-      .send({ groupId, scenarioIds: ['s1','s2'], caseIds: [] });
+      .send({ groupId, targetVersionId: versionId, scenarioIds: ['s1','s2'], caseIds: [] });
     const c = await pool.query(`SELECT count(*)::int AS n FROM scenarios WHERE requirement_id = $1`, [rid]);
     expect(c.rows[0]!.n).toBe(1);
   });
 
   it('404 when group not in same project', async () => {
     const ws = await import('../src/pi/workspace.js');
-    const { projectId } = await seedProject(pool);
+    const { projectId, versionId } = await seedProject(pool);
     const other = await pool.query(`INSERT INTO projects(organization_id, name) SELECT organization_id, 'P2' FROM projects WHERE id = $1 RETURNING id`, [projectId]);
     const og = await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, 'G2') RETURNING id`, [other.rows[0]!.id]);
     const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
@@ -208,7 +208,7 @@ describe('ai-thread + ai-workspace + save', () => {
 
   it('loose caseIds do NOT pull in unselected-scenario cases (regression)', async () => {
     const ws = await import('../src/pi/workspace.js');
-    const { projectId, groupId } = await seedProject(pool);
+    const { projectId, groupId, versionId } = await seedProject(pool);
     const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
     const rid = r.rows[0]!.id as string;
     // 一个场景 s1 含两个用例 c1, c2；再添一个散用例 c-loose。
@@ -219,13 +219,13 @@ describe('ai-thread + ai-workspace + save', () => {
     await ws.upsertCase(rid, null, { id: 'c-loose', title: 'Loose', description: null, priority: 'P2', steps: [] });
     // 只勾选 s1 + 显式勾选 c-loose。预期：c1, c2, c-loose 都被保存（场景全选 + 显式 loose）。
     const ok = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
-      .send({ groupId, scenarioIds: ['s1'], caseIds: ['c-loose'] });
+      .send({ groupId, targetVersionId: versionId, scenarioIds: ['s1'], caseIds: ['c-loose'] });
     expect(ok.status).toBe(200);
     expect(ok.body.savedCases).toBe(3);
 
     // 关键反向验证：仅勾选散用例 c-loose，s1 未选，预期只保存 c-loose 这一个。
     const ws2 = await import('../src/pi/workspace.js');
-    const { projectId: pid2, groupId: gid2 } = await seedProject(pool);
+    const { projectId: pid2, groupId: gid2, versionId: vid2 } = await seedProject(pool);
     const r2 = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r2','c',$1) RETURNING id`, [pid2]);
     const rid2 = r2.rows[0]!.id as string;
     await ws2.upsertScenario(rid2, { id: 's1', title: 'S', description: null, cases: [
@@ -234,7 +234,7 @@ describe('ai-thread + ai-workspace + save', () => {
     ] });
     await ws2.upsertCase(rid2, null, { id: 'c-loose', title: 'Loose', description: null, priority: 'P2', steps: [] });
     const onlyLoose = await request(app).post(`/api/requirements/${rid2}/ai-workspace/save`)
-      .send({ groupId: gid2, scenarioIds: [], caseIds: ['c-loose'] });
+      .send({ groupId: gid2, targetVersionId: vid2, scenarioIds: [], caseIds: ['c-loose'] });
     expect(onlyLoose.status).toBe(200);
     expect(onlyLoose.body.savedCases).toBe(1);
     const cases = await pool.query(`SELECT title FROM test_cases WHERE requirement_id = $1 ORDER BY title`, [rid2]);
@@ -243,7 +243,7 @@ describe('ai-thread + ai-workspace + save', () => {
 
   it('upsertCase persists compiled field into staged step', async () => {
     const ws = await import('../src/pi/workspace.js');
-    const { projectId } = await seedProject(pool);
+    const { projectId, versionId } = await seedProject(pool);
     const r = await pool.query(
       `INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`,
       [projectId],
@@ -271,7 +271,7 @@ describe('ai-thread + ai-workspace + save', () => {
 
   it('upsertCase defaults missing compiled to null', async () => {
     const ws = await import('../src/pi/workspace.js');
-    const { projectId } = await seedProject(pool);
+    const { projectId, versionId } = await seedProject(pool);
     const r = await pool.query(
       `INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`,
       [projectId],
@@ -303,7 +303,7 @@ describe('ai-thread + ai-workspace + save', () => {
     llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
     try {
       const ws = await import('../src/pi/workspace.js');
-      const { projectId, groupId } = await seedProject(pool);
+      const { projectId, groupId, versionId } = await seedProject(pool);
       const r = await pool.query(
         `INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`,
         [projectId],
@@ -326,7 +326,7 @@ describe('ai-thread + ai-workspace + save', () => {
       });
       const saved = await request(app)
         .post(`/api/requirements/${rid}/ai-workspace/save`)
-        .send({ groupId, scenarioIds: ['s1'], caseIds: ['c1'] });
+        .send({ groupId, targetVersionId: versionId, scenarioIds: ['s1'], caseIds: ['c1'] });
       expect(saved.status).toBe(200);
       expect(calls).toBe(0); // short-circuit: no LLM call
       const steps = await pool.query(
@@ -345,7 +345,7 @@ describe('ai-thread + ai-workspace + save', () => {
 
   it('explicit caseId under unselected scenario saves only that case (partial selection)', async () => {
     const ws = await import('../src/pi/workspace.js');
-    const { projectId, groupId } = await seedProject(pool);
+    const { projectId, groupId, versionId } = await seedProject(pool);
     const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
     const rid = r.rows[0]!.id as string;
     await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
@@ -354,7 +354,7 @@ describe('ai-thread + ai-workspace + save', () => {
     ] });
     // 场景 s1 未勾选，只显式勾选 c1：预期只保存 C1，且挂到场景行 S 下
     const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
-      .send({ groupId, scenarioIds: [], caseIds: ['c1'] });
+      .send({ groupId, targetVersionId: versionId, scenarioIds: [], caseIds: ['c1'] });
     expect(saved.status).toBe(200);
     expect(saved.body.savedCases).toBe(1);
     const rows = await pool.query(`SELECT tc.title, sc.title AS scenario_title FROM test_cases tc LEFT JOIN scenarios sc ON sc.id = tc.scenario_id WHERE tc.requirement_id = $1`, [rid]);

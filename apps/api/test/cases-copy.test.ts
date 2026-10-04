@@ -39,8 +39,8 @@ afterAll(async () => {
   await container.stop();
 });
 
-async function makeCaseWithSteps(groupId: string, title: string) {
-  const c = await request(app).post('/api/cases').send({ title, groupId });
+async function makeCaseWithSteps(groupId: string, versionId: string, title: string) {
+  const c = await request(app).post('/api/cases').send({ title, groupId, versionId });
   await request(app).post(`/api/cases/${c.body.id}/steps`).send({
     steps: [
       { order: 1, source: 'agent', action: { kind: 'navigate', url: 'https://x.test' } },
@@ -52,8 +52,8 @@ async function makeCaseWithSteps(groupId: string, title: string) {
 
 describe('case copy', () => {
   it('single copy clones steps and appends 副本', async () => {
-    const { groupId } = await seedProject(pool);
-    const src = await makeCaseWithSteps(groupId, '创建项目');
+    const { groupId, versionId } = await seedProject(pool);
+    const src = await makeCaseWithSteps(groupId, versionId, '创建项目');
     const r = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: groupId });
     expect(r.status).toBe(200);
     expect(r.body.title).toBe('创建项目 副本');
@@ -63,8 +63,8 @@ describe('case copy', () => {
   });
 
   it('copy naming increments 副本1, 副本2', async () => {
-    const { groupId } = await seedProject(pool);
-    const src = await makeCaseWithSteps(groupId, '登录');
+    const { groupId, versionId } = await seedProject(pool);
+    const src = await makeCaseWithSteps(groupId, versionId, '登录');
     const c1 = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: groupId });
     const c2 = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: groupId });
     const c3 = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: groupId });
@@ -76,8 +76,8 @@ describe('case copy', () => {
   it('batch copy to another group', async () => {
     const a = await seedProject(pool);
     const b = await seedProject(pool);
-    const c1 = await makeCaseWithSteps(a.groupId, 'A');
-    const c2 = await makeCaseWithSteps(a.groupId, 'B');
+    const c1 = await makeCaseWithSteps(a.groupId, a.versionId, 'A');
+    const c2 = await makeCaseWithSteps(a.groupId, a.versionId, 'B');
     const r = await request(app).post('/api/cases/copy').send({ caseIds: [c1.id, c2.id], targetGroupId: b.groupId });
     expect(r.status).toBe(200);
     expect(r.body.count).toBe(2);
@@ -86,8 +86,8 @@ describe('case copy', () => {
   });
 
   it('copy to unknown group returns 404', async () => {
-    const { groupId } = await seedProject(pool);
-    const src = await makeCaseWithSteps(groupId, 'X');
+    const { groupId, versionId } = await seedProject(pool);
+    const src = await makeCaseWithSteps(groupId, versionId, 'X');
     const r = await request(app)
       .post(`/api/cases/${src.id}/copy`)
       .send({ targetGroupId: '00000000-0000-0000-0000-000000000000' });
@@ -95,8 +95,8 @@ describe('case copy', () => {
   });
 
   it('DELETE /api/cases/:id removes case and its steps', async () => {
-    const { groupId } = await seedProject(pool);
-    const src = await makeCaseWithSteps(groupId, '待删除');
+    const { groupId, versionId } = await seedProject(pool);
+    const src = await makeCaseWithSteps(groupId, versionId, '待删除');
     const r = await request(app).delete(`/api/cases/${src.id}`);
     expect(r.status).toBe(200);
     const detail = await request(app).get(`/api/cases/${src.id}`);
@@ -106,9 +106,9 @@ describe('case copy', () => {
   });
 
   it('POST /api/cases/batch-delete removes all listed cases and their steps', async () => {
-    const { groupId } = await seedProject(pool);
-    const c1 = await makeCaseWithSteps(groupId, '批删-1');
-    const c2 = await makeCaseWithSteps(groupId, '批删-2');
+    const { groupId, versionId } = await seedProject(pool);
+    const c1 = await makeCaseWithSteps(groupId, versionId, '批删-1');
+    const c2 = await makeCaseWithSteps(groupId, versionId, '批删-2');
     const r = await request(app).post('/api/cases/batch-delete').send({ caseIds: [c1.id, c2.id] });
     expect(r.status).toBe(200);
     expect(r.body.count).toBe(2);
@@ -119,8 +119,8 @@ describe('case copy', () => {
   });
 
   it('POST /api/cases/batch-delete rejects the whole batch when any id is missing', async () => {
-    const { groupId } = await seedProject(pool);
-    const c1 = await makeCaseWithSteps(groupId, '存在');
+    const { groupId, versionId } = await seedProject(pool);
+    const c1 = await makeCaseWithSteps(groupId, versionId, '存在');
     const r = await request(app).post('/api/cases/batch-delete').send({
       caseIds: [c1.id, '00000000-0000-0000-0000-000000000000'],
     });

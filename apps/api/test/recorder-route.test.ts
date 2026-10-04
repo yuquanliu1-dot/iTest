@@ -45,8 +45,8 @@ afterAll(async () => {
 
 describe('recorder routes', () => {
   it('POST /api/recorder/sessions accepts mode/incognito/resumeFromOrder', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'R', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'R', groupId, versionId });
     const r = await request(app).post('/api/recorder/sessions').send({
       caseId: c.body.id,
       mode: 'incognito',
@@ -58,8 +58,8 @@ describe('recorder routes', () => {
   });
 
   it('resume with unbound upload step in the prefix returns 409', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'RU', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'RU', groupId, versionId });
     await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
@@ -87,8 +87,8 @@ describe('recorder routes', () => {
   });
 
   it('resume boundary step itself is not validated', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'RB', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'RB', groupId, versionId });
     await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
@@ -112,8 +112,8 @@ describe('recorder routes', () => {
   });
 
   it('finish writes test_cases.url from first step url for a fresh recording', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'NV', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'NV', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
     const session = getSession(s.body.sessionId)!;
     session.steps.push(
@@ -134,9 +134,9 @@ describe('recorder routes', () => {
   });
 
   it('finish falls back to project default_url when steps carry no url', async () => {
-    const { projectId, groupId } = await seedProject(pool);
+    const { projectId, groupId, versionId } = await seedProject(pool);
     await pool.query(`UPDATE projects SET default_url = $1 WHERE id = $2`, ['https://prod.example.com', projectId]);
-    const c = await request(app).post('/api/cases').send({ title: 'NVD', groupId });
+    const c = await request(app).post('/api/cases').send({ title: 'NVD', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'incognito' });
     const session = getSession(s.body.sessionId)!;
     session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] } });
@@ -152,8 +152,8 @@ describe('recorder routes', () => {
   });
 
   it('finish does not overwrite existing case.url on append', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'NVA', url: 'https://pinned.example.com', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'NVA', url: 'https://pinned.example.com', groupId, versionId });
     await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [{ action: { kind: 'navigate', url: 'https://app.example.com' }, source: 'manual' }],
     });
@@ -174,8 +174,8 @@ describe('recorder routes', () => {
   });
 
   it('finish writes session.targetUrl to test_cases.url when steps have no url', async () => {
-    const { groupId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'NVN', groupId });
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'NVN', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({
       caseId: c.body.id,
       mode: 'fresh',
