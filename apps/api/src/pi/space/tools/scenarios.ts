@@ -67,8 +67,17 @@ export function buildScenariosTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (v.description !== undefined) patch.description = v.description;
               if (Object.keys(patch).length === 0) return { ok: false, error: 'update 未提供任何要修改的字段(title/description)' };
               const before = await svc.getScenario(v.scenarioId);
+              // 挂起前预计算 diff(旧值 vs 合成新值),确认卡与实际执行共用一份数据
+              const diff = diffText(before ?? {}, { ...(before ?? {}), ...patch });
+              if (diff !== undefined) {
+                const approved = await requestConfirmation(
+                  { threadId: ctx.threadId, toolName: 'manage_scenarios', action: 'update', summary: `更新场景「${before?.title ?? v.scenarioId}」`, risk: 'update', diff },
+                  ctx.emit,
+                );
+                if (!approved) return { ok: false, error: '用户取消了该操作' };
+              }
               const after = await svc.updateScenario(v.scenarioId, patch);
-              emitStage(ctx, { kind: 'scenario', id: v.scenarioId, action: 'update', diff: diffText(before ?? {}, after) });
+              emitStage(ctx, { kind: 'scenario', id: v.scenarioId, action: 'update', diff });
               return { ok: true, data: `已更新场景「${after.title}」` };
             }
             case 'delete': {

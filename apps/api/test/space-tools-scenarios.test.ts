@@ -76,18 +76,31 @@ describe('manage_scenarios 工具', () => {
     expect((list as { data: string }).data).toContain('密码登录');
   }, 30_000);
 
-  it('update:改名生效且 stage 带 diff', async () => {
+  it('update:拒绝 → 取消且数据不变;确认 → 改名生效且 stage 用确认时同一 diff', async () => {
     const seed = await seedProject(pool);
     const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await toolOf(ctx);
     const rid = await makeRequirement(seed.projectId);
     await tool.execute({ action: 'create', requirementId: rid, title: '旧场景' });
     const sid = (await pool.query(`SELECT id FROM scenarios WHERE title='旧场景'`)).rows[0]!.id as string;
+
     events.length = 0;
-    const r = await tool.execute({ action: 'update', scenarioId: sid, title: '新场景' });
-    expect(r.ok).toBe(true);
+    const rejected = tool.execute({ action: 'update', scenarioId: sid, title: '新场景' });
+    await untilConfirm(events);
+    const req = events.find((e) => e.type === 'confirm_request') as Record<string, unknown>;
+    expect(req).toMatchObject({ toolName: 'manage_scenarios', action: 'update', risk: 'update', summary: '更新场景「旧场景」' });
+    expect(String(req.diff)).toContain('title: 旧场景 → 新场景');
+    resolveConfirmation(String(req.confirmId), false);
+    expect(await rejected).toMatchObject({ ok: false, error: '用户取消了该操作' });
+    expect((await pool.query(`SELECT title FROM scenarios WHERE id=$1`, [sid])).rows[0]!.title).toBe('旧场景');
+
+    events.length = 0;
+    const approved = tool.execute({ action: 'update', scenarioId: sid, title: '新场景' });
+    resolveConfirmation(await untilConfirm(events), true);
+    expect(await approved).toMatchObject({ ok: true });
     const stage = events.find((e) => e.type === 'stage') as { diff?: string };
     expect(stage.diff).toContain('title: 旧场景 → 新场景');
+    expect((await pool.query(`SELECT title FROM scenarios WHERE id=$1`, [sid])).rows[0]!.title).toBe('新场景');
   }, 30_000);
 
   it('delete:拒绝保留/确认删除', async () => {
