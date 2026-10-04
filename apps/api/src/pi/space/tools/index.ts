@@ -9,6 +9,7 @@ import type { SpaceToolsContext } from './context.js';
 import { buildAnnounceTool } from './announce.js';
 import { buildInspectTool } from './inspect.js';
 import { buildCasesTools } from './cases.js';
+import { buildScenariosTools } from './scenarios.js';
 
 export type { SpaceToolsContext } from './context.js';
 export { emitStage, type StageKind } from './stage.js';
@@ -19,5 +20,6 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   if (ctx.repoAvailable && ctx.cwd) tools.push(...buildRepoSandboxTools(ctx.cwd));
   tools.push(buildAnnounceTool(ctx), buildInspectTool(ctx));
   tools.push(...buildCasesTools(ctx));
+  tools.push(...buildScenariosTools(ctx));
   return tools;
 }
