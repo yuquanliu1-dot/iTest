@@ -1,7 +1,9 @@
 import { useEffect, useMemo } from 'react';
+import { useParams } from 'react-router-dom';
 import { AssistantRuntimeProvider } from '@assistant-ui/react';
 import { createPiHttpClient, usePiRuntime, type PiClientEvent } from '@assistant-ui/react-pi';
 import SpaceThreadPane from './SpaceThreadPane';
+import StagePanel from './StagePanel';
 import { useSpaceEventsStore } from './spaceEventsStore';
 
 interface Props {
@@ -15,6 +17,7 @@ interface Props {
  * 父级以 key=threadId 挂载本组件:切换线程即重挂载出全新 runtime。
  */
 export default function SpaceWorkspace({ threadId }: Props) {
+  const { projectId, versionId } = useParams<{ projectId: string; versionId: string }>();
   const client = useMemo(() => {
     const base = createPiHttpClient({ baseUrl: '/api/assistant' });
     const ingest = useSpaceEventsStore.getState().ingest;
@@ -43,7 +46,7 @@ export default function SpaceWorkspace({ threadId }: Props) {
           <SpaceThreadPane threadId={threadId} />
         </div>
         <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
-          {/* 舞台区(Task 5 接入 StagePanel) */}
+          <StagePanel projectId={projectId!} versionId={versionId!} />
         </div>
       </div>
     </AssistantRuntimeProvider>
