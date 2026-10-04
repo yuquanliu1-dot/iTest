@@ -115,7 +115,7 @@ export default function AiWorkspacePage() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups` : `/p/${projectId}/versions/select`)}
+          onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups` : `/`)}
         >
           <Icon name="chevronLeft" size={12} />
           返回用例列表

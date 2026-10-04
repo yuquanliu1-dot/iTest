@@ -18,7 +18,6 @@ import Executions from './pages/Reports';
 import ReportDetail from './pages/ReportDetail';
 import MembersPage from './pages/MembersPage';
 import Settings from './pages/Settings';
-import VersionsSelectPage from './pages/VersionsSelectPage';
 
 export default function App() {
   const initTheme = useThemeStore((s) => s.init);
@@ -38,9 +37,7 @@ export default function App() {
         <Route path="/members/*" element={<MembersPage />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/p/:projectId" element={<ProjectGuard />}>
-          {/* 版本选择中间页：只需项目可见（ProjectGuard 已校验）；不进版本号 */}
-          <Route path="versions/select" element={<VersionsSelectPage />} />
-          {/* 版本化二级路径 /v/:versionId/... 需 store.versionId 已设置（VersionsSelectPage 写入） */}
+          {/* 版本化二级路径 /v/:versionId/...：版本号由 ProjectsHome 行「进入」写入 store */}
           <Route path="v/:versionId">
             <Route index element={<Navigate to="overview" replace />} />
             <Route path="overview" element={<Dashboard />} />
@@ -54,19 +51,9 @@ export default function App() {
             <Route path="reports" element={<Executions />} />
             <Route path="reports/:id" element={<ReportDetail />} />
           </Route>
-          {/* 旧路径兼容：未带版本号直接进项目 → 弹到 versions select */}
-          <Route index element={<Navigate to="versions/select" replace />} />
-          <Route path="overview" element={<Navigate to="../versions/select" replace />} />
-          <Route path="groups" element={<Navigate to="../versions/select" replace />} />
-          <Route path="groups/:groupId" element={<Navigate to="../../versions/select" replace />} />
-          <Route path="cases/:id" element={<Navigate to="../../versions/select" replace />} />
-          <Route path="ai/:id" element={<Navigate to="../../versions/select" replace />} />
-          <Route path="plans" element={<Navigate to="../versions/select" replace />} />
-          <Route path="plans/:id" element={<Navigate to="../../versions/select" replace />} />
-          <Route path="plans/:id/runs/:runId" element={<Navigate to="../../../versions/select" replace />} />
-          <Route path="reports" element={<Navigate to="../versions/select" replace />} />
-          <Route path="reports/:id" element={<Navigate to="../../versions/select" replace />} />
-          <Route path="environments" element={<Navigate to="versions/select" replace />} />
+          {/* 旧路径兼容：未带版本号 → 回首页选项目 */}
+          <Route index element={<Navigate to="/" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
         <Route path="*" element={<ProjectsHome />} />
       </Route>

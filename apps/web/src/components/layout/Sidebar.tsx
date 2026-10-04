@@ -24,7 +24,7 @@ const PROJECT_GROUP: NavGroupDef = {
 const NAV_GROUPS: NavGroupDef[] = [PROJECT_GROUP];
 
 export default function Sidebar() {
-  const { projectId: urlProjectId } = useParams<{ projectId: string }>();
+  const { projectId: urlProjectId, versionId: urlVersionId } = useParams<{ projectId: string; versionId?: string }>();
   const navigate = useNavigate();
   const sidebarCollapsed = useLayoutStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useLayoutStore((s) => s.toggleSidebar);
@@ -34,7 +34,13 @@ export default function Sidebar() {
 
   // URL 优先，回退到 store；保证非项目页面（如 /settings）仍带旧上下文。
   const projectId = urlProjectId ?? current?.id;
-  const basePath = projectId ? `/p/${projectId}` : '';
+  // 版本号：URL > store。已选项目但未选版本 → basePath 不带 /v，链接会落到 redirect→/。
+  const versionId = urlVersionId ?? current?.versionId ?? undefined;
+  const basePath = projectId
+    ? versionId
+        ? `/p/${projectId}/v/${versionId}`
+        : `/p/${projectId}`
+    : '';
   const hasProject = Boolean(projectId);
 
   // Cmd+B / Ctrl+B shortcut

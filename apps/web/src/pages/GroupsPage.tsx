@@ -218,7 +218,7 @@ export default function GroupsPage() {
     onSuccess: (r) => {
       toast('执行完成', 'success');
       qc.invalidateQueries({ queryKey: ['reports'] });
-      navigate(versionId ? `/p/${projectId}/v/${versionId}/reports/${r.reportId}` : `/p/${projectId}/versions/select`);
+      navigate(versionId ? `/p/${projectId}/v/${versionId}/reports/${r.reportId}` : `/`);
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -266,7 +266,7 @@ export default function GroupsPage() {
       // 把首条需求文本带到工作台；AiWorkspacePage 拿到 threadId 后会自动 POST /messages 启动 AI 跑活。
       const draft = { requirementId: r.id, title: aiForm.title, content: aiForm.content };
       setAiForm({ open: false, title: '', content: '' });
-      navigate(versionId ? `/p/${projectId}/v/${versionId}/ai/${r.id}` : `/p/${projectId}/versions/select`, { state: { initialMessage: aiForm.content, requirement: draft } });
+      navigate(versionId ? `/p/${projectId}/v/${versionId}/ai/${r.id}` : `/`, { state: { initialMessage: aiForm.content, requirement: draft } });
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -286,7 +286,7 @@ export default function GroupsPage() {
       toast('用例已创建', 'success');
       setCaseForm(EMPTY_CASE_FORM);
       invalidate();
-      navigate(versionId ? `/p/${projectId}/v/${versionId}/cases/${r.id}` : `/p/${projectId}/versions/select`);
+      navigate(versionId ? `/p/${projectId}/v/${versionId}/cases/${r.id}` : `/`);
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -329,7 +329,7 @@ export default function GroupsPage() {
 
         <button
           data-active={!effectiveGroupId || undefined}
-          onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups` : `/p/${projectId}/versions/select`)}
+          onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups` : `/`)}
           className="group-nav-item text-left px-2 py-1.5 rounded-[var(--radius-sm)] text-[13px]"
           style={{
             color: !effectiveGroupId ? 'var(--color-accent)' : 'var(--color-foreground-secondary)',
@@ -351,7 +351,7 @@ export default function GroupsPage() {
               <div
                 key={g.id}
                 data-active={active || undefined}
-                onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups/${g.id}` : `/p/${projectId}/versions/select`)}
+                onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups/${g.id}` : `/`)}
                 className="group-nav-item group flex items-center gap-1 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer"
               >
                 <Icon name="gitBranch" size={12} style={{ color: 'var(--color-foreground-muted)', flexShrink: 0 }} />
@@ -645,7 +645,7 @@ export default function GroupsPage() {
                     key={c.id}
                     className={`group grid ${GRID_COLS} items-center px-5 py-[12px] gap-2 list-row-clickable`}
                     style={{ borderBottom: '1px solid var(--color-muted)', opacity: c.status === 'deprecated' ? 0.55 : 1 }}
-                    onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/cases/${c.id}` : `/p/${projectId}/versions/select`)}
+                    onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/cases/${c.id}` : `/`)}
                   >
                     <input
                       type="checkbox"
