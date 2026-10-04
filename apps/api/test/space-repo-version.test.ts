@@ -63,6 +63,14 @@ describe('checkoutRepoForVersion', () => {
     // 二次 checkout 走 fetch+reset 分支,结果幂等
     const cwd2 = await checkoutRepoForVersion(versionId);
     expect(cwd2).toBe(cwd);
+
+    // 已有沙箱上切换 ref(FETCH_HEAD 机制的核心场景):feature → main,内容跟随
+    await pool.query(`UPDATE project_versions SET ref='main' WHERE id=$1`, [versionId]);
+    const cwd3 = await checkoutRepoForVersion(versionId);
+    expect(cwd3).toBe(cwd);
+    expect(await fs.readFile(path.join(cwd3, 'app.txt'), 'utf8')).toBe('main-content');
+    const meta3 = JSON.parse(await fs.readFile(path.join(cwd3, '.itest-sandbox.json'), 'utf8')) as { branch: string };
+    expect(meta3.branch).toBe('main');
   }, 30_000);
 
   it('version.ref 为空 → 回落项目默认分支;项目无 repoUrl → no_repo', async () => {
