@@ -71,12 +71,29 @@ describe('space wire contract', () => {
     expect(r.status).toBe(404);
   });
 
+  it('POST /threads:工厂抛错(LLM 未配置等)仍返回空快照', async () => {
+    const { versionId } = await seedProject(pool);
+    const { setSpaceSessionFactory } = await import('../src/pi/space/session.js');
+    setSpaceSessionFactory(async () => { throw new Error('LLM 未配置'); });
+    const r = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    expect(r.status).toBe(200);
+    expect(r.body.metadata.id).toBeTruthy();
+    expect(r.body.messages).toEqual([]);
+    // 恢复默认 stub,避免影响后续用例
+    setSpaceSessionFactory(async () => makeFakeSession() as never);
+  });
+
   it('GET /threads?versionId= 返回该版本的线程列表(带标题/状态)', async () => {
     const { versionId } = await seedProject(pool);
     const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
     await request(app).post(`/api/assistant/threads/${t.body.metadata.id}/messages`).send({ input: { content: '查一下环境' } });
-    await new Promise((r) => setTimeout(r, 50)); // 等后台 ensure+prompt(stub factory 立即完成)
-    const list = await request(app).get(`/api/assistant/threads?versionId=${versionId}`);
+    // 后台 ensure+prompt 异步落标题;轮询等待,避免固定 sleep 在慢机上 flake
+    let list!: request.Response;
+    for (let i = 0; i < 10; i++) {
+      list = await request(app).get(`/api/assistant/threads?versionId=${versionId}`);
+      if (list.body.some((x: { title: string | null }) => x.title === '查一下环境')) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
     expect(list.status).toBe(200);
     const row = list.body.find((x: { id: string }) => x.id === t.body.metadata.id);
     expect(row).toBeTruthy();
