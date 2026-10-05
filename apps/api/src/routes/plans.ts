@@ -14,7 +14,7 @@ import {
 import { HttpError } from '../middleware/errorHandler.js';
 import { findIncognitoCaseIds, runPlanAsync } from '../execute/runPlan.js';
 import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
-import { createPlan, updatePlan, getPlanDetail, replacePlanCases, planProjectId } from '../services/plans.service.js';
+import { createPlan, updatePlan, getPlanDetail, replacePlanCases, planProjectId, removePlanCases } from '../services/plans.service.js';
 import { logger } from '../logger.js';
 
 export const plansRoute = Router({ mergeParams: true });
@@ -137,6 +137,15 @@ plansRoute.put('/:id/cases/order', async (req, res) => {
   if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
   await assertProjectVisible(pid, req.user!);
   await replacePlanCases(req.params.id!, caseIds);
+  res.json({ ok: true });
+});
+
+plansRoute.delete('/:id/cases', async (req, res) => {
+  const { caseIds } = z.object({ caseIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
+  const pid = await planProjectId(req.params.id!);
+  if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(pid, req.user!);
+  await removePlanCases(req.params.id!, caseIds);
   res.json({ ok: true });
 });
 
