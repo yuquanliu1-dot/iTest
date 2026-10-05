@@ -55,9 +55,6 @@ function stringFields(step: StepAction): Array<{ field: string; text: string }> 
     case 'screenshot':
       if (typeof a.name === 'string') out.push({ field: 'screenshot.name', text: a.name });
       break;
-    case 'aiStep':
-      if (typeof a.instruction === 'string') out.push({ field: 'aiStep.instruction', text: a.instruction });
-      break;
   }
   return out;
 }

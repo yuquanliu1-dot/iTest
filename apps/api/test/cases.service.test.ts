@@ -38,27 +38,31 @@ describe('cases.service', () => {
       .rejects.toMatchObject({ status: 400, code: 'version_mismatch' });
   }, 30_000);
 
-  it('createCaseWithSteps:compiled click 展开为具体步骤,compiled:[] 映射为 null 保留 aiStep 壳', async () => {
+  it('createCaseWithSteps:每条 instruction 直接落 aiTask，描述性断言被 sanitize 丢弃', async () => {
     const { groupId, versionId } = await seedProject(pool);
     const svc = await import('../src/services/cases.service.js');
     const c = await svc.createCaseWithSteps({
       groupId, versionId, title: '下单流程',
       steps: [
-        { instruction: '打开首页', compiled: [{ kind: 'navigate', url: 'https://a.example.com/' }] },
-        { instruction: '点击下单按钮', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '.buy' }] }], assertion: '下单成功' },
-        { instruction: '模糊步骤', compiled: [] },
+        { instruction: '打开首页' },
+        { instruction: '点击下单按钮', assertion: '下单成功' },
+        // 描述性短语 assertion 被 sanitize 丢弃
+        { instruction: '看结果', assertion: '登录表单正常展示' },
       ],
     });
     const rows = (await pool.query(`SELECT "order", name, action, assertion FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [c.id])).rows as Array<{
       order: number; name: string | null; action: Record<string, unknown>; assertion: Record<string, unknown> | null;
     }>;
-    // 第 1、2 条被展开成具体 DSL(每条 compiled 1 个子步骤 → 各 1 行);第 3 条 [] → null,留 aiStep 壳
+    // 每条 instruction 一一对应一行 aiTask，不再做 LLM 编译 / 拆条 / 展开
     expect(rows).toHaveLength(3);
-    expect((rows[0]!.action as { kind: string }).kind).toBe('navigate');
-    expect((rows[1]!.action as { kind: string }).kind).toBe('click');
-    expect((rows[1]!.assertion as { kind: string; match?: string }).kind).toBe('assertText');
-    expect((rows[2]!.action as { kind: string; compiled?: unknown }).kind).toBe('aiStep');
-    expect((rows[2]!.action as { compiled: unknown }).compiled).toBeNull();
+    for (const r of rows) {
+      expect((r.action as { kind: string }).kind).toBe('aiTask');
+      expect(typeof (r.action as { instruction?: string }).instruction).toBe('string');
+    }
+    expect((rows[1]!.assertion as { kind: string }).kind).toBe('assertText');
+    expect((rows[1]!.assertion as { equals: string }).equals).toBe('下单成功');
+    // 描述性短语断言 → null
+    expect(rows[2]!.assertion).toBeNull();
   }, 30_000);
 
   it('createCaseWithSteps:描述性短语 assertion 被 sanitize 丢弃,真实 UI 文案断言正常规整', async () => {
@@ -68,11 +72,11 @@ describe('cases.service', () => {
       groupId, versionId, title: '断言清洗验证',
       steps: [
         // 描述性短语 → 期望 assertion 为 null,不再以 page/contains 形态入库
-        { instruction: '打开登录页', compiled: [{ kind: 'navigate', url: 'https://a.example.com/login' }], assertion: '登录表单正常展示' },
+        { instruction: '打开登录页', assertion: '登录表单正常展示' },
         // 真实 UI 文本片段 → 期望 assertion 规整为完整 shape
-        { instruction: '点登录', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '.login' }] }], assertion: '登录成功' },
+        { instruction: '点登录', assertion: '登录成功' },
         // 短断言(≤4字)放行
-        { instruction: '看结果', compiled: [{ kind: 'waitFor', locator: [{ strategy: 'css', value: '.ok' }] }], assertion: '成功' },
+        { instruction: '看结果', assertion: '成功' },
       ],
     });
     const rows = (await pool.query(`SELECT "order", assertion FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [c.id])).rows as Array<{

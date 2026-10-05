@@ -5,10 +5,8 @@ import { testSteps, testCases, testAttachments, groups } from '../db/schema.js';
 import { eq, asc, and, inArray, sql } from 'drizzle-orm';
 import { StepAction } from '@itest/shared';
 import { HttpError } from '../middleware/errorHandler.js';
-import { compileAiStep, compileAiStepsInPlace } from '../agent/aiStepCompile.js';
-import { splitAiStepsInPlace } from '../agent/aiStepSplit.js';
 import { encrypt, ensureKeyLoaded } from '../lib/secret-crypto.js';
-import { migrateAction, migrateAssertion, sanitizeAssertion } from '../lib/step-migration.js';
+import { migrateAction, sanitizeAssertion } from '../lib/step-migration.js';
 import { buildVariableReport } from '../lib/variable-report.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
 
@@ -32,8 +30,7 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
   await assertCaseVisible(req.params.caseId!, req.user!);
-  splitAiStepsInPlace(body.steps);
-  // 拆条后片段会复制原 order；重排为接续现有最大 order 的连续序号，避免重复。
+  // 重排为接续现有最大 order 的连续序号，避免重复。
   const maxRow = await db
     .select({ maxOrder: sql<number>`coalesce(max(${testSteps.order}), 0)` })
     .from(testSteps)
@@ -42,7 +39,6 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
   body.steps.forEach((s, i) => {
     s.order = base + i + 1;
   });
-  const failedAi = await compileAiStepsInPlace(body.steps.map((s) => ({ action: s.action })));
   const variableReport = buildVariableReport(body.steps.map((s) => s.action));
   if (variableReport.regexIssues.length > 0) {
     throw new HttpError(
@@ -65,7 +61,7 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
             : null;
         const clean = sanitizeAssertion(text);
         const assertion = clean !== null
-          ? (migrateAssertion({ kind: 'assertText', text: clean }) as object)
+          ? (migrateAction({ kind: 'assertText', text: clean }) as object)
           : null;
         return {
           caseId: req.params.caseId,
@@ -82,7 +78,7 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
     .from(testSteps)
     .where(eq(testSteps.caseId, req.params.caseId))
     .orderBy(asc(testSteps.order));
-  res.json({ count: rows.length, steps: sorted, failedAi, variableReport });
+  res.json({ count: rows.length, steps: sorted, variableReport });
 });
 
 const ReorderBody = z.object({ stepIds: z.array(z.string().uuid()).min(1) });
@@ -129,7 +125,7 @@ stepsRoute.delete('/:caseId/steps/:stepId', async (req, res) => {
   res.json({ ok: true });
 });
 
-/** 全量替换步骤（步骤维护/粘贴/撤销的统一写入口）。aiStep 保存前自动编译。 */
+/** 全量替换步骤（步骤维护/粘贴/撤销的统一写入口）。 */
 stepsRoute.put('/:caseId/steps', async (req, res) => {
   const body = z
     .object({
@@ -146,7 +142,6 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
   for (const s of body.steps) {
     s.action = migrateAction(s.action) as typeof s.action;
   }
-  splitAiStepsInPlace(body.steps);
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
   await assertCaseVisible(req.params.caseId!, req.user!);
@@ -175,9 +170,6 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
       ensureKeyLoaded();
     }
   }
-  const failedAi = await compileAiStepsInPlace(
-    body.steps.map((s) => ({ action: s.action, name: s.name })),
-  );
   const variableReport = buildVariableReport(body.steps.map((s) => s.action));
   if (variableReport.regexIssues.length > 0) {
     throw new HttpError(
@@ -221,20 +213,7 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
       )
       .returning();
   });
-  res.json({ steps: rows.sort((a, b) => a.order - b.order), failedAi, variableReport });
-});
-
-/** 单独编译一条 AI 指令（步骤编辑页「重新编译」）。失败返回 compiled: null，不抛错。 */
-stepsRoute.post('/:caseId/steps/recompile', async (req, res) => {
-  const { instruction } = z.object({ instruction: z.string().min(1) }).parse(req.body);
-  const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
-  if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
-  await assertCaseVisible(req.params.caseId!, req.user!);
-  try {
-    res.json({ compiled: await compileAiStep(instruction) });
-  } catch {
-    res.json({ compiled: null });
-  }
+  res.json({ steps: rows.sort((a, b) => a.order - b.order), variableReport });
 });
 
 const CompileExtractBody = z.object({

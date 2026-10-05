@@ -22,7 +22,7 @@ export interface ToolExecutor {
  *  1) locator 写成 {item:{strategy,value}} 单对象外壳 → 还原成 [{strategy,value}]
  *  2) locator 直接写成 {strategy,value} 单对象 → 包成数组
  *  3) locator 每个候选又被多包一层数组（[[{...},{...}]]）→ 剥到只剩 [{...},{...}]
- *  navigate / screenshot / aiStep 等无 locator 字段原样透传。
+ *  navigate / screenshot / aiTask 等无 locator 字段原样透传。
  */
 export function normalizeCompiledStep(step: unknown): unknown {
   if (!step || typeof step !== 'object') return step;
@@ -145,7 +145,7 @@ export function buildWorkspaceTools(
         '尽量在同一轮并行发出全部工具调用：announce_plan、upsert_scenario 与每条用例一个 upsert_case 一起提交，不要逐条等待结果再发下一批。',
         '每条用例都应显式提供 description（说明验证点）与 priority（P0-P3）。',
         '每条 step 必须输出 compiled 字段（DSL 步骤数组，可执行回放）。规则与共享 SYSTEM_PROMPT 完全一致：',
-        '- compiled 是 JSON 数组，元素形如 {"kind": "...", ...}；允许 kind：navigate {url} / click {locator} / fill {locator, value} / hover {locator} / waitFor {locator, timeoutMs?} / assertText {locator, equals} / assertVisible {locator} / check {locator, checked} / select {locator, value} / extract {locator, varName}。禁止输出 aiStep。',
+        '- compiled 是 JSON 数组，元素形如 {"kind": "...", ...}；允许 kind：navigate {url} / click {locator} / fill {locator, value} / hover {locator} / waitFor {locator, timeoutMs?} / assertText {locator, equals} / assertVisible {locator} / check {locator, checked} / select {locator, value} / extract {locator, varName} / aiTask {instruction}（运行时智能体执行,不预编译,原样保留）。禁止输出 aiStep。',
         '- locator 必须是数组，每个元素是单个 {strategy, value} 对象，strategy 限 role/text/testId/css/xpath；至少 1 个候选。正确示例：locator:[{strategy:"css", value:"button[type=\'submit\']"}, {strategy:"css", value:".login-btn"}] —— 注意 locator **只有一层数组**，每个元素直接是 {strategy,value} 对象，不要把每个候选再嵌一层数组。完整 step 示例：{kind:"click", locator:[{strategy:"css", value:"button[type=\'submit\']"}]}。禁止把 locator 写成对象（如 {item:{...}} 或 {strategy:"...",value:"..."} 直接放在 locator 槽），回放无法识别。',
         '- navigate 的 url 必须是绝对 URL，且必须使用用户消息上下文里给的真实页面 URL（host:port/path 原样保留），禁止臆造 http://localhost:5173/...。如果你没有拿到 URL，请在生成用例前先调用 inspect_page 抓取真实页面，从抓取结果里取真实 URL。',
         '- 末尾断言（强约束）：步骤执行后若有可观察结果，断言必须基于真实可见元素——优先 assertVisible（元素级，不依赖文案）；次之 assertText + locator+match:"contains"。禁止使用 target:"page" equals:模糊自由文本（例「登录页正常加载」「看到工作台」），它对任何页面都命中，掩盖回放失败。',
@@ -164,7 +164,7 @@ export function buildWorkspaceTools(
           const name = (s.name && s.name.trim().length > 0)
             ? s.name
             : (s.action.split(/[，。！？,.!?\n]/, 1)[0]?.trim() ?? s.action.slice(0, 24)).slice(0, 200);
-          // 三态：undefined = 未尝试（保存时由 compileAiStepsInPlace 兜底）；
+          // 三态：undefined = 未尝试（保留编译字段未定义，save 时原样落 aiTask）；
           // null = AI 已放弃（短路不再重试）；array = 已编译（短路不再重试）。
           // 仅当 LLM 显式提供 compiled（数组或 null）时才写入字段，避免老用法下"字段缺失"误为"已放弃"。
           // 防御性归一化：

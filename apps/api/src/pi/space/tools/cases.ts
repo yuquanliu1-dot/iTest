@@ -32,7 +32,6 @@ const Actions = z.object({
   steps: z.array(z.object({
     action: z.string().min(1).max(2000),
     assertion: z.string().max(2000).nullable().optional(),
-    compiled: z.array(z.unknown()).optional(),
   })).max(30).optional(),
   tagIds: z.array(z.string().uuid()).optional(),
 });
@@ -63,7 +62,6 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
         steps: Type.Optional(Type.Array(Type.Object({
           action: Type.String({ minLength: 1, maxLength: 2000 }),
           assertion: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-          compiled: Type.Optional(Type.Array(Type.Unknown())),
         }), { maxItems: 30 })),
         tagIds: Type.Optional(Type.Array(Type.String())),
       }),
@@ -109,8 +107,8 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
                 groupId: v.groupId, versionId: ctx.versionId, title: v.title,
                 description: v.description, priority: v.priority, url: v.url, tagIds: v.tagIds,
                 expectedOutcome: v.expectedOutcome ?? null,
-                // 工具入参的 steps[].action 对应 service 的 AiStepInput.instruction(人类可读指令)
-                steps: v.steps?.map((s) => ({ instruction: s.action, assertion: s.assertion, compiled: s.compiled })),
+                // 工具入参的 steps[].action 对应 service 的 AiTaskInput.instruction(人类可读指令)
+                steps: v.steps?.map((s) => ({ instruction: s.action, assertion: s.assertion })),
               });
               emitStage(ctx, { kind: 'case', id: created.id, action: 'create' });
               const warning = !v.expectedOutcome

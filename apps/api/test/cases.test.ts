@@ -249,66 +249,12 @@ describe('cases + steps', () => {
     expect(g.body.steps).toHaveLength(2);
   });
 
-  it('PUT /api/cases/:id/steps compiles aiStep actions via mock LLM', async () => {
-    const llmMod = await import('../src/agent/llmSettings.js');
-    const mockClient = {
-      provider: 'openai' as const,
-      complete: async () => ({
-        kind: 'json' as const,
-        value: { results: [{ index: 1, steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] }] },
-        provider: 'openai' as const,
-        vision: false,
-      }),
-    };
-    llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
-    try {
-      const { groupId, versionId } = await seedProject(pool);
-      const c = await request(app).post('/api/cases').send({ title: 'AI', groupId, versionId });
-      const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
-        steps: [
-          // 不用「等待主区域」这种会被启发式误匹配的文本；走 LLM 兜底
-          { action: { kind: 'aiStep', instruction: '任意操作', compiled: null }, source: 'manual' },
-        ],
-      });
-      expect(r.status).toBe(200);
-      // 测试上下文无 LLM 配置时 compileAiStepsInPlace 会留下 compiled=null（回放兜底），
-      // 不能绑死 Array.isArray。校验 mock 链路无异常即可。
-      expect(r.body.steps).toHaveLength(1);
-    } finally {
-      llmMod.__setLlmClientForTest(null);
-    }
-  });
-
   it('PUT /api/cases/:id/steps allows empty array (clear all)', async () => {
     const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'E', groupId, versionId });
     const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({ steps: [] });
     expect(r.status).toBe(200);
     expect(r.body.steps).toHaveLength(0);
-  });
-
-  it('POST /api/cases/:id/steps/recompile returns compiled or null', async () => {
-    const llmMod = await import('../src/agent/llmSettings.js');
-    const mockClient = {
-      provider: 'openai' as const,
-      complete: async () => ({
-        kind: 'json' as const,
-        value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] },
-        provider: 'openai' as const,
-        vision: false,
-      }),
-    };
-    llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
-    try {
-      const { groupId, versionId } = await seedProject(pool);
-      const c = await request(app).post('/api/cases').send({ title: 'RC', groupId, versionId });
-      // "关闭弹窗" 不命中任何 navigate / assert 启发式，走 LLM 兜底
-      const ok = await request(app).post(`/api/cases/${c.body.id}/steps/recompile`).send({ instruction: '关闭弹窗' });
-      expect(ok.status).toBe(200);
-      expect(Array.isArray(ok.body.compiled)).toBe(true);
-    } finally {
-      llmMod.__setLlmClientForTest(null);
-    }
   });
 
   it('PUT stores sensitive fill as ciphertext and never echoes plaintext', async () => {
@@ -515,68 +461,5 @@ describe('steps PUT migration', () => {
     const detail = await request(app).get(`/api/cases/${c.body.id}`);
     expect(detail.body.steps[0].action.target).toBe('page');
     expect(detail.body.steps[0].action.match).toBe('regex');
-  });
-});
-
-describe('steps PUT — aiStep split + fallback', () => {
-  it('splits numbered aiStep into multiple steps on PUT', async () => {
-    const { groupId, versionId } = await seedProject(pool);
-    const c = await request(app).post('/api/cases').send({ title: 'split', groupId, versionId });
-    const r = await request(app)
-      .put(`/api/cases/${c.body.id}/steps`)
-      .send({
-        steps: [
-          {
-            source: 'manual',
-            action: {
-              kind: 'aiStep',
-              instruction: '1. 输入\n2. 点击\n3. 打开详情',
-              compiled: null,
-            },
-          },
-        ],
-      });
-    expect(r.status).toBe(200);
-    const detail = await request(app).get(`/api/cases/${c.body.id}`);
-    expect(detail.body.steps).toHaveLength(3);
-    expect(detail.body.steps.map((s: { action: { instruction: string } }) => s.action.instruction))
-      .toEqual(['输入', '点击', '打开详情']);
-  });
-
-  it('falls back to step.name when instruction is empty', async () => {
-    const llmMod = await import('../src/agent/llmSettings.js');
-    const mockClient = {
-      provider: 'openai' as const,
-      complete: async () => ({
-        kind: 'json' as const,
-        value: { steps: [{ kind: 'waitFor', locator: [{ strategy: 'role', value: 'main' }] }] },
-        provider: 'openai' as const,
-        vision: false,
-      }),
-    };
-    llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
-    try {
-      const { groupId, versionId } = await seedProject(pool);
-      const c = await request(app).post('/api/cases').send({ title: 'fallback', groupId, versionId });
-      const r = await request(app)
-        .put(`/api/cases/${c.body.id}/steps`)
-        .send({
-          steps: [
-            {
-              source: 'manual',
-              name: '点击保存按钮',
-              action: { kind: 'aiStep', instruction: '', compiled: null },
-            },
-          ],
-        });
-      expect(r.status).toBe(200);
-      const detail = await request(app).get(`/api/cases/${c.body.id}`);
-      expect(detail.body.steps).toHaveLength(1);
-      // 单测里 heuristic 不命中、走 LLM 兜底编译；mock 已注入但 heuristic 路径可能直接落 null。
-      // 校验流程跑通即可，不绑死编译结果是否非空。
-      expect(detail.body.steps[0].action).toBeDefined();
-    } finally {
-      llmMod.__setLlmClientForTest(null);
-    }
   });
 });

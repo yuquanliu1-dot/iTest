@@ -49,8 +49,8 @@ describe('switchAction', () => {
     expect((out.action as Record<string, unknown>).locator).toEqual(loc);
   });
 
-  it('click → aiStep / switchTab / screenshot 无 locator', () => {
-    expect(switchAction(clipOf({ kind: 'click', locator: loc }), 'aiStep').action).toEqual({ kind: 'aiStep', instruction: '', compiled: null });
+  it('click → aiTask / switchTab / screenshot 无 locator', () => {
+    expect(switchAction(clipOf({ kind: 'click', locator: loc }), 'aiTask').action).toEqual({ kind: 'aiTask', instruction: '' });
     expect(switchAction(clipOf({ kind: 'click', locator: loc }), 'switchTab').action).toEqual({ kind: 'switchTab', tabRef: '' });
     expect(switchAction(clipOf({ kind: 'click', locator: loc }), 'screenshot').action).toEqual({ kind: 'screenshot', name: '' });
   });
@@ -59,7 +59,7 @@ describe('switchAction', () => {
     for (const k of ['click', 'hover', 'fill', 'select', 'check', 'waitFor', 'assertVisible', 'assertText', 'assertJson', 'upload', 'extract']) {
       expect(kindNeedsLocator(k)).toBe(true);
     }
-    for (const k of ['navigate', 'switchTab', 'screenshot', 'aiStep']) {
+    for (const k of ['navigate', 'switchTab', 'screenshot', 'aiTask']) {
       expect(kindNeedsLocator(k)).toBe(false);
     }
   });

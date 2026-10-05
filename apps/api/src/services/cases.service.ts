@@ -10,10 +10,6 @@ import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { resolveEnvironmentProjectId, resolveVersionProjectId } from './projectAccess.js';
 import { migrateAssertion, sanitizeAssertion } from '../lib/step-migration.js';
-import { normalizeCompiledStep } from '../pi/tools.js';
-import { expandCompiledAiStepsInPlace } from '../lib/ai-step-expand.js';
-import { compileAiStepsInPlace } from '../agent/aiStepCompile.js';
-import { splitAiStepsInPlace } from '../agent/aiStepSplit.js';
 
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 const STATUSES = ['draft', 'review', 'ready', 'deprecated'];
@@ -64,27 +60,6 @@ function assertWindowCustom(v: { windowStrategy?: string; windowWidth?: number |
   }
 }
 
-/** 与 routes/requirements.ts 同源:把「打开 X 页」「访问 X」等指令翻译成默认 URL。
- * 供 compileAiStepsInPlace 当 ctx.url 兜底;base 优先用已解析的环境 URL,否则回 localhost:5173。 */
-function inferPageUrl(name: string, instruction: string, fallback?: string): string | undefined {
-  const text = `${name} ${instruction}`.toLowerCase();
-  const dict: Record<string, string> = {
-    '登录': '/login',
-    'login': '/login',
-    '注册': '/signup',
-    '工作台': '/',
-    '首页': '/',
-    '设置': '/settings',
-    '需求': '/requirements',
-    '用例': '/cases',
-    '计划': '/plans',
-  };
-  for (const [k, p] of Object.entries(dict)) {
-    if (text.includes(k)) return fallback ? `${fallback.replace(/\/$/, '')}${p}` : `http://localhost:5173${p}`;
-  }
-  return undefined;
-}
-
 function assertEnum(name: 'priority' | 'status', value: string, allowed: string[]): void {
   if (!allowed.includes(value)) throw new HttpError(400, `bad_${name}`, `invalid ${name}: ${value}`);
 }
@@ -124,30 +99,18 @@ export async function createCase(input: CreateCaseInput) {
   return { ...created, tags: tagsByCase.get(created.id) ?? [] };
 }
 
-export interface AiStepInput {
+export interface AiTaskInput {
   instruction: string;
   assertion?: string | null;
-  /** LLM 编译出的 DSL 子步骤;[] 映射为 null(放弃语义);缺省保留未编译 aiStep 壳。 */
-  compiled?: unknown[] | null;
 }
 
-/** 创建用例并写 AI 步骤(aiStep 壳 + 可选 compiled 归一化后即时展开;不做急切 LLM 编译)。 */
-export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiStepInput[] }) {
+/** 创建用例并写 AI 智能步骤（aiTask 单步，回放期由 LLM 多轮执行）。 */
+export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiTaskInput[] }) {
   const created = await createCase(input);
   if (input.steps?.length) {
-    const stepRows: Array<{
-      source: 'agent';
-      name: string;
-      action: object;
-      assertion: object | null;
-      componentKind?: string;
-      sensitive: boolean;
-    }> = input.steps.map((s) => {
+    const stepRows = input.steps.map((s) => {
       const name = (s.instruction.split(/[，。！？,.!?\n]/, 1)[0]?.trim() ?? '').slice(0, 200) || s.instruction.slice(0, 200);
-      const action: Record<string, unknown> = { kind: 'aiStep', instruction: s.instruction };
-      if (s.compiled !== undefined) {
-        action.compiled = Array.isArray(s.compiled) ? (s.compiled.length === 0 ? null : s.compiled.map(normalizeCompiledStep)) : s.compiled;
-      }
+      const action: Record<string, unknown> = { kind: 'aiTask', instruction: s.instruction };
       return {
         source: 'agent' as const,
         name,
@@ -162,35 +125,8 @@ export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiS
         sensitive: false,
       };
     });
-    // 注意:expand 内部是 p.stepRows = out(重赋值到包装对象)→ 必须经 prepared 读回展开结果
-    const prepared = [{ stepRows }];
-    // 复用 routes/requirements.ts 的「LLM 兜底编译」:拆条 → 编译 → 展开。
-    // 拆条:把 "1. ... 2. ..." 这种编号指令拆成多条 aiStep（首条继承原 compiled 语义,后续未编译)。
-    if (stepRows.length > 0) {
-      splitAiStepsInPlace(stepRows as unknown as Array<{ action: unknown }>);
-    }
-    // 兜底编译:仅编译未尝试的 aiStep;LLM 放弃(已写 compiled:null)或已编译(写 array)的不重试。
-    // 输入 url = 用例级 url(若有) → 兜底到 group.defaultUrl → 项目默认环境 baseUrl;与 resolveCaseUrl 同链。
-    const compileUrl = await resolveCaseUrl(
-      { url: input.url ?? null, groupId: input.groupId },
-      { defaultEnvFallback: true },
-    );
-    try {
-      await compileAiStepsInPlace(
-        stepRows.map((row) => ({
-          action: row.action,
-          name: row.name,
-          url: compileUrl ?? undefined,
-        })),
-        undefined,
-        (name) => inferPageUrl(name ?? '', '', compileUrl ?? undefined),
-      );
-    } catch {
-      // 编译失败不阻塞保存:原 aiStep 落库,回放兜底走视觉路径
-    }
-    expandCompiledAiStepsInPlace(prepared);
     await db.insert(testSteps).values(
-      prepared[0]!.stepRows.map((r, i) => ({
+      stepRows.map((r, i) => ({
         caseId: created.id,
         order: i,
         source: r.source,
@@ -198,7 +134,6 @@ export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiS
         action: r.action,
         assertion: r.assertion,
         sensitive: r.sensitive,
-        componentKind: typeof r.componentKind === 'string' ? r.componentKind : null,
       })),
     );
   }
