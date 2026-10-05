@@ -150,6 +150,11 @@ export const api = {
     get: (id: string) => request<PlanRunDetail>(`/plan-runs/${id}`),
     cancel: (id: string) => request<{ ok: boolean }>(`/plan-runs/${id}/cancel`, { method: 'POST' }),
     eventsUrl: (id: string) => `${BASE}/plan-runs/${id}/events`,
+    removeBatch: (ids: string[]) =>
+      request<{ count: number }>('/plan-runs/batch-delete', {
+        method: 'POST',
+        body: JSON.stringify({ planRunIds: ids }),
+      }),
   },
   versions: {
     list: (projectId: string) =>

@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { groups, projects, projectVersions, reports, testCases, testEnvironments } from '../db/schema.js';
+import { groups, projects, projectVersions, reports, testCases, testEnvironments, planRuns } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import type { AuthUser } from './auth.service.js';
 import { visibleOrgIdsFor } from './orgTree.js';
@@ -50,6 +50,14 @@ export async function assertReportVisible(reportId: string, user: AuthUser): Pro
     .limit(1);
   const projectId = rows[0]?.projectId;
   if (!projectId) throw new HttpError(404, 'not_found', 'report not found');
+  await assertProjectVisible(projectId, user);
+}
+
+/** plan run 可见性断言：plan_runs.projectId 直接落在 projects，链路判定后兜底。 */
+export async function assertPlanRunVisible(planRunId: string, user: AuthUser): Promise<void> {
+  const rows = await db.select({ projectId: planRuns.projectId }).from(planRuns).where(eq(planRuns.id, planRunId)).limit(1);
+  const projectId = rows[0]?.projectId;
+  if (!projectId) throw new HttpError(404, 'not_found', 'plan run not found');
   await assertProjectVisible(projectId, user);
 }
 

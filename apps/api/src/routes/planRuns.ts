@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import { eq, asc, inArray } from 'drizzle-orm';
+import { z } from 'zod';
 import { db } from '../db/client.js';
 import { planRuns, planRunCases, executionPlans, testCases } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { requestCancel, subscribeRun } from '../execute/runPlan.js';
 import { sseHeaders } from '../sse/agentRunStream.js';
-import { assertProjectVisible } from '../services/projectAccess.js';
+import { assertPlanRunVisible, assertProjectVisible } from '../services/projectAccess.js';
 
 export const planRunsRoute = Router();
 
@@ -40,6 +41,17 @@ planRunsRoute.post('/:id/cancel', async (req, res) => {
   requestCancel(run.id);
   await db.update(planRuns).set({ cancelRequested: true }).where(eq(planRuns.id, run.id));
   res.json({ ok: true });
+});
+
+planRunsRoute.post('/batch-delete', async (req, res) => {
+  const body = z.object({ planRunIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
+  // 与 reports/batch-delete 一致：按可见性逐个校验，违规直接 404
+  for (const id of body.planRunIds) await assertPlanRunVisible(id, req.user!);
+  const deleted = await db
+    .delete(planRuns)
+    .where(inArray(planRuns.id, body.planRunIds))
+    .returning({ id: planRuns.id });
+  res.json({ count: deleted.length });
 });
 
 planRunsRoute.get('/:id/events', async (req, res) => {
