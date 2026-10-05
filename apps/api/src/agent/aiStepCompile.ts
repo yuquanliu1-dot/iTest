@@ -9,7 +9,8 @@ const SYSTEM_PROMPT = `你是测试自动化步骤编译器。把用户的自然
 每个步骤形如 {"kind": "...", ...}，允许的 kind：
 navigate {url} | click {locator} | fill {locator, value} | hover {locator} |
 waitFor {locator, timeoutMs?} | assertText {locator, equals} | assertVisible {locator} |
-check {locator, checked} | select {locator, value} | extract {locator, varName}。
+check {locator, checked} | select {locator, value} | extract {locator, varName} |
+solveCaptcha {imageLocator, inputLocator}（已废弃，改用 aiTask）| aiTask {instruction}（运行时由 AI 智能体看截图执行的自然语言指令；登录页有验证码时用它代替普通 fill——例 {"kind":"aiTask","instruction":"识别验证码图片中的字符并填入验证码输入框"}；也适用于其他难以固化为 DSL 的动态交互）。
 locator 是 [{"strategy": "...", "value": "..."}] 数组，规则：
 - locator 必须**只有一层数组**：每个元素直接是单个 {strategy, value} 对象。
   正例：[{strategy:"css", value:"button[type='submit']"}]
@@ -145,14 +146,24 @@ export async function compileAiStepVision(
   const llm = client ?? (await resolveLlmClient()).client;
   const plan = planVision(instruction);
   if (!plan.useVision) throw new Error('compileAiStepVision: no #cssSelector placeholder in instruction');
-  const sys = `你是 OCR 助手。从图片中识别文本并只输出识别结果，不要解释，不要包含多余字符。`;
   const user = plan.outputSelector
     ? `页面元素: ${plan.sourceSelector}\n填写到: ${plan.outputSelector}\n${plan.cleanedInstruction}`
     : `页面元素: ${plan.sourceSelector}\n${plan.cleanedInstruction}`;
-  const r = await llm.complete({ systemPrompt: sys, userMessage: user, image: ctx.image });
+  return recognizeImageText(ctx.image, llm, user);
+}
+
+const OCR_SYSTEM_PROMPT = '你是 OCR 助手。从图片中识别文本并只输出识别结果，不要解释，不要包含多余字符。';
+
+/** 对单张图片做 OCR（验证码识别 / aiStep 视觉路径共用）。返回去除空白后的识别文本，空则抛错。 */
+export async function recognizeImageText(
+  image: { base64: string; mime: 'image/png' | 'image/jpeg' },
+  llm: LLMClient,
+  userMessage = '识别图片中的验证码字符，只输出字符本身（不区分大小写按原样输出）。',
+): Promise<string> {
+  const r = await llm.complete({ systemPrompt: OCR_SYSTEM_PROMPT, userMessage, image });
   const text = r.kind === 'text' ? r.value : JSON.stringify(r.value);
   const out = text.trim();
-  if (!out) throw new Error('compileAiStepVision: provider returned empty result');
+  if (!out) throw new Error('recognizeImageText: provider returned empty result');
   return out;
 }
 
