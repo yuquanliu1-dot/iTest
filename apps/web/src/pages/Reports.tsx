@@ -51,23 +51,47 @@ export default function Executions() {
 		enabled: !!projectId,
 	});
 
-	// 仅 kind === 'case' 的行可勾选（与原行为一致：计划运行不能误勾）
+	// case / plan 行均参与勾选；提交时按行类型分流到不同接口
 	const allRows = useMemo(() => data ?? [], [data]);
 	// 服务端一次返回所有行；这里在客户端按 page/pageSize 切片（与 GroupsPage 一致）。
 	const rows = useMemo(
 		() => allRows.slice((page - 1) * pageSize, page * pageSize),
 		[allRows, page, pageSize],
 	);
-	const selectableIds = useMemo(() => allRows.filter((r) => r.kind === 'case').map((r) => r.id), [allRows]);
+	const selectableIds = useMemo(() => allRows.map((r) => r.id), [allRows]);
 	const selection = useTableSelection(selectableIds);
 
 	const setPage = (next: number) => void setRaw({ page: String(next) });
 	const setPageSize = (next: number) => void setRaw({ pageSize: String(next), page: '1' });
 
+	// 按行 kind 分桶后并行提交：case → /reports/batch-delete，plan → /plan-runs/batch-delete
 	const batchDeleteReports = useMutation({
-		mutationFn: (ids: string[]) => api.reports.removeBatch(ids),
-		onSuccess: (r) => {
-			toast(`已删除 ${r.count} 条报告`, 'success');
+		mutationFn: async (ids: string[]) => {
+			const idByKind = new Map<string, Set<string>>();
+			for (const r of allRows) {
+				if (!ids.includes(r.id)) continue;
+				let set = idByKind.get(r.kind);
+				if (!set) {
+					set = new Set<string>();
+					idByKind.set(r.kind, set);
+				}
+				set.add(r.id);
+			}
+			const results: { kind: 'case' | 'plan'; count: number }[] = [];
+			if (idByKind.get('case')?.size) {
+				const r = await api.reports.removeBatch([...idByKind.get('case')!]);
+				results.push({ kind: 'case', count: r.count });
+			}
+			if (idByKind.get('plan')?.size) {
+				const r = await api.planRuns.removeBatch([...idByKind.get('plan')!]);
+				results.push({ kind: 'plan', count: r.count });
+			}
+			return results;
+		},
+		onSuccess: (results) => {
+			const total = results.reduce((sum, r) => sum + r.count, 0);
+			const parts = results.map((r) => `${r.kind === 'plan' ? '计划运行' : '报告'} ${r.count}`).join('，');
+			toast(`已删除 ${total} 条（${parts}）`, 'success');
 			selection.clear();
 			qc.invalidateQueries({ queryKey: ['executions'] });
 			qc.invalidateQueries({ queryKey: ['reports'] });
