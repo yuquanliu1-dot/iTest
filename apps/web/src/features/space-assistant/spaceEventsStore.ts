@@ -42,6 +42,8 @@ export type StagedByThread = Map<string, Map<string, StagedItem>>;
 export type StagedSelection = Map<string, Set<string>>;
 
 interface SpaceEventsState {
+  /** 当前激活线程 id；SpaceWorkspace mount 时写入,StagePanel 据此拉暂存列表。 */
+  threadId: string;
   confirms: SpaceConfirmRequest[];
   stageHistory: StageObject[];
   announce: AnnounceState | null;
@@ -50,6 +52,7 @@ interface SpaceEventsState {
   stagedSelection: StagedSelection;
   /** Pi client 订阅分流入口:只认空间自定义事件,pi 契约事件忽略。 */
   ingest: (e: Record<string, unknown>) => void;
+  setCurrentThreadId: (threadId: string) => void;
   removeConfirm: (confirmId: string) => void;
   /** 整批替换(初次进入空间页 / 路由切换时由 listStage 拉取后塞入)。 */
   setStaged: (threadId: string, doc: { cases: unknown[]; scenarios: unknown[]; environments: unknown[]; plans: unknown[] }) => void;
@@ -62,6 +65,9 @@ interface SpaceEventsState {
 
 const MAX_STAGE_HISTORY = 50;
 let stageSeq = 0;
+/** SSE 事件不携带 threadId(由后端 emitThreadEvent 添加但前端不读);
+ *  暂存预览按当前激活线程写,threadId 存 store 由 SpaceWorkspace mount 时写入,
+ *  StagePanel 订阅同一份 state,规避 window 全局变量的 mount 时序竞态。 */
 
 function keyOf(kind: Exclude<StageKind, 'group'>, localId: string): string {
   return `${kind}:${localId}`;
@@ -72,6 +78,7 @@ function keyOf(kind: Exclude<StageKind, 'group'>, localId: string): string {
  * 后端 5 分钟超时后 AI 会收到"用户取消"。快照帧(type='snapshot')不在分支内,天然忽略。
  */
 export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
+  threadId: '',
   confirms: [],
   stageHistory: [],
   announce: null,
@@ -84,16 +91,26 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
       return;
     }
     if (e.type === 'stage') {
-      const obj: StageObject = {
-        key: `s${++stageSeq}`,
-        kind: e.kind as StageKind,
-        id: e.id as string,
-        action: e.action as string,
-        ...(typeof e.diff === 'string' ? { diff: e.diff } : {}),
+      const kind = e.kind as Exclude<StageKind, 'group'>;
+      const action = e.action as string;
+      const id = e.id as string;
+      const obj: StageObject = { key: `s${++stageSeq}`, kind: e.kind as StageKind, id, action, ...(typeof e.diff === 'string' ? { diff: e.diff } : {}) };
+      // action='stage' 且带 payload:upsert 到 stagedByThread(实时预览)
+      // action='remove':从 stagedByThread 删除(落库成功后清掉)
+      const patch = (s: SpaceEventsState): Partial<SpaceEventsState> => {
+        const next = new Map(s.stagedByThread);
+        const map = new Map(next.get(s.threadId) ?? []);
+        if (action === 'stage' && e.payload) {
+          map.set(id, { localId: id, kind, payload: e.payload, stagedAt: (e.payload as { stagedAt?: string }).stagedAt ?? '' });
+        } else if (action === 'remove') {
+          map.delete(id);
+        }
+        next.set(s.threadId, map);
+        return { stagedByThread: next };
       };
       set((s) => ({
+        ...patch(s),
         stageHistory: [...s.stageHistory, obj].slice(-MAX_STAGE_HISTORY),
-        // announce 后的 stage 事件驱动进度;无 announce 时静默累计不展示
         announce: s.announce ? { ...s.announce, done: s.announce.done + 1 } : s.announce,
       }));
       return;
@@ -111,6 +128,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
   },
   removeConfirm: (confirmId) =>
     set((s) => ({ confirms: s.confirms.filter((c) => c.confirmId !== confirmId) })),
+  setCurrentThreadId: (threadId) => set({ threadId }),
   setStaged: (threadId, doc) => set((s) => {
     const next = new Map(s.stagedByThread);
     const map = new Map<string, StagedItem>();
