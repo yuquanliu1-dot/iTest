@@ -35,42 +35,6 @@ interface Props {
   versionId: string;
 }
 
-/** threadId 由 SpaceWorkspace mount 时写入 window.__spaceThreadId（panel 固化在右侧不便改 props 链）。 */
-function readPinnedThreadId(): string {
-  const w = window as unknown as { __spaceThreadId?: string };
-  return w.__spaceThreadId ?? '';
-}
-
-/** 拉 stage list + 订阅 SSE stage 事件。SSE 即时更新 store，list 只在 mount 与 refetch 主动拉时跑。 */
-function useStageDoc(threadId: string): { refetch: () => void } {
-  const qc = useQueryClient();
-  const ingest = useSpaceEventsStore((s) => s.ingest);
-  const q = useQuery({
-    queryKey: ['stage-doc', threadId],
-    queryFn: async () => {
-      const doc = await api.assistant.stage.list(threadId);
-      useSpaceEventsStore.getState().setStaged(threadId, doc);
-      return doc;
-    },
-    enabled: !!threadId,
-    staleTime: 5_000,
-  });
-  useEffect(() => {
-    if (!threadId) return;
-    const es = new EventSource(`/api/assistant/threads/${threadId}/events?snapshot=false`);
-    es.onmessage = (e) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload?.type === 'stage') ingest(payload);
-      } catch {
-        /* ignore */
-      }
-    };
-    return () => es.close();
-  }, [threadId, ingest, qc]);
-  return { refetch: q.refetch };
-}
-
 /** 把 stagedByThread 的 Map<localId, StagedItem> 拆成四个 Tab 的列表。 */
 function partition(staged: Map<string, StagedItem> | undefined): Record<Tab, StagedItem[]> {
   const out: Record<Tab, StagedItem[]> = { case: [], scenario: [], environment: [], plan: [] };
@@ -121,15 +85,45 @@ function CaseSteps({ steps }: { steps: StageDoc['cases'][number]['steps'] }) {
   );
 }
 
+/** 拉 stage list + 订阅 SSE stage 事件。SSE 即时更新 store，list 在 mount 与 SSE stage 事件时拉。 */
+function useStageDoc(threadId: string): { refetch: () => void } {
+  const qc = useQueryClient();
+  const ingest = useSpaceEventsStore((s) => s.ingest);
+  const q = useQuery({
+    queryKey: ['stage-doc', threadId],
+    queryFn: async () => {
+      const doc = await api.assistant.stage.list(threadId);
+      useSpaceEventsStore.getState().setStaged(threadId, doc);
+      return doc;
+    },
+    enabled: !!threadId,
+    staleTime: 5_000,
+  });
+  useEffect(() => {
+    if (!threadId) return;
+    const es = new EventSource(`/api/assistant/threads/${threadId}/events?snapshot=false`);
+    es.onmessage = (e) => {
+      try {
+        const payload = JSON.parse(e.data);
+        if (payload?.type === 'stage') {
+          ingest(payload);
+          // SSE 收到 stage 事件就拉一次 list，覆盖 store 里可能缺失的暂存对象
+          void qc.invalidateQueries({ queryKey: ['stage-doc', threadId] });
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    return () => es.close();
+  }, [threadId, ingest, qc]);
+  return { refetch: q.refetch };
+}
+
 /** 暂存面板：Tabs + 每行复选框 + 「保存选中」按钮。SSE 即时更新 + mount 时拉一次 list 兜底。 */
 export default function StagePanel({ projectId, versionId }: Props) {
   void versionId; // 暂未用；保留为未来「在用例库打开」等跳转入参
-  const [activeThreadId, setActiveThreadId] = useState<string>(() => readPinnedThreadId());
-  // SpaceWorkspace mount/切线程时更新 window.__spaceThreadId → 这里同步进 state
-  useEffect(() => {
-    const id = readPinnedThreadId();
-    if (id !== activeThreadId) setActiveThreadId(id);
-  }, [activeThreadId]);
+  // threadId 存 spaceEventsStore,由 SpaceWorkspace mount 时写入;订阅同一 state 规避 window 全局的时序竞态
+  const activeThreadId = useSpaceEventsStore((s) => s.threadId);
   const stagedByThread = useSpaceEventsStore((s) =>
     activeThreadId ? s.stagedByThread.get(activeThreadId) : undefined,
   );
