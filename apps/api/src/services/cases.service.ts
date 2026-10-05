@@ -9,7 +9,7 @@ import { caseTags, groups, projects, scenarios, tags, testCases, testSteps } fro
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { resolveEnvironmentProjectId, resolveVersionProjectId } from './projectAccess.js';
-import { migrateAssertion } from '../lib/step-migration.js';
+import { migrateAssertion, sanitizeAssertion } from '../lib/step-migration.js';
 import { normalizeCompiledStep } from '../pi/tools.js';
 import { expandCompiledAiStepsInPlace } from '../lib/ai-step-expand.js';
 import { compileAiStepsInPlace } from '../agent/aiStepCompile.js';
@@ -151,7 +151,13 @@ export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiS
         source: 'agent' as const,
         name,
         action: action as object,
-        assertion: s.assertion ? (migrateAssertion({ kind: 'assertText', text: s.assertion }) as object) : null,
+        // 先 sanitize：描述性断言（"登录表单正常展示"等）→ null，回放阶段跳过断言。
+        // 再 migrate：把 `{kind,text}` 老形态规整为 dispatch 认识的 `{equals,target,match,locator}`。
+        assertion: (() => {
+          const clean = sanitizeAssertion(s.assertion);
+          if (clean === null) return null;
+          return migrateAssertion({ kind: 'assertText', text: clean }) as object;
+        })(),
         sensitive: false,
       };
     });

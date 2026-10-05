@@ -8,7 +8,7 @@ import { HttpError } from '../middleware/errorHandler.js';
 import { compileAiStep, compileAiStepsInPlace } from '../agent/aiStepCompile.js';
 import { splitAiStepsInPlace } from '../agent/aiStepSplit.js';
 import { encrypt, ensureKeyLoaded } from '../lib/secret-crypto.js';
-import { migrateAction } from '../lib/step-migration.js';
+import { migrateAction, migrateAssertion, sanitizeAssertion } from '../lib/step-migration.js';
 import { buildVariableReport } from '../lib/variable-report.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
 
@@ -54,13 +54,27 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
   const rows = await db
     .insert(testSteps)
     .values(
-      body.steps.map((s) => ({
-        caseId: req.params.caseId,
-        order: s.order,
-        source: s.source,
-        action: s.action as object,
-        assertion: (s.assertion ?? null) as object | null,
-      })),
+      body.steps.map((s) => {
+        // 手动改步骤路径也走 sanitize + migrate：客户端已传规范 StepAction 时也再过一遍 sanitize
+        // （从 `equals` 字段提取字符串），保证描述性断言不会通过该入口溜进库。
+        const raw = s.assertion as { equals?: unknown; text?: unknown } | null | undefined;
+        const text = typeof raw?.equals === 'string'
+          ? raw.equals
+          : typeof raw?.text === 'string'
+            ? raw.text
+            : null;
+        const clean = sanitizeAssertion(text);
+        const assertion = clean !== null
+          ? (migrateAssertion({ kind: 'assertText', text: clean }) as object)
+          : null;
+        return {
+          caseId: req.params.caseId,
+          order: s.order,
+          source: s.source,
+          action: s.action as object,
+          assertion,
+        };
+      }),
     )
     .returning();
   const sorted = await db

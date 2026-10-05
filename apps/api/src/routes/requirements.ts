@@ -8,7 +8,7 @@ import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { compileAiStepsInPlace } from '../agent/aiStepCompile.js';
 import { splitAiStepsInPlace } from '../agent/aiStepSplit.js';
-import { migrateAssertion } from '../lib/step-migration.js';
+import { migrateAssertion, sanitizeAssertion } from '../lib/step-migration.js';
 import { expandCompiledAiStepsInPlace } from '../lib/ai-step-expand.js';
 import { loadDoc, recordContextMode, removeSaved, type StagedCase } from '../pi/workspace.js';
 
@@ -206,11 +206,13 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
         instruction: s.action,
       };
       if (s.compiled !== undefined) a.compiled = s.compiled;
+      const cleanAssertion = sanitizeAssertion(s.assertion);
       return {
         source: 'agent' as const,
         name: s.name,
         action: a as object,
-        assertion: s.assertion ? ({ kind: 'assertText', text: s.assertion } as object) : null,
+        // 先 sanitize：描述性断言 → null；通过则把老 `{kind,text}` 形态保留交给后续 migrateAssertion。
+        assertion: cleanAssertion ? ({ kind: 'assertText', text: cleanAssertion } as object) : null,
         sensitive: false,
       };
     });
@@ -272,7 +274,8 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
           source: row.source,
           name: row.name,
           action: row.action,
-          assertion: row.assertion ? migrateAssertion(row.assertion) : null,
+          // 二次 sanitize：build stepRows 时已过滤过描述性断言，但稳妥起见写入前再过一遍。
+          assertion: row.assertion ? (sanitizeAssertion((row.assertion as { text?: string }).text ?? '') ? migrateAssertion(row.assertion) : null) : null,
           sensitive: row.sensitive,
         })));
       }

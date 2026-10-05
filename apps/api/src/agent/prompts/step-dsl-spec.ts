@@ -25,6 +25,7 @@ ValueGenerator（fill.value 动态取值，可选其一）：
 2. 优先 role / text 定位；testId 仅限上下文提供的页面快照中确认存在的 testid，禁止编造 id/testid。
 3. 关键路径末尾必须有断言（assertVisible 或 assertText）。
 4. 页面跳转后先 waitFor 再操作。
+5. assertText 的 equals 必须是页面真实 UI 文本片段（按钮文案 / Toast 提示 / 错误信息 / 页面标题），禁止描述性短语（如"正常展示""已发出""已触发""已实现"），服务端会直接过滤掉。
 
 完整示例 steps：
 [
