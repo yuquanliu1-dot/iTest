@@ -1,8 +1,9 @@
 import { eq, asc } from 'drizzle-orm';
+import type { Browser, BrowserContext } from 'playwright-core';
 import { logger } from '../logger.js';
 import { db } from '../db/client.js';
 import { testCases, testSteps, reports, groups } from '../db/schema.js';
-import { executeCaseReal, type ExecStepResult } from './cdp.js';
+import { executeCaseReal, executeCaseInBrowser, type ExecStepResult } from './cdp.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import type { WindowStrategy, PreflightReport } from '@itest/shared';
 
@@ -12,10 +13,18 @@ import type { WindowStrategy, PreflightReport } from '@itest/shared';
  * `storageState` 用于在执行计划中复用登录准备阶段导出的 cookie/localStorage。
  * `forceFail`（测试用）在进入 CDP 前直接写失败报告，便于 fail_fast 行为测试。
  * `envOverride`（计划级）覆盖用例 defaultEnvId，用于执行计划上下文。
+ * `ownedBrowser`/`ownedContext`（计划级 loginPrepare 链路）让登录用例在 caller 持有的 chromium + context 中跑，
+ *  这样登录成功后可直接从同一 ctx 导出真实 storageState；调用方负责关闭。
  */
 export async function runCase(
   caseId: string,
-  opts?: { storageState?: unknown; forceFail?: boolean; envOverride?: { envId: string } | null },
+  opts?: {
+    storageState?: unknown;
+    forceFail?: boolean;
+    envOverride?: { envId: string } | null;
+    ownedBrowser?: Browser;
+    ownedContext?: BrowserContext;
+  },
 ): Promise<{ reportId: string; status: string }> {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
   if (!caseRow) throw new Error('case not found');
@@ -109,35 +118,54 @@ export async function runCase(
   let preflightReport: PreflightReport | undefined;
   let status: 'passed' | 'failed';
   try {
-    stepResults = await executeCaseReal(
-      caseId,
-      steps.map((s) => ({
-        order: s.order,
-        action: s.action,
-        assertion: s.assertion,
-        delayMs: s.delayMs,
-        id: s.id,
-        tabRef: s.tabRef,
-        componentKind: s.componentKind,
-        sensitive: s.sensitive,
-      })),
-      {
-        reportId,
-        projectId,
-        envCtx,
-        // Track 1：把用例级 expectedOutcome / title / url 传给 cdp，触发最后 vision 判定。
-        expectedOutcome: caseRow.expectedOutcome ?? null,
-        caseTitle: caseRow.title,
-        caseUrl: caseRow.url ?? null,
-      },
-      targetUrl,
-      opts?.storageState,
-      (r) => {
-        preflightReport = r;
-      },
-      caseWindow,
-      incognito,
-    );
+    const stepInput = steps.map((s) => ({
+      order: s.order,
+      action: s.action,
+      assertion: s.assertion,
+      delayMs: s.delayMs,
+      id: s.id,
+      tabRef: s.tabRef,
+      componentKind: s.componentKind,
+      sensitive: s.sensitive,
+    }));
+    const execCtx = {
+      reportId,
+      projectId,
+      envCtx,
+      // Track 1：把用例级 expectedOutcome / title / url 传给 cdp，触发最后 vision 判定。
+      expectedOutcome: caseRow.expectedOutcome ?? null,
+      caseTitle: caseRow.title,
+      caseUrl: caseRow.url ?? null,
+    };
+    if (opts?.ownedBrowser && opts?.ownedContext) {
+      // 计划级 loginPrepare 链路：在 caller 持有的 chromium + context 中跑（不再注入 storageState，
+      // context 已含登录 cookie；再注入反而覆盖）。浏览器与 context 由 caller 管理。
+      stepResults = await executeCaseInBrowser(
+        caseId,
+        stepInput,
+        execCtx,
+        opts.ownedBrowser,
+        opts.ownedContext,
+        targetUrl,
+        (r) => {
+          preflightReport = r;
+        },
+        caseWindow,
+      );
+    } else {
+      stepResults = await executeCaseReal(
+        caseId,
+        stepInput,
+        execCtx,
+        targetUrl,
+        opts?.storageState,
+        (r) => {
+          preflightReport = r;
+        },
+        caseWindow,
+        incognito,
+      );
+    }
     const failed = stepResults.filter((r) => r.status === 'failed').length;
     status = failed === 0 ? 'passed' : 'failed';
   } catch (e) {
@@ -155,7 +183,9 @@ export async function runCase(
     ];
     status = 'failed';
   } finally {
-    if (envCtx) envCtx.close().catch(() => undefined);
+    // caller owned browser 路径下浏览器生命周期由 caller 管；envCtx 仍在本函数内关闭，
+    // 因为每个用例各自解析独立 pg.Pool（不做共享），立即关避免长连接泄漏。
+    if (envCtx && !opts?.ownedBrowser) envCtx.close().catch(() => undefined);
   }
 
   const durationMs = Date.now() - startedAt;

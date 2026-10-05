@@ -1,5 +1,4 @@
 import { eq, and, asc } from 'drizzle-orm';
-import { chromium } from 'playwright-core';
 import { logger } from '../logger.js';
 import { db } from '../db/client.js';
 import {
@@ -108,6 +107,9 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   }
 
   // 登录准备
+  let loginBrowser: import('playwright-core').Browser | undefined;
+  let loginCtx: import('playwright-core').BrowserContext | undefined;
+  try {
   if (run.loginPrepareEnabled) {
     const incognitoIds = await findIncognitoCaseIds(plan.id);
     if (incognitoIds.length > 0) {
@@ -133,7 +135,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       {
         // 未配登录用例且环境配置了登录凭据时，走自动填表登录
         autoLogin: !loginCaseId && loginCred ? loginCred : undefined,
-        loginCaseRunner: async (cid, _ctx) => {
+        loginCaseRunner: async (cid, ctx, browser) => {
           // 写入 plan_run_cases（step_kind=login_prepare, status=running）
           const ins = await db
             .insert(planRunCases)
@@ -142,8 +144,13 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
           const row = ins[0]!;
           publish(planRunId, { type: 'plan_run_login', caseId: cid, stepKind: 'login_prepare', status: 'running' });
           try {
+            // 在 caller 持有的 chromium + ctx 中跑登录用例：登录后该 ctx 真实携带 cookie，
+            // 从同一 ctx 导出 storageState 喂给后续业务用例。如果登录用例失败或抛错，takeOwnership 不设，
+            // 让 loginPrepare 走 finally 关 browser。
             const r = await runCase(cid, {
               ...(planEnv ? { envOverride: { envId: planEnv.envId } } : {}),
+              ownedBrowser: browser,
+              ownedContext: ctx,
             });
             await db
               .update(planRunCases)
@@ -160,14 +167,10 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
               return { passed: false, storageState: undefined };
             }
             publish(planRunId, { type: 'plan_run_case_complete', caseId: cid, stepKind: 'login_prepare', status: 'passed', reportId: r.reportId });
-            // 简化：登录成功后从新启的 browser 中导出 storageState
-            const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
-            try {
-              const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
-              return { passed: true, storageState: await ctx.storageState() };
-            } finally {
-              await browser.close().catch(() => undefined);
-            }
+            // 从登录用例跑过的 ctx 导出真实 storageState；caller take ownership 后业务用例循环会关 browser。
+            loginBrowser = browser;
+            loginCtx = ctx;
+            return { passed: true, storageState: await ctx.storageState(), takeOwnership: true };
           } catch (e) {
             await db
               .update(planRunCases)
@@ -287,6 +290,12 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   await finalizeRun(planRunId, finalStatus, { passed, failed, skipped, summary: `${passed} 通过 / ${failed} 失败 / ${skipped} 跳过` });
   publish(planRunId, { type: 'plan_run_complete', status: finalStatus, summary: `${passed} 通过 / ${failed} 失败 / ${skipped} 跳过` });
   runState.delete(planRunId);
+  } finally {
+    // 登录准备 take ownership 后由本函数负责关浏览器+context；异常路径（登录 prepare 失败早返回）
+    // 也会走到这里，确保不留 chromium 残留进程。
+    if (loginCtx) await loginCtx.close().catch(() => undefined);
+    if (loginBrowser) await loginBrowser.close().catch(() => undefined);
+  }
 }
 
 async function finalizeRun(
