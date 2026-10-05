@@ -18,9 +18,9 @@ interface IconButtonProps {
 }
 
 const toneClass: Record<Tone, string> = {
-  muted: 'text-[var(--muted-foreground)]',
-  accent: 'text-[var(--primary)] hover:text-[var(--primary)]',
-  destructive: 'text-[var(--destructive)] hover:text-[var(--destructive)]',
+  muted: 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
+  accent: 'text-[var(--primary)] hover:text-[var(--primary)] hover:bg-[var(--primary)]/10',
+  destructive: 'text-[var(--destructive)] hover:text-[var(--destructive)] hover:bg-[var(--destructive)]/10',
 };
 
 // 尺寸对齐 CRM icon 档：sm→icon-xs(24px/12px 图标)、md→icon-sm(28px/14px 图标)

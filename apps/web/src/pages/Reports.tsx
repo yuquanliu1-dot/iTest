@@ -1,244 +1,221 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { parseAsString, parseAsStringEnum, useQueryStates } from 'nuqs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Search } from 'lucide-react';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
-import Card from '../components/ui/Card';
-import Segmented from '../components/ui/Segmented';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
-import Pagination from '../components/ui/Pagination';
+import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
+import { EmptyCellValue } from '../components/ui/Table';
+import { DataTable, type DataTableColumn, type DataTableTabs } from '../components/ui/DataTable';
+import { useTableSelection } from '../hooks/useTableSelection';
+import { fullDateTime, shortDateTime } from '../lib/format';
 import { useUIStore } from '../stores/ui';
-import { shortDateTime, fullDateTime } from '../lib/format';
 import {
-  PageShell,
-  PageShellDescription,
-  PageShellHeader,
-  PageShellTitle,
+	PageShell,
+	PageShellContent,
+	PageShellDescription,
+	PageShellHeader,
+	PageShellTitle,
 } from '../components/layout/PageShell';
 
 type Tab = 'all' | 'case' | 'plan';
-const DEFAULT_PAGE_SIZE = 20;
+
+const TAB_VALUES = ['all', 'case', 'plan'] as const;
+
+const executionsParsers = {
+	q: parseAsStringEnum([...TAB_VALUES]).withDefault('all'),
+	page: parseAsString.withDefault('1'),
+	pageSize: parseAsString.withDefault('20'),
+};
 
 export default function Executions() {
-  const navigate = useNavigate();
-  const { projectId, versionId: vidParam } = useParams<{ projectId: string; versionId?: string }>();
-  const versionId = vidParam ?? null;
-  const qc = useQueryClient();
-  const toast = useUIStore((s) => s.showToast);
-  const [tab, setTab] = useState<Tab>('all');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
-  // 批量删除只针对 kind === 'case'（即 report 行）；kind === 'plan' 行不参与勾选
-  const [checked, setChecked] = useState<Set<string>>(new Set());
-  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
+	const navigate = useNavigate();
+	const { projectId, versionId: vidParam } = useParams<{ projectId: string; versionId?: string }>();
+	const versionId = vidParam ?? null;
+	const qc = useQueryClient();
+	const toast = useUIStore((s) => s.showToast);
 
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['executions', projectId, versionId, tab],
-    queryFn: () => api.executions.list({ projectId, kind: tab }),
-    enabled: !!projectId,
-  });
+	const [raw, setRaw] = useQueryStates(executionsParsers, { history: 'replace' });
+	const tab = raw.q as Tab;
+	const page = Math.max(1, Number(raw.page) || 1);
+	const pageSizeRaw = Number(raw.pageSize);
+	const pageSize = [10, 20, 50, 100].includes(pageSizeRaw) ? pageSizeRaw : 20;
 
-  const rows = useMemo(() => (data ?? []).slice((page - 1) * pageSize, page * pageSize), [data, page, pageSize]);
-  const total = data?.length ?? 0;
+	const { data, isLoading, isError, error } = useQuery({
+		queryKey: ['executions', projectId, versionId, tab],
+		queryFn: () => api.executions.list({ projectId, kind: tab }),
+		enabled: !!projectId,
+	});
 
-  // 当前页所有可勾选的报告 id（仅 case 类型）
-  const selectableIds = useMemo(
-    () => rows.filter((r) => r.kind === 'case').map((r) => r.id),
-    [rows],
-  );
-  const allChecked = selectableIds.length > 0 && selectableIds.every((id) => checked.has(id));
+	// 仅 kind === 'case' 的行可勾选（与原行为一致：计划运行不能误勾）
+	const allRows = useMemo(() => data ?? [], [data]);
+	// 服务端一次返回所有行；这里在客户端按 page/pageSize 切片（与 GroupsPage 一致）。
+	const rows = useMemo(
+		() => allRows.slice((page - 1) * pageSize, page * pageSize),
+		[allRows, page, pageSize],
+	);
+	const selectableIds = useMemo(() => allRows.filter((r) => r.kind === 'case').map((r) => r.id), [allRows]);
+	const selection = useTableSelection(selectableIds);
 
-  // 切 tab 时清空选中集，避免跨 tab 误选
-  useEffect(() => { setChecked(new Set()); }, [tab]);
+	const setPage = (next: number) => void setRaw({ page: String(next) });
+	const setPageSize = (next: number) => void setRaw({ pageSize: String(next), page: '1' });
 
-  const toggleAll = () => {
-    setChecked((prev) => {
-      const next = new Set(prev);
-      if (allChecked) selectableIds.forEach((id) => next.delete(id));
-      else selectableIds.forEach((id) => next.add(id));
-      return next;
-    });
-  };
-  const toggleOne = (id: string) => {
-    setChecked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  };
+	const batchDeleteReports = useMutation({
+		mutationFn: (ids: string[]) => api.reports.removeBatch(ids),
+		onSuccess: (r) => {
+			toast(`已删除 ${r.count} 条报告`, 'success');
+			selection.clear();
+			qc.invalidateQueries({ queryKey: ['executions'] });
+			qc.invalidateQueries({ queryKey: ['reports'] });
+			qc.invalidateQueries({ queryKey: ['stats', projectId] });
+		},
+		onError: (e: Error) => toast(e.message, 'error'),
+	});
 
-  const batchDeleteReports = useMutation({
-    mutationFn: (ids: string[]) => api.reports.removeBatch(ids),
-    onSuccess: (r) => {
-      toast(`已删除 ${r.count} 条报告`, 'success');
-      setConfirmBatchDelete(false);
-      setChecked(new Set());
-      qc.invalidateQueries({ queryKey: ['executions'] });
-      qc.invalidateQueries({ queryKey: ['reports'] });
-      qc.invalidateQueries({ queryKey: ['stats', projectId] });
-    },
-    onError: (e: Error) => {
-      toast(e.message, 'error');
-      setConfirmBatchDelete(false);
-    },
-  });
+	const tabs: DataTableTabs = {
+		id: 'q',
+		allLabel: '所有',
+		options: [
+			{ value: 'case', label: '单用例' },
+			{ value: 'plan', label: '计划运行' },
+		],
+	};
 
-  const checkedList = useMemo(() => Array.from(checked), [checked]);
+	const columnsDef: DataTableColumn<(typeof rows)[number]>[] = [
+		{
+			id: 'kind',
+			header: '类型',
+			width: 'w-[88px]',
+			cellClassName: 'text-muted-foreground',
+			cell: (r) => (r.kind === 'plan' ? '计划' : '用例'),
+		},
+		{
+			id: 'title',
+			header: '标识',
+			cell: (r) => {
+				if (r.kind === 'plan') {
+					return (
+						<span className="flex items-center gap-2 min-w-0">
+							<span className="font-mono text-muted-foreground">run {r.id.slice(0, 8)}</span>
+						</span>
+					);
+				}
+				return (
+					<span className="flex items-center gap-2 min-w-0">
+						<span className="truncate">{(r as { caseTitle: string | null }).caseTitle ?? '已删除用例'}</span>
+						<span className="font-mono text-[11px] text-muted-foreground">case {(r as { caseId: string }).caseId.slice(0, 8)}</span>
+					</span>
+				);
+			},
+			cellClassName: 'min-w-0',
+		},
+		{
+			id: 'version',
+			header: '版本',
+			width: 'w-[140px]',
+			hideBelow: 'md',
+			cellClassName: 'text-xs text-muted-foreground',
+			cell: (r) => (
+				<span title={(r as { versionName?: string | null }).versionName ?? undefined}>
+					{(r as { versionName?: string | null }).versionName ?? <EmptyCellValue />}
+				</span>
+			),
+		},
+		{
+			id: 'status',
+			header: '状态',
+			width: 'w-[120px]',
+			cell: (r) => <StatusPill status={r.status}>{r.status}</StatusPill>,
+		},
+		{
+			id: 'createdAt',
+			header: '时间',
+			width: 'w-[110px]',
+			align: 'right',
+			cellClassName: 'text-xs text-muted-foreground tabular-nums',
+			cell: (r) => (
+				<span title={fullDateTime(r.createdAt)}>{shortDateTime(r.createdAt)}</span>
+			),
+		},
+	];
 
-  return (
-    <PageShell contained className="gap-3">
-      <PageShellHeader>
-        <PageShellTitle>执行历史</PageShellTitle>
-        <PageShellDescription>用例执行结果与计划运行汇总</PageShellDescription>
-      </PageShellHeader>
-      <div className="fade-up">
-        <Segmented<Tab>
-          options={[
-            { value: 'all', label: '所有', icon: 'list' },
-            { value: 'case', label: '单用例', icon: 'beaker' },
-            { value: 'plan', label: '计划运行', icon: 'flag' },
-          ]}
-          value={tab}
-          onChange={(t) => { setTab(t); setPage(1); }}
-        />
-      </div>
+	const goRunDetail = (r: (typeof rows)[number]) =>
+		navigate(
+			r.kind === 'plan'
+				? `/p/${projectId}/v/${versionId}/plans/${(r as { planId: string }).planId}/runs/${r.id}`
+				: `/p/${projectId}/v/${versionId}/reports/${r.id}`,
+		);
 
-      {/* 批量操作条 —— 仅在有勾选时显示；计划运行行不在勾选范围 */}
-      {checked.size > 0 && (
-        <div
-          className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-sm)]"
-          style={{ background: 'var(--primary-soft)', border: '1px solid var(--border)' }}
-        >
-          <span className="text-[12px]" style={{ color: 'var(--primary)' }}>已选 {checked.size} 条</span>
-          <div className="flex-1" />
-          <Button size="sm" variant="danger" onClick={() => setConfirmBatchDelete(true)}>
-            <Icon name="trash" size={12} />
-            批量删除
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => setChecked(new Set())}>取消选择</Button>
-        </div>
-      )}
+	const isEmpty = rows.length === 0;
 
-      <Card padding="none" className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        {isLoading ? (
-          <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
-            <Icon name="loader" size={16} className="animate-spin" />
-            <span style={{ marginLeft: 8 }}>加载中...</span>
-          </div>
-        ) : isError ? (
-          <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
-            加载失败：{error?.message ?? '未知错误'}
-          </div>
-        ) : rows.length === 0 ? (
-          <EmptyState icon="flag" title="还没有执行记录" description="在执行计划或用例详情页运行测试后会出现在这里。" />
-        ) : (
-          <>
-            <div
-              className={`grid items-center px-5 py-[10px] shrink-0 ${tab === 'plan' ? 'grid-cols-[80px_1fr_120px_120px_120px]' : 'grid-cols-[32px_80px_1fr_120px_120px_120px]'}`}
-              style={{ background: 'var(--muted)', borderBottom: '1px solid var(--border)' }}
-            >
-              {tab !== 'plan' ? (
-                <input type="checkbox" checked={allChecked} onChange={toggleAll} aria-label="全选当前页" />
-              ) : (
-                <span />
-              )}
-              <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>类型</span>
-              <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>标识</span>
-              <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>版本</span>
-              <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>状态</span>
-              <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>时间</span>
-            </div>
-            <div className="flex-1 min-h-0 overflow-y-auto" data-stagger>
-              {rows.map((r) => (
-                <div
-                  key={r.id}
-                  data-stagger-item
-                  className={`grid items-center px-5 py-[12px] cursor-pointer list-row-clickable hairline-bottom ${tab === 'plan' ? 'grid-cols-[80px_1fr_120px_120px_120px]' : 'grid-cols-[32px_80px_1fr_120px_120px_120px]'}`}
-                >
-                  {tab !== 'plan' && r.kind === 'case' ? (
-                    <input
-                      type="checkbox"
-                      checked={checked.has(r.id)}
-                      onChange={() => toggleOne(r.id)}
-                      onClick={(e) => e.stopPropagation()}
-                      aria-label={`选择 ${(r as { caseTitle?: string }).caseTitle ?? r.id}`}
-                    />
-                  ) : tab !== 'plan' ? (
-                    <span />
-                  ) : null}
-                  <span
-                    className="text-[12px]"
-                    style={{ color: 'var(--muted-foreground)' }}
-                    onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/v/${versionId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/v/${versionId}/reports/${r.id}`)}
-                  >
-                    {r.kind === 'plan' ? '计划' : '用例'}
-                  </span>
-                  <span
-                    className="text-[12px] truncate"
-                    style={{ color: 'var(--muted-foreground)' }}
-                    onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/v/${versionId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/v/${versionId}/reports/${r.id}`)}
-                  >
-                    {r.kind === 'plan' ? (
-                      <span className="font-mono">run {r.id.slice(0, 8)}</span>
-                    ) : (
-                      <>
-                        <span className="mr-2">{(r as { caseTitle: string | null }).caseTitle ?? '已删除用例'}</span>
-                        <span className="font-mono text-[11px]" style={{ color: 'var(--muted-foreground)' }}>case {(r as { caseId: string }).caseId.slice(0, 8)}</span>
-                      </>
-                    )}
-                  </span>
-                  <span
-                    className="text-[11px]"
-                    style={{ color: 'var(--muted-foreground)' }}
-                    title={(r as { versionName?: string | null }).versionName ?? undefined}
-                  >
-                    {(r as { versionName?: string | null }).versionName ?? '—'}
-                  </span>
-                  <span onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/v/${versionId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/v/${versionId}/reports/${r.id}`)}><StatusPill status={r.status}>{r.status}</StatusPill></span>
-                  <span
-                    className="text-[11px] font-mono"
-                    style={{ color: 'var(--muted-foreground)' }}
-                    title={fullDateTime(r.createdAt)}
-                    onClick={() => navigate(r.kind === 'plan' ? `/p/${projectId}/v/${versionId}/plans/${(r as { planId: string }).planId}/runs/${r.id}` : `/p/${projectId}/v/${versionId}/reports/${r.id}`)}
-                  >
-                    {shortDateTime(r.createdAt)}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <Pagination
-              page={page}
-              pageSize={pageSize}
-              total={total}
-              onPageChange={setPage}
-              onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
-            />
-          </>
-        )}
-      </Card>
+	return (
+		<PageShell contained className="gap-3">
+			<PageShellHeader>
+				<PageShellTitle>执行历史</PageShellTitle>
+				<PageShellDescription>用例执行结果与计划运行汇总</PageShellDescription>
+			</PageShellHeader>
 
-      {/* 批量删除确认 */}
-      <Dialog open={confirmBatchDelete} onOpenChange={(open) => { if (!open) setConfirmBatchDelete(false); }}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>批量删除报告</DialogTitle></DialogHeader>
-          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            确定删除已选的 <span style={{ color: 'var(--destructive)', fontWeight: 600 }}>{checked.size}</span> 条测试报告？相关截图将一并清理，且不可恢复。
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirmBatchDelete(false)}>取消</Button>
-            <Button
-              variant="danger"
-              disabled={batchDeleteReports.isPending || checked.size === 0}
-              onClick={() => batchDeleteReports.mutate(checkedList)}
-            >
-              {batchDeleteReports.isPending ? '删除中...' : `删除 ${checked.size} 条`}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </PageShell>
-  );
+			<PageShellContent>
+				{isError ? (
+					<div className="flex flex-1 items-center justify-center text-muted-foreground text-xs">
+						加载失败：{error?.message ?? '未知错误'}
+					</div>
+				) : (
+					<DataTable<(typeof rows)[number]>
+						query={{
+							sort: '',
+							dir: 'asc',
+							page,
+							pageSize,
+							tab,
+							tabId: 'q',
+							toggleSort: () => {},
+							setSort: () => {},
+							setDir: () => {},
+							setPage: (p) => setPage(p),
+							setPageSize: (s) => setPageSize(s),
+							setTab: (v) => void setRaw({ q: (v === 'case' || v === 'plan' ? v : 'all') as Tab }),
+							setFilter: () => {},
+							filters: {},
+						}}
+						columns={columnsDef}
+						getRowId={(r) => r.id}
+						rows={rows}
+						total={allRows.length}
+						loading={isLoading}
+						tabs={tabs}
+						onRowClick={goRunDetail}
+						selection={{
+							state: selection,
+							rowLabel: (r) => (r.kind === 'case' ? (r as { caseTitle?: string }).caseTitle ?? r.id : r.id),
+							actions: (
+								<Button
+									size="sm"
+									variant="destructive"
+									onClick={() => batchDeleteReports.mutate(selection.ids)}
+									disabled={batchDeleteReports.isPending || selection.count === 0}
+								>
+									<Icon name="trash" size={12} />
+									批量删除
+								</Button>
+							),
+						}}
+						search={(
+							<div className="relative w-full sm:max-w-xs">
+								<Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+								<Input placeholder="（预留搜索）" className="pl-7" size="sm" disabled />
+							</div>
+						)}
+						empty={
+							<EmptyState icon="flag" title="还没有执行记录" description="在执行计划或用例详情页运行测试后会出现在这里。" />
+						}
+					/>
+				)}
+			</PageShellContent>
+		</PageShell>
+	);
 }

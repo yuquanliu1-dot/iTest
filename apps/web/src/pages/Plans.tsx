@@ -87,6 +87,8 @@ export default function Plans() {
       </PageShellHeader>
 
       <PageShellContent>
+        {/* 卡片墙：CRM DataTable 仅针对「行表」场景，计划页用 grid 卡片展示更直观，
+            故不在本轮迁范围。如后续要迁，请整体替换为新组件而非局部补丁。 */}
         {isLoading ? (
           <div className="flex items-center justify-center py-12" style={{ color: 'var(--muted-foreground)' }}>
             <Icon name="loader" size={16} className="animate-spin" />

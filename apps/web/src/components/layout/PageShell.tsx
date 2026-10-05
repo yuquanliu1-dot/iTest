@@ -89,7 +89,9 @@ function PageShellContent({ className, ...props }: React.ComponentProps<'div'>) 
   return (
     <div
       data-slot="page-shell-content"
-      className={cn('flex flex-1 flex-col gap-6', className)}
+      // contained 模式下需要 min-h-0 + overflow-hidden 让 DataTable 的卡片
+      // 不撑破 PageShell，并把分页器钉在视口底部。
+      className={cn('flex flex-1 flex-col gap-6 min-h-0', className)}
       {...props}
     />
   );

@@ -1,6 +1,6 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { AssistantRuntimeProvider } from '@assistant-ui/react';
+import { AssistantRuntimeProvider, useAui, useAuiState } from '@assistant-ui/react';
 import { createPiHttpClient, usePiRuntime, type PiClientEvent } from '@assistant-ui/react-pi';
 import SpaceThreadPane from './SpaceThreadPane';
 import StagePanel from './StagePanel';
@@ -8,6 +8,8 @@ import { useSpaceEventsStore } from './spaceEventsStore';
 
 interface Props {
   threadId: string;
+  /** 来自上一跳 location.state 的首条 prompt;非空时 mount 后自动发给 AI（仅一次）。 */
+  initialMessage?: string;
 }
 
 /**
@@ -16,7 +18,7 @@ interface Props {
  * 再原样交给 runtime(pi 契约事件 runtime 自己处理,自定义事件其 reducer 忽略)。
  * 父级以 key=threadId 挂载本组件:切换线程即重挂载出全新 runtime。
  */
-export default function SpaceWorkspace({ threadId }: Props) {
+export default function SpaceWorkspace({ threadId, initialMessage }: Props) {
   const { projectId, versionId } = useParams<{ projectId: string; versionId: string }>();
   const client = useMemo(() => {
     const base = createPiHttpClient({ baseUrl: '/api/assistant' });
@@ -49,6 +51,31 @@ export default function SpaceWorkspace({ threadId }: Props) {
           <StagePanel projectId={projectId!} versionId={versionId!} />
         </div>
       </div>
+      {/* aui 必须在 AssistantRuntimeProvider 内使用;首条 prompt 在此层挂载后注入。 */}
+      {initialMessage && <InitialMessageInjector threadId={threadId} text={initialMessage} />}
     </AssistantRuntimeProvider>
   );
+}
+
+/** 远程线程绑定 + 历史加载完成后再 append;StrictMode 双触发由 ref 守护。
+ *  来自 requirement 级工作台 ThreadPane 的同款逻辑,见 apps/web/src/features/ai-workspace/ThreadPane.tsx。 */
+function InitialMessageInjector({ threadId, text }: { threadId: string; text: string }) {
+  const aui = useAui();
+  const remoteId = useAuiState((s) => s.optional.threadListItem?.remoteId);
+  const isLoading = useAuiState((s) => s.optional.thread?.isLoading ?? false);
+  const sentRef = useRef(false);
+  const textRef = useRef(text);
+  textRef.current = text;
+  const doneRef = useRef(false);
+  useEffect(() => {
+    if (doneRef.current) return;
+    if (sentRef.current) return;
+    if (remoteId !== threadId || isLoading) return;
+    sentRef.current = true;
+    aui.thread.append(textRef.current);
+    // 等当前 tick 让 append 落乐观消息后再解除 done,避免 ref 提前清掉
+    queueMicrotask(() => { doneRef.current = true; });
+    // exhaustive-deps 故意忽略:仅依赖 threadId/remoteId/isLoading 三态;text 走 textRef 始终取最新
+  }, [threadId, remoteId, isLoading]);
+  return null;
 }

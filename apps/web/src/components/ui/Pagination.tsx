@@ -59,7 +59,6 @@ export default function Pagination({
       className="flex shrink-0 items-center gap-3"
       style={{
         padding: '8px 20px',
-        borderTop: '1px solid var(--border)',
         fontSize: 12,
         color: 'var(--muted-foreground)',
       }}
@@ -73,8 +72,9 @@ export default function Pagination({
         value={pageSize}
         onChange={(e) => onPageSizeChange(Number(e.target.value))}
         aria-label="每页条数"
-        className="input-base input-inline"
-        style={{ height: CONTROL_H, padding: '0 8px', fontSize: 12, borderRadius: 'var(--radius-md)', cursor: 'pointer' }}
+        // CRM 风格：去掉 input-base 的边框 + 浅底色，hover 加深。
+        className="border-0 hover:bg-[var(--muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        style={{ height: CONTROL_H, padding: '0 8px', fontSize: 12, borderRadius: 'var(--radius-md)', cursor: 'pointer', background: 'var(--muted)/40', backgroundColor: 'color-mix(in oklch, var(--muted) 40%, transparent)' }}
       >
         {pageSizeOptions.map((size) => (
           <option key={size} value={size}>
@@ -153,8 +153,8 @@ export default function Pagination({
             onKeyDown={(e) => { if (e.key === 'Enter') commitJump(); }}
             onBlur={commitJump}
             aria-label="跳转到页"
-            className="input-base"
-            style={{ height: CONTROL_H, width: 48, padding: '0 4px', fontSize: 12, textAlign: 'center', borderRadius: 'var(--radius-md)' }}
+            className="border-0 hover:bg-[var(--muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            style={{ height: CONTROL_H, width: 48, padding: '0 4px', fontSize: 12, textAlign: 'center', borderRadius: 'var(--radius-md)', backgroundColor: 'color-mix(in oklch, var(--muted) 40%, transparent)' }}
           />
           页
         </span>
