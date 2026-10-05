@@ -52,6 +52,10 @@ export default function CaseDetail() {
   const [confirmResume, setConfirmResume] = useState<{ stepId: string; order: number } | null>(null);
   /** 删除步骤前一律先弹 modal —— 步骤误删需重新录制或编辑回填。 */
   const [confirmDeleteStep, setConfirmDeleteStep] = useState<{ stepId: string; order: number; instruction: string } | null>(null);
+  /** Track 1：用例级预期描述（自然语言）。回放结束由 vision LLM 拿最终截图比对。
+   *  编辑与保存走 caseDetail.expectedOutcome 同步；用 ref 跟踪 serverKey 避免 refetch 静默覆盖未保存编辑。 */
+  const [expectedOutcome, setExpectedOutcome] = useState('');
+  const expectedOutcomeSyncRef = useRef<string | null>(null);
   const clipboard = useStepClipboard();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<StepClip | null>(null);
@@ -156,6 +160,15 @@ export default function CaseDetail() {
     setIncognito(!!caseDetail.incognito);
     setDefaultEnvId(caseDetail.defaultEnvId ?? null);
   }, [caseDetail, windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId]);
+
+  // expectedOutcome 与服务端同步：与 runtimeSyncRef 同源模式(serverKey 比对,未保存编辑不覆盖)
+  useEffect(() => {
+    if (!caseDetail) return;
+    const serverValue = caseDetail.expectedOutcome ?? '';
+    if (expectedOutcomeSyncRef.current !== null && expectedOutcome !== expectedOutcomeSyncRef.current) return;
+    expectedOutcomeSyncRef.current = serverValue;
+    setExpectedOutcome(serverValue);
+  }, [caseDetail, expectedOutcome]);
 
   const { data: groups } = useQuery({
     queryKey: ['groups', projectId],
@@ -467,8 +480,18 @@ export default function CaseDetail() {
   };
 
   const saveRuntime = useMutation({
-    mutationFn: () => api.cases.patch(id!, { windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId }),
+    mutationFn: () =>
+      api.cases.patch(id!, {
+        windowStrategy,
+        windowWidth,
+        windowHeight,
+        incognito,
+        defaultEnvId,
+        // Track 1：与运行设置一并保存；空字符串视作清空（传 null）
+        expectedOutcome: expectedOutcome.trim() ? expectedOutcome : null,
+      }),
     onSuccess: () => {
+      expectedOutcomeSyncRef.current = expectedOutcome.trim() ? expectedOutcome : '';
       qc.invalidateQueries({ queryKey: ['case', id] });
       toast('已保存', 'success');
     },
@@ -607,6 +630,24 @@ export default function CaseDetail() {
                         </option>
                       ))}
                     </select>
+                  </label>
+                  {/* Track 1：用例级预期描述。回放结束后由 vision LLM 拿最终截图比对；
+                      步骤级 assertion 在回放层已被收紧为「指定元素可见」才生效，整页模糊断言一律跳过。 */}
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px] flex items-center gap-1" style={{ color: 'var(--muted-foreground)' }}>
+                      用例预期（最终页面应是什么样）
+                      <Icon name="info" size={10} style={{ opacity: 0.5 }} />
+                    </span>
+                    <textarea
+                      className="input-base"
+                      style={{ minHeight: 64, resize: 'vertical', fontSize: 12 }}
+                      placeholder="例:空字段提交后,登录框出现红色提示『请输入用户名和密码』。"
+                      value={expectedOutcome}
+                      onChange={(e) => setExpectedOutcome(e.target.value)}
+                    />
+                    <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
+                      留空则跳过用例级 vision 判定,用例成败只看所有步骤是否全部执行成功。
+                    </span>
                   </label>
                   <div className="flex justify-end">
                     <Button onClick={() => saveRuntime.mutate()} disabled={saveRuntime.isPending}>保存</Button>

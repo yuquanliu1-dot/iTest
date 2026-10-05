@@ -34,6 +34,8 @@ export const FailureReason = z.enum([
   'LogAssertionFailed',
   'EnvMissing',
   'EnvProjectMismatch',
+  /** Track 1: 用例级 vision LLM 判定最终截图与 expectedOutcome 不符 */
+  'VisionAssertionFailed',
   'Unknown',
 ]);
 export type FailureReason = z.infer<typeof FailureReason>;

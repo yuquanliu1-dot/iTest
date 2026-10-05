@@ -132,10 +132,18 @@ export function safeDecrypt(secret: { c?: string | null; i?: string | null; t?: 
 }
 
 async function projectDefaultEnvId(projectId: string): Promise<string | null> {
+  // Mode A：项目内没有显式默认环境时，自动取该项目的「唯一环境」作兜底。
+  // 避免因没点"设为默认"按钮导致 EnvMissing。
+  // 优先级：is_default=true 的 → 任意一条（按 createdAt 最早的）。
   const row = (await db.select({ id: testEnvironments.id }).from(testEnvironments)
     .where(and(eq(testEnvironments.projectId, projectId), eq(testEnvironments.isDefault, true)))
     .limit(1))[0];
-  return row?.id ?? null;
+  if (row) return row.id;
+  const fallback = (await db.select({ id: testEnvironments.id }).from(testEnvironments)
+    .where(eq(testEnvironments.projectId, projectId))
+    .orderBy(testEnvironments.createdAt)
+    .limit(1))[0];
+  return fallback?.id ?? null;
 }
 
 async function versionEnvironmentId(versionId: string): Promise<string | null> {

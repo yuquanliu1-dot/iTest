@@ -64,6 +64,8 @@ export interface ExecStepResult {
   db?: DbQueryRowResult;
   /** observeLog 步骤的结果（仅 observeLog 步携带，其它步 undefined） */
   log?: ObserveLogLineResult;
+  /** Track 1 用例级 vision 判定的回写结果（仅最后一步携带，其它步 undefined）。 */
+  visionAssert?: { passed: boolean; reason: string };
 }
 
 export interface ExecContext {
@@ -80,6 +82,12 @@ export interface ExecContext {
   llmClient?: import('../agent/llm-client.js').LLMClient;
   /** 环境上下文（含 pg.Pool / syslog 连接）；由 runCase 层注入，跨步骤复用。 */
   envCtx?: EnvCtx;
+  /** Track 1：用例级 expectedOutcome（自然语言）。最后一步执行完毕后由 vision LLM 拿最终截图判终态。 */
+  expectedOutcome?: string | null;
+  /** 用例标题（兜底语义锚，给 vision prompt 用）。 */
+  caseTitle?: string;
+  /** 用例 url（兜底语义锚，给 vision prompt 用）。 */
+  caseUrl?: string | null;
 }
 
 /** 用例级窗口策略（maximize/current/custom），custom 时携带 width/height。 */
@@ -383,6 +391,18 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
     }
     case 'aiStep': {
       const instruction = String(action.instruction ?? '');
+      // 优先走已编译的 DSL：instruction 即使带 # 占位符，回放时若已有 compiled 就直接执行子步骤。
+      // 仅在 aiStep 编译前/未尝试时才走视觉路径（source/output 选择器场景）。
+      if (Array.isArray(action.compiled) && action.compiled.length > 0) {
+        const { missing } = substituteVars(action.instruction, vars);
+        if (missing.length > 0) {
+          throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.instruction}")`);
+        }
+        for (const sub of action.compiled) {
+          await dispatch(sub, opts);
+        }
+        return;
+      }
       const plan = planVision(instruction);
       if (plan.useVision) {
         const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
@@ -401,15 +421,7 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
         }
         return;
       }
-      if (!action.compiled) throw new Error('AI 步骤未编译');
-      const { missing } = substituteVars(action.instruction, vars);
-      if (missing.length > 0) {
-        throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.instruction}")`);
-      }
-      for (const sub of action.compiled) {
-        await dispatch(sub, opts);
-      }
-      return;
+      throw new Error('AI 步骤未编译');
     }
     case 'queryDb': {
       const envCtx = opts.ctx.envCtx;
@@ -441,13 +453,19 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
   }
 }
 
-/** 把 test_steps.assertion 规整为 dispatch 认识的 StepAction；非法形态返回 undefined 表示跳过断言。 */
+/** 把 test_steps.assertion 规整为 dispatch 认识的 StepAction；非法形态返回 undefined 表示跳过断言。
+ *  Track 1：target:'page' + match:'contains' + 空 locator 的「整页模糊文本断言」一律跳过；
+ *  AI 写出来的描述性断言（"登录表单正常展示"等）正是这个形态，过滤后回放不再因 page innerText 命中失败。
+ *  真正的元素断言（specifiedElement + 非空 locator）继续生效。 */
 function normalizeStepAssertion(raw: unknown): StepAction | undefined {
   if (raw == null) return undefined;
   const migrated = migrateAssertion(raw);
   if (!migrated || typeof migrated !== 'object') return undefined;
   // 只放行 assertText（唯一支持的步骤级断言类型）；其它 kind 当作未设置以免污染错误信息。
   if ((migrated as { kind?: string }).kind !== 'assertText') return undefined;
+  const a = migrated as StepAction & { target?: string; match?: string; locator?: ReadonlyArray<unknown> };
+  // 整页模糊文本断言 → 跳过（用例级 expectedOutcome + vision 才是终态判定）
+  if (a.target === 'page' && (a.locator?.length ?? 0) === 0) return undefined;
   return migrated as StepAction;
 }
 
@@ -597,6 +615,12 @@ export async function executeCaseReal(
     const context = await browser.newContext({
       ...(storageState && !incognito ? { storageState: storageState as never } : {}),
       ...(viewport ? { viewport } : {}),
+      // 自签证书 / 内网 https 站点：执行期允许 ERR_CERT_AUTHORITY_INVALID 继续执行
+      // （用户仍可在浏览器手动信任证书；这条只影响回放链路）。
+      ignoreHTTPSErrors: true,
+      // navigator.language 设成 zh-CN:被测系统多数为中文产品,i18next 会按浏览器语种渲染;
+      // 暂硬编码,未来如需随 env/project 切换可挪到 envContext。
+      locale: 'zh-CN',
     });
     const page = await context.newPage();
     // 初始导航：用例级 init URL（targetUrl）始终先 goto 一次。
@@ -668,6 +692,41 @@ export async function executeCaseReal(
         });
         // 失败立即终止，避免后续步骤被前一步污染的页面状态搞乱。
         break;
+      }
+    }
+    // Track 1：用例级 vision 判定。所有 step.action 都通过后再做；走最终截图。
+    // 若中途已 failed，vision 不再覆盖（避免 vision 误判把真失败洗白）。
+    const failedSoFar = results.some((r) => r.status === 'failed');
+    if (!failedSoFar && ctx.expectedOutcome && ctx.expectedOutcome.trim()) {
+      try {
+        const buffer = await opts.page.screenshot({ timeout: 5000 });
+        const { judgeCaseOutcome } = await import('../agent/judgeCaseOutcome.js');
+        const verdict = await judgeCaseOutcome({
+          expectedOutcome: ctx.expectedOutcome,
+          caseTitle: ctx.caseTitle ?? caseId,
+          caseUrl: ctx.caseUrl ?? null,
+          screenshot: { base64: buffer.toString('base64'), mime: 'image/png' },
+          llmClient: ctx.llmClient,
+        });
+        if (verdict && !verdict.passed) {
+          // 用例级 vision 判失败 → 追加一个 order=-1 的 failed stepResult，调用方以「任意 failed」判定为失败。
+          results.push({
+            order: -1,
+            status: 'failed',
+            durationMs: 0,
+            error: `case-level vision assert failed: ${verdict.reason}`,
+            failureReason: 'VisionAssertionFailed',
+            humanMessage: '最终页面与用例预期不符',
+            visionAssert: { passed: false, reason: verdict.reason },
+          });
+        } else if (verdict) {
+          // 通过：在最后一步 result 上挂 visionAssert，调用方可读到 reason（不影响 passed 计数）。
+          const last = results[results.length - 1];
+          if (last) last.visionAssert = { passed: true, reason: verdict.reason };
+        }
+      } catch (e) {
+        // vision 兜底失败不视作用例失败：best-effort
+        logger.warn({ err: e, caseId }, 'case-outcome vision assert skipped');
       }
     }
   } finally {

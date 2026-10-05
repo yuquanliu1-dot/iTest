@@ -121,7 +121,15 @@ export async function runCase(
         componentKind: s.componentKind,
         sensitive: s.sensitive,
       })),
-      { reportId, projectId, envCtx },
+      {
+        reportId,
+        projectId,
+        envCtx,
+        // Track 1：把用例级 expectedOutcome / title / url 传给 cdp，触发最后 vision 判定。
+        expectedOutcome: caseRow.expectedOutcome ?? null,
+        caseTitle: caseRow.title,
+        caseUrl: caseRow.url ?? null,
+      },
       targetUrl,
       opts?.storageState,
       (r) => {

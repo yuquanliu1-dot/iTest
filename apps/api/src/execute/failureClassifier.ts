@@ -38,6 +38,7 @@ const HUMAN: Record<FailureReason, string> = {
   SyslogFileMissing: 'syslog 日志文件不可访问',
   SyslogTimeout: '读取 syslog 超时',
   LogAssertionFailed: '日志断言未命中',
+  VisionAssertionFailed: '最终页面与用例预期不符(vision 判定失败)',
   Unknown: '未知错误',
 };
 

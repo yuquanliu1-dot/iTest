@@ -26,6 +26,9 @@ const Actions = z.object({
   priority: z.enum(['P0', 'P1', 'P2', 'P3']).optional(),
   status: z.enum(['draft', 'review', 'ready', 'deprecated']).optional(),
   url: z.string().max(2000).nullable().optional(),
+  /** Track 1：用例级预期描述（自然语言）。回放结束后由 vision LLM 拿最终截图判定。
+   * 步骤级 assertion 字段保留向后兼容，但 dispatch 层只接受真实元素断言；用例成败由本字段+vision 决定。 */
+  expectedOutcome: z.string().max(4000).nullable().optional(),
   steps: z.array(z.object({
     action: z.string().min(1).max(2000),
     assertion: z.string().max(2000).nullable().optional(),
@@ -39,7 +42,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
     {
       name: 'manage_cases',
       description:
-        '用例管理。action=search(版本内检索,可带 keyword/groupId)| get(caseId,含步骤与标签)| create(title+groupId 必填,可带 description/priority/url/steps/tagIds)| update(caseId + title/description/priority/status/url 任一)| delete(caseId,需用户确认)| move_group(caseId+targetGroupId)| create_group(groupName,可带 groupDefaultUrl 作为用例默认入口 URL)。',
+        '用例管理。action=search(版本内检索,可带 keyword/groupId)| get(caseId,含步骤与标签)| create(title+groupId+expectedOutcome 必填,可带 description/priority/url/steps/tagIds)| update(caseId + title/description/priority/status/url/expectedOutcome 任一)| delete(caseId,需用户确认)| move_group(caseId+targetGroupId)| create_group(groupName,可带 groupDefaultUrl 作为用例默认入口 URL)。',
       parameters: Type.Object({
         action: Type.Union([
           Type.Literal('search'), Type.Literal('get'), Type.Literal('create'), Type.Literal('update'),
@@ -56,6 +59,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
         priority: Type.Optional(Type.Union([Type.Literal('P0'), Type.Literal('P1'), Type.Literal('P2'), Type.Literal('P3')])),
         status: Type.Optional(Type.Union([Type.Literal('draft'), Type.Literal('review'), Type.Literal('ready'), Type.Literal('deprecated')])),
         url: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+        expectedOutcome: Type.Optional(Type.Union([Type.String(), Type.Null()])),
         steps: Type.Optional(Type.Array(Type.Object({
           action: Type.String({ minLength: 1, maxLength: 2000 }),
           assertion: Type.Optional(Type.Union([Type.String(), Type.Null()])),
@@ -65,7 +69,8 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
       }),
       promptGuidelines: [
         '创建用例前先 search 相近标题避免重复;groupId 必须来自上下文摘要、search 或 create_group 的结果,禁止臆造 id。',
-        '写 steps 时:action 是人类可读操作指令。assertion 必须是页面里能直接命中的真实 UI 文本片段(按钮文案 / Toast 提示 / 错误信息 / 页面标题 / URL 段),禁止写"登录表单正常展示""账号已触发锁定""登录请求已发出"这种描述性短语——服务端会直接过滤,断言落库为 null(回放阶段跳过此步断言)。若仓库可用,先用 repo_ls/repo_read/repo_grep 看真实源码再给 compiled(DSL:允许 kind = navigate{url}/click{locator}/fill{locator,value}/hover{locator}/waitFor{locator,timeoutMs?}/assertText{locator,equals}/assertVisible{locator}/check{locator,checked}/select{locator,value}/extract{locator,varName})。',
+        '【Track 1】每个用例必须带 expectedOutcome(自然语言描述预期终态):用一句到三句话讲清楚用例走到最后页面/状态应该是什么样。例:"空字段提交后,登录框出现红色提示『请输入用户名和密码』"、"连续错误 5 次后,登录页显示『账号已临时锁定,请 30 秒后再试』"。回放结束后 vision LLM 会拿最终截图与 expectedOutcome 比对,通过才算用例通过。',
+        '写 steps 时:action 是人类可读操作指令。步骤级 assertion 字段保留但已被 dispatcher 收紧——只有带 locator 的真实元素断言会执行(指定的 input/button 可见),target=page match=contains 的整页文本断言会被跳过。推荐直接放弃步骤级 assertion,把所有"是否成功"写到 expectedOutcome 里让 vision 判。',
         'locator 必须是一层数组,每个元素是 {strategy, value},strategy 限 role/text/testId/css/xpath;不知道真实元素就省略 compiled(不要编造),或先调 inspect_page 抓页面。',
         'delete 会向用户发确认卡;被拒或超时返回取消,不要重试同一删除。',
       ],
@@ -98,14 +103,20 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
             case 'create': {
               if (!v.title) return { ok: false, error: 'create 需要 title' };
               if (!v.groupId) return { ok: false, error: 'create 需要 groupId(可先用 create_group 创建)' };
+              // Track 1：expectedOutcome 是用例级断言的唯一依据，强制必填。
+              // 这里仅做软警告：为空时允许保存但不再 vision 判定，调用方承担「没有自动判终态」的成本。
               const created = await svc.createCaseWithSteps({
                 groupId: v.groupId, versionId: ctx.versionId, title: v.title,
                 description: v.description, priority: v.priority, url: v.url, tagIds: v.tagIds,
+                expectedOutcome: v.expectedOutcome ?? null,
                 // 工具入参的 steps[].action 对应 service 的 AiStepInput.instruction(人类可读指令)
                 steps: v.steps?.map((s) => ({ instruction: s.action, assertion: s.assertion, compiled: s.compiled })),
               });
               emitStage(ctx, { kind: 'case', id: created.id, action: 'create' });
-              return { ok: true, data: `已创建用例「${created.title}」(${created.id})` };
+              const warning = !v.expectedOutcome
+                ? '（提示：未提供 expectedOutcome，回放时不会自动判定用例终态，依赖步骤级断言/手动查看报告。）'
+                : '';
+              return { ok: true, data: `已创建用例「${created.title}」(${created.id})${warning}` };
             }
             case 'update': {
               if (!v.caseId) return { ok: false, error: 'update 需要 caseId' };
@@ -117,7 +128,8 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (v.priority !== undefined) patch.priority = v.priority;
               if (v.status !== undefined) patch.status = v.status;
               if (v.url !== undefined) patch.url = v.url;
-              if (Object.keys(patch).length === 0) return { ok: false, error: 'update 未提供任何要修改的字段(title/description/priority/status/url)' };
+              if (v.expectedOutcome !== undefined) patch.expectedOutcome = v.expectedOutcome;
+              if (Object.keys(patch).length === 0) return { ok: false, error: 'update 未提供任何要修改的字段(title/description/priority/status/url/expectedOutcome)' };
               // 挂起前预计算 diff(旧值 vs 合成新值),确认卡与实际执行共用一份数据
               const diff = diffText(before, { ...before, ...patch });
               if (diff !== undefined) {
