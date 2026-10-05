@@ -366,7 +366,7 @@ export default function ProjectsHome() {
                 value={versionForm.environmentId}
                 onChange={(e) => setVersionForm((f) => ({ ...f, environmentId: e.target.value }))}
               >
-                <option value="">跟随项目默认环境</option>
+                <option value="">不在版本层指定</option>
                 {(envsQ.data ?? []).map((env) => (
                   <option key={env.id} value={env.id}>
                     {env.name}{env.isDefault ? '（默认）' : ''}
