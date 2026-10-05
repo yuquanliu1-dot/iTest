@@ -22,10 +22,11 @@ import StepEditDrawer from '../components/StepEditDrawer';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import SortableStepRow from '../components/step-form/SortableStepRow';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/shadcn/tooltip';
 import TagChip from '../components/ui/Tag';
 import LabelsManagerDialog from '../components/labels/LabelsManagerDialog';
 import { stepKindLabel } from '../lib/format';
-import { stepSummary } from '../lib/stepSummary';
+import { stepSummary, fullStepDescription } from '../lib/stepSummary';
 
 type Tab = 'description' | 'reports' | 'recording';
 
@@ -811,12 +812,26 @@ export default function CaseDetail() {
                             <span className="text-[11px] font-mono shrink-0 w-5" style={{ color: 'var(--muted-foreground)' }}>
                               {idx + 1}
                             </span>
-                            <span className="text-[12px] flex-1 truncate" style={{ color: 'var(--foreground)' }} title={stepSummary(s.action)}>
-                              <span className="text-[10px] font-semibold" style={{ color: 'var(--primary)' }}>
-                                {stepKindLabel((s.action as { kind?: string }).kind ?? '')}
-                              </span>{' '}
-                              {stepSummary(s.action)}
-                            </span>
+                            <TooltipProvider delayDuration={200}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-[12px] flex-1 truncate text-left cursor-default" style={{ color: 'var(--foreground)' }}>
+                                    <span className="text-[10px] font-semibold" style={{ color: 'var(--primary)' }}>
+                                      {stepKindLabel((s.action as { kind?: string }).kind ?? '')}
+                                    </span>{' '}
+                                    {stepSummary(s.action)}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent
+                                  side="bottom"
+                                  align="start"
+                                  sideOffset={6}
+                                  className="max-w-[420px] whitespace-pre-wrap text-left font-mono leading-relaxed"
+                                >
+                                  {fullStepDescription(s.action)}
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
                             {(s.action as { kind?: string; varName?: string }).kind === 'extract' && (
                               <span
                                 className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-mono"

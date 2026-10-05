@@ -22,15 +22,12 @@ function toDSL(step) {
     // 上传步骤 fileId 由 web 端绑定；此处只占位
     return { kind: 'upload', locator: step.target, fileId: '__pending__' };
   }
-  if (step.type === 'solveCaptcha') {
-    // 验证码步骤：回放时 AI 识别图片填入输入框,录制值不落 DSL
-    return { kind: 'solveCaptcha', imageLocator: step.imageTarget ?? [], inputLocator: step.target };
-  }
   const dsl = { kind: step.type, locator: step.target };
   if (dsl.kind === 'fill') {
     dsl.value = step.value ?? '';
     if (step.sensitive) dsl.sensitive = true;
   }
+  if (dsl.kind === 'aiTask') dsl.instruction = step.value ?? '';
   return dsl;
 }
 

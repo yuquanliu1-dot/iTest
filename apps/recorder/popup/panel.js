@@ -50,7 +50,7 @@ function suggestVarName(r) {
 
 if (mode === 'ai') {
   showForm({
-    hint: '描述要执行的操作，可用 #cssSelector 引用页面元素（如识别图片 #captchaImg），保存用例时会编译成具体步骤：',
+    hint: '描述要执行的操作，可用 #cssSelector 引用页面元素（如识别图片 #captchaImg），回放时由 AI 智能体实时执行：',
     label1: '指令',
     value1: '',
     onSubmit: () => {
@@ -59,7 +59,7 @@ if (mode === 'ai') {
         statusEl.textContent = '请输入指令';
         return;
       }
-      emit({ kind: 'aiStep', instruction, compiled: null });
+      emit({ kind: 'aiTask', instruction });
     },
   });
 } else {
