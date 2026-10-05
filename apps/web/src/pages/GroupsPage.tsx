@@ -370,7 +370,7 @@ export default function GroupsPage() {
 				header: '标题',
 				sortable: false,
 				cell: (c) => (
-					<span className="font-semibold truncate">{c.title}</span>
+					<span className="font-semibold truncate" title={c.title}>{c.title}</span>
 				),
 				cellClassName: 'min-w-0',
 			},

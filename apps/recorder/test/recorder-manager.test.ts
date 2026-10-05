@@ -205,6 +205,54 @@ describe('RecorderManager — noise filtering', () => {
     });
     expect(captured.filter((s) => s.type === 'hover')).toHaveLength(0);
   });
+
+  it('dedups sibling elements with same locator signature within 1.5s (React re-render case)', () => {
+    // 模拟 React 重渲染后 e.target 是新 Element 引用但 selector 不变。
+    // 两个相邻 div 都带 data-testid="badge" + 文本"状态标签"：testId/text/css 候选全相同，
+    // 仅 xpath 索引不同；但用户视角下"指向同一段文本"应被去重。
+    // 1.5s 内第二次 hover 应被签名级去重挡掉。
+    const a = makeEl('<div data-testid="badge">状态标签</div>');
+    const b = makeEl('<div data-testid="badge">状态标签</div>');
+    dom.window.document.body.appendChild(a);
+    dom.window.document.body.appendChild(b);
+    vi.useFakeTimers();
+    const realNow = Date.now;
+    let now = 1000;
+    Date.now = () => now;
+    withRecorder(() => {
+      fire(a, 'mouseover');
+      vi.advanceTimersByTime(500);
+      now = 1100;
+      fire(b, 'mouseover');
+      vi.advanceTimersByTime(500);
+    });
+    Date.now = realNow;
+    expect(captured.filter((s) => s.type === 'hover')).toHaveLength(1);
+  });
+
+  it('allows re-emit of same signature after the 1.5s dedup window expires', () => {
+    const a = makeEl('<div data-testid="badge">状态标签</div>');
+    const b = makeEl('<div data-testid="badge">状态标签</div>');
+    dom.window.document.body.appendChild(a);
+    dom.window.document.body.appendChild(b);
+    vi.useFakeTimers();
+    const realNow = Date.now;
+    let now = 1000;
+    Date.now = () => now;
+    withRecorder(() => {
+      fire(a, 'mouseover');
+      vi.advanceTimersByTime(500);
+      now = 1100;
+      fire(a, 'mouseleave');
+      // 跨越 1.5s 窗口后再 hover 同签名元素（fake timer 推进期间 Date.now 也随之更新）。
+      vi.advanceTimersByTime(2000);
+      now = 3700;
+      fire(b, 'mouseover');
+      vi.advanceTimersByTime(500);
+    });
+    Date.now = realNow;
+    expect(captured.filter((s) => s.type === 'hover')).toHaveLength(2);
+  });
 });
 
 describe('RecorderManager — output shape matches StepAction DSL', () => {
