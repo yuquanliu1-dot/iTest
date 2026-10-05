@@ -264,6 +264,8 @@ export const api = {
         status: CaseStatus;
         tagIds: string[];
         defaultEnvId: string | null;
+        /** Track 1：用例级预期描述。空字符串由调用方转 null。 */
+        expectedOutcome: string | null;
       }>,
     ) => request<TestCase>(`/cases/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/cases/${id}`, { method: 'DELETE' }),
@@ -739,6 +741,8 @@ export interface TestCase {
   windowHeight?: number | null;
   incognito?: boolean;
   defaultEnvId?: string | null;
+  /** Track 1：用例级预期描述（自然语言）。回放结束后由 vision LLM 拿最终截图判定。 */
+  expectedOutcome?: string | null;
 }
 export interface Scenario {
   id: string;

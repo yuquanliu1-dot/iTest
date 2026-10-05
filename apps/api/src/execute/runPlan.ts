@@ -163,7 +163,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
             // 简化：登录成功后从新启的 browser 中导出 storageState
             const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
             try {
-              const ctx = await browser.newContext();
+              const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
               return { passed: true, storageState: await ctx.storageState() };
             } finally {
               await browser.close().catch(() => undefined);

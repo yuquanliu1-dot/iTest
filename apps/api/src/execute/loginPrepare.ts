@@ -165,7 +165,7 @@ export async function loginPrepare(
 
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
   try {
-    const ctx = await browser.newContext();
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
     const page = await openDetectionPage(ctx, url);
     if (!page) return { status: 'failed', reason: 'detection page navigation failed' };
 

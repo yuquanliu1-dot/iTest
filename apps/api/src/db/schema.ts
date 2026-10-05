@@ -47,6 +47,9 @@ export const testCases = pgTable('test_cases', {
   incognito: boolean('incognito').notNull().default(false),
   defaultEnvId: uuid('default_env_id').references(() => testEnvironments.id, { onDelete: 'set null' }),
   scenarioId: uuid('scenario_id').references(() => scenarios.id, { onDelete: 'set null' }),
+  /** 用例级预期描述（自然语言）。回放阶段结束时由 vision LLM 拿最终截图 + 此字段判终态；
+   * 为空/null 时跳过用例级断言（仅按 step.action 是否全部成功判定 pass/fail）。 */
+  expectedOutcome: text('expected_outcome'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({

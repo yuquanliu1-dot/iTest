@@ -22,6 +22,8 @@ const CaseBodyBase = z.object({
   windowHeight: z.number().int().min(200).max(10000).optional(),
   incognito: z.boolean().default(false),
   tagIds: z.array(z.string().uuid()).optional(),
+  /** Track 1：用例级预期描述（自然语言）。回放结束后由 vision LLM 拿最终截图判定。 */
+  expectedOutcome: z.string().max(4000).nullable().optional(),
 });
 
 const CaseStatusEnum = z.enum(['draft', 'review', 'ready', 'deprecated']);

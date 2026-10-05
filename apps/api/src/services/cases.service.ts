@@ -103,6 +103,7 @@ export interface CreateCaseInput {
   requirementId?: string | null;
   scenarioId?: string | null;
   tagIds?: string[];
+  expectedOutcome?: string | null;
 }
 
 export async function createCase(input: CreateCaseInput) {
@@ -218,6 +219,7 @@ export interface UpdateCasePatch {
   windowHeight?: number | null;
   incognito?: boolean;
   tagIds?: string[];
+  expectedOutcome?: string | null;
 }
 
 export async function updateCase(caseId: string, patch: UpdateCasePatch) {
