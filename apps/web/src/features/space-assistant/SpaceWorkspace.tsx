@@ -39,6 +39,14 @@ export default function SpaceWorkspace({ threadId, initialMessage }: Props) {
   // 线程切换(mount)时清掉上一线程的确认卡与舞台状态
   useEffect(() => {
     useSpaceEventsStore.getState().reset();
+    // 把 threadId 暴露给 StagePanel:StagePanel 用 useQuery 拉 stage list 与开 SSE,
+    // 不便直接把 threadId 沿 props 传进 StagePanel(panel 已固化在右侧),改走 window pin。
+    const w = window as unknown as { __spaceThreadId?: string };
+    w.__spaceThreadId = threadId;
+    return () => {
+      // 卸载时清掉,避免下一线程误读
+      if (w.__spaceThreadId === threadId) delete w.__spaceThreadId;
+    };
   }, [threadId]);
   const runtime = usePiRuntime({ client, initialThreadId: threadId });
   return (

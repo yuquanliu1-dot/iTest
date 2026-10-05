@@ -1,166 +1,306 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { useAui } from '@assistant-ui/react';
-import { api } from '../../api/client';
-import Icon from '../../components/Icon';
+import { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { api, type StageDoc, type StageSaveBody } from '../../api/client';
 import Button from '../../components/ui/Button';
-import { useSpaceEventsStore, type StageObject } from './spaceEventsStore';
+import Icon from '../../components/Icon';
+import PriorityBadge from '../../components/ui/PriorityBadge';
+import { useUIStore } from '../../stores/ui';
+import { stepKindLabel } from '../../lib/format';
+import { stepSummary } from '../../lib/stepSummary';
+import SaveDialog from './SaveDialog';
+import {
+  useSpaceEventsStore,
+  type StageKind,
+  type StagedItem,
+} from './spaceEventsStore';
 
-const KIND_LABEL: Record<StageObject['kind'], string> = {
-  case: '用例', scenario: '场景', environment: '环境', plan: '计划', group: '分组',
+type Tab = Exclude<StageKind, 'group'>;
+
+const TABS: Array<{ key: Tab; label: string }> = [
+  { key: 'case', label: '用例' },
+  { key: 'scenario', label: '场景' },
+  { key: 'environment', label: '环境' },
+  { key: 'plan', label: '计划' },
+];
+
+const KIND_LABEL: Record<Tab, string> = {
+  case: '用例',
+  scenario: '场景',
+  environment: '环境',
+  plan: '计划',
 };
-
-const ACTION_LABEL: Record<string, string> = {
-  create: '新建', update: '更新', delete: '删除', upsert: '保存',
-  move_group: '移动分组', create_group: '新建分组',
-  add_cases: '添加用例', remove_cases: '移除用例', set_secret: '设置密钥',
-};
-const actionLabel = (a: string) => ACTION_LABEL[a] ?? a;
-
-function openPathFor(o: StageObject, projectId: string, versionId: string): string {
-  const base = `/p/${projectId}`;
-  if (o.kind === 'case') return `${base}/v/${versionId}/cases/${o.id}`;
-  if (o.kind === 'plan') return `${base}/v/${versionId}/plans/${o.id}`;
-  if (o.kind === 'environment') return `${base}/environments`;
-  return `${base}/v/${versionId}/groups`;
-}
 
 interface Props {
   projectId: string;
   versionId: string;
 }
 
-/**
- * 舞台:展示 AI 最近操作的对象(stage 事件流)。批量操作 = 历史列表 + 点选详情;
- * announce 事件驱动进度条。卡片底部跳传统页 + 「就此提问」显式注入 composer。
- */
-export default function StagePanel({ projectId, versionId }: Props) {
-  const stageHistory = useSpaceEventsStore((s) => s.stageHistory);
-  const announce = useSpaceEventsStore((s) => s.announce);
-  const navigate = useNavigate();
-  const aui = useAui();
-  const latest = stageHistory[stageHistory.length - 1] ?? null;
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  // 新 stage 到来自动切到最新对象;用户点选历史后保持所选
+/** threadId 由 SpaceWorkspace mount 时写入 window.__spaceThreadId（panel 固化在右侧不便改 props 链）。 */
+function readPinnedThreadId(): string {
+  const w = window as unknown as { __spaceThreadId?: string };
+  return w.__spaceThreadId ?? '';
+}
+
+/** 拉 stage list + 订阅 SSE stage 事件。SSE 即时更新 store，list 只在 mount 与 refetch 主动拉时跑。 */
+function useStageDoc(threadId: string): { refetch: () => void } {
+  const qc = useQueryClient();
+  const ingest = useSpaceEventsStore((s) => s.ingest);
+  const q = useQuery({
+    queryKey: ['stage-doc', threadId],
+    queryFn: async () => {
+      const doc = await api.assistant.stage.list(threadId);
+      useSpaceEventsStore.getState().setStaged(threadId, doc);
+      return doc;
+    },
+    enabled: !!threadId,
+    staleTime: 5_000,
+  });
   useEffect(() => {
-    if (latest) setSelectedKey(latest.key);
-  }, [latest]);
-  const selected = stageHistory.find((o) => o.key === selectedKey) ?? latest;
+    if (!threadId) return;
+    const es = new EventSource(`/api/assistant/threads/${threadId}/events?snapshot=false`);
+    es.onmessage = (e) => {
+      try {
+        const payload = JSON.parse(e.data);
+        if (payload?.type === 'stage') ingest(payload);
+      } catch {
+        /* ignore */
+      }
+    };
+    return () => es.close();
+  }, [threadId, ingest, qc]);
+  return { refetch: q.refetch };
+}
 
-  // queryKey 混入 stage key:同对象重复 update 时每次事件都强制 refetch,避免展示陈旧缓存
-  const caseQ = useQuery({
-    queryKey: ['case', selected?.id, selected?.key],
-    queryFn: () => api.cases.get(selected!.id),
-    enabled: selected?.kind === 'case',
-    retry: false,
-  });
-  const planQ = useQuery({
-    queryKey: ['plan', selected?.id, selected?.key],
-    queryFn: () => api.plans.get(selected!.id),
-    enabled: selected?.kind === 'plan',
-    retry: false,
-  });
-  const envsQ = useQuery({
-    queryKey: ['environments', projectId],
-    queryFn: () => api.environments.list(projectId),
-    enabled: selected?.kind === 'environment',
-  });
-  const scenariosQ = useQuery({
-    queryKey: ['scenarios', projectId],
-    queryFn: () => api.scenarios.listForProject(projectId),
-    enabled: selected?.kind === 'scenario',
-  });
+/** 把 stagedByThread 的 Map<localId, StagedItem> 拆成四个 Tab 的列表。 */
+function partition(staged: Map<string, StagedItem> | undefined): Record<Tab, StagedItem[]> {
+  const out: Record<Tab, StagedItem[]> = { case: [], scenario: [], environment: [], plan: [] };
+  if (!staged) return out;
+  for (const item of staged.values()) out[item.kind as Tab].push(item);
+  return out;
+}
 
-  // 选中对象的展示标题(取不到时不渲染「就此提问」)。
-  // body 约定:查询进行中留 null(兜底渲染 loader),其余状态必须显式给出内容或「已不存在」文案。
-  let title: string | null = null;
-  let body: ReactNode = null;
-  if (selected?.kind === 'case') {
-    if (caseQ.isPending) {
-      body = null;
-    } else {
-      const c = caseQ.data;
-      if (c) {
-        title = c.title;
-        body = (
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] px-1.5 py-[1px] rounded" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>{c.priority}</span>
-              <span className="text-[10px] px-1.5 py-[1px] rounded" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>{c.status}</span>
+/** cases 行的步骤渲染（折叠）。 */
+function CaseSteps({ steps }: { steps: StageDoc['cases'][number]['steps'] }) {
+  if (!steps.length) return null;
+  return (
+    <details className="mt-1">
+      <summary
+        className="cursor-pointer select-none"
+        style={{ color: 'var(--muted-foreground)', fontSize: 11 }}
+      >
+        步骤（{steps.length}）
+      </summary>
+      <ol className="mt-1 ml-4 list-decimal">
+        {steps.map((s, i) => (
+          <li key={i} className="mb-1">
+            <div>{s.action}</div>
+            {s.assertion && (
+              <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                断言：{s.assertion}
+              </div>
+            )}
+            <div className="text-[11px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
+              编译：
+              {s.compiled == null ? (
+                <span style={{ color: '#92400e' }}>未编译，保存时由后端补编译</span>
+              ) : (
+                <ol className="ml-4 list-decimal">
+                  {s.compiled.map((sub, j) => (
+                    <li key={j}>
+                      <span style={{ color: 'var(--primary)' }}>{stepKindLabel((sub as { kind?: string }).kind ?? '')}</span>{' '}
+                      {stepSummary(sub)}
+                    </li>
+                  ))}
+                </ol>
+              )}
             </div>
-            {c.url && <div className="text-[12px] break-all" style={{ color: 'var(--muted-foreground)' }}>{c.url}</div>}
-            {c.description && <p className="text-[12px] whitespace-pre-wrap" style={{ color: 'var(--muted-foreground)' }}>{c.description}</p>}
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+/** 暂存面板：Tabs + 每行复选框 + 「保存选中」按钮。SSE 即时更新 + mount 时拉一次 list 兜底。 */
+export default function StagePanel({ projectId, versionId }: Props) {
+  void versionId; // 暂未用；保留为未来「在用例库打开」等跳转入参
+  const [activeThreadId, setActiveThreadId] = useState<string>(() => readPinnedThreadId());
+  // SpaceWorkspace mount/切线程时更新 window.__spaceThreadId → 这里同步进 state
+  useEffect(() => {
+    const id = readPinnedThreadId();
+    if (id !== activeThreadId) setActiveThreadId(id);
+  }, [activeThreadId]);
+  const stagedByThread = useSpaceEventsStore((s) =>
+    activeThreadId ? s.stagedByThread.get(activeThreadId) : undefined,
+  );
+  const selection = useSpaceEventsStore((s) =>
+    activeThreadId ? s.stagedSelection.get(activeThreadId) : undefined,
+  );
+  const toggle = useSpaceEventsStore((s) => s.toggleStaged);
+  const selectAll = useSpaceEventsStore((s) => s.selectAllStaged);
+  const removeStaged = useSpaceEventsStore((s) => s.removeStagedLocal);
+
+  const partitioned = useMemo(() => partition(stagedByThread), [stagedByThread]);
+  const total = useMemo(
+    () =>
+      partitioned.case.length +
+      partitioned.scenario.length +
+      partitioned.environment.length +
+      partitioned.plan.length,
+    [partitioned],
+  );
+
+  const { refetch } = useStageDoc(activeThreadId);
+
+  const [tab, setTab] = useState<Tab>('case');
+  const [saveOpen, setSaveOpen] = useState(false);
+  const toast = useUIStore((s) => s.showToast);
+
+  const tabItems = partitioned[tab];
+  const tabAllSelected = tabItems.length > 0 && tabItems.every((x) => selection?.has(`${tab}:${x.localId}`));
+
+  // 用例/计划需要选 group；environment/scenario 不需要
+  const groupsQ = useQuery({
+    queryKey: ['project', projectId, 'groups'],
+    queryFn: () => api.projects.groups(projectId),
+    enabled: !!projectId,
+  });
+
+  const saveMut = useMutation({
+    mutationFn: (body: StageSaveBody) => api.assistant.stage.save(activeThreadId, body),
+    onSuccess: (res) => {
+      const totalSaved =
+        (res.savedCases ?? 0) +
+        (res.savedScenarios ?? 0) +
+        (res.savedEnvironments ?? 0) +
+        (res.savedPlans ?? 0);
+      toast(`已保存 ${totalSaved} 项`, 'success');
+      // 同步清空本地视图（SSE remove 事件会再刷一次兜底）
+      removeStaged(activeThreadId, 'case', partitioned.case.map((x) => x.localId));
+      removeStaged(activeThreadId, 'scenario', partitioned.scenario.map((x) => x.localId));
+      removeStaged(activeThreadId, 'environment', partitioned.environment.map((x) => x.localId));
+      removeStaged(activeThreadId, 'plan', partitioned.plan.map((x) => x.localId));
+      setSaveOpen(false);
+      void refetch();
+    },
+    onError: (e: Error) => toast(e.message || '保存失败', 'error'),
+  });
+
+  const renderCaseRow = (it: StagedItem) => {
+    const p = it.payload as StageDoc['cases'][number];
+    const key = `case:${it.localId}`;
+    const checked = !!selection?.has(key);
+    return (
+      <label key={it.localId} className="flex items-start gap-2 text-[12px] cursor-pointer">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => toggle(activeThreadId, 'case', it.localId)}
+        />
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold">{p.title}</span>
+            {p.priority && <PriorityBadge priority={p.priority} />}
           </div>
-        );
-      } else {
-        // isError 或 404:对象已不存在
-        body = <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>用例已不存在(可能已被删除)。</p>;
-      }
-    }
-  } else if (selected?.kind === 'plan') {
-    if (planQ.isPending) {
-      body = null;
-    } else {
-      const p = planQ.data;
-      if (p) {
-        title = p.name;
-        body = (
-          <div className="flex flex-col gap-1.5">
-            <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>编排 {p.cases.length} 条用例</div>
-            <ol className="text-[12px] pl-4 list-decimal" style={{ color: 'var(--muted-foreground)' }}>
-              {p.cases.slice(0, 10).map((c) => <li key={c.id} className="truncate">{c.title}</li>)}
-            </ol>
-            {p.cases.length > 10 && <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>…等 {p.cases.length} 条</div>}
+          {p.description && (
+            <div style={{ color: 'var(--muted-foreground)' }}>{p.description}</div>
+          )}
+          {p.url && (
+            <div className="text-[11px] break-all" style={{ color: 'var(--muted-foreground)' }}>{p.url}</div>
+          )}
+          <CaseSteps steps={p.steps} />
+        </div>
+      </label>
+    );
+  };
+
+  const renderScenarioRow = (it: StagedItem) => {
+    const p = it.payload as StageDoc['scenarios'][number];
+    const key = `scenario:${it.localId}`;
+    const checked = !!selection?.has(key);
+    return (
+      <label key={it.localId} className="flex items-start gap-2 text-[12px] cursor-pointer">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => toggle(activeThreadId, 'scenario', it.localId)}
+        />
+        <div className="flex-1">
+          <div className="font-semibold">{p.title}</div>
+          {p.description && <div style={{ color: 'var(--muted-foreground)' }}>{p.description}</div>}
+        </div>
+      </label>
+    );
+  };
+
+  const renderEnvRow = (it: StagedItem) => {
+    const p = it.payload as StageDoc['environments'][number];
+    const key = `environment:${it.localId}`;
+    const checked = !!selection?.has(key);
+    return (
+      <label key={it.localId} className="flex items-start gap-2 text-[12px] cursor-pointer">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => toggle(activeThreadId, 'environment', it.localId)}
+        />
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold">{p.name}</span>
+            {p.baseUrl && (
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{p.baseUrl}</span>
+            )}
           </div>
-        );
-      } else {
-        // isError 或 404:对象已不存在
-        body = <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>计划已不存在。</p>;
-      }
-    }
-  } else if (selected?.kind === 'environment') {
-    const env = (envsQ.data ?? []).find((e) => e.id === selected.id);
-    if (envsQ.isPending) {
-      body = null;
-    } else if (env) {
-      title = env.name;
-      body = (
-        <div className="flex flex-col gap-1.5">
-          {env.isDefault && <span className="text-[10px] px-1.5 py-[1px] rounded self-start" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>默认环境</span>}
-          {env.baseUrl && <div className="text-[12px] break-all" style={{ color: 'var(--muted-foreground)' }}>{env.baseUrl}</div>}
-          <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-            凭据对象 {env.objects.length} 个
+          {p.objects.length > 0 && (
+            <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+              凭据对象 {p.objects.length} 个
+            </div>
+          )}
+        </div>
+      </label>
+    );
+  };
+
+  const renderPlanRow = (it: StagedItem) => {
+    const p = it.payload as StageDoc['plans'][number];
+    const key = `plan:${it.localId}`;
+    const checked = !!selection?.has(key);
+    return (
+      <label key={it.localId} className="flex items-start gap-2 text-[12px] cursor-pointer">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => toggle(activeThreadId, 'plan', it.localId)}
+        />
+        <div className="flex-1">
+          <div className="font-semibold">{p.name}</div>
+          <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+            关联 {p.caseLocalIds.length} 个用例
           </div>
         </div>
-      );
-    } else {
-      // isError 或列表中找不到:对象已不存在
-      body = <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>环境已不存在。</p>;
-    }
-  } else if (selected?.kind === 'scenario') {
-    const sc = (scenariosQ.data ?? []).find((x) => x.id === selected.id);
-    if (scenariosQ.isPending) {
-      body = null;
-    } else if (sc) {
-      title = sc.title;
-      // 场景无详情接口,命中时给短文案,避免落进 loader 兜底
-      body = <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>场景已保存,可在用例库查看。</p>;
-    } else {
-      // isError 或列表中找不到:对象已不存在
-      body = <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>场景已不存在。</p>;
-    }
-  } else if (selected) {
-    // group:无单查接口,展示 diff 或引导文案
-    body = selected.diff
-      ? <pre className="text-[11px] whitespace-pre-wrap" style={{ color: 'var(--muted-foreground)' }}>{selected.diff}</pre>
-      : <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>分组已更新,可在用例库查看。</p>;
-  }
-
-  const askAbout = () => {
-    if (!selected || !title) return;
-    aui.thread.composer().setText(`关于${KIND_LABEL[selected.kind]}「${title}」：`);
+      </label>
+    );
   };
+
+  const renderTab = () => {
+    if (tabItems.length === 0) {
+      return (
+        <div className="text-[12px] text-center py-6" style={{ color: 'var(--muted-foreground)' }}>
+          暂存表为空，AI 创建对象后会出现在这里
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-col gap-2">
+        {tab === 'case' && tabItems.map(renderCaseRow)}
+        {tab === 'scenario' && tabItems.map(renderScenarioRow)}
+        {tab === 'environment' && tabItems.map(renderEnvRow)}
+        {tab === 'plan' && tabItems.map(renderPlanRow)}
+      </div>
+    );
+  };
+
+  const selectedTotal = selection?.size ?? 0;
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -168,81 +308,91 @@ export default function StagePanel({ projectId, versionId }: Props) {
         className="px-4 py-2.5 text-[12px] font-medium shrink-0"
         style={{ borderBottom: '1px solid var(--border)', color: 'var(--muted-foreground)' }}
       >
-        预览
+        暂存对象（{total}）
       </div>
-      {announce && (
-        <div className="px-4 py-2.5 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-          <div className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-            <Icon name="loader" size={12} className="animate-spin shrink-0" />
-            <span className="truncate">{announce.summary}</span>
-            <span className="shrink-0">{Math.min(announce.done, announce.total)}/{announce.total}</span>
+      <div className="flex items-center gap-1 px-3 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setTab(t.key)}
+            className="rounded px-2 py-1 text-[12px]"
+            style={{
+              background: tab === t.key ? 'var(--primary-soft)' : 'transparent',
+              color: tab === t.key ? 'var(--primary)' : 'var(--muted-foreground)',
+              fontWeight: tab === t.key ? 600 : 400,
+            }}
+          >
+            {t.label} ({partitioned[t.key].length})
+          </button>
+        ))}
+        {tabItems.length > 0 && (
+          <button
+            type="button"
+            className="ml-auto text-[11px]"
+            style={{ color: 'var(--muted-foreground)' }}
+            onClick={() => selectAll(activeThreadId, tab, !tabAllSelected)}
+          >
+            {tabAllSelected ? '取消全选' : '全选'}
+          </button>
+        )}
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto p-4">
+        {total === 0 ? (
+          <div className="flex-1 flex items-center justify-center min-h-[120px]">
+            <p className="text-[12px] text-center" style={{ color: 'var(--muted-foreground)' }}>
+              AI 暂存的对象会展示在这里
+            </p>
           </div>
-          <div className="mt-1.5 h-1 rounded-full overflow-hidden" style={{ background: 'var(--muted)' }}>
-            <div
-              className="h-full rounded-full transition-all"
-              style={{
-                width: `${announce.total ? Math.min(100, (announce.done / announce.total) * 100) : 0}%`,
-                background: 'var(--primary)',
-              }}
-            />
-          </div>
-        </div>
-      )}
-      {stageHistory.length > 1 && (
-        <div className="shrink-0 max-h-32 overflow-y-auto" style={{ borderBottom: '1px solid var(--border)' }}>
-          {[...stageHistory].reverse().map((o) => (
-            <button
-              key={o.key}
-              type="button"
-              onClick={() => setSelectedKey(o.key)}
-              className="block w-full text-left px-4 py-1.5 text-[12px] truncate"
-              style={{
-                background: o.key === selected?.key ? 'var(--muted)' : 'transparent',
-                color: o.key === selected?.key ? 'var(--foreground)' : 'var(--muted-foreground)',
-              }}
-            >
-              {KIND_LABEL[o.kind]} · {actionLabel(o.action)}
-            </button>
-          ))}
-        </div>
-      )}
-      {!selected ? (
-        <div className="flex-1 flex items-center justify-center">
-          <p className="text-[12px] px-6 text-center" style={{ color: 'var(--muted-foreground)' }}>
-            AI 创建或修改的用例、环境、计划会展示在这里
-          </p>
-        </div>
-      ) : (
-        <div className="flex-1 min-h-0 overflow-y-auto p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <span
-              className="text-[10px] px-1.5 py-[1px] rounded shrink-0"
-              style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}
-            >
-              {KIND_LABEL[selected.kind]}
-            </span>
-            <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>{actionLabel(selected.action)}</span>
-          </div>
-          {title && <h3 className="text-[14px] font-semibold mb-2" style={{ color: 'var(--foreground)' }}>{title}</h3>}
-          {body ?? <Icon name="loader" size={14} className="animate-spin" />}
-        </div>
-      )}
-      {selected && (
+        ) : (
+          renderTab()
+        )}
+      </div>
+      {total > 0 && (
         <div
           className="flex items-center gap-2 px-4 py-2.5 shrink-0"
           style={{ borderTop: '1px solid var(--border)' }}
         >
-          <Button size="sm" variant="ghost" onClick={() => navigate(openPathFor(selected, projectId, versionId))}>
-            <Icon name="externalLink" size={12} />
-            {selected.kind === 'environment' ? '环境管理' : selected.kind === 'plan' ? '打开计划' : '在用例库打开'} →
+          <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+            已选 {selectedTotal}
+          </span>
+          <div className="flex-1" />
+          <Button
+            size="sm"
+            disabled={selectedTotal === 0 || saveMut.isPending}
+            onClick={() => setSaveOpen(true)}
+          >
+            <Icon name="save" size={12} />
+            {saveMut.isPending ? '保存中…' : '保存选中'}
           </Button>
-          {title && (
-            <Button size="sm" variant="ghost" onClick={askAbout}>
-              就此提问
-            </Button>
-          )}
         </div>
       )}
+      <SaveDialog
+        open={saveOpen}
+        onOpenChange={setSaveOpen}
+        groups={groupsQ.data ?? []}
+        saving={saveMut.isPending}
+        partitioned={partitioned}
+        selection={selection ?? new Set<string>()}
+        onSave={(groupId) => {
+          const body: StageSaveBody = {
+            cases: partitioned.case
+              .filter((x) => selection?.has(`case:${x.localId}`))
+              .map((x) => ({ localId: x.localId, groupId })),
+            scenarios: partitioned.scenario
+              .filter((x) => selection?.has(`scenario:${x.localId}`))
+              .map((x) => ({ localId: x.localId })),
+            environments: partitioned.environment
+              .filter((x) => selection?.has(`environment:${x.localId}`))
+              .map((x) => ({ localId: x.localId })),
+            plans: partitioned.plan
+              .filter((x) => selection?.has(`plan:${x.localId}`))
+              .map((x) => ({ localId: x.localId, groupId })),
+          };
+          saveMut.mutate(body);
+        }}
+        kindLabel={KIND_LABEL[tab]}
+      />
     </div>
   );
 }

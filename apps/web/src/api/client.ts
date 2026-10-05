@@ -511,6 +511,22 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ confirmId, approved }),
       }),
+    /** 版本空间助手「暂存 → 落库」 */
+    stage: {
+      list: (threadId: string) =>
+        request<StageDoc>(`/assistant/threads/${threadId}/stage/list`, { method: 'POST' }),
+      save: (threadId: string, body: StageSaveBody) =>
+        request<{
+          savedCases: number;
+          savedScenarios: number;
+          savedEnvironments: number;
+          savedPlans: number;
+          caseIdMap: Record<string, string>;
+        }>(`/assistant/threads/${threadId}/stage/save`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
+    },
   },
   registerAdmin: (body: { username: string; displayName: string; email?: string; organizationId: string }) =>
     request<{ temporaryPassword: string; user: SafeUser }>('/auth/register-admin', {
@@ -759,6 +775,58 @@ export interface AssistantThread {
   createdAt?: string;
   updatedAt?: string;
 }
+// 版本空间助手暂存表（thread-scoped）单对象形态
+export interface StagedStageCase {
+  localId: string;
+  title: string;
+  description: string | null;
+  priority: string | null;
+  url: string | null;
+  steps: Array<{ action: string; assertion?: string | null; compiled?: unknown[] | null }>;
+  defaultEnvId: string | null;
+  expectedOutcome: string | null;
+  stagedAt: string;
+}
+export interface StagedStageScenario {
+  localId: string;
+  requirementId: string;
+  title: string;
+  description: string | null;
+  caseLocalIds: string[];
+  stagedAt: string;
+}
+export interface StagedEnvironmentObject {
+  objectType: 'db' | 'syslog' | 'login';
+  label?: string;
+  payload: Record<string, unknown>;
+  isDefault?: boolean;
+}
+export interface StagedEnvironment {
+  localId: string;
+  name: string;
+  baseUrl: string | null;
+  objects: StagedEnvironmentObject[];
+  stagedAt: string;
+}
+export interface StagedPlan {
+  localId: string;
+  name: string;
+  environmentId: string | null;
+  caseLocalIds: string[];
+  stagedAt: string;
+}
+export interface StageDoc {
+  cases: StagedStageCase[];
+  scenarios: StagedStageScenario[];
+  environments: StagedEnvironment[];
+  plans: StagedPlan[];
+}
+export interface StageSaveBody {
+  cases: Array<{ localId: string; groupId: string }>;
+  scenarios: Array<{ localId: string }>;
+  environments: Array<{ localId: string }>;
+  plans: Array<{ localId: string; groupId: string }>;
+}
 export interface Tag {
   id: string;
   organizationId: string;
@@ -965,8 +1033,12 @@ export interface StagedStep {
   /** 三态：undefined = 未尝试（保存时由后端兜底编译）；null = AI 已放弃；array = 已编译 */
   compiled?: CompiledAction[] | null;
 }
-export interface StagedCase { id: string; title: string; description: string | null; priority: Priority; steps: StagedStep[]; }
-export interface StagedScenario { id: string; title: string; description: string | null; cases: StagedCase[]; }
+export interface StagedAiCase { id: string; title: string; description: string | null; priority: Priority; steps: StagedStep[]; }
+export interface StagedAiScenario { id: string; title: string; description: string | null; cases: StagedAiCase[]; }
+export interface StagedStageCase { localId: string; title: string; description: string | null; priority: string | null; url: string | null; steps: Array<{ action: string; assertion?: string | null; compiled?: unknown[] | null }>; defaultEnvId: string | null; expectedOutcome: string | null; stagedAt: string; }
+// 兼容旧名（ai-workspace/WorkspacePanel 仍引用 StagedCase/StagedScenario；语义与本页无关）
+export type StagedCase = StagedAiCase;
+export type StagedScenario = StagedAiScenario;
 export interface RepoContext { commit: string; fetchedAt: string; mode: 'repo' | 'auto'; }
 export interface WorkspaceDoc {
   plan: { scenarios: number; cases: number } | null;
