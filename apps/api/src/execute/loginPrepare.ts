@@ -1,4 +1,4 @@
-import { chromium, type BrowserContext, type Page } from 'playwright-core';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { testCases } from '../db/schema.js';
@@ -145,12 +145,22 @@ async function autoFillLogin(
 /**
  * 登录准备入口：在调用方提供的 browser context 中探测；如已登录返回 skipped；
  * 否则优先执行登录用例（loginCaseRunner），未配登录用例且提供环境凭据（autoLogin）时自动填表登录。
+ *
+ * loginCaseRunner 拿到 caller 持有的 `browser` + `ctx`：登录用例直接在同一 ctx 跑步骤，
+ * 跑完后从同一 ctx 导出真实 storageState。当 callback 返回 `takeOwnership: true` 时，
+ * 本函数不再关闭 browser，由 caller（runPlan 业务循环）负责关闭——这样后续业务用例
+ * 可以复用同一 chromium 进程，避免每次 newContext 重复消耗。
  */
 export async function loginPrepare(
   cfg: LoginPrepareConfig,
   opts: {
-    /** 启动新 chromium；返回 browser + 是否已登录 + storageState。 */
-    loginCaseRunner: (caseId: string, ctx: BrowserContext) => Promise<{ passed: boolean; storageState: unknown }>;
+    /** 启动新 chromium；返回 browser + 是否已登录 + storageState。
+     *  takeOwnership=true 时本函数不关闭 browser，由 caller 负责。 */
+    loginCaseRunner: (
+      caseId: string,
+      ctx: BrowserContext,
+      browser: Browser,
+    ) => Promise<{ passed: boolean; storageState?: unknown; takeOwnership?: boolean }>;
     /** 环境登录凭据：未配登录用例（cfg.caseId 为空）时的自动填表登录。 */
     autoLogin?: LoginCtx;
   },
@@ -164,6 +174,7 @@ export async function loginPrepare(
   }
 
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
+  let takeOwnership = false;
   try {
     const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
     const page = await openDetectionPage(ctx, url);
@@ -183,12 +194,16 @@ export async function loginPrepare(
     }
 
     await page.close().catch(() => undefined);
-    const loginRun = await opts.loginCaseRunner(cfg.caseId!, ctx);
+    const loginRun = await opts.loginCaseRunner(cfg.caseId!, ctx, browser);
     if (!loginRun.passed) {
       return { status: 'failed', reason: 'login case failed' };
     }
+    // caller take ownership 时不再关 browser；否则保持原有「跑完就关」行为（自动填表/单测场景）。
+    takeOwnership = loginRun.takeOwnership === true;
     return { status: 'passed', reason: 'login case executed', storageState: loginRun.storageState };
   } finally {
-    await browser.close().catch(() => undefined);
+    if (!takeOwnership) {
+      await browser.close().catch(() => undefined);
+    }
   }
 }
