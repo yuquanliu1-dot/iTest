@@ -306,13 +306,23 @@ export const STAGE_PROMPT_GUIDELINES = [
   '需要创建用例/场景/环境/计划时,优先调用 stage_case / stage_scenario / stage_environment / stage_plan ——对象先暂存在草稿区,用户在右侧 StagePanel 勾选并选目标分组后才会正式落库。',
   'localId 由你（LLM）用 UUID v4 自生成（如 crypto.randomUUID()）,相同 localId 重复 stage 是幂等 UPSERT,可放心重发。',
   '不要直接用 manage_cases / manage_environments / manage_plans 的 create/upsert ——那些是实时写,会跳过用户的预览选择阶段。',
+  'stage_case 的每条 step 必须输出 compiled 字段（DSL 步骤数组,回放直接执行,保存时不再编译）。规则：',
+  '- compiled 是 JSON 数组,元素形如 {"kind": "...", ...}；允许 kind：navigate {url} / click {locator} / fill {locator, value} / hover {locator} / waitFor {locator, timeoutMs?} / assertText {locator, equals} / assertVisible {locator} / check {locator, checked} / select {locator, value} / extract {locator, varName} / aiTask {instruction}（运行时智能体执行,不预编译,原样保留）。禁止输出 aiStep。',
+  '- locator 是 [{"strategy":"...","value":"..."}] 的一层数组,可给多个候选按序探测;strategy 只能是 "role" | "text" | "testId" | "css" | "xpath";role 的 value 形如 "textbox[name=\'用户名\']" 且必须小写。',
+  '- navigate 的 url 必须是绝对 URL,且必须使用上下文里的真实页面 URL（host:port/path 原样保留）,禁止臆造 http://localhost:5173/...。没拿到 URL 时,生成用例前先调用 inspect_page 抓取真实页面,从抓取结果里取真实 URL 与 locator,禁止凭「典型实现」编造 testid/id。',
+  '- inspect_page 快照仅为页面初始状态:点击/提交后才出现的元素（结果区、错误提示）不在清单中。断言这类元素必须先触发对应操作再断言,或断言清单中其稳定的父容器;快照与动态都确认不了的元素用 role/text 定位。',
+  '- 末尾断言（强约束）:步骤执行后若有可观察结果,断言必须基于真实可见元素——优先 assertVisible（元素级,不依赖文案）;次之 assertText + locator + match:"contains"。禁止使用 target:"page" 的整页模糊自由文本断言（例「登录页正常加载」）,它对任何页面都命中,掩盖回放失败。navigate 步骤本身不要补断言。',
+  '- 若 step 没有可观察结果（如「打开某页」）,不要补任何断言。',
+  '- 若判断无法可靠编译（指令过于模糊、需视觉识别但无 #cssSelector 占位）,把 compiled 设为 null 表示「已放弃」。注意 null ≠ []:空数组在回放里等价于「什么都不做」,会隐藏失败;放弃语义必须用 null。',
+  '- 页面有验证码（登录/注册等）时,在密码填写与提交点击之间编出一条 {"kind":"aiTask","instruction":"识别验证码图片中的字符并填入验证码输入框"}:回放时由 AI 智能体实时截图识别并填入,不要给验证码输入框编普通 fill（填录制/生成的假值回放必失败）。其他难以固化为 DSL 的动态交互（图形验证、Canvas 控件、复杂弹窗等）同样优先用 aiTask。',
+  '- aiTask 不预编译,compiled 里原样保留即可（不要把它展开成其它 kind,也不要因它把 compiled 置 null）。',
 ];
 
 export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
   return [
     {
       name: 'stage_case',
-      description: '暂存一个用例到当前线程的草稿区。localId 必须由调用方生成 UUID v4。steps[].action 是人类可读指令。',
+      description: '暂存一个用例到当前线程的草稿区。localId 必须由调用方生成 UUID v4。steps[].action 是人类可读指令;steps[].compiled 是可回放 DSL 步骤数组（生成时必须给出,规则见 promptGuidelines;放弃用 null）。页面 URL/locator 未知时先调 inspect_page。',
       parameters: Type.Object({
         localId: Type.String({ minLength: 1, maxLength: 64 }),
         title: Type.String({ minLength: 1, maxLength: 200 }),
@@ -331,11 +341,14 @@ export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
       execute: async (input) => {
         const v = StageCaseInput.safeParse(input);
         if (!v.success) return { ok: false, error: `参数不合法:${v.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
-        await stageCase(ctx.threadId, ctx.versionId, {
-          ...v.data,
-          steps: v.data.steps ?? [],
-        });
-        emitStage(ctx, { kind: 'case', id: v.data.localId, action: 'stage' });
+        // compiled 防御性归一化:空数组 [] → null（LLM 把「放弃」误写成空数组会隐藏失败,必须映射为放弃语义）
+        const steps = (v.data.steps ?? []).map((s) => ({
+          ...s,
+          compiled: Array.isArray(s.compiled) && s.compiled.length === 0 ? null : s.compiled,
+        }));
+        const body: StagedCase = { ...v.data, steps };
+        await stageCase(ctx.threadId, ctx.versionId, body);
+        emitStage(ctx, { kind: 'case', id: v.data.localId, action: 'stage', payload: { ...body, stagedAt: new Date().toISOString() } });
         return { ok: true, data: `已暂存用例「${v.data.title}」(草稿 ${v.data.localId});用户将在右侧预览区勾选 → 选目标分组 → 落库。` };
       },
     },
@@ -353,8 +366,9 @@ export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
       execute: async (input) => {
         const v = StageScenarioInput.safeParse(input);
         if (!v.success) return { ok: false, error: `参数不合法:${v.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
-        await stageScenario(ctx.threadId, ctx.versionId, { ...v.data, caseLocalIds: v.data.caseLocalIds ?? [] });
-        emitStage(ctx, { kind: 'scenario', id: v.data.localId, action: 'stage' });
+        const body: StagedScenario = { ...v.data, caseLocalIds: v.data.caseLocalIds ?? [] };
+        await stageScenario(ctx.threadId, ctx.versionId, body);
+        emitStage(ctx, { kind: 'scenario', id: v.data.localId, action: 'stage', payload: { ...body, stagedAt: new Date().toISOString() } });
         return { ok: true, data: `已暂存场景「${v.data.title}」` };
       },
     },
@@ -376,11 +390,9 @@ export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
       execute: async (input) => {
         const v = StageEnvironmentInput.safeParse(input);
         if (!v.success) return { ok: false, error: `参数不合法:${v.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
-        await stageEnvironment(ctx.threadId, ctx.versionId, {
-          ...v.data,
-          objects: v.data.objects ?? [],
-        });
-        emitStage(ctx, { kind: 'environment', id: v.data.localId, action: 'stage' });
+        const body: StagedEnvironment = { ...v.data, objects: v.data.objects ?? [] };
+        await stageEnvironment(ctx.threadId, ctx.versionId, body);
+        emitStage(ctx, { kind: 'environment', id: v.data.localId, action: 'stage', payload: { ...body, stagedAt: new Date().toISOString() } });
         return { ok: true, data: `已暂存环境「${v.data.name}」` };
       },
     },
@@ -397,8 +409,9 @@ export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
       execute: async (input) => {
         const v = StagePlanInput.safeParse(input);
         if (!v.success) return { ok: false, error: `参数不合法:${v.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
-        await stagePlan(ctx.threadId, ctx.versionId, { ...v.data, caseLocalIds: v.data.caseLocalIds ?? [] });
-        emitStage(ctx, { kind: 'plan', id: v.data.localId, action: 'stage' });
+        const body: StagedPlan = { ...v.data, caseLocalIds: v.data.caseLocalIds ?? [] };
+        await stagePlan(ctx.threadId, ctx.versionId, body);
+        emitStage(ctx, { kind: 'plan', id: v.data.localId, action: 'stage', payload: { ...body, stagedAt: new Date().toISOString() } });
         return { ok: true, data: `已暂存计划「${v.data.name}」` };
       },
     },

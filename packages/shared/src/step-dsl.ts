@@ -131,6 +131,22 @@ export const SwitchTabAction = z.object({
   kind: z.literal('switchTab'),
   tabRef: z.string().min(1).max(64),
 });
+/** 验证码识别：回放时截验证码图片 → LLM vision OCR → 填入输入框。
+ * 适用于 AI 生成与人工录制的用例；value 每次回放动态识别,不固化。
+ * @deprecated 由 aiTask 通用智能步骤替代（保留以兼容存量数据）。 */
+export const SolveCaptchaAction = z.object({
+  kind: z.literal('solveCaptcha'),
+  imageLocator: z.array(Locator).min(1),
+  inputLocator: z.array(Locator).min(1),
+  intentLocator: IntentLocator.optional(),
+});
+/** 智能任务：回放时由 LLM 多轮驱动执行的自然语言步骤（不预编译，运行时看截图决策）。
+ * 适用于验证码识别、动态/不稳定页面交互等难以固化为 DSL 的场景。 */
+export const AiTaskAction = z.object({
+  kind: z.literal('aiTask'),
+  instruction: z.string().min(1).max(2000),
+  intentLocator: IntentLocator.optional(),
+});
 export const AssertJsonAction = z.object({
   kind: z.literal('assertJson'),
   locator: z.array(Locator).min(1),
@@ -203,6 +219,8 @@ export type StepAction =
   | z.infer<typeof SelectAction>
   | z.infer<typeof UploadAction>
   | z.infer<typeof SwitchTabAction>
+  | z.infer<typeof SolveCaptchaAction>
+  | z.infer<typeof AiTaskAction>
   | z.infer<typeof AssertJsonAction>
   | z.infer<typeof ExtractAction>
   | z.infer<typeof QueryDbAction>
@@ -222,6 +240,8 @@ export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
   SelectAction,
   UploadAction,
   SwitchTabAction,
+  SolveCaptchaAction,
+  AiTaskAction,
   AssertJsonAction,
   ExtractAction,
   QueryDbAction,

@@ -256,6 +256,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
       if (a) next.assertion = a;
       else delete next.assertion;
     }
+    if (kind === 'aiTask') next.instruction = instruction.trim();
     if (kind === 'navigate') next.url = url.trim();
     if (kind === 'waitFor') {
       if (timeoutMs) next.timeoutMs = Number(timeoutMs);
@@ -307,7 +308,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
       setFieldErrors({ 'action.description': '智能抽取需要填写描述并生成正则' });
       return;
     }
-    if (kind === 'aiStep' && !instruction.trim()) {
+    if ((kind === 'aiStep' || kind === 'aiTask') && !instruction.trim()) {
       setFieldErrors({ 'action.instruction': '指令不能为空' });
       return;
     }
@@ -619,6 +620,27 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
                 <p>• 关键结果请使用文本断言 / JSON 断言，不要把验证全部塞进智能步骤。</p>
               </div>
             )}
+          </div>
+        )}
+
+        {kind === 'aiTask' && (
+          <div className="flex flex-col gap-2">
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+              <span>自然语言指令（回放时由 AI 智能体实时执行，不预编译）</span>
+              <textarea
+                className="input-base input-xs"
+                aria-invalid={!!fieldErrors['action.instruction']}
+                rows={3}
+                value={instruction}
+                onChange={(e) => setInstruction(e.target.value)}
+                placeholder="例：识别验证码图片中的字符并填入验证码输入框"
+              />
+              <FieldError msg={fieldErrors['action.instruction']} />
+            </label>
+            <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--muted-foreground)' }}>
+              <p>• 智能步骤由 AI 在回放时看截图逐步执行，适合验证码识别、动态弹窗等难以固化为 DSL 的交互。</p>
+              <p>• 确定性高的常规操作请用 click / fill / waitFor 等具体步骤，更稳更快。</p>
+            </div>
           </div>
         )}
 

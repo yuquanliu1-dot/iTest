@@ -1,4 +1,4 @@
-import { chromium, type Browser, type Page } from 'playwright-core';
+import { chromium, type Browser, type ElementHandle, type Page } from 'playwright-core';
 import type {
   StepAction,
   Locator,
@@ -25,8 +25,9 @@ import { classify } from './failureClassifier.js';
 import { preflight } from './preflight.js';
 import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
 import { planVision } from '../agent/aiStepVision.js';
-import { compileAiStepVision } from '../agent/aiStepCompile.js';
+import { compileAiStepVision, recognizeImageText } from '../agent/aiStepCompile.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
+import { runAiTask } from './aiTask.js';
 import type { EnvCtx } from './envContext.js';
 import { runQueryDb } from './dbQuery.js';
 import { runObserveLog } from './syslogReader.js';
@@ -112,7 +113,7 @@ interface DispatchOpts {
 }
 
 /** 交互动作：执行前先做稳定性检查 */
-const INTERACTIVE_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select', 'upload'];
+const INTERACTIVE_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select', 'upload', 'solveCaptcha', 'aiTask'];
 /** 稳定性检查不过时可尝试 DOM 降级的动作 */
 const DOM_FALLBACK_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select'];
 
@@ -268,9 +269,24 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       }
       return;
     }
-    case 'waitFor':
-      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).waitFor({ state: 'visible', timeout: action.timeoutMs ?? 5000 });
-      return;
+    case 'waitFor': {
+      // tryFirstMatch 的 count() 是单帧探测：waitFor 语义是「等元素出现」，
+      // 点击/导航后元素尚不存在时必须轮询重试，否则 t=0 探测一次 count=0 立即失败。
+      const timeoutMs = action.timeoutMs ?? 5000;
+      const deadline = Date.now() + timeoutMs;
+      let lastErr: unknown;
+      while (Date.now() < deadline) {
+        try {
+          const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
+          await loc.waitFor({ state: 'visible', timeout: Math.max(100, deadline - Date.now()) });
+          return;
+        } catch (e) {
+          lastErr = e;
+          await page.waitForTimeout(200);
+        }
+      }
+      throw lastErr instanceof Error ? lastErr : new Error(`waitFor timeout: ${action.locator[0]?.value}`);
+    }
     case 'assertVisible':
       if (!(await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).isVisible({ timeout: 5000 }))) {
         throw new Error(`assertVisible failed: ${action.locator[0]?.value}`);
@@ -422,6 +438,93 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
         return;
       }
       throw new Error('AI 步骤未编译');
+    }
+    case 'aiTask': {
+      const { value, missing } = substituteVars(action.instruction, vars);
+      if (missing.length > 0) {
+        throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.instruction}")`);
+      }
+      const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
+      const summary = await runAiTask(opts.page, value, client);
+      return summary ? `aiTask: ${summary}` : undefined;
+    }
+    case 'solveCaptcha': {
+      // 截验证码图片 → LLM vision OCR → 填入输入框。识别文本每次回放动态获取,不写回步骤。
+      const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
+      const inputLoc = await tryFirstMatch(page, action.inputLocator, action.intentLocator, opts.hitSink);
+      let imageEl: ElementHandle | null = null;
+      try {
+        const imageLoc = await tryFirstMatch(page, action.imageLocator, undefined, opts.hitSink);
+        imageEl = await imageLoc.elementHandle();
+      } catch {
+        // imageLocator 候选未命中（常见:AI 从源码抓的 aria-label 与运行时本地化文案不一致）
+        // → 邻近输入框启发式找图,与录制器 findCaptchaImage 同策略。
+      }
+      if (!imageEl) {
+        const inputHandle = await inputLoc.elementHandle();
+        if (!inputHandle) throw new Error('solveCaptcha: 输入框元素句柄获取失败');
+        const found = await page.evaluateHandle((input) => {
+          const scope = input.closest('form') ?? input.parentElement;
+          if (!scope) return null;
+          const inRect = input.getBoundingClientRect();
+          const icx = inRect.left + inRect.width / 2;
+          const icy = inRect.top + inRect.height / 2;
+          let best: Element | null = null;
+          let bestDist = Infinity;
+          for (const el of Array.from(scope.querySelectorAll('img, svg'))) {
+            // lucide 图标也是 svg,排除;验证码图是 img 或无 lucide class 的 svg
+            if (el.tagName.toLowerCase() === 'svg' && /lucide/.test(el.getAttribute('class') ?? '')) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width < 10 || r.height < 10) continue;
+            const d = Math.hypot(r.left + r.width / 2 - icx, r.top + r.height / 2 - icy);
+            if (d < bestDist) {
+              bestDist = d;
+              best = el;
+            }
+          }
+          return best;
+        }, inputHandle);
+        imageEl = found.asElement();
+      }
+      if (!imageEl) throw new Error('solveCaptcha: 验证码图片定位失败（候选与启发式均未命中）');
+      // 小图直接 OCR 容易丢细节（z/2、i/j 混淆）:zoom 放大后截图,再还原。
+      // 透明底 PNG 会让视觉模型把噪点曲线当字符笔画:截屏期间垫白底,一并还原。
+      await imageEl
+        .evaluate((el) => {
+          (el as HTMLElement).style.zoom = '4';
+          (el as HTMLElement).style.background = '#fff';
+        })
+        .catch(() => undefined);
+      let buffer: Buffer;
+      try {
+        await imageEl.waitForElementState('visible', { timeout: 5000 });
+        buffer = await imageEl.screenshot({ timeout: 5000 });
+      } finally {
+        await imageEl
+          .evaluate((el) => {
+            (el as HTMLElement).style.zoom = '';
+            (el as HTMLElement).style.background = '';
+          })
+          .catch(() => undefined);
+      }
+      // 两次识别取一致（独立犯错同错值概率低）;不一致时第三次投票,降低单字符误读率。
+      const CAPTCHA_HINT =
+        '字符集为字母和数字（已排除 0 O o 1 l I，绝不出现），4 个字符，可能有随机旋转。' +
+        '注意区分：j 底部向右弯钩、i 是直杆加点；t 顶部有横杠；z 与 2 的区别是 z 上下平齐。' +
+        '逐字符仔细辨认，只输出 4 个字符本身。';
+      const ocr = () => recognizeImageText({ base64: buffer.toString('base64'), mime: 'image/png' }, client, CAPTCHA_HINT);
+      let text = (await ocr()).trim();
+      const second = (await ocr()).trim();
+      if (second !== text) {
+        const third = (await ocr()).trim();
+        // 简单多数：两两相同取该值，全不同取第二次（第二次与第一次不同才进入此分支）
+        text = third === text ? text : third === second ? second : second;
+      }
+      // 与 fill 同款 React 受控表单处理：先清空再逐键输入,最后 Tab 触发 blur 校验
+      await inputLoc.fill('', { timeout: 5000 });
+      await inputLoc.pressSequentially(text, { delay: 20 });
+      await page.keyboard.press('Tab').catch(() => undefined);
+      return;
     }
     case 'queryDb': {
       const envCtx = opts.ctx.envCtx;
@@ -699,6 +802,10 @@ export async function executeCaseReal(
     const failedSoFar = results.some((r) => r.status === 'failed');
     if (!failedSoFar && ctx.expectedOutcome && ctx.expectedOutcome.trim()) {
       try {
+        // 终态判定前给 SPA 收尾时间：点击提交 → 接口往返 → 前端跳转是异步的，
+        // 立即截图会把「仍停在提交前页面」误判为失败（实测点击后 ~100ms 截图仍显示登录页）。
+        await opts.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
+        await opts.page.waitForTimeout(800);
         const buffer = await opts.page.screenshot({ timeout: 5000 });
         const { judgeCaseOutcome } = await import('../agent/judgeCaseOutcome.js');
         const verdict = await judgeCaseOutcome({
