@@ -75,7 +75,12 @@ export function expandCompiledAiStepsInPlace(prepared: PreparedCase[]): void {
           sensitive: false,
           ...(first ? baseInherit : {}),
         };
-        if (first) (newRow as Record<string, unknown>).componentKind = `aiStep/${baseName}`;
+        if (first) {
+          // componentKind 列是 varchar(32),`aiStep/<name>` 在 name 较长时会溢出;截到 32 字符。
+          // 保留 `aiStep/` 前缀以便回放报告 / UI 详情反查。
+          const ck = `aiStep/${baseName}`.slice(0, 32);
+          (newRow as Record<string, unknown>).componentKind = ck;
+        }
         out.push(newRow);
         first = false;
       }
