@@ -135,10 +135,14 @@ export default function CaseDetail() {
     enabled: !!id,
   });
 
-  // 录制目标 URL 为空时预填继承链（用例.url → 分组.defaultUrl → 项目默认环境.base_url）解析结果
+  // 录制目标 URL 实时跟随"初始化导航 URL"（用例.url → 分组.defaultUrl → 环境.base_url 解析结果）。
+  // 用户手动改过之后不再被 caseDetail refetch 静默覆盖；点输入框右侧"↺"可恢复继承链结果。
+  const targetUrlDirtyRef = useRef(false);
   useEffect(() => {
-    if (caseDetail?.resolvedUrl) setTargetUrl((u) => u || caseDetail.resolvedUrl!);
-  }, [caseDetail]);
+    if (!caseDetail?.resolvedUrl) return;
+    if (targetUrlDirtyRef.current) return;
+    setTargetUrl(caseDetail.resolvedUrl);
+  }, [caseDetail?.resolvedUrl]);
 
   // 执行设置有未保存的本地编辑时，避免被 caseDetail refetch 静默覆盖
   const runtimeSyncRef = useRef<string | null>(null);
@@ -1108,14 +1112,28 @@ export default function CaseDetail() {
                   请在步骤列表中点「从这里开始」选择目标步骤。
                 </p>
               )}
-              <Input
-                label="录制目标 URL"
-                placeholder="https://example.com"
-                value={targetUrl}
-                onChange={(e) => setTargetUrl(e.target.value)}
-                size="sm"
-                className="mb-3"
-              />
+              <div className="flex items-end gap-2 mb-3">
+                <Input
+                  label="录制目标 URL"
+                  placeholder="https://example.com"
+                  value={targetUrl}
+                  onChange={(e) => {
+                    targetUrlDirtyRef.current = true;
+                    setTargetUrl(e.target.value);
+                  }}
+                  size="sm"
+                  className="flex-1"
+                />
+                <IconButton
+                  icon="refresh"
+                  title="用初始化导航 URL 覆盖"
+                  disabled={!caseDetail?.resolvedUrl || targetUrl === caseDetail.resolvedUrl}
+                  onClick={() => {
+                    targetUrlDirtyRef.current = false;
+                    setTargetUrl(caseDetail?.resolvedUrl ?? '');
+                  }}
+                />
+              </div>
               {recorder.status === 'recording' ? (
                 <Button variant="ghost" onClick={() => stopRecording.mutate()} className="w-full">
                   <Icon name="pause" size={12} />
