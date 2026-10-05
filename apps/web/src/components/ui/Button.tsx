@@ -1,7 +1,7 @@
 import { forwardRef } from 'react';
 import { Button as ShadcnButton } from './shadcn/button';
 
-type ButtonVariant = 'primary' | 'ghost' | 'danger';
+type ButtonVariant = 'primary' | 'ghost' | 'danger' | 'destructive';
 type ButtonSize = 'sm' | 'md' | 'lg';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -9,11 +9,12 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   size?: ButtonSize;
 }
 
-// iTest 语义 → CRM shadcn 变体：primary→default(实心主色)、ghost→outline(描边次操作)、danger→destructive(实心危险)
+// iTest 语义 → CRM shadcn 变体：primary→default(实心主色)、ghost→outline(描边次操作)、danger/destructive→destructive(实心危险)
 const variantMap = {
   primary: 'default',
   ghost: 'outline',
   danger: 'destructive',
+  destructive: 'destructive',
 } as const;
 
 // 尺寸对齐 CRM：sm→h-7(28) / md→default(h-8, 32) / lg→h-9(36)

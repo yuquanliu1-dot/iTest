@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import Button from '../components/ui/Button';
@@ -14,14 +14,23 @@ import {
 } from '../components/layout/PageShell';
 import SpaceWorkspace from '../features/space-assistant/SpaceWorkspace';
 
+interface AssistantInitialMessageState {
+  initialMessage?: string;
+}
+
 /**
  * 版本空间 AI 助手(AI-First 主入口):进入版本空间落地即对话。
  * 页面层只负责线程管理(最近线程下拉 + 新建 + 初始化错误引导);
  * 对话与舞台由 SpaceWorkspace 渲染(Task 3 接入)。
+ *
+ * 首条消息支持:从用例管理「AI 创建用例」/其他入口带 location.state.initialMessage 跳来时,
+ * 新建线程后自动注入首条 prompt。消息注入走 SpaceWorkspace 内 appendInitialMessage 子组件,
+ * 不在本页面持有 aui(aui 必须在 AssistantRuntimeProvider 内使用)。
  */
 export default function AssistantPage() {
   const { versionId } = useParams<{ projectId: string; versionId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const threadsQ = useQuery({
     queryKey: ['assistant-threads', versionId],
     queryFn: () => api.assistant.listThreads(versionId!),
@@ -31,6 +40,9 @@ export default function AssistantPage() {
   const [initError, setInitError] = useState<string | null>(null);
   // 非阻断警告(repo 不可用等,后端经快照 lastError 透出):对话仍可用
   const [warning, setWarning] = useState<string | null>(null);
+  // 上一跳 location.state 携带的首条 prompt:捕获进组件 state,
+  // 因为 SpaceWorkspace 在 threadId 到位后才挂载,届时 location.state 已被 effect 清空。
+  const [initialMessage] = useState(((location.state ?? {}) as AssistantInitialMessageState).initialMessage);
 
   // 首次进入自动选中最近一条线程;无线程时保持空态
   useEffect(() => {
@@ -38,6 +50,13 @@ export default function AssistantPage() {
     const first = threadsQ.data?.[0];
     if (first) setThreadId(first.id);
   }, [threadsQ.data, threadId]);
+
+  // mount 时清掉 location.state,避免用户再次进入同名路径又带回 stale initialMessage
+  useEffect(() => {
+    if (!initialMessage) return;
+    navigate(location.pathname, { replace: true });
+    // 仅在 mount 时清 stale state,不依赖 navigate/location(否则每次导航都会触发)
+  }, []);
 
   const create = useMutation({
     mutationFn: () => api.assistant.createThread(versionId!),
@@ -108,7 +127,7 @@ export default function AssistantPage() {
               </div>
             )}
             {threadId ? (
-              <SpaceWorkspace key={threadId} threadId={threadId} />
+              <SpaceWorkspace key={threadId} threadId={threadId} initialMessage={initialMessage} />
             ) : (
               <EmptyState
                 icon="message"
