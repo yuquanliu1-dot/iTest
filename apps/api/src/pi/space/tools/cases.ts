@@ -65,7 +65,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
       }),
       promptGuidelines: [
         '创建用例前先 search 相近标题避免重复;groupId 必须来自上下文摘要、search 或 create_group 的结果,禁止臆造 id。',
-        '写 steps 时:action 是人类可读操作指令,assertion 是预期结果文本;若仓库可用,先用 repo_ls/repo_read/repo_grep 看真实源码再给 compiled(DSL:允许 kind = navigate{url}/click{locator}/fill{locator,value}/hover{locator}/waitFor{locator,timeoutMs?}/assertText{locator,equals}/assertVisible{locator}/check{locator,checked}/select{locator,value}/extract{locator,varName})。',
+        '写 steps 时:action 是人类可读操作指令。assertion 必须是页面里能直接命中的真实 UI 文本片段(按钮文案 / Toast 提示 / 错误信息 / 页面标题 / URL 段),禁止写"登录表单正常展示""账号已触发锁定""登录请求已发出"这种描述性短语——服务端会直接过滤,断言落库为 null(回放阶段跳过此步断言)。若仓库可用,先用 repo_ls/repo_read/repo_grep 看真实源码再给 compiled(DSL:允许 kind = navigate{url}/click{locator}/fill{locator,value}/hover{locator}/waitFor{locator,timeoutMs?}/assertText{locator,equals}/assertVisible{locator}/check{locator,checked}/select{locator,value}/extract{locator,varName})。',
         'locator 必须是一层数组,每个元素是 {strategy, value},strategy 限 role/text/testId/css/xpath;不知道真实元素就省略 compiled(不要编造),或先调 inspect_page 抓页面。',
         'delete 会向用户发确认卡;被拒或超时返回取消,不要重试同一删除。',
       ],

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { migrateAction } from '../src/lib/step-migration.js';
+import { migrateAction, sanitizeAssertion } from '../src/lib/step-migration.js';
 
 describe('migrateAction — assertText', () => {
   it('adds target=specifiedElement + match=equals to legacy assertText', () => {
@@ -107,5 +107,65 @@ describe('migrateAction — extract mode lazy migration', () => {
     const out = migrateAction(cur) as { mode?: string; pattern?: string };
     expect(out.mode).toBe('regex');
     expect(out.pattern).toBe('\\d+');
+  });
+});
+
+describe('sanitizeAssertion — content-level filter', () => {
+  it('空字符串 → null', () => {
+    expect(sanitizeAssertion('')).toBeNull();
+  });
+
+  it('非字符串 → null', () => {
+    expect(sanitizeAssertion(undefined)).toBeNull();
+    expect(sanitizeAssertion(null)).toBeNull();
+    expect(sanitizeAssertion(123)).toBeNull();
+    expect(sanitizeAssertion({})).toBeNull();
+  });
+
+  it('纯空白 → null', () => {
+    expect(sanitizeAssertion('   ')).toBeNull();
+  });
+
+  it('短真实 UI 文案保留(≤4字)', () => {
+    expect(sanitizeAssertion('登录')).toBe('登录');
+    expect(sanitizeAssertion('成功')).toBe('成功');
+  });
+
+  it('中等长度真实 UI 文案保留', () => {
+    expect(sanitizeAssertion('登录成功')).toBe('登录成功');
+    expect(sanitizeAssertion('工作台')).toBe('工作台');
+    expect(sanitizeAssertion('锁定中,请30秒后再试')).toBe('锁定中,请30秒后再试');
+  });
+
+  it('描述性短语被过滤:命中"展示"', () => {
+    expect(sanitizeAssertion('登录表单正常展示')).toBeNull();
+    expect(sanitizeAssertion('表单展示成功')).toBeNull();
+  });
+
+  it('描述性短语被过滤:命中"回显"', () => {
+    expect(sanitizeAssertion('账号输入回显正常')).toBeNull();
+    expect(sanitizeAssertion('密码回显完成')).toBeNull();
+  });
+
+  it('描述性短语被过滤:命中"触发/已发出"', () => {
+    expect(sanitizeAssertion('账号已触发锁定且未到期')).toBeNull();
+    expect(sanitizeAssertion('登录请求已发出')).toBeNull();
+  });
+
+  it('描述性短语被过滤:其它描述性动词', () => {
+    expect(sanitizeAssertion('应该显示错误提示')).toBeNull();
+    expect(sanitizeAssertion('预期登录成功')).toBeNull();
+    expect(sanitizeAssertion('验证码填写成功(人工识别)')).toBeNull();
+  });
+
+  it('长度 4 边界:纯真实 UI 文案保留', () => {
+    // 长度恰好 = 4 → 走短断言放行分支,不查描述词表。
+    // "填写成功" 实际是描述性,但与"登录按钮"这类 4 字真实文案无法区分,
+    // 风险收益上放行;5+ 字才严查描述词。
+    expect(sanitizeAssertion('填写成功')).toBe('填写成功');
+  });
+
+  it('首尾空白被 trim 但保留', () => {
+    expect(sanitizeAssertion('  工作台  ')).toBe('工作台');
   });
 });

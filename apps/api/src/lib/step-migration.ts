@@ -67,6 +67,39 @@ export function migrateAssertion(raw: unknown): unknown {
   };
 }
 
+/**
+ * AI 写出来的 step-level assertion 文本里常含"描述性短语"（"登录表单正常展示"、"账号已触发锁定"、
+ * "登录请求已发出"）——它们通过 `migrateAssertion` 后会被当成 `target:'page' match:'contains'` 子串
+ * 校验，回放时拿 `document.body.innerText` 一定命中不到，整步 fail。
+ *
+ * 这层做内容级过滤：识别"描述性短语"返回 `null`，调用方写 `null` 入库，回放阶段自然跳过断言。
+ * 真实 UI 文案（按钮/toast/页面标题）短且具体，命中不到描述性动词表，得以保留。
+ *
+ * 判定：
+ *  - 空字符串 / 非 string → null
+ *  - 长度 > 4 且命中描述性动词白名单任一项 → null
+ *  - 其它原样返回（让调用方继续 migrateAssertion）
+ */
+const DESCRIPTIVE_PHRASES = [
+  '展示', '回显', '触发', '已发出', '发出', '应该', '预期', '需要',
+  '已实现', '可能', '大概', '或许', '应当', '可见', '已被', '已接收',
+  '提示', '需', '已成功', '成功提交', '提交了', '已完成', '完成回显',
+  '正常回显', '正常展示', '正常显示', '填写成功', '展示成功',
+];
+
+export function sanitizeAssertion(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const text = raw.trim();
+  if (text.length <= 4) {
+    // 短断言（按钮/toast 真实文案）放行；空/纯空白也走 null。
+    return text.length === 0 ? null : text;
+  }
+  for (const p of DESCRIPTIVE_PHRASES) {
+    if (text.includes(p)) return null;
+  }
+  return text;
+}
+
 /** 把 unknown 当作 StepAction 类型断言，仅供已通过 Zod 的路径使用。 */
 export function asStepAction(a: unknown): StepAction {
   return a as StepAction;

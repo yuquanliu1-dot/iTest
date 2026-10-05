@@ -45,7 +45,7 @@ describe('cases.service', () => {
       groupId, versionId, title: '下单流程',
       steps: [
         { instruction: '打开首页', compiled: [{ kind: 'navigate', url: 'https://a.example.com/' }] },
-        { instruction: '点击下单按钮', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '.buy' }] }], assertion: '出现成功提示' },
+        { instruction: '点击下单按钮', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '.buy' }] }], assertion: '下单成功' },
         { instruction: '模糊步骤', compiled: [] },
       ],
     });
@@ -59,6 +59,40 @@ describe('cases.service', () => {
     expect((rows[1]!.assertion as { kind: string; match?: string }).kind).toBe('assertText');
     expect((rows[2]!.action as { kind: string; compiled?: unknown }).kind).toBe('aiStep');
     expect((rows[2]!.action as { compiled: unknown }).compiled).toBeNull();
+  }, 30_000);
+
+  it('createCaseWithSteps:描述性短语 assertion 被 sanitize 丢弃,真实 UI 文案断言正常规整', async () => {
+    const { groupId, versionId } = await seedProject(pool);
+    const svc = await import('../src/services/cases.service.js');
+    const c = await svc.createCaseWithSteps({
+      groupId, versionId, title: '断言清洗验证',
+      steps: [
+        // 描述性短语 → 期望 assertion 为 null,不再以 page/contains 形态入库
+        { instruction: '打开登录页', compiled: [{ kind: 'navigate', url: 'https://a.example.com/login' }], assertion: '登录表单正常展示' },
+        // 真实 UI 文本片段 → 期望 assertion 规整为完整 shape
+        { instruction: '点登录', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '.login' }] }], assertion: '登录成功' },
+        // 短断言(≤4字)放行
+        { instruction: '看结果', compiled: [{ kind: 'waitFor', locator: [{ strategy: 'css', value: '.ok' }] }], assertion: '成功' },
+      ],
+    });
+    const rows = (await pool.query(`SELECT "order", assertion FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [c.id])).rows as Array<{
+      order: number; assertion: Record<string, unknown> | null;
+    }>;
+    expect(rows[0]!.assertion).toBeNull();
+    expect(rows[1]!.assertion).toEqual({
+      kind: 'assertText',
+      locator: [],
+      target: 'page',
+      match: 'contains',
+      equals: '登录成功',
+    });
+    expect(rows[2]!.assertion).toEqual({
+      kind: 'assertText',
+      locator: [],
+      target: 'page',
+      match: 'contains',
+      equals: '成功',
+    });
   }, 30_000);
 
   it('updateCase:scenario 不匹配 → 400;tagIds [] 清空;searchCasesInVersion 关键词过滤', async () => {
