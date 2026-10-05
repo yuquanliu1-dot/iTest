@@ -275,7 +275,7 @@ export default function PlanDetail() {
               style={{ minWidth: 160 }}
               disabled={(environments ?? []).length === 0}
             >
-              <option value="">跟随 case</option>
+              <option value="">不在计划层指定</option>
               {(environments ?? []).map((env) => (
                 <option key={env.id} value={env.id}>
                   {env.name}

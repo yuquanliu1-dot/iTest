@@ -623,7 +623,7 @@ export default function CaseDetail() {
                       onChange={(e) => setDefaultEnvId(e.target.value || null)}
                       disabled={(environments ?? []).length === 0}
                     >
-                      <option value="">跟随 plan</option>
+                      <option value="">不在用例层指定</option>
                       {(environments ?? []).map((e) => (
                         <option key={e.id} value={e.id}>
                           {e.name}
