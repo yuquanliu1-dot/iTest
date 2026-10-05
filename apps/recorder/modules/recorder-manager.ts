@@ -1,13 +1,15 @@
 import { generateLocators, type Locator } from './selector-core.js';
 import { detectComponent } from './component-detector.js';
 
-export type RecordedStepType = 'click' | 'fill' | 'hover' | 'check' | 'select' | 'upload';
+export type RecordedStepType = 'click' | 'fill' | 'hover' | 'check' | 'select' | 'upload' | 'solveCaptcha';
 
 export interface RecordedStep {
   type: RecordedStepType;
   target: Locator[];
   /** fill/select 的值；upload 的文件名 */
   value?: string;
+  /** solveCaptcha：验证码图片的定位候选（target 是验证码输入框） */
+  imageTarget?: Locator[];
   /** check 的目标状态 */
   checked?: boolean;
   url: string;
@@ -31,6 +33,47 @@ function buildIntentLocator(el: Element): RecordedStep['intentLocator'] {
   if (!role) return undefined;
   const text = el.textContent?.trim().slice(0, 50) || undefined;
   return text ? { semanticRole: role, contextText: text } : { semanticRole: role };
+}
+
+/** 验证码特征：input 自身的 id/name/class/placeholder/aria-label 或关联 label 文案命中即认为是验证码输入框。 */
+const CAPTCHA_RE = /captcha|验证码|校验码|validcode|verifycode|vercode|vcode/i;
+
+function isCaptchaInput(el: HTMLInputElement): boolean {
+  if (el.type === 'password') return false;
+  const labelText = (() => {
+    // label[for=id] 或包裹型 label
+    if (el.id) {
+      const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (l?.textContent) return l.textContent;
+    }
+    const wrap = el.closest('label');
+    return wrap?.textContent ?? '';
+  })();
+  return [el.id, el.name, el.className, el.placeholder, el.getAttribute('aria-label') ?? '', labelText]
+    .some((s) => typeof s === 'string' && s.length > 0 && CAPTCHA_RE.test(s));
+}
+
+/** 在验证码输入框附近找验证码图片：优先同 form/容器的 img[命中特征]，退回「input 前最近的 img」。 */
+function findCaptchaImage(input: HTMLInputElement): HTMLImageElement | null {
+  const scope = input.closest('form') ?? input.parentElement;
+  if (scope) {
+    for (const img of Array.from(scope.querySelectorAll('img'))) {
+      const sig = `${img.id} ${img.className} ${img.src} ${img.alt}`;
+      if (CAPTCHA_RE.test(sig) && img.offsetWidth > 0) return img;
+    }
+  }
+  let node: Element | null = input;
+  while (node) {
+    const prev = node.previousElementSibling;
+    if (prev) {
+      if (prev.tagName === 'IMG' && (prev as HTMLElement).offsetWidth > 0) return prev as HTMLImageElement;
+      const img = prev.querySelector?.('img');
+      if (img && (img as HTMLElement).offsetWidth > 0) return img as HTMLImageElement;
+    }
+    node = node.parentElement;
+    if (node && (node.tagName === 'FORM' || node === document.body)) break;
+  }
+  return null;
 }
 
 /**
@@ -151,6 +194,22 @@ export class RecorderManager {
         || /password/i.test(target.id ?? '');
       this.lastInputAt = Date.now();
       const intentLocator = buildIntentLocator(target);
+      // 验证码输入框 → solveCaptcha 步骤（回放时 AI 识别图片填入,录制值仅作参考不落 DSL）
+      if (!isSensitive && isCaptchaInput(target)) {
+        const img = findCaptchaImage(target);
+        if (img) {
+          this.handler?.({
+            type: 'solveCaptcha',
+            target: generateLocators(target),
+            imageTarget: generateLocators(img),
+            value,
+            url: location.href,
+            timestamp: Date.now(),
+            ...(intentLocator ? { intentLocator } : {}),
+          });
+          return;
+        }
+      }
       this.handler?.({
         type: 'fill',
         target: generateLocators(target),
