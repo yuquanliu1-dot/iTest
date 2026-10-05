@@ -66,7 +66,7 @@ describe('ai-thread + ai-workspace + save', () => {
     expect(cases.rows[0]!.priority).toBe('P0');
     const steps = await pool.query(`SELECT * FROM test_steps WHERE case_id = $1`, [cases.rows[0]!.id]);
     expect(steps.rows[0]!.source).toBe('agent');
-    expect((steps.rows[0]!.action as { kind: string }).kind).toBe('aiStep');
+    expect((steps.rows[0]!.action as { kind: string }).kind).toBe('aiTask');
     expect((steps.rows[0]!.assertion as { kind: string }).kind).toBe('assertText');
     // 新写入路径要落规范 assertText 形态（target=page, equals=text），否则回放引擎 dispatch 不认识。
     expect((steps.rows[0]!.assertion as { target: string }).target).toBe('page');
@@ -75,11 +75,15 @@ describe('ai-thread + ai-workspace + save', () => {
     expect(doc.scenarios).toEqual([]);
   });
 
-  it('POST /:id/ai-workspace/save expands multi-step instructions and compiles aiStep when LLM mock provided', async () => {
+  it('POST /:id/ai-workspace/save preserves aiTask steps on save without LLM compile', async () => {
     const llmMod = await import('../src/agent/llmSettings.js');
+    let calls = 0;
     const mockClient = {
       provider: 'openai' as const,
-      complete: async () => ({ kind: 'json' as const, value: { steps: [{ kind: 'navigate', url: 'http://localhost/login' }] }, provider: 'openai' as const, vision: false }),
+      complete: async () => {
+        calls++;
+        return { kind: 'json' as const, value: { steps: [{ kind: 'navigate', url: 'http://localhost/login' }] }, provider: 'openai' as const, vision: false };
+      },
     };
     llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
     try {
@@ -87,12 +91,6 @@ describe('ai-thread + ai-workspace + save', () => {
       const { projectId, groupId, versionId } = await seedProject(pool);
       const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
       const rid = r.rows[0]!.id as string;
-      // instruction 用编号列表触发 splitAiStepsInPlace；拆分后子串无动词开头，
-      // 启发式 navigate 不命中，走 LLM mock 拿 navigate 结果。
-      // mock 故意返回 localhost（测试上下文无 baseUrl），所以拆条后第一条 instruction 是
-      // "访问登录页"——它会命中启发式（即使不带"页"字也能匹配"登录"作为独立 token），
-      // 编译结果 = `http://localhost:5173/login`（兜底 baseUrl）。本断言只校验 compiled 数组非空且含 navigate，
-      // 不绑死 URL 来源（启发式 vs LLM mock）。
       await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
         { id: 'c1', title: 'C1', description: 'd', priority: 'P0', steps: [
           { name: 'multi', action: '1. 输入手机号\n2. 输入密码', assertion: 'assert' },
@@ -105,56 +103,37 @@ describe('ai-thread + ai-workspace + save', () => {
         `SELECT action FROM test_steps WHERE case_id = (SELECT id FROM test_cases WHERE requirement_id = $1 LIMIT 1) ORDER BY "order"`,
         [rid],
       );
-      // 拆条 + 编译后应该至少 2 条；第一条 instruction 应是拆条后的子串。
-      // 拆条后第一条继承原 compiled 语义（此用例未提供 → undefined → 走 LLM mock）；
-      // mock 返回 navigate，expected 即 mock 输出。
+      // 拆条后的两条 aiTask 原样落库，不再走 LLM 编译。
       expect(steps.rows.length).toBeGreaterThanOrEqual(2);
-      const first = steps.rows[0]!.action as { kind: string; instruction: string; compiled: unknown };
-      expect(first.kind).toBe('aiStep');
-      // 单测容器内 settings 表空 → compileAiStepsInPlace 会拿到 llm=null 但 mock 已注入；本测试的核心是
-      // 验证 aiStep 拆分后流程跑通、step 行被写入。LLM 兜底不命中时 compiled 留空是允许行为（保留原 aiStep 回放）。
-      expect(['string', 'object', 'undefined']).toContain(typeof first.compiled);
+      const first = steps.rows[0]!.action as { kind: string; instruction: string };
+      expect(first.kind).toBe('aiTask');
+      expect(typeof first.instruction).toBe('string');
+      // 整条链路不触发任何 LLM 调用：aiTask 已经在编译期移除兜底。
+      expect(calls).toBe(0);
     } finally {
       llmMod.__setLlmClientForTest(null);
     }
   });
 
-  it('save 把需求文本中的真实 URL 传给编译 ctx 并落库 test_cases.url', async () => {
-    const llmMod = await import('../src/agent/llmSettings.js');
-    const captured: string[] = [];
-    const mockClient = {
-      provider: 'openai' as const,
-      complete: async (args: { userMessage: string }) => {
-        captured.push(args.userMessage);
-        return { kind: 'json' as const, value: { steps: [{ kind: 'navigate', url: 'http://localhost/login' }] }, provider: 'openai' as const, vision: false };
-      },
-    };
-    llmMod.__setLlmClientForTest({ config: { provider: 'openai', apiKey: 'k', model: 'm' }, client: mockClient });
-    try {
-      const ws = await import('../src/pi/workspace.js');
-      const { projectId, groupId, versionId } = await seedProject(pool);
-      const r = await pool.query(
-        `INSERT INTO requirements(title, content, project_id) VALUES ('r', '页面地址：http://192.168.30.228:8088/static/element-manager.html，请参考实际代码。', $1) RETURNING id`,
-        [projectId],
-      );
-      const rid = r.rows[0]!.id as string;
-      await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
-        { id: 'c1', title: 'C1', description: 'd', priority: 'P0', steps: [
-          { name: 'multi', action: '1. 打开页面\n2. 点击添加元素', assertion: null },
-        ] },
-      ] });
-      const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
-        .send({ groupId, targetVersionId: versionId, scenarioIds: ['s1'], caseIds: ['c1'] });
-      expect(saved.status).toBe(200);
-      // 编译 userMessage 应带真实 URL（compileAiStep ctx.url），而非 localhost 兜底
-      expect(captured.length).toBeGreaterThan(0);
-      expect(captured[0]).toContain('http://192.168.30.228:8088/static/element-manager.html');
-      // 落库：test_cases.url
-      const cases = await pool.query(`SELECT url FROM test_cases WHERE requirement_id = $1`, [rid]);
-      expect(cases.rows[0]!.url).toBe('http://192.168.30.228:8088/static/element-manager.html');
-    } finally {
-      llmMod.__setLlmClientForTest(null);
-    }
+  it('save 把需求文本中的真实 URL 落到 test_cases.url', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const ws = await import('../src/pi/workspace.js');
+    const r = await pool.query(
+      `INSERT INTO requirements(title, content, project_id) VALUES ('r', '页面地址：http://192.168.30.228:8088/static/element-manager.html，请参考实际代码。', $1) RETURNING id`,
+      [projectId],
+    );
+    const rid = r.rows[0]!.id as string;
+    await ws.upsertScenario(rid, { id: 's1', title: 'S', description: null, cases: [
+      { id: 'c1', title: 'C1', description: 'd', priority: 'P0', steps: [
+        { name: 'multi', action: '1. 打开页面\n2. 点击添加元素', assertion: null },
+      ] },
+    ] });
+    const saved = await request(app).post(`/api/requirements/${rid}/ai-workspace/save`)
+      .send({ groupId, targetVersionId: versionId, scenarioIds: ['s1'], caseIds: ['c1'] });
+    expect(saved.status).toBe(200);
+    // 需求文本里的真实 URL 直接落到 test_cases.url；不再走 LLM 编译 ctx.url。
+    const cases = await pool.query(`SELECT url FROM test_cases WHERE requirement_id = $1`, [rid]);
+    expect(cases.rows[0]!.url).toBe('http://192.168.30.228:8088/static/element-manager.html');
   });
 
   it('pageContext（inspect_page 抓取记录）优先于需求文本 URL', async () => {
@@ -290,7 +269,7 @@ describe('ai-thread + ai-workspace + save', () => {
     expect(doc.looseCases[0]!.steps[0]!.compiled).toBeUndefined();
   });
 
-  it('save does NOT invoke LLM when staged step already has compiled array', async () => {
+  it('save 沿用 staged step 的 compiled 数组（不再展开，按 aiTask 规则存）', async () => {
     const llmMod = await import('../src/agent/llmSettings.js');
     let calls = 0;
     const mockClient = {
@@ -328,16 +307,16 @@ describe('ai-thread + ai-workspace + save', () => {
         .post(`/api/requirements/${rid}/ai-workspace/save`)
         .send({ groupId, targetVersionId: versionId, scenarioIds: ['s1'], caseIds: ['c1'] });
       expect(saved.status).toBe(200);
-      expect(calls).toBe(0); // short-circuit: no LLM call
+      expect(calls).toBe(0); // 没有任何 LLM 兜底调用
       const steps = await pool.query(
         `SELECT action FROM test_steps WHERE case_id = (SELECT id FROM test_cases WHERE requirement_id = $1 LIMIT 1) ORDER BY "order"`,
         [rid],
       );
-      // 2026-10-02 起：save 路径会把已编译的 aiStep 展开为具体 DSL（click / fill / ...），
-      // 让 UI 能直接编辑定位器、回放少一层 aiStep 递归。所以这里期望 kind='click' 而非 'aiStep'。
-      const a = steps.rows[0]!.action as { kind: string; locator: unknown };
-      expect(a.kind).toBe('click');
-      expect(a.locator).toEqual([{ strategy: 'text', value: 'submit' }]);
+      // save 路径不再做 aiStep 展开（aiStep 已删除）；每条 step 直接落 aiTask 壳，
+      // 编译过的 DSL 仅保留在草稿/编译期；落库步为 aiTask，回放期 aiTask 自带元素清单看截图决策。
+      const a = steps.rows[0]!.action as { kind: string; instruction: string };
+      expect(a.kind).toBe('aiTask');
+      expect(a.instruction).toBe('click submit');
     } finally {
       llmMod.__setLlmClientForTest(null);
     }

@@ -18,8 +18,8 @@ describe('canSwitch', () => {
     expect(canSwitch('waitFor', 'assertVisible')).toBe(true);
     expect(canSwitch('assertVisible', 'waitFor')).toBe(true);
   });
-  it('rejects switching involving navigate/upload/extract/aiStep/switchTab/screenshot/assertJson', () => {
-    for (const k of ['navigate', 'upload', 'extract', 'aiStep', 'switchTab', 'screenshot', 'assertJson'] as const) {
+  it('rejects switching involving navigate/upload/extract/aiTask/switchTab/screenshot/assertJson', () => {
+    for (const k of ['navigate', 'upload', 'extract', 'aiTask', 'switchTab', 'screenshot', 'assertJson'] as const) {
       expect(canSwitch(k, 'click')).toBe(false);
       expect(canSwitch('click', k)).toBe(false);
     }

@@ -27,11 +27,6 @@ export function migrateAction(raw: unknown): unknown {
     return action;
   }
 
-  if (kind === 'aiStep') {
-    if (!('assertion' in action)) action.assertion = undefined;
-    return action;
-  }
-
   // 其余 kind（navigate / upload / switchTab / screenshot / assertJson）原样返回
   return action;
 }

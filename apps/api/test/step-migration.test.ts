@@ -67,26 +67,6 @@ describe('migrateAction — defensive', () => {
   });
 });
 
-describe('migrateAction — aiStep assertion field', () => {
-  it('adds assertion=undefined to legacy aiStep without assertion', () => {
-    const legacy = { kind: 'aiStep', instruction: '提交订单', compiled: null };
-    const out = migrateAction(legacy) as { assertion?: unknown };
-    expect(out.assertion).toBeUndefined();
-  });
-
-  it('does not overwrite existing assertion', () => {
-    const cur = { kind: 'aiStep', instruction: 'x', compiled: null, assertion: '页面显示成功' };
-    const out = migrateAction(cur) as { assertion?: string };
-    expect(out.assertion).toBe('页面显示成功');
-  });
-
-  it('does not touch non-aiStep kinds', () => {
-    const click = { kind: 'click', locator: [{ strategy: 'css', value: '#btn' }] };
-    const out = migrateAction(click) as { assertion?: unknown };
-    expect('assertion' in out).toBe(false);
-  });
-});
-
 describe('migrateAction — extract mode lazy migration', () => {
   it('adds mode=completeValue to legacy extract', () => {
     const legacy = { kind: 'extract', locator: [{ strategy: 'css', value: '#x' }], varName: 'orderNo' };

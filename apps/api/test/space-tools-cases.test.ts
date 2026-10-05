@@ -53,22 +53,22 @@ async function untilConfirm(events: Array<Record<string, unknown>>): Promise<str
 }
 
 describe('manage_cases 工具', () => {
-  it('create:compiled click 展开为具体步骤行;stage(create) 广播', async () => {
+  it('create:每条 instruction 落 aiTask 行;stage(create) 广播', async () => {
     const seed = await seedProject(pool);
     const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await buildCasesToolsLazy(ctx);
     const r = await tool.execute({
       action: 'create', title: '下单流程', groupId: seed.groupId,
       steps: [
-        { action: '打开首页', compiled: [{ kind: 'navigate', url: 'https://a.example.com/' }] },
-        { action: '点击下单', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '.buy' }] }], assertion: '出现成功提示' },
+        { action: '打开首页', assertion: null },
+        { action: '点击下单', assertion: '出现成功提示' },
       ],
     });
     expect(r.ok).toBe(true);
     const steps = (await pool.query(
       `SELECT s.action FROM test_steps s JOIN test_cases c ON c.id = s.case_id WHERE c.title = '下单流程' ORDER BY s."order"`,
     )).rows as Array<{ action: { kind: string } }>;
-    expect(steps.map((s) => s.action.kind)).toEqual(['navigate', 'click']);
+    expect(steps.map((s) => s.action.kind)).toEqual(['aiTask', 'aiTask']);
     expect(events).toContainEqual(expect.objectContaining({ type: 'stage', kind: 'case', action: 'create' }));
   }, 30_000);
 

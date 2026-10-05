@@ -204,32 +204,6 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(results[0]!.status).toBe('passed');
   });
 
-  it('uncompiled aiStep fails with clear error; compiled aiStep runs substeps', async () => {
-    const bad = await executeCaseReal(
-      '00000000-0000-0000-0000-000000000001',
-      [{ order: 1, action: { kind: 'aiStep', instruction: 'x', compiled: null } }],
-      { reportId: 'r-ai-bad' },
-    );
-    expect(bad[0]!.status).toBe('failed');
-    expect(bad[0]!.error).toMatch(/未编译/);
-
-    const good = await executeCaseReal(
-      '00000000-0000-0000-0000-000000000001',
-      [
-        {
-          order: 1,
-          action: {
-            kind: 'aiStep',
-            instruction: 'x',
-            compiled: [{ kind: 'assertVisible', locator: [{ strategy: 'role', value: 'main' }] }],
-          },
-        },
-      ],
-      { reportId: 'r-ai-good' },
-    );
-    expect(good[0]!.status).toBe('passed');
-  });
-
   it('applies delayMs via page.waitForTimeout before dispatch', async () => {
     mocked.__page.waitForTimeout.mockClear();
     await executeCaseReal(
@@ -654,41 +628,5 @@ describe('phase3 — composite value at execute', () => {
     const fillCalls = (mocked.__locator.mock.results[mocked.__locator.mock.results.length - 1]!.value as { pressSequentially: ReturnType<typeof vi.fn> }).pressSequentially.mock.calls;
     const lastFillArg = fillCalls[fillCalls.length - 1]?.[0];
     expect(lastFillArg).toMatch(/^CS\d{3}$/);
-  });
-});
-
-describe('phase4 — aiStep vision path', () => {
-  it('captures #selector → mock OCR → fills output #selector', async () => {
-    // page.locator 返回 mock.first(locator)；用 #captchaImg 作为源
-    mocked.__locator.mockClear();
-    mocked.__getByText.mockClear();
-    const results = await executeCaseReal(
-      '00000000-0000-0000-0000-000000000040',
-      [
-        {
-          order: 1,
-          action: {
-            kind: 'aiStep',
-            instruction: '识别图片 #captchaImg 并输入到 #captchaInput',
-            compiled: null,
-          },
-        },
-      ],
-      {
-        reportId: 'r-vision-1',
-        llmClient: {
-          provider: 'openai',
-          complete: async () => ({
-            kind: 'text',
-            value: '识别出的文本',
-            provider: 'openai',
-            vision: true,
-          }),
-        },
-      },
-    );
-    expect(results[0]!.status).toBe('passed');
-    // 至少调用过两次 locator：一次截取 #captchaImg，一次 fill #captchaInput
-    expect(mocked.__locator.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });

@@ -36,13 +36,11 @@ export const STEP_KIND_LABELS: Record<string, string> = {
   navigate: '打开页面',
   upload: '上传文件',
   extract: '提取变量',
-  aiStep: 'AI步骤',
   aiTask: '智能步骤',
   switchTab: '切换标签页',
   screenshot: '截图',
   queryDb: '数据库查询',
   observeLog: '日志观察',
-  solveCaptcha: '验证码识别',
 };
 
 export function stepKindLabel(kind: string): string {

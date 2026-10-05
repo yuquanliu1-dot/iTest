@@ -21,12 +21,6 @@ interface Props {
   onClose: () => void;
 }
 
-/** 与服务端 aiStepSplit.splitByNumber 同一行匹配规则（自 StepEditModal 原样迁移）。 */
-function countNumberedSegments(text: string): number {
-  const re = /^[ \t]*\d+(?:\.[ \t]+|、[ \t]*)(.+)$/;
-  return text.split(/\r?\n/).filter((line) => re.test(line)).length;
-}
-
 function FieldError({ msg }: { msg?: string }) {
   if (!msg) return null;
   return <span className="text-[11px]" style={{ color: 'var(--destructive)' }}>{msg}</span>;
@@ -148,12 +142,8 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
   const [compiling, setCompiling] = useState(false);
   const [compileErr, setCompileErr] = useState('');
 
-  // aiStep / navigate / waitFor / check / switchTab / screenshot
+  // aiTask / navigate / waitFor / check / switchTab / screenshot
   const [instruction, setInstruction] = useState(String(action.instruction ?? ''));
-  // aiStep 可选断言：与 instruction 解耦；保存后落到 test_steps.assertion（assertText 形态）。
-  // 后端在 save 路径会做 migrateAssertion，老数据缺这字段时会回填空字符串而非报错。
-  const [aiAssertion, setAiAssertion] = useState(String(action.assertion ?? ''));
-  const [showBoundary, setShowBoundary] = useState(false);
   const [url, setUrl] = useState(String(action.url ?? ''));
   const [timeoutMs, setTimeoutMs] = useState(String(action.timeoutMs ?? ''));
   const [checked, setChecked] = useState(action.checked !== false);
@@ -249,13 +239,6 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         delete next.description;
       }
     }
-    if (kind === 'aiStep') {
-      next.instruction = instruction.trim();
-      next.compiled = action.compiled ?? null;
-      const a = aiAssertion.trim();
-      if (a) next.assertion = a;
-      else delete next.assertion;
-    }
     if (kind === 'aiTask') next.instruction = instruction.trim();
     if (kind === 'navigate') next.url = url.trim();
     if (kind === 'waitFor') {
@@ -308,7 +291,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
       setFieldErrors({ 'action.description': '智能抽取需要填写描述并生成正则' });
       return;
     }
-    if ((kind === 'aiStep' || kind === 'aiTask') && !instruction.trim()) {
+    if (kind === 'aiTask' && !instruction.trim()) {
       setFieldErrors({ 'action.instruction': '指令不能为空' });
       return;
     }
@@ -570,54 +553,6 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
                     已生成正则：{extractPattern}（捕获组 {extractGroup}，保存后回放按正则执行）
                   </p>
                 )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {kind === 'aiStep' && (
-          <div className="flex flex-col gap-2">
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>自然语言指令（保存后自动编译）</span>
-              <textarea
-                className="input-base input-xs"
-                aria-invalid={!!fieldErrors['action.instruction']}
-                rows={3}
-                value={instruction}
-                onChange={(e) => setInstruction(e.target.value)}
-                placeholder="可用 #cssSelector 引用页面元素，例: 识别图片 #captchaImg 并输入到 #captchaInput"
-              />
-              <FieldError msg={fieldErrors['action.instruction']} />
-            </label>
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>断言（可选，保存后落入 assertText）</span>
-              <textarea
-                className="input-base input-xs"
-                rows={2}
-                value={aiAssertion}
-                onChange={(e) => setAiAssertion(e.target.value)}
-                placeholder="例：看见验证码识别结果；留空则不生成断言"
-              />
-            </label>
-            {countNumberedSegments(instruction) >= 2 && (
-              <p className="text-[11px]" style={{ color: 'var(--primary)' }}>
-                检测到 {countNumberedSegments(instruction)} 条编号，保存时将自动拆为 {countNumberedSegments(instruction)} 条独立智能步骤
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={() => setShowBoundary((v) => !v)}
-              className="press self-start text-[11px] px-2 py-1 rounded-[var(--radius-sm)] border"
-              style={{ cursor: 'pointer', borderColor: 'var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)' }}
-            >
-              {showBoundary ? '收起使用边界提示' : '查看使用边界'}
-            </button>
-            {showBoundary && (
-              <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--muted-foreground)' }}>
-                <p>• 智能步骤适合复杂页面、动态选择、第一条结果等场景。</p>
-                <p>• 不建议用于登录、支付、删除审批等高风险路径，也不用于发布准入的关键确定性步骤。</p>
-                <p>• 强对抗验证码（滑块、点选、行为验证）不适用；仅适合测试环境中的简单图片验证码。</p>
-                <p>• 关键结果请使用文本断言 / JSON 断言，不要把验证全部塞进智能步骤。</p>
               </div>
             )}
           </div>

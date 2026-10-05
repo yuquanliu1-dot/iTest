@@ -6,10 +6,7 @@ import { requirements, groups, aiThreads, aiWorkspaceState, scenarios, testCases
 import { eq, asc, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
-import { compileAiStepsInPlace } from '../agent/aiStepCompile.js';
-import { splitAiStepsInPlace } from '../agent/aiStepSplit.js';
 import { migrateAssertion, sanitizeAssertion } from '../lib/step-migration.js';
-import { expandCompiledAiStepsInPlace } from '../lib/ai-step-expand.js';
 import { loadDoc, recordContextMode, removeSaved, type StagedCase } from '../pi/workspace.js';
 
 export const requirementsRoute = Router({ mergeParams: true });
@@ -109,26 +106,6 @@ const SaveBody = z.object({
   targetVersionId: z.string().uuid().optional(),
 });
 
-/** 把「打开 X 页」「访问 X」「打开登录页」等指令翻译成默认 URL。供 compileAiStep 当 ctx.url 兜底。 */
-function inferPageUrl(name: string, instruction: string, fallback?: string): string | undefined {
-  const text = `${name} ${instruction}`.toLowerCase();
-  const dict: Record<string, string> = {
-    '登录': '/login',
-    'login': '/login',
-    '注册': '/signup',
-    '工作台': '/',
-    '首页': '/',
-    '设置': '/settings',
-    '需求': '/requirements',
-    '用例': '/cases',
-    '计划': '/plans',
-  };
-  for (const [k, p] of Object.entries(dict)) {
-    if (text.includes(k)) return fallback ? `${fallback.replace(/\/$/, '')}${p}` : `http://localhost:5173${p}`;
-  }
-  return undefined;
-}
-
 /** 从需求文本提取第一个 http(s) URL（去掉中文标点等尾随字符）。无则 null。 */
 function extractFirstHttpUrl(text: string): string | null {
   const m = text.match(/https?:\/\/[^\s，。；、）)】」"']+/i);
@@ -178,72 +155,25 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
   const existingSc = await db.select({ id: scenarios.id, title: scenarios.title }).from(scenarios).where(eq(scenarios.requirementId, req.params.id));
   const scenarioByTitle = new Map(existingSc.map((r) => [r.title, r.id] as const));
 
-  // 阶段 1（事务外）：构建步骤行 + 拆条 + LLM 编译。编译是慢速网络 IO，不能占着数据库事务。
-  const groupDefaultUrl = g.defaultUrl ?? null;
-  // 执行 URL 优先级：agent 实际抓取过的页面（inspect_page）> 需求文本中的真实 URL > inferPageUrl 字典兜底。
+  // 阶段 1：构建步骤行 + 写库。每条 step 直接落 aiTask（回放期由 LLM 多轮执行）。
   const requirementUrl = doc.pageContext?.url ?? extractFirstHttpUrl(rows[0]!.content);
   const prepared: Array<{ c: StagedCase; scenarioTitle: string | null; stepRows: Array<{ source: 'agent'; name: string; action: object; assertion: object | null; sensitive: boolean }> }> = [];
   for (const c of selectedCaseById.values()) {
-    // 找到 c 所属场景行（按引用相等匹配）
     const owner = selectedScenarios.find((s) => s.cases.some((x) => x.id === c.id));
-    const stepRows: Array<{
-      source: 'agent';
-      name: string;
-      action: object;
-      assertion: object | null;
-      delayMs?: number;
-      tabRef?: string;
-      componentKind?: string;
-      sensitive: boolean;
-      secretCiphertext?: string;
-      secretIv?: string;
-      secretTag?: string;
-    }> = c.steps.map((s) => {
-      // 三态：undefined = 未尝试（不写 compiled 字段，触发 compileAiStepsInPlace 兜底）；
-      // null = AI 已放弃（短路不再重试）；array = 已编译（短路不再重试）。
-      const a: { kind: 'aiStep'; instruction: string; compiled?: unknown } = {
-        kind: 'aiStep',
-        instruction: s.action,
-      };
-      if (s.compiled !== undefined) a.compiled = s.compiled;
+    const stepRows = c.steps.map((s) => {
+      const action: Record<string, unknown> = { kind: 'aiTask', instruction: s.action };
       const cleanAssertion = sanitizeAssertion(s.assertion);
       return {
         source: 'agent' as const,
         name: s.name,
-        action: a as object,
+        action: action as object,
         // 先 sanitize：描述性断言 → null；通过则把老 `{kind,text}` 形态保留交给后续 migrateAssertion。
         assertion: cleanAssertion ? ({ kind: 'assertText', text: cleanAssertion } as object) : null,
         sensitive: false,
       };
     });
-    if (stepRows.length > 0) {
-      // 把 AI case 的 steps[] 当作 aiStep 数组落地前先做编号拆分（多条 aiStep）
-      splitAiStepsInPlace(stepRows as unknown as Array<{ action: unknown }>);
-    }
     prepared.push({ c, scenarioTitle: owner?.title ?? null, stepRows });
   }
-
-  // 阶段 1.5：并发编译所有用例的 aiStep（compileAiStepsInPlace 内部按 chunk 并发，
-  // 这里再做用例间并发；编译失败不阻塞保存，原 aiStep + compiled:null 回放兜底）。
-  await Promise.all(
-    prepared.map(async (p) => {
-      if (p.stepRows.length === 0) return;
-      try {
-        await compileAiStepsInPlace(
-          p.stepRows.map((row) => ({ action: row.action, name: row.name, url: requirementUrl ?? undefined })),
-          undefined,
-          (name) => inferPageUrl(name ?? '', '', groupDefaultUrl ?? undefined),
-        );
-      } catch {
-        // ignore per-case; 失败项保留 compiled:null
-      }
-    }),
-  );
-
-  // 阶段 1.6：把"已编译"的 aiStep 就地展开为多条具体 DSL 步骤（navigate/click/fill/...），
-  // 让 LLM 在生成阶段就已经出 compiled 的用例保存后能在 UI 上直接编辑、回放时少一层 aiStep 递归。
-  // "放弃"（compiled:null）和"未尝试"（无 compiled 字段）的 aiStep 原样保留，行为不变。
-  expandCompiledAiStepsInPlace(prepared);
 
   let savedCases = 0;
   // 阶段 2（事务内）：纯写库

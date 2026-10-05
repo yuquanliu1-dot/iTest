@@ -1,4 +1,4 @@
-import { chromium, type Browser, type ElementHandle, type Page } from 'playwright-core';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import type {
   StepAction,
   Locator,
@@ -24,8 +24,6 @@ import { waitForStable, ElementNotStable } from './stability.js';
 import { classify } from './failureClassifier.js';
 import { preflight } from './preflight.js';
 import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
-import { planVision } from '../agent/aiStepVision.js';
-import { compileAiStepVision, recognizeImageText } from '../agent/aiStepCompile.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
 import { runAiTask } from './aiTask.js';
 import type { EnvCtx } from './envContext.js';
@@ -113,7 +111,7 @@ interface DispatchOpts {
 }
 
 /** 交互动作：执行前先做稳定性检查 */
-const INTERACTIVE_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select', 'upload', 'solveCaptcha', 'aiTask'];
+const INTERACTIVE_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select', 'upload', 'aiTask'];
 /** 稳定性检查不过时可尝试 DOM 降级的动作 */
 const DOM_FALLBACK_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select'];
 
@@ -405,40 +403,6 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       vars[action.varName] = resolved;
       return;
     }
-    case 'aiStep': {
-      const instruction = String(action.instruction ?? '');
-      // 优先走已编译的 DSL：instruction 即使带 # 占位符，回放时若已有 compiled 就直接执行子步骤。
-      // 仅在 aiStep 编译前/未尝试时才走视觉路径（source/output 选择器场景）。
-      if (Array.isArray(action.compiled) && action.compiled.length > 0) {
-        const { missing } = substituteVars(action.instruction, vars);
-        if (missing.length > 0) {
-          throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.instruction}")`);
-        }
-        for (const sub of action.compiled) {
-          await dispatch(sub, opts);
-        }
-        return;
-      }
-      const plan = planVision(instruction);
-      if (plan.useVision) {
-        const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
-        const sourceLoc = page.locator(plan.sourceSelector!).first();
-        await sourceLoc.waitFor({ state: 'visible', timeout: 5000 });
-        const buffer = await sourceLoc.screenshot({ timeout: 5000 });
-        const text = await compileAiStepVision(
-          instruction,
-          { image: { base64: buffer.toString('base64'), mime: 'image/png' } },
-          client,
-        );
-        if (plan.outputSelector) {
-          const targetLoc = page.locator(plan.outputSelector).first();
-          await targetLoc.waitFor({ state: 'visible', timeout: 5000 });
-          await targetLoc.fill(text, { timeout: 5000 });
-        }
-        return;
-      }
-      throw new Error('AI 步骤未编译');
-    }
     case 'aiTask': {
       const { value, missing } = substituteVars(action.instruction, vars);
       if (missing.length > 0) {
@@ -447,84 +411,6 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
       const summary = await runAiTask(opts.page, value, client);
       return summary ? `aiTask: ${summary}` : undefined;
-    }
-    case 'solveCaptcha': {
-      // 截验证码图片 → LLM vision OCR → 填入输入框。识别文本每次回放动态获取,不写回步骤。
-      const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
-      const inputLoc = await tryFirstMatch(page, action.inputLocator, action.intentLocator, opts.hitSink);
-      let imageEl: ElementHandle | null = null;
-      try {
-        const imageLoc = await tryFirstMatch(page, action.imageLocator, undefined, opts.hitSink);
-        imageEl = await imageLoc.elementHandle();
-      } catch {
-        // imageLocator 候选未命中（常见:AI 从源码抓的 aria-label 与运行时本地化文案不一致）
-        // → 邻近输入框启发式找图,与录制器 findCaptchaImage 同策略。
-      }
-      if (!imageEl) {
-        const inputHandle = await inputLoc.elementHandle();
-        if (!inputHandle) throw new Error('solveCaptcha: 输入框元素句柄获取失败');
-        const found = await page.evaluateHandle((input) => {
-          const scope = input.closest('form') ?? input.parentElement;
-          if (!scope) return null;
-          const inRect = input.getBoundingClientRect();
-          const icx = inRect.left + inRect.width / 2;
-          const icy = inRect.top + inRect.height / 2;
-          let best: Element | null = null;
-          let bestDist = Infinity;
-          for (const el of Array.from(scope.querySelectorAll('img, svg'))) {
-            // lucide 图标也是 svg,排除;验证码图是 img 或无 lucide class 的 svg
-            if (el.tagName.toLowerCase() === 'svg' && /lucide/.test(el.getAttribute('class') ?? '')) continue;
-            const r = el.getBoundingClientRect();
-            if (r.width < 10 || r.height < 10) continue;
-            const d = Math.hypot(r.left + r.width / 2 - icx, r.top + r.height / 2 - icy);
-            if (d < bestDist) {
-              bestDist = d;
-              best = el;
-            }
-          }
-          return best;
-        }, inputHandle);
-        imageEl = found.asElement();
-      }
-      if (!imageEl) throw new Error('solveCaptcha: 验证码图片定位失败（候选与启发式均未命中）');
-      // 小图直接 OCR 容易丢细节（z/2、i/j 混淆）:zoom 放大后截图,再还原。
-      // 透明底 PNG 会让视觉模型把噪点曲线当字符笔画:截屏期间垫白底,一并还原。
-      await imageEl
-        .evaluate((el) => {
-          (el as HTMLElement).style.zoom = '4';
-          (el as HTMLElement).style.background = '#fff';
-        })
-        .catch(() => undefined);
-      let buffer: Buffer;
-      try {
-        await imageEl.waitForElementState('visible', { timeout: 5000 });
-        buffer = await imageEl.screenshot({ timeout: 5000 });
-      } finally {
-        await imageEl
-          .evaluate((el) => {
-            (el as HTMLElement).style.zoom = '';
-            (el as HTMLElement).style.background = '';
-          })
-          .catch(() => undefined);
-      }
-      // 两次识别取一致（独立犯错同错值概率低）;不一致时第三次投票,降低单字符误读率。
-      const CAPTCHA_HINT =
-        '字符集为字母和数字（已排除 0 O o 1 l I，绝不出现），4 个字符，可能有随机旋转。' +
-        '注意区分：j 底部向右弯钩、i 是直杆加点；t 顶部有横杠；z 与 2 的区别是 z 上下平齐。' +
-        '逐字符仔细辨认，只输出 4 个字符本身。';
-      const ocr = () => recognizeImageText({ base64: buffer.toString('base64'), mime: 'image/png' }, client, CAPTCHA_HINT);
-      let text = (await ocr()).trim();
-      const second = (await ocr()).trim();
-      if (second !== text) {
-        const third = (await ocr()).trim();
-        // 简单多数：两两相同取该值，全不同取第二次（第二次与第一次不同才进入此分支）
-        text = third === text ? text : third === second ? second : second;
-      }
-      // 与 fill 同款 React 受控表单处理：先清空再逐键输入,最后 Tab 触发 blur 校验
-      await inputLoc.fill('', { timeout: 5000 });
-      await inputLoc.pressSequentially(text, { delay: 20 });
-      await page.keyboard.press('Tab').catch(() => undefined);
-      return;
     }
     case 'queryDb': {
       const envCtx = opts.ctx.envCtx;
@@ -677,6 +563,142 @@ async function writeStepScreenshot(reportId: string, stepIndex: number, page: Pa
   }
 }
 
+/** 在已持有的 browser context 中跑用例步骤：init-goto → preflight → 步骤循环 → vision 兜底。
+ *  与 `executeCaseReal` 共享核心逻辑；区别是不负责 launch/newContext/close，调用方持有生命周期。 */
+async function runStepsInContext(
+  caseId: string,
+  steps: Array<{
+    order: number;
+    action: unknown;
+    assertion?: unknown;
+    delayMs?: number | null;
+    id?: string;
+    tabRef?: string | null;
+    componentKind?: string | null;
+    sensitive?: boolean | null;
+  }>,
+  ctx: ExecContext,
+  context: BrowserContext,
+  targetUrl?: string,
+  onPreflight?: (report: PreflightReport) => void,
+  caseWindow?: CaseWindow,
+): Promise<ExecStepResult[]> {
+  const results: ExecStepResult[] = [];
+  const vars: Record<string, string> = {};
+  const page = await context.newPage();
+  // 初始导航：用例级 init URL（targetUrl）始终先 goto 一次。
+  // 若首条 step 也是 navigate 且 URL 与 init 相同，让 step 来做这一步，避免重复加载。
+  const firstStepIsSameNav =
+    steps.length > 0
+    && (steps[0]!.action as { kind?: string }).kind === 'navigate'
+    && typeof (steps[0]!.action as { url?: string }).url === 'string'
+    && (steps[0]!.action as { url: string }).url === targetUrl;
+  if (targetUrl && !firstStepIsSameNav) {
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  }
+  // preflight：执行前置检查（URL 可达 / 登录态 / 标签页 / origin）。失败不阻塞执行。
+  try {
+    const report = await preflight(page, { url: targetUrl ?? null, title: '' });
+    onPreflight?.(report);
+  } catch (e) {
+    logger.warn({ err: e, caseId }, 'preflight failed; continuing');
+  }
+  const opts: DispatchOpts = { page, vars, ctx };
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]!;
+    const started = Date.now();
+    opts.stepId = step.id;
+    opts.hitSink = { current: null };
+    opts.dbSink = { current: null };
+    opts.logSink = { current: null };
+    const tabIndex =
+      ctx.tabMap && step.tabRef ? Array.from(ctx.tabMap.keys()).indexOf(step.tabRef) : 0;
+    const assertionAction = normalizeStepAssertion(step.assertion);
+    try {
+      if (step.delayMs) await opts.page.waitForTimeout(step.delayMs);
+      const warning = await dispatch(step.action as StepAction, opts);
+      // action 通过后才执行步骤级断言；断言失败同样记 failed 并终止后续。
+      if (assertionAction) {
+        await dispatch(assertionAction, opts);
+      }
+      const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
+      results.push({
+        order: step.order,
+        status: 'passed',
+        durationMs: Date.now() - started,
+        warning,
+        screenshot,
+        hitLocator: opts.hitSink.current ?? undefined,
+        tabIndex: tabIndex >= 0 ? tabIndex : 0,
+        db: opts.dbSink.current ?? undefined,
+        log: opts.logSink.current ?? undefined,
+      });
+    } catch (e) {
+      const durationMs = Date.now() - started;
+      const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
+      // 断言失败时 classify 应拿到 assertion 的形态（若归类器关心 action.kind）；
+      // 把实际跑的那条作为归类输入更准确——失败于 action 还是 assertion 一目了然。
+      const failedAction = (assertionAction ?? (step.action as StepAction));
+      const classified = classify(e, { action: failedAction, durationMs });
+      results.push({
+        order: step.order,
+        status: 'failed',
+        durationMs,
+        error: e instanceof Error ? e.message : String(e),
+        screenshot,
+        failureReason: classified.reason,
+        humanMessage: classified.humanMessage,
+        hitLocator: opts.hitSink.current ?? undefined,
+        tabIndex: tabIndex >= 0 ? tabIndex : 0,
+        db: opts.dbSink.current ?? undefined,
+        log: opts.logSink.current ?? undefined,
+      });
+      // 失败立即终止，避免后续步骤被前一步污染的页面状态搞乱。
+      break;
+    }
+  }
+  // Track 1：用例级 vision 判定。所有 step.action 都通过后再做；走最终截图。
+  // 若中途已 failed，vision 不再覆盖（避免 vision 误判把真失败洗白）。
+  const failedSoFar = results.some((r) => r.status === 'failed');
+  if (!failedSoFar && ctx.expectedOutcome && ctx.expectedOutcome.trim()) {
+    try {
+      // 终态判定前给 SPA 收尾时间：点击提交 → 接口往返 → 前端跳转是异步的，
+      // 立即截图会把「仍停在提交前页面」误判为失败（实测点击后 ~100ms 截图仍显示登录页）。
+      await opts.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
+      await opts.page.waitForTimeout(800);
+      const buffer = await opts.page.screenshot({ timeout: 5000 });
+      const { judgeCaseOutcome } = await import('../agent/judgeCaseOutcome.js');
+      const verdict = await judgeCaseOutcome({
+        expectedOutcome: ctx.expectedOutcome,
+        caseTitle: ctx.caseTitle ?? caseId,
+        caseUrl: ctx.caseUrl ?? null,
+        screenshot: { base64: buffer.toString('base64'), mime: 'image/png' },
+        llmClient: ctx.llmClient,
+      });
+      if (verdict && !verdict.passed) {
+        // 用例级 vision 判失败 → 追加一个 order=-1 的 failed stepResult，调用方以「任意 failed」判定为失败。
+        results.push({
+          order: -1,
+          status: 'failed',
+          durationMs: 0,
+          error: `case-level vision assert failed: ${verdict.reason}`,
+          failureReason: 'VisionAssertionFailed',
+          humanMessage: '最终页面与用例预期不符',
+          visionAssert: { passed: false, reason: verdict.reason },
+        });
+      } else if (verdict) {
+        // 通过：在最后一步 result 上挂 visionAssert，调用方可读到 reason（不影响 passed 计数）。
+        const last = results[results.length - 1];
+        if (last) last.visionAssert = { passed: true, reason: verdict.reason };
+      }
+    } catch (e) {
+      // vision 兜底失败不视作用例失败：best-effort
+      logger.warn({ err: e, caseId }, 'case-outcome vision assert skipped');
+    }
+  }
+  return results;
+}
+
 /** 真实浏览器执行用例（playwright-core 驱动 chromium）。返回 step 粒度的执行结果。
  * onPreflight：执行前 preflight 检查报告的旁路回调（由 runCase 层决定是否落库），
  * 保持既有返回签名（ExecStepResult[]）不变以兼容既有调用方。
@@ -702,8 +724,6 @@ export async function executeCaseReal(
   incognito?: boolean,
 ): Promise<ExecStepResult[]> {
   let browser: Browser | undefined;
-  const results: ExecStepResult[] = [];
-  const vars: Record<string, string> = {};
   try {
     browser = await chromium.launch({
       headless: true,
@@ -725,119 +745,35 @@ export async function executeCaseReal(
       // 暂硬编码,未来如需随 env/project 切换可挪到 envContext。
       locale: 'zh-CN',
     });
-    const page = await context.newPage();
-    // 初始导航：用例级 init URL（targetUrl）始终先 goto 一次。
-    // 若首条 step 也是 navigate 且 URL 与 init 相同，让 step 来做这一步，避免重复加载。
-    const firstStepIsSameNav =
-      steps.length > 0
-      && (steps[0]!.action as { kind?: string }).kind === 'navigate'
-      && typeof (steps[0]!.action as { url?: string }).url === 'string'
-      && (steps[0]!.action as { url: string }).url === targetUrl;
-    if (targetUrl && !firstStepIsSameNav) {
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    }
-    // preflight：执行前置检查（URL 可达 / 登录态 / 标签页 / origin）。失败不阻塞执行。
-    try {
-      const report = await preflight(page, { url: targetUrl ?? null, title: '' });
-      onPreflight?.(report);
-    } catch (e) {
-      logger.warn({ err: e, caseId }, 'preflight failed; continuing');
-    }
-    const opts: DispatchOpts = { page, vars, ctx };
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i]!;
-      const started = Date.now();
-      opts.stepId = step.id;
-      opts.hitSink = { current: null };
-      opts.dbSink = { current: null };
-      opts.logSink = { current: null };
-      const tabIndex =
-        ctx.tabMap && step.tabRef ? Array.from(ctx.tabMap.keys()).indexOf(step.tabRef) : 0;
-      const assertionAction = normalizeStepAssertion(step.assertion);
-      try {
-        if (step.delayMs) await opts.page.waitForTimeout(step.delayMs);
-        const warning = await dispatch(step.action as StepAction, opts);
-        // action 通过后才执行步骤级断言；断言失败同样记 failed 并终止后续。
-        if (assertionAction) {
-          await dispatch(assertionAction, opts);
-        }
-        const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
-        results.push({
-          order: step.order,
-          status: 'passed',
-          durationMs: Date.now() - started,
-          warning,
-          screenshot,
-          hitLocator: opts.hitSink.current ?? undefined,
-          tabIndex: tabIndex >= 0 ? tabIndex : 0,
-          db: opts.dbSink.current ?? undefined,
-          log: opts.logSink.current ?? undefined,
-        });
-      } catch (e) {
-        const durationMs = Date.now() - started;
-        const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
-        // 断言失败时 classify 应拿到 assertion 的形态（若归类器关心 action.kind）；
-        // 把实际跑的那条作为归类输入更准确——失败于 action 还是 assertion 一目了然。
-        const failedAction = (assertionAction ?? (step.action as StepAction));
-        const classified = classify(e, { action: failedAction, durationMs });
-        results.push({
-          order: step.order,
-          status: 'failed',
-          durationMs,
-          error: e instanceof Error ? e.message : String(e),
-          screenshot,
-          failureReason: classified.reason,
-          humanMessage: classified.humanMessage,
-          hitLocator: opts.hitSink.current ?? undefined,
-          tabIndex: tabIndex >= 0 ? tabIndex : 0,
-          db: opts.dbSink.current ?? undefined,
-          log: opts.logSink.current ?? undefined,
-        });
-        // 失败立即终止，避免后续步骤被前一步污染的页面状态搞乱。
-        break;
-      }
-    }
-    // Track 1：用例级 vision 判定。所有 step.action 都通过后再做；走最终截图。
-    // 若中途已 failed，vision 不再覆盖（避免 vision 误判把真失败洗白）。
-    const failedSoFar = results.some((r) => r.status === 'failed');
-    if (!failedSoFar && ctx.expectedOutcome && ctx.expectedOutcome.trim()) {
-      try {
-        // 终态判定前给 SPA 收尾时间：点击提交 → 接口往返 → 前端跳转是异步的，
-        // 立即截图会把「仍停在提交前页面」误判为失败（实测点击后 ~100ms 截图仍显示登录页）。
-        await opts.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
-        await opts.page.waitForTimeout(800);
-        const buffer = await opts.page.screenshot({ timeout: 5000 });
-        const { judgeCaseOutcome } = await import('../agent/judgeCaseOutcome.js');
-        const verdict = await judgeCaseOutcome({
-          expectedOutcome: ctx.expectedOutcome,
-          caseTitle: ctx.caseTitle ?? caseId,
-          caseUrl: ctx.caseUrl ?? null,
-          screenshot: { base64: buffer.toString('base64'), mime: 'image/png' },
-          llmClient: ctx.llmClient,
-        });
-        if (verdict && !verdict.passed) {
-          // 用例级 vision 判失败 → 追加一个 order=-1 的 failed stepResult，调用方以「任意 failed」判定为失败。
-          results.push({
-            order: -1,
-            status: 'failed',
-            durationMs: 0,
-            error: `case-level vision assert failed: ${verdict.reason}`,
-            failureReason: 'VisionAssertionFailed',
-            humanMessage: '最终页面与用例预期不符',
-            visionAssert: { passed: false, reason: verdict.reason },
-          });
-        } else if (verdict) {
-          // 通过：在最后一步 result 上挂 visionAssert，调用方可读到 reason（不影响 passed 计数）。
-          const last = results[results.length - 1];
-          if (last) last.visionAssert = { passed: true, reason: verdict.reason };
-        }
-      } catch (e) {
-        // vision 兜底失败不视作用例失败：best-effort
-        logger.warn({ err: e, caseId }, 'case-outcome vision assert skipped');
-      }
-    }
+    return await runStepsInContext(caseId, steps, ctx, context, targetUrl, onPreflight, caseWindow);
   } finally {
     if (browser) await browser.close().catch(() => undefined);
   }
-  return results;
+}
+
+/** 在调用方持有的 chromium + context 中跑用例步骤（用于 loginPrepare 链路共享登录态）。
+ *  与 `executeCaseReal` 行为一致但跳过 launch / newContext / close —— context 已含登录 cookie，
+ *  不再注入 storageState（覆盖会破坏登录态）；忽略 incognito（caller 持有的 ctx 已是登录态）。 */
+export async function executeCaseInBrowser(
+  caseId: string,
+  steps: Array<{
+    order: number;
+    action: unknown;
+    assertion?: unknown;
+    delayMs?: number | null;
+    id?: string;
+    tabRef?: string | null;
+    componentKind?: string | null;
+    sensitive?: boolean | null;
+  }>,
+  ctx: ExecContext,
+  browser: Browser,
+  context: BrowserContext,
+  targetUrl?: string,
+  onPreflight?: (report: PreflightReport) => void,
+  caseWindow?: CaseWindow,
+): Promise<ExecStepResult[]> {
+  // 显式持有 browser 参数以便调用方阅读意图；执行路径不直接用 browser（context 已就绪）。
+  void browser;
+  return runStepsInContext(caseId, steps, ctx, context, targetUrl, onPreflight, caseWindow);
 }

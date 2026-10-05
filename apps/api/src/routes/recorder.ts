@@ -7,7 +7,6 @@ import { HttpError } from '../middleware/errorHandler.js';
 import { StepAction } from '@itest/shared';
 import { createSession, getSession } from '../recorder/ws.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
-import { compileAiStepsInPlace } from '../agent/aiStepCompile.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
 import { logger } from '../logger.js';
 
@@ -89,12 +88,6 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
   if (!session) throw new HttpError(404, 'not_found', 'session not found');
   await assertCaseVisible(session.caseId, req.user!);
   session.ws?.close(1000, 'finished');
-  await compileAiStepsInPlace(
-    session.steps.map((s) => {
-      const item = s as { action: unknown; url?: string };
-      return { action: item.action, url: item.url };
-    }),
-  );
   let inserted = 0;
   const existing = await db.select().from(testSteps).where(eq(testSteps.caseId, session.caseId));
   let nextOrder = existing.length > 0 ? Math.max(...existing.map((s) => s.order)) + 1 : 1;

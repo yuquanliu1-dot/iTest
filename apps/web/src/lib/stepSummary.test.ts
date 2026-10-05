@@ -56,11 +56,6 @@ describe('stepSummary', () => {
     expect(stepSummary({ kind: 'extract', locator: loc(), varName: 'orderId', mode: 'completeValue' })).toBe('提取 → {{orderId}}');
   });
 
-  it('aiStep 显示指令前 40 字', () => {
-    const long = 'x'.repeat(50);
-    expect(stepSummary({ kind: 'aiStep', instruction: long, compiled: null })).toBe(`AI：${'x'.repeat(39)}…`);
-  });
-
   it('未知类型回退 JSON 片段（超长截断）', () => {
     const action = { kind: 'weird', foo: 'x'.repeat(60) };
     expect(stepSummary(action)).toBe(JSON.stringify(action).slice(0, 39) + '…');

@@ -3,7 +3,7 @@ import type { StepClip } from '../../stores/stepClipboard';
 export const STEP_KINDS = [
   'navigate', 'click', 'fill', 'select', 'check', 'hover', 'waitFor',
   'assertVisible', 'assertText', 'assertJson', 'extract', 'upload',
-  'switchTab', 'screenshot', 'aiStep', 'aiTask', 'queryDb', 'observeLog', 'solveCaptcha',
+  'switchTab', 'screenshot', 'aiTask', 'queryDb', 'observeLog',
 ] as const;
 export type StepKind = (typeof STEP_KINDS)[number];
 
@@ -68,9 +68,6 @@ export function switchAction(clip: StepClip, to: StepKind): StepClip {
     case 'screenshot':
       action = { kind: 'screenshot', name: '' };
       break;
-    case 'aiStep':
-      action = { kind: 'aiStep', instruction: '', compiled: null };
-      break;
     case 'aiTask':
       action = { kind: 'aiTask', instruction: typeof src.instruction === 'string' ? src.instruction : '' };
       break;
@@ -79,15 +76,6 @@ export function switchAction(clip: StepClip, to: StepKind): StepClip {
       break;
     case 'observeLog':
       action = { kind: 'observeLog', windowMs: 60000, keywords: [], fromLine: 200 };
-      break;
-    case 'solveCaptcha':
-      // 双 locator（图片 + 输入框）,复用 src.locator 作为输入框候选
-      action = {
-        kind: 'solveCaptcha',
-        imageLocator: [{ strategy: 'css', value: '' }],
-        inputLocator: locator ?? [{ strategy: 'css', value: '' }],
-        ...base(),
-      };
       break;
   }
 
