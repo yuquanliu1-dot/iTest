@@ -28,6 +28,8 @@ export default function PlanDetail() {
 
   const [showAdd, setShowAdd] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
+  /** 用例移除确认弹窗:点击行内 🗑 时弹出,避免误点(执行计划不含跨域层级,误移易踩雷)。 */
+  const [confirmRemoveCase, setConfirmRemoveCase] = useState<{ id: string; title: string } | null>(null);
   const [selectedAdd, setSelectedAdd] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -93,6 +95,16 @@ export default function PlanDetail() {
     mutationFn: (caseIds: string[]) => api.plans.reorderCases(id!, caseIds),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['plan', id] });
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
+  const removeCases = useMutation({
+    mutationFn: (caseIds: string[]) => api.plans.removeCases(id!, caseIds),
+    onSuccess: (data, vars) => {
+      toast(`已移除 ${vars.length} 个用例`, 'success');
+      qc.invalidateQueries({ queryKey: ['plan', id] });
+      qc.invalidateQueries({ queryKey: ['plans', projectId] });
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -407,6 +419,13 @@ export default function PlanDetail() {
                       ) : null}
                       <IconButton icon="chevronUp" title="上移" onClick={() => moveBy(idx, -1)} />
                       <IconButton icon="chevronDown" title="下移" onClick={() => moveBy(idx, 1)} />
+                      <IconButton
+                        icon="trash"
+                        title="从计划中移除"
+                        tone="destructive"
+                        disabled={removeCases.isPending}
+                        onClick={() => setConfirmRemoveCase({ id: c.id, title: c.title })}
+                      />
                       <StatusPill status="default">{c.id.slice(0, 8)}</StatusPill>
                     </li>
                   );
@@ -499,6 +518,26 @@ export default function PlanDetail() {
               style={{ background: 'var(--destructive)', color: '#fff', border: 'none' }}
             >
               {remove.isPending ? '删除中...' : '确认删除'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 用例移除确认:误删需重新打开"添加用例"找回,前端一律先弹再发请求 */}
+      <Dialog open={!!confirmRemoveCase} onOpenChange={(o) => !o && setConfirmRemoveCase(null)}>
+        <DialogContent style={{ maxWidth: 420 }}>
+          <DialogHeader><DialogTitle>从计划中移除用例</DialogTitle></DialogHeader>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+            确认将「{confirmRemoveCase?.title}」从本计划中移除？后续顺序会自动重排,但用例本身与历史报告保留,可在「添加用例」中重新加入。
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmRemoveCase(null)}>取消</Button>
+            <Button
+              variant="danger"
+              disabled={removeCases.isPending}
+              onClick={() => confirmRemoveCase && removeCases.mutate([confirmRemoveCase.id])}
+            >
+              {removeCases.isPending ? '移除中...' : '确认移除'}
             </Button>
           </DialogFooter>
         </DialogContent>

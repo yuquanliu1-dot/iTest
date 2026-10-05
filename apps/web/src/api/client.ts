@@ -134,6 +134,11 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ caseIds }),
       }),
+    removeCases: (id: string, caseIds: string[]) =>
+      request<{ ok: boolean }>(`/plans/${id}/cases`, {
+        method: 'DELETE',
+        body: JSON.stringify({ caseIds }),
+      }),
     loginCases: (id: string, q?: string) =>
       request<Array<{ id: string; title: string; groupId: string }>>(
         `/plans/${id}/login-cases${q ? `?q=${encodeURIComponent(q)}` : ''}`,
