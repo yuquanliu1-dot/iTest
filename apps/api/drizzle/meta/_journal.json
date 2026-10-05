@@ -141,6 +141,13 @@
       "when": 1759612800001,
       "tag": "0020_project_versions",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791172682450,
+      "tag": "0028_ai_stage_tables",
+      "breakpoints": true
     }
   ]
 }

@@ -119,6 +119,81 @@ export const aiCases = pgTable(
   }),
 );
 
+// 版本空间助手暂存表（thread-scoped）：AI 在 stage_* 工具里写这里，前端 StagePanel 勾选 → /stage/save 落正式表。
+// 与 ai_workspace_*（requirementId-keyed）并列存在但不复用：空间助手无 requirementId，localId 由 LLM 自生成。
+export const aiStageCases = pgTable(
+  'ai_stage_cases',
+  {
+    threadId: text('thread_id').notNull(),
+    localId: text('local_id').notNull(),
+    versionId: uuid('version_id').notNull(),
+    title: varchar('title', { length: 200 }).notNull(),
+    description: text('description'),
+    priority: varchar('priority', { length: 20 }),
+    url: text('url'),
+    steps: jsonb('steps').notNull().default([]),
+    defaultEnvId: uuid('default_env_id'),
+    expectedOutcome: text('expected_outcome'),
+    stagedAt: timestamp('staged_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.threadId, t.localId] }),
+    versionIdx: index('ai_stage_cases_version_idx').on(t.versionId),
+  }),
+);
+
+export const aiStageScenarios = pgTable(
+  'ai_stage_scenarios',
+  {
+    threadId: text('thread_id').notNull(),
+    localId: text('local_id').notNull(),
+    versionId: uuid('version_id').notNull(),
+    requirementId: uuid('requirement_id').notNull(),
+    title: varchar('title', { length: 200 }).notNull(),
+    description: text('description'),
+    caseLocalIds: text('case_local_ids').array().notNull().default([]),
+    stagedAt: timestamp('staged_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.threadId, t.localId] }),
+    versionIdx: index('ai_stage_scenarios_version_idx').on(t.versionId),
+  }),
+);
+
+export const aiStageEnvironments = pgTable(
+  'ai_stage_environments',
+  {
+    threadId: text('thread_id').notNull(),
+    localId: text('local_id').notNull(),
+    versionId: uuid('version_id').notNull(),
+    name: varchar('name', { length: 120 }).notNull(),
+    baseUrl: text('base_url'),
+    objects: jsonb('objects').notNull().default([]),
+    stagedAt: timestamp('staged_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.threadId, t.localId] }),
+    versionIdx: index('ai_stage_environments_version_idx').on(t.versionId),
+  }),
+);
+
+export const aiStagePlans = pgTable(
+  'ai_stage_plans',
+  {
+    threadId: text('thread_id').notNull(),
+    localId: text('local_id').notNull(),
+    versionId: uuid('version_id').notNull(),
+    name: varchar('name', { length: 200 }).notNull(),
+    environmentId: uuid('environment_id'),
+    caseLocalIds: text('case_local_ids').array().notNull().default([]),
+    stagedAt: timestamp('staged_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.threadId, t.localId] }),
+    versionIdx: index('ai_stage_plans_version_idx').on(t.versionId),
+  }),
+);
+
 export const testSteps = pgTable('test_steps', {
   id: uuid('id').primaryKey().defaultRandom(),
   caseId: uuid('case_id').references(() => testCases.id, { onDelete: 'cascade' }).notNull(),

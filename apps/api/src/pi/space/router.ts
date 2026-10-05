@@ -15,6 +15,7 @@ import { sseHeaders, sseSend } from '../../sse/agentRunStream.js';
 import type { AuthUser } from '../../services/auth.service.js';
 import { readLlmConfig } from '../modelBridge.js';
 import { resolveConfirmation } from './confirm.js';
+import { stageRoute } from './stageRoute.js';
 import {
   cancelThread, ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, spaceRepoIssue, subscribeThread, threadStatus,
 } from './session.js';
@@ -23,7 +24,7 @@ import type { ThreadSnapshot } from './session.js';
 export const spaceRoute = Router();
 
 /** threadId → versionId;仅接受 kind='version'(requirement 线程归 /api/pi 管,这里一律 404)。 */
-async function assertSpaceThreadVisible(threadId: string, user: AuthUser): Promise<string> {
+export async function assertSpaceThreadVisible(threadId: string, user: AuthUser): Promise<string> {
   const row = (await db
     .select({ kind: aiThreads.kind, versionId: aiThreads.versionId })
     .from(aiThreads)
@@ -155,3 +156,5 @@ spaceRoute.get('/threads/:id/events', async (req, res) => {
     res.end();
   }
 });
+
+spaceRoute.use(stageRoute);

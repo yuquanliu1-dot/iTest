@@ -13,10 +13,27 @@ import { buildCasesTools } from './cases.js';
 import { buildScenariosTools } from './scenarios.js';
 import { buildEnvironmentsTools } from './environments.js';
 import { buildPlansTools } from './plans.js';
+import { buildStageTools } from './stage-tools.js';
 
 export type { SpaceToolsContext } from './context.js';
 export { emitStage, type StageKind } from './stage.js';
 export { diffText } from './diff.js';
+export {
+  buildStageTools,
+  STAGE_PROMPT_GUIDELINES,
+  listStage,
+  stageCase,
+  stageScenario,
+  stageEnvironment,
+  stagePlan,
+  deleteStaged,
+  type StagedCase,
+  type StagedScenario,
+  type StagedEnvironment,
+  type StagedPlan,
+  type StageDoc,
+  type StageKind as StageObjectKind,
+} from './stage-tools.js';
 
 export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   const tools: ToolExecutor[] = [];
@@ -24,6 +41,9 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   // 调用收到"尚未就绪"错误(而非工具缺席导致 AI 困惑)。
   tools.push(...buildRepoSandboxTools(() => repoToolCwd(ctx.repo)));
   tools.push(buildAnnounceTool(ctx), buildInspectTool(ctx));
+  // stage_* 与 manage_* 并列：创建类对象优先走 stage_*（用户预览/勾选/选分组后再落库）；
+  // manage_* 仍负责实时写与改/删（保留既有工作流）。
+  tools.push(...buildStageTools(ctx));
   tools.push(...buildCasesTools(ctx));
   tools.push(...buildScenariosTools(ctx));
   tools.push(...buildEnvironmentsTools(ctx));
