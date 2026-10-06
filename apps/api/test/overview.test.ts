@@ -66,7 +66,7 @@ describe('overview', () => {
     expect(r.body.priorityDistribution).toHaveLength(4);
     expect(r.body.plans).toEqual([]);
     expect(r.body.recordingActivity).toEqual([]);
-    expect(r.body.aiActivity).toEqual([]);
+    expect(r.body.aiActivity).toHaveLength(7);
     expect(r.body.recentRuns).toEqual([]);
   });
 
@@ -104,6 +104,38 @@ describe('overview', () => {
       { priority: 'high', count: 1 },
       { priority: 'medium', count: 1 },
       { priority: 'low', count: 1 },
+    ]);
+  });
+
+  it('recordingActivity aggregates compiled step kinds per project', async () => {
+    const org = await seedOrg(pool);
+    const p = await pool.query(
+      `INSERT INTO projects(organization_id, name) VALUES ($1, 'p4') RETURNING id`,
+      [org.orgId],
+    );
+    const projectId = p.rows[0]!.id;
+    const g = await pool.query(
+      `INSERT INTO "groups"(project_id, name) VALUES ($1, 'g') RETURNING id`,
+      [projectId],
+    );
+    const groupId = g.rows[0]!.id;
+    const c = await pool.query(
+      `INSERT INTO test_cases(group_id, title) VALUES ($1, 'case1') RETURNING id`,
+      [groupId],
+    );
+    const caseId = c.rows[0]!.id;
+    await pool.query(
+      `INSERT INTO test_steps(case_id, "order", source, compiled) VALUES
+        ($1, 0, 'recorder', '[{"kind":"click"},{"kind":"fill"}]'::jsonb),
+        ($1, 1, 'recorder', '[{"kind":"click"}]'::jsonb),
+        ($1, 2, 'recorder', NULL)`,
+      [caseId],
+    );
+    const r = await request(app).get(`/api/projects/${projectId}/overview`);
+    expect(r.status).toBe(200);
+    expect(r.body.recordingActivity).toEqual([
+      { kind: 'click', count: 2 },
+      { kind: 'fill', count: 1 },
     ]);
   });
 });
