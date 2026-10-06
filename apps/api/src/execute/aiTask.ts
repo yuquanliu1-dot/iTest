@@ -145,6 +145,111 @@ async function shotElement(page: Page, selector: string): Promise<Buffer | null>
   }
 }
 
+/** 验证码类指令判定（录制器产物 instruction 固定为「识别验证码图片中的字符并填入验证码输入框」）。 */
+export const CAPTCHA_TASK_RE = /验证码|captcha/i;
+
+/** 提交后页面出现验证码校验失败提示的可观测信号（识别错误 / 过期都由被测系统提示，笼统匹配）。 */
+const CAPTCHA_FAIL_RE = /验证码.{0,12}(错误|过期|不正确|失效)|captcha[\s\S]{0,16}(invalid|expired|incorrect)/i;
+
+export async function detectCaptchaFailure(page: Page): Promise<boolean> {
+  try {
+    const text = await page.evaluate(() => document.body?.innerText ?? '');
+    return CAPTCHA_FAIL_RE.test(text);
+  } catch {
+    return false;
+  }
+}
+
+const CAPTCHA_OCR_PROMPT = `你是验证码识别器。仔细辨认图片中的每个字符（注意随机旋转、干扰线、删除线），只输出 JSON：{"text":"<字符>"}。
+规则：字符集为字母+数字；绝不出现 0 O o 1 l I；不区分大小写；通常是 4 位。没有把握时输出 {"fail":"原因"}。`;
+
+/**
+ * 验证码单轮识别：页内启发式定位「验证码图 + 配套输入框」→ 4x 截图 → 一次 vision 调用 → 填入。
+ * 供「多轮验证」重试使用——重试要抢在验证码 TTL 内完成，必须快（一次 LLM 往返 ~10s），
+ * 不走通用 runAiTask 的多轮 Agent 回路（实测 31s）。任何一步失败抛错，由调用方决定回落。
+ * hint：录制时的语义定位（data-testid / name），有则优先精确命中输入框。
+ * 注意：evaluate 回调内不能有嵌套函数声明（tsx esbuild keepNames 陷阱）。
+ */
+export async function solveCaptchaOnce(
+  page: Page,
+  client: LLMClient,
+  hint?: string | null,
+): Promise<string> {
+  const pair = await page.evaluateHandle((h) => {
+    if (h) {
+      const els = Array.from(document.querySelectorAll('input, textarea'));
+      for (const el of els) {
+        if (el.getAttribute('data-testid') === h || el.getAttribute('name') === h || el.id === h) {
+          let scope: Element | null = el;
+          for (let i = 0; i < 4 && scope; i++) {
+            const imgs = scope.querySelectorAll ? Array.from(scope.querySelectorAll('img')) : [];
+            for (const img of imgs) {
+              const r = (img as HTMLElement).getBoundingClientRect();
+              if (r.width >= 40 && r.height >= 16 && r.width <= 400 && r.height <= 200) return { img, input: el };
+            }
+            scope = scope.parentElement;
+          }
+          return { img: null, input: el };
+        }
+      }
+    }
+    const imgs = Array.from(document.querySelectorAll('img'));
+    for (const img of imgs) {
+      const r = (img as HTMLElement).getBoundingClientRect();
+      if (!(r.width >= 40 && r.height >= 16 && r.width <= 400 && r.height <= 200)) continue;
+      let scope: Element | null = img.parentElement;
+      for (let i = 0; i < 4 && scope; i++) {
+        const inputs = scope.querySelectorAll ? Array.from(scope.querySelectorAll('input, textarea')) : [];
+        for (const el of inputs) {
+          const t = (el.getAttribute('type') || '').toLowerCase();
+          if (t === 'hidden' || t === 'submit' || t === 'button' || t === 'file') continue;
+          return { img, input: el };
+        }
+        scope = scope.parentElement;
+      }
+    }
+    return null;
+  }, hint ?? null);
+  const inputHandle = await pair.evaluateHandle((p) => p?.input ?? null);
+  const inputEl = inputHandle.asElement();
+  if (!inputEl) throw new Error('未找到验证码输入框');
+  const imgHandle = await pair.evaluateHandle((p) => p?.img ?? null);
+  const imgEl = imgHandle.asElement();
+
+  let buffer: Buffer | null = null;
+  if (imgEl) {
+    await imgEl.evaluate((e) => {
+      (e as HTMLElement).style.zoom = '4';
+      (e as HTMLElement).style.background = '#fff';
+    }).catch(() => undefined);
+    try {
+      buffer = await imgEl.screenshot({ timeout: 3000 });
+    } catch {
+      buffer = null;
+    } finally {
+      await imgEl.evaluate((e) => {
+        (e as HTMLElement).style.zoom = '';
+        (e as HTMLElement).style.background = '';
+      }).catch(() => undefined);
+    }
+  }
+  if (!buffer) buffer = await page.screenshot({ timeout: 5000 });
+
+  const r = await client.complete({
+    systemPrompt: CAPTCHA_OCR_PROMPT,
+    userMessage: '识别这张验证码图片中的字符。',
+    image: { base64: buffer.toString('base64'), mime: 'image/png' },
+  });
+  const raw = r.kind === 'json' ? JSON.stringify(r.value) : r.value;
+  const parsed = tryParseJson(raw);
+  const text = typeof parsed?.text === 'string' ? parsed.text.trim() : '';
+  if (!/^[a-z0-9]{3,6}$/i.test(text)) throw new Error(`验证码识别结果非法: ${raw.slice(0, 80)}`);
+
+  await inputEl.fill('', { timeout: 5000 });
+  await inputEl.type(text, { delay: 20 });
+  return `已识别验证码为 ${text} 并填入`;
+}
+
 /**
  * 运行时 LLM 智能步骤：多轮「截图+元素清单 → LLM 决策 → 执行 → 反馈」循环，
  * 直到 LLM 声明完成/放弃或超过轮数上限。返回 done summary（用于步骤 warning）。

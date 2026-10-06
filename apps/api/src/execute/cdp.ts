@@ -25,7 +25,7 @@ import { classify } from './failureClassifier.js';
 import { preflight } from './preflight.js';
 import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
-import { runAiTask } from './aiTask.js';
+import { runAiTask, solveCaptchaOnce, detectCaptchaFailure, CAPTCHA_TASK_RE } from './aiTask.js';
 import type { EnvCtx } from './envContext.js';
 import { runQueryDb } from './dbQuery.js';
 import { runObserveLog } from './syslogReader.js';
@@ -83,6 +83,9 @@ export interface ExecContext {
   envCtx?: EnvCtx;
   /** Track 1：用例级 expectedOutcome（自然语言）。最后一步执行完毕后由 vision LLM 拿最终截图判终态。 */
   expectedOutcome?: string | null;
+  /** 验证码多轮验证：aiTask 识别步骤成功后登记，后续 click（提交）步骤完成时按失败信号重试。
+   *  hint = 录制时的语义定位（data-testid / name），重试识别时精确命中输入框。 */
+  captchaRetry?: { hint: string | null; roundsLeft: number } | null;
   /** 用例标题（兜底语义锚，给 vision prompt 用）。 */
   caseTitle?: string;
   /** 用例 url（兜底语义锚，给 vision prompt 用）。 */
@@ -112,6 +115,8 @@ interface DispatchOpts {
 
 /** 交互动作：执行前先做稳定性检查 */
 const INTERACTIVE_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select', 'upload', 'aiTask'];
+/** 验证码多轮验证的最大重试轮数（不含首轮识别提交）。 */
+const CAPTCHA_RETRY_ROUNDS = 2;
 /** 稳定性检查不过时可尝试 DOM 降级的动作 */
 const DOM_FALLBACK_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select'];
 
@@ -410,6 +415,11 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       }
       const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
       const summary = await runAiTask(opts.page, value, client);
+      // 验证码类指令：登记多轮验证上下文。提交（后续 click 步骤）若被系统判验证码错误/过期，
+      // 执行器自动重新识别（失败后验证码通常已被前端换新）并重新提交，而非直接判用例失败。
+      if (CAPTCHA_TASK_RE.test(value)) {
+        opts.ctx.captchaRetry = { hint: action.intentLocator?.semanticRole ?? null, roundsLeft: CAPTCHA_RETRY_ROUNDS };
+      }
       return summary ? `aiTask: ${summary}` : undefined;
     }
     case 'queryDb': {
@@ -547,6 +557,47 @@ function matchAssertText(actual: string, expected: string, match: 'equals' | 'co
   }
 }
 
+/** 验证码多轮验证：提交（click）后页面出现验证码失败提示时，重新识别并重新提交。
+ *  兼容两类真实失败：LLM 识别错误、验证码过期——多数系统登录失败后前端自动换新验证码，
+ *  直接识别当前图重试即可。轮数耗尽仍有失败提示 → 抛错判本步失败。返回 warning 文本。 */
+async function runCaptchaRetry(opts: DispatchOpts, clickActions: StepAction[]): Promise<string | undefined> {
+  const pending = opts.ctx.captchaRetry;
+  if (!pending) return undefined;
+  const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
+  const notes: string[] = [];
+  try {
+    while (pending.roundsLeft > 0) {
+      // 给登录接口往返和错误提示渲染留时间
+      await opts.page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => undefined);
+      await opts.page.waitForTimeout(600);
+      if (!(await detectCaptchaFailure(opts.page))) break;
+      pending.roundsLeft--;
+      const round = CAPTCHA_RETRY_ROUNDS - pending.roundsLeft;
+      // 快路径一次 vision 调用（~10s，抢 TTL）；机械失败回落通用多轮回路。
+      const solved = await solveCaptchaOnce(opts.page, client, pending.hint).catch(() => null)
+        ?? await runAiTask(opts.page, '识别当前验证码图片中的字符并填入验证码输入框', client).catch(() => null);
+      if (!solved) {
+        notes.push(`第 ${round} 轮：识别失败`);
+        break;
+      }
+      notes.push(`第 ${round} 轮：${solved}`);
+      for (const a of clickActions) {
+        await dispatch(a, opts);
+      }
+    }
+    if (pending.roundsLeft <= 0) {
+      await opts.page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => undefined);
+      await opts.page.waitForTimeout(600);
+      if (await detectCaptchaFailure(opts.page)) {
+        throw new Error('验证码多轮重试后仍校验失败（识别错误或验证码已过期）');
+      }
+    }
+  } finally {
+    opts.ctx.captchaRetry = null;
+  }
+  return notes.length > 0 ? `验证码重试：${notes.join('；')}` : undefined;
+}
+
 async function writeStepScreenshot(reportId: string, stepIndex: number, page: Page): Promise<string | undefined> {
   try {
     // navigate/click 触发跳转后立即截图会拍到白屏（SPA 在 domcontentloaded 后才渲染）。
@@ -641,6 +692,14 @@ async function runStepsInContext(
       // action 通过后才执行步骤级断言；断言失败同样记 failed 并终止后续。
       if (assertionAction) {
         await dispatch(assertionAction, opts);
+      }
+      // 验证码多轮验证：本步含 click（提交）且此前有验证码 aiTask 步骤时,按页面失败信号重试。
+      if (ctx.captchaRetry) {
+        const clickActions = (compiled as StepAction[]).filter((a) => a.kind === 'click');
+        if (clickActions.length > 0) {
+          const retryWarning = await runCaptchaRetry(opts, clickActions);
+          if (retryWarning) warning = warning ? `${warning}; ${retryWarning}` : retryWarning;
+        }
       }
       const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
       results.push({

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Page } from 'playwright-core';
 import type { LLMClient, LLMResult } from '../src/agent/llm-client.js';
-import { runAiTask } from '../src/execute/aiTask.js';
+import { runAiTask, solveCaptchaOnce, detectCaptchaFailure } from '../src/execute/aiTask.js';
 
 /** 记录调用顺序的桩 Page：screenshot/evaluate/url 走默认值，locator 动作全部记录。 */
 function makeStubPage() {
@@ -42,6 +42,52 @@ function makeMockLlm(script: Array<Record<string, unknown> | string>) {
   };
   return { llm, requests };
 }
+
+describe('solveCaptchaOnce / detectCaptchaFailure（多轮验证）', () => {
+  function makeCaptchaStub(opts: { pageText: string }) {
+    const calls: string[] = [];
+    const inputEl = {
+      fill: async (v: string) => { calls.push(`fill:${v}`); },
+      type: async (v: string) => { calls.push(`type:${v}`); },
+    };
+    const imgEl = {
+      evaluate: async () => undefined,
+      screenshot: async () => Buffer.from('zoomed-captcha'),
+    };
+    const page = {
+      evaluate: async () => opts.pageText,
+      evaluateHandle: async () => ({
+        evaluateHandle: async (getter: (p: unknown) => unknown) => {
+          const g = String(getter);
+          return { asElement: () => (g.includes('.input') ? inputEl : imgEl) };
+        },
+      }),
+      screenshot: async () => Buffer.from('fullpage'),
+    };
+    return { page: page as unknown as Page, calls };
+  }
+
+  it('识别成功：填入输入框并返回摘要', async () => {
+    const { page, calls } = makeCaptchaStub({ pageText: '' });
+    const { llm } = makeMockLlm([{ text: 'Ab3d' }]);
+    const summary = await solveCaptchaOnce(page, llm, 'captcha');
+    expect(summary).toContain('Ab3d');
+    expect(calls).toEqual(['fill:', 'type:Ab3d']);
+  });
+
+  it('识别结果非法时抛错（调用方回落通用回路）', async () => {
+    const { page } = makeCaptchaStub({ pageText: '' });
+    const { llm } = makeMockLlm(['看不清']);
+    await expect(solveCaptchaOnce(page, llm)).rejects.toThrow('验证码识别结果非法');
+  });
+
+  it('detectCaptchaFailure 匹配验证码错误/过期提示', async () => {
+    const { page: p1 } = makeCaptchaStub({ pageText: '欢迎回来\n验证码错误或已过期' });
+    expect(await detectCaptchaFailure(p1)).toBe(true);
+    const { page: p2 } = makeCaptchaStub({ pageText: '欢迎回来\n登录成功' });
+    expect(await detectCaptchaFailure(p2)).toBe(false);
+  });
+});
 
 describe('runAiTask', () => {
   it('多轮循环：执行动作、反馈结果、直到 done', async () => {
