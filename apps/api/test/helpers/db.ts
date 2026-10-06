@@ -73,6 +73,23 @@ END $$;
 -- 测试 schema 不强制 NOT NULL，简化旧测试插入（无 version_id 时由 seedProject 注入）
 CREATE INDEX test_cases_version_idx        ON test_cases(version_id);
 CREATE INDEX execution_plans_version_idx   ON execution_plans(version_id);
+CREATE TABLE datasets (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid REFERENCES projects(id) ON DELETE CASCADE NOT NULL, name varchar(120) NOT NULL, description text, columns jsonb NOT NULL DEFAULT '[]'::jsonb, rows jsonb NOT NULL DEFAULT '[]'::jsonb, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT datasets_project_name_uq UNIQUE(project_id, name));
+DO $$ BEGIN
+ ALTER TABLE test_cases ADD COLUMN dataset_id uuid REFERENCES datasets(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_column THEN null;
+END $$;
+DO $$ BEGIN
+ ALTER TABLE reports ADD COLUMN dataset_row_index integer;
+EXCEPTION WHEN duplicate_column THEN null;
+END $$;
+DO $$ BEGIN
+ ALTER TABLE reports ADD COLUMN dataset_snapshot jsonb;
+EXCEPTION WHEN duplicate_column THEN null;
+END $$;
+DO $$ BEGIN
+ ALTER TABLE plan_run_cases ADD COLUMN report_ids jsonb;
+EXCEPTION WHEN duplicate_column THEN null;
+END $$;
 `;
 
 export interface SeedOrg {

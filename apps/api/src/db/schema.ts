@@ -47,6 +47,7 @@ export const testCases = pgTable('test_cases', {
   windowHeight: integer('window_height'),
   incognito: boolean('incognito').notNull().default(false),
   defaultEnvId: uuid('default_env_id').references(() => testEnvironments.id, { onDelete: 'set null' }),
+  datasetId: uuid('dataset_id').references(() => datasets.id, { onDelete: 'set null' }),
   scenarioId: uuid('scenario_id').references(() => scenarios.id, { onDelete: 'set null' }),
   /** 用例级预期描述（自然语言）。回放阶段结束时由 vision LLM 拿最终截图 + 此字段判终态；
    * 为空/null 时跳过用例级断言（仅按 step.action 是否全部成功判定 pass/fail）。 */
@@ -256,6 +257,8 @@ export const reports = pgTable('reports', {
   stepResults: jsonb('step_results').notNull(),
   preflight: jsonb('preflight'),
   summary: text('summary'),
+  datasetRowIndex: integer('dataset_row_index'),
+  datasetSnapshot: jsonb('dataset_snapshot'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -425,6 +428,8 @@ export const planRunCases = pgTable('plan_run_cases', {
   planRunId: uuid('plan_run_id').notNull().references(() => planRuns.id, { onDelete: 'cascade' }),
   caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
   reportId: uuid('report_id').references(() => reports.id, { onDelete: 'set null' }),
+  /** 数据集迭代：该用例全部数据行产生的 report id 列表（首元素与 reportId 一致，兼容旧读取）。 */
+  reportIds: jsonb('report_ids').$type<string[]>(),
   order: integer('order').notNull(),
   status: varchar('status', { length: 20 }).notNull(),
   stepKind: varchar('step_kind', { length: 20 }).notNull(),
@@ -493,6 +498,31 @@ export const testEnvironments = pgTable('test_environments', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
   projectNameUq: unique('test_environments_project_name_uq').on(t.projectId, t.name),
+}));
+
+/** 数据集列定义：name 即回放变量名（{{name}}），sensitive 标记整列加密。 */
+export interface DatasetColumn {
+  name: string;
+  sensitive: boolean;
+}
+/** 敏感格密文：AES-256-GCM 三元组（与 environment_objects payload.secret 同构）。 */
+export interface DatasetEncCell { c: string; i: string; t: string }
+export interface DatasetRow {
+  disabled: boolean;
+  cells: Record<string, string | DatasetEncCell>;
+}
+
+export const datasets = pgTable('datasets', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 120 }).notNull(),
+  description: text('description'),
+  columns: jsonb('columns').$type<DatasetColumn[]>().notNull().default([]),
+  rows: jsonb('rows').$type<DatasetRow[]>().notNull().default([]),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  projectNameUq: unique('datasets_project_name_uq').on(t.projectId, t.name),
 }));
 
 // 环境对象：一个环境下的多类资源（db / syslog，未来可扩展），每类可多条、有唯一默认。
