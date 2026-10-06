@@ -22,6 +22,8 @@ interface StepResult {
   failureReason?: string;
   humanMessage?: string;
   hitLocator?: { kind: string; value: string };
+  /** Track 1 用例级视觉判定结果（最后一步/失败追加步携带） */
+  visionAssert?: { passed: boolean; reason: string; screenshot?: string };
   /** queryDb 步骤的结果（仅 queryDb 步携带） */
   db?: DbQueryRowResult;
   /** observeLog 步骤的结果（仅 observeLog 步携带） */
@@ -100,9 +102,10 @@ export default function ReportDetail() {
     grouped.push({ tabIndex: 0, steps: stepResults });
   }
   // 放大灯箱只看带截图的步骤，保持左右翻页在「有图步骤」之间
+  // 视觉判定最终截图也纳入，方便用户查看「最终页面 vs 预期」
   const shotSteps = stepResults
     .map((s, i) => ({ s, i }))
-    .filter(({ s }) => !!s.screenshot);
+    .filter(({ s }) => !!s.screenshot || !!s.visionAssert?.screenshot);
   const zoomed = zoomIndex !== null ? shotSteps[zoomIndex] ?? null : null;
   const gotoZoom = (next: number) => {
     if (shotSteps.length === 0) return;
@@ -167,6 +170,18 @@ export default function ReportDetail() {
               <span className="min-w-0 break-words">{s.warning}</span>
             </div>
           )}
+          {s.visionAssert && (
+            <div
+              className="flex gap-2 items-start text-[12px] px-2 py-1 rounded-[4px]"
+              style={{
+                background: s.visionAssert.passed ? 'var(--success-soft)' : 'var(--destructive-soft-strong)',
+                color: s.visionAssert.passed ? 'var(--success)' : 'var(--destructive)',
+              }}
+            >
+              <span className="shrink-0 font-medium">{s.visionAssert.passed ? '视觉判定通过' : '视觉判定失败'}</span>
+              <span className="min-w-0 break-words">{s.visionAssert.reason}</span>
+            </div>
+          )}
           {s.status !== 'passed' && (s.failureReason || s.humanMessage) && (
             <div className="flex flex-col gap-0.5 pl-2" style={{ borderLeft: '2px solid var(--destructive)' }}>
               {s.failureReason && (
@@ -200,6 +215,24 @@ export default function ReportDetail() {
             <img
               src={s.screenshot}
               alt={`step ${s.order}`}
+              className="w-16 h-16 object-cover block"
+            />
+          </button>
+        )}
+        {s.visionAssert?.screenshot && s.visionAssert.screenshot !== s.screenshot && (
+          <button
+            type="button"
+            onClick={() => {
+              const idx = shotSteps.findIndex((x) => x.s.visionAssert?.screenshot === s.visionAssert?.screenshot);
+              setZoomIndex(idx >= 0 ? idx : 0);
+            }}
+            aria-label={`放大 step ${s.order} 视觉判定截图`}
+            className="shrink-0 rounded-[var(--radius-sm)] overflow-hidden press"
+            style={{ border: '1px solid var(--border)', background: 'var(--popover)', padding: 0, cursor: 'zoom-in' }}
+          >
+            <img
+              src={s.visionAssert.screenshot}
+              alt={`step ${s.order} 视觉判定`}
               className="w-16 h-16 object-cover block"
             />
           </button>

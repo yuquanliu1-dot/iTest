@@ -8,6 +8,8 @@ import { StepAction } from '@itest/shared';
 import { createSession, getSession } from '../recorder/ws.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
+import { encrypt } from '../lib/secret-crypto.js';
+import { migrateAction } from '../lib/step-migration.js';
 import { logger } from '../logger.js';
 
 export const recorderRoute = Router();
@@ -132,7 +134,23 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
   for (const step of mergedSteps) {
     const item = step as { action: unknown; tabRef?: string; componentKind?: string; url?: string };
     StepAction.parse(item.action);
-    const action = item.action as { kind?: string; url?: string };
+    const action = item.action as {
+      kind?: string;
+      url?: string;
+      value?: unknown;
+      sensitive?: boolean;
+    };
+    const sensitive = action.kind === 'fill' && !!action.sensitive;
+    let secretCiphertext: string | null = null;
+    let secretIv: string | null = null;
+    let secretTag: string | null = null;
+    if (sensitive) {
+      const enc = encrypt(String(action.value ?? ''));
+      secretCiphertext = enc.ciphertext.toString('base64');
+      secretIv = enc.iv.toString('base64');
+      secretTag = enc.tag.toString('base64');
+      delete (action as Record<string, unknown>).value;
+    }
     // 录制产物:instruction 留空,compiled 单元素数组 = [录制得到的 StepAction]。
     // kind === 'navigate' 不再单独落 step(初始化 URL 已写用例级 url),与回放/前端一致。
     await db.insert(testSteps).values({
@@ -140,9 +158,13 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
       order: nextOrder++,
       source: 'recorder',
       instruction: action.kind === 'navigate' ? `打开 ${action.url ?? ''}` : '',
-      compiled: [item.action] as unknown[],
+      compiled: [migrateAction(action) as unknown] as unknown[],
       tabRef: item.tabRef ?? null,
       componentKind: item.componentKind ?? null,
+      sensitive,
+      secretCiphertext,
+      secretIv,
+      secretTag,
     });
     inserted++;
   }
