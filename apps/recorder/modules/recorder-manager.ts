@@ -1,5 +1,15 @@
-import { generateLocators, type Locator } from './selector-core.js';
+import { generateLocators, deriveSemantic, type Locator } from './selector-core.js';
 import { detectComponent } from './component-detector.js';
+
+/** 录制选项：popup / panel 配置后通过 start({...}) 传入。空 options 等价于历史默认行为。 */
+export interface RecorderOptions {
+  /** 优先 data-* 属性名（finder 会把整条父链的 `[name=...]` 都用上）。默认 `data-testid`。 */
+  preferredDataAttribute?: string;
+  /** 是否录 hover 步骤。默认 false——hover 是最大的噪声源之一，调试时再开。 */
+  recordHover?: boolean;
+  /** fill debounce 合并窗（ms）。用户连续输入超过这个时长才落库。默认 500。 */
+  fillFlushMs?: number;
+}
 
 export type RecordedStepType = 'click' | 'fill' | 'hover' | 'check' | 'select' | 'upload' | 'aiTask';
 
@@ -26,11 +36,9 @@ export interface RecordedStep {
 
 type StepHandler = (step: RecordedStep) => void;
 
+/** 委托给 selector-core.deriveSemantic：data-testid / name / 稳定语义 class / aria-label 四级回退。 */
 function buildIntentLocator(el: Element): RecordedStep['intentLocator'] {
-  const role = el.getAttribute('data-testid') ?? el.getAttribute('name') ?? null;
-  if (!role) return undefined;
-  const text = el.textContent?.trim().slice(0, 50) || undefined;
-  return text ? { semanticRole: role, contextText: text } : { semanticRole: role };
+  return deriveSemantic(el);
 }
 
 /** 验证码特征：input 自身的 id/name/class/placeholder/aria-label 或关联 label 文案命中即认为是验证码输入框。 */
@@ -66,6 +74,11 @@ function isCaptchaInput(el: HTMLInputElement): boolean {
 export class RecorderManager {
   private active = false;
   private paused = false;
+  private options: Required<RecorderOptions> = {
+    preferredDataAttribute: 'data-testid',
+    recordHover: false,
+    fillFlushMs: 250,
+  };
   private handler: StepHandler | null = null;
   private listeners: Array<{ el: EventTarget; type: string; fn: EventListener }> = [];
   private lastClick: { signature: string; at: number } | null = null;
@@ -82,16 +95,39 @@ export class RecorderManager {
   private static HOVER_SUPPRESS_AFTER_INPUT_MS = 300;
   private static HOVER_DWELL_MS = 500;
   private static HOVER_SIG_DEDUP_MS = 1500;
+  /** fill 步骤合并窗：连续 input 事件只在用户停顿超过这个时长后才落库。
+   *  250ms 是「快速打字停顿」的合理门槛——常见 IMEs / 自动填充以 200-300ms 节奏触发 input，
+   *  500ms 太长会让"输完一段等了很久"的中间步骤被吞掉。可通过 options.fillFlushMs 覆盖。 */
+  private static FILL_FLUSH_MS_DEFAULT = 250;
+  /** aiTask（验证码）合并窗：captcha 输入框在 React 重渲染或后端定时刷新时会反复触发 input，
+   *  1.5s 内同 locator 只产一条 aiTask。 */
+  private static AITASK_DEDUP_MS = 1500;
 
-  start(handler: StepHandler) {
+  /** 待 flush 的 fill 步骤：input 事件累加 value，到点才 emit。 */
+  private pendingFill: {
+    target: HTMLInputElement;
+    timer: ReturnType<typeof setTimeout>;
+    intentLocator?: ReturnType<typeof buildIntentLocator>;
+  } | null = null;
+  /** 最近一次 aiTask 步骤的 locator 签名 + 时间戳：1.5s 窗内同签名去重。 */
+  private lastAiTaskSig: { signature: string; at: number } | null = null;
+
+  start(handler: StepHandler, options: RecorderOptions = {}) {
     this.active = true;
     this.paused = false;
+    this.options = {
+      preferredDataAttribute: options.preferredDataAttribute ?? 'data-testid',
+      recordHover: options.recordHover ?? false,
+      fillFlushMs: options.fillFlushMs ?? RecorderManager.FILL_FLUSH_MS_DEFAULT,
+    };
     this.handler = handler;
     this.lastClick = null;
     this.lastInputAt = null;
     this.cancelPendingHover();
     this.lastHoverEl = null;
     this.lastHoverSig = null;
+    this.cancelPendingFill();
+    this.lastAiTaskSig = null;
     this.attachListeners();
   }
 
@@ -100,8 +136,10 @@ export class RecorderManager {
     this.paused = false;
     this.handler = null;
     this.cancelPendingHover();
+    this.cancelPendingFill();
     this.lastHoverEl = null;
     this.lastHoverSig = null;
+    this.lastAiTaskSig = null;
     this.detachListeners();
   }
 
@@ -113,6 +151,19 @@ export class RecorderManager {
     return this.paused;
   }
 
+  /** 更新录制选项（panel 里切换 hover / fillFlushMs 时调用）。录到一半改也能生效。 */
+  setOptions(options: RecorderOptions) {
+    this.options = {
+      preferredDataAttribute: options.preferredDataAttribute ?? this.options.preferredDataAttribute,
+      recordHover: options.recordHover ?? this.options.recordHover,
+      fillFlushMs: options.fillFlushMs ?? this.options.fillFlushMs,
+    };
+  }
+
+  getOptions(): RecorderOptions {
+    return { ...this.options };
+  }
+
   private canRecord() {
     return this.active && !this.paused;
   }
@@ -122,6 +173,41 @@ export class RecorderManager {
       clearTimeout(this.pendingHover.timer);
       this.pendingHover = null;
     }
+  }
+
+  /** flush 待处理的 fill：用户停打 500ms、blur 失焦、change 触发、或者 stop/start 之间切换时调用。 */
+  private cancelPendingFill() {
+    if (this.pendingFill) {
+      clearTimeout(this.pendingFill.timer);
+      this.pendingFill = null;
+    }
+  }
+
+  private flushPendingFill() {
+    if (!this.pendingFill) return;
+    const { target, intentLocator } = this.pendingFill;
+    this.pendingFill = null;
+    if (!this.canRecord()) return;
+    const value = target.value;
+    const isSensitive = target.type === 'password'
+      || /password/i.test(target.name ?? '')
+      || /password/i.test(target.id ?? '');
+    this.handler?.({
+      type: 'fill',
+      target: generateLocators(target),
+      value,
+      url: location.href,
+      timestamp: Date.now(),
+      sensitive: isSensitive || undefined,
+      ...(intentLocator ? { intentLocator } : {}),
+    });
+  }
+
+  private aiTaskSignature(target: Element): string {
+    return generateLocators(target)
+      .filter((l) => l.strategy === 'role' || l.strategy === 'testId' || l.strategy === 'text')
+      .map((l) => `${l.strategy}:${l.value}`)
+      .join('|');
   }
 
   private attachListeners() {
@@ -136,10 +222,34 @@ export class RecorderManager {
       return host.contains(e.target as Node);
     };
 
+    /** 自身含 role / data-testid / name / 已知交互 class 的元素不属于 layout 容器。其它情况如果父链上
+     *  命中至少 1 个稳定语义类（glass-card / auth-form-shell 等），就当作「页面级容器」不记 hover。 */
+    function isLayoutContainer(el: Element): boolean {
+      if (el.getAttribute('role')) return false;
+      if (el.getAttribute('data-testid') || el.getAttribute('data-test-id')) return false;
+      if (el.getAttribute('name')) return false;
+      // button / a / summary / label 这些「自叶子 UI」不会被用户刻意 hover 到（点击才是它们的语义），
+      // 但它们的 hover 一般也不该记——按按钮 hover 多数是光标移动路径上的过渡。让它们继续走到签名
+      // 去重（hover 之后通常会 click / input）即可。
+      let cur: Element | null = el.parentElement;
+      let depth = 0;
+      while (cur && depth < 4) {
+        const cls = (cur.getAttribute('class') || '').split(/\s+/);
+        if (cls.some((c) => /^(?:glass-card|glass-panel|auth-form-shell|auth-form-panel|auth-page|main-content|group-nav-tile|project-card|group)$/.test(c))) {
+          return true;
+        }
+        cur = cur.parentElement;
+        depth += 1;
+      }
+      return false;
+    }
+
     const onClick = (e: Event) => {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
       this.cancelPendingHover();
+      // 切到按钮 / 别处点击：flush 当前 input 的累计 fill，否则会丢最后一次停顿前的字符。
+      this.flushPendingFill();
       const target = e.target as Element;
       if (!target) return;
       const locs = generateLocators(target);
@@ -177,8 +287,16 @@ export class RecorderManager {
         || /password/i.test(target.id ?? '');
       this.lastInputAt = Date.now();
       const intentLocator = buildIntentLocator(target);
-      // 验证码输入框 → aiTask 步骤（回放时 AI 实时识别图片并填入）
+      // 验证码输入框 → aiTask 步骤（回放时 AI 实时识别图片并填入）。
+      // 1.5s 窗内同 locator 去重：captcha 在 React 重渲染或后端定时刷新时会反复触发 input，
+      // 不去重就会连续产 6+ 条相同 aiTask。
       if (!isSensitive && isCaptchaInput(target)) {
+        const sig = this.aiTaskSignature(target);
+        if (this.lastAiTaskSig && this.lastAiTaskSig.signature === sig && Date.now() - this.lastAiTaskSig.at < RecorderManager.AITASK_DEDUP_MS) {
+          this.lastAiTaskSig = { signature: sig, at: Date.now() };
+          return;
+        }
+        this.lastAiTaskSig = { signature: sig, at: Date.now() };
         this.handler?.({
           type: 'aiTask',
           target: generateLocators(target),
@@ -189,19 +307,31 @@ export class RecorderManager {
         });
         return;
       }
-      this.handler?.({
-        type: 'fill',
-        target: generateLocators(target),
-        value,
-        url: location.href,
-        timestamp: Date.now(),
-        sensitive: isSensitive || undefined,
-        ...(intentLocator ? { intentLocator } : {}),
-      });
+      // 普通 input：debounce 合并 + 同 input 累加。切换到另一个 input 时先 flush 旧的。
+      // 注意 pendingFill 拿的是 target 引用，flush 窗内它 value 又被改写，flush 时读最新 value 即可。
+      if (this.pendingFill && this.pendingFill.target !== target) {
+        this.flushPendingFill();
+      }
+      this.cancelPendingFill();
+      const flushMs = this.options.fillFlushMs;
+      const timer = setTimeout(() => {
+        // 只 flush 当前 timer 仍挂着的 pendingFill：避免输入字符之间 cancelPendingFill 已把 timer 清掉后
+        // 又被这个回调捡起来发射残留步骤。
+        if (this.pendingFill && this.pendingFill.timer === timer) {
+          this.flushPendingFill();
+        }
+      }, flushMs);
+      this.pendingFill = { target, timer, intentLocator: intentLocator ?? undefined };
+    };
+    const onBlur = (e: Event) => {
+      // 用户失焦（点别处 / Tab 切走）时强制 flush 当前 fill，避免 500ms 内就跳转丢失步骤。
+      this.flushPendingFill();
     };
     const onChange = (e: Event) => {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
+      // change 触发意味着用户对当前 input 的输入已经定型（失焦 / Enter / 选择项），先 flush 累计的 fill。
+      this.flushPendingFill();
       const target = e.target as HTMLInputElement | HTMLSelectElement;
       if (!target) return;
       const now = Date.now();
@@ -252,6 +382,9 @@ export class RecorderManager {
     const onMouseOver = (e: Event) => {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
+      // 默认不录 hover：hover 噪声源太多（layout 容器、body/html、重复经过同一元素……），
+      // 录到的步骤大半是用户没意图的「我看过这里」。只在调试 / inspector 模式下显式开启。
+      if (!this.options.recordHover) return;
       const target = e.target as Element;
       if (!target) return;
       const sinceInput = this.lastInputAt !== null ? Date.now() - this.lastInputAt : Infinity;
@@ -264,14 +397,31 @@ export class RecorderManager {
         this.cancelPendingHover();
         return;
       }
+      // body / html 上的 hover 不该记：光标离开所有有意义元素落到空白处时，e.target 会变成 body
+      // 或 html，停留计时器照样到点发射 noise 步骤。直接丢弃。tagName 统一 toLowerCase 比较
+      // 以兼容 jsdom 返回 'BODY'/'HTML' 大写的情况。
+      const rootTag = tag.toLowerCase();
+      if (rootTag === 'body' || rootTag === 'html') {
+        this.cancelPendingHover();
+        return;
+      }
+      // 页面级 layout 容器 hover 同样不记：`<form>` / `<div class="auth-form-shell">` /
+      // `<div class="glass-card project-card">` 这种元素，e.target 通常是它们的空白处或子元素，
+      // 没有「hover 到这个容器」的用户意图。判定：自身没有 role / data-testid / name，父链上
+      // 至少有 1 个稳定语义类（glass-card / auth-form-shell 等），就视为布局容器丢弃。
+      if (isLayoutContainer(target)) {
+        this.cancelPendingHover();
+        return;
+      }
       // 已记录过 hover 的元素内部微动不重复；停留中的元素内部划过不打断计时。
       if (this.lastHoverEl?.contains(target)) return;
       if (this.pendingHover?.el.contains(target)) return;
       // locator 签名级去重：React 重渲染 / 同级 hover 文本相同的元素（e.target 引用变了
       // 但 selector 不变）会被 1.5s 窗口挡掉，避免重复步骤。
-      // 仅用 role/testId/text/css（语义候选）做签名；xpath 索引会因 DOM 顺序不同而变化，不能拿来比较。
+      // 仅用 role/testId/text（语义候选）做签名；CSS 路径里 Tailwind utility 容易因重渲染微变，xpath 索引更
+      // 会因 DOM 顺序不同而变化，两者都不稳定，不能拿来比较。
       const sig = generateLocators(target)
-        .filter((l) => l.strategy !== 'xpath')
+        .filter((l) => l.strategy === 'role' || l.strategy === 'testId' || l.strategy === 'text')
         .map((l) => `${l.strategy}:${l.value}`)
         .join('|');
       if (this.lastHoverSig && this.lastHoverSig.signature === sig && Date.now() - this.lastHoverSig.at < RecorderManager.HOVER_SIG_DEDUP_MS) return;
@@ -304,12 +454,15 @@ export class RecorderManager {
     document.addEventListener('click', onClick, true);
     document.addEventListener('input', onInput, true);
     document.addEventListener('change', onChange, true);
+    // blur 强制 flush fill——避免切走焦点时 500ms 内丢失最后一次输入。
+    document.addEventListener('focusout', onBlur, true);
     document.addEventListener('mouseover', onMouseOver, true);
     document.addEventListener('mouseleave', onMouseLeave, true);
     this.listeners.push(
       { el: document, type: 'click', fn: onClick },
       { el: document, type: 'input', fn: onInput },
       { el: document, type: 'change', fn: onChange },
+      { el: document, type: 'focusout', fn: onBlur },
       { el: document, type: 'mouseover', fn: onMouseOver },
       { el: document, type: 'mouseleave', fn: onMouseLeave },
     );

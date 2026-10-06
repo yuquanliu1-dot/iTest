@@ -16,19 +16,24 @@ const recordingTabs = new Map(); // tabId -> tabIndex
 let nextTabIndex = 1;
 
 function toDSL(step) {
-  if (step.type === 'check') return { kind: 'check', locator: step.target, checked: !!step.checked };
-  if (step.type === 'select') return { kind: 'select', locator: step.target, value: step.value ?? '' };
+  if (step.type === 'check') return { kind: 'check', locator: step.target, checked: !!step.checked, ...intentField(step) };
+  if (step.type === 'select') return { kind: 'select', locator: step.target, value: step.value ?? '', ...intentField(step) };
   if (step.type === 'upload') {
     // 上传步骤 fileId 由 web 端绑定；此处只占位
-    return { kind: 'upload', locator: step.target, fileId: '__pending__' };
+    return { kind: 'upload', locator: step.target, fileId: '__pending__', ...intentField(step) };
   }
-  const dsl = { kind: step.type, locator: step.target };
+  const dsl = { kind: step.type, locator: step.target, ...intentField(step) };
   if (dsl.kind === 'fill') {
     dsl.value = step.value ?? '';
     if (step.sensitive) dsl.sensitive = true;
   }
   if (dsl.kind === 'aiTask') dsl.instruction = step.value ?? '';
   return dsl;
+}
+
+/** 把 recorder 端附带的 intentLocator 透传到 DSL——回放侧用它当 data-testid / name 的语义锚。 */
+function intentField(step) {
+  return step.intentLocator ? { intentLocator: step.intentLocator } : {};
 }
 
 // 录制中的 tab（主 tab 或接管的派生 tab）每次页面加载完成后重注入 recorder/panel：
@@ -240,7 +245,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
 
-  if (msg.type === 'pick' || msg.type === 'emit-step') {
+  if (msg.type === 'pick' || msg.type === 'emit-step' || msg.type === 'set-options') {
     if (recordingTabId === null) { sendResponse({ ok: false, error: '当前没有录制中的标签页' }); return; }
     chrome.tabs.sendMessage(recordingTabId, msg, (resp) => sendResponse(resp ?? { ok: false }));
     return true;

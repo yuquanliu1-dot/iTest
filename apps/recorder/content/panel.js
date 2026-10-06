@@ -83,6 +83,17 @@
       .panel.collapsed .body { display: none; }
       .panel.collapsed .head { padding: 7px 10px; }
       .panel.collapsed .count { margin-right: 2px; }
+      .opts { display: flex; flex-direction: column; gap: 4px; padding: 2px 0; }
+      .opts label {
+        font-size: 11px; color: #6e6a8a; display: flex; align-items: center; gap: 6px;
+        cursor: pointer; user-select: none;
+      }
+      .opts input[type=number] {
+        width: 48px; padding: 2px 4px; font-size: 11px; font-family: inherit;
+        border: 1px solid #d8d4ee; border-radius: 4px; background: #fff; color: #232038;
+      }
+      .opts input[type=number]:focus { outline: none; border-color: #7C5CFC; }
+      .opts input[type=checkbox] { accent-color: #7C5CFC; cursor: pointer; }
     </style>
     <div class="panel">
       <div class="head">
@@ -95,6 +106,10 @@
         <div class="row">
           <button class="btn ghost pause">暂停</button>
           <button class="btn danger stop">停止录制</button>
+        </div>
+        <div class="opts">
+          <label><input type="checkbox" class="opt-hover" /> 录制 hover 步骤</label>
+          <label>fill 合并窗 (ms)<input type="number" class="opt-fill-ms" min="50" max="2000" step="50" value="250" /></label>
         </div>
         <div class="grid">
           <button class="btn ghost feat" data-mode="variable">保存变量</button>
@@ -117,6 +132,8 @@
   const stopBtn = shadow.querySelector('.stop');
   const backBtn = shadow.querySelector('.back');
   const featBtns = shadow.querySelectorAll('.feat');
+  const hoverChk = shadow.querySelector('.opt-hover');
+  const fillMsInput = shadow.querySelector('.opt-fill-ms');
 
   const render = () => {
     panel.classList.toggle('collapsed', collapsed);
@@ -127,6 +144,20 @@
     toggleBtn.textContent = collapsed ? '◼' : '—';
     toggleBtn.title = collapsed ? '展开面板' : '收起面板';
   };
+
+  // 选项变更 → 透传到 content/recorder.js 的 manager。用 set-options 消息实时生效。
+  const sendOptions = () => {
+    const fillMs = parseInt(fillMsInput.value, 10);
+    chrome.runtime.sendMessage({
+      type: 'set-options',
+      options: {
+        recordHover: hoverChk.checked,
+        fillFlushMs: isNaN(fillMs) ? 250 : Math.max(50, Math.min(2000, fillMs)),
+      },
+    });
+  };
+  hoverChk.addEventListener('change', sendOptions);
+  fillMsInput.addEventListener('change', sendOptions);
 
   toggleBtn.addEventListener('click', () => { collapsed = !collapsed; render(); });
 
