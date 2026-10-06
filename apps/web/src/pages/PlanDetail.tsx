@@ -37,7 +37,7 @@ export default function PlanDetail() {
 
   const { data: allCases } = useQuery({
     queryKey: ['cases', projectId, versionId],
-    queryFn: () => api.cases.list({ projectId, versionId: versionId ?? undefined }),
+    queryFn: () => api.cases.list({ projectId }),
     enabled: !!projectId,
   });
 

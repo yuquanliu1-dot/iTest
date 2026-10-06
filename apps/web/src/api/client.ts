@@ -237,14 +237,14 @@ export const api = {
     get: (id: string) => request<Requirement>(`/requirements/${id}`),
   },
   cases: {
-    list: (params?: string | { priority?: string; groupId?: string; projectId?: string; scenarioId?: string; versionId?: string }) => {
+    list: (params?: string | { priority?: string; groupId?: string; projectId?: string; scenarioId?: string; versionIds?: string[] }) => {
       const p = typeof params === 'string' ? { priority: params } : params;
       const qs = new URLSearchParams();
       if (p?.priority) qs.set('priority', p.priority);
       if (p?.groupId) qs.set('groupId', p.groupId);
       if (p?.projectId) qs.set('projectId', p.projectId);
       if (p?.scenarioId) qs.set('scenarioId', p.scenarioId);
-      if (p?.versionId) qs.set('versionId', p.versionId);
+      if (p?.versionIds?.length) qs.set('versionIds', p.versionIds.join(','));
       const s = qs.toString();
       return request<TestCase[]>(`/cases${s ? `?${s}` : ''}`);
     },

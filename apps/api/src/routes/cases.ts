@@ -57,6 +57,11 @@ const PatchBody = CaseBodyBase.partial()
 
 casesRoute.get('/', async (req, res) => {
   const { priority, groupId, projectId, scenarioId } = req.query as Record<string, string | undefined>;
+  // versionIds 过滤：逗号分隔或重复参数均可；只在可见项目范围内收窄,无需额外可见性断言
+  const rawVersionIds = (req.query as Record<string, string | string[] | undefined>).versionIds;
+  const versionIds = (Array.isArray(rawVersionIds) ? rawVersionIds : rawVersionIds != null ? [rawVersionIds] : [])
+    .flatMap((v) => v.split(','))
+    .filter((v) => v.length > 0);
   let rows;
   if (projectId) {
     await assertProjectVisible(projectId, req.user!);
@@ -87,6 +92,10 @@ casesRoute.get('/', async (req, res) => {
     rows = scenarioId === 'none'
       ? rows.filter((r) => r.scenarioId == null)
       : rows.filter((r) => r.scenarioId === scenarioId);
+  }
+  if (versionIds.length > 0) {
+    const vset = new Set(versionIds);
+    rows = rows.filter((r) => r.versionId != null && vset.has(r.versionId));
   }
   // 把 scenario title 一起带回去，避免前端为每个 case 再发一次 detail 请求
   const sids = [...new Set(rows.map((r) => r.scenarioId).filter((v): v is string => !!v))];

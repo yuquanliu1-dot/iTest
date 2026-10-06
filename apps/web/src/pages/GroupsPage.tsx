@@ -54,6 +54,7 @@ const caseParsers = {
 	scenario: parseAsString.withDefault(''),
 	status: parseAsArrayOf(parseAsString).withDefault([]),
 	tag: parseAsArrayOf(parseAsString).withDefault([]),
+	versions: parseAsArrayOf(parseAsString).withDefault([]),
 	tab: parseAsStringEnum([...TAB_VALUES]).withDefault('all'),
 };
 
@@ -95,6 +96,7 @@ export default function GroupsPage() {
 	const scenarioId = raw.scenario;
 	const statusSelected = raw.status;
 	const tagSelected = raw.tag;
+	const versionsSelected = raw.versions;
 	const tab = raw.tab;
 	const page = Math.max(1, Number(raw.page) || 1);
 	const pageSizeRaw = Number(raw.pageSize);
@@ -117,13 +119,13 @@ export default function GroupsPage() {
 	});
 
 	const effectiveGroupId = groupId ?? '';
-	// 拉列表时只透传后端支持的过滤（priority/scenarioId），status/tags 走前端本地筛（API 暂不接）。
+	// 拉列表时只透传后端支持的过滤（priority/scenarioId/versionIds），status/tags 走前端本地筛（API 暂不接）。
 	const { data: cases, isLoading: casesLoading, isError: casesError, error: casesErrorObj } = useQuery({
-		queryKey: ['cases', projectId, versionId, effectiveGroupId, priority, scenarioId],
+		queryKey: ['cases', projectId, effectiveGroupId, priority, scenarioId, versionsSelected],
 		queryFn: () =>
 			api.cases.list(effectiveGroupId
-				? { groupId: effectiveGroupId, versionId: versionId ?? undefined, priority: priority || undefined, scenarioId: scenarioId || undefined }
-				: { projectId: projectId!, versionId: versionId ?? undefined, priority: priority || undefined, scenarioId: scenarioId || undefined }),
+				? { groupId: effectiveGroupId, priority: priority || undefined, scenarioId: scenarioId || undefined, versionIds: versionsSelected.length ? versionsSelected : undefined }
+				: { projectId: projectId!, priority: priority || undefined, scenarioId: scenarioId || undefined, versionIds: versionsSelected.length ? versionsSelected : undefined }),
 		enabled: !!projectId,
 	});
 
@@ -144,6 +146,13 @@ export default function GroupsPage() {
 	const { data: projectScenarios } = useQuery({
 		queryKey: ['scenarios', projectId],
 		queryFn: () => api.scenarios.listForProject(projectId!),
+		enabled: !!projectId,
+	});
+
+	// 版本过滤 facet 选项 = 项目全量版本（列表本身跨版本混排,过滤按 test_cases.version_id）
+	const { data: projectVersionList } = useQuery({
+		queryKey: ['versions', projectId],
+		queryFn: () => api.versions.list(projectId!),
 		enabled: !!projectId,
 	});
 
@@ -318,6 +327,7 @@ export default function GroupsPage() {
 	const setScenarioFilter = (next: string) => void setRaw({ scenario: next, page: '1' });
 	const setStatusFilter = (next: string[]) => void setRaw({ status: next, page: '1' });
 	const setTagFilter = (next: string[]) => void setRaw({ tag: next, page: '1' });
+	const setVersionsFilter = (next: string[]) => void setRaw({ versions: next, page: '1' });
 	const setPage = (next: number) => void setRaw({ page: String(next) });
 	const setPageSize = (next: number) => void setRaw({ pageSize: String(next), page: '1' });
 	const setTabFilter = (next: typeof tab) => void setRaw({ tab: next, page: '1' });
@@ -339,6 +349,11 @@ export default function GroupsPage() {
 			id: 'priority',
 			label: '优先级',
 			options: PRIORITY_VALUES.filter((p) => p !== '').map((p) => ({ value: p, label: p })),
+		},
+		{
+			id: 'version',
+			label: '版本',
+			options: (projectVersionList ?? []).map((v) => ({ value: v.id, label: v.name })),
 		},
 		{
 			id: 'scenario',
@@ -630,12 +645,14 @@ export default function GroupsPage() {
 										setTab: (v) => setTabFilter(v as typeof tab),
 										setFilter: (id, values) => {
 											if (id === 'priority') setPriorityFilter((values[0] ?? '') as typeof priority);
+											else if (id === 'version') setVersionsFilter(values);
 											else if (id === 'scenario') setScenarioFilter(values[0] ?? '');
 											else if (id === 'status') setStatusFilter(values);
 											else if (id === 'tag') setTagFilter(values);
 										},
 										filters: {
 											priority: priority ? [priority] : [],
+											version: versionsSelected,
 											scenario: scenarioId ? [scenarioId] : [],
 											status: statusSelected,
 											tag: tagSelected,

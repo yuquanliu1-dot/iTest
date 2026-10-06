@@ -62,6 +62,26 @@ describe('cases + steps', () => {
     expect(row?.versionName).toBe('v0');
   });
 
+  it('GET /api/cases filters by versionIds (single, multi, absent)', async () => {
+    const { projectId, groupId, versionId: v0 } = await seedProject(pool);
+    const v1 = (await pool.query(
+      `INSERT INTO project_versions(project_id, name) VALUES ($1, 'v1') RETURNING id`,
+      [projectId],
+    )).rows[0]!.id as string;
+    await request(app).post('/api/cases').send({ title: 'A-v0', groupId, versionId: v0 });
+    await request(app).post('/api/cases').send({ title: 'B-v1', groupId, versionId: v1 });
+    const titles = (body: Array<{ title: string }>) => body.map((c) => c.title).sort();
+
+    const all = await request(app).get(`/api/cases?projectId=${projectId}`);
+    expect(titles(all.body)).toEqual(['A-v0', 'B-v1']);
+
+    const onlyV0 = await request(app).get(`/api/cases?projectId=${projectId}&versionIds=${v0}`);
+    expect(titles(onlyV0.body)).toEqual(['A-v0']);
+
+    const both = await request(app).get(`/api/cases?projectId=${projectId}&versionIds=${v0},${v1}`);
+    expect(titles(both.body)).toEqual(['A-v0', 'B-v1']);
+  });
+
   it('GET /api/cases/:id returns case with steps', async () => {
     const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'X', groupId, versionId });
