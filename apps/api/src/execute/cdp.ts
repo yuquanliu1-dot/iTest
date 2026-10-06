@@ -17,7 +17,7 @@ import { testAttachments, testSteps } from '../db/schema.js';
 import { decrypt } from '../lib/secret-crypto.js';
 import { migrateAssertion } from '../lib/step-migration.js';
 import { logger } from '../logger.js';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildCandidates } from './locator-resolver.js';
 import { waitForStable, ElementNotStable } from './stability.js';
@@ -63,8 +63,8 @@ export interface ExecStepResult {
   db?: DbQueryRowResult;
   /** observeLog 步骤的结果（仅 observeLog 步携带，其它步 undefined） */
   log?: ObserveLogLineResult;
-  /** Track 1 用例级 vision 判定的回写结果（仅最后一步携带，其它步 undefined）。 */
-  visionAssert?: { passed: boolean; reason: string };
+  /** Track 1 用例级 vision 判定的回写结果（仅最后一步或追加失败步携带，其它步 undefined）。 */
+  visionAssert?: { passed: boolean; reason: string; screenshot?: string };
 }
 
 export interface ExecContext {
@@ -752,6 +752,15 @@ async function runStepsInContext(
       await opts.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
       await opts.page.waitForTimeout(800);
       const buffer = await opts.page.screenshot({ timeout: 5000 });
+      // 终态判定截图单独保存，便于报告页把「最终页面 vs 预期」展示给用户。
+      const visionScreenshotPath = `/screenshots/${ctx.reportId}/final.png`;
+      try {
+        const dir = join(SCREENSHOTS_DIR, ctx.reportId);
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, 'final.png'), buffer);
+      } catch (e) {
+        logger.warn({ err: e, reportId: ctx.reportId }, 'failed to save final vision screenshot');
+      }
       const { judgeCaseOutcome } = await import('../agent/judgeCaseOutcome.js');
       const verdict = await judgeCaseOutcome({
         expectedOutcome: ctx.expectedOutcome,
@@ -767,14 +776,15 @@ async function runStepsInContext(
           status: 'failed',
           durationMs: 0,
           error: `case-level vision assert failed: ${verdict.reason}`,
+          screenshot: visionScreenshotPath,
           failureReason: 'VisionAssertionFailed',
           humanMessage: '最终页面与用例预期不符',
-          visionAssert: { passed: false, reason: verdict.reason },
+          visionAssert: { passed: false, reason: verdict.reason, screenshot: visionScreenshotPath },
         });
       } else if (verdict) {
         // 通过：在最后一步 result 上挂 visionAssert，调用方可读到 reason（不影响 passed 计数）。
         const last = results[results.length - 1];
-        if (last) last.visionAssert = { passed: true, reason: verdict.reason };
+        if (last) last.visionAssert = { passed: true, reason: verdict.reason, screenshot: visionScreenshotPath };
       }
     } catch (e) {
       // vision 兜底失败不视作用例失败：best-effort
