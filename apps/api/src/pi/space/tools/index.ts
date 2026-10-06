@@ -14,6 +14,7 @@ import { buildScenariosTools } from './scenarios.js';
 import { buildEnvironmentsTools } from './environments.js';
 import { buildPlansTools } from './plans.js';
 import { buildStageTools } from './stage-tools.js';
+import { buildLoginTools } from './login.js';
 import { buildCaseOpsTools } from './case-ops-tools.js';
 
 export type { SpaceToolsContext } from './context.js';
@@ -53,6 +54,7 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   //   - stage_case     → 暂存「全新用例」，用户在 StagePanel 勾选 → 选目标分组 → 落库
   //   - stage_case_op  → 暂存「对已有用例/步骤的修改」，同上
   //   - manage_cases   → 仅负责 search/get/create_group（实时读 + 仅分组创建仍保留实时写）
+  tools.push(...buildLoginTools(ctx));
   tools.push(...buildStageTools(ctx));
   tools.push(...buildCaseOpsTools(ctx));
   tools.push(...buildCasesTools(ctx));

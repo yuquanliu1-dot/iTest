@@ -66,7 +66,7 @@ const EXTRACT_JS = `(() => {
   return { title, elements, truncated: nodes.length > maxElements };
 })()`;
 
-export async function inspectPage(rawUrl: string): Promise<string> {
+export async function inspectPage(rawUrl: string, opts?: { storageState?: unknown }): Promise<string> {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -83,7 +83,11 @@ export async function inspectPage(rawUrl: string): Promise<string> {
   });
   try {
     // 内网被测环境普遍用自签名证书,必须忽略校验,否则 inspect_page 在核心场景下不可用
-    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, ignoreHTTPSErrors: true });
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      ignoreHTTPSErrors: true,
+      ...(opts?.storageState ? { storageState: opts.storageState as never } : {}),
+    });
     const page = await context.newPage();
     await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: GOTO_TIMEOUT_MS });
     await page.waitForTimeout(SETTLE_MS);
