@@ -10,7 +10,7 @@ export interface AgentTool {
   handler: (input: unknown) => Promise<unknown>;
 }
 
-const StepItem = z.object({ order: z.number(), action: StepAction });
+const StepItem = z.object({ order: z.number(), action: StepAction, instruction: z.string().optional() });
 const StepsOutput = z.object({ steps: z.array(StepItem) });
 
 /** 保存 LLM 生成的脚本步骤到指定用例。 */
@@ -26,7 +26,8 @@ export function createSaveStepsTool(opts: { caseId: string }): AgentTool {
           caseId: opts.caseId,
           order: s.order,
           source: 'agent' as const,
-          action: s.action as object,
+          instruction: s.instruction ?? JSON.stringify(s.action),
+          compiled: [s.action] as unknown[],
         })),
       );
       return { ok: true, inserted: steps.length };
@@ -45,7 +46,7 @@ export function createGetCaseTool(opts: { caseId: string }): AgentTool {
         .from(testSteps)
         .where(eq(testSteps.caseId, opts.caseId))
         .orderBy(testSteps.order);
-      return { ok: true, steps: rows.map((r) => ({ order: r.order, action: r.action })) };
+      return { ok: true, steps: rows.map((r) => ({ order: r.order, compiled: r.compiled })) };
     },
   };
 }

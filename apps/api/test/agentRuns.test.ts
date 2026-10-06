@@ -14,8 +14,8 @@ vi.mock('../src/agent/llmSettings.js', () => ({
         kind: 'json' as const,
         value: {
           steps: [
-            { order: 0, action: { kind: 'navigate', url: 'https://example.com' } },
-            { order: 1, action: { kind: 'click', locator: [{ strategy: 'css', value: '#btn' }] } },
+            { order: 0, instruction: '访问示例', action: { kind: 'navigate', url: 'https://example.com' } },
+            { order: 1, instruction: '点击按钮', action: { kind: 'click', locator: [{ strategy: 'css', value: '#btn' }] } },
           ],
         },
       }),
@@ -85,10 +85,17 @@ describe('agent-runs (case2script only)', () => {
     const created = await request(app)
       .post('/api/agent-runs')
       .send({ targetType: 'case2script', targetId: c.rows[0]!.id, prompt: '用例: 登录' });
-    await new Promise((r) => setTimeout(r, 500));
-    const detail = await request(app).get(`/api/agent-runs/${created.body.id}`);
-    expect(detail.body.status).toBe('success');
-    const steps = await pool.query(`SELECT * FROM test_steps WHERE case_id = $1`, [c.rows[0]!.id]);
-    expect(steps.rows.length).toBeGreaterThan(0);
+    // 等异步 run 落到终态;500ms 不足以触发 inspectPage 网络超时,改成轮询 status 直到 success/failed。
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      const d = await request(app).get(`/api/agent-runs/${created.body.id}`);
+      if (d.body.status === 'success' || d.body.status === 'failed') {
+        if (d.body.status !== 'success') throw new Error(`agent run failed: ${d.body.error ?? 'unknown'}`);
+        const steps = await pool.query(`SELECT * FROM test_steps WHERE case_id = $1`, [c.rows[0]!.id]);
+        expect(steps.rows.length).toBeGreaterThan(0);
+        return;
+      }
+    }
+    throw new Error('agent run did not finish in time');
   });
 });

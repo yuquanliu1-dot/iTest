@@ -193,7 +193,8 @@ async function copyOneCase(caseId: string, targetGroupId: string, targetVersionI
         caseId: newCase.id,
         order: s.order,
         source: s.source,
-        action: s.action,
+        instruction: s.instruction,
+        compiled: s.compiled,
         assertion: s.assertion,
       })),
     );

@@ -32,11 +32,6 @@ describe('validateStepEdit', () => {
     expect(validateStepEdit({ action: click, delayMs: 500 }).ok).toBe(true);
   });
 
-  it('name 超 200 字', () => {
-    const r = validateStepEdit({ action: click, name: 'x'.repeat(201) });
-    expect(r.errors.name).toBeTruthy();
-  });
-
   it('extract 缺 varName', () => {
     const r = validateStepEdit({ action: { kind: 'extract', locator: click.locator, mode: 'completeValue', varName: '' } });
     expect(r.errors['action.varName']).toBeTruthy();

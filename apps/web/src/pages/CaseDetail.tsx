@@ -26,7 +26,12 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../com
 import TagChip from '../components/ui/Tag';
 import LabelsManagerDialog from '../components/labels/LabelsManagerDialog';
 import { stepKindLabel } from '../lib/format';
-import { stepSummary, fullStepDescription } from '../lib/stepSummary';
+import { stepSummary, fullStepDescription, getKind as getStepKind } from '../lib/stepSummary';
+
+/** 行内 instruction chip 用：截断到 n 字符,带 ellipsis。 */
+function clipInline(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
 
 type Tab = 'description' | 'reports' | 'recording';
 
@@ -61,6 +66,10 @@ export default function CaseDetail() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<StepClip | null>(null);
   const [editingIdx, setEditingIdx] = useState(-1);
+  /** 2026-10-06：手工新增步骤 — editingMode = 'create' 时 StepEditDrawer 展示不同标题/按钮。
+   *  初始 StepClip = { source:'manual', action:{kind:'click', locator:[{strategy:'css', value:''}]}, instruction:'', compiled:[] }
+   *  —— compiled=[] 是未编译信号,dispatcher 会抛 compile-missing,UI 阻塞执行(顶部执行按钮置灰 + 行内"未编译"徽章)。 */
+  const [editingMode, setEditingMode] = useState<'edit' | 'create'>('edit');
   const [varReport, setVarReport] = useState<VariableReport | null>(null);
   const [windowStrategy, setWindowStrategy] = useState<'maximize' | 'current' | 'custom'>('maximize');
   const [windowWidth, setWindowWidth] = useState<number | undefined>();
@@ -70,22 +79,64 @@ export default function CaseDetail() {
   const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [urlDraft, setUrlDraft] = useState('');
   const [urlSaving, setUrlSaving] = useState(false);
+  /** 行级 AI 重新编译：跟踪当前正在编译的 stepId，避免重复点击。 */
+  const [recompilingId, setRecompilingId] = useState<string | null>(null);
   const editingIdxRef = useRef<number>(-1);
   const editingSnapshotRef = useRef<StepClip | null>(null);
   const historyRef = useRef<StepClip[][]>([]);
 
-  const toClip = (s: { action: unknown; source: string; name?: string | null; delayMs?: number | null }): StepClip => ({
-    action: s.action,
-    source: s.source,
-    name: s.name ?? undefined,
-    delayMs: s.delayMs ?? undefined,
-  });
+  /** StepClip.action 是 compiled[0] 的客户端镜像（服务端 action 列已 DROP，不再下发）。
+   *  compiled 非空 → action = compiled[0]；空/缺失 → 占位 {}，DrawerForm 靠 buildAction 兜底。 */
+  const toClip = (s: { source: string; delayMs?: number | null; instruction?: string | null; compiled?: unknown[] | null }): StepClip => {
+    const compiledFirst = Array.isArray(s.compiled) && s.compiled.length > 0 ? s.compiled[0] : null;
+    return {
+      action: compiledFirst ?? {},
+      source: s.source,
+      delayMs: s.delayMs ?? undefined,
+      instruction: s.instruction ?? undefined,
+      compiled: s.compiled ?? undefined,
+    };
+  };
+
+  /** 行级未编译检测：与 dispatcher 对齐 —— compiled 非空数组才放行，null/undefined/[] 都视为未编译。 */
+  const isUncompiledStep = (s: { compiled?: unknown[] | null }): boolean => {
+    return !Array.isArray(s.compiled) || s.compiled.length === 0;
+  };
+
+  /** 行级重编：把自然语言 instruction 喂给 LLM，回填到对应 step 的 compiled。 */
+  const recompileRow = async (stepId: string) => {
+    if (!caseDetail) return;
+    const target = caseDetail.steps.find((x) => x.id === stepId);
+    if (!target) return;
+    const instructionText = target.instruction?.trim() ?? '';
+    if (!instructionText) {
+      toast('该步骤没有自然语言指令，无法 AI 编译', 'error');
+      return;
+    }
+    setRecompilingId(stepId);
+    try {
+      // 2026-10-07：行级 AI 编译走 case2script 同款多轮 Agent 回路（带 inspect_page 真实元素）,
+      //   替代旧的单点 LLM 调用 —— 单点调用给不出可靠 locator。
+      const r = await api.cases.aiEditStep(id!, { mode: 'recompile', stepId, instruction: instructionText });
+      if (r.error || !r.step) {
+        toast(r.error ?? '重新编译失败', 'error');
+        return;
+      }
+      // 后端已直接 UPDATE step 行；前端用 refetch 拉回最新
+      qc.invalidateQueries({ queryKey: ['case', id] });
+      toast('AI 已编译完成', 'success');
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally {
+      setRecompilingId(null);
+    }
+  };
 
   const replaceSteps = useMutation({
     mutationFn: (steps: StepClip[]) =>
       api.cases.replaceSteps(
         id!,
-        steps.map((s) => ({ ...s, name: s.name ?? undefined, delayMs: s.delayMs ?? undefined })),
+        steps.map((s) => ({ ...s, delayMs: s.delayMs ?? undefined, instruction: s.instruction ?? undefined, compiled: s.compiled ?? undefined })),
       ),
     onSuccess: (r) => {
       setVarReport(r.variableReport ?? null);
@@ -352,7 +403,9 @@ export default function CaseDetail() {
         prompt: JSON.stringify({
           title: caseDetail.title,
           description: caseDetail.description,
-          steps: caseDetail.steps.map((s) => s.action),
+          steps: caseDetail.steps.map((s) =>
+            Array.isArray(s.compiled) && s.compiled.length > 0 ? s.compiled[0] : null,
+          ),
         }),
       });
       setStreaming(true);
@@ -548,17 +601,26 @@ export default function CaseDetail() {
         <PriorityBadge priority={caseDetail.priority} />
         <CaseStatusMenu caseId={caseDetail.id} status={caseDetail.status} projectId={projectId} />
         <div className="flex-1" />
-        <Button
-          variant="ghost"
-          onClick={() => {
-            if (caseDetail.status === 'deprecated' && !window.confirm('用例已废弃，仍要执行？')) return;
-            execute.mutate();
-          }}
-          disabled={execute.isPending || caseDetail.steps.length === 0}
-        >
-          <Icon name="play" size={12} />
-          执行
-        </Button>
+        {(() => {
+          // 2026-10-06：未编译 step 阻塞执行（dispatcher 抛 compile-missing）。
+          //   老数据（无 compiled 列）按未编译处理，强制 user 重新 AI 编译。
+          const uncompiled = caseDetail.steps.filter((s) => isUncompiledStep(s));
+          const blocked = uncompiled.length > 0;
+          return (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (caseDetail.status === 'deprecated' && !window.confirm('用例已废弃，仍要执行？')) return;
+                execute.mutate();
+              }}
+              disabled={execute.isPending || caseDetail.steps.length === 0 || blocked}
+              title={blocked ? `存在 ${uncompiled.length} 个未编译步骤，请先点击「AI 编译」补齐` : undefined}
+            >
+              <Icon name="play" size={12} />
+              执行
+            </Button>
+          );
+        })()}
       </div>
 
       {/* Tabs */}
@@ -704,6 +766,27 @@ export default function CaseDetail() {
                   <Button
                     variant="ghost"
                     size="sm"
+                    disabled={recorder.status === 'recording'}
+                    onClick={() => {
+                      editingIdxRef.current = -1;
+                      setEditingIdx(-1);
+                      editingSnapshotRef.current = null;
+                      setEditing({
+                        action: { kind: 'click', locator: [{ strategy: 'css', value: '' }] },
+                        source: 'manual',
+                        instruction: '',
+                        compiled: [],
+                      });
+                      setEditingMode('create');
+                    }}
+                    title="手动新增一个步骤（未编译需先 AI 编译才能执行）"
+                  >
+                    <Icon name="plus" size={12} />
+                    新增步骤
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => {
                       const clips = caseDetail.steps.filter((s) => selected.has(s.id)).map(toClip);
                       if (clips.length === 0) {
@@ -815,67 +898,62 @@ export default function CaseDetail() {
                             <TooltipProvider delayDuration={200}>
                               <Tooltip>
                                 <TooltipTrigger asChild>
-                                  <span className="text-[12px] flex-1 truncate text-left cursor-default" style={{ color: 'var(--foreground)' }}>
-                                    <span className="text-[10px] font-semibold" style={{ color: 'var(--primary)' }}>
-                                      {stepKindLabel((s.action as { kind?: string }).kind ?? '')}
-                                    </span>{' '}
-                                    {stepSummary(s.action)}
+                                  <span
+                                    className="flex min-w-0 flex-1 items-baseline gap-1 cursor-default text-left"
+                                    style={{ color: 'var(--foreground)', fontSize: 12 }}
+                                  >
+                                    <span className="shrink-0 font-semibold" style={{ color: 'var(--primary)', fontSize: 10 }}>
+                                      {stepKindLabel(getStepKind(s))}
+                                    </span>
+                                    <span className="min-w-0 flex-1 truncate">
+                                      {s.instruction?.trim() || stepSummary(s)}
+                                    </span>
                                   </span>
                                 </TooltipTrigger>
                                 <TooltipContent
                                   side="bottom"
                                   align="start"
                                   sideOffset={6}
-                                  className="max-w-[420px] whitespace-pre-wrap text-left font-mono leading-relaxed"
+                                  className="block w-fit max-w-[420px] whitespace-pre-wrap break-words text-left font-mono leading-relaxed"
                                 >
-                                  {fullStepDescription(s.action)}
+                                  {fullStepDescription(s)}
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>
-                            {(s.action as { kind?: string; varName?: string }).kind === 'extract' && (
+                            {s.instruction?.trim() && (
                               <span
-                                className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-mono"
-                                style={{ border: '1px solid var(--primary)', color: 'var(--primary)', background: 'var(--popover)' }}
-                                title="抽取变量，供后续步骤 {{引用}}"
+                                className="text-[10px] px-1.5 py-0.5 rounded-[3px] shrink-0 font-mono truncate max-w-[140px]"
+                                style={{ border: '1px solid var(--border)', color: 'var(--muted-foreground)', background: 'var(--muted)' }}
+                                title={`行级 instruction:${s.instruction}`}
                               >
-                                → {`{{${(s.action as { varName?: string }).varName ?? ''}}}`}
+                                📝 {clipInline(s.instruction, 22)}
                               </span>
                             )}
-                            {(s.action as { kind?: string; compiled?: unknown[] | null }).kind === 'aiStep' &&
-                              (s.action as { compiled?: unknown[] | null }).compiled == null && (
-                                <button
-                                  onClick={() => {
-                                    const instruction = (s.action as { instruction?: string }).instruction ?? '';
-                                    api.cases
-                                      .recompileStep(id!, instruction)
-                                      .then((r) => {
-                                        if (!r.compiled) {
-                                          toast('重新编译失败', 'error');
-                                          return;
-                                        }
-                                        let applied = false;
-                                        mutateSteps((cur) => {
-                                          const i = cur.findIndex((c) => {
-                                            const a = c.action as { kind?: string; instruction?: string };
-                                            return a.kind === 'aiStep' && a.instruction === instruction;
-                                          });
-                                          if (i < 0) return cur;
-                                          applied = true;
-                                          const next = [...cur];
-                                          next[i] = { ...next[i]!, action: { ...(next[i]!.action as object), compiled: r.compiled } };
-                                          return next;
-                                        });
-                                        // applied 在 mutateSteps 内部同步置位；HTTP 失败时此路径不会跑到这里
-                                        toast(applied ? '编译成功' : '步骤已被修改，请刷新后重试', applied ? 'success' : 'error');
-                                      })
-                                      .catch((e: Error) => toast(e.message, 'error'));
-                                  }}
-                                  className="text-[10px] px-2 py-0.5 rounded-full shrink-0 press"
-                                  style={{ border: '1px solid var(--warning-soft-border)', color: 'var(--warning)', background: 'var(--warning-soft)', cursor: 'pointer' }}
+                            {(() => {
+                              const head = Array.isArray(s.compiled) && s.compiled.length > 0
+                                ? (s.compiled[0] as { kind?: string; varName?: string })
+                                : undefined;
+                              return head?.kind === 'extract' ? (
+                                <span
+                                  className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-mono"
+                                  style={{ border: '1px solid var(--primary)', color: 'var(--primary)', background: 'var(--popover)' }}
+                                  title="抽取变量，供后续步骤 {{引用}}"
                                 >
-                                  AI 编译失败 · 点我重编
-                                </button>
-                              )}
+                                  → {`{{${head.varName ?? ''}}}`}
+                                </span>
+                              ) : null;
+                            })()}
+                            {isUncompiledStep(s) && (
+                              <button
+                                onClick={() => recompileRow(s.id)}
+                                disabled={recompilingId === s.id}
+                                className="text-[10px] px-2 py-0.5 rounded-full shrink-0 press"
+                                style={{ border: '1px solid var(--warning-soft-border)', color: 'var(--warning)', background: 'var(--warning-soft)', cursor: recompilingId === s.id ? 'wait' : 'pointer' }}
+                                title="该步骤缺少 compiled DSL，回放将被 dispatcher 阻塞。点此调 LLM 重新编译。"
+                              >
+                                {recompilingId === s.id ? '编译中…' : 'AI 编译失败 · 点我重编'}
+                              </button>
+                            )}
                             <div className="flex items-center gap-1 shrink-0">
                               <IconButton
                                 icon="copy"
@@ -917,6 +995,7 @@ export default function CaseDetail() {
                                   setEditingIdx(idx);
                                   editingSnapshotRef.current = toClip(s);
                                   setEditing(toClip(s));
+                                  setEditingMode('edit');
                                 }}
                               />
                               <IconButton
@@ -924,7 +1003,7 @@ export default function CaseDetail() {
                                 title="删除"
                                 tone="destructive"
                                 disabled={deleteStep.isPending}
-                                onClick={() => setConfirmDeleteStep({ stepId: s.id, order: s.order, instruction: s.name ?? `第 ${s.order} 步` })}
+                                onClick={() => setConfirmDeleteStep({ stepId: s.id, order: s.order, instruction: s.instruction ?? `第 ${s.order} 步` })}
                               />
                             </div>
                           </SortableStepRow>
@@ -1178,30 +1257,46 @@ export default function CaseDetail() {
       </div>
       {editing && (
         <StepEditDrawer
+          mode={editingMode}
           initial={editing}
           availableVars={caseDetail.steps
-            .map((s) => (s.action as { kind?: string; varName?: string }).kind === 'extract'
-              ? (s.action as { varName: string }).varName
-              : undefined)
+            .map((s) => {
+              const head = Array.isArray(s.compiled) && s.compiled.length > 0
+                ? (s.compiled[0] as { kind?: string; varName?: string })
+                : undefined;
+              return head?.kind === 'extract' ? head.varName : undefined;
+            })
             .filter((v): v is string => !!v)}
           caseId={id}
-          onClose={() => { setEditing(null); setEditingIdx(-1); editingSnapshotRef.current = null; }}
+          onClose={() => { setEditing(null); setEditingIdx(-1); editingSnapshotRef.current = null; setEditingMode('edit'); }}
           onSave={(next) => {
             let applied = false;
-            mutateSteps((cur) => {
-              const i = editingIdxRef.current;
-              const prev = editingSnapshotRef.current;
-              const curAt = cur[i];
-              if (!curAt || !prev || !sameStep(curAt, prev)) return cur;
-              applied = true;
-              const newCur = [...cur];
-              newCur[i] = next;
-              return newCur;
-            });
+            if (editingMode === 'create') {
+              // 新增：append 到末尾,沿用 replaceSteps 入口(全量替换最简单且满足 undo)。
+              mutateSteps((cur) => {
+                applied = true;
+                // 保存时 action 必须与 compiled[0] 一致：action 占位与新规范冲突,服务端不再写 action 列。
+                // 对非 aiTask 等单元素 compiled,直接同步过来;多元素/空则保留 next.action 让 buildAction 兜底。
+                const head = Array.isArray(next.compiled) && next.compiled.length > 0 ? next.compiled[0] : null;
+                return [...cur, head ? { ...next, action: head } : next];
+              });
+            } else {
+              mutateSteps((cur) => {
+                const i = editingIdxRef.current;
+                const prev = editingSnapshotRef.current;
+                const curAt = cur[i];
+                if (!curAt || !prev || !sameStep(curAt, prev)) return cur;
+                applied = true;
+                const newCur = [...cur];
+                newCur[i] = next;
+                return newCur;
+              });
+            }
             if (!applied) toast('步骤已被修改，请关闭抽屉重试', 'error');
             setEditing(null);
             setEditingIdx(-1);
             editingSnapshotRef.current = null;
+            setEditingMode('edit');
           }}
         />
       )}

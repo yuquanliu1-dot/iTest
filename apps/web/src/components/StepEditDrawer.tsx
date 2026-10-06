@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Locator, QueryDbAction, ObserveLogAction } from '@itest/shared';
+import type { StepAction } from '@itest/shared';
 import { useQuery } from '@tanstack/react-query';
 import type { StepClip } from '../stores/stepClipboard';
 import { api } from '../api/client';
@@ -15,6 +16,9 @@ import { cn } from '../lib/cn';
 
 interface Props {
   initial: StepClip;
+  /** 'edit' = 修改已有步骤；'create' = 新增未编译空白步骤（首屏带 click 默认 action）。
+   *  仅影响标题文案 + 保存按钮文案 + 默认 source；保存数据流不变。 */
+  mode?: 'edit' | 'create';
   availableVars?: string[];
   caseId?: string;
   onSave: (next: StepClip) => void;
@@ -27,10 +31,10 @@ function FieldError({ msg }: { msg?: string }) {
 }
 
 /** 步骤编辑抽屉：外壳管类型切换 + 通用字段；DrawerForm 按 kind 重挂载管差异字段。 */
-export default function StepEditDrawer({ initial, availableVars = [], caseId, onSave, onClose }: Props) {
+export default function StepEditDrawer({ initial, mode = 'edit', availableVars = [], caseId, onSave, onClose }: Props) {
   const [draft, setDraft] = useState<StepClip>(initial);
-  // 通用字段放外壳：类型切换（DrawerForm 重挂载）不丢用户已输入的名称/延迟
-  const [name, setName] = useState(initial.name ?? '');
+  // 通用字段放外壳：类型切换（DrawerForm 重挂载）不丢用户已输入的延迟
+  // 2026-10-07 移除 name 输入框：name 列已退役，行级自然语言全部由 rowInstruction 承担。
   const [delayMs, setDelayMs] = useState(initial.delayMs ? String(initial.delayMs) : '');
   const kind = ((draft.action as { kind?: string })?.kind ?? 'click') as StepKind;
   // DrawerForm 每次渲染注册最新的 buildAction；类型切换前用它把未保存的字段编辑同步进 draft
@@ -45,7 +49,7 @@ export default function StepEditDrawer({ initial, availableVars = [], caseId, on
         aria-describedby={undefined}
       >
         <div className="flex items-center gap-3 px-5 py-4 shrink-0 border-b">
-          <SheetTitle className="text-sm font-semibold">编辑步骤</SheetTitle>
+          <SheetTitle className="text-sm font-semibold">{mode === 'create' ? '新增步骤' : '编辑步骤'}</SheetTitle>
           <select
             value={kind}
             onChange={(e) => {
@@ -68,15 +72,19 @@ export default function StepEditDrawer({ initial, availableVars = [], caseId, on
           key={kind}
           clip={draft}
           kind={kind}
-          name={name}
           delayMs={delayMs}
-          onName={setName}
           onDelayMs={setDelayMs}
           availableVars={availableVars}
           caseId={caseId}
           buildActionRef={buildActionRef}
           onCancel={onClose}
-          onSave={(built) => onSave({ ...built, name: name.trim() || undefined, delayMs: delayMs ? Number(delayMs) : undefined })}
+          saveLabel={mode === 'create' ? '添加步骤' : '保存'}
+          saveMode={mode}
+          onSave={(built) => onSave({
+            ...built,
+            source: built.source && built.source !== 'recorder' && built.source !== 'agent' ? built.source : 'manual',
+            delayMs: delayMs ? Number(delayMs) : undefined,
+          })}
         />
       </SheetContent>
     </Sheet>
@@ -88,18 +96,18 @@ export default function StepEditDrawer({ initial, availableVars = [], caseId, on
 interface FormProps {
   clip: StepClip;
   kind: StepKind;
-  name: string;
   delayMs: string;
-  onName: (v: string) => void;
   onDelayMs: (v: string) => void;
   availableVars: string[];
   caseId?: string;
   buildActionRef: RefObject<(() => Record<string, unknown> | null) | null>;
   onCancel: () => void;
   onSave: (built: StepClip) => void;
+  saveLabel: string;
+  saveMode: 'edit' | 'create';
 }
 
-function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVars, caseId, buildActionRef, onCancel, onSave }: FormProps) {
+function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, caseId, buildActionRef, onCancel, onSave, saveLabel, saveMode }: FormProps) {
   const action = clip.action as Record<string, unknown>;
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
@@ -139,16 +147,29 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
   const [extractPattern, setExtractPattern] = useState(String(action.pattern ?? ''));
   const [extractGroup, setExtractGroup] = useState(String(action.group ?? '1'));
   const [extractDescription, setExtractDescription] = useState(String(action.description ?? ''));
-  const [compiling, setCompiling] = useState(false);
-  const [compileErr, setCompileErr] = useState('');
 
-  // aiTask / navigate / waitFor / check / switchTab / screenshot
-  const [instruction, setInstruction] = useState(String(action.instruction ?? ''));
+  // aiTask 子步 instruction(LLM 多轮读) 与行级 instruction(人看/给 LLM 起手,回放不读)。
+  // 行级 instruction 走 rowInstruction state;aiTask 这块独立用 aiInstruction。
+  // 两字段在 DB 是不同列(行 instruction + compiled[i].instruction),勿混。
+  const [rowInstruction, setRowInstruction] = useState(String(clip.instruction ?? ''));
+  const [aiInstruction, setAiInstruction] = useState(String(action.instruction ?? ''));
   const [url, setUrl] = useState(String(action.url ?? ''));
   const [timeoutMs, setTimeoutMs] = useState(String(action.timeoutMs ?? ''));
   const [checked, setChecked] = useState(action.checked !== false);
   const [tabRef, setTabRef] = useState(String(action.tabRef ?? ''));
   const [shotName, setShotName] = useState(String(action.name ?? ''));
+
+  // extract 智能抽取编译（沿用历史变量名 compiling/compileErr）
+  const [compiling, setCompiling] = useState(false);
+  const [compileErr, setCompileErr] = useState('');
+
+  // 2026-10-06：行级 compiled 数组 + AI 编译状态（aiTask 用得到）。其余 kind
+  //   由 buildAction 自然回填到 compiled=[action]，与 dispatcher 走同一条路径。
+  //   局部遮蔽会丢 extract 状态，所以这里重命名为 aiCompiling/aiCompileErr。
+  const initialDraftCompiled: unknown[] | null = Array.isArray(clip.compiled) ? clip.compiled : null;
+  const [compiled, setCompiled] = useState<unknown[] | null>(initialDraftCompiled);
+  const [aiCompiling, setAiCompiling] = useState(false);
+  const [aiCompileErr, setAiCompileErr] = useState('');
 
   // queryDb / observeLog
   const { data: allowedTablesData } = useQuery({
@@ -239,7 +260,7 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         delete next.description;
       }
     }
-    if (kind === 'aiTask') next.instruction = instruction.trim();
+    if (kind === 'aiTask') next.instruction = aiInstruction.trim();
     if (kind === 'navigate') next.url = url.trim();
     if (kind === 'waitFor') {
       if (timeoutMs) next.timeoutMs = Number(timeoutMs);
@@ -281,7 +302,12 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
     return () => { buildActionRef.current = null; };
   });
 
-  /** 保存：先做交互级 gate，再构建 + zod 校验（自 StepEditModal.handleSave 迁移）。 */
+  /** 保存：先做交互级 gate，再构建 + zod 校验（自 StepEditModal.handleSave 迁移）。
+   *  2026-10-06：aiTask 强制要求 compiled 非空（未编译不允许保存），dispatcher 阻塞执行。
+   *  其他 kind 的 compiled 由 buildAction 自然回填为 [action]，与 dispatcher 走同一条路径。
+   *  2026-10-07：放宽 row 位置校验——create 模式允许空 locator/空 compiled 占位保存：
+   *    用户手填了 enableAutoCompile = true 时,直接走 {kind:'click', locator:[]}, compiled:[] 占位入栈,
+   *    顶部"执行"按 dispatcher compile-missing 抛错阻塞,行级「AI 智能任务」按钮一键回填。 */
   const handleSave = () => {
     if (kind === 'fill' && sensitive && !pwdDraft) {
       setFieldErrors({ sensitive: '已加密 — 修改时请输入新密码' });
@@ -291,8 +317,19 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
       setFieldErrors({ 'action.description': '智能抽取需要填写描述并生成正则' });
       return;
     }
-    if (kind === 'aiTask' && !instruction.trim()) {
+    if (kind === 'aiTask' && !aiInstruction.trim()) {
       setFieldErrors({ 'action.instruction': '指令不能为空' });
+      return;
+    }
+    // 占位保存分支：create 模式下 locator 全空时跳过 zod 校验,直接入库 compiled:[]
+    if (saveAsPlaceholder) {
+      const placeholderAction: Record<string, unknown> = { kind, locator: [] };
+      onSave({
+        action: placeholderAction,
+        source: clip.source,
+        instruction: rowInstruction.trim() || null,
+        compiled: [],
+      });
       return;
     }
     const next = buildAction();
@@ -300,29 +337,43 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
       setFieldErrors({ 'action.equals': '期望值不是合法 JSON' });
       return;
     }
-    const v = validateStepEdit({ action: next, name: name.trim() || undefined, delayMs: delayMs ? Number(delayMs) : undefined });
+    const v = validateStepEdit({ action: next, delayMs: delayMs ? Number(delayMs) : undefined });
     if (!v.ok) {
       setFieldErrors(v.errors);
       return;
     }
-    onSave({ action: next, source: clip.source });
+    // aiTask 必须先 AI 编译出 compiled：空数组 = dispatcher 抛 compile-missing。
+    const compiledOut: unknown[] = kind === 'aiTask' ? (compiled ?? []) : [next];
+    if (kind === 'aiTask' && compiledOut.length === 0) {
+      setFieldErrors({ 'action.instruction': '未编译：请先点击「AI 编译」生成 DSL' });
+      return;
+    }
+    onSave({
+      action: next,
+      source: clip.source,
+      instruction: rowInstruction.trim() || null,
+      compiled: compiledOut,
+    });
   };
 
   const showLocator = kindNeedsLocator(kind) && !(kind === 'assertText' && assertTarget !== 'specifiedElement');
+  // create 模式下用户没填 locator 时给一条「存为未编译占位」出口 —— 抽屉关闭后顶部执行仍置灰,
+  //   行级「AI 智能任务」按钮把 compiled 填回来。
+  const saveAsPlaceholder = saveMode === 'create' && kindNeedsLocator(kind) && locators.every((l) => !String(l.value ?? '').trim());
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3">
+        {/* 2026-10-07：移除「步骤名称」input —— name 列已退役,自然语言完整说明统一存到行级 instruction。 */}
         <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-          <span>步骤名称</span>
-          <input
-            className={cn('input-base input-xs')}
-            aria-invalid={!!fieldErrors.name}
-            value={name}
-            onChange={(e) => onName(e.target.value)}
-            placeholder="可选"
+          <span>自然语言描述（行级 instruction,人看 / 给 LLM 起手;回放不读）</span>
+          <textarea
+            className="input-base input-xs"
+            value={rowInstruction}
+            onChange={(e) => setRowInstruction(e.target.value)}
+            placeholder="必填。例:在用户名框输入管理员账号"
+            rows={2}
           />
-          <FieldError msg={fieldErrors.name} />
         </label>
         <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
           <span>执行前等待 (ms)</span>
@@ -561,17 +612,54 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
         {kind === 'aiTask' && (
           <div className="flex flex-col gap-2">
             <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>自然语言指令（回放时由 AI 智能体实时执行，不预编译）</span>
+              <span>AI 子步指令（编译后落到 compiled[0].instruction，回放时由 LLM 多轮读）</span>
               <textarea
                 className="input-base input-xs"
                 aria-invalid={!!fieldErrors['action.instruction']}
                 rows={3}
-                value={instruction}
-                onChange={(e) => setInstruction(e.target.value)}
+                value={aiInstruction}
+                onChange={(e) => setAiInstruction(e.target.value)}
                 placeholder="例：识别验证码图片中的字符并填入验证码输入框"
               />
               <FieldError msg={fieldErrors['action.instruction']} />
             </label>
+            <button
+              type="button"
+              disabled={aiCompiling || !aiInstruction.trim() || !caseId}
+              onClick={async () => {
+                if (!caseId) return;
+                setAiCompiling(true);
+                setAiCompileErr('');
+                try {
+                  const r = await api.cases.compileStep(caseId, aiInstruction.trim());
+                  if (r.compiled && r.compiled.length > 0) {
+                    setCompiled(r.compiled);
+                  } else {
+                    setAiCompileErr(r.error ?? '编译失败，请改写指令后重试');
+                  }
+                } catch (e) {
+                  setAiCompileErr((e as Error).message);
+                } finally {
+                  setAiCompiling(false);
+                }
+              }}
+              className="press self-start text-[11px] px-2 py-1 rounded-[var(--radius-sm)] border border-dashed"
+              style={{
+                borderColor: 'var(--border)',
+                color: compiled && compiled.length > 0 ? 'var(--success, var(--primary))' : 'var(--muted-foreground)',
+                background: 'var(--popover)',
+                cursor: aiCompiling ? 'wait' : 'pointer',
+              }}
+              title={!caseId ? '缺少 caseId' : compiled && compiled.length > 0 ? '已生成 DSL，编辑指令后可重新编译' : '把自然语言指令编译成 StepAction[]'}
+            >
+              {aiCompiling ? '编译中…' : compiled && compiled.length > 0 ? '已编译 · 重新编译' : 'AI 编译'}
+            </button>
+            {aiCompileErr && <p className="text-[11px]" style={{ color: 'var(--destructive)' }}>{aiCompileErr}</p>}
+            {compiled && compiled.length > 0 && (
+              <p className="text-[11px] font-mono" style={{ color: 'var(--muted-foreground)' }}>
+                已生成 DSL：{compiled.map((c) => (c as { kind?: string }).kind ?? '?').join(' → ')}（保存后回放按 compiled 执行）
+              </p>
+            )}
             <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--muted-foreground)' }}>
               <p>• 智能步骤由 AI 在回放时看截图逐步执行，适合验证码识别、动态弹窗等难以固化为 DSL 的交互。</p>
               <p>• 确定性高的常规操作请用 click / fill / waitFor 等具体步骤，更稳更快。</p>
@@ -733,7 +821,12 @@ function DrawerForm({ clip, kind, name, delayMs, onName, onDelayMs, availableVar
 
       <div className="flex items-center gap-2 justify-end px-5 py-4 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
         <Button variant="ghost" size="sm" onClick={onCancel}>取消</Button>
-        <Button size="sm" onClick={handleSave}>保存</Button>
+        {saveAsPlaceholder && (
+          <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
+            将存为未编译占位 — 执行会被阻塞,点行级「AI 智能任务」回填
+          </span>
+        )}
+        <Button size="sm" onClick={handleSave}>{saveLabel}</Button>
       </div>
     </div>
   );

@@ -67,8 +67,8 @@ describe('cases + steps', () => {
     const c = await request(app).post('/api/cases').send({ title: 'Y', groupId, versionId });
     const r = await request(app).post(`/api/cases/${c.body.id}/steps`).send({
       steps: [
-        { order: 1, source: 'agent', action: { kind: 'navigate', url: 'https://example.com/login' } },
-        { order: 2, source: 'agent', action: { kind: 'click', locator: [{ strategy: 'role', value: 'button[name="登录"]' }] } },
+        { order: 1, source: 'agent', compiled: [{ kind: 'navigate', url: 'https://example.com/login' }] },
+        { order: 2, source: 'agent', compiled: [{ kind: 'click', locator: [{ strategy: 'role', value: 'button[name="登录"]' }] }] },
       ],
     });
     expect(r.status).toBe(200);
@@ -79,7 +79,7 @@ describe('cases + steps', () => {
     const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'Z', groupId, versionId });
     const r = await request(app).post(`/api/cases/${c.body.id}/steps`).send({
-      steps: [{ order: 1, source: 'agent', action: { kind: 'click', locator: [] } }],
+      steps: [{ order: 1, source: 'agent', action: { kind: 'click' } }],
     });
     expect(r.status).toBe(400);
   });
@@ -91,7 +91,7 @@ describe('cases + steps', () => {
       steps: [1, 2, 3].map((order) => ({
         order,
         source: 'agent',
-        action: { kind: 'navigate', url: `https://x.test/${order}` },
+        compiled: [{ kind: 'navigate', url: `https://x.test/${order}` }],
       })),
     });
     const ids = appended.body.steps.map((s: { id: string }) => s.id) as string[];
@@ -111,7 +111,7 @@ describe('cases + steps', () => {
       steps: [1, 2].map((order) => ({
         order,
         source: 'agent',
-        action: { kind: 'navigate', url: 'https://x.test' },
+        compiled: [{ kind: 'navigate', url: 'https://x.test' }],
       })),
     });
     const ids = appended.body.steps.map((s: { id: string }) => s.id) as string[];
@@ -128,7 +128,7 @@ describe('cases + steps', () => {
       steps: [1, 2, 3].map((order) => ({
         order,
         source: 'agent',
-        action: { kind: 'navigate', url: `https://x.test/${order}` },
+        compiled: [{ kind: 'navigate', url: `https://x.test/${order}` }],
       })),
     });
     const ids = appended.body.steps.map((s: { id: string }) => s.id) as string[];
@@ -231,20 +231,19 @@ describe('cases + steps', () => {
     const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'R', groupId, versionId });
     await request(app).post(`/api/cases/${c.body.id}/steps`).send({
-      steps: [{ order: 1, source: 'agent', action: { kind: 'navigate', url: 'https://a.com' } }],
+      steps: [{ order: 1, source: 'agent', compiled: [{ kind: 'navigate', url: 'https://a.com' }] }],
     });
     const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
-        { action: { kind: 'click', locator: [{ strategy: 'text', value: 'Go' }] }, source: 'recorder', name: '点 Go', delayMs: 500 },
-        { action: { kind: 'fill', locator: [{ strategy: 'css', value: '#x' }], value: 'v' }, source: 'manual' },
+        { compiled: [{ kind: 'click', locator: [{ strategy: 'text', value: 'Go' }] }], source: 'recorder', instruction: '点 Go', delayMs: 500 },
+        { compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#x' }], value: 'v' }], source: 'manual' },
       ],
     });
     expect(r.status).toBe(200);
     expect(r.body.steps).toHaveLength(2);
     expect(r.body.steps[0].order).toBe(1);
-    expect(r.body.steps[0].name).toBe('点 Go');
+    expect(r.body.steps[0].instruction).toBe('点 Go');
     expect(r.body.steps[0].delayMs).toBe(500);
-    expect(r.body.steps[1].name).toBeNull();
     const g = await request(app).get(`/api/cases/${c.body.id}`);
     expect(g.body.steps).toHaveLength(2);
   });
@@ -265,12 +264,12 @@ describe('cases + steps', () => {
     const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
-          action: {
+          compiled: [{
             kind: 'fill',
             locator: [{ strategy: 'css', value: 'input[type=password]' }],
             value: 'super-secret',
             sensitive: true,
-          },
+          }],
           source: 'manual',
         },
       ],
@@ -288,7 +287,7 @@ describe('cases + steps', () => {
     const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
-          action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: 'no-such' },
+          compiled: [{ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: 'no-such' }],
           source: 'manual',
         },
       ],
@@ -308,7 +307,7 @@ describe('cases + steps', () => {
     const r = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
-          action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: up.body.id },
+          compiled: [{ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: up.body.id }],
           source: 'manual',
         },
       ],
@@ -333,7 +332,7 @@ describe('cases + steps', () => {
     const r = await request(app).put(`/api/cases/${cB.body.id}/steps`).send({
       steps: [
         {
-          action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: foreignFileId },
+          compiled: [{ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: foreignFileId }],
           source: 'manual',
         },
       ],
@@ -355,7 +354,7 @@ describe('cases + steps', () => {
     const r = await request(app).put(`/api/cases/${caseB}/steps`).send({
       steps: [
         {
-          action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: up.body.id },
+          compiled: [{ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: up.body.id }],
           source: 'manual',
         },
       ],
@@ -372,12 +371,12 @@ describe('cases + steps', () => {
     const put = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
-          action: {
+          compiled: [{
             kind: 'fill',
             locator: [{ strategy: 'css', value: 'input[type=password]' }],
             value: 'open-sesame',
             sensitive: true,
-          },
+          }],
           source: 'manual',
         },
       ],
@@ -396,12 +395,12 @@ describe('cases + steps', () => {
     const put = await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
-          action: {
+          compiled: [{
             kind: 'fill',
             locator: [{ strategy: 'css', value: '#x' }],
             value: 'v',
             sensitive: true,
-          },
+          }],
           source: 'manual',
         },
       ],
@@ -422,17 +421,17 @@ describe('steps PUT migration', () => {
         steps: [
           {
             source: 'manual',
-            action: {
+            compiled: [{
               kind: 'assertText',
               locator: [{ strategy: 'css', value: '.msg' }],
               equals: 'ok',
-            },
+            }],
           },
         ],
       });
     expect(r.status).toBe(200);
     const detail = await request(app).get(`/api/cases/${c.body.id}`);
-    const a = detail.body.steps[0].action;
+    const a = detail.body.steps[0].compiled[0];
     expect(a.target).toBe('specifiedElement');
     expect(a.match).toBe('equals');
     expect(a.intentLocator).toBeUndefined();
@@ -447,19 +446,19 @@ describe('steps PUT migration', () => {
         steps: [
           {
             source: 'manual',
-            action: {
+            compiled: [{
               kind: 'assertText',
               locator: [],
               target: 'page' as const,
               match: 'regex' as const,
               equals: '^ok',
-            },
+            }],
           },
         ],
       });
     expect(r.status).toBe(200);
     const detail = await request(app).get(`/api/cases/${c.body.id}`);
-    expect(detail.body.steps[0].action.target).toBe('page');
-    expect(detail.body.steps[0].action.match).toBe('regex');
+    expect(detail.body.steps[0].compiled[0].target).toBe('page');
+    expect(detail.body.steps[0].compiled[0].match).toBe('regex');
   });
 });

@@ -102,19 +102,26 @@ export async function createCase(input: CreateCaseInput) {
 export interface AiTaskInput {
   instruction: string;
   assertion?: string | null;
+  /** 已编译 DSL;缺失/null 视作未编译,dispatcher 阻塞执行。 */
+  compiled?: unknown[] | null;
 }
 
-/** 创建用例并写 AI 智能步骤（aiTask 单步，回放期由 LLM 多轮执行）。 */
+/** 创建用例并写步骤。
+ *  - 每条 step 的 instruction 来自 input.instruction(自然语言);
+ *  - 若提供了 compiled,把它存到 compiled 列;否则默认产出 aiTask 占位(LLM 生成路径),
+ *    调度阶段走 aiTask 多轮决策;为 null 时 UI 标"未编译"。
+ *  - 老 action 列已于 0030 迁移 DROP,新代码不再写。 */
 export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiTaskInput[] }) {
   const created = await createCase(input);
   if (input.steps?.length) {
     const stepRows = input.steps.map((s) => {
-      const name = (s.instruction.split(/[，。！？,.!?\n]/, 1)[0]?.trim() ?? '').slice(0, 200) || s.instruction.slice(0, 200);
-      const action: Record<string, unknown> = { kind: 'aiTask', instruction: s.instruction };
+      // space-assistant 工具入参只给 instruction + assertion,没有 compiled;
+      // 这里把 aiTask 默认占位写进 compiled,让 dispatcher 走 aiTask runtime 路径而非抛 compile-missing。
+      const compiled = (Array.isArray(s.compiled) ? s.compiled : [{ kind: 'aiTask', instruction: s.instruction }]) as unknown[];
       return {
         source: 'agent' as const,
-        name,
-        action: action as object,
+        instruction: s.instruction,
+        compiled,
         // 先 sanitize：描述性断言（"登录表单正常展示"等）→ null，回放阶段跳过断言。
         // 再 migrate：把 `{kind,text}` 老形态规整为 dispatch 认识的 `{equals,target,match,locator}`。
         assertion: (() => {
@@ -130,8 +137,8 @@ export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiT
         caseId: created.id,
         order: i,
         source: r.source,
-        name: r.name,
-        action: r.action,
+        instruction: r.instruction,
+        compiled: r.compiled as unknown[],
         assertion: r.assertion,
         sensitive: r.sensitive,
       })),
@@ -203,6 +210,52 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
 export async function deleteCase(caseId: string): Promise<void> {
   const deleted = await db.delete(testCases).where(eq(testCases.id, caseId)).returning({ id: testCases.id });
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+}
+
+/** 单步骤补丁:AI 编译助手回流落库通道。
+ *  - 只允许 instruction / compiled;其它列(敏感值/source/order/tab_ref)走既有写路径,
+ *    避免绕过 tools 注册表的边界。
+ *  - 落库后回行 + 旧 instruction 拼短 instruction(若新 instruction 为空,保留旧值)。 */
+export async function updateCaseStep(stepId: string, patch: { compiled?: unknown[] | null; instruction?: string }) {
+  const row = (await db.select().from(testSteps).where(eq(testSteps.id, stepId)).limit(1))[0];
+  if (!row) throw new HttpError(404, 'not_found', 'step not found');
+  const set: Partial<{ compiled: unknown[] | null; instruction: string }> = {};
+  if (patch.compiled !== undefined) set.compiled = patch.compiled === null ? null : patch.compiled;
+  if (patch.instruction !== undefined) set.instruction = patch.instruction;
+  if (Object.keys(set).length === 0) return row;
+  const [updated] = await db.update(testSteps).set(set).where(eq(testSteps.id, stepId)).returning();
+  return updated ?? row;
+}
+
+/** 单步骤插入(AI 助手 + 后续重排):插在 afterOrder 之后(若提供),否则追加到末尾。
+ *  复用 testSteps 表的 order 列连续紧凑语义,落库后把 afterOrder 之后的步骤 order +1。 */
+export async function insertCaseStep(
+  caseId: string,
+  body: { instruction: string; compiled?: unknown[] | null; afterOrder?: number; source?: string },
+) {
+  const rows = await db
+    .select({ id: testSteps.id, order: testSteps.order })
+    .from(testSteps)
+    .where(eq(testSteps.caseId, caseId))
+    .orderBy(asc(testSteps.order));
+  const maxOrder = rows.length > 0 ? Math.max(...rows.map((r) => r.order)) : 0;
+  const targetOrder = body.afterOrder !== undefined ? body.afterOrder + 1 : maxOrder + 1;
+  const [inserted] = await db
+    .insert(testSteps)
+    .values({
+      caseId,
+      order: targetOrder,
+      source: body.source ?? 'agent',
+      instruction: body.instruction,
+      compiled: body.compiled ?? null,
+    })
+    .returning();
+  // 后续步骤 order 紧凑化(把 targetOrder 起所有行 +1)
+  const after = rows.filter((r) => r.order >= targetOrder);
+  for (let i = 0; i < after.length; i++) {
+    await db.update(testSteps).set({ order: targetOrder + 1 + i }).where(eq(testSteps.id, after[i]!.id));
+  }
+  return inserted!;
 }
 
 /** 详情:步骤脱敏(去 secret 三元组列)+ 解析后的入口 URL + tags。不存在返回 null。 */

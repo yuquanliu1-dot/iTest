@@ -74,7 +74,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     mocked.__page.goto.mockClear();
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
-      [{ order: 1, action: { kind: 'navigate', url: 'https://example.com' } }],
+      [{ order: 1, compiled: [{ kind: 'navigate', url: 'https://example.com' }] }],
       { reportId: 'r-1' },
     );
     expect(mocked.__page.goto).toHaveBeenCalledWith('https://example.com', expect.objectContaining({ timeout: 30000 }));
@@ -86,7 +86,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     mocked.__locator.mockClear();
     await executeCaseReal(
       '00000000-0000-0000-0000-000000000002',
-      [{ order: 1, action: { kind: 'click', locator: [{ strategy: 'css', value: '#btn' }] } }],
+      [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#btn' }] }] }],
       { reportId: 'r-2' },
     );
     expect(mocked.__locator).toHaveBeenCalledWith('#btn');
@@ -97,7 +97,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     page.screenshot.mockClear();
     await executeCaseReal(
       '00000000-0000-0000-0000-000000000003',
-      [{ order: 1, action: { kind: 'fill', locator: [{ strategy: 'testId', value: 'user' }], value: 'alice' } }],
+      [{ order: 1, compiled: [{ kind: 'fill', locator: [{ strategy: 'testId', value: 'user' }], value: 'alice' }] }],
       { reportId: 'r-3' },
     );
     expect(page.screenshot).toHaveBeenCalled();
@@ -108,8 +108,8 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000004',
       [
-        { order: 1, action: { kind: 'navigate', url: 'https://x.test' } },
-        { order: 2, action: { kind: 'click', locator: [{ strategy: 'css', value: '#nope' }] } },
+        { order: 1, compiled: [{ kind: 'navigate', url: 'https://x.test' }] },
+        { order: 2, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#nope' }] }] },
       ],
       { reportId: 'r-4' },
     );
@@ -122,7 +122,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     mocked.__page.waitForTimeout.mockClear();
     await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
-      [{ order: 1, action: { kind: 'check', locator: [{ strategy: 'css', value: '#cb' }], checked: true } }],
+      [{ order: 1, compiled: [{ kind: 'check', locator: [{ strategy: 'css', value: '#cb' }], checked: true }] }],
       { reportId: 'r-check' },
     );
     const loc = (mocked.__page.locator as ReturnType<typeof vi.fn>).mock.results[0]!.value;
@@ -134,7 +134,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
   it('select action forwards materialized value to selectOption', async () => {
     await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
-      [{ order: 1, action: { kind: 'select', locator: [{ strategy: 'css', value: 'select' }], value: 'cn' } }],
+      [{ order: 1, compiled: [{ kind: 'select', locator: [{ strategy: 'css', value: 'select' }], value: 'cn' }] }],
       { reportId: 'r-select' },
     );
     const loc = (mocked.__page.locator as ReturnType<typeof vi.fn>).mock.results[0]!.value;
@@ -153,7 +153,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     mocked.__locator.mockImplementationOnce(() => multi as never);
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000027',
-      [{ order: 1, action: { kind: 'hover', locator: [{ strategy: 'css', value: 'tr' }] } }],
+      [{ order: 1, compiled: [{ kind: 'hover', locator: [{ strategy: 'css', value: 'tr' }] }] }],
       { reportId: 'r-hover-strict' },
     );
     expect(results[0]!.status).toBe('passed');
@@ -164,7 +164,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
   it('upload without bound fileId fails attachment-missing', async () => {
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
-      [{ order: 1, action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }] } }],
+      [{ order: 1, compiled: [{ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }] }] }],
       { reportId: 'r-upload' },
     );
     expect(results[0]!.status).toBe('failed');
@@ -175,8 +175,8 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
       [
-        { order: 1, action: { kind: 'extract', locator: [{ strategy: 'css', value: '#no' }], varName: 'orderNo' } },
-        { order: 2, action: { kind: 'fill', locator: [{ strategy: 'css', value: '#f' }], value: '{{orderNo}}' } },
+        { order: 1, compiled: [{ kind: 'extract', locator: [{ strategy: 'css', value: '#no' }], varName: 'orderNo' }] },
+        { order: 2, compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#f' }], value: '{{orderNo}}' }] },
       ],
       { reportId: 'r-extract' },
     );
@@ -188,7 +188,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
   it('unresolved {{var}} fails the step with missing var name', async () => {
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
-      [{ order: 1, action: { kind: 'fill', locator: [{ strategy: 'css', value: '#f' }], value: '{{nope}}' } }],
+      [{ order: 1, compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#f' }], value: '{{nope}}' }] }],
       { reportId: 'r-var' },
     );
     expect(results[0]!.status).toBe('failed');
@@ -198,7 +198,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
   it('assertJson deep-compares parsed element text', async () => {
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
-      [{ order: 1, action: { kind: 'assertJson', locator: [{ strategy: 'css', value: 'pre' }], equals: { code: 0 } } }],
+      [{ order: 1, compiled: [{ kind: 'assertJson', locator: [{ strategy: 'css', value: 'pre' }], equals: { code: 0 } }] }],
       { reportId: 'r-json' },
     );
     expect(results[0]!.status).toBe('passed');
@@ -208,7 +208,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     mocked.__page.waitForTimeout.mockClear();
     await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
-      [{ order: 1, delayMs: 300, action: { kind: 'navigate', url: 'https://example.com' } }],
+      [{ order: 1, delayMs: 300, compiled: [{ kind: 'navigate', url: 'https://example.com' }] }],
       { reportId: 'r-delay' },
     );
     expect(mocked.__page.waitForTimeout).toHaveBeenCalledWith(300);
@@ -219,7 +219,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     waitForLoadState.mockClear();
     await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
-      [{ order: 1, action: { kind: 'navigate', url: 'https://example.com' } }],
+      [{ order: 1, compiled: [{ kind: 'navigate', url: 'https://example.com' }] }],
       { reportId: 'r-settle' },
     );
     expect(waitForLoadState).toHaveBeenCalledWith('networkidle', expect.objectContaining({ timeout: 2000 }));
@@ -230,7 +230,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     (mocked.__page as unknown as { bringToFront: ReturnType<typeof vi.fn> }).bringToFront = bringToFront;
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000010',
-      [{ order: 1, action: { kind: 'switchTab', tabRef: 'session-x|tab#1' } }],
+      [{ order: 1, compiled: [{ kind: 'switchTab', tabRef: 'session-x|tab#1' }] }],
       { reportId: 'r-switch', tabMap: new Map([['session-x|tab#1', mocked.__page]]) },
     );
     expect(bringToFront).toHaveBeenCalled();
@@ -253,8 +253,8 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000016',
       [
-        { order: 1, action: { kind: 'switchTab', tabRef: 'session-x|tab#1' } },
-        { order: 2, action: { kind: 'click', locator: [{ strategy: 'css', value: '#after-switch' }] } },
+        { order: 1, compiled: [{ kind: 'switchTab', tabRef: 'session-x|tab#1' }] },
+        { order: 2, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#after-switch' }] }] },
       ],
       { reportId: 'r-switch-follow', tabMap: new Map([['session-x|tab#1', otherPage]]) },
     );
@@ -266,7 +266,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
   it('switchTab without matching tabMap entry fails with tab-missing', async () => {
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000011',
-      [{ order: 1, action: { kind: 'switchTab', tabRef: 'session-x|tab#9' } }],
+      [{ order: 1, compiled: [{ kind: 'switchTab', tabRef: 'session-x|tab#9' }] }],
       { reportId: 'r-miss', tabMap: new Map() },
     );
     expect(results[0]!.status).toBe('failed');
@@ -277,7 +277,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     mocked.__page.goto.mockClear();
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000050',
-      [{ order: 1, action: { kind: 'navigate', url: 'https://init.example.com' } }],
+      [{ order: 1, compiled: [{ kind: 'navigate', url: 'https://init.example.com' }] }],
       { reportId: 'r-dedupe' },
       'https://init.example.com',
     );
@@ -292,7 +292,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     mocked.__page.goto.mockClear();
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000051',
-      [{ order: 1, action: { kind: 'navigate', url: 'https://other.example.com' } }],
+      [{ order: 1, compiled: [{ kind: 'navigate', url: 'https://other.example.com' }] }],
       { reportId: 'r-dedupe-2' },
       'https://init.example.com',
     );
@@ -306,7 +306,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     mocked.__page.goto.mockClear();
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000052',
-      [{ order: 1, action: { kind: 'click', locator: [{ strategy: 'css', value: '#x' }] } }],
+      [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#x' }] }] }],
       { reportId: 'r-init-only' },
       'https://init.example.com',
     );
@@ -321,7 +321,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     mocked.__locator.mockReturnValueOnce({ setInputFiles } as never);
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000012',
-      [{ order: 1, action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: 'fake-id' } }],
+      [{ order: 1, compiled: [{ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: 'fake-id' }] }],
       { reportId: 'r-up', attachmentResolver: async () => ({ storedPath: '/tmp/x.bin', originalName: 'x.bin' }) },
     );
     expect(setInputFiles).toHaveBeenCalledWith('/tmp/x.bin', { timeout: 5000 });
@@ -331,7 +331,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
   it('upload without resolver or db row fails attachment-missing', async () => {
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000013',
-      [{ order: 1, action: { kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: 'nope' } }],
+      [{ order: 1, compiled: [{ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }], fileId: 'nope' }] }],
       { reportId: 'r-up-miss', attachmentResolver: async () => null },
     );
     expect(results[0]!.status).toBe('failed');
@@ -343,7 +343,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     mocked.__locator.mockReturnValueOnce({ fill: vi.fn().mockResolvedValue(undefined), pressSequentially } as never);
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000014',
-      [{ order: 1, action: { kind: 'fill', locator: [{ strategy: 'css', value: 'input[type=password]' }], value: '__sensitive__', sensitive: true }, id: 'step-1' }],
+      [{ order: 1, compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: 'input[type=password]' }], value: '__sensitive__', sensitive: true }], id: 'step-1' }],
       { reportId: 'r-secret', secretResolver: async (stepId: string) => (stepId === 'step-1' ? 'hunter2' : null) },
     );
     expect(pressSequentially).toHaveBeenCalledWith('hunter2', expect.anything());
@@ -353,7 +353,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
   it('sensitive fill without resolver value fails secret-missing', async () => {
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000015',
-      [{ order: 1, action: { kind: 'fill', locator: [{ strategy: 'css', value: 'input[type=password]' }], value: '__sensitive__', sensitive: true }, id: 'step-2' }],
+      [{ order: 1, compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: 'input[type=password]' }], value: '__sensitive__', sensitive: true }], id: 'step-2' }],
       { reportId: 'r-secret-miss', secretResolver: async () => null },
     );
     expect(results[0]!.status).toBe('failed');
@@ -370,11 +370,11 @@ describe('phase3 — three-tier locator', () => {
       [
         {
           order: 1,
-          action: {
+          compiled: [{
             kind: 'click',
             locator: [{ strategy: 'css', value: '.btn' }],
             intentLocator: { semanticRole: 'loginBtn' },
-          },
+          }],
         },
       ],
       { reportId: 'r-3loc-1' },
@@ -396,13 +396,13 @@ describe('phase3 — three-tier locator', () => {
       [
         {
           order: 1,
-          action: {
+          compiled: [{
             kind: 'click',
             locator: [
               { strategy: 'css', value: '.primary-btn' },
               { strategy: 'css', value: '#submit' },
             ],
-          },
+          }],
         },
       ],
       { reportId: 'r-3loc-2' },
@@ -425,11 +425,11 @@ describe('phase3 — assertText target×match', () => {
       [
         {
           order: 1,
-          action: {
+          compiled: [{
             kind: 'assertText',
             locator: [{ strategy: 'css', value: '.msg' }],
             equals: 'ok',
-          },
+          }],
         },
       ],
       { reportId: 'r-assert-eq' },
@@ -445,13 +445,13 @@ describe('phase3 — assertText target×match', () => {
       [
         {
           order: 1,
-          action: {
+          compiled: [{
             kind: 'assertText',
             locator: [],
             target: 'page',
             match: 'contains',
             equals: '登录成功',
-          },
+          }],
         },
       ],
       { reportId: 'r-assert-page' },
@@ -465,13 +465,13 @@ describe('phase3 — assertText target×match', () => {
       [
         {
           order: 1,
-          action: {
+          compiled: [{
             kind: 'assertText',
             locator: [],
             target: 'url',
             match: 'regex',
             equals: '^https://example\\.com/',
-          },
+          }],
         },
       ],
       { reportId: 'r-assert-url' },
@@ -486,13 +486,13 @@ describe('phase3 — assertText target×match', () => {
       [
         {
           order: 1,
-          action: {
+          compiled: [{
             kind: 'assertText',
             locator: [],
             target: 'errorMessage',
             match: 'contains',
             equals: '权限不足',
-          },
+          }],
         },
       ],
       { reportId: 'r-assert-err' },
@@ -515,7 +515,7 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
       [
         {
           order: 1,
-          action: { kind: 'navigate', url: 'https://example.com' },
+          compiled: [{ kind: 'navigate', url: 'https://example.com' }],
           assertion: {
             kind: 'assertText',
             locator: [],
@@ -530,7 +530,10 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
     expect(results[0]!.status).toBe('passed');
   });
 
-  it('fails step when assertion text is not in body (canonical shape)', async () => {
+  it('skips whole-page fuzzy text assertion (Track 1: expectedOutcome + vision is the final judgement)', async () => {
+    // target:'page' + locator:[] + match:'contains' 是 AI 写出来的描述性短语断言形态
+    // （"登录表单正常展示"等），cdp.ts:normalizeStepAssertion 主动 filter，不再让回放因
+    // page innerText 不命中而误报 failed。用例级 expectedOutcome + vision 才是终态判定。
     mocked.__locator.mockClear();
     mocked.__page.evaluate.mockReset();
     mocked.__page.evaluate.mockImplementation(() => Promise.resolve('不匹配的页面'));
@@ -539,7 +542,7 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
       [
         {
           order: 1,
-          action: { kind: 'navigate', url: 'https://example.com' },
+          compiled: [{ kind: 'navigate', url: 'https://example.com' }],
           assertion: {
             kind: 'assertText',
             locator: [],
@@ -551,8 +554,7 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
       ],
       { reportId: 'r-step-assert-fail' },
     );
-    expect(results[0]!.status).toBe('failed');
-    expect(results[0]!.error).toMatch(/登录成功/);
+    expect(results[0]!.status).toBe('passed');
   });
 
   it('legacy assertion shape {kind,text} is normalised to canonical and runs', async () => {
@@ -565,7 +567,7 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
       [
         {
           order: 1,
-          action: { kind: 'navigate', url: 'https://example.com' },
+          compiled: [{ kind: 'navigate', url: 'https://example.com' }],
           assertion: { kind: 'assertText', text: '页面标题显示为"元素管理 - 低代码测试平台"' },
         },
       ],
@@ -583,7 +585,7 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
       [
         {
           order: 1,
-          action: { kind: 'navigate', url: 'https://example.com' },
+          compiled: [{ kind: 'navigate', url: 'https://example.com' }],
           assertion: {
             kind: 'assertText',
             locator: [],
@@ -608,7 +610,7 @@ describe('phase3 — composite value at execute', () => {
       [
         {
           order: 1,
-          action: {
+          compiled: [{
             kind: 'fill',
             locator: [{ strategy: 'css', value: '#name' }],
             value: {
@@ -618,7 +620,7 @@ describe('phase3 — composite value at execute', () => {
                 { mode: 'randomNumber', length: 3 },
               ],
             },
-          },
+          }],
         },
       ],
       { reportId: 'r-composite' },

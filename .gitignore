@@ -7,6 +7,7 @@ dist
 coverage
 .DS_Store
 apps/api/screenshots
+apps/api/.screenshots
 apps/api/.data
 apps/recorder/modules/*.js
 # local assets / verify screenshots

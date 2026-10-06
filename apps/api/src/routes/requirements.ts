@@ -155,19 +155,26 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
   const existingSc = await db.select({ id: scenarios.id, title: scenarios.title }).from(scenarios).where(eq(scenarios.requirementId, req.params.id));
   const scenarioByTitle = new Map(existingSc.map((r) => [r.title, r.id] as const));
 
-  // 阶段 1：构建步骤行 + 写库。每条 step 直接落 aiTask（回放期由 LLM 多轮执行）。
+  // 阶段 1：构建步骤行 + 写库。每条 step 同时落 instruction(自然语言) + compiled(DSL 数组),
+  //   compiled 三态: undefined = 老 aiTask 单步占位(回放走 LLM 多轮), null = 放弃, array = 已编译。
+  //   2026-10-07 name 列退役：不再单独存 name,StagedStep.action 直接落到 instruction 列。
   const requirementUrl = doc.pageContext?.url ?? extractFirstHttpUrl(rows[0]!.content);
-  const prepared: Array<{ c: StagedCase; scenarioTitle: string | null; stepRows: Array<{ source: 'agent'; name: string; action: object; assertion: object | null; sensitive: boolean }> }> = [];
+  const prepared: Array<{ c: StagedCase; scenarioTitle: string | null; stepRows: Array<{ source: 'agent'; instruction: string; compiled: unknown[] | null; assertion: object | null; sensitive: boolean }> }> = [];
   for (const c of selectedCaseById.values()) {
     const owner = selectedScenarios.find((s) => s.cases.some((x) => x.id === c.id));
     const stepRows = c.steps.map((s) => {
-      const action: Record<string, unknown> = { kind: 'aiTask', instruction: s.action };
       const cleanAssertion = sanitizeAssertion(s.assertion);
+      // 2026-10-07 step 拆分:stage 行没有 compiled → 落 aiTask 占位,UI 显式触发 AI 编译再回填。
+      //   这样保留 dispatcher 走 aiTask runtime 路径的能力,同时把"未编译"语义与"放弃(null)"语义区分开。
+      const compiled: unknown[] | null = Array.isArray(s.compiled)
+        ? s.compiled
+        : s.compiled === null
+          ? null
+          : [{ kind: 'aiTask', instruction: s.action }];
       return {
         source: 'agent' as const,
-        name: s.name,
-        action: action as object,
-        // 先 sanitize：描述性断言 → null；通过则把老 `{kind,text}` 形态保留交给后续 migrateAssertion。
+        instruction: s.action,
+        compiled,
         assertion: cleanAssertion ? ({ kind: 'assertText', text: cleanAssertion } as object) : null,
         sensitive: false,
       };
@@ -202,8 +209,8 @@ requirementsRoute.post('/:id/ai-workspace/save', async (req, res) => {
           caseId: tc[0]!.id,
           order: i,
           source: row.source,
-          name: row.name,
-          action: row.action,
+          instruction: row.instruction,
+          compiled: row.compiled as unknown[] | null,
           // 二次 sanitize：build stepRows 时已过滤过描述性断言，但稳妥起见写入前再过一遍。
           assertion: row.assertion ? (sanitizeAssertion((row.assertion as { text?: string }).text ?? '') ? migrateAssertion(row.assertion) : null) : null,
           sensitive: row.sensitive,

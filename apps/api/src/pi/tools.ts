@@ -156,14 +156,11 @@ export function buildWorkspaceTools(
       execute: async (input) => {
         const v = input as {
           id: string; title: string; description?: string | null; priority?: 'P0'|'P1'|'P2'|'P3';
-          steps: Array<{ name?: string; action: string; assertion?: string | null; compiled?: unknown[] | null }>;
+          steps: Array<{ action: string; assertion?: string | null; compiled?: unknown[] | null }>;
           scenarioId?: string | null;
         };
-        // name 兜底：取 action 首句（按第一个中文/英文标点截断，长度 24）
+        // 2026-10-07 name 列退役：步骤不再需要 name,LLM 给出的 action 字符串即是行级 instruction。
         const steps = v.steps.map((s) => {
-          const name = (s.name && s.name.trim().length > 0)
-            ? s.name
-            : (s.action.split(/[，。！？,.!?\n]/, 1)[0]?.trim() ?? s.action.slice(0, 24)).slice(0, 200);
           // 三态：undefined = 未尝试（保留编译字段未定义，save 时原样落 aiTask）；
           // null = AI 已放弃（短路不再重试）；array = 已编译（短路不再重试）。
           // 仅当 LLM 显式提供 compiled（数组或 null）时才写入字段，避免老用法下"字段缺失"误为"已放弃"。
@@ -184,8 +181,7 @@ export function buildWorkspaceTools(
               compiled = s.compiled as unknown[] | null;
             }
           }
-          const out: { name: string; action: string; assertion: string | null; compiled?: unknown[] | null } = {
-            name,
+          const out: { action: string; assertion: string | null; compiled?: unknown[] | null } = {
             action: s.action,
             assertion: s.assertion ?? null,
           };
