@@ -45,7 +45,7 @@ describe('playback integration', () => {
     const preflights: PreflightReport[] = [];
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000099',
-      [{ order: 1, action: { kind: 'click', locator: [{ strategy: 'css', value: '#missing' }] } }],
+      [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#missing' }] }] }],
       { reportId: 'r-fail' },
       undefined,
       undefined,
@@ -67,11 +67,11 @@ describe('playback integration', () => {
       '00000000-0000-0000-0000-000000000098',
       [{
         order: 1,
-        action: {
+        compiled: [{
           kind: 'click',
           locator: [{ strategy: 'css', value: '.btn' }],
           intentLocator: { semanticRole: 'loginBtn' },
-        },
+        }],
       }],
       { reportId: 'r-hit' },
     );

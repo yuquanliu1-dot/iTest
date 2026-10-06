@@ -76,16 +76,14 @@ describe('workspace store', () => {
     expect(s!.cases[0]!.id).toBe('c1');
   });
 
-  it('upsertCase tolerates steps without name by using action fallback in the tools wrapper', async () => {
-    // tools.ts 内的兜底不在此处直接测试；这里只验证 upsertCase 接受无 name 的 step
-    // （schema 校验在 tools 层；这里强制传入有 name 的 step 以走持久化路径）。
+  it('upsertCase tolerates steps with only action (name 列退役)', async () => {
     const ws = await import('../src/pi/workspace.js');
     await ws.upsertScenario(requirementId, { id: 's1', title: 'S', description: null, cases: [] });
     await ws.upsertCase(requirementId, 's1', { id: 'c1', title: 'C', description: null, priority: 'P0', steps: [
-      { name: '打开页面', action: '打开登录页', assertion: null },
+      { action: '打开登录页', assertion: null },
     ] });
     const doc = await ws.loadDoc(requirementId);
-    expect(doc.scenarios[0]!.cases[0]!.steps[0]!.name).toBe('打开页面');
+    expect(doc.scenarios[0]!.cases[0]!.steps[0]!.action).toBe('打开登录页');
   });
 
   it('removeSaved drops only the listed case ids and empties drained scenarios', async () => {

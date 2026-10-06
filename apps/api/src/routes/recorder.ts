@@ -48,8 +48,10 @@ recorderRoute.post('/sessions', async (req, res) => {
     const upto = body.resumeFromOrder ?? steps.length + 1;
     const slice = steps.filter((s) => s.order < upto);
     for (const s of slice) {
-      const a = (s.action ?? {}) as { kind?: string; fileId?: string };
-      if (a.kind === 'upload') {
+      const a = (Array.isArray(s.compiled) && s.compiled.length > 0
+        ? s.compiled[0]
+        : undefined) as { kind?: string; fileId?: string } | undefined;
+      if (a?.kind === 'upload') {
         if (!a.fileId) throw new HttpError(409, 'upload_unbound', `upload step #${s.order} has no fileId bound`);
         const att = await db.select().from(testAttachments).where(eq(testAttachments.id, a.fileId));
         if (att.length === 0) throw new HttpError(409, 'upload_missing', `attachment ${a.fileId} not found`);
@@ -104,13 +106,17 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
     }
   }
   for (const step of session.steps) {
-    const item = step as { action: unknown; tabRef?: string; componentKind?: string };
+    const item = step as { action: unknown; tabRef?: string; componentKind?: string; url?: string };
     StepAction.parse(item.action);
+    const action = item.action as { kind?: string; url?: string };
+    // 录制产物:instruction 留空,compiled 单元素数组 = [录制得到的 StepAction]。
+    // kind === 'navigate' 不再单独落 step(初始化 URL 已写用例级 url),与回放/前端一致。
     await db.insert(testSteps).values({
       caseId: session.caseId,
       order: nextOrder++,
       source: 'recorder',
-      action: item.action as object,
+      instruction: action.kind === 'navigate' ? `打开 ${action.url ?? ''}` : '',
+      compiled: [item.action] as unknown[],
       tabRef: item.tabRef ?? null,
       componentKind: item.componentKind ?? null,
     });

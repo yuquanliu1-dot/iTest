@@ -66,7 +66,7 @@ describe('ai-thread + ai-workspace + save', () => {
     expect(cases.rows[0]!.priority).toBe('P0');
     const steps = await pool.query(`SELECT * FROM test_steps WHERE case_id = $1`, [cases.rows[0]!.id]);
     expect(steps.rows[0]!.source).toBe('agent');
-    expect((steps.rows[0]!.action as { kind: string }).kind).toBe('aiTask');
+    expect((steps.rows[0]!.compiled as Array<{ kind: string }>)[0]!.kind).toBe('aiTask');
     expect((steps.rows[0]!.assertion as { kind: string }).kind).toBe('assertText');
     // 新写入路径要落规范 assertText 形态（target=page, equals=text），否则回放引擎 dispatch 不认识。
     expect((steps.rows[0]!.assertion as { target: string }).target).toBe('page');
@@ -100,14 +100,14 @@ describe('ai-thread + ai-workspace + save', () => {
         .send({ groupId, targetVersionId: versionId, scenarioIds: ['s1'], caseIds: ['c1'] });
       expect(saved.status).toBe(200);
       const steps = await pool.query(
-        `SELECT action FROM test_steps WHERE case_id = (SELECT id FROM test_cases WHERE requirement_id = $1 LIMIT 1) ORDER BY "order"`,
+        `SELECT compiled, instruction FROM test_steps WHERE case_id = (SELECT id FROM test_cases WHERE requirement_id = $1 LIMIT 1) ORDER BY "order"`,
         [rid],
       );
-      // 拆条后的两条 aiTask 原样落库，不再走 LLM 编译。
-      expect(steps.rows.length).toBeGreaterThanOrEqual(2);
-      const first = steps.rows[0]!.action as { kind: string; instruction: string };
-      expect(first.kind).toBe('aiTask');
-      expect(typeof first.instruction).toBe('string');
+      // save 路径不再展开 multi 行为;每条 stage step 直接 1:1 落库。
+      expect(steps.rows.length).toBe(1);
+      const first = steps.rows[0]!.compiled as Array<{ kind: string; instruction: string }>;
+      expect(first[0]!.kind).toBe('aiTask');
+      expect(typeof first[0]!.instruction).toBe('string');
       // 整条链路不触发任何 LLM 调用：aiTask 已经在编译期移除兜底。
       expect(calls).toBe(0);
     } finally {
@@ -294,7 +294,6 @@ describe('ai-thread + ai-workspace + save', () => {
             id: 'c1', title: 'C1', description: 'd', priority: 'P0',
             steps: [
               {
-                name: 's1',
                 action: 'click submit',
                 assertion: null,
                 compiled: [{ kind: 'click', locator: [{ strategy: 'text', value: 'submit' }] }],
@@ -309,14 +308,12 @@ describe('ai-thread + ai-workspace + save', () => {
       expect(saved.status).toBe(200);
       expect(calls).toBe(0); // 没有任何 LLM 兜底调用
       const steps = await pool.query(
-        `SELECT action FROM test_steps WHERE case_id = (SELECT id FROM test_cases WHERE requirement_id = $1 LIMIT 1) ORDER BY "order"`,
+        `SELECT compiled, instruction FROM test_steps WHERE case_id = (SELECT id FROM test_cases WHERE requirement_id = $1 LIMIT 1) ORDER BY "order"`,
         [rid],
       );
-      // save 路径不再做 aiStep 展开（aiStep 已删除）；每条 step 直接落 aiTask 壳，
-      // 编译过的 DSL 仅保留在草稿/编译期；落库步为 aiTask，回放期 aiTask 自带元素清单看截图决策。
-      const a = steps.rows[0]!.action as { kind: string; instruction: string };
-      expect(a.kind).toBe('aiTask');
-      expect(a.instruction).toBe('click submit');
+      // 编译过的 DSL 沿用 staged step 的 compiled 数组；落库步保持 click，回放期直接派发。
+      const a = steps.rows[0]!.compiled as Array<{ kind: string }>;
+      expect(a[0]!.kind).toBe('click');
     } finally {
       llmMod.__setLlmClientForTest(null);
     }

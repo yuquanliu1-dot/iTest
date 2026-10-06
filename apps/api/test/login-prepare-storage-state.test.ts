@@ -125,7 +125,7 @@ import { executeCaseReal, executeCaseInBrowser } from '../src/execute/cdp.js';
 import { loginPrepare } from '../src/execute/loginPrepare.js';
 
 const SAMPLE_STEPS = [
-  { order: 1, action: { kind: 'navigate' as const, url: 'https://example.com' } },
+  { order: 1, compiled: [{ kind: 'navigate' as const, url: 'https://example.com' }] },
 ];
 
 beforeEach(() => {

@@ -5,7 +5,7 @@ import { publishWorkspaceEvent } from './bus.js';
 import type { StepAction } from '@itest/shared';
 
 export type StagedStep = {
-  name: string;
+  /** 行级自然语言,人看/给 LLM 起手;回放不读。2026-10-07 起取代旧 name 列。 */
   action: string;
   assertion: string | null;
   /**
@@ -89,7 +89,6 @@ export async function loadDoc(requirementId: string): Promise<WorkspaceDoc> {
         // 注意：loadDoc 不主动把 undefined 规范为 null——否则 workspace 自身就读不到三态语义。
         // 测试/外部 API 想要 null 视图请自行处理（见 step-migration 与 ai-workspace-save.test.ts）。
         const out: StagedStep = {
-          name: s.name,
           action: s.action,
           assertion: s.assertion ?? null,
         };

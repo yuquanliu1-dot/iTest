@@ -148,6 +148,20 @@
       "when": 1791172682450,
       "tag": "0028_ai_stage_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1791223135551,
+      "tag": "0029_split_step_action",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791231600000,
+      "tag": "0030_drop_step_action",
+      "breakpoints": true
     }
   ]
 }

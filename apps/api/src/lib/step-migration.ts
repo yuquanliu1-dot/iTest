@@ -31,13 +31,6 @@ export function migrateAction(raw: unknown): unknown {
   return action;
 }
 
-/** 整批迁移（steps PUT 入口处用）。 */
-export function migrateSteps(steps: Array<{ action: unknown }>): void {
-  for (const s of steps) {
-    s.action = migrateAction(s.action);
-  }
-}
-
 /**
  * 把 test_steps.assertion（任意形状）规整为 dispatch 认识的 StepAction 子集。
  * 只支持 assertText；其它 kind/null/非对象原样返回。

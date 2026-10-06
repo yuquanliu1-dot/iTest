@@ -66,9 +66,10 @@ describe('manage_cases 工具', () => {
     });
     expect(r.ok).toBe(true);
     const steps = (await pool.query(
-      `SELECT s.action FROM test_steps s JOIN test_cases c ON c.id = s.case_id WHERE c.title = '下单流程' ORDER BY s."order"`,
-    )).rows as Array<{ action: { kind: string } }>;
-    expect(steps.map((s) => s.action.kind)).toEqual(['aiTask', 'aiTask']);
+      `SELECT s.instruction, s.compiled FROM test_steps s JOIN test_cases c ON c.id = s.case_id WHERE c.title = '下单流程' ORDER BY s."order"`,
+    )).rows as Array<{ instruction: string; compiled: { kind: string }[] | null }>;
+    expect(steps.map((s) => s.instruction)).toEqual(['打开首页', '点击下单']);
+    expect(steps.every((s) => Array.isArray(s.compiled) && s.compiled.length === 1 && s.compiled[0]!.kind === 'aiTask')).toBe(true);
     expect(events).toContainEqual(expect.objectContaining({ type: 'stage', kind: 'case', action: 'create' }));
   }, 30_000);
 

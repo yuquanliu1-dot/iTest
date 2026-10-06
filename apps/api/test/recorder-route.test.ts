@@ -63,19 +63,19 @@ describe('recorder routes', () => {
     await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
-          action: { kind: 'click', locator: [{ strategy: 'css', value: '#x' }] },
+          compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#x' }] }],
           source: 'manual',
         },
         {
-          action: { kind: 'click', locator: [{ strategy: 'css', value: '#y' }] },
+          compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#y' }] }],
           source: 'manual',
         },
       ],
     });
     // Force step #1 into an upload step with no fileId (bypassing PUT validation)
     await pool.query(
-      `UPDATE test_steps SET action = $1 WHERE case_id = $2 AND "order" = 1`,
-      [JSON.stringify({ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }] }), c.body.id],
+      `UPDATE test_steps SET compiled = $1::jsonb WHERE case_id = $2 AND "order" = 1`,
+      [JSON.stringify([{ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }] }]), c.body.id],
     );
     // resumeFromOrder = 2 → prefix is step #1 (unbound upload) → 409
     const r = await request(app).post('/api/recorder/sessions').send({
@@ -92,7 +92,7 @@ describe('recorder routes', () => {
     await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
         {
-          action: { kind: 'click', locator: [{ strategy: 'css', value: '#x' }] },
+          compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#x' }] }],
           source: 'manual',
         },
       ],
@@ -100,8 +100,8 @@ describe('recorder routes', () => {
     // Step #1 is an unbound upload, but resume starts AT it (resumeFromOrder = 1),
     // so the prefix is empty and creation must succeed.
     await pool.query(
-      `UPDATE test_steps SET action = $1 WHERE case_id = $2 AND "order" = 1`,
-      [JSON.stringify({ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }] }), c.body.id],
+      `UPDATE test_steps SET compiled = $1::jsonb WHERE case_id = $2 AND "order" = 1`,
+      [JSON.stringify([{ kind: 'upload', locator: [{ strategy: 'css', value: 'input[type=file]' }] }]), c.body.id],
     );
     const r = await request(app).post('/api/recorder/sessions').send({
       caseId: c.body.id,
@@ -124,11 +124,11 @@ describe('recorder routes', () => {
     expect(f.status).toBe(200);
     expect(f.body.inserted).toBe(2);
     const rows = await pool.query(
-      `SELECT "order", action FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
+      `SELECT "order", compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
       [c.body.id],
     );
     // 不再落 navigate 步骤：首步是 click，初始导航写到 test_cases.url
-    expect(rows.rows[0]!.action.kind).toBe('click');
+    expect((rows.rows[0]!.compiled as Array<{ kind: string }>)[0]!.kind).toBe('click');
     const tcRows = await pool.query(`SELECT url FROM test_cases WHERE id = $1`, [c.body.id]);
     expect(tcRows.rows[0]!.url).toBe('https://app.example.com/home');
   });
@@ -145,17 +145,17 @@ describe('recorder routes', () => {
     const tcRows = await pool.query(`SELECT url FROM test_cases WHERE id = $1`, [c.body.id]);
     expect(tcRows.rows[0]!.url).toBe('https://prod.example.com');
     const stepRows = await pool.query(
-      `SELECT action FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
+      `SELECT compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
       [c.body.id],
     );
-    expect(stepRows.rows.filter((r: { action: { kind: string } }) => r.action.kind === 'navigate')).toHaveLength(0);
+    expect(stepRows.rows.filter((r: { compiled: Array<{ kind: string }> }) => r.compiled[0]?.kind === 'navigate')).toHaveLength(0);
   });
 
   it('finish does not overwrite existing case.url on append', async () => {
     const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'NVA', url: 'https://pinned.example.com', groupId, versionId });
     await request(app).put(`/api/cases/${c.body.id}/steps`).send({
-      steps: [{ action: { kind: 'navigate', url: 'https://app.example.com' }, source: 'manual' }],
+      steps: [{ compiled: [{ kind: 'navigate', url: 'https://app.example.com' }], source: 'manual' }],
     });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'append' });
     const session = getSession(s.body.sessionId)!;
@@ -166,11 +166,11 @@ describe('recorder routes', () => {
     const tcRows = await pool.query(`SELECT url FROM test_cases WHERE id = $1`, [c.body.id]);
     expect(tcRows.rows[0]!.url).toBe('https://pinned.example.com');
     const stepRows = await pool.query(
-      `SELECT action FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
+      `SELECT compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
       [c.body.id],
     );
     expect(stepRows.rows).toHaveLength(2);
-    expect(stepRows.rows[1]!.action.kind).toBe('click');
+    expect((stepRows.rows[1]!.compiled as Array<{ kind: string }>)[0]!.kind).toBe('click');
   });
 
   it('finish writes session.targetUrl to test_cases.url when steps have no url', async () => {

@@ -43,8 +43,8 @@ async function makeCaseWithSteps(groupId: string, versionId: string, title: stri
   const c = await request(app).post('/api/cases').send({ title, groupId, versionId });
   await request(app).post(`/api/cases/${c.body.id}/steps`).send({
     steps: [
-      { order: 1, source: 'agent', action: { kind: 'navigate', url: 'https://x.test' } },
-      { order: 2, source: 'recorder', action: { kind: 'click', locator: [{ strategy: 'css', value: '#btn' }] } },
+      { order: 1, source: 'agent', compiled: [{ kind: 'navigate', url: 'https://x.test' }] },
+      { order: 2, source: 'recorder', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#btn' }] }] },
     ],
   });
   return c.body as { id: string; title: string };

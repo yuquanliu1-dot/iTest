@@ -2,17 +2,17 @@ import { describe, it, expect } from 'vitest';
 import { switchAction, kindNeedsLocator } from './switchAction';
 import type { StepClip } from '../../stores/stepClipboard';
 
-const clipOf = (action: unknown): StepClip => ({ action, source: 'manual', name: 'n', delayMs: 100 });
+const clipOf = (action: unknown): StepClip => ({ action, source: 'manual', instruction: 'i', delayMs: 100 });
 const loc = [{ strategy: 'role', value: 'button' }];
 
 describe('switchAction', () => {
-  it('click → fill 保留 locator/intentLocator/name/delayMs', () => {
+  it('click → fill 保留 locator/intentLocator/instruction/delayMs', () => {
     const out = switchAction(clipOf({ kind: 'click', locator: loc, intentLocator: { semanticRole: 'button', contextText: '登录' } }), 'fill');
     const a = out.action as Record<string, unknown>;
     expect(a.kind).toBe('fill');
     expect(a.locator).toEqual(loc);
     expect(a.intentLocator).toEqual({ semanticRole: 'button', contextText: '登录' });
-    expect(out.name).toBe('n');
+    expect(out.instruction).toBe('i');
     expect(out.delayMs).toBe(100);
     expect(a.value).toBe('');
   });

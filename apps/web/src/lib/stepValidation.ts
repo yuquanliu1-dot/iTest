@@ -3,19 +3,17 @@ import { StepAction } from '@itest/shared';
 
 export interface StepEditInput {
   action: unknown;
-  name?: string;
   delayMs?: number;
 }
 
 export interface StepValidationResult {
   ok: boolean;
-  /** key 为字段路径，如 'name' | 'delayMs' | 'action.url' | 'action.locator.0.value' */
+  /** key 为字段路径，如 'delayMs' | 'action.url' | 'action.locator.0.value' */
   errors: Record<string, string>;
 }
 
 /** zod 报错路径 → 中文文案。 */
 function messageFor(path: string, raw: string): string {
-  if (path === 'name') return '步骤名称最多 200 字';
   if (path === 'delayMs') return '延迟必须是不超过 60000 的非负整数';
   if (path === 'action' || path === 'action.kind') return '操作内容不合法';
   if (path === 'action.locator') return '至少需要一个定位候选';
@@ -36,8 +34,6 @@ function messageFor(path: string, raw: string): string {
 
 export function validateStepEdit(input: StepEditInput): StepValidationResult {
   const errors: Record<string, string> = {};
-
-  if (input.name != null && input.name.length > 200) errors.name = messageFor('name', '');
 
   if (input.delayMs != null) {
     const d = input.delayMs;

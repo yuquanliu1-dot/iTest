@@ -16,7 +16,8 @@ export function kindNeedsLocator(kind: string): boolean {
   return WITH_LOCATOR.has(kind);
 }
 
-/** 类型切换：保留 locator/intentLocator/name/delayMs/source 等兼容字段；敏感值与不兼容字段丢弃。 */
+/** 类型切换：保留 locator/intentLocator/instruction/source 等兼容字段；敏感值与不兼容字段丢弃。
+ *  2026-10-07：name 列退役,switchAction 不再读写 name。 */
 export function switchAction(clip: StepClip, to: StepKind): StepClip {
   const src = (clip.action ?? {}) as Record<string, unknown>;
   const srcLocator = Array.isArray(src.locator) && src.locator.length > 0 ? src.locator : undefined;
@@ -79,5 +80,5 @@ export function switchAction(clip: StepClip, to: StepKind): StepClip {
       break;
   }
 
-  return { action, source: clip.source, name: clip.name, delayMs: clip.delayMs };
+  return { action, source: clip.source, instruction: clip.instruction, delayMs: clip.delayMs };
 }

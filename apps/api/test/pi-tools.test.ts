@@ -31,11 +31,11 @@ beforeEach(async () => {
 });
 
 describe('workspace tools wrapper (upsert_case)', () => {
-  it('steps.name 缺省时回退到 action 首句', async () => {
+  it('step 行级 instruction 来自 action（2026-10-07 name 列退役）', async () => {
     const { buildWorkspaceTools } = await import('../src/pi/tools.js');
     const tools = buildWorkspaceTools(requirementId);
     const upsert = tools.find((t) => t.name === 'upsert_case')!;
-    // 第一步 name 缺省，第二步有 name（验证向后兼容）
+    // 第一步无 name，第二步传 name 但落库形态只用 action 作为 instruction
     const r = await upsert.execute({
       id: 'c1', title: '用例1', description: null, priority: 'P0', scenarioId: null,
       steps: [
@@ -46,8 +46,8 @@ describe('workspace tools wrapper (upsert_case)', () => {
     expect(r.ok).toBe(true);
     const { loadDoc } = await import('../src/pi/workspace.js');
     const doc = await loadDoc(requirementId);
-    expect(doc.looseCases[0]!.steps[0]!.name).toBe('打开登录页面');
-    expect(doc.looseCases[0]!.steps[1]!.name).toBe('提交');
+    expect(doc.looseCases[0]!.steps[0]!.action).toBe('打开登录页面, 等待 2 秒');
+    expect(doc.looseCases[0]!.steps[1]!.action).toBe('点击登录按钮');
   });
 
   it('scenarioId 指向未声明场景时自动建占位场景，不再抛错', async () => {

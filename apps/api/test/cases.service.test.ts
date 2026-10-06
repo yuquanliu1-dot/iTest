@@ -50,14 +50,15 @@ describe('cases.service', () => {
         { instruction: '看结果', assertion: '登录表单正常展示' },
       ],
     });
-    const rows = (await pool.query(`SELECT "order", name, action, assertion FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [c.id])).rows as Array<{
-      order: number; name: string | null; action: Record<string, unknown>; assertion: Record<string, unknown> | null;
+    const rows = (await pool.query(`SELECT "order", compiled, assertion FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [c.id])).rows as Array<{
+      order: number; compiled: Array<Record<string, unknown>> | null; assertion: Record<string, unknown> | null;
     }>;
     // 每条 instruction 一一对应一行 aiTask，不再做 LLM 编译 / 拆条 / 展开
     expect(rows).toHaveLength(3);
     for (const r of rows) {
-      expect((r.action as { kind: string }).kind).toBe('aiTask');
-      expect(typeof (r.action as { instruction?: string }).instruction).toBe('string');
+      const first = (r.compiled ?? [])[0] as { kind?: string; instruction?: string };
+      expect(first.kind).toBe('aiTask');
+      expect(typeof first.instruction).toBe('string');
     }
     expect((rows[1]!.assertion as { kind: string }).kind).toBe('assertText');
     expect((rows[1]!.assertion as { equals: string }).equals).toBe('下单成功');

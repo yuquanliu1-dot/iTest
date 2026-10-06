@@ -14,6 +14,7 @@ import {
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import type { StepAction } from '@itest/shared';
 
 export const settings = pgTable('settings', {
   key: varchar('key', { length: 100 }).primaryKey(),
@@ -198,7 +199,8 @@ export const testSteps = pgTable('test_steps', {
   id: uuid('id').primaryKey().defaultRandom(),
   caseId: uuid('case_id').references(() => testCases.id, { onDelete: 'cascade' }).notNull(),
   order: integer('order').notNull(),
-  name: varchar('name', { length: 200 }),
+  // 2026-10-06 起彻底移除:name 列(老 UI 短标题)与 action 列同款作废,
+  //   短标题+行级自然语言全部由 instruction 列承担。DB 列已 DROP,schema 同步删除。
   delayMs: integer('delay_ms'),
   source: varchar('source', { length: 20 }).notNull(),
   tabRef: varchar('tab_ref', { length: 64 }),
@@ -207,7 +209,13 @@ export const testSteps = pgTable('test_steps', {
   secretCiphertext: text('secret_ciphertext'),
   secretIv: text('secret_iv'),
   secretTag: text('secret_tag'),
-  action: jsonb('action').notNull(),
+  /** 行级自然语言描述（人看 / 给 LLM 起手）。回放阶段不读；UI 摘要优先取 compiled[0]。
+   *  2026-10-07 起替代旧 name 列,自然语言完整说明都落这里。 */
+  instruction: text('instruction'),
+  /** 可执行 DSL 数组;回放唯一依据。
+   *  空数组/null = 未编译,dispatcher 抛 `compile-missing`,UI 阻塞执行并提示「AI 编译」。
+   *  类型记为 unknown[]:route 层 zod 解析后单条已是 StepAction;此处保持宽口避免 route 入参 narrow。 */
+  compiled: jsonb('compiled').$type<unknown[]>(),
   assertion: jsonb('assertion'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });

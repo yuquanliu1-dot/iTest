@@ -120,13 +120,14 @@ export async function runCase(
   try {
     const stepInput = steps.map((s) => ({
       order: s.order,
-      action: s.action,
       assertion: s.assertion,
       delayMs: s.delayMs,
       id: s.id,
       tabRef: s.tabRef,
       componentKind: s.componentKind,
       sensitive: s.sensitive,
+      // 2026-10-06:dispatcher 唯一回放依据 compiled;action 列已于 0030 DROP。
+      compiled: s.compiled as unknown[] | null | undefined,
     }));
     const execCtx = {
       reportId,

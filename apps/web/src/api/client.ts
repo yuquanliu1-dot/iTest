@@ -296,7 +296,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ caseIds, targetGroupId, targetVersionId }),
       }),
-    appendSteps: (id: string, steps: Array<{ order: number; source: string; action: unknown }>) =>
+    appendSteps: (id: string, steps: Array<{ order: number; source: string; action: unknown; instruction?: string; compiled?: unknown[] }>) =>
       request<{ count: number; steps: TestStep[]; failedAi: number; variableReport?: VariableReport }>(
         `/cases/${id}/steps`,
         {
@@ -313,19 +313,29 @@ export const api = {
       request<{ ok: boolean }>(`/cases/${id}/steps/${stepId}`, { method: 'DELETE' }),
     replaceSteps: (
       id: string,
-      steps: Array<{ action: unknown; source: string; name?: string; delayMs?: number }>,
+      steps: Array<{ action: unknown; source: string; delayMs?: number; instruction?: string; compiled?: unknown[] }>,
     ) =>
       request<{ steps: TestStep[]; failedAi: number; variableReport?: VariableReport }>(`/cases/${id}/steps`, {
         method: 'PUT',
         body: JSON.stringify({ steps }),
       }),
-    recompileStep: (id: string, instruction: string) =>
-      request<{ compiled: import('@itest/shared').StepAction[] | null }>(
-        `/cases/${id}/steps/recompile`,
+    /** 把自然语言 instruction 编译成 StepAction[] DSL。
+     *  返回 { compiled: null, error } 时表示放弃/失败,UI 应让用户重写 instruction。
+     *  轻量 LLM 单点调用,只用于 aiTask 子步抽出(走 inspection 不便的极简场景)。 */
+    compileStep: (caseId: string, instruction: string, context?: unknown[]) =>
+      request<{ compiled: import('@itest/shared').StepAction[] | null; error?: string }>(
+        `/cases/${caseId}/steps/compile`,
         {
           method: 'POST',
-          body: JSON.stringify({ instruction }),
+          body: JSON.stringify({ instruction, context }),
         },
+      ),
+    /** 行级 AI 重编译：走多轮 Agent 回路 + inspect_page 抓真实元素,落库到 compiled 列。
+     *  返回 { step, error? }。route POST `/cases/:caseId/steps/ai-edit`。 */
+    aiEditStep: (caseId: string, body: { mode: 'recompile'; stepId: string; instruction: string }) =>
+      request<{ step: TestStep | null; error?: string }>(
+        `/cases/${caseId}/steps/ai-edit`,
+        { method: 'POST', body: JSON.stringify(body) },
       ),
     compileExtract: (caseId: string, body: { description: string; sampleText: string }) =>
       request<{ pattern: string | null; group: number; error?: string }>(
@@ -850,12 +860,16 @@ export interface TestStep {
   id: string;
   order: number;
   source: string;
-  action: unknown;
-  name?: string | null;
   delayMs?: number | null;
   tabRef?: string | null;
   componentKind?: string | null;
   sensitive?: boolean;
+  /** 2026-10-06：行级自然语言；人看/给 LLM 起手；回放不读。
+   *  2026-10-07：取代旧 name 列(已彻底移除读写),自然语言完整说明都存这里。 */
+  instruction?: string | null;
+  /** 2026-10-06：可执行 DSL 数组 StepAction[]；回放唯一依据。空数组/null = 未编译。
+   *  2026-10-07：老 action 列已 DROP,DSL 只住这里。 */
+  compiled?: unknown[] | null;
 }
 export interface TestCaseDetail extends TestCase {
   description?: string;

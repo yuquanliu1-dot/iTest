@@ -1,5 +1,6 @@
 // apps/web/src/lib/stepSummary.ts
-/** 步骤正文的人类可读摘要（列表展示用）；纯函数，不依赖任何组件。 */
+import type { StepAction } from '@itest/shared';
+/** 步骤一览（列表/抽屉预览/悬浮卡）—— 人读摘要，纯函数，不依赖任何组件。 */
 
 interface KnownAction {
   kind?: string;
@@ -20,8 +21,42 @@ interface KnownAction {
   [k: string]: unknown;
 }
 
+/** step 行形状：dispatcher 唯一读 compiled（action 列已 DROP），UI 摘要与 kind 推断沿用同一路径。
+ *  compiled 用 unknown[] 对齐 TestStep；具体 dispatcher/AI 编译按 StepAction[] 解析。 */
+export interface StepRowLike {
+  /** 行级自然语言。 */
+  instruction?: string | null;
+  /** 可执行 DSL 数组；空数组/null/undefined 表示未编译。 */
+  compiled?: unknown[] | null;
+}
+
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+/** kind 推断路径：compiled[0]?.kind → ''。 */
+export function getKind(row: StepRowLike): string {
+  const c = Array.isArray(row.compiled) ? row.compiled[0] : undefined;
+  if (c && typeof c === 'object' && typeof (c as { kind?: string }).kind === 'string') {
+    return (c as { kind: string }).kind;
+  }
+  return '';
+}
+
+/** 选择 summary 用的 payload：compiled[0]（dispatcher 唯一回放依据）。 */
+function pickAction(row: StepRowLike): KnownAction {
+  const c = Array.isArray(row.compiled) ? row.compiled[0] : undefined;
+  return (c && typeof c === 'object' ? c : {}) as KnownAction;
+}
+
+/** 是否未编译：与 dispatcher 对齐 —— compiled 非空数组才视为已编译；
+ *  空数组 / null / undefined（老数据 action 列已 DROP，无 compiled 即无法回放）都算未编译。 */
+export function isUncompiled(row: StepRowLike): boolean {
+  return !Array.isArray(row.compiled) || row.compiled.length === 0;
+}
+
+// 兼容旧类型引用
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _StepAction = StepAction;
 
 /** 定位对象描述：优先语义文案，否则首个 locator 的 strategy=value。 */
 function targetText(action: KnownAction): string {
@@ -52,55 +87,60 @@ function valueText(action: KnownAction): string {
 
 const MATCH_LABELS: Record<string, string> = { equals: '等于', contains: '包含', notContains: '不包含', regex: '正则' };
 
-/** 列表/悬浮卡片用的简短摘要（已 clip）。 */
-export function stepSummary(action: unknown): string {
-  const a = (action ?? {}) as KnownAction;
+/** 列表/悬浮卡片用的简短摘要（已 clip）。
+ *  接收整 step 行（instruction + compiled + 老 action），kind 与 payload 均沿 compiled 优先。 */
+export function stepSummary(row: StepRowLike | unknown): string {
+  const r = (row ?? {}) as StepRowLike;
+  const a = pickAction(r);
   const t = targetText(a);
+  // 未编译（compiled 是 []）时 UI 前缀「⚠ 未编译 · 」
+  const uncompiledPrefix = isUncompiled(r) ? '⚠ 未编译 · ' : '';
   switch (a.kind) {
     case 'navigate':
-      return `打开 ${clip(str(a.url), 40)}`;
+      return uncompiledPrefix + `打开 ${clip(str(a.url), 40)}`;
     case 'click':
-      return `点击 ${clip(t, 20)}`;
+      return uncompiledPrefix + `点击 ${clip(t, 20)}`;
     case 'hover':
-      return `悬停 ${clip(t, 20)}`;
+      return uncompiledPrefix + `悬停 ${clip(t, 20)}`;
     case 'check':
-      return a.checked === false ? '取消勾选' : '勾选';
+      return uncompiledPrefix + (a.checked === false ? '取消勾选' : '勾选');
     case 'waitFor':
-      return `等待元素 ${clip(t, 20)}`;
+      return uncompiledPrefix + `等待元素 ${clip(t, 20)}`;
     case 'assertVisible':
-      return `断言可见 ${clip(t, 20)}`;
+      return uncompiledPrefix + `断言可见 ${clip(t, 20)}`;
     case 'fill':
-      return `输入 ${clip(valueText(a), 40)}`;
+      return uncompiledPrefix + `输入 ${clip(valueText(a), 40)}`;
     case 'select':
-      return `选择 ${clip(str(a.value), 20)}`;
+      return uncompiledPrefix + `选择 ${clip(str(a.value), 20)}`;
     case 'assertText':
-      return `断言文本 ${MATCH_LABELS[str(a.match)] ?? '等于'}「${clip(str(a.equals), 20)}」`;
+      return uncompiledPrefix + `断言文本 ${MATCH_LABELS[str(a.match)] ?? '等于'}「${clip(str(a.equals), 20)}」`;
     case 'assertJson':
-      return '断言 JSON';
+      return uncompiledPrefix + '断言 JSON';
     case 'screenshot':
-      return `截图 ${clip(str(a.name), 20)}`;
+      return uncompiledPrefix + `截图 ${clip(str(a.name), 20)}`;
     case 'upload':
-      return '上传文件';
+      return uncompiledPrefix + '上传文件';
     case 'switchTab':
-      return `切换标签页 ${clip(str(a.tabRef), 20)}`;
+      return uncompiledPrefix + `切换标签页 ${clip(str(a.tabRef), 20)}`;
     case 'extract':
-      return `提取 → {{${clip(str(a.varName), 30)}}}`;
+      return uncompiledPrefix + `提取 → {{${clip(str(a.varName), 30)}}}`;
     case 'aiTask':
-      return `智能：${clip(str(a.instruction), 40)}`;
+      return uncompiledPrefix + `智能：${clip(str(a.instruction), 40)}`;
     case 'queryDb':
-      return `查 ${str(a.table)}`;
+      return uncompiledPrefix + `查 ${str(a.table)}`;
     case 'observeLog': {
       const kw = Array.isArray(a.keywords) ? (a.keywords as unknown[]).map((v) => str(v)).filter(Boolean) : [];
-      return `观察日志${kw.length ? ' · ' + kw.join('/') : ''}`;
+      return uncompiledPrefix + `观察日志${kw.length ? ' · ' + kw.join('/') : ''}`;
     }
     default:
-      return clip(JSON.stringify(action) ?? String(action), 40);
+      return uncompiledPrefix + clip(JSON.stringify(a) ?? String(a), 40);
   }
 }
 
-/** tooltip/抽屉预览用的完整描述：所有关键字段，不截断；带换行。 */
-export function fullStepDescription(action: unknown): string {
-  const a = (action ?? {}) as KnownAction;
+/** tooltip/抽屉预览用的完整描述：所有关键字段，不截断。带换行。 */
+export function fullStepDescription(row: StepRowLike | unknown): string {
+  const r = (row ?? {}) as StepRowLike;
+  const a = pickAction(r);
   const lines: string[] = [];
   const push = (k: string, v: string) => { if (v) lines.push(`${k}：${v}`); };
 
@@ -122,10 +162,12 @@ export function fullStepDescription(action: unknown): string {
   push('指令', str(a.instruction));
   push('表名', str(a.table));
   if (Array.isArray(a.keywords)) push('日志关键字', (a.keywords as unknown[]).map((v) => str(v)).filter(Boolean).join(' / '));
+  push('自然语言', str(r.instruction));
+  if (isUncompiled(r)) push('编译状态', '未编译 · 点右侧「AI 编译」补');
 
-  if (lines.length === 0) {
+  if (lines.length === 0 || (lines.length === 1 && lines[0]?.startsWith('类型：'))) {
     // 兜底：JSON 序列化所有字段，便于调试未识别 kind
-    try { return JSON.stringify(action, null, 2); } catch { return String(action); }
+    try { return JSON.stringify(row, null, 2); } catch { return String(row); }
   }
   return lines.join('\n');
 }

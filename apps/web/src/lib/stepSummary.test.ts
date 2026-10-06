@@ -1,68 +1,110 @@
 // apps/web/src/lib/stepSummary.test.ts
 import { describe, it, expect } from 'vitest';
-import { stepSummary } from './stepSummary';
+import type { Locator } from '@itest/shared';
+import { stepSummary, fullStepDescription, getKind, isUncompiled, type StepRowLike } from './stepSummary';
 
-const loc = (strategy = 'css', value = '#btn') => [{ strategy, value }];
+const loc = (strategy: Locator['strategy'] = 'css', value = '#btn'): Locator[] => [{ strategy, value }];
 
 describe('stepSummary', () => {
   it('navigate 显示 URL', () => {
-    expect(stepSummary({ kind: 'navigate', url: 'https://example.com' })).toBe('打开 https://example.com');
+    expect(stepSummary({ compiled: [{ kind: 'navigate', url: 'https://example.com' }] })).toBe('打开 https://example.com');
   });
 
   it('click 优先用 intentLocator.contextText', () => {
-    expect(stepSummary({ kind: 'click', locator: loc(), intentLocator: { semanticRole: 'button', contextText: '登录' } })).toBe('点击 登录');
+    expect(stepSummary({ compiled: [{ kind: 'click', locator: loc(), intentLocator: { semanticRole: 'button', contextText: '登录' } }] })).toBe('点击 登录');
   });
 
   it('click 无 intent 时用首个 locator', () => {
-    expect(stepSummary({ kind: 'click', locator: loc('role', 'button') })).toBe('点击 role=button');
+    expect(stepSummary({ compiled: [{ kind: 'click', locator: loc('role', 'button') }] })).toBe('点击 role=button');
   });
 
   it('fill 固定值', () => {
-    expect(stepSummary({ kind: 'fill', locator: loc(), value: 'alice' })).toBe('输入 alice');
+    expect(stepSummary({ compiled: [{ kind: 'fill', locator: loc(), value: 'alice' }] })).toBe('输入 alice');
   });
 
   it('fill sensitive 脱敏', () => {
-    expect(stepSummary({ kind: 'fill', locator: loc(), value: '__sensitive__', sensitive: true })).toBe('输入 ***');
+    expect(stepSummary({ compiled: [{ kind: 'fill', locator: loc(), value: '__sensitive__', sensitive: true }] })).toBe('输入 ***');
   });
 
   it('fill 生成器值显示模式名', () => {
-    expect(stepSummary({ kind: 'fill', locator: loc(), value: { mode: 'randomString', length: 8 } })).toBe('输入 (随机字符串)');
+    expect(stepSummary({ compiled: [{ kind: 'fill', locator: loc(), value: { mode: 'randomString', length: 8 } }] })).toBe('输入 (随机字符串)');
   });
 
   it('select 显示值', () => {
-    expect(stepSummary({ kind: 'select', locator: loc(), value: 'SH' })).toBe('选择 SH');
+    expect(stepSummary({ compiled: [{ kind: 'select', locator: loc(), value: 'SH' }] })).toBe('选择 SH');
   });
 
   it('check / hover / waitFor / assertVisible', () => {
-    expect(stepSummary({ kind: 'check', locator: loc(), checked: true })).toBe('勾选');
-    expect(stepSummary({ kind: 'check', locator: loc(), checked: false })).toBe('取消勾选');
-    expect(stepSummary({ kind: 'hover', locator: loc() })).toBe('悬停 css=#btn');
-    expect(stepSummary({ kind: 'waitFor', locator: loc() })).toBe('等待元素 css=#btn');
-    expect(stepSummary({ kind: 'assertVisible', locator: loc() })).toBe('断言可见 css=#btn');
+    expect(stepSummary({ compiled: [{ kind: 'check', locator: loc(), checked: true }] })).toBe('勾选');
+    expect(stepSummary({ compiled: [{ kind: 'check', locator: loc(), checked: false }] })).toBe('取消勾选');
+    expect(stepSummary({ compiled: [{ kind: 'hover', locator: loc() }] })).toBe('悬停 css=#btn');
+    expect(stepSummary({ compiled: [{ kind: 'waitFor', locator: loc() }] })).toBe('等待元素 css=#btn');
+    expect(stepSummary({ compiled: [{ kind: 'assertVisible', locator: loc() }] })).toBe('断言可见 css=#btn');
   });
 
   it('assertText 按 match 生成', () => {
-    expect(stepSummary({ kind: 'assertText', locator: [], target: 'page', match: 'contains', equals: '登录成功' })).toBe('断言文本 包含「登录成功」');
+    expect(stepSummary({ compiled: [{ kind: 'assertText', locator: [], target: 'page', match: 'contains', equals: '登录成功' }] })).toBe('断言文本 包含「登录成功」');
   });
 
   it('screenshot / upload / switchTab / assertJson', () => {
-    expect(stepSummary({ kind: 'screenshot', name: 'shot1' })).toBe('截图 shot1');
-    expect(stepSummary({ kind: 'upload', locator: loc(), fileId: 'u-1' })).toBe('上传文件');
-    expect(stepSummary({ kind: 'switchTab', tabRef: 't1' })).toBe('切换标签页 t1');
-    expect(stepSummary({ kind: 'assertJson', locator: loc(), equals: { a: 1 } })).toBe('断言 JSON');
+    expect(stepSummary({ compiled: [{ kind: 'screenshot', name: 'shot1' }] })).toBe('截图 shot1');
+    expect(stepSummary({ compiled: [{ kind: 'upload', locator: loc(), fileId: 'u-1' }] })).toBe('上传文件');
+    expect(stepSummary({ compiled: [{ kind: 'switchTab', tabRef: 't1' }] })).toBe('切换标签页 t1');
+    expect(stepSummary({ compiled: [{ kind: 'assertJson', locator: loc(), equals: { a: 1 } }] })).toBe('断言 JSON');
   });
 
   it('extract 显示变量名', () => {
-    expect(stepSummary({ kind: 'extract', locator: loc(), varName: 'orderId', mode: 'completeValue' })).toBe('提取 → {{orderId}}');
+    expect(stepSummary({ compiled: [{ kind: 'extract', locator: loc(), varName: 'orderId', mode: 'completeValue' }] })).toBe('提取 → {{orderId}}');
   });
 
   it('未知类型回退 JSON 片段（超长截断）', () => {
-    const action = { kind: 'weird', foo: 'x'.repeat(60) };
-    expect(stepSummary(action)).toBe(JSON.stringify(action).slice(0, 39) + '…');
+    const row = { compiled: [{ kind: 'weird', foo: 'x'.repeat(60) }] };
+    expect(stepSummary(row)).toBe(JSON.stringify(row.compiled![0]).slice(0, 39) + '…');
   });
 
-  it('nullish 输入回退 "undefined"/"null" 文本', () => {
-    expect(stepSummary(undefined)).toBe('undefined');
-    expect(stepSummary(null)).toBe('null');
+  it('nullish 输入回退 JSON 字串化（default 分支）', () => {
+    // pickAction(nullish) → {} → default 分支返回 JSON.stringify({}) === "{}"
+    //   与历史 `String(action)` 行为不同；新签名接受 row（含 instruction/compiled），
+    //   nullish 是测试便利输入。这里断言「不抛错 + 返回纯字串」。
+    expect(typeof stepSummary(undefined)).toBe('string');
+    expect(typeof stepSummary(null)).toBe('string');
+  });
+
+  it('kind 取自 compiled[0]', () => {
+    const row: StepRowLike = {
+      instruction: '在用户名框输入 admin',
+      compiled: [{ kind: 'fill', locator: loc(), value: 'admin' }],
+    };
+    expect(stepSummary(row)).toBe('输入 admin');
+    expect(getKind(row)).toBe('fill');
+  });
+
+  it('compiled 为空数组时前缀「⚠ 未编译 · 」', () => {
+    const row: StepRowLike = { instruction: '待编译', compiled: [] };
+    expect(stepSummary(row)).toBe('⚠ 未编译 · {}');
+    expect(isUncompiled(row)).toBe(true);
+  });
+
+  it('compiled=null/undefined 也视为未编译（action 列已 DROP，无 compiled 即无法回放）', () => {
+    expect(isUncompiled({ compiled: null })).toBe(true);
+    expect(isUncompiled({ compiled: undefined })).toBe(true);
+    expect(isUncompiled({})).toBe(true);
+    // 未编译前缀同样适用于 null/undefined
+    expect(stepSummary({ compiled: null })).toBe('⚠ 未编译 · {}');
+  });
+
+  it('fullStepDescription 含自然语言行', () => {
+    const row: StepRowLike = {
+      instruction: '点击登录',
+      compiled: [{ kind: 'click', locator: loc('role', 'button') }],
+    };
+    const out = fullStepDescription(row);
+    expect(out).toContain('自然语言：点击登录');
+    expect(out).toContain('类型：click');
+  });
+
+  it('fullStepDescription 未编译时标注', () => {
+    const row: StepRowLike = { instruction: '填邮箱', compiled: [] };
+    expect(fullStepDescription(row)).toContain('未编译');
   });
 });

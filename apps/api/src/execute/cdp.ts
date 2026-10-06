@@ -569,13 +569,14 @@ async function runStepsInContext(
   caseId: string,
   steps: Array<{
     order: number;
-    action: unknown;
     assertion?: unknown;
     delayMs?: number | null;
     id?: string;
     tabRef?: string | null;
     componentKind?: string | null;
     sensitive?: boolean | null;
+    /** 可执行 DSL 数组；回放唯一依据。空数组/null = 未编译,抛 compile-missing。 */
+    compiled?: unknown[] | null;
   }>,
   ctx: ExecContext,
   context: BrowserContext,
@@ -588,11 +589,19 @@ async function runStepsInContext(
   const page = await context.newPage();
   // 初始导航：用例级 init URL（targetUrl）始终先 goto 一次。
   // 若首条 step 也是 navigate 且 URL 与 init 相同，让 step 来做这一步，避免重复加载。
+  const firstCompiled = steps[0]?.compiled;
+  const firstStepKind = (Array.isArray(firstCompiled) && firstCompiled.length > 0
+    ? (firstCompiled[0] as { kind?: string } | undefined)?.kind
+    : undefined);
   const firstStepIsSameNav =
     steps.length > 0
-    && (steps[0]!.action as { kind?: string }).kind === 'navigate'
-    && typeof (steps[0]!.action as { url?: string }).url === 'string'
-    && (steps[0]!.action as { url: string }).url === targetUrl;
+    && firstStepKind === 'navigate'
+    && (() => {
+        const u = (Array.isArray(firstCompiled) && firstCompiled.length > 0
+          ? (firstCompiled[0] as { url?: string }).url
+          : undefined);
+        return typeof u === 'string' && u === targetUrl;
+      })();
   if (targetUrl && !firstStepIsSameNav) {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   }
@@ -616,7 +625,19 @@ async function runStepsInContext(
     const assertionAction = normalizeStepAssertion(step.assertion);
     try {
       if (step.delayMs) await opts.page.waitForTimeout(step.delayMs);
-      const warning = await dispatch(step.action as StepAction, opts);
+      // dispatcher 唯一回放路径:按 compiled 数组派原子步骤。
+      // 1) compiled 为数组且非空 → 逐条派,收集 warning
+      // 2) compiled 为空数组 / null / undefined → 未编译,抛 compile-missing
+      let warning: string | undefined;
+      const compiled = (step as { compiled?: unknown }).compiled;
+      if (Array.isArray(compiled) && compiled.length > 0) {
+        for (const sub of compiled as StepAction[]) {
+          const w = await dispatch(sub, opts);
+          if (w && !warning) warning = w;
+        }
+      } else {
+        throw new Error(`compile-missing: 第 ${step.order} 步未编译,请点击「AI 编译」生成 DSL`);
+      }
       // action 通过后才执行步骤级断言；断言失败同样记 failed 并终止后续。
       if (assertionAction) {
         await dispatch(assertionAction, opts);
@@ -638,7 +659,12 @@ async function runStepsInContext(
       const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
       // 断言失败时 classify 应拿到 assertion 的形态（若归类器关心 action.kind）；
       // 把实际跑的那条作为归类输入更准确——失败于 action 还是 assertion 一目了然。
-      const failedAction = (assertionAction ?? (step.action as StepAction));
+      // 归类输入取 compiled[0]（未编译时为空,classify 对空 kind 走默认分支）。
+      const compiledForClassify = (step as { compiled?: unknown }).compiled;
+      const firstCompiledAction = (Array.isArray(compiledForClassify) && compiledForClassify.length > 0
+        ? (compiledForClassify[0] as StepAction)
+        : undefined);
+      const failedAction = (assertionAction ?? firstCompiledAction);
       const classified = classify(e, { action: failedAction, durationMs });
       results.push({
         order: step.order,
@@ -707,7 +733,6 @@ export async function executeCaseReal(
   caseId: string,
   steps: Array<{
     order: number;
-    action: unknown;
     /** 可选步骤级断言（任意 StepAction 子集）；为 null/undefined 时跳过。 */
     assertion?: unknown;
     delayMs?: number | null;
@@ -715,6 +740,8 @@ export async function executeCaseReal(
     tabRef?: string | null;
     componentKind?: string | null;
     sensitive?: boolean | null;
+    /** 可执行 DSL 数组；回放唯一依据。空数组/null = 未编译,抛 compile-missing。 */
+    compiled?: unknown[] | null;
   }>,
   ctx: ExecContext,
   targetUrl?: string,
@@ -758,13 +785,13 @@ export async function executeCaseInBrowser(
   caseId: string,
   steps: Array<{
     order: number;
-    action: unknown;
     assertion?: unknown;
     delayMs?: number | null;
     id?: string;
     tabRef?: string | null;
     componentKind?: string | null;
     sensitive?: boolean | null;
+    compiled?: unknown[] | null;
   }>,
   ctx: ExecContext,
   browser: Browser,
