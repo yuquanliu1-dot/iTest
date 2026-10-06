@@ -7,6 +7,7 @@ import type { StepClip } from '../stores/stepClipboard';
 import { api } from '../api/client';
 import { formatBytes, shortDateTime, stepKindLabel } from '../lib/format';
 import { validateStepEdit } from '../lib/stepValidation';
+import { stepSummary } from '../lib/stepSummary';
 import { STEP_KINDS, switchAction, kindNeedsLocator, type StepKind } from './step-form/switchAction';
 import LocatorArrayEditor from './step-form/LocatorArrayEditor';
 import FillValueEditor from './step-form/FillValueEditor';
@@ -347,7 +348,10 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, caseId, bui
       return;
     }
     // aiTask 必须先 AI 编译出 compiled：空数组 = dispatcher 抛 compile-missing。
-    const compiledOut: unknown[] = kind === 'aiTask' ? (compiled ?? []) : [next];
+    // 非 aiTask 编辑只改 compiled[0]：保存时保留其余动作（AI 可能一次产出一串 DSL），
+    // 否则会把整条链覆盖成 [next]，静默丢掉后续动作。create 模式无 compiled，自然为 [next]。
+    const compiledTail = Array.isArray(compiled) ? compiled.slice(1) : [];
+    const compiledOut: unknown[] = kind === 'aiTask' ? (compiled ?? []) : [next, ...compiledTail];
     if (kind === 'aiTask' && compiledOut.length === 0) {
       setFieldErrors({ 'action.instruction': '未编译：请先点击「AI 编译」生成 DSL' });
       return;
@@ -655,11 +659,6 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, caseId, bui
             >
               AI 助手编译
             </button>
-            {compiled && compiled.length > 0 && (
-              <p className="text-[11px] font-mono" style={{ color: 'var(--muted-foreground)' }}>
-                已生成 DSL：{compiled.map((c) => (c as { kind?: string }).kind ?? '?').join(' → ')}（保存后回放按 compiled 执行）
-              </p>
-            )}
             <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--muted-foreground)' }}>
               <p>• 智能步骤由 AI 在回放时看截图逐步执行，适合验证码识别、动态弹窗等难以固化为 DSL 的交互。</p>
               <p>• 确定性高的常规操作请用 click / fill / waitFor 等具体步骤，更稳更快。</p>
@@ -815,6 +814,26 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, caseId, bui
               <input className="input-base input-xs" type="number" min={1} max={10000} value={observeFromLine} onChange={(e) => setObserveFromLine(e.target.value)} />
             </label>
             <DbAssertionEditor value={logAssertion} onChange={setLogAssertion} />
+          </div>
+        )}
+
+        {/* compiled 动作链（只读）：AI 一次产出一串 DSL 时（如登录+操作+断言合并成一步），
+            上方表单只镜像 compiled[0]；这里枚举整条链提示用户保存不会丢尾部动作。 */}
+        {Array.isArray(compiled) && compiled.length > 1 && (
+          <div className="flex flex-col gap-1.5 rounded-[var(--radius-sm)] border border-dashed p-2" style={{ borderColor: 'var(--border)' }}>
+            <span className="text-[11px] font-semibold" style={{ color: 'var(--muted-foreground)' }}>
+              compiled 动作链（共 {compiled.length} 个，回放依序执行）
+            </span>
+            <ol className="flex flex-col gap-0.5 m-0 p-0 list-none">
+              {compiled.map((c, i) => (
+                <li key={i} className="text-[11px] font-mono" style={{ color: 'var(--muted-foreground)' }}>
+                  {i + 1}. {stepSummary({ compiled: [c] })}
+                </li>
+              ))}
+            </ol>
+            <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
+              本表单只编辑第 1 个动作；保存时其余动作原样保留。要改整条链：回列表点行内「拆分」逐动作编辑，或用 AI 助手重编。
+            </span>
           </div>
         )}
       </div>

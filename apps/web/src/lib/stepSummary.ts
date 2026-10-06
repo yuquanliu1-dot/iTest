@@ -42,10 +42,10 @@ export function getKind(row: StepRowLike): string {
   return '';
 }
 
-/** 选择 summary 用的 payload：compiled[0]（dispatcher 唯一回放依据）。 */
-function pickAction(row: StepRowLike): KnownAction {
-  const c = Array.isArray(row.compiled) ? row.compiled[0] : undefined;
-  return (c && typeof c === 'object' ? c : {}) as KnownAction;
+/** 选择 summary 用的 payload 数组：dispatcher 依序执行 compiled[0..n]。 */
+function pickAllActions(row: StepRowLike): KnownAction[] {
+  if (!Array.isArray(row.compiled)) return [];
+  return row.compiled.filter((c) => c && typeof c === 'object') as KnownAction[];
 }
 
 /** 是否未编译：与 dispatcher 对齐 —— compiled 非空数组才视为已编译；
@@ -87,60 +87,67 @@ function valueText(action: KnownAction): string {
 
 const MATCH_LABELS: Record<string, string> = { equals: '等于', contains: '包含', notContains: '不包含', regex: '正则' };
 
-/** 列表/悬浮卡片用的简短摘要（已 clip）。
- *  接收整 step 行（instruction + compiled + 老 action），kind 与 payload 均沿 compiled 优先。 */
-export function stepSummary(row: StepRowLike | unknown): string {
-  const r = (row ?? {}) as StepRowLike;
-  const a = pickAction(r);
+/** 单个动作的简短摘要（已 clip），不带未编译前缀。 */
+function actionSummary(a: KnownAction): string {
   const t = targetText(a);
-  // 未编译（compiled 是 []）时 UI 前缀「⚠ 未编译 · 」
-  const uncompiledPrefix = isUncompiled(r) ? '⚠ 未编译 · ' : '';
   switch (a.kind) {
     case 'navigate':
-      return uncompiledPrefix + `打开 ${clip(str(a.url), 40)}`;
+      return `打开 ${clip(str(a.url), 40)}`;
     case 'click':
-      return uncompiledPrefix + `点击 ${clip(t, 20)}`;
+      return `点击 ${clip(t, 20)}`;
     case 'hover':
-      return uncompiledPrefix + `悬停 ${clip(t, 20)}`;
+      return `悬停 ${clip(t, 20)}`;
     case 'check':
-      return uncompiledPrefix + (a.checked === false ? '取消勾选' : '勾选');
+      return a.checked === false ? '取消勾选' : '勾选';
     case 'waitFor':
-      return uncompiledPrefix + `等待元素 ${clip(t, 20)}`;
+      return `等待元素 ${clip(t, 20)}`;
     case 'assertVisible':
-      return uncompiledPrefix + `断言可见 ${clip(t, 20)}`;
+      return `断言可见 ${clip(t, 20)}`;
     case 'fill':
-      return uncompiledPrefix + `输入 ${clip(valueText(a), 40)}`;
+      return `输入 ${clip(valueText(a), 40)}`;
     case 'select':
-      return uncompiledPrefix + `选择 ${clip(str(a.value), 20)}`;
+      return `选择 ${clip(str(a.value), 20)}`;
     case 'assertText':
-      return uncompiledPrefix + `断言文本 ${MATCH_LABELS[str(a.match)] ?? '等于'}「${clip(str(a.equals), 20)}」`;
+      return `断言文本 ${MATCH_LABELS[str(a.match)] ?? '等于'}「${clip(str(a.equals), 20)}」`;
     case 'assertJson':
-      return uncompiledPrefix + '断言 JSON';
+      return '断言 JSON';
     case 'screenshot':
-      return uncompiledPrefix + `截图 ${clip(str(a.name), 20)}`;
+      return `截图 ${clip(str(a.name), 20)}`;
     case 'upload':
-      return uncompiledPrefix + '上传文件';
+      return '上传文件';
     case 'switchTab':
-      return uncompiledPrefix + `切换标签页 ${clip(str(a.tabRef), 20)}`;
+      return `切换标签页 ${clip(str(a.tabRef), 20)}`;
     case 'extract':
-      return uncompiledPrefix + `提取 → {{${clip(str(a.varName), 30)}}}`;
+      return `提取 → {{${clip(str(a.varName), 30)}}}`;
     case 'aiTask':
-      return uncompiledPrefix + `智能：${clip(str(a.instruction), 40)}`;
+      return `智能：${clip(str(a.instruction), 40)}`;
     case 'queryDb':
-      return uncompiledPrefix + `查 ${str(a.table)}`;
+      return `查 ${str(a.table)}`;
     case 'observeLog': {
       const kw = Array.isArray(a.keywords) ? (a.keywords as unknown[]).map((v) => str(v)).filter(Boolean) : [];
-      return uncompiledPrefix + `观察日志${kw.length ? ' · ' + kw.join('/') : ''}`;
+      return `观察日志${kw.length ? ' · ' + kw.join('/') : ''}`;
     }
     default:
-      return uncompiledPrefix + clip(JSON.stringify(a) ?? String(a), 40);
+      return clip(JSON.stringify(a) ?? String(a), 40);
   }
 }
 
-/** tooltip/抽屉预览用的完整描述：所有关键字段，不截断。带换行。 */
-export function fullStepDescription(row: StepRowLike | unknown): string {
+/** 列表/悬浮卡片用的简短摘要（已 clip）。
+ *  接收整 step 行（instruction + compiled）。多动作行（AI 一次产出一串 DSL）枚举整条链：
+ *  「共 N 步：a → b → …」；单动作行保持历史输出不变。 */
+export function stepSummary(row: StepRowLike | unknown): string {
   const r = (row ?? {}) as StepRowLike;
-  const a = pickAction(r);
+  const actions = pickAllActions(r);
+  if (actions.length > 1) {
+    return `共 ${actions.length} 步：${actions.map(actionSummary).join(' → ')}`;
+  }
+  // 未编译（compiled 是 []）时 UI 前缀「⚠ 未编译 · 」
+  const uncompiledPrefix = isUncompiled(r) ? '⚠ 未编译 · ' : '';
+  return uncompiledPrefix + actionSummary(actions[0] ?? {});
+}
+
+/** 单个动作的完整字段行（fullStepDescription 复用；多动作行按块枚举）。 */
+function describeAction(a: KnownAction): string[] {
   const lines: string[] = [];
   const push = (k: string, v: string) => { if (v) lines.push(`${k}：${v}`); };
 
@@ -162,8 +169,28 @@ export function fullStepDescription(row: StepRowLike | unknown): string {
   push('指令', str(a.instruction));
   push('表名', str(a.table));
   if (Array.isArray(a.keywords)) push('日志关键字', (a.keywords as unknown[]).map((v) => str(v)).filter(Boolean).join(' / '));
-  push('自然语言', str(r.instruction));
-  if (isUncompiled(r)) push('编译状态', '未编译 · 点右侧「AI 编译」补');
+  return lines;
+}
+
+/** tooltip/抽屉预览用的完整描述：所有关键字段，不截断。带换行。
+ *  多动作行按「【动作 i/N】」分块枚举整条 compiled 链，行级 instruction 附在末尾。 */
+export function fullStepDescription(row: StepRowLike | unknown): string {
+  const r = (row ?? {}) as StepRowLike;
+  const actions = pickAllActions(r);
+
+  const footer: string[] = [];
+  const pushFooter = (k: string, v: string) => { if (v) footer.push(`${k}：${v}`); };
+  pushFooter('自然语言', str(r.instruction));
+  if (isUncompiled(r)) footer.push('编译状态：未编译 · 点右侧「AI 编译」补');
+
+  if (actions.length > 1) {
+    const blocks = actions.map((a, i) => `【动作 ${i + 1}/${actions.length}】\n${describeAction(a).join('\n')}`);
+    if (footer.length) blocks.push(footer.join('\n'));
+    return blocks.join('\n\n');
+  }
+
+  const lines = describeAction(actions[0] ?? {});
+  lines.push(...footer);
 
   if (lines.length === 0 || (lines.length === 1 && lines[0]?.startsWith('类型：'))) {
     // 兜底：JSON 序列化所有字段，便于调试未识别 kind

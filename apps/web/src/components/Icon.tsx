@@ -47,6 +47,7 @@ import SendAlt from '@carbon/icons-react/es/SendAlt';
 import Settings from '@carbon/icons-react/es/Settings';
 import MagicWand from '@carbon/icons-react/es/MagicWand';
 import Star from '@carbon/icons-react/es/Star';
+import Split from '@carbon/icons-react/es/Split';
 import Tag from '@carbon/icons-react/es/Tag';
 import Terminal from '@carbon/icons-react/es/Terminal';
 import TrashCan from '@carbon/icons-react/es/TrashCan';
@@ -112,6 +113,7 @@ const iconMap: Record<string, CarbonIconType> = {
   send: SendAlt,
   settings: Settings,
   sparkles: MagicWand,
+  split: Split,
   star: Star,
   sun: Light,
   tag: Tag,

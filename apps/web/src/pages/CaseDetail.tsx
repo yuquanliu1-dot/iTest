@@ -147,6 +147,25 @@ export default function CaseDetail() {
     replaceSteps.mutate(updater(current));
   };
 
+  /** 拆分：一行多动作（AI 一次产出的 compiled 链）拆成 N 行单动作，每行可独立编辑。
+   *  第 1 行保留原行级 instruction 与 delayMs；其余行 instruction 用动作摘要、delayMs 清空。 */
+  const splitStep = (idx: number) => {
+    mutateSteps((cur) => {
+      const clip = cur[idx];
+      if (!clip || !Array.isArray(clip.compiled) || clip.compiled.length <= 1) return cur;
+      const expanded: StepClip[] = clip.compiled.map((c, i) => ({
+        ...clip,
+        action: c,
+        compiled: [c],
+        instruction: i === 0 ? clip.instruction : stepSummary({ compiled: [c] }),
+        delayMs: i === 0 ? clip.delayMs : undefined,
+      }));
+      const next = [...cur];
+      next.splice(idx, 1, ...expanded);
+      return next;
+    });
+  };
+
   const undo = () => {
     // 抽屉打开时步骤列表可能已被并发变更（行号会错位），先关抽屉再撤销
     if (editing) {
@@ -889,6 +908,15 @@ export default function CaseDetail() {
                                 📝 {clipInline(s.instruction, 22)}
                               </span>
                             )}
+                            {Array.isArray(s.compiled) && s.compiled.length > 1 && (
+                              <span
+                                className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-mono"
+                                style={{ border: '1px solid var(--border)', color: 'var(--muted-foreground)', background: 'var(--popover)' }}
+                                title={`compiled 含 ${s.compiled.length} 个动作，回放依序执行；悬停步骤文本看完整链`}
+                              >
+                                ⚙ 共 {s.compiled.length} 个动作
+                              </span>
+                            )}
                             {(() => {
                               const head = Array.isArray(s.compiled) && s.compiled.length > 0
                                 ? (s.compiled[0] as { kind?: string; varName?: string })
@@ -914,6 +942,14 @@ export default function CaseDetail() {
                               </button>
                             )}
                             <div className="flex items-center gap-1 shrink-0">
+                              {Array.isArray(s.compiled) && s.compiled.length > 1 && (
+                                <IconButton
+                                  icon="split"
+                                  title={`拆分为 ${s.compiled.length} 个单动作步骤（各自可独立编辑）`}
+                                  disabled={recorder.status === 'recording'}
+                                  onClick={() => splitStep(idx)}
+                                />
+                              )}
                               <IconButton
                                 icon="copy"
                                 title="复制此步骤到下一行"
