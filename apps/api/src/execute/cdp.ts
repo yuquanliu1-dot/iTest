@@ -90,6 +90,10 @@ export interface ExecContext {
   caseTitle?: string;
   /** 用例 url（兜底语义锚，给 vision prompt 用）。 */
   caseUrl?: string | null;
+  /** 数据集行初始变量（解密后明文，仅存在于执行期内存，不落库）。 */
+  initialVars?: Record<string, string>;
+  /** 数据集敏感列名集合：错误信息落报告前对相关变量值打码（与 recorder 敏感处理对齐）。 */
+  sensitiveVarKeys?: string[];
 }
 
 /** 用例级窗口策略（maximize/current/custom），custom 时携带 width/height。 */
@@ -614,6 +618,17 @@ async function writeStepScreenshot(reportId: string, stepIndex: number, page: Pa
   }
 }
 
+/** 报告侧脱敏：把 text 中出现的敏感变量值全部替换为 ******。
+ *  用 split/join 而非 RegExp，避免值里含正则元字符。 */
+export function maskSensitiveValues(text: string, vars: Record<string, string>, keys: readonly string[]): string {
+  let out = text;
+  for (const k of keys) {
+    const v = vars[k];
+    if (typeof v === 'string' && v.length > 0) out = out.split(v).join('******');
+  }
+  return out;
+}
+
 /** 在已持有的 browser context 中跑用例步骤：init-goto → preflight → 步骤循环 → vision 兜底。
  *  与 `executeCaseReal` 共享核心逻辑；区别是不负责 launch/newContext/close，调用方持有生命周期。 */
 async function runStepsInContext(
@@ -636,7 +651,7 @@ async function runStepsInContext(
   caseWindow?: CaseWindow,
 ): Promise<ExecStepResult[]> {
   const results: ExecStepResult[] = [];
-  const vars: Record<string, string> = {};
+  const vars: Record<string, string> = { ...(ctx.initialVars ?? {}) };
   const page = await context.newPage();
   // 初始导航：用例级 init URL（targetUrl）始终先 goto 一次。
   // 若首条 step 也是 navigate 且 URL 与 init 相同，让 step 来做这一步，避免重复加载。
@@ -724,6 +739,11 @@ async function runStepsInContext(
         ? (compiledForClassify[0] as StepAction)
         : undefined);
       const failedAction = (assertionAction ?? firstCompiledAction);
+      // 数据集敏感列脱敏：assertText 等错误信息带物化后的期望值（{{password}} 明文），
+      // classify/humanMessage 可能复用 e.message —— 落报告前原地打码，闭环列级加密。
+      if (e instanceof Error && ctx.sensitiveVarKeys && ctx.sensitiveVarKeys.length > 0) {
+        e.message = maskSensitiveValues(e.message, vars, ctx.sensitiveVarKeys);
+      }
       const classified = classify(e, { action: failedAction, durationMs });
       results.push({
         order: step.order,
