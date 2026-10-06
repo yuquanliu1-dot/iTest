@@ -619,13 +619,15 @@ async function writeStepScreenshot(reportId: string, stepIndex: number, page: Pa
 }
 
 /** 报告侧脱敏：把 text 中出现的敏感变量值全部替换为 ******。
- *  用 split/join 而非 RegExp，避免值里含正则元字符。 */
+ *  用 split/join 而非 RegExp，避免值里含正则元字符；
+ *  按值长度降序替换，防止短值是长值子串时留下残段。 */
 export function maskSensitiveValues(text: string, vars: Record<string, string>, keys: readonly string[]): string {
+  const vals = keys
+    .map((k) => vars[k])
+    .filter((v): v is string => typeof v === 'string' && v.length > 0)
+    .sort((a, b) => b.length - a.length);
   let out = text;
-  for (const k of keys) {
-    const v = vars[k];
-    if (typeof v === 'string' && v.length > 0) out = out.split(v).join('******');
-  }
+  for (const v of vals) out = out.split(v).join('******');
   return out;
 }
 

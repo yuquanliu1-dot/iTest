@@ -21,4 +21,9 @@ describe('maskSensitiveValues', () => {
     expect(maskSensitiveValues('x', { a: '' }, ['a'])).toBe('x');
     expect(maskSensitiveValues('x', {}, [])).toBe('x');
   });
+
+  it('一个敏感值是另一个的子串时，长值优先替换不残留', () => {
+    const vars = { pw: 'abc', token: 'abcd' };
+    expect(maskSensitiveValues('abc abcd', vars, ['pw', 'token'])).toBe('****** ******');
+  });
 });
