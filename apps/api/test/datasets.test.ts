@@ -297,5 +297,6 @@ describe('case dataset binding', () => {
     );
     const r = await request(app).patch(`/api/cases/${foreign.rows[0].id}`).send({ datasetId: created.id });
     expect(r.status).toBe(400);
+    expect(r.body.error).toBe('dataset_project_mismatch');
   });
 });
