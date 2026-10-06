@@ -53,6 +53,15 @@ describe('cases + steps', () => {
     expect(r.body.title).toBe('登录成功');
   });
 
+  it('GET /api/cases?projectId returns versionName per case', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    await request(app).post('/api/cases').send({ title: '带版本', groupId, versionId });
+    const r = await request(app).get(`/api/cases?projectId=${projectId}`);
+    expect(r.status).toBe(200);
+    const row = (r.body as Array<{ title: string; versionName: string | null }>).find((c) => c.title === '带版本');
+    expect(row?.versionName).toBe('v0');
+  });
+
   it('GET /api/cases/:id returns case with steps', async () => {
     const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'X', groupId, versionId });
