@@ -314,7 +314,7 @@ export default function ProjectsHome() {
             <DialogTitle>{form.mode === 'create-project' ? '新建项目' : '编辑项目'}</DialogTitle>
           </DialogHeader>
           <div className="flex-1 min-h-0 flex flex-col gap-3 px-5 py-4 overflow-y-auto">
-            <Input label="名称" placeholder="如：CueCast 官网" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+            <Input label="名称" placeholder="如：iTest 官网" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>描述（可空）</label>
               <textarea
