@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const UPLOAD_DIR = process.env.UPLOAD_DIR ?? join(process.cwd(), '.data', 'uploads');
-export const DEFAULT_UPLOAD_MAX_BYTES = 10485760; // 10 MB; CueCast cap. Override via UPLOAD_MAX_BYTES.
+export const DEFAULT_UPLOAD_MAX_BYTES = 10485760; // 10 MB; iTest cap. Override via UPLOAD_MAX_BYTES.
 
 // Read at call time so tests can tweak the limit via process.env without re-importing.
 export function uploadMaxBytes(): number {
