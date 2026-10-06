@@ -9,6 +9,20 @@ export function fullDateTime(iso: string): string {
   return new Date(iso).toLocaleString('zh-CN');
 }
 
+/** 毫秒 → 人类可读时长（1.2s / 1m 23s / 1h 05m）。null/undefined → '—'。 */
+export function formatDuration(ms: number | null | undefined): string {
+  if (ms == null) return '—';
+  if (ms < 1000) return `${ms} ms`;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return rs ? `${m}m ${rs}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm ? `${h}h ${rm}m` : `${h}h`;
+}
+
 /** 字节数 → 人类可读（1.2 KB / 3.4 MB）。与 iDO 文件大小同口径。 */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
