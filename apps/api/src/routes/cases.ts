@@ -50,6 +50,8 @@ const PatchBody = CaseBodyBase.partial()
     url: z.string().url().nullable().optional(),
     // 用例默认 environment id；null 表示清空，undefined 表示不动
     defaultEnvId: z.string().uuid().nullable().optional(),
+    // 绑定数据集 id；null 表示解绑，undefined 表示不动
+    datasetId: z.string().uuid().nullable().optional(),
   })
   .superRefine(checkWindowStrategy);
 
@@ -151,6 +153,10 @@ casesRoute.patch('/:id', async (req, res) => {
   if (body.defaultEnvId !== undefined && body.defaultEnvId !== null) {
     const { assertEnvironmentVisible } = await import('../services/projectAccess.js');
     await assertEnvironmentVisible(body.defaultEnvId, req.user!);
+  }
+  if (body.datasetId !== undefined && body.datasetId !== null) {
+    const { assertDatasetVisible } = await import('../services/projectAccess.js');
+    await assertDatasetVisible(body.datasetId, req.user!);
   }
   // scenario 匹配 / env 归属 / tag 组织校验由 service 兜底
   res.json(await updateCase(req.params.id!, body));

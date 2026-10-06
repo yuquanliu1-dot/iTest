@@ -40,6 +40,8 @@ beforeAll(async () => {
     next();
   });
   app.use('/api', datasetsRoute);
+  const { casesRoute } = await import('../src/routes/cases.js');
+  app.use('/api/cases', casesRoute);
   app.use(errorHandler);
 });
 
@@ -258,5 +260,42 @@ describe('datasets routes', () => {
     const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...body, name: '隔离' });
     const r = await request(app).get(`/api/projects/${other.rows[0].id}/datasets/${created.body.id}`);
     expect(r.status).toBe(404);
+  });
+});
+
+describe('case dataset binding', () => {
+  async function newCase(title: string): Promise<string> {
+    const r = await pool.query(
+      `INSERT INTO test_cases(group_id, version_id, title) VALUES ($1, $2, $3) RETURNING id`,
+      [groupId, versionId, title],
+    );
+    return r.rows[0].id as string;
+  }
+
+  it('PATCH 绑定/解绑 datasetId；详情回带 datasetId', async () => {
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, { ...body, name: '绑定目标' });
+    const caseId = await newCase('绑定流程');
+    const bind = await request(app).patch(`/api/cases/${caseId}`).send({ datasetId: created.id });
+    expect(bind.status).toBe(200);
+    expect(bind.body.datasetId).toBe(created.id);
+    const detail = await request(app).get(`/api/cases/${caseId}`);
+    expect(detail.body.datasetId).toBe(created.id);
+    const unbind = await request(app).patch(`/api/cases/${caseId}`).send({ datasetId: null });
+    expect(unbind.body.datasetId).toBeNull();
+  });
+
+  it('绑定别的项目的数据集报 400', async () => {
+    const other = await pool.query(`INSERT INTO projects(organization_id, name) VALUES ($1, '别家2') RETURNING id`, [orgId]);
+    await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, 'G')`, [other.rows[0].id]);
+    const g = await pool.query(`SELECT id FROM "groups" WHERE project_id = $1`, [other.rows[0].id]);
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, { ...body, name: '本项目的' });
+    const foreign = await pool.query(
+      `INSERT INTO test_cases(group_id, version_id, title) VALUES ($1, $2, '外案') RETURNING id`,
+      [g.rows[0].id, versionId],
+    );
+    const r = await request(app).patch(`/api/cases/${foreign.rows[0].id}`).send({ datasetId: created.id });
+    expect(r.status).toBe(400);
   });
 });
