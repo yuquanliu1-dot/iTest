@@ -1,10 +1,10 @@
-/* iTest 录制面板窗口 — 与中台设计 tokens 对齐（packages/ui/src/tokens.css） */
+/* iTest 录制面板窗口 — 与中台设计 tokens 对齐（packages/ui/src/tokens.css，CRM shadcn 风） */
 body {
   margin: 0;
-  font-family: -apple-system, "SF Pro Text", "DM Sans", "Inter", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: "Geist Variable", "Geist", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 12px;
-  color: #232038;
-  background: linear-gradient(135deg, #eef0ff 0%, #f6eeff 45%, #eaf6ff 100%);
+  color: #171717;
+  background: #ffffff;
 }
 .container {
   padding: 14px;
@@ -16,33 +16,36 @@ body {
 .head { display: flex; align-items: center; gap: 7px; }
 .dot {
   width: 8px; height: 8px; border-radius: 9999px; flex-shrink: 0;
-  background: linear-gradient(140deg, #4e7bff, #7c5cfc 60%, #b14cff);
+  background: linear-gradient(140deg, #00915f 0%, #006b4f 60%, #025e46 100%);
 }
 h1 { font-size: 13px; font-weight: 600; margin: 0; }
 
-.hint { font-size: 11px; color: #6e6a8a; margin: 0; line-height: 1.5; }
+.hint { font-size: 11px; color: #6b6b6b; margin: 0; line-height: 1.5; }
 .hidden { display: none; }
 
-label { font-size: 11px; color: #6e6a8a; }
+label { font-size: 11px; color: #6b6b6b; }
 input, textarea {
-  padding: 7px 9px; font-size: 12px; border: 1px solid rgba(0, 0, 0, 0.06);
-  border-radius: 8px; width: 100%; box-sizing: border-box; font-family: inherit;
-  background: #e9eaf6; color: #232038; outline: none;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  padding: 7px 9px; font-size: 12px; border: 1px solid #e2e2e2;
+  border-radius: 5px; width: 100%; box-sizing: border-box; font-family: inherit;
+  background: #fff; color: #171717; outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-input:hover, textarea:hover { border-color: rgba(0, 0, 0, 0.10); }
-input:focus, textarea:focus { border-color: #7c5cfc; background: rgba(255, 255, 255, 0.82); }
+input:hover, textarea:hover { border-color: #d0d0d0; }
+input:focus, textarea:focus {
+  border-color: #006b4f;
+  box-shadow: 0 0 0 2px color-mix(in oklch, #006b4f 18%, transparent);
+}
 
 .btn {
-  padding: 7px 12px; font-size: 12px; border-radius: 8px; cursor: pointer;
+  padding: 7px 12px; font-size: 12px; border-radius: 5px; cursor: pointer;
   font-family: inherit; transition: background 0.15s ease;
 }
 .btn.primary {
-  background: #7c5cfc; color: #fff; border: none; font-weight: 500; width: 100%;
+  background: #006b4f; color: #fff; border: none; font-weight: 500; width: 100%;
 }
-.btn.primary:hover { background: #6a4ae0; }
+.btn.primary:hover { background: #025e46; }
 .btn.primary:active { transform: scale(0.97); }
 .btn.ghost {
-  background: #eceaf8; border: 1px solid #e4e2f0; color: #6e6a8a; width: 100%;
+  background: #f4f4f4; border: none; color: #171717; width: 100%;
 }
-.btn.ghost:hover { background: #e4e1f3; border-color: rgba(0, 0, 0, 0.10); color: #232038; }
+.btn.ghost:hover { background: #e9e9e9; }
