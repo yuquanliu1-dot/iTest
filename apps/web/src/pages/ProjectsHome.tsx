@@ -301,6 +301,7 @@ export default function ProjectsHome() {
                 onRemoveVersion={(v) => setConfirmDeleteVersion({ projectId: p.id, versionId: v.id, versionName: v.name })}
                 onEditVersionRef={(v) => setRefForm({ open: true, projectId: p.id, version: v })}
                 onOpenEnvironments={() => navigate(`/p/${p.id}/environments`)}
+                onOpenDatasets={() => navigate(`/p/${p.id}/datasets`)}
               />
             ))}
           </div>
@@ -478,6 +479,7 @@ interface ProjectRowProps {
   onRemoveVersion: (v: ProjectVersion) => void;
   onEditVersionRef: (v: ProjectVersion) => void;
   onOpenEnvironments: () => void;
+  onOpenDatasets: () => void;
 }
 
 function ProjectRow({
@@ -492,6 +494,7 @@ function ProjectRow({
   onRemoveVersion,
   onEditVersionRef,
   onOpenEnvironments,
+  onOpenDatasets,
 }: ProjectRowProps) {
   const versionsQ = useQuery({
     queryKey: ['versions', p.id],
@@ -549,6 +552,7 @@ function ProjectRow({
         <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
           <IconButton icon="pencil" title="编辑项目" onClick={onEdit} />
           <IconButton icon="database" title="环境管理" onClick={onOpenEnvironments} />
+          <IconButton icon="table" title="数据集" onClick={onOpenDatasets} />
           <IconButton icon="trash" title="删除项目" tone="destructive" onClick={onDelete} />
         </div>
       </div>
