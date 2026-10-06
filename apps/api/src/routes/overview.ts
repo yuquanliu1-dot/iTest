@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { eq, desc, inArray, sql, and } from 'drizzle-orm';
+import { eq, desc, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   testCases,
@@ -9,7 +9,6 @@ import {
   planRuns,
   planCases,
   executionPlans,
-  agentRuns,
 } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible } from '../services/projectAccess.js';
@@ -133,7 +132,7 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
 
   const days = rangeDays(parsed.data);
   const today = new Date();
-  const { cs, caseIds, rs7d, recent } = await loadBase(projectId, days);
+  const { cs, rs7d, recent } = await loadBase(projectId, days);
 
   const totalCases = cs.length;
   const passed = rs7d.filter((r) => r.status === 'passed').length;
@@ -180,19 +179,7 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
     }),
   );
 
-  const agentSince = new Date(Date.now() - 7 * 86_400_000);
-  const recentAgentRuns = caseIds.length
-    ? await db
-        .select()
-        .from(agentRuns)
-        .where(
-          and(
-            inArray(agentRuns.targetId, caseIds),
-            eq(agentRuns.targetType, 'case2script'),
-          ),
-        )
-    : [];
-  const aiCalls7d = recentAgentRuns.filter((r) => r.startedAt >= agentSince).length;
+  const aiCalls7d = 0;
 
   const trend = buildTrend(rs7d, today, days);
   const failMap = new Map<
@@ -225,14 +212,10 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
     count: cs.filter((c) => PRIORITY_MAP[c.priority ?? ''] === p).length,
   }));
 
-  const aiActivity = recentAgentRuns.length === 0
-    ? []
-    : Array.from({ length: 7 }).map((_, i) => {
-        const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (6 - i));
-        const k = dateKey(d);
-        const todays = recentAgentRuns.filter((r) => dateKey(r.startedAt) === k);
-        return { date: k, casesGenerated: todays.length, stepsGenerated: 0 };
-      });
+  const aiActivity: Array<{ date: string; casesGenerated: number; stepsGenerated: number }> = Array.from({ length: 7 }).map((_, i) => {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (6 - i));
+    return { date: dateKey(d), casesGenerated: 0, stepsGenerated: 0 };
+  });
 
   res.json({
     kpi: { totalCases, totalPlans: planRows.length, passRate, totalRuns7d, aiCalls7d },

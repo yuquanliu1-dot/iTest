@@ -11,7 +11,7 @@ import { aiThreads } from '../../db/schema.js';
 import { logger } from '../../logger.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import { assertVersionVisible } from '../../services/projectAccess.js';
-import { sseHeaders, sseSend } from '../../sse/agentRunStream.js';
+import { sseHeaders, sseSend } from '../../sse/pi.js';
 import type { AuthUser } from '../../services/auth.service.js';
 import { readLlmConfig } from '../modelBridge.js';
 import { resolveConfirmation } from './confirm.js';

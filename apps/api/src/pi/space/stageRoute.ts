@@ -1,16 +1,16 @@
 /**
  * 版本空间助手「暂存 → 落库」HTTP 端点：
- *   POST /assistant/threads/:id/stage/list   返回该线程下所有暂存对象
+ *   POST /assistant/threads/:id/stage/list   返回该线程下所有暂存对象(含 caseOps)
  *   POST /assistant/threads/:id/stage/save   用户勾选后调用,把暂存对象落正式表并删 stage 行
  *
- * 落库顺序：先 scenarios（含 requirement 解析）→ cases（含 groupId）→ environments → plans。
+ * 落库顺序：先 scenarios（含 requirement 解析）→ cases（含 groupId）→ environments → plans → caseOps。
  * 任一阶段失败整体回滚（DELETE 不入库,但 stage 写入本身不回退 —— 用户可重新勾选重试）。
  */
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { Router } from 'express';
 import { db } from '../../db/client.js';
 import {
-  aiStageCases, aiStageEnvironments, aiStagePlans, aiStageScenarios,
+  aiStageCaseOps, aiStageCases, aiStageEnvironments, aiStagePlans, aiStageScenarios,
 } from '../../db/schema.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import * as casesSvc from '../../services/cases.service.js';
@@ -19,7 +19,11 @@ import * as environmentsSvc from '../../services/environments.service.js';
 import * as plansSvc from '../../services/plans.service.js';
 import { resolveVersionProjectId } from '../../services/projectAccess.js';
 import { emitThreadEvent } from './session.js';
-import { deleteStaged, listStage, type StageDoc, type StageKind } from './tools/stage-tools.js';
+import {
+  deleteStaged, listStage, type StageDoc, type StageKind, type StagedCaseOp,
+} from './tools/stage-tools.js';
+import { applyCaseOp, type SpaceToolsContext } from './tools/case-ops-tools.js';
+import { emptyRepoState } from './tools/context.js';
 import { assertSpaceThreadVisible } from './router.js';
 
 export const stageRoute = Router();
@@ -29,6 +33,7 @@ interface SaveBody {
   scenarios: Array<{ localId: string }>;
   environments: Array<{ localId: string }>;
   plans: Array<{ localId: string; groupId: string }>;
+  caseOps: Array<{ localId: string }>;
 }
 
 function emitStageRemove(threadId: string, kind: StageKind, localId: string): void {
@@ -50,7 +55,8 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
   const scenarios = body.scenarios ?? [];
   const environments = body.environments ?? [];
   const plans = body.plans ?? [];
-  if (cases.length + scenarios.length + environments.length + plans.length === 0) {
+  const caseOps = body.caseOps ?? [];
+  if (cases.length + scenarios.length + environments.length + plans.length + caseOps.length === 0) {
     throw new HttpError(400, 'bad_request', '至少选择一项');
   }
 
@@ -64,7 +70,6 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
         .where(and(eq(aiStageCases.threadId, threadId), inArray(aiStageCases.localId, cases.map((c) => c.localId))))
     : [];
   const caseByLocalId = new Map(stageCaseRows.map((r) => [r.localId, r]));
-  const groupOfCase = new Map(cases.map((c) => [c.localId, c.groupId]));
   const createdCaseIds = new Map<string, string>(); // staged localId → real caseId
   for (const sel of cases) {
     const row = caseByLocalId.get(sel.localId);
@@ -92,7 +97,6 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     });
     createdCaseIds.set(sel.localId, created.id);
   }
-  void groupOfCase; // 已被 sel.groupId 覆盖；保留便于将来扩展（每 case 独立 defaultEnv 等）
 
   // 1b. scenarios: 直接落正式表
   const stageScenarioRows = scenarios.length
@@ -131,7 +135,6 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
   for (const sel of plans) {
     const row = stagePlanRows.find((r) => r.localId === sel.localId);
     if (!row) throw new HttpError(404, 'not_found', `stage plan ${sel.localId} 已不存在`);
-    void sel.groupId; // 暂未做"按 group 自动建场景"扩展;groupId 仅供未来
     const realCaseIds = (row.caseLocalIds ?? [])
       .map((localId) => createdCaseIds.get(localId))
       .filter((x): x is string => !!x);
@@ -145,12 +148,34 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     }
   }
 
+  // 1e. caseOps:按 stagedAt 升序应用(用户勾选顺序之外的"全局意图顺序")。
+  //  - 步骤级 op（update_step/insert_step/delete_step/move_step）天然在同一 case 内,顺序按 stagedAt 即可;
+  //    跨 case 不保证事务(失败回退不跨用例)—— 单 case 内 insert/delete/move_step 由 case-ops-tools.applyCaseOp 包 transaction。
+  //  - 用例级 op(update_case/delete_case/move_case):delete 会级联删 steps,后续对已删 case 的 step op 会失败(用户应在前置勾选里把 step op 一起勾)—— 不做复杂重排。
+  const stageCaseOpRows = caseOps.length
+    ? (await db.select().from(aiStageCaseOps)
+        .where(and(eq(aiStageCaseOps.threadId, threadId), inArray(aiStageCaseOps.localId, caseOps.map((c) => c.localId))))
+        .orderBy(asc(aiStageCaseOps.stagedAt))) as unknown as Array<StagedCaseOp & { stagedAt: string }>
+    : [];
+  const projectId = pid; // for applyCaseOp ctx
+  for (const row of stageCaseOpRows) {
+    const ctx: SpaceToolsContext = {
+      threadId,
+      versionId,
+      projectId,
+      repo: emptyRepoState(),
+      emit: (e: unknown) => emitThreadEvent(threadId, e as Record<string, unknown>),
+    };
+    await applyCaseOp(row.op, row.payload, ctx);
+  }
+
   // 2. 全部成功后删 stage 行 + 广播 remove 事件（前端清空勾选状态）
   const localIdsByKind: Array<{ kind: StageKind; localIds: string[] }> = [
     { kind: 'case', localIds: cases.map((c) => c.localId) },
     { kind: 'scenario', localIds: scenarios.map((s) => s.localId) },
     { kind: 'environment', localIds: environments.map((e) => e.localId) },
     { kind: 'plan', localIds: plans.map((p) => p.localId) },
+    { kind: 'case_op', localIds: caseOps.map((c) => c.localId) },
   ];
   for (const { kind, localIds } of localIdsByKind) {
     if (localIds.length === 0) continue;
@@ -163,6 +188,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     savedScenarios: scenarios.length,
     savedEnvironments: environments.length,
     savedPlans: plans.length,
+    savedCaseOps: caseOps.length,
     caseIdMap: Object.fromEntries(createdCaseIds),
   });
 });
@@ -174,6 +200,7 @@ export async function purgeStaleStages(threadId: string): Promise<number> {
     db.delete(aiStageScenarios).where(eq(aiStageScenarios.threadId, threadId)).returning({ id: aiStageScenarios.localId }),
     db.delete(aiStageEnvironments).where(eq(aiStageEnvironments.threadId, threadId)).returning({ id: aiStageEnvironments.localId }),
     db.delete(aiStagePlans).where(eq(aiStagePlans.threadId, threadId)).returning({ id: aiStagePlans.localId }),
+    db.delete(aiStageCaseOps).where(eq(aiStageCaseOps.threadId, threadId)).returning({ id: aiStageCaseOps.localId }),
   ]);
   return removed.reduce((acc, r) => acc + r.length, 0);
 }

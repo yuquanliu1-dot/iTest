@@ -8,7 +8,7 @@ interface Props {
   groups: Array<{ id: string; name: string }>;
   saving: boolean;
   /** 概览：每 Tab 选中数（让用户在选择分组时看到要保存的内容）。 */
-  partitioned: { case: unknown[]; scenario: unknown[]; environment: unknown[]; plan: unknown[] };
+  partitioned: { case: unknown[]; case_op: unknown[]; scenario: unknown[]; environment: unknown[]; plan: unknown[] };
   selection: Set<string>;
   /** 用户点保存：传入选中的目标 groupId；空串 = "暂存到不指定"（仅 environment/scenario 适用）。 */
   onSave: (groupId: string) => void;
@@ -33,6 +33,7 @@ export default function SaveDialog({ open, onOpenChange, groups, saving, partiti
   const [groupId, setGroupId] = useState(initial);
   const selectedCounts = {
     case: partitioned.case.filter((x) => selection.has(`case:${(x as { localId: string }).localId}`)).length,
+    case_op: partitioned.case_op.filter((x) => selection.has(`case_op:${(x as { localId: string }).localId}`)).length,
     scenario: partitioned.scenario.filter((x) => selection.has(`scenario:${(x as { localId: string }).localId}`)).length,
     environment: partitioned.environment.filter((x) =>
       selection.has(`environment:${(x as { localId: string }).localId}`),
@@ -40,7 +41,12 @@ export default function SaveDialog({ open, onOpenChange, groups, saving, partiti
     plan: partitioned.plan.filter((x) => selection.has(`plan:${(x as { localId: string }).localId}`)).length,
   };
   const needGroup = selectedCounts.case + selectedCounts.plan > 0;
-  const totalSelected = selectedCounts.case + selectedCounts.scenario + selectedCounts.environment + selectedCounts.plan;
+  const totalSelected =
+    selectedCounts.case +
+    selectedCounts.case_op +
+    selectedCounts.scenario +
+    selectedCounts.environment +
+    selectedCounts.plan;
   const canSubmit = totalSelected > 0 && (!needGroup || !!groupId);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -52,6 +58,7 @@ export default function SaveDialog({ open, onOpenChange, groups, saving, partiti
           <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
             当前 Tab：{kindLabel}。选中 {totalSelected} 项
             {selectedCounts.case > 0 && ` · 用例 ${selectedCounts.case}`}
+            {selectedCounts.case_op > 0 && ` · 修改 ${selectedCounts.case_op}`}
             {selectedCounts.scenario > 0 && ` · 场景 ${selectedCounts.scenario}`}
             {selectedCounts.environment > 0 && ` · 环境 ${selectedCounts.environment}`}
             {selectedCounts.plan > 0 && ` · 计划 ${selectedCounts.plan}`}

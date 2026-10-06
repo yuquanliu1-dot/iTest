@@ -5,7 +5,7 @@ import { db } from '../db/client.js';
 import { planRuns, planRunCases, executionPlans, testCases } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { requestCancel, subscribeRun } from '../execute/runPlan.js';
-import { sseHeaders } from '../sse/agentRunStream.js';
+import { sseHeaders } from '../sse/pi.js';
 import { assertPlanRunVisible, assertProjectVisible } from '../services/projectAccess.js';
 
 export const planRunsRoute = Router();

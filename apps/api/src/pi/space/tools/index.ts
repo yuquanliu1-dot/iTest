@@ -14,6 +14,7 @@ import { buildScenariosTools } from './scenarios.js';
 import { buildEnvironmentsTools } from './environments.js';
 import { buildPlansTools } from './plans.js';
 import { buildStageTools } from './stage-tools.js';
+import { buildCaseOpsTools } from './case-ops-tools.js';
 
 export type { SpaceToolsContext } from './context.js';
 export { emitStage, type StageKind } from './stage.js';
@@ -34,6 +35,13 @@ export {
   type StageDoc,
   type StageKind as StageObjectKind,
 } from './stage-tools.js';
+export {
+  buildCaseOpsTools,
+  STAGE_CASE_OP_GUIDELINES,
+  stageCaseOp,
+  applyCaseOp,
+  type StageCaseOpInput,
+} from './case-ops-tools.js';
 
 export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   const tools: ToolExecutor[] = [];
@@ -41,9 +49,12 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   // 调用收到"尚未就绪"错误(而非工具缺席导致 AI 困惑)。
   tools.push(...buildRepoSandboxTools(() => repoToolCwd(ctx.repo)));
   tools.push(buildAnnounceTool(ctx), buildInspectTool(ctx));
-  // stage_* 与 manage_* 并列：创建类对象优先走 stage_*（用户预览/勾选/选分组后再落库）；
-  // manage_* 仍负责实时写与改/删（保留既有工作流）。
+  // stage_* / stage_case_op / manage_* 三个家族并存：
+  //   - stage_case     → 暂存「全新用例」，用户在 StagePanel 勾选 → 选目标分组 → 落库
+  //   - stage_case_op  → 暂存「对已有用例/步骤的修改」，同上
+  //   - manage_cases   → 仅负责 search/get/create_group（实时读 + 仅分组创建仍保留实时写）
   tools.push(...buildStageTools(ctx));
+  tools.push(...buildCaseOpsTools(ctx));
   tools.push(...buildCasesTools(ctx));
   tools.push(...buildScenariosTools(ctx));
   tools.push(...buildEnvironmentsTools(ctx));

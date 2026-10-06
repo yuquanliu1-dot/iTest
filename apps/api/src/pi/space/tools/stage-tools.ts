@@ -6,12 +6,12 @@
  * 与 ai_workspace_*（requirementId-keyed）不共享；这里按 (threadId, localId) 复合主键，
  * 落到 ai_stage_* 表。前端 StagePanel 勾选 → /stage/save 一次性落正式表。
  */
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
 import { db } from '../../../db/client.js';
 import {
-  aiStageCases, aiStageEnvironments, aiStagePlans, aiStageScenarios,
+  aiStageCaseOps, aiStageCases, aiStageEnvironments, aiStagePlans, aiStageScenarios,
 } from '../../../db/schema.js';
 import { HttpError } from '../../../middleware/errorHandler.js';
 import type { ToolExecutor } from '../../tools.js';
@@ -22,8 +22,8 @@ import { emitStage } from './stage.js';
 // Types (与前端 StageDoc 镜像)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type StageKind = 'case' | 'scenario' | 'environment' | 'plan';
-export const STAGE_KINDS: StageKind[] = ['case', 'scenario', 'environment', 'plan'];
+export type StageKind = 'case' | 'case_op' | 'scenario' | 'environment' | 'plan';
+export const STAGE_KINDS: StageKind[] = ['case', 'case_op', 'scenario', 'environment', 'plan'];
 
 export interface StagedCase {
   localId: string;
@@ -54,11 +54,21 @@ export interface StagedPlan {
   environmentId?: string | null;
   caseLocalIds: string[];
 }
+export interface StagedCaseOp {
+  localId: string;
+  caseId: string;
+  op: 'update_case' | 'delete_case' | 'move_case' | 'update_step' | 'insert_step' | 'delete_step' | 'move_step';
+  payload: unknown;
+  summary: string;
+  diff?: string;
+}
+
 export interface StageDoc {
   cases: Array<StagedCase & { stagedAt: string }>;
   scenarios: Array<StagedScenario & { stagedAt: string }>;
   environments: Array<StagedEnvironment & { stagedAt: string }>;
   plans: Array<StagedPlan & { stagedAt: string }>;
+  caseOps: Array<StagedCaseOp & { stagedAt: string }>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,19 +116,32 @@ function asStagedPlan(row: typeof aiStagePlans.$inferSelect): StagedPlan & { sta
     stagedAt: row.stagedAt.toISOString(),
   };
 }
+function asStagedCaseOp(row: typeof aiStageCaseOps.$inferSelect): StagedCaseOp & { stagedAt: string } {
+  return {
+    localId: row.localId,
+    caseId: row.caseId,
+    op: row.op as StagedCaseOp['op'],
+    payload: row.payload,
+    summary: row.summary,
+    diff: row.diff ?? undefined,
+    stagedAt: row.stagedAt.toISOString(),
+  };
+}
 
 export async function listStage(threadId: string): Promise<StageDoc> {
-  const [cRows, sRows, eRows, pRows] = await Promise.all([
+  const [cRows, sRows, eRows, pRows, opRows] = await Promise.all([
     db.select().from(aiStageCases).where(eq(aiStageCases.threadId, threadId)),
     db.select().from(aiStageScenarios).where(eq(aiStageScenarios.threadId, threadId)),
     db.select().from(aiStageEnvironments).where(eq(aiStageEnvironments.threadId, threadId)),
     db.select().from(aiStagePlans).where(eq(aiStagePlans.threadId, threadId)),
+    db.select().from(aiStageCaseOps).where(eq(aiStageCaseOps.threadId, threadId)).orderBy(asc(aiStageCaseOps.stagedAt)),
   ]);
   return {
     cases: cRows.map(asStagedCase),
     scenarios: sRows.map(asStagedScenario),
     environments: eRows.map(asStagedEnvironment),
     plans: pRows.map(asStagedPlan),
+    caseOps: opRows.map(asStagedCaseOp),
   };
 }
 
@@ -152,6 +175,12 @@ export async function deleteStaged(
     const r = await db.delete(aiStagePlans)
       .where(and(eq(aiStagePlans.threadId, threadId), inArray(aiStagePlans.localId, localIds)))
       .returning({ localId: aiStagePlans.localId });
+    removed += r.length;
+  }
+  if (kinds.includes('case_op')) {
+    const r = await db.delete(aiStageCaseOps)
+      .where(and(eq(aiStageCaseOps.threadId, threadId), inArray(aiStageCaseOps.localId, localIds)))
+      .returning({ localId: aiStageCaseOps.localId });
     removed += r.length;
   }
   return removed;
@@ -304,13 +333,15 @@ const StagePlanInput = z.object({
 
 export const STAGE_PROMPT_GUIDELINES = [
   '需要创建用例/场景/环境/计划时,优先调用 stage_case / stage_scenario / stage_environment / stage_plan ——对象先暂存在草稿区,用户在右侧 StagePanel 勾选并选目标分组后才会正式落库。',
+  '修改已有用例(更新元数据/删除/移动分组)或编辑其步骤(重编译 / 改 instruction / 插入 / 删除 / 排序)统一走 stage_case_op —— 详见该工具 promptGuidelines。manage_cases 已下线 update/delete/move_group 写动作,只剩 search/get/create_group。',
   'localId 由你（LLM）用 UUID v4 自生成（如 crypto.randomUUID()）,相同 localId 重复 stage 是幂等 UPSERT,可放心重发。',
-  '不要直接用 manage_cases / manage_environments / manage_plans 的 create/upsert ——那些是实时写,会跳过用户的预览选择阶段。',
+  '不要直接用 manage_cases 的 update/delete/move_group —— 那些 action 已下线,请改走 stage_case_op。',
   'stage_case 的每条 step 必须输出 compiled 字段（DSL 步骤数组,回放直接执行,保存时不再编译）。规则：',
   '- compiled 是 JSON 数组,元素形如 {"kind": "...", ...}；允许 kind：navigate {url} / click {locator} / fill {locator, value} / hover {locator} / waitFor {locator, timeoutMs?} / assertText {locator, equals} / assertVisible {locator} / check {locator, checked} / select {locator, value} / extract {locator, varName} / aiTask {instruction}（运行时智能体执行,不预编译,原样保留）。禁止输出 aiStep。',
   '- locator 是 [{"strategy":"...","value":"..."}] 的一层数组,可给多个候选按序探测;strategy 只能是 "role" | "text" | "testId" | "css" | "xpath";role 的 value 形如 "textbox[name=\'用户名\']" 且必须小写。',
   '- navigate 的 url 必须是绝对 URL,且必须使用上下文里的真实页面 URL（host:port/path 原样保留）,禁止臆造 http://localhost:5173/...。没拿到 URL 时,生成用例前先调用 inspect_page 抓取真实页面,从抓取结果里取真实 URL 与 locator,禁止凭「典型实现」编造 testid/id。',
   '- inspect_page 快照仅为页面初始状态:点击/提交后才出现的元素（结果区、错误提示）不在清单中。断言这类元素必须先触发对应操作再断言,或断言清单中其稳定的父容器;快照与动态都确认不了的元素用 role/text 定位。',
+  '- case 的「初始化导航 URL」(stage_case 的 url 字段)回放开始时已由系统执行,steps 里不要再写一条 {kind:"navigate", url: case.url} —— 重复导航既慢又让 locator 校验/网络抓取做两遍。step 真的意图是跳到不同页面/子路由时才写 navigate(url=目标 URL);只是「到登录页开始操作」时,不要写 navigate,直接 fill/click 即可。',
   '- 末尾断言（强约束）:步骤执行后若有可观察结果,断言必须基于真实可见元素——优先 assertVisible（元素级,不依赖文案）;次之 assertText + locator + match:"contains"。禁止使用 target:"page" 的整页模糊自由文本断言（例「登录页正常加载」）,它对任何页面都命中,掩盖回放失败。navigate 步骤本身不要补断言。',
   '- 若 step 没有可观察结果（如「打开某页」）,不要补任何断言。',
   '- 若判断无法可靠编译（指令过于模糊、需视觉识别但无 #cssSelector 占位）,把 compiled 设为 null 表示「已放弃」。注意 null ≠ []:空数组在回放里等价于「什么都不做」,会隐藏失败;放弃语义必须用 null。',

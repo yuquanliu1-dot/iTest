@@ -143,6 +143,34 @@ export const aiStageCases = pgTable(
   }),
 );
 
+/** 版本空间助手「修改已有用例/步骤」暂存表。
+ *  对应 stage_case_op 工具（单工具多 action）。PK = (threadId, localId)，与 stage_cases 风格一致。
+ *  - op:update_case/delete_case/move_case/update_step/insert_step/delete_step/move_step
+ *  - payload:zod 校验后的具体 op 输入（patch、targetGroupId、stepId、order、compiled、instruction…）
+ *  - summary:前端 StagePanel 渲染的行级一句话描述
+ *  - diff:与原值的对比（update_case/move_case/update_step/move_step 填；delete_* 不填）
+ *  用户在 StagePanel 勾选 → POST /threads/:id/stage/save 一次性落库（顺序：cases→scenarios→environments→plans→caseOps）。
+ */
+export const aiStageCaseOps = pgTable(
+  'ai_stage_case_ops',
+  {
+    threadId: text('thread_id').notNull(),
+    localId: text('local_id').notNull(),
+    versionId: uuid('version_id').notNull(),
+    caseId: uuid('case_id').notNull(),
+    op: varchar('op', { length: 30 }).notNull(),
+    payload: jsonb('payload').notNull(),
+    summary: text('summary').notNull(),
+    diff: text('diff'),
+    stagedAt: timestamp('staged_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.threadId, t.localId] }),
+    versionIdx: index('ai_stage_case_ops_version_idx').on(t.versionId),
+    caseIdx: index('ai_stage_case_ops_case_idx').on(t.caseId),
+  }),
+);
+
 export const aiStageScenarios = pgTable(
   'ai_stage_scenarios',
   {
@@ -220,22 +248,9 @@ export const testSteps = pgTable('test_steps', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
-export const agentRuns = pgTable('agent_runs', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  targetType: varchar('target_type', { length: 30 }).notNull(),
-  targetId: uuid('target_id').notNull(),
-  status: varchar('status', { length: 20 }).notNull(),
-  prompt: text('prompt').notNull(),
-  result: jsonb('result'),
-  error: text('error'),
-  startedAt: timestamp('started_at').defaultNow().notNull(),
-  finishedAt: timestamp('finished_at'),
-});
-
 export const reports = pgTable('reports', {
   id: uuid('id').primaryKey().defaultRandom(),
   caseId: uuid('case_id').references(() => testCases.id, { onDelete: 'cascade' }).notNull(),
-  agentRunId: uuid('agent_run_id').references(() => agentRuns.id),
   status: varchar('status', { length: 20 }).notNull(),
   durationMs: integer('duration_ms'),
   stepResults: jsonb('step_results').notNull(),
