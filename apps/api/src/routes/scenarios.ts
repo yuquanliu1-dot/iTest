@@ -13,6 +13,8 @@ import {
   requirementProjectId,
   scenarioProjectId,
 } from '../services/scenarios.service.js';
+import { cache, wrap } from '../lib/cache.js';
+import { scenariosForProjectKey, scenariosForRequirementKey } from '../lib/cache-keys.js';
 
 export const scenariosRoute = Router({ mergeParams: true });
 
@@ -32,18 +34,21 @@ scenariosRoute.get('/', async (req, res) => {
   const rid = (req.params as { requirementId?: string }).requirementId;
   if (projectId) {
     await assertProjectVisible(projectId, req.user!);
-    res.json(await listScenariosByProject(projectId));
+    const rows = await wrap(scenariosForProjectKey(projectId), 5 * 60_000, () => listScenariosByProject(projectId));
+    res.json(rows);
     return;
   }
   if (!rid) throw new HttpError(400, 'bad_request', 'projectId or requirementId required');
   const pid = await requirementProjectId(rid);
   if (!pid) throw new HttpError(404, 'not_found', 'requirement not found');
   await assertProjectVisible(pid, req.user!);
-  const rows = await db
-    .select()
-    .from(scenarios)
-    .where(eq(scenarios.requirementId, rid))
-    .orderBy(scenarios.order, scenarios.createdAt);
+  const rows = await wrap(scenariosForRequirementKey(rid), 5 * 60_000, async () => {
+    return db
+      .select()
+      .from(scenarios)
+      .where(eq(scenarios.requirementId, rid))
+      .orderBy(scenarios.order, scenarios.createdAt);
+  });
   res.json(rows);
 });
 
@@ -53,7 +58,10 @@ scenariosRoute.post('/', async (req, res) => {
   if (!pid) throw new HttpError(404, 'not_found', 'requirement not found');
   await assertProjectVisible(pid, req.user!);
   const body = CreateBody.parse(req.body);
-  res.json(await createScenario(rid, body));
+  const created = await createScenario(rid, body);
+  await cache.del(scenariosForProjectKey(pid));
+  await cache.del(scenariosForRequirementKey(rid));
+  res.json(created);
 });
 
 scenariosRoute.patch('/:id', async (req, res) => {
@@ -61,7 +69,11 @@ scenariosRoute.patch('/:id', async (req, res) => {
   if (!pid) throw new HttpError(404, 'not_found', 'scenario not found');
   await assertProjectVisible(pid, req.user!);
   const body = PatchBody.parse(req.body);
-  res.json(await updateScenario(req.params.id!, body));
+  const updated = await updateScenario(req.params.id!, body);
+  await cache.del(scenariosForProjectKey(pid));
+  // 通过 scenario → requirement 反查
+  await cache.del(scenariosForRequirementKey(updated.requirementId));
+  res.json(updated);
 });
 
 scenariosRoute.delete('/:id', async (req, res) => {
@@ -70,5 +82,6 @@ scenariosRoute.delete('/:id', async (req, res) => {
   await assertProjectVisible(pid, req.user!);
   // FK ON DELETE SET NULL: cases 自动解除绑定；不要 409
   await deleteScenario(req.params.id!);
+  await cache.del(scenariosForProjectKey(pid));
   res.json({ ok: true });
 });

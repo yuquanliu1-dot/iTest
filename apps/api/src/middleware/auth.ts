@@ -5,6 +5,8 @@ import { users } from '../db/schema.js';
 import { HttpError } from './errorHandler.js';
 import { verifySessionToken, type AuthUser } from '../services/auth.service.js';
 import { isPathInSubtree } from '../services/org-path.js';
+import { wrap } from '../lib/cache.js';
+import { tokenVersionKey } from '../lib/cache-keys.js';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -52,9 +54,13 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     const token = extractAuthToken(req);
     const payload = token ? verifySessionToken(token) : null;
     if (!payload) throw new HttpError(401, 'unauthorized', '未登录或会话已过期');
-    const rows = await db.select({ tokenVersion: users.tokenVersion }).from(users).where(eq(users.id, payload.userId)).limit(1);
-    const row = rows[0];
-    if (!row || row.tokenVersion !== payload.tokenVersion) {
+    // tokenVersion 短缓存(30s):登出/改密走 +1 后旧 JWT 校验失败的入口不会落到缓存键,
+    // 但 30s 内已签发的合法 JWT 仍能命中此处的数据库读取以减少 SQL。
+    const currentVersion = await wrap(tokenVersionKey(payload.userId), 30_000, async () => {
+      const rows = await db.select({ tokenVersion: users.tokenVersion }).from(users).where(eq(users.id, payload.userId)).limit(1);
+      return rows[0]?.tokenVersion ?? null;
+    });
+    if (currentVersion === null || currentVersion !== payload.tokenVersion) {
       throw new HttpError(401, 'unauthorized', '未登录或会话已过期');
     }
     req.user = payload;
