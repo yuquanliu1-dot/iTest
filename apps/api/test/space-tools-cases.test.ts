@@ -5,7 +5,6 @@ import { randomUUID } from 'node:crypto';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 import type { SpaceToolsContext } from '../src/pi/space/tools/context.js';
 import type { ToolExecutor } from '../src/pi/tools.js';
-import { resolveConfirmation } from '../src/pi/space/confirm.js';
 
 // 注意:buildCasesTools 链上静态引入 db/client(DATABASE_URL 在 beforeAll 才指向容器),
 // 必须在测试体内动态 import(与 cases.service.test.ts 同模式),否则查询打到默认本地库。
@@ -42,116 +41,124 @@ function makeCtx(over: Partial<SpaceToolsContext> = {}): { ctx: SpaceToolsContex
   return { ctx, events };
 }
 
-/** execute 在 confirm 前有异步 DB 查询 → 轮询等 confirm_request。 */
-async function untilConfirm(events: Array<Record<string, unknown>>): Promise<string> {
-  for (let i = 0; i < 100; i++) {
-    const e = events.find((x) => x.type === 'confirm_request');
-    if (e) return String(e.confirmId);
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  throw new Error('confirm_request not emitted');
+async function insertVersion(projectId: string, name: string): Promise<string> {
+  return (await pool.query(`INSERT INTO project_versions(project_id, name) VALUES ($1, $2) RETURNING id`, [projectId, name])).rows[0]!.id as string;
+}
+
+async function insertCase(groupId: string, versionId: string | null, title: string): Promise<string> {
+  return (await pool.query(`INSERT INTO test_cases(group_id, version_id, title) VALUES ($1, $2, $3) RETURNING id`, [groupId, versionId, title])).rows[0]!.id as string;
+}
+
+async function insertStep(caseId: number | string, order: number, instruction: string, compiled: unknown): Promise<void> {
+  await pool.query(
+    `INSERT INTO test_steps(case_id, "order", source, instruction, compiled) VALUES ($1, $2, 'manual', $3, $4::jsonb)`,
+    [caseId, order, instruction, compiled === null ? null : JSON.stringify(compiled)],
+  );
 }
 
 describe('manage_cases 工具', () => {
-  it('create:每条 instruction 落 aiTask 行;stage(create) 广播', async () => {
-    const seed = await seedProject(pool);
-    const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
-    const tool = await buildCasesToolsLazy(ctx);
-    const r = await tool.execute({
-      action: 'create', title: '下单流程', groupId: seed.groupId,
-      steps: [
-        { action: '打开首页', assertion: null },
-        { action: '点击下单', assertion: '出现成功提示' },
-      ],
-    });
-    expect(r.ok).toBe(true);
-    const steps = (await pool.query(
-      `SELECT s.instruction, s.compiled FROM test_steps s JOIN test_cases c ON c.id = s.case_id WHERE c.title = '下单流程' ORDER BY s."order"`,
-    )).rows as Array<{ instruction: string; compiled: { kind: string }[] | null }>;
-    expect(steps.map((s) => s.instruction)).toEqual(['打开首页', '点击下单']);
-    expect(steps.every((s) => Array.isArray(s.compiled) && s.compiled.length === 1 && s.compiled[0]!.kind === 'aiTask')).toBe(true);
-    expect(events).toContainEqual(expect.objectContaining({ type: 'stage', kind: 'case', action: 'create' }));
-  }, 30_000);
-
-  it('update:拒绝 → 取消且数据不变;确认 → 生效且 stage 用确认时同一 diff;跨版本 caseId 拒绝', async () => {
-    const seed = await seedProject(pool);
-    const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
-    const tool = await buildCasesToolsLazy(ctx);
-    await tool.execute({ action: 'create', title: '旧名', groupId: seed.groupId });
-    const caseId = (await pool.query(`SELECT id FROM test_cases WHERE title='旧名'`)).rows[0]!.id as string;
-
-    // 拒绝:confirm_request 携带预计算 diff,取消后数据不变
-    events.length = 0;
-    const rejected = tool.execute({ action: 'update', caseId, title: '新名', priority: 'P0' });
-    await untilConfirm(events);
-    const req = events.find((e) => e.type === 'confirm_request') as Record<string, unknown>;
-    expect(req).toMatchObject({ toolName: 'manage_cases', action: 'update', risk: 'update', summary: '更新用例「旧名」' });
-    expect(String(req.diff)).toContain('title: 旧名 → 新名');
-    resolveConfirmation(String(req.confirmId), false);
-    expect(await rejected).toMatchObject({ ok: false, error: '用户取消了该操作' });
-    expect((await pool.query(`SELECT title FROM test_cases WHERE id=$1`, [caseId])).rows[0]!.title).toBe('旧名');
-
-    // 确认:字段生效,stage 用确认时的同一 diff
-    events.length = 0;
-    const approved = tool.execute({ action: 'update', caseId, title: '新名', priority: 'P0' });
-    resolveConfirmation(await untilConfirm(events), true);
-    expect(await approved).toMatchObject({ ok: true });
-    const stage = events.find((e) => e.type === 'stage') as { diff?: string };
-    expect(stage.diff).toContain('title: 旧名 → 新名');
-    expect(stage.diff).toContain('priority: P1 → P0');
-    expect((await pool.query(`SELECT title, priority FROM test_cases WHERE id=$1`, [caseId])).rows[0]).toMatchObject({ title: '新名', priority: 'P0' });
-
-    const other = await seedProject(pool);
-    const { ctx: ctx2 } = makeCtx({ projectId: other.projectId, versionId: other.versionId });
-    const r2 = await (await buildCasesToolsLazy(ctx2)).execute({ action: 'update', caseId, title: '越权' });
-    expect(r2).toMatchObject({ ok: false });
-    expect((r2 as { error: string }).error).toContain('不属于当前版本');
-  }, 30_000);
-
-  it('delete:确认被拒 → 返回取消且用例仍在;确认通过 → 删除', async () => {
-    const seed = await seedProject(pool);
-    const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
-    const tool = await buildCasesToolsLazy(ctx);
-    await tool.execute({ action: 'create', title: '待删用例', groupId: seed.groupId });
-    const realId = (await pool.query(`SELECT id FROM test_cases WHERE title='待删用例'`)).rows[0]!.id as string;
-
-    const rejected = tool.execute({ action: 'delete', caseId: realId });
-    const cid = await untilConfirm(events);
-    resolveConfirmation(cid, false);
-    expect(await rejected).toMatchObject({ ok: false, error: '用户取消了该操作' });
-    expect((await pool.query(`SELECT id FROM test_cases WHERE id=$1`, [realId])).rowCount).toBe(1);
-
-    events.length = 0;
-    const approved = tool.execute({ action: 'delete', caseId: realId });
-    const cid2 = await untilConfirm(events);
-    resolveConfirmation(cid2, true);
-    expect(await approved).toMatchObject({ ok: true });
-    expect((await pool.query(`SELECT id FROM test_cases WHERE id=$1`, [realId])).rowCount).toBe(0);
-  }, 30_000);
-
-  it('归属校验:他项目分组 create/move_group 被拒;search 关键词过滤;create_group 建组可用', async () => {
+  it('search:缺省当前版本;versionId 跨版本检索;他项目版本/分组拒绝;create_group 建组可用', async () => {
     const seed = await seedProject(pool);
     const other = await seedProject(pool);
+    const v1 = await insertVersion(seed.projectId, 'v1');
+    await insertCase(seed.groupId, seed.versionId, '本版登录用例');
+    await insertCase(seed.groupId, v1, '别版登录用例');
+    await insertCase(other.groupId, other.versionId, '他项目用例');
     const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await buildCasesToolsLazy(ctx);
 
-    const badGroup = await tool.execute({ action: 'create', title: 'x', groupId: other.groupId });
-    expect(badGroup).toMatchObject({ ok: false });
+    // 缺省只搜当前版本
+    const cur = await tool.execute({ action: 'search', keyword: '登录' });
+    expect((cur as { ok: true; data: string }).data).toContain('本版登录用例');
+    expect((cur as { ok: true; data: string }).data).not.toContain('别版登录用例');
 
-    const g = await tool.execute({ action: 'create_group', groupName: 'AI分组', groupDefaultUrl: 'https://g.example.com' });
+    // 传 versionId 检索同项目其它版本
+    const cross = await tool.execute({ action: 'search', keyword: '登录', versionId: v1 });
+    expect((cross as { ok: true; data: string }).data).toContain('别版登录用例');
+    expect((cross as { ok: true; data: string }).data).not.toContain('本版登录用例');
+
+    // 他项目版本 / 他项目分组拒绝
+    expect(await tool.execute({ action: 'search', versionId: other.versionId })).toMatchObject({ ok: false });
+    expect(await tool.execute({ action: 'search', groupId: other.groupId })).toMatchObject({ ok: false });
+
+    // create_group 仍实时写
+    const g = await tool.execute({ action: 'create_group', groupName: 'AI分组' });
     expect(g.ok).toBe(true);
-    const gid = (await pool.query(`SELECT id FROM groups WHERE name='AI分组' AND project_id=$1`, [seed.projectId])).rows[0]!.id as string;
+    expect((await pool.query(`SELECT id FROM groups WHERE name='AI分组' AND project_id=$1`, [seed.projectId])).rowCount).toBe(1);
+  }, 30_000);
 
-    await tool.execute({ action: 'create', title: '登录成功用例', groupId: gid });
-    await tool.execute({ action: 'create', title: '支付用例', groupId: gid });
-    const search = await tool.execute({ action: 'search', keyword: '登录' });
-    expect((search as { ok: true; data: string }).data).toContain('登录成功用例');
-    expect((search as { ok: true; data: string }).data).not.toContain('支付用例');
+  it('get:当前版本可读;同项目跨版本可读;跨项目拒绝', async () => {
+    const seed = await seedProject(pool);
+    const other = await seedProject(pool);
+    const v1 = await insertVersion(seed.projectId, 'v1');
+    const curId = await insertCase(seed.groupId, seed.versionId, '本版用例');
+    const v1CaseId = await insertCase(seed.groupId, v1, '别版用例');
+    const otherCaseId = await insertCase(other.groupId, other.versionId, '他项目用例');
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await buildCasesToolsLazy(ctx);
 
-    const caseId = (await pool.query(`SELECT id FROM test_cases WHERE title='登录成功用例'`)).rows[0]!.id as string;
-    const moved = await tool.execute({ action: 'move_group', caseId, targetGroupId: seed.groupId });
-    expect(moved.ok).toBe(true);
-    const crossMove = await tool.execute({ action: 'move_group', caseId, targetGroupId: other.groupId });
-    expect(crossMove).toMatchObject({ ok: false });
+    expect((await tool.execute({ action: 'get', caseId: curId })).ok).toBe(true);
+    expect((await tool.execute({ action: 'get', caseId: v1CaseId })).ok).toBe(true);
+    expect(await tool.execute({ action: 'get', caseId: otherCaseId })).toMatchObject({ ok: false });
+  }, 30_000);
+
+  it('list_versions:列出项目版本并标出当前版本', async () => {
+    const seed = await seedProject(pool);
+    await insertVersion(seed.projectId, 'v1');
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await buildCasesToolsLazy(ctx);
+
+    const r = await tool.execute({ action: 'list_versions' });
+    expect(r.ok).toBe(true);
+    const versions = JSON.parse((r as { ok: true; data: string }).data) as Array<{ name: string; isCurrent: boolean }>;
+    expect(versions.find((v) => v.name === 'v0')).toMatchObject({ isCurrent: true });
+    expect(versions.find((v) => v.name === 'v1')).toMatchObject({ isCurrent: false });
+  }, 30_000);
+
+  it('copy_to_version:跨版本复制(步骤克隆+标题副本);缺省目标=当前版本;显式目标版本;归属拒绝', async () => {
+    const seed = await seedProject(pool);
+    const other = await seedProject(pool);
+    const v1 = await insertVersion(seed.projectId, 'v1');
+    const v2 = await insertVersion(seed.projectId, 'v2');
+    const srcId = await insertCase(seed.groupId, v1, '登录用例');
+    await insertStep(srcId, 0, '打开首页', [{ kind: 'navigate', url: 'https://a.example.com' }]);
+    await insertStep(srcId, 1, '点击登录', null);
+    const otherCaseId = await insertCase(other.groupId, other.versionId, '他项目用例');
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await buildCasesToolsLazy(ctx);
+
+    // 缺省目标 = 当前线程版本(v0)
+    const r = await tool.execute({ action: 'copy_to_version', caseId: srcId, targetGroupId: seed.groupId });
+    expect(r.ok).toBe(true);
+    const copied = (await pool.query(
+      `SELECT id, version_id FROM test_cases WHERE title = '登录用例 副本'`,
+    )).rows[0]!;
+    expect(copied.version_id).toBe(seed.versionId);
+    const steps = (await pool.query(
+      `SELECT instruction, compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
+      [copied.id],
+    )).rows as Array<{ instruction: string; compiled: Array<{ kind: string }> | null }>;
+    expect(steps.map((s) => s.instruction)).toEqual(['打开首页', '点击登录']);
+    expect(steps[0]!.compiled?.[0]?.kind).toBe('navigate');
+    expect(steps[1]!.compiled).toBeNull();
+
+    // 显式目标版本 v2
+    await tool.execute({ action: 'copy_to_version', caseId: srcId, targetGroupId: seed.groupId, versionId: v2 });
+    expect((await pool.query(
+      `SELECT id FROM test_cases WHERE title = '登录用例 副本1' AND version_id = $1`,
+      [v2],
+    )).rowCount).toBe(1);
+
+    // 归属拒绝:他项目源用例 / 他项目目标分组 / 他项目目标版本
+    expect(await tool.execute({ action: 'copy_to_version', caseId: otherCaseId, targetGroupId: seed.groupId }))
+      .toMatchObject({ ok: false });
+    expect(await tool.execute({ action: 'copy_to_version', caseId: srcId, targetGroupId: other.groupId }))
+      .toMatchObject({ ok: false });
+    expect(await tool.execute({ action: 'copy_to_version', caseId: srcId, targetGroupId: seed.groupId, versionId: other.versionId }))
+      .toMatchObject({ ok: false });
+
+    // 不存在的版本
+    expect(await tool.execute({ action: 'copy_to_version', caseId: srcId, targetGroupId: seed.groupId, versionId: randomUUID() }))
+      .toMatchObject({ ok: false });
   }, 30_000);
 });

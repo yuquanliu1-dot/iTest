@@ -5,7 +5,7 @@
  */
 import { asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { caseTags, groups, projects, scenarios, tags, testCases, testSteps } from '../db/schema.js';
+import { caseTags, groups, projects, projectVersions, scenarios, tags, testCases, testSteps } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { resolveEnvironmentProjectId, resolveVersionProjectId } from './projectAccess.js';
@@ -298,4 +298,67 @@ export async function createGroup(projectId: string, input: { name: string; defa
     .insert(groups)
     .values({ projectId, name: input.name, ...(input.defaultUrl !== undefined ? { defaultUrl: input.defaultUrl } : {}) })
     .returning())[0]!;
+}
+
+export async function listVersionsForProject(projectId: string) {
+  return db
+    .select({ id: projectVersions.id, name: projectVersions.name, ref: projectVersions.ref, refKind: projectVersions.refKind })
+    .from(projectVersions)
+    .where(eq(projectVersions.projectId, projectId))
+    .orderBy(asc(projectVersions.createdAt));
+}
+
+function nextCopyTitle(base: string, existing: string[]): string {
+  const taken = new Set(existing);
+  const first = `${base} 副本`;
+  if (!taken.has(first)) return first;
+  let n = 1;
+  while (taken.has(`${base} 副本${n}`)) n++;
+  return `${base} 副本${n}`;
+}
+
+export interface CopyCaseInput {
+  caseId: string;
+  targetGroupId: string;
+  /** null = 沿用源用例所在版本（同版本复制）。 */
+  targetVersionId: string | null;
+}
+
+/** 复制用例到目标分组（可跨版本）：克隆步骤（instruction/compiled/assertion）与标签关联，标题追加「副本 N」。
+ *  只做机械复制；源/目标的存在性与可见性由调用方校验（HTTP 边界查 per-user，AI 工具查项目归属）。 */
+export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: CopyCaseInput) {
+  const src = (await db.select().from(testCases).where(eq(testCases.id, caseId)).limit(1))[0];
+  if (!src) throw new HttpError(404, 'not_found', 'case not found');
+  const siblings = await db.select({ title: testCases.title }).from(testCases).where(eq(testCases.groupId, targetGroupId));
+  const title = nextCopyTitle(src.title, siblings.map((s) => s.title));
+  const inserted = await db
+    .insert(testCases)
+    .values({
+      title,
+      description: src.description,
+      priority: src.priority,
+      groupId: targetGroupId,
+      versionId: targetVersionId ?? src.versionId,
+      url: src.url,
+    })
+    .returning();
+  const newCase = inserted[0]!;
+  const steps = await db.select().from(testSteps).where(eq(testSteps.caseId, caseId)).orderBy(asc(testSteps.order));
+  if (steps.length > 0) {
+    await db.insert(testSteps).values(
+      steps.map((s) => ({
+        caseId: newCase.id,
+        order: s.order,
+        source: s.source,
+        instruction: s.instruction,
+        compiled: s.compiled,
+        assertion: s.assertion,
+      })),
+    );
+  }
+  const srcTagRows = await db.select({ tagId: caseTags.tagId }).from(caseTags).where(eq(caseTags.caseId, caseId));
+  if (srcTagRows.length > 0) {
+    await db.insert(caseTags).values(srcTagRows.map((r) => ({ caseId: newCase.id, tagId: r.tagId })));
+  }
+  return newCase;
 }
