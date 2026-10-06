@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { eq, asc, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { planRuns, planRunCases, executionPlans, testCases } from '../db/schema.js';
+import { planRuns, planRunCases, executionPlans, testCases, reports } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { requestCancel, subscribeRun } from '../execute/runPlan.js';
 import { sseHeaders } from '../sse/pi.js';
@@ -26,7 +26,17 @@ planRunsRoute.get('/:id', async (req, res) => {
     ? await db.select({ id: testCases.id, title: testCases.title }).from(testCases).where(inArray(testCases.id, caseIds))
     : [];
   const titleMap = new Map(titleRows.map((t) => [t.id, t.title]));
-  const cases = caseRows.map((c) => ({ ...c, caseTitle: titleMap.get(c.caseId) ?? null }));
+  // 数据集迭代：批量取全部行 report 的状态，供前端展示「i/N 行通过」
+  const reportIdList = caseRows.flatMap((c) => (Array.isArray(c.reportIds) ? c.reportIds : []));
+  const statusRows = reportIdList.length
+    ? await db.select({ id: reports.id, status: reports.status }).from(reports).where(inArray(reports.id, reportIdList))
+    : [];
+  const statusMap = new Map(statusRows.map((r) => [r.id, r.status]));
+  const cases = caseRows.map((c) => ({
+    ...c,
+    caseTitle: titleMap.get(c.caseId) ?? null,
+    rowStatuses: (c.reportIds ?? []).map((id) => statusMap.get(id) ?? 'unknown'),
+  }));
   res.json({
     ...run,
     planName: plan?.name ?? null,
