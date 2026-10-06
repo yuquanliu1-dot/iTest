@@ -377,7 +377,7 @@ export default function GroupsPage() {
 			{
 				id: 'group',
 				header: '所属分组',
-				width: 'w-[140px]',
+				width: 'w-[10%]',
 				hideBelow: 'lg',
 				cellClassName: 'text-muted-foreground',
 				cell: (c) => (c.groupId ? <span className="truncate">{groupName.get(c.groupId) ?? <EmptyCellValue />}</span> : <EmptyCellValue />),
@@ -385,7 +385,7 @@ export default function GroupsPage() {
 			{
 				id: 'version',
 				header: '版本',
-				width: 'w-[100px]',
+				width: 'w-[7%]',
 				hideBelow: 'lg',
 				cellClassName: 'text-muted-foreground',
 				cell: (c) => (
@@ -397,7 +397,7 @@ export default function GroupsPage() {
 			{
 				id: 'scenario',
 				header: '场景',
-				width: 'w-[140px]',
+				width: 'w-[10%]',
 				hideBelow: 'lg',
 				cellClassName: 'text-muted-foreground',
 				cell: (c) => (
@@ -409,7 +409,7 @@ export default function GroupsPage() {
 			{
 				id: 'tags',
 				header: '标签',
-				width: 'w-[180px]',
+				width: 'w-[12%]',
 				hideBelow: 'md',
 				cell: (c) => {
 					const tags = c.tags ?? [];
@@ -429,13 +429,13 @@ export default function GroupsPage() {
 			{
 				id: 'status',
 				header: '状态',
-				width: 'w-[120px]',
+				width: 'w-[9%]',
 				cell: (c) => <CaseStatusMenu caseId={c.id} status={c.status} projectId={projectId} />,
 			},
 			{
 				id: 'updatedAt',
 				header: '更新时间',
-				width: 'w-[110px]',
+				width: 'w-[8%]',
 				align: 'right',
 				cellClassName: 'text-xs text-muted-foreground tabular-nums',
 				cell: (c) => (c.updatedAt ? <span title={c.updatedAt}>{shortDateTime(c.updatedAt)}</span> : <EmptyCellValue />),
