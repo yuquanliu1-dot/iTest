@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS datasets (
 );
 DO $$ BEGIN
   ALTER TABLE datasets ADD CONSTRAINT datasets_project_name_uq UNIQUE(project_id, name);
-EXCEPTION WHEN duplicate_object THEN null;
+EXCEPTION WHEN duplicate_object OR duplicate_table THEN null;
 END $$;
 DO $$ BEGIN
   ALTER TABLE test_cases ADD COLUMN dataset_id uuid REFERENCES datasets(id) ON DELETE SET NULL;
