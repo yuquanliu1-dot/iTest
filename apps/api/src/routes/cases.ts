@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testCases, groups, scenarios } from '../db/schema.js';
+import { testCases, groups, scenarios, projectVersions } from '../db/schema.js';
 import { eq, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertCaseVisible, assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
@@ -99,10 +99,21 @@ casesRoute.get('/', async (req, res) => {
   // 同手法：批量回填 tags（避免 N+1）
   const caseIds = rows.map((r) => r.id);
   const tagsByCase = await tagsForCases(caseIds);
+  // 批量解析版本名：列表按项目拉取会跨版本混排，前端展示需要名字
+  const vids = [...new Set(rows.map((r) => r.versionId).filter((v): v is string => !!v))];
+  const vById = new Map<string, string>();
+  if (vids.length > 0) {
+    const vRows = await db
+      .select({ id: projectVersions.id, name: projectVersions.name })
+      .from(projectVersions)
+      .where(inArray(projectVersions.id, vids));
+    for (const v of vRows) vById.set(v.id, v.name);
+  }
   res.json(
     rows.map((r) => ({
       ...r,
       scenarioTitle: r.scenarioId ? (sById.get(r.scenarioId)?.title ?? null) : null,
+      versionName: vById.get(r.versionId) ?? null,
       tags: tagsByCase.get(r.id) ?? [],
     })),
   );

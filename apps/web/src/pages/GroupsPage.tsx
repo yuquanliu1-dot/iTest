@@ -383,6 +383,18 @@ export default function GroupsPage() {
 				cell: (c) => (c.groupId ? <span className="truncate">{groupName.get(c.groupId) ?? <EmptyCellValue />}</span> : <EmptyCellValue />),
 			},
 			{
+				id: 'version',
+				header: '版本',
+				width: 'w-[100px]',
+				hideBelow: 'lg',
+				cellClassName: 'text-muted-foreground',
+				cell: (c) => (
+					<span className="truncate" title={c.versionName ?? undefined}>
+						{c.versionName ?? <EmptyCellValue />}
+					</span>
+				),
+			},
+			{
 				id: 'scenario',
 				header: '场景',
 				width: 'w-[140px]',
