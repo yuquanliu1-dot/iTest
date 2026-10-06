@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let app: import('express').Express;
 let projectId: string;
 let groupId: string;
 let versionId: string;
@@ -27,6 +29,18 @@ beforeAll(async () => {
   username = seed.username;
   orgId = seed.orgId;
   orgPath = seed.orgPath;
+  const { default: express } = await import('express');
+  const { datasetsRoute } = await import('../src/routes/datasets.js');
+  const { errorHandler } = await import('../src/middleware/errorHandler.js');
+  app = express();
+  app.use(express.json());
+  const { managerUserOf } = await import('./helpers/auth.js');
+  app.use('/api', (req, _res, next) => {
+    req.user = managerUserOf(userId, username, orgId, orgPath);
+    next();
+  });
+  app.use('/api', datasetsRoute);
+  app.use(errorHandler);
 });
 
 afterAll(async () => {
@@ -191,5 +205,53 @@ describe('datasets.service', () => {
       [created.id],
     );
     await expect(svc.loadDatasetForRun(created.id)).rejects.toThrow('解密失败');
+  });
+});
+
+describe('datasets routes', () => {
+  it('GET /projects/:id/datasets 列表不带 rows；POST 新建', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...body, name: '路由列表' });
+    expect(created.status).toBe(200);
+    expect(created.id ?? created.body.id).toBeTruthy();
+    const list = await request(app).get(`/api/projects/${projectId}/datasets`);
+    expect(list.status).toBe(200);
+    const item = list.body.find((d: { id: string }) => d.id === created.body.id);
+    expect(item.rowCount).toBe(2);
+    expect(item.enabledRowCount).toBe(2);
+    expect(item.rows).toBeUndefined();
+    expect(item.columns).toEqual(body.columns.map((c) => ({ name: c.name, sensitive: c.sensitive })));
+  });
+
+  it('GET 详情敏感格 __masked；PUT 整文档更新', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...body, name: '路由编辑' });
+    const detail = await request(app).get(`/api/projects/${projectId}/datasets/${created.body.id}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.rows[0].cells.password).toEqual({ __masked: true });
+    const updated = await request(app)
+      .put(`/api/projects/${projectId}/datasets/${created.body.id}`)
+      .send({ ...body, name: '路由编辑', rows: [{ disabled: true, cells: { username: 'z', password: { __masked: true } } }] });
+    expect(updated.status).toBe(200);
+    const list = await request(app).get(`/api/projects/${projectId}/datasets`);
+    const item = list.body.find((d: { id: string }) => d.id === created.body.id);
+    expect(item.enabledRowCount).toBe(0);
+  });
+
+  it('DELETE 需确认：先返回 requiresConfirm，confirm=true 后删除并解绑用例', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...body, name: '路由删除' });
+    await pool.query(`INSERT INTO test_cases(group_id, version_id, title, dataset_id) VALUES ($1, $2, '删除绑定', $3)`, [groupId, versionId, created.body.id]);
+    const first = await request(app).delete(`/api/projects/${projectId}/datasets/${created.body.id}`);
+    expect(first.status).toBe(200);
+    expect(first.body).toEqual({ ok: false, requiresConfirm: true, caseCount: 1 });
+    const second = await request(app).delete(`/api/projects/${projectId}/datasets/${created.body.id}?confirm=true`);
+    expect(second.body).toEqual({ ok: true, caseCount: 1 });
+    const gone = await request(app).get(`/api/projects/${projectId}/datasets/${created.body.id}`);
+    expect(gone.status).toBe(404);
+  });
+
+  it('跨项目访问 404（不泄露存在性）', async () => {
+    const other = await pool.query(`INSERT INTO projects(organization_id, name) VALUES ($1, '别家项目') RETURNING id`, [orgId]);
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...body, name: '隔离' });
+    const r = await request(app).get(`/api/projects/${other.rows[0].id}/datasets/${created.body.id}`);
+    expect(r.status).toBe(404);
   });
 });

@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { groups, projects, projectVersions, reports, testCases, testEnvironments, planRuns } from '../db/schema.js';
+import { datasets, groups, projects, projectVersions, reports, testCases, testEnvironments, planRuns } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import type { AuthUser } from './auth.service.js';
 import { visibleOrgIdsFor } from './orgTree.js';
@@ -88,6 +88,24 @@ export async function assertEnvironmentVisible(envId: string, user: AuthUser): P
     .limit(1);
   const projectId = rows[0]?.projectId;
   if (!projectId) throw new HttpError(404, 'not_found', 'environment not found');
+  await assertProjectVisible(projectId, user);
+  return { projectId };
+}
+
+/** 解析 dataset 所属项目 id（dataset → project）；链路不存在返回 null。 */
+export async function resolveDatasetProjectId(datasetId: string): Promise<string | null> {
+  const rows = await db
+    .select({ projectId: datasets.projectId })
+    .from(datasets)
+    .where(eq(datasets.id, datasetId))
+    .limit(1);
+  return rows[0]?.projectId ?? null;
+}
+
+/** dataset 可见性断言：经所属项目判定，404 文案不区分「不存在」与「不可见」。 */
+export async function assertDatasetVisible(datasetId: string, user: AuthUser): Promise<{ projectId: string }> {
+  const projectId = await resolveDatasetProjectId(datasetId);
+  if (!projectId) throw new HttpError(404, 'not_found', 'dataset not found');
   await assertProjectVisible(projectId, user);
   return { projectId };
 }
