@@ -63,6 +63,9 @@ describe('datasets.service', () => {
     const detail = await svc.getDataset(created.id);
     expect(detail!.rows[0].cells.username).toBe('alice');
     expect(detail!.rows[0].cells.password).toEqual({ __masked: true });
+    // 写路径出参也必须是掩码（路由直接 res.json 该返回值）
+    expect(created.rows[0].cells.password).toEqual({ __masked: true });
+    expect(JSON.stringify(created)).not.toContain('pw-1');
   });
 
   it('updateDataset：__masked 回传沿用旧密文（解密可还原），改字符串则重新加密', async () => {
@@ -178,5 +181,15 @@ describe('datasets.service', () => {
     // FK SET NULL：用例自动解绑
     const c = await pool.query(`SELECT dataset_id FROM test_cases WHERE version_id = $1`, [versionId]);
     expect(c.rows[0].dataset_id).toBeNull();
+  });
+
+  it('loadDatasetForRun：敏感格损坏（解密失败）抛 DatasetConfigError', async () => {
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, { ...body, name: '坏密文' });
+    await pool.query(
+      `UPDATE datasets SET rows = jsonb_set(rows, '{0,cells,password}', '{"c":"AAAA","i":"AAAA","t":"AAAA"}') WHERE id = $1`,
+      [created.id],
+    );
+    await expect(svc.loadDatasetForRun(created.id)).rejects.toThrow('解密失败');
   });
 });

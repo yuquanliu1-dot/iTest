@@ -129,24 +129,29 @@ export async function listDatasets(projectId: string) {
   }));
 }
 
-/** 详情出参：敏感格密文 → {__masked:true} 占位，其余明文。 */
-export async function getDataset(datasetId: string) {
-  const d = (await db.select().from(datasets).where(eq(datasets.id, datasetId)).limit(1))[0];
-  if (!d) return null;
-  const sensitive = new Set(d.columns.filter((c) => c.sensitive).map((c) => c.name));
-  const rows = d.rows.map((r) => ({
+/** 出参归一：敏感格密文 → {__masked:true} 占位。 */
+function maskDatasetRows(columns: DatasetColumn[], rows: DatasetRow[]) {
+  const sensitive = new Set(columns.filter((c) => c.sensitive).map((c) => c.name));
+  return rows.map((r) => ({
     disabled: r.disabled,
     cells: Object.fromEntries(
       Object.entries(r.cells).map(([k, v]) => [k, sensitive.has(k) && isEncCell(v) ? DATASET_MASKED_CELL : v]),
     ),
   }));
-  return { ...d, rows };
+}
+
+/** 详情出参：敏感格密文 → {__masked:true} 占位，其余明文。 */
+export async function getDataset(datasetId: string) {
+  const d = (await db.select().from(datasets).where(eq(datasets.id, datasetId)).limit(1))[0];
+  if (!d) return null;
+  return { ...d, rows: maskDatasetRows(d.columns, d.rows) };
 }
 
 export async function createDataset(projectId: string, input: DatasetSaveBody) {
   const normalized = normalizeDataset(input);
   try {
-    return (await db.insert(datasets).values({ projectId, ...normalized }).returning())[0]!;
+    const row = (await db.insert(datasets).values({ projectId, ...normalized }).returning())[0]!;
+    return { ...row, rows: maskDatasetRows(normalized.columns, normalized.rows) };
   } catch (e) {
     if (isUniqueViolation(e)) throw new HttpError(409, 'name_conflict', 'dataset name already exists in this project');
     throw e;
@@ -158,11 +163,12 @@ export async function updateDataset(datasetId: string, input: DatasetSaveBody) {
   if (!prev) throw new HttpError(404, 'not_found', 'dataset not found');
   const normalized = normalizeDataset(input, { columns: prev.columns, rows: prev.rows });
   try {
-    return (await db
+    const row = (await db
       .update(datasets)
       .set({ ...normalized, updatedAt: new Date() })
       .where(eq(datasets.id, datasetId))
       .returning())[0]!;
+    return { ...row, rows: maskDatasetRows(normalized.columns, normalized.rows) };
   } catch (e) {
     if (isUniqueViolation(e)) throw new HttpError(409, 'name_conflict', 'dataset name already exists in this project');
     throw e;
@@ -211,7 +217,11 @@ export async function loadDatasetForRun(datasetId: string): Promise<{
     for (const col of d.columns) {
       const cell = row.cells[col.name];
       if (col.sensitive && isEncCell(cell)) {
-        vars[col.name] = decryptCell(cell);
+        try {
+          vars[col.name] = decryptCell(cell);
+        } catch {
+          throw new DatasetConfigError(`数据集敏感格解密失败（列 ${col.name}，密钥变更或数据损坏）`);
+        }
         values[col.name] = '******';
       } else {
         vars[col.name] = typeof cell === 'string' ? cell : '';
