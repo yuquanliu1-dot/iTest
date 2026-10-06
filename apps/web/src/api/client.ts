@@ -919,8 +919,16 @@ export interface DatasetSummary {
   updatedAt: string;
 }
 export interface DatasetMaskedCell { __masked: true }
-export interface DatasetDetail extends DatasetSummary {
+/** 详情/新建/编辑出参：原始行字段 + 掩码 rows（与 Summary 不同，不含 rowCount/enabledRowCount 统计）。 */
+export interface DatasetDetail {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  columns: Array<{ name: string; sensitive: boolean }>;
   rows: Array<{ disabled: boolean; cells: Record<string, string | DatasetMaskedCell> }>;
+  createdAt: string;
+  updatedAt: string;
 }
 export interface VariableReport {
   undefined: Array<{ stepOrder: number; field: string; name: string }>;
