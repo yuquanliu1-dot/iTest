@@ -4,6 +4,8 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { users } from '../db/schema.js';
 import { membershipsOf } from './orgTree.js';
+import { wrap } from '../lib/cache.js';
+import { meKey } from '../lib/cache-keys.js';
 
 const JWT_SECRET: string = process.env.AUTH_JWT_SECRET ?? ((): string => {
   if (process.env.NODE_ENV === 'production') {
@@ -219,14 +221,21 @@ export async function getMe(userId: string, activeOrgId: string): Promise<{
   activeOrganizationId: string;
   organizations: Array<{ id: string; name: string; parentId: string | null; path: string; isManager: boolean; isUser: boolean }>;
 } | null> {
+  // tokenVersion 由调用方在 JWT 里携带,作为 key 后缀实现版本键:
+  // 登出/改密后 tokenVersion+1,旧 JWT 携带旧 tv → 旧 key 不可达(自然失效),无需主动 del。
+  // activeOrgId 不进 key(用户切换组织时 memberships 没变,允许同 tv 复用)。
   const user = await findById(userId);
   if (!user) return null;
-  const memberships = await membershipsOf(userId);
-  return {
-    user: toSafeUser(user),
-    activeOrganizationId: activeOrgId,
-    organizations: memberships.map((m) => ({ id: m.id, name: m.name, parentId: m.parentId, path: m.path, isManager: m.isManager, isUser: m.isUser })),
-  };
+  // 用空字符串占位让 key 与 tokenVersion 强绑定,避免 activeOrgId 变化引入额外维度
+  const cacheKey = meKey(userId, user.tokenVersion);
+  return wrap(cacheKey, 60_000, async () => {
+    const memberships = await membershipsOf(userId);
+    return {
+      user: toSafeUser(user),
+      activeOrganizationId: activeOrgId,
+      organizations: memberships.map((m) => ({ id: m.id, name: m.name, parentId: m.parentId, path: m.path, isManager: m.isManager, isUser: m.isUser })),
+    };
+  });
 }
 
 /**

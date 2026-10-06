@@ -5,6 +5,10 @@ import { settings } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { getLlmClient, type LLMProvider } from '../agent/llm-client.js';
+import { cache, wrap } from '../lib/cache.js';
+import { settingKey, settingsAllKey } from '../lib/cache-keys.js';
+
+const SETTINGS_TTL_MS = 5 * 60_000;
 
 export const settingsRoute = Router();
 
@@ -21,16 +25,24 @@ const LlmTestBody = z.object({
 });
 
 settingsRoute.get('/', async (_req, res) => {
-  const rows = await db.select().from(settings);
-  const out: Record<string, unknown> = {};
-  for (const row of rows) out[row.key] = row.value;
+  const out = await wrap(settingsAllKey(), SETTINGS_TTL_MS, async () => {
+    const rows = await db.select().from(settings);
+    const acc: Record<string, unknown> = {};
+    for (const row of rows) acc[row.key] = row.value;
+    return acc;
+  });
   res.json(out);
 });
 
 settingsRoute.get('/:key', async (req, res) => {
-  const rows = await db.select().from(settings).where(eq(settings.key, req.params.key));
-  if (rows.length === 0) throw new HttpError(404, 'not_found', `key ${req.params.key} not found`);
-  res.json({ key: rows[0]!.key, value: rows[0]!.value, updatedAt: rows[0]!.updatedAt });
+  const k = req.params.key!;
+  const row = await wrap<{ key: string; value: unknown; updatedAt: Date } | null>(settingKey(k), SETTINGS_TTL_MS, async () => {
+    const rows = await db.select().from(settings).where(eq(settings.key, k));
+    const r = rows[0];
+    return r ? { key: r.key, value: r.value, updatedAt: r.updatedAt } : null;
+  });
+  if (!row) throw new HttpError(404, 'not_found', `key ${k} not found`);
+  res.json(row);
 });
 
 settingsRoute.put('/', async (req, res) => {
@@ -40,6 +52,9 @@ settingsRoute.put('/', async (req, res) => {
     .values({ key: body.key, value: body.value as object })
     .onConflictDoUpdate({ target: settings.key, set: { value: body.value as object, updatedAt: new Date() } })
     .returning();
+  // 失效:整张 settings 字典视图 + 此 key 的单条视图
+  await cache.del(settingsAllKey());
+  await cache.del(settingKey(body.key));
   res.json({ key: rows[0]!.key, value: rows[0]!.value });
 });
 

@@ -6,7 +6,7 @@ import { db } from '../db/client.js';
 import { organizationMembers, organizations, projects, users, projectAssignments as projectAssignmentsTable } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { isManagerOfOrg, requireAuth, requireManager } from '../middleware/auth.js';
-import { getOrgPath, membershipsOf, visibleOrgIdsFor } from '../services/orgTree.js';
+import { getOrgPath, invalidateMemberships, invalidateOrgTree, membershipsOf, visibleOrgIdsFor } from '../services/orgTree.js';
 import { findUserByUsername } from '../services/auth.service.js';
 import { subtreeOrgIds } from '../services/orgTree.js';
 import { isPathInSubtree } from '../services/org-path.js';
@@ -68,6 +68,8 @@ organizationsRoute.post('/', async (req, res) => {
     .insert(organizations)
     .values({ id, name: body.name, parentId: body.parentId, path })
     .returning();
+  // 新建子组织影响所有 path/subtree 视图 + 子树成员的可见列表
+  await invalidateOrgTree();
   res.status(201).json(inserted[0]);
 });
 
@@ -344,6 +346,8 @@ organizationsRoute.post('/:orgId/members', async (req, res) => {
     isManager: body.isManager,
     isUser: body.isUser,
   });
+  // 目标用户的可见组织列表 + 成员身份缓存失效
+  await invalidateMemberships(target.id);
   res.status(201).json({ ok: true });
 });
 
@@ -366,6 +370,7 @@ organizationsRoute.patch('/:orgId/members/:userId', async (req, res) => {
     .where(and(eq(organizationMembers.organizationId, orgId), eq(organizationMembers.userId, userId)))
     .returning({ id: organizationMembers.id });
   if (updated.length === 0) throw new HttpError(404, 'not_found', 'member not found');
+  await invalidateMemberships(userId);
   res.json({ ok: true });
 });
 
@@ -385,5 +390,6 @@ organizationsRoute.delete('/:orgId/members/:userId', async (req, res) => {
     throw new HttpError(409, 'last_membership', '不能移除用户的最后一个组织成员资格');
   }
   await db.delete(organizationMembers).where(and(eq(organizationMembers.organizationId, orgId), eq(organizationMembers.userId, userId)));
+  await invalidateMemberships(userId);
   res.json({ ok: true });
 });

@@ -6,6 +6,8 @@ import { tags, projects, organizations } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible } from '../services/projectAccess.js';
 import { visibleOrgIdsFor } from '../services/orgTree.js';
+import { cache, wrap } from '../lib/cache.js';
+import { tagsKey } from '../lib/cache-keys.js';
 
 // HEX 颜色：可带 # 前缀，最长 16 字符（库列宽）
 const hexColor = z.string().regex(/^#?[0-9a-fA-F]{3,8}$/, 'invalid hex color').max(16);
@@ -48,7 +50,9 @@ tagsRoute.get('/', async (req, res) => {
   if (!projectId) throw new HttpError(400, 'bad_request', 'projectId required');
   await assertProjectVisible(projectId, req.user!);
   const orgId = await resolveOrgIdForProject(projectId);
-  const rows = await db.select().from(tags).where(eq(tags.organizationId, orgId)).orderBy(tags.name);
+  const rows = await wrap(tagsKey(orgId), 5 * 60_000, async () => {
+    return db.select().from(tags).where(eq(tags.organizationId, orgId)).orderBy(tags.name);
+  });
   res.json(rows);
 });
 
@@ -63,6 +67,7 @@ tagsRoute.post('/', async (req, res) => {
       .insert(tags)
       .values({ organizationId: orgId, name: body.name, color: normalizeColor(body.color), description: body.description ?? null })
       .returning();
+    await cache.del(tagsKey(orgId));
     res.json(rows[0]);
   } catch (e) {
     if (isUniqueViolation(e)) throw new HttpError(409, 'tag_name_conflict', `tag "${body.name}" already exists`);
@@ -99,6 +104,7 @@ tagsRoute.patch('/:tagId', async (req, res) => {
       .where(eq(tags.id, tagId))
       .returning();
     if (rows.length === 0) throw new HttpError(404, 'not_found', 'tag not found');
+    await cache.del(tagsKey(row.organizationId));
     res.json(rows[0]);
   } catch (e) {
     if (isUniqueViolation(e)) throw new HttpError(409, 'tag_name_conflict', `tag "${body.name}" already exists`);
@@ -118,6 +124,7 @@ tagsRoute.delete('/:tagId', async (req, res) => {
   if (!visible.has(existing[0].organizationId)) throw new HttpError(404, 'not_found', 'tag not found');
   const rows = await db.delete(tags).where(eq(tags.id, tagId)).returning({ id: tags.id });
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'tag not found');
+  await cache.del(tagsKey(existing[0].organizationId));
   res.json({ ok: true });
 });
 
