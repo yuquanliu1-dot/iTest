@@ -8,7 +8,7 @@ import { db } from '../db/client.js';
 import { caseTags, groups, projects, projectVersions, scenarios, tags, testCases, testSteps } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
-import { resolveEnvironmentProjectId, resolveVersionProjectId } from './projectAccess.js';
+import { resolveDatasetProjectId, resolveEnvironmentProjectId, resolveVersionProjectId } from './projectAccess.js';
 import { migrateAssertion, sanitizeAssertion } from '../lib/step-migration.js';
 
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
@@ -156,6 +156,7 @@ export interface UpdateCasePatch {
   groupId?: string;
   scenarioId?: string | null;
   defaultEnvId?: string | null;
+  datasetId?: string | null;
   windowStrategy?: string;
   windowWidth?: number | null;
   windowHeight?: number | null;
@@ -193,6 +194,11 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
     const envPid = await resolveEnvironmentProjectId(patch.defaultEnvId);
     if (!envPid) throw new HttpError(404, 'not_found', 'environment not found');
     if (envPid !== targetPid) throw new HttpError(400, 'env_project_mismatch', 'environment does not belong to this project');
+  }
+  if (patch.datasetId !== undefined && patch.datasetId !== null) {
+    const dsPid = await resolveDatasetProjectId(patch.datasetId);
+    if (!dsPid) throw new HttpError(404, 'not_found', 'dataset not found');
+    if (dsPid !== targetPid) throw new HttpError(400, 'dataset_project_mismatch', 'dataset does not belong to this project');
   }
   if (patch.tagIds !== undefined) await assertTagsBelongToOrg(patch.tagIds, targetPid);
   const { tagIds, ...rest } = patch;
