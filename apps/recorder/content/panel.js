@@ -1,8 +1,8 @@
 /**
  * 页面内录制控制面板：录制启动时由 background 注入到录制标签页，
  * 默认固定在右下角的玻璃卡片，可通过标题栏拖动到任意位置（限制在视口内）。
- * 样式对齐 iTest 设计 tokens（packages/ui/src/tokens.css）：按钮圆角 6px（sm）、
- * 主操作紫色填充、次操作 ghost + 品牌边、危险 destructive、间距 token 化。
+ * 样式对齐 iTest 设计 tokens（packages/ui/src/tokens.css，CRM shadcn 风）：按钮圆角 5px、
+ * 主操作绿色填充（#006b4f）、次操作 ghost、危险 destructive、间距 token 化。
  * Shadow DOM 隔离，避免与宿主页面样式互相污染。
  */
 (() => {
@@ -23,15 +23,15 @@
     <style>
       :host { all: initial; }
       .panel {
-        font-family: -apple-system, "SF Pro Text", "DM Sans", "Inter", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+        font-family: "Geist Variable", "Geist", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
         width: 240px;
         background: rgba(255, 255, 255, 0.82);
         -webkit-backdrop-filter: blur(14px);
         backdrop-filter: blur(14px);
         border: 1px solid rgba(255, 255, 255, 0.9);
-        border-radius: 14px;
-        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 8px 30px rgba(120, 110, 200, 0.16);
-        color: #232038;
+        border-radius: 8px;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 8px 30px rgba(0, 0, 0, 0.10);
+        color: #171717;
         overflow: hidden;
         user-select: none;
         transition: width 0.15s ease;
@@ -51,13 +51,13 @@
       .title { font-size: 12px; font-weight: 600; flex: 1; white-space: nowrap; }
       .count {
         font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 9999px;
-        background: rgba(124, 92, 252, 0.12); color: #7C5CFC; white-space: nowrap;
+        background: rgba(0, 107, 79, 0.10); color: #006b4f; white-space: nowrap;
       }
       .toggle {
-        border: none; background: transparent; color: #9B97B5; cursor: pointer;
+        border: none; background: transparent; color: #9d9d9d; cursor: pointer;
         font-size: 13px; line-height: 1; padding: 0 2px;
       }
-      .toggle:hover { color: #232038; }
+      .toggle:hover { color: #171717; }
 
       .body { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 6px; }
       .row { display: flex; gap: 6px; }
@@ -65,19 +65,19 @@
       .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 
       .btn {
-        padding: 6px 10px; font-size: 12px; border-radius: 6px; cursor: pointer;
+        padding: 6px 10px; font-size: 12px; border-radius: 5px; cursor: pointer;
         font-family: inherit; line-height: 1.4; text-align: center;
         transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
       }
-      /* 主操作：紫色填充（与中台按钮一致） */
-      .btn.primary { background: #7C5CFC; color: #fff; border: 1px solid #7C5CFC; font-weight: 500; }
-      .btn.primary:hover { background: #6A4AE0; border-color: #6A4AE0; }
-      /* 次操作：浅紫 ghost + 品牌边 */
-      .btn.ghost { background: rgba(124, 92, 252, 0.08); border: 1px solid rgba(124, 92, 252, 0.20); color: #7C5CFC; }
-      .btn.ghost:hover { background: rgba(124, 92, 252, 0.14); border-color: rgba(124, 92, 252, 0.32); }
+      /* 主操作：绿色填充（与中台按钮一致） */
+      .btn.primary { background: #006b4f; color: #fff; border: 1px solid #006b4f; font-weight: 500; }
+      .btn.primary:hover { background: #025e46; border-color: #025e46; }
+      /* 次操作：ghost — 透明底 + 浅灰边 */
+      .btn.ghost { background: transparent; border: 1px solid #e2e2e2; color: #171717; }
+      .btn.ghost:hover { background: #f4f4f4; border-color: #d0d0d0; }
       /* 危险：透明 + 红边 */
-      .btn.danger { background: transparent; border: 1px solid #F04438; color: #F04438; }
-      .btn.danger:hover { background: rgba(240, 68, 56, 0.08); }
+      .btn.danger { background: transparent; border: 1px solid #ae2e24; color: #ae2e24; }
+      .btn.danger:hover { background: rgba(174, 46, 36, 0.08); }
 
       .panel.collapsed { width: auto; }
       .panel.collapsed .body { display: none; }
@@ -85,15 +85,15 @@
       .panel.collapsed .count { margin-right: 2px; }
       .opts { display: flex; flex-direction: column; gap: 4px; padding: 2px 0; }
       .opts label {
-        font-size: 11px; color: #6e6a8a; display: flex; align-items: center; gap: 6px;
+        font-size: 11px; color: #6b6b6b; display: flex; align-items: center; gap: 6px;
         cursor: pointer; user-select: none;
       }
       .opts input[type=number] {
         width: 48px; padding: 2px 4px; font-size: 11px; font-family: inherit;
-        border: 1px solid #d8d4ee; border-radius: 4px; background: #fff; color: #232038;
+        border: 1px solid #e2e2e2; border-radius: 4px; background: #fff; color: #171717;
       }
-      .opts input[type=number]:focus { outline: none; border-color: #7C5CFC; }
-      .opts input[type=checkbox] { accent-color: #7C5CFC; cursor: pointer; }
+      .opts input[type=number]:focus { outline: none; border-color: #006b4f; }
+      .opts input[type=checkbox] { accent-color: #006b4f; cursor: pointer; }
     </style>
     <div class="panel">
       <div class="head">
