@@ -181,6 +181,21 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
 
   const aiCalls7d = 0;
 
+  // 录制活动:按 compiled DSL kind 聚合项目内全部步骤动作(全量,非时间窗)。
+  const recordingRows = await db.execute(sql`
+    SELECT a->>'kind' AS kind, count(*)::int AS count
+    FROM test_steps s
+    JOIN test_cases c ON c.id = s.case_id
+    JOIN "groups" g ON g.id = c.group_id
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.compiled, '[]'::jsonb)) AS a
+    WHERE g.project_id = ${projectId}
+    GROUP BY a->>'kind'
+    ORDER BY count DESC, kind ASC
+  `);
+  const recordingActivity = (recordingRows.rows as Array<{ kind: string; count: number }>).map(
+    (r) => ({ kind: r.kind, count: Number(r.count) }),
+  );
+
   const trend = buildTrend(rs7d, today, days);
   const failMap = new Map<
     string,
@@ -223,7 +238,7 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
     topFailures,
     priorityDistribution,
     plans,
-    recordingActivity: [],
+    recordingActivity,
     aiActivity,
     recentRuns: recent,
   });

@@ -4,14 +4,25 @@ import type { OverviewResponse } from '../api';
 
 type Rec = OverviewResponse['recordingActivity'];
 
+// 与 packages/shared step-dsl.ts 的 StepAction kind 对齐;未列出的 kind 回退显示原始值。
 const KIND_LABEL: Record<string, string> = {
+  navigate: '导航',
   click: '点击',
-  input: '输入',
+  fill: '输入',
   hover: '悬浮',
+  waitFor: '等待',
+  assertText: '断言文本',
+  assertVisible: '断言可见',
+  screenshot: '截图',
   check: '勾选',
+  select: '选择',
   upload: '上传',
-  assert: '断言',
-  variable: '变量',
+  switchTab: '切换标签',
+  aiTask: 'AI 任务',
+  assertJson: '断言JSON',
+  extract: '提取变量',
+  queryDb: '查询数据库',
+  observeLog: '观察日志',
 };
 
 export default function RecordingActivityChart({ data }: { data: Rec }) {
