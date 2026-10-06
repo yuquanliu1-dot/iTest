@@ -243,7 +243,13 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       });
       await db
         .update(planRunCases)
-        .set({ status: r.status, reportId: r.reportId, finishedAt: new Date(), error: r.status === 'failed' ? 'case failed' : null })
+        .set({
+          status: r.status,
+          reportId: r.reportId,
+          ...(r.reportIds ? { reportIds: r.reportIds } : {}),
+          finishedAt: new Date(),
+          error: r.status === 'failed' ? 'case failed' : null,
+        })
         .where(eq(planRunCases.id, ins[0]!.id));
       publish(planRunId, { type: 'plan_run_case_complete', caseId: c.caseId, stepKind: 'business', status: r.status, reportId: r.reportId });
       if (r.status === 'passed') passed += 1;
