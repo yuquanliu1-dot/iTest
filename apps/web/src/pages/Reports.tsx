@@ -12,7 +12,7 @@ import Button from '../components/ui/Button';
 import { EmptyCellValue } from '../components/ui/Table';
 import { DataTable, type DataTableColumn, type DataTableTabs } from '../components/ui/DataTable';
 import { useTableSelection } from '../hooks/useTableSelection';
-import { fullDateTime, shortDateTime } from '../lib/format';
+import { fullDateTime, shortDateTime, formatDuration } from '../lib/format';
 import { useUIStore } from '../stores/ui';
 import {
 	PageShell,
@@ -154,6 +154,19 @@ export default function Executions() {
 			header: '状态',
 			width: 'w-[120px]',
 			cell: (r) => <StatusPill status={r.status}>{r.status}</StatusPill>,
+		},
+		{
+			id: 'duration',
+			header: '耗时',
+			width: 'w-[88px]',
+			hideBelow: 'md',
+			align: 'right',
+			cellClassName: 'text-xs text-muted-foreground tabular-nums',
+			cell: (r) => {
+				const ms = (r as { durationMs?: number | null }).durationMs;
+				const formatted = formatDuration(ms ?? null);
+				return <span title={ms != null ? `${ms} ms` : undefined}>{formatted}</span>;
+			},
 		},
 		{
 			id: 'createdAt',
