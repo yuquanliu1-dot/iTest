@@ -5,11 +5,15 @@ import { db } from '../db/client.js';
 import { testCases, testSteps, reports, groups } from '../db/schema.js';
 import { executeCaseReal, executeCaseInBrowser, type ExecStepResult } from './cdp.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
+import { loadDatasetForRun, type DatasetRowExec } from '../services/datasets.service.js';
 import type { WindowStrategy, PreflightReport } from '@itest/shared';
 
 /**
  * 执行单条用例并落报告。CDP 失败 → 写入 CDPUnavailable 失败报告（不再降级 mock）。
  * 返回 reportId 与最终状态，供单用例路由和执行计划共用。
+ * 数据集绑定（caseRow.datasetId）：N 个启用行 = N 次独立回放 = N 条 report；
+ * 单行失败不中断（每行是独立验证），最终 status 聚合为任一行 failed 即 failed。
+ * 配置错误（无启用行/列名非法/解密失败）直接抛 DatasetConfigError，不产生垃圾 report。
  * `storageState` 用于在执行计划中复用登录准备阶段导出的 cookie/localStorage。
  * `forceFail`（测试用）在进入 CDP 前直接写失败报告，便于 fail_fast 行为测试。
  * `envOverride`（计划级）覆盖用例 defaultEnvId，用于执行计划上下文。
@@ -25,10 +29,39 @@ export async function runCase(
     ownedBrowser?: Browser;
     ownedContext?: BrowserContext;
   },
-): Promise<{ reportId: string; status: string }> {
+): Promise<{ reportId: string; status: string; reportIds?: string[] }> {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
   if (!caseRow) throw new Error('case not found');
 
+  // 数据集绑定：前置校验（0 启用行/列名非法/解密失败）直接抛 DatasetConfigError —— 配置错误不产生垃圾 report。
+  if (caseRow.datasetId) {
+    const plan = await loadDatasetForRun(caseRow.datasetId);
+    const reportIds: string[] = [];
+    let finalStatus = 'passed';
+    for (const row of plan.rows) {
+      // 行失败不中断：任何单行错误已在 runCaseOnce 内记为该行 report failed，这里只聚合。
+      const r = await runCaseOnce(caseId, caseRow, opts, row);
+      reportIds.push(r.reportId);
+      if (r.status !== 'passed') finalStatus = 'failed';
+    }
+    return { reportId: reportIds[0]!, status: finalStatus, reportIds };
+  }
+  return runCaseOnce(caseId, caseRow, opts);
+}
+
+/** 单次执行（数据集模式下每行调一次）。rowPlan 存在时：report 带 rowIndex/快照，执行器注入初始变量。 */
+async function runCaseOnce(
+  caseId: string,
+  caseRow: typeof testCases.$inferSelect,
+  opts: {
+    storageState?: unknown;
+    forceFail?: boolean;
+    envOverride?: { envId: string } | null;
+    ownedBrowser?: Browser;
+    ownedContext?: BrowserContext;
+  } | undefined,
+  rowPlan?: DatasetRowExec,
+): Promise<{ reportId: string; status: string }> {
   // Resolve projectId for project-scoped attachment resolution during playback.
   const group = caseRow.groupId
     ? (await db.select({ projectId: groups.projectId }).from(groups).where(eq(groups.id, caseRow.groupId)))[0]
@@ -43,7 +76,13 @@ export async function runCase(
 
   const inserted = await db
     .insert(reports)
-    .values({ caseId, status: 'running', stepResults: [] as object, summary: 'execution in progress' })
+    .values({
+      caseId,
+      status: 'running',
+      stepResults: [] as object,
+      summary: 'execution in progress',
+      ...(rowPlan ? { datasetRowIndex: rowPlan.rowIndex, datasetSnapshot: rowPlan.snapshot } : {}),
+    })
     .returning();
   const reportId = inserted[0]!.id;
 
@@ -137,6 +176,9 @@ export async function runCase(
       expectedOutcome: caseRow.expectedOutcome ?? null,
       caseTitle: caseRow.title,
       caseUrl: caseRow.url ?? null,
+      ...(rowPlan
+        ? { initialVars: rowPlan.vars, sensitiveVarKeys: rowPlan.sensitiveVarKeys }
+        : {}),
     };
     if (opts?.ownedBrowser && opts?.ownedContext) {
       // 计划级 loginPrepare 链路：在 caller 持有的 chromium + context 中跑（不再注入 storageState，
