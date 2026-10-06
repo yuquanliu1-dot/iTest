@@ -8,6 +8,7 @@ import { useThemeStore } from './stores/theme';
 import LoginPage from './pages/LoginPage';
 import ProjectsHome from './pages/ProjectsHome';
 import EnvironmentsPage from './pages/EnvironmentsPage';
+import DatasetsPage from './pages/DatasetsPage';
 import Dashboard from './pages/Dashboard';
 import AssistantPage from './pages/AssistantPage';
 import AiWorkspacePage from './pages/AiWorkspacePage';
@@ -40,6 +41,8 @@ export default function App() {
         <Route path="/settings" element={<Settings />} />
         {/* 项目级环境维护：不依赖版本上下文，也不要求「进入」过项目（ProjectGuard 校验 store.current） */}
         <Route path="/p/:projectId/environments" element={<EnvironmentsPage />} />
+        {/* 项目级数据集维护：与环境页同层级，不依赖版本上下文 */}
+        <Route path="/p/:projectId/datasets" element={<DatasetsPage />} />
         <Route path="/p/:projectId" element={<ProjectGuard />}>
           {/* 版本化二级路径 /v/:versionId/...：版本号由 ProjectsHome 行「进入」写入 store */}
           <Route path="v/:versionId">

@@ -224,6 +224,19 @@ export const api = {
         body: JSON.stringify(body),
       }),
   },
+  datasets: {
+    list: (projectId: string) => request<DatasetSummary[]>(`/projects/${projectId}/datasets`),
+    get: (projectId: string, id: string) => request<DatasetDetail>(`/projects/${projectId}/datasets/${id}`),
+    create: (projectId: string, body: DatasetSaveBody) =>
+      request<DatasetDetail>(`/projects/${projectId}/datasets`, { method: 'POST', body: JSON.stringify(body) }),
+    update: (projectId: string, id: string, body: DatasetSaveBody) =>
+      request<DatasetDetail>(`/projects/${projectId}/datasets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    remove: (projectId: string, id: string, opts?: { confirm?: boolean }) =>
+      request<{ ok: boolean; requiresConfirm?: boolean; caseCount?: number }>(
+        `/projects/${projectId}/datasets/${id}${opts?.confirm ? '?confirm=true' : ''}`,
+        { method: 'DELETE' },
+      ),
+  },
   executions: {
     list: (params?: { projectId?: string; kind?: 'case' | 'plan' | 'all' }) => {
       const qs = new URLSearchParams();
@@ -274,6 +287,7 @@ export const api = {
         status: CaseStatus;
         tagIds: string[];
         defaultEnvId: string | null;
+        datasetId: string | null;
         /** Track 1：用例级预期描述。空字符串由调用方转 null。 */
         expectedOutcome: string | null;
       }>,
@@ -328,7 +342,7 @@ export const api = {
         { method: 'POST', body: JSON.stringify(body) },
       ),
     execute: (id: string) =>
-      request<{ reportId: string }>(`/cases/${id}/execute`, { method: 'POST' }),
+      request<{ reportId: string; reportIds?: string[] }>(`/cases/${id}/execute`, { method: 'POST' }),
   },
   tags: {
     list: (projectId: string) => request<Tag[]>(`/projects/${projectId}/tags`),
@@ -682,6 +696,8 @@ export interface PlanRunDetail {
     caseId: string;
     caseTitle: string | null;
     reportId: string | null;
+    reportIds?: string[] | null;
+    rowStatuses?: string[];
     order: number;
     status: string;
     stepKind: 'business' | 'login_prepare';
@@ -757,6 +773,7 @@ export interface TestCase {
   windowHeight?: number | null;
   incognito?: boolean;
   defaultEnvId?: string | null;
+  datasetId?: string | null;
   /** Track 1：用例级预期描述（自然语言）。回放结束后由 vision LLM 拿最终截图判定。 */
   expectedOutcome?: string | null;
 }
@@ -881,7 +898,29 @@ export interface TestCaseDetail extends TestCase {
   durationMs: number | null;
   stepResults: unknown;
   summary: string | null;
+  datasetRowIndex?: number | null;
+  datasetSnapshot?: { rowIndex: number; totalRows: number; values: Record<string, string> } | null;
   createdAt: string;
+}
+export interface DatasetSaveBody {
+  name: string;
+  description?: string | null;
+  columns: Array<{ name: string; sensitive?: boolean }>;
+  rows: Array<{ disabled?: boolean; cells: Record<string, unknown> }>;
+}
+export interface DatasetSummary {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  columns: Array<{ name: string; sensitive: boolean }>;
+  rowCount: number;
+  enabledRowCount: number;
+  updatedAt: string;
+}
+export interface DatasetMaskedCell { __masked: true }
+export interface DatasetDetail extends DatasetSummary {
+  rows: Array<{ disabled: boolean; cells: Record<string, string | DatasetMaskedCell> }>;
 }
 export interface VariableReport {
   undefined: Array<{ stepOrder: number; field: string; name: string }>;
