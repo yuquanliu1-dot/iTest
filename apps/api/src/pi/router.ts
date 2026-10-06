@@ -8,7 +8,7 @@ import { db } from '../db/client.js';
 import { aiThreads, requirements } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible, visibleProjectIds } from '../services/projectAccess.js';
-import { sseHeaders, sseSend } from '../sse/agentRunStream.js';
+import { sseHeaders, sseSend } from '../sse/pi.js';
 import type { AuthUser } from '../services/auth.service.js';
 import {
   cancelThread, ensureRecord, sendUserMessage, snapshotOfThread, subscribeThread, threadStatus,

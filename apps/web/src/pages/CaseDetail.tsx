@@ -5,7 +5,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type VariableReport } from '../api/client';
 import { useUIStore } from '../stores/ui';
 import { useRecorderStore } from '../stores/recorder';
-import { useAgentRunStore } from '../stores/agentRun';
 import { useStepClipboard, type StepClip } from '../stores/stepClipboard';
 import Icon from '../components/Icon';
 import CaseStatusMenu from '../components/CaseStatusMenu';
@@ -17,7 +16,6 @@ import Segmented from '../components/ui/Segmented';
 import Toggle from '../components/ui/Toggle';
 import EmptyState from '../components/ui/EmptyState';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
-import AgentStreamPanel from '../components/ui/AgentStreamPanel';
 import StepEditDrawer from '../components/StepEditDrawer';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
@@ -46,12 +44,8 @@ export default function CaseDetail() {
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
   const recorder = useRecorderStore();
-  const pushEvent = useAgentRunStore((s) => s.pushEvent);
-  const clearEvents = useAgentRunStore((s) => s.clear);
   const [tab, setTab] = useState<Tab>('description');
   const [targetUrl, setTargetUrl] = useState('');
-  const [streaming, setStreaming] = useState(false);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(null);
   const [mode, setMode] = useState<'fresh' | 'append' | 'resume' | 'incognito'>('fresh');
   const [resumeTarget, setResumeTarget] = useState<{ stepId: string; order: number } | null>(null);
@@ -79,8 +73,11 @@ export default function CaseDetail() {
   const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [urlDraft, setUrlDraft] = useState('');
   const [urlSaving, setUrlSaving] = useState(false);
+  /** 2026-10-07：AI 补充步骤弹窗输入。让用户写一句补充意图,再跳助手 + 带着意图进 initialMessage。
+   *  不让助手"猜",与行级重编对齐——AI 看快照前先有明确补什么的目标。 */
+  const [genStepsDialogOpen, setGenStepsDialogOpen] = useState(false);
+  const [genStepsIntent, setGenStepsIntent] = useState('');
   /** 行级 AI 重新编译：跟踪当前正在编译的 stepId，避免重复点击。 */
-  const [recompilingId, setRecompilingId] = useState<string | null>(null);
   const editingIdxRef = useRef<number>(-1);
   const editingSnapshotRef = useRef<StepClip | null>(null);
   const historyRef = useRef<StepClip[][]>([]);
@@ -103,8 +100,16 @@ export default function CaseDetail() {
     return !Array.isArray(s.compiled) || s.compiled.length === 0;
   };
 
-  /** 行级重编：把自然语言 instruction 喂给 LLM，回填到对应 step 的 compiled。 */
-  const recompileRow = async (stepId: string) => {
+  /** 跳转到 AI 助手,带 initialMessage 自动起新线程注入首条 prompt。
+   *  跳前 invalidate 用例查询,回 CaseDetail 时数据新鲜(助手对话里完成的修改经 StagePanel 落库后会反映到 ['case', id])。 */
+  const openAssistantWithMessage = (initialMessage: string) => {
+    if (!caseDetail || !projectId || !versionId) return;
+    void qc.invalidateQueries({ queryKey: ['case', id] });
+    navigate(`/p/${projectId}/v/${versionId}/assistant`, { state: { initialMessage } });
+  };
+
+  /** 行级「去助手重编译」：跳 AI 助手,首条 prompt 写明 stepId/order/instruction,引导助手走 stage_case_op(update_step) */
+  const askAssistantToRecompile = (stepId: string) => {
     if (!caseDetail) return;
     const target = caseDetail.steps.find((x) => x.id === stepId);
     if (!target) return;
@@ -113,23 +118,11 @@ export default function CaseDetail() {
       toast('该步骤没有自然语言指令，无法 AI 编译', 'error');
       return;
     }
-    setRecompilingId(stepId);
-    try {
-      // 2026-10-07：行级 AI 编译走 case2script 同款多轮 Agent 回路（带 inspect_page 真实元素）,
-      //   替代旧的单点 LLM 调用 —— 单点调用给不出可靠 locator。
-      const r = await api.cases.aiEditStep(id!, { mode: 'recompile', stepId, instruction: instructionText });
-      if (r.error || !r.step) {
-        toast(r.error ?? '重新编译失败', 'error');
-        return;
-      }
-      // 后端已直接 UPDATE step 行；前端用 refetch 拉回最新
-      qc.invalidateQueries({ queryKey: ['case', id] });
-      toast('AI 已编译完成', 'success');
-    } catch (e) {
-      toast((e as Error).message, 'error');
-    } finally {
-      setRecompilingId(null);
-    }
+    openAssistantWithMessage(
+      `对用例「${caseDetail.title}」(caseId=${id}, versionId=${versionId}) 第 ${target.order} 步重编译。\n` +
+        `instruction: ${JSON.stringify(instructionText)}\n` +
+        `请先 manage_cases get 拿完整步骤与 resolvedUrl,再 inspect_page 抓真实页面元素,然后调用 stage_case_op(action=update_step) 给出新的 compiled 并附 diff。`,
+    );
   };
 
   const replaceSteps = useMutation({
@@ -394,52 +387,24 @@ export default function CaseDetail() {
   }, [recorder, id, qc, toast]);
 
   const genSteps = useMutation({
-    mutationFn: async () => {
-      if (!caseDetail) throw new Error('case not loaded');
-      clearEvents();
-      const run = await api.agentRuns.create({
-        targetType: 'case2script',
-        targetId: id!,
-        prompt: JSON.stringify({
-          title: caseDetail.title,
-          description: caseDetail.description,
-          steps: caseDetail.steps.map((s) =>
-            Array.isArray(s.compiled) && s.compiled.length > 0 ? s.compiled[0] : null,
-          ),
-        }),
-      });
-      setStreaming(true);
-      setActiveRunId(run.id);
-      return new Promise<void>((resolve, reject) => {
-        const es = new EventSource(api.agentRuns.eventsUrl(run.id));
-        es.onmessage = (e) => {
-          try {
-            const payload = JSON.parse(e.data);
-            pushEvent({ type: payload.type, payload });
-            if (payload.type === 'workflow_complete') {
-              es.close();
-              setStreaming(false);
-              toast('步骤已补充', 'success');
-              qc.invalidateQueries({ queryKey: ['case', id] });
-              resolve();
-            }
-            if (payload.type === 'workflow_error') {
-              es.close();
-              setStreaming(false);
-              const msg = typeof payload.error === 'string' ? payload.error : '生成失败';
-              toast(msg, 'error');
-              reject(new Error(msg));
-            }
-          } catch {
-            /* ignore */
-          }
-        };
-        es.onerror = () => {
-          es.close();
-          setStreaming(false);
-          reject(new Error('SSE connection failed'));
-        };
-      });
+    mutationFn: async (intent: string) => {
+      if (!caseDetail || !projectId || !versionId) throw new Error('case/project/version missing');
+      const trimmed = intent.trim();
+      // 2026-10-07：「AI 补充步骤」改为跳 AI 助手 → stage_case_op(action=insert_step)。
+      // AI 在对话里能看到真实页面快照、能选择具体位置与 locator,用户在 StagePanel 勾选确认。
+      // 弹窗让用户写一句"补什么意图",与行级重编对齐:让 AI 看快照前先有明确目标。
+      const intentLine = trimmed ? `补充意图:${trimmed}\n` : '补充意图:由 AI 自行判断用例缺什么步骤。\n';
+      openAssistantWithMessage(
+        `对用例「${caseDetail.title}」(caseId=${id}, versionId=${versionId}) 补充脚本步骤。\n` +
+          `当前标题:${caseDetail.title}\n描述:${caseDetail.description ?? '（无）'}\n` +
+          intentLine +
+          `已有 ${caseDetail.steps.length} 步:\n` +
+          caseDetail.steps
+            .map((s, i) => `${i + 1}. ${(s.instruction ?? '').slice(0, 80)}`)
+            .join('\n') +
+          `\n请先 manage_cases get 拿完整 step 列表,再 inspect_page 抓真实元素,然后调用 stage_case_op(action=insert_step, afterOrder=末位 order) 给出新步骤的 compiled 与 instruction。`,
+      );
+      return Promise.resolve();
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -720,11 +685,6 @@ export default function CaseDetail() {
                     <Button onClick={() => saveRuntime.mutate()} disabled={saveRuntime.isPending}>保存</Button>
                   </div>
                 </div>
-                <AgentStreamPanel
-                  runId={activeRunId}
-                  streaming={streaming}
-                  errorMessage={(genSteps.error as Error | null)?.message}
-                />
                 <div className="bg-card border rounded-[var(--radius-md)] p-5">
                 <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
                   {caseDetail.description ? '描述' : '（无描述）'}
@@ -945,13 +905,12 @@ export default function CaseDetail() {
                             })()}
                             {isUncompiledStep(s) && (
                               <button
-                                onClick={() => recompileRow(s.id)}
-                                disabled={recompilingId === s.id}
+                                onClick={() => askAssistantToRecompile(s.id)}
                                 className="text-[10px] px-2 py-0.5 rounded-full shrink-0 press"
-                                style={{ border: '1px solid var(--warning-soft-border)', color: 'var(--warning)', background: 'var(--warning-soft)', cursor: recompilingId === s.id ? 'wait' : 'pointer' }}
-                                title="该步骤缺少 compiled DSL，回放将被 dispatcher 阻塞。点此调 LLM 重新编译。"
+                                style={{ border: '1px solid var(--warning-soft-border)', color: 'var(--warning)', background: 'var(--warning-soft)' }}
+                                title="该步骤缺少 compiled DSL，回放将被 dispatcher 阻塞。点此跳到 AI 助手走 stage_case_op 重新编译。"
                               >
-                                {recompilingId === s.id ? '编译中…' : 'AI 编译失败 · 点我重编'}
+                                AI 编译失败 · 跳助手重编
                               </button>
                             )}
                             <div className="flex items-center gap-1 shrink-0">
@@ -1177,12 +1136,9 @@ export default function CaseDetail() {
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
                 AI 补充
               </div>
-              <p className="text-[12px] mb-3" style={{ color: 'var(--muted-foreground)' }}>
-                用 AI 根据标题/描述/已有步骤补充更多脚本步骤。
-              </p>
-              <Button onClick={() => genSteps.mutate()} disabled={streaming || genSteps.isPending} className="w-full">
+              <Button onClick={() => setGenStepsDialogOpen(true)} className="w-full">
                 <Icon name="bolt" size={12} />
-                {streaming ? '补充中...' : 'AI 补充步骤'}
+                AI 补充步骤
               </Button>
             </div>
 
@@ -1399,6 +1355,36 @@ export default function CaseDetail() {
               onClick={() => confirmDeleteStep && deleteStep.mutate(confirmDeleteStep.stepId)}
             >
               {deleteStep.isPending ? '删除中...' : '确认删除'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={genStepsDialogOpen} onOpenChange={setGenStepsDialogOpen}>
+        <DialogContent style={{ maxWidth: 480 }}>
+          <DialogHeader><DialogTitle>AI 补充步骤</DialogTitle></DialogHeader>
+          <p className="text-[12px] mb-2" style={{ color: 'var(--muted-foreground)' }}>
+            告诉 AI 想补充哪些步骤（留空则由 AI 自行判断用例缺什么）。跳转后会先看真实页面快照,生成结果会在右侧 StagePanel 预览,你勾选后才落库。
+          </p>
+          <textarea
+            className="input-base input-sm w-full"
+            rows={4}
+            placeholder="例如：补充到首页点击『新建订单』,填写订单号、客户名,提交后断言列表出现新行"
+            value={genStepsIntent}
+            onChange={(e) => setGenStepsIntent(e.target.value)}
+          />
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setGenStepsDialogOpen(false)}>取消</Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                const intent = genStepsIntent;
+                setGenStepsDialogOpen(false);
+                setGenStepsIntent('');
+                genSteps.mutate(intent);
+              }}
+            >
+              <Icon name="bolt" size={12} />
+              让 AI 补充
             </Button>
           </DialogFooter>
         </DialogContent>

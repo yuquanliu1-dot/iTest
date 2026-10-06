@@ -18,6 +18,7 @@ type Tab = Exclude<StageKind, 'group'>;
 
 const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'case', label: '用例' },
+  { key: 'case_op', label: '修改' },
   { key: 'scenario', label: '场景' },
   { key: 'environment', label: '环境' },
   { key: 'plan', label: '计划' },
@@ -25,6 +26,7 @@ const TABS: Array<{ key: Tab; label: string }> = [
 
 const KIND_LABEL: Record<Tab, string> = {
   case: '用例',
+  case_op: '修改',
   scenario: '场景',
   environment: '环境',
   plan: '计划',
@@ -35,9 +37,9 @@ interface Props {
   versionId: string;
 }
 
-/** 把 stagedByThread 的 Map<localId, StagedItem> 拆成四个 Tab 的列表。 */
+/** 把 stagedByThread 的 Map<localId, StagedItem> 拆成五个 Tab 的列表。 */
 function partition(staged: Map<string, StagedItem> | undefined): Record<Tab, StagedItem[]> {
-  const out: Record<Tab, StagedItem[]> = { case: [], scenario: [], environment: [], plan: [] };
+  const out: Record<Tab, StagedItem[]> = { case: [], case_op: [], scenario: [], environment: [], plan: [] };
   if (!staged) return out;
   for (const item of staged.values()) out[item.kind as Tab].push(item);
   return out;
@@ -122,6 +124,7 @@ function useStageDoc(threadId: string): { refetch: () => void } {
 /** 暂存面板：Tabs + 每行复选框 + 「保存选中」按钮。SSE 即时更新 + mount 时拉一次 list 兜底。 */
 export default function StagePanel({ projectId, versionId }: Props) {
   void versionId; // 暂未用；保留为未来「在用例库打开」等跳转入参
+  const qc = useQueryClient();
   // threadId 存 spaceEventsStore,由 SpaceWorkspace mount 时写入;订阅同一 state 规避 window 全局的时序竞态
   const activeThreadId = useSpaceEventsStore((s) => s.threadId);
   const stagedByThread = useSpaceEventsStore((s) =>
@@ -138,6 +141,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
   const total = useMemo(
     () =>
       partitioned.case.length +
+      partitioned.case_op.length +
       partitioned.scenario.length +
       partitioned.environment.length +
       partitioned.plan.length,
@@ -165,17 +169,21 @@ export default function StagePanel({ projectId, versionId }: Props) {
     onSuccess: (res) => {
       const totalSaved =
         (res.savedCases ?? 0) +
+        (res.savedCaseOps ?? 0) +
         (res.savedScenarios ?? 0) +
         (res.savedEnvironments ?? 0) +
         (res.savedPlans ?? 0);
       toast(`已保存 ${totalSaved} 项`, 'success');
       // 同步清空本地视图（SSE remove 事件会再刷一次兜底）
       removeStaged(activeThreadId, 'case', partitioned.case.map((x) => x.localId));
+      removeStaged(activeThreadId, 'case_op', partitioned.case_op.map((x) => x.localId));
       removeStaged(activeThreadId, 'scenario', partitioned.scenario.map((x) => x.localId));
       removeStaged(activeThreadId, 'environment', partitioned.environment.map((x) => x.localId));
       removeStaged(activeThreadId, 'plan', partitioned.plan.map((x) => x.localId));
       setSaveOpen(false);
       void refetch();
+      // 让用户跳回 CaseDetail 时数据新鲜（修改类落库影响具体用例）
+      qc.invalidateQueries({ queryKey: ['cases'] });
     },
     onError: (e: Error) => toast(e.message || '保存失败', 'error'),
   });
@@ -276,6 +284,50 @@ export default function StagePanel({ projectId, versionId }: Props) {
     );
   };
 
+  const renderCaseOpRow = (it: StagedItem) => {
+    const p = it.payload as StageDoc['caseOps'][number];
+    const key = `case_op:${it.localId}`;
+    const checked = !!selection?.has(key);
+    const destructive = p.op === 'delete_case' || p.op === 'delete_step';
+    return (
+      <label key={it.localId} className="flex items-start gap-2 text-[12px] cursor-pointer">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => toggle(activeThreadId, 'case_op', it.localId)}
+        />
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <span
+              className="font-semibold"
+              style={{ color: destructive ? 'var(--destructive, #b91c1c)' : 'inherit' }}
+            >
+              {p.summary}
+            </span>
+            <span
+              className="text-[10px] px-1 rounded"
+              style={{
+                color: 'var(--muted-foreground)',
+                border: '1px solid var(--border)',
+                background: 'var(--popover)',
+              }}
+            >
+              {p.op}
+            </span>
+          </div>
+          {p.diff && (
+            <pre
+              className="mt-1 text-[11px] whitespace-pre-wrap"
+              style={{ color: 'var(--muted-foreground)' }}
+            >
+              {p.diff}
+            </pre>
+          )}
+        </div>
+      </label>
+    );
+  };
+
   const renderTab = () => {
     if (tabItems.length === 0) {
       return (
@@ -287,6 +339,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
     return (
       <div className="flex flex-col gap-2">
         {tab === 'case' && tabItems.map(renderCaseRow)}
+        {tab === 'case_op' && tabItems.map(renderCaseOpRow)}
         {tab === 'scenario' && tabItems.map(renderScenarioRow)}
         {tab === 'environment' && tabItems.map(renderEnvRow)}
         {tab === 'plan' && tabItems.map(renderPlanRow)}
@@ -373,6 +426,9 @@ export default function StagePanel({ projectId, versionId }: Props) {
             cases: partitioned.case
               .filter((x) => selection?.has(`case:${x.localId}`))
               .map((x) => ({ localId: x.localId, groupId })),
+            caseOps: partitioned.case_op
+              .filter((x) => selection?.has(`case_op:${x.localId}`))
+              .map((x) => ({ localId: x.localId })),
             scenarios: partitioned.scenario
               .filter((x) => selection?.has(`scenario:${x.localId}`))
               .map((x) => ({ localId: x.localId })),

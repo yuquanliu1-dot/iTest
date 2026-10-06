@@ -322,21 +322,6 @@ export const api = {
     /** 把自然语言 instruction 编译成 StepAction[] DSL。
      *  返回 { compiled: null, error } 时表示放弃/失败,UI 应让用户重写 instruction。
      *  轻量 LLM 单点调用,只用于 aiTask 子步抽出(走 inspection 不便的极简场景)。 */
-    compileStep: (caseId: string, instruction: string, context?: unknown[]) =>
-      request<{ compiled: import('@itest/shared').StepAction[] | null; error?: string }>(
-        `/cases/${caseId}/steps/compile`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ instruction, context }),
-        },
-      ),
-    /** 行级 AI 重编译：走多轮 Agent 回路 + inspect_page 抓真实元素,落库到 compiled 列。
-     *  返回 { step, error? }。route POST `/cases/:caseId/steps/ai-edit`。 */
-    aiEditStep: (caseId: string, body: { mode: 'recompile'; stepId: string; instruction: string }) =>
-      request<{ step: TestStep | null; error?: string }>(
-        `/cases/${caseId}/steps/ai-edit`,
-        { method: 'POST', body: JSON.stringify(body) },
-      ),
     compileExtract: (caseId: string, body: { description: string; sampleText: string }) =>
       request<{ pattern: string | null; group: number; error?: string }>(
         `/cases/${caseId}/steps/extract/compile`,
@@ -361,12 +346,6 @@ export const api = {
     remove: (id: string) => request<{ ok: boolean }>(`/reports/${id}`, { method: 'DELETE' }),
     removeBatch: (ids: string[]) =>
       request<{ count: number }>('/reports/batch-delete', { method: 'POST', body: JSON.stringify({ reportIds: ids }) }),
-  },
-  agentRuns: {
-    create: (body: { targetType: string; targetId: string; prompt: string; targetGroupId?: string }) =>
-      request<AgentRun>('/agent-runs', { method: 'POST', body: JSON.stringify(body) }),
-    get: (id: string) => request<AgentRun>(`/agent-runs/${id}`),
-    eventsUrl: (id: string) => `${BASE}/agent-runs/${id}/events`,
   },
   recorder: {
     createSession: (
@@ -541,6 +520,7 @@ export const api = {
           savedScenarios: number;
           savedEnvironments: number;
           savedPlans: number;
+          savedCaseOps: number;
           caseIdMap: Record<string, string>;
         }>(`/assistant/threads/${threadId}/stage/save`, {
           method: 'POST',
@@ -835,17 +815,35 @@ export interface StagedPlan {
   caseLocalIds: string[];
   stagedAt: string;
 }
+export interface StageCaseOp {
+  localId: string;
+  caseId: string;
+  op:
+    | 'update_case'
+    | 'delete_case'
+    | 'move_case'
+    | 'update_step'
+    | 'insert_step'
+    | 'delete_step'
+    | 'move_step';
+  payload: unknown;
+  summary: string;
+  diff?: string;
+  stagedAt: string;
+}
 export interface StageDoc {
   cases: StagedStageCase[];
   scenarios: StagedStageScenario[];
   environments: StagedEnvironment[];
   plans: StagedPlan[];
+  caseOps: StageCaseOp[];
 }
 export interface StageSaveBody {
   cases: Array<{ localId: string; groupId: string }>;
   scenarios: Array<{ localId: string }>;
   environments: Array<{ localId: string }>;
   plans: Array<{ localId: string; groupId: string }>;
+  caseOps: Array<{ localId: string }>;
 }
 export interface Tag {
   id: string;
@@ -885,16 +883,6 @@ export interface TestCaseDetail extends TestCase {
   summary: string | null;
   createdAt: string;
 }
-export interface AgentRun {
-  id: string;
-  targetType: string;
-  targetId: string;
-  status: string;
-  prompt: string;
-  result: unknown;
-  error: string | null;
-}
-
 export interface VariableReport {
   undefined: Array<{ stepOrder: number; field: string; name: string }>;
   duplicates: Array<{ name: string; definedAt: number[] }>;

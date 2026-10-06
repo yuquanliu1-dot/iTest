@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import type { Locator, QueryDbAction, ObserveLogAction } from '@itest/shared';
 import type { StepAction } from '@itest/shared';
 import { useQuery } from '@tanstack/react-query';
@@ -32,6 +33,8 @@ function FieldError({ msg }: { msg?: string }) {
 
 /** 步骤编辑抽屉：外壳管类型切换 + 通用字段；DrawerForm 按 kind 重挂载管差异字段。 */
 export default function StepEditDrawer({ initial, mode = 'edit', availableVars = [], caseId, onSave, onClose }: Props) {
+  const navigate = useNavigate();
+  const { projectId: routeProjectId, versionId: routeVersionId } = useParams<{ projectId: string; versionId: string }>();
   const [draft, setDraft] = useState<StepClip>(initial);
   // 通用字段放外壳：类型切换（DrawerForm 重挂载）不丢用户已输入的延迟
   // 2026-10-07 移除 name 输入框：name 列已退役，行级自然语言全部由 rowInstruction 承担。
@@ -108,6 +111,8 @@ interface FormProps {
 }
 
 function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, caseId, buildActionRef, onCancel, onSave, saveLabel, saveMode }: FormProps) {
+  const navigate = useNavigate();
+  const { projectId: routeProjectId, versionId: routeVersionId } = useParams<{ projectId: string; versionId: string }>();
   const action = clip.action as Record<string, unknown>;
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
@@ -159,17 +164,16 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, caseId, bui
   const [tabRef, setTabRef] = useState(String(action.tabRef ?? ''));
   const [shotName, setShotName] = useState(String(action.name ?? ''));
 
+  // 2026-10-06：行级 compiled 数组（aiTask 用得到）。其余 kind
+  //   由 buildAction 自然回填到 compiled=[action]，与 dispatcher 走同一条路径。
+  // 2026-10-07：aiTask 编译改为跳 AI 助手走 stage_case_op(action=update_step / insert_step),
+  //   这里只读 display — 落库完全由助手在 StagePanel 勾选后回写。
+  const initialDraftCompiled: unknown[] | null = Array.isArray(clip.compiled) ? clip.compiled : null;
+  const [compiled] = useState<unknown[] | null>(initialDraftCompiled);
+
   // extract 智能抽取编译（沿用历史变量名 compiling/compileErr）
   const [compiling, setCompiling] = useState(false);
   const [compileErr, setCompileErr] = useState('');
-
-  // 2026-10-06：行级 compiled 数组 + AI 编译状态（aiTask 用得到）。其余 kind
-  //   由 buildAction 自然回填到 compiled=[action]，与 dispatcher 走同一条路径。
-  //   局部遮蔽会丢 extract 状态，所以这里重命名为 aiCompiling/aiCompileErr。
-  const initialDraftCompiled: unknown[] | null = Array.isArray(clip.compiled) ? clip.compiled : null;
-  const [compiled, setCompiled] = useState<unknown[] | null>(initialDraftCompiled);
-  const [aiCompiling, setAiCompiling] = useState(false);
-  const [aiCompileErr, setAiCompileErr] = useState('');
 
   // queryDb / observeLog
   const { data: allowedTablesData } = useQuery({
@@ -625,36 +629,32 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, caseId, bui
             </label>
             <button
               type="button"
-              disabled={aiCompiling || !aiInstruction.trim() || !caseId}
-              onClick={async () => {
-                if (!caseId) return;
-                setAiCompiling(true);
-                setAiCompileErr('');
-                try {
-                  const r = await api.cases.compileStep(caseId, aiInstruction.trim());
-                  if (r.compiled && r.compiled.length > 0) {
-                    setCompiled(r.compiled);
-                  } else {
-                    setAiCompileErr(r.error ?? '编译失败，请改写指令后重试');
-                  }
-                } catch (e) {
-                  setAiCompileErr((e as Error).message);
-                } finally {
-                  setAiCompiling(false);
-                }
+              disabled={!aiInstruction.trim() || !caseId}
+              onClick={() => {
+                if (!caseId || !routeProjectId || !routeVersionId) return;
+                // 2026-10-07：aiTask 子步的「AI 编译」改为跳 AI 助手走 stage_case_op(action=update_step / insert_step)。
+                // 助手能 inspect_page 抓真实元素 + 让用户在 StagePanel 勾选 → 落库。
+                navigate(
+                  `/p/${routeProjectId}/v/${routeVersionId}/assistant`,
+                  {
+                    state: {
+                      initialMessage:
+                        `对 caseId=${caseId} 编辑一个 aiTask 步骤,instruction: ${JSON.stringify(aiInstruction.trim())}。\n` +
+                        `请先 manage_cases get 拿完整用例,再 inspect_page 抓真实元素,然后 stage_case_op(action=update_step 或 insert_step, compiled 里给出 [{kind:'aiTask', instruction:'${aiInstruction.trim().replace(/'/g, "\\'")}'}])。`,
+                    },
+                  },
+                );
               }}
               className="press self-start text-[11px] px-2 py-1 rounded-[var(--radius-sm)] border border-dashed"
               style={{
                 borderColor: 'var(--border)',
-                color: compiled && compiled.length > 0 ? 'var(--success, var(--primary))' : 'var(--muted-foreground)',
+                color: 'var(--muted-foreground)',
                 background: 'var(--popover)',
-                cursor: aiCompiling ? 'wait' : 'pointer',
               }}
-              title={!caseId ? '缺少 caseId' : compiled && compiled.length > 0 ? '已生成 DSL，编辑指令后可重新编译' : '把自然语言指令编译成 StepAction[]'}
+              title="把自然语言指令交给 AI 助手，助手会跳到 StagePanel 预览 → 勾选保存。"
             >
-              {aiCompiling ? '编译中…' : compiled && compiled.length > 0 ? '已编译 · 重新编译' : 'AI 编译'}
+              AI 助手编译
             </button>
-            {aiCompileErr && <p className="text-[11px]" style={{ color: 'var(--destructive)' }}>{aiCompileErr}</p>}
             {compiled && compiled.length > 0 && (
               <p className="text-[11px] font-mono" style={{ color: 'var(--muted-foreground)' }}>
                 已生成 DSL：{compiled.map((c) => (c as { kind?: string }).kind ?? '?').join(' → ')}（保存后回放按 compiled 执行）
