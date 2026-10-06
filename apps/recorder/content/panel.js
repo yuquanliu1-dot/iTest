@@ -108,13 +108,13 @@
           <button class="btn danger stop">停止录制</button>
         </div>
         <div class="opts">
-          <label><input type="checkbox" class="opt-hover" /> 录制 hover 步骤</label>
+          <label title="自动捕获：录制期间光标在元素上停留 ≥500ms 就生成一条 hover 步骤（噪声大，默认关闭）"><input type="checkbox" class="opt-hover" /> 录制 hover 步骤</label>
           <label>fill 合并窗 (ms)<input type="number" class="opt-fill-ms" min="50" max="2000" step="50" value="250" /></label>
         </div>
         <div class="grid">
           <button class="btn ghost feat" data-mode="variable">保存变量</button>
           <button class="btn ghost feat" data-mode="assert">添加断言</button>
-          <button class="btn ghost feat" data-mode="hover">记录悬浮</button>
+          <button class="btn ghost feat" data-mode="hover" title="手动插入：点选页面中的一个元素，立即生成一条 hover 步骤">插入 hover 步骤</button>
           <button class="btn ghost feat" data-mode="ai">AI 自然语言</button>
         </div>
         <button class="btn primary back">返回用例详情页</button>
