@@ -248,6 +248,11 @@ describe('datasets routes', () => {
     expect(gone.status).toBe(404);
   });
 
+  it('名称超 120 字符 → 400（zod max，避免 pg 22001 变 500）', async () => {
+    const r = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...body, name: 'x'.repeat(121) });
+    expect(r.status).toBe(400);
+  });
+
   it('跨项目访问 404（不泄露存在性）', async () => {
     const other = await pool.query(`INSERT INTO projects(organization_id, name) VALUES ($1, '别家项目') RETURNING id`, [orgId]);
     const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...body, name: '隔离' });
