@@ -18,7 +18,7 @@ import {
 export const datasetsRoute = Router();
 
 const SaveBody = z.object({
-  name: z.string().min(1),
+  name: z.string().min(1).max(120),
   description: z.string().nullable().optional(),
   columns: z.array(z.object({ name: z.string(), sensitive: z.boolean().optional() })),
   rows: z.array(z.object({ disabled: z.boolean().optional(), cells: z.record(z.unknown()) })),
