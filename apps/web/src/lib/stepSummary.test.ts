@@ -107,4 +107,43 @@ describe('stepSummary', () => {
     const row: StepRowLike = { instruction: '填邮箱', compiled: [] };
     expect(fullStepDescription(row)).toContain('未编译');
   });
+
+  it('多动作行：stepSummary 枚举整条链（共 N 步）', () => {
+    const row: StepRowLike = {
+      instruction: '登录后点编辑',
+      compiled: [
+        { kind: 'fill', locator: loc('css', '#u'), value: 'admin' },
+        { kind: 'click', locator: loc('css', '#btn') },
+        { kind: 'assertVisible', locator: loc('css', '#modal') },
+      ],
+    };
+    expect(stepSummary(row)).toBe('共 3 步：输入 admin → 点击 css=#btn → 断言可见 css=#modal');
+  });
+
+  it('多动作行：fullStepDescription 按【动作 i/N】分块枚举', () => {
+    const row: StepRowLike = {
+      instruction: '登录后点编辑',
+      compiled: [
+        { kind: 'fill', locator: loc('css', '#u'), value: 'admin' },
+        { kind: 'click', locator: loc('css', '#btn') },
+      ],
+    };
+    const out = fullStepDescription(row);
+    expect(out).toContain('【动作 1/2】');
+    expect(out).toContain('【动作 2/2】');
+    expect(out).toContain('类型：fill');
+    expect(out).toContain('类型：click');
+    expect(out).toContain('自然语言：登录后点编辑');
+  });
+
+  it('单动作行输出与多动作路径无关（保持历史格式）', () => {
+    const row: StepRowLike = {
+      instruction: '点击登录',
+      compiled: [{ kind: 'click', locator: loc('role', 'button') }],
+    };
+    expect(stepSummary(row)).toBe('点击 role=button');
+    const out = fullStepDescription(row);
+    expect(out).toContain('类型：click');
+    expect(out).not.toContain('【动作');
+  });
 });
