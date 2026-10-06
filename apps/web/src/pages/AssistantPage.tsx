@@ -51,6 +51,16 @@ export default function AssistantPage() {
     if (first) setThreadId(first.id);
   }, [threadsQ.data, threadId]);
 
+  // 上一跳带过来的首条 prompt:无论当前是否已有线程,都开一条新会话承载它。
+  // 助手是多会话并存的设计(用户可并行多个任务/多人各自独立),
+  // 把首条 prompt 注入到「最近一条历史线程」会污染原会话;新建独立线程最稳。
+  useEffect(() => {
+    if (!initialMessage || threadId) return;
+    if (create.isPending || create.isSuccess || create.isError) return;
+    create.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialMessage, threadId]);
+
   // mount 时清掉 location.state,避免用户再次进入同名路径又带回 stale initialMessage
   useEffect(() => {
     if (!initialMessage) return;
