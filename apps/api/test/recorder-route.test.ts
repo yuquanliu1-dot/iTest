@@ -133,6 +133,36 @@ describe('recorder routes', () => {
     expect(tcRows.rows[0]!.url).toBe('https://app.example.com/home');
   });
 
+  it('finish merges consecutive fills on the same locator, keeping the last value', async () => {
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'MF', groupId, versionId });
+    const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
+    const session = getSession(s.body.sessionId)!;
+    const locator = [{ strategy: 'css', value: '#auth-password' }];
+    session.steps.push(
+      { action: { kind: 'click', locator: [{ strategy: 'css', value: '#auth-username' }] }, url: 'https://app.example.com/' },
+      // React input remount / 中途停顿产生的碎片 fill（值为累计值）
+      { action: { kind: 'fill', locator, value: 'a', sensitive: true }, url: 'https://app.example.com/' },
+      { action: { kind: 'fill', locator, value: 'admin', sensitive: true }, url: 'https://app.example.com/' },
+      { action: { kind: 'fill', locator, value: 'admin123', sensitive: true }, url: 'https://app.example.com/' },
+      // 中间夹了别的步骤 → 不合并
+      { action: { kind: 'click', locator: [{ strategy: 'css', value: '#submit' }] }, url: 'https://app.example.com/' },
+      { action: { kind: 'fill', locator, value: 'changed' }, url: 'https://app.example.com/' },
+    );
+    const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
+    expect(f.status).toBe(200);
+    expect(f.body.inserted).toBe(4);
+    const rows = await pool.query(
+      `SELECT "order", compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
+      [c.body.id],
+    );
+    const kinds = rows.rows.map((r: { compiled: Array<{ kind: string; value?: string }> }) => r.compiled[0]);
+    expect(kinds.map((a: { kind: string }) => a.kind)).toEqual(['click', 'fill', 'click', 'fill']);
+    expect(kinds[1]!.value).toBe('admin123');
+    expect((kinds[1]! as { sensitive?: boolean }).sensitive).toBe(true);
+    expect(kinds[3]!.value).toBe('changed');
+  });
+
   it('finish falls back to default env base_url when steps carry no url', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     await pool.query(`INSERT INTO test_environments(project_id, name, is_default, base_url) VALUES ($1, '默认', true, $2)`, [projectId, 'https://prod.example.com']);

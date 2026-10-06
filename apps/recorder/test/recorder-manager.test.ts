@@ -505,6 +505,31 @@ describe('RecorderManager — input / aiTask dedup', () => {
     expect(captured[0]!.value).toBe('admin');
   });
 
+  it('skips fill flush when the input was detached mid-typing (React remount)', () => {
+    // 模拟 React controlled input 在校验失败时 remount：旧节点 detach，新节点持有完整值。
+    // flush 到旧节点时必须跳过，否则产出一个前缀碎片 fill（如只有 "a"）。
+    const input = makeEl('<input type="text" name="username" />');
+    dom.window.document.body.appendChild(input);
+    const inp = input as HTMLInputElement;
+    vi.useFakeTimers();
+    const captured: RecordedStep[] = [];
+    const mgr = new RecorderManager();
+    mgr.start((s) => captured.push(s));
+    inp.value = 'a';
+    inp.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    vi.advanceTimersByTime(100);
+    // React remount：旧节点从 DOM 摘除，新节点带着 state 里的完整值继续接收输入。
+    const replacement = makeEl('<input type="text" name="username" />');
+    (replacement as HTMLInputElement).value = 'admin';
+    input.remove();
+    dom.window.document.body.appendChild(replacement);
+    replacement.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    vi.advanceTimersByTime(300);
+    mgr.stop();
+    expect(captured.filter((s) => s.type === 'fill')).toHaveLength(1);
+    expect(captured[0]!.value).toBe('admin');
+  });
+
   it('flushes pending fill on focusout even within the debounce window', () => {
     const input = makeEl('<input type="text" name="username" />');
     dom.window.document.body.appendChild(input);

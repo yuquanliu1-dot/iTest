@@ -85,6 +85,29 @@ recorderRoute.post('/sessions', async (req, res) => {
   });
 });
 
+// 连续同 locator 的 fill 合并：React controlled input 在输入过程中 remount / 用户中途停顿时，
+// recorder 会产多条 fill（值为累计值，回放时逐条执行结果等价但噪音大）。合并保留最后一条的值，
+// 位置取第一条。其他 kind 或 locator 不同不合并（切走再回来填是合法的两步，中间必有其他步骤隔开）。
+type RecordedStepItem = { action?: { kind?: string; locator?: unknown; value?: unknown; sensitive?: unknown } };
+
+function mergeConsecutiveFills(steps: unknown[]): unknown[] {
+  const out: unknown[] = [];
+  for (const step of steps) {
+    const prev = out[out.length - 1] as RecordedStepItem | undefined;
+    const cur = step as RecordedStepItem;
+    if (
+      prev && cur.action?.kind === 'fill' && prev.action?.kind === 'fill'
+      && JSON.stringify(prev.action.locator) === JSON.stringify(cur.action.locator)
+    ) {
+      prev.action.value = cur.action.value;
+      prev.action.sensitive = cur.action.sensitive ?? prev.action.sensitive;
+      continue;
+    }
+    out.push(step);
+  }
+  return out;
+}
+
 recorderRoute.post('/sessions/:id/finish', async (req, res) => {
   const session = getSession(req.params.id);
   if (!session) throw new HttpError(404, 'not_found', 'session not found');
@@ -105,7 +128,8 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
       await db.update(testCases).set({ url: candidate, updatedAt: new Date() }).where(eq(testCases.id, session.caseId));
     }
   }
-  for (const step of session.steps) {
+  const mergedSteps = mergeConsecutiveFills(session.steps);
+  for (const step of mergedSteps) {
     const item = step as { action: unknown; tabRef?: string; componentKind?: string; url?: string };
     StepAction.parse(item.action);
     const action = item.action as { kind?: string; url?: string };

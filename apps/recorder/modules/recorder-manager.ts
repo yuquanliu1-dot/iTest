@@ -188,6 +188,10 @@ export class RecorderManager {
     const { target, intentLocator } = this.pendingFill;
     this.pendingFill = null;
     if (!this.canRecord()) return;
+    // React controlled input 在校验失败/错误提示出现时可能整节点 remount：旧节点被 detach，
+    // 后续输入都进了新节点。旧节点持有的只是当时的值前缀（如 "a"），发射出去就是碎片 fill。
+    // 跳过 detached 目标——新节点的 flush 会带上完整值。
+    if (!target.isConnected) return;
     const value = target.value;
     const isSensitive = target.type === 'password'
       || /password/i.test(target.name ?? '')
