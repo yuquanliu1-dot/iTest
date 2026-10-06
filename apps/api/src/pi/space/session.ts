@@ -4,6 +4,8 @@
  * 事件→react-pi 契约的映射与 pi/session.ts 保持一致;上下文摘要经 system prompt 注入(session 创建时)。
  */
 import { and, eq } from 'drizzle-orm';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { db } from '../../db/client.js';
 import { aiThreads, projectVersions } from '../../db/schema.js';
 import { logger } from '../../logger.js';
@@ -13,7 +15,7 @@ import { readLlmConfig } from '../modelBridge.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
-import { checkoutRepoForVersion, LockTimeoutError, RepoUnavailableError } from '../repo.js';
+import { checkoutRepoForVersion, LockTimeoutError, RepoUnavailableError, REPOS_ROOT, WORKSPACES_ROOT } from '../repo.js';
 import { emptyRepoState, type RepoState } from './tools/context.js';
 import { synthesizeModel, ENV_BY_PROVIDER } from '../session.js';
 
@@ -99,17 +101,20 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
   const unsub = session.subscribe((event) => fanOut(rec, event));
   rec.unsub = unsub;
   records.set(threadId, rec);
-  void checkoutInBackground(row.versionId, repo);
+  // 后台检出：repo 目录位于版本工作空间的 repo/ 子目录。
+  const workspaceDir = path.join(WORKSPACES_ROOT, `v-${row.versionId}`);
+  const repoDir = path.join(workspaceDir, 'repo');
+  void checkoutInBackground(row.versionId, repoDir, repo);
   return rec;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** 后台检出:与 session 构建解耦;锁冲突(并发建线程共享同一次 fetch)等锁后重试,至多 3 次。 */
-async function checkoutInBackground(versionId: string, repo: RepoState): Promise<void> {
+async function checkoutInBackground(versionId: string, repoDir: string, repo: RepoState): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      repo.cwd = await checkoutRepoForVersion(versionId);
+      repo.cwd = await checkoutRepoForVersion(versionId, repoDir);
       return;
     } catch (e) {
       if (e instanceof LockTimeoutError) { await sleep(2_000); continue; }
@@ -238,8 +243,9 @@ export function cancelThread(threadId: string): void {
 /** 空间助手 system prompt:风格约束 + 版本上下文摘要;无摘要时仅风格段(resourceLoader 追加空段无副作用)。 */
 export function buildSpaceSystemPrompt(summaryText: string | null): string {
   const style = '## 输出风格\n- 不要使用 emoji;强调用 markdown 加粗,列举用列表/表格。';
-  if (!summaryText) return style;
-  return `${style}\n\n## 版本空间上下文\n${summaryText}`;
+  const workspace = '## 工作空间\n- 当前目录是版本专属工作空间，项目仓库已检出到 ./repo 子目录；读取代码请优先使用 repo_ls / repo_read / repo_grep 工具。';
+  if (!summaryText) return `${style}\n\n${workspace}`;
+  return `${style}\n\n${workspace}\n\n## 版本空间上下文\n${summaryText}`;
 }
 
 async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<SpaceSessionLike> {
@@ -249,8 +255,20 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
   }
   const { createAgentSession, SessionManager, DefaultResourceLoader, getAgentDir } = await import('@earendil-works/pi-coding-agent');
   const { getBuiltinModel } = await import('@earendil-works/pi-ai/providers/all');
-  const workspaceDir = process.env.PI_WORKSPACE_DIR ?? './.data/pi-sessions';
-  await import('node:fs/promises').then((fs) => fs.mkdir(workspaceDir, { recursive: true }));
+  // 每个版本会话拥有独立工作空间：.data/workspaces/v-<versionId>，项目仓库检出在该空间下的 repo/ 子目录。
+  // Agent 的 cwd 指向工作空间（避免写入污染仓库），repo 工具仍操作 repo/ 子目录。
+  const workspaceDir = path.join(WORKSPACES_ROOT, `v-${ctx.versionId}`);
+  const repoDir = path.join(workspaceDir, 'repo');
+  await fs.mkdir(workspaceDir, { recursive: true });
+  await fs.mkdir(repoDir, { recursive: true });
+  // 兼容旧目录布局：若旧 .data/repos/v-<versionId> 存在而新 repo/ 尚未初始化，直接迁移避免重复克隆。
+  const legacyRepoDir = path.join(REPOS_ROOT, `v-${ctx.versionId}`);
+  const gitDir = path.join(repoDir, '.git');
+  const dirExists = async (p: string) => fs.stat(p).then((s) => s.isDirectory()).catch(() => false);
+  if ((await dirExists(legacyRepoDir)) && !(await dirExists(gitDir))) {
+    await fs.rm(repoDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rename(legacyRepoDir, repoDir).catch(() => {});
+  }
 
   type ToolRaw = {
     name: string; description: string; parameters: ReturnType<typeof Type.Object>;
@@ -288,8 +306,8 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
   } catch (e) {
     logger.warn({ err: e, versionId: ctx.versionId }, 'space summary build failed; continuing without context');
   }
-  // session cwd 固定用平台工作目录:repo 沙箱目录只活在 repo 工具的动态解析里
-  // (后台检出,完成时点不定),不再作为 session 根;loader 因此不读仓库内 CLAUDE.md。
+  // loader 的 cwd 与 session 工作目录都指向版本独立工作空间（仓库在 ./repo 子目录），
+  // 让 AI 对自身所在位置有正确认知，同时避免写入污染仓库检出。
   const loader = new DefaultResourceLoader({
     cwd: workspaceDir,
     agentDir: getAgentDir(),

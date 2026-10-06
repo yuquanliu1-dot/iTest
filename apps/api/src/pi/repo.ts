@@ -11,6 +11,7 @@ import type { ToolExecutor } from './tools.js';
 
 const DATA_DIR = process.env.PI_DATA_DIR ?? path.resolve(process.cwd(), '.data');
 export const REPOS_ROOT = path.join(DATA_DIR, 'repos');
+export const WORKSPACES_ROOT = path.join(DATA_DIR, 'workspaces');
 export const REPO_LOCK_TIMEOUT_MS = 5_000;
 export const REPO_RUN_TIMEOUT_MS = 30_000;
 export const MAX_OUTPUT_CHARS = 30_000;
@@ -82,7 +83,7 @@ export function buildRepoSandboxTools(cwdRoot: string | (() => string)): ToolExe
   return [
     {
       name: 'repo_ls',
-      description: '列出 cwd 下某目录的文件与子目录（不含隐藏文件）。最多 500 项。',
+      description: '列出已检出项目仓库根目录下某目录的文件与子目录（不含隐藏文件）。最多 500 项。',
       parameters: Type.Object({
         path: Type.Optional(Type.String()),
       }),
@@ -103,7 +104,7 @@ export function buildRepoSandboxTools(cwdRoot: string | (() => string)): ToolExe
     },
     {
       name: 'repo_read',
-      description: '读取 cwd 下文本文件的指定行范围（默认前 200 行，最多 500 行）。',
+      description: '读取已检出项目仓库根目录下文本文件的指定行范围（默认前 200 行，最多 500 行）。',
       parameters: Type.Object({
         path: Type.String({ minLength: 1 }),
         offset: Type.Optional(Type.Number({ minimum: 0 })),
@@ -144,7 +145,7 @@ export function buildRepoSandboxTools(cwdRoot: string | (() => string)): ToolExe
     },
     {
       name: 'repo_grep',
-      description: '在 cwd 下用 ripgrep 搜索；输出形如 file:line:text。maxMatches 默认 200。',
+      description: '在已检出项目仓库根目录下用 ripgrep 搜索；输出形如 file:line:text。maxMatches 默认 200。',
       parameters: Type.Object({
         pattern: Type.String({ minLength: 1 }),
         glob: Type.Optional(Type.String()),
@@ -173,7 +174,7 @@ export function buildRepoSandboxTools(cwdRoot: string | (() => string)): ToolExe
     },
     {
       name: 'repo_run',
-      description: '在 cwd 下执行白名单单命令；用于 git log/show/diff/ls-files/grep/status 等二级需求。',
+      description: '在已检出项目仓库根目录下执行白名单单命令；用于 git log/show/diff/ls-files/grep/status 等二级需求。',
       parameters: Type.Object({
         command: Type.String({ minLength: 1, maxLength: 1024 }),
       }),
@@ -360,13 +361,14 @@ async function loadVersionRepo(versionId: string): Promise<ProjectRepo | null> {
   return { repoUrl: row.repoUrl, branch: row.versionRef ?? row.branch, provider: row.provider, pat: row.pat, gitlabOverride: row.gitlabOverride };
 }
 
-/** 版本级 checkout：沙箱目录 v-<versionId> 与需求级隔离；ref 取 version.ref，缺省回落项目默认分支。tag 亦可用（fetch FETCH_HEAD）。 */
-export async function checkoutRepoForVersion(versionId: string): Promise<string> {
+/** 版本级 checkout：沙箱目录 v-<versionId> 与需求级隔离；ref 取 version.ref，缺省回落项目默认分支。tag 亦可用（fetch FETCH_HEAD）。
+ *  可通过 targetDir 指定检出目录，未指定时沿用 .data/repos/v-<versionId>。 */
+export async function checkoutRepoForVersion(versionId: string, targetDir?: string): Promise<string> {
   const info = await loadVersionRepo(versionId);
   if (!info) throw new RepoUnavailableError('no_repo', 'project has no repoUrl configured');
 
-  await fs.mkdir(REPOS_ROOT, { recursive: true });
-  const target = path.join(REPOS_ROOT, `v-${versionId}`);
+  const target = targetDir ?? path.join(REPOS_ROOT, `v-${versionId}`);
+  await fs.mkdir(path.dirname(target), { recursive: true });
 
   if (await dirExists(target)) {
     // 锁定；保证并发只跑一次 fetch
