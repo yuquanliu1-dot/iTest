@@ -106,6 +106,15 @@ async function execAction(page: Page, action: AiAction): Promise<string> {
       const loc = page.locator(action.selector).first();
       await loc.fill('', { timeout: 5000 });
       await loc.pressSequentially(action.value, { delay: 20 });
+      // React 受控表单常在 blur 时才提交 state / 触发校验；与 cdp.ts dispatch fill 保持一致。
+      await page.keyboard.press('Tab').catch(() => undefined);
+      // 简短停顿让 onChange/blur 事件落地（Antd 等库在 blur 后异步校验）。
+      await page.waitForTimeout(80);
+      // 回读确认：若 DOM value 与目标不一致，把实际值反馈给 LLM 以便下轮修正。
+      const actual = await loc.inputValue({ timeout: 3000 }).catch(() => '');
+      if (actual !== action.value) {
+        return `fill ${action.selector}: 实际值 "${actual}" 与目标 "${action.value}" 不一致`;
+      }
       return `fill ${action.selector}: ok`;
     }
     case 'press': {
@@ -296,9 +305,6 @@ export async function runAiTask(page: Page, instruction: string, client: LLMClie
     if (typeof parsed.fail === 'string' && parsed.fail.trim()) {
       throw new Error(`aiTask 放弃：${parsed.fail.trim()}`);
     }
-    if (parsed.done === true) {
-      return typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
-    }
     const actions = (Array.isArray(parsed.actions) ? parsed.actions : [])
       .map(parseAction)
       .filter((a): a is AiAction => a !== null)
@@ -318,6 +324,10 @@ export async function runAiTask(page: Page, instruction: string, client: LLMClie
     }
     if (actions.length === 0) {
       lastResults.push('[system] 没有可执行的动作（actions 为空）。如需结束请输出 done 或 fail。');
+    }
+    // 先执行动作再结束：LLM 可能在 done 响应里携带最终动作（如 fill 验证码）。
+    if (parsed.done === true) {
+      return typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
     }
   }
   throw new Error(`aiTask 超过 ${MAX_TURNS} 轮未完成：${instruction.slice(0, 80)}`);

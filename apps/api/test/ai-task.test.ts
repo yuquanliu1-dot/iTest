@@ -6,6 +6,7 @@ import { runAiTask, solveCaptchaOnce, detectCaptchaFailure } from '../src/execut
 /** 记录调用顺序的桩 Page：screenshot/evaluate/url 走默认值，locator 动作全部记录。 */
 function makeStubPage() {
   const calls: string[] = [];
+  const values: Record<string, string> = {};
   const page = {
     url: () => 'https://sut.example/login',
     screenshot: async () => Buffer.from('png'),
@@ -15,15 +16,19 @@ function makeStubPage() {
     locator: (selector: string) => ({
       first: () => ({
         click: async () => { calls.push(`click:${selector}`); },
-        fill: async (v: string) => { calls.push(`fill:${selector}:${v}`); },
-        pressSequentially: async (v: string) => { calls.push(`type:${selector}:${v}`); },
+        fill: async (v: string) => { calls.push(`fill:${selector}:${v}`); values[selector] = v; },
+        pressSequentially: async (v: string) => { calls.push(`type:${selector}:${v}`); values[selector] = v; },
+        inputValue: async () => {
+          calls.push(`inputValue:${selector}`);
+          return values[selector] ?? '';
+        },
         waitFor: async () => undefined,
         evaluate: async () => undefined,
         screenshot: async () => Buffer.from('zoomed'),
       }),
     }),
   };
-  return { page: page as unknown as Page, calls };
+  return { page: page as unknown as Page, calls, values };
 }
 
 /** 按轮次脚本化回复的 mock LLM；每轮收到完整 userMessage。 */
@@ -98,10 +103,27 @@ describe('runAiTask', () => {
     ]);
     const summary = await runAiTask(page, '识别验证码并填入输入框', llm);
     expect(summary).toBe('已识别并填入验证码');
-    expect(calls).toEqual(['fill:#auth-captcha:', 'type:#auth-captcha:Ab3d', 'click:button[type=submit]']);
+    expect(calls).toEqual([
+      'fill:#auth-captcha:',
+      'type:#auth-captcha:Ab3d',
+      'press:Tab',
+      'wait:80',
+      'inputValue:#auth-captcha',
+      'click:button[type=submit]',
+    ]);
     // 第 2 轮应携带第 1 轮动作结果反馈
     expect(requests[1]).toContain('上轮动作结果');
     expect(requests[1]).toContain('fill #auth-captcha: ok');
+  });
+
+  it('done 响应中携带动作时先执行动作再结束', async () => {
+    const { page, calls } = makeStubPage();
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'click', selector: '#final' }], done: true, summary: '一步完成' },
+    ]);
+    const summary = await runAiTask(page, '一步点击完成', llm);
+    expect(summary).toBe('一步完成');
+    expect(calls).toEqual(['click:#final']);
   });
 
   it('LLM 输出 fail 时立即抛错', async () => {
