@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testCases, testSteps, groups, scenarios, caseTags } from '../db/schema.js';
-import { eq, asc, inArray } from 'drizzle-orm';
+import { testCases, groups, scenarios } from '../db/schema.js';
+import { eq, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertCaseVisible, assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
-import { createCase, deleteCase, getCaseDetail, groupProjectId, tagsForCases, updateCase } from '../services/cases.service.js';
+import { copyCaseCore, createCase, deleteCase, getCaseDetail, groupProjectId, tagsForCases, updateCase } from '../services/cases.service.js';
 
 export const casesRoute = Router();
 
@@ -145,15 +145,6 @@ casesRoute.patch('/:id', async (req, res) => {
   res.json(await updateCase(req.params.id!, body));
 });
 
-async function nextCopyTitle(base: string, existing: string[]): Promise<string> {
-  const taken = new Set(existing);
-  const first = `${base} 副本`;
-  if (!taken.has(first)) return first;
-  let n = 1;
-  while (taken.has(`${base} 副本${n}`)) n++;
-  return `${base} 副本${n}`;
-}
-
 async function copyOneCase(caseId: string, targetGroupId: string, targetVersionId: string | null, user: NonNullable<Express.Request['user']>): Promise<unknown> {
   const src = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
   if (!src) throw new HttpError(404, 'not_found', 'case not found');
@@ -162,49 +153,11 @@ async function copyOneCase(caseId: string, targetGroupId: string, targetVersionI
   const targetGroup = (await db.select().from(groups).where(eq(groups.id, targetGroupId)))[0];
   if (targetGroup) await assertProjectVisible(targetGroup.projectId, user);
   // versionId 未传 → 同版本复制；否则校验属于 targetGroup.projectId
-  let versionId = src.versionId;
   if (targetVersionId) {
     const { projectId: vp } = await assertVersionVisible(targetVersionId, user);
     if (targetGroup && vp !== targetGroup.projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to target project');
-    versionId = targetVersionId;
   }
-  const siblings = await db.select({ title: testCases.title }).from(testCases).where(eq(testCases.groupId, targetGroupId));
-  const title = await nextCopyTitle(src.title, siblings.map((s) => s.title));
-  const steps = await db
-    .select()
-    .from(testSteps)
-    .where(eq(testSteps.caseId, caseId))
-    .orderBy(asc(testSteps.order));
-  const inserted = await db
-    .insert(testCases)
-    .values({
-      title,
-      description: src.description,
-      priority: src.priority,
-      groupId: targetGroupId,
-      versionId,
-      url: src.url,
-    })
-    .returning();
-  const newCase = inserted[0]!;
-  if (steps.length > 0) {
-    await db.insert(testSteps).values(
-      steps.map((s) => ({
-        caseId: newCase.id,
-        order: s.order,
-        source: s.source,
-        instruction: s.instruction,
-        compiled: s.compiled,
-        assertion: s.assertion,
-      })),
-    );
-  }
-  // 复制 src 的标签关联（id 不变，跨项目复制时已被 assertProjectVisible 拦截）
-  const srcTagRows = await db.select({ tagId: caseTags.tagId }).from(caseTags).where(eq(caseTags.caseId, caseId));
-  if (srcTagRows.length > 0) {
-    await db.insert(caseTags).values(srcTagRows.map((r) => ({ caseId: newCase.id, tagId: r.tagId })));
-  }
-  return newCase;
+  return copyCaseCore({ caseId, targetGroupId, targetVersionId });
 }
 
 casesRoute.post('/:id/copy', async (req, res) => {
