@@ -16,7 +16,9 @@
     }
     chrome.runtime.sendMessage({ type: 'step', step, tabRef: currentTabRef });
   };
-  const startCapture = () => manager.start(sendStep);
+  // panel 里切换的录制选项：startCapture 时透传给 manager；页面内面板用 set-options 实时更新。
+  let panelOptions = {};
+  const startCapture = () => manager.start(sendStep, panelOptions);
 
   window.addEventListener('message', (e) => {
     if (e.data?.source !== 'ita-web') return;
@@ -39,6 +41,12 @@
       manager.setPaused(true);
     } else if (msg?.type === 'resume') {
       manager.setPaused(false);
+    } else if (msg?.type === 'set-options') {
+      // panel 里切换 recordHover / fillFlushMs / preferredDataAttribute：实时更新 manager。
+      panelOptions = msg.options ?? {};
+      manager.setOptions(panelOptions);
+      sendResponse({ ok: true });
+      return;
     } else if (msg?.type === 'pick') {
       const prevPaused = manager.isPaused();
       manager.setPaused(true);

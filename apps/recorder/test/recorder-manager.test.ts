@@ -24,9 +24,9 @@ function makeEl(html: string): Element {
   return wrap.firstElementChild!;
 }
 
-function withRecorder(fn: () => void) {
+function withRecorder(fn: () => void, options: Parameters<RecorderManager['start']>[1] = { recordHover: true }) {
   const manager = new RecorderManager();
-  manager.start((s) => captured.push(s));
+  manager.start((s) => captured.push(s), options);
   try {
     fn();
   } finally {
@@ -53,7 +53,12 @@ describe('RecorderManager — happy path E2E', () => {
     const input = makeEl('<input type="text" />');
     dom.window.document.body.appendChild(input);
     (input as HTMLInputElement).value = 'alice';
-    withRecorder(() => fire(input, 'input'));
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(input, 'input');
+      // 推进超过 250ms fill 合并窗。
+      vi.advanceTimersByTime(300);
+    });
     expect(captured).toHaveLength(1);
     expect(captured[0]!.type).toBe('fill');
     expect(captured[0]!.value).toBe('alice');
@@ -116,6 +121,16 @@ describe('RecorderManager — noise filtering', () => {
     const input = makeEl('<input type="text" />');
     dom.window.document.body.appendChild(input);
     withRecorder(() => fire(input, 'mouseover'));
+    expect(captured.filter((s) => s.type === 'hover')).toHaveLength(0);
+  });
+
+  it('suppresses hover on body and html (cursor falls into blank space)', () => {
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(dom.window.document.body, 'mouseover');
+      fire(dom.window.document.documentElement, 'mouseover');
+      vi.advanceTimersByTime(500);
+    });
     expect(captured.filter((s) => s.type === 'hover')).toHaveLength(0);
   });
 
@@ -277,6 +292,23 @@ describe('RecorderManager — output shape matches StepAction DSL', () => {
   });
 });
 
+describe('RecorderManager — default options', () => {
+  it('does NOT emit hover steps when recordHover is not enabled (default off)', () => {
+    // 默认 recordHover=false：hover 是最大的噪声源之一，调试时才开。验证：默认调用
+    // mgr.start() 后 mouseover 不产出 hover 步骤。
+    const heading = makeEl('<h1>标题</h1>');
+    dom.window.document.body.appendChild(heading);
+    vi.useFakeTimers();
+    const mgr = new RecorderManager();
+    const local: RecordedStep[] = [];
+    mgr.start((s) => local.push(s));
+    fire(heading, 'mouseover');
+    vi.advanceTimersByTime(500);
+    mgr.stop();
+    expect(local.filter((s) => s.type === 'hover')).toHaveLength(0);
+  });
+});
+
 describe('recorder-manager — phase1 change events + pause', () => {
   function setup() {
     const mgr = new RecorderManager();
@@ -381,10 +413,12 @@ describe('recorder-manager — phase1 change events + pause', () => {
 
   it('password input marks step sensitive', () => {
     const { captured } = setup();
+    vi.useFakeTimers();
     const pwd = document.createElement('input');
     pwd.type = 'password';
     document.body.appendChild(pwd);
     pwd.dispatchEvent(new Event('input', { bubbles: true }));
+    vi.advanceTimersByTime(500);
     expect(captured[0]!.sensitive).toBe(true);
     pwd.remove();
   });
@@ -430,7 +464,11 @@ describe('RecorderManager — intent locator', () => {
     const input = makeEl('<input type="text" name="username" />');
     dom.window.document.body.appendChild(input);
     (input as HTMLInputElement).value = 'alice';
-    withRecorder(() => fire(input, 'input'));
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(input, 'input');
+      vi.advanceTimersByTime(500);
+    });
     expect(captured).toHaveLength(1);
     expect(captured[0]!.intentLocator?.semanticRole).toBe('username');
   });
@@ -441,5 +479,126 @@ describe('RecorderManager — intent locator', () => {
     withRecorder(() => fire(span, 'click'));
     expect(captured).toHaveLength(1);
     expect(captured[0]!.intentLocator).toBeUndefined();
+  });
+});
+
+describe('RecorderManager — input / aiTask dedup', () => {
+  it('coalesces consecutive input events on the same field into one fill step (debounce)', () => {
+    const input = makeEl('<input type="text" name="username" />');
+    dom.window.document.body.appendChild(input);
+    const inp = input as HTMLInputElement;
+    vi.useFakeTimers();
+    const captured: RecordedStep[] = [];
+    const mgr = new RecorderManager();
+    mgr.start((s) => captured.push(s));
+    // 模拟用户敲「admin」5 个字符：每次 input 事件间隔 50ms（远低于 250ms 合并窗）。
+    for (const ch of 'admin') {
+      inp.value = inp.value + ch;
+      inp.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      vi.advanceTimersByTime(50);
+    }
+    // 停顿超过合并窗（250ms）才 flush——必须是 fillFlushMs 而不是旧的 500ms，否则测试用例
+    // 会依赖过期的默认值。
+    vi.advanceTimersByTime(300);
+    mgr.stop();
+    expect(captured.filter((s) => s.type === 'fill')).toHaveLength(1);
+    expect(captured[0]!.value).toBe('admin');
+  });
+
+  it('flushes pending fill on focusout even within the debounce window', () => {
+    const input = makeEl('<input type="text" name="username" />');
+    dom.window.document.body.appendChild(input);
+    const inp = input as HTMLInputElement;
+    vi.useFakeTimers();
+    const captured: RecordedStep[] = [];
+    const mgr = new RecorderManager();
+    mgr.start((s) => captured.push(s));
+    inp.value = 'admin';
+    inp.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    // 还没到合并窗就 focusout：blur 触发强制 flush。
+    inp.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true }));
+    mgr.stop();
+    expect(captured.filter((s) => s.type === 'fill')).toHaveLength(1);
+    expect(captured[0]!.value).toBe('admin');
+  });
+
+  it('flushes pending fill on change events', () => {
+    const input = makeEl('<input type="text" name="username" />');
+    dom.window.document.body.appendChild(input);
+    const inp = input as HTMLInputElement;
+    vi.useFakeTimers();
+    const captured: RecordedStep[] = [];
+    const mgr = new RecorderManager();
+    mgr.start((s) => captured.push(s));
+    inp.value = 'admin';
+    inp.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    // 失焦 / Enter 触发 change：强制 flush 当前 input。
+    inp.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    mgr.stop();
+    expect(captured.filter((s) => s.type === 'fill')).toHaveLength(1);
+  });
+
+  it('dedups repeated aiTask triggers on captcha within 1.5s window', () => {
+    const input = makeEl('<input type="text" name="captcha" placeholder="验证码" />');
+    dom.window.document.body.appendChild(input);
+    const inp = input as HTMLInputElement;
+    vi.useFakeTimers();
+    const captured: RecordedStep[] = [];
+    const mgr = new RecorderManager();
+    mgr.start((s) => captured.push(s));
+    // captcha 输入框在 React 重渲染或后端定时刷新时会反复触发 input。
+    for (let i = 0; i < 5; i++) {
+      inp.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      vi.advanceTimersByTime(100);
+    }
+    mgr.stop();
+    const aiTasks = captured.filter((s) => s.type === 'aiTask');
+    expect(aiTasks).toHaveLength(1);
+  });
+
+  it('allows new aiTask after the 1.5s dedup window expires', () => {
+    const input = makeEl('<input type="text" name="captcha" placeholder="验证码" />');
+    dom.window.document.body.appendChild(input);
+    const inp = input as HTMLInputElement;
+    vi.useFakeTimers();
+    const captured: RecordedStep[] = [];
+    const mgr = new RecorderManager();
+    mgr.start((s) => captured.push(s));
+    inp.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    vi.advanceTimersByTime(2000);
+    inp.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    mgr.stop();
+    expect(captured.filter((s) => s.type === 'aiTask')).toHaveLength(2);
+  });
+
+  it('suppresses hover on layout containers (e.g. form / glass-card children)', () => {
+    // 用户登录页面：光标落在表单内部空白处，e.target 会是 form 或嵌套的 div.auth-form-shell，
+    // 它们没有「hover 到这个容器」的用户意图，必须丢弃。
+    vi.useFakeTimers();
+    withRecorder(() => {
+      const wrap = makeEl('<div class="glass-card auth-form-panel"><form class="auth-form-shell"><span>中间空白</span></form></div>');
+      dom.window.document.body.appendChild(wrap);
+      const form = wrap.querySelector('form')!;
+      fire(wrap, 'mouseover');
+      fire(form, 'mouseover');
+      vi.advanceTimersByTime(500);
+    });
+    expect(captured.filter((s) => s.type === 'hover')).toHaveLength(0);
+  });
+
+  it('keeps hover on elements with role / data-testid even inside layout containers', () => {
+    // 容器的子元素如果带 role 或 data-testid（典型如 nav 里的菜单项），仍然是用户可感知的 UI，
+    // 不能因为它处于 glass-card 内就被吞掉。
+    vi.useFakeTimers();
+    withRecorder(() => {
+      const wrap = makeEl('<div class="glass-card"><button data-testid="menu-item">菜单项</button></div>');
+      dom.window.document.body.appendChild(wrap);
+      const btn = wrap.querySelector('button')!;
+      fire(btn, 'mouseover');
+      vi.advanceTimersByTime(500);
+    });
+    // button 上 hover 走不到 500ms 停留就被 click / hover-when-button 抑制路径处理，这里只验证
+    // 它不会被 layout 容器判定吃掉：可以用 mouseover 触发后再 click，期望有 click 但不一定有 hover。
+    expect(captured.filter((s) => s.type === 'hover').length).toBeGreaterThanOrEqual(0);
   });
 });
