@@ -19,8 +19,9 @@ import { z } from 'zod';
 import { asc, eq } from 'drizzle-orm';
 import { StepAction } from '@itest/shared';
 import { db } from '../../../db/client.js';
-import { aiStageCaseOps, testSteps } from '../../../db/schema.js';
+import { aiStageCaseOps, datasets, testSteps } from '../../../db/schema.js';
 import * as svc from '../../../services/cases.service.js';
+import { buildVariableReport } from '../../../lib/variable-report.js';
 import { normalizeCompiledStep } from '../../tools.js';
 import { HttpError } from '../../../middleware/errorHandler.js';
 import type { ToolExecutor } from '../../tools.js';
@@ -54,6 +55,7 @@ const UpdateCasePatchShape = z.object({
   url: z.string().max(2000).nullable().optional(),
   expectedOutcome: z.string().max(4000).nullable().optional(),
   defaultEnvId: z.string().uuid().nullable().optional(),
+  datasetId: z.string().uuid().nullable().optional(),
 });
 
 const CaseOpBase = {
@@ -98,6 +100,7 @@ export const STAGE_CASE_OP_GUIDELINES = [
   '若判断无法可靠编译（指令过于模糊），把 compiled 设为 null 表示「已放弃」。空数组也会被映射为 null（回放里等价于「什么都不做」会隐藏失败）。',
   'stage_case_op 的 action 与字段一一对应：update_case {caseId, patch={...UpdateCasePatch 形状字段}}、delete_case {caseId}、move_case {caseId, targetGroupId}、update_step {stepId, caseId, instruction?, compiled?}、insert_step {caseId, instruction, afterOrder?, compiled?}、delete_step {stepId, caseId}、move_step {caseId, stepIds}。move_step 的 stepIds 必须恰好覆盖该 case 全部步骤并按目标顺序排列。',
   'localId 由你（LLM）用 UUID v4 自生成；同 localId 重复 stage 是幂等 UPSERT，可放心重发。',
+  '用例绑定/解绑数据集走 update_case(patch.datasetId)（跨项目数据集会被拒绝）；数据集列名即回放初始变量 {{列名}}，insert_step/update_step 响应会附「变量体检」反馈，引用未定义变量时请修正 compiled 或先确认数据集列名（manage_cases list_datasets / get）。',
 ];
 
 interface StagedCaseOpDoc {
@@ -160,6 +163,41 @@ function summaryFor(input: StageCaseOpInput, before: Awaited<ReturnType<typeof s
   }
 }
 
+/** 步骤写 op 的前瞻变量体检：按 op 虚拟应用后的全量 compiled 动作计算（含绑定数据集列作为初始变量），
+ *  以文本附在暂存响应里给 AI 自校验 —— 写完 {{var}} 立刻知道有没有写错，而不是回放才发现。 */
+async function prospectiveVarNote(
+  before: Awaited<ReturnType<typeof svc.getCaseDetail>> | null,
+  v: Extract<StageCaseOpInput, { action: 'insert_step' | 'update_step' }>,
+): Promise<string> {
+  if (!before) return '';
+  const steps = [...before.steps];
+  if (v.action === 'update_step') {
+    const i = steps.findIndex((s) => s.id === v.stepId);
+    if (i >= 0) steps[i] = { ...steps[i]!, compiled: v.compiled === undefined ? steps[i]!.compiled : v.compiled } as (typeof steps)[number];
+  } else {
+    const at = v.afterOrder !== undefined ? steps.findIndex((s) => s.order === v.afterOrder) + 1 : steps.length;
+    const maxOrder = steps.reduce((m, s) => Math.max(m, s.order), 0);
+    steps.splice(at, 0, { id: 'staged', order: maxOrder + 1, instruction: v.instruction, compiled: v.compiled ?? [] } as unknown as (typeof steps)[number]);
+  }
+  const actions = steps.flatMap((s): StepAction[] => {
+    const c = s.compiled as unknown[] | null | undefined;
+    return Array.isArray(c) ? c.filter((a): a is StepAction => !!((a as { kind?: string }).kind)) : [];
+  });
+  let initialVars: string[] | undefined;
+  const dsId = (before as { datasetId?: string | null }).datasetId;
+  if (dsId) {
+    const ds = (await db.select().from(datasets).where(eq(datasets.id, dsId)).limit(1))[0];
+    if (ds) initialVars = ds.columns.map((c) => c.name);
+  }
+  const report = buildVariableReport(actions, initialVars);
+  const notes = [
+    ...report.undefined.map((x) => `引用未定义变量 {{${x.name}}}(${x.field})`),
+    ...report.forwardRefs.map((x) => `前向引用 {{${x.name}}}`),
+    ...report.invalidNames.map((x) => `变量名 ${x.name} 不合法`),
+  ];
+  return notes.length > 0 ? `变量体检:${notes.join(';')}` : '变量体检:通过';
+}
+
 export async function stageCaseOp(threadId: string, versionId: string, body: StagedCaseOpDoc & { caseId: string; op: string; payload: unknown }): Promise<void> {
   await db
     .insert(aiStageCaseOps)
@@ -212,6 +250,7 @@ export function buildCaseOpsTools(ctx: SpaceToolsContext): ToolExecutor[] {
           url: Type.Optional(Type.Union([Type.String(), Type.Null()])),
           expectedOutcome: Type.Optional(Type.Union([Type.String(), Type.Null()])),
           defaultEnvId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          datasetId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
         })),
         stepId: Type.Optional(Type.String()),
         stepIds: Type.Optional(Type.Array(Type.String())),
@@ -270,7 +309,10 @@ export function buildCaseOpsTools(ctx: SpaceToolsContext): ToolExecutor[] {
           action: 'stage',
           payload: doc,
         });
-        return { ok: true, data: `已暂存修改「${summary}」(草稿 ${doc.localId})；用户在 StagePanel 勾选 → 落库。` };
+        const varNote = (v.action === 'insert_step' || v.action === 'update_step')
+          ? await prospectiveVarNote(before, v).catch(() => '')
+          : '';
+        return { ok: true, data: `已暂存修改「${summary}」(草稿 ${doc.localId})；用户在 StagePanel 勾选 → 落库。${varNote ? `\n${varNote}` : ''}` };
       },
     },
   ];
