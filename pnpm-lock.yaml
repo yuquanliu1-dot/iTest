@@ -35,6 +35,9 @@ importers:
       '@itest/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      agent-device:
+        specifier: ^0.21.22
+        version: 0.21.23
       bcryptjs:
         specifier: ^3.0.3
         version: 3.0.3
@@ -2796,6 +2799,16 @@ packages:
   agent-base@9.0.0:
     resolution: {integrity: sha512-TQf59BsZnytt8GdJKLPfUZ54g/iaUL2OWDSFCCvMOhsHduDQxO8xC4PNeyIkVcA5KwL2phPSv0douC0fgWzmnA==}
     engines: {node: '>= 20'}
+
+  agent-device@0.21.23:
+    resolution: {integrity: sha512-TZAuh3fMFa12Wh+1etcEll7FNvSCg1PjFkkfGz3XIYr9Ap9rJixHq89AnPqpTqnQ5fN2sp1UQgMFr7KcYoyqkA==}
+    engines: {node: '>=22.12'}
+    hasBin: true
+    peerDependencies:
+      ai: ^6.0.0 || ^7.0.0
+    peerDependenciesMeta:
+      ai:
+        optional: true
 
   agentkeepalive@4.6.0:
     resolution: {integrity: sha512-kja8j7PjmncONqaTsB8fQ+wE2mSU2DJ9D4XKoJ5PFWIdRMa6SLSN1ff4mOr4jCbfRSsxR4keIiySJU0N9T5hIQ==}
@@ -8088,6 +8101,8 @@ snapshots:
   agent-base@7.1.4: {}
 
   agent-base@9.0.0: {}
+
+  agent-device@0.21.23: {}
 
   agentkeepalive@4.6.0:
     dependencies:

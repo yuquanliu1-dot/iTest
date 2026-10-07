@@ -7,6 +7,9 @@ import { executeCaseReal, executeCaseInBrowser, maskSensitiveValues, type ExecSt
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { loadDatasetForRun, type DatasetRowExec } from '../services/datasets.service.js';
 import type { WindowStrategy, PreflightReport } from '@itest/shared';
+import { WebEngine } from './webEngine.js';
+import { MobileEngine } from './mobileEngine.js';
+import { EngineUnavailable, type Engine, type EngineInput } from './engine.js';
 
 /**
  * 执行单条用例并落报告。CDP 失败 → 写入 CDPUnavailable 失败报告（不再降级 mock）。
@@ -82,6 +85,9 @@ async function runCaseOnce(
       status: 'running',
       stepResults: [] as object,
       summary: 'execution in progress',
+      platform: caseRow.platform,
+      ...(caseRow.mobileOs ? { mobileOs: caseRow.mobileOs } : {}),
+      ...(caseRow.mobileDeviceTargetId ? { deviceTargetId: caseRow.mobileDeviceTargetId } : {}),
       ...(rowPlan ? { datasetRowIndex: rowPlan.rowIndex, datasetSnapshot: rowPlan.snapshot } : {}),
     })
     .returning();
@@ -207,6 +213,7 @@ async function runCaseOnceInner(
   let stepResults: ExecStepResult[];
   let preflightReport: PreflightReport | undefined;
   let status: 'passed' | 'failed';
+  const isMobile = caseRow.platform === 'mobile';
   try {
     const stepInput = steps.map((s) => ({
       order: s.order,
@@ -231,7 +238,57 @@ async function runCaseOnceInner(
         ? { initialVars: rowPlan.vars, sensitiveVarKeys: rowPlan.sensitiveVarKeys }
         : {}),
     };
-    if (opts?.ownedBrowser && opts?.ownedContext) {
+    // mobile 用例：直接走 MobileEngine；web 用例：登录准备链路（ownedBrowser）走 executeCaseInBrowser 复用 ctx,
+    // 其余走 WebEngine.execute → executeCaseReal（保留 storageState/incognito 注入语义）。
+    const mobileOs = (caseRow.mobileOs === 'ios' || caseRow.mobileOs === 'android')
+      ? caseRow.mobileOs
+      : null;
+    if (isMobile) {
+      const engine = new MobileEngine();
+      const engineInput: EngineInput = {
+        caseId,
+        caseTitle: caseRow.title,
+        caseUrl: caseRow.url ?? null,
+        expectedOutcome: caseRow.expectedOutcome ?? null,
+        steps: stepInput,
+        envCtx,
+        reportId,
+        projectId,
+        caseWindow,
+        incognito,
+        appRef: caseRow.appRef ?? null,
+        deviceTargetId: caseRow.mobileDeviceTargetId ?? null,
+        mobileOs,
+        ...(rowPlan ? { initialVars: rowPlan.vars, sensitiveVarKeys: rowPlan.sensitiveVarKeys } : {}),
+      };
+      try {
+        await engine.prepare(engineInput);
+        stepResults = await engine.execute(engineInput, targetUrl, (r: PreflightReport) => { preflightReport = r; });
+        const failed = stepResults.filter((r) => r.status === 'failed').length;
+        status = failed === 0 ? 'passed' : 'failed';
+      } catch (e) {
+        if (e instanceof EngineUnavailable) {
+          stepResults = [{
+            order: 1, status: 'failed', durationMs: 0,
+            error: e.message, failureReason: 'EngineUnavailable',
+            humanMessage: '移动端引擎不可用：' + e.message,
+          }];
+          status = 'failed';
+        } else {
+          logger.warn({ err: e, caseId, reportId }, 'mobile engine execution failed; writing CDPUnavailable failed report');
+          stepResults = [{
+            order: 1, status: 'failed', durationMs: 0,
+            error: e instanceof Error ? e.message : String(e),
+            failureReason: 'CDPUnavailable',
+            humanMessage: '执行失败',
+          }];
+          status = 'failed';
+        }
+      } finally {
+        try { await engine.release(engineInput); } catch { /* swallow */ }
+        if (envCtx && !opts?.ownedBrowser) envCtx.close().catch(() => undefined);
+      }
+    } else if (opts?.ownedBrowser && opts?.ownedContext) {
       // 计划级 loginPrepare 链路：在 caller 持有的 chromium + context 中跑（不再注入 storageState，
       // context 已含登录 cookie；再注入反而覆盖）。浏览器与 context 由 caller 管理。
       stepResults = await executeCaseInBrowser(
@@ -246,36 +303,50 @@ async function runCaseOnceInner(
         },
         caseWindow,
       );
+      const failed = stepResults.filter((r) => r.status === 'failed').length;
+      status = failed === 0 ? 'passed' : 'failed';
     } else {
-      stepResults = await executeCaseReal(
+      const engine = new WebEngine();
+      const engineInput: EngineInput = {
         caseId,
-        stepInput,
-        execCtx,
-        targetUrl,
-        opts?.storageState,
-        (r) => {
-          preflightReport = r;
-        },
+        caseTitle: caseRow.title,
+        caseUrl: caseRow.url ?? null,
+        expectedOutcome: caseRow.expectedOutcome ?? null,
+        steps: stepInput,
+        envCtx,
+        reportId,
+        projectId,
         caseWindow,
         incognito,
-      );
+        appRef: caseRow.appRef ?? null,
+        deviceTargetId: caseRow.mobileDeviceTargetId ?? null,
+        mobileOs,
+        ...(rowPlan ? { initialVars: rowPlan.vars, sensitiveVarKeys: rowPlan.sensitiveVarKeys } : {}),
+      };
+      try {
+        await engine.prepare(engineInput);
+        stepResults = await engine.execute(engineInput, targetUrl, (r: PreflightReport) => { preflightReport = r; });
+        const failed = stepResults.filter((r) => r.status === 'failed').length;
+        status = failed === 0 ? 'passed' : 'failed';
+      } catch (e) {
+        logger.warn({ err: e, caseId, reportId }, 'CDP execution failed; writing CDPUnavailable failed report');
+        const msg = e instanceof Error ? e.message : String(e);
+        stepResults = [
+          {
+            order: 1,
+            status: 'failed',
+            durationMs: 0,
+            error: msg,
+            failureReason: 'CDPUnavailable',
+            humanMessage: '真实浏览器不可用，已尝试 DOM 降级仍失败',
+          },
+        ];
+        status = 'failed';
+      } finally {
+        try { await engine.release(engineInput); } catch { /* swallow */ }
+        if (envCtx && !opts?.ownedBrowser) envCtx.close().catch(() => undefined);
+      }
     }
-    const failed = stepResults.filter((r) => r.status === 'failed').length;
-    status = failed === 0 ? 'passed' : 'failed';
-  } catch (e) {
-    logger.warn({ err: e, caseId, reportId }, 'CDP execution failed; writing CDPUnavailable failed report');
-    const msg = e instanceof Error ? e.message : String(e);
-    stepResults = [
-      {
-        order: 1,
-        status: 'failed',
-        durationMs: 0,
-        error: msg,
-        failureReason: 'CDPUnavailable',
-        humanMessage: '真实浏览器不可用，已尝试 DOM 降级仍失败',
-      },
-    ];
-    status = 'failed';
   } finally {
     // caller owned browser 路径下浏览器生命周期由 caller 管；envCtx 仍在本函数内关闭，
     // 因为每个用例各自解析独立 pg.Pool（不做共享），立即关避免长连接泄漏。
@@ -283,6 +354,19 @@ async function runCaseOnceInner(
   }
 
   const durationMs = Date.now() - startedAt;
+  // 移动端报表补 deviceName：deviceTargets service 在 Task 5 引入,这里用 dynamic import 兜底:
+  // service 还未实现(MVP 阶段顺序容忍)或解析失败时静默跳过,deviceName 保持 null。
+  let deviceName: string | null = null;
+  if (caseRow.platform === 'mobile' && caseRow.mobileDeviceTargetId) {
+    try {
+      // @ts-expect-error deviceTargets service 在 Task 5 引入,MVP 阶段可能尚未实现
+      const { resolveDeviceTarget } = await import('../services/deviceTargets.service.js');
+      const t = await resolveDeviceTarget(caseRow.mobileDeviceTargetId);
+      if (t) deviceName = t.name;
+    } catch {
+      // service 还未实现(MVP 阶段顺序容忍)
+    }
+  }
   await db
     .update(reports)
     .set({
@@ -291,6 +375,7 @@ async function runCaseOnceInner(
       stepResults: stepResults as object,
       summary: buildSummary(stepResults, preflightReport),
       preflight: preflightReport ?? null,
+      ...(deviceName ? { deviceName } : {}),
     })
     .where(eq(reports.id, reportId));
 
