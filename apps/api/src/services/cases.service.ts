@@ -6,9 +6,10 @@
 import { asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { caseTags, datasets, groups, projects, projectVersions, scenarios, tags, testCases, testSteps } from '../db/schema.js';
+import type { AppRef } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
-import { resolveDatasetProjectId, resolveEnvironmentProjectId, resolveVersionProjectId } from './projectAccess.js';
+import { resolveDatasetProjectId, resolveDeviceTargetProjectId, resolveEnvironmentProjectId, resolveVersionProjectId } from './projectAccess.js';
 import { migrateAssertion, sanitizeAssertion } from '../lib/step-migration.js';
 
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
@@ -163,6 +164,11 @@ export interface UpdateCasePatch {
   incognito?: boolean;
   tagIds?: string[];
   expectedOutcome?: string | null;
+  // 2026-10-07: 移动端支持
+  platform?: 'web' | 'mobile';
+  mobileOs?: 'ios' | 'android' | null;
+  mobileDeviceTargetId?: string | null;
+  appRef?: AppRef | null;
 }
 
 export async function updateCase(caseId: string, patch: UpdateCasePatch) {
@@ -199,6 +205,12 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
     const dsPid = await resolveDatasetProjectId(patch.datasetId);
     if (!dsPid) throw new HttpError(404, 'not_found', 'dataset not found');
     if (dsPid !== targetPid) throw new HttpError(400, 'dataset_project_mismatch', 'dataset does not belong to this project');
+  }
+  // 2026-10-07: 移动端 device target 跨项目断言（service 兜底）
+  if (patch.mobileDeviceTargetId !== undefined && patch.mobileDeviceTargetId !== null) {
+    const dtPid = await resolveDeviceTargetProjectId(patch.mobileDeviceTargetId);
+    if (!dtPid) throw new HttpError(404, 'not_found', 'device target not found');
+    if (dtPid !== targetPid) throw new HttpError(400, 'device_target_project_mismatch', 'device target does not belong to this project');
   }
   if (patch.tagIds !== undefined) await assertTagsBelongToOrg(patch.tagIds, targetPid);
   const { tagIds, ...rest } = patch;

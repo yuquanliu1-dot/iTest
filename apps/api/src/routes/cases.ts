@@ -52,6 +52,15 @@ const PatchBody = CaseBodyBase.partial()
     defaultEnvId: z.string().uuid().nullable().optional(),
     // 绑定数据集 id；null 表示解绑，undefined 表示不动
     datasetId: z.string().uuid().nullable().optional(),
+    // 2026-10-07: 移动端支持
+    platform: z.enum(['web', 'mobile']).optional(),
+    mobileOs: z.enum(['ios', 'android']).nullable().optional(),
+    mobileDeviceTargetId: z.string().uuid().nullable().optional(),
+    appRef: z.object({
+      bundleId: z.string().min(1).max(256),
+      appPath: z.string().optional(),
+      launchArgs: z.array(z.string()).max(50).optional(),
+    }).nullable().optional(),
   })
   .superRefine(checkWindowStrategy);
 
@@ -166,6 +175,28 @@ casesRoute.patch('/:id', async (req, res) => {
   if (body.datasetId !== undefined && body.datasetId !== null) {
     const { assertDatasetVisible } = await import('../services/projectAccess.js');
     await assertDatasetVisible(body.datasetId, req.user!);
+  }
+  // 2026-10-07: mobile platform 时 mobileOs/mobileDeviceTargetId/appRef 必须齐备（与已有字段合并判定）
+  // platform=web 时清空 mobile 字段
+  if (body.platform !== undefined) {
+    const existing = await getCaseDetail(req.params.id!);
+    if (body.platform === 'mobile') {
+      const mOs = body.mobileOs ?? existing?.mobileOs ?? null;
+      const mDt = body.mobileDeviceTargetId ?? existing?.mobileDeviceTargetId ?? null;
+      const aRef = body.appRef ?? existing?.appRef ?? null;
+      if (!mOs || !mDt || !aRef?.bundleId) {
+        throw new HttpError(400, 'mobile_config_required', 'mobile case requires mobileOs, mobileDeviceTargetId, appRef.bundleId');
+      }
+    } else {
+      // platform=web: 清空 mobile 字段(避免 web case 残留 mobile 配置)
+      body.mobileOs = null;
+      body.mobileDeviceTargetId = null;
+      body.appRef = null;
+    }
+  }
+  if (body.mobileDeviceTargetId !== undefined && body.mobileDeviceTargetId !== null) {
+    const { assertDeviceTargetVisible } = await import('../services/projectAccess.js');
+    await assertDeviceTargetVisible(body.mobileDeviceTargetId, req.user!);
   }
   // scenario 匹配 / env 归属 / tag 组织校验由 service 兜底
   res.json(await updateCase(req.params.id!, body));
