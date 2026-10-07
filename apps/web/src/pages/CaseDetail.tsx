@@ -747,6 +747,9 @@ export default function CaseDetail() {
                     />
                     <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
                       留空则跳过用例级 vision 判定,用例成败只看所有步骤是否全部执行成功。
+                      {datasetId && '支持 '}
+                      {datasetId && <code className="font-mono">{'{{列名}}'}</code>}
+                      {datasetId && ' 引用数据集列（与前置 extract 变量）,每行按行值替换后再判定;预期列不要标敏感。'}
                     </span>
                   </label>
                   <div className="flex justify-end">

@@ -23,7 +23,7 @@ interface StepResult {
   humanMessage?: string;
   hitLocator?: { kind: string; value: string };
   /** Track 1 用例级视觉判定结果（最后一步/失败追加步携带） */
-  visionAssert?: { passed: boolean; reason: string; screenshot?: string };
+  visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string };
   /** queryDb 步骤的结果（仅 queryDb 步携带） */
   db?: DbQueryRowResult;
   /** observeLog 步骤的结果（仅 observeLog 步携带） */
@@ -180,6 +180,11 @@ export default function ReportDetail() {
             >
               <span className="shrink-0 font-medium">{s.visionAssert.passed ? '视觉判定通过' : '视觉判定失败'}</span>
               <span className="min-w-0 break-words">{s.visionAssert.reason}</span>
+            </div>
+          )}
+          {s.visionAssert?.expected && (
+            <div className="text-[11px] font-mono px-2 py-1" style={{ color: 'var(--muted-foreground)' }}>
+              判定预期（按本行数据物化）：{s.visionAssert.expected}
             </div>
           )}
           {s.status !== 'passed' && (s.failureReason || s.humanMessage) && (

@@ -64,7 +64,7 @@ export interface ExecStepResult {
   /** observeLog 步骤的结果（仅 observeLog 步携带，其它步 undefined） */
   log?: ObserveLogLineResult;
   /** Track 1 用例级 vision 判定的回写结果（仅最后一步或追加失败步携带，其它步 undefined）。 */
-  visionAssert?: { passed: boolean; reason: string; screenshot?: string };
+  visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string };
 }
 
 export interface ExecContext {
@@ -631,6 +631,12 @@ export function maskSensitiveValues(text: string, vars: Record<string, string>, 
   return out;
 }
 
+/** 行级预期物化：expectedOutcome 模板按当次运行最终 vars（数据集初始变量 + extract）替换后交 vision 判定。
+ *  missing 保留字面量 —— vision 大概率不匹配 → 该行失败且报告可见原因，诚实失败优于静默跳过。 */
+export function materializeExpectedOutcome(text: string, vars: Record<string, string>): string {
+  return substituteVars(text, vars).value;
+}
+
 /** 在已持有的 browser context 中跑用例步骤：init-goto → preflight → 步骤循环 → vision 兜底。
  *  与 `executeCaseReal` 共享核心逻辑；区别是不负责 launch/newContext/close，调用方持有生命周期。 */
 async function runStepsInContext(
@@ -771,6 +777,8 @@ async function runStepsInContext(
   const failedSoFar = results.some((r) => r.status === 'failed');
   if (!failedSoFar && ctx.expectedOutcome && ctx.expectedOutcome.trim()) {
     try {
+      // 数据集行级物化：expectedOutcome 模板按当次运行最终 vars 替换后再判定，负向行不再共用同一段预期文本。
+      const expectedForJudge = materializeExpectedOutcome(ctx.expectedOutcome, vars);
       // 终态判定前给 SPA 收尾时间：点击提交 → 接口往返 → 前端跳转是异步的，
       // 立即截图会把「仍停在提交前页面」误判为失败（实测点击后 ~100ms 截图仍显示登录页）。
       await opts.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
@@ -787,7 +795,7 @@ async function runStepsInContext(
       }
       const { judgeCaseOutcome } = await import('../agent/judgeCaseOutcome.js');
       const verdict = await judgeCaseOutcome({
-        expectedOutcome: ctx.expectedOutcome,
+        expectedOutcome: expectedForJudge,
         caseTitle: ctx.caseTitle ?? caseId,
         caseUrl: ctx.caseUrl ?? null,
         screenshot: { base64: buffer.toString('base64'), mime: 'image/png' },
@@ -803,12 +811,12 @@ async function runStepsInContext(
           screenshot: visionScreenshotPath,
           failureReason: 'VisionAssertionFailed',
           humanMessage: '最终页面与用例预期不符',
-          visionAssert: { passed: false, reason: verdict.reason, screenshot: visionScreenshotPath },
+          visionAssert: { passed: false, reason: verdict.reason, screenshot: visionScreenshotPath, expected: expectedForJudge },
         });
       } else if (verdict) {
         // 通过：在最后一步 result 上挂 visionAssert，调用方可读到 reason（不影响 passed 计数）。
         const last = results[results.length - 1];
-        if (last) last.visionAssert = { passed: true, reason: verdict.reason, screenshot: visionScreenshotPath };
+        if (last) last.visionAssert = { passed: true, reason: verdict.reason, screenshot: visionScreenshotPath, expected: expectedForJudge };
       }
     } catch (e) {
       // vision 兜底失败不视作用例失败：best-effort
