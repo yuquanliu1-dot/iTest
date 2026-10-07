@@ -17,6 +17,7 @@ import Toggle from '../components/ui/Toggle';
 import EmptyState from '../components/ui/EmptyState';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import StepEditDrawer from '../components/StepEditDrawer';
+import { MobileRecorder } from '../features/mobile-recorder';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import SortableStepRow from '../components/step-form/SortableStepRow';
@@ -74,6 +75,8 @@ export default function CaseDetail() {
   const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [urlDraft, setUrlDraft] = useState('');
   const [urlSaving, setUrlSaving] = useState(false);
+  /** 2026-10-07：移动端录制弹窗开关（仅 platform === 'mobile' 时显示入口）。 */
+  const [mobileRecorderOpen, setMobileRecorderOpen] = useState(false);
   /** 2026-10-07：AI 补充步骤弹窗输入。让用户写一句补充意图,再跳助手 + 带着意图进 initialMessage。
    *  不让助手"猜",与行级重编对齐——AI 看快照前先有明确补什么的目标。 */
   const [genStepsDialogOpen, setGenStepsDialogOpen] = useState(false);
@@ -1230,6 +1233,25 @@ export default function CaseDetail() {
               </Button>
             </div>
 
+            {caseDetail.platform === 'mobile' && (
+              <div className="bg-card border rounded-[var(--radius-md)] p-4">
+                <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
+                  移动录制
+                </div>
+                <Button
+                  onClick={() => setMobileRecorderOpen(true)}
+                  disabled={mobileRecorderOpen}
+                  className="w-full"
+                >
+                  <Icon name="tablet" size={12} />
+                  录制 Mobile
+                </Button>
+                <p className="text-[11px] mt-2" style={{ color: 'var(--muted-foreground)' }}>
+                  后端 mobile daemon 启动后,点选右侧 Accessibility Tree 即可生成步骤。
+                </p>
+              </div>
+            )}
+
             <div className="bg-card border rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
                 浏览器录制
@@ -1471,6 +1493,28 @@ export default function CaseDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 移动录制弹窗：仅 platform === 'mobile' 时启用（按钮在上方右侧栏）。onClose 时刷新用例以拉回新步骤。 */}
+      {mobileRecorderOpen && projectId && (
+        <Dialog open={mobileRecorderOpen} onOpenChange={(o) => !o && setMobileRecorderOpen(false)}>
+          <DialogContent style={{ maxWidth: 960, height: '70vh', padding: 0 }}>
+            <DialogHeader className="px-5 pt-4 pb-2">
+              <DialogTitle>移动录制</DialogTitle>
+            </DialogHeader>
+            <div className="flex-1 min-h-0" style={{ height: 'calc(70vh - 56px)' }}>
+              <MobileRecorder
+                caseId={id!}
+                projectId={projectId}
+                defaultTargetId={caseDetail.mobileDeviceTargetId ?? undefined}
+                onClose={() => {
+                  setMobileRecorderOpen(false);
+                  qc.invalidateQueries({ queryKey: ['case', id] });
+                }}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
