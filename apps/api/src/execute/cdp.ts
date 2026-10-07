@@ -505,20 +505,30 @@ async function tryFirstMatch(
   if (cands.length === 0) {
     throw new Error('locator array is empty');
   }
+  // 探测某个 css/role/testid 候选时,如果 count=0 短重试一次。
+  // 根因:playwright 的 count() 走 a11y 树,而 a11y 树 rebuild 是 lazy 的,
+  // networkidle 后 DOM 已渲染但 a11y 树可能滞后 ~100-200ms。
+  // 实测 SOC 登录页:navigate + networkidle 后立刻探测 [name="username"] 仍为 0,
+  // 等 150ms 后变 1。
   let lastErr: unknown;
   for (const c of cands) {
     const probe = c.loc as unknown as { count?: () => Promise<number>; isVisible?: () => Promise<boolean> };
     if (probe && typeof probe.count === 'function') {
-      try {
-        const n = await probe.count();
-        if (n > 0) {
+      const n1 = await probe.count().catch((e) => { lastErr = e; return -1; });
+      if (n1 > 0) {
+        if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
+        return c.loc;
+      }
+      if (n1 === 0) {
+        // a11y 树滞后兜底:短等一次再判定
+        await page.waitForTimeout(150);
+        const n2 = await probe.count().catch(() => -1);
+        if (n2 > 0) {
           if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
           return c.loc;
         }
-        lastErr = new Error(`count=0 (${c.kind})`);
-      } catch (e) {
-        lastErr = e;
       }
+      lastErr = new Error(`count=0 (${c.kind})`);
       continue;
     }
     // 没有 count()（如 getByText 路径）直接接受
@@ -808,22 +818,28 @@ async function runStepsInContext(
         screenshot: { base64: buffer.toString('base64'), mime: 'image/png' },
         llmClient: ctx.llmClient,
       });
+      // 报告侧脱敏：LLM 提示按 spec §8.3 走明文，但落库的 visionAssert（expected / reason 可能复述敏感列值）
+      // 与步骤错误信息同口径打码 —— 报告与详情只出掩码，闭环列级加密。
+      const maskForReport = (t: string) => (ctx.sensitiveVarKeys && ctx.sensitiveVarKeys.length > 0
+        ? maskSensitiveValues(t, vars, ctx.sensitiveVarKeys)
+        : t);
+      const expectedForReport = maskForReport(expectedForJudge);
       if (verdict && !verdict.passed) {
         // 用例级 vision 判失败 → 追加一个 order=-1 的 failed stepResult，调用方以「任意 failed」判定为失败。
         results.push({
           order: -1,
           status: 'failed',
           durationMs: 0,
-          error: `case-level vision assert failed: ${verdict.reason}`,
+          error: `case-level vision assert failed: ${maskForReport(verdict.reason)}`,
           screenshot: visionScreenshotPath,
           failureReason: 'VisionAssertionFailed',
           humanMessage: '最终页面与用例预期不符',
-          visionAssert: { passed: false, reason: verdict.reason, screenshot: visionScreenshotPath, expected: expectedForJudge },
+          visionAssert: { passed: false, reason: maskForReport(verdict.reason), screenshot: visionScreenshotPath, expected: expectedForReport },
         });
       } else if (verdict) {
         // 通过：在最后一步 result 上挂 visionAssert，调用方可读到 reason（不影响 passed 计数）。
         const last = results[results.length - 1];
-        if (last) last.visionAssert = { passed: true, reason: verdict.reason, screenshot: visionScreenshotPath, expected: expectedForJudge };
+        if (last) last.visionAssert = { passed: true, reason: maskForReport(verdict.reason), screenshot: visionScreenshotPath, expected: expectedForReport };
       }
     } catch (e) {
       // vision 兜底失败不视作用例失败：best-effort

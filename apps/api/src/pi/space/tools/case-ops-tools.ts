@@ -175,7 +175,8 @@ async function prospectiveVarNote(
     const i = steps.findIndex((s) => s.id === v.stepId);
     if (i >= 0) steps[i] = { ...steps[i]!, compiled: v.compiled === undefined ? steps[i]!.compiled : v.compiled } as (typeof steps)[number];
   } else {
-    const at = v.afterOrder !== undefined ? steps.findIndex((s) => s.order === v.afterOrder) + 1 : steps.length;
+    // 与真实 insertCaseStep 对齐：afterOrder 之后插入；越界（>= maxOrder）时落到末尾而非队首。
+    const at = v.afterOrder !== undefined ? steps.filter((s) => s.order <= v.afterOrder).length : steps.length;
     const maxOrder = steps.reduce((m, s) => Math.max(m, s.order), 0);
     steps.splice(at, 0, { id: 'staged', order: maxOrder + 1, instruction: v.instruction, compiled: v.compiled ?? [] } as unknown as (typeof steps)[number]);
   }
