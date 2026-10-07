@@ -4,12 +4,15 @@ export const STEP_KINDS = [
   'navigate', 'click', 'fill', 'select', 'check', 'hover', 'waitFor',
   'assertVisible', 'assertText', 'assertJson', 'extract', 'upload',
   'switchTab', 'screenshot', 'aiTask', 'queryDb', 'observeLog',
+  'tap', 'swipe', 'setAppearance', 'setNetwork', 'setLocation',
+  'appOpen', 'appBack', 'appRestart', 'home',
 ] as const;
 export type StepKind = (typeof STEP_KINDS)[number];
 
 const WITH_LOCATOR: ReadonlySet<string> = new Set([
   'click', 'hover', 'fill', 'select', 'check', 'waitFor',
   'assertVisible', 'assertText', 'assertJson', 'upload', 'extract',
+  'tap', 'swipe',
 ]);
 
 export function kindNeedsLocator(kind: string): boolean {
@@ -77,6 +80,37 @@ export function switchAction(clip: StepClip, to: StepKind): StepClip {
       break;
     case 'observeLog':
       action = { kind: 'observeLog', windowMs: 60000, keywords: [], fromLine: 200 };
+      break;
+    case 'tap':
+      action = { kind: 'tap', locator: locator!, ...base() };
+      break;
+    case 'swipe':
+      action = {
+        kind: 'swipe',
+        from: srcLocator ?? [{ strategy: 'accessibilityId', value: '' }],
+        to: [{ strategy: 'accessibilityId', value: '' }],
+      };
+      break;
+    case 'setAppearance':
+      action = { kind: 'setAppearance', mode: 'light' };
+      break;
+    case 'setNetwork':
+      action = { kind: 'setNetwork', state: 'online' };
+      break;
+    case 'setLocation':
+      action = { kind: 'setLocation', latitude: 0, longitude: 0 };
+      break;
+    case 'appOpen':
+      action = { kind: 'appOpen' };
+      break;
+    case 'appBack':
+      action = { kind: 'appBack' };
+      break;
+    case 'appRestart':
+      action = { kind: 'appRestart' };
+      break;
+    case 'home':
+      action = { kind: 'home' };
       break;
   }
 

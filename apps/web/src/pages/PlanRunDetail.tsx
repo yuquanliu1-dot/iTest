@@ -63,6 +63,7 @@ export default function PlanRunDetail() {
             <EmptyState icon="listChecks" title="暂无步骤" />
           ) : (
             <div className="flex flex-col" data-stagger>
+              {/* mobile plan-run case platform badge: requires backend exposing case.platform on run.cases[i]; tracked as follow-up */}
               {run.cases.map((c) => (
                 <div key={c.id} data-stagger-item className="flex items-start gap-3 px-5 py-3 hairline-bottom">
                   <span className="font-mono text-[12px] shrink-0 mt-0.5" style={{ color: 'var(--muted-foreground)' }}>

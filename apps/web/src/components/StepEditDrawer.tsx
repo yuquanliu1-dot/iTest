@@ -24,6 +24,8 @@ interface Props {
   availableVars?: string[];
   datasetVars?: string[];
   caseId?: string;
+  /** 移动端用例时启用 mobile 步骤种类 + 隐藏 web-only kind；同步影响 kind 下拉与表单字段。 */
+  platform?: 'web' | 'mobile';
   onSave: (next: StepClip) => void;
   onClose: () => void;
 }
@@ -34,14 +36,22 @@ function FieldError({ msg }: { msg?: string }) {
 }
 
 /** 步骤编辑抽屉：外壳管类型切换 + 通用字段；DrawerForm 按 kind 重挂载管差异字段。 */
-export default function StepEditDrawer({ initial, mode = 'edit', availableVars = [], datasetVars = [], caseId, onSave, onClose }: Props) {
+export default function StepEditDrawer({ initial, mode = 'edit', availableVars = [], datasetVars = [], caseId, platform = 'web', onSave, onClose }: Props) {
   const navigate = useNavigate();
   const { projectId: routeProjectId, versionId: routeVersionId } = useParams<{ projectId: string; versionId: string }>();
+  // 移动端可见 kind = 移动 9 + 跨平台可用 6（click/fill/assertVisible/assertText/screenshot/aiTask）
+  const MOBILE_ALLOWED_KINDS: ReadonlySet<string> = new Set([
+    'tap', 'swipe', 'setAppearance', 'setNetwork', 'setLocation',
+    'appOpen', 'appBack', 'appRestart', 'home',
+    'click', 'fill', 'assertVisible', 'assertText', 'screenshot', 'aiTask',
+  ]);
+  const isMobile = platform === 'mobile';
+  const availableKinds = (isMobile ? STEP_KINDS.filter((k) => MOBILE_ALLOWED_KINDS.has(k)) : STEP_KINDS) as StepKind[];
   const [draft, setDraft] = useState<StepClip>(initial);
   // 通用字段放外壳：类型切换（DrawerForm 重挂载）不丢用户已输入的延迟
   // 2026-10-07 移除 name 输入框：name 列已退役，行级自然语言全部由 rowInstruction 承担。
   const [delayMs, setDelayMs] = useState(initial.delayMs ? String(initial.delayMs) : '');
-  const kind = ((draft.action as { kind?: string })?.kind ?? 'click') as StepKind;
+  const kind = ((draft.action as { kind?: string })?.kind ?? (isMobile ? 'tap' : 'click')) as StepKind;
   // DrawerForm 每次渲染注册最新的 buildAction；类型切换前用它把未保存的字段编辑同步进 draft
   const buildActionRef = useRef<(() => Record<string, unknown> | null) | null>(null);
 
@@ -65,7 +75,7 @@ export default function StepEditDrawer({ initial, mode = 'edit', availableVars =
             className="input-base input-xs input-inline"
             title="切换操作类型（兼容字段自动保留）"
           >
-            {STEP_KINDS.map((k) => <option key={k} value={k}>{stepKindLabel(k)}</option>)}
+            {availableKinds.map((k) => <option key={k} value={k}>{stepKindLabel(k)}</option>)}
           </select>
           <div className="flex-1" />
           <SheetClose asChild>
@@ -82,6 +92,7 @@ export default function StepEditDrawer({ initial, mode = 'edit', availableVars =
           availableVars={availableVars}
           datasetVars={datasetVars}
           caseId={caseId}
+          platform={platform}
           buildActionRef={buildActionRef}
           onCancel={onClose}
           saveLabel={mode === 'create' ? '添加步骤' : '保存'}
@@ -107,6 +118,7 @@ interface FormProps {
   availableVars: string[];
   datasetVars: string[];
   caseId?: string;
+  platform?: 'web' | 'mobile';
   buildActionRef: RefObject<(() => Record<string, unknown> | null) | null>;
   onCancel: () => void;
   onSave: (built: StepClip) => void;
@@ -114,7 +126,7 @@ interface FormProps {
   saveMode: 'edit' | 'create';
 }
 
-function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars = [], caseId, buildActionRef, onCancel, onSave, saveLabel, saveMode }: FormProps) {
+function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars = [], caseId, platform = 'web', buildActionRef, onCancel, onSave, saveLabel, saveMode }: FormProps) {
   const navigate = useNavigate();
   const { projectId: routeProjectId, versionId: routeVersionId } = useParams<{ projectId: string; versionId: string }>();
   const action = clip.action as Record<string, unknown>;
@@ -205,6 +217,26 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
   const [logAssertion, setLogAssertion] = useState<{ match: 'equals' | 'contains' | 'regex'; expected: string } | undefined>(
     action.assertion as { match: 'equals' | 'contains' | 'regex'; expected: string } | undefined,
   );
+
+  // mobile-only
+  const isMobileForm = platform === 'mobile';
+  const [swipeFrom, setSwipeFrom] = useState<Locator[]>(() => {
+    if (Array.isArray(action.from)) return action.from as Locator[];
+    return [{ strategy: 'accessibilityId', value: '' }];
+  });
+  const [swipeTo, setSwipeTo] = useState<Locator[]>(() => {
+    if (Array.isArray(action.to)) return action.to as Locator[];
+    return [{ strategy: 'accessibilityId', value: '' }];
+  });
+  const [appearanceMode, setAppearanceMode] = useState<'light' | 'dark'>(
+    (action.mode as 'light' | 'dark') ?? 'light',
+  );
+  const [networkState, setNetworkState] = useState<'online' | 'offline' | 'airplane'>(
+    (action.state as 'online' | 'offline' | 'airplane') ?? 'online',
+  );
+  const [latInput, setLatInput] = useState(String(action.latitude ?? 0));
+  const [lonInput, setLonInput] = useState(String(action.longitude ?? 0));
+  const [appOpenBundleId, setAppOpenBundleId] = useState(String(action.bundleId ?? ''));
 
   useEffect(() => {
     if (kind !== 'upload' || !caseId) return;
@@ -299,6 +331,19 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       next.fromLine = Math.max(1, Math.min(10000, Number(observeFromLine) || 200));
       if (logAssertion) next.assertion = logAssertion;
       else delete next.assertion;
+    }
+    if (kind === 'swipe') {
+      next.from = swipeFrom;
+      next.to = swipeTo;
+    }
+    if (kind === 'setAppearance') next.mode = appearanceMode;
+    if (kind === 'setNetwork') next.state = networkState;
+    if (kind === 'setLocation') {
+      next.latitude = Number(latInput) || 0;
+      next.longitude = Number(lonInput) || 0;
+    }
+    if (kind === 'appOpen') {
+      next.bundleId = appOpenBundleId.trim() || undefined;
     }
 
     return next;
@@ -402,7 +447,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
         {showLocator && (
           <div className="flex flex-col gap-1.5">
             <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>定位候选（按顺序尝试，录制产生的语义定位优先）</span>
-            <LocatorArrayEditor locators={locators} onChange={setLocators} errors={fieldErrors} />
+            <LocatorArrayEditor locators={locators} onChange={setLocators} errors={fieldErrors} mobile={isMobileForm} />
           </div>
         )}
 
@@ -756,6 +801,90 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
             <span>截图名称</span>
             <input className="input-base input-xs" value={shotName} onChange={(e) => setShotName(e.target.value)} placeholder="可选" />
           </label>
+        )}
+
+        {/* ---- mobile-only kind forms ----  (tap/swipe/setAppearance/setNetwork/setLocation/appOpen/appBack/appRestart/home) */}
+        {kind === 'swipe' && (
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>起点定位</span>
+              <LocatorArrayEditor locators={swipeFrom} onChange={setSwipeFrom} errors={fieldErrors} mobile />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>终点定位</span>
+              <LocatorArrayEditor locators={swipeTo} onChange={setSwipeTo} errors={fieldErrors} mobile />
+            </div>
+          </div>
+        )}
+
+        {kind === 'setAppearance' && (
+          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+            <span>外观模式</span>
+            <select className="input-base input-xs" value={appearanceMode} onChange={(e) => setAppearanceMode(e.target.value as 'light' | 'dark')}>
+              <option value="light">浅色</option>
+              <option value="dark">深色</option>
+            </select>
+          </label>
+        )}
+
+        {kind === 'setNetwork' && (
+          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+            <span>网络状态</span>
+            <select className="input-base input-xs" value={networkState} onChange={(e) => setNetworkState(e.target.value as 'online' | 'offline' | 'airplane')}>
+              <option value="online">在线</option>
+              <option value="offline">离线</option>
+              <option value="airplane">飞行模式</option>
+            </select>
+          </label>
+        )}
+
+        {kind === 'setLocation' && (
+          <div className="flex gap-2">
+            <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
+              <span>纬度 (-90 ~ 90)</span>
+              <input
+                className="input-base input-xs"
+                aria-invalid={!!fieldErrors['action.latitude']}
+                value={latInput}
+                onChange={(e) => setLatInput(e.target.value)}
+                inputMode="numeric"
+                placeholder="0"
+              />
+              <FieldError msg={fieldErrors['action.latitude']} />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
+              <span>经度 (-180 ~ 180)</span>
+              <input
+                className="input-base input-xs"
+                aria-invalid={!!fieldErrors['action.longitude']}
+                value={lonInput}
+                onChange={(e) => setLonInput(e.target.value)}
+                inputMode="numeric"
+                placeholder="0"
+              />
+              <FieldError msg={fieldErrors['action.longitude']} />
+            </label>
+          </div>
+        )}
+
+        {kind === 'appOpen' && (
+          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+            <span>bundleId（留空则启动默认应用）</span>
+            <input
+              className="input-base input-xs"
+              aria-invalid={!!fieldErrors['action.bundleId']}
+              value={appOpenBundleId}
+              onChange={(e) => setAppOpenBundleId(e.target.value)}
+              placeholder="com.example.app"
+            />
+            <FieldError msg={fieldErrors['action.bundleId']} />
+          </label>
+        )}
+
+        {(kind === 'appBack' || kind === 'appRestart' || kind === 'home') && (
+          <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+            该步骤无需额外字段,保存即可。
+          </p>
         )}
 
         {kind === 'queryDb' && (

@@ -6,12 +6,16 @@ interface Props {
   onChange: (next: Locator[]) => void;
   /** 以 action.locator 开头的错误，如 { 'action.locator.0.value': '…' } */
   errors?: Record<string, string>;
+  /** 移动端用例：补全 accessibilityId/label/predicate 三个移动专用策略。 */
+  mobile?: boolean;
 }
 
-const STRATEGIES: Locator['strategy'][] = ['role', 'text', 'testId', 'css', 'xpath'];
+const STRATEGIES_WEB: Locator['strategy'][] = ['role', 'text', 'testId', 'css', 'xpath'];
+const STRATEGIES_MOBILE_EXTRA: Locator['strategy'][] = ['accessibilityId', 'label', 'predicate'];
 
 /** locator 有序候选数组编辑器：录制会产生多个候选，顺序即回放优先级。 */
-export default function LocatorArrayEditor({ locators, onChange, errors = {} }: Props) {
+export default function LocatorArrayEditor({ locators, onChange, errors = {}, mobile }: Props) {
+  const strategies = mobile ? [...STRATEGIES_WEB, ...STRATEGIES_MOBILE_EXTRA] : STRATEGIES_WEB;
   const update = (i: number, patch: Partial<Locator>) =>
     onChange(locators.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
   const remove = (i: number) => onChange(locators.filter((_, idx) => idx !== i));
@@ -37,7 +41,7 @@ export default function LocatorArrayEditor({ locators, onChange, errors = {} }: 
                 value={l.strategy}
                 onChange={(e) => update(i, { strategy: e.target.value as Locator['strategy'] })}
               >
-                {STRATEGIES.map((s) => (
+                {strategies.map((s) => (
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>
@@ -58,7 +62,7 @@ export default function LocatorArrayEditor({ locators, onChange, errors = {} }: 
       })}
       <button
         type="button"
-        onClick={() => onChange([...locators, { strategy: 'css', value: '' }])}
+        onClick={() => onChange([...locators, { strategy: mobile ? 'accessibilityId' : 'css', value: '' }])}
         className="press text-[11px] px-2 py-1 rounded-[var(--radius-sm)] self-start"
         style={{ border: '1px dashed var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: 'pointer' }}
       >

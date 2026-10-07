@@ -1328,6 +1328,7 @@ export default function CaseDetail() {
           availableVars={Array.from(new Set([...datasetVars, ...extractVars]))}
           datasetVars={datasetVars}
           caseId={id}
+          platform={caseDetail.platform ?? 'web'}
           onClose={() => { setEditing(null); setEditingIdx(-1); editingSnapshotRef.current = null; setEditingMode('edit'); }}
           onSave={(next) => {
             let applied = false;
