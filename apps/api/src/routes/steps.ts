@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testSteps, testCases, testAttachments, groups } from '../db/schema.js';
+import { testSteps, testCases, testAttachments, groups, datasets } from '../db/schema.js';
 import { eq, asc, and, inArray, sql } from 'drizzle-orm';
 import { StepAction } from '@itest/shared';
 import { HttpError } from '../middleware/errorHandler.js';
@@ -34,6 +34,12 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
   await assertCaseVisible(req.params.caseId!, req.user!);
+  // 绑定数据集的列名 = 回放初始变量（与 PUT 替换路由一致），datasetId 为 null 时不传。
+  let initialVars: string[] | undefined;
+  if (exists[0]!.datasetId) {
+    const ds = (await db.select().from(datasets).where(eq(datasets.id, exists[0]!.datasetId)).limit(1))[0];
+    if (ds) initialVars = ds.columns.map((c) => c.name);
+  }
   // 重排为接续现有最大 order 的连续序号，避免重复。
   const maxRow = await db
     .select({ maxOrder: sql<number>`coalesce(max(${testSteps.order}), 0)` })
@@ -47,6 +53,7 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
     body.steps
       .map((s) => s.action)
       .filter((a): a is StepAction => !!a && !!((a as { kind?: string }).kind) && ((a as { locator?: unknown[] }).locator?.length ?? 0) > 0),
+    initialVars,
   );
   if (variableReport.regexIssues.length > 0) {
     throw new HttpError(
@@ -199,6 +206,12 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
   const g = (await db.select().from(groups).where(eq(groups.id, groupId)))[0];
   if (!g) throw new HttpError(404, 'not_found', 'group not found');
   const caseProjectId = g.projectId;
+  // 绑定数据集的列名 = 回放初始变量：体检时传入 buildVariableReport，避免 {{列名}} 被误报未定义。
+  let initialVars: string[] | undefined;
+  if (exists[0]!.datasetId) {
+    const ds = (await db.select().from(datasets).where(eq(datasets.id, exists[0]!.datasetId)).limit(1))[0];
+    if (ds) initialVars = ds.columns.map((c) => c.name);
+  }
   for (const s of body.steps) {
     // upload/sensitive 等语义检查从 compiled[0] 读取(action 可能缺省 —— 2026-10-07 起 compiled 是 source of truth)。
     const c0 = (Array.isArray(s.compiled) && s.compiled.length > 0
@@ -228,12 +241,34 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
       ensureKeyLoaded();
     }
   }
-  // 占位步骤没有具体 kind 形态,buildVariableReport 跳过它们。
-  const variableReport = buildVariableReport(
-    body.steps
-      .map((s) => s.action)
-      .filter((a): a is StepAction => !!a && !!((a as { kind?: string }).kind) && ((a as { locator?: unknown[] }).locator?.length ?? 0) > 0),
-  );
+  // 2026-10-07：体检输入按 compiled 全量扁平化（多动作链里第 2+ 个动作的 {{var}} 也要扫）；
+  // 老数据无 compiled 时回退 action（须有 kind 且 locator 非空）。占位（compiled 空数组）自然跳过。
+  // 扁平化后动作下标 ≠ 步骤下标，记录每个动作所属步骤下标，把 report 里的 order 重映射回步骤序号
+  // （UI/报错文案按"步骤 N"展示，N 必须对得上 steps 列表）。
+  const stepIndexOfAction: number[] = [];
+  const actionsForReport = body.steps.flatMap((s, si): StepAction[] => {
+    if (Array.isArray(s.compiled)) {
+      const acts = s.compiled.filter((c): c is StepAction => !!((c as { kind?: string }).kind));
+      acts.forEach(() => stepIndexOfAction.push(si));
+      return acts;
+    }
+    const a = s.action as { kind?: string; locator?: unknown[] } | undefined;
+    if (a?.kind && (a.locator?.length ?? 0) > 0) {
+      stepIndexOfAction.push(si);
+      return [a as StepAction];
+    }
+    return [];
+  });
+  const rawReport = buildVariableReport(actionsForReport, initialVars);
+  const stepOf = (i: number) => stepIndexOfAction[i] ?? i;
+  const variableReport = {
+    ...rawReport,
+    undefined: rawReport.undefined.map((v) => ({ ...v, stepOrder: stepOf(v.stepOrder) })),
+    forwardRefs: rawReport.forwardRefs.map((v) => ({ ...v, stepOrder: stepOf(v.stepOrder) })),
+    regexIssues: rawReport.regexIssues.map((v) => ({ ...v, stepOrder: stepOf(v.stepOrder) })),
+    invalidNames: rawReport.invalidNames.map((v) => ({ ...v, stepOrder: stepOf(v.stepOrder) })),
+    duplicates: rawReport.duplicates.map((d) => ({ ...d, definedAt: d.definedAt.map(stepOf) })),
+  };
   if (variableReport.regexIssues.length > 0) {
     throw new HttpError(
       422,

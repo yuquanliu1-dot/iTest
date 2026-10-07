@@ -42,6 +42,8 @@ beforeAll(async () => {
   app.use('/api', datasetsRoute);
   const { casesRoute } = await import('../src/routes/cases.js');
   app.use('/api/cases', casesRoute);
+  const { stepsRoute } = await import('../src/routes/steps.js');
+  app.use('/api/cases', stepsRoute);
   app.use(errorHandler);
 });
 
@@ -364,5 +366,31 @@ describe('case dataset binding', () => {
     const r = await request(app).patch(`/api/cases/${foreign.rows[0].id}`).send({ datasetId: created.id });
     expect(r.status).toBe(400);
     expect(r.body.error).toBe('dataset_project_mismatch');
+  });
+
+  it('PUT steps：数据集列作初始变量不误报未定义；compiled[1] 里的引用也检出', async () => {
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, { ...body, name: '体检数据集' });
+    const caseId = await newCase('变量体检集成');
+    const bind = await request(app).patch(`/api/cases/${caseId}`).send({ datasetId: created.id });
+    expect(bind.status).toBe(200);
+    const put = await request(app).put(`/api/cases/${caseId}/steps`).send({
+      steps: [
+        { instruction: '输入用户名', compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#u' }], value: '{{username}}' }] },
+        { instruction: '抽取token', compiled: [{ kind: 'extract', locator: [{ strategy: 'css', value: 'a' }], varName: 'token', mode: 'completeValue' }] },
+        { instruction: '输入token', compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#t' }], value: '{{token}}' }] },
+        { instruction: '组合步骤', compiled: [
+          { kind: 'waitFor', locator: [{ strategy: 'css', value: '#x' }], timeoutMs: 1000 },
+          { kind: 'assertText', locator: [{ strategy: 'css', value: '#y' }], equals: '订单{{orderNo}}' },
+        ] },
+      ],
+    });
+    expect(put.status).toBe(200);
+    // 数据集列（username）与已 extract 的 token 不误报未定义
+    const names: string[] = put.body.variableReport.undefined.map((u: { name: string }) => u.name);
+    expect(names).not.toContain('username');
+    expect(names).not.toContain('token');
+    // orderNo 既不在数据集列也没 extract，且位于 compiled[1]（第二个动作）——必须被扁平化检出，stepOrder 映射回步骤 3
+    expect(put.body.variableReport.undefined).toContainEqual({ stepOrder: 3, field: 'assertText.equals', name: 'orderNo' });
   });
 });
