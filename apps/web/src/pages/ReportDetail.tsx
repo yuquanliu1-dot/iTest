@@ -347,7 +347,20 @@ export default function ReportDetail() {
               />
               <MetaRow label="用例 ID" value={<span className="font-mono text-[11px]">{data.caseId.slice(0, 8)}</span>} />
               <MetaRow label="报告 ID" value={<span className="font-mono text-[11px]">{data.id.slice(0, 8)}</span>} />
+              {data.datasetRowIndex != null && data.datasetSnapshot && (
+                <MetaRow label="数据行" value={`${data.datasetSnapshot.rowIndex + 1}/${data.datasetSnapshot.totalRows}`} />
+              )}
             </div>
+            {data.datasetSnapshot && (
+              <div className="bg-card border rounded-[var(--radius-md)] p-4">
+                <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
+                  当次数据行
+                </div>
+                {Object.entries(data.datasetSnapshot.values).map(([k, v]) => (
+                  <MetaRow key={k} label={k} value={<span className="font-mono text-[11px]">{v}</span>} />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
