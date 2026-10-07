@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { datasets, groups, projects, projectVersions, reports, testCases, testEnvironments, planRuns } from '../db/schema.js';
+import { datasets, deviceTargets, groups, projects, projectVersions, reports, testCases, testEnvironments, planRuns } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import type { AuthUser } from './auth.service.js';
 import { visibleOrgIdsFor } from './orgTree.js';
@@ -124,6 +124,24 @@ export async function resolveVersionProjectId(versionId: string): Promise<string
 export async function assertVersionVisible(versionId: string, user: AuthUser): Promise<{ projectId: string }> {
   const projectId = await resolveVersionProjectId(versionId);
   if (!projectId) throw new HttpError(404, 'not_found', 'version not found');
+  await assertProjectVisible(projectId, user);
+  return { projectId };
+}
+
+/** 解析 device target 所属项目 id（device_target → project）；链路不存在返回 null。 */
+export async function resolveDeviceTargetProjectId(deviceTargetId: string): Promise<string | null> {
+  const rows = await db
+    .select({ projectId: deviceTargets.projectId })
+    .from(deviceTargets)
+    .where(eq(deviceTargets.id, deviceTargetId))
+    .limit(1);
+  return rows[0]?.projectId ?? null;
+}
+
+/** device target 可见性断言：经所属项目判定，404 文案不区分「不存在」与「不可见」。 */
+export async function assertDeviceTargetVisible(deviceTargetId: string, user: AuthUser): Promise<{ projectId: string }> {
+  const projectId = await resolveDeviceTargetProjectId(deviceTargetId);
+  if (!projectId) throw new HttpError(404, 'not_found', 'device target not found');
   await assertProjectVisible(projectId, user);
   return { projectId };
 }
