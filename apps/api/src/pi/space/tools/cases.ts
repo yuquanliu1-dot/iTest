@@ -22,6 +22,7 @@ import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import * as svc from '../../../services/cases.service.js';
+import { listDatasets } from '../../../services/datasets.service.js';
 import { resolveCaseProjectId, resolveVersionProjectId } from '../../../services/projectAccess.js';
 import { HttpError } from '../../../middleware/errorHandler.js';
 import { db } from '../../../db/client.js';
@@ -121,7 +122,6 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
               return { ok: true, data: JSON.stringify(rows.map((r) => ({ ...r, isCurrent: r.id === ctx.versionId })), null, 2) };
             }
             case 'list_datasets': {
-              const { listDatasets } = await import('../../../services/datasets.service.js');
               const rows = await listDatasets(ctx.projectId);
               return {
                 ok: true,
