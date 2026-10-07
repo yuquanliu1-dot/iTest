@@ -423,6 +423,58 @@ describe('recorder-manager — phase1 change events + pause', () => {
     pwd.remove();
   });
 
+  // 浏览器自动填充 / 1Password 等密码管理器扩展会直接设 input.value 但**不**触发 input 事件,
+  // 只在失焦后触发 change。本测试验证 change 兜底能录上无 input 历史的密码。
+  it('password autofill via change only (no input) records fill with sensitive=true', () => {
+    const { captured } = setup();
+    const pwd = document.createElement('input');
+    pwd.type = 'password';
+    pwd.name = 'password';
+    document.body.appendChild(pwd);
+    // 模拟 Chrome autofill:native setter 写值,**不**触发 input
+    const proto = Object.getPrototypeOf(pwd);
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    desc!.set!.call(pwd, 'AutoFilledSecret');
+    pwd.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.type).toBe('fill');
+    expect(captured[0]!.value).toBe('AutoFilledSecret');
+    expect(captured[0]!.sensitive).toBe(true);
+    pwd.remove();
+  });
+
+  // 同一密码输入框在 1s 内反复 change(autofill 重填 / 失焦再聚焦)只产一条 fill。
+  it('password autofill dedupes within 1s window', async () => {
+    const { captured } = setup();
+    const pwd = document.createElement('input');
+    pwd.type = 'password';
+    pwd.name = 'password';
+    document.body.appendChild(pwd);
+    pwd.value = 'v1';
+    pwd.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 50));
+    pwd.value = 'v2';
+    pwd.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 50));
+    pwd.value = 'v3';
+    pwd.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(captured).toHaveLength(1);
+    pwd.remove();
+  });
+
+  // change 兜底不会污染非密码字段(non-password 输入框)。
+  it('change autofill fallback ignores non-sensitive fields', () => {
+    const { captured } = setup();
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.name = 'username';
+    inp.value = 'admin';
+    document.body.appendChild(inp);
+    inp.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(captured.find((s) => s.type === 'fill' && s.sensitive === true)).toBeUndefined();
+    inp.remove();
+  });
+
   it('select change inside antd container sets componentKind=select', () => {
     const { captured } = setup();
     const wrap = document.createElement('div');
