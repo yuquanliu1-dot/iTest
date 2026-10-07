@@ -29,6 +29,7 @@ import { runAiTask, solveCaptchaOnce, detectCaptchaFailure, CAPTCHA_TASK_RE } fr
 import type { EnvCtx } from './envContext.js';
 import { runQueryDb } from './dbQuery.js';
 import { runObserveLog } from './syslogReader.js';
+import { runCaseVisionAssert } from './visionAssert.js';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
 
@@ -793,57 +794,21 @@ async function runStepsInContext(
   // 若中途已 failed，vision 不再覆盖（避免 vision 误判把真失败洗白）。
   const failedSoFar = results.some((r) => r.status === 'failed');
   if (!failedSoFar && ctx.expectedOutcome && ctx.expectedOutcome.trim()) {
-    try {
-      // 数据集行级物化：expectedOutcome 模板按当次运行最终 vars 替换后再判定，负向行不再共用同一段预期文本。
-      const expectedForJudge = materializeExpectedOutcome(ctx.expectedOutcome, vars);
-      // 终态判定前给 SPA 收尾时间：点击提交 → 接口往返 → 前端跳转是异步的，
-      // 立即截图会把「仍停在提交前页面」误判为失败（实测点击后 ~100ms 截图仍显示登录页）。
-      await opts.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
-      await opts.page.waitForTimeout(800);
-      const buffer = await opts.page.screenshot({ timeout: 5000 });
-      // 终态判定截图单独保存，便于报告页把「最终页面 vs 预期」展示给用户。
-      const visionScreenshotPath = `/screenshots/${ctx.reportId}/final.png`;
-      try {
-        const dir = join(SCREENSHOTS_DIR, ctx.reportId);
-        await mkdir(dir, { recursive: true });
-        await writeFile(join(dir, 'final.png'), buffer);
-      } catch (e) {
-        logger.warn({ err: e, reportId: ctx.reportId }, 'failed to save final vision screenshot');
-      }
-      const { judgeCaseOutcome } = await import('../agent/judgeCaseOutcome.js');
-      const verdict = await judgeCaseOutcome({
-        expectedOutcome: expectedForJudge,
-        caseTitle: ctx.caseTitle ?? caseId,
-        caseUrl: ctx.caseUrl ?? null,
-        screenshot: { base64: buffer.toString('base64'), mime: 'image/png' },
-        llmClient: ctx.llmClient,
-      });
-      // 报告侧脱敏：LLM 提示按 spec §8.3 走明文，但落库的 visionAssert（expected / reason 可能复述敏感列值）
-      // 与步骤错误信息同口径打码 —— 报告与详情只出掩码，闭环列级加密。
-      const maskForReport = (t: string) => (ctx.sensitiveVarKeys && ctx.sensitiveVarKeys.length > 0
-        ? maskSensitiveValues(t, vars, ctx.sensitiveVarKeys)
-        : t);
-      const expectedForReport = maskForReport(expectedForJudge);
-      if (verdict && !verdict.passed) {
-        // 用例级 vision 判失败 → 追加一个 order=-1 的 failed stepResult，调用方以「任意 failed」判定为失败。
-        results.push({
-          order: -1,
-          status: 'failed',
-          durationMs: 0,
-          error: `case-level vision assert failed: ${maskForReport(verdict.reason)}`,
-          screenshot: visionScreenshotPath,
-          failureReason: 'VisionAssertionFailed',
-          humanMessage: '最终页面与用例预期不符',
-          visionAssert: { passed: false, reason: maskForReport(verdict.reason), screenshot: visionScreenshotPath, expected: expectedForReport },
-        });
-      } else if (verdict) {
-        // 通过：在最后一步 result 上挂 visionAssert，调用方可读到 reason（不影响 passed 计数）。
-        const last = results[results.length - 1];
-        if (last) last.visionAssert = { passed: true, reason: maskForReport(verdict.reason), screenshot: visionScreenshotPath, expected: expectedForReport };
-      }
-    } catch (e) {
-      // vision 兜底失败不视作用例失败：best-effort
-      logger.warn({ err: e, caseId }, 'case-outcome vision assert skipped');
+    const va = await runCaseVisionAssert({
+      page: opts.page,
+      reportId: ctx.reportId,
+      caseTitle: ctx.caseTitle ?? caseId,
+      caseUrl: ctx.caseUrl ?? null,
+      expectedOutcome: ctx.expectedOutcome,
+      vars,
+      sensitiveVarKeys: ctx.sensitiveVarKeys ?? [],
+      llmClient: ctx.llmClient,
+    });
+    if (va?.failureStep) {
+      results.push(va.failureStep);
+    } else if (va?.onLastPass) {
+      const last = results[results.length - 1];
+      if (last) last.visionAssert = { passed: true, ...va.onLastPass };
     }
   }
   return results;
