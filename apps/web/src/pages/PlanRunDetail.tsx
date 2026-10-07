@@ -74,13 +74,37 @@ export default function PlanRunDetail() {
                       <span className="font-mono text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{c.caseId.slice(0, 8)}</span>
                       <StatusPill status={c.status} pulse={c.status === 'running'}>{c.status}</StatusPill>
                       <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{c.durationMs ?? 0} ms</span>
+                      {(c.reportIds?.length ?? 0) > 1 && (
+                        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                          {(c.rowStatuses ?? []).filter((s) => s === 'passed').length}/{c.reportIds!.length} 行通过
+                        </span>
+                      )}
                     </div>
                     {c.error && <div className="text-[12px] mt-1" style={{ color: 'var(--destructive)' }}>{c.error}</div>}
                   </div>
-                  {c.reportId && (
-                    <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports/${c.reportId}`)}>
-                      报告
-                    </Button>
+                  {(c.reportIds?.length ?? 0) > 1 ? (
+                    <div className="flex items-center gap-1 shrink-0">
+                      {(c.reportIds ?? []).map((rid, i) => {
+                        const st = c.rowStatuses?.[i];
+                        return (
+                          <Button
+                            key={rid}
+                            variant="ghost"
+                            size="sm"
+                            title={st ?? undefined}
+                            onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports/${rid}`)}
+                          >
+                            行{i + 1} {st === 'passed' ? '✓' : st === 'failed' ? '✕' : '·'}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    c.reportId && (
+                      <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports/${c.reportId}`)}>
+                        报告
+                      </Button>
+                    )
                   )}
                 </div>
               ))}
