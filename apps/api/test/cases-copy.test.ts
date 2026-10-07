@@ -73,6 +73,32 @@ describe('case copy', () => {
     expect(c3.body.title).toBe('登录 副本2');
   });
 
+  it('copy carries datasetId within same project; drops it cross-project', async () => {
+    const a = await seedProject(pool);
+    const b = await seedProject(pool);
+    const ds = await pool.query(
+      `INSERT INTO datasets(project_id, name, columns, rows) VALUES ($1, '复制绑定', $2::jsonb, $3::jsonb) RETURNING id`,
+      [
+        a.projectId,
+        JSON.stringify([{ name: 'u', sensitive: false }]),
+        JSON.stringify([{ disabled: false, cells: { u: 'x' } }]),
+      ],
+    );
+    const src = await makeCaseWithSteps(a.groupId, a.versionId, '绑数据集');
+    const bind = await request(app).patch(`/api/cases/${src.id}`).send({ datasetId: ds.rows[0].id });
+    expect(bind.status).toBe(200);
+
+    // 同项目目标分组：绑定随拷贝携带
+    const sameProject = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: a.groupId });
+    expect(sameProject.status).toBe(200);
+    expect(sameProject.body.datasetId).toBe(ds.rows[0].id);
+
+    // 跨项目目标分组：数据集不外带，置空（回退单次执行）
+    const crossProject = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: b.groupId });
+    expect(crossProject.status).toBe(200);
+    expect(crossProject.body.datasetId).toBeNull();
+  });
+
   it('batch copy to another group', async () => {
     const a = await seedProject(pool);
     const b = await seedProject(pool);

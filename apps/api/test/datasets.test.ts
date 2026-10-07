@@ -166,6 +166,24 @@ describe('datasets.service', () => {
     expect((badTarget as HttpError).status).toBe(400);
   });
 
+  it('updateDataset：敏感→非敏感但旧密文损坏 → 400 提示重新填写（而非 500）', async () => {
+    const { HttpError } = await import('../src/middleware/errorHandler.js');
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, { ...body, name: '坏密文去敏' });
+    await pool.query(
+      `UPDATE datasets SET rows = jsonb_set(rows, '{0,cells,password}', '{"c":"AAAA","i":"AAAA","t":"AAAA"}') WHERE id = $1`,
+      [created.id],
+    );
+    const e = await svc.updateDataset(created.id, {
+      name: '坏密文去敏',
+      columns: [{ name: 'username', sensitive: false }, { name: 'password', sensitive: false }], // 去敏触发解密
+      rows: [{ disabled: false, cells: { username: 'x', password: { __masked: true } } }],
+    }).catch((err: unknown) => err);
+    expect(e).toBeInstanceOf(HttpError);
+    expect((e as HttpError).status).toBe(400);
+    expect((e as HttpError).message).toContain('解密失败');
+  });
+
   it('校验：非法列名 / 重复列名 / 未知列 / 超上限 报 400', async () => {
     const svc = await import('../src/services/datasets.service.js');
     const { HttpError } = await import('../src/middleware/errorHandler.js');

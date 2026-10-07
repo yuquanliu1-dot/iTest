@@ -122,8 +122,16 @@ function normalizeDataset(
         if (typeof v === 'string') {
           cells[k] = v;
         } else if (isMaskedCell(v)) {
-          // 刚从敏感切成非敏感：把旧密文解回明文（用户要求去敏）
-          cells[k] = isEncCell(prevCell) ? decryptCell(prevCell) : (typeof prevCell === 'string' ? prevCell : '');
+          // 刚从敏感切成非敏感：把旧密文解回明文（用户要求去敏）；密文损坏显式 400 而非 500
+          if (isEncCell(prevCell)) {
+            try {
+              cells[k] = decryptCell(prevCell);
+            } catch {
+              throw new HttpError(400, 'bad_request', `列 ${k} 旧密文解密失败（密钥变更或数据损坏），请重新填写该列值`);
+            }
+          } else {
+            cells[k] = typeof prevCell === 'string' ? prevCell : '';
+          }
         } else {
           throw new HttpError(400, 'bad_request', `第 ${i + 1} 行列 ${k} 的值类型不合法`);
         }
