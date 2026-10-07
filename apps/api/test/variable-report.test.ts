@@ -66,3 +66,21 @@ describe('buildVariableReport', () => {
     expect(report.invalidNames[0]!.stepOrder).toBe(0);
   });
 });
+
+describe('initialVars（数据集列作为初始变量）', () => {
+  it('初始变量不报 undefined/forwardRefs', () => {
+    const report = buildVariableReport([ex('token'), fillAction('{{username}}'), fillAction('{{token}}')], ['username']);
+    expect(report.undefined).toEqual([]);
+    expect(report.forwardRefs).toEqual([]);
+  });
+
+  it('extract 覆盖同名列不报 duplicates（运行时后写生效，合法）', () => {
+    const report = buildVariableReport([ex('username'), fillAction('{{username}}')], ['username']);
+    expect(report.duplicates).toEqual([]);
+  });
+
+  it('不在初始变量里的引用仍报 undefined', () => {
+    const report = buildVariableReport([fillAction('{{nope}}')], ['username']);
+    expect(report.undefined).toEqual([{ stepOrder: 0, field: 'fill.value', name: 'nope' }]);
+  });
+});

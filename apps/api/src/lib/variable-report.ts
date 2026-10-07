@@ -59,13 +59,18 @@ function stringFields(step: StepAction): Array<{ field: string; text: string }> 
   return out;
 }
 
-export function buildVariableReport(steps: StepAction[]): VariableReport {
+export function buildVariableReport(steps: StepAction[], initialVars?: string[]): VariableReport {
   const definedOrder = new Map<string, number>();
   const duplicates = new Map<string, number[]>();
   const undef: VariableIssue[] = [];
   const forward: VariableIssue[] = [];
   const regexIssues: RegexIssue[] = [];
   const invalidNames: VarNameIssue[] = [];
+
+  // 初始变量（绑定数据集的列）：视为步骤 0 前已定义（order=-1）。
+  // 只消灭 undefined/forwardRefs 误报；不参与 duplicates —— extract 覆盖同名初始变量属合法运行时语义（后写生效），
+  // 且 definedOrder 保留 -1：对它的前向引用用初始值，不算 forward。
+  for (const name of initialVars ?? []) definedOrder.set(name, -1);
 
   // First pass: register all extract varName → earliest definition order.
   for (let i = 0; i < steps.length; i++) {
@@ -76,13 +81,15 @@ export function buildVariableReport(steps: StepAction[]): VariableReport {
       invalidNames.push({ stepOrder: i, field: 'extract.varName', name: a.varName, reason: nameCheck.reason ?? 'invalid' });
     }
     const name = a.varName;
-    if (definedOrder.has(name)) {
-      const arr = duplicates.get(name) ?? [definedOrder.get(name)!];
+    const prev = definedOrder.get(name);
+    if (prev !== undefined && prev >= 0) {
+      const arr = duplicates.get(name) ?? [prev];
       arr.push(i);
       duplicates.set(name, arr);
-    } else {
+    } else if (prev === undefined) {
       definedOrder.set(name, i);
     }
+    // prev === -1（初始变量）：保留 -1，不记 duplicate
     if (a.mode === 'regex' && a.pattern) {
       const r = safeRegex(a.pattern);
       if (!r.ok) regexIssues.push({ stepOrder: i, reason: r.reason });
