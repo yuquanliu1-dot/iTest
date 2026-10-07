@@ -22,6 +22,7 @@ interface Props {
    *  仅影响标题文案 + 保存按钮文案 + 默认 source；保存数据流不变。 */
   mode?: 'edit' | 'create';
   availableVars?: string[];
+  datasetVars?: string[];
   caseId?: string;
   onSave: (next: StepClip) => void;
   onClose: () => void;
@@ -33,7 +34,7 @@ function FieldError({ msg }: { msg?: string }) {
 }
 
 /** 步骤编辑抽屉：外壳管类型切换 + 通用字段；DrawerForm 按 kind 重挂载管差异字段。 */
-export default function StepEditDrawer({ initial, mode = 'edit', availableVars = [], caseId, onSave, onClose }: Props) {
+export default function StepEditDrawer({ initial, mode = 'edit', availableVars = [], datasetVars = [], caseId, onSave, onClose }: Props) {
   const navigate = useNavigate();
   const { projectId: routeProjectId, versionId: routeVersionId } = useParams<{ projectId: string; versionId: string }>();
   const [draft, setDraft] = useState<StepClip>(initial);
@@ -79,6 +80,7 @@ export default function StepEditDrawer({ initial, mode = 'edit', availableVars =
           delayMs={delayMs}
           onDelayMs={setDelayMs}
           availableVars={availableVars}
+          datasetVars={datasetVars}
           caseId={caseId}
           buildActionRef={buildActionRef}
           onCancel={onClose}
@@ -103,6 +105,7 @@ interface FormProps {
   delayMs: string;
   onDelayMs: (v: string) => void;
   availableVars: string[];
+  datasetVars: string[];
   caseId?: string;
   buildActionRef: RefObject<(() => Record<string, unknown> | null) | null>;
   onCancel: () => void;
@@ -111,7 +114,7 @@ interface FormProps {
   saveMode: 'edit' | 'create';
 }
 
-function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, caseId, buildActionRef, onCancel, onSave, saveLabel, saveMode }: FormProps) {
+function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars = [], caseId, buildActionRef, onCancel, onSave, saveLabel, saveMode }: FormProps) {
   const navigate = useNavigate();
   const { projectId: routeProjectId, versionId: routeVersionId } = useParams<{ projectId: string; versionId: string }>();
   const action = clip.action as Record<string, unknown>;
@@ -424,7 +427,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, caseId, bui
                 <FieldError msg={fieldErrors.sensitive} />
               </div>
             ) : kind === 'fill' ? (
-              <FillValueEditor value={fillValue} onChange={setFillValue} availableVars={availableVars} />
+              <FillValueEditor value={fillValue} onChange={setFillValue} availableVars={availableVars} datasetVars={datasetVars} />
             ) : (
               <div className="flex flex-col gap-1">
                 <input
