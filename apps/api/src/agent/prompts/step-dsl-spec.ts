@@ -15,6 +15,20 @@ export const STEP_DSL_SPEC = `StepAction 按 kind 区分（discriminated union�
 - {"kind":"extract","locator":[Locator,...],"varName":"变量名"}
 - {"kind":"aiTask","instruction":"自然语言指令"}（回放时由 AI 智能体实时看截图执行，不预编译；登录页有验证码时用它代替普通 fill——例："识别验证码图片中的字符并填入验证码输入框"；也适用于其他难以固化为 DSL 的动态交互）
 Locator = {"strategy":"role"|"text"|"testId"|"css"|"xpath","value":"定位值"}（xpath 仅用于读取历史数据;新生成的用例应优先 css / role / text / testId，结构鲁棒性差的位置不要选 xpath）
+（mobile-only："accessibilityId"|"label"|"predicate"，仅在 platform=mobile 用例中可产出；web 用例不得使用）
+mobile-only action（仅 platform=mobile 时产出）：
+- {"kind":"tap","locator":[Locator,...]}（首选 tap；click 在 mobile 也可用但会映射为 tap）
+- {"kind":"swipe","from":[Locator,...],"to":[Locator,...],"durationMs":300（默认）}
+- {"kind":"setAppearance","mode":"light"|"dark"}
+- {"kind":"setNetwork","state":"online"|"offline"|"airplane"}
+- {"kind":"setLocation","latitude":<float>,"longitude":<float>}
+- {"kind":"appOpen","bundleId":"com.x.y"}（缺省用 case.appRef.bundleId）
+- {"kind":"appBack"}
+- {"kind":"appRestart"}
+- {"kind":"home"}
+规则（同前）：
+- platform=mobile 时 locator 优先 accessibilityId / label，禁止使用 css 修饰符。
+- platform=web 时 locator 优先 role / text / testId；移动端策略不被接受。
 ValueGenerator（fill.value 动态取值，可选其一）：
 - {"mode":"randomString","length":12}
 - {"mode":"randomNumber","min":0,"max":999999}
