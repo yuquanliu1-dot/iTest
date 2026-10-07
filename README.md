@@ -11,6 +11,7 @@ Turborepo monorepo：
 - `apps/recorder`：Chrome Manifest V3 扩展
 - `packages/shared`：步骤 DSL + Zod schema
 - `packages/ui`：设计令牌 + glass-panel 工具类
+- 移动端测试：`agent-device` SDK（callstack）— `apps/api/src/execute/mobileEngine.ts`
 
 ## 端口
 
@@ -58,6 +59,18 @@ chromium 二进制 **不会** 随 `pnpm install` 下载（playwright-core 不含
 4. 用例详情页：「录制补充」（需 Chrome 扩展，模式 全新/追加/从这里开始/无痕）、「AI 补充步骤」、「执行」；步骤可编辑（名称/等待/随机值/敏感值/上传绑定）、复制粘贴、撤销、AI 步骤失败重编
 5. `/reports` 查看执行结果（含逐步截图）
 
+## 移动端测试
+
+支持 **iOS Simulator** 与 **Android Emulator**。基于 [agent-device](https://github.com/callstack/agent-device) SDK 驱动模拟器，后端在 `apps/api/src/execute/mobileEngine.ts` 实现。
+
+- **设备目标管理**：项目行右侧「设备目标」按钮 → `/p/:projectId/device-targets`，按 mobileOs 区分 ios/android，每条记录带 deviceRef（如 `iPhone 17 Pro`）和 appBundleId 兜底。
+- **用例改 mobile**：用例详情 → 改 `platform='mobile'`、`mobileOs`、`mobileDeviceTargetId`、`appRef.bundleId`，保存后该用例走 MobileEngine 路由。
+- **录制 Mobile**：用例详情 → 「录制 Mobile」按钮（依赖后端 mobile session WS — 任务单独跟踪）。
+- **执行**：用例执行按 `platform` 路由到 MobileEngine（agent-device SDK）或 WebEngine（playwright-core）。
+- **报告**：报告 header 显示 `mobileOs + deviceName` pill；右栏元数据卡显示平台/设备；步骤截图存到 `apps/api/screenshots/<reportId>/`。
+- **手动验证**：项目根 `node apps/api/probe-mobile.mjs`（默认连本机 dev API；可设 `API_TOKEN/ORG_ID`；`DRY_RUN=1` 仅打印请求序列）。
+- **当前边界**：暂不支持真机 / 云设备 / 屏幕录制；iOS 仅 Simulator，Android 仅 Emulator。
+
 ## 测试
 
 ```bash
@@ -80,7 +93,6 @@ pnpm verify  # lint + typecheck + test
 ❌ 不在 MVP：
 - 多用户/权限
 - i18n
-- 移动端适配
 
 ## 已知边界（后续版本）
 
