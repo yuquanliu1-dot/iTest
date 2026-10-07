@@ -3,12 +3,13 @@
  * 归属校验(实体 ∈ ctx.projectId;版本读写面见各 action)在这里;per-user 可见性在 HTTP 边界。
  *
  * 设计变更:用例/步骤的一切修改统一走 stage_case_op 暂存 → StagePanel 勾选 → 落库。
- * 本工具五类：
+ * 本工具六类：
  *   - search:版本内检索(可传 versionId 检索同项目其它版本,为跨版本复制找源)
- *   - get:caseId 拿完整详情(同项目内可跨版本读,复制前核对源用例)
+ *   - get:caseId 拿完整详情(同项目内可跨版本读,复制前核对源用例;绑定了数据集时附 dataset 结构)
  *   - list_versions:项目版本列表(拿源/目标 versionId)
  *   - copy_to_version:复制用例到目标分组(可跨版本,实时写——与 create_group 同级的容器类操作)
  *   - create_group:分组容器创建仍实时写(分组是用例的容器,不属于"对用例的修改")
+ *   - list_datasets:项目数据集结构(列名/敏感标记/行数;仅结构,行值/敏感值永不出库)
  *
  * 旧 action 迁移：
  *   - create          → stage_case(payload 带 groupId,落库时 stageRoute 校验 groupId 归属)
@@ -19,15 +20,18 @@
  */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
+import { eq } from 'drizzle-orm';
 import * as svc from '../../../services/cases.service.js';
 import { resolveCaseProjectId, resolveVersionProjectId } from '../../../services/projectAccess.js';
 import { HttpError } from '../../../middleware/errorHandler.js';
+import { db } from '../../../db/client.js';
+import { datasets } from '../../../db/schema.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 import { emitStage } from './stage.js';
 
 const Actions = z.object({
-  action: z.enum(['search', 'get', 'list_versions', 'copy_to_version', 'create_group']),
+  action: z.enum(['search', 'get', 'list_versions', 'copy_to_version', 'create_group', 'list_datasets']),
   caseId: z.string().uuid().optional(),
   keyword: z.string().max(200).optional(),
   groupId: z.string().uuid().optional(),
@@ -43,7 +47,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
     {
       name: 'manage_cases',
       description:
-        '用例只读操作 + 分组创建 + 跨版本复制。action=search(检索用例,缺省当前版本,可传 versionId 检索同项目其它版本)| get(caseId,含步骤与标签,同项目内可跨版本读)| list_versions(项目版本列表,标出当前版本)| copy_to_version(caseId + targetGroupId,可传 versionId 指定目标版本,缺省复制到当前版本;实时落库)| create_group(groupName,可带 groupDefaultUrl)。用例/步骤的增删改一律走 stage_case(全新用例)或 stage_case_op(已有用例)—— 用户在右侧 StagePanel 勾选 → 落库。',
+        '用例只读操作 + 分组创建 + 跨版本复制。action=search(检索用例,缺省当前版本,可传 versionId 检索同项目其它版本)| get(caseId,含步骤与标签,同项目内可跨版本读)| list_versions(项目版本列表,标出当前版本)| copy_to_version(caseId + targetGroupId,可传 versionId 指定目标版本,缺省复制到当前版本;实时落库)| create_group(groupName,可带 groupDefaultUrl)| list_datasets(项目数据集结构:列名/敏感标记/行数;敏感值永不出现在输出)。用例/步骤的增删改一律走 stage_case(全新用例)或 stage_case_op(已有用例)—— 用户在右侧 StagePanel 勾选 → 落库。',
       parameters: Type.Object({
         action: Type.Union([
           Type.Literal('search'),
@@ -51,6 +55,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
           Type.Literal('list_versions'),
           Type.Literal('copy_to_version'),
           Type.Literal('create_group'),
+          Type.Literal('list_datasets'),
         ]),
         caseId: Type.Optional(Type.String()),
         keyword: Type.Optional(Type.String()),
@@ -67,6 +72,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
         '跨版本复制用例的标准流程:list_versions 拿版本 id → search(versionId=源版本, keyword=...) 找到源 caseId(可 get 核对步骤) → 确认目标分组存在(不存在先 create_group) → copy_to_version(caseId, targetGroupId, versionId=目标版本)。目标版本缺省为当前版本。',
         '创建 group 后返回 groupId；下一步创建用例时把 groupId 喂给 stage_case。',
         'search 返回的列表项不含步骤全文,要看完整步骤/expectedOutcome 用 get。',
+        '数据集列名即回放初始变量 {{列名}}：看项目数据集结构用 list_datasets（仅结构,敏感值永不可见）；看某用例可用变量用 get 返回的 dataset.columns。行间差异（输入值/断言文本/预期描述）应写成 {{var}}，让每行数据驱动出不同验证。绑定/解绑走 stage_case_op update_case(patch.datasetId)。',
       ],
       execute: async (input) => {
         let v: z.infer<typeof Actions>;
@@ -102,11 +108,25 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
               // 同项目内可跨版本读(复制前核对源用例);跨项目拒绝
               const pid = await resolveCaseProjectId(v.caseId);
               if (pid !== ctx.projectId) return { ok: false, error: '用例不存在或不属于当前项目' };
-              return { ok: true, data: JSON.stringify(detail, null, 2) };
+              // 绑定数据集 → 附结构(列名即回放初始变量);仅结构,行值/敏感值永不外泄
+              let dataset: { id: string; name: string; columns: Array<{ name: string; sensitive: boolean }>; enabledRowCount: number } | null = null;
+              if (detail.datasetId) {
+                const ds = (await db.select().from(datasets).where(eq(datasets.id, detail.datasetId)).limit(1))[0];
+                if (ds) dataset = { id: ds.id, name: ds.name, columns: ds.columns, enabledRowCount: ds.rows.filter((r) => !r.disabled).length };
+              }
+              return { ok: true, data: JSON.stringify({ ...detail, dataset }, null, 2) };
             }
             case 'list_versions': {
               const rows = await svc.listVersionsForProject(ctx.projectId);
               return { ok: true, data: JSON.stringify(rows.map((r) => ({ ...r, isCurrent: r.id === ctx.versionId })), null, 2) };
+            }
+            case 'list_datasets': {
+              const { listDatasets } = await import('../../../services/datasets.service.js');
+              const rows = await listDatasets(ctx.projectId);
+              return {
+                ok: true,
+                data: JSON.stringify(rows.map(({ projectId: _pid, updatedAt: _u, ...rest }) => rest), null, 2),
+              };
             }
             case 'copy_to_version': {
               if (!v.caseId || !v.targetGroupId) return { ok: false, error: 'copy_to_version 需要 caseId 与 targetGroupId' };

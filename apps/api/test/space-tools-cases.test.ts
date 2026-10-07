@@ -161,4 +161,84 @@ describe('manage_cases 工具', () => {
     expect(await tool.execute({ action: 'copy_to_version', caseId: srcId, targetGroupId: seed.groupId, versionId: randomUUID() }))
       .toMatchObject({ ok: false });
   }, 30_000);
+
+  it('list_datasets:仅返回结构(列名/敏感标记/行数),敏感值与行值永不出现在输出', async () => {
+    const seed = await seedProject(pool);
+    const { createDataset } = await import('../src/services/datasets.service.js');
+    const ds = await createDataset(seed.projectId, {
+      name: '登录账号',
+      columns: [
+        { name: 'username', sensitive: false },
+        { name: 'password', sensitive: true },
+      ],
+      rows: [
+        { cells: { username: 'alice', password: 'alice-secret-pass' } },
+        { disabled: true, cells: { username: 'bob', password: 'bob-secret-pass' } },
+      ],
+    });
+    expect(ds.id).toBeTruthy();
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await buildCasesToolsLazy(ctx);
+
+    const r = await tool.execute({ action: 'list_datasets' });
+    expect(r.ok).toBe(true);
+    const raw = (r as { ok: true; data: string }).data;
+    const list = JSON.parse(raw) as Array<{ name: string; columns: Array<{ name: string; sensitive: boolean }>; rowCount: number; enabledRowCount: number }>;
+    const d = list.find((x) => x.name === '登录账号')!;
+    expect(d.columns).toEqual([
+      { name: 'username', sensitive: false },
+      { name: 'password', sensitive: true },
+    ]);
+    expect(d.rowCount).toBe(2);
+    expect(d.enabledRowCount).toBe(1);
+    // 行值(含非敏感明文与敏感明文)绝不出现;projectId/updatedAt 字段不外泄
+    expect(raw).not.toContain('alice');
+    expect(raw).not.toContain('bob');
+    expect(raw).not.toContain('secret-pass');
+    expect(raw).not.toContain('projectId');
+    expect(raw).not.toContain('updatedAt');
+  }, 30_000);
+
+  it('get:已绑定数据集的用例返回 dataset 结构;未绑定返回 dataset:null', async () => {
+    const seed = await seedProject(pool);
+    const { createDataset } = await import('../src/services/datasets.service.js');
+    const ds = await createDataset(seed.projectId, {
+      name: '登录账号',
+      columns: [
+        { name: 'username', sensitive: false },
+        { name: 'password', sensitive: true },
+      ],
+      rows: [
+        { cells: { username: 'alice', password: 'alice-secret-pass' } },
+        { disabled: true, cells: { username: 'bob', password: 'bob-secret-pass' } },
+      ],
+    });
+    const boundId = await insertCase(seed.groupId, seed.versionId, '绑定数据集用例');
+    await pool.query(`UPDATE test_cases SET dataset_id = $1 WHERE id = $2`, [ds.id, boundId]);
+    const freeId = await insertCase(seed.groupId, seed.versionId, '未绑定用例');
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await buildCasesToolsLazy(ctx);
+
+    const bound = await tool.execute({ action: 'get', caseId: boundId });
+    expect(bound.ok).toBe(true);
+    const boundRaw = (bound as { ok: true; data: string }).data;
+    const boundDetail = JSON.parse(boundRaw) as { dataset: { name: string; columns: Array<{ name: string; sensitive: boolean }>; enabledRowCount: number } | null };
+    expect(boundDetail.dataset).toEqual({
+      id: ds.id,
+      name: '登录账号',
+      columns: [
+        { name: 'username', sensitive: false },
+        { name: 'password', sensitive: true },
+      ],
+      enabledRowCount: 1,
+    });
+    // dataset 结构信息里不含任何行值
+    expect(boundRaw).not.toContain('alice');
+    expect(boundRaw).not.toContain('secret-pass');
+
+    const free = await tool.execute({ action: 'get', caseId: freeId });
+    expect(free.ok).toBe(true);
+    const freeDetail = JSON.parse((free as { ok: true; data: string }).data) as { dataset: unknown };
+    expect(freeDetail.dataset).toBeNull();
+  }, 30_000);
 });
