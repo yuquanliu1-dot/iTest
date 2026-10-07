@@ -124,6 +124,7 @@ const iconMap: Record<string, CarbonIconType> = {
   upload: Upload,
   user: User,
   warning: WarningAlt,
+  x: Close,
   close: Close,
 };
 
