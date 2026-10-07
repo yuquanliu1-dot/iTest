@@ -95,6 +95,9 @@ export default function DatasetsPage() {
 
   const renameColumn = (i: number, name: string) => mutate((d) => {
     const old = d.columns[i]!.name;
+    // 重名改名整步拒绝（连列名都不改）：撞名保存本就被 saveBlocked 拦住，若允许中间态，
+    // cells 重键会把同名旧列的值覆盖掉（敏感列等于在 draft 里丢密文，保存也救不回）。
+    if (name && d.columns.some((c, j) => j !== i && c.name === name)) return d;
     const columns = [...d.columns];
     // renamedFrom 记住本次编辑会话里最初的服务端列名（连续改名链式穿透），保存时据此生成 renames，
     // 让服务端把旧列密文 re-key 到新列名 —— 否则敏感列改名会静默丢失密文。
