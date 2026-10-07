@@ -183,7 +183,7 @@ export default function ReportDetail() {
             </div>
           )}
           {s.visionAssert?.expected && (
-            <div className="text-[11px] font-mono px-2 py-1" style={{ color: 'var(--muted-foreground)' }}>
+            <div className="text-[11px] font-mono px-2 py-1 min-w-0 break-words" style={{ color: 'var(--muted-foreground)' }}>
               判定预期（按本行数据物化）：{s.visionAssert.expected}
             </div>
           )}
