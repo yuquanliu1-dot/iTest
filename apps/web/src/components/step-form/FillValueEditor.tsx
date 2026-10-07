@@ -52,6 +52,7 @@ function draftFromValue(v: unknown): FragmentDraft[] {
  * 当 value 身份变化（切换步骤/类型）时父组件必须通过 key 重挂载本组件。
  */
 export default function FillValueEditor({ value, onChange, availableVars = [], datasetVars = [] }: Props) {
+  const extractOnly = availableVars.filter((v) => !datasetVars.includes(v));
   const isObj = typeof value === 'object' && value !== null;
   const objMode = isObj ? ((value as { mode?: string }).mode as ValueMode | undefined) : undefined;
   const initialMode: ValueMode = objMode ?? 'fixed';
@@ -122,10 +123,10 @@ export default function FillValueEditor({ value, onChange, availableVars = [], d
             {availableVars.map((v) => <option key={v} value={`{{${v}}}`} />)}
           </datalist>
           {availableVars.length > 0 && (
-            <div className="text-[10px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
-              {datasetVars.length > 0 && <span>数据集列：{datasetVars.map((v) => `{{${v}}}`).join('、')}　</span>}
-              {availableVars.filter((v) => !datasetVars.includes(v)).length > 0 && (
-                <span>前置 extract：{availableVars.filter((v) => !datasetVars.includes(v)).map((v) => `{{${v}}}`).join('、')}</span>
+            <div className="text-[10px] mt-1 flex gap-3" style={{ color: 'var(--muted-foreground)' }}>
+              {datasetVars.length > 0 && <span>数据集列：{datasetVars.map((v) => `{{${v}}}`).join('、')}</span>}
+              {extractOnly.length > 0 && (
+                <span>前置 extract：{extractOnly.map((v) => `{{${v}}}`).join('、')}</span>
               )}
             </div>
           )}

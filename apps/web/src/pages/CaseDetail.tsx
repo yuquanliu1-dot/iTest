@@ -1300,7 +1300,7 @@ export default function CaseDetail() {
         <StepEditDrawer
           mode={editingMode}
           initial={editing}
-          availableVars={[...datasetVars, ...extractVars]}
+          availableVars={Array.from(new Set([...datasetVars, ...extractVars]))}
           datasetVars={datasetVars}
           caseId={id}
           onClose={() => { setEditing(null); setEditingIdx(-1); editingSnapshotRef.current = null; setEditingMode('edit'); }}
