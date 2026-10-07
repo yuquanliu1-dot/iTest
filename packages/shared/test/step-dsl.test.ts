@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { StepAction, Locator } from '../src/step-dsl.js';
+import { StepAction, Locator, LocatorStrategy } from '../src/step-dsl.js';
 
 describe('step-dsl', () => {
   it('accepts valid click action', () => {
@@ -383,5 +383,49 @@ describe('step-dsl — phase3 composite value', () => {
       value: { mode: 'composite', fragments: [{ mode: 'uuid' }] },
     });
     expect(r.success).toBe(false);
+  });
+});
+
+describe('step-dsl — mobile extensions (2026-10-07)', () => {
+  it('accepts tap action with accessibilityId', () => {
+    const r = StepAction.safeParse({
+      kind: 'tap',
+      locator: [{ strategy: 'accessibilityId', value: 'login_button' }],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts swipe action', () => {
+    const r = StepAction.safeParse({
+      kind: 'swipe',
+      from: [{ strategy: 'accessibilityId', value: 'list_top' }],
+      to: [{ strategy: 'accessibilityId', value: 'list_bottom' }],
+      durationMs: 500,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts swipe without durationMs (uses default)', () => {
+    const r = StepAction.safeParse({
+      kind: 'swipe',
+      from: [{ strategy: 'accessibilityId', value: 'a' }],
+      to: [{ strategy: 'accessibilityId', value: 'b' }],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts setNetwork airplane', () => {
+    const r = StepAction.safeParse({ kind: 'setNetwork', state: 'airplane' });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects setLocation out of latitude range', () => {
+    const r = StepAction.safeParse({ kind: 'setLocation', latitude: 95, longitude: 0 });
+    expect(r.success).toBe(false);
+  });
+
+  it('parses accessibilityId locator strategy', () => {
+    const r = LocatorStrategy.safeParse('accessibilityId');
+    expect(r.success).toBe(true);
   });
 });
