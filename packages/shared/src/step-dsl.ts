@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // xpath 仍保留在 schema(历史数据兼容),但录制端和新生成的 AI 用例不应再产。
-export const LocatorStrategy = z.enum(['role', 'text', 'testId', 'css', 'xpath']);
+export const LocatorStrategy = z.enum(['role', 'text', 'testId', 'css', 'xpath', 'accessibilityId', 'label', 'predicate']);
 export type LocatorStrategy = z.infer<typeof LocatorStrategy>;
 
 export const Locator = z.object({
@@ -198,6 +198,41 @@ export const ObserveLogAction = z.object({
 });
 export type ObserveLogAction = z.infer<typeof ObserveLogAction>;
 
+/** 2026-10-07: 移动端测试 step DSL 增量（Task 1 of iTest mobile-testing plan）。 */
+export const TapAction = z.object({
+  kind: z.literal('tap'),
+  locator: z.array(Locator).min(1),
+  intentLocator: IntentLocator.optional(),
+  doubleTap: z.boolean().optional(),
+  longPressMs: z.number().int().min(100).max(5000).optional(),
+});
+export const SwipeAction = z.object({
+  kind: z.literal('swipe'),
+  from: z.array(Locator).min(1),
+  to: z.array(Locator).min(1),
+  durationMs: z.number().int().min(50).max(3000).default(300),
+});
+export const SetAppearanceAction = z.object({
+  kind: z.literal('setAppearance'),
+  mode: z.enum(['light', 'dark']),
+});
+export const SetNetworkAction = z.object({
+  kind: z.literal('setNetwork'),
+  state: z.enum(['online', 'offline', 'airplane']),
+});
+export const SetLocationAction = z.object({
+  kind: z.literal('setLocation'),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+});
+export const AppOpenAction = z.object({
+  kind: z.literal('appOpen'),
+  bundleId: z.string().min(1).optional(),
+});
+export const AppBackAction = z.object({ kind: z.literal('appBack') });
+export const AppRestartAction = z.object({ kind: z.literal('appRestart') });
+export const HomeAction = z.object({ kind: z.literal('home') });
+
 export type StepAction =
   | z.infer<typeof NavigateAction>
   | z.infer<typeof ClickAction>
@@ -215,7 +250,16 @@ export type StepAction =
   | z.infer<typeof AssertJsonAction>
   | z.infer<typeof ExtractAction>
   | z.infer<typeof QueryDbAction>
-  | z.infer<typeof ObserveLogAction>;
+  | z.infer<typeof ObserveLogAction>
+  | z.infer<typeof TapAction>
+  | z.infer<typeof SwipeAction>
+  | z.infer<typeof SetAppearanceAction>
+  | z.infer<typeof SetNetworkAction>
+  | z.infer<typeof SetLocationAction>
+  | z.infer<typeof AppOpenAction>
+  | z.infer<typeof AppBackAction>
+  | z.infer<typeof AppRestartAction>
+  | z.infer<typeof HomeAction>;
 
 export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
   NavigateAction,
@@ -235,4 +279,13 @@ export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
   ExtractAction,
   QueryDbAction,
   ObserveLogAction,
+  TapAction,
+  SwipeAction,
+  SetAppearanceAction,
+  SetNetworkAction,
+  SetLocationAction,
+  AppOpenAction,
+  AppBackAction,
+  AppRestartAction,
+  HomeAction,
 ]) as z.ZodType<StepAction>;

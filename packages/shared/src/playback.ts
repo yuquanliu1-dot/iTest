@@ -36,6 +36,11 @@ export const FailureReason = z.enum([
   'EnvProjectMismatch',
   /** Track 1: 用例级 vision LLM 判定最终截图与 expectedOutcome 不符 */
   'VisionAssertionFailed',
+  /** 2026-10-07: mobile engine 失败归类 */
+  'EngineUnavailable',
+  'MobileUnsupportedCapability',
+  'MobileStepFailed',
+  'AppInstallFailed',
   'Unknown',
 ]);
 export type FailureReason = z.infer<typeof FailureReason>;
