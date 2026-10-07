@@ -276,6 +276,15 @@ export default function ReportDetail() {
           测试报告
         </h1>
         <StatusPill status={data.status}>{data.status.toUpperCase()}</StatusPill>
+        {data.platform === 'mobile' && (
+          <span
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded-full"
+            style={{ background: 'var(--info-soft)', color: 'var(--info)' }}
+          >
+            <Icon name="tablet" size={11} />
+            {data.mobileOs ?? 'mobile'}{data.deviceName ? ` · ${data.deviceName}` : ''}
+          </span>
+        )}
         <Button
           variant="ghost"
           onClick={() => setShowDelete(true)}
@@ -352,6 +361,12 @@ export default function ReportDetail() {
               />
               <MetaRow label="用例 ID" value={<span className="font-mono text-[11px]">{data.caseId.slice(0, 8)}</span>} />
               <MetaRow label="报告 ID" value={<span className="font-mono text-[11px]">{data.id.slice(0, 8)}</span>} />
+              {data.platform && (
+                <MetaRow label="平台" value={data.platform} />
+              )}
+              {data.platform && (
+                <MetaRow label="设备" value={`${data.mobileOs ?? data.platform}${data.deviceName ? ` · ${data.deviceName}` : ''}`} />
+              )}
               {data.datasetRowIndex != null && data.datasetSnapshot && (
                 <MetaRow label="数据行" value={`${data.datasetSnapshot.rowIndex + 1}/${data.datasetSnapshot.totalRows}`} />
               )}
