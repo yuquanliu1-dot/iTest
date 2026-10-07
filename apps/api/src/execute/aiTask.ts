@@ -27,6 +27,28 @@ actions 元素类型：
 - 每轮动作要保守，最多 6 个；每个动作的执行结果（ok / 错误信息）下轮反馈给你，出错就换 selector 重试。
 - 需要引用平台变量时用 {{varName}}（平台会替换为实际值）。`;
 
+const MOBILE_SYSTEM_PROMPT = `你是移动端测试执行智能体，在 iOS Simulator / Android Emulator 上执行自然语言测试指令。
+可观测：当前 accessibility tree（节点含 accessibilityId / label / role / bounds）、当前屏幕截图。
+只输出 JSON，格式：
+{"actions": [...], "done": false, "summary": "一句话进展"}
+actions 元素类型：
+- {"type":"tap","accessibilityId":"..."} 或 {"label":"..."}（优先 accessibilityId）
+- {"type":"fill","accessibilityId":"...","value":"..."}
+- {"type":"swipe","from":{"accessibilityId":"..."},"to":{"accessibilityId":"..."},"durationMs":500}
+- {"type":"setAppearance","mode":"light"|"dark"}
+- {"type":"setNetwork","state":"online"|"offline"|"airplane"}
+- {"type":"setLocation","latitude":<float>,"longitude":<float>}
+- {"type":"home"} / {"type":"appBack"} / {"type":"appRestart"} / {"type":"appOpen","bundleId":"..."}
+- {"type":"wait","ms":<毫秒>}
+- {"type":"screenshot","accessibilityId":"..."}　请求该节点 4 倍放大截图，下轮附图发给你
+结束方式（二选一）：
+- 指令已完成：{"done": true, "summary": "做了什么"}
+- 无法完成：{"fail": "原因"}
+规则：
+- 节点中心坐标取 bounds 中心；不要做坐标绝对计算。
+- 每轮动作要保守，最多 6 个；每个动作结果下轮反馈给你，出错就换 accessibilityId / label 重试。
+- 屏幕中可能同时存在多个相同 label 的节点，命中歧义时优先选 accessibilityId。`;
+
 interface ElementInfo {
   selector: string;
   tag: string;
@@ -262,8 +284,15 @@ export async function solveCaptchaOnce(
 /**
  * 运行时 LLM 智能步骤：多轮「截图+元素清单 → LLM 决策 → 执行 → 反馈」循环，
  * 直到 LLM 声明完成/放弃或超过轮数上限。返回 done summary（用于步骤 warning）。
+ * mobile=true 时改用移动端系统提示词（accessibility tree / tap / swipe / app 控制）。
  */
-export async function runAiTask(page: Page, instruction: string, client: LLMClient): Promise<string> {
+export async function runAiTask(
+  page: Page,
+  instruction: string,
+  client: LLMClient,
+  mobile?: boolean,
+): Promise<string> {
+  const systemPrompt = mobile ? MOBILE_SYSTEM_PROMPT : SYSTEM_PROMPT;
   let lastResults: string[] = [];
   let pendingShot: string | null = null;
   for (let turn = 1; turn <= MAX_TURNS; turn++) {
@@ -292,7 +321,7 @@ export async function runAiTask(page: Page, instruction: string, client: LLMClie
       `第 ${turn}/${MAX_TURNS} 轮。`,
     ].join('\n');
     const r = await client.complete({
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt,
       userMessage,
       image: { base64: buffer.toString('base64'), mime: 'image/png' },
     });
