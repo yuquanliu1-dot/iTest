@@ -210,6 +210,8 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       const { value, missing } = substituteVars(action.url, vars);
       if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.url}")`);
       await page.goto(value, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      // navigate 同样需要等 SPA hydrate 后再让后续步骤探测元素（与 init-goto 行为对齐）。
+      await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
       return;
     }
     case 'click':
@@ -678,6 +680,11 @@ async function runStepsInContext(
       })();
   if (targetUrl && !firstStepIsSameNav) {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // SPA 就绪等待：domcontentloaded 后 Vue/React SPA 还在异步加载 chunk + mount,
+    // 此时探测 [name=...] / role 都会得到 count=0。实测 SOC 登录页在 domcontentloaded 后
+    // ~300ms 表单才渲染完成；networkidle 是最稳的「JS 跑完 + DOM 渲染完」信号。
+    // 5s 兜底（长连接页面等不到 idle 也不阻塞执行）；空文档（HTML-only）会立刻 idle。
+    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
   }
   // preflight：执行前置检查（URL 可达 / 登录态 / 标签页 / origin）。失败不阻塞执行。
   try {
