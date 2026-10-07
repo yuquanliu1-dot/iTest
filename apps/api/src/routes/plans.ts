@@ -14,7 +14,7 @@ import {
 import { HttpError } from '../middleware/errorHandler.js';
 import { findIncognitoCaseIds, runPlanAsync } from '../execute/runPlan.js';
 import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
-import { createPlan, updatePlan, getPlanDetail, replacePlanCases, planProjectId, removePlanCases } from '../services/plans.service.js';
+import { createPlan, updatePlan, getPlanDetail, replacePlanCases, planProjectId, removePlanCases, updatePlanCase } from '../services/plans.service.js';
 import { logger } from '../logger.js';
 
 export const plansRoute = Router({ mergeParams: true });
@@ -31,12 +31,22 @@ const LoginPrepareBody = z
   })
   .optional();
 
+/** planCases 行级覆盖：加进计划时可改写用例的 device_target / 浏览器上下文；不传/置 null = 沿用例自带值。 */
+const TargetOverrideBody = z
+  .object({
+    deviceTargetId: z.string().uuid().optional(),
+    browserContext: z.enum(['incognito', 'persistent']).optional(),
+  })
+  .nullable()
+  .optional();
+
 const CreateBody = z.object({
   name: z.string().min(1).max(200),
   environment: z.string().max(100).optional(),
   versionId: z.string().uuid().optional(),
   strategy: StrategyEnum.default('run_all'),
   loginPrepare: LoginPrepareBody,
+  targetOverride: TargetOverrideBody,
 });
 
 const PatchBody = z.object({
@@ -46,6 +56,7 @@ const PatchBody = z.object({
   versionId: z.string().uuid().nullable().optional(),
   strategy: StrategyEnum.optional(),
   loginPrepare: LoginPrepareBody,
+  targetOverride: TargetOverrideBody,
 });
 
 plansRoute.get('/', async (req, res) => {
@@ -147,6 +158,20 @@ plansRoute.delete('/:id/cases', async (req, res) => {
   await assertProjectVisible(pid, req.user!);
   await removePlanCases(req.params.id!, caseIds);
   res.json({ ok: true });
+});
+
+// planCases 行级 PATCH:目前只支持 targetOverride（device_target / 浏览器上下文覆盖）。
+// body 形如 { caseId, targetOverride }：caseId 必填，targetOverride 可为对象/null/undefined。
+plansRoute.patch('/:id/cases/:caseId', async (req, res) => {
+  const { caseId } = req.params as { caseId?: string };
+  if (!caseId) throw new HttpError(400, 'bad_request', 'caseId is required');
+  const body = z.object({
+    targetOverride: TargetOverrideBody,
+  }).parse(req.body);
+  const pid = await planProjectId(req.params.id!);
+  if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(pid, req.user!);
+  res.json(await updatePlanCase(req.params.id!, caseId, { targetOverride: body.targetOverride }));
 });
 
 plansRoute.get('/:id/login-cases', async (req, res) => {

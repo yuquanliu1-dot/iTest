@@ -33,6 +33,34 @@ export interface LoginPrepareInput {
   unauthorizedKeywords?: string[] | null;
 }
 
+/** 计划级覆盖：用例默认 device_target / 浏览器上下文可在「加进计划」时改写,
+ *  不动用例本体,仅本次计划执行时按覆盖解析。null = 沿用例自带值。 */
+export type TargetOverride = {
+  deviceTargetId?: string;
+  browserContext?: 'incognito' | 'persistent';
+} | null;
+
+export interface UpdatePlanCasePatch {
+  targetOverride?: TargetOverride;
+}
+
+export interface UpdatePlanCaseResult {
+  caseId: string;
+  targetOverride: TargetOverride;
+}
+
+/** 计划内用例覆盖值写入；null/undefined 显式落 null（清空覆盖回到用例自带值），
+ *  undefined 表示不动（与 nullable 的语义分离，调用方通过 patch 里字段是否存在判定）。 */
+export async function updatePlanCase(planId: string, caseId: string, patch: UpdatePlanCasePatch): Promise<UpdatePlanCaseResult> {
+  const existing = (await db.select().from(planCases).where(and(eq(planCases.planId, planId), eq(planCases.caseId, caseId))).limit(1))[0];
+  if (!existing) throw new HttpError(404, 'not_found', 'plan case not found');
+  if (patch.targetOverride !== undefined) {
+    await db.update(planCases).set({ targetOverride: patch.targetOverride }).where(eq(planCases.id, existing.id));
+  }
+  const after = (await db.select({ targetOverride: planCases.targetOverride }).from(planCases).where(eq(planCases.id, existing.id)).limit(1))[0];
+  return { caseId, targetOverride: after?.targetOverride ?? null };
+}
+
 export interface CreatePlanInput {
   name: string;
   versionId: string;
