@@ -14,7 +14,7 @@ export const STEP_DSL_SPEC = `StepAction 按 kind 区分（discriminated union�
 - {"kind":"upload","locator":[Locator,...],"fileName":"a.png"（可选）}
 - {"kind":"extract","locator":[Locator,...],"varName":"变量名"}
 - {"kind":"aiTask","instruction":"自然语言指令"}（回放时由 AI 智能体实时看截图执行，不预编译；登录页有验证码时用它代替普通 fill——例："识别验证码图片中的字符并填入验证码输入框"；也适用于其他难以固化为 DSL 的动态交互）
-Locator = {"strategy":"role"|"text"|"testId"|"css"|"xpath","value":"定位值"}
+Locator = {"strategy":"role"|"text"|"testId"|"css"|"xpath","value":"定位值"}（xpath 仅用于读取历史数据;新生成的用例应优先 css / role / text / testId，结构鲁棒性差的位置不要选 xpath）
 ValueGenerator（fill.value 动态取值，可选其一）：
 - {"mode":"randomString","length":12}
 - {"mode":"randomNumber","min":0,"max":999999}
