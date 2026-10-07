@@ -70,6 +70,7 @@ export default function CaseDetail() {
   const [windowHeight, setWindowHeight] = useState<number | undefined>();
   const [incognito, setIncognito] = useState(false);
   const [defaultEnvId, setDefaultEnvId] = useState<string | null>(null);
+  const [datasetId, setDatasetId] = useState<string | null>(null);
   const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [urlDraft, setUrlDraft] = useState('');
   const [urlSaving, setUrlSaving] = useState(false);
@@ -218,8 +219,9 @@ export default function CaseDetail() {
       caseDetail.windowHeight ?? undefined,
       !!caseDetail.incognito,
       caseDetail.defaultEnvId ?? null,
+      caseDetail.datasetId ?? null,
     ]);
-    const localKey = JSON.stringify([windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId]);
+    const localKey = JSON.stringify([windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId, datasetId]);
     if (runtimeSyncRef.current !== null && localKey !== runtimeSyncRef.current) return;
     runtimeSyncRef.current = serverKey;
     setWindowStrategy((caseDetail.windowStrategy as 'maximize' | 'current' | 'custom') ?? 'maximize');
@@ -227,7 +229,8 @@ export default function CaseDetail() {
     setWindowHeight(caseDetail.windowHeight ?? undefined);
     setIncognito(!!caseDetail.incognito);
     setDefaultEnvId(caseDetail.defaultEnvId ?? null);
-  }, [caseDetail, windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId]);
+    setDatasetId(caseDetail.datasetId ?? null);
+  }, [caseDetail, windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId, datasetId]);
 
   // expectedOutcome 与服务端同步：与 runtimeSyncRef 同源模式(serverKey 比对,未保存编辑不覆盖)
   useEffect(() => {
@@ -262,6 +265,18 @@ export default function CaseDetail() {
     queryFn: () => api.environments.list(projectId!),
     enabled: !!projectId,
   });
+
+  const { data: datasetList } = useQuery({
+    queryKey: ['datasets', projectId],
+    queryFn: () => api.datasets.list(projectId!),
+    enabled: !!projectId,
+  });
+
+  /** 数据集列名（绑定的数据集）—— 与前置 extract 变量合并供 FillValueEditor 选择。 */
+  const datasetVars = useMemo(() => {
+    const ds = (datasetList ?? []).find((d) => d.id === datasetId);
+    return ds ? ds.columns.map((c) => c.name) : [];
+  }, [datasetList, datasetId]);
 
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [labelsManagerOpen, setLabelsManagerOpen] = useState(false);
@@ -454,7 +469,11 @@ export default function CaseDetail() {
     onSuccess: (r) => {
       toast('执行完成', 'success');
       qc.invalidateQueries({ queryKey: ['reports'] });
-      navigate(`/p/${projectId}/v/${versionId}/reports/${r.reportId}`);
+      if (r.reportIds && r.reportIds.length > 1) {
+        navigate(`/p/${projectId}/v/${versionId}/reports`);
+      } else {
+        navigate(`/p/${projectId}/v/${versionId}/reports/${r.reportId}`);
+      }
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -529,6 +548,7 @@ export default function CaseDetail() {
         windowHeight,
         incognito,
         defaultEnvId,
+        datasetId,
         // Track 1：与运行设置一并保存；空字符串视作清空（传 null）
         expectedOutcome: expectedOutcome.trim() ? expectedOutcome : null,
       }),
@@ -565,6 +585,15 @@ export default function CaseDetail() {
       </div>
     );
   }
+
+  const extractVars = caseDetail.steps
+    .map((s) => {
+      const head = Array.isArray(s.compiled) && s.compiled.length > 0
+        ? (s.compiled[0] as { kind?: string; varName?: string })
+        : undefined;
+      return head?.kind === 'extract' ? head.varName : undefined;
+    })
+    .filter((v): v is string => !!v);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -681,6 +710,26 @@ export default function CaseDetail() {
                         </option>
                       ))}
                     </select>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>测试数据集</span>
+                    <select
+                      className="input-base input-sm"
+                      value={datasetId ?? ''}
+                      onChange={(e) => setDatasetId(e.target.value || null)}
+                    >
+                      <option value="">不绑定（单次回放）</option>
+                      {(datasetList ?? []).map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name}（{d.enabledRowCount} 启用行）
+                        </option>
+                      ))}
+                    </select>
+                    {datasetId && (
+                      <span className="text-[10px]" style={{ color: 'var(--info)' }}>
+                        回放将按启用行数逐行执行，每行产生一条独立报告；步骤中用 {'{{列名}}'} 引用数据。
+                      </span>
+                    )}
                   </label>
                   {/* Track 1：用例级预期描述。回放结束后由 vision LLM 拿最终截图比对；
                       步骤级 assertion 在回放层已被收紧为「指定元素可见」才生效，整页模糊断言一律跳过。 */}
@@ -1251,14 +1300,8 @@ export default function CaseDetail() {
         <StepEditDrawer
           mode={editingMode}
           initial={editing}
-          availableVars={caseDetail.steps
-            .map((s) => {
-              const head = Array.isArray(s.compiled) && s.compiled.length > 0
-                ? (s.compiled[0] as { kind?: string; varName?: string })
-                : undefined;
-              return head?.kind === 'extract' ? head.varName : undefined;
-            })
-            .filter((v): v is string => !!v)}
+          availableVars={[...datasetVars, ...extractVars]}
+          datasetVars={datasetVars}
           caseId={id}
           onClose={() => { setEditing(null); setEditingIdx(-1); editingSnapshotRef.current = null; setEditingMode('edit'); }}
           onSave={(next) => {
