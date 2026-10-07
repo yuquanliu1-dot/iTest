@@ -22,6 +22,7 @@ const SaveBody = z.object({
   description: z.string().nullable().optional(),
   columns: z.array(z.object({ name: z.string(), sensitive: z.boolean().optional() })),
   rows: z.array(z.object({ disabled: z.boolean().optional(), cells: z.record(z.unknown()) })),
+  renames: z.record(z.string()).optional(),
 });
 
 /** 数据集属指定项目（projectId 匹配 + 项目可见），否则 404。 */
