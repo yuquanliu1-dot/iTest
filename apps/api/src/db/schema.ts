@@ -52,6 +52,12 @@ export const testCases = pgTable('test_cases', {
   /** 用例级预期描述（自然语言）。回放阶段结束时由 vision LLM 拿最终截图 + 此字段判终态；
    * 为空/null 时跳过用例级断言（仅按 step.action 是否全部成功判定 pass/fail）。 */
   expectedOutcome: text('expected_outcome'),
+  // 移动端元数据：platform='web' 表示存量 web 用例;'android'|'ios' 表示走 Appium driver。
+  // 复用 test_cases.dataset_id / default_env_id 的「nullable FK + set null」约定：删除 device_targets 不应牵连用例。
+  platform: varchar('platform', { length: 16 }).notNull().default('web'),
+  mobileOs: varchar('mobile_os', { length: 16 }),
+  mobileDeviceTargetId: uuid('mobile_device_target_id').references(() => deviceTargets.id, { onDelete: 'set null' }),
+  appRef: jsonb('app_ref').$type<AppRef | null>(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
@@ -246,6 +252,9 @@ export const testSteps = pgTable('test_steps', {
    *  类型记为 unknown[]:route 层 zod 解析后单条已是 StepAction;此处保持宽口避免 route 入参 narrow。 */
   compiled: jsonb('compiled').$type<unknown[]>(),
   assertion: jsonb('assertion'),
+  // 移动端专属：步骤覆盖 mobile_os 时（与用例 platform 一致），回放期按 android/ios dispatch。
+  // 缺省 = 跟随用例 platform（web 用例的 steps 永远 null）。
+  mobileOs: varchar('mobile_os', { length: 16 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -259,6 +268,12 @@ export const reports = pgTable('reports', {
   summary: text('summary'),
   datasetRowIndex: integer('dataset_row_index'),
   datasetSnapshot: jsonb('dataset_snapshot'),
+  // 移动端快照：执行期 device_target 解析后的最终值入报表，便于历史追溯。
+  // deviceName 取 device_target.name 当时值（device_target 改名不联动历史 report）。
+  platform: varchar('platform', { length: 16 }).notNull().default('web'),
+  mobileOs: varchar('mobile_os', { length: 16 }),
+  deviceName: varchar('device_name', { length: 128 }),
+  deviceTargetId: uuid('device_target_id').references(() => deviceTargets.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -399,6 +414,9 @@ export const planCases = pgTable('plan_cases', {
   planId: uuid('plan_id').notNull().references(() => executionPlans.id, { onDelete: 'cascade' }),
   caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
   order: integer('order').notNull(),
+  // 计划级覆盖：用例默认 device_target / 浏览器上下文可在「加进计划」时改写，
+  // 不动用例本体，仅本次计划执行时按覆盖解析。null = 沿用例自带值。
+  targetOverride: jsonb('target_override').$type<{ deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null>(),
 });
 
 export const planRuns = pgTable('plan_runs', {
@@ -511,6 +529,31 @@ export interface DatasetRow {
   disabled: boolean;
   cells: Record<string, string | DatasetEncCell>;
 }
+
+/** 移动端 App 引用：bundleId / 本地 app 路径 / 启动参数。
+ *  落到 test_cases.app_ref；回放时 driver 用它启动 app + 上传派生能力（activity / package）。 */
+export interface AppRef {
+  bundleId: string;
+  appPath?: string;
+  launchArgs?: string[];
+}
+
+// 设备目标：每条记录代表一个具体真机/模拟器，挂在 project 下；用例与执行计划都按 device_target 解析。
+// 与 test_environments 平级但用途不同：环境管 baseUrl；device_target 管 mobile_os + device_ref + app_ref。
+export const deviceTargets = pgTable('device_targets', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 128 }).notNull(),
+  mobileOs: varchar('mobile_os', { length: 16 }).notNull(),
+  deviceRef: varchar('device_ref', { length: 128 }).notNull(),
+  appBundleId: varchar('app_bundle_id', { length: 256 }),
+  appPath: text('app_path'),
+  launchArgs: jsonb('launch_args').$type<string[]>().notNull().default([]),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  uniqByProjectName: uniqueIndex('device_targets_project_name_uq').on(t.projectId, t.name),
+}));
 
 export const datasets = pgTable('datasets', {
   id: uuid('id').primaryKey().defaultRandom(),
