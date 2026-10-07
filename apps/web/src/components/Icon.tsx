@@ -33,6 +33,8 @@ import Renew from '@carbon/icons-react/es/Renew';
 import Logout from '@carbon/icons-react/es/Logout';
 import Maximize from '@carbon/icons-react/es/Maximize';
 import Minimize from '@carbon/icons-react/es/Minimize';
+import Mobile from '@carbon/icons-react/es/Mobile';
+import Tablet from '@carbon/icons-react/es/Tablet';
 import Chat from '@carbon/icons-react/es/Chat';
 import Asleep from '@carbon/icons-react/es/Asleep';
 import Light from '@carbon/icons-react/es/Light';
@@ -102,6 +104,8 @@ const iconMap: Record<string, CarbonIconType> = {
   maximize: Maximize,
   message: Chat,
   minimize: Minimize,
+  mobile: Mobile,
+  tablet: Tablet,
   moon: Asleep,
   moreHorizontal: OverflowMenuHorizontal,
   panelLeft: SidePanelOpen,

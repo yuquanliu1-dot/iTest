@@ -535,7 +535,9 @@ export const api = {
           savedEnvironments: number;
           savedPlans: number;
           savedCaseOps: number;
+          savedDatasets: number;
           caseIdMap: Record<string, string>;
+          datasetIdMap: Record<string, string>;
         }>(`/assistant/threads/${threadId}/stage/save`, {
           method: 'POST',
           body: JSON.stringify(body),
@@ -571,6 +573,15 @@ export const api = {
       request<Scenario>(`/scenarios/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) =>
       request<{ ok: boolean }>(`/scenarios/${id}`, { method: 'DELETE' }),
+  },
+  deviceTargets: {
+    list: (projectId: string) => request<DeviceTarget[]>(`/projects/${projectId}/device-targets`),
+    create: (projectId: string, body: Omit<DeviceTarget, 'id' | 'projectId' | 'createdAt' | 'updatedAt'>) =>
+      request<DeviceTarget>(`/projects/${projectId}/device-targets`, { method: 'POST', body: JSON.stringify(body) }),
+    update: (projectId: string, id: string, body: Omit<DeviceTarget, 'id' | 'projectId' | 'createdAt' | 'updatedAt'>) =>
+      request<DeviceTarget>(`/projects/${projectId}/device-targets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    remove: (projectId: string, id: string) =>
+      request<{ ok: true }>(`/projects/${projectId}/device-targets/${id}`, { method: 'DELETE' }),
   },
 };
 
@@ -776,6 +787,10 @@ export interface TestCase {
   datasetId?: string | null;
   /** Track 1：用例级预期描述（自然语言）。回放结束后由 vision LLM 拿最终截图判定。 */
   expectedOutcome?: string | null;
+  platform?: 'web' | 'mobile';
+  mobileOs?: 'ios' | 'android' | null;
+  mobileDeviceTargetId?: string | null;
+  appRef?: { bundleId: string; appPath?: string; launchArgs?: string[] } | null;
 }
 export interface Scenario {
   id: string;
@@ -802,6 +817,8 @@ export interface StagedStageCase {
   steps: Array<{ action: string; assertion?: string | null; compiled?: unknown[] | null }>;
   defaultEnvId: string | null;
   expectedOutcome: string | null;
+  /** 配套数据集 localId（同批 stage_dataset 生成；保存时数据集先落库并自动绑定）。 */
+  datasetLocalId: string | null;
   stagedAt: string;
 }
 export interface StagedStageScenario {
@@ -848,12 +865,22 @@ export interface StageCaseOp {
   diff?: string;
   stagedAt: string;
 }
+/** AI 生成的数据集草稿：rows 为明文（敏感列落库时才加密），预览对用户可见。 */
+export interface StagedDataset {
+  localId: string;
+  name: string;
+  description: string | null;
+  columns: Array<{ name: string; sensitive?: boolean }>;
+  rows: Array<{ disabled?: boolean; cells: Record<string, string> }>;
+  stagedAt: string;
+}
 export interface StageDoc {
   cases: StagedStageCase[];
   scenarios: StagedStageScenario[];
   environments: StagedEnvironment[];
   plans: StagedPlan[];
   caseOps: StageCaseOp[];
+  datasets: StagedDataset[];
 }
 export interface StageSaveBody {
   cases: Array<{ localId: string; groupId: string }>;
@@ -861,6 +888,7 @@ export interface StageSaveBody {
   environments: Array<{ localId: string }>;
   plans: Array<{ localId: string; groupId: string }>;
   caseOps: Array<{ localId: string }>;
+  datasets: Array<{ localId: string }>;
 }
 export interface Tag {
   id: string;
@@ -900,6 +928,10 @@ export interface TestCaseDetail extends TestCase {
   summary: string | null;
   datasetRowIndex?: number | null;
   datasetSnapshot?: { rowIndex: number; totalRows: number; values: Record<string, string> } | null;
+  platform?: 'web' | 'mobile';
+  mobileOs?: 'ios' | 'android' | null;
+  deviceName?: string | null;
+  deviceTargetId?: string | null;
   createdAt: string;
 }
 export interface DatasetSaveBody {
@@ -929,6 +961,18 @@ export interface DatasetDetail {
   description: string | null;
   columns: Array<{ name: string; sensitive: boolean }>;
   rows: Array<{ disabled: boolean; cells: Record<string, string | DatasetMaskedCell> }>;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface DeviceTarget {
+  id: string;
+  projectId: string;
+  name: string;
+  mobileOs: 'ios' | 'android';
+  deviceRef: string;
+  appBundleId: string | null;
+  appPath: string | null;
+  launchArgs: string[];
   createdAt: string;
   updatedAt: string;
 }

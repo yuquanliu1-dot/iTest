@@ -9,6 +9,7 @@ import LoginPage from './pages/LoginPage';
 import ProjectsHome from './pages/ProjectsHome';
 import EnvironmentsPage from './pages/EnvironmentsPage';
 import DatasetsPage from './pages/DatasetsPage';
+import DeviceTargetsPage from './pages/DeviceTargetsPage';
 import Dashboard from './pages/Dashboard';
 import AssistantPage from './pages/AssistantPage';
 import AiWorkspacePage from './pages/AiWorkspacePage';
@@ -43,6 +44,8 @@ export default function App() {
         <Route path="/p/:projectId/environments" element={<EnvironmentsPage />} />
         {/* 项目级数据集维护：与环境页同层级，不依赖版本上下文 */}
         <Route path="/p/:projectId/datasets" element={<DatasetsPage />} />
+        {/* 项目级设备目标维护：移动端用例的 simulator/emulator 配置 */}
+        <Route path="/p/:projectId/device-targets" element={<DeviceTargetsPage />} />
         <Route path="/p/:projectId" element={<ProjectGuard />}>
           {/* 版本化二级路径 /v/:versionId/...：版本号由 ProjectsHome 行「进入」写入 store */}
           <Route path="v/:versionId">
