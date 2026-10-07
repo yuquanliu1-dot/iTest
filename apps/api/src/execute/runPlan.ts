@@ -70,7 +70,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   runState.set(planRunId, { cancelRequested: false });
 
   const cases = await db
-    .select({ caseId: planCases.caseId, order: planCases.order, status: testCases.status })
+    .select({ caseId: planCases.caseId, order: planCases.order, status: testCases.status, platform: testCases.platform })
     .from(planCases)
     .innerJoin(testCases, eq(testCases.id, planCases.caseId))
     .where(eq(planCases.planId, plan.id))
@@ -122,6 +122,10 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       return;
     }
     const loginCaseId = run.loginCaseId;
+    const firstMobile = cases.find((c) => c.status !== 'deprecated' && c.platform === 'mobile');
+    if (firstMobile) {
+      throw new HttpError(422, 'login_prepare_skips_mobile', '登录准备仅对 web 业务用例生效；mobile case 不参与,请关闭 loginPrepare 或移除 mobile case');
+    }
     const firstCaseId = cases.find((c) => c.status !== 'deprecated')?.caseId ?? null;
     const result = await loginPrepare(
       {
@@ -230,6 +234,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       skipped += 1;
       continue;
     }
+    if (c.platform === 'mobile') continue; // mobile case 不走 loginPrepare 注入的 web storageState；后续由 runCase 路由到 MobileEngine
     const ins = await db
       .insert(planRunCases)
       .values({ planRunId, caseId: c.caseId, order: i + 1, status: 'running', stepKind: 'business' })
