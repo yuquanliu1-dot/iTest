@@ -13,7 +13,7 @@ import { fullDateTime } from '../lib/format';
 type Masked = DatasetMaskedCell;
 type DraftCell = string | Masked;
 interface DraftRow { disabled: boolean; cells: Record<string, DraftCell> }
-interface DraftColumn { name: string; sensitive: boolean }
+interface DraftColumn { name: string; sensitive: boolean; renamedFrom?: string }
 interface Draft {
   id?: string;
   name: string;
@@ -58,11 +58,17 @@ export default function DatasetsPage() {
 
   const save = useMutation({
     mutationFn: async (d: Draft) => {
+      const renames: Record<string, string> = {};
+      for (const c of d.columns) {
+        if (c.renamedFrom && c.renamedFrom !== c.name) renames[c.renamedFrom] = c.name;
+      }
       const body: DatasetSaveBody = {
         name: d.name,
         description: d.description.trim() || null,
         columns: d.columns.map((c) => ({ name: c.name, sensitive: c.sensitive })),
         rows: d.rows.map((r) => ({ disabled: r.disabled, cells: { ...r.cells } })),
+        // 改名声明：编辑已有数据集时让服务端把旧列密文 re-key 到新列名（新建无旧密文，可省略）
+        ...(d.id && Object.keys(renames).length > 0 ? { renames } : {}),
       };
       return d.id ? api.datasets.update(projectId!, d.id, body) : api.datasets.create(projectId!, body);
     },
@@ -90,7 +96,9 @@ export default function DatasetsPage() {
   const renameColumn = (i: number, name: string) => mutate((d) => {
     const old = d.columns[i]!.name;
     const columns = [...d.columns];
-    columns[i] = { ...columns[i]!, name };
+    // renamedFrom 记住本次编辑会话里最初的服务端列名（连续改名链式穿透），保存时据此生成 renames，
+    // 让服务端把旧列密文 re-key 到新列名 —— 否则敏感列改名会静默丢失密文。
+    columns[i] = { ...columns[i]!, name, renamedFrom: d.columns[i]!.renamedFrom ?? old };
     const rows = d.rows.map((r) => {
       if (!(old in r.cells)) return r;
       const cells: Record<string, DraftCell> = {};

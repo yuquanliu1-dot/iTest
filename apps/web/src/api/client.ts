@@ -907,6 +907,8 @@ export interface DatasetSaveBody {
   description?: string | null;
   columns: Array<{ name: string; sensitive?: boolean }>;
   rows: Array<{ disabled?: boolean; cells: Record<string, unknown> }>;
+  /** 列改名声明（旧列名 → 新列名）：让服务端把旧列密文 re-key 到新列名（编辑已有数据集时）。 */
+  renames?: Record<string, string>;
 }
 export interface DatasetSummary {
   id: string;

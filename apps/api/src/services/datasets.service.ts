@@ -29,6 +29,8 @@ export interface DatasetSaveBody {
   description?: string | null;
   columns: Array<{ name: string; sensitive?: boolean }>;
   rows: Array<{ disabled?: boolean; cells: Record<string, unknown> }>;
+  /** 列改名声明（旧列名 → 新列名）：__masked 占位按行对齐时把旧密文 re-key 到新列名，否则改名会静默清空密文。 */
+  renames?: Record<string, string>;
 }
 
 function isEncCell(v: unknown): v is DatasetEncCell {
@@ -78,7 +80,24 @@ function normalizeDataset(
   if (columns.length > MAX_COLUMNS) throw new HttpError(400, 'bad_request', `列数超上限（最多 ${MAX_COLUMNS} 列）`);
   if ((input.rows ?? []).length > MAX_ROWS) throw new HttpError(400, 'bad_request', `行数超上限（最多 ${MAX_ROWS} 行）`);
 
-  const prevRows = prev?.rows ?? [];
+  // 改名声明校验：目标列必须出现在本次列集里，且多个旧名不能挤向同一个新名（列名本身已去重）。
+  const renames = input.renames ?? {};
+  const renameEntries = Object.entries(renames);
+  if (renameEntries.length > 0) {
+    const targets = new Set<string>();
+    for (const [, newName] of renameEntries) {
+      if (!seen.has(newName)) throw new HttpError(400, 'bad_request', `renames 目标列 ${newName} 不在本次保存的列集中`);
+      if (targets.has(newName)) throw new HttpError(400, 'bad_request', `renames 目标列重复：${newName}`);
+      targets.add(newName);
+    }
+  }
+  // 旧密文按行对齐前先 re-key 到新列名（构建全新对象，a↔b 互换也能对上）。
+  const prevRows = (prev?.rows ?? []).map((row) => {
+    if (renameEntries.length === 0) return row;
+    const cells: DatasetRow['cells'] = {};
+    for (const [k, v] of Object.entries(row.cells)) cells[renames[k] ?? k] = v;
+    return { ...row, cells };
+  });
   const rows: DatasetRow[] = (input.rows ?? []).map((row, i) => {
     const cells: DatasetRow['cells'] = {};
     for (const [k, v] of Object.entries(row.cells ?? {})) {
@@ -89,8 +108,13 @@ function normalizeDataset(
         if (typeof v === 'string') {
           cells[k] = v.length > 0 ? encryptCell(v) : '';
         } else if (isMaskedCell(v)) {
-          // 密码框语义：未改动占位符回传 → 沿用旧密文；旧值是明文（列刚切成敏感）视为空
-          cells[k] = isEncCell(prevCell) ? prevCell : '';
+          // 密码框语义：未改动占位符回传 → 沿用旧密文（renames 已把旧密文 re-key 到新列名）。
+          // 找不到对应旧密文（改名未声明 renames / 陈旧客户端）→ 显式 400，绝不静默清空：
+          // 用户看不到明文，静默置空等于不可逆丢失。
+          if (!isEncCell(prevCell)) {
+            throw new HttpError(400, 'bad_request', `第 ${i + 1} 行列 ${k} 回传了敏感占位符但没有对应旧密文（列可能被重命名但未声明 renames），请刷新后重试`);
+          }
+          cells[k] = prevCell;
         } else {
           throw new HttpError(400, 'bad_request', `第 ${i + 1} 行列 ${k} 的值类型不合法`);
         }

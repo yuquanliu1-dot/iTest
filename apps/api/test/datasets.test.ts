@@ -118,6 +118,54 @@ describe('datasets.service', () => {
     expect(detail!.rows[0].cells.password).toBe('pw-1');
   });
 
+  it('updateDataset：敏感列改名 + renames 声明 → __masked 沿用旧密文，回放变量跟随新列名', async () => {
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, { ...body, name: '改名账号' });
+    const detail = await svc.getDataset(created.id);
+    const updated = await svc.updateDataset(created.id, {
+      name: '改名账号',
+      columns: [
+        { name: 'username', sensitive: false },
+        { name: 'secret', sensitive: true }, // password → secret
+      ],
+      renames: { password: 'secret' },
+      rows: detail!.rows.map((r) => ({
+        disabled: false,
+        cells: { username: r.cells.username as string, secret: r.cells.password }, // __masked 原样回传
+      })),
+    });
+    // 出参仍是掩码（不是空串）→ 密文没有丢
+    expect(updated.rows[0].cells.secret).toEqual({ __masked: true });
+    // 解密存活：改名后按新列名仍解出原明文
+    const run = await svc.loadDatasetForRun(created.id);
+    expect(run.rows[0].vars.secret).toBe('pw-1');
+    expect(run.rows[1].vars.secret).toBe('pw-2');
+    expect(run.rows[0].sensitiveVarKeys).toEqual(['secret']);
+  });
+
+  it('updateDataset：敏感列改名但不带 renames → 400，不再静默清空密文', async () => {
+    const { HttpError } = await import('../src/middleware/errorHandler.js');
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, { ...body, name: '改名无声明' });
+    const detail = await svc.getDataset(created.id);
+    const missing = await svc.updateDataset(created.id, {
+      name: '改名无声明',
+      columns: [{ name: 'username', sensitive: false }, { name: 'secret', sensitive: true }],
+      rows: detail!.rows.map((r) => ({ disabled: false, cells: { username: 'x', secret: { __masked: true } } })),
+    }).catch((e: unknown) => e);
+    expect(missing).toBeInstanceOf(HttpError);
+    expect((missing as HttpError).status).toBe(400);
+    expect((missing as HttpError).message).toContain('renames');
+    // renames 目标列不在本次列集 → 同样 400
+    const badTarget = await svc.updateDataset(created.id, {
+      name: '改名无声明',
+      columns: [{ name: 'username', sensitive: false }, { name: 'secret', sensitive: true }],
+      renames: { password: 'nonexistent' },
+      rows: detail!.rows.map((r) => ({ disabled: false, cells: { username: 'x', secret: 'pw' } })),
+    }).catch((e: unknown) => e);
+    expect((badTarget as HttpError).status).toBe(400);
+  });
+
   it('校验：非法列名 / 重复列名 / 未知列 / 超上限 报 400', async () => {
     const svc = await import('../src/services/datasets.service.js');
     const { HttpError } = await import('../src/middleware/errorHandler.js');
