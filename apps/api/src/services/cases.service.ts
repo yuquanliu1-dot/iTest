@@ -5,7 +5,7 @@
  */
 import { asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { caseTags, groups, projects, projectVersions, scenarios, tags, testCases, testSteps } from '../db/schema.js';
+import { caseTags, datasets, groups, projects, projectVersions, scenarios, tags, testCases, testSteps } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { resolveDatasetProjectId, resolveEnvironmentProjectId, resolveVersionProjectId } from './projectAccess.js';
@@ -337,6 +337,21 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
   if (!src) throw new HttpError(404, 'not_found', 'case not found');
   const siblings = await db.select({ title: testCases.title }).from(testCases).where(eq(testCases.groupId, targetGroupId));
   const title = nextCopyTitle(src.title, siblings.map((s) => s.title));
+  // 数据集绑定随拷贝：仅当源数据集与目标分组同项目时携带（跨项目不外带，置空回退单次执行）。
+  let datasetId: string | null = null;
+  if (src.datasetId) {
+    const targetGroup = (await db
+      .select({ projectId: groups.projectId })
+      .from(groups)
+      .where(eq(groups.id, targetGroupId))
+      .limit(1))[0];
+    const srcDs = (await db
+      .select({ projectId: datasets.projectId })
+      .from(datasets)
+      .where(eq(datasets.id, src.datasetId))
+      .limit(1))[0];
+    if (targetGroup && srcDs && srcDs.projectId === targetGroup.projectId) datasetId = src.datasetId;
+  }
   const inserted = await db
     .insert(testCases)
     .values({
@@ -346,6 +361,7 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
       groupId: targetGroupId,
       versionId: targetVersionId ?? src.versionId,
       url: src.url,
+      datasetId,
     })
     .returning();
   const newCase = inserted[0]!;

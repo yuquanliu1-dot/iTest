@@ -3,7 +3,7 @@ import type { Browser, BrowserContext } from 'playwright-core';
 import { logger } from '../logger.js';
 import { db } from '../db/client.js';
 import { testCases, testSteps, reports, groups } from '../db/schema.js';
-import { executeCaseReal, executeCaseInBrowser, type ExecStepResult } from './cdp.js';
+import { executeCaseReal, executeCaseInBrowser, maskSensitiveValues, type ExecStepResult } from './cdp.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { loadDatasetForRun, type DatasetRowExec } from '../services/datasets.service.js';
 import type { WindowStrategy, PreflightReport } from '@itest/shared';
@@ -49,7 +49,8 @@ export async function runCase(
   return runCaseOnce(caseId, caseRow, opts);
 }
 
-/** 单次执行（数据集模式下每行调一次）。rowPlan 存在时：report 带 rowIndex/快照，执行器注入初始变量。 */
+/** 单次执行（数据集模式下每行调一次）。rowPlan 存在时：report 带 rowIndex/快照，执行器注入初始变量；
+ *  且插入 report 之后的任何意外错误都在这里兜底为该行 failed report，不中断迭代、不留 running 僵尸。 */
 async function runCaseOnce(
   caseId: string,
   caseRow: typeof testCases.$inferSelect,
@@ -86,6 +87,56 @@ async function runCaseOnce(
     .returning();
   const reportId = inserted[0]!.id;
 
+  // 非数据集模式保持原语义：内部错误照常上抛（由 HTTP 边界处理）。
+  if (!rowPlan) return runCaseOnceInner(caseId, caseRow, opts, projectId, steps, reportId, undefined);
+  // 数据集行兜底：report 已落库，之后任何意外错误（解密/URL 解析/最终落库等）不抛出迭代循环，
+  // 而是记为该行 InternalError failed report —— 满足「任何单行错误一律 failed，继续下一行」。
+  try {
+    return await runCaseOnceInner(caseId, caseRow, opts, projectId, steps, reportId, rowPlan);
+  } catch (e) {
+    let msg = e instanceof Error ? e.message : String(e);
+    if (rowPlan.sensitiveVarKeys.length > 0) {
+      msg = maskSensitiveValues(msg, rowPlan.vars, rowPlan.sensitiveVarKeys);
+    }
+    logger.warn({ err: e, caseId, reportId }, 'dataset row crashed after report insert; writing InternalError failed report');
+    await db
+      .update(reports)
+      .set({
+        status: 'failed',
+        stepResults: [
+          {
+            order: 1,
+            status: 'failed',
+            durationMs: 0,
+            error: msg,
+            failureReason: 'InternalError',
+            humanMessage: '执行器内部错误，该行已记为失败',
+          },
+        ] as object,
+        summary: msg,
+      })
+      .where(eq(reports.id, reportId))
+      .catch(() => undefined);
+    return { reportId, status: 'failed' };
+  }
+}
+
+/** report 插入之后的执行主体（runCaseOnce 完成前置查询与 report 落库后调用）。 */
+async function runCaseOnceInner(
+  caseId: string,
+  caseRow: typeof testCases.$inferSelect,
+  opts: {
+    storageState?: unknown;
+    forceFail?: boolean;
+    envOverride?: { envId: string } | null;
+    ownedBrowser?: Browser;
+    ownedContext?: BrowserContext;
+  } | undefined,
+  projectId: string | undefined,
+  steps: (typeof testSteps.$inferSelect)[],
+  reportId: string,
+  rowPlan: DatasetRowExec | undefined,
+): Promise<{ reportId: string; status: string }> {
   // 确定性测试钩子：不启动浏览器，直接落失败报告。
   if (opts?.forceFail) {
     const stepResults: ExecStepResult[] = [];

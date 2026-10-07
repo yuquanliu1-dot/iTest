@@ -11,6 +11,22 @@ vi.mock('../src/execute/cdp.js', async (importOriginal) => {
   return { ...actual, executeCaseReal: execMock, executeCaseInBrowser: execMock };
 });
 
+// mock resolveCaseUrl：默认委托真实实现；urlMock 设置 once 实现时可注入 report 插入后的意外抛错。
+const { urlMock } = vi.hoisted(() => ({ urlMock: vi.fn() }));
+vi.mock('../src/lib/resolve-url.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/lib/resolve-url.js')>();
+  return {
+    ...actual,
+    resolveCaseUrl: (
+      caseRow: Parameters<typeof actual.resolveCaseUrl>[0],
+      o: Parameters<typeof actual.resolveCaseUrl>[1],
+    ) => {
+      const intercepted = urlMock(caseRow, o);
+      return intercepted === undefined ? actual.resolveCaseUrl(caseRow, o) : intercepted;
+    },
+  };
+});
+
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
@@ -123,6 +139,41 @@ describe('runCase dataset iteration', () => {
     expect(rep0.body.status).toBe('failed');
     const rep1 = await request(app).get(`/api/reports/${r.body.reportIds[1]}`);
     expect(rep1.body.status).toBe('passed');
+  });
+
+  it('report 落库后的意外错误兜底：该行记 InternalError failed，不留 running，后续行继续', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '兜底迭代' });
+    const caseId = await insertCase('兜底不中断', created.body.id);
+
+    execMock.mockReset();
+    execMock.mockResolvedValue([]);
+    urlMock.mockReset();
+    // 第 1 行在 report 插入之后、执行器之前抛出意外错误（非 EnvMissing/CDPUnavailable 分类路径）
+    urlMock.mockImplementationOnce(() => {
+      throw new Error('boom after insert');
+    });
+    const r = await request(app).post(`/api/cases/${caseId}/execute`);
+    expect(r.status).toBe(200);
+    expect(r.body.reportIds).toHaveLength(2);
+
+    const rep0 = await request(app).get(`/api/reports/${r.body.reportIds[0]}`);
+    expect(rep0.body.status).toBe('failed');
+    expect(rep0.body.stepResults[0].failureReason).toBe('InternalError');
+    expect(rep0.body.stepResults[0].error).toContain('boom after insert');
+    expect(rep0.body.stepResults[0].humanMessage).toBe('执行器内部错误，该行已记为失败');
+
+    // 后续行照常执行
+    const rep1 = await request(app).get(`/api/reports/${r.body.reportIds[1]}`);
+    expect(rep1.body.status).toBe('passed');
+    expect(rep1.body.datasetRowIndex).toBe(1);
+
+    // 该用例名下没有遗留 running 僵尸 report
+    const all = await pool.query(
+      `SELECT status, dataset_row_index FROM reports WHERE case_id = $1 ORDER BY dataset_row_index`,
+      [caseId],
+    );
+    expect(all.rows).toHaveLength(2);
+    expect(all.rows.every((x: { status: string }) => x.status !== 'running')).toBe(true);
   });
 
   it('0 启用行 → 400 且不产生任何 report', async () => {

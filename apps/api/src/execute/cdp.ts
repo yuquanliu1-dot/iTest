@@ -742,16 +742,18 @@ async function runStepsInContext(
         : undefined);
       const failedAction = (assertionAction ?? firstCompiledAction);
       // 数据集敏感列脱敏：assertText 等错误信息带物化后的期望值（{{password}} 明文），
-      // classify/humanMessage 可能复用 e.message —— 落报告前原地打码，闭环列级加密。
-      if (e instanceof Error && ctx.sensitiveVarKeys && ctx.sensitiveVarKeys.length > 0) {
-        e.message = maskSensitiveValues(e.message, vars, ctx.sensitiveVarKeys);
+      // classify/humanMessage 可能复用 e.message —— 落报告前统一打码（非 Error 抛出物也走 String 后打码），闭环列级加密。
+      let rawMsg = e instanceof Error ? e.message : String(e);
+      if (ctx.sensitiveVarKeys && ctx.sensitiveVarKeys.length > 0) {
+        rawMsg = maskSensitiveValues(rawMsg, vars, ctx.sensitiveVarKeys);
+        if (e instanceof Error) e.message = rawMsg;
       }
       const classified = classify(e, { action: failedAction, durationMs });
       results.push({
         order: step.order,
         status: 'failed',
         durationMs,
-        error: e instanceof Error ? e.message : String(e),
+        error: rawMsg,
         screenshot,
         failureReason: classified.reason,
         humanMessage: classified.humanMessage,
