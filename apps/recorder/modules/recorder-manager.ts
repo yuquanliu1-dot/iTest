@@ -102,6 +102,11 @@ export class RecorderManager {
   /** aiTask（验证码）合并窗：captcha 输入框在 React 重渲染或后端定时刷新时会反复触发 input，
    *  1.5s 内同 locator 只产一条 aiTask。 */
   private static AITASK_DEDUP_MS = 1500;
+  /** 密码自动填充兜底去重窗：Chrome autofill / 1Password 在失焦+focus 反复时可能连续触发 change，
+   *  同一 locator 1s 内只产一条 fill,避免重复步骤。 */
+  private static SENSITIVE_CHANGE_DEDUP_MS = 1000;
+  /** 最近一次敏感字段 change 兜底发射的 locator 签名 + 时间戳:SENSITIVE_CHANGE_DEDUP_MS 窗内去重。 */
+  private lastSensitiveChange: { signature: string; at: number } | null = null;
 
   /** 待 flush 的 fill 步骤：input 事件累加 value，到点才 emit。 */
   private pendingFill: {
@@ -128,6 +133,7 @@ export class RecorderManager {
     this.lastHoverSig = null;
     this.cancelPendingFill();
     this.lastAiTaskSig = null;
+    this.lastSensitiveChange = null;
     this.attachListeners();
   }
 
@@ -331,11 +337,52 @@ export class RecorderManager {
       // 用户失焦（点别处 / Tab 切走）时强制 flush 当前 fill，避免 500ms 内就跳转丢失步骤。
       this.flushPendingFill();
     };
+    // Chrome 自动填充 / 1Password / LastPass 等密码管理器扩展会直接调 native setter 写 value,
+    // **不触发** input 事件,只触发 change 事件(且通常在失焦之后一次性发)。
+    // onChange 已 flush pending fill,这里再针对密码输入框补一条「change 但无 pending」路径,
+    // 即便用户全程没键盘输入(纯自动填充)也能把 password 值录上。
+    // 注意:必须 dedup——同 locator 的 change 可能反复触发(autofill 重填、blur 后再 focus)。
+    const onChangePasswordAutofill = (e: Event) => {
+      const target = e.target as HTMLInputElement | null;
+      if (!target) return;
+      if (target.tagName?.toLowerCase() !== 'input') return;
+      const isSensitive = target.type === 'password'
+        || /password/i.test(target.name ?? '')
+        || /password/i.test(target.id ?? '');
+      if (!isSensitive) return;
+      if (!target.isConnected) return;
+      const value = target.value;
+      if (!value) return; // 空值不上报(同手动键入前 focus 时的空字符串一致)
+      const intentLocator = buildIntentLocator(target);
+      const sig = generateLocators(target)
+        .filter((l) => l.strategy === 'role' || l.strategy === 'testId' || l.strategy === 'text')
+        .map((l) => `${l.strategy}:${l.value}`)
+        .join('|');
+      const now = Date.now();
+      if (this.lastSensitiveChange && this.lastSensitiveChange.signature === sig
+          && now - this.lastSensitiveChange.at < RecorderManager.SENSITIVE_CHANGE_DEDUP_MS) {
+        return;
+      }
+      this.lastSensitiveChange = { signature: sig, at: now };
+      // 如果已经有 pending fill 在同一 target 上,250ms 后 flush 会覆盖;这里直接 emit 一次保证
+      // 自动填充场景下也立即落库(value 已定型,不需要等 debounce)。
+      this.cancelPendingFill();
+      this.handler?.({
+        type: 'fill',
+        target: generateLocators(target),
+        value,
+        url: location.href,
+        timestamp: now,
+        sensitive: true,
+        ...(intentLocator ? { intentLocator } : {}),
+      });
+    };
     const onChange = (e: Event) => {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
       // change 触发意味着用户对当前 input 的输入已经定型（失焦 / Enter / 选择项），先 flush 累计的 fill。
       this.flushPendingFill();
+      onChangePasswordAutofill(e);
       const target = e.target as HTMLInputElement | HTMLSelectElement;
       if (!target) return;
       const now = Date.now();
