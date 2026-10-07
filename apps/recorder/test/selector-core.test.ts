@@ -50,16 +50,41 @@ describe('selector-core', () => {
     expect(locs.find((l) => l.strategy === 'css')?.value).toContain('button');
   });
 
-  it('generates xpath locator with // prefix', () => {
+  it('no longer emits xpath locator', () => {
     const el = makeEl('<button>ok</button>');
     const locs = generateLocators(el);
-    expect(locs.find((l) => l.strategy === 'xpath')?.value).toMatch(/^\/.*button/);
+    expect(locs.find((l) => l.strategy === 'xpath')).toBeUndefined();
   });
 
   it('limits to 5 candidates', () => {
     const el = makeEl('<button data-testid="x" aria-label="y">z</button>');
     const locs = generateLocators(el);
     expect(locs.length).toBeLessThanOrEqual(5);
+  });
+
+  it('emits placeholder as independent css candidate', () => {
+    const el = makeEl('<input placeholder="账号" />');
+    const locs = generateLocators(el);
+    expect(locs.find((l) => l.strategy === 'css' && l.value === '[placeholder="账号"]')).toBeDefined();
+  });
+
+  it('emits name as independent css candidate', () => {
+    const el = makeEl('<input name="username" />');
+    const locs = generateLocators(el);
+    expect(locs.find((l) => l.strategy === 'css' && l.value === '[name="username"]')).toBeDefined();
+  });
+
+  it('escapes double quotes in placeholder css selector', () => {
+    const el = makeEl('<input placeholder=\'用户"专用"\' />');
+    const locs = generateLocators(el);
+    const ph = locs.find((l) => l.strategy === 'css' && l.value.includes('placeholder'));
+    expect(ph?.value).toBe('[placeholder="用户\\"专用\\""]');
+  });
+
+  it('drops placeholder candidate when empty / whitespace-only', () => {
+    const el = makeEl('<input placeholder="   " />');
+    const locs = generateLocators(el);
+    expect(locs.find((l) => l.strategy === 'css' && l.value.includes('placeholder'))).toBeUndefined();
   });
 
   it('includes text locator when text is short', () => {
@@ -83,55 +108,6 @@ describe('selector-core', () => {
   });
 });
 
-describe('selector-core — stable anchors', () => {
-  it('XPath anchors to nearest stable class ancestor', () => {
-    // body > div#root > nav.glass-panel > div > button.group-nav-tile > svg > path
-    // 最近的稳定锚点是 button.group-nav-tile（depth=3），不是 nav.glass-panel（depth=2）。
-    // depth 上限是 4：挨着的稳定锚点更紧凑，索引偏移更少。
-    const dom = new JSDOM(`<!doctype html><html><body>
-      <div id="root"><nav class="glass-panel"><div><button class="group-nav-tile"><svg><path></path></svg></button></div></nav></div>
-    </body></html>`);
-    const path = dom.window.document.querySelector('path')!;
-    const xpath = generateLocators(path).find((l) => l.strategy === 'xpath')!.value;
-    expect(xpath).toMatch(/^\/\/button\[@class="group-nav-tile"\]/);
-    expect(xpath).not.toMatch(/body\[1\]/); // 不再用根索引
-  });
-
-  it('XPath keeps glass-panel anchor when no closer stable class', () => {
-    // button 上只有 utility 类，没有 stable class → 上一级 nav.glass-panel 才是锚点。
-    const dom = new JSDOM(`<!doctype html><html><body>
-      <div id="root"><nav class="glass-panel"><div><button class="flex items-center"><svg><path></path></svg></button></div></nav></div>
-    </body></html>`);
-    const path = dom.window.document.querySelector('path')!;
-    const xpath = generateLocators(path).find((l) => l.strategy === 'xpath')!.value;
-    expect(xpath).toMatch(/^\/\/nav\[@class="glass-panel"\]/);
-  });
-
-  it('XPath falls back to root path when no stable ancestor in 4 levels', () => {
-    // 没有任何语义 class 的场景，仍允许回退到根索引式 XPath（不是崩溃）。
-    const dom = new JSDOM(`<!doctype html><html><body>
-      <div id="root"><div><div><div><div><span></span></div></div></div></div></div>
-    </body></html>`);
-    const span = dom.window.document.querySelector('span')!;
-    const xpath = generateLocators(span).find((l) => l.strategy === 'xpath')!.value;
-    expect(xpath).toMatch(/^\/.*span/);
-  });
-
-  it('id fast-path preserves //*[@id="x"] behavior', () => {
-    const dom = new JSDOM('<!doctype html><body><div id="root"><span></span></div></body>');
-    const span = dom.window.document.querySelector('span')!;
-    expect(generateLocators(span).find((l) => l.strategy === 'xpath')!.value).toBe('//div[@id="root"]/span[1]');
-  });
-
-  it('runtime ids like "el-7f9c3a" still take id fast-path but only if stable', () => {
-    const dom = new JSDOM('<!doctype html><body><div id="el-7f9c3a"><span></span></div></body>');
-    const span = dom.window.document.querySelector('span')!;
-    // 运行时 id 不再被 fast-path，走锚点路径（找不到 stable 锚点 → 根路径）。
-    const xpath = generateLocators(span).find((l) => l.strategy === 'xpath')!.value;
-    expect(xpath).not.toContain('@id="el-7f9c3a"');
-  });
-});
-
 describe('selector-core — Tailwind-aware CSS', () => {
   it('strips utilities around semantic classes', () => {
     const dom = new JSDOM(`<!doctype html><html><body>
@@ -143,6 +119,42 @@ describe('selector-core — Tailwind-aware CSS', () => {
     // 命中后整条路径都用语义 class，不再包含 Tailwind utility。
     expect(css).toMatch(/(group-nav-tile|glass-panel)/);
     expect(css).not.toMatch(/\b(flex|w-full|h-dvh|items-center|justify-center|overflow-hidden)\b/);
+  });
+});
+
+describe('selector-core — placeholder/name candidates replace xpath', () => {
+  it('SOC-style username input: name + placeholder + role + css all present', () => {
+    const dom = new JSDOM(`<input type="text" name="username" placeholder="账号" />`);
+    const input = dom.window.document.querySelector('input')!;
+    const locs = generateLocators(input);
+    const cssList = locs.filter((l) => l.strategy === 'css').map((l) => l.value);
+    expect(cssList).toContain('[placeholder="账号"]');
+    expect(cssList).toContain('[name="username"]');
+    expect(locs.find((l) => l.strategy === 'xpath')).toBeUndefined();
+  });
+
+  it('SOC-style password input: emits [placeholder] + [name] for both name+placeholder attrs', () => {
+    const dom = new JSDOM(`<input type="password" name="password" placeholder="密码" />`);
+    const input = dom.window.document.querySelector('input')!;
+    const cssList = generateLocators(input).filter((l) => l.strategy === 'css').map((l) => l.value);
+    expect(cssList).toContain('[placeholder="密码"]');
+    expect(cssList).toContain('[name="password"]');
+  });
+
+  it('input with only name (no placeholder) still emits [name] candidate', () => {
+    const dom = new JSDOM(`<input name="csrfToken" />`);
+    const input = dom.window.document.querySelector('input')!;
+    const cssList = generateLocators(input).filter((l) => l.strategy === 'css').map((l) => l.value);
+    expect(cssList).toContain('[name="csrfToken"]');
+  });
+
+  it('button with no form attrs still produces css candidate without placeholder/name', () => {
+    // 验证移除 xpath 后 css 候选(medv/finder)仍能 cover 普通 button。
+    const dom = new JSDOM(`<button class="login-btn">登录</button>`);
+    const btn = dom.window.document.querySelector('button')!;
+    const locs = generateLocators(btn);
+    expect(locs.find((l) => l.strategy === 'css')?.value).toContain('button');
+    expect(locs.find((l) => l.strategy === 'xpath')).toBeUndefined();
   });
 });
 

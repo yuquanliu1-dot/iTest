@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+// xpath 仍保留在 schema(历史数据兼容),但录制端和新生成的 AI 用例不应再产。
 export const LocatorStrategy = z.enum(['role', 'text', 'testId', 'css', 'xpath']);
 export type LocatorStrategy = z.infer<typeof LocatorStrategy>;
 

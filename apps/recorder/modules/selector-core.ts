@@ -2,7 +2,7 @@ import { finder } from '@medv/finder';
 import { filterCssPath, isStableCssPath, stripRuntimeAria, isUtilityClass } from './selector-filter.js';
 
 export interface Locator {
-  strategy: 'role' | 'testId' | 'text' | 'css' | 'xpath';
+  strategy: 'role' | 'testId' | 'text' | 'css';
   value: string;
 }
 
@@ -147,7 +147,8 @@ function buildCssPathFallback(el: Element): string {
   return parts.join(' > ');
 }
 
-/** 沿父链向上找一个稳定锚点（data-testid / 稳定 id / 已知语义 class）。最多上溯 4 层。 */
+/** 沿父链向上找一个稳定锚点（data-testid / 稳定 id / 已知语义 class）。最多上溯 4 层。
+ *  现在已无 xpath 候选产出,本函数仅供 nearestStableAnchorTest / 历史数据回放兜底使用。 */
 function nearestStableAnchor(el: Element): Element | null {
   let cur: Element | null = el.parentElement;
   let depth = 0;
@@ -241,9 +242,24 @@ export function generateLocators(el: Element, options: GenerateLocatorsOptions =
     push({ strategy: 'text', value: name });
   }
 
+  // placeholder / name：表单元素最高 ROI 的语义属性，独立提为 css 候选。
+  // - placeholder 是设计/文案迭代的视觉标签，跨 layout 改动稳；
+  // - name 是表单提交用的语义名，对 input/select/textarea 一律稳定。
+  // 两都通过 css 通道产出，复用回放端 css 候选解析路径（locator-resolver.ts 的 css 分支），
+  // 回放端零改动。value 在写入 css 属性选择器前要转义双引号/反斜杠。
+  const placeholder = el.getAttribute('placeholder');
+  if (placeholder && placeholder.trim()) {
+    const safe = placeholder.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    push({ strategy: 'css', value: `[placeholder="${safe}"]` });
+  }
+  const nameAttr = el.getAttribute('name');
+  if (nameAttr && nameAttr.trim()) {
+    const safe = nameAttr.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    push({ strategy: 'css', value: `[name="${safe}"]` });
+  }
+
   const css = buildCssPath(el, options);
   push({ strategy: 'css', value: css });
-  push({ strategy: 'xpath', value: buildXPath(el) });
 
   return out.slice(0, MAX_CANDIDATES);
 }
