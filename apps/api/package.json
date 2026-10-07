@@ -20,6 +20,7 @@
     "@google/generative-ai": "^0.21.0",
     "@itest/recorder": "workspace:*",
     "@itest/shared": "workspace:*",
+    "agent-device": "^0.21.22",
     "bcryptjs": "^3.0.3",
     "drizzle-orm": "^0.36.0",
     "express": "^5.2.1",

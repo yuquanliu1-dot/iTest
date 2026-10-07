@@ -39,6 +39,10 @@ const HUMAN: Record<FailureReason, string> = {
   SyslogTimeout: '读取 syslog 超时',
   LogAssertionFailed: '日志断言未命中',
   VisionAssertionFailed: '最终页面与用例预期不符(vision 判定失败)',
+  EngineUnavailable: '移动端引擎不可用，请检查设备配置或 agent-device daemon',
+  MobileUnsupportedCapability: '当前 mobile 引擎不支持该动作',
+  MobileStepFailed: 'agent-device 命令失败',
+  AppInstallFailed: '移动端 app 安装失败',
   Unknown: '未知错误',
 };
 

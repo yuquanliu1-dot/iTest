@@ -502,6 +502,15 @@ async function tryFirstMatch(
   intentLocator?: IntentLocator,
   hitSink?: { current: HitLocator | null },
 ): Promise<ReturnType<Page['locator']>> {
+  // 2026-10-07: mobile-only locator strategy 在 web engine dispatcher 中标 unsupported,
+  // 避免误用(如 web case 误用 accessibilityId 命中空节点导致 fail)。
+  // 这里 guard 早于 buildCandidates：buildCandidates 是纯 web 形态,接受 mobile-only strategy 会误生成 css 候选,
+  // 因此直接在此处抛错。MobileEngine 不走 buildCandidates,不会受影响。
+  for (const l of locator) {
+    if (l.strategy === 'accessibilityId' || l.strategy === 'label' || l.strategy === 'predicate') {
+      throw new Error(`locator strategy '${l.strategy}' is mobile-only; cannot run on web engine`);
+    }
+  }
   const cands = buildCandidates(page, { locator, intentLocator });
   if (cands.length === 0) {
     throw new Error('locator array is empty');

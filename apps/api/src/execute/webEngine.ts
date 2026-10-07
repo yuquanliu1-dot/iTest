@@ -1,5 +1,5 @@
 import type { Engine, EngineInput } from './engine.js';
-import { executeCaseReal, type ExecStepResult } from './cdp.js';
+import { executeCaseReal, type ExecContext, type ExecStepResult } from './cdp.js';
 import type { PreflightReport } from '@itest/shared';
 
 export class WebEngine implements Engine {
