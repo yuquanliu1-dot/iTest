@@ -152,7 +152,8 @@ export default function RecorderExtensionBadge() {
                   <li>回到本页面，徽标变绿即代表已就绪。</li>
                 </ol>
                 <p className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
-                  提示：扩展仅在通过 <code>http://localhost</code> 或 <code>127.0.0.1</code> 访问中台时注入；跨机器访问请在扩展所在机器的浏览器里打开中台。
+                  提示：扩展默认在当前中台域名下注入；若扩展所在机器访问中台的地址与这里不同（例如跨机器访问），
+                  可点击扩展图标，在弹窗里把「中台地址」改成实际访问地址后保存。
                 </p>
               </>
             )}

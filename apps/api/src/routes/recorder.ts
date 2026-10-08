@@ -239,7 +239,42 @@ async function walkRecorderDir(root: string, rel: string, out: string[]): Promis
   }
 }
 
-recorderRoute.get('/extension.zip', async (_req, res) => {
+/** 解析下载请求对应中台 origin（写到 zip 里的 manifest 与 console-config.default）。
+ *  优先级：浏览器 Origin 头 > Referer 解析 > nginx 透传的 Host + X-Forwarded-Proto。
+ *  解析失败回退 null（保留 manifest 默认 localhost/127.0.0.1）。
+ *  导出仅供测试；生产代码用不到。 */
+export function deriveConsoleOrigin(req: import('express').Request): string | null {
+  const xfpRaw = req.headers['x-forwarded-proto'];
+  const proto = (typeof xfpRaw === 'string' ? xfpRaw : Array.isArray(xfpRaw) ? xfpRaw[0] : 'http')
+    ?.split(',')[0]?.trim().toLowerCase();
+  const originHdr = req.headers['origin'];
+  const originStr = typeof originHdr === 'string' ? originHdr : undefined;
+  if (originStr) {
+    try { return new URL(originStr).origin; } catch { /* fallthrough */ }
+  }
+  const refHdr = req.headers['referer'];
+  const refStr = typeof refHdr === 'string' ? refHdr : undefined;
+  if (refStr) {
+    try { return new URL(refStr).origin; } catch { /* fallthrough */ }
+  }
+  const hostHdr = req.headers['host'];
+  const hostStr = typeof hostHdr === 'string' ? hostHdr : undefined;
+  if (hostStr) {
+    const scheme = proto === 'https' ? 'https' : proto === 'http' ? 'http' : 'http';
+    return `${scheme}://${hostStr}`;
+  }
+  return null;
+}
+
+/** 把 origin 拼成 content_scripts matches 项；同源已是 http(s)/* 一条足够。
+ *  origin 形如 http://192.168.30.228:8080 → http://192.168.30.228:8080/*
+ *  注意：Chromium 拒绝 :/* 这种省略 host 的 pattern，所以要保留 host+port。
+ *  导出仅供测试。 */
+export function originToMatchPattern(origin: string): string {
+  return `${origin}/*`;
+}
+
+recorderRoute.get('/extension.zip', async (req, res) => {
   const root = resolveRecorderRoot();
   // build 产物校验：modules/recorder-manager.js 是 esbuild 入口，缺失 = 还没 build。
   try {
@@ -253,11 +288,52 @@ recorderRoute.get('/extension.zip', async (_req, res) => {
   }
   // manifest version 用作 zip 文件名后缀——build 后会同步更新
   let version = '0.0.0';
+  let manifestText: string | null = null;
   try {
-    const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')) as { version?: string };
+    manifestText = await readFile(join(root, 'manifest.json'), 'utf8');
+    const manifest = JSON.parse(manifestText) as { version?: string; content_scripts?: Array<{ matches?: string[] }> };
     version = manifest.version ?? version;
   } catch (err) {
     logger.warn({ err }, 'extension.zip: manifest.json read failed, using default version');
+  }
+
+  // 根据请求 origin 重写 manifest.content_scripts.matches，让下载得到的扩展在对应中台域名直接注入。
+  // 没解析出 origin（curl 直连等）时保留源码 manifest 原样。
+  const consoleOrigin = deriveConsoleOrigin(req);
+  if (consoleOrigin && manifestText) {
+    try {
+      const manifest = JSON.parse(manifestText) as {
+        content_scripts?: Array<{ matches?: string[]; js?: string[]; run_at?: string }>;
+      };
+      const cs = manifest.content_scripts?.[0];
+      if (cs) {
+        const defaults = ['http://localhost/*', 'http://127.0.0.1/*'];
+        const deployed = originToMatchPattern(consoleOrigin);
+        // 避免重复：部署 origin 已经等于 default 之一时跳过写入。
+        const merged = Array.from(new Set([...(cs.matches ?? []), deployed, ...defaults]));
+        cs.matches = merged.filter((m, idx, arr) => arr.indexOf(m) === idx);
+        manifestText = JSON.stringify(manifest, null, 2);
+      }
+    } catch (err) {
+      logger.warn({ err, consoleOrigin }, 'extension.zip: failed to inject deployed origin into manifest');
+    }
+  }
+
+  // console-config.js 里的 DEFAULT_CONSOLE_ORIGIN 决定 popup 首屏 input 默认值；
+  // 重写为部署 origin，下载即用、跨机器时不必再去弹窗里改。
+  let consoleConfigText: string | null = null;
+  if (consoleOrigin) {
+    try {
+      const raw = await readFile(join(root, 'modules', 'console-config.js'), 'utf8');
+      // 仅在 DEFAULT_CONSOLE_ORIGIN 是源码默认 http://localhost:5173 时改写，
+      // 避免覆盖测试或后续手工构建的产物。
+      consoleConfigText = raw.replace(
+        /export const DEFAULT_CONSOLE_ORIGIN = 'http:\/\/localhost:5173';/,
+        `export const DEFAULT_CONSOLE_ORIGIN = ${JSON.stringify(consoleOrigin)};`,
+      );
+    } catch (err) {
+      logger.warn({ err }, 'extension.zip: console-config.js read failed');
+    }
   }
 
   const files: string[] = [];
@@ -277,11 +353,42 @@ recorderRoute.get('/extension.zip', async (_req, res) => {
   });
   archive.pipe(res);
 
+  // 先把两个要重写的文件清掉，避免被后面 archive.file 覆盖式同名追加（archiver 不会去重同 name 条目）。
+  const OVERRIDE_FILES = new Set<string>([
+    'manifest.json',
+    'modules' + sep + 'console-config.js',
+  ]);
+
   for (const rel of files) {
+    if (OVERRIDE_FILES.has(rel)) continue;
     // 双重保险：再断言一遍路径不会逃出 root（防止 manifest.json 被改坏导致 readdir 跑飞）
     const safe = relative(root, join(root, rel));
     if (safe.startsWith('..') || safe.includes('..' + sep)) continue;
     archive.file(join(root, rel), { name: `itest-recorder${sep}${safe}` });
   }
+
+  if (manifestText) {
+    archive.append(manifestText, { name: `itest-recorder${sep}manifest.json` });
+  } else {
+    // 解析失败时还是带上源码默认 manifest，避免扩展装上空 manifest
+    try {
+      const fallback = await readFile(join(root, 'manifest.json'), 'utf8');
+      archive.append(fallback, { name: `itest-recorder${sep}manifest.json` });
+    } catch (err) {
+      logger.error({ err }, 'extension.zip: fallback manifest.json read failed');
+    }
+  }
+  if (consoleConfigText) {
+    archive.append(consoleConfigText, { name: `itest-recorder${sep}modules${sep}console-config.js` });
+  } else {
+    try {
+      const fallback = await readFile(join(root, 'modules', 'console-config.js'), 'utf8');
+      archive.append(fallback, { name: `itest-recorder${sep}modules${sep}console-config.js` });
+    } catch (err) {
+      logger.warn({ err }, 'extension.zip: fallback console-config.js read failed');
+    }
+  }
+
   await archive.finalize();
 });
+
