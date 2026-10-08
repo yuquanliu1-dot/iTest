@@ -400,6 +400,17 @@ export const api = {
         `/cases/${caseId}/attachments`,
       ),
   },
+  /** 浏览器原生下载：fetch → blob → `<a download>`，不走 JSON 解析。
+   *  与 request() 不同：401 不会自动跳登录（保持与原始 `<a>` 一致），调用方按需处理。 */
+  downloadExtensionZip: async (): Promise<Blob> => {
+    const r = await fetch(`${BASE}/recorder/extension.zip`, { credentials: 'same-origin' });
+    if (!r.ok) {
+      if (r.status === 401) throw new ApiError(401, '未登录或会话已过期');
+      const body = await r.json().catch(() => ({}));
+      throw new ApiError(r.status, body.message ?? `HTTP ${r.status}`);
+    }
+    return r.blob();
+  },
   auth: {
     login: (username: string, password: string) =>
       request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),

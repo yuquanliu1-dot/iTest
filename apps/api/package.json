@@ -21,6 +21,7 @@
     "@itest/recorder": "workspace:*",
     "@itest/shared": "workspace:*",
     "agent-device": "^0.21.22",
+    "archiver": "^7.0.1",
     "bcryptjs": "^3.0.3",
     "drizzle-orm": "^0.36.0",
     "express": "^5.2.1",
@@ -40,6 +41,7 @@
   "devDependencies": {
     "@testcontainers/mysql": "^12.2.0",
     "@testcontainers/postgresql": "^10.13.2",
+    "@types/archiver": "^7.0.0",
     "@types/express": "^5.0.0",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.9.0",

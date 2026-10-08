@@ -1,5 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { createRequire } from 'node:module';
+import { stat, readdir, readFile } from 'node:fs/promises';
+import { join, relative, sep } from 'node:path';
+import archiver from 'archiver';
 import { db } from '../db/client.js';
 import { testCases, testSteps, testAttachments, testSessions } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -188,4 +192,96 @@ recorderRoute.post('/sessions/:id/tab-events', async (req, res) => {
   if (!session.tabs) session.tabs = [];
   session.tabs.push(...body.events);
   res.json({ count: session.tabs.length });
+});
+
+/** 用 @itest/recorder workspace 包的 package.json 反推扩展根目录。
+ *  dev 走 pnpm symlink 到 apps/recorder；prod 走 tsc 编译后也可能保留 symlink；
+ *  解析失败时回退到 cwd 相对路径（保留一份鲁棒兜底）。 */
+function resolveRecorderRoot(): string {
+  try {
+    const req = createRequire(import.meta.url);
+    const pkgPath = req.resolve('@itest/recorder/package.json');
+    // ../package.json → 上一级就是包根目录
+    return join(pkgPath, '..');
+  } catch (err) {
+    logger.warn({ err }, 'resolveRecorderRoot: @itest/recorder not resolvable, falling back to cwd/../recorder');
+    return join(process.cwd(), 'apps', 'recorder');
+  }
+}
+
+/** 白名单后缀：扩展 manifest 实际加载的运行时文件类型。
+ *  不在白名单的（.ts 源码、.map、.git 等）一律不进 zip。 */
+const ALLOWED_EXTS = new Set(['.js', '.json', '.css', '.html', '.png']);
+const SKIP_DIRS = new Set(['node_modules', 'test', '.git']);
+/** 配置/类型/构建工件：扩展运行时不需要，开发者修改后会让 Chrome 把根目录当 workspace 误识别。 */
+const SKIP_FILES = new Set(['package.json', 'tsconfig.json', 'tsconfig.build.json', 'package-lock.json', 'pnpm-lock.yaml']);
+
+async function walkRecorderDir(root: string, rel: string, out: string[]): Promise<void> {
+  const abs = join(root, rel);
+  let entries;
+  try {
+    entries = await readdir(abs, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    const childRel = rel ? `${rel}${sep}${e.name}` : e.name;
+    if (e.isDirectory()) {
+      if (SKIP_DIRS.has(e.name)) continue;
+      await walkRecorderDir(root, childRel, out);
+    } else if (e.isFile()) {
+      if (SKIP_FILES.has(e.name)) continue;
+      const dot = e.name.lastIndexOf('.');
+      const ext = dot >= 0 ? e.name.slice(dot).toLowerCase() : '';
+      if (!ALLOWED_EXTS.has(ext)) continue;
+      out.push(childRel);
+    }
+  }
+}
+
+recorderRoute.get('/extension.zip', async (_req, res) => {
+  const root = resolveRecorderRoot();
+  // build 产物校验：modules/recorder-manager.js 是 esbuild 入口，缺失 = 还没 build。
+  try {
+    await stat(join(root, 'modules', 'recorder-manager.js'));
+  } catch {
+    throw new HttpError(
+      409,
+      'extension_not_built',
+      'recorder extension has no build artifacts; run `pnpm --filter @itest/recorder build` first',
+    );
+  }
+  // manifest version 用作 zip 文件名后缀——build 后会同步更新
+  let version = '0.0.0';
+  try {
+    const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')) as { version?: string };
+    version = manifest.version ?? version;
+  } catch (err) {
+    logger.warn({ err }, 'extension.zip: manifest.json read failed, using default version');
+  }
+
+  const files: string[] = [];
+  await walkRecorderDir(root, '', files);
+
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="itest-recorder-v${version}.zip"`);
+
+  const archive = archiver('zip', { zlib: { level: 9 } });
+  archive.on('warning', (err) => {
+    if (err.code !== 'ENOENT') logger.warn({ err }, 'extension.zip warning');
+  });
+  archive.on('error', (err) => {
+    logger.error({ err }, 'extension.zip error');
+    if (!res.headersSent) res.status(500).json({ message: 'failed to build extension zip' });
+    else res.end();
+  });
+  archive.pipe(res);
+
+  for (const rel of files) {
+    // 双重保险：再断言一遍路径不会逃出 root（防止 manifest.json 被改坏导致 readdir 跑飞）
+    const safe = relative(root, join(root, rel));
+    if (safe.startsWith('..') || safe.includes('..' + sep)) continue;
+    archive.file(join(root, rel), { name: `itest-recorder${sep}${safe}` });
+  }
+  await archive.finalize();
 });

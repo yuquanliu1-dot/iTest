@@ -3,6 +3,7 @@ import { useProjectStore } from '../../stores/project';
 import { useAuthStore } from '../../stores/auth';
 import BrandGlyph from '../BrandGlyph';
 import UserMenu from './UserMenu';
+import RecorderExtensionBadge from './RecorderExtensionBadge';
 import { Separator } from '../ui/shadcn/separator';
 
 /**
@@ -38,7 +39,9 @@ export default function AppHeader() {
         </span>
       </div>
 
-      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+      <div className="ml-auto flex shrink-0 items-center gap-3">
+        <RecorderExtensionBadge />
+        <div className="h-5 w-px" style={{ background: 'var(--border)' }} aria-hidden />
         <UserMenu />
       </div>
     </header>
