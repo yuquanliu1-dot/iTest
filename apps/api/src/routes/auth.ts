@@ -25,10 +25,22 @@ export const authRoute = Router();
 const COOKIE_NAME = 'authToken';
 const COOKIE_MAX_AGE_MS = 8 * 60 * 60 * 1000; // 与 JWT 8h 对齐
 
-function setAuthCookie(res: import('express').Response, token: string): void {
+import type { Request, Response } from 'express';
+
+/** secure 跟随反向代理报告的协议；直连时按 NODE_ENV 决定。 */
+function cookieSecureFlag(req: Request): boolean {
+  const xfpRaw = req.headers['x-forwarded-proto'];
+  const xfp = (typeof xfpRaw === 'string' ? xfpRaw : Array.isArray(xfpRaw) ? xfpRaw[0] : undefined)
+    ?.split(',')[0]?.trim().toLowerCase();
+  if (xfp === 'https') return true;
+  if (xfp === 'http') return false;
+  return process.env.NODE_ENV === 'production';
+}
+
+function setAuthCookie(req: Request, res: Response, token: string): void {
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: cookieSecureFlag(req),
     sameSite: 'strict',
     path: '/',
     maxAge: COOKIE_MAX_AGE_MS,
@@ -52,7 +64,7 @@ authRoute.post('/login', async (req, res) => {
     res.json(result);
     return;
   }
-  setAuthCookie(res, result.token);
+  setAuthCookie(req, res, result.token);
   res.json({ status: 'ok', user: result.user, organization: result.organization });
 });
 
@@ -86,7 +98,7 @@ authRoute.post('/change-password', async (req, res) => {
   }
   const result = await login(payload.username, body.newPassword);
   if (!result || result.status !== 'ok') throw new HttpError(401, 'invalid_credentials', '用户名或密码错误');
-  setAuthCookie(res, result.token);
+  setAuthCookie(req, res, result.token);
   res.json({ status: 'ok', user: result.user, organization: result.organization });
 });
 
@@ -105,7 +117,7 @@ authRoute.post('/switch-org', requireAuth, async (req, res) => {
   const body = SwitchOrgBody.parse(req.body);
   const result = await switchOrganization(req.user!.userId, body.organizationId);
   if (!result) throw new HttpError(403, 'forbidden', '不是该组织成员');
-  setAuthCookie(res, result.token);
+  setAuthCookie(req, res, result.token);
   res.json({ organization: result.organization, isManager: result.isManager, isUser: result.isUser });
 });
 
