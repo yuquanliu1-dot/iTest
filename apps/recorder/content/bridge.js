@@ -20,6 +20,18 @@
       window.postMessage({ source: 'ita-ext', type: 'start-result', ok: false, error: 'context_invalidated' }, '*');
       return;
     }
+    // 探测握手：web 顶栏在 mount 时发 ping，扩展回 pong + manifest version。
+    // 不调 background、不打开 WS，仅在 content script 自答。
+    // 收到的是空 version → context invalidated（扩展刚被重载过），web 端可提示刷新页面。
+    if (e.data.type === 'ping') {
+      let version = null;
+      if (isContextAlive()) {
+        try { version = chrome.runtime.getManifest().version ?? null; } catch { /* ignore */ }
+      }
+      window.postMessage({ source: 'ita-ext', type: 'pong', id: e.data.id, version }, '*');
+      return;
+    }
+
     if (e.data.type === 'start-recording') {
       chrome.runtime.sendMessage(
         { type: 'start', session: e.data.session, targetUrl: e.data.targetUrl },

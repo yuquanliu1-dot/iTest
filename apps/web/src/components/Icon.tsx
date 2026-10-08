@@ -48,6 +48,8 @@ import Search from '@carbon/icons-react/es/Search';
 import SendAlt from '@carbon/icons-react/es/SendAlt';
 import Settings from '@carbon/icons-react/es/Settings';
 import MagicWand from '@carbon/icons-react/es/MagicWand';
+import Plug from '@carbon/icons-react/es/Plug';
+import Recording from '@carbon/icons-react/es/Recording';
 import Star from '@carbon/icons-react/es/Star';
 import Split from '@carbon/icons-react/es/Split';
 import Table from '@carbon/icons-react/es/Table';
@@ -56,7 +58,6 @@ import Terminal from '@carbon/icons-react/es/Terminal';
 import TrashCan from '@carbon/icons-react/es/TrashCan';
 import Upload from '@carbon/icons-react/es/Upload';
 import User from '@carbon/icons-react/es/User';
-import WarningAlt from '@carbon/icons-react/es/WarningAlt';
 import Close from '@carbon/icons-react/es/Close';
 import Globe from '@carbon/icons-react/es/Globe';
 
@@ -112,8 +113,9 @@ const iconMap: Record<string, CarbonIconType> = {
   pause: Pause,
   pencil: Edit,
   play: Play,
+  plug: Plug,
   plus: Add,
-  refresh: Renew,
+  recording: Recording,
   save: Save,
   search: Search,
   send: SendAlt,
@@ -127,7 +129,7 @@ const iconMap: Record<string, CarbonIconType> = {
   trash: TrashCan,
   upload: Upload,
   user: User,
-  warning: WarningAlt,
+  warning: WarningAltFilled,
   x: Close,
   close: Close,
 };
