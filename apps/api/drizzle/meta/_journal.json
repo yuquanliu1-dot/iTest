@@ -169,6 +169,13 @@
       "when": 1791307042000,
       "tag": "0031_replay_datasets",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791380000000,
+      "tag": "0032_mobile_testing",
+      "breakpoints": true
     }
   ]
 }
