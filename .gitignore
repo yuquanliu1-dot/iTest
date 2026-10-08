@@ -10,6 +10,8 @@ apps/api/screenshots
 apps/api/.screenshots
 apps/api/.data
 apps/recorder/modules/*.js
+# shared package source builds (tsc → src/*.js for prod)
+packages/shared/src/*.js
 # local assets / verify screenshots
 .claude/
 *.png
