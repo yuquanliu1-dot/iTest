@@ -8,6 +8,7 @@ import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 import IconButton from '../components/ui/IconButton';
+import ScheduleListCard from '../components/plans/ScheduleListCard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
 import { caseStatusLabel } from '../lib/format';
 
@@ -377,6 +378,8 @@ export default function PlanDetail() {
             )}
           </div>
         </div>
+
+        <ScheduleListCard planId={id!} />
 
         <div className="bg-card border rounded-[var(--radius-md)] p-5">
           <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3 hairline-bottom pb-2" style={{ color: 'var(--muted-foreground)' }}>

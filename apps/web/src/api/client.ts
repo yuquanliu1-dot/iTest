@@ -156,6 +156,24 @@ export const api = {
         body: JSON.stringify({ planRunIds: ids }),
       }),
   },
+  planSchedules: {
+    list: (planId: string) => request<PlanSchedule[]>(`/plans/${planId}/schedules`),
+    create: (planId: string, body: PlanScheduleCreateInput) =>
+      request<PlanSchedule>(`/plans/${planId}/schedules`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    patch: (id: string, body: PlanSchedulePatchInput) =>
+      request<PlanSchedule>(`/plan-schedules/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    remove: (id: string) => request<{ ok: boolean }>(`/plan-schedules/${id}`, { method: 'DELETE' }),
+    enable: (id: string) =>
+      request<PlanSchedule>(`/plan-schedules/${id}/enable`, { method: 'POST' }),
+    disable: (id: string) =>
+      request<PlanSchedule>(`/plan-schedules/${id}/disable`, { method: 'POST' }),
+  },
   versions: {
     list: (projectId: string) =>
       request<ProjectVersion[]>(`/projects/${projectId}/versions`),
@@ -728,6 +746,27 @@ export interface PlanRunDetail {
     durationMs: number | null;
     error: string | null;
   }>;
+}
+export interface PlanSchedule {
+  id: string;
+  planId: string;
+  enabled: boolean;
+  cronExpr: string;
+  timezone: string;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface PlanScheduleCreateInput {
+  cronExpr: string;
+  timezone?: string;
+  enabled?: boolean;
+}
+export interface PlanSchedulePatchInput {
+  cronExpr?: string;
+  timezone?: string;
+  enabled?: boolean;
 }
 export type ExecutionEntry =
   | {
