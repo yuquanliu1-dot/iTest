@@ -11,6 +11,7 @@ import {
 import { runCase } from './runCase.js';
 import { loginPrepare } from './loginPrepare.js';
 import { publishRunEvent, subscribeRunEvent } from '../sse/planRunBus.js';
+import { HttpError } from '../middleware/errorHandler.js';
 
 /** 单 planRun 的运行控制器：内存中保存 storageState 与 cancelRequested。 */
 const runState = new Map<string, { cancelRequested: boolean; storageState?: unknown }>();
