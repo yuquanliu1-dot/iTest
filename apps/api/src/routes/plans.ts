@@ -197,6 +197,7 @@ plansRoute.post('/:id/run', async (req, res) => {
   const { runId } = await enqueuePlanRun({
     planId: req.params.id,
     trigger: { source: 'manual', userId: req.user!.userId },
-    callerUser: { userId: req.user!.userId },
+    callerUser: req.user!,
   });
   res.json({ runId });
+});
