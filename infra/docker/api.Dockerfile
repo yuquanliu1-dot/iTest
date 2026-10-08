@@ -31,7 +31,9 @@ RUN pnpm --filter @itest/shared build || true \
 
 # ----- runtime -----
 FROM node:22-bookworm-slim AS api
-WORKDIR /app
+# build context 默认从仓库根(infra/docker/deploy.sh:25 用 . 作 context)。
+# WORKDIR /repo 让 infra/docker/certs 路径与 api-build stage 一致。
+WORKDIR /repo
 ENV NODE_ENV=production \
     API_HOST=0.0.0.0 \
     API_PORT=54321
