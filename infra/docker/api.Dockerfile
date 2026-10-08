@@ -17,6 +17,12 @@ COPY apps/api/drizzle ./apps/api/drizzle
 COPY apps/api/scripts ./apps/api/scripts
 COPY packages/shared/src ./packages/shared/src
 COPY packages/ui/src ./packages/ui/src
+# recorder 包：拷贝 manifest/popup/content/background 等运行时文件 + 已构建的 modules。
+# node_modules 留给 pnpm install --prod 阶段拉齐；modules 在 pnpm --filter @itest/recorder build 后由 tsc/esbuild 生成。
+COPY apps/recorder/manifest.json ./apps/recorder/manifest.json
+COPY apps/recorder/popup ./apps/recorder/popup
+COPY apps/recorder/content ./apps/recorder/content
+COPY apps/recorder/background.js ./apps/recorder/background.js
 COPY apps/recorder/modules ./apps/recorder/modules
 
 RUN pnpm --filter @itest/shared build || true \
