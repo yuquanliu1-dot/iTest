@@ -3,19 +3,17 @@ import { z } from 'zod';
 import { eq, and, asc, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
-  environmentObjects,
   executionPlans,
   planCases,
-  planRuns,
   testCases,
   groups,
   projectVersions,
 } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
-import { findIncognitoCaseIds, runPlanAsync } from '../execute/runPlan.js';
 import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { createPlan, updatePlan, getPlanDetail, replacePlanCases, planProjectId, removePlanCases, updatePlanCase } from '../services/plans.service.js';
 import { logger } from '../logger.js';
+import { enqueuePlanRun } from '../execute/enqueuePlanRun.js';
 
 export const plansRoute = Router({ mergeParams: true });
 
@@ -196,47 +194,9 @@ plansRoute.get('/:id/login-cases', async (req, res) => {
 });
 
 plansRoute.post('/:id/run', async (req, res) => {
-  const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, req.params.id)))[0];
-  if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
-  await assertProjectVisible(plan.projectId, req.user!);
-  if (plan.loginPrepareEnabled && !plan.loginCaseId) {
-    // 无登录用例时允许环境登录凭据自动登录；计划环境连 login 对象都没有才算配置缺失
-    let hasEnvLogin = false;
-    if (plan.environmentId) {
-      const objs = await db.select({ id: environmentObjects.id }).from(environmentObjects)
-        .where(and(eq(environmentObjects.environmentId, plan.environmentId), eq(environmentObjects.objectType, 'login')))
-        .limit(1);
-      hasEnvLogin = objs.length > 0;
-    }
-    if (!hasEnvLogin) {
-      throw new HttpError(422, 'login_case_required', '登录准备已开启：需选择登录用例，或在计划环境中配置登录凭据');
-    }
-  }
-  if (plan.loginPrepareEnabled) {
-    const incognitoIds = await findIncognitoCaseIds(plan.id);
-    if (incognitoIds.length > 0) {
-      throw new HttpError(422, 'incognito_conflicts_with_login_prepare', `cases: ${incognitoIds.join(',')}`);
-    }
-  }
-  const ins = await db
-    .insert(planRuns)
-    .values({
-      planId: plan.id,
-      projectId: plan.projectId,
-      status: 'running',
-      strategy: plan.strategy,
-      loginPrepareEnabled: plan.loginPrepareEnabled,
-      loginCaseId: plan.loginCaseId,
-      detectionUrl: plan.detectionUrl,
-      loginSuccessSelector: plan.loginSuccessSelector,
-      loginUnauthorizedKeywords: plan.loginUnauthorizedKeywords,
-      totalCases: 0,
-    })
-    .returning();
-  const runId = ins[0]!.id;
-  // fire-and-forget
-  void runPlanAsync({ planRunId: runId }).catch((e) => {
-    logger.error({ err: e, planRunId: runId }, 'runPlanAsync crashed');
+  const { runId } = await enqueuePlanRun({
+    planId: req.params.id,
+    trigger: { source: 'manual', userId: req.user!.userId },
+    callerUser: { userId: req.user!.userId },
   });
   res.json({ runId });
-});

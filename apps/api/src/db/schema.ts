@@ -462,6 +462,12 @@ export const planRuns = pgTable('plan_runs', {
   failedCases: integer('failed_cases'),
   skippedCases: integer('skipped_cases'),
   cancelRequested: boolean('cancel_requested').notNull().default(false),
+  /** 触发来源：`manual` 一键执行 / `schedule` 调度器触发 */
+  triggeredBy: varchar('triggered_by', { length: 20 }).notNull().default('manual'),
+  /** scheduled run 的 actor（创建 schedule 的用户）；手动时为发起人 */
+  triggeredByUserId: uuid('triggered_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  /** 关联调度记录；manual 为 null */
+  scheduleId: uuid('schedule_id'),
 });
 
 export const planRunCases = pgTable('plan_run_cases', {
@@ -479,6 +485,38 @@ export const planRunCases = pgTable('plan_run_cases', {
   durationMs: integer('duration_ms'),
   error: text('error'),
 });
+
+/**
+ * 执行计划调度：one_shot(指定时刻跑一次) / cron(cron 表达式重复) / interval(固定间隔循环)。
+ * BullMQ 在进程启动时 reconcileAllSchedules 把 enabled=true 的全部 re-add 到队列；
+ * 这里持久化计划定义 + 下次执行时间，UI 列表读这里的 next_run_at。
+ */
+export const planSchedules = pgTable('plan_schedules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  planId: uuid('plan_id').notNull().references(() => executionPlans.id, { onDelete: 'cascade' }),
+  /** 'one_shot' | 'cron' | 'interval' */
+  triggerType: varchar('trigger_type', { length: 16 }).notNull(),
+  /** 用户可临时停用（不需要删除调度）；worker / 路由读 enabled 决定是否入队 */
+  enabled: boolean('enabled').notNull().default(true),
+  /** one_shot 专用：到点跑一次后 worker 翻 enabled=false */
+  runAt: timestamp('run_at'),
+  /** cron 专用：cron 表达式（如 '0 9 * * *'） */
+  cronExpr: varchar('cron_expr', { length: 120 }),
+  /** interval 专用：每隔 N 毫秒（已校验 60s..7d） */
+  intervalMs: integer('interval_ms'),
+  /** IANA 时区名，默认 Asia/Shanghai；用于 cron 与 one_shot 的时间解释 */
+  timezone: varchar('timezone', { length: 64 }).notNull().default('Asia/Shanghai'),
+  /** 最近一次实际触发时间（worker 写） */
+  lastRunAt: timestamp('last_run_at'),
+  /** 下次触发时间（worker 写，列表页"下次执行"读此列） */
+  nextRunAt: timestamp('next_run_at'),
+  /** 创建人；scheduled run 的 triggered_by_user_id 沿用此值 */
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  planIdIdx: index('plan_schedules_plan_idx').on(t.planId),
+}));
 
 export const testAttachments = pgTable('test_attachments', {
   id: uuid('id').primaryKey().defaultRandom(),
