@@ -73,7 +73,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
         '跨版本复制用例的标准流程:list_versions 拿版本 id → search(versionId=源版本, keyword=...) 找到源 caseId(可 get 核对步骤) → 确认目标分组存在(不存在先 create_group) → copy_to_version(caseId, targetGroupId, versionId=目标版本)。目标版本缺省为当前版本。',
         '创建 group 后返回 groupId；下一步创建用例时把 groupId 喂给 stage_case。',
         'search 返回的列表项不含步骤全文,要看完整步骤/expectedOutcome 用 get。',
-        '数据集列名即回放初始变量 {{列名}}：看项目数据集结构用 list_datasets（仅结构,敏感值永不可见）；看某用例可用变量用 get 返回的 dataset.columns。行间差异（输入值/断言文本/预期描述）应写成 {{var}}，让每行数据驱动出不同验证。绑定/解绑走 stage_case_op update_case(patch.datasetId)。',
+        '数据集列名即回放初始变量 {{列名}}：看项目数据集结构用 list_datasets（仅结构,敏感值永不可见）；看某用例可用变量用 get 返回的 dataset.columns。行间差异（输入值/断言文本/预期描述）应写成 {{var}}，让每行数据驱动出不同验证。项目里没有合适数据集时用 stage_dataset 生成（配套新用例用 stage_case 的 datasetLocalId 绑定）；给已有用例绑定/解绑已落库数据集走 stage_case_op update_case(patch.datasetId)。修改已有数据集暂不支持。',
       ],
       execute: async (input) => {
         let v: z.infer<typeof Actions>;

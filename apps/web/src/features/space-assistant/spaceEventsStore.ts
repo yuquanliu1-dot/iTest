@@ -10,7 +10,7 @@ export interface SpaceConfirmRequest {
   risk: 'update' | 'delete' | 'secret';
 }
 
-export type StageKind = 'case' | 'case_op' | 'scenario' | 'environment' | 'plan' | 'group';
+export type StageKind = 'case' | 'case_op' | 'scenario' | 'environment' | 'plan' | 'dataset' | 'group';
 
 export interface StageObject {
   key: string;
@@ -55,7 +55,7 @@ interface SpaceEventsState {
   setCurrentThreadId: (threadId: string) => void;
   removeConfirm: (confirmId: string) => void;
   /** 整批替换(初次进入空间页 / 路由切换时由 listStage 拉取后塞入)。 */
-  setStaged: (threadId: string, doc: { cases: unknown[]; scenarios: unknown[]; environments: unknown[]; plans: unknown[]; caseOps: unknown[] }) => void;
+  setStaged: (threadId: string, doc: { cases: unknown[]; scenarios: unknown[]; environments: unknown[]; plans: unknown[]; caseOps?: unknown[]; datasets?: unknown[] }) => void;
   toggleStaged: (threadId: string, kind: Exclude<StageKind, 'group'>, localId: string) => void;
   selectAllStaged: (threadId: string, kind: Exclude<StageKind, 'group'>, selected: boolean) => void;
   /** save 后调用:从前端 view 清掉已落库条目 + 选中标记。 */
@@ -146,6 +146,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
     for (const x of doc.environments) upsert('environment', x);
     for (const x of doc.plans) upsert('plan', x);
     for (const x of (doc.caseOps ?? [])) upsert('case_op', x);
+    for (const x of (doc.datasets ?? [])) upsert('dataset', x);
     next.set(threadId, map);
     return { stagedByThread: next };
   }),

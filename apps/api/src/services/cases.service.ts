@@ -80,6 +80,8 @@ export interface CreateCaseInput {
   scenarioId?: string | null;
   tagIds?: string[];
   expectedOutcome?: string | null;
+  /** 绑定数据集（space-assistant stage 保存路径：数据集先落库再回填）。 */
+  datasetId?: string | null;
 }
 
 export async function createCase(input: CreateCaseInput) {
@@ -88,6 +90,11 @@ export async function createCase(input: CreateCaseInput) {
   const vp = await resolveVersionProjectId(input.versionId);
   if (!vp) throw new HttpError(404, 'not_found', 'version not found');
   if (vp !== pid) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
+  if (input.datasetId !== undefined && input.datasetId !== null) {
+    const dsPid = await resolveDatasetProjectId(input.datasetId);
+    if (!dsPid) throw new HttpError(404, 'not_found', 'dataset not found');
+    if (dsPid !== pid) throw new HttpError(400, 'dataset_project_mismatch', 'dataset does not belong to this project');
+  }
   if (input.priority !== undefined) assertEnum('priority', input.priority, PRIORITIES);
   assertWindowCustom(input);
   if (input.tagIds?.length) await assertTagsBelongToOrg(input.tagIds, pid);
