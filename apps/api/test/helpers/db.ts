@@ -131,7 +131,7 @@ DO $$ BEGIN
   ALTER TABLE plan_cases ADD COLUMN target_override jsonb;
 EXCEPTION WHEN duplicate_column THEN null;
 END $$;
-CREATE TABLE plan_schedules (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), plan_id uuid REFERENCES execution_plans(id) ON DELETE CASCADE NOT NULL, trigger_type varchar(16) NOT NULL, enabled boolean NOT NULL DEFAULT true, run_at timestamp, cron_expr varchar(120), interval_ms integer, timezone varchar(64) NOT NULL DEFAULT 'Asia/Shanghai', last_run_at timestamp, next_run_at timestamp, created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT plan_schedules_trigger_type_chk CHECK (trigger_type IN ('one_shot','cron','interval')), CONSTRAINT plan_schedules_field_chk CHECK ((trigger_type='one_shot' AND run_at IS NOT NULL) OR (trigger_type='cron' AND cron_expr IS NOT NULL) OR (trigger_type='interval' AND interval_ms IS NOT NULL AND interval_ms > 0)));
+CREATE TABLE plan_schedules (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), plan_id uuid REFERENCES execution_plans(id) ON DELETE CASCADE NOT NULL, enabled boolean NOT NULL DEFAULT true, cron_expr varchar(120) NOT NULL, timezone varchar(64) NOT NULL DEFAULT 'Asia/Shanghai', last_run_at timestamp, next_run_at timestamp, created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 CREATE INDEX plan_schedules_plan_idx ON plan_schedules(plan_id);
 `;
 
