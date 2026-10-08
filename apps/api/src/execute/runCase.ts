@@ -355,11 +355,10 @@ async function runCaseOnceInner(
 
   const durationMs = Date.now() - startedAt;
   // 移动端报表补 deviceName：deviceTargets service 在 Task 5 引入,这里用 dynamic import 兜底:
-  // service 还未实现(MVP 阶段顺序容忍)或解析失败时静默跳过,deviceName 保持 null。
+  // service 尚未实现(MVP 阶段顺序容忍)或解析失败时静默跳过,deviceName 保持 null。
   let deviceName: string | null = null;
   if (caseRow.platform === 'mobile' && caseRow.mobileDeviceTargetId) {
     try {
-      // @ts-expect-error deviceTargets service 在 Task 5 引入,MVP 阶段可能尚未实现
       const { resolveDeviceTarget } = await import('../services/deviceTargets.service.js');
       const t = await resolveDeviceTarget(caseRow.mobileDeviceTargetId);
       if (t) deviceName = t.name;
