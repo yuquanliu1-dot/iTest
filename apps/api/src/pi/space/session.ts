@@ -123,8 +123,13 @@ async function checkoutInBackground(versionId: string, repoDir: string, repo: Re
         else repo.noRepo = true;
         return;
       }
+      // 非 RepoUnavailableError:通常是 spawn 二进制不存在(repo.ts:266 已翻译 git ENOENT)。
+      // 显式匹配"git binary missing"以给出指向 api.Dockerfile 的可执行提示,其它错误照原样落 issue。
       logger.warn({ err: e, versionId }, 'space repo checkout failed');
-      repo.issue = e instanceof Error ? e.message : String(e);
+      const errMsg = e instanceof Error ? e.message : String(e);
+      repo.issue = /git binary missing|spawn git/.test(errMsg)
+        ? 'git binary missing in container (rebuild api.Dockerfile)'
+        : errMsg;
       return;
     }
   }

@@ -22,3 +22,7 @@ verify-*.jpeg
 # local worktrees
 .worktrees/
 .superpowers/
+
+# 内部自签 CA 走镜像 build context,默认提交到仓库（org 内通用）；
+# 真正的 PAT / 凭据仍走 .env,不要混淆。
+# infra/docker/certs/gitlab-ca.crt

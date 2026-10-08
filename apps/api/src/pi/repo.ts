@@ -268,7 +268,16 @@ function runGit(args: string[], cwdArg: string = process.cwd()): Promise<string>
     let err = '';
     child.stdout.on('data', (d) => { out += d.toString(); });
     child.stderr.on('data', (d) => { err += d.toString(); });
-    child.on('error', reject);
+    child.on('error', (e) => {
+      const errNo = e as NodeJS.ErrnoException;
+      // 容器镜像没装 git 时 spawn 即 ENOENT;原文「spawn git ENOENT」对运维没指导意义,
+      // 转成可执行的修复建议,checkoutInBackground 会再透到 repo.issue。
+      if (errNo.code === 'ENOENT' && errNo.message.includes('git')) {
+        reject(new Error('git binary missing in runtime image; rebuild infra/docker/api.Dockerfile with git installed'));
+      } else {
+        reject(errNo);
+      }
+    });
     child.on('close', (code) => code === 0 ? resolve(out) : reject(new Error(err.trim() || `git exit ${code}`)));
   });
 }
