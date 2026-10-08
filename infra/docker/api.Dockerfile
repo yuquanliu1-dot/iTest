@@ -42,13 +42,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 自签 CA(可选;若 infra/docker/certs/*.crt 存在则 update-ca-certificates)。
-# COPY 在 source 不匹配 glob 时会报错,所以用 compgen 探测,空目录也能跑通。
-COPY infra/docker/certs/*.crt /usr/local/share/ca-certificates/ 2>/dev/null || true
-RUN if compgen -G "/usr/local/share/ca-certificates/*.crt" > /dev/null; then \
-      update-ca-certificates && echo "custom CAs loaded"; \
+# COPY 在 source 不匹配 glob 时整个构建会失败,所以用 RUN + shopt glob 探测 + cp,空目录也跑通。
+COPY infra/docker/certs/ /tmp/itest-certs/
+RUN if compgen -G "/tmp/itest-certs/*.crt" > /dev/null; then \
+      cp /tmp/itest-certs/*.crt /usr/local/share/ca-certificates/ && \
+      update-ca-certificates && echo "custom CAs loaded" || echo "update-ca-certificates failed"; \
     else \
       echo "no custom CA certs in infra/docker/certs/; system CA only"; \
     fi
+RUN rm -rf /tmp/itest-certs
 
 # 拷贝构建好的源码 + 依赖
 COPY --from=api-build /repo /repo
