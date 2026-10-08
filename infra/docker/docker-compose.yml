@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: itest-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: itest
+      POSTGRES_PASSWORD: itest
+      POSTGRES_DB: itest
+    volumes:
+      - itest-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U itest"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: itest-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  api:
+    image: itest-api:latest
+    container_name: itest-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env.production
+    ports:
+      - "54321:54321"
+    volumes:
+      - itest-screenshots:/repo/apps/api/screenshots
+
+  web:
+    image: itest-web:latest
+    container_name: itest-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+
+volumes:
+  itest-pg-data:
+  itest-screenshots:
