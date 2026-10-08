@@ -35,6 +35,21 @@ WORKDIR /app
 ENV NODE_ENV=production \
     API_HOST=0.0.0.0 \
     API_PORT=54321
+# 运行时系统依赖:repo checkout 需要 git + ca-certificates;repo_grep 需要 ripgrep。
+# bookworm-slim 不带任何系统二进制,apt-get 必须。详见 infra/docker/certs/README.md。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+
+# 自签 CA(可选;若 infra/docker/certs/*.crt 存在则 update-ca-certificates)。
+# COPY 在 source 不匹配 glob 时会报错,所以用 compgen 探测,空目录也能跑通。
+COPY infra/docker/certs/*.crt /usr/local/share/ca-certificates/ 2>/dev/null || true
+RUN if compgen -G "/usr/local/share/ca-certificates/*.crt" > /dev/null; then \
+      update-ca-certificates && echo "custom CAs loaded"; \
+    else \
+      echo "no custom CA certs in infra/docker/certs/; system CA only"; \
+    fi
+
 # 拷贝构建好的源码 + 依赖
 COPY --from=api-build /repo /repo
 WORKDIR /repo/apps/api
