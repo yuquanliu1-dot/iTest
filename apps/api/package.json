@@ -23,6 +23,8 @@
     "agent-device": "^0.21.22",
     "archiver": "^7.0.1",
     "bcryptjs": "^3.0.3",
+    "bullmq": "^5.34.0",
+    "cron-parser": "^4.9.0",
     "drizzle-orm": "^0.36.0",
     "express": "^5.2.1",
     "ioredis": "^5.4.1",
