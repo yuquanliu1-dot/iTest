@@ -43,6 +43,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
+# 2026-10-09: 内网 GitLab 部署的证书仅签到 IP,无 SAN 匹配,git 默认会拒;
+# 在镜像里全局关 TLS 验证。代价:整个容器内 git 都不校验证书,运维可控且写明出处。
+RUN git config --global http.sslVerify false
+
 # 自签 CA(可选;若 infra/docker/certs/*.crt 存在则 update-ca-certificates)。
 # COPY 在 source 不匹配 glob 时整个构建会失败,所以用 RUN + shopt glob 探测 + cp,空目录也跑通。
 # cert 拷贝 layer 与 update-ca-certificates 分开,避免任一步骤被 buildkit 缓存层复用导致 cert 缺失。
