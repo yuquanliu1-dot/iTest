@@ -8,7 +8,7 @@ interface Props {
   groups: Array<{ id: string; name: string }>;
   saving: boolean;
   /** 概览：每 Tab 选中数（让用户在选择分组时看到要保存的内容）。 */
-  partitioned: { case: unknown[]; case_op: unknown[]; scenario: unknown[]; environment: unknown[]; plan: unknown[] };
+  partitioned: { case: unknown[]; case_op: unknown[]; scenario: unknown[]; environment: unknown[]; plan: unknown[]; dataset: unknown[] };
   selection: Set<string>;
   /** 用户点保存：传入选中的目标 groupId；空串 = "暂存到不指定"（仅 environment/scenario 适用）。 */
   onSave: (groupId: string) => void;
@@ -39,6 +39,9 @@ export default function SaveDialog({ open, onOpenChange, groups, saving, partiti
       selection.has(`environment:${(x as { localId: string }).localId}`),
     ).length,
     plan: partitioned.plan.filter((x) => selection.has(`plan:${(x as { localId: string }).localId}`)).length,
+    dataset: partitioned.dataset.filter((x) =>
+      selection.has(`dataset:${(x as { localId: string }).localId}`),
+    ).length,
   };
   const needGroup = selectedCounts.case + selectedCounts.plan > 0;
   const totalSelected =
@@ -46,7 +49,8 @@ export default function SaveDialog({ open, onOpenChange, groups, saving, partiti
     selectedCounts.case_op +
     selectedCounts.scenario +
     selectedCounts.environment +
-    selectedCounts.plan;
+    selectedCounts.plan +
+    selectedCounts.dataset;
   const canSubmit = totalSelected > 0 && (!needGroup || !!groupId);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -62,6 +66,7 @@ export default function SaveDialog({ open, onOpenChange, groups, saving, partiti
             {selectedCounts.scenario > 0 && ` · 场景 ${selectedCounts.scenario}`}
             {selectedCounts.environment > 0 && ` · 环境 ${selectedCounts.environment}`}
             {selectedCounts.plan > 0 && ` · 计划 ${selectedCounts.plan}`}
+            {selectedCounts.dataset > 0 && ` · 数据集 ${selectedCounts.dataset}`}
           </div>
           {needGroup ? (
             <div className="flex flex-col gap-1">
@@ -90,7 +95,7 @@ export default function SaveDialog({ open, onOpenChange, groups, saving, partiti
             </div>
           ) : (
             <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-              仅保存环境/场景，落库时按项目默认位置放置，无需选分组。
+              仅保存环境/场景/数据集，落库时按项目默认位置放置，无需选分组。
             </div>
           )}
         </div>

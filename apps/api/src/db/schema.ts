@@ -142,6 +142,8 @@ export const aiStageCases = pgTable(
     steps: jsonb('steps').notNull().default([]),
     defaultEnvId: uuid('default_env_id'),
     expectedOutcome: text('expected_outcome'),
+    /** 配套绑定：同批暂存数据集的 localId（stage_dataset 生成）；save 时数据集先落库回填真实 datasetId。 */
+    datasetLocalId: text('dataset_local_id'),
     stagedAt: timestamp('staged_at').defaultNow().notNull(),
   },
   (t) => ({
@@ -227,6 +229,27 @@ export const aiStagePlans = pgTable(
   (t) => ({
     pk: primaryKey({ columns: [t.threadId, t.localId] }),
     versionIdx: index('ai_stage_plans_version_idx').on(t.versionId),
+  }),
+);
+
+/** 版本空间助手「数据集暂存表」。对应 stage_dataset 工具；PK = (threadId, localId)。
+ *  rows 为明文草稿（AI 生成、StagePanel 预览可见）；敏感格仅在 /stage/save 走
+ *  createDataset(normalizeDataset) 时加密，stage 表不存密文。 */
+export const aiStageDatasets = pgTable(
+  'ai_stage_datasets',
+  {
+    threadId: text('thread_id').notNull(),
+    localId: text('local_id').notNull(),
+    versionId: uuid('version_id').notNull(),
+    name: varchar('name', { length: 120 }).notNull(),
+    description: text('description'),
+    columns: jsonb('columns').notNull().default([]),
+    rows: jsonb('rows').notNull().default([]),
+    stagedAt: timestamp('staged_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.threadId, t.localId] }),
+    versionIdx: index('ai_stage_datasets_version_idx').on(t.versionId),
   }),
 );
 

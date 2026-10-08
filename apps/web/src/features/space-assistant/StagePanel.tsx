@@ -22,6 +22,7 @@ const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'scenario', label: '场景' },
   { key: 'environment', label: '环境' },
   { key: 'plan', label: '计划' },
+  { key: 'dataset', label: '数据集' },
 ];
 
 const KIND_LABEL: Record<Tab, string> = {
@@ -30,6 +31,7 @@ const KIND_LABEL: Record<Tab, string> = {
   scenario: '场景',
   environment: '环境',
   plan: '计划',
+  dataset: '数据集',
 };
 
 interface Props {
@@ -37,9 +39,9 @@ interface Props {
   versionId: string;
 }
 
-/** 把 stagedByThread 的 Map<localId, StagedItem> 拆成五个 Tab 的列表。 */
+/** 把 stagedByThread 的 Map<localId, StagedItem> 拆成六个 Tab 的列表。 */
 function partition(staged: Map<string, StagedItem> | undefined): Record<Tab, StagedItem[]> {
-  const out: Record<Tab, StagedItem[]> = { case: [], case_op: [], scenario: [], environment: [], plan: [] };
+  const out: Record<Tab, StagedItem[]> = { case: [], case_op: [], scenario: [], environment: [], plan: [], dataset: [] };
   if (!staged) return out;
   for (const item of staged.values()) out[item.kind as Tab].push(item);
   return out;
@@ -144,7 +146,8 @@ export default function StagePanel({ projectId, versionId }: Props) {
       partitioned.case_op.length +
       partitioned.scenario.length +
       partitioned.environment.length +
-      partitioned.plan.length,
+      partitioned.plan.length +
+      partitioned.dataset.length,
     [partitioned],
   );
 
@@ -172,7 +175,8 @@ export default function StagePanel({ projectId, versionId }: Props) {
         (res.savedCaseOps ?? 0) +
         (res.savedScenarios ?? 0) +
         (res.savedEnvironments ?? 0) +
-        (res.savedPlans ?? 0);
+        (res.savedPlans ?? 0) +
+        (res.savedDatasets ?? 0);
       toast(`已保存 ${totalSaved} 项`, 'success');
       // 同步清空本地视图（SSE remove 事件会再刷一次兜底）
       removeStaged(activeThreadId, 'case', partitioned.case.map((x) => x.localId));
@@ -180,10 +184,13 @@ export default function StagePanel({ projectId, versionId }: Props) {
       removeStaged(activeThreadId, 'scenario', partitioned.scenario.map((x) => x.localId));
       removeStaged(activeThreadId, 'environment', partitioned.environment.map((x) => x.localId));
       removeStaged(activeThreadId, 'plan', partitioned.plan.map((x) => x.localId));
+      removeStaged(activeThreadId, 'dataset', partitioned.dataset.map((x) => x.localId));
       setSaveOpen(false);
       void refetch();
       // 让用户跳回 CaseDetail 时数据新鲜（修改类落库影响具体用例）
       qc.invalidateQueries({ queryKey: ['cases'] });
+      // 数据集管理页/绑定下拉需要新鲜数据
+      qc.invalidateQueries({ queryKey: ['datasets'] });
     },
     onError: (e: Error) => toast(e.message || '保存失败', 'error'),
   });
@@ -192,6 +199,11 @@ export default function StagePanel({ projectId, versionId }: Props) {
     const p = it.payload as StageDoc['cases'][number];
     const key = `case:${it.localId}`;
     const checked = !!selection?.has(key);
+    const boundDataset = p.datasetLocalId
+      ? (partitioned.dataset.find(
+          (d) => (d.payload as StageDoc['datasets'][number]).localId === p.datasetLocalId,
+        )?.payload as StageDoc['datasets'][number] | undefined)
+      : undefined;
     return (
       <label key={it.localId} className="flex items-start gap-2 text-[12px] cursor-pointer">
         <input
@@ -209,6 +221,11 @@ export default function StagePanel({ projectId, versionId }: Props) {
           )}
           {p.url && (
             <div className="text-[11px] break-all" style={{ color: 'var(--muted-foreground)' }}>{p.url}</div>
+          )}
+          {p.datasetLocalId && (
+            <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+              配套数据集：{boundDataset ? `「${boundDataset.name}」（同批保存时自动绑定）` : '草稿已不在暂存区，保存时不绑定'}
+            </div>
           )}
           <CaseSteps steps={p.steps} />
         </div>
@@ -284,6 +301,81 @@ export default function StagePanel({ projectId, versionId }: Props) {
     );
   };
 
+  const renderDatasetRow = (it: StagedItem) => {
+    const p = it.payload as StageDoc['datasets'][number];
+    const key = `dataset:${it.localId}`;
+    const checked = !!selection?.has(key);
+    const disabledCount = p.rows.filter((r) => r.disabled).length;
+    return (
+      <label key={it.localId} className="flex items-start gap-2 text-[12px] cursor-pointer">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => toggle(activeThreadId, 'dataset', it.localId)}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold">{p.name}</div>
+          {p.description && (
+            <div style={{ color: 'var(--muted-foreground)' }}>{p.description}</div>
+          )}
+          <div className="flex flex-wrap items-center gap-1 mt-1">
+            {p.columns.map((c) => (
+              <span
+                key={c.name}
+                className="text-[10px] px-1 rounded"
+                style={{
+                  color: 'var(--muted-foreground)',
+                  border: '1px solid var(--border)',
+                  background: 'var(--popover)',
+                }}
+                title={c.sensitive ? '敏感列，落库时加密存储' : undefined}
+              >
+                {`{{${c.name}}}`}
+                {c.sensitive ? ' 🔒' : ''}
+              </span>
+            ))}
+          </div>
+          {p.rows.length > 0 && (
+            <details className="mt-1">
+              <summary
+                className="cursor-pointer select-none"
+                style={{ color: 'var(--muted-foreground)', fontSize: 11 }}
+              >
+                行数据（{p.rows.length}
+                {disabledCount > 0 ? `，${disabledCount} 行禁用` : ''}；敏感列为明文草稿，落库时加密）
+              </summary>
+              <div className="mt-1 overflow-x-auto">
+                <table className="text-[11px] whitespace-nowrap" style={{ borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      {p.columns.map((c) => (
+                        <th key={c.name} style={{ border: '1px solid var(--border)', padding: '2px 6px', textAlign: 'left' }}>
+                          {c.name}
+                          {c.sensitive ? ' 🔒' : ''}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {p.rows.map((r, i) => (
+                      <tr key={i} style={{ opacity: r.disabled ? 0.5 : 1 }}>
+                        {p.columns.map((c) => (
+                          <td key={c.name} style={{ border: '1px solid var(--border)', padding: '2px 6px' }}>
+                            {r.cells[c.name] ?? ''}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
+        </div>
+      </label>
+    );
+  };
+
   const renderCaseOpRow = (it: StagedItem) => {
     const p = it.payload as StageDoc['caseOps'][number];
     const key = `case_op:${it.localId}`;
@@ -343,6 +435,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
         {tab === 'scenario' && tabItems.map(renderScenarioRow)}
         {tab === 'environment' && tabItems.map(renderEnvRow)}
         {tab === 'plan' && tabItems.map(renderPlanRow)}
+        {tab === 'dataset' && tabItems.map(renderDatasetRow)}
       </div>
     );
   };
@@ -438,6 +531,9 @@ export default function StagePanel({ projectId, versionId }: Props) {
             plans: partitioned.plan
               .filter((x) => selection?.has(`plan:${x.localId}`))
               .map((x) => ({ localId: x.localId, groupId })),
+            datasets: partitioned.dataset
+              .filter((x) => selection?.has(`dataset:${x.localId}`))
+              .map((x) => ({ localId: x.localId })),
           };
           saveMut.mutate(body);
         }}

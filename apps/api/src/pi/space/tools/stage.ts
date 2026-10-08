@@ -1,6 +1,6 @@
 import type { SpaceToolsContext } from './context.js';
 
-export type StageKind = 'case' | 'case_op' | 'scenario' | 'environment' | 'plan' | 'group';
+export type StageKind = 'case' | 'case_op' | 'scenario' | 'environment' | 'plan' | 'dataset' | 'group';
 
 type StagedPayload<T> = T & { stagedAt: string };
 

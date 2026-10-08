@@ -3,20 +3,21 @@
  *   POST /assistant/threads/:id/stage/list   返回该线程下所有暂存对象(含 caseOps)
  *   POST /assistant/threads/:id/stage/save   用户勾选后调用,把暂存对象落正式表并删 stage 行
  *
- * 落库顺序：先 scenarios（含 requirement 解析）→ cases（含 groupId）→ environments → plans → caseOps。
+ * 落库顺序：先 datasets（cases 的 datasetLocalId 依赖真实 id）→ scenarios（含 requirement 解析）→ cases（含 groupId）→ environments → plans → caseOps。
  * 任一阶段失败整体回滚（DELETE 不入库,但 stage 写入本身不回退 —— 用户可重新勾选重试）。
  */
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { Router } from 'express';
 import { db } from '../../db/client.js';
 import {
-  aiStageCaseOps, aiStageCases, aiStageEnvironments, aiStagePlans, aiStageScenarios,
+  aiStageCaseOps, aiStageCases, aiStageDatasets, aiStageEnvironments, aiStagePlans, aiStageScenarios,
 } from '../../db/schema.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import * as casesSvc from '../../services/cases.service.js';
 import * as scenariosSvc from '../../services/scenarios.service.js';
 import * as environmentsSvc from '../../services/environments.service.js';
 import * as plansSvc from '../../services/plans.service.js';
+import * as datasetsSvc from '../../services/datasets.service.js';
 import { resolveVersionProjectId } from '../../services/projectAccess.js';
 import { emitThreadEvent } from './session.js';
 import {
@@ -34,6 +35,7 @@ interface SaveBody {
   environments: Array<{ localId: string }>;
   plans: Array<{ localId: string; groupId: string }>;
   caseOps: Array<{ localId: string }>;
+  datasets: Array<{ localId: string }>;
 }
 
 function emitStageRemove(threadId: string, kind: StageKind, localId: string): void {
@@ -56,7 +58,8 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
   const environments = body.environments ?? [];
   const plans = body.plans ?? [];
   const caseOps = body.caseOps ?? [];
-  if (cases.length + scenarios.length + environments.length + plans.length + caseOps.length === 0) {
+  const datasets = body.datasets ?? [];
+  if (cases.length + scenarios.length + environments.length + plans.length + caseOps.length + datasets.length === 0) {
     throw new HttpError(400, 'bad_request', '至少选择一项');
   }
 
@@ -64,7 +67,27 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
   const pid = await resolveVersionProjectId(versionId);
   if (!pid) throw new HttpError(500, 'invariant', 'version project missing');
 
-  // 1a. cases: 拉 stage 行 → 校验 groupId 归属 → 调 createCaseWithSteps 落库
+  // 1a. datasets: 先于 cases 落库（stage_case.datasetLocalId 需要真实 datasetId 回填）。
+  //  rows 是明文草稿（含 sensitive 列）→ createDataset/normalizeDataset 在这里完成加密。
+  //  名称冲突 409 由 service 抛出,用户改名后可重试。
+  const stageDatasetRows = datasets.length
+    ? await db.select().from(aiStageDatasets)
+        .where(and(eq(aiStageDatasets.threadId, threadId), inArray(aiStageDatasets.localId, datasets.map((d) => d.localId))))
+    : [];
+  const createdDatasetIds = new Map<string, string>(); // staged localId → real datasetId
+  for (const sel of datasets) {
+    const row = stageDatasetRows.find((r) => r.localId === sel.localId);
+    if (!row) throw new HttpError(404, 'not_found', `stage dataset ${sel.localId} 已不存在,请刷新重试`);
+    const created = await datasetsSvc.createDataset(pid, {
+      name: row.name,
+      description: row.description,
+      columns: (row.columns ?? []) as Array<{ name: string; sensitive?: boolean }>,
+      rows: (row.rows ?? []) as Array<{ disabled?: boolean; cells: Record<string, unknown> }>,
+    });
+    createdDatasetIds.set(sel.localId, created.id);
+  }
+
+  // 1b. cases: 拉 stage 行 → 校验 groupId 归属 → 调 createCaseWithSteps 落库
   const stageCaseRows = cases.length
     ? await db.select().from(aiStageCases)
         .where(and(eq(aiStageCases.threadId, threadId), inArray(aiStageCases.localId, cases.map((c) => c.localId))))
@@ -78,6 +101,8 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     const gidPid = await casesSvc.groupProjectId(gid);
     if (!gidPid) throw new HttpError(404, 'not_found', `group ${gid} 不存在`);
     if (gidPid !== pid) throw new HttpError(400, 'cross_project', `group ${gid} 不属于当前项目`);
+    // 配套数据集绑定：datasetLocalId 仅在本批 datasets 里解析;未勾选/未找到则跳过绑定（沿 plans caseLocalIds 先例）。
+    const datasetId = row.datasetLocalId ? createdDatasetIds.get(row.datasetLocalId) : undefined;
     const created = await casesSvc.createCaseWithSteps({
       groupId: gid,
       versionId,
@@ -86,6 +111,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
       priority: row.priority ?? undefined,
       url: row.url,
       expectedOutcome: row.expectedOutcome,
+      datasetId: datasetId ?? undefined,
       steps: ((row.steps as unknown[]) ?? []).map((s) => {
         const o = s as { action?: unknown; assertion?: unknown; compiled?: unknown };
         return {
@@ -98,7 +124,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     createdCaseIds.set(sel.localId, created.id);
   }
 
-  // 1b. scenarios: 直接落正式表
+  // 1c. scenarios: 直接落正式表
   const stageScenarioRows = scenarios.length
     ? await db.select().from(aiStageScenarios)
         .where(and(eq(aiStageScenarios.threadId, threadId), inArray(aiStageScenarios.localId, scenarios.map((s) => s.localId))))
@@ -109,7 +135,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     await scenariosSvc.createScenario(row.requirementId, { title: row.title, description: row.description });
   }
 
-  // 1c. environments: name 冲突 → 409（其余场景 service 内部已经抛 HttpError）
+  // 1d. environments: name 冲突 → 409（其余场景 service 内部已经抛 HttpError）
   const stageEnvRows = environments.length
     ? await db.select().from(aiStageEnvironments)
         .where(and(eq(aiStageEnvironments.threadId, threadId), inArray(aiStageEnvironments.localId, environments.map((e) => e.localId))))
@@ -127,7 +153,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     });
   }
 
-  // 1d. plans: 先建计划,再按 caseLocalIds 解析真实 caseId（来自已落库的 caseStage 1a）→ replacePlanCases
+  // 1e. plans: 先建计划,再按 caseLocalIds 解析真实 caseId（来自已落库的 caseStage 1b）→ replacePlanCases
   const stagePlanRows = plans.length
     ? await db.select().from(aiStagePlans)
         .where(and(eq(aiStagePlans.threadId, threadId), inArray(aiStagePlans.localId, plans.map((p) => p.localId))))
@@ -148,7 +174,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     }
   }
 
-  // 1e. caseOps:按 stagedAt 升序应用(用户勾选顺序之外的"全局意图顺序")。
+  // 1f. caseOps:按 stagedAt 升序应用(用户勾选顺序之外的"全局意图顺序")。
   //  - 步骤级 op（update_step/insert_step/delete_step/move_step）天然在同一 case 内,顺序按 stagedAt 即可;
   //    跨 case 不保证事务(失败回退不跨用例)—— 单 case 内 insert/delete/move_step 由 case-ops-tools.applyCaseOp 包 transaction。
   //  - 用例级 op(update_case/delete_case/move_case):delete 会级联删 steps,后续对已删 case 的 step op 会失败(用户应在前置勾选里把 step op 一起勾)—— 不做复杂重排。
@@ -176,6 +202,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     { kind: 'environment', localIds: environments.map((e) => e.localId) },
     { kind: 'plan', localIds: plans.map((p) => p.localId) },
     { kind: 'case_op', localIds: caseOps.map((c) => c.localId) },
+    { kind: 'dataset', localIds: datasets.map((d) => d.localId) },
   ];
   for (const { kind, localIds } of localIdsByKind) {
     if (localIds.length === 0) continue;
@@ -189,7 +216,9 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     savedEnvironments: environments.length,
     savedPlans: plans.length,
     savedCaseOps: caseOps.length,
+    savedDatasets: datasets.length,
     caseIdMap: Object.fromEntries(createdCaseIds),
+    datasetIdMap: Object.fromEntries(createdDatasetIds),
   });
 });
 
@@ -201,6 +230,7 @@ export async function purgeStaleStages(threadId: string): Promise<number> {
     db.delete(aiStageEnvironments).where(eq(aiStageEnvironments.threadId, threadId)).returning({ id: aiStageEnvironments.localId }),
     db.delete(aiStagePlans).where(eq(aiStagePlans.threadId, threadId)).returning({ id: aiStagePlans.localId }),
     db.delete(aiStageCaseOps).where(eq(aiStageCaseOps.threadId, threadId)).returning({ id: aiStageCaseOps.localId }),
+    db.delete(aiStageDatasets).where(eq(aiStageDatasets.threadId, threadId)).returning({ id: aiStageDatasets.localId }),
   ]);
   return removed.reduce((acc, r) => acc + r.length, 0);
 }
