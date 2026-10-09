@@ -1,39 +1,51 @@
 #!/usr/bin/env bash
 # 本地一键发布：打包仓库 → 上传 tarball → 远程执行 deploy.sh（非首次自动备库）。
-# 目标服务器配置在 infra/docker/deploy.env（模板见 deploy.env.example，勿提交）。
+# 目标服务器配置在 infra/docker/deploy.d/<env>.env（目录已 gitignore，模板见 deploy.d/.env.example）。
 #
 # 用法:
-#   infra/docker/release.sh            # 正式发布
-#   infra/docker/release.sh --dry-run  # 只打包不上传不部署
+#   infra/docker/release.sh                          # 等价 --env prod
+#   infra/docker/release.sh --env <name>             # 指定环境（prod / staging / dev / ...）
+#   infra/docker/release.sh [--env <name>] --dry-run # 只打包不上传不部署
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ENV="prod"
 DRY_RUN=0
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --env) shift; ENV="${1:-}"; [ -n "$ENV" ] || { echo "--env 需要值"; exit 1; } ;;
+    --env=*) ENV="${1#--env=}" ;;
     --dry-run) DRY_RUN=1 ;;
-    *) echo "未知参数: $arg"; echo "用法: $0 [--dry-run]"; exit 1 ;;
+    -h|--help)
+      sed -n '2,8p' "$0"; exit 0 ;;
+    *) echo "未知参数: $1"; sed -n '2,8p' "$0"; exit 1 ;;
   esac
+  shift
 done
 
-ENV_FILE="${DEPLOY_ENV_FILE:-$SCRIPT_DIR/deploy.env}"
+# 凭证文件名限制:字母/数字/下划线/连字符,避免路径穿越
+case "$ENV" in
+  *[!A-Za-z0-9_-]*|'') echo "env name invalid: $ENV (only letters/digits/underscore/dash)"; exit 1 ;;
+esac
+
+ENV_FILE="${DEPLOY_ENV_FILE:-$SCRIPT_DIR/deploy.d/$ENV.env}"
 if [ ! -f "$ENV_FILE" ]; then
   echo "缺少配置文件 $ENV_FILE"
-  echo "先复制模板并填写: cp $SCRIPT_DIR/deploy.env.example $SCRIPT_DIR/deploy.env"
+  echo "先复制模板并按实际填写: cp $SCRIPT_DIR/deploy.d/.env.example $ENV_FILE"
   exit 1
 fi
 # shellcheck source=/dev/null
 source "$ENV_FILE"
 
-: "${DEPLOY_SSH_USER:?deploy.env 缺少 DEPLOY_SSH_USER}"
-: "${DEPLOY_SSH_HOST:?deploy.env 缺少 DEPLOY_SSH_HOST}"
+: "${DEPLOY_SSH_USER:?deploy.d/$ENV.env 缺少 DEPLOY_SSH_USER}"
+: "${DEPLOY_SSH_HOST:?deploy.d/$ENV.env 缺少 DEPLOY_SSH_HOST}"
 DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
 DEPLOY_REMOTE_DIR="${DEPLOY_REMOTE_DIR:-/home/wangb/itest}"
 DEPLOY_BACKUP_KEEP="${DEPLOY_BACKUP_KEEP:-10}"
 
 if [ -n "${DEPLOY_SSH_PASSWORD:-}" ] && ! command -v sshpass >/dev/null 2>&1; then
-  echo "deploy.env 配置了 DEPLOY_SSH_PASSWORD 但本机没有 sshpass（brew install hudochenkov/sshpass/sshpass 或 apt install sshpass）"
+  echo "deploy.d/$ENV.env 配置了 DEPLOY_SSH_PASSWORD 但本机没有 sshpass（brew install hudochenkov/sshpass/sshpass 或 apt install sshpass）"
   exit 1
 fi
 
@@ -68,6 +80,7 @@ tar -C "$ROOT" -czf "$TARBALL" \
   --exclude='*.log' \
   --exclude='.env' \
   --exclude='deploy.env' \
+  --exclude='deploy.d' \
   .
 ls -lh "$TARBALL"
 
