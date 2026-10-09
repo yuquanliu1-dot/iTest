@@ -183,8 +183,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           const stepResults: AiStepResult[] = [];
           let failedIndex = -1;
           let login: 'logged-in' | 'not-needed' = 'not-needed';
-          // SSE 实时进度：验证全程可达数分钟，前端凭这些事件渲染逐步进度卡（spaceEventsStore.verify_progress）
-          ctx.emit({ type: 'verify_progress', phase: 'start', caseId, total: steps.length, targetUrl: targetUrl ?? null });
+          // SSE 实时进度：验证全程可达数分钟，前端凭这些事件渲染逐步进度卡（spaceEventsStore.verify_progress）。
+          // loginCache/loginUser：登录态缓存命中与凭据用户直显对话框，无需翻服务端日志即可确认复用生效。
+          ctx.emit({
+            type: 'verify_progress', phase: 'start', caseId, total: steps.length, targetUrl: targetUrl ?? null,
+            loginCache: cachedState ? ('hit' as const) : ('miss' as const),
+            loginUser: envCtx.login?.user ?? null,
+          });
           for (let i = 0; i < steps.length; i++) {
             const s = steps[i]!;
             const started = Date.now();
@@ -242,7 +247,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   error: reason, failureReason: 'StepReportedFailed',
                   screenshot: await writeStepScreenshot(reportId, i + 1, page),
                 });
-                ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: reason.slice(0, 120) });
+                ctx.emit({
+                  type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: reason.slice(0, 120),
+                  ...(typeof parsed?.login === 'string' ? { login: parsed.login } : {}),
+                });
                 failedIndex = i;
                 break;
               }
@@ -256,8 +264,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               ctx.emit({
                 type: 'verify_progress', phase: 'step_done', order: s.order, status: 'passed',
                 durationMs: Date.now() - started,
+                // 逐步登录行为以 LLM 当轮自报为准（含契约漂移,如实展示）
+                ...(typeof parsed?.login === 'string' ? { login: parsed.login } : {}),
                 ...(parsed ? {} : { reason: summary.slice(0, 120) }),
-                ...(login === 'logged-in' ? { login } : {}),
               });
             } catch (e) {
               // watchdog 强关浏览器会让在途 runAiTask 抛错——此时真实原因是超时而非步骤失败
@@ -296,7 +305,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(r.failureReason ? { failureReason: r.failureReason } : {}),
           }));
           if (failedIndex < 0) {
-            ctx.emit({ type: 'verify_progress', phase: 'end', result: 'passed' });
+            // cacheSaved: 正常收尾均无条件回写（watchdog 超时路径在循环内提前 return,无 end 事件）
+            ctx.emit({ type: 'verify_progress', phase: 'end', result: 'passed', cacheSaved: true });
             return {
               ok: true,
               data: JSON.stringify({
@@ -311,7 +321,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           }
           const failed = stepResults[failedIndex]!;
           const failedStep = steps[failedIndex]!;
-          ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed' });
+          ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
           return {
             ok: true,
             data: JSON.stringify({

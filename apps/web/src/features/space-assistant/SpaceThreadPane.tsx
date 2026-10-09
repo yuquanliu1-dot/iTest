@@ -147,6 +147,11 @@ function VerifyProgressCard() {
           实测验证（{vp.steps.filter((s) => s.status !== 'running').length}/{vp.total} 步
           {vp.targetUrl ? ` · ${vp.targetUrl}` : ''}）
         </span>
+        {vp.loginCache === 'hit' ? (
+          <span style={{ color: 'var(--success)', flexShrink: 0 }}>登录缓存命中{vp.loginUser ? `（${vp.loginUser}）` : ''}</span>
+        ) : vp.loginCache === 'miss' ? (
+          <span style={{ flexShrink: 0 }}>{vp.loginUser ? `登录缓存未命中（${vp.loginUser}）` : '未配置登录凭据'}</span>
+        ) : null}
         {done ? (
           <Icon
             name={vp.result === 'passed' ? 'check' : 'close'}
@@ -156,6 +161,7 @@ function VerifyProgressCard() {
         ) : (
           <Icon name="loader" size={12} className="animate-spin" style={{ color: 'var(--primary)', flexShrink: 0 }} />
         )}
+        {done && vp.cacheSaved ? <span style={{ flexShrink: 0 }}>· 已回写登录缓存</span> : null}
       </div>
       <div className="flex flex-col gap-0.5">
         {vp.steps.map((s) => (
@@ -179,6 +185,7 @@ function VerifyProgressCard() {
               第 {s.order} 步{s.brief ? `：${s.brief}` : ''}
               {s.status === 'failed' && s.reason ? ` — ${s.reason}` : ''}
               {s.durationMs != null && s.status !== 'running' ? `（${(s.durationMs / 1000).toFixed(1)}s）` : ''}
+              {s.login === 'logged-in' ? ' · 已登录' : ''}
             </span>
           </div>
         ))}

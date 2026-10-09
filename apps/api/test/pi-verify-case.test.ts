@@ -236,15 +236,16 @@ describe('verify_case 逐步 AI 执行编排', () => {
     // verify_progress SSE 事件序列:start → (step_start + step_done)×2 → end
     const phases = emitLog.map((e) => (e as { phase: string }).phase);
     expect(phases).toEqual(['start', 'step_start', 'step_done', 'step_start', 'step_done', 'end']);
-    const start = emitLog[0] as { type: string; caseId: string; total: number; targetUrl: string | null };
-    expect(start).toMatchObject({ type: 'verify_progress', caseId, total: 2, targetUrl: 'http://env.example/page' });
+    const start = emitLog[0] as { type: string; caseId: string; total: number; targetUrl: string | null; loginCache: string; loginUser: string | null };
+    expect(start).toMatchObject({ type: 'verify_progress', caseId, total: 2, targetUrl: 'http://env.example/page', loginCache: 'miss', loginUser: null });
     const stepStart = emitLog[1] as { order: number; brief: string };
     expect(stepStart).toMatchObject({ order: 1 });
     expect(stepStart.brief).toContain('点击删除按钮');
-    const stepDone = emitLog[2] as { type: string; order: number; status: string };
-    expect(stepDone).toMatchObject({ type: 'verify_progress', order: 1, status: 'passed' });
-    const end = emitLog[5] as { result: string };
+    const stepDone = emitLog[2] as { type: string; order: number; status: string; login?: string };
+    expect(stepDone).toMatchObject({ type: 'verify_progress', order: 1, status: 'passed', login: 'not-needed' });
+    const end = emitLog[5] as { result: string; cacheSaved: boolean };
     expect(end.result).toBe('passed');
+    expect(end.cacheSaved).toBe(true);
   });
 
   it('配置 login 凭据：instruction 含占位符不含明文，valueSub 还原真实值 → login logged-in', async () => {
@@ -269,6 +270,15 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.login).toBe('logged-in');
       expect(r.data).not.toContain('Passw0rd!');
     }
+    // start 事件上报凭据用户与缓存未命中；step_done 上报当轮登录行为
+    const emitLog: unknown[] = [];
+    // 重跑一次以捕获事件（缓存已回写,本次应为 hit——顺带覆盖 hit 断言）
+    const r2 = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId });
+    expect(r2.ok).toBe(true);
+    const start2 = emitLog[0] as { loginCache: string; loginUser: string | null };
+    expect(start2).toMatchObject({ loginCache: 'hit', loginUser: 'qa01' });
+    const stepDone2 = emitLog[2] as { login?: string };
+    expect(stepDone2.login).toBe('logged-in');
   });
 
   it('敏感步骤：instruction 含 __ITEST_STEP_SECRET__，valueSub 还原明文，返回无明文', async () => {
