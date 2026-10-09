@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # 本地一键发布：打包仓库 → 上传 tarball → 远程执行 deploy.sh（非首次自动备库）。
 # 目标服务器配置在 infra/docker/deploy.d/<env>.env（目录已 gitignore，模板见 deploy.d/.env.example）。
+# 推荐按目标命名（prod228.env / staging-31.env），方便一眼区分多台主机。
 #
 # 用法:
-#   infra/docker/release.sh                          # 等价 --env prod
-#   infra/docker/release.sh --env <name>             # 指定环境（prod / staging / dev / ...）
-#   infra/docker/release.sh [--env <name>] --dry-run # 只打包不上传不部署
+#   infra/docker/release.sh                                # 需要 --env,不默认
+#   infra/docker/release.sh --env <name>                   # 指定环境（prod228 / staging-31 / ...）
+#   infra/docker/release.sh [--env <name>] --dry-run       # 只打包不上传不部署
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-ENV="prod"
+ENV=""
 DRY_RUN=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -18,11 +19,17 @@ while [ $# -gt 0 ]; do
     --env=*) ENV="${1#--env=}" ;;
     --dry-run) DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,8p' "$0"; exit 0 ;;
-    *) echo "未知参数: $1"; sed -n '2,8p' "$0"; exit 1 ;;
+      sed -n '2,9p' "$0"; exit 0 ;;
+    *) echo "未知参数: $1"; sed -n '2,9p' "$0"; exit 1 ;;
   esac
   shift
 done
+
+if [ -z "$ENV" ]; then
+  echo "必须指定 --env <name>(文件名= deploy.d/<name>.env)"
+  sed -n '2,9p' "$0"
+  exit 1
+fi
 
 # 凭证文件名限制:字母/数字/下划线/连字符,避免路径穿越
 case "$ENV" in
