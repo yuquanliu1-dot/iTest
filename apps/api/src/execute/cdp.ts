@@ -695,6 +695,8 @@ async function runStepsInContext(
   targetUrl?: string,
   onPreflight?: (report: PreflightReport) => void,
   caseWindow?: CaseWindow,
+  /** 失败即停钩子（verify_case 用）：失败 break 前携带失败步骤下标与当前页触发；钩子抛错忽略。 */
+  onFailurePage?: (page: Page, failedIndex: number) => Promise<void>,
 ): Promise<ExecStepResult[]> {
   const results: ExecStepResult[] = [];
   const vars: Record<string, string> = { ...(ctx.initialVars ?? {}) };
@@ -811,6 +813,7 @@ async function runStepsInContext(
         db: opts.dbSink.current ?? undefined,
         log: opts.logSink.current ?? undefined,
       });
+      if (onFailurePage) await onFailurePage(opts.page, i).catch(() => undefined);
       // 失败立即终止，避免后续步骤被前一步污染的页面状态搞乱。
       break;
     }
@@ -913,8 +916,9 @@ export async function executeCaseInBrowser(
   targetUrl?: string,
   onPreflight?: (report: PreflightReport) => void,
   caseWindow?: CaseWindow,
+  onFailurePage?: (page: Page, failedIndex: number) => Promise<void>,
 ): Promise<ExecStepResult[]> {
   // 显式持有 browser 参数以便调用方阅读意图；执行路径不直接用 browser（context 已就绪）。
   void browser;
-  return runStepsInContext(caseId, steps, ctx, context, targetUrl, onPreflight, caseWindow);
+  return runStepsInContext(caseId, steps, ctx, context, targetUrl, onPreflight, caseWindow, onFailurePage);
 }
