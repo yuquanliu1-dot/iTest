@@ -15,7 +15,9 @@ import { executeCaseInBrowser } from '../../../execute/cdp.js';
 import type { ExecContext, ExecStepResult } from '../../../execute/cdp.js';
 import { resolveEnv } from '../../../execute/envContext.js';
 import { resolveCaseUrl } from '../../../lib/resolve-url.js';
-import { loginInContext } from '../../autoLogin.js';
+import { runAiTask, solveCaptchaOnce } from '../../../execute/aiTask.js';
+import { resolveLlmClient } from '../../../agent/llmSettings.js';
+import { loginInContext, type CaptchaSolver } from '../../autoLogin.js';
 import { extractPageElements } from '../../inspectPage.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
@@ -35,6 +37,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正（stage_case/stage_case_op）后重新验证。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。',
       '环境未配置 login 凭据而验证因登录页失败时，引导用户到项目环境页配置 login 凭据，不要伪造登录步骤。',
+      '本工具已自动识别登录页图形验证码（字母/数字）；若识别仍失败，按错误提示调整 locator 或检查环境网络/LLM 配置。',
     ],
     execute: async (input) => {
       const { caseId } = input as { caseId: string };
@@ -91,8 +94,24 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             if (!loginUrl) {
               return { ok: false, error: '环境未配置 loginUrl/baseUrl，无法自动登录；请到环境页补全 login 凭据的登录页地址' };
             }
+            // 复用 aiTask 既有的 solveCaptchaOnce + runAiTask 兜底；与 execute/cdp.ts runCaptchaRetry 同源。
+            // resolveLlmClient 在 LLM 未配置时抛错——透传上去更直观（用户去设置页配置）。
+            let solveCaptcha: CaptchaSolver | undefined;
             try {
-              login = await loginInContext(context, envCtx.login, loginUrl);
+              const client = (await resolveLlmClient()).client;
+              solveCaptcha = async (page) => {
+                await solveCaptchaOnce(page, client, /* hint */ null)
+                  .catch(async (e1) => {
+                    // 单轮失败回退通用多轮回路（与 cdp.ts runCaptchaRetry 同策略）。
+                    await runAiTask(page, '识别当前验证码图片中的字符并填入验证码输入框', client)
+                      .catch((e2) => { throw new Error(`solveCaptchaOnce: ${(e1 as Error).message}; runAiTask: ${(e2 as Error).message}`); });
+                  });
+              };
+            } catch (e) {
+              return { ok: false, error: `LLM 未配置，无法识别验证码: ${(e as Error).message}` };
+            }
+            try {
+              login = await loginInContext(context, envCtx.login, loginUrl, { solveCaptcha });
             } catch (e) {
               // watchdog 触发会强关浏览器，登录操作随之抛错——此时真实原因是超时而非登录本身
               if (timedOut) return { ok: false, error: `验证超时（${VERIFY_TIMEOUT_MS / 1000}s）已终止` };

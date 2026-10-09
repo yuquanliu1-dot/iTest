@@ -11,6 +11,14 @@ const SETTLE_MS = 800;
 
 const URL_LOGIN_HINTS = /(?:^|\/)(login|signin|sign-in|auth|unauthorized)(?:\/|$|\?)/i;
 
+/** 注入式验证码解决器：调用方持有 LLMClient 与识别策略，本模块只负责在登录页探测到验证码时触发。
+ *  抛错由 loginInContext 透传出去（原文案由 solveCaptchaOnce 等实现控制）。 */
+export type CaptchaSolver = (page: Page) => Promise<void>;
+
+/** 选择器与 aiTask.ts:captchaRetry 的 hint 定位保持一致；prod228 实测命中 `input[name="verificationCode"]`。 */
+const CAPTCHA_INPUT_SELECTOR =
+  'input#auth-captcha, input[name="captcha"], input[id*="captcha" i], input[placeholder*="验证码" i]';
+
 async function isLoginPage(page: Page): Promise<boolean> {
   if (URL_LOGIN_HINTS.test(page.url())) return true;
   const hasPassword = await page.locator('input[type="password"]').count().catch(() => 0);
@@ -67,11 +75,13 @@ async function fillLoginForm(page: Page, cred: LoginCtx): Promise<boolean> {
 }
 
 /** 在 context 上完成登录。返回 'logged-in'（本次完成登录）或 'not-needed'（无需登录/已有登录态）。
- *  失败抛错（文案可直接回给 AI/用户）。结束后关闭登录页；登录态(cookie/localStorage)留在 context。 */
+ *  失败抛错（文案可直接回给 AI/用户）。结束后关闭登录页；登录态(cookie/localStorage)留在 context。
+ *  opts.solveCaptcha：探测到登录页含验证码元素时调用（仅依赖注入，不引入对 LLM 模块的硬依赖）。 */
 export async function loginInContext(
   context: BrowserContext,
   cred: LoginCtx,
   startUrl: string,
+  opts?: { solveCaptcha?: CaptchaSolver },
 ): Promise<'logged-in' | 'not-needed'> {
   const page = await context.newPage();
   try {
@@ -84,11 +94,13 @@ export async function loginInContext(
       page.locator('input[type="password"]').first().waitFor({ state: 'attached', timeout: 5000 }),
     ]).catch(() => undefined);
     if (!(await isLoginPage(page))) return 'not-needed';
-    const captcha = await page
-      .locator('input#auth-captcha, input[name="captcha"], input[id*="captcha" i], input[placeholder*="验证码" i]')
-      .first()
-      .count() > 0;
-    if (captcha) throw new Error('登录页需要验证码，无法自动完成登录');
+    const captcha = await page.locator(CAPTCHA_INPUT_SELECTOR).first().count() > 0;
+    if (captcha) {
+      // 调用方注入解决器（perform_login / verify_case 各自构造，复用 solveCaptchaOnce + runAiTask）。
+      // 不存在解决器时仍报原文案，向导用户去配置环境；存在但抛错则原样透传（含 LLM 输出片段）。
+      if (!opts?.solveCaptcha) throw new Error('登录页需要验证码，无法自动完成登录');
+      await opts.solveCaptcha(page);
+    }
     const ok = await fillLoginForm(page, cred);
     if (!ok) throw new Error('自动填表登录失败（未找到用户名/密码输入框或提交后仍在登录页）');
     return 'logged-in';
