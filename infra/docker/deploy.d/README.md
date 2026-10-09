@@ -7,11 +7,13 @@
 
 ```bash
 cd infra/docker/deploy.d
-cp .env.example prod.env
-$EDITOR prod.env          # 填入 prod 服务器的 SSH 凭据与远端路径
+cp .env.example <env>.env
+$EDITOR <env>.env          # 填入目标服务器的 SSH 凭据与远端路径
 ```
 
-新增环境直接 `cp prod.env staging.env` 后改值；旧 env 不会被覆盖。
+推荐按目标命名(如 `prod228.env` / `staging-31.env`),便于一眼区分多台 prod 主机。
+
+新增环境直接 `cp <env>.env <other>.env` 后改值；旧 env 不会被覆盖。
 
 ## 文件命名约定
 
