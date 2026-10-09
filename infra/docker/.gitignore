@@ -1,3 +1,6 @@
 # 部署密钥/目标配置，勿提交
 .env.production
 deploy.env
+deploy.d/*
+!deploy.d/.env.example
+!deploy.d/README.md

@@ -15,7 +15,7 @@ if [ ! -d "$ROOT" ]; then
   exit 1
 fi
 if [ ! -f "$ROOT/infra/docker/.env.production" ]; then
-  echo "缺少 $ROOT/infra/docker/.env.production（首次部署需先准备密钥，参考 deploy.env.example 流程）"
+  echo "缺少 $ROOT/infra/docker/.env.production（首次部署需先准备密钥，参考 infra/docker/deploy.d/README.md 流程）"
   exit 1
 fi
 
