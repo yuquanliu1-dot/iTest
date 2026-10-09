@@ -10,6 +10,7 @@ import {
 import ConfirmCard from './ConfirmCard';
 import Icon, { type IconName } from '../../components/Icon';
 import Markdown from '../../components/ui/Markdown';
+import { useSpaceEventsStore } from './spaceEventsStore';
 
 /**
  * 空间助手对话流:只渲染 pi 契约的结构原语,运行时由 SpaceWorkspace 的
@@ -24,6 +25,7 @@ export default function SpaceThreadPane({ threadId }: { threadId: string }) {
           <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
         </ThreadPrimitive.Viewport>
         <ThreadPrimitive.ViewportFooter className="border-t p-3" style={{ borderColor: 'var(--border)' }}>
+          <VerifyProgressCard />
           <ConfirmCard threadId={threadId} />
           <ComposerPrimitive.Root className="flex items-end gap-2">
             <ComposerPrimitive.Input
@@ -122,10 +124,67 @@ function toolMeta(toolName: string, args: unknown): { icon: IconName; label: str
   if (toolName === 'manage_scenarios') return { icon: 'layers', label: '场景管理', summary: action };
   if (toolName === 'manage_environments') return { icon: 'globe', label: '环境管理', summary: action };
   if (toolName === 'manage_plans') return { icon: 'listChecks', label: '计划管理', summary: action };
+  if (toolName === 'verify_case') return { icon: 'beaker', label: '实测验证', summary: typeof a.caseId === 'string' ? a.caseId.slice(0, 8) : '' };
   if (toolName.startsWith('repo_')) {
     return { icon: 'code', label: '读取仓库', summary: typeof a.path === 'string' ? a.path : (typeof a.command === 'string' ? a.command : '') };
   }
   return null;
+}
+
+/** verify_case 实时进度卡：verify_progress SSE 事件驱动，逐条渲染步骤状态（运行中/通过/失败）。 */
+function VerifyProgressCard() {
+  const vp = useSpaceEventsStore((s) => s.verifyProgress);
+  if (!vp) return null;
+  const done = vp.result !== null;
+  return (
+    <div
+      className="fade-up mb-2 rounded-[var(--radius-md)] px-3 py-2 text-[12px]"
+      style={{ background: 'var(--muted)', border: '1px solid var(--border)' }}
+    >
+      <div className="mb-1.5 flex items-center gap-1.5" style={{ color: 'var(--muted-foreground)' }}>
+        <Icon name="beaker" size={12} style={{ flexShrink: 0 }} />
+        <span className="truncate">
+          实测验证（{vp.steps.filter((s) => s.status !== 'running').length}/{vp.total} 步
+          {vp.targetUrl ? ` · ${vp.targetUrl}` : ''}）
+        </span>
+        {done ? (
+          <Icon
+            name={vp.result === 'passed' ? 'check' : 'close'}
+            size={12}
+            style={{ color: vp.result === 'passed' ? 'var(--success)' : 'var(--destructive)', flexShrink: 0 }}
+          />
+        ) : (
+          <Icon name="loader" size={12} className="animate-spin" style={{ color: 'var(--primary)', flexShrink: 0 }} />
+        )}
+      </div>
+      <div className="flex flex-col gap-0.5">
+        {vp.steps.map((s) => (
+          <div key={s.order} className="flex items-start gap-1.5" style={{ color: 'var(--muted-foreground)' }}>
+            <Icon
+              name={s.status === 'running' ? 'loader' : s.status === 'passed' ? 'check' : 'close'}
+              size={11}
+              className={s.status === 'running' ? 'animate-spin' : ''}
+              style={{
+                color:
+                  s.status === 'running'
+                    ? 'var(--primary)'
+                    : s.status === 'passed'
+                      ? 'var(--success)'
+                      : 'var(--destructive)',
+                flexShrink: 0,
+                marginTop: 2,
+              }}
+            />
+            <span className="min-w-0 break-all">
+              第 {s.order} 步{s.brief ? `：${s.brief}` : ''}
+              {s.status === 'failed' && s.reason ? ` — ${s.reason}` : ''}
+              {s.durationMs != null && s.status !== 'running' ? `（${(s.durationMs / 1000).toFixed(1)}s）` : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /** 工具调用 chip:进行中(loader 旋转)/完成(check)/失败(✗ destructive),让操作过程有渐进反馈。 */

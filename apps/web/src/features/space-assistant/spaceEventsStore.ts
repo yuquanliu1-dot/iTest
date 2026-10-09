@@ -26,6 +26,23 @@ export interface AnnounceState {
   done: number;
 }
 
+/** verify_case 实时进度（verify_progress SSE 事件驱动）：逐步渲染 AI 验证进展。 */
+export interface VerifyProgressStep {
+  order: number;
+  status: 'running' | 'passed' | 'failed';
+  brief?: string;
+  reason?: string;
+  durationMs?: number;
+}
+
+export interface VerifyProgressState {
+  caseId: string;
+  total: number;
+  targetUrl: string | null;
+  steps: VerifyProgressStep[];
+  result: 'passed' | 'failed' | null;
+}
+
 /** 暂存条目：stage_case / stage_scenario / stage_environment / stage_plan 写入。
  *  payload 是 StageDoc 中对应 kind 的单条对象,前端直接渲染预览/勾选。 */
 export interface StagedItem<TPayload = unknown> {
@@ -47,6 +64,8 @@ interface SpaceEventsState {
   confirms: SpaceConfirmRequest[];
   stageHistory: StageObject[];
   announce: AnnounceState | null;
+  /** verify_case 实时进度卡数据（verify_progress 事件驱动；agent_start/新一轮清空）。 */
+  verifyProgress: VerifyProgressState | null;
   /** 暂存对象池：用户预览/勾选 → save 时入参的 source of truth。 */
   stagedByThread: StagedByThread;
   stagedSelection: StagedSelection;
@@ -82,6 +101,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
   confirms: [],
   stageHistory: [],
   announce: null,
+  verifyProgress: null,
   stagedByThread: new Map(),
   stagedSelection: new Map(),
   ingest: (e) => {
@@ -121,9 +141,74 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
       });
       return;
     }
+    if (e.type === 'verify_progress') {
+      const phase = e.phase as string;
+      if (phase === 'start') {
+        set({
+          verifyProgress: {
+            caseId: String(e.caseId ?? ''),
+            total: Number(e.total ?? 0),
+            targetUrl: (e.targetUrl as string | null) ?? null,
+            steps: [],
+            result: null,
+          },
+        });
+        return;
+      }
+      if (phase === 'step_start') {
+        set((s) =>
+          s.verifyProgress
+            ? {
+                verifyProgress: {
+                  ...s.verifyProgress,
+                  steps: [
+                    ...s.verifyProgress.steps,
+                    {
+                      order: Number(e.order ?? 0),
+                      status: 'running' as const,
+                      ...(typeof e.brief === 'string' ? { brief: e.brief } : {}),
+                    },
+                  ],
+                },
+              }
+            : s,
+        );
+        return;
+      }
+      if (phase === 'step_done') {
+        set((s) => {
+          if (!s.verifyProgress) return s;
+          const steps = s.verifyProgress.steps.map((st) =>
+            st.order === Number(e.order)
+              ? {
+                  ...st,
+                  status: (e.status === 'failed' ? 'failed' : 'passed') as 'failed' | 'passed',
+                  ...(typeof e.reason === 'string' ? { reason: e.reason } : {}),
+                  ...(typeof e.durationMs === 'number' ? { durationMs: e.durationMs } : {}),
+                }
+              : st,
+          );
+          return { verifyProgress: { ...s.verifyProgress, steps } };
+        });
+        return;
+      }
+      if (phase === 'end') {
+        set((s) =>
+          s.verifyProgress
+            ? {
+                verifyProgress: {
+                  ...s.verifyProgress,
+                  result: e.result === 'failed' ? ('failed' as const) : ('passed' as const),
+                },
+              }
+            : s,
+        );
+      }
+      return;
+    }
     if (e.type === 'agent_start') {
       // 新一轮开始:清掉上一轮的 announce 进度(舞台历史保留)
-      set((s) => (s.announce ? { announce: null } : s));
+      set((s) => (s.announce || s.verifyProgress ? { announce: null, verifyProgress: null } : s));
     }
   },
   removeConfirm: (confirmId) =>
@@ -185,7 +270,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
     return { stagedByThread: next, stagedSelection: sel };
   }),
   reset: () => set({
-    confirms: [], stageHistory: [], announce: null,
+    confirms: [], stageHistory: [], announce: null, verifyProgress: null,
     stagedByThread: new Map(), stagedSelection: new Map(),
   }),
 }));

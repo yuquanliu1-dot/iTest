@@ -178,6 +178,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           const stepResults: AiStepResult[] = [];
           let failedIndex = -1;
           let login: 'logged-in' | 'not-needed' = 'not-needed';
+          // SSE 实时进度：验证全程可达数分钟，前端凭这些事件渲染逐步进度卡（spaceEventsStore.verify_progress）
+          ctx.emit({ type: 'verify_progress', phase: 'start', caseId, total: steps.length, targetUrl: targetUrl ?? null });
           for (let i = 0; i < steps.length; i++) {
             const s = steps[i]!;
             const started = Date.now();
@@ -190,6 +192,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   order: s.order, status: 'failed', durationMs: Date.now() - started,
                   error: 'sensitive 步骤缺少密文（secret-missing）', failureReason: 'SecretMissing',
                 });
+                ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: 'sensitive 步骤缺少密文' });
                 failedIndex = i;
                 break;
               }
@@ -204,6 +207,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   order: s.order, status: 'failed', durationMs: Date.now() - started,
                   error: '敏感字段解密失败（secret-decrypt）', failureReason: 'SecretMissing',
                 });
+                ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: '敏感字段解密失败' });
                 failedIndex = i;
                 break;
               }
@@ -215,6 +219,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               steps.length,
               { hasLogin: !!envCtx.login, hasSecret: stepSecret !== undefined },
             );
+            ctx.emit({
+              type: 'verify_progress', phase: 'step_start', order: s.order,
+              brief: (s.instruction ?? JSON.stringify(s.compiled) ?? '').slice(0, 120),
+            });
             try {
               const summary = await runAiTask(page, instruction, client, false, {
                 maxTurns: STEP_MAX_TURNS,
@@ -229,6 +237,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   error: reason, failureReason: 'StepReportedFailed',
                   screenshot: await writeStepScreenshot(reportId, i + 1, page),
                 });
+                ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: reason.slice(0, 120) });
                 failedIndex = i;
                 break;
               }
@@ -239,6 +248,12 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 // 契约漂移兜底：summary 非 JSON 也算通过，但原文带出 warning 供人工核查
                 ...(parsed ? {} : { warning: summary.slice(0, 200) }),
               });
+              ctx.emit({
+                type: 'verify_progress', phase: 'step_done', order: s.order, status: 'passed',
+                durationMs: Date.now() - started,
+                ...(parsed ? {} : { reason: summary.slice(0, 120) }),
+                ...(login === 'logged-in' ? { login } : {}),
+              });
             } catch (e) {
               // watchdog 强关浏览器会让在途 runAiTask 抛错——此时真实原因是超时而非步骤失败
               if (timedOut) return { ok: false, error: `验证超时（${VERIFY_TIMEOUT_MS / 1000}s）已终止` };
@@ -247,6 +262,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 error: (e as Error).message.slice(0, 300), failureReason: 'AiTaskAborted',
                 screenshot: await writeStepScreenshot(reportId, i + 1, page),
               });
+              ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: (e as Error).message.slice(0, 120) });
               failedIndex = i;
               break;
             }
@@ -269,6 +285,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(r.failureReason ? { failureReason: r.failureReason } : {}),
           }));
           if (failedIndex < 0) {
+            ctx.emit({ type: 'verify_progress', phase: 'end', result: 'passed' });
             return {
               ok: true,
               data: JSON.stringify({
@@ -283,6 +300,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           }
           const failed = stepResults[failedIndex]!;
           const failedStep = steps[failedIndex]!;
+          ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed' });
           return {
             ok: true,
             data: JSON.stringify({

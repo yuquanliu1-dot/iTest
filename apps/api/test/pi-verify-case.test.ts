@@ -140,8 +140,14 @@ async function seedLoginObject(): Promise<void> {
   );
 }
 
-function toolCtx() {
-  return { threadId: 't1', versionId, projectId, repo: { cwd: null, issue: null, noRepo: false }, emit: () => {} };
+function toolCtx(emitLog?: unknown[]) {
+  return {
+    threadId: 't1',
+    versionId,
+    projectId,
+    repo: { cwd: null, issue: null, noRepo: false },
+    emit: (e: unknown) => emitLog?.push(e),
+  };
 }
 
 const CLICK_COMPILED = [{ kind: 'click', locator: [{ strategy: 'css', value: '#missing' }] }];
@@ -194,8 +200,9 @@ describe('verify_case 逐步 AI 执行编排', () => {
     const caseId = await seedCase({ steps: [CLICK_COMPILED, CLICK_COMPILED] });
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"完成","login":"not-needed"}');
+    const emitLog: unknown[] = [];
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
-    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId });
     expect(r.ok).toBe(true);
     if (r.ok) {
       const data = JSON.parse(r.data!);
@@ -213,6 +220,18 @@ describe('verify_case 逐步 AI 执行编排', () => {
     expect(call[4]).toMatchObject({ maxTurns: 5 });
     // 初始导航被调（首步非同 URL navigate）
     expect(await fakeGotos()).toEqual(['http://env.example/page']);
+    // verify_progress SSE 事件序列:start → (step_start + step_done)×2 → end
+    const phases = emitLog.map((e) => (e as { phase: string }).phase);
+    expect(phases).toEqual(['start', 'step_start', 'step_done', 'step_start', 'step_done', 'end']);
+    const start = emitLog[0] as { type: string; caseId: string; total: number; targetUrl: string | null };
+    expect(start).toMatchObject({ type: 'verify_progress', caseId, total: 2, targetUrl: 'http://env.example/page' });
+    const stepStart = emitLog[1] as { order: number; brief: string };
+    expect(stepStart).toMatchObject({ order: 1 });
+    expect(stepStart.brief).toContain('点击删除按钮');
+    const stepDone = emitLog[2] as { type: string; order: number; status: string };
+    expect(stepDone).toMatchObject({ type: 'verify_progress', order: 1, status: 'passed' });
+    const end = emitLog[5] as { result: string };
+    expect(end.result).toBe('passed');
   });
 
   it('配置 login 凭据：instruction 含占位符不含明文，valueSub 还原真实值 → login logged-in', async () => {
@@ -278,8 +297,9 @@ describe('verify_case 逐步 AI 执行编排', () => {
     vi.mocked(runAiTask)
       .mockResolvedValueOnce('{"status":"passed","reason":"ok","login":"not-needed"}')
       .mockResolvedValueOnce('{"status":"failed","reason":"元素未找到","login":"not-needed"}');
+    const emitLog: unknown[] = [];
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
-    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId });
     expect(r.ok).toBe(true);
     expect(runAiTask).toHaveBeenCalledTimes(2); // 第 2 步失败即停，第 3 步（无）不再执行
     if (r.ok) {
@@ -297,6 +317,13 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.failure.page.elements[0]).toContain('button#del');
       expect(typeof data.failure.note).toBe('string');
     }
+    // 失败路径:失败步 step_done 带 status=failed + reason,end result=failed
+    const stepDoneFailed = emitLog.find(
+      (e) => (e as { phase?: string }).phase === 'step_done' && (e as { order?: number }).order === 2,
+    ) as { status: string; reason: string };
+    expect(stepDoneFailed).toMatchObject({ status: 'failed', reason: '元素未找到' });
+    const end = emitLog.at(-1) as { result: string };
+    expect(end.result).toBe('failed');
   });
 
   it('runAiTask reject → failureReason AiTaskAborted + 失败页元素清单', async () => {
