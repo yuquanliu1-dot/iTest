@@ -33,7 +33,7 @@ export class WebEngine implements Engine {
       input.steps,
       ctx,
       targetUrl,
-      undefined, // storageState 由 runPlan 链注入（沿用现有语义）
+      input.storageState,
       preflightSink,
       input.caseWindow,
       input.incognito,
