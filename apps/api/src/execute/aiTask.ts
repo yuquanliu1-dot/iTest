@@ -17,6 +17,7 @@ actions 元素类型：
 - {"type":"fill","selector":"<css>","value":"<最终文本>"}（React 受控表单已特殊处理，直接给最终值即可）
 - {"type":"press","key":"Enter|Tab|Escape|ArrowDown|..."}
 - {"type":"wait","ms":<毫秒>}
+- {"type":"navigate","url":"<绝对地址>"}（仅 http/https 绝对地址）
 - {"type":"screenshot","selector":"<css>"}　请求该元素的 4 倍放大白底截图，下轮会作为附图发给你
 结束方式（二选一）：
 - 指令已完成：{"done": true, "summary": "做了什么"}
@@ -103,6 +104,7 @@ type AiAction =
   | { type: 'fill'; selector: string; value: string }
   | { type: 'press'; key: string }
   | { type: 'wait'; ms: number }
+  | { type: 'navigate'; url: string }
   | { type: 'screenshot'; selector: string };
 
 function parseAction(a: unknown): AiAction | null {
@@ -113,12 +115,14 @@ function parseAction(a: unknown): AiAction | null {
   if (type === 'fill' && typeof o.selector === 'string' && typeof o.value === 'string') return { type, selector: o.selector, value: o.value };
   if (type === 'press' && typeof o.key === 'string') return { type, key: o.key };
   if (type === 'wait' && typeof o.ms === 'number') return { type, ms: Math.min(Math.max(o.ms, 0), 10000) };
+  if (type === 'navigate' && typeof o.url === 'string' && /^https?:\/\//.test(o.url)) return { type, url: o.url };
   if (type === 'screenshot' && typeof o.selector === 'string') return { type, selector: o.selector };
   return null;
 }
 
-/** 执行单个动作，返回给人/LLM 的结果描述。 */
-async function execAction(page: Page, action: AiAction): Promise<string> {
+/** 执行单个动作，返回给人/LLM 的结果描述。
+ *  valueSub：fill value 执行前替换（占位符 → 真实凭据）；发生替换后反馈不回显真实值。 */
+async function execAction(page: Page, action: AiAction, valueSub?: (v: string) => string): Promise<string> {
   switch (action.type) {
     case 'click': {
       await page.locator(action.selector).first().click({ timeout: 5000, force: true });
@@ -126,15 +130,19 @@ async function execAction(page: Page, action: AiAction): Promise<string> {
     }
     case 'fill': {
       const loc = page.locator(action.selector).first();
+      const realValue = valueSub ? valueSub(action.value) : action.value;
+      const substituted = realValue !== action.value;
       await loc.fill('', { timeout: 5000 });
-      await loc.pressSequentially(action.value, { delay: 20 });
+      await loc.pressSequentially(realValue, { delay: 20 });
       // React 受控表单常在 blur 时才提交 state / 触发校验；与 cdp.ts dispatch fill 保持一致。
       await page.keyboard.press('Tab').catch(() => undefined);
       // 简短停顿让 onChange/blur 事件落地（Antd 等库在 blur 后异步校验）。
       await page.waitForTimeout(80);
       // 回读确认：若 DOM value 与目标不一致，把实际值反馈给 LLM 以便下轮修正。
       const actual = await loc.inputValue({ timeout: 3000 }).catch(() => '');
-      if (actual !== action.value) {
+      if (actual !== realValue) {
+        // 发生替换（凭据类 fill）时不回显 actual/目标值——防密码片段泄漏回 LLM。
+        if (substituted) return `fill ${action.selector}: 实际值与目标不一致（实际值长度 ${actual.length}）`;
         return `fill ${action.selector}: 实际值 "${actual}" 与目标 "${action.value}" 不一致`;
       }
       return `fill ${action.selector}: ok`;
@@ -146,6 +154,12 @@ async function execAction(page: Page, action: AiAction): Promise<string> {
     case 'wait': {
       await page.waitForTimeout(action.ms);
       return `wait ${action.ms}: ok`;
+    }
+    case 'navigate': {
+      await page.goto(action.url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+      // 与 init-goto 对齐：等 SPA hydrate，长连接页面 5s 兜底不阻塞。
+      await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
+      return `navigate ${action.url}: ok`;
     }
     case 'screenshot': {
       // 不在这里截图：标记后由主循环在下一轮开头截 4x 白底图
@@ -281,21 +295,32 @@ export async function solveCaptchaOnce(
   return `已识别验证码为 ${text} 并填入`;
 }
 
+/** runAiTask 可选项。 */
+export interface RunAiTaskOpts {
+  /** 对话轮数上限（缺省 MAX_TURNS=8）。 */
+  maxTurns?: number;
+  /** fill value 执行前替换（占位符 → 真实凭据）；替换后错误反馈不回显真实值。 */
+  valueSub?: (v: string) => string;
+}
+
 /**
  * 运行时 LLM 智能步骤：多轮「截图+元素清单 → LLM 决策 → 执行 → 反馈」循环，
  * 直到 LLM 声明完成/放弃或超过轮数上限。返回 done summary（用于步骤 warning）。
  * mobile=true 时改用移动端系统提示词（accessibility tree / tap / swipe / app 控制）。
+ * opts.maxTurns：轮数上限覆盖（verify_case 逐步执行用 5）；opts.valueSub：凭据占位符替换。
  */
 export async function runAiTask(
   page: Page,
   instruction: string,
   client: LLMClient,
   mobile?: boolean,
+  opts?: RunAiTaskOpts,
 ): Promise<string> {
+  const maxTurns = opts?.maxTurns ?? MAX_TURNS;
   const systemPrompt = mobile ? MOBILE_SYSTEM_PROMPT : SYSTEM_PROMPT;
   let lastResults: string[] = [];
   let pendingShot: string | null = null;
-  for (let turn = 1; turn <= MAX_TURNS; turn++) {
+  for (let turn = 1; turn <= maxTurns; turn++) {
     let buffer: Buffer | null = null;
     let imageNote = '';
     if (pendingShot) {
@@ -318,7 +343,7 @@ export async function runAiTask(
       imageNote,
       `可交互元素（JSON，selector 可直接用于动作）：${JSON.stringify(elements.slice(0, MAX_ELEMENTS))}`,
       lastResults.length > 0 ? `上轮动作结果：\n${lastResults.join('\n')}` : '（首轮，无历史动作）',
-      `第 ${turn}/${MAX_TURNS} 轮。`,
+      `第 ${turn}/${maxTurns} 轮。`,
     ].join('\n');
     const r = await client.complete({
       systemPrompt,
@@ -346,9 +371,10 @@ export async function runAiTask(
         continue;
       }
       try {
-        lastResults.push(await execAction(page, a));
+        lastResults.push(await execAction(page, a, opts?.valueSub));
       } catch (e) {
-        lastResults.push(`${a.type} ${'selector' in a ? a.selector : ''}: error ${e instanceof Error ? e.message.slice(0, 150) : String(e)}`);
+        const target = 'selector' in a ? a.selector : 'url' in a ? a.url : '';
+        lastResults.push(`${a.type} ${target}: error ${e instanceof Error ? e.message.slice(0, 150) : String(e)}`);
       }
     }
     if (actions.length === 0) {
@@ -359,5 +385,5 @@ export async function runAiTask(
       return typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
     }
   }
-  throw new Error(`aiTask 超过 ${MAX_TURNS} 轮未完成：${instruction.slice(0, 80)}`);
+  throw new Error(`aiTask 超过 ${maxTurns} 轮未完成：${instruction.slice(0, 80)}`);
 }

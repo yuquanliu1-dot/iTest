@@ -1,8 +1,9 @@
 /**
- * verify_case 工具：生成/修改用例后在真实被测系统上实测验证（spec: 2026-10-09-verify-case-design）。
- * 编排：读用例 → resolveEnv → (可选)凭证自动登录 → executeCaseInBrowser 失败即停
- * → 失败页元素清单（复用 inspectPage 提取器）→ 结构化反馈供 agent 自修正 compiled。
- * 验证不落 report（结果只回对话上下文）；副作用与正式执行一致（spec 已确认接受）。
+ * verify_case 工具：生成/修改用例后在真实被测系统上实测验证（全 AI 驱动，无硬编码登录）。
+ * 编排：读用例 → resolveEnv → resolveCaseUrl → launch → 逐步骤 runAiTask（LLM 看截图+元素清单
+ * 自主操作浏览器）→ 失败即停 → 失败页元素清单（复用 inspectPage 提取器）→ 结构化反馈供 agent 自修正。
+ * 登录/验证码/改密弹窗等场景由 LLM 按页面实际状态自主判断处理；凭据经占位符注入、执行时刻替换，
+ * 不进 LLM 上下文/返回值/日志。验证不落 report（结果只回对话上下文）；副作用与正式执行一致（spec 已确认接受）。
  */
 import { randomUUID } from 'node:crypto';
 import { Type } from '@earendil-works/pi-ai';
@@ -11,33 +12,86 @@ import type { Browser } from 'playwright-core';
 import { asc, eq } from 'drizzle-orm';
 import { db } from '../../../db/client.js';
 import { testCases, testSteps } from '../../../db/schema.js';
-import { executeCaseInBrowser } from '../../../execute/cdp.js';
-import type { ExecContext, ExecStepResult } from '../../../execute/cdp.js';
+import { runAiTask } from '../../../execute/aiTask.js';
+import { writeStepScreenshot } from '../../../execute/cdp.js';
 import { resolveEnv } from '../../../execute/envContext.js';
 import { resolveCaseUrl } from '../../../lib/resolve-url.js';
-import { runAiTask, solveCaptchaOnce } from '../../../execute/aiTask.js';
+import { decrypt } from '../../../lib/secret-crypto.js';
 import { resolveLlmClient } from '../../../agent/llmSettings.js';
-import { loginInContext, type CaptchaSolver } from '../../autoLogin.js';
+import { tryParseJson } from '../../../agent/llm-client.js';
 import { extractPageElements } from '../../inspectPage.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
-const VERIFY_TIMEOUT_MS = 120_000;
+// AI 轮次慢于编译回放，watchdog 从 120s 放宽到 300s；单步对话轮上限独立收紧。
+const VERIFY_TIMEOUT_MS = 300_000;
+const STEP_MAX_TURNS = 5;
+
+/** 凭据占位符：提示词里只有字面量，valueSub 在动作执行时刻替换为真实值。 */
+const USER_PH = '__ITEST_USERNAME__';
+const PASSWORD_PH = '__ITEST_PASSWORD__';
+const SECRET_PH = '__ITEST_STEP_SECRET__';
+
+interface AiStepResult {
+  order: number;
+  status: 'passed' | 'failed';
+  durationMs: number;
+  warning?: string;
+  screenshot?: string;
+  error?: string;
+  failureReason?: 'StepReportedFailed' | 'AiTaskAborted' | 'SecretMissing';
+}
+
+/** 单步执行指令：自然语言 + compiled 参考 + 占位符凭据段（仅配置了 login 时）+ 输出契约。 */
+function buildStepInstruction(
+  step: { order: number; instruction: string | null; compiled: unknown; assertion: unknown },
+  total: number,
+  sec: { hasLogin: boolean; hasSecret: boolean },
+): string {
+  const lines: string[] = [];
+  lines.push('你是网页测试执行器，在当前浏览器页面上完成下面这一步测试操作，完成后按输出契约结束。');
+  lines.push('');
+  lines.push(`## 步骤（第 ${step.order} 步 / 共 ${total} 步）`);
+  lines.push(`- 自然语言：${step.instruction ?? '（无，以编译动作为准）'}`);
+  lines.push('- 编译动作（compiled DSL，供参考；若页面实际与它不符，以实际页面为准自行调整）：');
+  lines.push(JSON.stringify(step.compiled));
+  if (step.assertion != null) lines.push(`- 断言（预期结果，完成后自行核实）：${JSON.stringify(step.assertion)}`);
+  if (sec.hasLogin) {
+    lines.push('');
+    lines.push('## 登录凭据');
+    lines.push('若当前页面是登录页（由你根据页面内容自行判断），先用占位符完成登录再执行本步：');
+    lines.push(`- 用户名输入框 fill 的 value 用字面量 ${USER_PH}`);
+    lines.push(`- 密码输入框 fill 的 value 用字面量 ${PASSWORD_PH}`);
+    lines.push('平台会把占位符替换为真实值；你不得猜测、拼接或输出真实凭据。');
+    lines.push('登录后若出现强制改密/绑定等弹窗，按页面提示处理（能跳过则跳过）后继续本步。');
+  }
+  if (sec.hasSecret) {
+    lines.push(`本步含加密敏感字段，填入时 value 一律用字面量 ${SECRET_PH}（平台替换为真实值，你不得猜测）。`);
+  }
+  lines.push('');
+  lines.push('## 输出契约');
+  lines.push('done.summary 必须是该 JSON 对象序列化后的文本：');
+  lines.push('{"status":"passed"|"failed","reason":"<一句话中文>","login":"logged-in"|"not-needed"}');
+  lines.push('- passed：本步操作（含触发的登录）已按页面实际状态完成；failed 写清原因。');
+  lines.push('- login：本轮你实际执行了登录填表并提交 → "logged-in"；无需登录 → "not-needed"。');
+  lines.push('中途无法继续时直接输出 {"fail":"原因"}。');
+  return lines.join('\n');
+}
 
 export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'verify_case',
     description:
-      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性：自动用环境 login 凭据登录（未配置则跳过登录直跑），失败即停并返回失败步骤详情与失败页可交互元素清单。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。验证会产生真实副作用（与正式执行一致）。',
+      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性（全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理），失败即停并返回失败步骤详情与失败页可交互元素清单。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。验证会产生真实副作用（与正式执行一致）。',
     parameters: Type.Object({
       caseId: Type.String({ minLength: 1 }),
     }),
     promptGuidelines: [
       '含 compiled 步骤的用例创建/修改后，环境可用时调用 verify_case 实测验证，不要只凭源码分析就声称用例可运行。',
+      'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正（stage_case/stage_case_op）后重新验证。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。',
-      '环境未配置 login 凭据而验证因登录页失败时，引导用户到项目环境页配置 login 凭据，不要伪造登录步骤。',
-      '本工具已自动识别登录页图形验证码（字母/数字）；若识别仍失败，按错误提示调整 locator 或检查环境网络/LLM 配置。',
+      '环境未配置 login 凭据而验证卡在登录页时，引导用户到项目环境页配置 login 凭据，不要伪造登录步骤。',
     ],
     execute: async (input) => {
       const { caseId } = input as { caseId: string };
@@ -57,6 +111,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           .orderBy(asc(testSteps.order));
         if (steps.length === 0) return { ok: false, error: '用例没有可验证的步骤' };
 
+        // ── LLM 前置检查（全 AI 驱动的硬前提；未配置直接失败，用户去设置页配置）──
+        let client: Awaited<ReturnType<typeof resolveLlmClient>>['client'];
+        try {
+          client = (await resolveLlmClient()).client;
+        } catch (e) {
+          return { ok: false, error: `LLM 未配置，无法执行 AI 验证: ${(e as Error).message}` };
+        }
+
         // ── 环境解析（case defaultEnv > version link > 项目默认）──
         let envCtx: Awaited<ReturnType<typeof resolveEnv>>;
         try {
@@ -71,7 +133,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           return { ok: false, error: `环境解析失败: ${(e as Error).message}` };
         }
 
-        // ── 浏览器 + (可选)登录 → 逐步执行（失败即停）──
+        // ── 浏览器 + watchdog → 逐步骤 AI 驱动执行（fail-stop）──
         let browser: Browser | undefined;
         let timedOut = false;
         const timer = setTimeout(() => {
@@ -87,75 +149,113 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ignoreHTTPSErrors: true,
             viewport: { width: 1280, height: 800 },
           });
+          const page = await context.newPage();
 
-          let login: 'logged-in' | 'not-needed' = 'not-needed';
-          if (envCtx.login) {
-            const loginUrl = envCtx.login.loginUrl || envCtx.baseUrl || '';
-            if (!loginUrl) {
-              return { ok: false, error: '环境未配置 loginUrl/baseUrl，无法自动登录；请到环境页补全 login 凭据的登录页地址' };
-            }
-            // 复用 aiTask 既有的 solveCaptchaOnce + runAiTask 兜底；与 execute/cdp.ts runCaptchaRetry 同源。
-            // resolveLlmClient 在 LLM 未配置时抛错——透传上去更直观（用户去设置页配置）。
-            let solveCaptcha: CaptchaSolver | undefined;
-            try {
-              const client = (await resolveLlmClient()).client;
-              solveCaptcha = async (page) => {
-                await solveCaptchaOnce(page, client, /* hint */ null)
-                  .catch(async (e1) => {
-                    // 单轮失败回退通用多轮回路（与 cdp.ts runCaptchaRetry 同策略）。
-                    await runAiTask(page, '识别当前验证码图片中的字符并填入验证码输入框', client)
-                      .catch((e2) => { throw new Error(`solveCaptchaOnce: ${(e1 as Error).message}; runAiTask: ${(e2 as Error).message}`); });
-                  });
-              };
-            } catch (e) {
-              return { ok: false, error: `LLM 未配置，无法识别验证码: ${(e as Error).message}` };
-            }
-            try {
-              login = await loginInContext(context, envCtx.login, loginUrl, { solveCaptcha });
-            } catch (e) {
-              // watchdog 触发会强关浏览器，登录操作随之抛错——此时真实原因是超时而非登录本身
-              if (timedOut) return { ok: false, error: `验证超时（${VERIFY_TIMEOUT_MS / 1000}s）已终止` };
-              return { ok: false, error: `登录失败: ${(e as Error).message}` };
+          // 初始导航（与 cdp.ts runStepsInContext 同判定：首条 compiled 为同 URL navigate 则跳过，避免重复加载）
+          if (targetUrl) {
+            const firstCompiled = steps[0]?.compiled;
+            const firstAction = (Array.isArray(firstCompiled) && firstCompiled.length > 0
+              ? firstCompiled[0]
+              : undefined) as { kind?: string; url?: string } | undefined;
+            const skipInit = firstAction?.kind === 'navigate' && firstAction.url === targetUrl;
+            if (!skipInit) {
+              await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+              await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
             }
           }
 
-          let failurePage: Awaited<ReturnType<typeof extractPageElements>> | null = null;
-          const stepInput = steps.map((s) => ({
-            order: s.order,
-            assertion: s.assertion,
-            delayMs: s.delayMs,
-            id: s.id,
-            tabRef: s.tabRef,
-            componentKind: s.componentKind,
-            sensitive: s.sensitive,
-            compiled: s.compiled as unknown[] | null | undefined,
-          }));
-          const execCtx: ExecContext = {
-            reportId: `verify-${randomUUID()}`,
-            projectId: ctx.projectId,
-            envCtx,
-            expectedOutcome: null, // v1 跳过用例级 vision 判定
-            caseTitle: caseRow.title,
-            caseUrl: caseRow.url ?? null,
+          // 占位符 → 真实值（无凭据时替换为 ''，提示词相应不注入凭据段）
+          const cred = envCtx.login;
+          let stepSecret: string | undefined;
+          const valueSub = (v: string): string => {
+            if (v === USER_PH) return cred?.user ?? '';
+            if (v === PASSWORD_PH) return cred?.password ?? '';
+            if (v === SECRET_PH) return stepSecret ?? '';
+            return v;
           };
-          let stepResults: ExecStepResult[];
-          try {
-            stepResults = await executeCaseInBrowser(
-              caseId,
-              stepInput,
-              execCtx,
-              browser,
-              context,
-              targetUrl,
-              undefined,
-              undefined,
-              async (page) => {
-                failurePage = await extractPageElements(page).catch(() => null);
-              },
+
+          const reportId = `verify-${randomUUID()}`;
+          const stepResults: AiStepResult[] = [];
+          let failedIndex = -1;
+          let login: 'logged-in' | 'not-needed' = 'not-needed';
+          for (let i = 0; i < steps.length; i++) {
+            const s = steps[i]!;
+            const started = Date.now();
+
+            // 敏感步骤先解密：密文缺失/解密失败直接判该步失败，不让 LLM 乱填
+            stepSecret = undefined;
+            if (s.sensitive) {
+              if (!s.secretCiphertext || !s.secretIv || !s.secretTag) {
+                stepResults.push({
+                  order: s.order, status: 'failed', durationMs: Date.now() - started,
+                  error: 'sensitive 步骤缺少密文（secret-missing）', failureReason: 'SecretMissing',
+                });
+                failedIndex = i;
+                break;
+              }
+              try {
+                stepSecret = decrypt({
+                  ciphertext: Buffer.from(s.secretCiphertext, 'base64'),
+                  iv: Buffer.from(s.secretIv, 'base64'),
+                  tag: Buffer.from(s.secretTag, 'base64'),
+                });
+              } catch {
+                stepResults.push({
+                  order: s.order, status: 'failed', durationMs: Date.now() - started,
+                  error: '敏感字段解密失败（secret-decrypt）', failureReason: 'SecretMissing',
+                });
+                failedIndex = i;
+                break;
+              }
+            }
+
+            if (s.delayMs) await page.waitForTimeout(s.delayMs);
+            const instruction = buildStepInstruction(
+              { order: s.order, instruction: s.instruction, compiled: s.compiled, assertion: s.assertion },
+              steps.length,
+              { hasLogin: !!envCtx.login, hasSecret: stepSecret !== undefined },
             );
-          } catch (e) {
-            if (timedOut) return { ok: false, error: `验证超时（${VERIFY_TIMEOUT_MS / 1000}s）已终止` };
-            return { ok: false, error: `验证执行失败: ${(e as Error).message}` };
+            try {
+              const summary = await runAiTask(page, instruction, client, false, {
+                maxTurns: STEP_MAX_TURNS,
+                valueSub,
+              });
+              const parsed = tryParseJson(summary);
+              if (parsed && parsed.status === 'failed') {
+                // LLM 自报失败：fail-stop，原因直达反馈
+                const reason = typeof parsed.reason === 'string' ? parsed.reason : summary.slice(0, 200);
+                stepResults.push({
+                  order: s.order, status: 'failed', durationMs: Date.now() - started,
+                  error: reason, failureReason: 'StepReportedFailed',
+                  screenshot: await writeStepScreenshot(reportId, i + 1, page),
+                });
+                failedIndex = i;
+                break;
+              }
+              if (parsed?.login === 'logged-in') login = 'logged-in';
+              stepResults.push({
+                order: s.order, status: 'passed', durationMs: Date.now() - started,
+                screenshot: await writeStepScreenshot(reportId, i + 1, page),
+                // 契约漂移兜底：summary 非 JSON 也算通过，但原文带出 warning 供人工核查
+                ...(parsed ? {} : { warning: summary.slice(0, 200) }),
+              });
+            } catch (e) {
+              // watchdog 强关浏览器会让在途 runAiTask 抛错——此时真实原因是超时而非步骤失败
+              if (timedOut) return { ok: false, error: `验证超时（${VERIFY_TIMEOUT_MS / 1000}s）已终止` };
+              stepResults.push({
+                order: s.order, status: 'failed', durationMs: Date.now() - started,
+                error: (e as Error).message.slice(0, 300), failureReason: 'AiTaskAborted',
+                screenshot: await writeStepScreenshot(reportId, i + 1, page),
+              });
+              failedIndex = i;
+              break;
+            }
+          }
+
+          // ── 失败收尾：失败页元素清单（供 agent 修正 locator）──
+          let failurePage: Awaited<ReturnType<typeof extractPageElements>> | null = null;
+          if (failedIndex >= 0) {
+            failurePage = await extractPageElements(page).catch(() => null);
           }
 
           // ── 结果组装（成功精简、失败信息密集）──
@@ -163,9 +263,11 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             order: r.order,
             status: r.status,
             durationMs: r.durationMs,
-            ...(r.hitLocator ? { hitLocator: r.hitLocator } : {}),
+            ...(r.warning ? { warning: r.warning } : {}),
+            ...(r.screenshot ? { screenshot: r.screenshot } : {}),
+            ...(r.error ? { error: r.error } : {}),
+            ...(r.failureReason ? { failureReason: r.failureReason } : {}),
           }));
-          const failedIndex = stepResults.findIndex((r) => r.status === 'failed');
           if (failedIndex < 0) {
             return {
               ok: true,
@@ -180,7 +282,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             };
           }
           const failed = stepResults[failedIndex]!;
-          const failedStep = stepInput[failedIndex];
+          const failedStep = steps[failedIndex]!;
           return {
             ok: true,
             data: JSON.stringify({
@@ -192,10 +294,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               steps: stepsSummary,
               failure: {
                 stepOrder: failed.order,
-                action: failedStep?.compiled ?? null,
+                action: failedStep.compiled ?? null,
                 error: failed.error ?? null,
                 failureReason: failed.failureReason ?? null,
-                humanMessage: failed.humanMessage ?? null,
+                humanMessage: failed.error ?? null,
                 screenshot: failed.screenshot ?? null,
                 page: failurePage,
                 note: 'page.elements 为失败页当前可见的可交互元素；修正 locator 只能使用其中真实存在的选择器。快照不含操作后才出现的元素。',

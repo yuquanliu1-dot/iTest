@@ -640,7 +640,7 @@ async function runCaptchaRetry(opts: DispatchOpts, clickActions: StepAction[]): 
   return notes.length > 0 ? `验证码重试：${notes.join('；')}` : undefined;
 }
 
-async function writeStepScreenshot(reportId: string, stepIndex: number, page: Page): Promise<string | undefined> {
+export async function writeStepScreenshot(reportId: string, stepIndex: number, page: Page): Promise<string | undefined> {
   try {
     // navigate/click 触发跳转后立即截图会拍到白屏（SPA 在 domcontentloaded 后才渲染）。
     // 先等 networkidle 让渲染落地；带 2s 兜底，长连接页面等不到 idle 也不阻塞截图。

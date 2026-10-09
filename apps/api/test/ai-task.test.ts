@@ -11,6 +11,8 @@ function makeStubPage() {
     url: () => 'https://sut.example/login',
     screenshot: async () => Buffer.from('png'),
     evaluate: async () => [],
+    goto: async (u: string) => { calls.push(`goto:${u}`); },
+    waitForLoadState: async () => {},
     keyboard: { press: async (key: string) => { calls.push(`press:${key}`); } },
     waitForTimeout: async (ms: number) => { calls.push(`wait:${ms}`); },
     locator: (selector: string) => ({
@@ -164,5 +166,104 @@ describe('runAiTask', () => {
     const summary = await runAiTask(page, '点一个不存在再换', llm);
     expect(summary).toBe('换方案完成');
     expect(requests[1]).toContain('no such element: #missing');
+  });
+
+  it('valueSub 替换：占位符在执行时刻还原为真实值，反馈不含真实值', async () => {
+    const { page, calls } = makeStubPage();
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'fill', selector: '#pwd', value: '__ITEST_PASSWORD__' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    const summary = await runAiTask(page, '填密码', llm, false, {
+      valueSub: (v) => (v === '__ITEST_PASSWORD__' ? 'RealSecret!9' : v),
+    });
+    expect(summary).toBe('ok');
+    expect(calls).toContain('type:#pwd:RealSecret!9');
+    // 回读命中真实值 → 反馈 ok，任何一轮请求都不含明文
+    expect(requests[1]).toContain('fill #pwd: ok');
+    expect(requests[1]).not.toContain('RealSecret!9');
+  });
+
+  it('替换后 mismatch：反馈不回显实际值/目标值，只给长度', async () => {
+    const calls: string[] = [];
+    // React 截断模拟：回读值与键入值不一致
+    const page = {
+      url: () => 'https://sut.example/login',
+      screenshot: async () => Buffer.from('png'),
+      evaluate: async () => [],
+      goto: async () => {},
+      waitForLoadState: async () => {},
+      keyboard: { press: async () => {} },
+      waitForTimeout: async () => {},
+      locator: (selector: string) => ({
+        first: () => ({
+          click: async () => {},
+          fill: async () => {},
+          pressSequentially: async (v: string) => { calls.push(`type:${v}`); },
+          inputValue: async () => 'Trun',
+          waitFor: async () => undefined,
+          evaluate: async () => undefined,
+          screenshot: async () => Buffer.from('z'),
+        }),
+      }),
+    } as unknown as Page;
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'fill', selector: '#pwd', value: '__ITEST_STEP_SECRET__' }] },
+      { fail: 'stop' },
+    ]);
+    await expect(
+      runAiTask(page, '填敏感值', llm, false, {
+        valueSub: (v) => (v === '__ITEST_STEP_SECRET__' ? 'RealSecret!9' : v),
+      }),
+    ).rejects.toThrow('aiTask 放弃');
+    expect(calls).toEqual(['type:RealSecret!9']);
+    expect(requests[1]).toContain('实际值与目标不一致（实际值长度 4）');
+    expect(requests[1]).not.toContain('RealSecret!9');
+    expect(requests[1]).not.toContain('Trun');
+  });
+
+  it('未替换 mismatch：保持既有回显（实际值+目标值）', async () => {
+    const page = {
+      url: () => 'https://sut.example/login',
+      screenshot: async () => Buffer.from('png'),
+      evaluate: async () => [],
+      goto: async () => {},
+      waitForLoadState: async () => {},
+      keyboard: { press: async () => {} },
+      waitForTimeout: async () => {},
+      locator: (selector: string) => ({
+        first: () => ({
+          click: async () => {},
+          fill: async () => {},
+          pressSequentially: async () => {},
+          inputValue: async () => 'actual-x',
+          waitFor: async () => undefined,
+          evaluate: async () => undefined,
+          screenshot: async () => Buffer.from('z'),
+        }),
+      }),
+    } as unknown as Page;
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'fill', selector: '#u', value: 'expected' }] },
+      { fail: 'stop' },
+    ]);
+    await expect(runAiTask(page, '填用户名', llm)).rejects.toThrow();
+    expect(requests[1]).toContain('实际值 "actual-x" 与目标 "expected" 不一致');
+  });
+
+  it('navigate 动作：goto http(s) 绝对地址并反馈 ok；非法 scheme 被 parseAction 丢弃', async () => {
+    const { page } = makeStubPage();
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'navigate', url: 'https://sut.example/home' }, { type: 'navigate', url: 'javascript:alert(1)' }] },
+      { done: true, summary: '已导航' },
+    ]);
+    await runAiTask(page, '去首页', llm);
+    expect(requests[1]).toContain('navigate https://sut.example/home: ok');
+  });
+
+  it('opts.maxTurns 覆盖轮数上限并出现在报错文案', async () => {
+    const { page } = makeStubPage();
+    const { llm } = makeMockLlm(Array.from({ length: 3 }, () => ({ actions: [{ type: 'wait', ms: 1 }] })));
+    await expect(runAiTask(page, '完不成', llm, false, { maxTurns: 2 })).rejects.toThrow(/超过 2 轮未完成/);
   });
 });
