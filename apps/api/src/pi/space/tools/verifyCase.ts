@@ -94,6 +94,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             try {
               login = await loginInContext(context, envCtx.login, loginUrl);
             } catch (e) {
+              // watchdog 触发会强关浏览器，登录操作随之抛错——此时真实原因是超时而非登录本身
+              if (timedOut) return { ok: false, error: `验证超时（${VERIFY_TIMEOUT_MS / 1000}s）已终止` };
               return { ok: false, error: `登录失败: ${(e as Error).message}` };
             }
           }
