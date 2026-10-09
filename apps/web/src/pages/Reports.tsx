@@ -199,6 +199,23 @@ export default function Executions() {
 			cell: (r) => <StatusPill status={r.status}>{r.status}</StatusPill>,
 		},
 		{
+			id: 'assertion',
+			header: '最后断言',
+			width: 'w-[240px]',
+			hideBelow: 'lg',
+			cellClassName: 'text-xs text-muted-foreground',
+			cell: (r) => {
+				// 用例行 = vision 断言 reason / 失败步 error；计划行 = 运行结论（N 通过 / M 失败）。
+				const text = r.kind === 'case' ? (r.lastAssertion ?? null) : r.summary;
+				if (!text) return <EmptyCellValue />;
+				return (
+					<span className="block truncate" title={text}>
+						{text}
+					</span>
+				);
+			},
+		},
+		{
 			id: 'duration',
 			header: '耗时',
 			width: 'w-[88px]',

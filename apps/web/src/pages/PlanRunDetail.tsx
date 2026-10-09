@@ -82,6 +82,12 @@ export default function PlanRunDetail() {
                       )}
                     </div>
                     {c.error && <div className="text-[12px] mt-1" style={{ color: 'var(--destructive)' }}>{c.error}</div>}
+                    {/* 通过行展示最后断言结论（vision reason）；失败行 error 已含结论，不重复展示 */}
+                    {!c.error && c.lastAssertion && (
+                      <div className="text-[12px] mt-1 truncate" style={{ color: 'var(--muted-foreground)' }} title={c.lastAssertion}>
+                        {c.lastAssertion}
+                      </div>
+                    )}
                   </div>
                   {(c.reportIds?.length ?? 0) > 1 ? (
                     <div className="flex items-center gap-1 shrink-0">
