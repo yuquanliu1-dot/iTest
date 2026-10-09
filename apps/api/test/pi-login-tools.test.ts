@@ -115,6 +115,16 @@ describe('perform_login（AI 驱动）', () => {
     if (!r.ok) expect(r.error).toContain('aiTask 超过 10 轮');
   });
 
+  it('成功登录后回写 storageState 缓存（暖 verify_case）', async () => {
+    mockEnv({ user: 'qa01', password: 'Passw0rd!', loginUrl: 'http://e/login' });
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"登录成功"}');
+    const [, loginTool] = buildLoginTools(toolCtx());
+    const r = await loginTool.execute({});
+    expect(r.ok).toBe(true);
+    const { getLoginState } = await import('../src/pi/space/tools/loginStateCache.js');
+    expect(getLoginState('env1:qa01')).toMatchObject({ cookies: [{ name: 'sid', value: 'abc' }] });
+  });
+
   it('LLM 未配置 → ok:false，不启动浏览器', async () => {
     mockEnv({ user: 'qa01', password: 'Passw0rd!', loginUrl: 'http://e/login' });
     const { resolveLlmClient } = await import('../src/agent/llmSettings.js');

@@ -22,21 +22,25 @@ vi.mock('../src/agent/llmSettings.js', () => ({
     client: { provider: 'anthropic' as const, complete: async () => ({ kind: 'text' as const, value: '', provider: 'anthropic' as const, vision: false }) },
   })),
 }));
-// playwright 桩：launch → context.newPage 返回极简 page；gotos 记录初始导航（经 __testState 暴露给测试）。
+// playwright 桩：launch → context.newPage 返回极简 page；gotos 记录初始导航、ctxOpts 记录 newContext 入参（经 __testState 暴露给测试）。
 vi.mock('playwright-core', () => {
-  const state = { gotos: [] as string[] };
+  const state = { gotos: [] as string[], ctxOpts: [] as unknown[] };
   return {
     chromium: {
       launch: vi.fn(async () => ({
-        newContext: async () => ({
-          newPage: async () => ({
-            url: () => 'http://env.example/page',
-            goto: async (u: string) => { state.gotos.push(u); },
-            waitForLoadState: async () => {},
-            waitForTimeout: async () => {},
+        newContext: vi.fn(async (opts?: unknown) => {
+          state.ctxOpts.push(opts);
+          return {
+            newPage: async () => ({
+              url: () => 'http://env.example/page',
+              goto: async (u: string) => { state.gotos.push(u); },
+              waitForLoadState: async () => {},
+              waitForTimeout: async () => {},
+              close: async () => {},
+            }),
+            storageState: async () => ({ cookies: [{ name: 'sid', value: 'cached' }], origins: [] }),
             close: async () => {},
-          }),
-          close: async () => {},
+          };
         }),
         close: async () => {},
       })),
@@ -68,8 +72,11 @@ afterAll(async () => {
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  const { __testState } = (await import('playwright-core')) as unknown as { __testState: { gotos: string[] } };
+  const { __testState } = (await import('playwright-core')) as unknown as {
+    __testState: { gotos: string[]; ctxOpts: unknown[] };
+  };
   __testState.gotos.length = 0;
+  __testState.ctxOpts.length = 0;
   await pool.query(`TRUNCATE test_steps, test_cases, test_environments, environment_objects,
     requirements, "groups", projects, project_versions, ai_threads, ai_workspace_state
     RESTART IDENTITY CASCADE`);
@@ -156,6 +163,12 @@ const CLICK_COMPILED = [{ kind: 'click', locator: [{ strategy: 'css', value: '#m
 async function fakeGotos(): Promise<string[]> {
   const { __testState } = (await import('playwright-core')) as unknown as { __testState: { gotos: string[] } };
   return __testState.gotos;
+}
+
+/** 当前默认环境 id（loginStateCache 的 key 组成部分） */
+async function defaultEnvId(): Promise<string> {
+  const r = await pool.query(`SELECT id FROM test_environments WHERE project_id = $1 AND is_default = true`, [projectId]);
+  return r.rows[0]!.id as string;
 }
 
 describe('verify_case 前置校验', () => {
@@ -355,6 +368,37 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.result).toBe('passed');
       expect(data.steps[0].warning).toBe('已手动完成点击操作');
     }
+  });
+
+  it('登录态缓存命中：newContext 注入 storageState（免登录直接跑步骤）', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED] });
+    const { saveLoginState } = await import('../src/pi/space/tools/loginStateCache.js');
+    const fakeState = { cookies: [{ name: 'sid', value: 'warm' }], origins: [] };
+    saveLoginState(`${await defaultEnvId()}:`, fakeState as never);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const { __testState } = (await import('playwright-core')) as unknown as {
+      __testState: { ctxOpts: Array<Record<string, unknown> | undefined> };
+    };
+    expect(__testState.ctxOpts[0]).toMatchObject({ storageState: fakeState });
+  });
+
+  it('login logged-in：验证后回写 storageState 缓存（key 为 envId:user）', async () => {
+    await seedLoginObject();
+    const caseId = await seedCase({ steps: [CLICK_COMPILED] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"已登录并完成点击","login":"logged-in"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const { getLoginState } = await import('../src/pi/space/tools/loginStateCache.js');
+    expect(getLoginState(`${await defaultEnvId()}:qa01`)).toEqual({
+      cookies: [{ name: 'sid', value: 'cached' }],
+      origins: [],
+    });
   });
 });
 
