@@ -49,6 +49,8 @@ export interface VerifyProgressState {
   result: 'passed' | 'failed' | null;
   /** end 事件：本轮是否已回写登录态缓存。 */
   cacheSaved: boolean;
+  /** 本线程暂存的 caseOp 叠加数（>0 表示验证基于暂存修改，未落库）。 */
+  stagedOps: number;
 }
 
 /** 暂存条目：stage_case / stage_scenario / stage_environment / stage_plan 写入。
@@ -162,6 +164,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
             steps: [],
             result: null,
             cacheSaved: false,
+            stagedOps: Number(e.stagedOps ?? 0),
           },
         });
         return;

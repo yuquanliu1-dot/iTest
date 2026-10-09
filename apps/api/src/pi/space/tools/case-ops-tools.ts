@@ -321,8 +321,7 @@ export function buildCaseOpsTools(ctx: SpaceToolsContext): ToolExecutor[] {
 }
 
 /** 给 stageRoute.s / 落库时复用：按 ai_stage_case_ops 行执行真实写。op 与 buildCaseOpsTools 一一对应。 */
-export async function applyCaseOp(op: string, payload: unknown, ctx: SpaceToolsContext): Promise<void> {
-  const v = StageCaseOpInput.parse(payload);
+export async function applyCaseOp(op: string, payload: unknown, ctx: SpaceToolsContext): Promise<void> {  const v = StageCaseOpInput.parse(payload);
   const caseId = v.caseId;
   // 二次校验：落库前再确认归属（与创建时一致）
   const before = await loadCaseOrThrow(ctx, caseId);
@@ -390,4 +389,118 @@ export async function applyCaseOp(op: string, payload: unknown, ctx: SpaceToolsC
     }
   }
   throw new HttpError(500, 'invariant', `unknown op ${op}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 虚拟应用（不落库）：把暂存的 caseOps 叠加到 DB 用例上,供 verify_case 基于暂存继续验证。
+// 语义与 applyCaseOp 对齐,但只计算生效后的 steps / casePatch,不做任何写。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 与 testSteps 行结构对齐的"生效步骤"（虚拟插入的步骤无密文字段）。 */
+export interface EffectiveStep {
+  id: string;
+  order: number;
+  instruction: string | null;
+  compiled: unknown;
+  assertion: unknown;
+  sensitive: boolean;
+  delayMs: number | null;
+  secretCiphertext: string | null;
+  secretIv: string | null;
+  secretTag: string | null;
+}
+
+export interface CaseOverlay {
+  /** update_case 补丁里影响执行的部分（其余元数据与验证无关）。 */
+  url?: string | null;
+  defaultEnvId?: string | null;
+  /** 有步骤级 op 时为叠加后的全量步骤；否则 null 表示沿用 DB 步骤。 */
+  steps: EffectiveStep[] | null;
+  /** 暂存了 delete_case：用例待删除,不应再验证。 */
+  deleteStaged: boolean;
+  /** 成功叠加的 op 数（含 move_case 等不影响执行的计数,供 UI 展示）。 */
+  opsApplied: number;
+}
+
+export function computeCaseOverlay(
+  dbSteps: EffectiveStep[],
+  ops: Array<{ payload: unknown }>,
+): CaseOverlay {
+  const overlay: CaseOverlay = { steps: null, deleteStaged: false, opsApplied: 0 };
+  let steps: EffectiveStep[] | null = null;
+  const ensure = (): EffectiveStep[] => (steps ??= dbSteps.map((s) => ({ ...s })));
+  const normalize = (): void => steps!.forEach((s, i) => { s.order = i + 1; });
+  ops.forEach(({ payload }, idx) => {
+    const parsed = StageCaseOpInput.safeParse(payload);
+    if (!parsed.success) return;
+    const v = parsed.data;
+    switch (v.action) {
+      case 'update_case':
+        if (v.patch.url !== undefined) overlay.url = v.patch.url;
+        if (v.patch.defaultEnvId !== undefined) overlay.defaultEnvId = v.patch.defaultEnvId;
+        overlay.opsApplied++;
+        break;
+      case 'delete_case':
+        overlay.deleteStaged = true;
+        overlay.opsApplied++;
+        break;
+      case 'update_step': {
+        const st = ensure().find((s) => s.id === v.stepId);
+        if (!st) break;
+        if (v.instruction !== undefined) st.instruction = v.instruction;
+        if (v.compiled !== undefined) st.compiled = v.compiled;
+        normalize();
+        overlay.steps = steps;
+        overlay.opsApplied++;
+        break;
+      }
+      case 'insert_step': {
+        const list = ensure();
+        const st: EffectiveStep = {
+          id: `staged:${idx}`,
+          order: 0,
+          instruction: v.instruction,
+          compiled: v.compiled ?? null,
+          assertion: null,
+          sensitive: false,
+          delayMs: null,
+          secretCiphertext: null,
+          secretIv: null,
+          secretTag: null,
+        };
+        // 与 insertCaseStep 对齐：afterOrder 之后插入,越界落末尾
+        list.splice(Math.min(v.afterOrder ?? list.length, list.length), 0, st);
+        normalize();
+        overlay.steps = steps;
+        overlay.opsApplied++;
+        break;
+      }
+      case 'delete_step': {
+        const list = ensure();
+        const i = list.findIndex((s) => s.id === v.stepId);
+        if (i < 0) break;
+        list.splice(i, 1);
+        normalize();
+        overlay.steps = steps;
+        overlay.opsApplied++;
+        break;
+      }
+      case 'move_step': {
+        const list = ensure();
+        const byId = new Map(list.map((s) => [s.id, s]));
+        if (!v.stepIds.every((id) => byId.has(id))) break;
+        const rest = list.filter((s) => !v.stepIds.includes(s.id));
+        steps = v.stepIds.map((id) => byId.get(id)!).concat(rest);
+        normalize();
+        overlay.steps = steps;
+        overlay.opsApplied++;
+        break;
+      }
+      case 'move_case':
+        // 分组移动不影响执行,仅计数
+        overlay.opsApplied++;
+        break;
+    }
+  });
+  return overlay;
 }

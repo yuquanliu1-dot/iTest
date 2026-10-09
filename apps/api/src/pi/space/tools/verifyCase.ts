@@ -9,9 +9,9 @@ import { randomUUID } from 'node:crypto';
 import { Type } from '@earendil-works/pi-ai';
 import { chromium } from 'playwright-core';
 import type { Browser } from 'playwright-core';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, and } from 'drizzle-orm';
 import { db } from '../../../db/client.js';
-import { testCases, testSteps } from '../../../db/schema.js';
+import { testCases, testSteps, aiStageCaseOps } from '../../../db/schema.js';
 import { runAiTask } from '../../../execute/aiTask.js';
 import { writeStepScreenshot } from '../../../execute/cdp.js';
 import { resolveEnv } from '../../../execute/envContext.js';
@@ -20,6 +20,7 @@ import { decrypt } from '../../../lib/secret-crypto.js';
 import { resolveLlmClient } from '../../../agent/llmSettings.js';
 import { tryParseJson } from '../../../agent/llm-client.js';
 import { extractPageElements } from '../../inspectPage.js';
+import { computeCaseOverlay } from './case-ops-tools.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
@@ -90,7 +91,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
     promptGuidelines: [
       '含 compiled 步骤的用例创建/修改后，环境可用时调用 verify_case 实测验证，不要只凭源码分析就声称用例可运行。',
       'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
-      'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正（stage_case/stage_case_op）后重新验证。',
+      'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后，引导用户在右侧暂存区勾选统一保存。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。',
       '环境未配置 login 凭据而验证卡在登录页时，引导用户到项目环境页配置 login 凭据，不要伪造登录步骤。',
     ],
@@ -112,6 +113,28 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           .orderBy(asc(testSteps.order));
         if (steps.length === 0) return { ok: false, error: '用例没有可验证的步骤' };
 
+        // ── 暂存叠加：本线程已暂存的 stage_case_op 虚拟应用到 DB 用例上,验证基于暂存状态继续——
+        //    失败→暂存修正→直接重验的循环全程不落库,全部通过后用户在暂存区统一保存 ──
+        const stagedOps = await db
+          .select({ op: aiStageCaseOps.op, payload: aiStageCaseOps.payload })
+          .from(aiStageCaseOps)
+          .where(and(eq(aiStageCaseOps.threadId, ctx.threadId), eq(aiStageCaseOps.caseId, caseId)))
+          .orderBy(asc(aiStageCaseOps.stagedAt));
+        const overlay = computeCaseOverlay(steps, stagedOps);
+        if (overlay.deleteStaged) {
+          return { ok: false, error: '用例已暂存删除，请先在暂存区取消删除（或落库）后再验证' };
+        }
+        const effectiveSteps = overlay.steps ?? steps;
+        if (effectiveSteps.length === 0) return { ok: false, error: '用例没有可验证的步骤' };
+        const effectiveCase =
+          overlay.url !== undefined || overlay.defaultEnvId !== undefined
+            ? {
+                ...caseRow,
+                ...(overlay.url !== undefined ? { url: overlay.url } : {}),
+                ...(overlay.defaultEnvId !== undefined ? { defaultEnvId: overlay.defaultEnvId } : {}),
+              }
+            : caseRow;
+
         // ── LLM 前置检查（全 AI 驱动的硬前提；未配置直接失败，用户去设置页配置）──
         let client: Awaited<ReturnType<typeof resolveLlmClient>>['client'];
         try {
@@ -124,7 +147,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         let envCtx: Awaited<ReturnType<typeof resolveEnv>>;
         try {
           envCtx = await resolveEnv(
-            { caseEnvId: caseRow.defaultEnvId ?? null, versionId: caseRow.versionId ?? ctx.versionId },
+            { caseEnvId: effectiveCase.defaultEnvId ?? null, versionId: effectiveCase.versionId ?? ctx.versionId },
             { expectedProjectId: ctx.projectId },
           );
         } catch (e) {
@@ -143,7 +166,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         }, VERIFY_TIMEOUT_MS);
         try {
           // resolveCaseUrl 有 db 查询，放进本 try 让 finally 的 envCtx.close 兜底（否则查询抛错会泄漏连接池）
-          const resolvedUrl = await resolveCaseUrl(caseRow, { envBaseUrl: envCtx.baseUrl });
+          const resolvedUrl = await resolveCaseUrl(effectiveCase, { envBaseUrl: envCtx.baseUrl });
           const targetUrl = resolvedUrl && /^https?:\/\//.test(resolvedUrl) ? resolvedUrl : undefined;
           browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
           // 命中登录态缓存则注入 context:同环境重试轮/后续用例免登录（过期自愈,见 loginStateCache）
@@ -158,7 +181,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
 
           // 初始导航（与 cdp.ts runStepsInContext 同判定：首条 compiled 为同 URL navigate 则跳过，避免重复加载）
           if (targetUrl) {
-            const firstCompiled = steps[0]?.compiled;
+            const firstCompiled = effectiveSteps[0]?.compiled;
             const firstAction = (Array.isArray(firstCompiled) && firstCompiled.length > 0
               ? firstCompiled[0]
               : undefined) as { kind?: string; url?: string } | undefined;
@@ -186,12 +209,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // SSE 实时进度：验证全程可达数分钟，前端凭这些事件渲染逐步进度卡（spaceEventsStore.verify_progress）。
           // loginCache/loginUser：登录态缓存命中与凭据用户直显对话框，无需翻服务端日志即可确认复用生效。
           ctx.emit({
-            type: 'verify_progress', phase: 'start', caseId, total: steps.length, targetUrl: targetUrl ?? null,
+            type: 'verify_progress', phase: 'start', caseId, total: effectiveSteps.length, targetUrl: targetUrl ?? null,
             loginCache: cachedState ? ('hit' as const) : ('miss' as const),
             loginUser: envCtx.login?.user ?? null,
+            stagedOps: overlay.opsApplied,
           });
-          for (let i = 0; i < steps.length; i++) {
-            const s = steps[i]!;
+          for (let i = 0; i < effectiveSteps.length; i++) {
+            const s = effectiveSteps[i]!;
             const started = Date.now();
 
             // 敏感步骤先解密：密文缺失/解密失败直接判该步失败，不让 LLM 乱填
@@ -226,7 +250,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             if (s.delayMs) await page.waitForTimeout(s.delayMs);
             const instruction = buildStepInstruction(
               { order: s.order, instruction: s.instruction, compiled: s.compiled, assertion: s.assertion },
-              steps.length,
+              effectiveSteps.length,
               { hasLogin: !!envCtx.login, hasSecret: stepSecret !== undefined },
             );
             ctx.emit({
@@ -315,12 +339,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 envId: envCtx.envId,
                 targetUrl: targetUrl ?? null,
                 login,
+                basedOn: overlay.opsApplied > 0 ? ('staged' as const) : ('db' as const),
+                stagedOpsApplied: overlay.opsApplied,
                 steps: stepsSummary,
               }),
             };
           }
           const failed = stepResults[failedIndex]!;
-          const failedStep = steps[failedIndex]!;
+          const failedStep = effectiveSteps[failedIndex]!;
           ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
           return {
             ok: true,
@@ -330,6 +356,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
               login,
+              basedOn: overlay.opsApplied > 0 ? ('staged' as const) : ('db' as const),
+              stagedOpsApplied: overlay.opsApplied,
               steps: stepsSummary,
               failure: {
                 stepOrder: failed.order,
