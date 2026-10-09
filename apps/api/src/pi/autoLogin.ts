@@ -64,7 +64,15 @@ async function fillLoginForm(page: Page, cred: LoginCtx): Promise<boolean> {
       if ((await pageSubmit.count()) > 0) {
         await pageSubmit.click({ timeout: 5000 });
       } else {
-        await password.press('Enter');
+        // ElementUI/Vue 等登录按钮常为 button[type=button]（prod228 实测 el-button login-btn），按文本兜底
+        const textSubmit = page
+          .locator('button:visible', { hasText: /^(登\s*录|sign\s*in|log\s*in|login|submit)$/i })
+          .first();
+        if ((await textSubmit.count()) > 0) {
+          await textSubmit.click({ timeout: 5000 });
+        } else {
+          await password.press('Enter');
+        }
       }
     }
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => undefined);
