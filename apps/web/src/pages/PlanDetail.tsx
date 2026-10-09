@@ -265,8 +265,8 @@ export default function PlanDetail() {
         </Button>
       </div>
 
-      {/* 内容列限宽居中（同 PageShell max-w-7xl），宽屏下表单不散成一整行 */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-4 mx-auto w-full max-w-7xl">
+      {/* 内容列限宽居中（同 PageShell clamp 容器），宽屏下表单不散成一整行 */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-4 mx-auto w-full max-w-[min(100%-2rem,100rem)]">
         <div className="bg-card border rounded-[var(--radius-md)] p-5">
           {/* input-base 默认 width:100%，flex 行内会把标签挤到竖排；控件 flex-1 弹性填充 + 标签 shrink-0 */}
           <div className="flex items-center gap-4">

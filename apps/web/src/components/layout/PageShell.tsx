@@ -1,8 +1,10 @@
 import { cn } from '../../lib/cn';
 import type * as React from 'react';
 
-// CRM page-shell 移植：内容区 padding + max-w-7xl 容器 + 页标题族。
+// CRM page-shell 移植：内容区 padding + clamp(100%-2rem,100rem) 容器 + 页标题族。
 // 各页面在 Phase 4 逐页接入；contained 用于全高应用型页面（不外滚）。
+// 容器宽度策略:小屏几乎贴边,大屏(≥1920)封顶 1600px,中间线性增长,
+// 减少宽屏左右大块留白。
 
 function PageShell({
   className,
@@ -20,7 +22,9 @@ function PageShell({
       <div
         data-slot="page-shell"
         className={cn(
-          'mx-auto flex w-full min-w-0 max-w-7xl flex-1 flex-col gap-6',
+          // 大屏自适应:clamp(可用宽度-2rem padding, 1600px)
+          // 1024 以下 ≈ 屏宽;1440 ≈ 1376;1920 拉满 1600 后停止增长,避免过宽
+          'mx-auto flex w-full min-w-0 max-w-[min(100%-2rem,100rem)] flex-1 flex-col gap-6',
           // contained 模式下必须允许收缩，否则 min-height:auto 使内容撑破
           // overflow-hidden 的滚动容器，底部（如分页器）被裁掉且无法滚动。
           contained && 'min-h-0',
