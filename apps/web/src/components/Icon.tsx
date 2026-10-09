@@ -24,6 +24,7 @@ import View from '@carbon/icons-react/es/View';
 import ViewOff from '@carbon/icons-react/es/ViewOff';
 import Document from '@carbon/icons-react/es/Document';
 import Flag from '@carbon/icons-react/es/Flag';
+import Grid from '@carbon/icons-react/es/Grid';
 import Branch from '@carbon/icons-react/es/Branch';
 import Draggable from '@carbon/icons-react/es/Draggable';
 import Layers from '@carbon/icons-react/es/Layers';
@@ -94,8 +95,10 @@ const iconMap: Record<string, CarbonIconType> = {
   eyeOff: ViewOff,
   file: Document,
   flag: Flag,
+  reportView: Document,
   gitBranch: Branch,
   globe: Globe,
+  grid: Grid,
   gripVertical: Draggable,
   layers: Layers,
   list: List,

@@ -267,10 +267,22 @@ export default function ReportDetail() {
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header bar */}
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports`)}>
-          <Icon name="chevronLeft" size={12} />
-          返回报告列表
-        </Button>
+        {/* 计划运行成员报告：返回到所属计划运行详情；普通报告回报告列表 */}
+        {data.planRunId && data.planId ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate(`/p/${projectId}/v/${versionId}/plans/${data.planId}/runs/${data.planRunId}`)}
+          >
+            <Icon name="chevronLeft" size={12} />
+            返回计划运行
+          </Button>
+        ) : (
+          <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports`)}>
+            <Icon name="chevronLeft" size={12} />
+            返回报告列表
+          </Button>
+        )}
         <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
         <h1 className="text-[16px] font-semibold" style={{ color: 'var(--foreground)' }}>
           测试报告

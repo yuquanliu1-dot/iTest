@@ -617,6 +617,18 @@ export default function CaseDetail() {
         <PriorityBadge priority={caseDetail.priority} />
         <CaseStatusMenu caseId={caseDetail.id} status={caseDetail.status} projectId={projectId} />
         <div className="flex-1" />
+        <Button
+          variant="ghost"
+          onClick={() =>
+            navigate(
+              `/p/${projectId}/v/${versionId}/reports?caseId=${caseDetail.id}&q=${encodeURIComponent(caseDetail.title)}&tab=case`,
+            )
+          }
+          title="查看该用例的全部执行报告"
+        >
+          <Icon name="reportView" size={12} />
+          查看报告
+        </Button>
         {(() => {
           // 2026-10-06：未编译 step 阻塞执行（dispatcher 抛 compile-missing）。
           //   老数据（无 compiled 列）按未编译处理，强制 user 重新 AI 编译。
