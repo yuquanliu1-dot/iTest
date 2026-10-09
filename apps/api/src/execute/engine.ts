@@ -25,6 +25,8 @@ export interface EngineInput {
   projectId: string | undefined;
   caseWindow?: CaseWindow;
   incognito: boolean;
+  /** 计划级 loginPrepare 导出的登录态（runPlan → runCase 透传）；单用例执行无此值。 */
+  storageState?: unknown;
   appRef?: { bundleId: string; appPath?: string; launchArgs?: string[] } | null;
   deviceTargetId?: string | null;
   mobileOs?: 'ios' | 'android' | null;

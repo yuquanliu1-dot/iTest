@@ -318,6 +318,7 @@ async function runCaseOnceInner(
         projectId,
         caseWindow,
         incognito,
+        ...(opts?.storageState ? { storageState: opts.storageState } : {}),
         appRef: caseRow.appRef ?? null,
         deviceTargetId: caseRow.mobileDeviceTargetId ?? null,
         mobileOs,
