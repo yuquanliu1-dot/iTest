@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { eq, desc, inArray } from 'drizzle-orm';
+import { eq, desc, inArray, and, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { reports, planRuns, groups, testCases, executionPlans, projectVersions } from '../db/schema.js';
+import { reports, planRuns, groups, testCases, executionPlans, projectVersions, planRunCases } from '../db/schema.js';
 import { assertProjectVisible, visibleProjectIds } from '../services/projectAccess.js';
 
 export const executionsRoute = Router();
@@ -37,6 +37,13 @@ type Entry = CaseEntry | PlanEntry;
 
 executionsRoute.get('/', async (req, res) => {
   const { projectId, kind = 'all' } = req.query as { projectId?: string; kind?: 'case' | 'plan' | 'all' };
+  // 状态 / 版本 / 关键词 facet：statuses / versionIds 走 csv；q 模糊匹配 caseTitle（仅 case 行生效）
+  const statusArr = typeof req.query.statuses === 'string' ? req.query.statuses.split(',').filter(Boolean) : [];
+  const versionArr = typeof req.query.versionIds === 'string' ? req.query.versionIds.split(',').filter(Boolean) : [];
+  const qTrim = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  // 用例 / 计划深链：前端从用例列表或计划列表点「查看报告」时附带，自动过滤
+  const caseIdFilter = typeof req.query.caseId === 'string' && req.query.caseId ? req.query.caseId : '';
+  const planIdFilter = typeof req.query.planId === 'string' && req.query.planId ? req.query.planId : '';
 
   if (projectId) await assertProjectVisible(projectId, req.user!);
   // 无 projectId 时按可见项目过滤
@@ -55,12 +62,30 @@ executionsRoute.get('/', async (req, res) => {
       gids = gs.map((g) => g.id);
     }
     const cs = gids.length ? await db.select({ id: testCases.id, versionId: testCases.versionId }).from(testCases).where(inArray(testCases.groupId, gids)) : [];
+    // facet 拼装：版本在 case 侧基于 testCases.versionId，关键词基于 case 标题
+    const caseFilters = [
+      inArray(reports.caseId, cs.map((c) => c.id)),
+      // 计划运行的成员用例执行历史不在此列表展示（点击计划运行行可看其成员用例）：
+      // 排除挂在 plan_run_cases.report_id 上的报告，以及数据集迭代挂在 report_ids 数组中的报告。
+      sql`not exists (
+        select 1 from ${planRunCases} prc
+        where prc.report_id = ${reports.id}
+           or exists (
+             select 1 from jsonb_array_elements_text(coalesce(prc.report_ids, '[]'::jsonb)) as rid(rid)
+             where rid.rid = ${reports.id}::text
+           )
+      )`,
+    ];
+    if (statusArr.length) caseFilters.push(inArray(reports.status, statusArr));
+    if (versionArr.length) caseFilters.push(inArray(testCases.versionId, versionArr));
+    if (qTrim) caseFilters.push(sql`${testCases.title} ilike ${'%' + qTrim + '%'}`);
+    if (caseIdFilter) caseFilters.push(eq(reports.caseId, caseIdFilter));
     caseRows = cs.length
       ? ((await db
         .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, summary: reports.summary, createdAt: reports.createdAt })
         .from(reports)
         .leftJoin(testCases, eq(testCases.id, reports.caseId))
-        .where(inArray(reports.caseId, cs.map((c) => c.id)))
+        .where(and(...caseFilters))
         .orderBy(desc(reports.createdAt))) as unknown as CaseEntry[]).map((r) => {
           const c = cs.find((x) => x.id === r.caseId);
           return { ...r, versionId: c?.versionId ?? null, versionName: null, kind: 'case' as const };
@@ -75,17 +100,22 @@ executionsRoute.get('/', async (req, res) => {
   }
 
   if (kind === 'plan' || kind === 'all') {
-    const q = projectId
-      ? eq(planRuns.projectId, projectId)
+    const conds = projectId
+      ? [eq(planRuns.projectId, projectId)]
       : visiblePids && visiblePids.length > 0
-        ? inArray(planRuns.projectId, visiblePids)
-        : undefined;
-    const rows = q
+        ? [inArray(planRuns.projectId, visiblePids)]
+        : [];
+    if (statusArr.length) conds.push(inArray(planRuns.status, statusArr));
+    // plan 行的 versionId 来自 executionPlans.versionId
+    if (versionArr.length) conds.push(inArray(executionPlans.versionId, versionArr));
+    if (planIdFilter) conds.push(eq(planRuns.planId, planIdFilter));
+    const where = conds.length ? and(...conds) : undefined;
+    const rows = where
       ? await db
           .select({ id: planRuns.id, planId: planRuns.planId, status: planRuns.status, summary: planRuns.summary, totalCases: planRuns.totalCases, passedCases: planRuns.passedCases, failedCases: planRuns.failedCases, skippedCases: planRuns.skippedCases, durationMs: planRuns.durationMs, startedAt: planRuns.startedAt, versionId: executionPlans.versionId })
           .from(planRuns)
           .innerJoin(executionPlans, eq(executionPlans.id, planRuns.planId))
-          .where(q)
+          .where(where)
           .orderBy(desc(planRuns.startedAt))
       : [];
     planRows = rows.map((r) => ({

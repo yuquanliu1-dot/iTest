@@ -37,9 +37,9 @@ export default function PlanRunDetail() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/plans/${id}`)}>
+        <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports`)}>
           <Icon name="chevronLeft" size={12} />
-          返回计划详情
+          返回执行历史
         </Button>
         <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
         <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>计划运行</h1>

@@ -256,6 +256,10 @@ export const api = {
       statuses?: string[];
       versionIds?: string[];
       q?: string;
+      /** 单用例深链：只看该用例的执行报告 */
+      caseId?: string;
+      /** 单计划深链：只看该计划的运行历史 */
+      planId?: string;
     }) => {
       const qs = new URLSearchParams();
       if (params?.projectId) qs.set('projectId', params.projectId);
@@ -263,6 +267,8 @@ export const api = {
       if (params?.statuses?.length) qs.set('statuses', params.statuses.join(','));
       if (params?.versionIds?.length) qs.set('versionIds', params.versionIds.join(','));
       if (params?.q?.trim()) qs.set('q', params.q.trim());
+      if (params?.caseId) qs.set('caseId', params.caseId);
+      if (params?.planId) qs.set('planId', params.planId);
       const s = qs.toString();
       return request<ExecutionEntry[]>(`/executions${s ? `?${s}` : ''}`);
     },
@@ -940,6 +946,9 @@ export interface TestCaseDetail extends TestCase {
   deviceName?: string | null;
   deviceTargetId?: string | null;
   createdAt: string;
+  /** 计划运行成员报告：附带来源（后端从 plan_run_cases 查得）。返回按钮据此切到「返回计划运行」 */
+  planRunId?: string | null;
+  planId?: string | null;
 }
 export interface DatasetSaveBody {
   name: string;

@@ -458,7 +458,7 @@ export default function GroupsPage() {
 			{
 				id: 'actions',
 				header: '',
-				width: 'w-[112px]',
+				width: 'w-[140px]',
 				align: 'right',
 				hideable: false,
 				cell: (c) => (
@@ -472,6 +472,11 @@ export default function GroupsPage() {
 							tone="accent"
 							disabled={executeCase.isPending && executeCase.variables === c.id}
 							onClick={() => executeCase.mutate(c.id)}
+						/>
+						<IconButton
+							icon="reportView"
+							title="查看报告"
+							onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/reports?caseId=${c.id}&q=${encodeURIComponent(c.title)}&tab=case` : `/`)}
 						/>
 						<IconButton
 							icon="copy"

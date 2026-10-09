@@ -33,6 +33,10 @@ const executionsParsers = {
 	statuses: parseAsArrayOf(parseAsString).withDefault([]),
 	versions: parseAsArrayOf(parseAsString).withDefault([]),
 	tab: parseAsStringEnum([...TAB_VALUES]).withDefault('all'),
+	// 单用例深链：来自 GroupsPage「查看报告」按钮 → 把 q 固定为标题词
+	caseId: parseAsString.withDefault(''),
+	// 单计划深链：来自 Plans「查看报告」按钮 → 把 tab 固定为 plan
+	planId: parseAsString.withDefault(''),
 };
 
 export default function Executions() {
@@ -49,7 +53,7 @@ export default function Executions() {
 	const pageSize = [10, 20, 50, 100].includes(pageSizeRaw) ? pageSizeRaw : 20;
 
 	const { data, isLoading, isError, error } = useQuery({
-		queryKey: ['executions', projectId, versionId, tab, raw.statuses, raw.versions, raw.q],
+		queryKey: ['executions', projectId, versionId, tab, raw.statuses, raw.versions, raw.q, raw.caseId, raw.planId],
 		queryFn: () =>
 			api.executions.list({
 				projectId,
@@ -57,6 +61,8 @@ export default function Executions() {
 				statuses: raw.statuses.length ? raw.statuses : undefined,
 				versionIds: raw.versions.length ? raw.versions : undefined,
 				q: raw.q.trim() ? raw.q.trim() : undefined,
+				caseId: raw.caseId || undefined,
+				planId: raw.planId || undefined,
 			}),
 		enabled: !!projectId,
 	});
