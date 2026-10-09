@@ -31,16 +31,18 @@
 
 ---
 
-### Task 0: 处理工作区未提交的 execute/ WIP（前置，必须先做）
+### Task 0: 确认工作区状态（前置，必须先做）
 
-工作区有 4 个未提交的用户改动文件（cdp.ts / engine.ts / runCase.ts / webEngine.ts）。Task 2 要修改 cdp.ts 并提交，**直接 `git add apps/api/src/execute/cdp.ts` 会把用户 WIP 一起带进提交**。
+历史背景：计划编写时 execute/ 下有 4 个未提交 WIP，已被并行会话以 bd93f77/13099bb 提交落库，stash 步骤作废。但并行会话**仍在活跃改动**（web ai-workspace 重构：暂存的删除 + modelBridge.ts/session.ts/App.tsx 未暂存改动）。
 
-- [ ] **Step 0.1: 与用户确认处理方式**（AskUserQuestion）：建议 `git stash push -m "WIP execute engines (verify_case 前置暂存)" apps/api/src/execute/`，本计划完成并提交后由用户决定何时 `git stash pop`（可能有冲突，不自动 pop）。若用户选择先自行提交 WIP，则跳过 stash。
+- [ ] **Step 0.1: 检查当前工作区**
 
-- [ ] **Step 0.2: 执行 stash（若确认）并验证工作区干净**
+Run: `git status --short`
+Expected: 本计划涉及的 6 个文件（inspectPage.ts / cdp.ts / autoLogin.ts / login.ts / verifyCase.ts / index.ts）不在改动列表中。若 `apps/api/src/execute/cdp.ts` 出现 M 状态（并行会话又改了），先 `git diff apps/api/src/execute/cdp.ts` 确认与 Task 2 的改动点（runStepsInContext 签名 / 失败 catch 块 / executeCaseInBrowser 透传，锚点：`失败立即终止` 注释在 cdp.ts:814、`executeCaseInBrowser` 在 cdp.ts:898）无冲突再继续。
 
-Run: `git stash list | head -3 && git status --short`
-Expected: `apps/api/src/execute/` 下无 M 状态文件；stash 列表含 "WIP execute engines"。
+- [ ] **Step 0.2: 提交纪律**
+
+后续每个 Task 的 `git add` 只加该 Task 列出的文件（并行会话在共享 index 工作，禁止 `git add -A`/`git add .`）。
 
 ---
 
@@ -1074,6 +1076,6 @@ git commit -m "fix(pi): verify_case 验收修复"
 
 （无修复则跳过。）
 
-- [ ] **Step 5.5: 提醒用户恢复 stash（Task 0 暂存的 execute/ WIP）**
+- [ ] **Step 5.5: 收尾确认**
 
-告知用户：`git stash pop` 恢复此前暂存的 execute/ 改动；cdp.ts 可能有冲突（我们改了签名与 catch 块），冲突处保留双方（onFailurePage 参数 + 用户 WIP）。**不要自动执行 pop。**
+告知用户实现完成；并行会话的 web 重构改动（若有残留）与本计划无关，不做处理。
