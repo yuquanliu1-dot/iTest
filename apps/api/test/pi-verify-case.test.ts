@@ -400,6 +400,21 @@ describe('verify_case 逐步 AI 执行编排', () => {
       origins: [],
     });
   });
+
+  it('LLM 漏报 login（not-needed）仍回写缓存——回归：契约漂移不阻断暖缓存', async () => {
+    await seedLoginObject();
+    const caseId = await seedCase({ steps: [CLICK_COMPILED] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"完成","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const { getLoginState } = await import('../src/pi/space/tools/loginStateCache.js');
+    expect(getLoginState(`${await defaultEnvId()}:qa01`)).toEqual({
+      cookies: [{ name: 'sid', value: 'cached' }],
+      origins: [],
+    });
+  });
 });
 
 describe('verify_case 注册', () => {

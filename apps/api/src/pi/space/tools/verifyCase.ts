@@ -74,7 +74,7 @@ function buildStepInstruction(
   lines.push('done.summary 必须是该 JSON 对象序列化后的文本：');
   lines.push('{"status":"passed"|"failed","reason":"<一句话中文>","login":"logged-in"|"not-needed"}');
   lines.push('- passed：本步操作（含触发的登录）已按页面实际状态完成；failed 写清原因。');
-  lines.push('- login：本轮你实际执行了登录填表并提交 → "logged-in"；无需登录 → "not-needed"。');
+  lines.push('- login：本轮你实际执行了登录填表并提交 → 必须填 "logged-in"（即使登录发生在本步骤开头）；确实没有登录任何表单 → "not-needed"。');
   lines.push('中途无法继续时直接输出 {"fail":"原因"}。');
   return lines.join('\n');
 }
@@ -273,11 +273,11 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
           }
 
-          // 登录成功回写登录态缓存：同环境的重试轮/后续用例免登录；watchdog 超时路径在循环内提前 return，不会走到这里
-          if (login === 'logged-in') {
-            const state = await context.storageState().catch(() => null);
-            if (state) saveLoginState(loginKey, state);
-          }
+          // 登录态回写：不依赖 LLM 自报的 login 字段（实测存在漏报契约漂移），配了登录就无条件存当前会话——
+          // 未登录时存的是匿名会话，下轮注入后 AI 照样识别登录页重新登录并覆盖（自愈）。
+          // watchdog 超时路径在循环内提前 return，不会走到这里。
+          const savedState = await context.storageState().catch(() => null);
+          if (savedState) saveLoginState(loginKey, savedState);
 
           // ── 失败收尾：失败页元素清单（供 agent 修正 locator）──
           let failurePage: Awaited<ReturnType<typeof extractPageElements>> | null = null;
