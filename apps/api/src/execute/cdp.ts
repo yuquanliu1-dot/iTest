@@ -297,11 +297,27 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       }
       throw lastErr instanceof Error ? lastErr : new Error(`waitFor timeout: ${action.locator[0]?.value}`);
     }
-    case 'assertVisible':
-      if (!(await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).isVisible({ timeout: 5000 }))) {
-        throw new Error(`assertVisible failed: ${action.locator[0]?.value}`);
+    case 'assertVisible': {
+      const assertLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
+      try {
+        if (!(await assertLoc.isVisible({ timeout: 5000 }))) {
+          throw new Error(`assertVisible failed: ${action.locator[0]?.value}`);
+        }
+      } catch (e) {
+        // strict-mode violation（text/role 命中多个元素，如表格列头+筛选区同名文本）
+        // → 退到「任一匹配可见」即通过，与 click/fill/hover 的兜底一致。
+        // 注意不能只查 first()：Element-UI 固定列会在 .el-table__fixed 里渲染隐藏克隆，
+        // DOM 顺序靠前的匹配可能是 visibility:hidden 的副本，必须过滤后再判。
+        if (e instanceof Error && /strict mode violation/.test(e.message)) {
+          if (!(await assertLoc.filter({ visible: true }).first().isVisible())) {
+            throw new Error(`assertVisible failed: ${action.locator[0]?.value}`);
+          }
+          return;
+        }
+        throw e;
       }
       return;
+    }
     case 'assertText': {
       const a = action as StepAction & { kind: 'assertText' };
       const { value, missing } = substituteVars(a.equals, vars);
