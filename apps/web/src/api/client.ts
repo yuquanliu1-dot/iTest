@@ -256,10 +256,19 @@ export const api = {
       ),
   },
   executions: {
-    list: (params?: { projectId?: string; kind?: 'case' | 'plan' | 'all' }) => {
+    list: (params?: {
+      projectId?: string;
+      kind?: 'case' | 'plan' | 'all';
+      statuses?: string[];
+      versionIds?: string[];
+      q?: string;
+    }) => {
       const qs = new URLSearchParams();
       if (params?.projectId) qs.set('projectId', params.projectId);
       if (params?.kind) qs.set('kind', params.kind);
+      if (params?.statuses?.length) qs.set('statuses', params.statuses.join(','));
+      if (params?.versionIds?.length) qs.set('versionIds', params.versionIds.join(','));
+      if (params?.q?.trim()) qs.set('q', params.q.trim());
       const s = qs.toString();
       return request<ExecutionEntry[]>(`/executions${s ? `?${s}` : ''}`);
     },

@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { parseAsString, parseAsStringEnum, useQueryStates } from 'nuqs';
+import { parseAsArrayOf, parseAsString, parseAsStringEnum, useQueryStates } from 'nuqs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { api } from '../api/client';
@@ -10,7 +10,7 @@ import EmptyState from '../components/ui/EmptyState';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import { EmptyCellValue } from '../components/ui/Table';
-import { DataTable, type DataTableColumn, type DataTableTabs } from '../components/ui/DataTable';
+import { DataTable, type DataTableColumn, type DataTableFacet, type DataTableTabs } from '../components/ui/DataTable';
 import { useTableSelection } from '../hooks/useTableSelection';
 import { fullDateTime, shortDateTime, formatDuration } from '../lib/format';
 import { useUIStore } from '../stores/ui';
@@ -27,9 +27,12 @@ type Tab = 'all' | 'case' | 'plan';
 const TAB_VALUES = ['all', 'case', 'plan'] as const;
 
 const executionsParsers = {
-	q: parseAsStringEnum([...TAB_VALUES]).withDefault('all'),
+	q: parseAsString.withDefault(''),
 	page: parseAsString.withDefault('1'),
 	pageSize: parseAsString.withDefault('20'),
+	statuses: parseAsArrayOf(parseAsString).withDefault([]),
+	versions: parseAsArrayOf(parseAsString).withDefault([]),
+	tab: parseAsStringEnum([...TAB_VALUES]).withDefault('all'),
 };
 
 export default function Executions() {
@@ -40,14 +43,28 @@ export default function Executions() {
 	const toast = useUIStore((s) => s.showToast);
 
 	const [raw, setRaw] = useQueryStates(executionsParsers, { history: 'replace' });
-	const tab = raw.q as Tab;
+	const tab = raw.tab as Tab;
 	const page = Math.max(1, Number(raw.page) || 1);
 	const pageSizeRaw = Number(raw.pageSize);
 	const pageSize = [10, 20, 50, 100].includes(pageSizeRaw) ? pageSizeRaw : 20;
 
 	const { data, isLoading, isError, error } = useQuery({
-		queryKey: ['executions', projectId, versionId, tab],
-		queryFn: () => api.executions.list({ projectId, kind: tab }),
+		queryKey: ['executions', projectId, versionId, tab, raw.statuses, raw.versions, raw.q],
+		queryFn: () =>
+			api.executions.list({
+				projectId,
+				kind: tab,
+				statuses: raw.statuses.length ? raw.statuses : undefined,
+				versionIds: raw.versions.length ? raw.versions : undefined,
+				q: raw.q.trim() ? raw.q.trim() : undefined,
+			}),
+		enabled: !!projectId,
+	});
+
+	// 版本 facet 选项 = 项目全量版本，与 GroupsPage 一致
+	const { data: projectVersionList } = useQuery({
+		queryKey: ['versions', projectId],
+		queryFn: () => api.versions.list(projectId!),
 		enabled: !!projectId,
 	});
 
@@ -63,6 +80,9 @@ export default function Executions() {
 
 	const setPage = (next: number) => void setRaw({ page: String(next) });
 	const setPageSize = (next: number) => void setRaw({ pageSize: String(next), page: '1' });
+	const setStatusFilter = (next: string[]) => void setRaw({ statuses: next, page: '1' });
+	const setVersionsFilter = (next: string[]) => void setRaw({ versions: next, page: '1' });
+	const setSearch = (next: string) => void setRaw({ q: next, page: '1' });
 
 	// 按行 kind 分桶后并行提交：case → /reports/batch-delete，plan → /plan-runs/batch-delete
 	const batchDeleteReports = useMutation({
@@ -101,13 +121,30 @@ export default function Executions() {
 	});
 
 	const tabs: DataTableTabs = {
-		id: 'q',
+		id: 'tab',
 		allLabel: '所有',
 		options: [
 			{ value: 'case', label: '单用例' },
 			{ value: 'plan', label: '计划运行' },
 		],
 	};
+
+	const facets: DataTableFacet[] = [
+		{
+			id: 'status',
+			label: '状态',
+			options: [
+				{ value: 'passed', label: '通过' },
+				{ value: 'failed', label: '失败' },
+				{ value: 'running', label: '运行中' },
+			],
+		},
+		{
+			id: 'version',
+			label: '版本',
+			options: (projectVersionList ?? []).map((v) => ({ value: v.id, label: v.name })),
+		},
+	];
 
 	const columnsDef: DataTableColumn<(typeof rows)[number]>[] = [
 		{
@@ -209,21 +246,28 @@ export default function Executions() {
 							page,
 							pageSize,
 							tab,
-							tabId: 'q',
+							tabId: 'tab',
 							toggleSort: () => {},
 							setSort: () => {},
 							setDir: () => {},
 							setPage: (p) => setPage(p),
 							setPageSize: (s) => setPageSize(s),
-							setTab: (v) => void setRaw({ q: (v === 'case' || v === 'plan' ? v : 'all') as Tab }),
-							setFilter: () => {},
-							filters: {},
+							setTab: (v) => void setRaw({ tab: (v === 'case' || v === 'plan' ? v : 'all') as Tab }),
+							setFilter: (id, values) => {
+								if (id === 'status') setStatusFilter(values);
+								else if (id === 'version') setVersionsFilter(values);
+							},
+							filters: {
+								status: raw.statuses,
+								version: raw.versions,
+							},
 						}}
 						columns={columnsDef}
 						getRowId={(r) => r.id}
 						rows={rows}
 						total={allRows.length}
 						loading={isLoading}
+						facets={facets}
 						tabs={tabs}
 						onRowClick={goRunDetail}
 						selection={{
@@ -244,7 +288,13 @@ export default function Executions() {
 						search={(
 							<div className="relative w-full sm:max-w-xs">
 								<Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-								<Input placeholder="（预留搜索）" className="pl-7" size="sm" disabled />
+								<Input
+									value={raw.q}
+									onChange={(e) => setSearch(e.target.value)}
+									placeholder="搜索用例标题…"
+									className="pl-7"
+									size="sm"
+								/>
 							</div>
 						)}
 						empty={
