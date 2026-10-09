@@ -4,6 +4,7 @@ import { resolveEnv } from '../../../execute/envContext.js';
 import { runAiTask } from '../../../execute/aiTask.js';
 import { resolveLlmClient } from '../../../agent/llmSettings.js';
 import { tryParseJson } from '../../../agent/llm-client.js';
+import { loginStateKey, saveLoginState } from './loginStateCache.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
@@ -102,6 +103,8 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
               return { ok: false, error: `登录失败: ${reason}` };
             }
             const storageState = await context.storageState();
+            // 暖缓存：verify_case 及后续 perform_login 同环境同账号直接复用（过期自愈）
+            saveLoginState(loginStateKey(envCtx.envId, cred?.user), storageState);
             return {
               ok: true,
               data: JSON.stringify({ storageState, message: '登录成功' }),

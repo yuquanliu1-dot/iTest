@@ -20,6 +20,7 @@ import { decrypt } from '../../../lib/secret-crypto.js';
 import { resolveLlmClient } from '../../../agent/llmSettings.js';
 import { tryParseJson } from '../../../agent/llm-client.js';
 import { extractPageElements } from '../../inspectPage.js';
+import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
@@ -145,9 +146,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           const resolvedUrl = await resolveCaseUrl(caseRow, { envBaseUrl: envCtx.baseUrl });
           const targetUrl = resolvedUrl && /^https?:\/\//.test(resolvedUrl) ? resolvedUrl : undefined;
           browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
+          // 命中登录态缓存则注入 context:同环境重试轮/后续用例免登录（过期自愈,见 loginStateCache）
+          const loginKey = loginStateKey(envCtx.envId, envCtx.login?.user);
+          const cachedState = getLoginState(loginKey);
           const context = await browser.newContext({
             ignoreHTTPSErrors: true,
             viewport: { width: 1280, height: 800 },
+            ...(cachedState ? { storageState: cachedState } : {}),
           });
           const page = await context.newPage();
 
@@ -266,6 +271,12 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               failedIndex = i;
               break;
             }
+          }
+
+          // 登录成功回写登录态缓存：同环境的重试轮/后续用例免登录；watchdog 超时路径在循环内提前 return，不会走到这里
+          if (login === 'logged-in') {
+            const state = await context.storageState().catch(() => null);
+            if (state) saveLoginState(loginKey, state);
           }
 
           // ── 失败收尾：失败页元素清单（供 agent 修正 locator）──
