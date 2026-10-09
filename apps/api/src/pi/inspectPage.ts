@@ -3,8 +3,10 @@
  * 注入 LLM 上下文。launch 模式与 execute/cdp.ts 一致（CHROMIUM_PATH 覆盖），
  * DOM 提取沿用 domFallback.ts 的 page.evaluate 注入惯例。
  * 防护：仅 http/https + goto 超时 + 元素数/输出长度上限（内网被测地址是核心场景，不做私网拦截）。
+ * extractPageElements 供 verify_case 失败页快照复用。
  */
 import { chromium } from 'playwright-core';
+import type { Page } from 'playwright-core';
 
 const GOTO_TIMEOUT_MS = 20_000;
 const SETTLE_MS = 800;
@@ -66,6 +68,19 @@ const EXTRACT_JS = `(() => {
   return { title, elements, truncated: nodes.length > maxElements };
 })()`;
 
+export interface PageElementSnapshot {
+  url: string;
+  title: string;
+  elements: string[];
+  truncated: boolean;
+}
+
+/** 在已打开的页面上提取可交互元素清单（inspect_page 与 verify_case 失败页快照共用）。 */
+export async function extractPageElements(page: Page, url?: string): Promise<PageElementSnapshot> {
+  const extracted = (await page.evaluate(EXTRACT_JS)) as { title: string; elements: string[]; truncated: boolean };
+  return { url: url ?? page.url(), title: extracted.title, elements: extracted.elements, truncated: extracted.truncated };
+}
+
 export async function inspectPage(rawUrl: string, opts?: { storageState?: unknown }): Promise<string> {
   let url: URL;
   try {
@@ -92,18 +107,14 @@ export async function inspectPage(rawUrl: string, opts?: { storageState?: unknow
     await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: GOTO_TIMEOUT_MS });
     await page.waitForTimeout(SETTLE_MS);
 
-    const extracted = (await page.evaluate(EXTRACT_JS)) as {
-      title: string;
-      elements: string[];
-      truncated: boolean;
-    };
+    const snap = await extractPageElements(page, url.toString());
 
     const lines = [
       `页面: ${url.toString()}`,
-      `标题: ${extracted.title || '(无)'}`,
+      `标题: ${snap.title || '(无)'}`,
       '注意: 此快照仅为页面初始状态。点击/提交后才出现的元素（结果区、错误提示等）不在清单中——断言这类元素必须先触发相应操作，或断言清单中其稳定的父容器；清单里不存在的 testid/id 绝对禁止编造。',
-      `可交互元素 (${extracted.elements.length}${extracted.truncated ? `，已截断至 ${MAX_ELEMENTS}` : ''}):`,
-      ...extracted.elements,
+      `可交互元素 (${snap.elements.length}${snap.truncated ? `，已截断至 ${MAX_ELEMENTS}` : ''}):`,
+      ...snap.elements,
     ];
     let out = lines.join('\n');
     if (out.length > MAX_OUTPUT_CHARS) out = `${out.slice(0, MAX_OUTPUT_CHARS)}\n…(输出超长已截断)`;
