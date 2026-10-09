@@ -490,8 +490,7 @@ export default function GroupsPage() {
 		];
 
 	const startAiCaseSession = useMutation({
-		// 直接跳到空间级 AI 助手(/assistant);旧 requirement 级工作台保留为兼容路由,
-		// 不再从此入口创建。首条消息 = 需求正文 + 覆盖要求。
+		// 直接跳到空间级 AI 助手(/assistant);首条消息 = 需求正文 + 覆盖要求。
 		mutationFn: () => Promise.resolve(),
 		onSuccess: () => {
 			const initialMessage = aiForm.content + coveragePrompt(aiForm.coverage);

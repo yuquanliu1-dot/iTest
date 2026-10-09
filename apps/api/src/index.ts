@@ -28,7 +28,6 @@ import { scenariosRoute } from './routes/scenarios.js';
 import { tagsRoute } from './routes/tags.js';
 import usersRoute from './routes/users.js';
 import assignmentsRoute from './routes/assignments.js';
-import { piRoute } from './pi/router.js';
 import { spaceRoute } from './pi/space/router.js';
 import { requireAuth } from './middleware/auth.js';
 
@@ -67,7 +66,6 @@ app.use('/api/projects/:projectId/tags', tagsRoute);
 app.use('/api/plan-runs', planRunsRoute);
 app.use('/api/executions', executionsRoute);
 app.use('/api/recorder', recorderRoute);
-app.use('/api/pi', piRoute);
 app.use('/api/assistant', spaceRoute);
 app.use(errorHandler);
 
