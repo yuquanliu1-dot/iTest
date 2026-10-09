@@ -16,6 +16,8 @@ interface CaseEntry {
   status: string;
   durationMs: number | null;
   summary: string | null;
+  /** 最后断言信息：取 step_results 末位元素 —— vision 判定 reason（通过/失败）或失败步 error；无断言为 null。 */
+  lastAssertion: string | null;
   createdAt: Date | string;
 }
 interface PlanEntry {
@@ -82,7 +84,29 @@ executionsRoute.get('/', async (req, res) => {
     if (caseIdFilter) caseFilters.push(eq(reports.caseId, caseIdFilter));
     caseRows = cs.length
       ? ((await db
-        .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, summary: reports.summary, createdAt: reports.createdAt })
+        .select({
+          id: reports.id,
+          caseId: reports.caseId,
+          caseTitle: testCases.title,
+          status: reports.status,
+          durationMs: reports.durationMs,
+          summary: reports.summary,
+          // 最后断言：step_results 数组末位元素 —— vision 通过时 reason 挂在最后一步、vision 失败步追加在末位
+          // （order=-1）、普通步骤失败即中断也在末位。coalesce 取 vision reason，否则失败步 error。
+          lastAssertion: sql<string | null>`
+            case
+              when jsonb_typeof(${reports.stepResults}) = 'array' and jsonb_array_length(${reports.stepResults}) > 0 then
+                (select coalesce(
+                   e -> 'visionAssert' ->> 'reason',
+                   case when e ->> 'status' = 'failed' then e ->> 'error' end
+                 )
+                 from jsonb_array_elements(${reports.stepResults}) with ordinality as t(e, ord)
+                 order by ord desc
+                 limit 1)
+              else null
+            end`,
+          createdAt: reports.createdAt,
+        })
         .from(reports)
         .leftJoin(testCases, eq(testCases.id, reports.caseId))
         .where(and(...caseFilters))

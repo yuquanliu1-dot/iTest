@@ -717,6 +717,8 @@ export interface PlanRunDetail {
     finishedAt: string | null;
     durationMs: number | null;
     error: string | null;
+    /** 最后断言结论：vision 判定 reason 或失败步 error；无报告/未断言为 null。 */
+    lastAssertion?: string | null;
   }>;
 }
 export interface PlanSchedule {
@@ -751,6 +753,8 @@ export type ExecutionEntry =
       status: string;
       durationMs: number | null;
       summary: string | null;
+      /** 最后断言信息：vision 判定 reason 或失败步 error；无断言为 null。 */
+      lastAssertion?: string | null;
       createdAt: string;
     }
   | {

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { eq, asc, inArray } from 'drizzle-orm';
+import { eq, asc, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/client.js';
 import { planRuns, planRunCases, executionPlans, testCases, reports } from '../db/schema.js';
@@ -32,11 +32,45 @@ planRunsRoute.get('/:id', async (req, res) => {
     ? await db.select({ id: reports.id, status: reports.status }).from(reports).where(inArray(reports.id, reportIdList))
     : [];
   const statusMap = new Map(statusRows.map((r) => [r.id, r.status]));
-  const cases = caseRows.map((c) => ({
-    ...c,
-    caseTitle: titleMap.get(c.caseId) ?? null,
-    rowStatuses: (c.reportIds ?? []).map((id) => statusMap.get(id) ?? 'unknown'),
-  }));
+  // 批量取每份报告的最后断言（vision reason / 失败步 error），口径与 /executions 列表一致
+  const allReportIds = Array.from(
+    new Set([...reportIdList, ...caseRows.map((c) => c.reportId).filter((v): v is string => !!v)]),
+  );
+  const assertionRows = allReportIds.length
+    ? await db
+        .select({
+          id: reports.id,
+          // 最后断言：step_results 数组末位元素 —— vision reason 优先，否则失败步 error
+          lastAssertion: sql<string | null>`
+            case
+              when jsonb_typeof(${reports.stepResults}) = 'array' and jsonb_array_length(${reports.stepResults}) > 0 then
+                (select coalesce(
+                   e -> 'visionAssert' ->> 'reason',
+                   case when e ->> 'status' = 'failed' then e ->> 'error' end
+                 )
+                 from jsonb_array_elements(${reports.stepResults}) with ordinality as t(e, ord)
+                 order by ord desc
+                 limit 1)
+              else null
+            end`,
+        })
+        .from(reports)
+        .where(inArray(reports.id, allReportIds))
+    : [];
+  const assertionMap = new Map(assertionRows.map((r) => [r.id, r.lastAssertion]));
+  const cases = caseRows.map((c) => {
+    const ids = c.reportIds?.length ? c.reportIds : c.reportId ? [c.reportId] : [];
+    // 数据集多行：优先展示首个失败行的断言；全过则取末行
+    const assertions = ids.map((id) => assertionMap.get(id) ?? null);
+    const failedIdx = ids.findIndex((id) => statusMap.get(id) === 'failed');
+    const lastAssertion = (failedIdx >= 0 ? assertions[failedIdx] : assertions[assertions.length - 1]) ?? null;
+    return {
+      ...c,
+      caseTitle: titleMap.get(c.caseId) ?? null,
+      rowStatuses: (c.reportIds ?? []).map((id) => statusMap.get(id) ?? 'unknown'),
+      lastAssertion,
+    };
+  });
   res.json({
     ...run,
     planName: plan?.name ?? null,
