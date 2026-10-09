@@ -61,6 +61,20 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
   pool = new Pool({ connectionString: container.getConnectionUri() });
   await pool.query(SCHEMA_SQL);
+  // SCHEMA_SQL 尚未收录 ai_stage_case_ops(暂存表),本文件自建(与 src/db/schema.ts:163-181 对齐)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ai_stage_case_ops (
+      thread_id text NOT NULL,
+      local_id text NOT NULL,
+      version_id uuid NOT NULL,
+      case_id uuid NOT NULL,
+      op varchar(30) NOT NULL,
+      payload jsonb NOT NULL,
+      summary text NOT NULL,
+      diff text,
+      staged_at timestamp NOT NULL DEFAULT now(),
+      CONSTRAINT ai_stage_case_ops_pk PRIMARY KEY(thread_id, local_id)
+    )`);
 }, 60_000);
 
 afterAll(async () => {
@@ -78,7 +92,7 @@ beforeEach(async () => {
   __testState.gotos.length = 0;
   __testState.ctxOpts.length = 0;
   await pool.query(`TRUNCATE test_steps, test_cases, test_environments, environment_objects,
-    requirements, "groups", projects, project_versions, ai_threads, ai_workspace_state
+    requirements, "groups", projects, project_versions, ai_threads, ai_workspace_state, ai_stage_case_ops
     RESTART IDENTITY CASCADE`);
   const seed = await seedProject(pool);
   projectId = seed.projectId;
@@ -424,6 +438,52 @@ describe('verify_case 逐步 AI 执行编排', () => {
       cookies: [{ name: 'sid', value: 'cached' }],
       origins: [],
     });
+  });
+
+  it('stage_case_op 暂存的 update_step 自动叠加：验证基于暂存步骤继续，全程不落库', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED] });
+    const stepRows = await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
+    const stepId = stepRows.rows[0]!.id as string;
+    const fixed = [{ kind: 'click', locator: [{ strategy: 'css', value: '#real' }] }];
+    await pool.query(
+      `INSERT INTO ai_stage_case_ops(thread_id, local_id, version_id, case_id, op, payload, summary, staged_at)
+       VALUES ('t1', $1, $2, $3, 'update_step', $4::jsonb, '修正 locator', now())`,
+      [randomUUID(), versionId, caseId, JSON.stringify({ action: 'update_step', caseId, stepId, compiled: fixed })],
+    );
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const emitLog: unknown[] = [];
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId });
+    expect(r.ok).toBe(true);
+    // AI 看到的是叠加后的 compiled（#real），不是 DB 里的 #missing
+    const instruction = String(vi.mocked(runAiTask).mock.calls[0]![1]);
+    expect(instruction).toContain('#real');
+    expect(instruction).not.toContain('#missing');
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.basedOn).toBe('staged');
+      expect(data.stagedOpsApplied).toBe(1);
+    }
+    // start 事件上报暂存叠加数 → 前端"基于暂存（1 项修改）"徽标
+    const start = emitLog[0] as { stagedOps: number };
+    expect(start.stagedOps).toBe(1);
+    // 全程不落库：DB 步骤 compiled 仍是 #missing
+    const after = await pool.query(`SELECT compiled FROM test_steps WHERE id = $1`, [stepId]);
+    expect(JSON.stringify(after.rows[0]!.compiled)).toContain('#missing');
+  });
+
+  it('stage_case_op 暂存 delete_case → ok:false（用例待删除，不应再验证）', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED] });
+    await pool.query(
+      `INSERT INTO ai_stage_case_ops(thread_id, local_id, version_id, case_id, op, payload, summary, staged_at)
+       VALUES ('t1', $1, $2, $3, 'delete_case', $4::jsonb, '删除用例', now())`,
+      [randomUUID(), versionId, caseId, JSON.stringify({ action: 'delete_case', caseId })],
+    );
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('已暂存删除');
   });
 });
 

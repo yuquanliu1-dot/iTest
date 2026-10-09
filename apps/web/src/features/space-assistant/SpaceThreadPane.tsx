@@ -152,6 +152,7 @@ function VerifyProgressCard() {
         ) : vp.loginCache === 'miss' ? (
           <span style={{ flexShrink: 0 }}>{vp.loginUser ? `登录缓存未命中（${vp.loginUser}）` : '未配置登录凭据'}</span>
         ) : null}
+        {vp.stagedOps > 0 ? <span style={{ flexShrink: 0 }}>基于暂存（{vp.stagedOps} 项修改）</span> : null}
         {done ? (
           <Icon
             name={vp.result === 'passed' ? 'check' : 'close'}
