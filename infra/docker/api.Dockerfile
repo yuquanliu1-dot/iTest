@@ -36,11 +36,17 @@ FROM node:22-bookworm-slim AS api
 WORKDIR /repo
 ENV NODE_ENV=production \
     API_HOST=0.0.0.0 \
-    API_PORT=54321
-# 运行时系统依赖:repo checkout 需要 git + ca-certificates;repo_grep 需要 ripgrep。
+    API_PORT=54321 \
+    PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
+    PI_DATA_DIR=/repo/apps/api/.data
+# 运行时系统依赖:repo checkout 需要 git + ca-certificates;repo_grep 需要 ripgrep;
+# chromium 需要一组图形/字体库(playwright-core 自带 CLI 装浏览器,--with-deps 装系统 so)。
 # bookworm-slim 不带任何系统二进制,apt-get 必须。详见 infra/docker/certs/README.md。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates ripgrep \
+      libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+      libxkbcommon0 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
+      libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # 2026-10-09: 内网 GitLab 部署的证书仅签到 IP,无 SAN 匹配,git 默认会拒;
@@ -64,6 +70,10 @@ COPY --from=api-build /repo /repo
 WORKDIR /repo/apps/api
 RUN corepack enable && corepack prepare pnpm@9.12.0 --activate \
  && pnpm install --prod --frozen-lockfile --filter @itest/api... --filter @itest/shared --filter @itest/recorder --filter @itest/ui
+# chromium 在镜像里装好,避免每个容器启动都重新拉。版本由 playwright-core 自带 browsers.json 决定,
+# 因此锁 playwright-core 版本即锁 chromium。下载失败不阻断构建,deploy.sh smoke 会早期发现。
+RUN pnpm exec playwright-core install chromium chromium-headless-shell \
+ || (echo "WARN: playwright browser install failed; chrome may be missing at runtime"; exit 0)
 EXPOSE 54321
 # fresh DB schema 用 drizzle-kit push 同步（migrations 历史不完整，migrate 路径会失败）；后续启动才用 migrate 增量。
 CMD ["sh", "-c", "pnpm exec drizzle-kit push --force && node dist/index.js"]

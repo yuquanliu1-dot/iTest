@@ -333,7 +333,7 @@ export async function checkoutRepo(requirementId: string): Promise<string> {
   await fs.mkdir(REPOS_ROOT, { recursive: true });
   const target = path.join(REPOS_ROOT, requirementId);
 
-  if (await dirExists(target)) {
+  if (await dirExists(target) && await dirExists(path.join(target, '.git'))) {
     // 锁定；保证并发只跑一次 fetch
     try {
       const release = await lockfile.lock(target, { retries: 0, stale: 30_000 });
@@ -343,6 +343,7 @@ export async function checkoutRepo(requirementId: string): Promise<string> {
       throw e;
     }
   } else {
+    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
     await fs.mkdir(target, { recursive: true });
     const release = await lockfile.lock(target, { retries: 0, stale: 30_000 }).catch(() => null);
     try {
@@ -379,7 +380,7 @@ export async function checkoutRepoForVersion(versionId: string, targetDir?: stri
   const target = targetDir ?? path.join(REPOS_ROOT, `v-${versionId}`);
   await fs.mkdir(path.dirname(target), { recursive: true });
 
-  if (await dirExists(target)) {
+  if (await dirExists(target) && await dirExists(path.join(target, '.git'))) {
     // 锁定；保证并发只跑一次 fetch
     try {
       const release = await lockfile.lock(target, { retries: 0, stale: 30_000 });
@@ -389,6 +390,7 @@ export async function checkoutRepoForVersion(versionId: string, targetDir?: stri
       throw e;
     }
   } else {
+    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
     await fs.mkdir(target, { recursive: true });
     const release = await lockfile.lock(target, { retries: 0, stale: 30_000 }).catch(() => null);
     try {

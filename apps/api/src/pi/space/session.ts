@@ -119,8 +119,12 @@ async function checkoutInBackground(versionId: string, repoDir: string, repo: Re
     } catch (e) {
       if (e instanceof LockTimeoutError) { await sleep(2_000); continue; }
       if (e instanceof RepoUnavailableError) {
-        if (e.reason !== 'no_repo') repo.issue = `${e.message}(${e.reason})`;
-        else repo.noRepo = true;
+        if (e.reason !== 'no_repo') {
+          repo.issue = `${e.message}(${e.reason})`;
+          logger.warn({ versionId, reason: e.reason, err: e.message }, 'space repo checkout failed');
+        } else {
+          repo.noRepo = true;
+        }
         return;
       }
       // 非 RepoUnavailableError:通常是 spawn 二进制不存在(repo.ts:266 已翻译 git ENOENT)。
