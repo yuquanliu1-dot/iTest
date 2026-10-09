@@ -43,7 +43,7 @@ ENV NODE_ENV=production \
 # chromium 需要一组图形/字体库(playwright-core 自带 CLI 装浏览器,--with-deps 装系统 so)。
 # bookworm-slim 不带任何系统二进制,apt-get 必须。详见 infra/docker/certs/README.md。
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates ripgrep \
+      git ca-certificates ripgrep unzip \
       libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
       libxkbcommon0 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
       libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 \
@@ -70,10 +70,24 @@ COPY --from=api-build /repo /repo
 WORKDIR /repo/apps/api
 RUN corepack enable && corepack prepare pnpm@9.12.0 --activate \
  && pnpm install --prod --frozen-lockfile --filter @itest/api... --filter @itest/shared --filter @itest/recorder --filter @itest/ui
-# chromium 在镜像里装好,避免每个容器启动都重新拉。版本由 playwright-core 自带 browsers.json 决定,
-# 因此锁 playwright-core 版本即锁 chromium。下载失败不阻断构建,deploy.sh smoke 会早期发现。
-RUN pnpm exec playwright-core install chromium chromium-headless-shell \
- || (echo "WARN: playwright browser install failed; chrome may be missing at runtime"; exit 0)
+# chromium 离线优先:国内直连 playwright CDN 极慢(实测 11min+/browser),预下载 zip 放服务器
+# infra/docker/(c1243-*.zip 共 ~316MB,不进 git 也不进 release tarball,由运维 scp 预置;
+# tar 解包不删已有文件,所以 zip 在服务器上持续可用)。COPY 整目录后按存在性分流,
+# zip 缺失时回落网络下载(慢但可用,失败仅告警,deploy.sh smoke 会早期发现)。
+# 版本对应 playwright-core ~1.63 browsers.json 的 chromium build 1243;升级 playwright 时需同步换 zip。
+COPY infra/docker/ /tmp/itest-pw/
+RUN mkdir -p /root/.cache/ms-playwright \
+ && if [ -f /tmp/itest-pw/c1243-chrome.zip ] && [ -f /tmp/itest-pw/c1243-shell.zip ]; then \
+      unzip -q /tmp/itest-pw/c1243-chrome.zip -d /root/.cache/ms-playwright/chromium-1243 \
+   && unzip -q /tmp/itest-pw/c1243-shell.zip -d /root/.cache/ms-playwright/chromium_headless_shell-1243 \
+   && touch /root/.cache/ms-playwright/chromium-1243/INSTALLATION_COMPLETE \
+            /root/.cache/ms-playwright/chromium_headless_shell-1243/INSTALLATION_COMPLETE \
+   && echo "chromium installed from offline zips"; \
+    else \
+      pnpm exec playwright-core install chromium chromium-headless-shell \
+   || echo "WARN: playwright browser install failed; chrome may be missing at runtime"; \
+    fi \
+ && rm -rf /tmp/itest-pw
 EXPOSE 54321
 # fresh DB schema 用 drizzle-kit push 同步（migrations 历史不完整，migrate 路径会失败）；后续启动才用 migrate 增量。
 CMD ["sh", "-c", "pnpm exec drizzle-kit push --force && node dist/index.js"]
