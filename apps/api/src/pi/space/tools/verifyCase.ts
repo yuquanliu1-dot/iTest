@@ -32,7 +32,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
     }),
     promptGuidelines: [
       '含 compiled 步骤的用例创建/修改后，环境可用时调用 verify_case 实测验证，不要只凭源码分析就声称用例可运行。',
-      'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正（upsert_case/stage_case_op）后重新验证。',
+      'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正（stage_case/stage_case_op）后重新验证。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。',
       '环境未配置 login 凭据而验证因登录页失败时，引导用户到项目环境页配置 login 凭据，不要伪造登录步骤。',
     ],
@@ -68,9 +68,6 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           return { ok: false, error: `环境解析失败: ${(e as Error).message}` };
         }
 
-        const resolvedUrl = await resolveCaseUrl(caseRow, { envBaseUrl: envCtx.baseUrl });
-        const targetUrl = resolvedUrl && /^https?:\/\//.test(resolvedUrl) ? resolvedUrl : undefined;
-
         // ── 浏览器 + (可选)登录 → 逐步执行（失败即停）──
         let browser: Browser | undefined;
         let timedOut = false;
@@ -79,6 +76,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           if (browser) void browser.close().catch(() => undefined);
         }, VERIFY_TIMEOUT_MS);
         try {
+          // resolveCaseUrl 有 db 查询，放进本 try 让 finally 的 envCtx.close 兜底（否则查询抛错会泄漏连接池）
+          const resolvedUrl = await resolveCaseUrl(caseRow, { envBaseUrl: envCtx.baseUrl });
+          const targetUrl = resolvedUrl && /^https?:\/\//.test(resolvedUrl) ? resolvedUrl : undefined;
           browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
           const context = await browser.newContext({
             ignoreHTTPSErrors: true,
