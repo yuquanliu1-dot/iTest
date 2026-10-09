@@ -15,6 +15,7 @@ import { Button } from '../ui/shadcn/button';
 import { useAuthStore } from '../../stores/auth';
 import { useThemeStore } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
+import ChangeMyPasswordModal from '../auth/ChangeMyPasswordModal';
 import Icon from '../Icon';
 
 /**
@@ -25,6 +26,7 @@ import Icon from '../Icon';
 export default function UserMenu() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [pwdOpen, setPwdOpen] = useState(false);
   const toast = useUIStore((s) => s.showToast);
   const user = useAuthStore((s) => s.user);
   const organizations = useAuthStore((s) => s.organizations);
@@ -55,6 +57,11 @@ export default function UserMenu() {
     setOpen(false);
     await logout();
     navigate('/login', { replace: true });
+  };
+
+  const handleOpenPwd = () => {
+    setOpen(false);
+    setPwdOpen(true);
   };
 
   return (
@@ -113,6 +120,11 @@ export default function UserMenu() {
           {theme === 'dark' ? '浅色主题' : '深色主题'}
         </DropdownMenuItem>
 
+        <DropdownMenuItem onSelect={(event) => { event.preventDefault(); handleOpenPwd(); }}>
+          <Icon name="settings" size={14} />
+          修改密码
+        </DropdownMenuItem>
+
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="text-[var(--destructive)] data-[highlighted]:text-[var(--destructive)]"
@@ -122,6 +134,7 @@ export default function UserMenu() {
           退出登录
         </DropdownMenuItem>
       </DropdownMenuContent>
+      <ChangeMyPasswordModal open={pwdOpen} onOpenChange={setPwdOpen} />
     </DropdownMenu>
   );
 }
