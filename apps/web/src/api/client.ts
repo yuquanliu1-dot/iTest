@@ -945,7 +945,7 @@ export interface StageSaveBody {
   cases: Array<{ localId: string; groupId: string }>;
   scenarios: Array<{ localId: string }>;
   environments: Array<{ localId: string }>;
-  plans: Array<{ localId: string; groupId: string }>;
+  plans: Array<{ localId: string }>;
   caseOps: Array<{ localId: string }>;
   datasets: Array<{ localId: string }>;
 }

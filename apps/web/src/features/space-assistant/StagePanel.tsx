@@ -530,7 +530,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
               .map((x) => ({ localId: x.localId })),
             plans: partitioned.plan
               .filter((x) => selection?.has(`plan:${x.localId}`))
-              .map((x) => ({ localId: x.localId, groupId })),
+              .map((x) => ({ localId: x.localId })),
             datasets: partitioned.dataset
               .filter((x) => selection?.has(`dataset:${x.localId}`))
               .map((x) => ({ localId: x.localId })),

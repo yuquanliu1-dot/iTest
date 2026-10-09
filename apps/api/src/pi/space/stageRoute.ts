@@ -10,7 +10,7 @@ import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { Router } from 'express';
 import { db } from '../../db/client.js';
 import {
-  aiStageCaseOps, aiStageCases, aiStageDatasets, aiStageEnvironments, aiStagePlans, aiStageScenarios,
+  aiStageCaseOps, aiStageCases, aiStageDatasets, aiStageEnvironments, aiStagePlans, aiStageScenarios, groups, testCases,
 } from '../../db/schema.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import * as casesSvc from '../../services/cases.service.js';
@@ -33,7 +33,7 @@ interface SaveBody {
   cases: Array<{ localId: string; groupId: string }>;
   scenarios: Array<{ localId: string }>;
   environments: Array<{ localId: string }>;
-  plans: Array<{ localId: string; groupId: string }>;
+  plans: Array<{ localId: string }>;
   caseOps: Array<{ localId: string }>;
   datasets: Array<{ localId: string }>;
 }
@@ -153,17 +153,38 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     });
   }
 
-  // 1e. plans: 先建计划,再按 caseLocalIds 解析真实 caseId（来自已落库的 caseStage 1b）→ replacePlanCases
+  // 1e. plans: 先建计划,再按 caseLocalIds 解析真实 caseId。
+  //  - caseLocalIds 允许两种来源：①本批暂存的用例（localId 来自 1b）→ createdCaseIds 映射；
+  //    ②LLM 直接给的真实 caseId（来自 manage_cases search/get）→ 在 project 内 lookup。
+  //  这样「引用已有用例」与「暂存用例」混用都能正确落库；解析失败的 localId 抛错并点名。
   const stagePlanRows = plans.length
     ? await db.select().from(aiStagePlans)
         .where(and(eq(aiStagePlans.threadId, threadId), inArray(aiStagePlans.localId, plans.map((p) => p.localId))))
     : [];
+  const referencedLocalIds = Array.from(new Set(stagePlanRows.flatMap((r) => r.caseLocalIds ?? [])));
+  const existingCaseIdSet = new Set<string>();
+  const missingFromBatch = referencedLocalIds.filter((lid) => !createdCaseIds.has(lid));
+  if (missingFromBatch.length) {
+    const realIds = await db
+      .select({ id: testCases.id })
+      .from(testCases)
+      .innerJoin(groups, eq(groups.id, testCases.groupId))
+      .where(and(inArray(testCases.id, missingFromBatch), eq(groups.projectId, pid)));
+    for (const r of realIds) existingCaseIdSet.add(r.id);
+  }
   for (const sel of plans) {
     const row = stagePlanRows.find((r) => r.localId === sel.localId);
     if (!row) throw new HttpError(404, 'not_found', `stage plan ${sel.localId} 已不存在`);
-    const realCaseIds = (row.caseLocalIds ?? [])
-      .map((localId) => createdCaseIds.get(localId))
-      .filter((x): x is string => !!x);
+    const realCaseIds: string[] = [];
+    const unresolved: string[] = [];
+    for (const localId of row.caseLocalIds ?? []) {
+      const realId = createdCaseIds.get(localId) ?? (existingCaseIdSet.has(localId) ? localId : undefined);
+      if (realId) realCaseIds.push(realId);
+      else unresolved.push(localId);
+    }
+    if (unresolved.length > 0) {
+      throw new HttpError(400, 'unresolved_case', `计划「${row.name}」引用了未勾选/不存在的用例:${unresolved.join('、')};请在用例 Tab 勾选后重试,或从计划中移除引用`);
+    }
     const plan = await plansSvc.createPlan(pid, {
       name: row.name,
       versionId,
