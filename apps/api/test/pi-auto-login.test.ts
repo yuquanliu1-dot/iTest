@@ -8,6 +8,10 @@ interface Script {
   captchaCount?: number;
   usernameIdx?: number;
   formSubmitCount?: number;
+  /** button[type=submit]:visible 计数 */
+  pageSubmitCount?: number;
+  /** 文本登录按钮（button:visible + hasText）计数 */
+  textSubmitCount?: number;
   /** 提交后密码框数量（0=已跳离登录页 → 登录成功） */
   afterSubmitPasswordCount?: number;
 }
@@ -32,9 +36,14 @@ function fakeContextWithPage(s: Script) {
     first() { return formSubmit; },
   };
   const pageSubmit = {
-    count: async () => s.formSubmitCount ?? 0,
+    count: async () => s.pageSubmitCount ?? 0,
     click: async () => { state.passwordCount = s.afterSubmitPasswordCount ?? 0; urlRef.v = 'http://e/home'; },
     first() { return pageSubmit; },
+  };
+  const textSubmit = {
+    count: async () => s.textSubmitCount ?? 0,
+    click: async () => { state.passwordCount = s.afterSubmitPasswordCount ?? 0; urlRef.v = 'http://e/home'; },
+    first() { return textSubmit; },
   };
   const generic = { count: async () => 0, fill: async (v: string) => { fills.push(`input:${v}`); }, nth() { return generic; } };
   const page = {
@@ -50,6 +59,7 @@ function fakeContextWithPage(s: Script) {
       if ((sel.includes('button[type="submit"]') || sel.includes('input[type="submit"]')) && sel.includes(':visible')) {
         return pageSubmit;
       }
+      if (sel.startsWith('button:visible')) return textSubmit;
       return generic;
     },
     evaluate: async () => s.usernameIdx ?? 0,
@@ -135,5 +145,37 @@ describe('loginInContext', () => {
       afterSubmitPasswordCount: 1,
     });
     await expect(loginInContext(context, CRED, 'http://e/home')).rejects.toThrow(/自动填表登录失败/);
+  });
+
+  it('ElementUI 场景：无 submit 型按钮,文本登录按钮兜底点击 → logged-in', async () => {
+    const { context, fills } = fakeContextWithPage({
+      url: 'http://e/login',
+      passwordCount: 1,
+      captchaCount: 1,
+      usernameIdx: 0,
+      textSubmitCount: 1,
+      afterSubmitPasswordCount: 0,
+    });
+    const solver = vi.fn(async () => {});
+    await expect(
+      loginInContext(context, CRED, 'http://e/login', { solveCaptcha: solver }),
+    ).resolves.toBe('logged-in');
+    expect(fills).toContain('input:qa01');
+    expect(fills).toContain('password:Secret!1');
+    // 走到文本按钮分支意味着未触发 Enter 兜底
+    expect(fills).not.toContain('press:Enter');
+  });
+
+  it('button[type=submit] 存在时优先于文本按钮', async () => {
+    const { context, fills } = fakeContextWithPage({
+      url: 'http://e/login',
+      passwordCount: 1,
+      usernameIdx: 0,
+      pageSubmitCount: 1,
+      textSubmitCount: 1,
+      afterSubmitPasswordCount: 0,
+    });
+    await expect(loginInContext(context, CRED, 'http://e/login')).resolves.toBe('logged-in');
+    expect(fills).not.toContain('press:Enter');
   });
 });
