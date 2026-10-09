@@ -66,6 +66,17 @@ else
 fi
 
 echo "== 打包 =="
+# 预检:录制回连地址指回环 = 用户浏览器里的扩展必连不上(2026-10-09 prod228 踩过)。
+# 只告警不阻断:确有"浏览器就跑在服务器上"的用法时允许放行。
+ENV_PROD="$ROOT/infra/docker/.env.production"
+if [ -f "$ENV_PROD" ]; then
+  WS_URL="$(grep -E '^RECORDER_PUBLIC_WS_URL=' "$ENV_PROD" | cut -d= -f2- || true)"
+  if [ -z "$WS_URL" ]; then
+    echo "⚠️  WARN: .env.production 缺少 RECORDER_PUBLIC_WS_URL，api 会回落 ws://127.0.0.1:54321/recorder，远程浏览器里的扩展连不上"
+  elif echo "$WS_URL" | grep -qE '127\.0\.0\.1|localhost|::1'; then
+    echo "⚠️  WARN: RECORDER_PUBLIC_WS_URL=$WS_URL 指向回环地址。扩展运行在用户浏览器里，回连地址必须是浏览器可达的主机地址(如 ws://<服务器IP>:8080/api/recorder)"
+  fi
+fi
 GIT_SHA=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
 echo "来源: $ROOT @ $GIT_SHA"
 TMP_LOCAL="$(mktemp -d)"

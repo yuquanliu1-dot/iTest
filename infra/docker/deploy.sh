@@ -129,6 +129,48 @@ if ! docker exec itest-api node -e "import('playwright-core').then(({chromium}) 
   SMOKE_FAIL=1
 fi
 
+# (d) 录制回连地址 sanity：扩展跑在用户浏览器里，wsUrl 指回环=远程用户必挂(2026-10-09 prod228 踩过)；
+#     环境变量缺失时 api 回落 ws://127.0.0.1:54321/recorder，同样是回环，一并告警。
+WS_URL="$(docker exec itest-api printenv RECORDER_PUBLIC_WS_URL 2>/dev/null || true)"
+if [ -z "$WS_URL" ] || echo "$WS_URL" | grep -qE '127\.0\.0\.1|localhost|::1'; then
+  SMOKE_WARN="$SMOKE_WARN
+  - RECORDER_PUBLIC_WS_URL 为空或指向回环(${WS_URL:-<unset>})：扩展在用户浏览器里运行，回连地址必须是浏览器可达的主机地址(如 ws://<服务器IP>:8080/api/recorder)"
+  SMOKE_FAIL=1
+fi
+
+# (e) 录制 WS 握手链路：浏览器扩展 → nginx(/api/recorder 精确匹配) → api upgrade 处理器(只认 /recorder)。
+#     用假 token 探测：链路通时 api 校验失败即断连，nginx 立刻回 502 → PASS；
+#     路径不匹配(踩过：proxy_pass 不带 URI 未把 /api/recorder 改写成 /recorder)时 upgrade 无人处理、
+#     请求挂起到超时 → FAIL；401/404 = nginx 丢了 Upgrade 头或 location 误路由 → FAIL。
+if ! docker exec itest-api node -e "
+const http = require('node:http');
+const req = http.request({
+  host: 'itest-web', port: 80, path: '/api/recorder?sessionId=smoke&token=smoke',
+  headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version': '13' },
+});
+req.on('upgrade', () => process.exit(0));
+req.on('response', (r) => process.exit(r.statusCode === 502 ? 0 : 1));
+req.on('error', () => process.exit(1));
+req.setTimeout(6000, () => { req.destroy(); process.exit(1); });
+req.end();
+" >/dev/null 2>&1; then
+  SMOKE_WARN="$SMOKE_WARN
+  - 录制 WS 握手链路 FAIL（nginx /api/recorder → api /recorder upgrade 不通：检查 web.nginx.conf 的 location = /api/recorder 与 proxy_pass /recorder 改写）"
+  SMOKE_FAIL=1
+fi
+
+# (f) 录制 REST 路由：POST /api/recorder/sessions 无凭证应得到 401/400(证明打到 api 的路由层)；
+#     若 /api/recorder 前缀被整体改写(踩过)，api 会回 404 Cannot POST /recorder/sessions。
+if ! docker exec itest-api node -e "
+fetch('http://itest-web:80/api/recorder/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+  .then((r) => process.exit(r.status === 404 ? 1 : 0))
+  .catch(() => process.exit(1));
+" >/dev/null 2>&1; then
+  SMOKE_WARN="$SMOKE_WARN
+  - 录制 REST 路由 FAIL（POST /api/recorder/sessions 返回 404：nginx 把 /api/recorder 前缀误改写，REST 应走通用 /api/ 反代）"
+  SMOKE_FAIL=1
+fi
+
 if [ "$SMOKE_FAIL" = "1" ]; then
   echo "⚠️  smoke 未全过:$SMOKE_WARN"
   echo "  容器仍在跑,需手动排错或回滚。"
