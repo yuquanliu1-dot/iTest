@@ -43,7 +43,10 @@ export default function SaveDialog({ open, onOpenChange, groups, saving, partiti
       selection.has(`dataset:${(x as { localId: string }).localId}`),
     ).length,
   };
-  const needGroup = selectedCounts.case + selectedCounts.plan > 0;
+  // 只有用例在保存时需要 groupId（落 groups 关系）。其他对象走 project/version 默认落点：
+  //   - scenario → requirement；environment → project 下默认；plan → version + project；dataset → project
+  // 计划历史上传过 groupId 是误用，service 端 createPlan 不读也不存，分组选择是 UI 噪音。
+  const needGroup = selectedCounts.case > 0;
   const totalSelected =
     selectedCounts.case +
     selectedCounts.case_op +
