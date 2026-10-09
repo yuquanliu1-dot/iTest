@@ -7,6 +7,13 @@ import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 // executeCaseInBrowser / loginInContext 打桩：工具测试聚焦编排与结果组装。
 vi.mock('../src/execute/cdp.js', () => ({ executeCaseInBrowser: vi.fn() }));
 vi.mock('../src/pi/autoLogin.js', () => ({ loginInContext: vi.fn() }));
+// LLM 模块桩：resolveLlmClient 缺省走 settings 表（测试库无 provider 配置会抛），先注入假 client。
+vi.mock('../src/agent/llmSettings.js', () => ({
+  resolveLlmClient: vi.fn(async () => ({
+    config: { provider: 'anthropic', apiKey: 'fake', model: 'fake' },
+    client: { provider: 'anthropic' as const, complete: async () => ({ kind: 'text' as const, value: '', provider: 'anthropic' as const, vision: false }) },
+  })),
+}));
 vi.mock('playwright-core', () => ({
   chromium: {
     launch: async () => ({

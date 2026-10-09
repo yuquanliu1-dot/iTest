@@ -1,7 +1,9 @@
 import { Type } from '@earendil-works/pi-ai';
 import { chromium } from 'playwright-core';
 import { resolveEnv } from '../../../execute/envContext.js';
-import { loginInContext } from '../../autoLogin.js';
+import { runAiTask, solveCaptchaOnce } from '../../../execute/aiTask.js';
+import { resolveLlmClient } from '../../../agent/llmSettings.js';
+import { loginInContext, type CaptchaSolver } from '../../autoLogin.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
@@ -63,7 +65,21 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
           });
           try {
             const context = await browser.newContext({ ignoreHTTPSErrors: true });
-            const status = await loginInContext(context, envCtx.login, targetUrl);
+            // 复用 aiTask 既有的 solveCaptchaOnce + runAiTask 兜底；与 verify_case 同源。
+            let solveCaptcha: CaptchaSolver | undefined;
+            try {
+              const client = (await resolveLlmClient()).client;
+              solveCaptcha = async (page) => {
+                await solveCaptchaOnce(page, client, /* hint */ null)
+                  .catch(async (e1) => {
+                    await runAiTask(page, '识别当前验证码图片中的字符并填入验证码输入框', client)
+                      .catch((e2) => { throw new Error(`solveCaptchaOnce: ${(e1 as Error).message}; runAiTask: ${(e2 as Error).message}`); });
+                  });
+              };
+            } catch (e) {
+              return { ok: false, error: `LLM 未配置，无法识别验证码: ${(e as Error).message}` };
+            }
+            const status = await loginInContext(context, envCtx.login, targetUrl, { solveCaptcha });
             const storageState = await context.storageState();
             return {
               ok: true,
