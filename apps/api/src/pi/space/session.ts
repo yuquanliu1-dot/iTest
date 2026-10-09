@@ -1,7 +1,7 @@
 /**
  * 版本空间 AI 助手线程 supervisor(pi/space)。
- * 与 requirement 级 pi/session.ts 并列:绑定 versionId、一线程一 session、一版本可多线程。
- * 事件→react-pi 契约的映射与 pi/session.ts 保持一致;上下文摘要经 system prompt 注入(session 创建时)。
+ * 绑定 versionId、一线程一 session、一版本可多线程。
+ * 上下文摘要经 system prompt 注入(session 创建时)。
  */
 import { and, eq } from 'drizzle-orm';
 import fs from 'node:fs/promises';
@@ -11,13 +11,12 @@ import { aiThreads, projectVersions } from '../../db/schema.js';
 import { logger } from '../../logger.js';
 import { buildSpaceTools } from './tools/index.js';
 import { buildSpaceSummary } from './summary.js';
-import { readLlmConfig } from '../modelBridge.js';
+import { readLlmConfig, synthesizeModel, ENV_BY_PROVIDER } from '../modelBridge.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
 import { checkoutRepoForVersion, LockTimeoutError, RepoUnavailableError, REPOS_ROOT, WORKSPACES_ROOT } from '../repo.js';
 import { emptyRepoState, type RepoState } from './tools/context.js';
-import { synthesizeModel, ENV_BY_PROVIDER } from '../session.js';
 
 export interface SpaceSessionLike {
   subscribe(fn: (e: unknown) => void): () => void;
@@ -139,7 +138,7 @@ async function checkoutInBackground(versionId: string, repoDir: string, repo: Re
   }
 }
 
-/** Pi AgentSession 事件 → react-pi body 的最小映射(与 pi/session.ts 一致)。 */
+/** Pi AgentSession 事件 → react-pi body 的最小映射。 */
 function mapSessionEvent(event: { type?: string } & Record<string, unknown>, ctx: { turnIndex: number }): Record<string, unknown> {
   switch (event.type) {
     case 'agent_start': return { type: 'agent_start' };

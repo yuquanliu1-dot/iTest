@@ -1,7 +1,7 @@
 /**
  * 版本空间 AI 助手 HTTP+SSE 契约(react-pi 兼容子集),挂载于 /api/assistant。
- * 与 /api/pi(requirement 级)并列,只服务 kind='version' 线程。
- * 事件通道与 pi/router.ts 同源:session fanOut(含 emitThreadEvent 的 confirm_request)。
+ * 只服务 kind='version' 线程。
+ * 事件通道与 session fanOut 同源(含 emitThreadEvent 的 confirm_request)。
  */
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';

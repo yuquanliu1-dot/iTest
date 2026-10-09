@@ -93,12 +93,6 @@ export const api = {
     plans: (id: string) => request<PlanWithCount[]>(`/projects/${id}/plans`),
     createPlan: (id: string, body: { name: string; environment?: string; versionId?: string }) =>
       request<ExecutionPlan>(`/projects/${id}/plans`, { method: 'POST', body: JSON.stringify(body) }),
-    requirements: (id: string) => request<Requirement[]>(`/projects/${id}/requirements`),
-    createRequirement: (id: string, body: { title: string; content: string }) =>
-      request<Requirement>(`/projects/${id}/requirements`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      }),
   },
   groups: {
     patch: (id: string, body: Partial<{ name: string; defaultUrl: string }>) =>
@@ -272,9 +266,6 @@ export const api = {
       const s = qs.toString();
       return request<ExecutionEntry[]>(`/executions${s ? `?${s}` : ''}`);
     },
-  },
-  requirements: {
-    get: (id: string) => request<Requirement>(`/requirements/${id}`),
   },
   cases: {
     list: (params?: string | { priority?: string; groupId?: string; projectId?: string; scenarioId?: string; versionIds?: string[] }) => {
@@ -512,40 +503,6 @@ export const api = {
       request<{ temporaryPassword: string; user: UserSummary }>(`/auth/register-admin`, {
         method: 'POST',
         body: JSON.stringify(body),
-      }),
-  },
-  aiWorkspace: {
-    ensureThread: (requirementId: string) =>
-      request<{ threadId: string }>(`/requirements/${requirementId}/ai-thread`, { method: 'POST' }),
-    sendMessage: (
-      threadId: string,
-      content: string,
-      metadata: { contextMode: 'repo' | 'page' | 'auto' } = { contextMode: 'auto' },
-    ) =>
-      fetch(`${BASE}/pi/threads/${threadId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: { content }, metadata }),
-      }).then((r) => {
-        if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
-      }),
-    getWorkspace: (requirementId: string) =>
-      request<WorkspaceDoc>(`/requirements/${requirementId}/ai-workspace`),
-    save: (
-      requirementId: string,
-      body: { groupId: string; scenarioIds: string[]; caseIds: string[]; targetVersionId?: string },
-    ) =>
-      request<{ savedCases: number }>(`/requirements/${requirementId}/ai-workspace/save`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      }),
-    setContextMode: (requirementId: string, mode: 'repo' | 'page' | 'auto') =>
-      fetch(`${BASE}/requirements/${requirementId}/ai-workspace/context-mode`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode }),
-      }).then((r) => {
-        if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
       }),
   },
   assistant: {
@@ -812,15 +769,6 @@ export interface ProjectStats {
   failures: number;
   groups: Array<{ id: string; name: string; caseCount: number }>;
   recentRuns: Array<{ id: string; caseId: string; status: string; createdAt: string }>;
-}
-export interface Requirement {
-  id: string;
-  title: string;
-  content: string;
-  status: string;
-  projectId?: string;
-  createdAt: string;
-  updatedAt: string;
 }
 export type CaseStatus = 'draft' | 'review' | 'ready' | 'deprecated';
 export interface TestCase {
@@ -1172,43 +1120,4 @@ export interface VerifyRepoResult {
   error?: string;
   branchExists?: boolean;
   defaultBranch?: string;
-}
-
-export type Priority = 'P0' | 'P1' | 'P2' | 'P3';
-export type CompiledAction =
-  | { kind: 'navigate'; url: string }
-  | { kind: 'click'; locator: Array<{ strategy: string; value: string }> }
-  | { kind: 'fill'; locator: Array<{ strategy: string; value: string }>; value: unknown }
-  | { kind: 'waitFor'; locator: Array<{ strategy: string; value: string }> }
-  | { kind: 'assertText'; target?: string; equals?: string; contains?: string }
-  | { kind: 'assertVisible'; locator: Array<{ strategy: string; value: string }> }
-  | { kind: 'check'; locator: Array<{ strategy: string; value: string }>; checked: boolean }
-  | { kind: 'select'; locator: Array<{ strategy: string; value: string }>; value: string }
-  | { kind: 'hover'; locator: Array<{ strategy: string; value: string }> }
-  | { kind: 'screenshot'; name: string }
-  | { kind: 'switchTab'; tabRef: string }
-  | { kind: 'extract'; varName: string; mode?: string; pattern?: string }
-  | { kind: string; [k: string]: unknown };
-
-export interface StagedStep {
-  name: string;
-  action: string;
-  assertion: string | null;
-  /** 三态：undefined = 未尝试（保存时由后端兜底编译）；null = AI 已放弃；array = 已编译 */
-  compiled?: CompiledAction[] | null;
-}
-export interface StagedAiCase { id: string; title: string; description: string | null; priority: Priority; steps: StagedStep[]; }
-export interface StagedAiScenario { id: string; title: string; description: string | null; cases: StagedAiCase[]; }
-export interface StagedStageCase { localId: string; title: string; description: string | null; priority: string | null; url: string | null; steps: Array<{ action: string; assertion?: string | null; compiled?: unknown[] | null }>; defaultEnvId: string | null; expectedOutcome: string | null; stagedAt: string; }
-// 兼容旧名（ai-workspace/WorkspacePanel 仍引用 StagedCase/StagedScenario；语义与本页无关）
-export type StagedCase = StagedAiCase;
-export type StagedScenario = StagedAiScenario;
-export interface RepoContext { commit: string; fetchedAt: string; mode: 'repo' | 'auto'; }
-export interface WorkspaceDoc {
-  plan: { scenarios: number; cases: number } | null;
-  contextMode?: 'repo' | 'page' | 'auto';
-  pageContext?: { url: string; fetchedAt: string } | null;
-  repoContext?: RepoContext | null;
-  scenarios: StagedScenario[];
-  looseCases: StagedCase[];
 }

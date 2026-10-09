@@ -36,3 +36,32 @@ export async function readLlmConfig(): Promise<LlmConfig | null> {
   if (!apiKey || !model) return null;
   return { provider, apiKey, model, baseUrl: rawBase || null };
 }
+
+/**
+ * settings 里的 model 可以是代理/网关的自定义别名（不在 pi-ai catalog 里，getBuiltinModel 返回
+ * undefined）。此时按 provider 合成一个最小合法 Model：api 必须是 pi-ai 的 KnownApi 之一，
+ * baseUrl 用 settings 的值（网关）或 provider 默认值。
+ */
+export function synthesizeModel(provider: LlmProvider, modelId: string, baseUrl: string | null): Record<string, unknown> {
+  const defaults: Record<LlmProvider, { api: string; baseUrl: string }> = {
+    anthropic: { api: 'anthropic-messages', baseUrl: 'https://api.anthropic.com' },
+    openai: { api: 'openai-completions', baseUrl: 'https://api.openai.com/v1' },
+    google: { api: 'google-generative-ai', baseUrl: 'https://generativelanguage.googleapis.com' },
+  };
+  const d = defaults[provider];
+  return {
+    id: modelId,
+    name: modelId,
+    api: d.api,
+    provider,
+    baseUrl: baseUrl ?? d.baseUrl,
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200000,
+    maxTokens: 8192,
+    type: 'chat',
+  };
+}
+
+export const ENV_BY_PROVIDER = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', google: 'GEMINI_API_KEY' } as const;
