@@ -33,14 +33,22 @@ export interface VerifyProgressStep {
   brief?: string;
   reason?: string;
   durationMs?: number;
+  /** LLM 当轮自报的登录行为（'logged-in' 在该步实际执行了登录填表）。 */
+  login?: 'logged-in' | 'not-needed';
 }
 
 export interface VerifyProgressState {
   caseId: string;
   total: number;
   targetUrl: string | null;
+  /** 登录态缓存命中与否（start 事件）；null=未上报。 */
+  loginCache: 'hit' | 'miss' | null;
+  /** 环境配置的登录用户名；null=未配置凭据。 */
+  loginUser: string | null;
   steps: VerifyProgressStep[];
   result: 'passed' | 'failed' | null;
+  /** end 事件：本轮是否已回写登录态缓存。 */
+  cacheSaved: boolean;
 }
 
 /** 暂存条目：stage_case / stage_scenario / stage_environment / stage_plan 写入。
@@ -149,8 +157,11 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
             caseId: String(e.caseId ?? ''),
             total: Number(e.total ?? 0),
             targetUrl: (e.targetUrl as string | null) ?? null,
+            loginCache: e.loginCache === 'hit' || e.loginCache === 'miss' ? e.loginCache : null,
+            loginUser: typeof e.loginUser === 'string' ? e.loginUser : null,
             steps: [],
             result: null,
+            cacheSaved: false,
           },
         });
         return;
@@ -185,6 +196,9 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
                   status: (e.status === 'failed' ? 'failed' : 'passed') as 'failed' | 'passed',
                   ...(typeof e.reason === 'string' ? { reason: e.reason } : {}),
                   ...(typeof e.durationMs === 'number' ? { durationMs: e.durationMs } : {}),
+                  ...(e.login === 'logged-in' || e.login === 'not-needed'
+                    ? { login: e.login as 'logged-in' | 'not-needed' }
+                    : {}),
                 }
               : st,
           );
@@ -199,6 +213,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
                 verifyProgress: {
                   ...s.verifyProgress,
                   result: e.result === 'failed' ? ('failed' as const) : ('passed' as const),
+                  cacheSaved: e.cacheSaved === true,
                 },
               }
             : s,
