@@ -201,3 +201,185 @@ describe('manage_plans 工具', () => {
     expect(events.find((e) => e.type === 'confirm_request')).toBeUndefined();
   }, 30_000);
 });
+
+describe('manage_plans 工具·schedule CRUD', () => {
+  let testCounter = 0;
+  /** 造一个空 plan + 配套 ctx,一并返回 planId/projectId/tool/events。
+   *  关键点:tool 必须与 plan 同一 ctx(共享 projectId/versionId/emit),否则后面
+   *  tool.execute 会报「计划不存在或不属于当前项目」。
+   *  用唯一 planName 避免跨测试残留(每个 seedProject 也是新项目,但 plans 表没 projectId 索引时按 name 查会撞同名)。 */
+  async function newPlan(): Promise<{ planId: string; projectId: string; tool: Awaited<ReturnType<typeof toolOf>>; events: Array<Record<string, unknown>> }> {
+    const name = `调度测试-${++testCounter}-${randomUUID().slice(0, 8)}`;
+    const seed = await seedProject(pool);
+    const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx);
+    await tool.execute({ action: 'create', name });
+    const planId = (await pool.query(`SELECT id FROM execution_plans WHERE name=$1`, [name])).rows[0]!.id as string;
+    return { planId, projectId: seed.projectId, tool, events };
+  }
+
+  /** 直接走 service 造调度(绕过 confirm 卡挂起);后续 update/delete 测试要 trigger confirm。 */
+  async function seedSchedule(planId: string, cron = '0 9 * * *'): Promise<string> {
+    const { createPlanSchedule } = await import('../src/services/planSchedules.service.js');
+    const { seedOrg } = await import('./helpers/db.js');
+    const { userId } = await seedOrg(pool);
+    const row = await createPlanSchedule(planId, { cronExpr: cron, createdByUserId: userId });
+    return row.id;
+  }
+
+  it('create_schedule 走确认卡 → 通过 → stage(create_schedule) 广播 + DB 写入 + 返回 nextRunAt', async () => {
+    const seed = await seedProject(pool);
+    const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx);
+    // 同一个 ctx 上下文建 plan + 调度,确保 ctx.projectId === plan.projectId
+    const planId = await (async () => {
+      const r = await tool.execute({ action: 'create', name: '每天9点' });
+      if (!r.ok) throw new Error('seed create plan failed: ' + (r as { error?: string }).error);
+      return (await pool.query(`SELECT id FROM execution_plans WHERE name=$1`, ['每天9点'])).rows[0]!.id as string;
+    })();
+
+    events.length = 0;
+    const req = tool.execute({ action: 'create_schedule', planId, cronExpr: '0 9 * * *' });
+    const confirmId = await untilConfirm(events);
+    const reqEvent = events.find((e) => e.type === 'confirm_request') as Record<string, unknown>;
+    expect(reqEvent).toMatchObject({ toolName: 'manage_plans', action: 'create_schedule', risk: 'update' });
+    expect(String(reqEvent.summary)).toContain('0 9 * * *');
+    resolveConfirmation(confirmId, true);
+    const r = await req as { ok: boolean; data: string };
+    expect(r.ok).toBe(true);
+    expect(r.data).toContain('下次执行');
+    const stage = events.find((e) => e.type === 'stage') as { kind: string; action: string };
+    expect(stage).toMatchObject({ kind: 'plan', action: 'create_schedule' });
+    const row = (await pool.query(`SELECT cron_expr, enabled, timezone FROM plan_schedules WHERE plan_id=$1`, [planId])).rows[0] as { cron_expr: string; enabled: boolean; timezone: string };
+    expect(row).toMatchObject({ cron_expr: '0 9 * * *', enabled: true, timezone: 'Asia/Shanghai' });
+  }, 30_000);
+
+  it('create_schedule 跨项目 planId 拒绝 → 门控前报错 + 不弹卡 + DB 0 行', async () => {
+    const seed = await seedProject(pool);
+    const other = await seedProject(pool);
+    const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx);
+    // 造一个属于 other 项目的 plan
+    const { createPlan } = await import('../src/services/plans.service.js');
+    const otherPlan = await createPlan(other.projectId, { name: '别人的', versionId: other.versionId });
+
+    events.length = 0;
+    const r = await tool.execute({ action: 'create_schedule', planId: otherPlan.id, cronExpr: '0 9 * * *' });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { error: string }).error).toContain('不属于当前项目');
+    expect(events.find((e) => e.type === 'confirm_request')).toBeUndefined();
+    const n = (await pool.query(`SELECT count(*)::int AS n FROM plan_schedules WHERE plan_id=$1`, [otherPlan.id])).rows[0]!.n as number;
+    expect(n).toBe(0);
+  }, 30_000);
+
+  it('update_schedule 改 cron 走卡 → diff 含 cron before→after;拒绝 → DB cron 不变', async () => {
+    const { planId, tool, events } = await newPlan();
+    const sid = await seedSchedule(planId, '0 9 * * *');
+
+    // 拒绝路径
+    events.length = 0;
+    const rejected = tool.execute({ action: 'update_schedule', scheduleId: sid, cronExpr: '30 8 * * *' });
+    await untilConfirm(events);
+    const reqEvent = events.find((e) => e.type === 'confirm_request') as Record<string, unknown>;
+    expect(String(reqEvent.diff)).toContain('cron: 0 9 * * * → 30 8 * * *');
+    resolveConfirmation(String(reqEvent.confirmId), false);
+    expect(await rejected).toMatchObject({ ok: false, error: '用户取消了该操作' });
+    const before = (await pool.query(`SELECT cron_expr FROM plan_schedules WHERE id=$1`, [sid])).rows[0]!.cron_expr as string;
+    expect(before).toBe('0 9 * * *');
+
+    // 通过路径
+    events.length = 0;
+    const approved = tool.execute({ action: 'update_schedule', scheduleId: sid, cronExpr: '30 8 * * *' });
+    const cid2 = await untilConfirm(events);
+    resolveConfirmation(cid2, true);
+    const r2 = await approved as { ok: boolean; data: string };
+    expect(r2.ok).toBe(true);
+    const stage = events.find((e) => e.type === 'stage') as { action: string; diff?: string };
+    expect(stage.action).toBe('update_schedule');
+    expect(stage.diff).toContain('cron: 0 9 * * * → 30 8 * * *');
+    const after = (await pool.query(`SELECT cron_expr FROM plan_schedules WHERE id=$1`, [sid])).rows[0]!.cron_expr as string;
+    expect(after).toBe('30 8 * * *');
+  }, 30_000);
+
+  it('update_schedule 字段全等于现值 → 短路不弹卡', async () => {
+    const { planId, tool, events } = await newPlan();
+    const sid = await seedSchedule(planId, '0 9 * * *');
+
+    events.length = 0;
+    const r = await tool.execute({ action: 'update_schedule', scheduleId: sid, cronExpr: '0 9 * * *' });
+    expect(r).toMatchObject({ ok: true });
+    expect((r as { data: string }).data).toContain('调度无需更新');
+    expect(events.find((e) => e.type === 'confirm_request')).toBeUndefined();
+  }, 30_000);
+
+  it('update_schedule 字段全缺 → 参数错误;不存在 scheduleId → "调度不存在或已删除"', async () => {
+    const { planId, tool } = await newPlan();
+    const sid = await seedSchedule(planId, '0 9 * * *');
+
+    expect(await tool.execute({ action: 'update_schedule', scheduleId: sid }))
+      .toMatchObject({ ok: false });
+    expect(await tool.execute({ action: 'update_schedule', scheduleId: '00000000-0000-0000-0000-000000000000', cronExpr: '0 9 * * *' }))
+      .toMatchObject({ ok: true, data: expect.stringContaining('调度不存在或已删除') });
+  }, 30_000);
+
+  it('delete_schedule 走卡 → 通过删除;拒绝保留行;不存在 scheduleId 短路', async () => {
+    const { planId, tool, events } = await newPlan();
+    const sid = await seedSchedule(planId, '0 9 * * *');
+
+    // 不存在 → 短路,不弹卡
+    events.length = 0;
+    const r0 = await tool.execute({ action: 'delete_schedule', scheduleId: '00000000-0000-0000-0000-000000000000' });
+    expect(r0).toMatchObject({ ok: true, data: expect.stringContaining('调度不存在或已删除') });
+    expect(events.find((e) => e.type === 'confirm_request')).toBeUndefined();
+
+    // 拒绝 → 行保留
+    events.length = 0;
+    const rejected = tool.execute({ action: 'delete_schedule', scheduleId: sid });
+    await untilConfirm(events);
+    const reqEvent = events.find((e) => e.type === 'confirm_request') as Record<string, unknown>;
+    expect(reqEvent.risk).toBe('delete');
+    expect(String(reqEvent.summary)).toContain('0 9 * * *');
+    resolveConfirmation(String(reqEvent.confirmId), false);
+    expect(await rejected).toMatchObject({ ok: false, error: '用户取消了该操作' });
+    const n1 = (await pool.query(`SELECT count(*)::int AS n FROM plan_schedules WHERE id=$1`, [sid])).rows[0]!.n as number;
+    expect(n1).toBe(1);
+
+    // 通过 → 删除
+    events.length = 0;
+    const approved = tool.execute({ action: 'delete_schedule', scheduleId: sid });
+    const cid = await untilConfirm(events);
+    resolveConfirmation(cid, true);
+    expect(await approved).toMatchObject({ ok: true });
+    const n2 = (await pool.query(`SELECT count(*)::int AS n FROM plan_schedules WHERE id=$1`, [sid])).rows[0]!.n as number;
+    expect(n2).toBe(0);
+  }, 30_000);
+
+  it('list_schedules 命中新建项;空计划返 []', async () => {
+    const { planId, tool, events } = await newPlan();
+
+    events.length = 0;
+    const empty = await tool.execute({ action: 'list_schedules', planId }) as { ok: boolean; data: string };
+    expect(empty.ok).toBe(true);
+    expect(JSON.parse(empty.data)).toEqual([]);
+    expect(events.find((e) => e.type === 'confirm_request')).toBeUndefined();
+
+    await seedSchedule(planId, '0 9 * * *');
+    await seedSchedule(planId, '30 14 * * *');
+    const full = await tool.execute({ action: 'list_schedules', planId }) as { ok: boolean; data: string };
+    expect(full.ok).toBe(true);
+    const rows = JSON.parse(full.data) as Array<{ cronExpr: string }>;
+    expect(rows.map((r) => r.cronExpr)).toEqual(['0 9 * * *', '30 14 * * *']);
+  }, 30_000);
+
+  it('create_schedule cron 非法 → 不弹卡 + 参数错误', async () => {
+    const { planId, tool, events } = await newPlan();
+
+    events.length = 0;
+    const r = await tool.execute({ action: 'create_schedule', planId, cronExpr: 'not a cron' });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { error: string }).error).toMatch(/cron|参数不合法|计划不存在/);
+    expect(events.find((e) => e.type === 'confirm_request')).toBeUndefined();
+    const n = (await pool.query(`SELECT count(*)::int AS n FROM plan_schedules WHERE plan_id=$1`, [planId])).rows[0]!.n as number;
+    expect(n).toBe(0);
+  }, 30_000);
+});
