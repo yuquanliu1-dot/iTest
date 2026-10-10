@@ -14,6 +14,7 @@ import { db } from '../../../db/client.js';
 import { testCases, testSteps, aiStageCaseOps } from '../../../db/schema.js';
 import { runAiTask } from '../../../execute/aiTask.js';
 import { writeStepScreenshot } from '../../../execute/cdp.js';
+import { runCaseVisionAssert } from '../../../execute/visionAssert.js';
 import { resolveEnv } from '../../../execute/envContext.js';
 import { resolveCaseUrl } from '../../../lib/resolve-url.js';
 import { decrypt } from '../../../lib/secret-crypto.js';
@@ -41,7 +42,65 @@ interface AiStepResult {
   warning?: string;
   screenshot?: string;
   error?: string;
-  failureReason?: 'StepReportedFailed' | 'AiTaskAborted' | 'SecretMissing';
+  failureReason?: 'StepReportedFailed' | 'AiTaskAborted' | 'SecretMissing' | 'LocatorMismatch';
+}
+
+/** compiled 保真校验：verify_case 的 AI 可以临场绕开坏 locator，但正式回放是逐字执行 compiled 的——
+ *  校验不通过必须在验证阶段就判失败，逼 AI 用真实选择器修正，而不是"AI 能过=用例能跑"。
+ *  时机：click/hover 在步骤前校验（元素此时就该在页面上）；断言类、fill、check、select、extract 在 AI 通过后校验
+ *  （这些动作结束时元素理应仍在）。navigate/aiTask/waitFor 无从或不必校验，跳过。
+ *  locator 数组为候选或关系：任一命中即通过（与回放 tryFirstMatch 语义一致）。 */
+async function checkCompiledLocators(
+  page: import('playwright-core').Page,
+  compiled: unknown,
+  mode: 'pre' | 'post',
+): Promise<string | null> {
+  const actions = (Array.isArray(compiled) ? compiled : []) as Array<{
+    kind?: string;
+    locator?: Array<{ strategy?: string; value?: string }>;
+  }>;
+  for (const a of actions) {
+    if (!a.kind) continue;
+    const timing = a.kind === 'click' || a.kind === 'hover' ? 'pre' : 'post';
+    if (a.kind === 'navigate' || a.kind === 'aiTask' || a.kind === 'waitFor') continue;
+    if (timing !== mode) continue;
+    const locs = Array.isArray(a.locator) ? a.locator : [];
+    if (locs.length === 0) continue;
+    for (const l of locs) {
+      if (l.strategy === 'accessibilityId' || l.strategy === 'label' || l.strategy === 'predicate') {
+        return `compiled 定位校验不通过: strategy '${l.strategy}' 为移动端专用，web 回放不支持`;
+      }
+      if (typeof l.value !== 'string' || !l.value) {
+        return `compiled 定位校验不通过: ${a.kind} 的 locator 缺少 value`;
+      }
+      const value = l.value;
+      // 与回放 tryFirstMatch 同策略映射；role 等构建成本高的策略跳过（占比小）。
+      const probe = (): Promise<number> => {
+        switch (l.strategy) {
+          case 'css': return page.locator(value).count();
+          case 'text': return page.getByText(value).count();
+          case 'xpath': return page.locator(`xpath=${value}`).count();
+          case 'testId': return page.getByTestId(value).count();
+          default: return Promise.resolve(-1); // 跳过
+        }
+      };
+      if (l.strategy !== 'css' && l.strategy !== 'text' && l.strategy !== 'xpath' && l.strategy !== 'testId') continue;
+      try {
+        let n = await probe();
+        if (n === 0) {
+          // a11y 树滞后兜底，与回放 count=0 短重试一次同思路
+          await page.waitForTimeout(150);
+          n = await probe();
+        }
+        if (n === 0) {
+          return `compiled 定位校验不通过（回放将失败）: ${l.strategy}=${l.value} 命中 0 个元素`;
+        }
+      } catch (e) {
+        return `compiled 定位校验异常（选择器可能不合法，回放将抛错）: ${l.strategy}=${l.value} — ${(e as Error).message.slice(0, 120)}`;
+      }
+    }
+  }
+  return null;
 }
 
 /** 单步执行指令：自然语言 + compiled 参考 + 占位符凭据段（仅配置了 login 时）+ 输出契约。 */
@@ -91,7 +150,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
     promptGuidelines: [
       '含 compiled 步骤的用例创建/修改后，环境可用时调用 verify_case 实测验证，不要只凭源码分析就声称用例可运行。',
       'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
-      'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后，引导用户在右侧暂存区勾选统一保存。',
+      'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
+      'verify_case 会校验 compiled 选择器能真实命中页面（AI 临场绕开坏 locator 不算通过，回放逐字执行 compiled 会失败）:失败原因含"定位校验不通过"时,必须用 failure.page.elements 里的真实选择器替换原 locator(严禁留着坏 locator 只靠 AI 硬跑)。verify_case 还会做用例级终态判定(失败原因含 VisionAssertionFailed):步骤都通过但最终页面不符 expectedOutcome 时,修正步骤行为或调整 expectedOutcome 后再验。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。',
       '环境未配置 login 凭据而验证卡在登录页时，引导用户到项目环境页配置 login 凭据，不要伪造登录步骤。',
     ],
@@ -257,6 +317,18 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               type: 'verify_progress', phase: 'step_start', order: s.order,
               brief: (s.instruction ?? JSON.stringify(s.compiled) ?? '').slice(0, 120),
             });
+            // compiled 保真前置校验：click/hover 的目标元素此刻就该在页面上，解析不到直接判失败（不烧 AI 轮次）
+            const preErr = await checkCompiledLocators(page, s.compiled, 'pre');
+            if (preErr) {
+              stepResults.push({
+                order: s.order, status: 'failed', durationMs: Date.now() - started,
+                error: preErr, failureReason: 'LocatorMismatch',
+                screenshot: await writeStepScreenshot(reportId, i + 1, page),
+              });
+              ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: preErr.slice(0, 120) });
+              failedIndex = i;
+              break;
+            }
             try {
               const summary = await runAiTask(page, instruction, client, false, {
                 maxTurns: STEP_MAX_TURNS,
@@ -279,6 +351,19 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 break;
               }
               if (parsed?.login === 'logged-in') login = 'logged-in';
+              // compiled 保真后置校验：assert*/fill/check/select/extract 结束时元素理应仍在；
+              // AI 可以临场绕开坏 locator，但回放逐字执行 compiled——此刻校验不过，回放必挂
+              const postErr = await checkCompiledLocators(page, s.compiled, 'post');
+              if (postErr) {
+                stepResults.push({
+                  order: s.order, status: 'failed', durationMs: Date.now() - started,
+                  error: postErr, failureReason: 'LocatorMismatch',
+                  screenshot: await writeStepScreenshot(reportId, i + 1, page),
+                });
+                ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: postErr.slice(0, 120) });
+                failedIndex = i;
+                break;
+              }
               stepResults.push({
                 order: s.order, status: 'passed', durationMs: Date.now() - started,
                 screenshot: await writeStepScreenshot(reportId, i + 1, page),
@@ -306,6 +391,29 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
           }
 
+          // 用例级终态判定：与正式回放同一 vision 断言（cdp.ts runCaseVisionAssert），
+          // 全部步骤通过后再判 expectedOutcome——verify_case 不能只保证"步骤能执行"，还得保证"终态符合预期"。
+          let visionFailure: { error?: string | null; humanMessage?: string | null; screenshot?: string | null; failureReason?: string | null } | null = null;
+          if (failedIndex < 0 && typeof caseRow.expectedOutcome === 'string' && caseRow.expectedOutcome.trim()) {
+            const va = await runCaseVisionAssert({
+              page,
+              reportId,
+              caseTitle: caseRow.title,
+              caseUrl: targetUrl ?? null,
+              expectedOutcome: caseRow.expectedOutcome,
+              vars: {},
+              sensitiveVarKeys: [],
+              llmClient: client,
+            });
+            if (va?.failureStep) {
+              visionFailure = va.failureStep;
+              ctx.emit({
+                type: 'verify_progress', phase: 'step_done', order: -1, status: 'failed',
+                reason: (va.failureStep.error ?? '终态与用例预期不符').slice(0, 120),
+              });
+            }
+          }
+
           // 登录态回写：不依赖 LLM 自报的 login 字段（实测存在漏报契约漂移），配了登录就无条件存当前会话——
           // 未登录时存的是匿名会话，下轮注入后 AI 照样识别登录页重新登录并覆盖（自愈）。
           // watchdog 超时路径在循环内提前 return，不会走到这里。
@@ -314,7 +422,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
 
           // ── 失败收尾：失败页元素清单（供 agent 修正 locator）──
           let failurePage: Awaited<ReturnType<typeof extractPageElements>> | null = null;
-          if (failedIndex >= 0) {
+          if (failedIndex >= 0 || visionFailure) {
             failurePage = await extractPageElements(page).catch(() => null);
           }
 
@@ -328,7 +436,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(r.error ? { error: r.error } : {}),
             ...(r.failureReason ? { failureReason: r.failureReason } : {}),
           }));
-          if (failedIndex < 0) {
+          if (failedIndex < 0 && !visionFailure) {
             // cacheSaved: 正常收尾均无条件回写（watchdog 超时路径在循环内提前 return,无 end 事件）
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'passed', cacheSaved: true });
             return {
@@ -342,6 +450,32 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 basedOn: overlay.opsApplied > 0 ? ('staged' as const) : ('db' as const),
                 stagedOpsApplied: overlay.opsApplied,
                 steps: stepsSummary,
+              }),
+            };
+          }
+          if (visionFailure) {
+            ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
+            return {
+              ok: true,
+              data: JSON.stringify({
+                result: 'failed',
+                caseId,
+                envId: envCtx.envId,
+                targetUrl: targetUrl ?? null,
+                login,
+                basedOn: overlay.opsApplied > 0 ? ('staged' as const) : ('db' as const),
+                stagedOpsApplied: overlay.opsApplied,
+                steps: stepsSummary,
+                failure: {
+                  stepOrder: -1,
+                  action: null,
+                  error: visionFailure.error ?? '最终页面与用例预期不符',
+                  failureReason: visionFailure.failureReason ?? 'VisionAssertionFailed',
+                  humanMessage: visionFailure.humanMessage ?? '最终页面与用例预期不符',
+                  screenshot: visionFailure.screenshot ?? null,
+                  page: failurePage,
+                  note: 'vision 终态判定失败：全部步骤执行通过后，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。',
+                },
               }),
             };
           }
