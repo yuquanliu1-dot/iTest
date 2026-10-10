@@ -81,7 +81,23 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
   pool = new Pool({ connectionString: container.getConnectionUri() });
   await pool.query(SCHEMA_SQL);
-  // SCHEMA_SQL 尚未收录 ai_stage_case_ops(暂存表),本文件自建(与 src/db/schema.ts:163-181 对齐)
+  // SCHEMA_SQL 尚未收录暂存表,本文件自建(与 src/db/schema.ts 对齐)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ai_stage_cases (
+      thread_id text NOT NULL,
+      local_id text NOT NULL,
+      version_id uuid NOT NULL,
+      title varchar(200) NOT NULL,
+      description text,
+      priority varchar(20),
+      url text,
+      steps jsonb NOT NULL DEFAULT '[]',
+      default_env_id uuid,
+      expected_outcome text,
+      dataset_local_id text,
+      staged_at timestamp NOT NULL DEFAULT now(),
+      CONSTRAINT ai_stage_cases_pk PRIMARY KEY(thread_id, local_id)
+    )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ai_stage_case_ops (
       thread_id text NOT NULL,
@@ -113,7 +129,7 @@ beforeEach(async () => {
   __testState.ctxOpts.length = 0;
   __testState.zeroLocators.length = 0;
   await pool.query(`TRUNCATE test_steps, test_cases, test_environments, environment_objects,
-    requirements, "groups", projects, project_versions, ai_threads, ai_workspace_state, ai_stage_case_ops
+    requirements, "groups", projects, project_versions, ai_threads, ai_workspace_state, ai_stage_case_ops, ai_stage_cases
     RESTART IDENTITY CASCADE`);
   const seed = await seedProject(pool);
   projectId = seed.projectId;
@@ -493,6 +509,55 @@ describe('verify_case 逐步 AI 执行编排', () => {
     // 全程不落库：DB 步骤 compiled 仍是 #missing
     const after = await pool.query(`SELECT compiled FROM test_steps WHERE id = $1`, [stepId]);
     expect(JSON.stringify(after.rows[0]!.compiled)).toContain('#missing');
+  });
+
+  it('纯草稿用例（stage_case localId，未落库）：verify_case 直接以 localId 验证 → passed，全程不落库', async () => {
+    const localId = randomUUID();
+    const draftSteps = [
+      { action: '点击新建按钮', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#newBtn' }] }], assertion: null },
+      { action: '填写表单', compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#name' }], value: '测试' }], assertion: null },
+    ];
+    await pool.query(
+      `INSERT INTO ai_stage_cases(thread_id, local_id, version_id, title, url, steps, expected_outcome, staged_at)
+       VALUES ('t1', $1, $2, '草稿用例', 'http://env.example/page', $3::jsonb, '表单保存成功', now())`,
+      [localId, versionId, JSON.stringify(draftSteps)],
+    );
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const emitLog: unknown[] = [];
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId: localId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('passed');
+      expect(data.basedOn).toBe('staged');
+      expect(data.steps).toHaveLength(2);
+      expect(data.caseId).toBe(localId);
+    }
+    // LLM 看到的是草稿的 compiled（#newBtn），指令含 url 兜底（草稿无分组走 env baseUrl 之外的双线）与步骤序号
+    const call = vi.mocked(runAiTask).mock.calls[0]!;
+    expect(String(call[1])).toContain('#newBtn');
+    expect(String(call[1])).toContain('第 1 步 / 共 2 步');
+    // start 事件携带草稿标记
+    const start = emitLog[0] as { caseId: string; stagedOps: number };
+    expect(start).toMatchObject({ caseId: localId, stagedOps: 0 });
+  });
+
+  it('纯草稿用例未落库：verify_case 通过后 DB 仍无 test_cases 行（验证全程不落库）', async () => {
+    const localId = randomUUID();
+    await pool.query(
+      `INSERT INTO ai_stage_cases(thread_id, local_id, version_id, title, steps, staged_at)
+       VALUES ('t1', $1, $2, '草稿', $3::jsonb, now())`,
+      [localId, versionId, JSON.stringify([{ action: '点击', compiled: CLICK_COMPILED, assertion: null }])],
+    );
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId: localId });
+    expect(r.ok).toBe(true);
+    const rows = await pool.query(`SELECT id FROM test_cases WHERE title = '草稿'`);
+    expect(rows.rows).toHaveLength(0);
   });
 
   it('stage_case_op 暂存 delete_case → ok:false（用例待删除，不应再验证）', async () => {

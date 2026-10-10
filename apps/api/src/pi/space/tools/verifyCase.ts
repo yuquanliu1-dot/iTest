@@ -11,7 +11,7 @@ import { chromium } from 'playwright-core';
 import type { Browser } from 'playwright-core';
 import { asc, eq, and } from 'drizzle-orm';
 import { db } from '../../../db/client.js';
-import { testCases, testSteps, aiStageCaseOps } from '../../../db/schema.js';
+import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/schema.js';
 import { runAiTask } from '../../../execute/aiTask.js';
 import { writeStepScreenshot } from '../../../execute/cdp.js';
 import { runCaseVisionAssert } from '../../../execute/visionAssert.js';
@@ -21,7 +21,7 @@ import { decrypt } from '../../../lib/secret-crypto.js';
 import { resolveLlmClient } from '../../../agent/llmSettings.js';
 import { tryParseJson } from '../../../agent/llm-client.js';
 import { extractPageElements } from '../../inspectPage.js';
-import { computeCaseOverlay } from './case-ops-tools.js';
+import { computeCaseOverlay, type EffectiveStep } from './case-ops-tools.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
@@ -158,7 +158,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'verify_case',
     description:
-      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性（全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理），失败即停并返回失败步骤详情与失败页可交互元素清单。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。验证会产生真实副作用（与正式执行一致）。',
+      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性（全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理），失败即停并返回失败步骤详情与失败页可交互元素清单。caseId 支持两种形态：落库用例 id，或本线程 stage_case 生成的 localId（纯草稿验证，全程不落库，save 时才正式建用例）。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。验证会产生真实副作用（与正式执行一致）。',
     parameters: Type.Object({
       caseId: Type.String({ minLength: 1 }),
     }),
@@ -166,6 +166,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       '含 compiled 步骤的用例创建/修改后，环境可用时调用 verify_case 实测验证，不要只凭源码分析就声称用例可运行。',
       'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
+      'stage_case 新建的纯草稿用例（未落库）也可直接 verify_case：caseId 传 stage_case 时声明的 localId；修正循环 = 同 localId 重发 stage_case（幂等覆盖）后再次 verify_case，全程不落库，通过后引导用户在暂存区勾选保存。注意：暂存草稿的 defaultEnvId 只能绑定已落库环境或留空走默认链（暂存环境不支持）。',
       'verify_case 会校验 compiled 选择器能真实命中页面（AI 临场绕开坏 locator 不算通过，回放逐字执行 compiled 会失败）:失败原因含"定位校验不通过"时,必须用 failure.page.elements 里的真实选择器替换原 locator(严禁留着坏 locator 只靠 AI 硬跑)。verify_case 还会做用例级终态判定(失败原因含 VisionAssertionFailed):步骤都通过但最终页面不符 expectedOutcome 时,修正步骤行为或调整 expectedOutcome 后再验。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。',
       '环境未配置 login 凭据而验证卡在登录页时，引导用户到项目环境页配置 login 凭据，不要伪造登录步骤。',
@@ -176,39 +177,77 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       // （ToolExecutor 契约：不向 agent 循环抛异常）
       try {
         // ── 前置校验（不启动浏览器）──
-        const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
-        if (!caseRow) return { ok: false, error: `用例不存在: ${caseId}` };
-        if (caseRow.platform === 'mobile') {
+        // caseId 双形态：落库用例 id，或本线程 stage_case 的 localId（纯草稿——验证全程不落库，save 时才正式建 case/steps）
+        const dbCase = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
+        let stagedCase: typeof aiStageCases.$inferSelect | null = null;
+        if (!dbCase) {
+          stagedCase =
+            (await db.select().from(aiStageCases)
+              .where(and(eq(aiStageCases.threadId, ctx.threadId), eq(aiStageCases.localId, caseId))))[0] ?? null;
+          if (!stagedCase) {
+            return { ok: false, error: `用例不存在: ${caseId}（既非落库用例，也非本线程暂存草稿）` };
+          }
+        }
+        if (dbCase?.platform === 'mobile') {
           return { ok: false, error: 'verify_case 暂不支持移动端用例（v1 仅支持 web）' };
         }
-        const steps = await db
-          .select()
-          .from(testSteps)
-          .where(eq(testSteps.caseId, caseId))
-          .orderBy(asc(testSteps.order));
+        // 执行所需元数据两种来源对齐到同一形状；草稿无 groupId（无分组默认 URL 链）、无 platform（暂存仅 web）
+        // 注意不能用 dbCase?.x ?? stagedCase!.x 合并——dbCase 存在而字段为 null 时会落到 stagedCase!.x 空引用
+        const caseMeta = dbCase
+          ? {
+              title: dbCase.title,
+              url: dbCase.url,
+              expectedOutcome: dbCase.expectedOutcome,
+              defaultEnvId: dbCase.defaultEnvId,
+              versionId: dbCase.versionId,
+            }
+          : {
+              title: stagedCase!.title,
+              url: stagedCase!.url ?? null,
+              expectedOutcome: stagedCase!.expectedOutcome ?? null,
+              defaultEnvId: stagedCase!.defaultEnvId ?? null,
+              versionId: stagedCase!.versionId,
+            };
+        const steps: EffectiveStep[] = dbCase
+          ? await db.select().from(testSteps).where(eq(testSteps.caseId, caseId)).orderBy(asc(testSteps.order))
+          : (stagedCase!.steps as Array<{ action?: unknown; assertion?: unknown; compiled?: unknown }>).map((s, i) => ({
+              id: `staged-${i + 1}`,
+              order: i + 1,
+              instruction: typeof s.action === 'string' ? s.action : null,
+              compiled: Array.isArray(s.compiled) ? s.compiled : null,
+              assertion: typeof s.assertion === 'string' ? s.assertion : null,
+              // 暂存步骤本无 sensitive/密文字段（save 映射也只带 instruction/assertion/compiled），与落库路径的虚拟插入步对齐
+              sensitive: false,
+              delayMs: null,
+              secretCiphertext: null,
+              secretIv: null,
+              secretTag: null,
+            }));
         if (steps.length === 0) return { ok: false, error: '用例没有可验证的步骤' };
 
         // ── 暂存叠加：本线程已暂存的 stage_case_op 虚拟应用到 DB 用例上,验证基于暂存状态继续——
         //    失败→暂存修正→直接重验的循环全程不落库,全部通过后用户在暂存区统一保存 ──
-        const stagedOps = await db
-          .select({ op: aiStageCaseOps.op, payload: aiStageCaseOps.payload })
-          .from(aiStageCaseOps)
-          .where(and(eq(aiStageCaseOps.threadId, ctx.threadId), eq(aiStageCaseOps.caseId, caseId)))
-          .orderBy(asc(aiStageCaseOps.stagedAt));
-        const overlay = computeCaseOverlay(steps, stagedOps);
-        if (overlay.deleteStaged) {
-          return { ok: false, error: '用例已暂存删除，请先在暂存区取消删除（或落库）后再验证' };
+        //    （纯草稿没有 DB caseId 可供 op 挂载，修正循环 = 同 localId 重发 stage_case 覆盖后再验）
+        let effectiveSteps = steps;
+        const overlayPatches: { url?: string | null; defaultEnvId?: string | null } = {};
+        let opsApplied = 0;
+        if (dbCase) {
+          const stagedOps = await db
+            .select({ op: aiStageCaseOps.op, payload: aiStageCaseOps.payload })
+            .from(aiStageCaseOps)
+            .where(and(eq(aiStageCaseOps.threadId, ctx.threadId), eq(aiStageCaseOps.caseId, caseId)))
+            .orderBy(asc(aiStageCaseOps.stagedAt));
+          const overlay = computeCaseOverlay(steps, stagedOps);
+          if (overlay.deleteStaged) {
+            return { ok: false, error: '用例已暂存删除，请先在暂存区取消删除（或落库）后再验证' };
+          }
+          if (overlay.steps) effectiveSteps = overlay.steps;
+          if (overlay.url !== undefined) overlayPatches.url = overlay.url;
+          if (overlay.defaultEnvId !== undefined) overlayPatches.defaultEnvId = overlay.defaultEnvId;
+          opsApplied = overlay.opsApplied;
         }
-        const effectiveSteps = overlay.steps ?? steps;
         if (effectiveSteps.length === 0) return { ok: false, error: '用例没有可验证的步骤' };
-        const effectiveCase =
-          overlay.url !== undefined || overlay.defaultEnvId !== undefined
-            ? {
-                ...caseRow,
-                ...(overlay.url !== undefined ? { url: overlay.url } : {}),
-                ...(overlay.defaultEnvId !== undefined ? { defaultEnvId: overlay.defaultEnvId } : {}),
-              }
-            : caseRow;
+        const effectiveCase = { ...caseMeta, ...overlayPatches };
 
         // ── LLM 前置检查（全 AI 驱动的硬前提；未配置直接失败，用户去设置页配置）──
         let client: Awaited<ReturnType<typeof resolveLlmClient>>['client'];
@@ -241,7 +280,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         }, VERIFY_TIMEOUT_MS);
         try {
           // resolveCaseUrl 有 db 查询，放进本 try 让 finally 的 envCtx.close 兜底（否则查询抛错会泄漏连接池）
-          const resolvedUrl = await resolveCaseUrl(effectiveCase, { envBaseUrl: envCtx.baseUrl });
+          // 草稿无分组，不走 resolveCaseUrl 的 group.defaultUrl 链：url → 环境 baseUrl
+          const resolvedUrl = stagedCase
+            ? (effectiveCase.url ?? envCtx.baseUrl)
+            : await resolveCaseUrl(
+                { url: effectiveCase.url, groupId: dbCase!.groupId },
+                { envBaseUrl: envCtx.baseUrl },
+              );
           const targetUrl = resolvedUrl && /^https?:\/\//.test(resolvedUrl) ? resolvedUrl : undefined;
           browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
           // 命中登录态缓存则注入 context:同环境重试轮/后续用例免登录（过期自愈,见 loginStateCache）
@@ -287,7 +332,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             type: 'verify_progress', phase: 'start', caseId, total: effectiveSteps.length, targetUrl: targetUrl ?? null,
             loginCache: cachedState ? ('hit' as const) : ('miss' as const),
             loginUser: envCtx.login?.user ?? null,
-            stagedOps: overlay.opsApplied,
+            stagedOps: opsApplied,
           });
           for (let i = 0; i < effectiveSteps.length; i++) {
             const s = effectiveSteps[i]!;
@@ -409,13 +454,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // 用例级终态判定：与正式回放同一 vision 断言（cdp.ts runCaseVisionAssert），
           // 全部步骤通过后再判 expectedOutcome——verify_case 不能只保证"步骤能执行"，还得保证"终态符合预期"。
           let visionFailure: { error?: string | null; humanMessage?: string | null; screenshot?: string | null; failureReason?: string | null } | null = null;
-          if (failedIndex < 0 && typeof caseRow.expectedOutcome === 'string' && caseRow.expectedOutcome.trim()) {
+          if (failedIndex < 0 && typeof effectiveCase.expectedOutcome === 'string' && effectiveCase.expectedOutcome.trim()) {
             const va = await runCaseVisionAssert({
               page,
               reportId,
-              caseTitle: caseRow.title,
+              caseTitle: effectiveCase.title,
               caseUrl: targetUrl ?? null,
-              expectedOutcome: caseRow.expectedOutcome,
+              expectedOutcome: effectiveCase.expectedOutcome,
               vars: {},
               sensitiveVarKeys: [],
               llmClient: client,
@@ -462,8 +507,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 envId: envCtx.envId,
                 targetUrl: targetUrl ?? null,
                 login,
-                basedOn: overlay.opsApplied > 0 ? ('staged' as const) : ('db' as const),
-                stagedOpsApplied: overlay.opsApplied,
+                basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
+                stagedOpsApplied: opsApplied,
                 steps: stepsSummary,
               }),
             };
@@ -478,8 +523,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 envId: envCtx.envId,
                 targetUrl: targetUrl ?? null,
                 login,
-                basedOn: overlay.opsApplied > 0 ? ('staged' as const) : ('db' as const),
-                stagedOpsApplied: overlay.opsApplied,
+                basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
+                stagedOpsApplied: opsApplied,
                 steps: stepsSummary,
                 failure: {
                   stepOrder: -1,
@@ -505,8 +550,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
               login,
-              basedOn: overlay.opsApplied > 0 ? ('staged' as const) : ('db' as const),
-              stagedOpsApplied: overlay.opsApplied,
+              basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
+              stagedOpsApplied: opsApplied,
               steps: stepsSummary,
               failure: {
                 stepOrder: failed.order,
