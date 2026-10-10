@@ -68,13 +68,21 @@ executionsRoute.get('/', async (req, res) => {
     const caseFilters = [
       inArray(reports.caseId, cs.map((c) => c.id)),
       // 计划运行的成员用例执行历史不在此列表展示（点击计划运行行可看其成员用例）：
-      // 排除挂在 plan_run_cases.report_id 上的报告，以及数据集迭代挂在 report_ids 数组中的报告。
+      // 排除挂在 plan_run_cases.report_id 上的报告、数据集迭代挂在 report_ids 数组中的报告，
+      // 以及「正在作为 plan 成员执行」的用例（runCase 一开跑就插 report，report_id 要等用例跑完才
+      // 回填——这段瞬态窗口内的 report 无任何 plan 链接，但 plan_run_cases 行以 status=running 先行存在，
+      // 据此精确识别。登录用例排在最前跑，正是该窗口最容易让用户在日常监控里看到的那条）。
       sql`not exists (
         select 1 from ${planRunCases} prc
         where prc.report_id = ${reports.id}
            or exists (
              select 1 from jsonb_array_elements_text(coalesce(prc.report_ids, '[]'::jsonb)) as rid(rid)
              where rid.rid = ${reports.id}::text
+           )
+           or exists (
+             select 1 from ${planRunCases} prc_active
+             where prc_active.case_id = ${reports.caseId}
+               and prc_active.status = 'running'
            )
       )`,
     ];
