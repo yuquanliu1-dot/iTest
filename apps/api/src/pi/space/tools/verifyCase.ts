@@ -49,7 +49,9 @@ interface AiStepResult {
  *  校验不通过必须在验证阶段就判失败，逼 AI 用真实选择器修正，而不是"AI 能过=用例能跑"。
  *  时机：click/hover 在步骤前校验（元素此时就该在页面上）；断言类、fill、check、select、extract 在 AI 通过后校验
  *  （这些动作结束时元素理应仍在）。navigate/aiTask/waitFor 无从或不必校验，跳过。
- *  locator 数组为候选或关系：任一命中即通过（与回放 tryFirstMatch 语义一致）。 */
+ *  locator 数组为候选或关系：任一命中即通过（与回放 tryFirstMatch 语义一致）；全部可探测候选均未命中才判失败。
+ *  候选探测异常（选择器不合法）按该候选落空处理——回放对 count 异常也是捕获后继续下一候选，两边语义一致。
+ *  role 等构建成本高的策略不探测、视为可信（占比小）。 */
 async function checkCompiledLocators(
   page: import('playwright-core').Page,
   compiled: unknown,
@@ -66,6 +68,7 @@ async function checkCompiledLocators(
     if (timing !== mode) continue;
     const locs = Array.isArray(a.locator) ? a.locator : [];
     if (locs.length === 0) continue;
+    // 结构性错误与命中无关，直接判失败
     for (const l of locs) {
       if (l.strategy === 'accessibilityId' || l.strategy === 'label' || l.strategy === 'predicate') {
         return `compiled 定位校验不通过: strategy '${l.strategy}' 为移动端专用，web 回放不支持`;
@@ -73,7 +76,13 @@ async function checkCompiledLocators(
       if (typeof l.value !== 'string' || !l.value) {
         return `compiled 定位校验不通过: ${a.kind} 的 locator 缺少 value`;
       }
-      const value = l.value;
+    }
+    // 候选或关系：按序探测，任一命中即通过（剩余候选不再探测）；全部落空才判失败
+    let hit = false;
+    let probed = 0;
+    const misses: string[] = [];
+    for (const l of locs) {
+      const value = l.value as string;
       // 与回放 tryFirstMatch 同策略映射；role 等构建成本高的策略跳过（占比小）。
       const probe = (): Promise<number> => {
         switch (l.strategy) {
@@ -85,6 +94,7 @@ async function checkCompiledLocators(
         }
       };
       if (l.strategy !== 'css' && l.strategy !== 'text' && l.strategy !== 'xpath' && l.strategy !== 'testId') continue;
+      probed++;
       try {
         let n = await probe();
         if (n === 0) {
@@ -92,12 +102,17 @@ async function checkCompiledLocators(
           await page.waitForTimeout(150);
           n = await probe();
         }
-        if (n === 0) {
-          return `compiled 定位校验不通过（回放将失败）: ${l.strategy}=${l.value} 命中 0 个元素`;
+        if (n > 0) {
+          hit = true;
+          break;
         }
+        misses.push(`${l.strategy}=${l.value} 命中 0 个元素`);
       } catch (e) {
-        return `compiled 定位校验异常（选择器可能不合法，回放将抛错）: ${l.strategy}=${l.value} — ${(e as Error).message.slice(0, 120)}`;
+        misses.push(`${l.strategy}=${l.value} 探测异常: ${(e as Error).message.slice(0, 80)}`);
       }
+    }
+    if (probed > 0 && !hit) {
+      return `compiled 定位校验不通过（回放将失败）: ${a.kind} 全部 ${probed} 个候选均未命中 — ${misses.join('；')}`;
     }
   }
   return null;
