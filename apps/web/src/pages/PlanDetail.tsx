@@ -10,9 +10,22 @@ import Button from '../components/ui/Button';
 import IconButton from '../components/ui/IconButton';
 import ScheduleListCard from '../components/plans/ScheduleListCard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
+  DropdownMenuCheckboxItem, DropdownMenuItem, DropdownMenuSeparator,
+} from '../components/ui/shadcn/dropdown-menu';
 import { caseStatusLabel } from '../lib/format';
 
 type Strategy = 'run_all' | 'fail_fast';
+
+/** 添加用例弹窗的过滤选中集：每维一组 value（多选并集）。 */
+type AddFilters = {
+  groups: string[];
+  versions: string[];
+  statuses: string[];
+  priorities: string[];
+  tags: string[];
+};
 
 export default function PlanDetail() {
   const { id, projectId, versionId: vidParam } = useParams<{ id: string; projectId: string; versionId?: string }>();
@@ -42,12 +55,41 @@ export default function PlanDetail() {
     enabled: !!projectId,
   });
 
+  /** 添加用例弹窗的过滤维度选项：分组名 / 版本名 / 标签名靠三处 GET 提供（值与选中集在前端本地筛）。 */
+  const { data: projectGroups } = useQuery({
+    queryKey: ['groups', projectId],
+    queryFn: () => api.projects.groups(projectId!),
+    enabled: !!projectId,
+  });
+  const { data: projectVersions } = useQuery({
+    queryKey: ['versions', projectId],
+    queryFn: () => api.versions.list(projectId!),
+    enabled: !!projectId,
+  });
+  const { data: projectTags } = useQuery({
+    queryKey: ['tags', projectId],
+    queryFn: () => api.tags.list(projectId!),
+    enabled: !!projectId,
+  });
+
+  /** 添加用例弹窗过滤：每维多选（并集），维度间取交集。弹窗每次打开重置为空。 */
+  const EMPTY_ADD_FILTERS: AddFilters = { groups: [], versions: [], statuses: [], priorities: [], tags: [] };
+  const [addFilters, setAddFilters] = useState<AddFilters>(EMPTY_ADD_FILTERS);
+  const hasAddFilter = addFilters.groups.length > 0 || addFilters.versions.length > 0
+    || addFilters.statuses.length > 0 || addFilters.priorities.length > 0 || addFilters.tags.length > 0;
+
   const inPlanIds = useMemo(() => new Set((plan?.cases ?? []).map((c) => c.id)), [plan]);
   const candidates = useMemo(() => {
-    const list = (allCases ?? []).filter((c) => !inPlanIds.has(c.id));
-    if (!search.trim()) return list;
-    return list.filter((c) => c.title.includes(search.trim()));
-  }, [allCases, inPlanIds, search]);
+    let list = (allCases ?? []).filter((c) => !inPlanIds.has(c.id));
+    // 状态/标签走前端本地筛（GET /cases 不接这两个参数，与 GroupsPage 一致）
+    if (addFilters.groups.length) list = list.filter((c) => addFilters.groups.includes(c.groupId ?? ''));
+    if (addFilters.versions.length) list = list.filter((c) => c.versionId != null && addFilters.versions.includes(c.versionId));
+    if (addFilters.statuses.length) list = list.filter((c) => addFilters.statuses.includes(c.status));
+    if (addFilters.priorities.length) list = list.filter((c) => addFilters.priorities.includes(c.priority));
+    if (addFilters.tags.length) list = list.filter((c) => (c.tags ?? []).some((t) => addFilters.tags.includes(t.id)));
+    if (search.trim()) list = list.filter((c) => c.title.includes(search.trim()));
+    return list;
+  }, [allCases, inPlanIds, addFilters, search]);
 
   const [loginQ, setLoginQ] = useState('');
   const { data: loginCases } = useQuery({
@@ -239,7 +281,7 @@ export default function PlanDetail() {
           </span>
         ) : null}
         <div className="flex-1" />
-        <Button variant="ghost" onClick={() => setShowAdd(true)}>
+        <Button variant="ghost" onClick={() => { setShowAdd(true); setAddFilters(EMPTY_ADD_FILTERS); setSearch(''); }}>
           <Icon name="plus" size={12} />
           添加用例
         </Button>
@@ -439,7 +481,7 @@ export default function PlanDetail() {
       </div>
 
       <Dialog open={showAdd} onOpenChange={setShowAdd}>
-        <DialogContent style={{ maxWidth: 540 }}>
+        <DialogContent style={{ maxWidth: 600 }}>
           <DialogHeader>
             <DialogTitle>添加用例</DialogTitle>
           </DialogHeader>
@@ -454,10 +496,54 @@ export default function PlanDetail() {
                 className="input-base input-sm input-with-leading"
               />
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <FacetDropdown
+                label="分组"
+                options={(projectGroups ?? []).map((g) => ({ value: g.id, label: g.name }))}
+                selected={addFilters.groups}
+                onChange={(v) => setAddFilters({ ...addFilters, groups: v })}
+              />
+              <FacetDropdown
+                label="版本"
+                options={(projectVersions ?? []).map((v) => ({ value: v.id, label: v.name }))}
+                selected={addFilters.versions}
+                onChange={(v) => setAddFilters({ ...addFilters, versions: v })}
+              />
+              <FacetDropdown
+                label="状态"
+                options={(['draft', 'review', 'ready', 'deprecated'] as const).map((s) => ({ value: s, label: caseStatusLabel(s) }))}
+                selected={addFilters.statuses}
+                onChange={(v) => setAddFilters({ ...addFilters, statuses: v })}
+              />
+              <FacetDropdown
+                label="优先级"
+                options={['P0', 'P1', 'P2', 'P3'].map((p) => ({ value: p, label: p }))}
+                selected={addFilters.priorities}
+                onChange={(v) => setAddFilters({ ...addFilters, priorities: v })}
+              />
+              <FacetDropdown
+                label="标签"
+                options={(projectTags ?? []).map((t) => ({ value: t.id, label: t.name }))}
+                selected={addFilters.tags}
+                onChange={(v) => setAddFilters({ ...addFilters, tags: v })}
+              />
+              {hasAddFilter && (
+                <button
+                  type="button"
+                  onClick={() => setAddFilters(EMPTY_ADD_FILTERS)}
+                  className="press input-sm px-2 text-[12px]"
+                  style={{ color: 'var(--primary)' }}
+                >
+                  重置
+                </button>
+              )}
+            </div>
           </div>
           <div className="px-5 pb-4 max-h-[400px] overflow-y-auto flex flex-col gap-1">
             {candidates.length === 0 ? (
-              <div className="text-[12px] py-8 text-center" style={{ color: 'var(--muted-foreground)' }}>没有可添加的用例</div>
+              <div className="text-[12px] py-8 text-center" style={{ color: 'var(--muted-foreground)' }}>
+                {hasAddFilter || search.trim() ? '无匹配当前筛选的用例' : '没有可添加的用例'}
+              </div>
             ) : (
               candidates.map((c) => {
                 const checked = selectedAdd.has(c.id);
@@ -546,5 +632,59 @@ export default function PlanDetail() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/** 添加用例弹窗的多选过滤菜单：按钮显示 label +（选中数），展开为 checkbox 多选（镜像 GroupsPage facet 交互）。
+ *  options 空 → 禁选「无可选项」；有选中 → 顶部「清除」一键清空该维。 */
+function FacetDropdown({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: Array<{ value: string; label: string }>;
+  selected: string[];
+  onChange: (values: string[]) => void;
+}) {
+  const active = selected.length > 0;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="input-base input-sm inline-flex items-center gap-1 press"
+          style={active ? { borderColor: 'var(--primary)', color: 'var(--primary)' } : undefined}
+        >
+          {label}
+          {active ? ` (${selected.length})` : ''}
+          <Icon name="chevronDown" size={12} style={{ flexShrink: 0 }} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-72 min-w-44 overflow-y-auto">
+        {options.length === 0 ? (
+          <DropdownMenuItem disabled>无可选项</DropdownMenuItem>
+        ) : (
+          <>
+            {active && (
+              <>
+                <DropdownMenuItem onSelect={() => onChange([])}>清除</DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            {options.map((o) => (
+              <DropdownMenuCheckboxItem
+                key={o.value}
+                checked={selected.includes(o.value)}
+                onCheckedChange={(next) => onChange(next === true ? [...selected, o.value] : selected.filter((v) => v !== o.value))}
+              >
+                {o.label}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
