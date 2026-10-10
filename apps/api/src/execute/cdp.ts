@@ -511,6 +511,12 @@ function locatorForCandidate(locator: Locator[], intent: IntentLocator | undefin
   return kind;
 }
 
+/** tryFirstMatch 探测视角的 locator 形状：count() 探测存在性，filter({visible}) 取可见子集。 */
+interface ProbeLocator {
+  count?: () => Promise<number>;
+  filter?: (opts: { visible: boolean }) => ProbeLocator;
+}
+
 /**
  * 三层定位候选顺序尝试；任一成功即返回。所有候选失败抛错。
  * 使用 buildCandidates 构造候选；优先用 intent.testid / contextText，再稳定 #id CSS，最后是 XPath / 其它 CSS。
@@ -549,7 +555,7 @@ async function tryFirstMatch(
   for (let round = 0; round < LOCATOR_PROBE_ROUNDS; round++) {
     if (round > 0) await page.waitForTimeout(LOCATOR_PROBE_INTERVAL_MS);
     for (const c of cands) {
-      const probe = c.loc as unknown as { count?: () => Promise<number> };
+      const probe = c.loc as unknown as ProbeLocator;
       if (!probe || typeof probe.count !== 'function') {
         // 没有 count()（如 getByText 路径）直接接受
         if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
@@ -557,8 +563,23 @@ async function tryFirstMatch(
       }
       const n = await probe.count().catch((e) => { lastErr = e; return -1; });
       if (n > 0) {
+        // 2026-10-10 Fix C（可见性感知探测）: raw 命中后还需存在「可见」实例才返回,
+        // 并把可见子集交给后续动作。Element-UI 固定列/模板克隆会让链式选择器解析到
+        // 不可见副本,生产上有两种失败形态:
+        //  ① 单匹配不可见 → click 无坐标可算,~1s 抛 "Element is not visible"(克隆/导入导出);
+        //  ② force:true 点中不可见副本"通过"但实际无效果,后续步骤 count=0(查看/编辑)。
+        // 可见子集为空 → 视为本轮落空,继续轮询/下一候选(行重渲染竞态下下轮会出现可见实例);
+        // 可见性探测异常或 locator 无 filter() → 维持旧行为返回原 locator。
+        const visibleLoc = probe.filter?.({ visible: true });
+        const vn = visibleLoc && typeof visibleLoc.count === 'function'
+          ? await visibleLoc.count().catch((e) => { lastErr = e; return -1; })
+          : -1;
+        if (vn === 0) {
+          lastErr = new Error(`resolved ${n} match(es) but none visible (${c.kind})`);
+          continue;
+        }
         if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
-        return c.loc;
+        return (vn > 0 ? visibleLoc! : c.loc) as ReturnType<Page['locator']>;
       }
       if (n === 0) lastErr = new Error(`count=0 (${c.kind})`);
     }
