@@ -6,7 +6,12 @@ import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
 // 全 AI 驱动编排测试：runAiTask / writeStepScreenshot / extractPageElements 打桩，聚焦 verify_case 编排契约。
 vi.mock('../src/execute/aiTask.js', () => ({ runAiTask: vi.fn() }));
-vi.mock('../src/execute/cdp.js', () => ({ writeStepScreenshot: vi.fn(async () => '/screenshots/verify-x/step-1.png') }));
+vi.mock('../src/execute/cdp.js', () => ({
+  writeStepScreenshot: vi.fn(async () => '/screenshots/verify-x/step-1.png'),
+  // runCaseVisionAssert 依赖的模板物化/脱敏（验证场景无数据集变量/敏感列，恒等即可）
+  materializeExpectedOutcome: (t: string) => t,
+  maskSensitiveValues: (t: string) => t,
+}));
 vi.mock('../src/pi/inspectPage.js', () => ({
   extractPageElements: vi.fn(async () => ({
     title: '失败页',
@@ -23,8 +28,15 @@ vi.mock('../src/agent/llmSettings.js', () => ({
   })),
 }));
 // playwright 桩：launch → context.newPage 返回极简 page；gotos 记录初始导航、ctxOpts 记录 newContext 入参（经 __testState 暴露给测试）。
+// locator/getByText/getByTestId 模拟 compiled 保真校验的 count 探测：zeroLocators 里的选择器永远命中 0；含 :contains 的选择器抛非法伪类错误（与真实 Playwright 一致）。
 vi.mock('playwright-core', () => {
-  const state = { gotos: [] as string[], ctxOpts: [] as unknown[] };
+  const state = { gotos: [] as string[], ctxOpts: [] as unknown[], zeroLocators: [] as string[] };
+  const makeLoc = (sel: string) => ({
+    count: async () => {
+      if (sel.includes(':contains')) throw new Error(`Unknown pseudo-class "${sel.match(/:contains/)?.[0]}"`);
+      return state.zeroLocators.some((z) => sel.includes(z)) ? 0 : 1;
+    },
+  });
   return {
     chromium: {
       launch: vi.fn(async () => ({
@@ -37,6 +49,10 @@ vi.mock('playwright-core', () => {
               waitForLoadState: async () => {},
               waitForTimeout: async () => {},
               close: async () => {},
+              screenshot: async () => Buffer.from('fake-png'),
+              locator: (sel: string) => makeLoc(sel),
+              getByText: (t: string) => makeLoc(`text=${t}`),
+              getByTestId: (t: string) => makeLoc(`testid=${t}`),
             }),
             storageState: async () => ({ cookies: [{ name: 'sid', value: 'cached' }], origins: [] }),
             close: async () => {},
@@ -48,6 +64,10 @@ vi.mock('playwright-core', () => {
     __testState: state,
   };
 });
+// judgeCaseOutcome 桩：vision 终态判定的 LLM 判官（真实实现要走视觉模型，测试注入裁决结果）。
+vi.mock('../src/agent/judgeCaseOutcome.js', () => ({
+  judgeCaseOutcome: vi.fn(async () => ({ passed: true, reason: 'ok' })),
+}));
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -87,10 +107,11 @@ afterAll(async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   const { __testState } = (await import('playwright-core')) as unknown as {
-    __testState: { gotos: string[]; ctxOpts: unknown[] };
+    __testState: { gotos: string[]; ctxOpts: unknown[]; zeroLocators: string[] };
   };
   __testState.gotos.length = 0;
   __testState.ctxOpts.length = 0;
+  __testState.zeroLocators.length = 0;
   await pool.query(`TRUNCATE test_steps, test_cases, test_environments, environment_objects,
     requirements, "groups", projects, project_versions, ai_threads, ai_workspace_state, ai_stage_case_ops
     RESTART IDENTITY CASCADE`);
@@ -109,6 +130,7 @@ async function seedCase(opts: {
   platform?: string;
   url?: string | null;
   steps?: unknown[];
+  expectedOutcome?: string | null;
   /** 仅对第 1 步标记 sensitive 并注入密文（明文 StepSecret!9） */
   sensitiveStep1?: boolean;
   /** sensitive=true 但不注入密文（secret-missing 场景） */
@@ -116,8 +138,8 @@ async function seedCase(opts: {
 }): Promise<string> {
   const id = randomUUID();
   await pool.query(
-    `INSERT INTO test_cases(id, group_id, version_id, title, url, platform) VALUES ($1, $2, $3, '验证用例', $4, $5)`,
-    [id, groupId, versionId, opts.url ?? 'http://env.example/page', opts.platform ?? 'web'],
+    `INSERT INTO test_cases(id, group_id, version_id, title, url, platform, expected_outcome) VALUES ($1, $2, $3, '验证用例', $4, $5, $6)`,
+    [id, groupId, versionId, opts.url ?? 'http://env.example/page', opts.platform ?? 'web', opts.expectedOutcome ?? null],
   );
   for (let i = 0; i < (opts.steps ?? []).length; i++) {
     await pool.query(
@@ -484,6 +506,81 @@ describe('verify_case 逐步 AI 执行编排', () => {
     const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('已暂存删除');
+  });
+
+  it('compiled 保真前置校验：click 用非法 :contains 选择器 → LocatorMismatch，不调 runAiTask', async () => {
+    const caseId = await seedCase({
+      steps: [[{ kind: 'click', locator: [{ strategy: 'css', value: "button.el-button--primary>span:contains('新建')" }] }]],
+    });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    expect(runAiTask).not.toHaveBeenCalled(); // 前置拦截，不烧 AI 轮次
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('failed');
+      expect(data.steps[0].failureReason).toBe('LocatorMismatch');
+      expect(data.steps[0].error).toContain(':contains');
+      expect(data.failure.failureReason).toBe('LocatorMismatch');
+    }
+  });
+
+  it('compiled 保真后置校验：AI 报 passed 但 assertVisible locator 命中 0 → LocatorMismatch', async () => {
+    const caseId = await seedCase({
+      steps: [[{ kind: 'assertVisible', locator: [{ strategy: 'css', value: '.ghost-element' }] }]],
+    });
+    const { __testState } = (await import('playwright-core')) as unknown as { __testState: { zeroLocators: string[] } };
+    __testState.zeroLocators.push('.ghost-element');
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"看到了","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('failed');
+      // AI 明明报了 passed，保真校验仍判失败（回放将 count=0）
+      expect(data.steps[0].status).toBe('failed');
+      expect(data.steps[0].failureReason).toBe('LocatorMismatch');
+      expect(data.steps[0].error).toContain('.ghost-element');
+    }
+  });
+
+  it('用例级终态判定：步骤全过后 vision 判不符 expectedOutcome → failed VisionAssertionFailed', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED], expectedOutcome: '字段以只读形式展示' });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { judgeCaseOutcome } = await import('../src/agent/judgeCaseOutcome.js');
+    vi.mocked(judgeCaseOutcome).mockResolvedValue({ passed: false, reason: '输入框未置灰，仍可编辑' });
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('failed');
+      expect(data.steps[0].status).toBe('passed'); // 步骤本身没问题，死在终态
+      expect(data.failure.stepOrder).toBe(-1);
+      expect(data.failure.failureReason).toBe('VisionAssertionFailed');
+      expect(data.failure.error).toContain('输入框未置灰');
+      expect(data.failure.humanMessage).toBe('最终页面与用例预期不符');
+    }
+  });
+
+  it('用例级终态判定通过：vision 判 passed → 整体 passed（judge 被真实调用一次）', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED], expectedOutcome: '列表展示解析规则' });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { judgeCaseOutcome } = await import('../src/agent/judgeCaseOutcome.js');
+    vi.mocked(judgeCaseOutcome).mockResolvedValue({ passed: true, reason: '列表已展示规则' });
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('passed');
+    }
+    expect(vi.mocked(judgeCaseOutcome)).toHaveBeenCalledTimes(1);
   });
 });
 
