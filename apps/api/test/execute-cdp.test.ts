@@ -672,6 +672,107 @@ describe('locator probe window — SPA 深链挂载滞后的有界轮询', () =>
   });
 });
 
+describe('Fix C — visibility-aware probe (tryFirstMatch)', () => {
+  it('raw 单匹配不可见 → 窗口内轮询等到可见实例，点击落在可见子集上（克隆/导入导出 签名①自愈）', async () => {
+    mocked.__locator.mockClear();
+    // prod228 克隆解析规则 step-0 复现形态：链式选择器解析到唯一匹配但不可见
+    //（Element-UI 固定列/模板克隆），行重渲染后可见实例才出现。
+    const okClick = vi.fn().mockResolvedValue(undefined);
+    let visProbes = 0;
+    const visibleLoc = {
+      click: okClick,
+      count: vi.fn().mockImplementation(async () => (visProbes++ < 2 ? 0 : 1)),
+    };
+    const raw = {
+      click: vi.fn().mockResolvedValue(undefined),
+      count: vi.fn().mockResolvedValue(1),
+      filter: vi.fn().mockReturnValue(visibleLoc),
+    };
+    mocked.__locator.mockImplementationOnce(() => raw as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000060',
+      [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#clone-icon' }] }] }],
+      { reportId: 'r-fixc-late-visible' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(raw.click).not.toHaveBeenCalled(); // 永远不点 raw（可能命中不可见副本）
+    expect(raw.filter).toHaveBeenCalledWith({ visible: true });
+    expect(okClick).toHaveBeenCalledWith(expect.objectContaining({ force: true }));
+  });
+
+  it('全窗口无可见实例 → 失败并报 none visible，不点击不可见元素（签名①不可自愈时诚实失败）', async () => {
+    mocked.__locator.mockClear();
+    const raw = {
+      click: vi.fn().mockResolvedValue(undefined),
+      count: vi.fn().mockResolvedValue(1),
+      filter: vi.fn().mockReturnValue({ count: vi.fn().mockResolvedValue(0) }),
+    };
+    mocked.__locator.mockImplementationOnce(() => raw as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000061',
+      [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#gone-hidden' }] }] }],
+      { reportId: 'r-fixc-never-visible' },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/none visible/);
+    expect(raw.click).not.toHaveBeenCalled();
+  });
+
+  it('候选1 仅解析到不可见实例 → 落到候选2 的可见实例（导入导出 checkbox 形态）', async () => {
+    mocked.__locator.mockClear();
+    const badClick = vi.fn().mockResolvedValue(undefined);
+    const okClick = vi.fn().mockResolvedValue(undefined);
+    const cand1 = {
+      click: badClick,
+      count: vi.fn().mockResolvedValue(1),
+      filter: vi.fn().mockReturnValue({ count: vi.fn().mockResolvedValue(0) }),
+    };
+    const cand2Visible = { click: okClick, count: vi.fn().mockResolvedValue(1) };
+    const cand2 = {
+      count: vi.fn().mockResolvedValue(1),
+      filter: vi.fn().mockReturnValue(cand2Visible),
+    };
+    mocked.__locator.mockImplementationOnce(() => cand1 as never);
+    mocked.__locator.mockImplementationOnce(() => cand2 as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000062',
+      [{
+        order: 1,
+        compiled: [{
+          kind: 'click',
+          locator: [
+            { strategy: 'css', value: '#a' },
+            { strategy: 'css', value: '#b' },
+          ],
+        }],
+      }],
+      { reportId: 'r-fixc-candidate-fallthrough' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(badClick).not.toHaveBeenCalled();
+    expect(okClick).toHaveBeenCalled();
+  });
+
+  it('raw 与可见子集同时命中 → 点击派发到可见子集而非 raw（查看/编辑 签名② force 空转）', async () => {
+    mocked.__locator.mockClear();
+    // 查看/编辑 复现形态：raw 解析成功且 force click"通过"，但点到不可见副本无实际效果。
+    // Fix C 后返回可见子集，动作天然作用于真实元素。
+    const rawClick = vi.fn().mockResolvedValue(undefined);
+    const okClick = vi.fn().mockResolvedValue(undefined);
+    const visibleLoc = { click: okClick, count: vi.fn().mockResolvedValue(1) };
+    const raw = { click: rawClick, count: vi.fn().mockResolvedValue(1), filter: vi.fn().mockReturnValue(visibleLoc) };
+    mocked.__locator.mockImplementationOnce(() => raw as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000063',
+      [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#view-icon' }] }] }],
+      { reportId: 'r-fixc-visible-subset' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(okClick).toHaveBeenCalled();
+    expect(rawClick).not.toHaveBeenCalled();
+  });
+});
+
 describe('phase3 — composite value at execute', () => {
   it('composite fill uses materialized fragment value', async () => {
     mocked.__locator.mockClear();
