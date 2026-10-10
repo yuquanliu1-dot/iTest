@@ -3,6 +3,21 @@ const STATE_CLASSES = new Set([
   'loading', 'open', 'show', 'checked', 'expanded',
   'collapsed', 'current',
 ]);
+/** UI 组件库的运行时交互态 class：录制瞬间存在——用户鼠标正悬在行/按钮上——回放（无鼠标悬停）
+ *  必然不存在，固化进 css 链回放必 count=0（规则查看 用例根因：el-table 悬停行 .hover-row）。
+ *  Element-UI：hover-row（表格悬停行）/ current-row（高亮行）/ is-hover / is-active；
+ *  通用命名：hovering / focused / mouse-in。 */
+const TRANSIENT_STATE_CLASS_RE = /^(?:hover-row|current-row|hovering|focused|mouse-in)$/i;
+/** 后缀族：cell-hover / row-hover / ant-table-cell-row-hover / tab-active / btn-selected 等——
+ *  以 -hover/-focus/-active/-selected 结尾的 class 几乎全是交互态样式钩子，按瞬态丢弃。 */
+const TRANSIENT_CLASS_TAIL_RE = /-(?:hover|focus|active|selected)$/i;
+
+/** class 是否运行时瞬态（STATE_CLASSES 精确集 + UI 库瞬态族）：录制存在、回放必无。
+ *  selector-core 的 finder className 过滤与本文件的两条清洗路径（hasUnstableClass / filterSegment）
+ *  共用同一口径——finder 产物不掺瞬态类，兜底清洗也能把它们剥掉。 */
+export function isTransientStateClass(cls: string): boolean {
+  return STATE_CLASSES.has(cls) || TRANSIENT_STATE_CLASS_RE.test(cls) || TRANSIENT_CLASS_TAIL_RE.test(cls);
+}
 /** Radix / shadcn 等组件库在运行时挂的状态属性。`data-[state=open]:animate-in` 这类属性选择器
  *  在 buildCssPath 时会被当成 class 段保留下来，但每次 state 切换都会变化，必须当作 STATE 丢掉。
  *  扁平切分后会出现四种 token：
@@ -157,7 +172,7 @@ export function hasUnstableClass(path: string): boolean {
       if (!tok.startsWith('.')) return false;
       const cls = tok.slice(1);
       return (
-        STATE_CLASSES.has(cls) ||
+        isTransientStateClass(cls) ||
         STATE_ATTR_CLASS_RE.test(cls) ||
         (IVU_PREFIX.test(cls) && !/^ivu-btn|^ivu-select/.test(cls)) ||
         EL_HEX_TAIL.test(cls) ||
@@ -191,7 +206,7 @@ function filterSegment(seg: string): string {
     }
     if (!tok.startsWith('.')) return true;
     const cls = tok.slice(1);
-    if (STATE_CLASSES.has(cls)) return false;
+    if (isTransientStateClass(cls)) return false;
     if (NUMERIC_CLASS_RE.test(cls)) return false;
     if (STATE_ATTR_CLASS_RE.test(cls)) return false;
     if (IVU_PREFIX.test(cls) && !/^ivu-btn|^ivu-select/.test(cls)) return false;

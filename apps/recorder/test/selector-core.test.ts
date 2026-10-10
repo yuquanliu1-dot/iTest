@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { JSDOM } from 'jsdom';
-import { generateLocators, deriveSemantic } from '../modules/selector-core.js';
+import { generateLocators, deriveSemantic, positionalOwnClassCandidate } from '../modules/selector-core.js';
 
 let document: Document;
 
@@ -261,6 +261,86 @@ describe('selector-core — preferredDataAttribute', () => {
     const cssCustom = generateLocators(span2, { preferredDataAttribute: 'data-qa' }).find((l) => l.strategy === 'css')!.value;
     expect(cssCustom).toContain('data-qa');
     expect(cssCustom).toContain('projects');
+  });
+});
+
+describe('selector-core — 悬停瞬态与属性名候选（规则查看 用例回归）', () => {
+  /** 把 JSDOM 文档挂到 globalThis.document.body——finder 以 document.body 为 root 做唯一性校验，
+   *  detached 元素会让 finder 抛错走 fallback 路径。 */
+  function mountToBody(dom: JSDOM) {
+    while (dom.window.document.body.firstChild) {
+      document.body.appendChild(dom.window.document.body.firstChild);
+    }
+  }
+
+  it('悬停行 .hover-row 不进任何 css 候选（finder className 过滤）', () => {
+    const dom = new JSDOM(`<!doctype html><html><body>
+      <table><tbody>
+        <tr class="el-table__row hover-row"><td><i class="icon-chakan" title="查看"></i></td></tr>
+        <tr class="el-table__row"><td><i class="icon-chakan" title="查看"></i></td></tr>
+      </tbody></table>
+    </body></html>`);
+    mountToBody(dom);
+    const icon = document.querySelector('tr .icon-chakan')!;
+    const cssLocs = generateLocators(icon).filter((l) => l.strategy === 'css');
+    expect(cssLocs.length).toBeGreaterThan(0);
+    expect(cssLocs.every((l) => !l.value.includes('hover-row'))).toBe(true);
+  });
+
+  it('纯图标元素：title 属性不产 text 候选（getByText 看不到属性），改产 [title=...] css 候选', () => {
+    const dom = new JSDOM('<i class="icon-chakan" title="查看"></i>');
+    const icon = dom.window.document.querySelector('i')!;
+    const locs = generateLocators(icon);
+    expect(locs.find((l) => l.strategy === 'text')).toBeUndefined();
+    expect(locs.find((l) => l.strategy === 'css' && l.value === '[title="查看"]')).toBeDefined();
+  });
+
+  it('aria-label 属性同样不产 text 候选，产 [aria-label=...] css 候选', () => {
+    const dom = new JSDOM('<span aria-label="展开详情"></span>');
+    const el = dom.window.document.querySelector('span')!;
+    const locs = generateLocators(el);
+    expect(locs.find((l) => l.strategy === 'text')).toBeUndefined();
+    expect(locs.find((l) => l.strategy === 'css' && l.value === '[aria-label="展开详情"]')).toBeDefined();
+  });
+
+  it('有子树文本的元素照旧产 text 候选，且不重复给属性兜底候选', () => {
+    const dom = new JSDOM('<button aria-label="提交">保存</button>');
+    const btn = dom.window.document.querySelector('button')!;
+    const locs = generateLocators(btn);
+    expect(locs.find((l) => l.strategy === 'text')?.value).toBe('保存');
+    expect(locs.find((l) => l.strategy === 'css' && l.value.startsWith('[aria-label'))).toBeUndefined();
+  });
+
+  it('input 的 placeholder 不再产 text 候选（getByText 看不到 placeholder）', () => {
+    const dom = new JSDOM('<input placeholder="账号" />');
+    const input = dom.window.document.querySelector('input')!;
+    const locs = generateLocators(input);
+    expect(locs.find((l) => l.strategy === 'text')).toBeUndefined();
+    expect(locs.find((l) => l.strategy === 'css' && l.value === '[placeholder="账号"]')).toBeDefined();
+  });
+});
+
+describe('positionalOwnClassCandidate — 位置链兜底候选', () => {
+  it('≥3 段 :nth-of-type 且元素带可辨识 class → 给 .own-class 候选', () => {
+    const dom = new JSDOM('<div class="op-btn icon-edit">A</div>');
+    const el = dom.window.document.querySelector('div')!;
+    const css = '.scroller > div > div > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1)';
+    expect(positionalOwnClassCandidate(css, el)).toBe('.op-btn.icon-edit');
+  });
+  it('位置段不足 3 → null（唯一性更强的大链无需兜底）', () => {
+    const dom = new JSDOM('<div class="op-btn">A</div>');
+    const el = dom.window.document.querySelector('div')!;
+    expect(positionalOwnClassCandidate('tr:nth-of-type(3) .icon-chakan', el)).toBeNull();
+  });
+  it('元素无可辨识 class（bare / 仅组件库或 utility class）→ null', () => {
+    const dom = new JSDOM('<div class="el-button flex w-full"></div>');
+    const el = dom.window.document.querySelector('div')!;
+    expect(positionalOwnClassCandidate('div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1)', el)).toBeNull();
+  });
+  it(':nth-child 与 :nth-of-type 同计数', () => {
+    const dom = new JSDOM('<div class="op-btn">A</div>');
+    const el = dom.window.document.querySelector('div')!;
+    expect(positionalOwnClassCandidate('div:nth-child(1) > div:nth-child(2) > div:nth-child(3)', el)).toBe('.op-btn');
   });
 });
 
