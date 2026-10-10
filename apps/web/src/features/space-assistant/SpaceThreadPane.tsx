@@ -23,6 +23,10 @@ export default function SpaceThreadPane({ threadId }: { threadId: string }) {
       <ThreadPrimitive.Root className="flex flex-col h-full">
         <ThreadPrimitive.Viewport className="flex-1 min-h-0 overflow-y-auto px-4 py-5">
           <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
+          {/* 运行期常驻指示:工具间隙/模型静默期没有任何可见输出,靠底部三点动效提示会话仍在跑,避免"卡死"错觉 */}
+          <ThreadPrimitive.If running>
+            <RunningIndicator />
+          </ThreadPrimitive.If>
         </ThreadPrimitive.Viewport>
         <ThreadPrimitive.ViewportFooter className="border-t p-3" style={{ borderColor: 'var(--border)' }}>
           <VerifyProgressCard />
@@ -90,6 +94,20 @@ function AssistantMessage() {
           color: 'var(--destructive)',
         }}
       />
+    </div>
+  );
+}
+
+/** 运行指示:running=true 期间常驻消息列表底部(thinking-dot 三点动效,与思考中段同一视觉语言)。 */
+function RunningIndicator() {
+  return (
+    <div className="mb-4 inline-flex items-center gap-1 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+      正在运行
+      <span className="inline-flex items-center gap-0.5">
+        <span className="thinking-dot" />
+        <span className="thinking-dot" />
+        <span className="thinking-dot" />
+      </span>
     </div>
   );
 }
