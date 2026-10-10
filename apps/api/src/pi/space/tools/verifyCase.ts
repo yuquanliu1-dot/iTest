@@ -14,6 +14,7 @@ import { db } from '../../../db/client.js';
 import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/schema.js';
 import { runAiTask } from '../../../execute/aiTask.js';
 import { writeStepScreenshot } from '../../../execute/cdp.js';
+import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from '../../../execute/locator-probe.js';
 import { runCaseVisionAssert } from '../../../execute/visionAssert.js';
 import { resolveEnv } from '../../../execute/envContext.js';
 import { resolveCaseUrl } from '../../../lib/resolve-url.js';
@@ -77,42 +78,46 @@ async function checkCompiledLocators(
         return `compiled 定位校验不通过: ${a.kind} 的 locator 缺少 value`;
       }
     }
-    // 候选或关系：按序探测，任一命中即通过（剩余候选不再探测）；全部落空才判失败
-    let hit = false;
-    let probed = 0;
-    const misses: string[] = [];
-    for (const l of locs) {
-      const value = l.value as string;
-      // 与回放 tryFirstMatch 同策略映射；role 等构建成本高的策略跳过（占比小）。
-      const probe = (): Promise<number> => {
+    // 候选或关系：按序探测，任一命中即通过（剩余候选不再探测）；全部落空才判失败。
+    // 探测窗口与回放 tryFirstMatch 对齐（LOCATOR_PROBE_ROUNDS 轮 × 250ms ≈3s，首轮立即）：
+    // SPA 深链挂载滞后可达秒级、networkidle 不可靠，verify 预检窗口若短于回放会误判回放能过的 locator。
+    // 与回放同策略映射；role 等构建成本高的策略跳过（占比小，视为可信）。
+    const probeable = locs.filter(
+      (l) => l.strategy === 'css' || l.strategy === 'text' || l.strategy === 'xpath' || l.strategy === 'testId',
+    );
+    if (probeable.length > 0) {
+      let hit = false;
+      const misses: string[] = [];
+      const missSeen = new Set<string>();
+      const probe = (l: { strategy?: string; value?: string }): Promise<number> => {
+        const value = l.value as string;
         switch (l.strategy) {
           case 'css': return page.locator(value).count();
           case 'text': return page.getByText(value).count();
           case 'xpath': return page.locator(`xpath=${value}`).count();
           case 'testId': return page.getByTestId(value).count();
-          default: return Promise.resolve(-1); // 跳过
+          default: return Promise.resolve(-1);
         }
       };
-      if (l.strategy !== 'css' && l.strategy !== 'text' && l.strategy !== 'xpath' && l.strategy !== 'testId') continue;
-      probed++;
-      try {
-        let n = await probe();
-        if (n === 0) {
-          // a11y 树滞后兜底，与回放 count=0 短重试一次同思路
-          await page.waitForTimeout(150);
-          n = await probe();
+      poll: for (let round = 0; round < LOCATOR_PROBE_ROUNDS; round++) {
+        if (round > 0) await page.waitForTimeout(LOCATOR_PROBE_INTERVAL_MS);
+        for (const l of probeable) {
+          try {
+            if ((await probe(l)) > 0) {
+              hit = true;
+              break poll;
+            }
+            const msg = `${l.strategy}=${l.value} 命中 0 个元素`;
+            if (!missSeen.has(msg)) { missSeen.add(msg); misses.push(msg); }
+          } catch (e) {
+            const msg = `${l.strategy}=${l.value} 探测异常: ${(e as Error).message.slice(0, 80)}`;
+            if (!missSeen.has(msg)) { missSeen.add(msg); misses.push(msg); }
+          }
         }
-        if (n > 0) {
-          hit = true;
-          break;
-        }
-        misses.push(`${l.strategy}=${l.value} 命中 0 个元素`);
-      } catch (e) {
-        misses.push(`${l.strategy}=${l.value} 探测异常: ${(e as Error).message.slice(0, 80)}`);
       }
-    }
-    if (probed > 0 && !hit) {
-      return `compiled 定位校验不通过（回放将失败）: ${a.kind} 全部 ${probed} 个候选均未命中 — ${misses.join('；')}`;
+      if (!hit) {
+        return `compiled 定位校验不通过（回放将失败）: ${a.kind} 全部 ${probeable.length} 个候选均未命中 — ${misses.join('；')}`;
+      }
     }
   }
   return null;
