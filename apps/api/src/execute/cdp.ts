@@ -224,7 +224,10 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       } catch (e) {
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
           const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
-          await loc.first().click({ timeout: 5000 });
+          // 不能裸 first()：Element-UI 在 .el-table 首子节点渲染 display:none 的 .hidden-columns
+          // 模板克隆（.el-table__fixed 里还有隐藏克隆），DOM 顺序早于真实元素，first() 会抓到
+          // 不可见副本等 5s 超时（规则查看 回测根因）。与 assertVisible 兜底同款 visible 过滤。
+          await loc.filter({ visible: true }).first().click({ timeout: 5000 });
           return;
         }
         throw e;
@@ -256,9 +259,10 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
         // 触发 blur 让 onChange 提交（Antd 等库在 blur 时同步校验/格式化）
         await page.keyboard.press('Tab').catch(() => undefined);
       } catch (e) {
-        // strict-mode violation（getByRole 命中多个同名元素）→ 退到 first()
+        // strict-mode violation（getByRole 命中多个同名元素）→ 退到可见匹配的 first()
+        // （visible 过滤防隐藏克隆劫持，同 click 兜底）
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
-          await fillLoc.first().fill(value, { timeout: 5000 });
+          await fillLoc.filter({ visible: true }).first().fill(value, { timeout: 5000 });
           return;
         }
         throw e;
@@ -271,9 +275,9 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
         await hoverLoc.hover({ timeout: 5000 });
       } catch (e) {
         // strict-mode violation（文本/role 命中多个元素，录制场景常见：表格里重复的日期、同名链接）
-        // → 退到 first()，与 click/fill 的兜底一致。
+        // → 退到可见匹配的 first()，与 click/fill 的兜底一致（visible 过滤防隐藏克隆劫持）。
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
-          await hoverLoc.first().hover({ timeout: 5000 });
+          await hoverLoc.filter({ visible: true }).first().hover({ timeout: 5000 });
           return;
         }
         throw e;

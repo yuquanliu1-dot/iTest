@@ -294,6 +294,17 @@ describe('selector-core — 悬停瞬态与属性名候选（规则查看 用例
     expect(locs.find((l) => l.strategy === 'text')).toBeUndefined();
     expect(locs.find((l) => l.strategy === 'css' && l.value === '[title="查看"]')).toBeDefined();
   });
+  it('属性候选排在 finder 链之后（唯一性强的链先探测）', () => {
+    // 规则查看 回测回归：[title="查看"] 表格每行都有（天然多匹配），排在唯一性最强的
+    // finder 链之前会让回放首探测命中它并退到 .first()，抓到 .hidden-columns 隐藏克隆。
+    const dom = new JSDOM('<i class="icon-chakan" title="查看"></i>');
+    const icon = dom.window.document.querySelector('i')!;
+    const cssList = generateLocators(icon).filter((l) => l.strategy === 'css').map((l) => l.value);
+    const idxChain = cssList.findIndex((v) => v.includes('icon-chakan'));
+    const idxTitle = cssList.findIndex((v) => v === '[title="查看"]');
+    expect(idxChain).toBeGreaterThanOrEqual(0);
+    expect(idxTitle).toBeGreaterThan(idxChain);
+  });
 
   it('aria-label 属性同样不产 text 候选，产 [aria-label=...] css 候选', () => {
     const dom = new JSDOM('<span aria-label="展开详情"></span>');
