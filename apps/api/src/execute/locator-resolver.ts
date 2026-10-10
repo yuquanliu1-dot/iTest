@@ -23,25 +23,29 @@ function isPureStableCss(value: string): boolean {
  *   4. XPath
  *   5. 普通 CSS / role / text / testId（按出现顺序）
  *
- * 返回值是 playwright Locator 数组 + 标记信息。失败回退由调用方 tryEach 决定。
+ * 返回值是 playwright Locator 数组 + 标记信息；src 为该候选的来源定位表达式
+ * （同 strategy 多候选时 kind 反查不出具体哪条，src 供调用方展示/报错）。失败回退由调用方 tryEach 决定。
  */
-export function buildCandidates(page: Page, action: ResolverInput): Array<{ kind: string; loc: ReturnType<Page['locator']> }> {
-  const out: Array<{ kind: string; loc: ReturnType<Page['locator']> }> = [];
+export function buildCandidates(
+  page: Page,
+  action: ResolverInput,
+): Array<{ kind: string; loc: ReturnType<Page['locator']>; src?: string }> {
+  const out: Array<{ kind: string; loc: ReturnType<Page['locator']>; src?: string }> = [];
   const seen = new Set<unknown>();
 
-  const push = (kind: string, l: ReturnType<Page['locator']>) => {
+  const push = (kind: string, l: ReturnType<Page['locator']>, src?: string) => {
     if (seen.has(l)) return;
     seen.add(l);
-    out.push({ kind, loc: l });
+    out.push({ kind, loc: l, src });
   };
 
   // 1+2: intent
   if (action.intentLocator) {
     if (action.intentLocator.semanticRole) {
-      push('intent-testid', page.locator(`[data-testid="${action.intentLocator.semanticRole}"]`));
+      push('intent-testid', page.locator(`[data-testid="${action.intentLocator.semanticRole}"]`), `[data-testid="${action.intentLocator.semanticRole}"]`);
     }
     if (action.intentLocator.contextText) {
-      push('intent-text', page.getByText(action.intentLocator.contextText));
+      push('intent-text', page.getByText(action.intentLocator.contextText), `text=${action.intentLocator.contextText}`);
     }
   }
 
@@ -49,41 +53,41 @@ export function buildCandidates(page: Page, action: ResolverInput): Array<{ kind
   // 注意：稳定 #id 在最前是为了让一级 CSS 失败时能立刻回落到稳定的 #id，避免不必要的 XPath / 普通 CSS 重试。
   for (const l of action.locator) {
     if (l.strategy === 'css' && isPureStableCss(l.value)) {
-      push('stable-css', page.locator(l.value));
+      push('stable-css', page.locator(l.value), l.value);
     }
   }
 
   for (const l of action.locator) {
     if (l.strategy === 'css' && !isPureStableCss(l.value)) {
-      push('css', page.locator(l.value));
+      push('css', page.locator(l.value), l.value);
     }
     if (l.strategy === 'xpath') {
-      push('xpath', page.locator(`xpath=${l.value}`));
+      push('xpath', page.locator(`xpath=${l.value}`), l.value);
     }
     if (l.strategy === 'role') {
       const m = l.value.match(/^([\w-]+)(?:\[name="([^"]*)"\]|\[name='([^']*)'\])$/);
       if (m) {
         const [, role, name1, name2] = m;
-        push('role', page.getByRole(role as never, { name: name1 ?? name2 ?? undefined }));
+        push('role', page.getByRole(role as never, { name: name1 ?? name2 ?? undefined }), l.value);
         // 无 name 兜底：role 单独匹配可能命中多个元素（strict mode violation）。
         // 给出「role + 无 name」候选，让 tryFirstMatch 用 count() 探测，避免 fill 阶段才暴露。
-        if (!name1 && !name2) push('role-unnamed', page.getByRole(l.value as never));
+        if (!name1 && !name2) push('role-unnamed', page.getByRole(l.value as never), l.value);
       } else if (l.value.includes(' ')) {
         // 多段 role locator（"textbox 用户名"）——拆为 role + text 两段组合，分别探测。
         const parts = l.value.split(/\s+/);
         const role = parts[0]!;
         const text = parts.slice(1).join(' ');
-        push('role-with-text', page.getByRole(role as never, { name: text }));
+        push('role-with-text', page.getByRole(role as never, { name: text }), l.value);
       } else {
-        push('role', page.getByRole(l.value as never));
+        push('role', page.getByRole(l.value as never), l.value);
       }
     }
     if (l.strategy === 'text') {
-      push('text', page.getByText(l.value));
+      push('text', page.getByText(l.value), l.value);
     }
     if (l.strategy === 'testId') {
       const v = l.value.startsWith('[') ? l.value : `[data-testid="${l.value}"]`;
-      push('testId', page.locator(v));
+      push('testId', page.locator(v), l.value);
     }
   }
 
