@@ -169,6 +169,54 @@ describe('plan execution extras', () => {
     expect(kinds.has('plan')).toBe(true);
   });
 
+  it('plan 运行中成员用例（report 未回填）不出现在执行历史；回填后仍不出现；手动运行照常显示', async () => {
+    // 回归：runCase 一开跑就插 report，report_id 到用例跑完才回填 plan_run_cases——瞬态窗口内
+    // report 无 plan 链接，登录用例又排在最前跑，最容易让用户在执行历史里看到"长得像独立执行"的行。
+    // plan_run_cases 行以 status=running 先行存在，执行历史应据此精确排除运行中成员的报告。
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const member = await makeCase(groupId, versionId, 'plan-member');
+    const manual = await makeCase(groupId, versionId, 'manual-run');
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    const planId = plan.body.id as string;
+    // 构造与 runPlan 一致的运行中 shape：plan_runs(running) + member 的 running report + 未回填的 member 行
+    const run = await pool.query(
+      `INSERT INTO plan_runs(plan_id, project_id, status, strategy) VALUES ($1, $2, 'running', 'run_all') RETURNING id`,
+      [planId, projectId],
+    );
+    const runId = run.rows[0].id as string;
+    const manualRep = await pool.query(
+      `INSERT INTO reports(case_id, status, step_results) VALUES ($1, 'passed', '[]'::jsonb) RETURNING id`,
+      [manual],
+    );
+    const memberRep = await pool.query(
+      `INSERT INTO reports(case_id, status, step_results) VALUES ($1, 'running', '[]'::jsonb) RETURNING id`,
+      [member],
+    );
+    await pool.query(
+      `INSERT INTO plan_run_cases(plan_run_id, case_id, "order", status, step_kind) VALUES ($1, $2, 1, 'running', 'business')`,
+      [runId, member],
+    );
+
+    // 瞬态窗口：运行中的成员报告被排除，手动运行不受影响
+    const list1 = await request(app).get(`/api/executions?projectId=${projectId}&kind=case`);
+    expect(list1.status).toBe(200);
+    const ids1 = list1.body.map((e: { id: string }) => e.id);
+    expect(ids1).not.toContain(memberRep.rows[0].id);
+    expect(ids1).toContain(manualRep.rows[0].id);
+
+    // 执行完成：report_id 回填 + 状态收敛 → 既有链接过滤继续排除（无缝衔接，无第二个泄漏窗口）
+    await pool.query(
+      `UPDATE plan_run_cases SET status = 'passed', report_id = $1, finished_at = now()
+       WHERE plan_run_id = $2 AND case_id = $3`,
+      [memberRep.rows[0].id, runId, member],
+    );
+    await pool.query(`UPDATE reports SET status = 'passed' WHERE id = $1`, [memberRep.rows[0].id]);
+    const list2 = await request(app).get(`/api/executions?projectId=${projectId}&kind=case`);
+    const ids2 = list2.body.map((e: { id: string }) => e.id);
+    expect(ids2).not.toContain(memberRep.rows[0].id);
+    expect(ids2).toContain(manualRep.rows[0].id);
+  });
+
   it('fail_fast: first case fails → remaining cases skipped, plan_run.status=failed', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     const c1 = await makeCase(groupId, versionId, 'c1');
