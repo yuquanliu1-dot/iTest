@@ -15,6 +15,8 @@ import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/
 import { runAiTask } from '../../../execute/aiTask.js';
 import { writeStepScreenshot } from '../../../execute/cdp.js';
 import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from '../../../execute/locator-probe.js';
+import { buildCandidates } from '../../../execute/locator-resolver.js';
+import type { Locator } from '@itest/shared';
 import { runCaseVisionAssert } from '../../../execute/visionAssert.js';
 import { resolveEnv } from '../../../execute/envContext.js';
 import { resolveCaseUrl } from '../../../lib/resolve-url.js';
@@ -43,21 +45,27 @@ interface AiStepResult {
   warning?: string;
   screenshot?: string;
   error?: string;
-  failureReason?: 'StepReportedFailed' | 'AiTaskAborted' | 'SecretMissing' | 'LocatorMismatch';
+  failureReason?: 'StepReportedFailed' | 'AiTaskAborted' | 'SecretMissing' | 'LocatorMismatch' | 'AmbiguousLocator';
 }
 
 /** compiled 保真校验：verify_case 的 AI 可以临场绕开坏 locator，但正式回放是逐字执行 compiled 的——
  *  校验不通过必须在验证阶段就判失败，逼 AI 用真实选择器修正，而不是"AI 能过=用例能跑"。
  *  时机：click/hover 在步骤前校验（元素此时就该在页面上）；断言类、fill、check、select、extract 在 AI 通过后校验
  *  （这些动作结束时元素理应仍在）。navigate/aiTask/waitFor 无从或不必校验，跳过。
- *  locator 数组为候选或关系：任一命中即通过（与回放 tryFirstMatch 语义一致）；全部可探测候选均未命中才判失败。
- *  候选探测异常（选择器不合法）按该候选落空处理——回放对 count 异常也是捕获后继续下一候选，两边语义一致。
- *  role 等构建成本高的策略不探测、视为可信（占比小）。 */
+ *  候选探测直接复用回放的 buildCandidates + count()：候选展开（纯 #id 提升、role 拆 name、testId 包
+ *  data-testid）与探测顺序跟 tryFirstMatch 完全一致——verify 的「首命中候选」就是回放实际会采用的候选。
+ *  两级判失败：
+ *  1) 全部候选未命中 → LocatorMismatch（回放必挂）；
+ *  2) 首命中候选命中多个元素（count>1）且动作是 click/fill/hover → AmbiguousLocator——这三类在回放里
+ *     命中多元素会静默退到 .first() 操作 DOM 序第一个（check/select 是显式抛错，无静默风险），
+ *     verify 只测 count>0 会放行"碰巧对"的选择器（目标恰好是第一个匹配），表单加字段/调序即静默错元素。
+ *  探测窗口与回放对齐（LOCATOR_PROBE_ROUNDS 轮 × 250ms ≈3s，首轮立即）：SPA 深链挂载滞后可达秒级、
+ *  networkidle 不可靠，verify 预检窗口若短于回放会误判回放能过的 locator。 */
 async function checkCompiledLocators(
   page: import('playwright-core').Page,
   compiled: unknown,
   mode: 'pre' | 'post',
-): Promise<string | null> {
+): Promise<{ reason: 'LocatorMismatch' | 'AmbiguousLocator'; message: string } | null> {
   const actions = (Array.isArray(compiled) ? compiled : []) as Array<{
     kind?: string;
     locator?: Array<{ strategy?: string; value?: string }>;
@@ -72,51 +80,54 @@ async function checkCompiledLocators(
     // 结构性错误与命中无关，直接判失败
     for (const l of locs) {
       if (l.strategy === 'accessibilityId' || l.strategy === 'label' || l.strategy === 'predicate') {
-        return `compiled 定位校验不通过: strategy '${l.strategy}' 为移动端专用，web 回放不支持`;
+        return { reason: 'LocatorMismatch', message: `compiled 定位校验不通过: strategy '${l.strategy}' 为移动端专用，web 回放不支持` };
       }
       if (typeof l.value !== 'string' || !l.value) {
-        return `compiled 定位校验不通过: ${a.kind} 的 locator 缺少 value`;
+        return { reason: 'LocatorMismatch', message: `compiled 定位校验不通过: ${a.kind} 的 locator 缺少 value` };
       }
     }
-    // 候选或关系：按序探测，任一命中即通过（剩余候选不再探测）；全部落空才判失败。
-    // 探测窗口与回放 tryFirstMatch 对齐（LOCATOR_PROBE_ROUNDS 轮 × 250ms ≈3s，首轮立即）：
-    // SPA 深链挂载滞后可达秒级、networkidle 不可靠，verify 预检窗口若短于回放会误判回放能过的 locator。
-    // 与回放同策略映射；role 等构建成本高的策略跳过（占比小，视为可信）。
-    const probeable = locs.filter(
-      (l) => l.strategy === 'css' || l.strategy === 'text' || l.strategy === 'xpath' || l.strategy === 'testId',
-    );
-    if (probeable.length > 0) {
-      let hit = false;
+    // 与回放同一候选构造 + count 探测：任一候选命中即停（回放同款短路）；全部落空才判 LocatorMismatch。
+    const cands = buildCandidates(page, { locator: locs as unknown as Locator[] });
+    if (cands.length > 0) {
+      let hitCount = 0;
+      let hitDesc = '';
       const misses: string[] = [];
       const missSeen = new Set<string>();
-      const probe = (l: { strategy?: string; value?: string }): Promise<number> => {
-        const value = l.value as string;
-        switch (l.strategy) {
-          case 'css': return page.locator(value).count();
-          case 'text': return page.getByText(value).count();
-          case 'xpath': return page.locator(`xpath=${value}`).count();
-          case 'testId': return page.getByTestId(value).count();
-          default: return Promise.resolve(-1);
-        }
-      };
       poll: for (let round = 0; round < LOCATOR_PROBE_ROUNDS; round++) {
         if (round > 0) await page.waitForTimeout(LOCATOR_PROBE_INTERVAL_MS);
-        for (const l of probeable) {
+        for (const c of cands) {
+          const desc = c.src ?? c.kind;
+          const probe = c.loc as unknown as { count?: () => Promise<number> };
+          if (!probe || typeof probe.count !== 'function') {
+            // 没有 count() 的候选直接接受（与回放 tryFirstMatch 一致）
+            hitCount = 1;
+            hitDesc = `${c.kind} ${desc}`;
+            break poll;
+          }
           try {
-            if ((await probe(l)) > 0) {
-              hit = true;
+            const n = await probe.count();
+            if (n > 0) {
+              hitCount = n;
+              hitDesc = `${c.kind} ${desc}`;
               break poll;
             }
-            const msg = `${l.strategy}=${l.value} 命中 0 个元素`;
+            const msg = `${c.kind}=${desc} 命中 0 个元素`;
             if (!missSeen.has(msg)) { missSeen.add(msg); misses.push(msg); }
           } catch (e) {
-            const msg = `${l.strategy}=${l.value} 探测异常: ${(e as Error).message.slice(0, 80)}`;
+            // 探测异常（选择器不合法）按该候选落空处理——回放对 count 异常同样捕获后继续下一候选
+            const msg = `${c.kind}=${desc} 探测异常: ${(e as Error).message.slice(0, 80)}`;
             if (!missSeen.has(msg)) { missSeen.add(msg); misses.push(msg); }
           }
         }
       }
-      if (!hit) {
-        return `compiled 定位校验不通过（回放将失败）: ${a.kind} 全部 ${probeable.length} 个候选均未命中 — ${misses.join('；')}`;
+      if (hitCount === 0) {
+        return { reason: 'LocatorMismatch', message: `compiled 定位校验不通过（回放将失败）: ${a.kind} 全部 ${cands.length} 个候选均未命中 — ${misses.join('；')}` };
+      }
+      if ((a.kind === 'click' || a.kind === 'fill' || a.kind === 'hover') && hitCount > 1) {
+        return {
+          reason: 'AmbiguousLocator',
+          message: `compiled 定位校验不通过（候选命中多个元素）: ${a.kind} 候选 ${hitDesc} 命中 ${hitCount} 个元素，回放将静默操作其中第一个——请给该候选加属性过滤（如 [placeholder=...]）或把唯一命中的候选提到首位后重验`,
+        };
       }
     }
   }
@@ -172,7 +183,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
       'stage_case 新建的纯草稿用例（未落库）也可直接 verify_case：caseId 传 stage_case 时声明的 localId；修正循环 = 同 localId 重发 stage_case（幂等覆盖）后再次 verify_case，全程不落库，通过后引导用户在暂存区勾选保存。注意：暂存草稿的 defaultEnvId 只能绑定已落库环境或留空走默认链（暂存环境不支持）。',
-      'verify_case 会校验 compiled 选择器能真实命中页面（AI 临场绕开坏 locator 不算通过，回放逐字执行 compiled 会失败）:失败原因含"定位校验不通过"时,必须用 failure.page.elements 里的真实选择器替换原 locator(严禁留着坏 locator 只靠 AI 硬跑)。verify_case 还会做用例级终态判定(失败原因含 VisionAssertionFailed):步骤都通过但最终页面不符 expectedOutcome 时,修正步骤行为或调整 expectedOutcome 后再验。',
+      'verify_case 会校验 compiled 选择器能真实命中页面（AI 临场绕开坏 locator 不算通过，回放逐字执行 compiled 会失败）:失败原因含"定位校验不通过"时,必须用 failure.page.elements 里的真实选择器替换原 locator(严禁留着坏 locator 只靠 AI 硬跑)。候选命中多个元素(AmbiguousLocator)同样判失败——回放会静默操作第一个匹配元素,必须给该候选加属性过滤(如 [placeholder=...])或把唯一命中的候选提到首位。verify_case 还会做用例级终态判定(失败原因含 VisionAssertionFailed):步骤都通过但最终页面不符 expectedOutcome 时,修正步骤行为或调整 expectedOutcome 后再验。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。',
       '环境未配置 login 凭据而验证卡在登录页时，引导用户到项目环境页配置 login 凭据，不要伪造登录步骤。',
     ],
@@ -387,10 +398,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             if (preErr) {
               stepResults.push({
                 order: s.order, status: 'failed', durationMs: Date.now() - started,
-                error: preErr, failureReason: 'LocatorMismatch',
+                error: preErr.message, failureReason: preErr.reason,
                 screenshot: await writeStepScreenshot(reportId, i + 1, page),
               });
-              ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: preErr.slice(0, 120) });
+              ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: preErr.message.slice(0, 120) });
               failedIndex = i;
               break;
             }
@@ -422,10 +433,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               if (postErr) {
                 stepResults.push({
                   order: s.order, status: 'failed', durationMs: Date.now() - started,
-                  error: postErr, failureReason: 'LocatorMismatch',
+                  error: postErr.message, failureReason: postErr.reason,
                   screenshot: await writeStepScreenshot(reportId, i + 1, page),
                 });
-                ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: postErr.slice(0, 120) });
+                ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: postErr.message.slice(0, 120) });
                 failedIndex = i;
                 break;
               }

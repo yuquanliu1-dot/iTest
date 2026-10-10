@@ -28,10 +28,10 @@ vi.mock('../src/agent/llmSettings.js', () => ({
   })),
 }));
 // playwright 桩：launch → context.newPage 返回极简 page；gotos 记录初始导航、ctxOpts 记录 newContext 入参（经 __testState 暴露给测试）。
-// locator/getByText/getByTestId 模拟 compiled 保真校验的 count 探测：zeroLocators 里的选择器永远命中 0；含 :contains 的选择器抛非法伪类错误（与真实 Playwright 一致）。
+// locator/getByText/getByTestId/getByRole 模拟 compiled 保真校验的 count 探测：zeroLocators 里的选择器永远命中 0；multiLocators 精确命中 2（多匹配）；含 :contains 的选择器抛非法伪类错误（与真实 Playwright 一致）。
 vi.mock('playwright-core', () => {
   const state = {
-    gotos: [] as string[], ctxOpts: [] as unknown[], zeroLocators: [] as string[],
+    gotos: [] as string[], ctxOpts: [] as unknown[], zeroLocators: [] as string[], multiLocators: [] as string[],
     // SPA 挂载滞后模拟：sel → 第 N 次 count() 起返回 1（之前返回 0）
     mountAfter: {} as Record<string, number>, countCalls: {} as Record<string, number>,
   };
@@ -39,6 +39,7 @@ vi.mock('playwright-core', () => {
     count: async () => {
       if (sel.includes(':contains')) throw new Error(`Unknown pseudo-class "${sel.match(/:contains/)?.[0]}"`);
       if (state.zeroLocators.some((z) => sel.includes(z))) return 0;
+      if (state.multiLocators.some((m) => sel === m)) return 2;
       const need = state.mountAfter[sel];
       if (need != null) {
         const c = (state.countCalls[sel] ?? 0) + 1;
@@ -64,6 +65,7 @@ vi.mock('playwright-core', () => {
               locator: (sel: string) => makeLoc(sel),
               getByText: (t: string) => makeLoc(`text=${t}`),
               getByTestId: (t: string) => makeLoc(`testid=${t}`),
+              getByRole: (r: string, opts?: { name?: string }) => makeLoc(`role=${r}:${opts?.name ?? ''}`),
             }),
             storageState: async () => ({ cookies: [{ name: 'sid', value: 'cached' }], origins: [] }),
             close: async () => {},
@@ -134,11 +136,12 @@ afterAll(async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   const { __testState } = (await import('playwright-core')) as unknown as {
-    __testState: { gotos: string[]; ctxOpts: unknown[]; zeroLocators: string[]; mountAfter: Record<string, number>; countCalls: Record<string, number> };
+    __testState: { gotos: string[]; ctxOpts: unknown[]; zeroLocators: string[]; multiLocators: string[]; mountAfter: Record<string, number>; countCalls: Record<string, number> };
   };
   __testState.gotos.length = 0;
   __testState.ctxOpts.length = 0;
   __testState.zeroLocators.length = 0;
+  __testState.multiLocators.length = 0;
   __testState.mountAfter = {};
   __testState.countCalls = {};
   await pool.query(`TRUNCATE test_steps, test_cases, test_environments, environment_objects,
@@ -698,6 +701,76 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.result).toBe('passed');
       expect(data.steps[0].status).toBe('passed');
       expect(__testState.countCalls['.late-mount']).toBe(3);
+    }
+  });
+
+  it('compiled 保真后置校验：fill 首候选命中多个元素（count>1）→ AmbiguousLocator', async () => {
+    // 回归动机：AI 生成 '#ruleconfig1 .baseForm input' 这类裸标签候选命中表单全部 input，
+    // 回放 strict-mode 兜底 .first() 静默填第一个字段——verify 只测 count>0 会放行"碰巧对"。
+    const caseId = await seedCase({
+      steps: [[{ kind: 'fill', locator: [{ strategy: 'css', value: '#ruleconfig1 .baseForm input' }], value: '规则名' }]],
+    });
+    const { __testState } = (await import('playwright-core')) as unknown as { __testState: { multiLocators: string[] } };
+    __testState.multiLocators.push('#ruleconfig1 .baseForm input');
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    expect(runAiTask).toHaveBeenCalledTimes(1); // fill 是后置校验：AI 先执行，元素理应仍在
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('failed');
+      expect(data.steps[0].status).toBe('failed');
+      expect(data.steps[0].failureReason).toBe('AmbiguousLocator');
+      expect(data.steps[0].error).toContain('#ruleconfig1 .baseForm input');
+      expect(data.steps[0].error).toContain('命中 2 个元素');
+      expect(data.failure.failureReason).toBe('AmbiguousLocator');
+    }
+  });
+
+  it('compiled 保真前置校验：click 首候选命中多个 → AmbiguousLocator，不烧 AI 轮次', async () => {
+    const caseId = await seedCase({
+      steps: [[{ kind: 'click', locator: [{ strategy: 'css', value: '#Datarules .header button.el-button--primary' }] }]],
+    });
+    const { __testState } = (await import('playwright-core')) as unknown as { __testState: { multiLocators: string[] } };
+    __testState.multiLocators.push('#Datarules .header button.el-button--primary');
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    expect(runAiTask).not.toHaveBeenCalled(); // 前置拦截，AI 不跑
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('failed');
+      expect(data.steps[0].failureReason).toBe('AmbiguousLocator');
+    }
+  });
+
+  it('多匹配判定与回放同序：首候选多匹配、次候选唯一 → 仍判 AmbiguousLocator（回放按序采用首候选）', async () => {
+    const caseId = await seedCase({
+      steps: [[{
+        kind: 'fill',
+        locator: [
+          { strategy: 'css', value: '.multi-a' },
+          { strategy: 'role', value: 'textbox[name="规则名称"]' },
+        ],
+        value: 'x',
+      }]],
+    });
+    const { __testState } = (await import('playwright-core')) as unknown as { __testState: { multiLocators: string[] } };
+    __testState.multiLocators.push('.multi-a');
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('failed');
+      // 回放探测顺序 = buildCandidates 顺序：css .multi-a 先命中（count=2）即被采用，轮不到唯一的 role 候选
+      expect(data.steps[0].failureReason).toBe('AmbiguousLocator');
+      expect(data.steps[0].error).toContain('.multi-a');
     }
   });
 
