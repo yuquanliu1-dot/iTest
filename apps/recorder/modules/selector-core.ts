@@ -301,9 +301,15 @@ export function generateLocators(el: Element, options: GenerateLocatorsOptions =
     push({ strategy: 'css', value: `[name="${safe}"]` });
   }
 
+  const css = buildCssPath(el, options);
+  push({ strategy: 'css', value: css });
+
   // 属性名兜底 css 候选：纯图标按钮的 aria-label/title 是 DOM 常驻属性（悬停 tooltip 文案的
   // 常见落点），css 属性选择器可稳定命中——但 getByText 永远看不到它们。仅在没有子树文本时
   // 给出（有子树文本时 text 候选已覆盖同名语义，且子树文本才是用户可见文案）。
+  // 必须排在 finder 链之后：表格操作列每行都有同 title 的图标，[title="查看"] 这类候选天然
+  // 多匹配；唯一性最强的链排前面，回放首个探测即命中正确元素（规则查看 回测：[title] 排首位
+  // 导致 .first() 抓到 .hidden-columns 隐藏克隆）。
   if (attrName && !subtreeText) {
     for (const attr of ['aria-label', 'title'] as const) {
       const v = el.getAttribute(attr);
@@ -314,8 +320,6 @@ export function generateLocators(el: Element, options: GenerateLocatorsOptions =
     }
   }
 
-  const css = buildCssPath(el, options);
-  push({ strategy: 'css', value: css });
   const ownClass = positionalOwnClassCandidate(css, el);
   if (ownClass) push({ strategy: 'css', value: ownClass });
 

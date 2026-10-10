@@ -141,12 +141,13 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(loc.selectOption).toHaveBeenCalledWith('cn', expect.objectContaining({ timeout: 5000 }));
   });
 
-  it('hover falls back to first() on strict mode violation', async () => {
+  it('hover falls back to visible-filtered first() on strict mode violation', async () => {
     mocked.__locator.mockClear();
     // 录制场景常见：文本/CSS 命中多个元素（表格里重复的日期、同名链接）。
     const okHover = vi.fn().mockResolvedValue(undefined);
     const multi = {
       hover: vi.fn().mockRejectedValueOnce(new Error('strict mode violation: locator(\'tr\') resolved to 3 elements')),
+      filter: vi.fn().mockReturnThis(),
       first: vi.fn().mockReturnValue({ hover: okHover }),
       count: vi.fn().mockResolvedValue(3),
     };
@@ -157,8 +158,35 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
       { reportId: 'r-hover-strict' },
     );
     expect(results[0]!.status).toBe('passed');
+    expect(multi.filter).toHaveBeenCalledWith({ visible: true });
     expect(multi.first).toHaveBeenCalled();
     expect(okHover).toHaveBeenCalled();
+  });
+
+  it('click strict-mode 兜底先过滤 visible 再 first（隐藏克隆不得劫持）', async () => {
+    mocked.__locator.mockClear();
+    // 规则查看 回测回归：[title="查看"] 命中 7 个（Element-UI .hidden-columns 里的 display:none
+    // 模板克隆 DOM 顺序在前），裸 .first() 会抓到不可见副本等到超时。
+    const okClick = vi.fn().mockResolvedValue(undefined);
+    const multi = {
+      click: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('strict mode violation: locator(\'[title="查看"]\') resolved to 7 elements')),
+      filter: vi.fn().mockReturnThis(),
+      first: vi.fn().mockReturnValue({ click: okClick }),
+      count: vi.fn().mockResolvedValue(7),
+    };
+    // 两次 Once：初次 click 与兜底路径二次 tryFirstMatch 各解析一次 locator，都要拿到 multi
+    mocked.__locator.mockImplementationOnce(() => multi as never);
+    mocked.__locator.mockImplementationOnce(() => multi as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000028',
+      [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '[title="查看"]' }] }] }],
+      { reportId: 'r-click-strict' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(multi.filter).toHaveBeenCalledWith({ visible: true });
+    expect(okClick).toHaveBeenCalled();
   });
 
   it('upload without bound fileId fails attachment-missing', async () => {
@@ -172,6 +200,8 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
   });
 
   it('extract action stores element value into vars for later fill', async () => {
+    // 必须清历史：本用例按 mock.results[1] 取 fill 步骤的 locator，前面用例残留的调用会挤偏下标
+    mocked.__locator.mockClear();
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
       [
