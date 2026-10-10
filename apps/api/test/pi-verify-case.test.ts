@@ -30,11 +30,22 @@ vi.mock('../src/agent/llmSettings.js', () => ({
 // playwright 桩：launch → context.newPage 返回极简 page；gotos 记录初始导航、ctxOpts 记录 newContext 入参（经 __testState 暴露给测试）。
 // locator/getByText/getByTestId 模拟 compiled 保真校验的 count 探测：zeroLocators 里的选择器永远命中 0；含 :contains 的选择器抛非法伪类错误（与真实 Playwright 一致）。
 vi.mock('playwright-core', () => {
-  const state = { gotos: [] as string[], ctxOpts: [] as unknown[], zeroLocators: [] as string[] };
+  const state = {
+    gotos: [] as string[], ctxOpts: [] as unknown[], zeroLocators: [] as string[],
+    // SPA 挂载滞后模拟：sel → 第 N 次 count() 起返回 1（之前返回 0）
+    mountAfter: {} as Record<string, number>, countCalls: {} as Record<string, number>,
+  };
   const makeLoc = (sel: string) => ({
     count: async () => {
       if (sel.includes(':contains')) throw new Error(`Unknown pseudo-class "${sel.match(/:contains/)?.[0]}"`);
-      return state.zeroLocators.some((z) => sel.includes(z)) ? 0 : 1;
+      if (state.zeroLocators.some((z) => sel.includes(z))) return 0;
+      const need = state.mountAfter[sel];
+      if (need != null) {
+        const c = (state.countCalls[sel] ?? 0) + 1;
+        state.countCalls[sel] = c;
+        return c >= need ? 1 : 0;
+      }
+      return 1;
     },
   });
   return {
@@ -123,11 +134,13 @@ afterAll(async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   const { __testState } = (await import('playwright-core')) as unknown as {
-    __testState: { gotos: string[]; ctxOpts: unknown[]; zeroLocators: string[] };
+    __testState: { gotos: string[]; ctxOpts: unknown[]; zeroLocators: string[]; mountAfter: Record<string, number>; countCalls: Record<string, number> };
   };
   __testState.gotos.length = 0;
   __testState.ctxOpts.length = 0;
   __testState.zeroLocators.length = 0;
+  __testState.mountAfter = {};
+  __testState.countCalls = {};
   await pool.query(`TRUNCATE test_steps, test_cases, test_environments, environment_objects,
     requirements, "groups", projects, project_versions, ai_threads, ai_workspace_state, ai_stage_case_ops, ai_stage_cases
     RESTART IDENTITY CASCADE`);
@@ -662,6 +675,29 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.steps[0].error).toContain('全部 2 个候选');
       expect(data.steps[0].error).toContain('.ghost-a');
       expect(data.steps[0].error).toContain('.ghost-b');
+    }
+  });
+
+  it('compiled 保真后置校验：SPA 挂载滞后（前两轮 count=0 后命中）→ 轮询窗口内通过', async () => {
+    // 回测 8a178d83 根因回归：networkidle 后页面仍未挂载完，探测放弃约 2s 后元素才出现。
+    // verify 预检/后置校验窗口与回放对齐（12 轮轮询），迟挂载元素应判通过而非 LocatorMismatch。
+    const caseId = await seedCase({
+      steps: [[{ kind: 'assertVisible', locator: [{ strategy: 'css', value: '.late-mount' }] }]],
+    });
+    const { __testState } = (await import('playwright-core')) as unknown as {
+      __testState: { mountAfter: Record<string, number>; countCalls: Record<string, number> };
+    };
+    __testState.mountAfter['.late-mount'] = 3; // 前 2 次探测 0，第 3 次挂载完成
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"看到了","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('passed');
+      expect(data.steps[0].status).toBe('passed');
+      expect(__testState.countCalls['.late-mount']).toBe(3);
     }
   });
 

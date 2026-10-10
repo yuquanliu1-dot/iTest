@@ -602,6 +602,46 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
   });
 });
 
+describe('locator probe window — SPA 深链挂载滞后的有界轮询', () => {
+  it('count=0 for early rounds then mounted → passes within window', async () => {
+    // 回测 8a178d83 根因回归：networkidle 后页面仍未挂载完，探测放弃 ~2s 后元素才出现。
+    // 前 2 轮 count=0、第 3 轮变 1 → 轮询窗口内应命中而非判失败。
+    let calls = 0;
+    const late = {
+      click: vi.fn().mockResolvedValue(undefined),
+      first: vi.fn().mockReturnThis(),
+      count: vi.fn().mockImplementation(async () => (calls++ < 2 ? 0 : 1)),
+    };
+    mocked.__locator.mockImplementationOnce(() => late as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000040',
+      [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#late' }] }] }],
+      { reportId: 'r-late-mount' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(late.count).toHaveBeenCalledTimes(3); // 前 2 轮 miss，第 3 轮命中
+    expect(late.click).toHaveBeenCalled();
+  });
+
+  it('all candidates miss across full window → fails with count=0', async () => {
+    const never = {
+      click: vi.fn().mockResolvedValue(undefined),
+      first: vi.fn().mockReturnThis(),
+      count: vi.fn().mockResolvedValue(0),
+    };
+    mocked.__locator.mockImplementationOnce(() => never as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000041',
+      [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#gone' }] }] }],
+      { reportId: 'r-never-mount' },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/count=0/);
+    // 有界轮询而非单次重试：单候选在窗口内被轮转探测满 12 轮
+    expect(never.count).toHaveBeenCalledTimes(12);
+  });
+});
+
 describe('phase3 — composite value at execute', () => {
   it('composite fill uses materialized fragment value', async () => {
     mocked.__locator.mockClear();

@@ -20,6 +20,7 @@ import { logger } from '../logger.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildCandidates } from './locator-resolver.js';
+import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from './locator-probe.js';
 import { waitForStable, ElementNotStable } from './stability.js';
 import { classify } from './failureClassifier.js';
 import { preflight } from './preflight.js';
@@ -531,35 +532,32 @@ async function tryFirstMatch(
   if (cands.length === 0) {
     throw new Error('locator array is empty');
   }
-  // 探测某个 css/role/testid 候选时,如果 count=0 短重试一次。
-  // 根因:playwright 的 count() 走 a11y 树,而 a11y 树 rebuild 是 lazy 的,
-  // networkidle 后 DOM 已渲染但 a11y 树可能滞后 ~100-200ms。
-  // 实测 SOC 登录页:navigate + networkidle 后立刻探测 [name="username"] 仍为 0,
-  // 等 150ms 后变 1。
+  // 2026-10-10: 候选探测从「单候选 count=0 后单次 150ms 重试」改为有界轮询窗口——
+  // 首轮立即按序探测全部候选,全部落空则每 250ms 轮转再探,任一命中即返回,最多 12 轮(≈3s)。
+  // 根因一(a11y 滞后,150ms 够用):playwright 的 count() 走 a11y 树,rebuild 是 lazy 的,
+  //   networkidle 后 DOM 已渲染但 a11y 树可能滞后 ~100-200ms(实测 SOC 登录页 150ms 后变 1)。
+  // 根因二(SPA 挂载滞后,150ms 差一个数量级):深链路由挂载在 networkidle 后仍可持续秒级,
+  //   实测 8a178d83 回测 step-1 探测放弃约 2s 后页面才挂载完成(失败截图已是完整渲染页)。
+  // 用轮数上限而非墙钟 deadline:窗口语义固定(12×250ms≈3s),且测试里 mock 的 waitForTimeout
+  // 不推进墙钟,墙钟 deadline 会死循环。探测异常按该轮落空处理进下一轮(瞬时错误可自愈);
+  // 无 count() 的候选(如 getByText 路径)保持直接接受。
   let lastErr: unknown;
-  for (const c of cands) {
-    const probe = c.loc as unknown as { count?: () => Promise<number>; isVisible?: () => Promise<boolean> };
-    if (probe && typeof probe.count === 'function') {
-      const n1 = await probe.count().catch((e) => { lastErr = e; return -1; });
-      if (n1 > 0) {
+  for (let round = 0; round < LOCATOR_PROBE_ROUNDS; round++) {
+    if (round > 0) await page.waitForTimeout(LOCATOR_PROBE_INTERVAL_MS);
+    for (const c of cands) {
+      const probe = c.loc as unknown as { count?: () => Promise<number> };
+      if (!probe || typeof probe.count !== 'function') {
+        // 没有 count()（如 getByText 路径）直接接受
         if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
         return c.loc;
       }
-      if (n1 === 0) {
-        // a11y 树滞后兜底:短等一次再判定
-        await page.waitForTimeout(150);
-        const n2 = await probe.count().catch(() => -1);
-        if (n2 > 0) {
-          if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
-          return c.loc;
-        }
+      const n = await probe.count().catch((e) => { lastErr = e; return -1; });
+      if (n > 0) {
+        if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
+        return c.loc;
       }
-      lastErr = new Error(`count=0 (${c.kind})`);
-      continue;
+      if (n === 0) lastErr = new Error(`count=0 (${c.kind})`);
     }
-    // 没有 count()（如 getByText 路径）直接接受
-    if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
-    return c.loc;
   }
   throw lastErr instanceof Error ? lastErr : new Error('all locator candidates failed');
 }
