@@ -3,6 +3,7 @@ import {
   ErrorPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  useAuiState,
   type ReasoningMessagePartProps,
   type TextMessagePartProps,
   type ToolCallMessagePartProps,
@@ -98,8 +99,16 @@ function AssistantMessage() {
   );
 }
 
-/** 运行指示:running=true 期间常驻消息列表底部(thinking-dot 三点动效,与思考中段同一视觉语言)。 */
+/** 运行指示:running=true 期间常驻消息列表底部(thinking-dot 三点动效,与思考中段同一视觉语言)。
+ *  思考流期间隐藏本身:模型推理时消息内已渲染「思考中」,再叠一只底部三点动效就是两套同形动画。
+ *  二者语义互补——思考中=模型在推理(跟着消息走),正在运行=工具调用间隙/模型静默期(线程整体存活)。 */
 function RunningIndicator() {
+  const thinkingActive = useAuiState((s) =>
+    s.thread.messages.some((m) =>
+      m.content.some((p) => p.type === 'reasoning' && p.status?.type === 'running'),
+    ),
+  );
+  if (thinkingActive) return null;
   return (
     <div className="mb-4 inline-flex items-center gap-1 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
       正在运行
