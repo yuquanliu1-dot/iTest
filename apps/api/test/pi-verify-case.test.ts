@@ -547,6 +547,59 @@ describe('verify_case 逐步 AI 执行编排', () => {
     }
   });
 
+  it('compiled 保真后置校验：多候选首候选命中 0、次候选命中 → 通过（或关系，与回放一致）', async () => {
+    const caseId = await seedCase({
+      steps: [[{
+        kind: 'assertVisible',
+        locator: [
+          { strategy: 'css', value: '.ghost-element' },
+          { strategy: 'text', value: '删除' },
+        ],
+      }]],
+    });
+    const { __testState } = (await import('playwright-core')) as unknown as { __testState: { zeroLocators: string[] } };
+    __testState.zeroLocators.push('.ghost-element');
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"看到了","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      // 任一候选命中即通过——全部候选命中 0 才是回放失败
+      expect(data.result).toBe('passed');
+      expect(data.steps[0].status).toBe('passed');
+    }
+  });
+
+  it('compiled 保真后置校验：多候选全部命中 0 → LocatorMismatch 且失败信息列出全部候选', async () => {
+    const caseId = await seedCase({
+      steps: [[{
+        kind: 'assertVisible',
+        locator: [
+          { strategy: 'css', value: '.ghost-a' },
+          { strategy: 'css', value: '.ghost-b' },
+        ],
+      }]],
+    });
+    const { __testState } = (await import('playwright-core')) as unknown as { __testState: { zeroLocators: string[] } };
+    __testState.zeroLocators.push('.ghost-a', '.ghost-b');
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"看到了","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('failed');
+      expect(data.steps[0].status).toBe('failed');
+      expect(data.steps[0].failureReason).toBe('LocatorMismatch');
+      expect(data.steps[0].error).toContain('全部 2 个候选');
+      expect(data.steps[0].error).toContain('.ghost-a');
+      expect(data.steps[0].error).toContain('.ghost-b');
+    }
+  });
+
   it('用例级终态判定：步骤全过后 vision 判不符 expectedOutcome → failed VisionAssertionFailed', async () => {
     const caseId = await seedCase({ steps: [CLICK_COMPILED], expectedOutcome: '字段以只读形式展示' });
     const { runAiTask } = await import('../src/execute/aiTask.js');
