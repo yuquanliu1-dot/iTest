@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isStableCssPath, filterCssPath, stripRuntimeAria, isUtilityClass, hasUnstableClass } from '../modules/selector-filter.js';
+import { isStableCssPath, filterCssPath, stripRuntimeAria, isUtilityClass, hasUnstableClass, isTransientStateClass } from '../modules/selector-filter.js';
 
 describe('selector-filter', () => {
   it('marks id with hex suffix as unstable', () => {
@@ -71,6 +71,37 @@ describe('selector-filter', () => {
       .toContain('glass-card');
     expect(filterCssPath('div.md:flex-row.auth-page-enter.div.glass-card'))
       .not.toContain('md:flex-row');
+  });
+});
+
+describe('transient interaction-state classes（悬停/聚焦瞬态）', () => {
+  // 回归动机：规则查看 用例回放 count=0——录制时鼠标悬停行带 Element-UI .hover-row，
+  // 回放无鼠标悬停该 class 必不存在。
+  it('isTransientStateClass: hover-row / current-row / is-hover / 后缀族', () => {
+    expect(isTransientStateClass('hover-row')).toBe(true);
+    expect(isTransientStateClass('current-row')).toBe(true);
+    expect(isTransientStateClass('is-hover')).toBe(true);
+    expect(isTransientStateClass('is-active')).toBe(true);
+    expect(isTransientStateClass('cell-hover')).toBe(true);
+    expect(isTransientStateClass('ant-table-cell-row-hover')).toBe(true);
+    expect(isTransientStateClass('tab-active')).toBe(true);
+    // 稳定结构类不误伤
+    expect(isTransientStateClass('el-table__row')).toBe(false);
+    expect(isTransientStateClass('icon-chakan')).toBe(false);
+    expect(isTransientStateClass('btn-primary')).toBe(false);
+    expect(isTransientStateClass('glass-card')).toBe(false);
+  });
+  it('hasUnstableClass flags hover-row paths', () => {
+    expect(hasUnstableClass('tr.el-table__row.hover-row > td > .icon-chakan')).toBe(true);
+    expect(hasUnstableClass('tr.el-table__row > td > .icon-chakan')).toBe(false);
+  });
+  it('filterCssPath strips hover-row but keeps the rest of the chain', () => {
+    // 输入契约：' > ' 连接的子代组合器路径（finder / buildCssPathFallback 的产出形式）。
+    expect(filterCssPath('table > tr.el-table__row.hover-row > td > .icon-chakan'))
+      .toBe('table > tr.el-table__row > td > .icon-chakan');
+    expect(filterCssPath('tr.is-hover > td')).toBe('tr > td');
+    expect(filterCssPath('li.el-menu-item.is-active')).toBe('li.el-menu-item');
+    expect(filterCssPath('tr.current-row > td')).toBe('tr > td');
   });
 });
 

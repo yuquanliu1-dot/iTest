@@ -1,5 +1,5 @@
 import { finder } from '@medv/finder';
-import { filterCssPath, isStableCssPath, stripRuntimeAria, isUtilityClass } from './selector-filter.js';
+import { filterCssPath, isStableCssPath, stripRuntimeAria, isUtilityClass, isTransientStateClass } from './selector-filter.js';
 
 export interface Locator {
   strategy: 'role' | 'testId' | 'text' | 'css';
@@ -38,18 +38,24 @@ function normalize(s: string | null | undefined): string {
   return (s ?? '').replace(/\s+/g, ' ').trim();
 }
 
-/** text 候选应满足：
- *   - 优先取 aria-label / title / placeholder（语义最稳定）。
- *   - 回退到 innerText / textContent，先把空白折叠成单空格。
- *   - 含 volatile 尾巴（时间、计数）的直接丢弃——避免「13 天前」「待澄清 1」让下次重放失效。
- *   - 长度超过 50 时切到最近的词边界，避免切在词中间。
- *   - 元素含 element 子节点时：button / a / summary 这种「本身是叶子 UI、文本在子 span/icon 里」
- *     仍要产 text 候选（取子树拼接）；其他 layout 容器（dialog / card / section / form）才丢弃——
- *     后者命中文本会让回放锁定整个父容器，下一次重渲染很容易脱锚。
+/** 属性名（aria-label / title / placeholder）：仅供 role 候选（Playwright 可访问名计算包含这些
+ *  属性）与 css 属性候选（[title="..."]）。**不得**进 text 候选——回放 getByText 只匹配文本节点，
+ *  而纯图标按钮的 title/aria-label 恰恰来自悬停提示文案（规则查看 用例根因之一：text "查看"
+ *  实为 title 属性，回放 count=0）。
  */
-function getAccessibleName(el: Element): string | null {
+function getAttrName(el: Element): string | null {
   const attr = el.getAttribute('aria-label') ?? el.getAttribute('title') ?? el.getAttribute('placeholder');
   if (attr && attr.trim()) return attr.trim();
+  return null;
+}
+
+/** 子树可见文本——text 候选唯一合法来源：
+ *   - 叶子元素或 button / a / summary 这类「自叶子 UI」取子树文本；其他 layout 容器返回 null，
+ *     避免回放锁定整个父容器。
+ *   - 含 volatile 尾巴（时间、计数）的直接丢弃——避免「13 天前」「待澄清 1」让下次重放失效。
+ *   - 长度超过 50 时切到最近的词边界，避免切在词中间。
+ */
+function getSubtreeText(el: Element): string | null {
   const tag = el.tagName.toLowerCase();
   if (!isLeaf(el)) {
     // 仅 button / a / summary 这类「自叶子 UI」的元素从子树文本里拼出 name；其它 layout 容器
@@ -63,6 +69,11 @@ function getAccessibleName(el: Element): string | null {
   const slice = raw.slice(0, 50);
   const lastSpace = slice.lastIndexOf(' ');
   return lastSpace > 20 ? slice.slice(0, lastSpace) : slice;
+}
+
+/** role 候选的 name：属性名优先（Playwright 可访问名计算含 aria-label/title），回退子树文本。 */
+function getAccessibleName(el: Element): string | null {
+  return getAttrName(el) ?? getSubtreeText(el);
 }
 
 /** 含 element 子节点即视为非 leaf。SVG 元素及其子节点也按此规则——svg/path 等的 innerText
@@ -98,6 +109,10 @@ function buildCssPath(el: Element, options: GenerateLocatorsOptions = {}): strin
   try {
     return finder(el, {
       root: document.body,
+      // 瞬态交互态 class（hover-row / is-hover / cell-hover 等）录制瞬间在 DOM 上——用户鼠标
+      // 正悬在那——但回放无鼠标悬停必不存在。finder 主路径不经过 filterCssPath 清洗，
+      // 必须在候选源头拦住（规则查看 用例根因：录制时 tr 带 .hover-row，回放 count=0）。
+      className: (name) => !isTransientStateClass(name),
       idName: (name) =>
         !/^\d+$/.test(name) &&
         !/__BV_/.test(name) &&
@@ -218,6 +233,31 @@ export function deriveSemantic(el: Element): { semanticRole: string; contextText
   return undefined;
 }
 
+/** 位置链段（:nth-of-type / :nth-child）出现 ≥3 次视为纯位置链——DOM 结构稍变即碎。 */
+const POSITIONAL_SEGMENTS_RE = /:(?:nth-of-type|nth-child)\(/g;
+const POSITIONAL_CHAIN_LIMIT = 3;
+
+/** 元素自身「可辨识」class：非瞬态/非 utility / 非组件库通用前缀（el-/ant-/ivu-）。
+ *  如 .icon-chakan 这类项目语义类——位置链碎掉后仍能按类命中目标。 */
+function distinctiveOwnClasses(el: Element): string[] {
+  const cls = el.getAttribute('class');
+  if (!cls) return [];
+  return cls
+    .split(/\s+/)
+    .filter((c) => c.length >= 3 && !isTransientStateClass(c) && !isUtilityClass(c) && !/^(?:el-|ant-|ivu-)/.test(c));
+}
+
+/** 位置链降权兜底：finder 在无锚点页面会产出深层 :nth-of-type 链；元素自身带可辨识 class
+ *  （如 .icon-chakan）时补一个自身 class 候选，放在链**之后**——链活着时轮不到它（不抢
+ *  唯一性更强的大链，避免静默操作第一个匹配元素）；链碎后它仍能命中同类元素（多行图标
+ *  会命中多个，回放取首个），比整条链 count=0 直接失败强。 */
+export function positionalOwnClassCandidate(css: string, el: Element): string | null {
+  const count = (css.match(POSITIONAL_SEGMENTS_RE) ?? []).length;
+  if (count < POSITIONAL_CHAIN_LIMIT) return null;
+  const own = distinctiveOwnClasses(el);
+  return own.length > 0 ? `.${own.join('.')}` : null;
+}
+
 export function generateLocators(el: Element, options: GenerateLocatorsOptions = {}): Locator[] {
   const out: Locator[] = [];
   const seen = new Set<string>();
@@ -230,16 +270,19 @@ export function generateLocators(el: Element, options: GenerateLocatorsOptions =
   };
 
   const role = getAccessibleRole(el);
-  const name = getAccessibleName(el);
+  const attrName = getAttrName(el);
+  const subtreeText = getSubtreeText(el);
+  const name = attrName ?? subtreeText;
   if (role && name) push({ strategy: 'role', value: `${role}[name="${name.replace(/"/g, '\\"')}"]` });
 
   const testId = getTestId(el);
   if (testId) push({ strategy: 'testId', value: testId });
 
   const tag = el.tagName.toLowerCase();
-  // svg / path 等无意义文本不产 text 候选（它们的 innerText 经常是父容器文案或空串）。
-  if (name && name.length > 0 && name.length <= 50 && tag !== 'svg' && tag !== 'path') {
-    push({ strategy: 'text', value: name });
+  // text 候选只收子树真实文本节点（getByText 只匹配文本节点）；svg / path 的 innerText
+  // 经常是父容器文案或空串，同样不产。
+  if (subtreeText && subtreeText.length <= 50 && tag !== 'svg' && tag !== 'path') {
+    push({ strategy: 'text', value: subtreeText });
   }
 
   // placeholder / name：表单元素最高 ROI 的语义属性，独立提为 css 候选。
@@ -258,8 +301,23 @@ export function generateLocators(el: Element, options: GenerateLocatorsOptions =
     push({ strategy: 'css', value: `[name="${safe}"]` });
   }
 
+  // 属性名兜底 css 候选：纯图标按钮的 aria-label/title 是 DOM 常驻属性（悬停 tooltip 文案的
+  // 常见落点），css 属性选择器可稳定命中——但 getByText 永远看不到它们。仅在没有子树文本时
+  // 给出（有子树文本时 text 候选已覆盖同名语义，且子树文本才是用户可见文案）。
+  if (attrName && !subtreeText) {
+    for (const attr of ['aria-label', 'title'] as const) {
+      const v = el.getAttribute(attr);
+      if (v && v.trim() && v.trim().length <= 50) {
+        const safe = v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        push({ strategy: 'css', value: `[${attr}="${safe}"]` });
+      }
+    }
+  }
+
   const css = buildCssPath(el, options);
   push({ strategy: 'css', value: css });
+  const ownClass = positionalOwnClassCandidate(css, el);
+  if (ownClass) push({ strategy: 'css', value: ownClass });
 
   return out.slice(0, MAX_CANDIDATES);
 }
