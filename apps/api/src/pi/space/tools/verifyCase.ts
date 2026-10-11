@@ -36,9 +36,9 @@ const VERIFY_TIMEOUT_MS = 300_000;
 const STEP_MAX_TURNS = 5;
 
 /** 凭据占位符：提示词里只有字面量，valueSub 在动作执行时刻替换为真实值。 */
-const USER_PH = '__ITEST_USERNAME__';
-const PASSWORD_PH = '__ITEST_PASSWORD__';
-const SECRET_PH = '__ITEST_STEP_SECRET__';
+export const USER_PH = '__ITEST_USERNAME__';
+export const PASSWORD_PH = '__ITEST_PASSWORD__';
+export const SECRET_PH = '__ITEST_STEP_SECRET__';
 
 interface AiStepResult {
   order: number;
@@ -136,8 +136,9 @@ async function checkCompiledLocators(
   return null;
 }
 
-/** 单步执行指令：自然语言 + compiled 参考 + 占位符凭据段（仅配置了 login 时）+ 输出契约。 */
-function buildStepInstruction(
+/** 单步执行指令：自然语言 + compiled 参考 + 占位符凭据段（仅配置了 login 时）+ 输出契约。
+ *  solidify_case 复用同一提示词协议（AI 相执行 + 占位符凭据注入）。 */
+export function buildStepInstruction(
   step: { order: number; instruction: string | null; compiled: unknown; assertion: unknown },
   total: number,
   sec: { hasLogin: boolean; hasSecret: boolean },

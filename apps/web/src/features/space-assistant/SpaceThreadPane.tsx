@@ -31,6 +31,7 @@ export default function SpaceThreadPane({ threadId }: { threadId: string }) {
         </ThreadPrimitive.Viewport>
         <ThreadPrimitive.ViewportFooter className="border-t p-3" style={{ borderColor: 'var(--border)' }}>
           <VerifyProgressCard />
+          <SolidifyProgressCard />
           <ConfirmCard threadId={threadId} />
           <ComposerPrimitive.Root className="flex items-end gap-2">
             <ComposerPrimitive.Input
@@ -152,6 +153,7 @@ function toolMeta(toolName: string, args: unknown): { icon: IconName; label: str
   if (toolName === 'manage_environments') return { icon: 'globe', label: '环境管理', summary: action };
   if (toolName === 'manage_plans') return { icon: 'listChecks', label: '计划管理', summary: action };
   if (toolName === 'verify_case') return { icon: 'beaker', label: '实测验证', summary: typeof a.caseId === 'string' ? a.caseId.slice(0, 8) : '' };
+  if (toolName === 'solidify_case') return { icon: 'sparkles', label: '固化用例', summary: typeof a.caseId === 'string' ? a.caseId.slice(0, 8) : '' };
   if (toolName.startsWith('repo_')) {
     return { icon: 'code', label: '读取仓库', summary: typeof a.path === 'string' ? a.path : (typeof a.command === 'string' ? a.command : '') };
   }
@@ -241,6 +243,43 @@ function VerifyProgressCard() {
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** solidify_case 实时进度卡：solidify_progress SSE 事件驱动，单行指示（start/end 两相）。
+ *  固化会真实再执行一遍用例，全程数分钟——单行 loader → 结果（固化数/保持数/失败原因）。 */
+function SolidifyProgressCard() {
+  const sp = useSpaceEventsStore((s) => s.solidifyProgress);
+  if (!sp) return null;
+  const done = sp.result !== null;
+  const ok = sp.result === 'solidified';
+  let status: string;
+  if (!done) status = '执行中';
+  else if (ok) status = `已固化 ${sp.solidified ?? 0} 步${sp.kept ? `，保持视觉 ${sp.kept} 步` : ''}`;
+  else if (sp.result === 'nothing-solidified') status = sp.kept ? `无可固化步骤，${sp.kept} 步保持视觉模式` : '无可固化步骤';
+  else status = sp.reason ? `失败 — ${sp.reason}` : '失败';
+  return (
+    <div
+      className="fade-up mb-2 flex items-center gap-1.5 rounded-[var(--radius-md)] px-3 py-2 text-[12px]"
+      style={{ background: 'var(--muted)', border: '1px solid var(--border)', color: 'var(--muted-foreground)' }}
+    >
+      <Icon name="sparkles" size={12} style={{ flexShrink: 0 }} />
+      <span className="truncate">
+        固化用例（{sp.solidifiable}/{sp.total} 步可固化）{status ? ` · ${status}` : ''}
+      </span>
+      {done ? (
+        <Icon
+          name={ok || sp.result === 'nothing-solidified' ? 'check' : 'close'}
+          size={12}
+          style={{
+            color: sp.result === 'failed' ? 'var(--destructive)' : 'var(--success)',
+            flexShrink: 0,
+          }}
+        />
+      ) : (
+        <Icon name="loader" size={12} className="animate-spin" style={{ color: 'var(--primary)', flexShrink: 0 }} />
+      )}
     </div>
   );
 }

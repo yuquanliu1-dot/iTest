@@ -16,6 +16,7 @@ import { buildPlansTools } from './plans.js';
 import { buildStageTools } from './stage-tools.js';
 import { buildLoginTools } from './login.js';
 import { buildVerifyCaseTool } from './verifyCase.js';
+import { buildSolidifyCaseTool } from './solidifyCase.js';
 import { buildCaseOpsTools } from './case-ops-tools.js';
 
 export type { SpaceToolsContext } from './context.js';
@@ -57,6 +58,7 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   //   - manage_cases   → 仅负责 search/get/create_group（实时读 + 仅分组创建仍保留实时写）
   tools.push(...buildLoginTools(ctx));
   tools.push(buildVerifyCaseTool(ctx));
+  tools.push(buildSolidifyCaseTool(ctx));
   tools.push(...buildStageTools(ctx));
   tools.push(...buildCaseOpsTools(ctx));
   tools.push(...buildCasesTools(ctx));
