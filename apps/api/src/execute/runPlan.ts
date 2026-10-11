@@ -148,6 +148,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
             .returning();
           const row = ins[0]!;
           publish(planRunId, { type: 'plan_run_login', caseId: cid, stepKind: 'login_prepare', status: 'running' });
+          const loginT0 = Date.now();
           try {
             // 在 caller 持有的 chromium + ctx 中跑登录用例：登录后该 ctx 真实携带 cookie，
             // 从同一 ctx 导出 storageState 喂给后续业务用例。如果登录用例失败或抛错，takeOwnership 不设，
@@ -163,7 +164,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
                 status: r.status,
                 reportId: r.reportId,
                 finishedAt: new Date(),
-                durationMs: 0,
+                durationMs: Date.now() - loginT0,
                 error: r.status === 'failed' ? 'login case failed' : null,
               })
               .where(eq(planRunCases.id, row.id));
@@ -179,7 +180,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
           } catch (e) {
             await db
               .update(planRunCases)
-              .set({ status: 'failed', finishedAt: new Date(), error: e instanceof Error ? e.message : String(e) })
+              .set({ status: 'failed', finishedAt: new Date(), durationMs: Date.now() - loginT0, error: e instanceof Error ? e.message : String(e) })
               .where(eq(planRunCases.id, row.id));
             return { passed: false, storageState: undefined };
           }
@@ -241,6 +242,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       .values({ planRunId, caseId: c.caseId, order: i + 1, status: 'running', stepKind: 'business' })
       .returning();
     publish(planRunId, { type: 'plan_run_case_start', caseId: c.caseId, stepKind: 'business', status: 'running' });
+    const t0 = Date.now();
     try {
       const r = await runCase(c.caseId, {
         storageState: loginState,
@@ -254,6 +256,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
           reportId: r.reportId,
           ...(r.reportIds ? { reportIds: r.reportIds } : {}),
           finishedAt: new Date(),
+          durationMs: Date.now() - t0,
           error: r.status === 'failed' ? 'case failed' : null,
         })
         .where(eq(planRunCases.id, ins[0]!.id));
@@ -278,7 +281,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
     } catch (e) {
       await db
         .update(planRunCases)
-        .set({ status: 'failed', finishedAt: new Date(), error: e instanceof Error ? e.message : String(e) })
+        .set({ status: 'failed', finishedAt: new Date(), durationMs: Date.now() - t0, error: e instanceof Error ? e.message : String(e) })
         .where(eq(planRunCases.id, ins[0]!.id));
       failed += 1;
       publish(planRunId, { type: 'plan_run_case_complete', caseId: c.caseId, stepKind: 'business', status: 'failed' });
