@@ -437,7 +437,7 @@ export const STAGE_PROMPT_GUIDELINES = [
   '数据驱动回放（同一流程跑多组数据）用 stage_dataset 生成数据集：列名即回放变量 {{列名}},行间差异（输入值/断言文案/预期提示）写成列值;配套的用例用 stage_case 的 datasetLocalId 绑定（同一批保存时数据集先落库并自动绑定）。用例步骤里 fill 的 value / 断言文案直接写 {{列名}}。',
   '步骤里的 {{变量名}} 必须与数据集列名逐字一致（列名只能字母/下划线开头,中文列名非法）——stage_case 响应附「变量体检」,引用未定义/不一致变量时请立即修正后重发。',
   '数据集敏感列（密码/密钥等）标 sensitive:true,单元格值仍以明文给出（落库时自动加密,预览对用户可见）;已有数据集的行值/敏感值对你永不可见（list_datasets 仅结构）。修改已有数据集暂不支持;给已有用例绑定已落库数据集走 stage_case_op update_case(patch.datasetId)。',
-  'stage_case 的每条 step 必须输出 compiled 字段（DSL 步骤数组,回放直接执行,保存时不再编译）。规则：',
+  'stage_case 的每条 step 必须输出 compiled 字段（DSL 步骤数组,回放直接执行,保存时不再编译）。增量需求/功能还不稳定、页面元素频繁变动时,可把整条步骤建成视觉模式：compiled 置 null（或 [{"kind":"aiTask","instruction":"..."}]）,回放时由 AI 看截图临场执行自然语言指令；功能稳定后再用 solidify_case 固化为机械步骤。规则：',
   '- compiled 是 JSON 数组,元素形如 {"kind": "...", ...}；允许 kind：navigate {url} / click {locator} / fill {locator, value} / hover {locator} / waitFor {locator, timeoutMs?} / assertText {locator, equals} / assertVisible {locator} / check {locator, checked} / select {locator, value} / extract {locator, varName} / aiTask {instruction}（运行时智能体执行,不预编译,原样保留）。禁止输出 aiStep。',
   '- locator 是 [{"strategy":"...","value":"..."}] 的一层数组;strategy 只能是 "role" | "text" | "testId" | "css" | "xpath";role 的 value 形如 "textbox[name=\'用户名\']" 且必须小写。xpath 的绝对路径在 SPA 重渲染时极易失效——仅历史数据兼容,新生成的步骤禁止产出 xpath 候选。多候选（强约束）:每个带 locator 的动作给 2~4 个候选,按稳定度降序,且全部从 inspect_page 抓到的**同一个目标元素**派生（同源锚定,严禁把不同元素的定位拼进同一条候选链）:(1) 纯 #id;(2) css 属性选择器 [name=]/[placeholder=]/[aria-label=]/[data-testid=],快照里有哪个属性用哪个;(3) role[name=可见文案],仅当元素是语义 HTML（button/input/a 等）或带 role 属性;(4) text=可见文案兜底。位置型选择器（`:first-child`/`:nth-child`/『表单里第一个 input』等）依赖字段顺序,极易静默命中错误元素——仅当元素无任何可用属性时才用且排在末位。裸标签结尾的 css（如 `.baseForm input`、`.example textarea`）命中作用域内全部同标签元素,等同位置型——css 候选必须带属性过滤（如 `input[placeholder="规则名称"]`）或唯一类名/ID 限定;表单 fill 的元素带 placeholder/name 等属性时,属性候选必给且排首位（verify_case 会把首命中候选命中多个元素的 locator 判为 AmbiguousLocator 失败）。完整 step 示例：{kind:"click", locator:[{strategy:"css", value:"#loginBtn"}, {strategy:"role", value:"button[name=\'登录\']"}, {strategy:"text", value:"登录"}]};表单 fill 示例 locator：[{strategy:"css", value:"[placeholder=\\"账号\\"]"}, {strategy:"role", value:"textbox[name=\\"账号\\"]"}]。locator **只有一层数组**,每个元素直接是 {strategy,value} 对象,不要把每个候选再嵌一层数组。禁止把 locator 写成对象（如 {item:{...}} 或 {strategy:"...",value:"..."} 直接放在 locator 槽），回放无法识别。',
   '- navigate 的 url 必须是绝对 URL,且必须使用上下文里的真实页面 URL（host:port/path 原样保留）,禁止臆造 http://localhost:5173/...。没拿到 URL 时,生成用例前先调用 inspect_page 抓取真实页面,从抓取结果里取真实 URL 与 locator,禁止凭「典型实现」编造 testid/id。',
@@ -448,6 +448,7 @@ export const STAGE_PROMPT_GUIDELINES = [
   '- 若判断无法可靠编译（指令过于模糊、需视觉识别但无 #cssSelector 占位）,把 compiled 设为 null 表示「已放弃」。注意 null ≠ []:空数组在回放里等价于「什么都不做」,会隐藏失败;放弃语义必须用 null。',
   '- 页面有验证码（登录/注册等）时,在密码填写与提交点击之间编出一条 {"kind":"aiTask","instruction":"识别验证码图片中的字符并填入验证码输入框"}:回放时由 AI 智能体实时截图识别并填入,不要给验证码输入框编普通 fill（填录制/生成的假值回放必失败）。其他难以固化为 DSL 的动态交互（图形验证、Canvas 控件、复杂弹窗等）同样优先用 aiTask。',
   '- aiTask 不预编译,compiled 里原样保留即可（不要把它展开成其它 kind,也不要因它把 compiled 置 null）。',
+  '视觉模式用例（步骤 compiled 为 null 或纯 aiTask）功能稳定后,调用 solidify_case 把 AI 实际执行过的动作固化（solidify）为机械 compiled,就地改写源用例并暂存 —— 固化结果必须再经 verify_case 验收才算完成。',
 ];
 
 /** stage_case 前瞻变量体检（与 stage_case_op 的 prospectiveVarNote 同方向）:

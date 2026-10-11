@@ -55,6 +55,20 @@ export interface VerifyProgressState {
   stagedOps: number;
 }
 
+/** solidify_case 实时进度（solidify_progress SSE 事件驱动）：单行指示（start/end 两相）。 */
+export interface SolidifyProgressState {
+  caseId: string;
+  total: number;
+  /** 可固化（视觉模式）步骤数（start 事件）。 */
+  solidifiable: number;
+  result: 'solidified' | 'failed' | 'nothing-solidified' | null;
+  /** end 事件：固化步骤数 / 保持视觉步骤数。 */
+  solidified: number | null;
+  kept: number | null;
+  /** 失败原因（result='failed' 时）。 */
+  reason: string | null;
+}
+
 /** 暂存条目：stage_case / stage_scenario / stage_environment / stage_plan 写入。
  *  payload 是 StageDoc 中对应 kind 的单条对象,前端直接渲染预览/勾选。 */
 export interface StagedItem<TPayload = unknown> {
@@ -78,6 +92,8 @@ interface SpaceEventsState {
   announce: AnnounceState | null;
   /** verify_case 实时进度卡数据（verify_progress 事件驱动；agent_start/新一轮清空）。 */
   verifyProgress: VerifyProgressState | null;
+  /** solidify_case 实时进度（solidify_progress 事件驱动；agent_start/新一轮清空）。 */
+  solidifyProgress: SolidifyProgressState | null;
   /** 暂存对象池：用户预览/勾选 → save 时入参的 source of truth。 */
   stagedByThread: StagedByThread;
   stagedSelection: StagedSelection;
@@ -114,6 +130,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
   stageHistory: [],
   announce: null,
   verifyProgress: null,
+  solidifyProgress: null,
   stagedByThread: new Map(),
   stagedSelection: new Map(),
   ingest: (e) => {
@@ -251,9 +268,47 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
       }
       return;
     }
+    if (e.type === 'solidify_progress') {
+      const phase = e.phase as string;
+      if (phase === 'start') {
+        set({
+          solidifyProgress: {
+            caseId: String(e.caseId ?? ''),
+            total: Number(e.total ?? 0),
+            solidifiable: Number(e.solidifiable ?? 0),
+            result: null,
+            solidified: null,
+            kept: null,
+            reason: null,
+          },
+        });
+        return;
+      }
+      if (phase === 'end') {
+        set((s) => {
+          if (!s.solidifyProgress) return s;
+          const result =
+            e.result === 'failed' ? 'failed' : e.result === 'nothing-solidified' ? 'nothing-solidified' : 'solidified';
+          return {
+            solidifyProgress: {
+              ...s.solidifyProgress,
+              result,
+              ...(typeof e.solidified === 'number' ? { solidified: e.solidified } : {}),
+              ...(typeof e.kept === 'number' ? { kept: e.kept } : {}),
+              ...(typeof e.reason === 'string' ? { reason: e.reason } : {}),
+            },
+          };
+        });
+      }
+      return;
+    }
     if (e.type === 'agent_start') {
-      // 新一轮开始:清掉上一轮的 announce 进度(舞台历史保留)
-      set((s) => (s.announce || s.verifyProgress ? { announce: null, verifyProgress: null } : s));
+      // 新一轮开始:清掉上一轮的 announce/verify/solidify 进度(舞台历史保留)
+      set((s) =>
+        s.announce || s.verifyProgress || s.solidifyProgress
+          ? { announce: null, verifyProgress: null, solidifyProgress: null }
+          : s,
+      );
     }
   },
   removeConfirm: (confirmId) =>
@@ -315,7 +370,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
     return { stagedByThread: next, stagedSelection: sel };
   }),
   reset: () => set({
-    confirms: [], stageHistory: [], announce: null, verifyProgress: null,
+    confirms: [], stageHistory: [], announce: null, verifyProgress: null, solidifyProgress: null,
     stagedByThread: new Map(), stagedSelection: new Map(),
   }),
 }));

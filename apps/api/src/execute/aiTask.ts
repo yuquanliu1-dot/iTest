@@ -99,7 +99,7 @@ async function dumpElements(page: Page): Promise<ElementInfo[]> {
   return raw as unknown as ElementInfo[];
 }
 
-type AiAction =
+export type AiAction =
   | { type: 'click'; selector: string }
   | { type: 'fill'; selector: string; value: string }
   | { type: 'press'; key: string }
@@ -301,6 +301,8 @@ export interface RunAiTaskOpts {
   maxTurns?: number;
   /** fill value 执行前替换（占位符 → 真实凭据）；替换后错误反馈不回显真实值。 */
   valueSub?: (v: string) => string;
+  /** 每个动作执行后回调（ok = 未抛错）。solidify_case 用它收集 AI 实际操作过的元素。 */
+  onAction?: (action: AiAction, ok: boolean) => void;
 }
 
 /**
@@ -368,11 +370,14 @@ export async function runAiTask(
       if (a.type === 'screenshot') {
         pendingShot = a.selector;
         lastResults.push(`screenshot ${a.selector}: 已接受，下轮附图`);
+        opts?.onAction?.(a, true);
         continue;
       }
       try {
         lastResults.push(await execAction(page, a, opts?.valueSub));
+        opts?.onAction?.(a, true);
       } catch (e) {
+        opts?.onAction?.(a, false);
         const target = 'selector' in a ? a.selector : 'url' in a ? a.url : '';
         lastResults.push(`${a.type} ${target}: error ${e instanceof Error ? e.message.slice(0, 150) : String(e)}`);
       }
