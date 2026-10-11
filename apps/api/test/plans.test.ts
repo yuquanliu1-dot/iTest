@@ -254,6 +254,31 @@ describe('plan execution extras', () => {
     }
   });
 
+  it('plan run 成员用例落真实执行耗时（durationMs 不再 NULL/0）', async () => {
+    // 回归：业务用例收尾时从不写 plan_run_cases.duration_ms（NULL → 前端 c.durationMs ?? 0 显示 0 ms），
+    // 登录用例写死 0 —— 计划运行时间线的「用例耗时」列恒为 0。修复后按 runCase 实际执行时长回填。
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const c1 = await makeCase(groupId, versionId, 'c1');
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1] });
+
+    const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
+    expect(r.status).toBe(200);
+    const runId = r.body.runId as string;
+
+    let detail: { body: { status: string; cases: Array<{ status: string; durationMs: number | null }> } };
+    for (let i = 0; i < 50; i++) {
+      detail = await request(app).get(`/api/plan-runs/${runId}`);
+      if (detail!.body.status !== 'running') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(detail!.body.status).not.toBe('running');
+    const row = detail!.body.cases[0]!;
+    // 用例真实执行过（无环境配置 → failed report，但已跑完收尾）：耗时必须是正数而非 NULL/0
+    expect(typeof row.durationMs).toBe('number');
+    expect(row.durationMs!).toBeGreaterThan(0);
+  });
+
   it('deprecated cases skipped without execution, plan_run.status=passed', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     const c1 = await makeCase(groupId, versionId, 'c1');
