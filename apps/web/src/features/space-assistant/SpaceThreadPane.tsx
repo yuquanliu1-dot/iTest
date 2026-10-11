@@ -217,6 +217,29 @@ function VerifyProgressCard() {
             </span>
           </div>
         ))}
+        {vp.replay ? (
+          <div className="flex items-start gap-1.5" style={{ color: 'var(--muted-foreground)' }}>
+            <Icon
+              name={vp.replay.status === 'running' ? 'loader' : vp.replay.status === 'passed' ? 'check' : 'close'}
+              size={11}
+              className={vp.replay.status === 'running' ? 'animate-spin' : ''}
+              style={{
+                color:
+                  vp.replay.status === 'running'
+                    ? 'var(--primary)'
+                    : vp.replay.status === 'passed'
+                      ? 'var(--success)'
+                      : 'var(--destructive)',
+                flexShrink: 0,
+                marginTop: 2,
+              }}
+            />
+            <span className="min-w-0 break-all">
+              Compiled 机械回放校验
+              {vp.replay.status === 'failed' && vp.replay.reason ? ` — ${vp.replay.reason}` : ''}
+            </span>
+          </div>
+        ) : null}
       </div>
     </div>
   );

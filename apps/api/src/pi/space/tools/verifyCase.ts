@@ -2,18 +2,20 @@
  * verify_case 工具：生成/修改用例后在真实被测系统上实测验证（全 AI 驱动，无硬编码登录）。
  * 编排：读用例 → resolveEnv → resolveCaseUrl → launch → 逐步骤 runAiTask（LLM 看截图+元素清单
  * 自主操作浏览器）→ 失败即停 → 失败页元素清单（复用 inspectPage 提取器）→ 结构化反馈供 agent 自修正。
+ * AI 步骤 + 终态判定全过后，追加与正式回放同引擎的 compiled 机械干跑（executeCaseInBrowser）：
+ * AI 临场执行可自适应修正（换落点/换目标重试），回放是逐字派发——分叉只有真机回放能暴露。
  * 登录/验证码/改密弹窗等场景由 LLM 按页面实际状态自主判断处理；凭据经占位符注入、执行时刻替换，
  * 不进 LLM 上下文/返回值/日志。验证不落 report（结果只回对话上下文）；副作用与正式执行一致（spec 已确认接受）。
  */
 import { randomUUID } from 'node:crypto';
 import { Type } from '@earendil-works/pi-ai';
 import { chromium } from 'playwright-core';
-import type { Browser } from 'playwright-core';
+import type { Browser, Page } from 'playwright-core';
 import { asc, eq, and } from 'drizzle-orm';
 import { db } from '../../../db/client.js';
 import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/schema.js';
 import { runAiTask } from '../../../execute/aiTask.js';
-import { writeStepScreenshot } from '../../../execute/cdp.js';
+import { writeStepScreenshot, executeCaseInBrowser, type ExecStepResult } from '../../../execute/cdp.js';
 import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from '../../../execute/locator-probe.js';
 import { buildCandidates } from '../../../execute/locator-resolver.js';
 import type { Locator } from '@itest/shared';
@@ -174,7 +176,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'verify_case',
     description:
-      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性（全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理），失败即停并返回失败步骤详情与失败页可交互元素清单。caseId 支持两种形态：落库用例 id，或本线程 stage_case 生成的 localId（纯草稿验证，全程不落库，save 时才正式建用例）。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。验证会产生真实副作用（与正式执行一致）。',
+      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性（全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理），失败即停并返回失败步骤详情与失败页可交互元素清单。AI 步骤与终态判定全过后，还会用与正式回放同引擎的机械干跑逐字执行 compiled（failureReason=ReplayDivergence 表示 AI 能过但逐字回放分叉）。caseId 支持两种形态：落库用例 id，或本线程 stage_case 生成的 localId（纯草稿验证，全程不落库，save 时才正式建用例）。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。验证会产生真实副作用（与正式执行一致，机械干跑会再执行一遍）。',
     parameters: Type.Object({
       caseId: Type.String({ minLength: 1 }),
     }),
@@ -184,6 +186,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
       'stage_case 新建的纯草稿用例（未落库）也可直接 verify_case：caseId 传 stage_case 时声明的 localId；修正循环 = 同 localId 重发 stage_case（幂等覆盖）后再次 verify_case，全程不落库，通过后引导用户在暂存区勾选保存。注意：暂存草稿的 defaultEnvId 只能绑定已落库环境或留空走默认链（暂存环境不支持）。',
       'verify_case 会校验 compiled 选择器能真实命中页面（AI 临场绕开坏 locator 不算通过，回放逐字执行 compiled 会失败）:失败原因含"定位校验不通过"时,必须用 failure.page.elements 里的真实选择器替换原 locator(严禁留着坏 locator 只靠 AI 硬跑)。候选命中多个元素(AmbiguousLocator)同样判失败——回放会静默操作第一个匹配元素,必须给该候选加属性过滤(如 [placeholder=...])或把唯一命中的候选提到首位。verify_case 还会做用例级终态判定(失败原因含 VisionAssertionFailed):步骤都通过但最终页面不符 expectedOutcome 时,修正步骤行为或调整 expectedOutcome 后再验。',
+      'verify_case 最后一道关卡是与正式回放同引擎的 compiled 机械干跑(failureReason=ReplayDivergence):AI 临场能跑通但逐字派发 compiled 失败,典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突导致二次执行必挂。修正方式:用 failure.page.elements 里的真实选择器把失败步 compiled 改成更精确的可操作目标(点组件内部真实接收点击的元素),或修正测试数据策略(时间戳命名)后重验。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。',
       '环境未配置 login 凭据而验证卡在登录页时，引导用户到项目环境页配置 login 凭据，不要伪造登录步骤。',
     ],
@@ -496,9 +499,85 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           const savedState = await context.storageState().catch(() => null);
           if (savedState) saveLoginState(loginKey, savedState);
 
+          // ── compiled 机械回放干跑：AI 相全过（步骤 + 终态判定）才跑，最终裁决门 ──
+          // 正式回放逐字派发 compiled；AI 临场执行可自适应修正，两者分叉（如 click 落在
+          // 组件 wrapper 中心不触发行为）只有真机回放能暴露。复用 executeCaseInBrowser：
+          // 同 context（登录态随 cookie 携带）新开 page、不写 DB 报告；截图落 -replay
+          // 目录，避免与 AI 相同名 step-N.png 互相覆盖。副作用与正式执行一致（二次执行
+          // 恰好暴露唯一名冲突等回放脆弱性，属有意语义）。
+          let replayFailure: ExecStepResult | null = null;
+          let replaySteps: ExecStepResult[] = [];
+          let replayPage: Page | null = null;
+          let replayStartedAt = 0;
+          if (failedIndex < 0 && !visionFailure) {
+            ctx.emit({ type: 'verify_progress', phase: 'replay_start' });
+            replayStartedAt = Date.now();
+            try {
+              // 敏感字段：暂存草稿 step id 非 UUID，cdp 默认 secretResolver 查库必失败 → 注入本线程解密结果
+              const secretMap = new Map<string, string>();
+              for (const s of effectiveSteps) {
+                if (s.sensitive && s.secretCiphertext && s.secretIv && s.secretTag) {
+                  secretMap.set(
+                    s.id,
+                    decrypt({
+                      ciphertext: Buffer.from(s.secretCiphertext, 'base64'),
+                      iv: Buffer.from(s.secretIv, 'base64'),
+                      tag: Buffer.from(s.secretTag, 'base64'),
+                    }),
+                  );
+                }
+              }
+              replaySteps = await executeCaseInBrowser(
+                caseId,
+                effectiveSteps.map((s) => ({
+                  order: s.order,
+                  assertion: s.assertion,
+                  delayMs: s.delayMs,
+                  id: s.id,
+                  sensitive: s.sensitive,
+                  compiled: Array.isArray(s.compiled) ? s.compiled : null,
+                })),
+                {
+                  reportId: `${reportId}-replay`,
+                  envCtx,
+                  llmClient: client,
+                  ...(secretMap.size > 0
+                    ? { secretResolver: async (stepId: string) => secretMap.get(stepId) ?? null }
+                    : {}),
+                  caseTitle: effectiveCase.title,
+                  caseUrl: targetUrl ?? null,
+                },
+                browser,
+                context,
+                targetUrl,
+                undefined,
+                undefined,
+                async (p) => {
+                  replayPage = p;
+                },
+              );
+              replayFailure = replaySteps.find((r) => r.status === 'failed') ?? null;
+            } catch (e) {
+              if (timedOut) return { ok: false, error: `验证超时（${VERIFY_TIMEOUT_MS / 1000}s）已终止` };
+              throw e;
+            }
+            if (timedOut) return { ok: false, error: `验证超时（${VERIFY_TIMEOUT_MS / 1000}s）已终止` };
+            ctx.emit({
+              type: 'verify_progress',
+              phase: 'replay_done',
+              status: replayFailure ? ('failed' as const) : ('passed' as const),
+              ...(replayFailure
+                ? { reason: (replayFailure.humanMessage ?? replayFailure.error ?? 'compiled 机械回放分叉').slice(0, 120) }
+                : {}),
+            });
+          }
+
           // ── 失败收尾：失败页元素清单（供 agent 修正 locator）──
           let failurePage: Awaited<ReturnType<typeof extractPageElements>> | null = null;
-          if (failedIndex >= 0 || visionFailure) {
+          if (replayFailure) {
+            // 回放分叉时优先取干跑自己的 page（分叉现场）；AI 旧 page 状态已漂移
+            failurePage = await extractPageElements(replayPage ?? page).catch(() => null);
+          } else if (failedIndex >= 0 || visionFailure) {
             failurePage = await extractPageElements(page).catch(() => null);
           }
 
@@ -512,7 +591,16 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(r.error ? { error: r.error } : {}),
             ...(r.failureReason ? { failureReason: r.failureReason } : {}),
           }));
-          if (failedIndex < 0 && !visionFailure) {
+          const replaySummary = replaySteps.map((r) => ({
+            order: r.order,
+            status: r.status,
+            durationMs: r.durationMs,
+            ...(r.error ? { error: r.error } : {}),
+            ...(r.failureReason ? { failureReason: r.failureReason } : {}),
+            ...(r.screenshot ? { screenshot: r.screenshot } : {}),
+            ...(r.hitLocator ? { hitLocator: r.hitLocator } : {}),
+          }));
+          if (failedIndex < 0 && !visionFailure && !replayFailure) {
             // cacheSaved: 正常收尾均无条件回写（watchdog 超时路径在循环内提前 return,无 end 事件）
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'passed', cacheSaved: true });
             return {
@@ -526,6 +614,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
                 stagedOpsApplied: opsApplied,
                 steps: stepsSummary,
+                replay: { result: 'passed' as const, durationMs: Date.now() - replayStartedAt },
               }),
             };
           }
@@ -551,6 +640,34 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   screenshot: visionFailure.screenshot ?? null,
                   page: failurePage,
                   note: 'vision 终态判定失败：全部步骤执行通过后，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。',
+                },
+              }),
+            };
+          }
+          if (replayFailure) {
+            const failedReplayStep = effectiveSteps.find((s) => s.order === replayFailure!.order) ?? null;
+            ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
+            return {
+              ok: true,
+              data: JSON.stringify({
+                result: 'failed',
+                caseId,
+                envId: envCtx.envId,
+                targetUrl: targetUrl ?? null,
+                login,
+                basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
+                stagedOpsApplied: opsApplied,
+                steps: stepsSummary,
+                replay: replaySummary,
+                failure: {
+                  stepOrder: replayFailure.order,
+                  action: failedReplayStep?.compiled ?? null,
+                  error: replayFailure.error ?? null,
+                  failureReason: 'ReplayDivergence',
+                  humanMessage: replayFailure.humanMessage ?? replayFailure.error ?? null,
+                  screenshot: replayFailure.screenshot ?? null,
+                  page: failurePage,
+                  note: 'AI 临场执行能通过，但与正式回放同引擎的 compiled 机械逐字执行失败（回放分叉）——典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突二次执行必挂。请用 failure.page.elements 中真实存在的选择器把该步 compiled 改成更精确的可操作目标（组件内部真实接收点击/输入的元素），或修正测试数据策略（时间戳命名）后重验。',
                 },
               }),
             };
