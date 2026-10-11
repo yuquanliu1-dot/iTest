@@ -46,6 +46,8 @@ export interface VerifyProgressState {
   /** 环境配置的登录用户名；null=未配置凭据。 */
   loginUser: string | null;
   steps: VerifyProgressStep[];
+  /** compiled 机械回放干跑（replay_start/replay_done 事件）；null=未进入该阶段。 */
+  replay: { status: 'running' | 'passed' | 'failed'; reason?: string } | null;
   result: 'passed' | 'failed' | null;
   /** end 事件：本轮是否已回写登录态缓存。 */
   cacheSaved: boolean;
@@ -162,6 +164,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
             loginCache: e.loginCache === 'hit' || e.loginCache === 'miss' ? e.loginCache : null,
             loginUser: typeof e.loginUser === 'string' ? e.loginUser : null,
             steps: [],
+            replay: null,
             result: null,
             cacheSaved: false,
             stagedOps: Number(e.stagedOps ?? 0),
@@ -207,6 +210,30 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
           );
           return { verifyProgress: { ...s.verifyProgress, steps } };
         });
+        return;
+      }
+      if (phase === 'replay_start') {
+        set((s) =>
+          s.verifyProgress
+            ? { verifyProgress: { ...s.verifyProgress, replay: { status: 'running' as const } } }
+            : s,
+        );
+        return;
+      }
+      if (phase === 'replay_done') {
+        set((s) =>
+          s.verifyProgress
+            ? {
+                verifyProgress: {
+                  ...s.verifyProgress,
+                  replay: {
+                    status: e.status === 'failed' ? ('failed' as const) : ('passed' as const),
+                    ...(typeof e.reason === 'string' ? { reason: e.reason } : {}),
+                  },
+                },
+              }
+            : s,
+        );
         return;
       }
       if (phase === 'end') {

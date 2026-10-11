@@ -8,6 +8,20 @@ import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 vi.mock('../src/execute/aiTask.js', () => ({ runAiTask: vi.fn() }));
 vi.mock('../src/execute/cdp.js', () => ({
   writeStepScreenshot: vi.fn(async () => '/screenshots/verify-x/step-1.png'),
+  // 机械干跑默认全过（步骤序号透传）；失败/接线细节由用例内 mockImplementationOnce 覆写
+  executeCaseInBrowser: vi.fn(
+    async (
+      _caseId: string,
+      steps: Array<{ order: number }>,
+      _ctx?: unknown,
+      _browser?: unknown,
+      _context?: unknown,
+      _targetUrl?: string,
+      _onPreflight?: unknown,
+      _caseWindow?: unknown,
+      _onFailurePage?: (page: unknown, failedIndex: number) => Promise<void>,
+    ) => steps.map((s) => ({ order: s.order, status: 'passed' as const, durationMs: 10 })),
+  ),
   // runCaseVisionAssert 依赖的模板物化/脱敏（验证场景无数据集变量/敏感列，恒等即可）
   materializeExpectedOutcome: (t: string) => t,
   maskSensitiveValues: (t: string) => t,
@@ -301,9 +315,9 @@ describe('verify_case 逐步 AI 执行编排', () => {
     expect(call[4]).toMatchObject({ maxTurns: 5 });
     // 初始导航被调（首步非同 URL navigate）
     expect(await fakeGotos()).toEqual(['http://env.example/page']);
-    // verify_progress SSE 事件序列:start → (step_start + step_done)×2 → end
+    // verify_progress SSE 事件序列:start → (step_start + step_done)×2 → replay_start → replay_done → end
     const phases = emitLog.map((e) => (e as { phase: string }).phase);
-    expect(phases).toEqual(['start', 'step_start', 'step_done', 'step_start', 'step_done', 'end']);
+    expect(phases).toEqual(['start', 'step_start', 'step_done', 'step_start', 'step_done', 'replay_start', 'replay_done', 'end']);
     const start = emitLog[0] as { type: string; caseId: string; total: number; targetUrl: string | null; loginCache: string; loginUser: string | null };
     expect(start).toMatchObject({ type: 'verify_progress', caseId, total: 2, targetUrl: 'http://env.example/page', loginCache: 'miss', loginUser: null });
     const stepStart = emitLog[1] as { order: number; brief: string };
@@ -311,7 +325,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     expect(stepStart.brief).toContain('点击删除按钮');
     const stepDone = emitLog[2] as { type: string; order: number; status: string; login?: string };
     expect(stepDone).toMatchObject({ type: 'verify_progress', order: 1, status: 'passed', login: 'not-needed' });
-    const end = emitLog[5] as { result: string; cacheSaved: boolean };
+    const end = emitLog[7] as { result: string; cacheSaved: boolean };
     expect(end.result).toBe('passed');
     expect(end.cacheSaved).toBe(true);
   });
@@ -808,6 +822,128 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.result).toBe('passed');
     }
     expect(vi.mocked(judgeCaseOutcome)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('verify_case compiled 机械回放干跑', () => {
+  it('AI 相全过后干跑：executeCaseInBrowser 调用一次、reportId 隔离、不重复终态判定，通过 → passed + replay 摘要', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const emitLog: unknown[] = [];
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    expect(executeCaseInBrowser).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(executeCaseInBrowser).mock.calls[0]!;
+    const [caseIdArg, stepsArg, ctxArg, browserArg, contextArg, targetUrlArg] = call as unknown as [
+      string,
+      Array<{ compiled: unknown[] }>,
+      { reportId: string; expectedOutcome?: string },
+      unknown,
+      unknown,
+      string | undefined,
+    ];
+    expect(caseIdArg).toBe(caseId);
+    expect(targetUrlArg).toBe('http://env.example/page');
+    // 截图目录隔离（-replay 后缀），避免覆盖 AI 相同名 step-N.png；终态判定不重复跑
+    expect(ctxArg.reportId).toMatch(/-replay$/);
+    expect(ctxArg.expectedOutcome).toBeUndefined();
+    // compiled 逐字透传给机械回放引擎；browser/context 复用 verify 自己的实例（登录态随 cookie 携带）
+    expect(stepsArg[0]!.compiled).toEqual(CLICK_COMPILED);
+    expect(browserArg).toBeTruthy();
+    expect(contextArg).toBeTruthy();
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('passed');
+      expect(data.replay.result).toBe('passed');
+      expect(typeof data.replay.durationMs).toBe('number');
+    }
+  });
+
+  it('干跑失败（AI 能过、逐字回放挂）→ ReplayDivergence，failure.page 取干跑自己的 page', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const replayPageStub = { url: () => 'http://env.example/page', marker: 'replay-page' };
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    vi.mocked(executeCaseInBrowser).mockImplementationOnce(
+      async (
+        _cid: string,
+        _steps: Array<{ order: number }>,
+        _ctx: unknown,
+        _browser: unknown,
+        _context: unknown,
+        _targetUrl: string | undefined,
+        _onPreflight: unknown,
+        _caseWindow: unknown,
+        onFailurePage?: (page: unknown, failedIndex: number) => Promise<void>,
+      ) => {
+        // 模拟真实引擎失败时回调 onFailurePage（verify 借此留住干跑 page 引用）
+        await onFailurePage?.(replayPageStub, 0);
+        return [
+          { order: 1, status: 'failed' as const, durationMs: 5, error: 'count=0 (role)', failureReason: 'LocatorAllFailed', humanMessage: '所有定位候选均未命中', screenshot: '/screenshots/verify-x-replay/step-1.png' },
+        ];
+      },
+    );
+    const emitLog: unknown[] = [];
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('failed');
+      expect(data.steps[0].status).toBe('passed'); // AI 相全过，死在机械回放
+      expect(data.replay[0].status).toBe('failed');
+      expect(data.failure.stepOrder).toBe(1);
+      expect(data.failure.failureReason).toBe('ReplayDivergence');
+      expect(data.failure.error).toBe('count=0 (role)');
+      expect(data.failure.humanMessage).toBe('所有定位候选均未命中');
+      expect(data.failure.screenshot).toContain('-replay');
+      expect(data.failure.action).toEqual(CLICK_COMPILED);
+      expect(data.failure.page.elements[0]).toContain('button#del');
+      expect(typeof data.failure.note).toBe('string');
+    }
+    // 失败页元素清单取自干跑 page（分叉现场），不是 AI 旧 page
+    const { extractPageElements } = await import('../src/pi/inspectPage.js');
+    expect(vi.mocked(extractPageElements).mock.calls.at(-1)?.[0]).toBe(replayPageStub);
+    // SSE 序列：AI 步全过 → replay_start → replay_done(failed) → end(failed)
+    const phases = emitLog.map((e) => (e as { phase: string }).phase);
+    expect(phases).toEqual(['start', 'step_start', 'step_done', 'replay_start', 'replay_done', 'end']);
+    const replayDone = emitLog[4] as { status: string; reason: string };
+    expect(replayDone).toMatchObject({ status: 'failed', reason: '所有定位候选均未命中' });
+    const end = emitLog.at(-1) as { result: string };
+    expect(end.result).toBe('failed');
+  });
+
+  it('敏感步骤：干跑注入 secretResolver（stepId → 解密明文）；非敏感用例不注入', async () => {
+    const sensitiveId = await seedCase({ steps: [CLICK_COMPILED], sensitiveStep1: true });
+    const plainId = await seedCase({ steps: [CLICK_COMPILED] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r1 = await buildVerifyCaseTool(toolCtx()).execute({ caseId: sensitiveId });
+    expect(r1.ok).toBe(true);
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    const sensitiveCall = vi.mocked(executeCaseInBrowser).mock.calls[0]! as unknown as [
+      string,
+      Array<{ id: string; sensitive: boolean }>,
+      { secretResolver: (stepId: string) => Promise<string | null> },
+    ];
+    expect(sensitiveCall[1][0]!.sensitive).toBe(true);
+    // 暂存/DB step id 直接映射解密明文（DB 默认 secretResolver 查库链路不适用 verify 语境）
+    await expect(sensitiveCall[2].secretResolver(sensitiveCall[1][0]!.id)).resolves.toBe('StepSecret!9');
+    await expect(sensitiveCall[2].secretResolver('unknown-step')).resolves.toBeNull();
+    if (r1.ok) expect(r1.data).not.toContain('StepSecret!9');
+    const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId: plainId });
+    expect(r2.ok).toBe(true);
+    const plainCall = vi.mocked(executeCaseInBrowser).mock.calls[1]! as unknown as [
+      string,
+      unknown,
+      { secretResolver?: unknown },
+    ];
+    expect(plainCall[2].secretResolver).toBeUndefined();
   });
 });
 
