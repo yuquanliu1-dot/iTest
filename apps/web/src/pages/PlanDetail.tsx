@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
   DropdownMenuCheckboxItem, DropdownMenuItem, DropdownMenuSeparator,
+  DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from '../components/ui/shadcn/dropdown-menu';
 import { caseStatusLabel } from '../lib/format';
 
@@ -77,6 +78,8 @@ export default function PlanDetail() {
   const [addFilters, setAddFilters] = useState<AddFilters>(EMPTY_ADD_FILTERS);
   const hasAddFilter = addFilters.groups.length > 0 || addFilters.versions.length > 0
     || addFilters.statuses.length > 0 || addFilters.priorities.length > 0 || addFilters.tags.length > 0;
+  const activeFilterCount = addFilters.groups.length + addFilters.versions.length
+    + addFilters.statuses.length + addFilters.priorities.length + addFilters.tags.length;
 
   const inPlanIds = useMemo(() => new Set((plan?.cases ?? []).map((c) => c.id)), [plan]);
   const candidates = useMemo(() => {
@@ -485,8 +488,8 @@ export default function PlanDetail() {
           <DialogHeader>
             <DialogTitle>添加用例</DialogTitle>
           </DialogHeader>
-          <div className="px-5 py-3">
-            <div className="input-wrap">
+          <div className="px-5 py-3 flex items-center gap-2">
+            <div className="input-wrap flex-1 min-w-0">
               <Icon name="search" size={14} className="input-icon" />
               <input
                 type="text"
@@ -496,48 +499,57 @@ export default function PlanDetail() {
                 className="input-base input-sm input-with-leading"
               />
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <FacetDropdown
-                label="分组"
-                options={(projectGroups ?? []).map((g) => ({ value: g.id, label: g.name }))}
-                selected={addFilters.groups}
-                onChange={(v) => setAddFilters({ ...addFilters, groups: v })}
-              />
-              <FacetDropdown
-                label="版本"
-                options={(projectVersions ?? []).map((v) => ({ value: v.id, label: v.name }))}
-                selected={addFilters.versions}
-                onChange={(v) => setAddFilters({ ...addFilters, versions: v })}
-              />
-              <FacetDropdown
-                label="状态"
-                options={(['draft', 'review', 'ready', 'deprecated'] as const).map((s) => ({ value: s, label: caseStatusLabel(s) }))}
-                selected={addFilters.statuses}
-                onChange={(v) => setAddFilters({ ...addFilters, statuses: v })}
-              />
-              <FacetDropdown
-                label="优先级"
-                options={['P0', 'P1', 'P2', 'P3'].map((p) => ({ value: p, label: p }))}
-                selected={addFilters.priorities}
-                onChange={(v) => setAddFilters({ ...addFilters, priorities: v })}
-              />
-              <FacetDropdown
-                label="标签"
-                options={(projectTags ?? []).map((t) => ({ value: t.id, label: t.name }))}
-                selected={addFilters.tags}
-                onChange={(v) => setAddFilters({ ...addFilters, tags: v })}
-              />
-              {hasAddFilter && (
-                <button
-                  type="button"
-                  onClick={() => setAddFilters(EMPTY_ADD_FILTERS)}
-                  className="press input-sm px-2 text-[12px]"
-                  style={{ color: 'var(--primary)' }}
-                >
-                  重置
-                </button>
-              )}
-            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="ghost" size="sm" className="shrink-0">
+                  <Icon name="settings" size={12} />
+                  过滤
+                  {activeFilterCount > 0 && (
+                    <span className="text-[11px] tabular-nums opacity-70">({activeFilterCount})</span>
+                  )}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-52">
+                {activeFilterCount > 0 && (
+                  <>
+                    <DropdownMenuItem onSelect={() => setAddFilters(EMPTY_ADD_FILTERS)}>
+                      清除全部筛选
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <FilterSubmenu
+                  label="分组"
+                  options={(projectGroups ?? []).map((g) => ({ value: g.id, label: g.name }))}
+                  selected={addFilters.groups}
+                  onChange={(v) => setAddFilters({ ...addFilters, groups: v })}
+                />
+                <FilterSubmenu
+                  label="版本"
+                  options={(projectVersions ?? []).map((v) => ({ value: v.id, label: v.name }))}
+                  selected={addFilters.versions}
+                  onChange={(v) => setAddFilters({ ...addFilters, versions: v })}
+                />
+                <FilterSubmenu
+                  label="状态"
+                  options={(['draft', 'review', 'ready', 'deprecated'] as const).map((s) => ({ value: s, label: caseStatusLabel(s) }))}
+                  selected={addFilters.statuses}
+                  onChange={(v) => setAddFilters({ ...addFilters, statuses: v })}
+                />
+                <FilterSubmenu
+                  label="优先级"
+                  options={['P0', 'P1', 'P2', 'P3'].map((p) => ({ value: p, label: p }))}
+                  selected={addFilters.priorities}
+                  onChange={(v) => setAddFilters({ ...addFilters, priorities: v })}
+                />
+                <FilterSubmenu
+                  label="标签"
+                  options={(projectTags ?? []).map((t) => ({ value: t.id, label: t.name }))}
+                  selected={addFilters.tags}
+                  onChange={(v) => setAddFilters({ ...addFilters, tags: v })}
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
           <div className="px-5 pb-4 max-h-[400px] overflow-y-auto flex flex-col gap-1">
             {candidates.length === 0 ? (
@@ -635,9 +647,9 @@ export default function PlanDetail() {
   );
 }
 
-/** 添加用例弹窗的多选过滤菜单：按钮显示 label +（选中数），展开为 checkbox 多选（镜像 GroupsPage facet 交互）。
- *  options 空 → 禁选「无可选项」；有选中 → 顶部「清除」一键清空该维。 */
-function FacetDropdown({
+/** 添加用例弹窗过滤菜单的单个维度子菜单（镜像 DataTable FacetSubmenu 交互）：
+ *  父菜单「过滤」内 hover 展开，checkbox 多选；options 空 → 禁选「无可选项」；有选中 → 顶部「清除」一键清空该维。 */
+function FilterSubmenu({
   label,
   options,
   selected,
@@ -650,19 +662,12 @@ function FacetDropdown({
 }) {
   const active = selected.length > 0;
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="input-base input-sm inline-flex items-center gap-1 press"
-          style={active ? { borderColor: 'var(--primary)', color: 'var(--primary)' } : undefined}
-        >
-          {label}
-          {active ? ` (${selected.length})` : ''}
-          <Icon name="chevronDown" size={12} style={{ flexShrink: 0 }} />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-72 min-w-44 overflow-y-auto">
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        {label}
+        {active ? ` (${selected.length})` : ''}
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="max-h-72 min-w-52 overflow-y-auto">
         {options.length === 0 ? (
           <DropdownMenuItem disabled>无可选项</DropdownMenuItem>
         ) : (
@@ -684,7 +689,7 @@ function FacetDropdown({
             ))}
           </>
         )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }
