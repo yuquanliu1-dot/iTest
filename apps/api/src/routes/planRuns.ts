@@ -7,7 +7,7 @@ import { HttpError } from '../middleware/errorHandler.js';
 import { requestCancel, subscribeRun } from '../execute/runPlan.js';
 import { sseHeaders } from '../sse/pi.js';
 import { assertPlanRunVisible, assertProjectVisible } from '../services/projectAccess.js';
-import { handleLiveView, handleLiveReplay } from '../execute/liveView.js';
+import { handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf } from '../execute/liveView.js';
 
 export const planRunsRoute = Router();
 
@@ -130,11 +130,13 @@ planRunsRoute.get('/:id/events', async (req, res) => {
 });
 
 /** 计划运行的实时画面（MJPEG）：runPlanAsync 注册的 `planrun:<id>` 源；运行中才可连。
- *  ?replay=1 为本轮运行的录制回放（执行结束 30min 内）。 */
+ *  ?replay=1 为本轮运行的录制回放（执行结束 30min 内）；&speed=N 为回放倍速；
+ *  ?replay=meta 探测录制是否仍可回放（前端据此决定是否显示「回放」按钮）。 */
 planRunsRoute.get('/:id/live', async (req, res) => {
   const run = (await db.select().from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
   if (!run) throw new HttpError(404, 'not_found', 'plan run not found');
   await assertProjectVisible(run.projectId, req.user!);
-  if (req.query.replay === '1') return handleLiveReplay(req, res, `planrun:${run.id}`);
+  if (req.query.replay === 'meta') return handleLiveReplayMeta(res, `planrun:${run.id}`);
+  if (req.query.replay === '1') return handleLiveReplay(req, res, `planrun:${run.id}`, { speed: replaySpeedOf(req.query) });
   handleLiveView(req, res, `planrun:${run.id}`);
 });

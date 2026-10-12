@@ -37,7 +37,8 @@ function fakeConn() {
       chunks.push(chunk);
       return true;
     },
-    end() {
+    end(chunk?: string | Buffer) {
+      if (chunk !== undefined) chunks.push(chunk);
       this.writableEnded = true;
     },
   };
@@ -549,5 +550,88 @@ describe('录制与回放', () => {
     const again = fakeConn();
     replay(again.req, again.res, 'ttl-rec');
     expect(again.res.status).toBe(404); // 注册表已清（再次确认）
+  });
+
+  it('回放倍速：speed=N 压缩帧间隔（约 1/N），非法/缺失 → 1x', async () => {
+    vi.useFakeTimers();
+    const { registerLiveView: reg, handleLiveReplay: replay, replaySpeedOf } = await freshLiveView();
+    // 两帧录制，原始帧差 2000ms（无人观看慢节流）
+    const record = (key: string) => {
+      const live = reg(key);
+      live.setPage(fakePage([() => Promise.resolve(JPEG), () => Promise.resolve(JPEG2)]) as never);
+      return live;
+    };
+    // 1x：帧差 2000ms
+    const one = record('sp-1');
+    await vi.advanceTimersByTimeAsync(2200);
+    one.close();
+    const c1 = fakeConn();
+    replay(c1.req, c1.res, 'sp-1', { speed: 1 });
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(countBytes(Buffer.concat(c1.body()), FRAME_HEADER)).toBe(1); // 尚未到次帧
+    await vi.advanceTimersByTimeAsync(1);
+    expect(countBytes(Buffer.concat(c1.body()), FRAME_HEADER)).toBe(2);
+
+    // 4x：2000/4 = 500ms 出第二帧并 end
+    const four = record('sp-4');
+    await vi.advanceTimersByTimeAsync(2200);
+    four.close();
+    const c4 = fakeConn();
+    replay(c4.req, c4.res, 'sp-4', { speed: 4 });
+    expect(countBytes(Buffer.concat(c4.body()), FRAME_HEADER)).toBe(1); // 首帧即出
+    await vi.advanceTimersByTimeAsync(499);
+    expect(countBytes(Buffer.concat(c4.body()), FRAME_HEADER)).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(countBytes(Buffer.concat(c4.body()), FRAME_HEADER)).toBe(2);
+    expect(c4.res.writableEnded).toBe(true);
+
+    // 8x：2000/8 = 250ms（受 REPLAY_MIN_GAP 之前的压缩值，未触底）
+    const eight = record('sp-8');
+    await vi.advanceTimersByTimeAsync(2200);
+    eight.close();
+    const c8 = fakeConn();
+    replay(c8.req, c8.res, 'sp-8', { speed: 8 });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(countBytes(Buffer.concat(c8.body()), FRAME_HEADER)).toBe(2);
+    expect(c8.res.writableEnded).toBe(true);
+
+    // 参数解析：缺失 / 0 / 负数 / NaN → 1；超上限 → 8；小数透传
+    expect(replaySpeedOf({})).toBe(1);
+    expect(replaySpeedOf({ speed: '0' })).toBe(1);
+    expect(replaySpeedOf({ speed: '-4' })).toBe(1);
+    expect(replaySpeedOf({ speed: 'abc' })).toBe(1);
+    expect(replaySpeedOf({ speed: '100' })).toBe(8);
+    expect(replaySpeedOf({ speed: '2' })).toBe(2);
+  });
+
+  it('回放可用性探测 meta：有录制 → available，live 中/无录制/过期 → false', async () => {
+    vi.useFakeTimers();
+    const { registerLiveView: reg, handleLiveReplayMeta: meta } = await freshLiveView();
+    const jsonOf = (c: ReturnType<typeof fakeConn>) => JSON.parse(Buffer.concat(c.body()).toString());
+    const probe = (key: string) => {
+      const c = fakeConn();
+      meta(c.res as never, key);
+      return { status: c.res.status, body: jsonOf(c) };
+    };
+    // 运行中（未 dead）→ 无可回放
+    const live = reg('meta-live');
+    live.setPage(fakePage([() => Promise.resolve(JPEG)]) as never);
+    await vi.advanceTimersByTimeAsync(0); // 冲掉 setPage 首 tick 截图入录
+    expect(probe('meta-live')).toEqual({ status: 200, body: { available: false } });
+    // 运行结束且有录制 → available + 元信息
+    live.close();
+    expect(probe('meta-live')).toEqual({
+      status: 200,
+      body: { available: true, frames: 1, durationMs: 0, expiresAt: expect.any(Number) },
+    });
+    // 从未出帧 → 无可回放
+    const empty = reg('meta-empty');
+    empty.close();
+    expect(probe('meta-empty').body).toEqual({ available: false });
+    // 未注册的 key → 无可回放
+    expect(probe('meta-nope').body).toEqual({ available: false });
+    // TTL 过期（懒检查先把条目删出注册表）→ 无可回放
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
+    expect(probe('meta-live').body).toEqual({ available: false });
   });
 });

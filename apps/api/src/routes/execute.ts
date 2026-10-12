@@ -6,7 +6,7 @@ import { runCase, insertRunningReportRow, type PreseedReport } from '../execute/
 import { DatasetConfigError } from '../services/datasets.service.js';
 import { loadDatasetForRun } from '../services/datasets.service.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
-import { registerLiveView, handleLiveView, handleLiveReplay } from '../execute/liveView.js';
+import { registerLiveView, handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf } from '../execute/liveView.js';
 import { db } from '../db/client.js';
 import { testCases, reports } from '../db/schema.js';
 import { logger } from '../logger.js';
@@ -71,10 +71,12 @@ executeRoute.post('/cases/:caseId/execute', async (req, res) => {
 });
 
 /** 单用例执行的实时画面（MJPEG）。鉴权与 execute 一致（用例可见性）；key 稳定，执行中才可连。
- *  ?replay=1 为本轮执行的录制回放（执行结束 30min 内，下次执行同 key 时覆盖）。 */
+ *  ?replay=1 为本轮执行的录制回放（执行结束 30min 内，下次执行同 key 时覆盖）；&speed=N 为回放倍速；
+ *  ?replay=meta 探测录制是否仍可回放（前端据此决定是否显示「回放」按钮）。 */
 executeRoute.get('/cases/:caseId/live', async (req, res) => {
   const caseId = req.params.caseId!;
   await assertCaseVisible(caseId, req.user!);
-  if (req.query.replay === '1') return handleLiveReplay(req, res, `case:${caseId}`);
+  if (req.query.replay === 'meta') return handleLiveReplayMeta(res, `case:${caseId}`);
+  if (req.query.replay === '1') return handleLiveReplay(req, res, `case:${caseId}`, { speed: replaySpeedOf(req.query) });
   handleLiveView(req, res, `case:${caseId}`);
 });
