@@ -150,15 +150,18 @@ export default function ReportDetail() {
   } else {
     grouped.push({ tabIndex: 0, steps: stepResults });
   }
-  // 放大灯箱只看带截图的步骤，保持左右翻页在「有图步骤」之间
-  // 视觉判定最终截图也纳入，方便用户查看「最终页面 vs 预期」
-  const shotSteps = stepResults
-    .map((s, i) => ({ s, i }))
-    .filter(({ s }) => !!s.screenshot || !!s.visionAssert?.screenshot);
-  const zoomed = zoomIndex !== null ? shotSteps[zoomIndex] ?? null : null;
+  // 放大灯箱按「图片」而非「步骤」建索引：一步可能有「执行截图」+「视觉判定截图」两张，
+  // 若按步骤索引，点第二张缩略图会定位到该步、再渲染出第一张（被盖住的那张永远放大不出来）。
+  const shots = stepResults.flatMap((s) => [
+    ...(s.screenshot ? [{ s, url: s.screenshot, label: `Step #${s.order} 截图` }] : []),
+    ...(s.visionAssert?.screenshot && s.visionAssert.screenshot !== s.screenshot
+      ? [{ s, url: s.visionAssert.screenshot, label: `Step #${s.order} 视觉判定截图` }]
+      : []),
+  ]);
+  const zoomed = zoomIndex !== null ? shots[zoomIndex] ?? null : null;
   const gotoZoom = (next: number) => {
-    if (shotSteps.length === 0) return;
-    const wrapped = (next + shotSteps.length) % shotSteps.length;
+    if (shots.length === 0) return;
+    const wrapped = (next + shots.length) % shots.length;
     setZoomIndex(wrapped);
   };
 
@@ -279,7 +282,7 @@ export default function ReportDetail() {
           <button
             type="button"
             onClick={() => {
-              const idx = shotSteps.findIndex((x) => x.i === stepResults.indexOf(s));
+              const idx = shots.findIndex((x) => x.url === s.screenshot);
               setZoomIndex(idx >= 0 ? idx : 0);
             }}
             aria-label={`放大 step ${s.order} 截图`}
@@ -297,7 +300,7 @@ export default function ReportDetail() {
           <button
             type="button"
             onClick={() => {
-              const idx = shotSteps.findIndex((x) => x.s.visionAssert?.screenshot === s.visionAssert?.screenshot);
+              const idx = shots.findIndex((x) => x.url === s.visionAssert!.screenshot);
               setZoomIndex(idx >= 0 ? idx : 0);
             }}
             aria-label={`放大 step ${s.order} 视觉判定截图`}
@@ -528,7 +531,7 @@ export default function ReportDetail() {
                   pointerEvents: 'none',
                 }}
               >
-                <span style={{ paddingLeft: 2 }}>Step #{zoomed.s.order}</span>
+                <span style={{ paddingLeft: 2 }}>{zoomed.label}</span>
                 <span
                   style={{
                     padding: '2px 10px',
@@ -537,7 +540,7 @@ export default function ReportDetail() {
                     textShadow: 'none',
                   }}
                 >
-                  {zoomIndex! + 1} / {shotSteps.length}
+                  {zoomIndex! + 1} / {shots.length}
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -545,7 +548,7 @@ export default function ReportDetail() {
                   type="button"
                   aria-label="上一步截图"
                   onClick={(e) => { e.stopPropagation(); gotoZoom(zoomIndex! - 1); }}
-                  disabled={shotSteps.length <= 1}
+                  disabled={shots.length <= 1}
                   className="zoom-nav-btn"
                 >
                   <Icon name="chevronLeft" size={20} />
@@ -560,8 +563,8 @@ export default function ReportDetail() {
                   tabIndex={-1}
                 >
                   <img
-                    src={zoomed.s.screenshot}
-                    alt={`step ${zoomed.s.order} 截图`}
+                    src={zoomed.url}
+                    alt={zoomed.label}
                     style={{
                       maxWidth: 'calc(100vw - 168px)',
                       maxHeight: 'calc(100vh - 140px)',
@@ -575,7 +578,7 @@ export default function ReportDetail() {
                   type="button"
                   aria-label="下一步截图"
                   onClick={(e) => { e.stopPropagation(); gotoZoom(zoomIndex! + 1); }}
-                  disabled={shotSteps.length <= 1}
+                  disabled={shots.length <= 1}
                   className="zoom-nav-btn"
                 >
                   <Icon name="chevronRight" size={20} />
