@@ -14,7 +14,7 @@ import type { Browser, Page } from 'playwright-core';
 import { asc, eq, and } from 'drizzle-orm';
 import { db } from '../../../db/client.js';
 import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/schema.js';
-import { runAiTask } from '../../../execute/aiTask.js';
+import { runAiTask, USER_PH, PASSWORD_PH, SECRET_PH } from '../../../execute/aiTask.js';
 import { writeStepScreenshot, executeCaseInBrowser, type ExecStepResult } from '../../../execute/cdp.js';
 import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from '../../../execute/locator-probe.js';
 import { buildCandidates } from '../../../execute/locator-resolver.js';
@@ -35,10 +35,9 @@ import type { SpaceToolsContext } from './context.js';
 const VERIFY_TIMEOUT_MS = 300_000;
 const STEP_MAX_TURNS = 5;
 
-/** 凭据占位符：提示词里只有字面量，valueSub 在动作执行时刻替换为真实值。 */
-export const USER_PH = '__ITEST_USERNAME__';
-export const PASSWORD_PH = '__ITEST_PASSWORD__';
-export const SECRET_PH = '__ITEST_STEP_SECRET__';
+/** 凭据占位符：提示词里只有字面量，valueSub 在动作执行时刻替换为真实值。
+ *  协议常量随 execute 层定义（valueSub 语义所在地），此处转出口径不变。 */
+export { USER_PH, PASSWORD_PH, SECRET_PH };
 
 interface AiStepResult {
   order: number;

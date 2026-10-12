@@ -14,10 +14,10 @@ import { Type } from '@earendil-works/pi-ai';
 import { chromium } from 'playwright-core';
 import type { Browser } from 'playwright-core';
 import { asc, eq, and } from 'drizzle-orm';
-import type { Locator, StepAction } from '@itest/shared';
 import { db } from '../../../db/client.js';
 import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/schema.js';
 import { runAiTask, type AiAction } from '../../../execute/aiTask.js';
+import { mapAiActionsToCompiled } from '../../../execute/aiActionMap.js';
 import { writeStepScreenshot } from '../../../execute/cdp.js';
 import { resolveEnv } from '../../../execute/envContext.js';
 import { resolveCaseUrl } from '../../../lib/resolve-url.js';
@@ -38,8 +38,8 @@ import type { SpaceToolsContext } from './context.js';
 const SOLIDIFY_TIMEOUT_MS = 300_000;
 const STEP_MAX_TURNS = 5;
 
-/** Playwright 专有语法（引擎链 / 伪类扩展），平台 css 策略不认识 → 不可映射。 */
-const PLAYWRIGHT_ONLY_SELECTOR_RE = />>|:has-text|:has\(|:near\(|:above\(|:below\(|engine=|nth=/i;
+// 映射实现已下沉 execute/aiActionMap.ts（aiTask 运行时缓存共用），此处转出口径不变（测试直接 import 本模块）。
+export { mapAiActionsToCompiled, type SolidifyMapResult } from '../../../execute/aiActionMap.js';
 
 /** 步骤是否为视觉模式（可固化候选）：未编译（纯 instruction）或 compiled 全部由 aiTask 组成。 */
 export function isVisualStep(step: { instruction: string | null; compiled: unknown; sensitive: boolean }): boolean {
@@ -49,62 +49,6 @@ export function isVisualStep(step: { instruction: string | null; compiled: unkno
     return typeof step.instruction === 'string' && step.instruction.trim().length > 0;
   }
   return compiled.every((a) => (a as { kind?: string }).kind === 'aiTask');
-}
-
-/** AI 动作选择器 → 平台 Locator；不可映射返回 null。 */
-function mapSelector(selector: string): Locator | null {
-  const text = /^text=(.+)$/s.exec(selector);
-  if (text) return { strategy: 'text', value: text[1]! };
-  if (PLAYWRIGHT_ONLY_SELECTOR_RE.test(selector)) return null;
-  return { strategy: 'css', value: selector };
-}
-
-export type SolidifyMapResult =
-  | { ok: true; compiled: StepAction[]; skippedCount: number }
-  | { ok: false; reason: string };
-
-/**
- * 把一个 aiTask 步骤收集到的（成功）AI 动作序列机械映射为 compiled DSL。
- * 步骤级全有或全无：press / wait 无对应 DSL kind、选择器含 Playwright 专有语法、
- * fill value 是凭据占位符——任一出现即整步保持 aiTask（保守正确优于部分固化）。
- * screenshot 是观察性动作，跳过不映射。
- */
-export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
-  const compiled: StepAction[] = [];
-  let skippedCount = 0;
-  for (const a of actions) {
-    switch (a.type) {
-      case 'click': {
-        const locator = mapSelector(a.selector);
-        if (!locator) return { ok: false, reason: `click 选择器 "${a.selector}" 含 Playwright 专有语法，无法映射为平台 locator` };
-        compiled.push({ kind: 'click', locator: [locator] });
-        break;
-      }
-      case 'fill': {
-        if (a.value === USER_PH || a.value === PASSWORD_PH || a.value === SECRET_PH) {
-          return { ok: false, reason: 'fill value 为登录/敏感凭据占位符（登录不属于用例步骤，归环境登录），不固化' };
-        }
-        const locator = mapSelector(a.selector);
-        if (!locator) return { ok: false, reason: `fill 选择器 "${a.selector}" 含 Playwright 专有语法，无法映射为平台 locator` };
-        compiled.push({ kind: 'fill', locator: [locator], value: a.value });
-        break;
-      }
-      case 'navigate':
-        compiled.push({ kind: 'navigate', url: a.url });
-        break;
-      case 'screenshot':
-        skippedCount += 1; // 观察性动作（AI 自己看页面用），无副作用，不进 compiled
-        break;
-      case 'press':
-        return { ok: false, reason: `含键盘动作 press(${a.key})，DSL 无对应机械动作，整步保持 aiTask` };
-      case 'wait':
-        return { ok: false, reason: `含时序动作 wait(${a.ms}ms)，DSL 无对应机械动作，整步保持 aiTask` };
-    }
-  }
-  if (compiled.length === 0) {
-    return { ok: false, reason: '无可映射动作（成功动作为空或全为观察性截图）' };
-  }
-  return { ok: true, compiled, skippedCount };
 }
 
 export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {

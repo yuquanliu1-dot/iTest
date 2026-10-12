@@ -26,7 +26,9 @@ import { classify } from './failureClassifier.js';
 import { preflight } from './preflight.js';
 import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
-import { runAiTask, solveCaptchaOnce, detectCaptchaFailure, CAPTCHA_TASK_RE } from './aiTask.js';
+import { runAiTask, solveCaptchaOnce, detectCaptchaFailure, CAPTCHA_TASK_RE, type AiAction } from './aiTask.js';
+import { mapAiActionsToCompiled } from './aiActionMap.js';
+import { readAiTaskCache, writeAiTaskCache, bumpAiTaskCacheHit } from './aiTaskCache.js';
 import type { EnvCtx } from './envContext.js';
 import { runQueryDb } from './dbQuery.js';
 import { runObserveLog } from './syslogReader.js';
@@ -67,6 +69,8 @@ export interface ExecStepResult {
   log?: ObserveLogLineResult;
   /** Track 1 用例级 vision 判定的回写结果（仅最后一步或追加失败步携带，其它步 undefined）。 */
   visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string };
+  /** aiTask 步骤本轮回放走了动作缓存（机械执行，零 LLM）；报告据此展示"缓存命中"。 */
+  cached?: boolean;
 }
 
 export interface ExecContext {
@@ -111,12 +115,16 @@ interface DispatchOpts {
   ctx: ExecContext;
   /** 当前步骤 id（敏感填充解密用） */
   stepId?: string;
+  /** 所属用例 id（aiTask 运行时缓存判定用；executeSteps 等无用例上下文的调用方缺省） */
+  caseId?: string;
   /** 记录本步命中的定位 kind/value（由 tryFirstMatch 写入） */
   hitSink?: { current: HitLocator | null };
   /** 记录本步 queryDb 结果（由 queryDb 分支写入） */
   dbSink?: { current: DbQueryRowResult | null };
   /** 记录本步 observeLog 结果（由 observeLog 分支写入） */
   logSink?: { current: ObserveLogLineResult | null };
+  /** 记录本步 aiTask 是否命中动作缓存（由 aiTask 分支写入） */
+  cacheSink?: { current: boolean };
 }
 
 /** 交互动作：执行前先做稳定性检查 */
@@ -441,12 +449,40 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       if (missing.length > 0) {
         throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.instruction}")`);
       }
+      // 运行时动作缓存（自动挡固化）：可缓存 = DB 步骤（UUID stepId）+ 用例回放上下文
+      // + 非验证码（每次必须真识别）+ 指令无数据集变量（缓存值含物化数据，跨行复用必错）。
+      const cacheable = !!opts.caseId && !!opts.stepId && UUID_RE.test(opts.stepId)
+        && !CAPTCHA_TASK_RE.test(action.instruction)
+        && value === action.instruction;
+      if (cacheable) {
+        const cached = await readAiTaskCache(opts.stepId!, action.instruction);
+        if (cached && cached.length > 0) {
+          try {
+            // 缓存动作经完整 dispatch：稳定性检查 / 多候选探测 / DOM 降级 / hitSink 全部生效。
+            for (const sub of cached) await dispatch(sub, opts);
+            void bumpAiTaskCacheHit(opts.stepId!).catch(() => undefined);
+            if (opts.cacheSink) opts.cacheSink.current = true;
+            return `aiTask(缓存命中): ${cached.length} 个机械动作`;
+          } catch {
+            // 页面分叉：静默回退 AI 重做（自愈），成功后覆写缓存。
+          }
+        }
+      }
       const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
-      const summary = await runAiTask(opts.page, value, client);
+      const collected: AiAction[] = [];
+      const summary = await runAiTask(opts.page, value, client, undefined, {
+        onAction: (a, ok) => { if (ok) collected.push(a); },
+      });
       // 验证码类指令：登记多轮验证上下文。提交（后续 click 步骤）若被系统判验证码错误/过期，
       // 执行器自动重新识别（失败后验证码通常已被前端换新）并重新提交，而非直接判用例失败。
       if (CAPTCHA_TASK_RE.test(value)) {
         opts.ctx.captchaRetry = { hint: action.intentLocator?.semanticRole ?? null, roundsLeft: CAPTCHA_RETRY_ROUNDS };
+      }
+      if (cacheable) {
+        const mapped = mapAiActionsToCompiled(collected);
+        if (mapped.ok) {
+          void writeAiTaskCache(opts.stepId!, action.instruction, mapped.compiled).catch(() => undefined);
+        }
       }
       return summary ? `aiTask: ${summary}` : undefined;
     }
@@ -754,7 +790,7 @@ async function runStepsInContext(
   } catch (e) {
     logger.warn({ err: e, caseId }, 'preflight failed; continuing');
   }
-  const opts: DispatchOpts = { page, vars, ctx };
+  const opts: DispatchOpts = { page, vars, ctx, caseId };
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]!;
     const started = Date.now();
@@ -762,6 +798,7 @@ async function runStepsInContext(
     opts.hitSink = { current: null };
     opts.dbSink = { current: null };
     opts.logSink = { current: null };
+    opts.cacheSink = { current: false };
     const tabIndex =
       ctx.tabMap && step.tabRef ? Array.from(ctx.tabMap.keys()).indexOf(step.tabRef) : 0;
     const assertionAction = normalizeStepAssertion(step.assertion);
@@ -803,6 +840,7 @@ async function runStepsInContext(
         tabIndex: tabIndex >= 0 ? tabIndex : 0,
         db: opts.dbSink.current ?? undefined,
         log: opts.logSink.current ?? undefined,
+        ...(opts.cacheSink.current ? { cached: true } : {}),
       });
     } catch (e) {
       const durationMs = Date.now() - started;
