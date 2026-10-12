@@ -30,6 +30,9 @@ input, textarea {
   background: #fff; color: #171717; outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
+/* 单行输入对齐中台 .input-base：h-8(32px)；textarea 对齐 min-h-20(80px) */
+input { height: 32px; }
+textarea { min-height: 80px; }
 input:hover, textarea:hover { border-color: #d0d0d0; }
 input:focus, textarea:focus {
   border-color: #006b4f;
