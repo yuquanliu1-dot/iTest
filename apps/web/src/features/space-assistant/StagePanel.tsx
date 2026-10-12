@@ -71,7 +71,7 @@ function CaseSteps({ steps }: { steps: StageDoc['cases'][number]['steps'] }) {
             <div className="text-[11px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
               编译：
               {s.compiled == null ? (
-                <span style={{ color: '#92400e' }}>未编译，保存时由后端补编译</span>
+                <span style={{ color: '#92400e' }}>未编译：落库后该步骤不会执行，请用 [{'{"kind":"aiTask","instruction":"..."}'}] 表达「由 AI 临场执行」</span>
               ) : (
                 <ol className="ml-4 list-decimal">
                   {s.compiled.map((sub, j) => (
