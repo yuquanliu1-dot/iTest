@@ -7,6 +7,8 @@ import { Type } from '@earendil-works/pi-ai';
 import lockfile from 'proper-lockfile';
 import { db } from '../db/client.js';
 import { projects, projectVersions, requirements } from '../db/schema.js';
+import { analyzeLocatorCandidates, type SourceCount } from '../execute/staticLocator.js';
+import type { Locator } from '@itest/shared';
 import type { ToolExecutor } from './tools.js';
 
 const DATA_DIR = process.env.PI_DATA_DIR ?? path.resolve(process.cwd(), '.data');
@@ -78,6 +80,34 @@ function runRg(cwdRoot: string, args: string[]): Promise<{ stdout: string; code:
 
 /** cwdRoot 传静态目录(requirement 级)或 () => string(动态解析,空间级后台异步检出:
  *  未就绪/不可用时 throw,由各工具既有 try/catch 转为错误结果)。 */
+
+/** 结构化 grep 计数：对源码跑 ripgrep，返回命中数与样例文件路径（供静态定位预检）。
+ *  -c 按文件输出 path:count，输出量受「命中文件数」而非「命中行数」约束；
+ *  --max-count=100 封顶单文件内计数（终极泛化锚点也不会炸输出）。rg 默认尊重 .gitignore。 */
+export async function countRepoGrep(cwdRoot: string, pattern: string, glob?: string): Promise<SourceCount> {
+  const args = ['--no-heading', '-c', '-S', '--max-count=100'];
+  if (glob) args.push('--glob', glob);
+  args.push('--', pattern, '.');
+  const { stdout } = await runRg(cwdRoot, args);
+  if (!stdout) return { count: 0, truncated: false, samplePaths: [] };
+  let count = 0;
+  let truncated = false;
+  const samplePaths: string[] = [];
+  const seen = new Set<string>();
+  for (const line of stdout.split('\n').filter(Boolean)) {
+    const idx = line.lastIndexOf(':');
+    const pathPart = idx > 0 ? line.slice(0, idx) : line;
+    const cnt = Number(line.slice(idx + 1));
+    if (!Number.isFinite(cnt)) continue;
+    if (cnt >= 100) truncated = true;
+    count += cnt;
+    if (!seen.has(pathPart) && samplePaths.length < 10) {
+      seen.add(pathPart);
+      samplePaths.push(pathPart);
+    }
+  }
+  return { count, truncated, samplePaths };
+}
 export function buildRepoSandboxTools(cwdRoot: string | (() => string)): ToolExecutor[] {
   const resolveCwd = (): string => (typeof cwdRoot === 'function' ? cwdRoot() : cwdRoot);
   return [
@@ -167,6 +197,24 @@ export function buildRepoSandboxTools(cwdRoot: string | (() => string)): ToolExe
             return { path: l.slice(0, idx1), line: Number(l.slice(idx1 + 1, idx2)), text: l.slice(idx2 + 1) };
           });
           return { ok: true, data: asData({ matches, truncated: matches.length >= maxMatches }) };
+        } catch (e) {
+          return { ok: false, error: (e as Error).message };
+        }
+      },
+    },
+    {
+      name: 'static_locator',
+      description: '对一组候选 locator 做源码静态定位分析：逐候选查询该锚点字面量在仓库源码中的命中次数，返回 verdict（unique=源码唯一锚点 / multiple=源码命中多处→回放歧义风险 / not-found=源码未字面命中且无语义键（疑似臆造或改名）/ dynamic-suspect=源码未字面命中但存在动态绑定（如 :placeholder="变量"），运行时为准，勿据此判死 / skipped=无静态可判）。用于生成或修正 compiled 步骤的 locator 时：把伪唯一锚点（如 [title="查看"] 源码命中多处）换成语义唯一锚点（如 .icon-chakan）。',
+      parameters: Type.Object({
+        locators: Type.Array(Type.Object({ strategy: Type.String({ minLength: 1 }), value: Type.String({ minLength: 1 }) })),
+      }),
+      execute: async (input) => {
+        const { locators } = input as { locators: Array<{ strategy: string; value: string }> };
+        try {
+          const cwd = resolveCwd();
+          const count = (pattern: string) => countRepoGrep(cwd, pattern);
+          const reports = await analyzeLocatorCandidates(locators as Locator[], count);
+          return { ok: true, data: asData(reports) };
         } catch (e) {
           return { ok: false, error: (e as Error).message };
         }
