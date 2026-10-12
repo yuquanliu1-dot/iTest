@@ -116,16 +116,15 @@ export interface AiTaskInput {
 
 /** 创建用例并写步骤。
  *  - 每条 step 的 instruction 来自 input.instruction(自然语言);
- *  - 若提供了 compiled,把它存到 compiled 列;否则默认产出 aiTask 占位(LLM 生成路径),
- *    调度阶段走 aiTask 多轮决策;为 null 时 UI 标"未编译"。
+ *  - compiled 原样落库：缺失/null 即「未编译」，dispatcher 抛 compile-missing、UI 阻塞执行。
+ *    视觉模式必须由调用方显式给 [{kind:'aiTask',instruction}]——服务端不做 null→aiTask 兜底，
+ *    否则「已放弃/漏编译」会被悄悄变成可执行的 AI 步骤，掩盖缺失（与 stage-tools 的 null 语义一致）。
  *  - 老 action 列已于 0030 迁移 DROP,新代码不再写。 */
 export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiTaskInput[] }) {
   const created = await createCase(input);
   if (input.steps?.length) {
     const stepRows = input.steps.map((s) => {
-      // space-assistant 工具入参只给 instruction + assertion,没有 compiled;
-      // 这里把 aiTask 默认占位写进 compiled,让 dispatcher 走 aiTask runtime 路径而非抛 compile-missing。
-      const compiled = (Array.isArray(s.compiled) ? s.compiled : [{ kind: 'aiTask', instruction: s.instruction }]) as unknown[];
+      const compiled = (Array.isArray(s.compiled) ? s.compiled : null) as unknown[] | null;
       return {
         source: 'agent' as const,
         instruction: s.instruction,
@@ -146,7 +145,7 @@ export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiT
         order: i,
         source: r.source,
         instruction: r.instruction,
-        compiled: r.compiled as unknown[],
+        compiled: r.compiled as unknown[] | null,
         assertion: r.assertion,
         sensitive: r.sensitive,
       })),

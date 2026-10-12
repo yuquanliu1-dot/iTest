@@ -38,7 +38,7 @@ describe('cases.service', () => {
       .rejects.toMatchObject({ status: 400, code: 'version_mismatch' });
   }, 30_000);
 
-  it('createCaseWithSteps:每条 instruction 直接落 aiTask，描述性断言被 sanitize 丢弃', async () => {
+  it('createCaseWithSteps:无 compiled 的步骤落 null（未编译、不自动兜底 aiTask），描述性断言被 sanitize 丢弃', async () => {
     const { groupId, versionId } = await seedProject(pool);
     const svc = await import('../src/services/cases.service.js');
     const c = await svc.createCaseWithSteps({
@@ -48,18 +48,18 @@ describe('cases.service', () => {
         { instruction: '点击下单按钮', assertion: '下单成功' },
         // 描述性短语 assertion 被 sanitize 丢弃
         { instruction: '看结果', assertion: '登录表单正常展示' },
+        // 视觉模式由调用方显式给 aiTask，原样落库
+        { instruction: '让 AI 临场做', compiled: [{ kind: 'aiTask', instruction: '让 AI 临场做' }] },
       ],
     });
     const rows = (await pool.query(`SELECT "order", compiled, assertion FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [c.id])).rows as Array<{
       order: number; compiled: Array<Record<string, unknown>> | null; assertion: Record<string, unknown> | null;
     }>;
-    // 每条 instruction 一一对应一行 aiTask，不再做 LLM 编译 / 拆条 / 展开
-    expect(rows).toHaveLength(3);
-    for (const r of rows) {
-      const first = (r.compiled ?? [])[0] as { kind?: string; instruction?: string };
-      expect(first.kind).toBe('aiTask');
-      expect(typeof first.instruction).toBe('string');
-    }
+    // 缺失 compiled 原样落 null = 未编译（dispatcher 阻塞执行），服务端不做 aiTask 兜底
+    expect(rows).toHaveLength(4);
+    for (const r of rows.slice(0, 3)) expect(r.compiled).toBeNull();
+    // 显式 aiTask 原样保留
+    expect(rows[3]!.compiled).toEqual([{ kind: 'aiTask', instruction: '让 AI 临场做' }]);
     expect((rows[1]!.assertion as { kind: string }).kind).toBe('assertText');
     expect((rows[1]!.assertion as { equals: string }).equals).toBe('下单成功');
     // 描述性短语断言 → null
