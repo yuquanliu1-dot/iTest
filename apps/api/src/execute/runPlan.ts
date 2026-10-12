@@ -12,6 +12,7 @@ import { runCase } from './runCase.js';
 import { loginPrepare } from './loginPrepare.js';
 import { publishRunEvent, subscribeRunEvent } from '../sse/planRunBus.js';
 import { HttpError } from '../middleware/errorHandler.js';
+import { registerLiveView } from './liveView.js';
 
 /** 单 planRun 的运行控制器：内存中保存 storageState 与 cancelRequested。 */
 const runState = new Map<string, { cancelRequested: boolean; storageState?: unknown }>();
@@ -69,6 +70,8 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   if (!plan) return;
 
   runState.set(planRunId, { cancelRequested: false });
+  // playground 实时画面：整个计划运行一个画面源，逐用例 setPage 跟随（含登录准备/登录用例共用浏览器）。
+  const live = registerLiveView(`planrun:${planRunId}`);
 
   const cases = await db
     .select({ caseId: planCases.caseId, order: planCases.order, status: testCases.status, platform: testCases.platform })
@@ -138,8 +141,9 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
         firstCaseId,
       },
       {
-        // 未配登录用例且环境配置了登录凭据时，走自动填表登录
+        // 未配登录用例且环境配置了登录凭据时，走自动填表登录（探测/填表页纳入实时画面）
         autoLogin: !loginCaseId && loginCred ? loginCred : undefined,
+        liveView: live,
         loginCaseRunner: async (cid, ctx, browser) => {
           // 写入 plan_run_cases（step_kind=login_prepare, status=running）
           const ins = await db
@@ -157,6 +161,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
               ...(planEnv ? { envOverride: { envId: planEnv.envId } } : {}),
               ownedBrowser: browser,
               ownedContext: ctx,
+              liveView: live,
             });
             await db
               .update(planRunCases)
@@ -248,6 +253,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
         storageState: loginState,
         forceFail: forceFailIds.has(c.caseId),
         ...(planEnv ? { envOverride: { envId: planEnv.envId } } : {}),
+        liveView: live,
       });
       await db
         .update(planRunCases)
@@ -310,6 +316,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
     // 也会走到这里，确保不留 chromium 残留进程。
     if (loginCtx) await loginCtx.close().catch(() => undefined);
     if (loginBrowser) await loginBrowser.close().catch(() => undefined);
+    live.close();
   }
 }
 

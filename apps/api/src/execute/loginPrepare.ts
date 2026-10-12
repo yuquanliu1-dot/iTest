@@ -163,6 +163,8 @@ export async function loginPrepare(
     ) => Promise<{ passed: boolean; storageState?: unknown; takeOwnership?: boolean }>;
     /** 环境登录凭据：未配登录用例（cfg.caseId 为空）时的自动填表登录。 */
     autoLogin?: LoginCtx;
+    /** playground 实时画面源：探测页/自动登录页也纳入画面（自动填表登录过程可见）。 */
+    liveView?: { setPage(p: Page): void };
   },
 ): Promise<LoginPrepareResult> {
   if (!cfg.enabled) return { status: 'skipped', reason: 'disabled' };
@@ -179,6 +181,8 @@ export async function loginPrepare(
     const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
     const page = await openDetectionPage(ctx, url);
     if (!page) return { status: 'failed', reason: 'detection page navigation failed' };
+    // 探测/自动登录页纳入实时画面（loginCaseRunner 路径随后由 runCase 的 newPage 接管切换）
+    opts.liveView?.setPage(page);
 
     const detect = await detectLoginState(page, cfg);
     if (detect.alreadyLoggedIn) {

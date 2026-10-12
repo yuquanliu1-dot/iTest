@@ -143,7 +143,8 @@ export const api = {
   planRuns: {
     get: (id: string) => request<PlanRunDetail>(`/plan-runs/${id}`),
     cancel: (id: string) => request<{ ok: boolean }>(`/plan-runs/${id}/cancel`, { method: 'POST' }),
-    eventsUrl: (id: string) => `${BASE}/plan-runs/${id}/events`,
+    liveUrl: (id: string) => `${BASE}/plan-runs/${id}/live`,
+    replayUrl: (id: string) => `${BASE}/plan-runs/${id}/live?replay=1`,
     removeBatch: (ids: string[]) =>
       request<{ count: number }>('/plan-runs/batch-delete', {
         method: 'POST',
@@ -367,6 +368,8 @@ export const api = {
       ),
     execute: (id: string) =>
       request<{ reportId: string; reportIds?: string[] }>(`/cases/${id}/execute`, { method: 'POST' }),
+    liveUrl: (id: string) => `/api/cases/${id}/live`,
+    replayUrl: (id: string) => `/api/cases/${id}/live?replay=1`,
   },
   tags: {
     list: (projectId: string) => request<Tag[]>(`/projects/${projectId}/tags`),

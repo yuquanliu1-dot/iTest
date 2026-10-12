@@ -1,20 +1,35 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
+import { useUIStore } from '../stores/ui';
 import Icon from '../components/Icon';
 import Button from '../components/ui/Button';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
+import LiveViewCard from '../components/LiveViewCard';
 import { fullDateTime } from '../lib/format';
 
 export default function PlanRunDetail() {
   const { id, runId, projectId, versionId } = useParams<{ id: string; runId: string; projectId: string; versionId: string }>();
   const navigate = useNavigate();
+  const qc = useQueryClient();
+  const toast = useUIStore((s) => s.showToast);
   const { data: run, isLoading, isError, error } = useQuery({
     queryKey: ['planRun', runId],
     queryFn: () => api.planRuns.get(runId!),
     enabled: !!runId,
     refetchInterval: (q) => (q.state.data?.status === 'running' ? 2000 : false),
+  });
+
+  // 中止能力从计划详情页迁移到这里：执行即跳本页，running 期间就地中止。
+  const cancel = useMutation({
+    mutationFn: () => api.planRuns.cancel(runId!),
+    onSuccess: () => {
+      toast('已发起中止', 'success');
+      qc.invalidateQueries({ queryKey: ['planRun', runId] });
+      qc.invalidateQueries({ queryKey: ['executions'] });
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
   });
 
   if (isError) {
@@ -45,12 +60,25 @@ export default function PlanRunDetail() {
         <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>计划运行</h1>
         <StatusPill status={run.status}>{run.status}</StatusPill>
         <div className="flex-1" />
+        {run.status === 'running' && (
+          <Button variant="ghost" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
+            <Icon name="pause" size={12} />
+            {cancel.isPending ? '中止中...' : '中止'}
+          </Button>
+        )}
         <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
           {fullDateTime(run.startedAt)} · {run.durationMs ?? 0} ms
         </span>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-4">
+        {/* 运行中实时画面：refetchInterval 2s 轮询 run.status，running 期间 <img> 直连 MJPEG 流；
+            结束定格最后一帧 + 「回放」按钮（录制回放，不自动播）。 */}
+        <LiveViewCard
+          liveUrl={api.planRuns.liveUrl(run.id)}
+          replayUrl={api.planRuns.replayUrl(run.id)}
+          running={run.status === 'running'}
+        />
         <div className="bg-card border rounded-[var(--radius-md)] p-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
           {run.summary ?? '执行中...'}
         </div>

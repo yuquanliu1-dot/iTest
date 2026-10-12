@@ -470,13 +470,10 @@ export default function CaseDetail() {
   const execute = useMutation({
     mutationFn: () => api.cases.execute(id!),
     onSuccess: (r) => {
-      toast('执行完成', 'success');
+      // 执行已异步化：点击执行立即落到报告页（running 中实时画面 + 跑完原地出报告）。
+      // 数据集多行 → 落到第 1 份报告，报告页顶部有「全部 N 份」入口。
       qc.invalidateQueries({ queryKey: ['reports'] });
-      if (r.reportIds && r.reportIds.length > 1) {
-        navigate(`/p/${projectId}/v/${versionId}/reports`);
-      } else {
-        navigate(`/p/${projectId}/v/${versionId}/reports/${r.reportId}`);
-      }
+      navigate(`/p/${projectId}/v/${versionId}/reports/${r.reportId}`);
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });

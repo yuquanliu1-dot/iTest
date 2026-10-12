@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
+import LiveViewCard from '../components/LiveViewCard';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
@@ -77,6 +78,8 @@ export default function ReportDetail() {
     queryKey: ['report', id],
     queryFn: () => api.reports.get(id!),
     enabled: !!id,
+    // 执行已异步化：running 期间 2s 轮询，报告从 running → passed/failed 时原地收敛
+    refetchInterval: (q) => (q.state.data?.status === 'running' ? 2000 : false),
   });
 
   const remove = useMutation({
@@ -107,6 +110,12 @@ export default function ReportDetail() {
       </div>
     );
   }
+
+  // 执行已异步化：running 期间报告页直连 MJPEG 实时画面，跑完原地出报告。
+  // 数据集运行整段共享一个流（key=case:<caseId>）：行 0 报告先行收尾但 run 仍在继续，
+  // 行 0 页面保持画面直到整个 run 结束。结束后面面定格最后一帧 + 「回放」按钮（录制回放）。
+  const isRunning = data.status === 'running';
+  const keepLiveForDataset = data.datasetRowIndex === 0 && (data.datasetSnapshot?.totalRows ?? 1) > 1;
 
   const stepResults = (data.stepResults as StepResult[]) ?? [];
   const passed = stepResults.filter((s) => s.status === 'passed').length;
@@ -348,6 +357,16 @@ export default function ReportDetail() {
           测试报告
         </h1>
         <StatusPill status={data.status}>{data.status.toUpperCase()}</StatusPill>
+        {data.datasetSnapshot && data.datasetSnapshot.totalRows > 1 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports?tab=case&caseId=${data.caseId}`)}
+            title={`该用例数据集共 ${data.datasetSnapshot.totalRows} 行，每行一份报告`}
+          >
+            全部 {data.datasetSnapshot.totalRows} 份
+          </Button>
+        )}
         {data.healed && (
           <span
             className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded-full"
@@ -385,6 +404,12 @@ export default function ReportDetail() {
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="flex gap-5 p-6">
           <div className="flex-1 min-w-0 flex flex-col gap-3">
+            {/* running|数据集末尾期间实时画面；结束后定格 + 回放按钮 */}
+            <LiveViewCard
+              liveUrl={api.cases.liveUrl(data.caseId)}
+              replayUrl={api.cases.replayUrl(data.caseId)}
+              running={isRunning || keepLiveForDataset}
+            />
             {data.summary && (
               <div className="bg-card border rounded-[var(--radius-md)] p-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
                 {data.summary}

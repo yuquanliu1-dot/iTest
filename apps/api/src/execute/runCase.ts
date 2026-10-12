@@ -22,7 +22,36 @@ import { EngineUnavailable, type Engine, type EngineInput } from './engine.js';
  * `envOverride`（计划级）覆盖用例 defaultEnvId，用于执行计划上下文。
  * `ownedBrowser`/`ownedContext`（计划级 loginPrepare 链路）让登录用例在 caller 持有的 chromium + context 中跑，
  *  这样登录成功后可直接从同一 ctx 导出真实 storageState；调用方负责关闭。
+ * `preseed`（单用例执行路由用）：路由已提前插入 running 报告行拿 reportId（执行即跳报告页），
+ *  传进来后本函数/各 runCaseOnce 按 rowIndex 匹配复用、不再二次插入；null 表示保持原插入语义。
  */
+export interface PreseedReport {
+  reportId: string;
+  rowIndex: number | null;
+}
+
+/** 插入一条 running 报告行（与 runCaseOnce 原插入值完全一致），返回 reportId。
+ *  单用例执行路由提前调用（执行转后台后响应必须带回 reportId），runCaseOnce 靠 preseed 复用。 */
+export async function insertRunningReportRow(
+  caseRow: typeof testCases.$inferSelect,
+  rowPlan?: DatasetRowExec,
+): Promise<string> {
+  const inserted = await db
+    .insert(reports)
+    .values({
+      caseId: caseRow.id,
+      status: 'running',
+      stepResults: [] as object,
+      summary: 'execution in progress',
+      platform: caseRow.platform,
+      ...(caseRow.mobileOs ? { mobileOs: caseRow.mobileOs } : {}),
+      ...(caseRow.mobileDeviceTargetId ? { deviceTargetId: caseRow.mobileDeviceTargetId } : {}),
+      ...(rowPlan ? { datasetRowIndex: rowPlan.rowIndex, datasetSnapshot: rowPlan.snapshot } : {}),
+    })
+    .returning();
+  return inserted[0]!.id;
+}
+
 export async function runCase(
   caseId: string,
   opts?: {
@@ -31,6 +60,10 @@ export async function runCase(
     envOverride?: { envId: string } | null;
     ownedBrowser?: Browser;
     ownedContext?: BrowserContext;
+    /** playground 实时画面源：透传给执行器，页面切换时跟随（计划运行/单用例执行）。 */
+    liveView?: import('./liveView.js').LiveViewHandle;
+    /** 路由已预置的 running 报告行（执行即跳报告页）；提供后跳过本函数内的报告插入。 */
+    preseed?: PreseedReport[];
   },
 ): Promise<{ reportId: string; status: string; reportIds?: string[] }> {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
@@ -63,6 +96,8 @@ async function runCaseOnce(
     envOverride?: { envId: string } | null;
     ownedBrowser?: Browser;
     ownedContext?: BrowserContext;
+    liveView?: import('./liveView.js').LiveViewHandle;
+    preseed?: PreseedReport[];
   } | undefined,
   rowPlan?: DatasetRowExec,
 ): Promise<{ reportId: string; status: string }> {
@@ -78,20 +113,16 @@ async function runCaseOnce(
     .where(eq(testSteps.caseId, caseId))
     .orderBy(asc(testSteps.order));
 
-  const inserted = await db
-    .insert(reports)
-    .values({
-      caseId,
-      status: 'running',
-      stepResults: [] as object,
-      summary: 'execution in progress',
-      platform: caseRow.platform,
-      ...(caseRow.mobileOs ? { mobileOs: caseRow.mobileOs } : {}),
-      ...(caseRow.mobileDeviceTargetId ? { deviceTargetId: caseRow.mobileDeviceTargetId } : {}),
-      ...(rowPlan ? { datasetRowIndex: rowPlan.rowIndex, datasetSnapshot: rowPlan.snapshot } : {}),
-    })
-    .returning();
-  const reportId = inserted[0]!.id;
+  // preseed（路由已预置该行的 running 报告行）→ 按 rowIndex 匹配复用 reportId，不二次插入。
+  // 匹配不上（数据集在预检与后台执行之间被改）抛错，由数据集行兜底/路由 catch 记为 failed。
+  let reportId: string;
+  if (opts?.preseed) {
+    const match = opts.preseed.find((p) => (p.rowIndex ?? null) === (rowPlan?.rowIndex ?? null));
+    if (!match) throw new Error(`preseed report missing for dataset row ${rowPlan?.rowIndex ?? 'none'}`);
+    reportId = match.reportId;
+  } else {
+    reportId = await insertRunningReportRow(caseRow, rowPlan);
+  }
 
   // 非数据集模式保持原语义：内部错误照常上抛（由 HTTP 边界处理）。
   if (!rowPlan) return runCaseOnceInner(caseId, caseRow, opts, projectId, steps, reportId, undefined);
@@ -137,6 +168,7 @@ async function runCaseOnceInner(
     envOverride?: { envId: string } | null;
     ownedBrowser?: Browser;
     ownedContext?: BrowserContext;
+    liveView?: import('./liveView.js').LiveViewHandle;
   } | undefined,
   projectId: string | undefined,
   steps: (typeof testSteps.$inferSelect)[],
@@ -237,6 +269,7 @@ async function runCaseOnceInner(
       ...(rowPlan
         ? { initialVars: rowPlan.vars, sensitiveVarKeys: rowPlan.sensitiveVarKeys }
         : {}),
+      ...(opts?.liveView ? { liveView: opts.liveView } : {}),
     };
     // mobile 用例：直接走 MobileEngine；web 用例：登录准备链路（ownedBrowser）走 executeCaseInBrowser 复用 ctx,
     // 其余走 WebEngine.execute → executeCaseReal（保留 storageState/incognito 注入语义）。
@@ -322,6 +355,7 @@ async function runCaseOnceInner(
         appRef: caseRow.appRef ?? null,
         deviceTargetId: caseRow.mobileDeviceTargetId ?? null,
         mobileOs,
+        ...(opts?.liveView ? { liveView: opts.liveView } : {}),
         ...(rowPlan ? { initialVars: rowPlan.vars, sensitiveVarKeys: rowPlan.sensitiveVarKeys } : {}),
       };
       try {

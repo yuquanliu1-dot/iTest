@@ -47,7 +47,6 @@ export default function PlanDetail() {
   const [confirmRemoveCase, setConfirmRemoveCase] = useState<{ id: string; title: string } | null>(null);
   const [selectedAdd, setSelectedAdd] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [environmentId, setEnvironmentId] = useState<string | null>(null);
 
   const { data: allCases } = useQuery({
@@ -168,40 +167,12 @@ export default function PlanDetail() {
   const run = useMutation({
     mutationFn: () => api.plans.run(id!),
     onSuccess: (r) => {
-      setActiveRunId(r.runId);
+      // 执行即跳运行详情页：running 中实时画面 + 2s 轮询到完成，中止按钮在 PlanRunDetail 内。
+      qc.invalidateQueries({ queryKey: ['executions'] });
+      navigate(versionId ? `/p/${projectId}/v/${versionId}/plans/${id}/runs/${r.runId}` : `/`);
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
-
-  const cancel = useMutation({
-    mutationFn: () => api.planRuns.cancel(activeRunId!),
-    onError: (e: Error) => toast(e.message, 'error'),
-  });
-
-  useEffect(() => {
-    if (!activeRunId) return;
-    const es = new EventSource(api.planRuns.eventsUrl(activeRunId));
-    es.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data);
-        if (data.type === 'plan_run_complete') {
-          es.close();
-          setActiveRunId(null);
-          qc.invalidateQueries({ queryKey: ['plan', id] });
-          qc.invalidateQueries({ queryKey: ['plans', projectId] });
-          qc.invalidateQueries({ queryKey: ['executions'] });
-          toast(`执行完成：${data.summary ?? ''}`, data.status === 'passed' ? 'success' : 'error');
-          const dest = versionId
-            ? `/p/${projectId}/v/${versionId}/plans/${id}/runs/${activeRunId}`
-            : `/`;
-          navigate(dest);
-        }
-      } catch {
-        /* ignore */
-      }
-    };
-    return () => es.close();
-  }, [activeRunId, id, navigate, projectId, qc, toast, versionId]);
 
   useEffect(() => {
     if (showAdd) setSelectedAdd(new Set());
@@ -257,8 +228,6 @@ export default function PlanDetail() {
     });
   };
 
-  const isRunning = !!activeRunId;
-
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -288,17 +257,10 @@ export default function PlanDetail() {
           <Icon name="plus" size={12} />
           添加用例
         </Button>
-        {isRunning ? (
-          <Button variant="ghost" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
-            <Icon name="pause" size={12} />
-            中止
-          </Button>
-        ) : (
-          <Button onClick={() => run.mutate()} disabled={run.isPending || plan.cases.length === 0}>
-            <Icon name="play" size={12} />
-            {run.isPending ? '启动中...' : '一键执行'}
-          </Button>
-        )}
+        <Button onClick={() => run.mutate()} disabled={run.isPending || plan.cases.length === 0}>
+          <Icon name="play" size={12} />
+          {run.isPending ? '启动中...' : '一键执行'}
+        </Button>
         <Button
           variant="ghost"
           onClick={() => setShowDelete(true)}

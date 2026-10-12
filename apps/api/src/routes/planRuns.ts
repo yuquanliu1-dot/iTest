@@ -7,6 +7,7 @@ import { HttpError } from '../middleware/errorHandler.js';
 import { requestCancel, subscribeRun } from '../execute/runPlan.js';
 import { sseHeaders } from '../sse/pi.js';
 import { assertPlanRunVisible, assertProjectVisible } from '../services/projectAccess.js';
+import { handleLiveView, handleLiveReplay } from '../execute/liveView.js';
 
 export const planRunsRoute = Router();
 
@@ -126,4 +127,14 @@ planRunsRoute.get('/:id/events', async (req, res) => {
     })}\n\n`,
   );
   req.on('close', () => unsub());
+});
+
+/** 计划运行的实时画面（MJPEG）：runPlanAsync 注册的 `planrun:<id>` 源；运行中才可连。
+ *  ?replay=1 为本轮运行的录制回放（执行结束 30min 内）。 */
+planRunsRoute.get('/:id/live', async (req, res) => {
+  const run = (await db.select().from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
+  if (!run) throw new HttpError(404, 'not_found', 'plan run not found');
+  await assertProjectVisible(run.projectId, req.user!);
+  if (req.query.replay === '1') return handleLiveReplay(req, res, `planrun:${run.id}`);
+  handleLiveView(req, res, `planrun:${run.id}`);
 });

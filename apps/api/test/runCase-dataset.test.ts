@@ -54,6 +54,19 @@ async function insertCase(title: string, datasetId: string | null): Promise<stri
   return r.rows[0].id as string;
 }
 
+/** 执行已异步化（POST 立即返回 running reportId，后台继续跑）：
+ *  轮询指定 report 直到 status !== 'running'，再把 body 返回给断言。 */
+async function waitReportDone(reportId: string, timeoutMs = 8000): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rep = await request(app).get(`/api/reports/${reportId}`);
+    expect(rep.status).toBe(200);
+    if (rep.body.status !== 'running') return rep.body;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`report ${reportId} still running after ${timeoutMs}ms`);
+}
+
 beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   process.env.DATABASE_URL = container.getConnectionUri();
@@ -106,6 +119,10 @@ describe('runCase dataset iteration', () => {
     expect(r.body.reportId).toBe(r.body.reportIds[0]);
     expect(r.body.status).toBeUndefined(); // 单执行入口不回传 status（保持旧响应形状）
 
+    // 后台执行：轮询到两条 report 都收敛后再断言执行器调用与落库结果
+    await waitReportDone(r.body.reportIds[0]);
+    await waitReportDone(r.body.reportIds[1]);
+
     // 执行器收到该行解密后的初始变量 + 敏感列名
     expect(execMock).toHaveBeenCalledTimes(2);
     const firstCtx = execMock.mock.calls[0]![2] as { initialVars?: Record<string, string>; sensitiveVarKeys?: string[] };
@@ -135,6 +152,9 @@ describe('runCase dataset iteration', () => {
     expect(r.status).toBe(200);
     expect(r.body.reportIds).toHaveLength(2);
 
+    await waitReportDone(r.body.reportIds[0]);
+    await waitReportDone(r.body.reportIds[1]);
+
     const rep0 = await request(app).get(`/api/reports/${r.body.reportIds[0]}`);
     expect(rep0.body.status).toBe('failed');
     const rep1 = await request(app).get(`/api/reports/${r.body.reportIds[1]}`);
@@ -156,6 +176,9 @@ describe('runCase dataset iteration', () => {
     expect(r.status).toBe(200);
     expect(r.body.reportIds).toHaveLength(2);
 
+    await waitReportDone(r.body.reportIds[0]);
+    await waitReportDone(r.body.reportIds[1]);
+
     const rep0 = await request(app).get(`/api/reports/${r.body.reportIds[0]}`);
     expect(rep0.body.status).toBe('failed');
     expect(rep0.body.stepResults[0].failureReason).toBe('InternalError');
@@ -174,6 +197,33 @@ describe('runCase dataset iteration', () => {
     );
     expect(all.rows).toHaveLength(2);
     expect(all.rows.every((x: { status: string }) => x.status !== 'running')).toBe(true);
+  });
+
+  it('异步契约：POST 立即返回 running 态 report（报告先落库，执行在后台收敛）', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '异步契约' });
+    const caseId = await insertCase('异步执行', created.body.id);
+
+    execMock.mockReset();
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    // 第 1 行执行器在 gate 上挂起直到放行 → 保证 POST 返回时执行必然未完成
+    execMock.mockImplementationOnce(async () => {
+      await gate;
+      return [{ order: 1, status: 'passed', durationMs: 0 }];
+    }).mockResolvedValue([]);
+    const r = await request(app).post(`/api/cases/${caseId}/execute`);
+    expect(r.status).toBe(200);
+    expect(r.body.reportIds).toHaveLength(2);
+    // 执行被 gate 挂起 → 此刻 report 仍是 running（报告行先于执行存在）
+    const running = await request(app).get(`/api/reports/${r.body.reportIds[0]}`);
+    expect(running.body.status).toBe('running');
+
+    release!();
+    await waitReportDone(r.body.reportIds[0]);
+    await waitReportDone(r.body.reportIds[1]);
+    const done = await request(app).get(`/api/reports/${r.body.reportIds[0]}`);
+    expect(done.body.status).toBe('passed');
+    expect(execMock).toHaveBeenCalledTimes(2);
   });
 
   it('0 启用行 → 400 且不产生任何 report', async () => {

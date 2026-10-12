@@ -64,6 +64,19 @@ async function insertMobileCase(title: string): Promise<string> {
   return r.rows[0]!.id as string;
 }
 
+/** 执行已异步化（POST 立即返回 running reportId，后台继续跑）：
+ *  轮询指定 report 直到 status !== 'running'，再把 body 返回给断言。 */
+async function waitReportDone(reportId: string, timeoutMs = 8000): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rep = await request(app).get(`/api/reports/${reportId}`);
+    expect(rep.status).toBe(200);
+    if (rep.body.status !== 'running') return rep.body;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`report ${reportId} still running after ${timeoutMs}ms`);
+}
+
 async function insertWebCase(title: string): Promise<string> {
   const r = await pool.query(
     `INSERT INTO test_cases(group_id, version_id, title) VALUES ($1, $2, $3) RETURNING id`,
@@ -128,6 +141,7 @@ describe('runCase platform routing', () => {
     webExec.mockResolvedValue([{ order: 1, status: 'passed', durationMs: 0 }]);
     const r = await request(app).post(`/api/cases/${mobileCaseId}/execute`);
     expect(r.status).toBe(200);
+    await waitReportDone(r.body.reportId);
     expect(mobileExec).toHaveBeenCalledTimes(1);
     expect(webExec).not.toHaveBeenCalled();
     const input = mobileExec.mock.calls[0]![0] as import('../src/execute/engine.js').EngineInput;
@@ -151,6 +165,7 @@ describe('runCase platform routing', () => {
     mobileExec.mockResolvedValue([{ order: 1, status: 'passed', durationMs: 0 }]);
     const r = await request(app).post(`/api/cases/${mobileCaseId}/execute`);
     expect(r.status).toBe(200);
+    await waitReportDone(r.body.reportId);
     const rep = await request(app).get(`/api/reports/${r.body.reportId}`);
     expect(rep.status).toBe(200);
     expect(rep.body.status).toBe('failed');
@@ -166,6 +181,7 @@ describe('runCase platform routing', () => {
     mobileExec.mockResolvedValue([{ order: 1, status: 'passed', durationMs: 0 }]);
     const r = await request(app).post(`/api/cases/${webCaseId}/execute`);
     expect(r.status).toBe(200);
+    await waitReportDone(r.body.reportId);
     expect(webExec).toHaveBeenCalledTimes(1);
     expect(mobileExec).not.toHaveBeenCalled();
     const input = webExec.mock.calls[0]![0] as import('../src/execute/engine.js').EngineInput;
@@ -200,6 +216,8 @@ describe('runCase platform routing', () => {
     expect(r.status).toBe(200);
     expect(r.body.reportIds).toHaveLength(2);
     expect(r.body.reportId).toBe(r.body.reportIds[0]);
+    await waitReportDone(r.body.reportIds[0]);
+    await waitReportDone(r.body.reportIds[1]);
     expect(mobileExec).toHaveBeenCalledTimes(2);
     // row 0 should see decrypted initialVars
     const firstInput = mobileExec.mock.calls[0]![0] as import('../src/execute/engine.js').EngineInput;
