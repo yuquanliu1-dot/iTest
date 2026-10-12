@@ -8,6 +8,7 @@ import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 import IconButton from '../components/ui/IconButton';
+import InlineEdit from '../components/ui/InlineEdit';
 import ScheduleListCard from '../components/plans/ScheduleListCard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
 import {
@@ -120,6 +121,7 @@ export default function PlanDetail() {
     mutationFn: (body: Parameters<typeof api.plans.patch>[1]) => api.plans.patch(id!, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['plan', id] });
+      qc.invalidateQueries({ queryKey: ['plans', projectId] });
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -240,9 +242,16 @@ export default function PlanDetail() {
           返回计划列表
         </Button>
         <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
-        <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>
-          {plan.name}
-        </h1>
+        {/* 计划名称行内可编辑：点标题改，走 PATCH /plans/:id { name } */}
+        <InlineEdit
+          value={plan.name}
+          disabled={patchPlan.isPending}
+          ariaLabel="计划名称"
+          onSave={(next) => patchPlan.mutateAsync({ name: next })}
+          className="text-[16px] font-semibold max-w-[420px]"
+          inputClassName="text-[16px] font-semibold max-w-[420px]"
+          style={{ color: 'var(--foreground)' }}
+        />
         {plan.versionId && plan.versionName ? (
           <span
             className="text-[10px] font-semibold uppercase px-2 py-[2px] rounded-full"

@@ -13,6 +13,7 @@ import Button from '../components/ui/Button';
 import IconButton from '../components/ui/IconButton';
 import Input from '../components/ui/Input';
 import Segmented from '../components/ui/Segmented';
+import InlineEdit from '../components/ui/InlineEdit';
 import Toggle from '../components/ui/Toggle';
 import EmptyState from '../components/ui/EmptyState';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
@@ -318,6 +319,19 @@ export default function CaseDetail() {
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
+  // 用例名称行内编辑：改用例本身（PATCH /cases/:id { title }），用例库/助手/历史报告同步生效。
+  const rename = useMutation({
+    mutationFn: (title: string) => api.cases.patch(id!, { title }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['case', id] });
+      qc.invalidateQueries({ queryKey: ['cases', projectId] });
+      qc.invalidateQueries({ queryKey: ['plan'] });
+      qc.invalidateQueries({ queryKey: ['reports'] });
+      toast('已重命名', 'success');
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  });
+
   const toggleTag = (tagId: string) => {
     const next = caseTagIds.includes(tagId)
       ? caseTagIds.filter((x) => x !== tagId)
@@ -608,9 +622,16 @@ export default function CaseDetail() {
           {group?.name ?? '用例列表'}
         </Button>
         <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
-        <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>
-          {caseDetail.title}
-        </h1>
+        {/* 用例名称行内可编辑：点标题改，走 PATCH /cases/:id { title } */}
+        <InlineEdit
+          value={caseDetail.title}
+          disabled={rename.isPending}
+          ariaLabel="用例名称"
+          onSave={(next) => rename.mutateAsync(next)}
+          className="text-[16px] font-semibold max-w-[420px]"
+          inputClassName="text-[16px] font-semibold max-w-[420px]"
+          style={{ color: 'var(--foreground)' }}
+        />
         <PriorityBadge priority={caseDetail.priority} />
         <CaseStatusMenu caseId={caseDetail.id} status={caseDetail.status} projectId={projectId} />
         <div className="flex-1" />
