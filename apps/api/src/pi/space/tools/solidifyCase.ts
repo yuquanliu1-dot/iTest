@@ -30,7 +30,7 @@ import { stageCase } from './stage-tools.js';
 import { emitStage } from './stage.js';
 import { diffText } from './diff.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
-import { registerLiveView } from '../liveView.js';
+import { registerLiveView } from '../../../execute/liveView.js';
 import { buildStepInstruction, USER_PH, PASSWORD_PH, SECRET_PH } from './verifyCase.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';

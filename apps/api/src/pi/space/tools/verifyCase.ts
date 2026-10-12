@@ -30,7 +30,7 @@ import { extractPageElements } from '../../inspectPage.js';
 import { countRepoGrep } from '../../repo.js';
 import { computeCaseOverlay, type EffectiveStep } from './case-ops-tools.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
-import { registerLiveView } from '../liveView.js';
+import { registerLiveView } from '../../../execute/liveView.js';
 import { repoToolCwd } from './context.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
@@ -591,6 +591,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   reportId: `${reportId}-replay`,
                   envCtx,
                   llmClient: client,
+                  liveView: live,
                   ...(secretMap.size > 0
                     ? { secretResolver: async (stepId: string) => secretMap.get(stepId) ?? null }
                     : {}),
@@ -603,8 +604,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 undefined,
                 undefined,
                 async (p) => {
+                  // onFailurePage 仅在分叉失败时触发；正常路径的页面切换由 runStepsInContext 的
+                  // ctx.liveView.setPage 在 page 创建时完成（replay ExecContext 已带 liveView）。
                   replayPage = p;
-                  live?.setPage(p); // 实时画面切到机械回放页（同 context 新开 page）
                 },
               );
               replayFailure = replaySteps.find((r) => r.status === 'failed') ?? null;

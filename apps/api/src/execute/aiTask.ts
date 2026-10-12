@@ -3,6 +3,7 @@ import type { LLMClient } from '../agent/llm-client.js';
 import { tryParseJson } from '../agent/llm-client.js';
 import type { AiUsageAddend } from './aiUsage.js';
 import { logger } from '../logger.js';
+import { annotateAction, clearAnnotation } from './liveView.js';
 
 /** 单条指令的最大对话轮数（每轮一次 LLM 调用）。 */
 const MAX_TURNS = 8;
@@ -386,13 +387,20 @@ export async function runAiTask(
         opts?.onAction?.(a, true);
         continue;
       }
+      const sel = 'selector' in a ? a.selector : null;
+      // 动作高亮（blackboard）：selector 动作执行前在目标位置描红框，finally 清除——
+      // 有人观看（playground 画面流）时注入，无人观看零 DOM/CDP 干扰（boundingBox 懒求值）。
+      // 清除保证下轮截图/步截图不被污染。
+      if (sel) await annotateAction(page, () => page.locator(sel).first().boundingBox().catch(() => null));
       try {
         lastResults.push(await execAction(page, a, opts?.valueSub));
         opts?.onAction?.(a, true);
       } catch (e) {
         opts?.onAction?.(a, false);
-        const target = 'selector' in a ? a.selector : 'url' in a ? a.url : '';
+        const target = sel ?? ('url' in a ? a.url : '');
         lastResults.push(`${a.type} ${target}: error ${e instanceof Error ? e.message.slice(0, 150) : String(e)}`);
+      } finally {
+        await clearAnnotation(page);
       }
     }
     if (actions.length === 0) {

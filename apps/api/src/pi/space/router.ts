@@ -12,7 +12,7 @@ import { logger } from '../../logger.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import { assertVersionVisible } from '../../services/projectAccess.js';
 import { sseHeaders, sseSend } from '../../sse/pi.js';
-import { handleLiveView } from './liveView.js';
+import { handleLiveView, handleLiveReplay } from '../../execute/liveView.js';
 import type { AuthUser } from '../../services/auth.service.js';
 import { readLlmConfig } from '../modelBridge.js';
 import { resolveConfirmation } from './confirm.js';
@@ -159,9 +159,11 @@ spaceRoute.get('/threads/:id/events', async (req, res) => {
 });
 
 /** 助手 playground 实时画面：verify_case / solidify_case 执行期间的 MJPEG 流。
- *  鉴权与 SSE 一致（线程可见性）；key 由工具运行时随机生成且随 start 事件下发。 */
+ *  鉴权与 SSE 一致（线程可见性）；key 由工具运行时随机生成且随 start 事件下发。
+ *  ?replay=1 为本轮工具执行的录制回放（执行结束 30min 内）。 */
 spaceRoute.get('/threads/:id/live/:key', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
+  if (req.query.replay === '1') return handleLiveReplay(req, res, req.params.key!);
   handleLiveView(req, res, req.params.key!);
 });
 

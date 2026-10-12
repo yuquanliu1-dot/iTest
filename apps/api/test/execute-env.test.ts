@@ -63,11 +63,28 @@ afterAll(async () => {
   await container.stop();
 });
 
+/** 执行已异步化（POST 立即返回，后台继续跑）；本 app 未挂 reports 路由，直接轮询 DB 到 report 收敛。 */
+async function waitReportDone(caseId: string, timeoutMs = 8000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const r = await pool.query(
+      `SELECT status FROM reports WHERE case_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [caseId],
+    );
+    const row = r.rows[0];
+    if (row && row.status !== 'running') return;
+    await new Promise((res) => setTimeout(res, 25));
+  }
+  throw new Error(`report for case ${caseId} still running after ${timeoutMs}ms`);
+}
+
 describe('execute with env', () => {
   it('case with no env + queryDb step → reports EnvMissing failureReason', async () => {
     // 创建一个 queryDb 步骤；触发 runCase → resolveEnv → EnvMissing
     const r = await request(app).post(`/api/cases/${caseId}/execute`);
     expect(r.status).toBe(200);
+    // 后台执行：轮询 DB 到 report 收敛后再取最新行断言
+    await waitReportDone(caseId);
     const { eq } = await import('drizzle-orm');
     const { db } = await import('../src/db/client.js');
     const { reports } = await import('../src/db/schema.js');

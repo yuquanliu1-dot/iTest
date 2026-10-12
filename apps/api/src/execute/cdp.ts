@@ -35,6 +35,7 @@ import { runObserveLog } from './syslogReader.js';
 import { runHttpRequest, type HttpStepResult } from './httpRequest.js';
 import { runCaseVisionAssert } from './visionAssert.js';
 import { newAiUsage, type AiUsageStat, type AiUsageAccumulator, type AiUsageAddend } from './aiUsage.js';
+import { annotateAction, clearAnnotation, type LiveViewHandle } from './liveView.js';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
 
@@ -108,6 +109,8 @@ export interface ExecContext {
   initialVars?: Record<string, string>;
   /** 数据集敏感列名集合：错误信息落报告前对相关变量值打码（与 recorder 敏感处理对齐）。 */
   sensitiveVarKeys?: string[];
+  /** playground 实时画面源：每页新开时 setPage，让画面跟随执行（计划运行/单用例执行）。 */
+  liveView?: LiveViewHandle;
 }
 
 /** 用例级窗口策略（maximize/current/custom），custom 时携带 width/height。 */
@@ -221,8 +224,20 @@ async function defaultSecretResolver(stepId: string): Promise<string | null> {
   });
 }
 
-/** 执行单步；返回 warning 文本（无则 undefined）。失败抛错由调用方记 failed。 */
+/**
+ * 执行单步；返回 warning 文本（无则 undefined）。失败抛错由调用方记 failed。
+ * 入口包 finally 清除动作高亮（blackboard）：无论动作成败，其后的 step 截图 / vision 断言 /
+ * aiTask 轮截图都发生在清除之后，永不被描边框污染。递归（aiTask 缓存重放 dispatch 子动作）同样经过本入口。
+ */
 async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
+  try {
+    return await dispatchInner(action, opts);
+  } finally {
+    await clearAnnotation(opts.page);
+  }
+}
+
+async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
   const { page, vars } = opts;
   // 交互动作前置稳定性检查；不稳定且 DOM 降级成功时以 warning 短路返回。
   if (INTERACTIVE_KINDS.includes(action.kind)) {
@@ -626,6 +641,7 @@ async function tryFirstMatch(
       if (!probe || typeof probe.count !== 'function') {
         // 没有 count()（如 getByText 路径）直接接受
         if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
+        await annotateAction(page, () => c.loc.boundingBox().catch(() => null));
         return c.loc;
       }
       const n = await probe.count().catch((e) => { lastErr = e; return -1; });
@@ -646,7 +662,9 @@ async function tryFirstMatch(
           continue;
         }
         if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
-        return (vn > 0 ? visibleLoc! : c.loc) as ReturnType<Page['locator']>;
+        const chosen = (vn > 0 ? visibleLoc! : c.loc) as ReturnType<Page['locator']>;
+        await annotateAction(page, () => chosen.boundingBox().catch(() => null));
+        return chosen;
       }
       if (n === 0) lastErr = new Error(`count=0 (${c.kind})`);
     }
@@ -792,6 +810,8 @@ async function runStepsInContext(
   const results: ExecStepResult[] = [];
   const vars: Record<string, string> = { ...(ctx.initialVars ?? {}) };
   const page = await context.newPage();
+  // playground 实时画面跟随：切换到本页（切换页 switchTab / 逐用例新 page 都会经过这里）。
+  ctx.liveView?.setPage(page);
   // 初始导航：用例级 init URL（targetUrl）始终先 goto 一次。
   // 若首条 step 也是 navigate 且 URL 与 init 相同，让 step 来做这一步，避免重复加载。
   const firstCompiled = steps[0]?.compiled;

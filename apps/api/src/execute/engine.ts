@@ -30,6 +30,8 @@ export interface EngineInput {
   appRef?: { bundleId: string; appPath?: string; launchArgs?: string[] } | null;
   deviceTargetId?: string | null;
   mobileOs?: 'ios' | 'android' | null;
+  /** playground 实时画面源：每页新开时 setPage，让画面跟随执行（计划运行/单用例执行）。 */
+  liveView?: import('./liveView.js').LiveViewHandle;
 }
 
 export interface Engine {
