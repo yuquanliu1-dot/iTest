@@ -23,12 +23,15 @@ import { runCaseVisionAssert } from '../../../execute/visionAssert.js';
 import { resolveEnv } from '../../../execute/envContext.js';
 import { resolveCaseUrl } from '../../../lib/resolve-url.js';
 import { decrypt } from '../../../lib/secret-crypto.js';
+import { analyzeLocatorCandidates, summarizeStaticReports, type StaticLocatorReport } from '../../../execute/staticLocator.js';
 import { resolveLlmClient } from '../../../agent/llmSettings.js';
 import { tryParseJson } from '../../../agent/llm-client.js';
 import { extractPageElements } from '../../inspectPage.js';
+import { countRepoGrep } from '../../repo.js';
 import { computeCaseOverlay, type EffectiveStep } from './case-ops-tools.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
 import { registerLiveView } from '../liveView.js';
+import { repoToolCwd } from './context.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
@@ -48,6 +51,20 @@ interface AiStepResult {
   screenshot?: string;
   error?: string;
   failureReason?: 'StepReportedFailed' | 'AiTaskAborted' | 'SecretMissing' | 'LocatorMismatch' | 'AmbiguousLocator';
+}
+
+/** 收集 compiled 步骤里的全部 locator 候选（供静态定位预检复用；与 checkCompiledLocators 同源解析）。 */
+function collectStepLocators(compiled: unknown): Locator[] {
+  const actions = (Array.isArray(compiled) ? compiled : []) as Array<{ kind?: string; locator?: Locator[] }>;
+  const out: Locator[] = [];
+  for (const a of actions) {
+    if (typeof a.kind !== 'string') continue;
+    const locs = Array.isArray(a.locator) ? a.locator : [];
+    for (const l of locs) {
+      if (l && typeof l.value === 'string' && l.value && typeof l.strategy === 'string') out.push(l);
+    }
+  }
+  return out;
 }
 
 /** compiled 保真校验：verify_case 的 AI 可以临场绕开坏 locator，但正式回放是逐字执行 compiled 的——
@@ -291,6 +308,32 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           return { ok: false, error: `环境解析失败: ${(e as Error).message}` };
         }
 
+        // ── L1 源码静态预检（advisory，不判死）──
+        // 仓库就绪即自动尝试：逐步骤 compiled 候选跑源码 hit 计数（unique/multiple/not-found/
+        // dynamic-suspect），结果进 verify_progress.staticNote + result.staticAnalysis + 失败 note。
+        // 「静态排行，运行时拍板」：静态事实不改变任何通过/失败判决，只做上下文；
+        // repo 未配置/检出中/工具异常 → 静默降级为现行纯运行时行为，零回归。
+        const staticByStep: StaticLocatorReport[][] = [];
+        const staticAnalysis: Array<{ order: number; note: string | null }> = [];
+        if (ctx.repo.cwd) {
+          try {
+            const cwd = repoToolCwd(ctx.repo);
+            const count = (pattern: string) => countRepoGrep(cwd, pattern);
+            for (const s of effectiveSteps) {
+              const locs = collectStepLocators(s.compiled);
+              const reports = locs.length > 0 ? await analyzeLocatorCandidates(locs, count) : [];
+              staticByStep.push(reports);
+              staticAnalysis.push({ order: s.order, note: summarizeStaticReports(reports) });
+            }
+          } catch {
+            // 仓库工具异常表面化前静默降级：静态分析是增强，不是依赖
+          }
+        }
+        const staticWarnings = staticAnalysis.filter((a): a is { order: number; note: string } => a.note !== null);
+        const staticNote = staticWarnings.length > 0
+          ? `源码静态分析:${staticWarnings.map((a) => `步骤#${a.order} ${a.note}`).join(' | ')}`
+          : null;
+
         // ── 浏览器 + watchdog → 逐步骤 AI 驱动执行（fail-stop）──
         let browser: Browser | undefined;
         let live: ReturnType<typeof registerLiveView> | undefined;
@@ -357,6 +400,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             loginCache: cachedState ? ('hit' as const) : ('miss' as const),
             loginUser: envCtx.login?.user ?? null,
             stagedOps: opsApplied,
+            ...(staticNote ? { staticNote } : {}),
             liveUrl: `/api/assistant/threads/${ctx.threadId}/live/${live.key}`,
           });
           for (let i = 0; i < effectiveSteps.length; i++) {
@@ -620,6 +664,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 login,
                 basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
                 stagedOpsApplied: opsApplied,
+                ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
                 steps: stepsSummary,
                 replay: { result: 'passed' as const, durationMs: Date.now() - replayStartedAt },
               }),
@@ -637,6 +682,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 login,
                 basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
                 stagedOpsApplied: opsApplied,
+                ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
                 steps: stepsSummary,
                 failure: {
                   stepOrder: -1,
@@ -653,6 +699,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           }
           if (replayFailure) {
             const failedReplayStep = effectiveSteps.find((s) => s.order === replayFailure!.order) ?? null;
+            const replayIdx = failedReplayStep ? effectiveSteps.indexOf(failedReplayStep) : -1;
+            const replayHint = replayIdx >= 0 ? summarizeStaticReports(staticByStep[replayIdx] ?? []) : null;
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
             return {
               ok: true,
@@ -664,6 +712,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 login,
                 basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
                 stagedOpsApplied: opsApplied,
+                ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
                 steps: stepsSummary,
                 replay: replaySummary,
                 failure: {
@@ -674,13 +723,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   humanMessage: replayFailure.humanMessage ?? replayFailure.error ?? null,
                   screenshot: replayFailure.screenshot ?? null,
                   page: failurePage,
-                  note: 'AI 临场执行能通过，但与正式回放同引擎的 compiled 机械逐字执行失败（回放分叉）——典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突二次执行必挂。请用 failure.page.elements 中真实存在的选择器把该步 compiled 改成更精确的可操作目标（组件内部真实接收点击/输入的元素），或修正测试数据策略（时间戳命名）后重验。',
+                  note: `AI 临场执行能通过，但与正式回放同引擎的 compiled 机械逐字执行失败（回放分叉）——典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突二次执行必挂。请用 failure.page.elements 中真实存在的选择器把该步 compiled 改成更精确的可操作目标（组件内部真实接收点击/输入的元素），或修正测试数据策略（时间戳命名）后重验。${replayHint ? ` 源码静态提示:${replayHint}` : ''}`,
                 },
               }),
             };
           }
           const failed = stepResults[failedIndex]!;
           const failedStep = effectiveSteps[failedIndex]!;
+          const failedHint = summarizeStaticReports(staticByStep[failedIndex] ?? []);
           ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
           return {
             ok: true,
@@ -692,6 +742,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               login,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
+              ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
               steps: stepsSummary,
               failure: {
                 stepOrder: failed.order,
@@ -701,7 +752,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 humanMessage: failed.error ?? null,
                 screenshot: failed.screenshot ?? null,
                 page: failurePage,
-                note: 'page.elements 为失败页当前可见的可交互元素；修正 locator 只能使用其中真实存在的选择器。快照不含操作后才出现的元素。',
+                note: `page.elements 为失败页当前可见的可交互元素；修正 locator 只能使用其中真实存在的选择器。快照不含操作后才出现的元素。${failedHint ? ` 源码静态提示:${failedHint}` : ''}`,
               },
             }),
           };
