@@ -98,6 +98,35 @@ function updateRoundState(key: string, data: string): void {
   });
 }
 
+/**
+ * 终态判定失败时探测「环境无前置数据」信号（Element-UI 空表 / 分页 0 条 / 通用空态文案）。
+ * 用于把 VisionAssertionFailed 的失败反馈从「与预期不符」细化成「环境里根本没有可验证的数据」——
+ * 2026-10-13 prod228 实测：AI 建的用例只做「进页面看列表」，而「自动处置」tab 恒为 0 条，
+ * 终态判定必然落空。反馈若只说「不符」，AI 会靠稀释 expectedOutcome 蒙混过关（三轮才收敛）。
+ * 命中即在 note 里点名：要么让用例先造出前置数据，要么如实汇报环境缺数据，不要改预期。
+ * 用字符串表达式传 page.evaluate：tsx/esbuild keepNames 会注入 __name 辅助调用，
+ * 浏览器端无此符号会 ReferenceError（与 inspectPage.ts 同因）。
+ */
+async function detectEmptyDataState(page: Page): Promise<string | null> {
+  try {
+    const hit = (await page.evaluate(`(() => {
+      const texts = Array.from(document.querySelectorAll('.el-table__empty-text, .el-empty__description, [class*="empty"]'))
+        .map((el) => (el.innerText || '').replace(/\\s+/g, ' ').trim())
+        .filter(Boolean);
+      const body = document.body ? document.body.innerText : '';
+      const zeroPage = /共\\s*0\\s*条|共\\s*0\\s*项/.test(body);
+      const emptyText = texts.find((t) => /暂无|没有|无数据|为空|no data/i.test(t));
+      return JSON.stringify({ emptyText: emptyText ?? null, zeroPage, texts: texts.slice(0, 3) });
+    })()`)) as string;
+    const parsed = JSON.parse(hit) as { emptyText: string | null; zeroPage: boolean; texts: string[] };
+    if (parsed.emptyText) return parsed.emptyText;
+    if (parsed.zeroPage) return parsed.texts[0] ?? '分页计数为 0';
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /** 收集 compiled 步骤里的全部 locator 候选（供静态定位预检复用；与 checkCompiledLocators 同源解析）。 */
 function collectStepLocators(compiled: unknown): Locator[] {
   const actions = (Array.isArray(compiled) ? compiled : []) as Array<{ kind?: string; locator?: Locator[] }>;
@@ -249,6 +278,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
       'stage_case 新建的纯草稿用例（未落库）也可直接 verify_case：caseId 传 stage_case 时声明的 localId；修正循环 = 同 localId 重发 stage_case（幂等覆盖）后再次 verify_case，全程不落库，通过后引导用户在暂存区勾选保存。注意：暂存草稿的 defaultEnvId 只能绑定已落库环境或留空走默认链（暂存环境不支持）。',
       'verify_case 会校验 compiled 选择器能真实命中页面（AI 临场绕开坏 locator 不算通过，回放逐字执行 compiled 会失败）:失败原因含"定位校验不通过"时,必须用 failure.page.elements 里的真实选择器替换原 locator(严禁留着坏 locator 只靠 AI 硬跑)。候选命中多个元素(AmbiguousLocator)同样判失败——回放会静默操作第一个匹配元素,必须给该候选加属性过滤(如 [placeholder=...])或把唯一命中的候选提到首位。verify_case 还会做用例级终态判定(失败原因含 VisionAssertionFailed):步骤都通过但最终页面不符 expectedOutcome 时,修正步骤行为或调整 expectedOutcome 后再验。',
+      '终态判定失败(failureReason=VisionAssertionFailed)且 failure.note 含"空数据信号"时,说明被测环境里根本没有可供断言的数据——这是用例缺前置造数步骤,不是选择器写错。正确做法:给用例补上"先造出满足预期的数据"的步骤(如创建一条会触发自动处置的事件),或如实告诉用户环境缺数据。严禁弱化 expectedOutcome 把失败蒙成通过(例:把"自动启动处置成功"改成"页面正常加载"、删掉断言步骤)——那是把用例改得测不出东西,比失败更糟。',
+      'result.staticAnalysis 与 failure.note 里的"源码无字面命中"只是排序参考,不是"这个选择器是假的"。选择器是否存在一律以 failure.page.elements 和运行时实测为准:框架运行时拼接的 id(如 Element-UI tab 的 #tab-autodo)源码里本就没有字面量,但运行时真实命中。sourceAnalysis 与运行时命中冲突时,信运行时。',
       'verify_case 最后一道关卡是与正式回放同引擎的 compiled 机械干跑(failureReason=ReplayDivergence):AI 临场能跑通但逐字派发 compiled 失败,典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突导致二次执行必挂。修正方式:用 failure.page.elements 里的真实选择器把失败步 compiled 改成更精确的可操作目标(点组件内部真实接收点击的元素),或修正测试数据策略(时间戳命名)后重验。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。',
       '环境未配置 login 凭据而验证卡在登录页时，引导用户到项目环境页配置 login 凭据，不要伪造登录步骤。',
@@ -705,6 +736,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             failurePage = await extractPageElements(page).catch(() => null);
           }
 
+          // 终态判定失败时补测「环境无前置数据」信号：空表/0 条时 note 直接点名数据缺失，
+          // 避免 AI 用稀释 expectedOutcome 的方式把失败蒙成通过
+          const emptyDataHint = visionFailure ? await detectEmptyDataState(page) : null;
+
           // ── 结果组装（成功精简、失败信息密集）──
           const stepsSummary = stepResults.map((r) => ({
             order: r.order,
@@ -762,7 +797,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 humanMessage: visionFailure.humanMessage ?? '最终页面与用例预期不符',
                 screenshot: visionFailure.screenshot ?? null,
                 page: failurePage,
-                note: 'vision 终态判定失败：全部步骤执行通过后，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。',
+                note: `vision 终态判定失败：全部步骤执行通过后，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。${emptyDataHint ? ` ⚠ 失败页检出空数据信号「${emptyDataHint}」：被测环境当前没有可供断言的数据，这通常是环境前置数据缺失，而非选择器/步骤写错。正确做法是让用例先创建出满足 expectedOutcome 的数据（例如造一条会自动触发处置的事件），或如实向用户汇报环境缺数据——严禁通过弱化 expectedOutcome（如把"自动启动处置成功"改成"页面正常加载"）把失败蒙成通过。` : ''}`,
               },
             });
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);

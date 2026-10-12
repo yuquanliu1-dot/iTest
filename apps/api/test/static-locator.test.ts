@@ -206,6 +206,16 @@ describe('summarizeStaticReports / 缓存', () => {
     expect(s!).not.toContain('.icon-chakan');
   });
 
+  it('not-found 摘要措辞中性：不出现「臆造」等结论性字眼（prod228 实测会被 AI 当成选择器是假的）', async () => {
+    const s = await summarizeStaticReports(
+      await analyzeLocatorCandidates([{ strategy: 'css', value: '#tab-autodo' }], async () => ({ count: 0, truncated: false, samplePaths: [] })),
+    );
+    expect(s).toBeTruthy();
+    expect(s!).toContain('源码无字面命中');
+    expect(s!).toContain('运行时命中与否以实测为准');
+    expect(s!).not.toContain('臆造');
+  });
+
   it('重复候选共用一次 grep（pattern 去重缓存）', async () => {
     let calls = 0;
     const counting: LocatorCountFn = async (pattern) => {

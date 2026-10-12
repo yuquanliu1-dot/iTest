@@ -953,6 +953,66 @@ describe('verify_case compiled 机械回放干跑', () => {
   });
 });
 
+describe('verify_case 空转硬上限', () => {
+  it('同因连续失败达上限后强制停止（StagnantRoundLimit），且不再启动浏览器', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED], expectedOutcome: '最终状态达成' });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { judgeCaseOutcome } = await import('../src/agent/judgeCaseOutcome.js');
+    vi.mocked(judgeCaseOutcome).mockResolvedValue({ passed: false, reason: '最终页面与预期不符' });
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+
+    // 前 3 轮同因失败（签名 = VisionAssertionFailed:-1:最终页面与预期不符）
+    for (let i = 0; i < 3; i++) {
+      const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+      expect(r.ok).toBe(true);
+      const d = JSON.parse(r!.data!);
+      expect(d.result).toBe('failed');
+      expect(d.failure.failureReason).toBe('VisionAssertionFailed');
+    }
+
+    const { chromium } = await import('playwright-core');
+    vi.mocked(chromium.launch).mockClear();
+    const stopped = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(stopped.ok).toBe(true);
+    const d = JSON.parse(stopped!.data!);
+    expect(d.failure.failureReason).toBe('StagnantRoundLimit');
+    expect(d.failure.humanMessage).toContain('强制停止');
+    expect(chromium.launch).not.toHaveBeenCalled(); // 短路不启动浏览器
+
+    // 计数回退一级：下一次放行 1 次实测（仍同因失败会再次触发停止，不永久死锁）
+    vi.mocked(chromium.launch).mockClear();
+    const allowed = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(JSON.parse(allowed!.data!).failure.failureReason).toBe('VisionAssertionFailed');
+    expect(chromium.launch).toHaveBeenCalled();
+  });
+
+  it('中途通过即清零，不触发强制停止', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED], expectedOutcome: '列表展示数据' });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { judgeCaseOutcome } = await import('../src/agent/judgeCaseOutcome.js');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+
+    // 先攒 2 轮同因失败（未达上限 3）
+    vi.mocked(judgeCaseOutcome).mockResolvedValue({ passed: false, reason: '不符 A' });
+    for (let i = 0; i < 2; i++) {
+      await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    }
+    // 通过 → 计数清零
+    vi.mocked(judgeCaseOutcome).mockResolvedValue({ passed: true, reason: '通过' });
+    expect(JSON.parse((await buildVerifyCaseTool(toolCtx()).execute({ caseId }))!.data!).result).toBe('passed');
+    // 计数确已清零：再连败 3 轮也只在第 4 次调用才触发（而非"通过前攒的 2 轮 + 这 3 轮"提前触发）
+    vi.mocked(judgeCaseOutcome).mockResolvedValue({ passed: false, reason: '不符 B' });
+    for (let i = 0; i < 3; i++) {
+      const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+      expect(JSON.parse(r!.data!).failure.failureReason).toBe('VisionAssertionFailed');
+    }
+    const stopped = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(JSON.parse(stopped!.data!).failure.failureReason).toBe('StagnantRoundLimit');
+  });
+});
+
 describe('verify_case 注册', () => {
   it('buildSpaceTools 包含 verify_case', async () => {
     const { buildSpaceTools } = await import('../src/pi/space/tools/index.js');
