@@ -344,7 +344,14 @@ export async function runAiTask(
       pendingShot = null;
     }
     if (!buffer) {
-      buffer = await page.screenshot({ timeout: 5000 });
+      // 全页截图超时降级：微前端子应用切换时页面持续重绘/字体慢加载，page.screenshot
+      // 等 stable 会 5s 超时抛错。这里不能让它炸掉整个 AI 步骤——重试一次，仍失败则
+      // 无图继续本轮（LLM 靠元素清单也能操作），并在下轮结果里标注无图原因。
+      buffer = await page.screenshot({ timeout: 5000 }).catch(() => null);
+      if (!buffer) {
+        buffer = await page.screenshot({ timeout: 5000 }).catch(() => null);
+        if (!buffer) imageNote = '（本轮页面截图超时，无附图；请依赖下方元素清单操作）\n';
+      }
     }
     let elements: ElementInfo[] = [];
     try {
@@ -363,7 +370,7 @@ export async function runAiTask(
     const r = await client.complete({
       systemPrompt,
       userMessage,
-      image: { base64: buffer.toString('base64'), mime: 'image/png' },
+      ...(buffer ? { image: { base64: buffer.toString('base64'), mime: 'image/png' as const } } : {}),
     });
     opts?.onUsage?.(r);
     const raw = r.kind === 'json' ? JSON.stringify(r.value) : r.value;

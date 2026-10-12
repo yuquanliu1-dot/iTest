@@ -38,6 +38,10 @@ import type { SpaceToolsContext } from './context.js';
 // AI 轮次慢于编译回放，watchdog 从 120s 放宽到 300s；单步对话轮上限独立收紧。
 const VERIFY_TIMEOUT_MS = 300_000;
 const STEP_MAX_TURNS = 5;
+// 同一用例连续失败上限：prompt 建议 3 轮，但 prompt 建议不硬——agent 可无视。这里加硬约束：
+// 第 N+1 轮若失败原因签名与前一轮相同（无进展）即强制停止并给出"环境/前置问题"提示，
+// 避免在环境缺数据/页面持续不稳定的场景里空转烧 LLM 调用。
+const VERIFY_MAX_STAGNANT_ROUNDS = 3;
 
 /** 凭据占位符：提示词里只有字面量，valueSub 在动作执行时刻替换为真实值。
  *  协议常量随 execute 层定义（valueSub 语义所在地），此处转出口径不变。 */
@@ -51,6 +55,47 @@ interface AiStepResult {
   screenshot?: string;
   error?: string;
   failureReason?: 'StepReportedFailed' | 'AiTaskAborted' | 'SecretMissing' | 'LocatorMismatch' | 'AmbiguousLocator';
+}
+
+/** 按 thread×case 维度跟踪连续同因失败轮次（防空转硬约束用）。
+ *  失败签名 = `${failureReason}:${failedOrder}:${firstLine(error)}`——签名相同视为无进展。
+ *  线程/用例结束（passed 或强制停止）即清掉该条记录。 */
+interface RoundState {
+  lastSignature: string;
+  consecutive: number;
+}
+const verifyRoundState = new Map<string, RoundState>();
+const roundKey = (threadId: string, caseId: string) => `${threadId}::${caseId}`;
+/** 从 verify_case 响应 data JSON 解析出"失败签名"；passed 或解析失败 → null（清计数）。 */
+function failureSignatureFromData(data: string): string | null {
+  try {
+    const j = JSON.parse(data) as {
+      result: 'passed' | 'failed';
+      failure?: { failureReason?: string | null; stepOrder: number; error?: string | null; humanMessage?: string | null };
+    };
+    if (j.result === 'passed') return null;
+    if (!j.failure) return 'unknown';
+    const f = j.failure;
+    const raw = typeof f.error === 'string' && f.error ? f.error : typeof f.humanMessage === 'string' ? f.humanMessage : '';
+    const errLine = raw.replace(/\n[\s\S]*/, '').slice(0, 80);
+    return `${f.failureReason ?? 'Unknown'}:${f.stepOrder}:${errLine}`;
+  } catch {
+    return 'unparseable';
+  }
+}
+
+/** 更新按 thread×case 的失败签名轮次：通过 → 清除；签名变更 → 重置计数；同签名 → 累加。 */
+function updateRoundState(key: string, data: string): void {
+  const sig = failureSignatureFromData(data);
+  if (sig === null) {
+    verifyRoundState.delete(key);
+    return;
+  }
+  const prev = verifyRoundState.get(key);
+  verifyRoundState.set(key, {
+    lastSignature: sig,
+    consecutive: prev && prev.lastSignature === sig ? prev.consecutive + 1 : 1,
+  });
 }
 
 /** 收集 compiled 步骤里的全部 locator 候选（供静态定位预检复用；与 checkCompiledLocators 同源解析）。 */
@@ -210,6 +255,32 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
     ],
     execute: async (input) => {
       const { caseId } = input as { caseId: string };
+      // ── 空转硬约束：同一用例同因连续失败达上限即强制停止（prompt 指南对 agent 不硬,这里真正拦截）──
+      // 失败签名未变即无进展：环境缺前导数据/被测页面持续不稳定这类前置问题重试再多轮也只重复烧 LLM,
+      // 直接短路返回把结论交给 agent 如实汇报。触发后将计数回退到上限-1——下一次调用允许正常跑一轮：
+      // 仍同因失败会再次触发停止（强制停止之间至多放行 1 次实测）,已修复则通过清除计数,不会永久死锁。
+      const roundState = verifyRoundState.get(roundKey(ctx.threadId, caseId));
+      if (roundState && roundState.consecutive >= VERIFY_MAX_STAGNANT_ROUNDS) {
+        verifyRoundState.set(roundKey(ctx.threadId, caseId), {
+          lastSignature: roundState.lastSignature,
+          consecutive: VERIFY_MAX_STAGNANT_ROUNDS - 1,
+        });
+        return {
+          ok: true,
+          data: JSON.stringify({
+            result: 'failed',
+            caseId,
+            failure: {
+              stepOrder: -1,
+              action: null,
+              error: null,
+              failureReason: 'StagnantRoundLimit',
+              humanMessage: `同一失败原因已连续 ${VERIFY_MAX_STAGNANT_ROUNDS} 轮无任何进展，本次已强制停止验证。这通常是环境前置数据缺失、被测页面持续不稳定或用例存在前置依赖——重复实测无法解决。请停止继续 verify_case,把已验证步骤结果与失败原因如实汇报给用户,并引导检查环境数据 / 页面可用性;环境就绪后再验证会正常继续。`,
+              note: 'verify_case 同因失败轮次上限触发强制停止,防止在无进展状态下空转消耗 LLM 调用。',
+            },
+          }),
+        };
+      }
       // 最外层兜底：db 查询 / chromium launch / resolveCaseUrl 等未预料异常一律转 ok:false
       // （ToolExecutor 契约：不向 agent 循环抛异常）
       try {
@@ -656,87 +727,24 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           if (failedIndex < 0 && !visionFailure && !replayFailure) {
             // cacheSaved: 正常收尾均无条件回写（watchdog 超时路径在循环内提前 return,无 end 事件）
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'passed', cacheSaved: true });
-            return {
-              ok: true,
-              data: JSON.stringify({
-                result: 'passed',
-                caseId,
-                envId: envCtx.envId,
-                targetUrl: targetUrl ?? null,
-                login,
-                basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
-                stagedOpsApplied: opsApplied,
-                ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
-                steps: stepsSummary,
-                replay: { result: 'passed' as const, durationMs: Date.now() - replayStartedAt },
-              }),
-            };
+            const rdata = JSON.stringify({
+              result: 'passed',
+              caseId,
+              envId: envCtx.envId,
+              targetUrl: targetUrl ?? null,
+              login,
+              basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
+              stagedOpsApplied: opsApplied,
+              ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
+              steps: stepsSummary,
+              replay: { result: 'passed' as const, durationMs: Date.now() - replayStartedAt },
+            });
+            updateRoundState(roundKey(ctx.threadId, caseId), rdata);
+            return { ok: true, data: rdata };
           }
           if (visionFailure) {
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
-            return {
-              ok: true,
-              data: JSON.stringify({
-                result: 'failed',
-                caseId,
-                envId: envCtx.envId,
-                targetUrl: targetUrl ?? null,
-                login,
-                basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
-                stagedOpsApplied: opsApplied,
-                ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
-                steps: stepsSummary,
-                failure: {
-                  stepOrder: -1,
-                  action: null,
-                  error: visionFailure.error ?? '最终页面与用例预期不符',
-                  failureReason: visionFailure.failureReason ?? 'VisionAssertionFailed',
-                  humanMessage: visionFailure.humanMessage ?? '最终页面与用例预期不符',
-                  screenshot: visionFailure.screenshot ?? null,
-                  page: failurePage,
-                  note: 'vision 终态判定失败：全部步骤执行通过后，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。',
-                },
-              }),
-            };
-          }
-          if (replayFailure) {
-            const failedReplayStep = effectiveSteps.find((s) => s.order === replayFailure!.order) ?? null;
-            const replayIdx = failedReplayStep ? effectiveSteps.indexOf(failedReplayStep) : -1;
-            const replayHint = replayIdx >= 0 ? summarizeStaticReports(staticByStep[replayIdx] ?? []) : null;
-            ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
-            return {
-              ok: true,
-              data: JSON.stringify({
-                result: 'failed',
-                caseId,
-                envId: envCtx.envId,
-                targetUrl: targetUrl ?? null,
-                login,
-                basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
-                stagedOpsApplied: opsApplied,
-                ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
-                steps: stepsSummary,
-                replay: replaySummary,
-                failure: {
-                  stepOrder: replayFailure.order,
-                  action: failedReplayStep?.compiled ?? null,
-                  error: replayFailure.error ?? null,
-                  failureReason: 'ReplayDivergence',
-                  humanMessage: replayFailure.humanMessage ?? replayFailure.error ?? null,
-                  screenshot: replayFailure.screenshot ?? null,
-                  page: failurePage,
-                  note: `AI 临场执行能通过，但与正式回放同引擎的 compiled 机械逐字执行失败（回放分叉）——典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突二次执行必挂。请用 failure.page.elements 中真实存在的选择器把该步 compiled 改成更精确的可操作目标（组件内部真实接收点击/输入的元素），或修正测试数据策略（时间戳命名）后重验。${replayHint ? ` 源码静态提示:${replayHint}` : ''}`,
-                },
-              }),
-            };
-          }
-          const failed = stepResults[failedIndex]!;
-          const failedStep = effectiveSteps[failedIndex]!;
-          const failedHint = summarizeStaticReports(staticByStep[failedIndex] ?? []);
-          ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
-          return {
-            ok: true,
-            data: JSON.stringify({
+            const rdata = JSON.stringify({
               result: 'failed',
               caseId,
               envId: envCtx.envId,
@@ -747,17 +755,76 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
               steps: stepsSummary,
               failure: {
-                stepOrder: failed.order,
-                action: failedStep.compiled ?? null,
-                error: failed.error ?? null,
-                failureReason: failed.failureReason ?? null,
-                humanMessage: failed.error ?? null,
-                screenshot: failed.screenshot ?? null,
+                stepOrder: -1,
+                action: null,
+                error: visionFailure.error ?? '最终页面与用例预期不符',
+                failureReason: visionFailure.failureReason ?? 'VisionAssertionFailed',
+                humanMessage: visionFailure.humanMessage ?? '最终页面与用例预期不符',
+                screenshot: visionFailure.screenshot ?? null,
                 page: failurePage,
-                note: `page.elements 为失败页当前可见的可交互元素；修正 locator 只能使用其中真实存在的选择器。快照不含操作后才出现的元素。${failedHint ? ` 源码静态提示:${failedHint}` : ''}`,
+                note: 'vision 终态判定失败：全部步骤执行通过后，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。',
               },
-            }),
-          };
+            });
+            updateRoundState(roundKey(ctx.threadId, caseId), rdata);
+            return { ok: true, data: rdata };
+          }
+          if (replayFailure) {
+            const failedReplayStep = effectiveSteps.find((s) => s.order === replayFailure!.order) ?? null;
+            const replayIdx = failedReplayStep ? effectiveSteps.indexOf(failedReplayStep) : -1;
+            const replayHint = replayIdx >= 0 ? summarizeStaticReports(staticByStep[replayIdx] ?? []) : null;
+            ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
+            const rdata = JSON.stringify({
+              result: 'failed',
+              caseId,
+              envId: envCtx.envId,
+              targetUrl: targetUrl ?? null,
+              login,
+              basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
+              stagedOpsApplied: opsApplied,
+              ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
+              steps: stepsSummary,
+              replay: replaySummary,
+              failure: {
+                stepOrder: replayFailure.order,
+                action: failedReplayStep?.compiled ?? null,
+                error: replayFailure.error ?? null,
+                failureReason: 'ReplayDivergence',
+                humanMessage: replayFailure.humanMessage ?? replayFailure.error ?? null,
+                screenshot: replayFailure.screenshot ?? null,
+                page: failurePage,
+                note: `AI 临场执行能通过，但与正式回放同引擎的 compiled 机械逐字执行失败（回放分叉）——典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突二次执行必挂。请用 failure.page.elements 中真实存在的选择器把该步 compiled 改成更精确的可操作目标（组件内部真实接收点击/输入的元素），或修正测试数据策略（时间戳命名）后重验。${replayHint ? ` 源码静态提示:${replayHint}` : ''}`,
+              },
+            });
+            updateRoundState(roundKey(ctx.threadId, caseId), rdata);
+            return { ok: true, data: rdata };
+          }
+          const failed = stepResults[failedIndex]!;
+          const failedStep = effectiveSteps[failedIndex]!;
+          const failedHint = summarizeStaticReports(staticByStep[failedIndex] ?? []);
+          ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
+          const rdata = JSON.stringify({
+            result: 'failed',
+            caseId,
+            envId: envCtx.envId,
+            targetUrl: targetUrl ?? null,
+            login,
+            basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
+            stagedOpsApplied: opsApplied,
+            ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
+            steps: stepsSummary,
+            failure: {
+              stepOrder: failed.order,
+              action: failedStep.compiled ?? null,
+              error: failed.error ?? null,
+              failureReason: failed.failureReason ?? null,
+              humanMessage: failed.error ?? null,
+              screenshot: failed.screenshot ?? null,
+              page: failurePage,
+              note: `page.elements 为失败页当前可见的可交互元素；修正 locator 只能使用其中真实存在的选择器。快照不含操作后才出现的元素。${failedHint ? ` 源码静态提示:${failedHint}` : ''}`,
+            },
+          });
+          updateRoundState(roundKey(ctx.threadId, caseId), rdata);
+          return { ok: true, data: rdata };
         } finally {
           clearTimeout(timer);
           live?.close();
