@@ -38,6 +38,10 @@ const HUMAN: Record<FailureReason, string> = {
   SyslogFileMissing: 'syslog 日志文件不可访问',
   SyslogTimeout: '读取 syslog 超时',
   LogAssertionFailed: '日志断言未命中',
+  HttpRequestError: 'HTTP 请求失败（网络错误或无法读取响应）',
+  HttpRequestTimeout: 'HTTP 请求超时',
+  HttpRequestAssertionFailed: 'HTTP 断言未命中（状态码或响应体不匹配）',
+  HttpRequestSaveAsFailed: 'HTTP 响应值提取失败',
   VisionAssertionFailed: '最终页面与用例预期不符(vision 判定失败)',
   EngineUnavailable: '移动端引擎不可用，请检查设备配置或 agent-device daemon',
   MobileUnsupportedCapability: '当前 mobile 引擎不支持该动作',
@@ -90,6 +94,10 @@ export function classify(err: unknown, ctx: ClassifyCtx = {}): ClassifiedFailure
   if (e?.name === 'SyslogFileMissing') return { reason: 'SyslogFileMissing', humanMessage: HUMAN.SyslogFileMissing };
   if (e?.name === 'SyslogTimeout') return { reason: 'SyslogTimeout', humanMessage: HUMAN.SyslogTimeout };
   if (e?.name === 'LogAssertionFailed') return { reason: 'LogAssertionFailed', humanMessage: HUMAN.LogAssertionFailed };
+  if (e?.name === 'HttpRequestError') return { reason: 'HttpRequestError', humanMessage: HUMAN.HttpRequestError };
+  if (e?.name === 'HttpRequestTimeout') return { reason: 'HttpRequestTimeout', humanMessage: HUMAN.HttpRequestTimeout };
+  if (e?.name === 'HttpRequestAssertionFailed') return { reason: 'HttpRequestAssertionFailed', humanMessage: HUMAN.HttpRequestAssertionFailed };
+  if (e?.name === 'HttpRequestSaveAsFailed') return { reason: 'HttpRequestSaveAsFailed', humanMessage: HUMAN.HttpRequestSaveAsFailed };
   if (ctx.action && (ctx.action as { kind?: string }).kind === 'fill' &&
       (msg.includes('unique constraint') || msg.includes('duplicate'))) {
     return { reason: 'FixedValueConflict', humanMessage: HUMAN.FixedValueConflict };

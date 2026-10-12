@@ -32,6 +32,7 @@ import { readAiTaskCache, writeAiTaskCache, bumpAiTaskCacheHit } from './aiTaskC
 import type { EnvCtx } from './envContext.js';
 import { runQueryDb } from './dbQuery.js';
 import { runObserveLog } from './syslogReader.js';
+import { runHttpRequest, type HttpStepResult } from './httpRequest.js';
 import { runCaseVisionAssert } from './visionAssert.js';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
@@ -67,6 +68,8 @@ export interface ExecStepResult {
   db?: DbQueryRowResult;
   /** observeLog 步骤的结果（仅 observeLog 步携带，其它步 undefined） */
   log?: ObserveLogLineResult;
+  /** httpRequest 步骤的结果（仅 httpRequest 步携带，其它步 undefined） */
+  http?: HttpStepResult;
   /** Track 1 用例级 vision 判定的回写结果（仅最后一步或追加失败步携带，其它步 undefined）。 */
   visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string };
   /** aiTask 步骤本轮回放走了动作缓存（机械执行，零 LLM）；报告据此展示"缓存命中"。 */
@@ -123,6 +126,8 @@ interface DispatchOpts {
   dbSink?: { current: DbQueryRowResult | null };
   /** 记录本步 observeLog 结果（由 observeLog 分支写入） */
   logSink?: { current: ObserveLogLineResult | null };
+  /** 记录本步 httpRequest 结果（由 httpRequest 分支写入） */
+  httpSink?: { current: HttpStepResult | null };
   /** 记录本步 aiTask 是否命中动作缓存（由 aiTask 分支写入） */
   cacheSink?: { current: boolean };
 }
@@ -513,6 +518,18 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       if (opts.logSink) opts.logSink.current = result;
       return;
     }
+    case 'httpRequest': {
+      const result = await runHttpRequest({ action, page: opts.page, vars: opts.vars });
+      // saveAs 提取的变量写回 vars，后续步骤 {{var}} 可消费
+      if (result.saved) opts.vars[result.saved.varName] = result.saved.value;
+      if (result.assertion && !result.assertion.matched) {
+        // 先把结果写到 sink，调用方即便抛错也能在 step.result.http 里看到请求/响应
+        if (opts.httpSink) opts.httpSink.current = result;
+        const e = new Error('httpRequest assertion failed'); e.name = 'HttpRequestAssertionFailed'; throw e;
+      }
+      if (opts.httpSink) opts.httpSink.current = result;
+      return;
+    }
   }
 }
 
@@ -798,6 +815,7 @@ async function runStepsInContext(
     opts.hitSink = { current: null };
     opts.dbSink = { current: null };
     opts.logSink = { current: null };
+    opts.httpSink = { current: null };
     opts.cacheSink = { current: false };
     const tabIndex =
       ctx.tabMap && step.tabRef ? Array.from(ctx.tabMap.keys()).indexOf(step.tabRef) : 0;
@@ -840,6 +858,7 @@ async function runStepsInContext(
         tabIndex: tabIndex >= 0 ? tabIndex : 0,
         db: opts.dbSink.current ?? undefined,
         log: opts.logSink.current ?? undefined,
+        http: opts.httpSink.current ?? undefined,
         ...(opts.cacheSink.current ? { cached: true } : {}),
       });
     } catch (e) {
@@ -873,6 +892,7 @@ async function runStepsInContext(
         tabIndex: tabIndex >= 0 ? tabIndex : 0,
         db: opts.dbSink.current ?? undefined,
         log: opts.logSink.current ?? undefined,
+        http: opts.httpSink.current ?? undefined,
       });
       if (onFailurePage) await onFailurePage(opts.page, i).catch(() => undefined);
       // 失败立即终止，避免后续步骤被前一步污染的页面状态搞乱。

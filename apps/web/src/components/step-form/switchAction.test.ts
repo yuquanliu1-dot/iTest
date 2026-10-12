@@ -55,6 +55,11 @@ describe('switchAction', () => {
     expect(switchAction(clipOf({ kind: 'click', locator: loc }), 'screenshot').action).toEqual({ kind: 'screenshot', name: '' });
   });
 
+  it('click → httpRequest 默认 GET + 空 headers', () => {
+    expect(switchAction(clipOf({ kind: 'click', locator: loc }), 'httpRequest').action)
+      .toEqual({ kind: 'httpRequest', method: 'GET', url: '', headers: [], timeoutMs: 10000 });
+  });
+
   it('kindNeedsLocator 覆盖 13 种', () => {
     for (const k of ['click', 'hover', 'fill', 'select', 'check', 'waitFor', 'assertVisible', 'assertText', 'assertJson', 'upload', 'extract']) {
       expect(kindNeedsLocator(k)).toBe(true);

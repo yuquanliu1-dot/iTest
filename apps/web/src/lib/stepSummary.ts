@@ -127,6 +127,11 @@ function actionSummary(a: KnownAction): string {
       const kw = Array.isArray(a.keywords) ? (a.keywords as unknown[]).map((v) => str(v)).filter(Boolean) : [];
       return `观察日志${kw.length ? ' · ' + kw.join('/') : ''}`;
     }
+    case 'httpRequest': {
+      const saveAs = a.saveAs as { varName?: unknown } | undefined;
+      const arrow = saveAs && typeof saveAs.varName === 'string' && saveAs.varName ? ` → {{${saveAs.varName}}}` : '';
+      return `${str(a.method) || 'GET'} ${clip(str(a.url), 40)}${arrow}`;
+    }
     default:
       return clip(JSON.stringify(a) ?? String(a), 40);
   }
@@ -169,6 +174,21 @@ function describeAction(a: KnownAction): string[] {
   push('指令', str(a.instruction));
   push('表名', str(a.table));
   if (Array.isArray(a.keywords)) push('日志关键字', (a.keywords as unknown[]).map((v) => str(v)).filter(Boolean).join(' / '));
+  if (a.kind === 'httpRequest') {
+    push('请求方式', str(a.method));
+    push('请求体', typeof a.body === 'string' ? clip(a.body, 200) : '');
+    if (a.carryLoginState) lines.push('携带登录态：是');
+    const saveAs = a.saveAs as { varName?: unknown; from?: unknown; path?: unknown } | undefined;
+    if (saveAs) {
+      const from = saveAs.from === 'status' ? '状态码' : '响应体';
+      push('提取变量', `{{${str(saveAs.varName)}}} ← ${from}${saveAs.path ? `.${str(saveAs.path)}` : ''}`);
+    }
+    const assertion = a.assertion as { status?: unknown; match?: unknown; expected?: unknown } | undefined;
+    if (assertion) {
+      if (assertion.status !== undefined) push('断言状态码', String(assertion.status));
+      if (assertion.expected !== undefined) push('断言响应', `${MATCH_LABELS[str(assertion.match)] ?? '包含'}「${clip(str(assertion.expected), 60)}」`);
+    }
+  }
   return lines;
 }
 

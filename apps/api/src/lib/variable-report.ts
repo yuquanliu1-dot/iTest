@@ -55,6 +55,20 @@ function stringFields(step: StepAction): Array<{ field: string; text: string }> 
     case 'screenshot':
       if (typeof a.name === 'string') out.push({ field: 'screenshot.name', text: a.name });
       break;
+    case 'httpRequest': {
+      if (typeof a.url === 'string') out.push({ field: 'httpRequest.url', text: a.url });
+      const headers = a.headers;
+      if (Array.isArray(headers)) {
+        for (const h of headers as Array<{ key?: unknown; value?: unknown }>) {
+          if (typeof h.key === 'string') out.push({ field: 'httpRequest.headers.key', text: h.key });
+          if (typeof h.value === 'string') out.push({ field: 'httpRequest.headers.value', text: h.value });
+        }
+      }
+      if (typeof a.body === 'string') out.push({ field: 'httpRequest.body', text: a.body });
+      const assertion = a.assertion as { expected?: unknown } | undefined;
+      if (assertion && typeof assertion.expected === 'string') out.push({ field: 'httpRequest.assertion.expected', text: assertion.expected });
+      break;
+    }
   }
   return out;
 }
@@ -72,27 +86,46 @@ export function buildVariableReport(steps: StepAction[], initialVars?: string[])
   // 且 definedOrder 保留 -1：对它的前向引用用初始值，不算 forward。
   for (const name of initialVars ?? []) definedOrder.set(name, -1);
 
-  // First pass: register all extract varName → earliest definition order.
+  // First pass: register all extract varName / httpRequest saveAs varName → earliest definition order.
   for (let i = 0; i < steps.length; i++) {
     const a = steps[i]!;
-    if (a.kind !== 'extract') continue;
-    const nameCheck = validateVariableName(a.varName);
-    if (!nameCheck.ok) {
-      invalidNames.push({ stepOrder: i, field: 'extract.varName', name: a.varName, reason: nameCheck.reason ?? 'invalid' });
-    }
-    const name = a.varName;
-    const prev = definedOrder.get(name);
-    if (prev !== undefined && prev >= 0) {
-      const arr = duplicates.get(name) ?? [prev];
-      arr.push(i);
-      duplicates.set(name, arr);
-    } else if (prev === undefined) {
-      definedOrder.set(name, i);
-    }
-    // prev === -1（初始变量）：保留 -1，不记 duplicate
-    if (a.mode === 'regex' && a.pattern) {
-      const r = safeRegex(a.pattern);
-      if (!r.ok) regexIssues.push({ stepOrder: i, reason: r.reason });
+    if (a.kind === 'extract') {
+      const nameCheck = validateVariableName(a.varName);
+      if (!nameCheck.ok) {
+        invalidNames.push({ stepOrder: i, field: 'extract.varName', name: a.varName, reason: nameCheck.reason ?? 'invalid' });
+      }
+      const name = a.varName;
+      const prev = definedOrder.get(name);
+      if (prev !== undefined && prev >= 0) {
+        const arr = duplicates.get(name) ?? [prev];
+        arr.push(i);
+        duplicates.set(name, arr);
+      } else if (prev === undefined) {
+        definedOrder.set(name, i);
+      }
+      // prev === -1（初始变量）：保留 -1，不记 duplicate
+      if (a.mode === 'regex' && a.pattern) {
+        const r = safeRegex(a.pattern);
+        if (!r.ok) regexIssues.push({ stepOrder: i, reason: r.reason });
+      }
+    } else if (a.kind === 'httpRequest' && a.saveAs) {
+      const nameCheck = validateVariableName(a.saveAs.varName);
+      if (!nameCheck.ok) {
+        invalidNames.push({ stepOrder: i, field: 'httpRequest.saveAs.varName', name: a.saveAs.varName, reason: nameCheck.reason ?? 'invalid' });
+      }
+      const name = a.saveAs.varName;
+      const prev = definedOrder.get(name);
+      if (prev !== undefined && prev >= 0) {
+        const arr = duplicates.get(name) ?? [prev];
+        arr.push(i);
+        duplicates.set(name, arr);
+      } else if (prev === undefined) {
+        definedOrder.set(name, i);
+      }
+      if (a.assertion?.match === 'regex' && a.assertion.expected) {
+        const r = safeRegex(a.assertion.expected);
+        if (!r.ok) regexIssues.push({ stepOrder: i, reason: r.reason });
+      }
     }
   }
 
