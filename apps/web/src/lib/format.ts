@@ -55,6 +55,7 @@ export const STEP_KIND_LABELS: Record<string, string> = {
   screenshot: '截图',
   queryDb: '数据库查询',
   observeLog: '日志观察',
+  httpRequest: 'HTTP 请求',
 };
 
 export function stepKindLabel(kind: string): string {

@@ -14,6 +14,7 @@ export const STEP_DSL_SPEC = `StepAction 按 kind 区分（discriminated union�
 - {"kind":"upload","locator":[Locator,...],"fileName":"a.png"（可选）}
 - {"kind":"extract","locator":[Locator,...],"varName":"变量名"}
 - {"kind":"aiTask","instruction":"自然语言指令"}（回放时由 AI 智能体实时看截图执行，不预编译；登录页有验证码时用它代替普通 fill——例："识别验证码图片中的字符并填入验证码输入框"；也适用于其他难以固化为 DSL 的动态交互）
+- {"kind":"httpRequest","method":"GET","url":"https://api.example.com/users","headers":[{"key":"Content-Type","value":"application/json"}],"body":"JSON字符串(可选)","timeoutMs":10000,"carryLoginState":true(可选,转发浏览器登录态Cookie),"saveAs":{"varName":"orderId","from":"body","path":"data.id"}(可选,提取响应值为变量),"assertion":{"status":200,"match":"contains","expected":"ok"}(可选)}（REST API 请求步骤，回放机械执行；url/headers值/body 支持 {{变量}} 替换）
 Locator = {"strategy":"role"|"text"|"testId"|"css"|"xpath","value":"定位值"}（xpath 仅用于读取历史数据;新生成的用例应优先 css / role / text / testId，结构鲁棒性差的位置不要选 xpath）
 （mobile-only："accessibilityId"|"label"|"predicate"，仅在 platform=mobile 用例中可产出；web 用例不得使用）
 mobile-only action（仅 platform=mobile 时产出）：

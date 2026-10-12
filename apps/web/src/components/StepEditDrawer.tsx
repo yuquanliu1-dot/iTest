@@ -218,6 +218,29 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
     action.assertion as { match: 'equals' | 'contains' | 'regex'; expected: string } | undefined,
   );
 
+  // httpRequest
+  const [httpMethod, setHttpMethod] = useState<string>(String(action.method ?? 'GET'));
+  const [httpUrl, setHttpUrl] = useState(String(action.url ?? ''));
+  const [httpHeaders, setHttpHeaders] = useState<Array<{ key: string; value: string }>>(
+    Array.isArray(action.headers) ? (action.headers as Array<{ key?: unknown; value?: unknown }>).map((h) => ({ key: String(h.key ?? ''), value: String(h.value ?? '') })) : [],
+  );
+  const [httpBody, setHttpBody] = useState(String(action.body ?? ''));
+  const [httpTimeout, setHttpTimeout] = useState(String(action.timeoutMs ?? 10000));
+  const [httpCarryLogin, setHttpCarryLogin] = useState(action.carryLoginState === true);
+  const [httpSaveAs, setHttpSaveAs] = useState<{ varName: string; from: 'body' | 'status'; path: string }>(() => {
+    const s = action.saveAs as { varName?: unknown; from?: unknown; path?: unknown } | undefined;
+    return { varName: String(s?.varName ?? ''), from: s?.from === 'status' ? 'status' : 'body', path: String(s?.path ?? '') };
+  });
+  const [httpAssertion, setHttpAssertion] = useState<{ status: string; match: 'equals' | 'contains' | 'regex'; expected: string } | undefined>(() => {
+    const a = action.assertion as { status?: unknown; match?: unknown; expected?: unknown } | undefined;
+    if (!a) return undefined;
+    return {
+      status: a.status !== undefined ? String(a.status) : '',
+      match: a.match === 'equals' || a.match === 'regex' ? a.match : 'contains',
+      expected: String(a.expected ?? ''),
+    };
+  });
+
   // mobile-only
   const isMobileForm = platform === 'mobile';
   const [swipeFrom, setSwipeFrom] = useState<Locator[]>(() => {
@@ -331,6 +354,38 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       next.fromLine = Math.max(1, Math.min(10000, Number(observeFromLine) || 200));
       if (logAssertion) next.assertion = logAssertion;
       else delete next.assertion;
+    }
+    if (kind === 'httpRequest') {
+      next.method = httpMethod;
+      next.url = httpUrl.trim();
+      next.headers = httpHeaders
+        .filter((h) => h.key.trim())
+        .slice(0, 20)
+        .map((h) => ({ key: h.key.trim(), value: h.value }));
+      if (httpBody) next.body = httpBody;
+      else delete next.body;
+      next.timeoutMs = Math.max(1000, Math.min(30000, Number(httpTimeout) || 10000));
+      if (httpCarryLogin) next.carryLoginState = true;
+      else delete next.carryLoginState;
+      if (httpSaveAs.varName.trim()) {
+        next.saveAs = {
+          varName: httpSaveAs.varName.trim(),
+          from: httpSaveAs.from,
+          ...(httpSaveAs.from === 'body' && httpSaveAs.path.trim() ? { path: httpSaveAs.path.trim() } : {}),
+        };
+      } else {
+        delete next.saveAs;
+      }
+      if (httpAssertion && (httpAssertion.status.trim() !== '' || httpAssertion.expected !== '')) {
+        const statusNum = Number(httpAssertion.status);
+        next.assertion = {
+          ...(httpAssertion.status.trim() !== '' && Number.isInteger(statusNum) ? { status: statusNum } : {}),
+          match: httpAssertion.match,
+          ...(httpAssertion.expected !== '' ? { expected: httpAssertion.expected } : {}),
+        };
+      } else {
+        delete next.assertion;
+      }
     }
     if (kind === 'swipe') {
       next.from = swipeFrom;
@@ -949,6 +1004,79 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
           </div>
         )}
 
+        {kind === 'httpRequest' && (
+          <div className="flex flex-col gap-2">
+            <div className="flex gap-1.5">
+              <select className="input-base input-xs" style={{ width: 96 }} value={httpMethod} onChange={(e) => setHttpMethod(e.target.value)}>
+                {['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <input
+                className="input-base input-xs flex-1"
+                aria-invalid={!!fieldErrors['action.url']}
+                value={httpUrl}
+                onChange={(e) => setHttpUrl(e.target.value)}
+                placeholder="https://host/api/path（支持 {{var}}）"
+              />
+            </div>
+            <FieldError msg={fieldErrors['action.url']} />
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>请求头（最多 20 个，值支持 {'{{var}}'}）</span>
+              {httpHeaders.map((h, i) => (
+                <div key={i} className="flex gap-1 items-center">
+                  <input className="input-base input-xs" style={{ width: 140 }} value={h.key} placeholder="Header" onChange={(e) => {
+                    const nextH = [...httpHeaders]; nextH[i] = { ...h, key: e.target.value }; setHttpHeaders(nextH);
+                  }} />
+                  <input className="input-base input-xs flex-1" value={h.value} placeholder="值" onChange={(e) => {
+                    const nextH = [...httpHeaders]; nextH[i] = { ...h, value: e.target.value }; setHttpHeaders(nextH);
+                  }} />
+                  <button type="button" className="text-[11px] press" style={{ background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4 }} onClick={() => setHttpHeaders(httpHeaders.filter((_, j) => j !== i))}>✕</button>
+                </div>
+              ))}
+              {httpHeaders.length < 20 && (
+                <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px dashed var(--border)', color: 'var(--primary)', cursor: 'pointer', borderRadius: 4, padding: '4px 8px' }} onClick={() => setHttpHeaders([...httpHeaders, { key: '', value: '' }])}>
+                  + 增加请求头
+                </button>
+              )}
+            </div>
+            {httpMethod !== 'GET' && httpMethod !== 'HEAD' && (
+              <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                <span>请求体（原文，支持 {'{{var}}'}）</span>
+                <textarea
+                  className="input-base input-xs font-mono"
+                  style={{ minHeight: 72 }}
+                  value={httpBody}
+                  onChange={(e) => setHttpBody(e.target.value)}
+                  placeholder='{"name": "value"}'
+                />
+              </label>
+            )}
+            <div className="flex gap-2 items-center">
+              <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
+                <span>超时 (ms, 1000-30000)</span>
+                <input className="input-base input-xs" type="number" min={1000} max={30000} value={httpTimeout} onChange={(e) => setHttpTimeout(e.target.value)} />
+              </label>
+              <label className="flex gap-1.5 items-center text-[11px] self-end pb-1 cursor-pointer" style={{ color: 'var(--muted-foreground)' }}>
+                <input type="checkbox" checked={httpCarryLogin} onChange={(e) => setHttpCarryLogin(e.target.checked)} />
+                <span>携带浏览器登录态 Cookie</span>
+              </label>
+            </div>
+            <div className="flex flex-col gap-1.5 p-2 rounded-[var(--radius-sm)]" style={{ border: '1px solid var(--border)', background: 'var(--muted)' }}>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>提取变量（响应值 → {'{{var}}'}，供后续步骤使用）</span>
+              <div className="flex gap-1.5">
+                <input className="input-base input-xs" style={{ width: 130 }} value={httpSaveAs.varName} placeholder="变量名" onChange={(e) => setHttpSaveAs({ ...httpSaveAs, varName: e.target.value })} />
+                <select className="input-base input-xs" style={{ width: 96 }} value={httpSaveAs.from} onChange={(e) => setHttpSaveAs({ ...httpSaveAs, from: e.target.value as 'body' | 'status' })}>
+                  <option value="body">响应体</option>
+                  <option value="status">状态码</option>
+                </select>
+                {httpSaveAs.from === 'body' && (
+                  <input className="input-base input-xs flex-1 font-mono" value={httpSaveAs.path} placeholder="data.items[0].id（留空取全文）" onChange={(e) => setHttpSaveAs({ ...httpSaveAs, path: e.target.value })} />
+                )}
+              </div>
+            </div>
+            <HttpAssertionEditor value={httpAssertion} onChange={setHttpAssertion} />
+          </div>
+        )}
+
         {/* compiled 动作链（只读）：AI 一次产出一串 DSL 时（如登录+操作+断言合并成一步），
             上方表单只镜像 compiled[0]；这里枚举整条链提示用户保存不会丢尾部动作。 */}
         {Array.isArray(compiled) && compiled.length > 1 && (
@@ -1008,6 +1136,31 @@ function DbAssertionEditor({ value, onChange, columns }: { value: { match: 'equa
           {columns.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       )}
+      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px solid var(--destructive)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4, padding: '2px 8px' }} onClick={() => onChange(undefined)}>移除断言</button>
+    </div>
+  );
+}
+
+function HttpAssertionEditor({ value, onChange }: { value: { status: string; match: 'equals' | 'contains' | 'regex'; expected: string } | undefined; onChange: (v: typeof value) => void }) {
+  if (!value) {
+    return (
+      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px dashed var(--border)', color: 'var(--muted-foreground)', cursor: 'pointer', padding: '4px 8px', borderRadius: 5 }} onClick={() => onChange({ status: '', match: 'contains', expected: '' })}>
+        + 附加断言
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1.5 p-2 rounded-[var(--radius-sm)]" style={{ border: '1px solid var(--border)', background: 'var(--muted)' }}>
+      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>断言（状态码 / 响应体；不命中则步骤失败）</span>
+      <div className="flex gap-1.5">
+        <input className="input-base input-xs" style={{ width: 130 }} type="number" min={100} max={599} value={value.status ?? ''} placeholder="状态码（可选）" onChange={(e) => onChange({ ...value, status: e.target.value })} />
+        <select className="input-base input-xs" style={{ width: 84 }} value={value.match} onChange={(e) => onChange({ ...value, match: e.target.value as 'equals' | 'contains' | 'regex' })}>
+          <option value="equals">等于</option>
+          <option value="contains">包含</option>
+          <option value="regex">正则</option>
+        </select>
+        <input className="input-base input-xs flex-1" value={value.expected} placeholder="响应体期望（可选）" onChange={(e) => onChange({ ...value, expected: e.target.value })} />
+      </div>
       <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px solid var(--destructive)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4, padding: '2px 8px' }} onClick={() => onChange(undefined)}>移除断言</button>
     </div>
   );

@@ -29,6 +29,9 @@ function messageFor(path: string, raw: string): string {
   if (path === 'action.value') return '填写值不合法';
   if (path === 'action.value.fragments') return '组合值不合法（至少 1 段，总长 ≤ 1024）';
   if (path === 'action.timeoutMs') return '超时必须是正整数（毫秒）';
+  if (path.startsWith('action.headers.')) return '请求头键不能为空且数量 ≤ 20';
+  if (path === 'action.saveAs.varName') return '提取变量名不能为空';
+  if (path === 'action.saveAs.path') return '提取路径不合法';
   return `${path || 'action'}: ${raw}`.slice(0, 120);
 }
 

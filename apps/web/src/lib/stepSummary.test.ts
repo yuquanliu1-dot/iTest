@@ -57,6 +57,11 @@ describe('stepSummary', () => {
     expect(stepSummary({ compiled: [{ kind: 'extract', locator: loc(), varName: 'orderId', mode: 'completeValue' }] })).toBe('提取 → {{orderId}}');
   });
 
+  it('httpRequest 显示方法+URL，saveAs 加提取箭头', () => {
+    expect(stepSummary({ compiled: [{ kind: 'httpRequest', method: 'GET', url: '{{apiBase}}/users', headers: [], timeoutMs: 10000 }] })).toBe('GET {{apiBase}}/users');
+    expect(stepSummary({ compiled: [{ kind: 'httpRequest', method: 'POST', url: '/api/orders', headers: [], timeoutMs: 10000, saveAs: { varName: 'orderId', from: 'body', path: 'data.id' } }] })).toBe('POST /api/orders → {{orderId}}');
+  });
+
   it('未知类型回退 JSON 片段（超长截断）', () => {
     const row = { compiled: [{ kind: 'weird', foo: 'x'.repeat(60) }] };
     expect(stepSummary(row)).toBe(JSON.stringify(row.compiled![0]).slice(0, 39) + '…');

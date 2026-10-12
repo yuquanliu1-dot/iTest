@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import Button from '../components/ui/Button';
 import { useUIStore } from '../stores/ui';
 import { fullDateTime } from '../lib/format';
-import type { DbQueryRowResult, ObserveLogLineResult } from '@itest/shared';
+import type { DbQueryRowResult, ObserveLogLineResult, HttpStepResult } from '@itest/shared';
 
 interface StepResult {
   order: number;
@@ -28,6 +28,8 @@ interface StepResult {
   db?: DbQueryRowResult;
   /** observeLog 步骤的结果（仅 observeLog 步携带） */
   log?: ObserveLogLineResult;
+  /** httpRequest 步骤的结果（仅 httpRequest 步携带） */
+  http?: HttpStepResult;
   /** aiTask 步骤本轮回放走了动作缓存（机械执行，零 LLM） */
   cached?: boolean;
 }
@@ -210,6 +212,7 @@ export default function ReportDetail() {
           )}
           {s.db && <DbResultCell db={s.db} />}
           {s.log && <LogResultCell log={s.log} />}
+          {s.http && <HttpResultCell http={s.http} />}
         </div>
         {s.screenshot && (
           <button
@@ -549,6 +552,75 @@ function DbResultCell({ db }: { db: DbQueryRowResult }) {
       >
         {JSON.stringify(db.rows.slice(0, 5), null, 2)}
       </pre>
+    </details>
+  );
+}
+
+function HttpResultCell({ http }: { http: HttpStepResult }) {
+  const PRE_STYLE: React.CSSProperties = {
+    maxHeight: 240,
+    overflow: 'auto',
+    fontSize: 11,
+    margin: '4px 0',
+    padding: 8,
+    borderRadius: 4,
+    background: 'var(--muted)',
+    color: 'var(--muted-foreground)',
+    border: '1px solid var(--border)',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-all',
+  };
+  let path = '';
+  try { path = new URL(http.request.url).pathname + new URL(http.request.url).search; } catch { path = http.request.url; }
+  return (
+    <details className="text-[11px]">
+      <summary
+        className="cursor-pointer"
+        style={{ color: 'var(--muted-foreground)' }}
+      >
+        HTTP：{http.request.method} {path} → {http.response.status}（{http.response.durationMs}ms）
+        {http.assertion && (
+          <span
+            style={{
+              color: http.assertion.matched ? 'var(--success)' : 'var(--destructive)',
+              marginLeft: 8,
+            }}
+          >
+            {http.assertion.matched ? '✓ 命中' : '✕ 未命中'}
+            {http.assertion.statusExpected !== undefined && ` 状态码 ${http.assertion.statusExpected}`}
+            {http.assertion.expected !== undefined && `「${http.assertion.expected}」`}
+          </span>
+        )}
+        {http.saved && (
+          <span style={{ marginLeft: 8, color: 'var(--muted-foreground)' }}>
+            提取 {`{{${http.saved.varName}}}`}
+          </span>
+        )}
+      </summary>
+      <div style={{ margin: '4px 0', display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div>
+          <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>请求头</div>
+          <pre style={PRE_STYLE}>{JSON.stringify(http.request.headers, null, 2)}</pre>
+        </div>
+        {http.request.bodyPreview !== undefined && (
+          <div>
+            <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>请求体</div>
+            <pre style={PRE_STYLE}>{http.request.bodyPreview}</pre>
+          </div>
+        )}
+        <div>
+          <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>
+            响应 {http.response.status} {http.response.statusText}
+          </div>
+          <pre style={PRE_STYLE}>{http.response.bodyText || '（空）'}</pre>
+        </div>
+        {http.saved && (
+          <div>
+            <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>提取变量</div>
+            <pre style={PRE_STYLE}>{`{{${http.saved.varName}}} = ${http.saved.value}`}</pre>
+          </div>
+        )}
+      </div>
     </details>
   );
 }

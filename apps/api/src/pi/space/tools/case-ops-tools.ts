@@ -95,7 +95,7 @@ export const STAGE_CASE_OP_GUIDELINES = [
   '不要直接调用 manage_cases 的 update/delete/move_group —— 那些场景已下线。manage_cases 只剩 search/get/create_group。',
   '不要用 stage_case / manage_cases.create 修改已有用例 —— stage_case 是创建全新用例的，请用 action=update_case/move_case。',
   '在生成 compiled 前，先调用 manage_cases get 拿 caseId/versionId/expectedOutcome/steps 全量，再用 inspect_page 抓真实页面元素（locator 的 testId/aria-label/css 必须取自快照，禁止凭"典型实现"臆造）。',
-  'compiled 是 JSON 数组（元素形如 {kind, ...}），允许 kind：navigate / click / fill / hover / waitFor / assertText / assertVisible / check / select / extract / aiTask（动态验证码/弹窗等用 aiTask，不要用普通 fill）。禁止输出 aiStep。',
+  'compiled 是 JSON 数组（元素形如 {kind, ...}），允许 kind：navigate / click / fill / hover / waitFor / assertText / assertVisible / check / select / extract / aiTask（动态验证码/弹窗等用 aiTask，不要用普通 fill）/ httpRequest {method, url, headers[], body?, timeoutMs?, carryLoginState?, saveAs?, assertion?}（REST API 请求步骤：saveAs 提取响应值为 {{var}} 供后续步骤消费,carryLoginState 转发浏览器登录态；url/headers 值/body 支持 {{变量}}）。禁止输出 aiStep。',
   'case 的「初始化导航 URL」(case.url) 回放开始时已由系统执行,update_step / insert_step 的 compiled 里不要再写一条 {kind:"navigate", url: case.url} —— 重复导航既慢又让 locator 校验做两遍。真的意图是跳到不同页面/子路由时才写 navigate(url=目标 URL)。',
   '若判断无法可靠编译（指令过于模糊），把 compiled 设为 null 表示「已放弃」。空数组也会被映射为 null（回放里等价于「什么都不做」会隐藏失败）。',
   'stage_case_op 的 action 与字段一一对应：update_case {caseId, patch={...UpdateCasePatch 形状字段}}、delete_case {caseId}、move_case {caseId, targetGroupId}、update_step {stepId, caseId, instruction?, compiled?}、insert_step {caseId, instruction, afterOrder?, compiled?}、delete_step {stepId, caseId}、move_step {caseId, stepIds}。move_step 的 stepIds 必须恰好覆盖该 case 全部步骤并按目标顺序排列。',

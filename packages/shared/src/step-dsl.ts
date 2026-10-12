@@ -198,6 +198,41 @@ export const ObserveLogAction = z.object({
 });
 export type ObserveLogAction = z.infer<typeof ObserveLogAction>;
 
+export const HttpMethod = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
+export type HttpMethod = z.infer<typeof HttpMethod>;
+
+export const HttpRequestAction = z.object({
+  kind: z.literal('httpRequest'),
+  method: HttpMethod.default('GET'),
+  /** 支持 {{var}} 替换。 */
+  url: z.string().min(1).max(2000),
+  headers: z.array(z.object({
+    key: z.string().min(1).max(128),
+    /** 支持 {{var}} 替换。 */
+    value: z.string().max(2000),
+  })).max(20).default([]),
+  /** 原文请求体，支持 {{var}} 替换。 */
+  body: z.string().max(65536).optional(),
+  timeoutMs: z.number().int().min(1000).max(30000).default(10000),
+  /** true 时把浏览器登录态 Cookie 按 URL host 转发给请求（不覆盖手填 Cookie 头）。 */
+  carryLoginState: z.boolean().optional(),
+  /** 响应值提取为变量，供后续步骤 {{var}} 消费。 */
+  saveAs: z.object({
+    varName: z.string().min(1).max(64),
+    from: z.enum(['body', 'status']),
+    /** 简化 dot-path（如 data.items[0].id），仅 from='body' 时生效；缺省取完整 body 文本。 */
+    path: z.string().max(200).optional(),
+  }).optional(),
+  /** status 与 body 二者可选，都设置则都须通过。 */
+  assertion: z.object({
+    status: z.number().int().min(100).max(599).optional(),
+    match: DbAssertionMatch.default('contains'),
+    /** 作用于响应 body 文本的匹配期望值。 */
+    expected: z.string().max(2000).optional(),
+  }).optional(),
+});
+export type HttpRequestAction = z.infer<typeof HttpRequestAction>;
+
 /** 2026-10-07: 移动端测试 step DSL 增量（Task 1 of iTest mobile-testing plan）。 */
 export const TapAction = z.object({
   kind: z.literal('tap'),
@@ -251,6 +286,7 @@ export type StepAction =
   | z.infer<typeof ExtractAction>
   | z.infer<typeof QueryDbAction>
   | z.infer<typeof ObserveLogAction>
+  | z.infer<typeof HttpRequestAction>
   | z.infer<typeof TapAction>
   | z.infer<typeof SwipeAction>
   | z.infer<typeof SetAppearanceAction>
@@ -279,6 +315,7 @@ export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
   ExtractAction,
   QueryDbAction,
   ObserveLogAction,
+  HttpRequestAction,
   TapAction,
   SwipeAction,
   SetAppearanceAction,

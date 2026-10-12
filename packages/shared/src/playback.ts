@@ -32,6 +32,11 @@ export const FailureReason = z.enum([
   'SyslogFileMissing',
   'SyslogTimeout',
   'LogAssertionFailed',
+  /** 2026-10-12: httpRequest 步骤失败归类 */
+  'HttpRequestError',
+  'HttpRequestTimeout',
+  'HttpRequestAssertionFailed',
+  'HttpRequestSaveAsFailed',
   'EnvMissing',
   'EnvProjectMismatch',
   /** Track 1: 用例级 vision LLM 判定最终截图与 expectedOutcome 不符 */
@@ -77,4 +82,23 @@ export interface ObserveLogLineResult {
   lines: { ts?: string; raw: string }[];
   truncated?: boolean;
   assertion?: { matched: boolean; expected: string; match: 'equals' | 'contains' | 'regex' };
+}
+
+/** httpRequest 步骤执行结果：请求/响应（敏感头打码、body 截断 64KB）/断言命中/变量提取。 */
+export interface HttpStepResult {
+  request: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    bodyPreview?: string;
+  };
+  response: {
+    status: number;
+    statusText: string;
+    headers: Record<string, string>;
+    bodyText: string;
+    durationMs: number;
+  };
+  assertion?: { matched: boolean; statusExpected?: number; match?: 'equals' | 'contains' | 'regex'; expected?: string };
+  saved?: { varName: string; value: string };
 }
