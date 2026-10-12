@@ -107,6 +107,13 @@ export type AiAction =
   | { type: 'navigate'; url: string }
   | { type: 'screenshot'; selector: string };
 
+// AI 相凭据占位符协议：verify_case / solidify_case 的提示词要求 LLM 把用户名/密码/
+// 敏感字段 fill 成这三个字面量，执行时刻由 valueSub 替换为真实值。协议常量定义在
+// execute 层（valueSub 语义所在地），pi 工具层从这里取用。
+export const USER_PH = '__ITEST_USERNAME__';
+export const PASSWORD_PH = '__ITEST_PASSWORD__';
+export const SECRET_PH = '__ITEST_STEP_SECRET__';
+
 function parseAction(a: unknown): AiAction | null {
   if (!a || typeof a !== 'object') return null;
   const o = a as Record<string, unknown>;

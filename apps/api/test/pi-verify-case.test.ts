@@ -5,7 +5,13 @@ import { randomUUID } from 'node:crypto';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
 // 全 AI 驱动编排测试：runAiTask / writeStepScreenshot / extractPageElements 打桩，聚焦 verify_case 编排契约。
-vi.mock('../src/execute/aiTask.js', () => ({ runAiTask: vi.fn() }));
+// 占位符常量随 execute 层定义（verifyCase 提示词经 aiTask.js 取用）,一并打桩隔绝真实依赖。
+vi.mock('../src/execute/aiTask.js', () => ({
+  runAiTask: vi.fn(),
+  USER_PH: '__ITEST_USERNAME__',
+  PASSWORD_PH: '__ITEST_PASSWORD__',
+  SECRET_PH: '__ITEST_STEP_SECRET__',
+}));
 vi.mock('../src/execute/cdp.js', () => ({
   writeStepScreenshot: vi.fn(async () => '/screenshots/verify-x/step-1.png'),
   // 机械干跑默认全过（步骤序号透传）；失败/接线细节由用例内 mockImplementationOnce 覆写

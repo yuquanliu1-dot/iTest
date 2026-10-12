@@ -281,6 +281,19 @@ export const testSteps = pgTable('test_steps', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+/** aiTask 视觉步骤的运行时动作缓存（"自动挡固化"）：首次回放成功后把 AI 实际执行
+ *  的动作序列缓存，后续回放先机械执行缓存，失败静默回退 AI 并覆写（自愈协议）。
+ *  与 solidify_case 互补：缓存对用例定义零侵入（test_steps.compiled 不变）。
+ *  key = (stepId, instruction 精确匹配)——指令一改即过期；步骤删除级联清缓存。 */
+export const stepActionCache = pgTable('step_action_cache', {
+  stepId: uuid('step_id').primaryKey().references(() => testSteps.id, { onDelete: 'cascade' }),
+  instruction: text('instruction').notNull(),
+  actions: jsonb('actions').$type<StepAction[]>().notNull(),
+  hits: integer('hits').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 export const reports = pgTable('reports', {
   id: uuid('id').primaryKey().defaultRandom(),
   caseId: uuid('case_id').references(() => testCases.id, { onDelete: 'cascade' }).notNull(),

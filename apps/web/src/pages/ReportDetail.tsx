@@ -28,6 +28,8 @@ interface StepResult {
   db?: DbQueryRowResult;
   /** observeLog 步骤的结果（仅 observeLog 步携带） */
   log?: ObserveLogLineResult;
+  /** aiTask 步骤本轮回放走了动作缓存（机械执行，零 LLM） */
+  cached?: boolean;
 }
 
 function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -140,6 +142,9 @@ export default function ReportDetail() {
             )}
             {s.tabIndex !== undefined && (
               <Meta label="标签页" value={`#${s.tabIndex}`} mono muted />
+            )}
+            {s.cached && (
+              <Meta label="执行" value="缓存命中" muted />
             )}
           </div>
           {/* 错误 / 警告 / 变量提示 —— 用色块+图标直接说明这是什么类型的提示 */}
