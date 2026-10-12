@@ -14,6 +14,16 @@ import Markdown from '../../components/ui/Markdown';
 import LiveViewCard from '../../components/LiveViewCard';
 import { useSpaceEventsStore } from './spaceEventsStore';
 
+/** SSE 下发的 liveUrl 上拼回放参数（speed=1 时省略，保持 URL 简洁）。 */
+function withSpeed(liveUrl: string, speed: number): string {
+  return speed === 1 ? `${liveUrl}?replay=1` : `${liveUrl}?replay=1&speed=${speed}`;
+}
+
+/** 录制可用性探测 URL：liveUrl 后面已经带了随机 key，直接换 query 即可。 */
+function metaUrl(liveUrl: string): string {
+  return `${liveUrl}?replay=meta`;
+}
+
 /**
  * 空间助手对话流:只渲染 pi 契约的结构原语,运行时由 SpaceWorkspace 的
  * AssistantRuntimeProvider 提供。composer 上方为确认卡(confirm_request 事件驱动)。
@@ -172,7 +182,7 @@ function VerifyProgressCard() {
       style={{ background: 'var(--muted)', border: '1px solid var(--border)' }}
     >
       {vp.liveUrl ? (
-        <LiveViewCard liveUrl={vp.liveUrl} replayUrl={`${vp.liveUrl}?replay=1`} running={!done} />
+        <LiveViewCard liveUrl={vp.liveUrl} replayUrl={(speed) => withSpeed(vp.liveUrl!, speed)} replayMetaUrl={metaUrl(vp.liveUrl!)} running={!done} />
       ) : null}
       <div className="mb-1.5 flex items-center gap-1.5" style={{ color: 'var(--muted-foreground)' }}>
         <Icon name="beaker" size={12} style={{ flexShrink: 0 }} />
@@ -269,7 +279,7 @@ function SolidifyProgressCard() {
       style={{ background: 'var(--muted)', border: '1px solid var(--border)', color: 'var(--muted-foreground)' }}
     >
       {sp.liveUrl ? (
-        <LiveViewCard liveUrl={sp.liveUrl} replayUrl={`${sp.liveUrl}?replay=1`} running={!done} />
+        <LiveViewCard liveUrl={sp.liveUrl} replayUrl={(speed) => withSpeed(sp.liveUrl!, speed)} replayMetaUrl={metaUrl(sp.liveUrl!)} running={!done} />
       ) : null}
       <div className="flex items-center gap-1.5">
       <Icon name="sparkles" size={12} style={{ flexShrink: 0 }} />

@@ -407,7 +407,8 @@ export default function ReportDetail() {
             {/* running|数据集末尾期间实时画面；结束后定格 + 回放按钮 */}
             <LiveViewCard
               liveUrl={api.cases.liveUrl(data.caseId)}
-              replayUrl={api.cases.replayUrl(data.caseId)}
+              replayUrl={(speed) => api.cases.replayUrl(data.caseId, speed)}
+              replayMetaUrl={api.cases.replayMetaUrl(data.caseId)}
               running={isRunning || keepLiveForDataset}
             />
             {data.summary && (

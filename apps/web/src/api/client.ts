@@ -144,7 +144,9 @@ export const api = {
     get: (id: string) => request<PlanRunDetail>(`/plan-runs/${id}`),
     cancel: (id: string) => request<{ ok: boolean }>(`/plan-runs/${id}/cancel`, { method: 'POST' }),
     liveUrl: (id: string) => `${BASE}/plan-runs/${id}/live`,
-    replayUrl: (id: string) => `${BASE}/plan-runs/${id}/live?replay=1`,
+    replayUrl: (id: string, speed?: number) =>
+      speed && speed !== 1 ? `${BASE}/plan-runs/${id}/live?replay=1&speed=${speed}` : `${BASE}/plan-runs/${id}/live?replay=1`,
+    replayMetaUrl: (id: string) => `${BASE}/plan-runs/${id}/live?replay=meta`,
     removeBatch: (ids: string[]) =>
       request<{ count: number }>('/plan-runs/batch-delete', {
         method: 'POST',
@@ -369,7 +371,9 @@ export const api = {
     execute: (id: string) =>
       request<{ reportId: string; reportIds?: string[] }>(`/cases/${id}/execute`, { method: 'POST' }),
     liveUrl: (id: string) => `/api/cases/${id}/live`,
-    replayUrl: (id: string) => `/api/cases/${id}/live?replay=1`,
+    replayUrl: (id: string, speed?: number) =>
+      speed && speed !== 1 ? `/api/cases/${id}/live?replay=1&speed=${speed}` : `/api/cases/${id}/live?replay=1`,
+    replayMetaUrl: (id: string) => `/api/cases/${id}/live?replay=meta`,
   },
   tags: {
     list: (projectId: string) => request<Tag[]>(`/projects/${projectId}/tags`),

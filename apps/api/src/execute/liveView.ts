@@ -10,8 +10,8 @@
  * 录制与回放：泵产出的每一帧（screencast + 轮询）同时追加进 `recording`（内存、有界：
  * 每份 ≤MAX_FRAMES 帧、全局 ≤MAX_RETAINED_RECORDINGS 份、TTL 30min）。无论有无观看者
  * 都录制（无人观看时泵以 ~0.5fps 节流，保证调度/无人值守执行也能事后回放）。执行结束
- * teardown 不再删注册表，而是置 dead 保留 recording；`handleLiveReplay`（?replay=1）
- * 按帧时间戳间隔把录制帧重新播一遍后 end。
+ * teardown 不再删注册表，而是置 dead 保留 recording；`handleLiveReplay`（?replay=1[&speed=N]）
+ * 按帧时间戳间隔把录制帧重新播一遍后 end，speed 为倍速（1=原速，≤8x）。
  *
  * 动作高亮（blackboard 层）：annotateAction 在被测页面注入 fixed 定位描边框（pointer-events:none、
  * 无文本——避免污染 innerText 断言与 AI 视觉截图），clearAnnotation 由执行器在每个动作的
@@ -45,11 +45,15 @@ const SWEEP_INTERVAL_MS = 60_000;
 /** 回放帧间隔钳制：太快连发伤 HDMI 且无必要，太慢失真实节奏。 */
 const REPLAY_MIN_GAP_MS = 250;
 const REPLAY_MAX_GAP_MS = 2000;
+/** 回放倍速上限（?speed=）：8x 已足够看清每帧动作，再快只是糊。 */
+const REPLAY_MAX_SPEED = 8;
+/** 加速后的最小帧间隔：低于此浏览器来不及解码，纯闪。 */
+const REPLAY_FAST_MIN_GAP_MS = 40;
 
 interface LiveResponse {
   writeHead: (status: number, headers: Record<string, string>) => void;
   write: (chunk: string | Buffer) => boolean;
-  end: () => void;
+  end: (chunk?: string | Buffer) => void;
   writableEnded: boolean;
 }
 
@@ -330,15 +334,48 @@ export function handleLiveView(req: { on: (event: 'close', fn: () => void) => vo
   });
 }
 
-/** GET .../live/:key?replay=1 —— 执行结束后的录制回放：按录制帧时间戳间隔把整段重播一遍，末帧后 end。
+/** 回放倍速：解析 ?speed=，非法/缺失 → 1；钳制到 [0.25, REPLAY_MAX_SPEED]。 */
+export function replaySpeedOf(query: unknown): number {
+  const raw = typeof query === 'object' && query !== null ? (query as Record<string, unknown>).speed : undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, REPLAY_MAX_SPEED) : 1;
+}
+
+/** GET .../live/:key?replay=meta —— 探测本轮录制是否仍可回放（内存录制：TTL 过期 / LRU 淘汰 /
+ *  进程重启后就没了）。前端据此决定是否显示「回放」按钮，避免点下去撞 404。
+ *  可回放返回 { available:true, frames, durationMs, expiresAt }；否则 { available:false }（仍 200）。 */
+export function handleLiveReplayMeta(res: LiveResponse, key: string): void {
+  const entry = getEntry(key); // 懒 TTL 检查：过期条目在此之前已被删出注册表
+  const frames = entry && entry.dead ? entry.recording : [];
+  const body =
+    frames.length > 0
+      ? {
+          available: true,
+          frames: frames.length,
+          durationMs: frames[frames.length - 1]!.ts - frames[0]!.ts,
+          expiresAt: entry!.expiresAt,
+        }
+      : { available: false };
+  res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify(body));
+}
+
+/** GET .../live/:key?replay=1[&speed=N] —— 执行结束后的录制回放：按录制帧时间戳间隔把整段重播一遍，
+ *  末帧后 end。`speed` 为倍速（1=原速，默认；上限 8），帧间隔按倍率压缩、下限 REPLAY_FAST_MIN_GAP_MS。
  *  每连接独立游标，天然支持并发回放。录制不存在/未结束/已过期 → 404。 */
-export function handleLiveReplay(req: { on: (event: 'close', fn: () => void) => void }, res: LiveResponse, key: string): void {
+export function handleLiveReplay(
+  req: { on: (event: 'close', fn: () => void) => void },
+  res: LiveResponse,
+  key: string,
+  opts?: { speed?: number },
+): void {
   const entry = getEntry(key);
   if (!entry || !entry.dead || entry.recording.length === 0) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end();
     return;
   }
+  const speed = Math.min(Math.max(opts?.speed ?? 1, 0.25), REPLAY_MAX_SPEED);
   res.writeHead(200, {
     'Content-Type': `multipart/x-mixed-replace; boundary=${BOUNDARY}`,
     'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
@@ -363,8 +400,8 @@ export function handleLiveReplay(req: { on: (event: 'close', fn: () => void) => 
       res.end();
       return;
     }
-    const gap = Math.min(Math.max(frames[i]!.ts - f.ts, REPLAY_MIN_GAP_MS), REPLAY_MAX_GAP_MS);
-    timer = setTimeout(step, gap);
+    const raw = Math.min(Math.max(frames[i]!.ts - f.ts, REPLAY_MIN_GAP_MS), REPLAY_MAX_GAP_MS);
+    timer = setTimeout(step, Math.max(Math.round(raw / speed), REPLAY_FAST_MIN_GAP_MS));
   };
   req.on('close', () => {
     if (timer) clearTimeout(timer);

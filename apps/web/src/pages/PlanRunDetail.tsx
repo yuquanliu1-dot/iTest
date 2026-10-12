@@ -76,7 +76,8 @@ export default function PlanRunDetail() {
             结束定格最后一帧 + 「回放」按钮（录制回放，不自动播）。 */}
         <LiveViewCard
           liveUrl={api.planRuns.liveUrl(run.id)}
-          replayUrl={api.planRuns.replayUrl(run.id)}
+          replayUrl={(speed) => api.planRuns.replayUrl(run.id, speed)}
+          replayMetaUrl={api.planRuns.replayMetaUrl(run.id)}
           running={run.status === 'running'}
         />
         <div className="bg-card border rounded-[var(--radius-md)] p-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
