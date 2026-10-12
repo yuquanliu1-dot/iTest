@@ -150,6 +150,7 @@ export default function PlanDetail() {
     mutationFn: (caseIds: string[]) => api.plans.removeCases(id!, caseIds),
     onSuccess: (data, vars) => {
       toast(`已移除 ${vars.length} 个用例`, 'success');
+      setConfirmRemoveCase(null);
       qc.invalidateQueries({ queryKey: ['plan', id] });
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
     },
