@@ -4,6 +4,7 @@ import { AssistantRuntimeProvider, useAui, useAuiState } from '@assistant-ui/rea
 import { createPiHttpClient, usePiRuntime, type PiClientEvent } from '@assistant-ui/react-pi';
 import SpaceThreadPane from './SpaceThreadPane';
 import StagePanel from './StagePanel';
+import LiveViewRail from './LiveViewRail';
 import { useSpaceEventsStore } from './spaceEventsStore';
 
 interface Props {
@@ -53,8 +54,11 @@ export default function SpaceWorkspace({ threadId, initialMessage }: Props) {
         <div className="flex-1 min-w-0 min-h-0" style={{ borderRight: '1px solid var(--border)' }}>
           <SpaceThreadPane threadId={threadId} />
         </div>
-        <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
-          <StagePanel projectId={projectId!} versionId={versionId!} />
+        <div className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
+          <LiveViewRail />
+          <div className="flex-1 min-h-0">
+            <StagePanel projectId={projectId!} versionId={versionId!} />
+          </div>
         </div>
       </div>
       {/* aui 必须在 AssistantRuntimeProvider 内使用;首条 prompt 在此层挂载后注入。 */}

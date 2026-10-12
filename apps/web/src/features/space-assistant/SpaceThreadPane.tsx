@@ -11,18 +11,7 @@ import {
 import ConfirmCard from './ConfirmCard';
 import Icon, { type IconName } from '../../components/Icon';
 import Markdown from '../../components/ui/Markdown';
-import LiveViewCard from '../../components/LiveViewCard';
 import { useSpaceEventsStore } from './spaceEventsStore';
-
-/** SSE 下发的 liveUrl 上拼回放参数（speed=1 时省略，保持 URL 简洁）。 */
-function withSpeed(liveUrl: string, speed: number): string {
-  return speed === 1 ? `${liveUrl}?replay=1` : `${liveUrl}?replay=1&speed=${speed}`;
-}
-
-/** 录制可用性探测 URL：liveUrl 后面已经带了随机 key，直接换 query 即可。 */
-function metaUrl(liveUrl: string): string {
-  return `${liveUrl}?replay=meta`;
-}
 
 /**
  * 空间助手对话流:只渲染 pi 契约的结构原语,运行时由 SpaceWorkspace 的
@@ -181,9 +170,7 @@ function VerifyProgressCard() {
       className="fade-up mb-2 rounded-[var(--radius-md)] px-3 py-2 text-[12px]"
       style={{ background: 'var(--muted)', border: '1px solid var(--border)' }}
     >
-      {vp.liveUrl ? (
-        <LiveViewCard liveUrl={vp.liveUrl} replayUrl={(speed) => withSpeed(vp.liveUrl!, speed)} replayMetaUrl={metaUrl(vp.liveUrl!)} running={!done} />
-      ) : null}
+      {/* 实时画面已移到右侧栏（LiveViewRail），此处只留步骤进度 */}
       <div className="mb-1.5 flex items-center gap-1.5" style={{ color: 'var(--muted-foreground)' }}>
         <Icon name="beaker" size={12} style={{ flexShrink: 0 }} />
         <span className="truncate">
@@ -278,9 +265,7 @@ function SolidifyProgressCard() {
       className="fade-up mb-2 rounded-[var(--radius-md)] px-3 py-2 text-[12px]"
       style={{ background: 'var(--muted)', border: '1px solid var(--border)', color: 'var(--muted-foreground)' }}
     >
-      {sp.liveUrl ? (
-        <LiveViewCard liveUrl={sp.liveUrl} replayUrl={(speed) => withSpeed(sp.liveUrl!, speed)} replayMetaUrl={metaUrl(sp.liveUrl!)} running={!done} />
-      ) : null}
+      {/* 实时画面已移到右侧栏（LiveViewRail），此处只留单行状态 */}
       <div className="flex items-center gap-1.5">
       <Icon name="sparkles" size={12} style={{ flexShrink: 0 }} />
       <span className="truncate">

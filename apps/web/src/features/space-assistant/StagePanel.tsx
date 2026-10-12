@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type StageDoc, type StageSaveBody } from '../../api/client';
 import Button from '../../components/ui/Button';
+import CollapsiblePanel from '../../components/ui/CollapsiblePanel';
 import Icon from '../../components/Icon';
 import PriorityBadge from '../../components/ui/PriorityBadge';
 import { useUIStore } from '../../stores/ui';
@@ -443,14 +444,9 @@ export default function StagePanel({ projectId, versionId }: Props) {
   const selectedTotal = selection?.size ?? 0;
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <div
-        className="px-4 py-2.5 text-[12px] font-medium shrink-0"
-        style={{ borderBottom: '1px solid var(--border)', color: 'var(--muted-foreground)' }}
-      >
-        暂存对象（{total}）
-      </div>
-      <div className="flex items-center gap-1 px-3 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+    <CollapsiblePanel title={`暂存对象（${total}）`} defaultOpen divider={false}>
+      <div className="flex flex-col h-full min-h-0">
+        <div className="flex items-center gap-1 px-3 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
         {TABS.map((t) => (
           <button
             key={t.key}
@@ -539,6 +535,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
         }}
         kindLabel={KIND_LABEL[tab]}
       />
-    </div>
+      </div>
+    </CollapsiblePanel>
   );
 }
