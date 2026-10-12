@@ -34,6 +34,7 @@ import { runQueryDb } from './dbQuery.js';
 import { runObserveLog } from './syslogReader.js';
 import { runHttpRequest, type HttpStepResult } from './httpRequest.js';
 import { runCaseVisionAssert } from './visionAssert.js';
+import { newAiUsage, type AiUsageStat, type AiUsageAccumulator, type AiUsageAddend } from './aiUsage.js';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
 
@@ -71,9 +72,13 @@ export interface ExecStepResult {
   /** httpRequest 步骤的结果（仅 httpRequest 步携带，其它步 undefined） */
   http?: HttpStepResult;
   /** Track 1 用例级 vision 判定的回写结果（仅最后一步或追加失败步携带，其它步 undefined）。 */
-  visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string };
+  visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string; aiUsage?: AiUsageStat };
   /** aiTask 步骤本轮回放走了动作缓存（机械执行，零 LLM）；报告据此展示"缓存命中"。 */
   cached?: boolean;
+  /** 本步 LLM 用量（aiTask / 验证码 / vision 判定产生的调用累加）；零调用步缺省。 */
+  aiUsage?: AiUsageStat;
+  /** 缓存条目存在但重放分叉、AI 自愈通过（仅 passed 步携带；首跑无缓存不算）。 */
+  healed?: boolean;
 }
 
 export interface ExecContext {
@@ -130,6 +135,10 @@ interface DispatchOpts {
   httpSink?: { current: HttpStepResult | null };
   /** 记录本步 aiTask 是否命中动作缓存（由 aiTask 分支写入） */
   cacheSink?: { current: boolean };
+  /** 本步 LLM 用量累加器（aiTask / 验证码分支每轮 complete 后 add；stepResult 组装时读） */
+  aiUsage?: AiUsageAccumulator;
+  /** 记录本步是否发生缓存分叉后 AI 自愈成功（由 aiTask 分支写入） */
+  healedSink?: { current: boolean };
 }
 
 /** 交互动作：执行前先做稳定性检查 */
@@ -462,6 +471,7 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
       if (cacheable) {
         const cached = await readAiTaskCache(opts.stepId!, action.instruction);
         if (cached && cached.length > 0) {
+          let cacheDiverged = false;
           try {
             // 缓存动作经完整 dispatch：稳定性检查 / 多候选探测 / DOM 降级 / hitSink 全部生效。
             for (const sub of cached) await dispatch(sub, opts);
@@ -470,14 +480,18 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
             return `aiTask(缓存命中): ${cached.length} 个机械动作`;
           } catch {
             // 页面分叉：静默回退 AI 重做（自愈），成功后覆写缓存。
+            cacheDiverged = true;
           }
+          if (cacheDiverged && opts.healedSink) opts.healedSink.current = true;
         }
       }
       const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
       const collected: AiAction[] = [];
-      const summary = await runAiTask(opts.page, value, client, undefined, {
+      const aiOpts: { onAction: (a: AiAction, ok: boolean) => void; onUsage?: (r: AiUsageAddend) => void } = {
         onAction: (a, ok) => { if (ok) collected.push(a); },
-      });
+      };
+      if (opts.aiUsage) aiOpts.onUsage = (r) => opts.aiUsage!.add(r);
+      const summary = await runAiTask(opts.page, value, client, undefined, aiOpts);
       // 验证码类指令：登记多轮验证上下文。提交（后续 click 步骤）若被系统判验证码错误/过期，
       // 执行器自动重新识别（失败后验证码通常已被前端换新）并重新提交，而非直接判用例失败。
       if (CAPTCHA_TASK_RE.test(value)) {
@@ -692,8 +706,9 @@ async function runCaptchaRetry(opts: DispatchOpts, clickActions: StepAction[]): 
       pending.roundsLeft--;
       const round = CAPTCHA_RETRY_ROUNDS - pending.roundsLeft;
       // 快路径一次 vision 调用（~10s，抢 TTL）；机械失败回落通用多轮回路。
-      const solved = await solveCaptchaOnce(opts.page, client, pending.hint).catch(() => null)
-        ?? await runAiTask(opts.page, '识别当前验证码图片中的字符并填入验证码输入框', client).catch(() => null);
+      const onUsage = opts.aiUsage ? (r: AiUsageAddend) => opts.aiUsage!.add(r) : undefined;
+      const solved = await solveCaptchaOnce(opts.page, client, pending.hint, onUsage).catch(() => null)
+        ?? await runAiTask(opts.page, '识别当前验证码图片中的字符并填入验证码输入框', client, undefined, onUsage ? { onUsage } : undefined).catch(() => null);
       if (!solved) {
         notes.push(`第 ${round} 轮：识别失败`);
         break;
@@ -817,6 +832,9 @@ async function runStepsInContext(
     opts.logSink = { current: null };
     opts.httpSink = { current: null };
     opts.cacheSink = { current: false };
+    const aiUsage = newAiUsage();
+    opts.aiUsage = aiUsage;
+    opts.healedSink = { current: false };
     const tabIndex =
       ctx.tabMap && step.tabRef ? Array.from(ctx.tabMap.keys()).indexOf(step.tabRef) : 0;
     const assertionAction = normalizeStepAssertion(step.assertion);
@@ -860,6 +878,8 @@ async function runStepsInContext(
         log: opts.logSink.current ?? undefined,
         http: opts.httpSink.current ?? undefined,
         ...(opts.cacheSink.current ? { cached: true } : {}),
+        ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
+        ...(opts.healedSink.current ? { healed: true } : {}),
       });
     } catch (e) {
       const durationMs = Date.now() - started;
@@ -893,6 +913,7 @@ async function runStepsInContext(
         db: opts.dbSink.current ?? undefined,
         log: opts.logSink.current ?? undefined,
         http: opts.httpSink.current ?? undefined,
+        ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
       });
       if (onFailurePage) await onFailurePage(opts.page, i).catch(() => undefined);
       // 失败立即终止，避免后续步骤被前一步污染的页面状态搞乱。

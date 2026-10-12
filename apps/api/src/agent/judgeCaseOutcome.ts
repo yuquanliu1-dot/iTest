@@ -1,11 +1,12 @@
 import { resolveLlmClient } from './llmSettings.js';
 import type { LLMClient } from './llm-client.js';
-import { tryParseJson } from './llm-client.js';
+import { completeJson } from './llm-client.js';
 import { CASE_OUTCOME_VISION_PROMPT } from './prompts/case-outcome-vision.js';
+import { newAiUsage, type AiUsageStat } from '../execute/aiUsage.js';
 import { logger } from '../logger.js';
 
-export interface VisionAssertOk { passed: true; reason: string }
-export interface VisionAssertFail { passed: false; reason: string }
+export interface VisionAssertOk { passed: true; reason: string; aiUsage?: AiUsageStat }
+export interface VisionAssertFail { passed: false; reason: string; aiUsage?: AiUsageStat }
 export type VisionAssertResult = VisionAssertOk | VisionAssertFail;
 
 export interface JudgeCaseOutcomeOpts {
@@ -44,7 +45,7 @@ export async function judgeCaseOutcome(opts: JudgeCaseOutcomeOpts): Promise<Visi
   ].filter(Boolean).join('\n');
   let r;
   try {
-    r = await client.complete({
+    r = await completeJson(client, {
       systemPrompt: CASE_OUTCOME_VISION_PROMPT,
       userMessage,
       image: opts.screenshot,
@@ -53,13 +54,10 @@ export async function judgeCaseOutcome(opts: JudgeCaseOutcomeOpts): Promise<Visi
     logger.warn({ err: e, caseTitle: opts.caseTitle }, 'case-outcome vision assert failed; treat as skipped');
     return undefined;
   }
-  if (r.kind !== 'json') {
-    const parsed = tryParseJson(r.value);
-    if (parsed) return normalize(parsed);
-    logger.warn({ raw: r.value.slice(0, 200) }, 'case-outcome vision: provider returned non-json; treat as skipped');
-    return undefined;
-  }
-  return normalize(r.value);
+  const usage = newAiUsage();
+  usage.add(r);
+  const n = normalize(r.value);
+  return n ? { ...n, aiUsage: usage.stat } : undefined;
 }
 
 function normalize(raw: Record<string, unknown>): VisionAssertResult | undefined {

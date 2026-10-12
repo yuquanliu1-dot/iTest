@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   ComposerPrimitive,
   ErrorPrimitive,
@@ -160,6 +161,35 @@ function toolMeta(toolName: string, args: unknown): { icon: IconName; label: str
   return null;
 }
 
+/** 浏览器实时画面（playground）：MJPEG multipart 流，<img> 原生解码逐帧渲染。
+ *  流随工具结束由服务端收尾——浏览器保留最后帧（定格），新一轮 agent_start 清空进度卡时一并消失。
+ *  onError（流异常断开等）隐藏画面，进度文字不受影响。 */
+function LiveViewImg({ url }: { url: string }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) return null;
+  return (
+    <div
+      className="relative mb-1.5 overflow-hidden rounded-[var(--radius-sm)]"
+      style={{ border: '1px solid var(--border)', background: 'var(--popover)' }}
+    >
+      <img
+        src={url}
+        onError={() => setBroken(true)}
+        alt="浏览器实时画面"
+        className="block w-full object-contain"
+        style={{ maxHeight: 220 }}
+      />
+      <span
+        className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full px-1.5 py-px text-[10px]"
+        style={{ background: 'rgba(0,0,0,0.55)', color: '#fff' }}
+      >
+        <span className="inline-block size-1.5 rounded-full" style={{ background: 'var(--destructive)' }} />
+        实时
+      </span>
+    </div>
+  );
+}
+
 /** verify_case 实时进度卡：verify_progress SSE 事件驱动，逐条渲染步骤状态（运行中/通过/失败）。 */
 function VerifyProgressCard() {
   const vp = useSpaceEventsStore((s) => s.verifyProgress);
@@ -170,6 +200,7 @@ function VerifyProgressCard() {
       className="fade-up mb-2 rounded-[var(--radius-md)] px-3 py-2 text-[12px]"
       style={{ background: 'var(--muted)', border: '1px solid var(--border)' }}
     >
+      {vp.liveUrl ? <LiveViewImg url={vp.liveUrl} /> : null}
       <div className="mb-1.5 flex items-center gap-1.5" style={{ color: 'var(--muted-foreground)' }}>
         <Icon name="beaker" size={12} style={{ flexShrink: 0 }} />
         <span className="truncate">
@@ -261,9 +292,11 @@ function SolidifyProgressCard() {
   else status = sp.reason ? `失败 — ${sp.reason}` : '失败';
   return (
     <div
-      className="fade-up mb-2 flex items-center gap-1.5 rounded-[var(--radius-md)] px-3 py-2 text-[12px]"
+      className="fade-up mb-2 rounded-[var(--radius-md)] px-3 py-2 text-[12px]"
       style={{ background: 'var(--muted)', border: '1px solid var(--border)', color: 'var(--muted-foreground)' }}
     >
+      {sp.liveUrl ? <LiveViewImg url={sp.liveUrl} /> : null}
+      <div className="flex items-center gap-1.5">
       <Icon name="sparkles" size={12} style={{ flexShrink: 0 }} />
       <span className="truncate">
         固化用例（{sp.solidifiable}/{sp.total} 步可固化）{status ? ` · ${status}` : ''}
@@ -280,6 +313,7 @@ function SolidifyProgressCard() {
       ) : (
         <Icon name="loader" size={12} className="animate-spin" style={{ color: 'var(--primary)', flexShrink: 0 }} />
       )}
+      </div>
     </div>
   );
 }

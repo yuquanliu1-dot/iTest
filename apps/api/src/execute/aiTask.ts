@@ -1,6 +1,7 @@
 import type { Page } from 'playwright-core';
 import type { LLMClient } from '../agent/llm-client.js';
 import { tryParseJson } from '../agent/llm-client.js';
+import type { AiUsageAddend } from './aiUsage.js';
 import { logger } from '../logger.js';
 
 /** 单条指令的最大对话轮数（每轮一次 LLM 调用）。 */
@@ -226,6 +227,7 @@ export async function solveCaptchaOnce(
   page: Page,
   client: LLMClient,
   hint?: string | null,
+  onUsage?: (r: AiUsageAddend) => void,
 ): Promise<string> {
   const pair = await page.evaluateHandle((h) => {
     if (h) {
@@ -292,6 +294,7 @@ export async function solveCaptchaOnce(
     userMessage: '识别这张验证码图片中的字符。',
     image: { base64: buffer.toString('base64'), mime: 'image/png' },
   });
+  onUsage?.(r);
   const raw = r.kind === 'json' ? JSON.stringify(r.value) : r.value;
   const parsed = tryParseJson(raw);
   const text = typeof parsed?.text === 'string' ? parsed.text.trim() : '';
@@ -310,6 +313,8 @@ export interface RunAiTaskOpts {
   valueSub?: (v: string) => string;
   /** 每个动作执行后回调（ok = 未抛错）。solidify_case 用它收集 AI 实际操作过的元素。 */
   onAction?: (action: AiAction, ok: boolean) => void;
+  /** 每轮 LLM complete 后回调（usage/durationMs/model 透传，供 aiUsage 累加）。 */
+  onUsage?: (r: AiUsageAddend) => void;
 }
 
 /**
@@ -359,6 +364,7 @@ export async function runAiTask(
       userMessage,
       image: { base64: buffer.toString('base64'), mime: 'image/png' },
     });
+    opts?.onUsage?.(r);
     const raw = r.kind === 'json' ? JSON.stringify(r.value) : r.value;
     const parsed = tryParseJson(raw);
     if (!parsed) {

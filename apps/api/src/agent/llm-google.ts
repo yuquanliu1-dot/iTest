@@ -21,10 +21,14 @@ export class GoogleClient implements LLMClient {
     if (req.image) {
       parts.push({ inlineData: { mimeType: req.image.mime, data: req.image.base64 } });
     }
+    const t0 = Date.now();
     const resp = await m.generateContent(parts);
+    const durationMs = Date.now() - t0;
     const text = resp.response.text();
     const json = tryParseJson(text);
     const base: LLMCompleteResult = json ? { kind: 'json', value: json } : { kind: 'text', value: text };
-    return { ...base, provider: 'google', vision: !!req.image };
+    const meta = resp.response.usageMetadata;
+    const usage = meta ? { promptTokens: meta.promptTokenCount ?? 0, completionTokens: meta.candidatesTokenCount ?? 0 } : undefined;
+    return { ...base, provider: 'google', vision: !!req.image, ...(usage ? { usage } : {}), durationMs, model };
   }
 }

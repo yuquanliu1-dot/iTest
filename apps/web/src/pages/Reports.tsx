@@ -196,7 +196,20 @@ export default function Executions() {
 			id: 'status',
 			header: '状态',
 			width: 'w-[120px]',
-			cell: (r) => <StatusPill status={r.status}>{r.status}</StatusPill>,
+			cell: (r) => (
+				<span className="inline-flex items-center gap-1.5">
+					<StatusPill status={r.status}>{r.status}</StatusPill>
+					{r.kind === 'case' && r.status === 'passed' && (r as { healed?: boolean }).healed && (
+						<span
+							className="px-1.5 py-px text-[10px] rounded-full"
+							style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}
+							title="存在 aiTask 步骤缓存分叉后 AI 自愈通过——通过但不够稳定"
+						>
+							自愈
+						</span>
+					)}
+				</span>
+			),
 		},
 		{
 			id: 'assertion',

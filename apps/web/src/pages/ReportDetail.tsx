@@ -11,6 +11,16 @@ import { useUIStore } from '../stores/ui';
 import { fullDateTime } from '../lib/format';
 import type { DbQueryRowResult, ObserveLogLineResult, HttpStepResult } from '@itest/shared';
 
+/** 步骤级 LLM 用量（aiTask / 验证码 / vision 判定累加）；与 apps/api execute/aiUsage.ts 对齐。 */
+interface AiUsage {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  modelCallMs: number;
+  retries: number;
+  model?: string;
+}
+
 interface StepResult {
   order: number;
   status: string;
@@ -23,7 +33,7 @@ interface StepResult {
   humanMessage?: string;
   hitLocator?: { kind: string; value: string };
   /** Track 1 用例级视觉判定结果（最后一步/失败追加步携带） */
-  visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string };
+  visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string; aiUsage?: AiUsage };
   /** queryDb 步骤的结果（仅 queryDb 步携带） */
   db?: DbQueryRowResult;
   /** observeLog 步骤的结果（仅 observeLog 步携带） */
@@ -32,6 +42,19 @@ interface StepResult {
   http?: HttpStepResult;
   /** aiTask 步骤本轮回放走了动作缓存（机械执行，零 LLM） */
   cached?: boolean;
+  /** 缓存条目存在但重放分叉、AI 自愈通过（仅 passed 步携带） */
+  healed?: boolean;
+  /** 本步 LLM 用量；零调用步缺省 */
+  aiUsage?: AiUsage;
+}
+
+/** tokens 千位缩写：1234 → 1.2k */
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+function aiUsageText(u: AiUsage): string {
+  return `AI ${u.calls} 次调用 · ${fmtTokens(u.promptTokens + u.completionTokens)} tokens · ${(u.modelCallMs / 1000).toFixed(1)}s`;
 }
 
 function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -88,6 +111,19 @@ export default function ReportDetail() {
   const stepResults = (data.stepResults as StepResult[]) ?? [];
   const passed = stepResults.filter((s) => s.status === 'passed').length;
   const failed = stepResults.filter((s) => s.status === 'failed').length;
+  // AI 调用汇总：步骤 aiUsage + visionAssert.aiUsage 全量求和
+  const aiTotal = stepResults.reduce(
+    (acc, s) => {
+      for (const u of [s.aiUsage, s.visionAssert?.aiUsage]) {
+        if (!u) continue;
+        acc.calls += u.calls;
+        acc.tokens += u.promptTokens + u.completionTokens;
+        acc.ms += u.modelCallMs;
+      }
+      return acc;
+    },
+    { calls: 0, tokens: 0, ms: 0 },
+  );
   const hasTabs = stepResults.some((s) => typeof s.tabIndex === 'number');
   // 按 tabIndex 分组：未设置 tabIndex 的步骤归入 tab #0 组（向后兼容 phase1 报告）
   const grouped: Array<{ tabIndex: number; steps: StepResult[] }> = [];
@@ -148,6 +184,17 @@ export default function ReportDetail() {
             {s.cached && (
               <Meta label="执行" value="缓存命中" muted />
             )}
+            {s.healed && (
+              <Meta label="执行" value="AI 自愈" title="缓存动作与页面分叉，AI 兜底重做后通过" />
+            )}
+            {s.aiUsage && (
+              <Meta
+                label="用量"
+                value={aiUsageText(s.aiUsage) + (s.aiUsage.retries > 0 ? ` · 重试 ${s.aiUsage.retries}` : '')}
+                mono
+                muted
+              />
+            )}
           </div>
           {/* 错误 / 警告 / 变量提示 —— 用色块+图标直接说明这是什么类型的提示 */}
           {s.error && (
@@ -192,6 +239,11 @@ export default function ReportDetail() {
           {s.visionAssert?.expected && (
             <div className="text-[11px] font-mono px-2 py-1 min-w-0 break-words" style={{ color: 'var(--muted-foreground)' }}>
               判定预期（按本行数据物化）：{s.visionAssert.expected}
+            </div>
+          )}
+          {s.visionAssert?.aiUsage && (
+            <div className="text-[11px] font-mono px-2 py-1" style={{ color: 'var(--muted-foreground)' }}>
+              视觉判定 {aiUsageText(s.visionAssert.aiUsage)}
             </div>
           )}
           {s.status !== 'passed' && (s.failureReason || s.humanMessage) && (
@@ -296,6 +348,15 @@ export default function ReportDetail() {
           测试报告
         </h1>
         <StatusPill status={data.status}>{data.status.toUpperCase()}</StatusPill>
+        {data.healed && (
+          <span
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded-full"
+            style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}
+            title="存在 aiTask 步骤缓存分叉后 AI 自愈通过——通过但不够稳定"
+          >
+            自愈通过
+          </span>
+        )}
         {data.platform === 'mobile' && (
           <span
             className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded-full"
@@ -370,6 +431,12 @@ export default function ReportDetail() {
               <MetaRow label="总步骤" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{stepResults.length}</span>} />
               <MetaRow label="通过" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--success)' }}>{passed}</span>} />
               <MetaRow label="失败" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--destructive)' }}>{failed}</span>} />
+              {aiTotal.calls > 0 && (
+                <MetaRow
+                  label="AI 调用"
+                  value={<span className="font-mono text-[11px]">{aiTotal.calls} 次 · {fmtTokens(aiTotal.tokens)} tokens · {(aiTotal.ms / 1000).toFixed(1)}s</span>}
+                />
+              )}
             </div>
             <div className="bg-card border rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>

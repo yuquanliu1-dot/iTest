@@ -18,6 +18,8 @@ interface CaseEntry {
   summary: string | null;
   /** 最后断言信息：取 step_results 末位元素 —— vision 判定 reason（通过/失败）或失败步 error；无断言为 null。 */
   lastAssertion: string | null;
+  /** 自愈通过标记：passed 且 aiTask 缓存分叉后 AI 自愈成功；failed 恒 false。 */
+  healed: boolean;
   createdAt: Date | string;
 }
 interface PlanEntry {
@@ -114,6 +116,7 @@ executionsRoute.get('/', async (req, res) => {
               else null
             end`,
           createdAt: reports.createdAt,
+          healed: reports.healed,
         })
         .from(reports)
         .leftJoin(testCases, eq(testCases.id, reports.caseId))

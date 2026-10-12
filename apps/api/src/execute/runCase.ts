@@ -376,6 +376,8 @@ async function runCaseOnceInner(
       summary: buildSummary(stepResults, preflightReport),
       preflight: preflightReport ?? null,
       ...(deviceName ? { deviceName } : {}),
+      // 双通过率口径：passed 且有步骤 healed（aiTask 缓存分叉后 AI 自愈成功）
+      healed: status === 'passed' && stepResults.some((r) => r.healed === true),
     })
     .where(eq(reports.id, reportId));
 

@@ -118,7 +118,12 @@ beforeEach(async () => {
   testState.clicks.length = 0;
   testState.failClicks = 0;
   runAiTask.mockImplementation(async (...args: unknown[]) => {
-    const opts = args[4] as { onAction?: (a: Record<string, unknown>, ok: boolean) => void } | undefined;
+    const opts = args[4] as {
+      onAction?: (a: Record<string, unknown>, ok: boolean) => void;
+      onUsage?: (r: Record<string, unknown>) => void;
+    } | undefined;
+    // 模拟一次 LLM 调用的 usage 透出（cdp.ts 经 onUsage 累加进 stepResult.aiUsage）
+    opts?.onUsage?.({ usage: { promptTokens: 100, completionTokens: 50 }, durationMs: 1500, model: 'fake-model' });
     for (const [a, ok] of aiActions) opts?.onAction?.(a, ok);
     if (aiError) throw aiError;
     return 'done';
@@ -181,6 +186,9 @@ describe('aiTask 运行时动作缓存', () => {
     const results = await replay(caseId, stepId, '点击删除按钮');
     expect(results[0]).toMatchObject({ status: 'passed' });
     expect(results[0]!.cached).toBeUndefined();
+    // 首跑无缓存：不算 healed；AI 用量透出
+    expect(results[0]!.healed).toBeUndefined();
+    expect(results[0]!.aiUsage).toMatchObject({ calls: 1, promptTokens: 100, completionTokens: 50, modelCallMs: 1500, model: 'fake-model' });
     expect(runAiTask).toHaveBeenCalledTimes(1);
     expect(testState.clicks).toEqual([]); // AI 相由 runAiTask 桩执行,未经 playwright
     const row = await waitForCache(stepId, (r) => Array.isArray(r.actions) && r.actions.length === 2);
@@ -206,6 +214,8 @@ describe('aiTask 运行时动作缓存', () => {
     const results = await replay(caseId, stepId, '点击删除按钮');
     expect(results[0]).toMatchObject({ status: 'passed', cached: true });
     expect(results[0]!.warning).toContain('缓存命中');
+    expect(results[0]!.healed).toBeUndefined();
+    expect(results[0]!.aiUsage).toBeUndefined(); // 零 LLM → 无用量
     expect(runAiTask).not.toHaveBeenCalled(); // 全程零 LLM
     expect(testState.clicks).toEqual(['#del']); // 缓存动作经 playwright 机械执行
     expect((await waitForCache(stepId, (r) => r.hits === 1)).hits).toBe(1);
@@ -223,6 +233,8 @@ describe('aiTask 运行时动作缓存', () => {
     const results = await replay(caseId, stepId, '点击删除按钮');
     expect(results[0]).toMatchObject({ status: 'passed' }); // 回退相不算命中
     expect(results[0]!.cached).toBeUndefined();
+    expect(results[0]!.healed).toBe(true); // 缓存分叉后 AI 自愈通过
+    expect(results[0]!.aiUsage).toMatchObject({ calls: 1 }); // 自愈相的 AI 用量
     expect(runAiTask).toHaveBeenCalledTimes(1); // 回退 AI
     // 就地覆写
     const row = await waitForCache(stepId, (r) =>
@@ -244,6 +256,8 @@ describe('aiTask 运行时动作缓存', () => {
     const results = await replay(caseId, stepId, '点击删除按钮');
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.error).toContain('AI 不可用');
+    expect(results[0]!.healed).toBeUndefined(); // 失败步永不 healed
+    expect(results[0]!.aiUsage?.calls).toBe(1); // 失败步仍透出已发生的 AI 用量
     expect(await cacheRow(stepId)).toBeNull();
   });
 

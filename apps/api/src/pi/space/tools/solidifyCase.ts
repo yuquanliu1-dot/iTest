@@ -30,6 +30,7 @@ import { stageCase } from './stage-tools.js';
 import { emitStage } from './stage.js';
 import { diffText } from './diff.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
+import { registerLiveView } from '../liveView.js';
 import { buildStepInstruction, USER_PH, PASSWORD_PH, SECRET_PH } from './verifyCase.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
@@ -164,6 +165,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
 
         // ── 浏览器 + watchdog → 逐步骤 AI 驱动执行（与 verify_case AI 相同骨架）+ onAction 收集 ──
         let browser: Browser | undefined;
+        let live: ReturnType<typeof registerLiveView> | undefined;
         let timedOut = false;
         const timer = setTimeout(() => {
           timedOut = true;
@@ -186,6 +188,9 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(cachedState ? { storageState: cachedState } : {}),
           });
           const page = await context.newPage();
+          // playground 实时画面：与 verify_case 同模式（注册页面源 → start 事件带流地址 → finally close）
+          live = registerLiveView();
+          live.setPage(page);
           if (targetUrl) {
             const firstCompiled = effectiveSteps[0]?.compiled;
             const firstAction = (Array.isArray(firstCompiled) && firstCompiled.length > 0
@@ -218,6 +223,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             solidifiable: visualSteps.length,
             targetUrl: targetUrl ?? null,
             loginCache: cachedState ? ('hit' as const) : ('miss' as const),
+            liveUrl: `/api/assistant/threads/${ctx.threadId}/live/${live.key}`,
           });
           for (let i = 0; i < effectiveSteps.length; i++) {
             const s = effectiveSteps[i]!;
@@ -399,6 +405,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           };
         } finally {
           clearTimeout(timer);
+          live?.close();
           if (browser) await browser.close().catch(() => undefined);
           await envCtx.close().catch(() => undefined);
         }

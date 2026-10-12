@@ -19,6 +19,7 @@ export class OpenAIClient implements LLMClient {
         image_url: { url: `data:${req.image.mime};base64,${req.image.base64}` },
       });
     }
+    const t0 = Date.now();
     const resp = await this.client.chat.completions.create({
       model,
       messages: [
@@ -28,9 +29,11 @@ export class OpenAIClient implements LLMClient {
       response_format: { type: 'json_object' as const },
       temperature: 0.2,
     });
+    const durationMs = Date.now() - t0;
     const text = resp.choices[0]?.message?.content ?? '';
     const json = tryParseJson(text);
     const base: LLMCompleteResult = json ? { kind: 'json', value: json } : { kind: 'text', value: text };
-    return { ...base, provider: 'openai', vision: !!req.image };
+    const usage = resp.usage ? { promptTokens: resp.usage.prompt_tokens ?? 0, completionTokens: resp.usage.completion_tokens ?? 0 } : undefined;
+    return { ...base, provider: 'openai', vision: !!req.image, ...(usage ? { usage } : {}), durationMs, model };
   }
 }

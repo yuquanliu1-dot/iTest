@@ -310,6 +310,9 @@ export const reports = pgTable('reports', {
   mobileOs: varchar('mobile_os', { length: 16 }),
   deviceName: varchar('device_name', { length: 128 }),
   deviceTargetId: uuid('device_target_id').references(() => deviceTargets.id, { onDelete: 'set null' }),
+  // 双通过率口径：passed 且 healed=true = 自愈通过（aiTask 缓存分叉后 AI 兜底成功）；
+  // passed 且 healed=false = 一次通过；failed 恒 false。
+  healed: boolean('healed').notNull().default(false),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
