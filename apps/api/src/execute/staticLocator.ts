@@ -11,7 +11,9 @@
  * - 命中 0     → 二级「去参化」探测区分：
  *     · loosened 键（属性只保留属性名 / 字面量本身）在源码里有 → dynamic-suspect：
  *       锚点由动态绑定渲染（:id="x" / v-for / 模板绑定），运行时确认，不误杀；
- *     · loosened 也没有 → not-found：疑似臆造 / 脚手架改名（仍不判死，留运行时裁决）。
+ *     · loosened 也没有 → not-found：源码无字面命中。注意这≠锚点不存在——抽屉式渲染 /
+ *       运行时拼接的 id（如 Element-UI tab 的 id="tab-xxx"）grep 不到是常态，
+ *       摘要措辞因此保持中性，运行时命中才是判据（绝不判死）。
  *
  * count 回调注入式（execute 层纯逻辑可单测）：生产接 repo_grep（见 repo.ts 的
  * countRepoGrep），测试接假计数器。
@@ -143,7 +145,7 @@ export async function analyzeLocatorCandidates(
       reports.push({ strategy: c.strategy, value: c.value, verdict: 'unique', sourceCount: 1, sourceTruncated: precise.truncated, samplePaths: precise.samplePaths });
       continue;
     }
-    // precise 命中 0：去参化二级探测，区分「动态渲染」与「疑似臆造」
+    // precise 命中 0：去参化二级探测，区分「动态渲染」与「源码无字面痕迹」
     if (keys.loose) {
       const loose = await counted(keys.loose);
       if (loose.count > 0) {
@@ -163,7 +165,11 @@ export function summarizeStaticReports(reports: StaticLocatorReport[]): string |
   const mult = reports.filter((r) => r.verdict === 'multiple').map((r) => `${r.strategy}:${r.value}`);
   if (mult.length > 0) parts.push(`源码命中多处（回放歧义风险）: ${mult.join('、')}`);
   const nf = reports.filter((r) => r.verdict === 'not-found').map((r) => `${r.strategy}:${r.value}`);
-  if (nf.length > 0) parts.push(`源码未命中（疑似臆造或脚手架改名）: ${nf.join('、')}`);
+  // 措辞刻意中性：源码 grep 只覆盖字面量，抽屉式渲染/运行时拼接的属性名（Element-UI 给 tab 生成
+  // id="tab-xxx" 之类）grep 不到是常态。写成「疑似臆造」会被 AI 当成「这个 selector 是假的」而
+  // 丢弃运行时已证明能命中的候选——2026-10-13 prod228 实测：#tab-autodo 运行时真实存在，
+  // 却被这条提示带偏，改写步骤又验两轮才蒙混通过。静态事实只做排序参考，运行时命中才是判据。
+  if (nf.length > 0) parts.push(`源码无字面命中（仅供排序参考，运行时命中与否以实测为准）: ${nf.join('、')}`);
   const dyn = reports.filter((r) => r.verdict === 'dynamic-suspect').map((r) => `${r.strategy}:${r.value}`);
   if (dyn.length > 0) parts.push(`源码未字面命中但存在动态绑定（以运行时为准）: ${dyn.join('、')}`);
   return parts.length > 0 ? parts.join('；') : null;
