@@ -53,6 +53,8 @@ export interface VerifyProgressState {
   cacheSaved: boolean;
   /** 本线程暂存的 caseOp 叠加数（>0 表示验证基于暂存修改，未落库）。 */
   stagedOps: number;
+  /** 浏览器实时画面流地址（MJPEG multipart，<img> 直接解码）；null=不可用。 */
+  liveUrl: string | null;
 }
 
 /** solidify_case 实时进度（solidify_progress SSE 事件驱动）：单行指示（start/end 两相）。 */
@@ -67,6 +69,8 @@ export interface SolidifyProgressState {
   kept: number | null;
   /** 失败原因（result='failed' 时）。 */
   reason: string | null;
+  /** 浏览器实时画面流地址（MJPEG multipart，<img> 直接解码）；null=不可用。 */
+  liveUrl: string | null;
 }
 
 /** 暂存条目：stage_case / stage_scenario / stage_environment / stage_plan 写入。
@@ -185,6 +189,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
             result: null,
             cacheSaved: false,
             stagedOps: Number(e.stagedOps ?? 0),
+            liveUrl: typeof e.liveUrl === 'string' ? e.liveUrl : null,
           },
         });
         return;
@@ -280,6 +285,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
             solidified: null,
             kept: null,
             reason: null,
+            liveUrl: typeof e.liveUrl === 'string' ? e.liveUrl : null,
           },
         });
         return;

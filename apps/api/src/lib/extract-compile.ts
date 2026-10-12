@@ -1,5 +1,6 @@
 import { safeRegex } from '@itest/shared';
 import { resolveLlmClient } from '../agent/llmSettings.js';
+import { completeJson } from '../agent/llm-client.js';
 
 const SYSTEM_PROMPT = `你是文本片段抽取助手。用户给一段原始文本和自然语言描述，你输出一个 JavaScript 正则（仅一条）与捕获组编号。
 要求：
@@ -24,9 +25,9 @@ export async function compileExtractRegex(
     `原始文本: ${sampleText}`,
     `描述: ${description}`,
   ].join('\n');
-  const r = await client.complete({ systemPrompt: SYSTEM_PROMPT, userMessage });
-  const raw = r.kind === 'json' ? (r.value as { pattern?: unknown; group?: unknown }) : null;
-  if (!raw || typeof raw.pattern !== 'string') {
+  const r = await completeJson(client, { systemPrompt: SYSTEM_PROMPT, userMessage });
+  const raw = r.value as { pattern?: unknown; group?: unknown };
+  if (typeof raw.pattern !== 'string') {
     throw new Error('extract-compile: LLM 输出不合法');
   }
   const pattern = raw.pattern;

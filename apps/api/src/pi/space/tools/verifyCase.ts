@@ -28,6 +28,7 @@ import { tryParseJson } from '../../../agent/llm-client.js';
 import { extractPageElements } from '../../inspectPage.js';
 import { computeCaseOverlay, type EffectiveStep } from './case-ops-tools.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
+import { registerLiveView } from '../liveView.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
@@ -292,6 +293,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
 
         // ── 浏览器 + watchdog → 逐步骤 AI 驱动执行（fail-stop）──
         let browser: Browser | undefined;
+        let live: ReturnType<typeof registerLiveView> | undefined;
         let timedOut = false;
         const timer = setTimeout(() => {
           timedOut = true;
@@ -317,6 +319,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(cachedState ? { storageState: cachedState } : {}),
           });
           const page = await context.newPage();
+          // playground 实时画面：注册页面源，start 事件把流地址带给前端进度卡；finally close 结束流
+          live = registerLiveView();
+          live.setPage(page);
 
           // 初始导航（与 cdp.ts runStepsInContext 同判定：首条 compiled 为同 URL navigate 则跳过，避免重复加载）
           if (targetUrl) {
@@ -352,6 +357,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             loginCache: cachedState ? ('hit' as const) : ('miss' as const),
             loginUser: envCtx.login?.user ?? null,
             stagedOps: opsApplied,
+            liveUrl: `/api/assistant/threads/${ctx.threadId}/live/${live.key}`,
           });
           for (let i = 0; i < effectiveSteps.length; i++) {
             const s = effectiveSteps[i]!;
@@ -554,6 +560,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 undefined,
                 async (p) => {
                   replayPage = p;
+                  live?.setPage(p); // 实时画面切到机械回放页（同 context 新开 page）
                 },
               );
               replayFailure = replaySteps.find((r) => r.status === 'failed') ?? null;
@@ -700,6 +707,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           };
         } finally {
           clearTimeout(timer);
+          live?.close();
           if (browser) await browser.close().catch(() => undefined);
           await envCtx.close().catch(() => undefined);
         }

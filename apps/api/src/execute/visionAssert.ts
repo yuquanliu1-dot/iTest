@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { logger } from '../logger.js';
 import type { ExecStepResult } from './cdp.js';
 import { materializeExpectedOutcome, maskSensitiveValues } from './cdp.js';
+import type { AiUsageStat } from './aiUsage.js';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
 
@@ -22,7 +23,7 @@ export interface VisionAssertOutcome {
   /** 用于追加 order=-1 的失败步；mobile 路径下不返回 */
   failureStep?: ExecStepResult;
   /** 用于回写到最后一个 pass 步 */
-  onLastPass?: { reason: string; screenshot: string; expected: string };
+  onLastPass?: { reason: string; screenshot: string; expected: string; aiUsage?: AiUsageStat };
 }
 
 /** 用例级 vision 判定:从 cdp.ts 抽出,与 web 路径共用。mobile 路径下传入 page=undefined 时跳过(best-effort)。
@@ -72,7 +73,7 @@ export async function runCaseVisionAssert(input: VisionAssertInput): Promise<Vis
           screenshot: visionScreenshotPath,
           failureReason: 'VisionAssertionFailed',
           humanMessage: '最终页面与用例预期不符',
-          visionAssert: { passed: false, reason: maskForReport(verdict.reason), screenshot: visionScreenshotPath, expected: expectedForReport },
+          visionAssert: { passed: false, reason: maskForReport(verdict.reason), screenshot: visionScreenshotPath, expected: expectedForReport, ...(verdict.aiUsage ? { aiUsage: verdict.aiUsage } : {}) },
         },
       };
     }
@@ -83,6 +84,7 @@ export async function runCaseVisionAssert(input: VisionAssertInput): Promise<Vis
           reason: maskForReport(verdict.reason),
           screenshot: visionScreenshotPath,
           expected: expectedForReport,
+          ...(verdict.aiUsage ? { aiUsage: verdict.aiUsage } : {}),
         },
       };
     }
