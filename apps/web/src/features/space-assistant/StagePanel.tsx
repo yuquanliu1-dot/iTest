@@ -77,7 +77,7 @@ function CaseSteps({ steps }: { steps: StageDoc['cases'][number]['steps'] }) {
                   {s.compiled.map((sub, j) => (
                     <li key={j}>
                       <span style={{ color: 'var(--primary)' }}>{stepKindLabel((sub as { kind?: string }).kind ?? '')}</span>{' '}
-                      {stepSummary(sub)}
+                      {stepSummary({ compiled: [sub] })}
                     </li>
                   ))}
                 </ol>
