@@ -9,6 +9,7 @@ import type {
   WindowStrategy,
   DbQueryRowResult,
   ObserveLogLineResult,
+  FillValue,
 } from '@itest/shared';
 import { deepEqual, materializeValue, substituteVars } from '@itest/shared';
 import { eq, and } from 'drizzle-orm';
@@ -26,7 +27,7 @@ import { classify } from './failureClassifier.js';
 import { preflight } from './preflight.js';
 import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
-import { runAiTask, solveCaptchaOnce, detectCaptchaFailure, CAPTCHA_TASK_RE, type AiAction } from './aiTask.js';
+import { runAiTask, solveCaptchaOnce, detectCaptchaFailure, CAPTCHA_TASK_RE, USER_PH, PASSWORD_PH, SECRET_PH, type AiAction } from './aiTask.js';
 import { mapAiActionsToCompiled } from './aiActionMap.js';
 import { readAiTaskCache, writeAiTaskCache, bumpAiTaskCacheHit } from './aiTaskCache.js';
 import type { EnvCtx } from './envContext.js';
@@ -166,7 +167,7 @@ async function tryDomFallback(action: StepAction, opts: DispatchOpts): Promise<{
     case 'click':
       return domClick(page, action.locator);
     case 'fill':
-      return domFill(page, action.locator, materializeValue(action.value ?? '', vars));
+      return domFill(page, action.locator, resolveFillValue(action.value ?? '', opts.ctx.envCtx, vars));
     case 'check':
       return domCheck(page, action.locator, action.checked);
     case 'select':
@@ -222,6 +223,35 @@ async function defaultSecretResolver(stepId: string): Promise<string | null> {
     iv: Buffer.from(s.secretIv, 'base64'),
     tag: Buffer.from(s.secretTag, 'base64'),
   });
+}
+
+/** 机械派发路径的凭据占位符 → 环境 login 凭据真实值。
+ *  AI 相（verify/solidify/perform_login）由 valueSub 在动作执行时刻替换（aiTask.ts），
+ *  compiled 的机械派发没有那套替换，这里补齐同一语义 —— 否则占位符会被原样敲进表单、
+ *  登录必然失败且步骤仍报 passed（2026-10-13 prod228 用例 394bdcb2 实测）。
+ *  非占位符原样返回；引用了凭据但环境没配 login → EnvMissing，绝不静默填字面量。 */
+function resolveEnvCredential(raw: string, envCtx: EnvCtx | undefined): string {
+  if (raw === USER_PH || raw === PASSWORD_PH) {
+    const login = envCtx?.login;
+    if (!login) {
+      const e = new Error(`env-missing: 用例步骤引用了 ${raw}，但当前环境未配置 login 凭据（请到项目设置→测试环境配置）`);
+      e.name = 'EnvMissing';
+      throw e;
+    }
+    return raw === USER_PH ? login.user : login.password;
+  }
+  if (raw === SECRET_PH) {
+    // 步骤级密文只有 sensitive 分支（secretResolver）能解；compiled 里写占位符无处可解。
+    const e = new Error(`secret-missing: 步骤 compiled 含 ${SECRET_PH}，敏感值只能走 sensitive=true + 密文，不能写占位符`);
+    e.name = 'SecretMissing';
+    throw e;
+  }
+  return raw;
+}
+
+/** fill 的最终入值：{{变量}} 物化后替换环境凭据占位符（非字符串 value 只做物化）。 */
+function resolveFillValue(value: FillValue, envCtx: EnvCtx | undefined, vars: Record<string, string>): string {
+  return resolveEnvCredential(materializeValue(value, vars), envCtx);
 }
 
 /**
@@ -285,7 +315,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
             throw new Error(`var-missing: {{${sub.missing[0]!}}} (template="${action.value}")`);
           }
         }
-        value = materializeValue(action.value, vars);
+        value = resolveFillValue(action.value, opts.ctx.envCtx, vars);
       }
       const fillLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
       try {
