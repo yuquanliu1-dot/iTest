@@ -199,6 +199,88 @@ describe('repo_grep', () => {
   });
 });
 
+describe('countRepoGrepBatch', () => {
+  let batchCwd: string;
+  beforeAll(async () => {
+    batchCwd = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-rg-batch-'));
+    await fs.writeFile(path.join(batchCwd, 'a.html'), '<i class="icon-chakan" title="查看"></i>\n<p>普通文案</p>');
+    await fs.writeFile(path.join(batchCwd, 'b.html'), '<a title="查看">查看</a>\n<button title="查看">x</button>');
+    await fs.writeFile(path.join(batchCwd, 'c.vue'), '<el-input :placeholder="keywordPlaceholder" />');
+  });
+  afterAll(async () => { await fs.rm(batchCwd, { recursive: true, force: true }); });
+
+  it('N 个 pattern 单次遍历后按 pattern 归因（批量版的存在理由）', async () => {
+    const { countRepoGrepBatch } = await import('../src/pi/repo.js');
+    const table = await countRepoGrepBatch(batchCwd, [
+      'title\\s*[:=]\\s*[\'"]{1,2}查看', // a + b 共 3 处
+      'icon-chakan', // 1 处
+      'placeholder', // 1 处
+      'nonexistent_zzz', // 0 处
+    ]);
+    expect(table.get('title\\s*[:=]\\s*[\'"]{1,2}查看')!.count).toBe(3);
+    expect(table.get('icon-chakan')!.count).toBe(1);
+    expect(table.get('placeholder')!.count).toBe(1);
+    expect(table.get('nonexistent_zzz')!.count).toBe(0);
+  });
+
+  it('与逐条版 countRepoGrep 计数一致（批量归因没跑偏）', async () => {
+    const { countRepoGrep, countRepoGrepBatch } = await import('../src/pi/repo.js');
+    const patterns = ['icon-chakan', 'placeholder', '查看', '普通文案'];
+    const batch = await countRepoGrepBatch(batchCwd, patterns);
+    for (const p of patterns) {
+      const serial = await countRepoGrep(batchCwd, p);
+      expect(batch.get(p)!.count, p).toBe(serial.count);
+    }
+  });
+
+  it('空 pattern 列表 → 空 Map，不 spawn', async () => {
+    const { countRepoGrepBatch } = await import('../src/pi/repo.js');
+    expect((await countRepoGrepBatch(batchCwd, [])).size).toBe(0);
+  });
+
+  it('rg 不存在时静默降级（全体 count=0），不抛错打断 verify_case', async () => {
+    const { countRepoGrepBatch } = await import('../src/pi/repo.js');
+    const prev = process.env.PATH;
+    process.env.PATH = '/nonexistent-dir';
+    try {
+      const table = await countRepoGrepBatch(batchCwd, ['icon-chakan']);
+      expect(table.get('icon-chakan')!.count).toBe(0);
+    } finally { process.env.PATH = prev; }
+  });
+
+  it('pattern 数超上限时分批查询，计数跨批累计', async () => {
+    const { countRepoGrepBatch, BATCH_GREP_MAX_PATTERNS } = await import('../src/pi/repo.js');
+    const many = Array.from({ length: BATCH_GREP_MAX_PATTERNS + 5 }, (_, i) =>
+      i === BATCH_GREP_MAX_PATTERNS + 4 ? 'icon-chakan' : `miss_${i}`);
+    const table = await countRepoGrepBatch(batchCwd, many);
+    expect(table.get('icon-chakan')!.count).toBe(1); // 落在第二批
+    expect(table.get('miss_0')!.count).toBe(0);
+    expect(table.size).toBe(many.length);
+  });
+});
+
+describe('static_locator 工具', () => {
+  it('一次批量查询给出全部候选的 verdict', async () => {
+    const { buildRepoSandboxTools } = await import('../src/pi/repo.js');
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-static-loc-'));
+    await fs.writeFile(path.join(dir, 'a.html'), '<i class="icon-chakan" title="查看"></i>');
+    await fs.writeFile(path.join(dir, 'b.html'), '<a title="查看">查看</a>\n<b title="查看">y</b>');
+    try {
+      const t = buildRepoSandboxTools(dir).find((x) => x.name === 'static_locator')!;
+      const r = await t.execute({
+        locators: [
+          { strategy: 'css', value: '.icon-chakan' },
+          { strategy: 'css', value: '[title="查看"]' },
+        ],
+      });
+      expect(r.ok).toBe(true);
+      const reports = JSON.parse((r as { data: string }).data) as Array<{ value: string; verdict: string }>;
+      expect(reports.find((x) => x.value === '.icon-chakan')!.verdict).toBe('unique');
+      expect(reports.find((x) => x.value === '[title="查看"]')!.verdict).toBe('multiple');
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+});
+
 describe('repo_run', () => {
   it('白名单 ls 返回 cwd 根目录列表', async () => {
     const tools = buildRepoSandboxTools(cwd);

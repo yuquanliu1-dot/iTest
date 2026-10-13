@@ -23,11 +23,11 @@ import { runCaseVisionAssert } from '../../../execute/visionAssert.js';
 import { resolveEnv } from '../../../execute/envContext.js';
 import { resolveCaseUrl } from '../../../lib/resolve-url.js';
 import { decrypt } from '../../../lib/secret-crypto.js';
-import { analyzeLocatorCandidates, summarizeStaticReports, type StaticLocatorReport } from '../../../execute/staticLocator.js';
+import { analyzeLocatorCandidatesBatch, summarizeStaticReports, type StaticLocatorReport } from '../../../execute/staticLocator.js';
 import { resolveLlmClient } from '../../../agent/llmSettings.js';
 import { tryParseJson } from '../../../agent/llm-client.js';
 import { extractPageElements } from '../../inspectPage.js';
-import { countRepoGrep } from '../../repo.js';
+import { countRepoGrepBatch } from '../../repo.js';
 import { computeCaseOverlay, type EffectiveStep } from './case-ops-tools.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
 import { registerLiveView } from '../../../execute/liveView.js';
@@ -411,29 +411,37 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         }
 
         // ── L1 源码静态预检（advisory，不判死）──
-        // 仓库就绪即自动尝试：逐步骤 compiled 候选跑源码 hit 计数（unique/multiple/not-found/
-        // dynamic-suspect），结果进 verify_progress.staticNote + result.staticAnalysis + 失败 note。
+        // 仓库就绪即自动尝试：全用例候选一次性批量查源码（单次 rg 遍历树），得到
+        // unique/multiple/not-found/dynamic-suspect，进 verify_progress.staticNote +
+        // result.staticAnalysis + 失败 note。
         // 「静态排行，运行时拍板」：静态事实不改变任何通过/失败判决，只做上下文；
         // repo 未配置/检出中/工具异常 → 静默降级为现行纯运行时行为，零回归。
         const staticByStep: StaticLocatorReport[][] = [];
-        const staticAnalysis: Array<{ order: number; note: string | null }> = [];
+        const staticAnalysis: Array<{ order: number; note: string }> = [];
         if (ctx.repo.cwd) {
           try {
             const cwd = repoToolCwd(ctx.repo);
-            const count = (pattern: string) => countRepoGrep(cwd, pattern);
-            for (const s of effectiveSteps) {
-              const locs = collectStepLocators(s.compiled);
-              const reports = locs.length > 0 ? await analyzeLocatorCandidates(locs, count) : [];
+            // 先把所有步骤的候选摊平，一次批量计数——跨步骤重复的 pattern（如多个 fill 共用
+            // [placeholder="账号"]）只查一次；逐步骤查询则是每步都重扫一遍树。
+            const stepLocs = effectiveSteps.map((s) => collectStepLocators(s.compiled));
+            const flat = stepLocs.flat();
+            const allReports = flat.length > 0
+              ? await analyzeLocatorCandidatesBatch(flat, (patterns) => countRepoGrepBatch(cwd, patterns))
+              : [];
+            let cursor = 0;
+            for (let i = 0; i < stepLocs.length; i++) {
+              const reports = allReports.slice(cursor, cursor + stepLocs[i]!.length);
+              cursor += stepLocs[i]!.length;
               staticByStep.push(reports);
-              staticAnalysis.push({ order: s.order, note: summarizeStaticReports(reports) });
+              const note = summarizeStaticReports(reports);
+              if (note) staticAnalysis.push({ order: effectiveSteps[i]!.order, note });
             }
           } catch {
             // 仓库工具异常表面化前静默降级：静态分析是增强，不是依赖
           }
         }
-        const staticWarnings = staticAnalysis.filter((a): a is { order: number; note: string } => a.note !== null);
-        const staticNote = staticWarnings.length > 0
-          ? `源码静态分析:${staticWarnings.map((a) => `步骤#${a.order} ${a.note}`).join(' | ')}`
+        const staticNote = staticAnalysis.length > 0
+          ? `源码静态分析:${staticAnalysis.map((a) => `步骤#${a.order} ${a.note}`).join(' | ')}`
           : null;
 
         // ── 浏览器 + watchdog → 逐步骤 AI 驱动执行（fail-stop）──
@@ -770,7 +778,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               login,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
-              ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
+              ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
               steps: stepsSummary,
               replay: { result: 'passed' as const, durationMs: Date.now() - replayStartedAt },
             });
@@ -787,7 +795,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               login,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
-              ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
+              ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
               steps: stepsSummary,
               failure: {
                 stepOrder: -1,
@@ -816,7 +824,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               login,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
-              ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
+              ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
               steps: stepsSummary,
               replay: replaySummary,
               failure: {
@@ -845,7 +853,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             login,
             basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
             stagedOpsApplied: opsApplied,
-            ...(staticWarnings.length > 0 ? { staticAnalysis: staticWarnings } : {}),
+            ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
             steps: stepsSummary,
             failure: {
               stepOrder: failed.order,
