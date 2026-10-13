@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Page } from 'playwright-core';
 
 // Mock playwright-core so we can verify dispatch logic without a real browser.
@@ -801,5 +801,84 @@ describe('phase3 — composite value at execute', () => {
     const fillCalls = (mocked.__locator.mock.results[mocked.__locator.mock.results.length - 1]!.value as { pressSequentially: ReturnType<typeof vi.fn> }).pressSequentially.mock.calls;
     const lastFillArg = fillCalls[fillCalls.length - 1]?.[0];
     expect(lastFillArg).toMatch(/^CS\d{3}$/);
+  });
+});
+describe('机械 fill 的环境凭据占位符（compiled 不再需要明文密码）', () => {
+  const loginEnv = {
+    envId: 'e-1',
+    baseUrl: null,
+    login: { user: 'admin', password: 'S3cret!', loginUrl: null },
+    close: async () => undefined,
+  };
+
+  /** 最近一次 locator mock 的 pressSequentially 实参（fill 后键入路径）。 */
+  function lastTypedValue(): unknown {
+    const loc = mocked.__locator.mock.results[mocked.__locator.mock.results.length - 1]!.value as {
+      pressSequentially: ReturnType<typeof vi.fn>;
+    };
+    const calls = loc.pressSequentially.mock.calls;
+    return calls[calls.length - 1]?.[0];
+  }
+
+  beforeEach(() => { mocked.__locator.mockClear(); });
+
+  it('__ITEST_USERNAME__ → 环境 login.user（不把字面量敲进表单）', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000030',
+      [{ order: 1, compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#u' }], value: '__ITEST_USERNAME__' }] }],
+      { reportId: 'r-ph-user', envCtx: loginEnv as never },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(lastTypedValue()).toBe('admin');
+  });
+
+  it('__ITEST_PASSWORD__ → 环境 login.password（2026-10-13 prod228 回归）', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000031',
+      [{ order: 1, compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#p' }], value: '__ITEST_PASSWORD__' }] }],
+      { reportId: 'r-ph-pass', envCtx: loginEnv as never },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(lastTypedValue()).toBe('S3cret!');
+  });
+
+  it('环境未配 login → EnvMissing 失败，绝不静默填字面量', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000032',
+      [{ order: 1, compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#p' }], value: '__ITEST_PASSWORD__' }] }],
+      { reportId: 'r-ph-none' },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/env-missing/);
+  });
+
+  it('__ITEST_STEP_SECRET__ 在机械路径无密文可解 → SecretMissing 失败', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000033',
+      [{ order: 1, compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#s' }], value: '__ITEST_STEP_SECRET__' }] }],
+      { reportId: 'r-ph-secret', envCtx: loginEnv as never },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/secret-missing/);
+  });
+
+  it('非占位符值不受影响（普通 fill 照常）', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000034',
+      [{ order: 1, compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#n' }], value: 'alice' }] }],
+      { reportId: 'r-ph-plain', envCtx: loginEnv as never },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(lastTypedValue()).toBe('alice');
+  });
+
+  it('__ITEST_PASSWORD__ 嵌在 {{变量}} 里：先物化再替换占位符', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000035',
+      [{ order: 1, compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#p' }], value: '{{pw}}' }] }],
+      { reportId: 'r-ph-var', envCtx: loginEnv as never, initialVars: { pw: '__ITEST_PASSWORD__' } },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(lastTypedValue()).toBe('S3cret!');
   });
 });
