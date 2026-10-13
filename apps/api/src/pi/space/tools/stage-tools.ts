@@ -16,6 +16,7 @@ import {
 } from '../../../db/schema.js';
 import { HttpError } from '../../../middleware/errorHandler.js';
 import { buildVariableReport } from '../../../lib/variable-report.js';
+import { buildOutcomeNote } from './outcomeNote.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 import { emitStage } from './stage.js';
@@ -452,6 +453,7 @@ export const STAGE_PROMPT_GUIDELINES = [
   '- httpRequest 用于 API 测试与混合场景（API 造数 → UI 验证）：{"kind":"httpRequest","method":"GET|POST|PUT|PATCH|DELETE","url":"https://...","headers":[{"key":"Content-Type","value":"application/json"}],"body":"JSON 字符串（可选）","timeoutMs":10000,"carryLoginState":true（可选,转发浏览器登录态 Cookie）,"saveAs":{"varName":"orderId","from":"body","path":"data.id"}（可选,响应值提取为 {{orderId}} 供后续步骤消费）,"assertion":{"status":200,"match":"contains","expected":"ok"}（可选,status 与 expected 二者至少其一）}。url/headers 值/body 支持 {{变量}} 替换（数据集列或前置 extract/saveAs 定义的变量）。',
   '- 用户提供 OpenAPI/Swagger 规范（粘贴在对话里或已提交到仓库,用 repo_read 读取）要生成 API 用例时：按 path+method 选端点,依 schema 构造 headers/body,鉴权 token 从环境/数据集变量取（不要明文写死）;编排期就把每条请求固化为 httpRequest 步骤（回放不再调 LLM）,链式传值用 saveAs + {{var}}。UI+API 混合用例：UI 登录步骤后接 carryLoginState:true 的 httpRequest 即可复用会话。',
   '视觉模式用例（步骤 compiled 为纯 aiTask 数组）功能稳定后,调用 solidify_case 把 AI 实际执行过的动作固化（solidify）为机械 compiled,就地改写源用例并暂存 —— 固化结果必须再经 verify_case 验收才算完成。',
+  'expectedOutcome 必须与步骤类型匹配,先分清本用例是「观察型」还是「变更型」:变更型(新建/提交/删除等会改变服务端状态)才配业务结果断言;观察型(进页面查看列表状态)只配「页面可达/数据可见」这类断言。把观察型用例的 expectedOutcome 写成业务结果(如"自动启动处置成功"),verify_case 终态判定必然失败,而你唯一的过关手段会是弱化预期——把用例改成什么都测不出来。响应里的「预期体检」点名了这种不自洽,务必当场修正。',
 ];
 
 /** stage_case 前瞻变量体检（与 stage_case_op 的 prospectiveVarNote 同方向）:
@@ -487,6 +489,16 @@ async function caseVarNote(threadId: string, body: StagedCase): Promise<string> 
   return notes.length > 0 ? `变量体检:${[...new Set(notes)].join(';')}` : '变量体检:通过';
 }
 
+/** expectedOutcome 自洽体检：断言了业务结果、步骤却造不出该状态时，当场提示补造数步骤
+ *  或如实调整预期（否则终态判定必败，AI 只能弱化预期蒙混通过）。纯启发式，只提示不判死。 */
+function caseOutcomeNote(body: StagedCase): string | null {
+  return buildOutcomeNote({
+    expectedOutcome: body.expectedOutcome,
+    stepActions: (body.steps ?? []).map((s) => (s as { action?: string } | null)?.action ?? null),
+    stepCompileds: (body.steps ?? []).map((s) => (s as { compiled?: unknown } | null)?.compiled ?? null),
+  });
+}
+
 export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
   return [
     {
@@ -520,7 +532,9 @@ export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
         await stageCase(ctx.threadId, ctx.versionId, body);
         emitStage(ctx, { kind: 'case', id: v.data.localId, action: 'stage', payload: { ...body, stagedAt: new Date().toISOString() } });
         const varNote = await caseVarNote(ctx.threadId, body).catch(() => '');
-        return { ok: true, data: `已暂存用例「${v.data.title}」(草稿 ${v.data.localId});用户将在右侧预览区勾选 → 选目标分组 → 落库。${varNote ? `\n${varNote}` : ''}` };
+        const outNote = caseOutcomeNote(body);
+        const notes = [varNote, outNote].filter(Boolean).join('\n');
+        return { ok: true, data: `已暂存用例「${v.data.title}」(草稿 ${v.data.localId});用户将在右侧预览区勾选 → 选目标分组 → 落库。${notes ? `\n${notes}` : ''}\n下一步:环境可用时用 verify_case(caseId=该草稿 localId)实测,验证通过后再引导用户在右侧暂存区勾选统一保存。` };
       },
     },
     {

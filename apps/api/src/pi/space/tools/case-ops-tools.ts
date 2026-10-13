@@ -23,6 +23,7 @@ import { aiStageCaseOps, datasets, testSteps } from '../../../db/schema.js';
 import * as svc from '../../../services/cases.service.js';
 import { buildVariableReport } from '../../../lib/variable-report.js';
 import { normalizeCompiledStep } from '../../tools.js';
+import { buildOutcomeNote } from './outcomeNote.js';
 import { HttpError } from '../../../middleware/errorHandler.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
@@ -101,6 +102,7 @@ export const STAGE_CASE_OP_GUIDELINES = [
   'stage_case_op 的 action 与字段一一对应：update_case {caseId, patch={...UpdateCasePatch 形状字段}}、delete_case {caseId}、move_case {caseId, targetGroupId}、update_step {stepId, caseId, instruction?, compiled?}、insert_step {caseId, instruction, afterOrder?, compiled?}、delete_step {stepId, caseId}、move_step {caseId, stepIds}。move_step 的 stepIds 必须恰好覆盖该 case 全部步骤并按目标顺序排列。',
   'localId 由你（LLM）用 UUID v4 自生成；同 localId 重复 stage 是幂等 UPSERT，可放心重发。',
   '用例绑定/解绑数据集走 update_case(patch.datasetId)（跨项目数据集会被拒绝）；数据集列名即回放初始变量 {{列名}}，insert_step/update_step 响应会附「变量体检」反馈，引用未定义变量时请修正 compiled 或先确认数据集列名（manage_cases list_datasets / get）。',
+  '改 expectedOutcome 前先分清本用例是「观察型」还是「变更型」:观察型(进页面查看列表状态)只配「页面可达/数据可见」断言,把 expectedOutcome 改成业务结果(如"自动启动处置成功")会让 verify_case 终态判定必然失败,而你唯一的过关手段就成了弱化预期——把用例改成什么都测不出来。响应里的「预期体检」点名了这种不自洽,修正步骤(补造数步骤)或如实改预期,两者都要真改。',
 ];
 
 interface StagedCaseOpDoc {
@@ -198,6 +200,22 @@ async function prospectiveVarNote(
     ...report.invalidNames.map((x) => `变量名 ${x.name} 不合法`),
   ];
   return notes.length > 0 ? `变量体检:${notes.join(';')}` : '变量体检:通过';
+}
+
+/** expectedOutcome 自洽体检：update_case 改预期时，按该用例现有步骤判定「造不造得出被断言的
+ *  业务状态」（只提示不判死，与 stage_case 同源）。单工具单 action，本次 op 不含步骤改动，
+ *  故直接用落库前步骤即可，无需虚拟叠加。 */
+function outcomeNoteAfterOp(
+  before: Awaited<ReturnType<typeof svc.getCaseDetail>> | null,
+  v: Extract<StageCaseOpInput, { action: 'update_case' }>,
+): string | null {
+  const expectedOutcome = v.patch.expectedOutcome;
+  if (expectedOutcome === undefined || !before) return null;
+  return buildOutcomeNote({
+    expectedOutcome,
+    stepActions: before.steps.map((s) => s.instruction),
+    stepCompileds: before.steps.map((s) => s.compiled),
+  });
 }
 
 export async function stageCaseOp(threadId: string, versionId: string, body: StagedCaseOpDoc & { caseId: string; op: string; payload: unknown }): Promise<void> {
@@ -314,7 +332,9 @@ export function buildCaseOpsTools(ctx: SpaceToolsContext): ToolExecutor[] {
         const varNote = (v.action === 'insert_step' || v.action === 'update_step')
           ? await prospectiveVarNote(before, v).catch(() => '')
           : '';
-        return { ok: true, data: `已暂存修改「${summary}」(草稿 ${doc.localId})；用户在 StagePanel 勾选 → 落库。${varNote ? `\n${varNote}` : ''}` };
+        const outNote = v.action === 'update_case' ? outcomeNoteAfterOp(before, v) : null;
+        const notes = [varNote, outNote].filter(Boolean).join('\n');
+        return { ok: true, data: `已暂存修改「${summary}」(草稿 ${doc.localId})；用户在 StagePanel 勾选 → 落库。${notes ? `\n${notes}` : ''}` };
       },
     },
   ];
