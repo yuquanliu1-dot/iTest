@@ -59,12 +59,18 @@ export default function MoveProjectModal({ visible, projectId, projectName, curr
         )}
         <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginBottom: 10 }}>将「{projectName}」移动到：</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <select value={targetId} onChange={(e) => setTargetId(e.target.value)} className="input-base">
-            <option value="">— 选择目标组织 —</option>
-            {filtered.map((o) => (
-              <option key={o.id} value={o.id}>{o.name}</option>
-            ))}
-          </select>
+          {filtered.length === 0 ? (
+            <div style={{ padding: '12px 0', textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>
+              没有可移动到的其他组织
+            </div>
+          ) : (
+            <select value={targetId} onChange={(e) => setTargetId(e.target.value)} className="input-base">
+              <option value="">— 选择目标组织 —</option>
+              {filtered.map((o) => (
+                <option key={o.id} value={o.id}>{o.name}</option>
+              ))}
+            </select>
+          )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
             <button onClick={onClose} disabled={saving} style={{ padding: '6px 14px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
             <button onClick={() => void handleSubmit()} disabled={saving || !target} style={{

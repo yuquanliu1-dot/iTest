@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useUIStore } from '../../stores/ui';
-import { api, type Project, type AssignedUser, type UserSummary } from '../../api/client';
+import { api, type Project, type AssignedUser, type UserSummary, type OrgManagedNode } from '../../api/client';
 import { useProjectStore } from '../../stores/project';
 import { useAuthStore } from '../../stores/auth';
-import { sortByPath } from '../../utils/orgTree';
+import { isManagerOfOrgPath } from '../../utils/orgTree';
 import MoveProjectModal from './MoveProjectModal';
 
 interface Props { projectId: string; currentOrgId: string; onBack: () => void }
@@ -19,6 +19,7 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
   const [page, setPage] = useState(1);
 
   const [moving, setMoving] = useState(false);
+  const [moveTargets, setMoveTargets] = useState<OrgManagedNode[]>([]);
   const [adding, setAdding] = useState(false);
   const [candidateQ, setCandidateQ] = useState('');
   const [candidates, setCandidates] = useState<UserSummary[]>([]);
@@ -102,7 +103,27 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
   };
 
   const assignedPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const choices = sortByPath(organizations.filter((o) => o.isManager));
+
+  // 移动目标候选 = managed-subtree 里我能管理的组织。
+  // 不能用 authStore.organizations（它只含 /auth/me 的直接 membership，不含后代组织），
+  // 否则上级管理员的候选列表为空，下拉框无从选择。后端 move 用 isManagerOfOrg（祖先链
+  // managerOrgPaths）判定，这里用 isManagerOfOrgPath 与之对齐。
+  useEffect(() => {
+    if (!moving) return;
+    let stale = false;
+    api.orgs
+      .managedSubtree()
+      .then((rows) => {
+        if (stale) return;
+        setMoveTargets(rows.filter((o) => isManagerOfOrgPath(organizations, o.path)));
+      })
+      .catch(() => {
+        if (!stale) setMoveTargets([]);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [moving, organizations]);
 
   return (
     <div className="flex flex-col h-full">
@@ -199,7 +220,7 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
         projectId={projectId}
         projectName={project?.name ?? ''}
         currentOrgId={project?.organizationId ?? currentOrgId}
-        choices={choices}
+        choices={moveTargets}
         onClose={() => setMoving(false)}
         onMoved={(updated) => {
           setProject(updated);
