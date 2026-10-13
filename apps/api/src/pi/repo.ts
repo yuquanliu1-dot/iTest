@@ -119,16 +119,6 @@ const BATCH_MAX_COUNT_PER_FILE = 200;
 const BATCH_MAX_TOTAL_LINES = 20_000;
 /** 批量模式每 pattern 记录的最大样例路径数（与 countRepoGrep 对齐）。 */
 const BATCH_MAX_SAMPLE_PATHS = 10;
-/** 单次 rg 的 pattern 数上限：一次 spawn 携带过多 -e 会顶到 ARG_MAX，且逐行归因的
- *  正则匹配开销线性增长。60 已远超真实用例的候选规模（12 步 × 2~4 候选 ≈ 30~80）。 */
-export const BATCH_GREP_MAX_PATTERNS = 60;
-
-/** rg -S（smart-case）的等价判定：pattern 全小写 → 匹配忽略大小写；含任一大写 → 区分大小写。
- *  归因正则必须复刻这条规则，否则 rg 命中的行会被 JS 侧漏认领、count 系统性偏小
- *  （实测 SOC 仓库 placeholder：rg 报 2288 行，敏感归因只认 2108，差 180 行是 PLACEHOLDER/Placeholder 变体）。 */
-function isSmartCaseInsensitive(pattern: string): boolean {
-  return !/[A-Z]/.test(pattern);
-}
 
 /** 把 rg -n 的合并输出按 pattern 归因，写入 perPattern（就地累加）。
  *  rg 不标注命中来自哪个 -e，故取回整行原文后在内存里逐 pattern 跑已编译正则认领。 */
@@ -159,33 +149,41 @@ function attributeLines(
   }
 }
 
-/** 单次 rg 批量查 N 个 pattern：树只走一遍，JS 侧按 pattern 归因。
+/** 批量查 N 个 pattern：树只走一遍，JS 侧按 pattern 归因。
  *
  *  rg 合并输出不标注命中来自哪个 -e，而 analyzeLocatorCandidates 的判决（unique / multiple /
  *  not-found）依赖 per-pattern 计数，故用 -n 行模式取回整行原文后由 attributeLines 归因。
  *  N 个 pattern × 数千行 ≈ 数万次 regex.test，毫秒级，不是瓶颈。
+ *  注意不要改成并发 spawn：rg 内部已按核数并行，外层再套并发只是在抢同一批 CPU（实测更慢）。
  *
- *  实测（真实 40M 仓库 / 811 个 .ts）：34 次串行 spawn 1038ms → 单次批量 39ms。
- *  注意不要改成并发 spawn：rg 内部已按核数并行，外层再套并发只是在抢同一批 CPU（实测更慢）。 */
+ *  pattern 按「含不含大写字母」分组，各跑一次 rg——起因是 rg -S(smart-case) 的作用域是
+ *  **整条命令行而非单个 -e**：只要命令行里有任一 pattern 含大写，rg 就对所有 pattern 关闭
+ *  忽略大小写。实测（真实仓库 / SOC base-all）：
+ *    -S -e placeholder              → 2288（含 placeHolderStyle 等 180 处变体）
+ *    -S -e placeholder -e searchForm → 2108（searchForm 含大写，把 placeholder 也拖成区分大小写）
+ *  混合跑必然有一组口径与逐条版不一致；拆组后每次的 smart-case 作用域内 pattern 同质，
+ *  归因正则统一用各自组的大小写语义（不含大写组加 i flag），与逐条版严格对齐。
+ *  分组后 spawn 数至多 2，相对 N 次串行仍是数量级优势。 */
 export async function countRepoGrepBatch(cwdRoot: string, patterns: string[]): Promise<Map<string, SourceCount>> {
   const out = new Map<string, SourceCount>();
   const uniq = [...new Set(patterns)].filter(Boolean);
   if (uniq.length === 0) return out;
 
-  // 分批：每批一次 spawn。批数通常为 1（真实用例远达不到 60），超限时退化为多次遍历而非炸 ARG_MAX。
-  for (let i = 0; i < uniq.length; i += BATCH_GREP_MAX_PATTERNS) {
-    const chunk = uniq.slice(i, i + BATCH_GREP_MAX_PATTERNS);
+  const groups = [
+    uniq.filter((p) => !/[A-Z]/.test(p)),
+    uniq.filter((p) => /[A-Z]/.test(p)),
+  ].filter((g) => g.length > 0);
+
+  for (const group of groups) {
+    const insensitive = !/[A-Z]/.test(group[0]!);
     // 归因正则全部来自 extractGrepKeys 的 esc()（已转义 . * + ? ^ $ { } ( ) | [ ] \），
     // 必然可编译，不做逐 pattern 的 try/catch。
-    const regexes = chunk.map((p) => ({
-      pattern: p,
-      re: new RegExp(p, isSmartCaseInsensitive(p) ? 'i' : ''),
-    }));
+    const regexes = group.map((p) => ({ pattern: p, re: new RegExp(p, insensitive ? 'i' : '') }));
     const perPattern = new Map<string, SourceCount>(
-      chunk.map((p) => [p, { count: 0, truncated: false, samplePaths: [] }]),
+      group.map((p) => [p, { count: 0, truncated: false, samplePaths: [] }]),
     );
     const argList = ['--no-heading', '-n', '-S', `--max-count=${BATCH_MAX_COUNT_PER_FILE}`];
-    for (const p of chunk) argList.push('-e', p);
+    for (const p of group) argList.push('-e', p);
     argList.push('--', '.');
     // rg 不可用/超时 → 本批全体记 0 命中（静态分析是 advisory，绝不因工具故障打断 verify_case；
     // 与逐条版对 rg 异常的宽松度一致）。perPattern 已预置 0 计数，故成败都要并进 out。
