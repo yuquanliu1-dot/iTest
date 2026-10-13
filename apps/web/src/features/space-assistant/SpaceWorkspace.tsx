@@ -4,7 +4,8 @@ import { AssistantRuntimeProvider, useAui, useAuiState } from '@assistant-ui/rea
 import { createPiHttpClient, usePiRuntime, type PiClientEvent } from '@assistant-ui/react-pi';
 import SpaceThreadPane from './SpaceThreadPane';
 import StagePanel from './StagePanel';
-import LiveViewRail from './LiveViewRail';
+import LiveViewRail, { useActiveLiveView } from './LiveViewRail';
+import VerticalSplit from '../../components/ui/VerticalSplit';
 import { useSpaceEventsStore } from './spaceEventsStore';
 
 interface Props {
@@ -47,6 +48,7 @@ export default function SpaceWorkspace({ threadId, initialMessage }: Props) {
       useSpaceEventsStore.getState().setCurrentThreadId('');
     };
   }, [threadId]);
+  const hasLiveView = !!useActiveLiveView();
   const runtime = usePiRuntime({ client, initialThreadId: threadId });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -55,10 +57,14 @@ export default function SpaceWorkspace({ threadId, initialMessage }: Props) {
           <SpaceThreadPane threadId={threadId} />
         </div>
         <div className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
-          <LiveViewRail />
-          <div className="flex-1 min-h-0">
-            <StagePanel projectId={projectId!} versionId={versionId!} />
-          </div>
+          {/* 有实时画面时上下分栏（可拖拽调整各自高度）；无画面时暂存面板占满。 */}
+          {hasLiveView ? (
+            <VerticalSplit top={<LiveViewRail />} bottom={<StagePanel projectId={projectId!} versionId={versionId!} />} />
+          ) : (
+            <div className="flex-1 min-w-0 min-h-0">
+              <StagePanel projectId={projectId!} versionId={versionId!} />
+            </div>
+          )}
         </div>
       </div>
       {/* aui 必须在 AssistantRuntimeProvider 内使用;首条 prompt 在此层挂载后注入。 */}

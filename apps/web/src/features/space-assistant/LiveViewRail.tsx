@@ -12,12 +12,20 @@ function metaUrl(liveUrl: string): string {
   return `${liveUrl}?replay=meta`;
 }
 
-/** 实时画面栏：从 verify/solidify 进度卡里取本轮 liveUrl，渲染成 live + 回放画面。
- *  两侧互斥（verify 结束后才可能固化），同有值时取 verify 那份。 */
-export default function LiveViewRail() {
+/**
+ * 实时画面的活跃源：从 verify / solidify 进度卡里取本轮 liveUrl。
+ * 两侧互斥（verify 结束后才可能固化），同有值时取 verify 那份。
+ * hook 与渲染共用，供 SpaceWorkspace 判断是否渲染可拖拽分栏。
+ */
+export function useActiveLiveView() {
   const verify = useSpaceEventsStore((s) => s.verifyProgress);
   const solidify = useSpaceEventsStore((s) => s.solidifyProgress);
-  const vp = verify?.liveUrl ? verify : solidify?.liveUrl ? solidify : null;
+  return verify?.liveUrl ? verify : solidify?.liveUrl ? solidify : null;
+}
+
+/** 实时画面栏：渲染成 live + 回放画面，无活跃画面时返回 null。 */
+export default function LiveViewRail() {
+  const vp = useActiveLiveView();
   if (!vp) return null;
   const running = vp.result === null;
   return (
