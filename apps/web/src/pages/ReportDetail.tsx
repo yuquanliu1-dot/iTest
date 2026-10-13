@@ -473,7 +473,22 @@ export default function ReportDetail() {
               </div>
               <MetaRow
                 label="用例"
-                value={data.caseTitle ?? <span style={{ color: 'var(--muted-foreground)' }}>已删除用例</span>}
+                value={
+                  data.caseTitle ? (
+                    /* 用例名称跳用例详情：报告与用例是多对多，靠 caseId 定位 */
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/p/${projectId}/v/${versionId}/cases/${data.caseId}`)}
+                      className="underline-offset-2 hover:underline"
+                      style={{ color: 'var(--primary)', cursor: 'pointer' }}
+                      title="打开用例详情"
+                    >
+                      {data.caseTitle}
+                    </button>
+                  ) : (
+                    <span style={{ color: 'var(--muted-foreground)' }}>已删除用例</span>
+                  )
+                }
               />
               <MetaRow label="用例 ID" value={<span className="font-mono text-[11px]">{data.caseId.slice(0, 8)}</span>} />
               <MetaRow label="报告 ID" value={<span className="font-mono text-[11px]">{data.id.slice(0, 8)}</span>} />
