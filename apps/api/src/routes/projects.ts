@@ -174,15 +174,14 @@ projectsRoute.post('/:id/groups', async (req, res) => {
   res.json(await createGroup(projectId, { name: body.name }));
 });
 
-/** POST /verify-repo — 仓库元数据可达性 + 分支存在性 + 项目名/仓库短名校验。仅 manager。 */
+/** POST /verify-repo — 仓库元数据可达性 + 分支存在性。仅 manager。 */
 projectsRoute.post('/verify-repo', requireManager, async (req, res) => {
   const repoUrl = z.string().url().parse(req.body.repoUrl);
   const branch = req.body.branch as string | undefined;
-  const projectName = (req.body.projectName as string | undefined)?.trim();
   const provider = (req.body.provider as 'github' | 'gitee' | 'gitlab' | undefined) ?? 'github';
   const pat = req.body.patOverride as string | undefined;
   try {
-    const result = await verifyRepoAccess({ repoUrl, provider, pat, branch, projectName });
+    const result = await verifyRepoAccess({ repoUrl, provider, pat, branch });
     res.json(result);
   } catch (err) {
     res.status(400).json({ valid: false, error: (err as Error).message });

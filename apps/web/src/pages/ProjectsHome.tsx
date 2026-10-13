@@ -330,7 +330,6 @@ export default function ProjectsHome() {
             <RepoFields
               value={form.repo}
               onChange={(repo) => setForm((f) => ({ ...f, repo }))}
-              projectNameHint={form.name.trim() || undefined}
             />
           </div>
           <div

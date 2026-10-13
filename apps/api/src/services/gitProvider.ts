@@ -13,7 +13,6 @@ export interface VerifyRepoInput {
   provider: GitProviderName;
   pat?: string;
   branch?: string;
-  projectName?: string;
 }
 
 export interface VerifyRepoResult {
@@ -66,11 +65,6 @@ export function validateRepoUrl(repoUrl: string, provider: GitProviderName): { v
   }
 }
 
-export function repoShortName(repoUrl: string): string {
-  const m = repoUrl.match(/\/([^/]+?)(\.git)?\/?$/);
-  return m ? m[1]! : '';
-}
-
 export function validateRepoName(name: string): { valid: boolean; error?: string } {
   // GitHub/Gitee 仓库名：字母数字 + . _ -，最长 100
   if (!/^[A-Za-z0-9._-]{1,100}$/.test(name)) {
@@ -80,7 +74,7 @@ export function validateRepoName(name: string): { valid: boolean; error?: string
 }
 
 /**
- * 校验仓库可达性 + 分支存在 + 项目名一致。
+ * 校验仓库可达性 + 分支存在。
  *  - URL 形式校验总是先做
  *  - GitHub：HEAD /repos/{owner}/{repo}（带 PAT）；无 PAT 则 GET /repos/.../branches/{branch}
  *    （unauthenticated 60/hr；超时即「提示需 PAT」）
@@ -90,14 +84,8 @@ export async function verifyRepoAccess(input: VerifyRepoInput): Promise<VerifyRe
   const urlCheck = validateRepoUrl(input.repoUrl, input.provider);
   if (!urlCheck.valid) return { valid: false, error: urlCheck.error };
 
-  const shortName = repoShortName(input.repoUrl);
-  if (input.projectName) {
-    if (input.projectName !== shortName) {
-      return { valid: false, error: `项目名称必须与仓库短名一致（${input.projectName} vs ${shortName}）` };
-    }
-  }
   if (input.provider !== 'github') {
-    // Gitee / GitLab 当前只做 URL + 名称校验；不假装可达
+    // Gitee / GitLab 当前只做 URL 形式校验；不假装可达
     return { valid: true };
   }
   // GitHub：调用 REST API HEAD /repos/{owner}/{repo}；带 PAT 可放宽限速

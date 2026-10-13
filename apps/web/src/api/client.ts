@@ -71,7 +71,6 @@ export const api = {
       provider?: 'github' | 'gitee' | 'gitlab';
       patOverride?: string;
       branch?: string;
-      projectName?: string;
     }) => request<VerifyRepoResult>(`/projects/verify-repo`, { method: 'POST', body: JSON.stringify(body) }),
     assignments: (id: string, params?: { q?: string; page?: number; limit?: number }) =>
       request<Paged<AssignedUser>>(`/projects/${id}/assignments${qs(params ?? {})}`),
