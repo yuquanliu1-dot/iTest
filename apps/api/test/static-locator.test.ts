@@ -2,10 +2,13 @@ import { describe, it, expect } from 'vitest';
 import type { Locator } from '@itest/shared';
 import {
   analyzeLocatorCandidates,
+  analyzeLocatorCandidatesBatch,
   extractGrepKeys,
   reorderCandidates,
   summarizeStaticReports,
+  type BatchLocatorCountFn,
   type LocatorCountFn,
+  type SourceCount,
   type StaticLocatorReport,
 } from '../src/execute/staticLocator.js';
 
@@ -229,5 +232,88 @@ describe('summarizeStaticReports / 缓存', () => {
     ];
     await analyzeLocatorCandidates(cands, counting);
     expect(calls).toBe(2); // .wat 与 #other 各一次
+  });
+});
+
+// ── 批量版：判决必须与逐条版逐字段一致 ──
+describe('analyzeLocatorCandidatesBatch', () => {
+  /** 假批量计数器：一次调用收到全部 pattern，用同一份假源码判命中。
+   *  顺带断言「跨候选的重复 pattern 只出现一次」（批量版相对逐条版的去重收益来源）。 */
+  function makeBatch(lines: string[]): BatchLocatorCountFn {
+    return async (patterns) => {
+      const table = new Map<string, SourceCount>();
+      for (const p of new Set(patterns)) {
+        const re = new RegExp(p);
+        const hits = lines.filter((l) => re.test(l));
+        table.set(p, { count: hits.length, truncated: false, samplePaths: hits.slice(0, 3).map((_, i) => `views/line-${i + 1}.vue`) });
+      }
+      return table;
+    };
+  }
+
+  const socLines = [
+    '<i class="icon-chakan operateBtn" title="查看"></i>',
+    '<button class="toolbar-link" title="查看">查看</button>',
+    '<a title="查看">查看</a>',
+    '<li><span title="查看">查看</span></li>',
+    '<p title="查看">点击查看</p>',
+  ];
+
+  it('输出与逐条版逐字段一致（SOC 夹具）', async () => {
+    const cands: Locator[] = [
+      { strategy: 'css', value: '[title="查看"]' },
+      { strategy: 'css', value: '.icon-chakan' },
+      { strategy: 'xpath', value: '/html/body/div[1]/button' },
+    ];
+    const serial = await analyzeLocatorCandidates(cands, makeCounter(socLines));
+    const batch = await analyzeLocatorCandidatesBatch(cands, makeBatch(socLines));
+    expect(batch).toEqual(serial);
+  });
+
+  it('dynamic-suspect / not-found 判定与逐条版一致', async () => {
+    const dynLines = ['<el-input :placeholder="keywordPlaceholder" />', '<li :data-id="item.id" v-for="i in list" />'];
+    const cands: Locator[] = [
+      { strategy: 'css', value: '[placeholder="请输入关键字"]' },
+      { strategy: 'css', value: '[data-id="9123"]' },
+      { strategy: 'css', value: '[data-custom-flag="zzz"]' },
+    ];
+    expect(await analyzeLocatorCandidatesBatch(cands, makeBatch(dynLines))).toEqual(
+      await analyzeLocatorCandidates(cands, makeCounter(dynLines)),
+    );
+  });
+
+  it('一次性收集 precise+loose 全部 pattern；重复候选只带一份', async () => {
+    let seen: string[] = [];
+    const batch: BatchLocatorCountFn = async (patterns) => {
+      seen = patterns;
+      return new Map();
+    };
+    await analyzeLocatorCandidatesBatch(
+      [
+        { strategy: 'css', value: '[placeholder="账号"]' }, // precise + loose
+        { strategy: 'css', value: '[placeholder="账号"]' }, // 重复候选
+        { strategy: 'css', value: '.icon-chakan' }, // 仅 precise
+        { strategy: 'xpath', value: '/html/body' }, // 无静态可判，不带 pattern
+      ],
+      batch,
+    );
+    expect(seen).toHaveLength(3); // placeholder precise / placeholder loose / icon-chakan
+    expect(new Set(seen).size).toBe(3);
+  });
+
+  it('批量查询抛错 → 全体降级为 0 命中（静默不判死，语义同逐条版的 count 失败兜底）', async () => {
+    const reports = await analyzeLocatorCandidatesBatch(
+      [{ strategy: 'css', value: '.icon-chakan' }],
+      async () => { throw new Error('rg timeout'); },
+    );
+    expect(reports[0]!.verdict).toBe('not-found');
+  });
+
+  it('Map 缺失的 pattern 视为 0 命中，不抛错', async () => {
+    const reports = await analyzeLocatorCandidatesBatch(
+      [{ strategy: 'css', value: '.ghost' }],
+      async () => new Map<string, SourceCount>(),
+    );
+    expect(reports[0]!.sourceCount).toBe(0);
   });
 });

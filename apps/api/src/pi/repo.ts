@@ -7,7 +7,7 @@ import { Type } from '@earendil-works/pi-ai';
 import lockfile from 'proper-lockfile';
 import { db } from '../db/client.js';
 import { projects, projectVersions, requirements } from '../db/schema.js';
-import { analyzeLocatorCandidates, type SourceCount } from '../execute/staticLocator.js';
+import { analyzeLocatorCandidatesBatch, type SourceCount } from '../execute/staticLocator.js';
 import type { Locator } from '@itest/shared';
 import type { ToolExecutor } from './tools.js';
 
@@ -81,9 +81,10 @@ function runRg(cwdRoot: string, args: string[]): Promise<{ stdout: string; code:
 /** cwdRoot 传静态目录(requirement 级)或 () => string(动态解析,空间级后台异步检出:
  *  未就绪/不可用时 throw,由各工具既有 try/catch 转为错误结果)。 */
 
-/** 结构化 grep 计数：对源码跑 ripgrep，返回命中数与样例文件路径（供静态定位预检）。
+/** 单 pattern 计数：L1 静态定位的逐条查询路径（批量版见 countRepoGrepBatch）。
  *  -c 按文件输出 path:count，输出量受「命中文件数」而非「命中行数」约束；
- *  --max-count=100 封顶单文件内计数（终极泛化锚点也不会炸输出）。rg 默认尊重 .gitignore。 */
+ *  --max-count=100 封顶单文件内计数（终极泛化锚点也不会炸输出）。rg 默认尊重 .gitignore。
+ *  保留给需要单独 glob 或单条精确计数的调用方。 */
 export async function countRepoGrep(cwdRoot: string, pattern: string, glob?: string): Promise<SourceCount> {
   const args = ['--no-heading', '-c', '-S', '--max-count=100'];
   if (glob) args.push('--glob', glob);
@@ -108,6 +109,95 @@ export async function countRepoGrep(cwdRoot: string, pattern: string, glob?: str
   }
   return { count, truncated, samplePaths };
 }
+
+/** 批量模式的单文件行数上限。注意 rg 的 --max-count 是「每文件」而非「每 pattern」，
+ *  N 个 pattern 共享这个配额（实测：300 文件 × 2 pattern，cap=2 → 恰好 600 行）。 */
+const BATCH_MAX_COUNT_PER_FILE = 200;
+/** 批量模式总输出行数上限，防止 common-word pattern（service/test/data）灌爆内存。
+ *  超限即截断并置全体 truncated——计数只用于「唯一 / 多重 / 零命中」三分，
+ *  截断只会让 count 偏大（multiple 方向），不会把 multiple 误判成 unique。 */
+const BATCH_MAX_TOTAL_LINES = 20_000;
+/** 批量模式每 pattern 记录的最大样例路径数（与 countRepoGrep 对齐）。 */
+const BATCH_MAX_SAMPLE_PATHS = 10;
+/** 单次 rg 的 pattern 数上限：一次 spawn 携带过多 -e 会顶到 ARG_MAX，且逐行归因的
+ *  正则匹配开销线性增长。60 已远超真实用例的候选规模（12 步 × 2~4 候选 ≈ 30~80）。 */
+export const BATCH_GREP_MAX_PATTERNS = 60;
+
+/** 把 rg -n 的合并输出按 pattern 归因，写入 perPattern（就地累加）。
+ *  rg 不标注命中来自哪个 -e，故取回整行原文后在内存里逐 pattern 跑已编译正则认领。 */
+function attributeLines(
+  stdout: string,
+  regexes: Array<{ pattern: string; re: RegExp }>,
+  perPattern: Map<string, SourceCount>,
+): void {
+  let lineNo = 0;
+  for (const line of stdout.split('\n')) {
+    if (!line) continue;
+    if (++lineNo > BATCH_MAX_TOTAL_LINES) {
+      for (const sc of perPattern.values()) sc.truncated = true;
+      break;
+    }
+    // rg -n 输出 path:lineno:text。路径含冒号时用「首个 : 后跟数字」的形态定位分隔点。
+    const m = /^([^:]+):(\d+):([\s\S]*)$/.exec(line);
+    if (!m) continue;
+    const text = m[3]!;
+    for (const { pattern, re } of regexes) {
+      if (!re.test(text)) continue;
+      const sc = perPattern.get(pattern)!;
+      sc.count += 1;
+      if (!sc.samplePaths.includes(m[1]!) && sc.samplePaths.length < BATCH_MAX_SAMPLE_PATHS) {
+        sc.samplePaths.push(m[1]!);
+      }
+    }
+  }
+}
+
+/** 单次 rg 批量查 N 个 pattern：树只走一遍，JS 侧按 pattern 归因。
+ *
+ *  rg 合并输出不标注命中来自哪个 -e，而 analyzeLocatorCandidates 的判决（unique / multiple /
+ *  not-found）依赖 per-pattern 计数，故用 -n 行模式取回整行原文后由 attributeLines 归因。
+ *  N 个 pattern × 数千行 ≈ 数万次 regex.test，毫秒级，不是瓶颈。
+ *
+ *  实测（真实 40M 仓库 / 811 个 .ts）：34 次串行 spawn 1038ms → 单次批量 39ms。
+ *  注意不要改成并发 spawn：rg 内部已按核数并行，外层再套并发只是在抢同一批 CPU（实测更慢）。 */
+export async function countRepoGrepBatch(cwdRoot: string, patterns: string[]): Promise<Map<string, SourceCount>> {
+  const out = new Map<string, SourceCount>();
+  const uniq = [...new Set(patterns)].filter(Boolean);
+  if (uniq.length === 0) return out;
+
+  // 分批：每批一次 spawn。批数通常为 1（真实用例远达不到 60），超限时退化为多次遍历而非炸 ARG_MAX。
+  for (let i = 0; i < uniq.length; i += BATCH_GREP_MAX_PATTERNS) {
+    const chunk = uniq.slice(i, i + BATCH_GREP_MAX_PATTERNS);
+    // 归因正则全部来自 extractGrepKeys 的 esc()（已转义 . * + ? ^ $ { } ( ) | [ ] \），
+    // 必然可编译，不做逐 pattern 的 try/catch。
+    const regexes = chunk.map((p) => ({ pattern: p, re: new RegExp(p) }));
+    const perPattern = new Map<string, SourceCount>(
+      chunk.map((p) => [p, { count: 0, truncated: false, samplePaths: [] }]),
+    );
+    const argList = ['--no-heading', '-n', '-S', `--max-count=${BATCH_MAX_COUNT_PER_FILE}`];
+    for (const p of chunk) argList.push('-e', p);
+    argList.push('--', '.');
+    // rg 不可用/超时 → 本批全体记 0 命中（静态分析是 advisory，绝不因工具故障打断 verify_case；
+    // 与逐条版对 rg 异常的宽松度一致）。perPattern 已预置 0 计数，故成败都要并进 out。
+    await runRg(cwdRoot, argList)
+      .then(({ stdout }) => attributeLines(stdout, regexes, perPattern))
+      .catch(() => undefined);
+    for (const [p, sc] of perPattern) {
+      const prev = out.get(p);
+      if (prev) {
+        prev.count += sc.count;
+        prev.truncated = prev.truncated || sc.truncated;
+        for (const s of sc.samplePaths) {
+          if (prev.samplePaths.length < BATCH_MAX_SAMPLE_PATHS && !prev.samplePaths.includes(s)) prev.samplePaths.push(s);
+        }
+      } else {
+        out.set(p, sc);
+      }
+    }
+  }
+  return out;
+}
+
 export function buildRepoSandboxTools(cwdRoot: string | (() => string)): ToolExecutor[] {
   const resolveCwd = (): string => (typeof cwdRoot === 'function' ? cwdRoot() : cwdRoot);
   return [
@@ -212,8 +302,7 @@ export function buildRepoSandboxTools(cwdRoot: string | (() => string)): ToolExe
         const { locators } = input as { locators: Array<{ strategy: string; value: string }> };
         try {
           const cwd = resolveCwd();
-          const count = (pattern: string) => countRepoGrep(cwd, pattern);
-          const reports = await analyzeLocatorCandidates(locators as Locator[], count);
+          const reports = await analyzeLocatorCandidatesBatch(locators as Locator[], (patterns) => countRepoGrepBatch(cwd, patterns));
           return { ok: true, data: asData(reports) };
         } catch (e) {
           return { ok: false, error: (e as Error).message };

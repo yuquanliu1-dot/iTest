@@ -40,6 +40,8 @@ export interface StaticLocatorReport {
 }
 
 export type LocatorCountFn = (pattern: string) => Promise<SourceCount>;
+/** 批量计数回调：一次遍历查出全部 pattern 的命中数。返回 Map 缺失的 pattern 视为命中 0。 */
+export type BatchLocatorCountFn = (patterns: string[]) => Promise<Map<string, SourceCount>>;
 
 const RE_SPECIAL = /[.*+?^${}()|[\]\\]/g;
 const esc = (s: string): string => s.replace(RE_SPECIAL, '\\$&');
@@ -114,6 +116,9 @@ export function reorderCandidates(reports: StaticLocatorReport[]): StaticLocator
 /**
  * 对一组候选跑静态定位分析。count 调用按 pattern 去重缓存（同一条目在候选间复用）。
  * 只产出 advisory 事实，不判死。
+ *
+ *  逐 pattern 计数（每个 pattern 一次进程/IO）。跨候选、跨用例复用请改用
+ *  analyzeLocatorCandidatesBatch —— 那是同一套判决逻辑，只是计数来自单次批量查询。
  */
 export async function analyzeLocatorCandidates(
   candidates: Locator[],
@@ -128,7 +133,39 @@ export async function analyzeLocatorCandidates(
     }
     return p;
   };
+  return judgeCandidates(candidates, counted);
+}
 
+/**
+ * 批量版：先把所有候选要用的 pattern（precise + loose）一次性收集去重，交给 batchCount
+ *  单次查询，再走与 analyzeLocatorCandidates 完全相同的判决。产出的 StaticLocatorReport
+ *  形状逐字段一致——下游 summarizeStaticReports / SSE 事件零改动。
+ *
+ *  跨候选、跨用例共享一次查询，重复 pattern（如不同步骤共用 [placeholder="账号"]）天然去重；
+ *  只在 precise 命中 0 的候选上追加 loose 查询的时序差异在这里被抹平：判决只关心 count 是否
+ *  为 0/1/>1，precise=0 这个事实本身不依赖查询顺序。
+ */
+export async function analyzeLocatorCandidatesBatch(
+  candidates: Locator[],
+  batchCount: BatchLocatorCountFn,
+): Promise<StaticLocatorReport[]> {
+  const wanted = new Set<string>();
+  for (const c of candidates) {
+    const keys = extractGrepKeys(c.strategy, c.value);
+    if (!keys) continue;
+    wanted.add(keys.precise);
+    if (keys.loose) wanted.add(keys.loose);
+  }
+  const table = (await batchCount([...wanted]).catch(() => new Map<string, SourceCount>()));
+  const lookup = (pattern: string): SourceCount => table.get(pattern) ?? { count: 0, truncated: false, samplePaths: [] };
+  return judgeCandidates(candidates, async (p) => lookup(p));
+}
+
+/** unique / multiple / not-found / dynamic-suspect 的判决，两种计数注入方式共用。 */
+async function judgeCandidates(
+  candidates: Locator[],
+  counted: (pattern: string) => Promise<SourceCount>,
+): Promise<StaticLocatorReport[]> {
   const reports: StaticLocatorReport[] = [];
   for (const c of candidates) {
     const keys = extractGrepKeys(c.strategy, c.value);
