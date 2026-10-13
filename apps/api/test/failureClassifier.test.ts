@@ -36,7 +36,19 @@ describe('failureClassifier', () => {
     const ctx = { action: { kind: 'fill', value: 'x' } };
     expect(classify(new Error('unique constraint violation: duplicate key'), ctx).reason).toBe('FixedValueConflict');
   });
-  it('durationMs > 15000 → SlowLoad', () => {
+  it('LLMProviderError → LLMProviderError（不再是 Unknown）', () => {
+    const e = new Error('LLM 网关返回空响应(无 content,可能被安全策略静默拦截)');
+    e.name = 'LLMProviderError';
+    expect(classify(e).reason).toBe('LLMProviderError');
+  });
+  it('LLMProviderError + durationMs>15s → 仍是 LLMProviderError，不被 SlowLoad 兜底吞掉', () => {
+    // 回归动机:2026-10-13 prod228 网关缺 content 抛裸 TypeError,被 durationMs 兜底误报「页面加载过慢」。
+    const e = new Error('LLM 网关返回空响应(无 content,可能被安全策略静默拦截)');
+    e.name = 'LLMProviderError';
+    expect(classify(e, { durationMs: 27992 }).reason).toBe('LLMProviderError');
+    expect(classify(e, { durationMs: 27992 }).humanMessage).toContain('LLM');
+  });
+  it('durationMs > 15000 → SlowLoad（非 LLM 异常的既有兜底不受影响）', () => {
     const ctx = { durationMs: 20000 };
     expect(classify(new Error('not stable'), ctx).reason).toBe('SlowLoad');
   });
