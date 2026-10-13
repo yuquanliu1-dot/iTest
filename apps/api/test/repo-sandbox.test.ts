@@ -233,6 +233,24 @@ describe('countRepoGrepBatch', () => {
     }
   });
 
+  it('大小写变体行也计入：归因正则须复刻 rg -S 的 smart-case（否则全小写 pattern 系统性少算）', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-rg-case-'));
+    await fs.writeFile(
+      path.join(dir, 'a.html'),
+      ['placeholder="a"', 'PLACEHOLDER="b"', 'Placeholder="c"', 'unrelated=""'].join('\n'),
+    );
+    try {
+      const { countRepoGrep, countRepoGrepBatch } = await import('../src/pi/repo.js');
+      const batch = await countRepoGrepBatch(dir, ['placeholder']);
+      const serial = await countRepoGrep(dir, 'placeholder');
+      expect(batch.get('placeholder')!.count).toBe(3);
+      expect(batch.get('placeholder')!.count).toBe(serial.count);
+      // 含大写的 pattern 走区分大小写：rg 与 JS 侧同口径
+      const upperBatch = await countRepoGrepBatch(dir, ['PLACEHOLDER']);
+      expect(upperBatch.get('PLACEHOLDER')!.count).toBe(await countRepoGrep(dir, 'PLACEHOLDER').then((r) => r.count));
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
   it('空 pattern 列表 → 空 Map，不 spawn', async () => {
     const { countRepoGrepBatch } = await import('../src/pi/repo.js');
     expect((await countRepoGrepBatch(batchCwd, [])).size).toBe(0);

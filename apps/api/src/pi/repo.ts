@@ -123,6 +123,13 @@ const BATCH_MAX_SAMPLE_PATHS = 10;
  *  正则匹配开销线性增长。60 已远超真实用例的候选规模（12 步 × 2~4 候选 ≈ 30~80）。 */
 export const BATCH_GREP_MAX_PATTERNS = 60;
 
+/** rg -S（smart-case）的等价判定：pattern 全小写 → 匹配忽略大小写；含任一大写 → 区分大小写。
+ *  归因正则必须复刻这条规则，否则 rg 命中的行会被 JS 侧漏认领、count 系统性偏小
+ *  （实测 SOC 仓库 placeholder：rg 报 2288 行，敏感归因只认 2108，差 180 行是 PLACEHOLDER/Placeholder 变体）。 */
+function isSmartCaseInsensitive(pattern: string): boolean {
+  return !/[A-Z]/.test(pattern);
+}
+
 /** 把 rg -n 的合并输出按 pattern 归因，写入 perPattern（就地累加）。
  *  rg 不标注命中来自哪个 -e，故取回整行原文后在内存里逐 pattern 跑已编译正则认领。 */
 function attributeLines(
@@ -170,7 +177,10 @@ export async function countRepoGrepBatch(cwdRoot: string, patterns: string[]): P
     const chunk = uniq.slice(i, i + BATCH_GREP_MAX_PATTERNS);
     // 归因正则全部来自 extractGrepKeys 的 esc()（已转义 . * + ? ^ $ { } ( ) | [ ] \），
     // 必然可编译，不做逐 pattern 的 try/catch。
-    const regexes = chunk.map((p) => ({ pattern: p, re: new RegExp(p) }));
+    const regexes = chunk.map((p) => ({
+      pattern: p,
+      re: new RegExp(p, isSmartCaseInsensitive(p) ? 'i' : ''),
+    }));
     const perPattern = new Map<string, SourceCount>(
       chunk.map((p) => [p, { count: 0, truncated: false, samplePaths: [] }]),
     );
