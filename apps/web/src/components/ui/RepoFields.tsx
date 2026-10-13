@@ -28,11 +28,9 @@ export const EMPTY_REPO: RepoFieldsValue = {
 interface Props {
   value: RepoFieldsValue;
   onChange: (v: RepoFieldsValue) => void;
-  /** 测试连接时用于必填的 projectName（URL 解析出来的短名应与之匹配）。新建项目时可用项目名实时对比 */
-  projectNameHint?: string;
 }
 
-export default function RepoFields({ value, onChange, projectNameHint }: Props) {
+export default function RepoFields({ value, onChange }: Props) {
   const [open, setOpen] = useState<boolean>(!!value.repoUrl);
   const [verifyState, setVerifyState] = useState<
     | { kind: 'idle' }
@@ -48,7 +46,6 @@ export default function RepoFields({ value, onChange, projectNameHint }: Props) 
         provider: value.provider,
         patOverride: value.patOverride.trim() || undefined,
         branch: value.defaultBranch.trim() || undefined,
-        projectName: projectNameHint,
       }),
     onMutate: () => setVerifyState({ kind: 'checking' }),
     onSuccess: (r) => {
