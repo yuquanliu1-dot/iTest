@@ -22,6 +22,9 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const isEdit = org !== null;
+  // allOrgs 由调用方内联构造，每次渲染都是新引用；放进 effect 依赖会在每次输入时重跑并清空表单。
+  const allOrgsRef = useRef(allOrgs);
+  allOrgsRef.current = allOrgs;
 
   useEffect(() => {
     if (!visible) return;
@@ -30,7 +33,10 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
       setEditParentId(org.parentId ?? '');
     } else {
       setForm({ name: '', description: '' });
-      setEditParentId(parentId ?? '');
+      // 新建模式必须有上级组织（API 要求 parentId 为 uuid）：未指定时回落到最上层可见组织。
+      // 不设回落的话 editParentId=''，受控 select 会把选中态显示在第一项上而 state 仍为 ''，
+      // 提交时发出空串被 z.string().uuid() 拒成 400。
+      setEditParentId(parentId ?? allOrgsRef.current[0]?.id ?? '');
     }
     setError(null);
     const id = requestAnimationFrame(() => nameRef.current?.focus());
@@ -50,6 +56,11 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
           description: form.description.trim() || undefined,
         });
       } else {
+        if (!editParentId) {
+          setError('请选择上级组织');
+          setSaving(false);
+          return;
+        }
         await api.orgs.createSubOrg(form.name.trim(), editParentId);
       }
       onSaved();

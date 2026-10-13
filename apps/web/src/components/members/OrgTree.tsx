@@ -110,7 +110,7 @@ export default function OrgTree({ selectedOrgId, onSelect, canManage, onCreate, 
       {canManage && (
         <div className="shrink-0" style={{ borderTop: '1px solid var(--border)', padding: 8 }}>
           <button
-            onClick={() => onCreate(null)}
+            onClick={() => onCreate(selectedOrgId)}
             className="w-full rounded text-[12px]"
             style={{ padding: '6px 0', border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--primary)', cursor: 'pointer' }}
           >
