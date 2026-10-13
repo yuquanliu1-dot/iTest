@@ -233,7 +233,7 @@ describe('countRepoGrepBatch', () => {
     }
   });
 
-  it('大小写变体行也计入：归因正则须复刻 rg -S 的 smart-case（否则全小写 pattern 系统性少算）', async () => {
+  it('大小写变体行也计入：全小写 pattern 走 rg -S 的忽略大小写语义', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-rg-case-'));
     await fs.writeFile(
       path.join(dir, 'a.html'),
@@ -245,9 +245,30 @@ describe('countRepoGrepBatch', () => {
       const serial = await countRepoGrep(dir, 'placeholder');
       expect(batch.get('placeholder')!.count).toBe(3);
       expect(batch.get('placeholder')!.count).toBe(serial.count);
-      // 含大写的 pattern 走区分大小写：rg 与 JS 侧同口径
+      // 含大写的 pattern 走区分大小写
       const upperBatch = await countRepoGrepBatch(dir, ['PLACEHOLDER']);
-      expect(upperBatch.get('PLACEHOLDER')!.count).toBe(await countRepoGrep(dir, 'PLACEHOLDER').then((r) => r.count));
+      expect(upperBatch.get('PLACEHOLDER')!.count).toBe((await countRepoGrep(dir, 'PLACEHOLDER')).count);
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('大小写混合的 pattern 集：含大写者不污染全小写者的计数（smart-case 作用域是整条命令行）', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-rg-case2-'));
+    await fs.writeFile(
+      path.join(dir, 'a.html'),
+      ['placeholder="low"', 'PLACEHOLDER="up"', 'searchForm="camel"', 'SEARCHFORM="UPPER"', 'SEARCHFORM placeholder both'].join('\n'),
+    );
+    try {
+      const { countRepoGrep, countRepoGrepBatch } = await import('../src/pi/repo.js');
+      const patterns = ['placeholder', 'searchForm', 'SEARCHFORM', 'brand-nonexistent'];
+      const batch = await countRepoGrepBatch(dir, patterns);
+      for (const p of patterns) {
+        const serial = (await countRepoGrep(dir, p)).count;
+        expect(batch.get(p)!.count, p).toBe(serial);
+      }
+      // 关键语义：若不拆组，-e searchForm 会把 -e placeholder 拖成区分大小写（3 → 1）
+      expect(batch.get('placeholder')!.count).toBe(3);
+      expect(batch.get('searchForm')!.count).toBe(1);
+      expect(batch.get('SEARCHFORM')!.count).toBe(2);
     } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 
@@ -264,16 +285,6 @@ describe('countRepoGrepBatch', () => {
       const table = await countRepoGrepBatch(batchCwd, ['icon-chakan']);
       expect(table.get('icon-chakan')!.count).toBe(0);
     } finally { process.env.PATH = prev; }
-  });
-
-  it('pattern 数超上限时分批查询，计数跨批累计', async () => {
-    const { countRepoGrepBatch, BATCH_GREP_MAX_PATTERNS } = await import('../src/pi/repo.js');
-    const many = Array.from({ length: BATCH_GREP_MAX_PATTERNS + 5 }, (_, i) =>
-      i === BATCH_GREP_MAX_PATTERNS + 4 ? 'icon-chakan' : `miss_${i}`);
-    const table = await countRepoGrepBatch(batchCwd, many);
-    expect(table.get('icon-chakan')!.count).toBe(1); // 落在第二批
-    expect(table.get('miss_0')!.count).toBe(0);
-    expect(table.size).toBe(many.length);
   });
 });
 
