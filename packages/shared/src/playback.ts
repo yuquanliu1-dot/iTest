@@ -37,6 +37,8 @@ export const FailureReason = z.enum([
   'HttpRequestTimeout',
   'HttpRequestAssertionFailed',
   'HttpRequestSaveAsFailed',
+  /** 2026-10-13: LLM 网关/提供商异常（缺 content、被安全策略静默拦截等平台侧错误，非页面/定位问题） */
+  'LLMProviderError',
   'EnvMissing',
   'EnvProjectMismatch',
   /** Track 1: 用例级 vision LLM 判定最终截图与 expectedOutcome 不符 */

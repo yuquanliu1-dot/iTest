@@ -42,6 +42,8 @@ const HUMAN: Record<FailureReason, string> = {
   HttpRequestTimeout: 'HTTP 请求超时',
   HttpRequestAssertionFailed: 'HTTP 断言未命中（状态码或响应体不匹配）',
   HttpRequestSaveAsFailed: 'HTTP 响应值提取失败',
+  /** 平台侧 LLM 网关/提供商错误：页面与定位无关联，误报页面慢会引偏排查。 */
+  LLMProviderError: 'LLM 网关/提供商异常（空响应或已被安全策略拦截），请检查模型服务状态',
   VisionAssertionFailed: '最终页面与用例预期不符(vision 判定失败)',
   EngineUnavailable: '移动端引擎不可用，请检查设备配置或 agent-device daemon',
   MobileUnsupportedCapability: '当前 mobile 引擎不支持该动作',
@@ -98,6 +100,9 @@ export function classify(err: unknown, ctx: ClassifyCtx = {}): ClassifiedFailure
   if (e?.name === 'HttpRequestTimeout') return { reason: 'HttpRequestTimeout', humanMessage: HUMAN.HttpRequestTimeout };
   if (e?.name === 'HttpRequestAssertionFailed') return { reason: 'HttpRequestAssertionFailed', humanMessage: HUMAN.HttpRequestAssertionFailed };
   if (e?.name === 'HttpRequestSaveAsFailed') return { reason: 'HttpRequestSaveAsFailed', humanMessage: HUMAN.HttpRequestSaveAsFailed };
+  // 必须在 durationMs SlowLoad 兜底之前：LLM 网关异常往往耗时超 15s，
+  // 若落到兜底会被误报成「页面加载过慢」。2026-10-13 prod228 实测误报。
+  if (e?.name === 'LLMProviderError') return { reason: 'LLMProviderError', humanMessage: HUMAN.LLMProviderError };
   if (ctx.action && (ctx.action as { kind?: string }).kind === 'fill' &&
       (msg.includes('unique constraint') || msg.includes('duplicate'))) {
     return { reason: 'FixedValueConflict', humanMessage: HUMAN.FixedValueConflict };
