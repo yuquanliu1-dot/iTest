@@ -146,6 +146,12 @@ DO $$ BEGIN ALTER TABLE projects        ADD COLUMN created_by_user_id uuid REFER
 DO $$ BEGIN ALTER TABLE execution_plans ADD COLUMN created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL; EXCEPTION WHEN duplicate_column THEN null; END $$;
 DO $$ BEGIN ALTER TABLE datasets        ADD COLUMN created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL; EXCEPTION WHEN duplicate_column THEN null; END $$;
 DO $$ BEGIN ALTER TABLE test_environments ADD COLUMN created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL; EXCEPTION WHEN duplicate_column THEN null; END $$;
+DO $$ BEGIN
+ ALTER TABLE test_cases ADD COLUMN coverage_types jsonb DEFAULT '[]';
+EXCEPTION WHEN duplicate_column THEN null;
+END $$;
+-- 暂存表（部分测试文件自建，此处补齐共用的 ai_stage_cases 以免各文件重复）
+CREATE TABLE ai_stage_cases (thread_id text NOT NULL, local_id text NOT NULL, version_id uuid NOT NULL, title varchar(200) NOT NULL, description text, priority varchar(20), url text, steps jsonb NOT NULL DEFAULT '[]', default_env_id uuid, expected_outcome text, dataset_local_id text, coverage_types jsonb DEFAULT '[]', staged_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_stage_cases_pk PRIMARY KEY(thread_id, local_id));
 `;
 
 export interface SeedOrg {

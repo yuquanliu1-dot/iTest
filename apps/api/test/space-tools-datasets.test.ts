@@ -17,23 +17,7 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
   pool = new Pool({ connectionString: container.getConnectionUri() });
   await pool.query(SCHEMA_SQL);
-  // SCHEMA_SQL 尚未收录 ai_stage_* 暂存表,本文件自建(与 src/db/schema.ts + 0033 迁移对齐)
-  await pool.query(`
-    CREATE TABLE ai_stage_cases (
-      thread_id text NOT NULL,
-      local_id text NOT NULL,
-      version_id uuid NOT NULL,
-      title varchar(200) NOT NULL,
-      description text,
-      priority varchar(20),
-      url text,
-      steps jsonb NOT NULL DEFAULT '[]',
-      default_env_id uuid,
-      expected_outcome text,
-      dataset_local_id text,
-      staged_at timestamp NOT NULL DEFAULT now(),
-      CONSTRAINT ai_stage_cases_pk PRIMARY KEY(thread_id, local_id)
-    )`);
+  // listStage 并行查全部 6 张 stage 表,其余 4 张补空表(列定义照 src/db/schema.ts)
   await pool.query(`
     CREATE TABLE ai_stage_datasets (
       thread_id text NOT NULL,
@@ -222,6 +206,66 @@ describe('stage_dataset 工具', () => {
     const { listStage } = await import('../src/pi/space/tools/stage-tools.js');
     const doc = await listStage(ctx.threadId);
     expect(doc.cases.find((c) => c.title === '登录-数据驱动')!.datasetLocalId).toBe(VALID_BODY.localId);
+  });
+});
+
+describe('stage_case 覆盖类型(coverageTypes)', () => {
+  it('声明的 coverageTypes 落暂存表;响应附覆盖回执点名各类分布', async () => {
+    const seed = await seedProject(pool);
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx, 'stage_case');
+
+    const first = await tool.execute({ localId: randomUUID(), title: '登录成功', coverageTypes: ['functional'] });
+    expect(first.ok).toBe(true);
+    const data1 = (first as { data: string }).data;
+    expect(data1).toContain('覆盖回执');
+    expect(data1).toContain('本条覆盖 功能（正常流）');
+    // 第一条时其余类型均未覆盖,模型据此知道自己还没切
+    expect(data1).toContain('异常场景×0');
+
+    await tool.execute({ localId: randomUUID(), title: '密码错误', coverageTypes: ['exception'] });
+    const third = await tool.execute({ localId: randomUUID(), title: '超长用户名', coverageTypes: ['boundary'] });
+    const data3 = (third as { data: string }).data;
+    expect(data3).toContain('功能（正常流）×1');
+    expect(data3).toContain('异常场景×1');
+    expect(data3).toContain('边界值×1');
+    expect(data3).toContain('UI/UX（呈现·交互）×0');
+
+    const { listStage } = await import('../src/pi/space/tools/stage-tools.js');
+    const doc = await listStage(ctx.threadId);
+    expect(doc.cases.find((c) => c.title === '密码错误')!.coverageTypes).toEqual(['exception']);
+  });
+
+  it('非法类型 key 被 zod 拒绝,不入暂存区', async () => {
+    const seed = await seedProject(pool);
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx, 'stage_case');
+
+    // @ts-expect-error 故意传未知类型 key
+    const bad = await tool.execute({ localId: randomUUID(), title: 'X', coverageTypes: ['perf'] });
+    expect(bad.ok).toBe(false);
+
+    const n = await pool.query(`SELECT count(*)::int AS n FROM ai_stage_cases WHERE thread_id=$1`, [ctx.threadId]);
+    expect(n.rows[0]!.n).toBe(0);
+  });
+
+  it('暂存区的 coverageTypes 能穿过 createCaseWithSteps 落到正式用例表', async () => {
+    const seed = await seedProject(pool);
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx, 'stage_case');
+    await tool.execute({ localId: randomUUID(), title: '登录-越权', coverageTypes: ['security'] });
+
+    const { listStage } = await import('../src/pi/space/tools/stage-tools.js');
+    const row = (await listStage(ctx.threadId)).cases[0]!;
+
+    // stageRoute 的落库就是这组字段的透传
+    const { createCaseWithSteps } = await import('../src/services/cases.service.js');
+    const created = await createCaseWithSteps({
+      groupId: seed.groupId, versionId: seed.versionId, title: row.title,
+      coverageTypes: row.coverageTypes,
+    });
+    const saved = (await pool.query(`SELECT coverage_types FROM test_cases WHERE id=$1`, [created.id])).rows[0]!;
+    expect(saved.coverage_types).toEqual(['security']);
   });
 });
 

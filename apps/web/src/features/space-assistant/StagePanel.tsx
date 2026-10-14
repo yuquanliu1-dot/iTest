@@ -8,6 +8,7 @@ import PriorityBadge from '../../components/ui/PriorityBadge';
 import { useUIStore } from '../../stores/ui';
 import { stepKindLabel } from '../../lib/format';
 import { stepSummary } from '../../lib/stepSummary';
+import { COVERAGE_LABELS } from '@itest/shared';
 import SaveDialog from './SaveDialog';
 import {
   useSpaceEventsStore,
@@ -223,6 +224,11 @@ export default function StagePanel({ projectId, versionId }: Props) {
           {p.url && (
             <div className="text-[11px] break-all" style={{ color: 'var(--muted-foreground)' }}>{p.url}</div>
           )}
+          {p.coverageTypes?.length ? (
+            <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+              覆盖：{p.coverageTypes.map((k) => COVERAGE_LABELS.get(k) ?? k).join('、')}
+            </div>
+          ) : null}
           {p.datasetLocalId && (
             <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               配套数据集：{boundDataset ? `「${boundDataset.name}」（同批保存时自动绑定）` : '草稿已不在暂存区，保存时不绑定'}

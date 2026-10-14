@@ -81,6 +81,8 @@ export interface CreateCaseInput {
   scenarioId?: string | null;
   tagIds?: string[];
   expectedOutcome?: string | null;
+  /** 本条覆盖的测试类型（COVERAGE_TYPE_KEYS 子集）；AI 生成路径由 stage_case 带下来。 */
+  coverageTypes?: string[];
   /** 绑定数据集（space-assistant stage 保存路径：数据集先落库再回填）。 */
   datasetId?: string | null;
   /** 创建人（对齐 plan_schedules.created_by_user_id 约定）；caller 未传则 null。 */

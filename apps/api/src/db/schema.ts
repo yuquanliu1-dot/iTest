@@ -52,6 +52,9 @@ export const testCases = pgTable('test_cases', {
   /** 用例级预期描述（自然语言）。回放阶段结束时由 vision LLM 拿最终截图 + 此字段判终态；
    * 为空/null 时跳过用例级断言（仅按 step.action 是否全部成功判定 pass/fail）。 */
   expectedOutcome: text('expected_outcome'),
+  /** 本条覆盖的测试类型（COVERAGE_TYPE_KEYS 子集）。AI 生成时由 stage_case.coverageTypes 带下来：
+   *  落库后覆盖度才可查询/可统计,不再只是提示词里的一句话。 */
+  coverageTypes: jsonb('coverage_types').default([]),
   // 移动端元数据：platform='web' 表示存量 web 用例;'android'|'ios' 表示走 Appium driver。
   // 复用 test_cases.dataset_id / default_env_id 的「nullable FK + set null」约定：删除 device_targets 不应牵连用例。
   platform: varchar('platform', { length: 16 }).notNull().default('web'),
@@ -148,6 +151,10 @@ export const aiStageCases = pgTable(
     expectedOutcome: text('expected_outcome'),
     /** 配套绑定：同批暂存数据集的 localId（stage_dataset 生成）；save 时数据集先落库回填真实 datasetId。 */
     datasetLocalId: text('dataset_local_id'),
+    /** 本条用例覆盖的测试类型（functional/exception/boundary/security/uiux）。
+     *  弹窗勾选的覆盖要求此前只是拼进 prompt 的一句话，工具层收不到、生成后无从核对；
+     *  落到这列后覆盖意图成为可查询数据，暂存区可展示、后续可做覆盖矩阵。 */
+    coverageTypes: jsonb('coverage_types').default([]),
     stagedAt: timestamp('staged_at').defaultNow().notNull(),
   },
   (t) => ({
