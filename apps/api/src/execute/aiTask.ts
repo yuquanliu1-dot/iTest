@@ -203,13 +203,25 @@ async function shotElement(page: Page, selector: string): Promise<Buffer | null>
 /** 验证码类指令判定（录制器产物 instruction 固定为「识别验证码图片中的字符并填入验证码输入框」）。 */
 export const CAPTCHA_TASK_RE = /验证码|captcha/i;
 
-/** 提交后页面出现验证码校验失败提示的可观测信号（识别错误 / 过期都由被测系统提示，笼统匹配）。 */
-const CAPTCHA_FAIL_RE = /验证码.{0,12}(错误|过期|不正确|失效)|captcha[\s\S]{0,16}(invalid|expired|incorrect)/i;
-
-export async function detectCaptchaFailure(page: Page): Promise<boolean> {
+/** 用 LLM 判断页面是否展示了验证码失败提示（任何措辞：不合法/未通过/无效/识别失败/已过期等）。
+ *  替代旧的正则 detectCaptchaFailure——正则无法覆盖被测系统各异的错误文案。
+ *  best-effort：LLM 调用失败时返回 false（不比旧行为差）。 */
+export async function isCaptchaFailed(
+  page: Page,
+  client: LLMClient,
+  onUsage?: (r: AiUsageAddend) => void,
+): Promise<boolean> {
   try {
-    const text = await page.evaluate(() => document.body?.innerText ?? '');
-    return CAPTCHA_FAIL_RE.test(text);
+    await waitForPageSettled(page, { timeoutMs: 3000, settleMs: 300 });
+    const buffer = await page.screenshot({ timeout: 5000 });
+    const r = await client.complete({
+      systemPrompt: `你是验证码状态检测器。判断这张截图中是否展示了验证码校验失败的提示（任何措辞：不合法/未通过/无效/识别失败/已过期/错误等）。只输出 JSON：{"failed":true} 或 {"failed":false}。没有失败提示或提示与验证码无关时输出 {"failed":false}。`,
+      userMessage: '判断这张截图是否有验证码失败提示。',
+      image: { base64: buffer.toString('base64'), mime: 'image/png' },
+    });
+    onUsage?.(r);
+    const parsed = tryParseJson(r.kind === 'json' ? JSON.stringify(r.value) : r.value);
+    return parsed?.failed === true;
   } catch {
     return false;
   }

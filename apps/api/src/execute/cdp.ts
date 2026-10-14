@@ -27,7 +27,7 @@ import { classify } from './failureClassifier.js';
 import { preflight } from './preflight.js';
 import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
-import { runAiTask, solveCaptchaOnce, detectCaptchaFailure, CAPTCHA_TASK_RE, USER_PH, PASSWORD_PH, SECRET_PH, type AiAction } from './aiTask.js';
+import { runAiTask, solveCaptchaOnce, isCaptchaFailed, CAPTCHA_TASK_RE, USER_PH, PASSWORD_PH, SECRET_PH, type AiAction } from './aiTask.js';
 import { mapAiActionsToCompiled } from './aiActionMap.js';
 import { readAiTaskCache, writeAiTaskCache, bumpAiTaskCacheHit } from './aiTaskCache.js';
 import type { EnvCtx } from './envContext.js';
@@ -755,11 +755,11 @@ async function runCaptchaRetry(opts: DispatchOpts, clickActions: StepAction[]): 
       // 给登录接口往返和错误提示渲染留时间
       await opts.page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => undefined);
       await opts.page.waitForTimeout(600);
-      if (!(await detectCaptchaFailure(opts.page))) break;
+      const onUsage = opts.aiUsage ? (r: AiUsageAddend) => opts.aiUsage!.add(r) : undefined;
+      if (!(await isCaptchaFailed(opts.page, client, onUsage))) break;
       pending.roundsLeft--;
       const round = CAPTCHA_RETRY_ROUNDS - pending.roundsLeft;
       // 快路径一次 vision 调用（~10s，抢 TTL）；机械失败回落通用多轮回路。
-      const onUsage = opts.aiUsage ? (r: AiUsageAddend) => opts.aiUsage!.add(r) : undefined;
       const solved = await solveCaptchaOnce(opts.page, client, pending.hint, onUsage).catch(() => null)
         ?? await runAiTask(opts.page, '识别当前验证码图片中的字符并填入验证码输入框', client, undefined, onUsage ? { onUsage } : undefined).catch(() => null);
       if (!solved) {
@@ -774,7 +774,8 @@ async function runCaptchaRetry(opts: DispatchOpts, clickActions: StepAction[]): 
     if (pending.roundsLeft <= 0) {
       await opts.page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => undefined);
       await opts.page.waitForTimeout(600);
-      if (await detectCaptchaFailure(opts.page)) {
+      const onUsage = opts.aiUsage ? (r: AiUsageAddend) => opts.aiUsage!.add(r) : undefined;
+      if (await isCaptchaFailed(opts.page, client, onUsage)) {
         throw new Error('验证码多轮重试后仍校验失败（识别错误或验证码已过期）');
       }
     }
