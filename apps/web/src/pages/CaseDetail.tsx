@@ -29,10 +29,6 @@ import { stepKindLabel } from '../lib/format';
 import { stepSummary, fullStepDescription, getKind as getStepKind } from '../lib/stepSummary';
 import { creatorName } from '../lib/creatorName';
 
-/** 行内 instruction chip 用：截断到 n 字符,带 ellipsis。 */
-function clipInline(s: string, n: number): string {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
-}
 
 type Tab = 'description' | 'reports' | 'recording';
 
@@ -990,15 +986,6 @@ export default function CaseDetail() {
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>
-                            {s.instruction?.trim() && (
-                              <span
-                                className="text-[10px] px-1.5 py-0.5 rounded-[3px] shrink-0 font-mono truncate max-w-[140px]"
-                                style={{ border: '1px solid var(--border)', color: 'var(--muted-foreground)', background: 'var(--muted)' }}
-                                title={`行级 instruction:${s.instruction}`}
-                              >
-                                📝 {clipInline(s.instruction, 22)}
-                              </span>
-                            )}
                             {Array.isArray(s.compiled) && s.compiled.length > 1 && (
                               <span
                                 className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-mono"
