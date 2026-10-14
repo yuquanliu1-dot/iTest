@@ -15,7 +15,7 @@ vi.mock('../src/execute/aiTask.js', () => ({
   PASSWORD_PH: '__ITEST_PASSWORD__',
   SECRET_PH: '__ITEST_STEP_SECRET__',
   solveCaptchaOnce: vi.fn(async () => null),
-  detectCaptchaFailure: vi.fn(() => false),
+  isCaptchaFailed: vi.fn(async () => false),
 }));
 vi.mock('../src/agent/llmSettings.js', () => ({
   resolveLlmClient: vi.fn(async () => ({
