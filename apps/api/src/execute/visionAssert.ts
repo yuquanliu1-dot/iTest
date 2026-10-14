@@ -39,6 +39,22 @@ export async function runCaseVisionAssert(input: VisionAssertInput): Promise<Vis
     // 会把「还没加载完」误判为「不符合预期」。连拍两帧像素指纹相同即静默，超时按当前帧继续。
     await waitForPageSettled(input.page, { timeoutMs: 12000, settleMs: 400 });
     const buffer = await input.page.screenshot({ timeout: 5000 });
+    // 页面超出视口时补一张整页图：视口截图看不到滚动线以下的内容，而判定 prompt 里
+    // 「空白/加载中 → failed」这条规则会把「关键区域在视口以下」误判成页面坏了。
+    // 先量文档高度，只有真的溢出才截整页——短页面保持单图，判定成本与改动前一致。
+    let fullBuffer: Buffer | null = null;
+    try {
+      const overflow = await input.page.evaluate(() => {
+        const el = document.scrollingElement ?? document.documentElement;
+        return { scrollH: el.scrollHeight, clientH: el.clientHeight };
+      });
+      if (overflow.scrollH > overflow.clientH + 100) {
+        fullBuffer = await input.page.screenshot({ timeout: 15000, fullPage: true });
+      }
+    } catch (e) {
+      // 量高度/整页截图失败不阻断判定：退回单张视口图，与该逻辑引入前行为一致。
+      logger.warn({ err: e, reportId: input.reportId }, 'full-page screenshot for vision assert failed');
+    }
     // 终态判定截图单独保存,便于报告页把「最终页面 vs 预期」展示给用户。
     const visionScreenshotPath = `/screenshots/${input.reportId}/final.png`;
     try {
@@ -54,6 +70,7 @@ export async function runCaseVisionAssert(input: VisionAssertInput): Promise<Vis
       caseTitle: input.caseTitle,
       caseUrl: input.caseUrl,
       screenshot: { base64: buffer.toString('base64'), mime: 'image/png' },
+      ...(fullBuffer ? { fullScreenshot: { base64: fullBuffer.toString('base64'), mime: 'image/png' as const } } : {}),
       llmClient: input.llmClient,
     });
     // 报告侧脱敏:LLM 提示按 spec §8.3 走明文,但落库的 visionAssert(expected / reason 可能复述敏感列值)
