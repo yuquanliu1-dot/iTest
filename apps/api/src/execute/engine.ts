@@ -36,10 +36,13 @@ export interface EngineInput {
 
 export interface Engine {
   readonly platform: 'web' | 'mobile';
+  /** 每步结束（passed/failed 均已落 results）后回调该步结果——供 runCase 层增量落库，
+   *  报告页 2s 轮询即可逐步看到结果，不必等整段跑完。 */
   execute(
     input: EngineInput,
     targetUrl?: string,
     preflightSink?: (r: PreflightReport) => void,
+    onStep?: (r: ExecStepResult) => void,
   ): Promise<ExecStepResult[]>;
   prepare(input: EngineInput): Promise<void>;
   release(input: EngineInput): Promise<void>;

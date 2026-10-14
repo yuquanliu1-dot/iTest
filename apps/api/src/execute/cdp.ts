@@ -834,6 +834,8 @@ async function runStepsInContext(
   targetUrl?: string,
   onPreflight?: (report: PreflightReport) => void,
   caseWindow?: CaseWindow,
+  /** 每步结束（passed/failed）后回调——供调用方增量落库，报告页轮询即可逐步看到结果。 */
+  onStep?: (r: ExecStepResult) => void,
   /** 失败即停钩子（verify_case 用）：失败 break 前携带失败步骤下标与当前页触发；钩子抛错忽略。 */
   onFailurePage?: (page: Page, failedIndex: number) => Promise<void>,
 ): Promise<ExecStepResult[]> {
@@ -916,7 +918,7 @@ async function runStepsInContext(
         }
       }
       const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
-      results.push({
+      const passedResult: ExecStepResult = {
         order: step.order,
         status: 'passed',
         durationMs: Date.now() - started,
@@ -930,7 +932,9 @@ async function runStepsInContext(
         ...(opts.cacheSink.current ? { cached: true } : {}),
         ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
         ...(opts.healedSink.current ? { healed: true } : {}),
-      });
+      };
+      results.push(passedResult);
+      onStep?.(passedResult);
     } catch (e) {
       const durationMs = Date.now() - started;
       const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
@@ -950,7 +954,7 @@ async function runStepsInContext(
         if (e instanceof Error) e.message = rawMsg;
       }
       const classified = classify(e, { action: failedAction, durationMs });
-      results.push({
+      const failedResult: ExecStepResult = {
         order: step.order,
         status: 'failed',
         durationMs,
@@ -964,7 +968,9 @@ async function runStepsInContext(
         log: opts.logSink.current ?? undefined,
         http: opts.httpSink.current ?? undefined,
         ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
-      });
+      };
+      results.push(failedResult);
+      onStep?.(failedResult);
       if (onFailurePage) await onFailurePage(opts.page, i).catch(() => undefined);
       // 失败立即终止，避免后续步骤被前一步污染的页面状态搞乱。
       break;
@@ -1018,6 +1024,7 @@ export async function executeCaseReal(
   onPreflight?: (report: PreflightReport) => void,
   caseWindow?: CaseWindow,
   incognito?: boolean,
+  onStep?: (r: ExecStepResult) => void,
 ): Promise<ExecStepResult[]> {
   let browser: Browser | undefined;
   try {
@@ -1041,7 +1048,7 @@ export async function executeCaseReal(
       // 暂硬编码,未来如需随 env/project 切换可挪到 envContext。
       locale: 'zh-CN',
     });
-    return await runStepsInContext(caseId, steps, ctx, context, targetUrl, onPreflight, caseWindow);
+    return await runStepsInContext(caseId, steps, ctx, context, targetUrl, onPreflight, caseWindow, onStep);
   } finally {
     if (browser) await browser.close().catch(() => undefined);
   }
@@ -1068,9 +1075,10 @@ export async function executeCaseInBrowser(
   targetUrl?: string,
   onPreflight?: (report: PreflightReport) => void,
   caseWindow?: CaseWindow,
+  onStep?: (r: ExecStepResult) => void,
   onFailurePage?: (page: Page, failedIndex: number) => Promise<void>,
 ): Promise<ExecStepResult[]> {
   // 显式持有 browser 参数以便调用方阅读意图；执行路径不直接用 browser（context 已就绪）。
   void browser;
-  return runStepsInContext(caseId, steps, ctx, context, targetUrl, onPreflight, caseWindow, onFailurePage);
+  return runStepsInContext(caseId, steps, ctx, context, targetUrl, onPreflight, caseWindow, onStep, onFailurePage);
 }

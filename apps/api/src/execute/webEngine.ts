@@ -17,6 +17,7 @@ export class WebEngine implements Engine {
     input: EngineInput,
     targetUrl?: string,
     preflightSink?: (r: PreflightReport) => void,
+    onStep?: (r: ExecStepResult) => void,
   ): Promise<ExecStepResult[]> {
     const ctx: ExecContext = {
       reportId: input.reportId,
@@ -38,6 +39,7 @@ export class WebEngine implements Engine {
       preflightSink,
       input.caseWindow,
       input.incognito,
+      onStep,
     );
   }
 }
