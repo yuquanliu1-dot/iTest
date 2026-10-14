@@ -38,7 +38,7 @@ describe('cases.service', () => {
       .rejects.toMatchObject({ status: 400, code: 'version_mismatch' });
   }, 30_000);
 
-  it('createCaseWithSteps:无 compiled 的步骤落 null（未编译、不自动兜底 aiTask），描述性断言被 sanitize 丢弃', async () => {
+  it('createCaseWithSteps:无 compiled 的步骤落 null（未编译、不自动兜底 aiTask），断言原样规整', async () => {
     const { groupId, versionId } = await seedProject(pool);
     const svc = await import('../src/services/cases.service.js');
     const c = await svc.createCaseWithSteps({
@@ -46,7 +46,6 @@ describe('cases.service', () => {
       steps: [
         { instruction: '打开首页' },
         { instruction: '点击下单按钮', assertion: '下单成功' },
-        // 描述性短语 assertion 被 sanitize 丢弃
         { instruction: '看结果', assertion: '登录表单正常展示' },
         // 视觉模式由调用方显式给 aiTask，原样落库
         { instruction: '让 AI 临场做', compiled: [{ kind: 'aiTask', instruction: '让 AI 临场做' }] },
@@ -62,42 +61,38 @@ describe('cases.service', () => {
     expect(rows[3]!.compiled).toEqual([{ kind: 'aiTask', instruction: '让 AI 临场做' }]);
     expect((rows[1]!.assertion as { kind: string }).kind).toBe('assertText');
     expect((rows[1]!.assertion as { equals: string }).equals).toBe('下单成功');
-    // 描述性短语断言 → null
-    expect(rows[2]!.assertion).toBeNull();
+    // 描述性短语也照常入库 —— 措辞判定交给 verify_case 的 LLM（assertionJudge），
+    // 写入路径不再按词表静默丢弃用户的断言
+    expect((rows[2]!.assertion as { equals: string }).equals).toBe('登录表单正常展示');
   }, 30_000);
 
-  it('createCaseWithSteps:描述性短语 assertion 被 sanitize 丢弃,真实 UI 文案断言正常规整', async () => {
+  it('createCaseWithSteps:断言只做形状规范化，措辞不参与入库判定', async () => {
     const { groupId, versionId } = await seedProject(pool);
     const svc = await import('../src/services/cases.service.js');
     const c = await svc.createCaseWithSteps({
       groupId, versionId, title: '断言清洗验证',
       steps: [
-        // 描述性短语 → 期望 assertion 为 null,不再以 page/contains 形态入库
+        // 描述性短语：照常入库，由 verify_case 在真实页面上用 LLM 判
         { instruction: '打开登录页', assertion: '登录表单正常展示' },
-        // 真实 UI 文本片段 → 期望 assertion 规整为完整 shape
         { instruction: '点登录', assertion: '登录成功' },
-        // 短断言(≤4字)放行
         { instruction: '看结果', assertion: '成功' },
+        { instruction: '空白断言', assertion: '   ' },
       ],
     });
     const rows = (await pool.query(`SELECT "order", assertion FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [c.id])).rows as Array<{
       order: number; assertion: Record<string, unknown> | null;
     }>;
-    expect(rows[0]!.assertion).toBeNull();
+    expect(rows[0]!.assertion).toEqual({
+      kind: 'assertText', locator: [], target: 'page', match: 'contains', equals: '登录表单正常展示',
+    });
     expect(rows[1]!.assertion).toEqual({
-      kind: 'assertText',
-      locator: [],
-      target: 'page',
-      match: 'contains',
-      equals: '登录成功',
+      kind: 'assertText', locator: [], target: 'page', match: 'contains', equals: '登录成功',
     });
     expect(rows[2]!.assertion).toEqual({
-      kind: 'assertText',
-      locator: [],
-      target: 'page',
-      match: 'contains',
-      equals: '成功',
+      kind: 'assertText', locator: [], target: 'page', match: 'contains', equals: '成功',
     });
+    // 纯空白仍归一为 null（没有内容可断言）
+    expect(rows[3]!.assertion).toBeNull();
   }, 30_000);
 
   it('updateCase:scenario 不匹配 → 400;tagIds [] 清空;searchCasesInVersion 关键词过滤', async () => {

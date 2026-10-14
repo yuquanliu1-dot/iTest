@@ -82,6 +82,9 @@ vi.mock('playwright-core', () => {
               waitForTimeout: async () => {},
               close: async () => {},
               screenshot: async () => Buffer.from('fake-png'),
+              // pageSettle 的像素指纹取数字；断言文本体检取 innerText 字符串。
+              // 恒返回 0：连续两次相同 → 页面已静止；innerText 场景恒为空串，judge 仍按语义判。
+              evaluate: async () => 0,
               locator: (sel: string) => makeLoc(sel),
               getByText: (t: string) => makeLoc(`text=${t}`),
               getByTestId: (t: string) => makeLoc(`testid=${t}`),
@@ -100,6 +103,11 @@ vi.mock('playwright-core', () => {
 // judgeCaseOutcome 桩：vision 终态判定的 LLM 判官（真实实现要走视觉模型，测试注入裁决结果）。
 vi.mock('../src/agent/judgeCaseOutcome.js', () => ({
   judgeCaseOutcome: vi.fn(async () => ({ passed: true, reason: 'ok' })),
+}));
+// assertionJudge 桩：断言文本体检的 LLM 判官（真实实现要发 LLM 请求，测试注入裁决结果）。
+// 缺省判 real=true（保留断言），仅专门的用例用 mockImplementationOnce 覆盖。
+vi.mock('../src/pi/space/tools/assertionJudge.js', () => ({
+  judgeAssertionText: vi.fn(async () => ({ real: true, reason: '' })),
 }));
 
 let container: StartedPostgreSqlContainer;
@@ -182,6 +190,8 @@ async function seedCase(opts: {
   platform?: string;
   url?: string | null;
   steps?: unknown[];
+  /** 与 steps 同序的 step-level assertion（测试步骤断言文本体检用） */
+  assertions?: unknown[];
   expectedOutcome?: string | null;
   /** 仅对第 1 步标记 sensitive 并注入密文（明文 StepSecret!9） */
   sensitiveStep1?: boolean;
@@ -195,8 +205,15 @@ async function seedCase(opts: {
   );
   for (let i = 0; i < (opts.steps ?? []).length; i++) {
     await pool.query(
-      `INSERT INTO test_steps(case_id, "order", source, compiled, instruction) VALUES ($1, $2, 'ai', $3::jsonb, $4)`,
-      [id, i + 1, JSON.stringify(opts.steps![i]), i === 0 ? '第一步：点击删除按钮' : null],
+      `INSERT INTO test_steps(case_id, "order", source, compiled, instruction, assertion)
+       VALUES ($1, $2, 'ai', $3::jsonb, $4, $5::jsonb)`,
+      [
+        id,
+        i + 1,
+        JSON.stringify(opts.steps![i]),
+        i === 0 ? '第一步：点击删除按钮' : null,
+        opts.assertions?.[i] != null ? JSON.stringify(opts.assertions[i]) : null,
+      ],
     );
   }
   if (opts.sensitiveStep1 || opts.sensitiveNoSecret) {
@@ -831,6 +848,60 @@ describe('verify_case 逐步 AI 执行编排', () => {
   });
 });
 
+describe('verify_case 断言文本体检', () => {
+  const ASSERT_COMPILED = [{ kind: 'click', locator: [{ strategy: 'css', value: '#okBtn' }] }];
+
+  it('判定为描述性短语 → 不进本轮指令、不进机械回放、原样回传给 LLM', async () => {
+    const caseId = await seedCase({
+      steps: [ASSERT_COMPILED],
+      assertions: ['登录表单正常展示'],
+    });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { judgeAssertionText } = await import('../src/pi/space/tools/assertionJudge.js');
+    vi.mocked(judgeAssertionText).mockResolvedValueOnce({ real: false, reason: '描述状态而非页面文案' });
+
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok, r.ok ? '' : JSON.stringify(r)).toBe(true);
+    const data = JSON.parse(r!.data!);
+    expect(data.result).toBe('passed');
+    // 断言原文回传，agent 据此改写成真实 UI 文案，而不是靠弱化断言蒙混
+    expect(data.droppedAssertions).toEqual([{ order: 1, assertion: '登录表单正常展示' }]);
+    // AI 相指令里带「已忽略」说明，不再让它去核实一个页面上不存在的文案
+    const instr = String(vi.mocked(runAiTask).mock.calls[0]![1]);
+    expect(instr).toContain('断言：已忽略');
+    expect(instr).toContain('登录表单正常展示');
+    // 机械回放也跳过该断言（回放逐字派发，跑一遍只会白挂一次）
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    const stepsArg = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ assertion: unknown }>;
+    expect(stepsArg[0]!.assertion).toBeNull();
+  });
+
+  it('判定为真实 UI 文案 → 断言照常进入指令与回放', async () => {
+    const caseId = await seedCase({
+      steps: [ASSERT_COMPILED],
+      assertions: ['登录'],
+    });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { judgeAssertionText } = await import('../src/pi/space/tools/assertionJudge.js');
+    vi.mocked(judgeAssertionText).mockResolvedValueOnce({ real: true, reason: '按钮文案' });
+
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse(r!.data!);
+    expect(data.droppedAssertions).toBeUndefined();
+    const instr = String(vi.mocked(runAiTask).mock.calls[0]![1]);
+    expect(instr).toContain('断言（预期结果，完成后自行核实）');
+    expect(instr).not.toContain('断言：已忽略');
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    const stepsArg = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ assertion: unknown }>;
+    expect(stepsArg[0]!.assertion).not.toBeNull();
+  });
+});
+
 describe('verify_case compiled 机械回放干跑', () => {
   it('AI 相全过后干跑：executeCaseInBrowser 调用一次、reportId 隔离、不重复终态判定，通过 → passed + replay 摘要', async () => {
     const caseId = await seedCase({ steps: [CLICK_COMPILED] });
@@ -884,6 +955,7 @@ describe('verify_case compiled 机械回放干跑', () => {
         _targetUrl: string | undefined,
         _onPreflight: unknown,
         _caseWindow: unknown,
+        _onStep: unknown,
         onFailurePage?: (page: unknown, failedIndex: number) => Promise<void>,
       ) => {
         // 模拟真实引擎失败时回调 onFailurePage（verify 借此留住干跑 page 引用）

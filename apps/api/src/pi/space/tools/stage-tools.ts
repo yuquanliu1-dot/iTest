@@ -9,7 +9,8 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
-import { validateVariableName, VAR_NAME_RE, type StepAction } from '@itest/shared';
+import { validateVariableName, VAR_NAME_RE, StepAction } from '@itest/shared';
+import { STEP_DSL_SPEC } from '../../../agent/prompts/step-dsl-spec.js';
 import { db } from '../../../db/client.js';
 import {
   aiStageCaseOps, aiStageCases, aiStageDatasets, aiStageEnvironments, aiStagePlans, aiStageScenarios,
@@ -17,6 +18,7 @@ import {
 import { HttpError } from '../../../middleware/errorHandler.js';
 import { buildVariableReport } from '../../../lib/variable-report.js';
 import { buildOutcomeNote } from './outcomeNote.js';
+import { normalizeCompiledStep } from '../../tools.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 import { emitStage } from './stage.js';
@@ -352,10 +354,18 @@ export async function stageDataset(threadId: string, versionId: string, body: St
 // 与 manage_*（实时写）并列存在；调用方可在 prompt 里优先选 stage_*。
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** compiled 的防御校验：与 stage_case_op（case-ops-tools.ts CompiledNullableArray）同款。
+ *  normalizeCompiledStep 修 LLM 常见的 locator 异常形状，z.array(StepAction) 挡下非法 kind/字段——
+ *  此前 stage_case 收 z.array(z.unknown())，垃圾能一路入库，只在回放时才炸。 */
+const CompiledSteps = z
+  .array(z.unknown())
+  .transform((v) => v.map(normalizeCompiledStep))
+  .pipe(z.array(StepAction).nullable());
+
 const StepInput = z.object({
   action: z.string().min(1).max(2000),
   assertion: z.string().max(2000).nullable().optional(),
-  compiled: z.array(z.unknown()).optional(),
+  compiled: CompiledSteps.optional(),
 });
 const StageCaseInput = z.object({
   localId: z.string().min(1).max(64),
@@ -440,7 +450,7 @@ export const STAGE_PROMPT_GUIDELINES = [
   '登录步骤的凭据不要写明文：用户名输入框 fill 的 value 写字面量 __ITEST_USERNAME__、密码输入框写字面量 __ITEST_PASSWORD__,回放时平台自动替换为「项目设置→测试环境」里配的 login 凭据真实值（环境未配 login 则该步报 env-missing 失败,不会静默填字面量）。这与数据集变量 {{列名}} 的分工：数据集管同流程多组数据的差异,__ITEST_*__ 只指向环境的单一登录凭据。verify_case / solidify_case 的 AI 相也认同一套占位符,两相行为一致。除这三个字面量外不要臆造别的 __ITEST_xxx__。',
   '数据集敏感列（密码/密钥等）标 sensitive:true,单元格值仍以明文给出（落库时自动加密,预览对用户可见）;已有数据集的行值/敏感值对你永不可见（list_datasets 仅结构）。修改已有数据集暂不支持;给已有用例绑定已落库数据集走 stage_case_op update_case(patch.datasetId)。',
   'stage_case 的每条 step 必须输出 compiled 字段（DSL 步骤数组,回放直接执行,保存时不再编译）。增量需求/功能还不稳定、页面元素频繁变动时,可把整条步骤建成视觉模式：compiled 写成 [{"kind":"aiTask","instruction":"..."}]（不是 null）,回放时由 AI 看截图临场执行自然语言指令；功能稳定后再用 solidify_case 固化为机械步骤。规则：',
-  '- compiled 是 JSON 数组,元素形如 {"kind": "...", ...}；允许 kind：navigate {url} / click {locator} / fill {locator, value} / hover {locator} / waitFor {locator, timeoutMs?} / assertText {locator, equals} / assertVisible {locator} / check {locator, checked} / select {locator, value} / extract {locator, varName} / aiTask {instruction}（运行时智能体执行,不预编译,原样保留）/ httpRequest {method, url, headers[], body?, timeoutMs?, carryLoginState?, saveAs?, assertion?}（REST API 请求步骤,回放机械执行零 LLM）。禁止输出 aiStep。',
+  '- compiled 是 JSON 数组,元素形如 {"kind": "...", ...}；允许 kind：navigate {url} / click {locator} / fill {locator, value} / hover {locator} / waitFor {locator, timeoutMs?} / assertText {locator, equals} / assertVisible {locator} / check {locator, checked} / select {locator, value} / extract {locator, varName} / aiTask {instruction}（运行时智能体执行,不预编译,原样保留）/ httpRequest {method, url, headers[], body?, timeoutMs?, carryLoginState?, saveAs?, assertion?}（REST API 请求步骤,回放机械执行零 LLM）。另支持 assertJson / queryDb / observeLog / screenshot / switchTab / upload —— 完整形状见下方 DSL 规格。禁止输出 aiStep。',
   '- locator 是 [{"strategy":"...","value":"..."}] 的一层数组;strategy 只能是 "role" | "text" | "testId" | "css" | "xpath";role 的 value 形如 "textbox[name=\'用户名\']" 且必须小写。xpath 的绝对路径在 SPA 重渲染时极易失效——仅历史数据兼容,新生成的步骤禁止产出 xpath 候选。多候选（强约束）:每个带 locator 的动作给 2~4 个候选,按稳定度降序,且全部从 inspect_page 抓到的**同一个目标元素**派生（同源锚定,严禁把不同元素的定位拼进同一条候选链）:(1) 纯 #id;(2) css 属性选择器 [name=]/[placeholder=]/[aria-label=]/[data-testid=],快照里有哪个属性用哪个;(3) role[name=可见文案],仅当元素是语义 HTML（button/input/a 等）或带 role 属性;(4) text=可见文案兜底。位置型选择器（`:first-child`/`:nth-child`/『表单里第一个 input』等）依赖字段顺序,极易静默命中错误元素——仅当元素无任何可用属性时才用且排在末位。裸标签结尾的 css（如 `.baseForm input`、`.example textarea`）命中作用域内全部同标签元素,等同位置型——css 候选必须带属性过滤（如 `input[placeholder="规则名称"]`）或唯一类名/ID 限定;表单 fill 的元素带 placeholder/name 等属性时,属性候选必给且排首位（verify_case 会把首命中候选命中多个元素的 locator 判为 AmbiguousLocator 失败）。完整 step 示例：{kind:"click", locator:[{strategy:"css", value:"#loginBtn"}, {strategy:"role", value:"button[name=\'登录\']"}, {strategy:"text", value:"登录"}]};表单 fill 示例 locator：[{strategy:"css", value:"[placeholder=\\"账号\\"]"}, {strategy:"role", value:"textbox[name=\\"账号\\"]"}]。locator **只有一层数组**,每个元素直接是 {strategy,value} 对象,不要把每个候选再嵌一层数组。禁止把 locator 写成对象（如 {item:{...}} 或 {strategy:"...",value:"..."} 直接放在 locator 槽），回放无法识别。',
   '- 仓库已检出时,可用 static_locator 工具对候选做源码静态分析(把候选的 strategy/value 传入,返回 verdict:unique=源码唯一锚点/multiple=源码命中多处→回放歧义/not-found=源码未命中疑似臆造/dynamic-suspect=元素由动态绑定渲染):候选里的伪唯一锚点(例 [title=\\"查看\\"] 源码命中多处)必须换成同元素的源码唯一语义锚点(如 .icon-chakan),命中多处者回放会静默点错。注意 0 命中不全是臆造——:placeholder=\\"变量\\" 之类动态绑定会判 dynamic-suspect,勿据此判死,以 verify_case 实测为准。',
   '- navigate 的 url 必须是绝对 URL,且必须使用上下文里的真实页面 URL（host:port/path 原样保留）,禁止臆造 http://localhost:5173/...。没拿到 URL 时,生成用例前先调用 inspect_page 抓取真实页面,从抓取结果里取真实 URL 与 locator,禁止凭「典型实现」编造 testid/id。',
@@ -455,6 +465,7 @@ export const STAGE_PROMPT_GUIDELINES = [
   '- 用户提供 OpenAPI/Swagger 规范（粘贴在对话里或已提交到仓库,用 repo_read 读取）要生成 API 用例时：按 path+method 选端点,依 schema 构造 headers/body,鉴权 token 从环境/数据集变量取（不要明文写死）;编排期就把每条请求固化为 httpRequest 步骤（回放不再调 LLM）,链式传值用 saveAs + {{var}}。UI+API 混合用例：UI 登录步骤后接 carryLoginState:true 的 httpRequest 即可复用会话。',
   '视觉模式用例（步骤 compiled 为纯 aiTask 数组）功能稳定后,调用 solidify_case 把 AI 实际执行过的动作固化（solidify）为机械 compiled,就地改写源用例并暂存 —— 固化结果必须再经 verify_case 验收才算完成。',
   'expectedOutcome 必须与步骤类型匹配,先分清本用例是「观察型」还是「变更型」:变更型(新建/提交/删除等会改变服务端状态)才配业务结果断言;观察型(进页面查看列表状态)只配「页面可达/数据可见」这类断言。把观察型用例的 expectedOutcome 写成业务结果(如"自动启动处置成功"),verify_case 终态判定必然失败,而你唯一的过关手段会是弱化预期——把用例改成什么都测不出来。响应里的「预期体检」点名了这种不自洽,务必当场修正。',
+  `【完整 StepAction DSL 规格（权威定义，上面的 kind 列表是摘要）】\n${STEP_DSL_SPEC}`,
 ];
 
 /** stage_case 前瞻变量体检（与 stage_case_op 的 prospectiveVarNote 同方向）:
