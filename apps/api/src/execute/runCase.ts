@@ -10,6 +10,7 @@ import type { WindowStrategy, PreflightReport } from '@itest/shared';
 import { WebEngine } from './webEngine.js';
 import { MobileEngine } from './mobileEngine.js';
 import { EngineUnavailable, type Engine, type EngineInput } from './engine.js';
+import { readAiFallbackSettings } from './aiFallback.js';
 
 /**
  * 执行单条用例并落报告。CDP 失败 → 写入 CDPUnavailable 失败报告（不再降级 mock）。
@@ -271,6 +272,8 @@ async function runCaseOnceInner(
     );
   };
   try {
+    // 回放 AI 降级开关（全局设置）：每次执行读一次，注入 executor 供 dispatcher 触达；全关时不透传。
+    const aiFallback = await readAiFallbackSettings();
     const stepInput = steps.map((s) => ({
       order: s.order,
       assertion: s.assertion,
@@ -281,6 +284,8 @@ async function runCaseOnceInner(
       sensitive: s.sensitive,
       // 2026-10-06:dispatcher 唯一回放依据 compiled;action 列已于 0030 DROP。
       compiled: s.compiled as unknown[] | null | undefined,
+      // AI 降级兜底用：行级自然语言指令（正常机械回放不读）。
+      instruction: s.instruction,
     }));
     const execCtx = {
       reportId,
@@ -294,6 +299,7 @@ async function runCaseOnceInner(
         ? { initialVars: rowPlan.vars, sensitiveVarKeys: rowPlan.sensitiveVarKeys }
         : {}),
       ...(opts?.liveView ? { liveView: opts.liveView } : {}),
+      ...(aiFallback.compileMissing || aiFallback.locatorFailed ? { aiFallback } : {}),
     };
     // mobile 用例：直接走 MobileEngine；web 用例：登录准备链路（ownedBrowser）走 executeCaseInBrowser 复用 ctx,
     // 其余走 WebEngine.execute → executeCaseReal（保留 storageState/incognito 注入语义）。
@@ -382,6 +388,7 @@ async function runCaseOnceInner(
         mobileOs,
         ...(opts?.liveView ? { liveView: opts.liveView } : {}),
         ...(rowPlan ? { initialVars: rowPlan.vars, sensitiveVarKeys: rowPlan.sensitiveVarKeys } : {}),
+        ...(aiFallback.compileMissing || aiFallback.locatorFailed ? { aiFallback } : {}),
       };
       try {
         await engine.prepare(engineInput);

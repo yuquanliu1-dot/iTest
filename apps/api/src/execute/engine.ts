@@ -16,7 +16,11 @@ export interface EngineInput {
     componentKind: string | null;
     sensitive: boolean;
     compiled: unknown[] | null | undefined;
+    /** 行级自然语言指令；回放仅 AI 降级兜底用，机械回放不读。 */
+    instruction: string | null;
   }>;
+  /** 回放 AI 降级开关（全局设置，runCase 层读入注入；缺省全关）。 */
+  aiFallback?: import('./aiFallback.js').AiFallbackSettings;
   envCtx?: EnvCtx;
   initialVars?: Record<string, string>;
   sensitiveVarKeys?: string[];
