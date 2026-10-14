@@ -1,5 +1,5 @@
 import { resolveLlmClient } from './llmSettings.js';
-import type { LLMClient } from './llm-client.js';
+import type { LLMClient, LLMMessage } from './llm-client.js';
 import { completeJson } from './llm-client.js';
 import { CASE_OUTCOME_VISION_PROMPT } from './prompts/case-outcome-vision.js';
 import { newAiUsage, type AiUsageStat } from '../execute/aiUsage.js';
@@ -18,6 +18,9 @@ export interface JudgeCaseOutcomeOpts {
   caseUrl?: string | null;
   /** 最终页面截图（PNG/JPEG base64）。 */
   screenshot: { base64: string; mime: 'image/png' | 'image/jpeg' };
+  /** 可选的整页截图：页面超出视口时补一张，覆盖需要滚动才能看到的区域。
+   *  不传则只按视口图判定（与该字段引入前一致）。 */
+  fullScreenshot?: { base64: string; mime: 'image/png' | 'image/jpeg' } | null;
   /** LLM 注入；缺省时按需 resolveLlmClient。 */
   llmClient?: LLMClient;
 }
@@ -37,18 +40,35 @@ export async function judgeCaseOutcome(opts: JudgeCaseOutcomeOpts): Promise<Visi
       return undefined;
     }
   }
+  // 双图形态：视口图（图 1，用户执行结束时实际看到的）+ 整页图（图 2，覆盖视口以下）。
+  // 走 messages 而非 image 字段——后者只支持单图；三个 client 都已按 messages 的
+  // image block 逐块映射（llm-openai/anthropic/google），无需改 provider 层。
   const userMessage = [
     `用例标题: ${opts.caseTitle}`,
     opts.caseUrl ? `用例入口 URL: ${opts.caseUrl}` : '',
     `用例预期: ${expected}`,
-    '以下为执行结束后的页面截图：',
+    opts.fullScreenshot ? '以下为执行结束后的页面截图（图 1 视口 / 图 2 整页）：' : '以下为执行结束后的页面截图：',
   ].filter(Boolean).join('\n');
+  const twoImages: LLMMessage[] | undefined = opts.fullScreenshot
+    ? [{
+        role: 'user',
+        content: [
+          { type: 'image', base64: opts.screenshot.base64, mime: opts.screenshot.mime },
+          { type: 'text', text: '图 1：执行结束时用户实际看到的视口范围。' },
+          { type: 'image', base64: opts.fullScreenshot.base64, mime: opts.fullScreenshot.mime },
+          { type: 'text', text: '图 2：同一时刻的整页截图（含视口以下需滚动才能看到的区域）。' },
+          { type: 'text', text: userMessage },
+        ],
+      }]
+    : undefined;
   let r;
   try {
     r = await completeJson(client, {
       systemPrompt: CASE_OUTCOME_VISION_PROMPT,
       userMessage,
-      image: opts.screenshot,
+      ...(twoImages
+        ? { messages: twoImages }
+        : { image: opts.screenshot }),
     });
   } catch (e) {
     logger.warn({ err: e, caseTitle: opts.caseTitle }, 'case-outcome vision assert failed; treat as skipped');
