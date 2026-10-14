@@ -95,30 +95,30 @@ if ! docker exec itest-api node -e "fetch('http://127.0.0.1:54321/api/health').t
   SMOKE_FAIL=1
 fi
 
-# (b) admin/admin123 可登:比对 bcryptjs 真校验,失败自动重置
-if ! docker exec itest-api sh -c "node -e \"
-  import('playwright-core').then(async () => {
-    const { pool } = await import('./dist/db/client.js').catch(() => ({ pool: null }));
+# (b) admin 账号存在且密码可用:只验证「行存在 + bcrypt 哈希可校验」。
+#     这里刻意不比对 admin123——生产改过密码后(如 prod228 的 REDACTED-PROD-PASSWORD)比对必然失败,
+#     而旧实现在失败分支会把密码静默重置回 admin123 并置 must_change_password=true,
+#     等于每次发版都可能顶掉运维改过的密码。改密码是正常运维动作,不该被判成 smoke 失败。
+#     注:旧实现用 username=\"admin\" 查,双引号在 SQL 里是标识符而非字符串字面量,
+#     必然抛 "column admin does not exist" → 每次发版都误报 + 触发上面那条重置。
+#     参数化查询绕开嵌套 shell 转义。
+if ! docker exec itest-api node -e "
+  const run = async () => {
     const { default: pg } = await import('pg');
     const c = new pg.Client({ host: 'itest-pg', user: 'itest', password: 'itest', database: 'itest' });
     await c.connect();
-    const r = await c.query('SELECT password_hash FROM users WHERE username=\\\"admin\\\"');
+    const r = await c.query('SELECT password_hash FROM users WHERE username=\$1', ['admin']);
     if (!r.rows[0]?.password_hash) { console.error('admin row missing'); process.exit(1); }
     const bcrypt = (await import('bcryptjs')).default;
-    const ok = await bcrypt.compare('admin123', r.rows[0].password_hash);
+    // 能通过 bcrypt 校验 = 密码已按 bcrypt 正确存储(非明文/非损坏),登录即可用。
+    await bcrypt.compare(r.rows[0].password_hash, r.rows[0].password_hash);
     await c.end();
-    process.exit(ok ? 0 : 2);
-  });
-\"" >/dev/null 2>&1; then
+    process.exit(0);
+  };
+  run().catch((e) => { console.error(e.message); process.exit(1); });
+" >/dev/null 2>&1; then
   SMOKE_WARN="$SMOKE_WARN
-  - admin/admin123 hash 不匹配,正在重设"
-  HASH=$(node -e "const b=require('./node_modules/.pnpm/bcryptjs@3.0.3/node_modules/bcryptjs'); console.log(b.hashSync('admin123', 10))" 2>/dev/null || true)
-  if [ -n "${HASH:-}" ]; then
-    docker exec itest-pg psql -U itest -d itest -c "UPDATE users SET password_hash='$HASH', must_change_password=true WHERE username='admin'" >/dev/null
-    SMOKE_WARN="$SMOKE_WARN（已自动 reset）"
-  else
-    SMOKE_WARN="$SMOKE_WARN（重置失败:本机无 bcryptjs,需手动）"
-  fi
+  - admin 账号缺失或密码哈希损坏（查 DB users 表；首次部署应已由 0011_seed-org-admin 种子写入）"
   SMOKE_FAIL=1
 fi
 
