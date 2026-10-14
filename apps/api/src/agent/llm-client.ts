@@ -8,11 +8,20 @@ export interface LLMConfig {
   baseUrl?: string;
 }
 
+/** 一条对话消息（多轮累积形态）。content 里的 image 是截图 block。 */
+export interface LLMMessage {
+  role: 'user' | 'assistant';
+  content: Array<{ type: 'text'; text: string } | { type: 'image'; base64: string; mime: 'image/png' | 'image/jpeg' }>;
+}
+
 export interface LLMRequest {
   systemPrompt: string;
   userMessage: string;
   /** 多模态输入：当前只支持单图；后续可扩 image[] */
   image?: { base64: string; mime: 'image/png' | 'image/jpeg' };
+  /** 多轮累积历史（可选）。给了就用它替代单轮 userMessage/image。
+   *  缺省时退化为原来的单轮形态，行为不变。 */
+  messages?: LLMMessage[];
 }
 
 export type LLMCompleteResult =
@@ -22,6 +31,10 @@ export type LLMCompleteResult =
 export interface LLMUsage {
   promptTokens: number;
   completionTokens: number;
+  /** 本次命中缓存的 prompt token 数（不含在 promptTokens 内）。 */
+  cacheReadTokens?: number;
+  /** 本次为建立缓存新写入的 token 数。 */
+  cacheCreationTokens?: number;
 }
 
 export type LLMResult =
@@ -84,10 +97,12 @@ export async function completeJson(
   // 语义重试：把上次的非法输出与错误回喂
   retries = 1;
   const t1 = Date.now();
-  const retryReq: LLMRequest = {
-    ...req,
-    userMessage: `${req.userMessage}\n\n上次响应不是合法 JSON（响应开头：「${first.value.slice(0, 120)}」）。请重新输出，只输出 JSON，不要任何其他文字。`,
-  };
+  const hint = `\n\n上次响应不是合法 JSON（响应开头：「${first.value.slice(0, 120)}」）。请重新输出，只输出 JSON，不要任何其他文字。`;
+  // 多轮形态下不能只改 userMessage——clients 优先读 messages，改了也不会生效。
+  // 追加一条新的 user 消息承载重试提示（历史保持不变，前缀仍可缓存）。
+  const retryReq: LLMRequest = req.messages
+    ? { ...req, messages: [...req.messages, { role: 'user', content: [{ type: 'text', text: hint.trim() }] }] }
+    : { ...req, userMessage: `${req.userMessage}${hint}` };
   const second = await client.complete(retryReq);
   durationMs += second.durationMs ?? Date.now() - t1;
   if (second.usage) { agg.promptTokens += second.usage.promptTokens; agg.completionTokens += second.usage.completionTokens; agg.hasUsage = true; }

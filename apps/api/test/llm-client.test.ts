@@ -68,4 +68,29 @@ describe('completeJson 语义重试', () => {
     await expect(completeJson(c, req)).rejects.toThrow(/不是合法 JSON/);
     expect(c.requests).toHaveLength(2);
   });
+
+  it('多轮形态的语义重试：提示追加为新 user 消息，而不是被 messages 忽略', async () => {
+    // 回归动机：clients 优先读 req.messages，早期实现只改 userMessage 会让重试提示
+    // 在多轮形态下静默丢失 —— 模型收到完全相同的请求，重复返回同样的非法 JSON。
+    const multiReq: LLMRequest = {
+      systemPrompt: 'sys',
+      userMessage: '当轮',
+      messages: [{ role: 'user', content: [{ type: 'text', text: '第1轮' }] }],
+    };
+    const c = fakeClient([
+      { kind: 'text', value: 'not json at all' },
+      { kind: 'json', value: { ok: 3 } },
+    ]);
+    const r = await completeJson(c, multiReq);
+    expect(r.value).toEqual({ ok: 3 });
+    expect(r.retries).toBe(1);
+    const retry = c.requests[1]!;
+    // 历史保留 + 追加承载提示的新消息
+    expect(retry.messages).toHaveLength(2);
+    expect(retry.messages![0]!.content[0]).toEqual({ type: 'text', text: '第1轮' });
+    const hintText = retry.messages![1]!.content[0]!;
+    expect(hintText.type).toBe('text');
+    expect((hintText as { text: string }).text).toContain('不是合法 JSON');
+    expect((hintText as { text: string }).text).toContain('not json at all');
+  });
 });

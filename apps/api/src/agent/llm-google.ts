@@ -15,20 +15,32 @@ export class GoogleClient implements LLMClient {
       systemInstruction: req.systemPrompt || 'You are a helpful assistant. Reply with JSON only.',
       generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
     });
-    const parts: Array<{ text: string } | { inlineData: { mimeType: 'image/png' | 'image/jpeg'; data: string } }> = [
-      { text: req.userMessage },
-    ];
-    if (req.image) {
-      parts.push({ inlineData: { mimeType: req.image.mime, data: req.image.base64 } });
-    }
+    // 多轮累积：req.messages 存在时按 user/assistant 交替回传，否则退化为单轮。
+    // 空数组按单轮处理：startChat 的 history 必须以 user 开头，且末轮要单独 sendMessage，
+    // 空历史会导致 turns[-1] 为 undefined。
+    const src = req.messages && req.messages.length > 0 ? req.messages : [{
+      role: 'user' as const,
+      content: [
+        ...(req.image ? [{ type: 'image' as const, base64: req.image.base64, mime: req.image.mime }] : []),
+        { type: 'text' as const, text: req.userMessage },
+      ],
+    }];
+    const turns = src.map((msg) => ({
+      role: msg.role === 'assistant' ? ('model' as const) : ('user' as const),
+      parts: msg.content.map((b) => (b.type === 'image'
+        ? { inlineData: { mimeType: b.mime, data: b.base64 } }
+        : { text: b.text })),
+    }));
     const t0 = Date.now();
-    const resp = await m.generateContent(parts);
+    // startChat 需要历史（不含当前轮）+ 当前轮 parts；单轮形态时 history 为空。
+    const chat = m.startChat({ history: turns.slice(0, -1).map((t) => ({ ...t, parts: t.parts as never })) });
+    const resp = await chat.sendMessage(turns[turns.length - 1]!.parts as never);
     const durationMs = Date.now() - t0;
     const text = resp.response.text();
     const json = tryParseJson(text);
     const base: LLMCompleteResult = json ? { kind: 'json', value: json } : { kind: 'text', value: text };
     const meta = resp.response.usageMetadata;
     const usage = meta ? { promptTokens: meta.promptTokenCount ?? 0, completionTokens: meta.candidatesTokenCount ?? 0 } : undefined;
-    return { ...base, provider: 'google', vision: !!req.image, ...(usage ? { usage } : {}), durationMs, model };
+    return { ...base, provider: 'google', vision: turns.some((x) => x.parts.some((p) => 'inlineData' in p)), ...(usage ? { usage } : {}), durationMs, model };
   }
 }
