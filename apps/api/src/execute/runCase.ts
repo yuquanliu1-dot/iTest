@@ -246,6 +246,24 @@ async function runCaseOnceInner(
   let preflightReport: PreflightReport | undefined;
   let status: 'passed' | 'failed';
   const isMobile = caseRow.platform === 'mobile';
+  // 增量落库：每步结束把当前累计结果刷进报告行（status 仍为 running），让报告页 2s
+  // 轮询逐步看到结果，而不是等整段跑完才一次性出现。
+  // 写入是 fire-and-forget（失败只记日志，不打断执行），但末尾终态写入前必须等它们落定，
+  // 否则迟到的增量写会用旧快照盖掉终态 stepResults。failed 步骤同样增量落库，
+  // 这样「跑到失败那步停下」也能立刻看到失败原因。
+  const liveSteps: ExecStepResult[] = [];
+  const pendingWrites: Promise<unknown>[] = [];
+  const onStep = (r: ExecStepResult) => {
+    liveSteps.push(r);
+    const snapshot = liveSteps.slice();
+    pendingWrites.push(
+      db
+        .update(reports)
+        .set({ stepResults: snapshot as object })
+        .where(eq(reports.id, reportId))
+        .catch((e) => logger.warn({ err: e, reportId, order: r.order }, 'incremental stepResults persist failed')),
+    );
+  };
   try {
     const stepInput = steps.map((s) => ({
       order: s.order,
@@ -296,7 +314,7 @@ async function runCaseOnceInner(
       };
       try {
         await engine.prepare(engineInput);
-        stepResults = await engine.execute(engineInput, targetUrl, (r: PreflightReport) => { preflightReport = r; });
+        stepResults = await engine.execute(engineInput, targetUrl, (r: PreflightReport) => { preflightReport = r; }, onStep);
         const failed = stepResults.filter((r) => r.status === 'failed').length;
         status = failed === 0 ? 'passed' : 'failed';
       } catch (e) {
@@ -335,6 +353,7 @@ async function runCaseOnceInner(
           preflightReport = r;
         },
         caseWindow,
+        onStep,
       );
       const failed = stepResults.filter((r) => r.status === 'failed').length;
       status = failed === 0 ? 'passed' : 'failed';
@@ -360,7 +379,7 @@ async function runCaseOnceInner(
       };
       try {
         await engine.prepare(engineInput);
-        stepResults = await engine.execute(engineInput, targetUrl, (r: PreflightReport) => { preflightReport = r; });
+        stepResults = await engine.execute(engineInput, targetUrl, (r: PreflightReport) => { preflightReport = r; }, onStep);
         const failed = stepResults.filter((r) => r.status === 'failed').length;
         status = failed === 0 ? 'passed' : 'failed';
       } catch (e) {
@@ -401,6 +420,8 @@ async function runCaseOnceInner(
       // service 还未实现(MVP 阶段顺序容忍)
     }
   }
+  // 等所有增量写落定再写终态：否则迟到的增量快照会用旧数据盖掉终态 stepResults。
+  await Promise.all(pendingWrites);
   await db
     .update(reports)
     .set({

@@ -58,7 +58,7 @@ export class MobileEngine implements Engine {
     this.reportId = null;
   }
 
-  async execute(input: EngineInput, _targetUrl?: string, _preflightSink?: (r: PreflightReport) => void): Promise<ExecStepResult[]> {
+  async execute(input: EngineInput, _targetUrl?: string, _preflightSink?: (r: PreflightReport) => void, onStep?: (r: ExecStepResult) => void): Promise<ExecStepResult[]> {
     if (!this.session) throw new EngineUnavailable('mobile session not prepared');
     const results: ExecStepResult[] = [];
     const vars: Record<string, string> = { ...(input.initialVars ?? {}) };
@@ -66,12 +66,14 @@ export class MobileEngine implements Engine {
       const started = Date.now();
       const compiled = step.compiled;
       if (!Array.isArray(compiled) || compiled.length === 0) {
-        results.push({
+        const missing: ExecStepResult = {
           order: step.order, status: 'failed', durationMs: 0,
           error: `compile-missing: 第 ${step.order} 步未编译`,
           failureReason: 'MobileUnsupportedCapability',
           humanMessage: '移动端步骤缺少 compiled DSL',
-        });
+        };
+        results.push(missing);
+        onStep?.(missing);
         break;
       }
       try {
@@ -79,20 +81,24 @@ export class MobileEngine implements Engine {
           await this.dispatchMobile(sub, vars);
         }
         const screenshot = await this.captureStepScreenshot(input.reportId, step.order);
-        results.push({
+        const passedResult: ExecStepResult = {
           order: step.order, status: 'passed', durationMs: Date.now() - started, screenshot,
-        });
+        };
+        results.push(passedResult);
+        onStep?.(passedResult);
       } catch (e) {
         let msg = e instanceof Error ? e.message : String(e);
         if (input.sensitiveVarKeys?.length) msg = maskSensitiveValues(msg, vars, input.sensitiveVarKeys);
         const screenshot = await this.captureStepScreenshot(input.reportId, step.order);
         const reason: 'MobileUnsupportedCapability' | 'MobileStepFailed' =
           e instanceof Error && e.name === 'MobileUnsupportedCapability' ? 'MobileUnsupportedCapability' : 'MobileStepFailed';
-        results.push({
+        const failedResult: ExecStepResult = {
           order: step.order, status: 'failed', durationMs: Date.now() - started,
           error: msg, screenshot, failureReason: reason,
           humanMessage: reason === 'MobileUnsupportedCapability' ? '当前 mobile 引擎不支持该动作' : `agent-device 命令失败：${msg}`,
-        });
+        };
+        results.push(failedResult);
+        onStep?.(failedResult);
         break;
       }
     }

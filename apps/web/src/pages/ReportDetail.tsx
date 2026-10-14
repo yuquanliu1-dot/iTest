@@ -426,7 +426,18 @@ export default function ReportDetail() {
                 </span>
               </div>
               {stepResults.length === 0 ? (
-                <EmptyState icon="listChecks" title="无步骤结果" />
+                // 执行中且首步尚未落库：说明是「还没开始出结果」，不是「没结果」——别误导成空报告。
+                isRunning ? (
+                  <div
+                    className="flex flex-col items-center justify-center gap-2 px-5 py-14"
+                    style={{ color: 'var(--muted-foreground)' }}
+                  >
+                    <Icon name="loader" size={16} className="animate-spin" />
+                    <span style={{ fontSize: 13 }}>执行中，等待第 1 步结果…</span>
+                  </div>
+                ) : (
+                  <EmptyState icon="listChecks" title="无步骤结果" />
+                )
               ) : (
                 <div className="flex flex-col" data-stagger>
                   {(grouped.length === 1 && grouped[0]!.tabIndex === 0 && !hasTabs

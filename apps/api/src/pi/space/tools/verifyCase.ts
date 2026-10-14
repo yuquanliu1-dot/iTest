@@ -713,6 +713,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 targetUrl,
                 undefined,
                 undefined,
+                undefined,
                 async (p) => {
                   // onFailurePage 仅在分叉失败时触发；正常路径的页面切换由 runStepsInContext 的
                   // ctx.liveView.setPage 在 page 创建时完成（replay ExecContext 已带 liveView）。
