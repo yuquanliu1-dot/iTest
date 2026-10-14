@@ -46,6 +46,8 @@ interface StepResult {
   cached?: boolean;
   /** 缓存条目存在但重放分叉、AI 自愈通过（仅 passed 步携带） */
   healed?: boolean;
+  /** 机械执行受阻，由 AI 按步骤指令临场执行通过（回放 AI 降级，仅 passed 步携带） */
+  degraded?: boolean;
   /** 本步 LLM 用量；零调用步缺省 */
   aiUsage?: AiUsage;
 }
@@ -200,6 +202,9 @@ export default function ReportDetail() {
             {s.healed && (
               <Meta label="执行" value="AI 自愈" title="缓存动作与页面分叉，AI 兜底重做后通过" />
             )}
+            {s.degraded && (
+              <Meta label="执行" value="AI 降级" title="机械执行受阻（如未编译 / 元素识别失败），由 AI 按步骤指令临场执行通过" />
+            )}
             {s.aiUsage && (
               <Meta
                 label="用量"
@@ -231,9 +236,11 @@ export default function ReportDetail() {
           {s.warning && (
             <div
               className="flex gap-2 items-start text-[12px] px-2 py-1 rounded-[4px]"
-              style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}
+              style={s.degraded
+                ? { background: 'var(--info-soft)', color: 'var(--info)' }
+                : { background: 'var(--warning-soft)', color: 'var(--warning)' }}
             >
-              <span className="shrink-0 font-medium">警告</span>
+              <span className="shrink-0 font-medium">{s.degraded ? 'AI 降级执行' : '警告'}</span>
               <span className="min-w-0 break-words">{s.warning}</span>
             </div>
           )}

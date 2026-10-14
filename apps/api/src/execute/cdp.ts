@@ -31,6 +31,7 @@ import { runAiTask, solveCaptchaOnce, detectCaptchaFailure, CAPTCHA_TASK_RE, USE
 import { mapAiActionsToCompiled } from './aiActionMap.js';
 import { readAiTaskCache, writeAiTaskCache, bumpAiTaskCacheHit } from './aiTaskCache.js';
 import type { EnvCtx } from './envContext.js';
+import type { AiFallbackSettings } from './aiFallback.js';
 import { runQueryDb } from './dbQuery.js';
 import { runObserveLog } from './syslogReader.js';
 import { runHttpRequest, type HttpStepResult } from './httpRequest.js';
@@ -81,6 +82,8 @@ export interface ExecStepResult {
   aiUsage?: AiUsageStat;
   /** 缓存条目存在但重放分叉、AI 自愈通过（仅 passed 步携带；首跑无缓存不算）。 */
   healed?: boolean;
+  /** 本步机械执行受阻，由 AI 按步骤指令临场执行通过（回放 AI 降级）；报告据此醒目标注。 */
+  degraded?: boolean;
 }
 
 export interface ExecContext {
@@ -112,6 +115,8 @@ export interface ExecContext {
   sensitiveVarKeys?: string[];
   /** playground 实时画面源：每页新开时 setPage，让画面跟随执行（计划运行/单用例执行）。 */
   liveView?: LiveViewHandle;
+  /** 回放 AI 降级开关（全局设置，runCase 层读入注入；缺省全关 = 保持既有失败语义）。 */
+  aiFallback?: AiFallbackSettings;
 }
 
 /** 用例级窗口策略（maximize/current/custom），custom 时携带 width/height。 */
@@ -828,6 +833,8 @@ async function runStepsInContext(
     sensitive?: boolean | null;
     /** 可执行 DSL 数组；回放唯一依据。空数组/null = 未编译,抛 compile-missing。 */
     compiled?: unknown[] | null;
+    /** 行级自然语言指令；回放仅 AI 降级兜底用，机械回放不读。 */
+    instruction?: string | null;
   }>,
   ctx: ExecContext,
   context: BrowserContext,
@@ -875,6 +882,8 @@ async function runStepsInContext(
     logger.warn({ err: e, caseId }, 'preflight failed; continuing');
   }
   const opts: DispatchOpts = { page, vars, ctx, caseId };
+  // 回放 AI 降级开关（全局设置，runCase 层注入 ctx.aiFallback；缺省全关 = 保持既有失败语义）。
+  const fallback = ctx.aiFallback ?? { compileMissing: false, locatorFailed: false };
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]!;
     const started = Date.now();
@@ -896,6 +905,7 @@ async function runStepsInContext(
       // 1) compiled 为数组且非空 → 逐条派,收集 warning
       // 2) compiled 为空数组 / null / undefined → 未编译,抛 compile-missing
       let warning: string | undefined;
+      let degraded = false;
       const compiled = (step as { compiled?: unknown }).compiled;
       if (Array.isArray(compiled) && compiled.length > 0) {
         for (const sub of compiled as StepAction[]) {
@@ -903,7 +913,25 @@ async function runStepsInContext(
           if (w && !warning) warning = w;
         }
       } else {
-        throw new Error(`compile-missing: 第 ${step.order} 步未编译,请点击「AI 编译」生成 DSL`);
+        // AI 降级（可选）：compiled 为空 + 全局开关开 + 有行级指令 → 指令临场执行；成功留 warning 照常过，
+        // 失败维持原 compile-missing 语义（开关开但无 LLM / 指令含未定义变量 / AI 放弃都走这里）。
+        const inst = step.instruction?.trim();
+        if (fallback.compileMissing && inst) {
+          const { value: instResolved, missing } = substituteVars(inst, vars);
+          if (missing.length === 0) {
+            try {
+              const client = ctx.llmClient ?? (await resolveLlmClient()).client;
+              const summary = await runAiTask(opts.page, instResolved, client, undefined, { onUsage: (r) => aiUsage.add(r) });
+              degraded = true;
+              warning = `未编译，AI 按指令临场执行${summary ? `：${summary}` : ''}`;
+            } catch {
+              // AI 不可用/失败 → 维持原 compile-missing 语义（下面 throw）
+            }
+          }
+        }
+        if (!warning) {
+          throw new Error(`compile-missing: 第 ${step.order} 步未编译,请点击「AI 编译」生成 DSL`);
+        }
       }
       // action 通过后才执行步骤级断言；断言失败同样记 failed 并终止后续。
       if (assertionAction) {
@@ -932,6 +960,7 @@ async function runStepsInContext(
         ...(opts.cacheSink.current ? { cached: true } : {}),
         ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
         ...(opts.healedSink.current ? { healed: true } : {}),
+        ...(degraded ? { degraded: true } : {}),
       };
       results.push(passedResult);
       onStep?.(passedResult);
@@ -954,6 +983,48 @@ async function runStepsInContext(
         if (e instanceof Error) e.message = rawMsg;
       }
       const classified = classify(e, { action: failedAction, durationMs });
+      // AI 降级（可选）：元素识别失败（LocatorAllFailed）+ 全局开关开 + 有行级指令 → 用指令让 AI 整步重做。
+      // 成功 → 步骤 passed + warning 标注（不置 healed，避免污染双通过率口径）；失败维持原 failedResult。
+      // aiTask 步骤本就在跑 AI，元素识别失败时再“按指令临场执行”毫无增益 → 一律不降级，维持原失败。
+      const inst = step.instruction?.trim();
+      if (
+        classified.reason === 'LocatorAllFailed'
+        && fallback.locatorFailed
+        && inst
+        && failedAction?.kind !== 'aiTask'
+      ) {
+        const { value: instResolved, missing } = substituteVars(inst, vars);
+        if (missing.length === 0) {
+          let aiSummary: string | undefined;
+          try {
+            const client = ctx.llmClient ?? (await resolveLlmClient()).client;
+            aiSummary = (await runAiTask(opts.page, instResolved, client, undefined, { onUsage: (r) => aiUsage.add(r) })) || undefined;
+          } catch {
+            // AI 不可用/失败 → 维持原 LocatorAllFailed 失败（走下方 failedResult）
+          }
+          if (aiSummary !== undefined) {
+            const aiScreenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
+            const aiPassed: ExecStepResult = {
+              order: step.order,
+              status: 'passed',
+              durationMs: Date.now() - started,
+              // 原机械失败原因（如 count=0 (css #gone)）一并带进 warning，报告页可看到“识别到什么程度失败”。
+              warning: `元素识别失败（${rawMsg}），AI 按指令重做本步${aiSummary ? `：${aiSummary}` : ''}`,
+              screenshot: aiScreenshot,
+              hitLocator: opts.hitSink.current ?? undefined,
+              tabIndex: tabIndex >= 0 ? tabIndex : 0,
+              db: opts.dbSink.current ?? undefined,
+              log: opts.logSink.current ?? undefined,
+              http: opts.httpSink.current ?? undefined,
+              ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
+              degraded: true,
+            };
+            results.push(aiPassed);
+            onStep?.(aiPassed);
+            continue; // 本步降级通过，跳到下一 step（不走 break / onFailurePage）
+          }
+        }
+      }
       const failedResult: ExecStepResult = {
         order: step.order,
         status: 'failed',
@@ -1017,6 +1088,8 @@ export async function executeCaseReal(
     sensitive?: boolean | null;
     /** 可执行 DSL 数组；回放唯一依据。空数组/null = 未编译,抛 compile-missing。 */
     compiled?: unknown[] | null;
+    /** 行级自然语言指令；回放仅 AI 降级兜底用，机械回放不读。 */
+    instruction?: string | null;
   }>,
   ctx: ExecContext,
   targetUrl?: string,
@@ -1068,6 +1141,8 @@ export async function executeCaseInBrowser(
     componentKind?: string | null;
     sensitive?: boolean | null;
     compiled?: unknown[] | null;
+    /** 行级自然语言指令；回放仅 AI 降级兜底用，机械回放不读。 */
+    instruction?: string | null;
   }>,
   ctx: ExecContext,
   browser: Browser,

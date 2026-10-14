@@ -27,11 +27,16 @@ const DEFAULT_MODELS: Record<string, string> = {
   google: 'gemini-2.0-flash',
 };
 
-type Panel = 'llm' | 'appearance';
+/** 与 apps/api/src/execute/aiFallback.ts 的 AI_FALLBACK_KEYS 互为镜像。 */
+const AI_FALLBACK_COMPILE_MISSING_KEY = 'ai_fallback_compile_missing';
+const AI_FALLBACK_LOCATOR_FAILED_KEY = 'ai_fallback_locator_failed';
+
+type Panel = 'llm' | 'appearance' | 'replay';
 
 const PANELS: Array<{ key: Panel; label: string; icon: 'beaker' | 'sparkles' | 'layers' }> = [
   { key: 'llm', label: 'LLM Provider', icon: 'beaker' },
   { key: 'appearance', label: '外观', icon: 'sparkles' },
+  { key: 'replay', label: '回放降级', icon: 'layers' },
 ];
 
 export default function Settings() {
@@ -46,6 +51,10 @@ export default function Settings() {
   const [model, setModel] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
 
+  // 回放 AI 降级开关
+  const [compileMissingFallback, setCompileMissingFallback] = useState(false);
+  const [locatorFailedFallback, setLocatorFailedFallback] = useState(false);
+
   const { data, isLoading } = useQuery({ queryKey: ['settings'], queryFn: api.settings.list });
 
   useEffect(() => {
@@ -54,6 +63,8 @@ export default function Settings() {
     setApiKey((data.llm_api_key as string) ?? '');
     setModel((data.llm_model as string) ?? '');
     setBaseUrl((data.llm_base_url as string) ?? '');
+    setCompileMissingFallback(data[AI_FALLBACK_COMPILE_MISSING_KEY] === true);
+    setLocatorFailedFallback(data[AI_FALLBACK_LOCATOR_FAILED_KEY] === true);
   }, [data]);
 
   const save = useMutation({
@@ -69,6 +80,12 @@ export default function Settings() {
 
   const test = useMutation({
     mutationFn: () => api.settings.testConnection({ provider, apiKey, model, baseUrl }),
+  });
+
+  // 回放降级开关即时保存
+  const saveFallback = useMutation({
+    mutationFn: ({ key, value }: { key: string; value: boolean }) => api.settings.put(key, value),
+    onError: (e: Error) => toast((e as Error).message || '保存失败', 'error'),
   });
 
   if (isLoading) {
@@ -229,6 +246,51 @@ export default function Settings() {
                     </div>
                   </div>
                   <Toggle checked={theme === 'dark'} onChange={() => toggleTheme()} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {panel === 'replay' && (
+            <div className="flex flex-col gap-4 max-w-xl">
+              <div>
+                <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--foreground)' }}>
+                  回放降级
+                </h3>
+                <p className="text-[12px] mb-4" style={{ color: 'var(--muted-foreground)' }}>
+                  步骤机械执行受阻时，可用该步骤的自然语言指令让 AI 临场兜底执行（成功计通过并标注「AI 降级执行」，失败维持原失败）。
+                </p>
+              </div>
+              <div className="flex flex-col gap-3">
+                <div className="bg-card border flex items-center justify-between" style={{ padding: 16 }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>compiled DSL 为空自动降级 AI 执行</div>
+                    <div className="text-[11px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
+                      步骤未编译时用其指令临场执行，不再以 compile-missing 直接判失败。
+                    </div>
+                  </div>
+                  <Toggle
+                    checked={compileMissingFallback}
+                    onChange={(v) => {
+                      setCompileMissingFallback(v);
+                      saveFallback.mutate({ key: AI_FALLBACK_COMPILE_MISSING_KEY, value: v });
+                    }}
+                  />
+                </div>
+                <div className="bg-card border flex items-center justify-between" style={{ padding: 16 }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>元素识别失败自动降级 AI 执行</div>
+                    <div className="text-[11px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
+                      click/fill 等机械动作全部定位失败时用指令重做本步。
+                    </div>
+                  </div>
+                  <Toggle
+                    checked={locatorFailedFallback}
+                    onChange={(v) => {
+                      setLocatorFailedFallback(v);
+                      saveFallback.mutate({ key: AI_FALLBACK_LOCATOR_FAILED_KEY, value: v });
+                    }}
+                  />
                 </div>
               </div>
             </div>

@@ -35,6 +35,7 @@ describe('executeCaseInBrowser onFailurePage 钩子', () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       hook,
     );
     expect(results).toHaveLength(1);
@@ -57,6 +58,7 @@ describe('executeCaseInBrowser onFailurePage 钩子', () => {
       { reportId: 'ut-onfailure-2' },
       {} as Browser,
       fakeContext(page),
+      undefined,
       undefined,
       undefined,
       undefined,
