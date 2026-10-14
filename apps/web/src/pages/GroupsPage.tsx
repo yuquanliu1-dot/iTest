@@ -31,6 +31,7 @@ import { EmptyCellValue } from '../components/ui/Table';
 import { DataTable, type DataTableColumn, type DataTableFacet, type DataTableTabs } from '../components/ui/DataTable';
 import { useTableSelection } from '../hooks/useTableSelection';
 import { caseStatusLabel, shortDateTime } from '../lib/format';
+import { creatorName } from '../lib/creatorName';
 import {
 	PageShell,
 	PageShellActions,
@@ -446,6 +447,14 @@ export default function GroupsPage() {
 				header: '状态',
 				width: 'w-[9%]',
 				cell: (c) => <CaseStatusMenu caseId={c.id} status={c.status} projectId={projectId} />,
+			},
+			{
+				id: 'createdBy',
+				header: '创建人',
+				width: 'w-[8%]',
+				hideBelow: 'lg',
+				cellClassName: 'text-xs text-muted-foreground',
+				cell: (c) => (c.createdBy ? <span className="truncate">{creatorName(c.createdBy)}</span> : <EmptyCellValue />),
 			},
 			{
 				id: 'updatedAt',

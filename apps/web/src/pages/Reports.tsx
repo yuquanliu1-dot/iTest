@@ -243,17 +243,20 @@ export default function Executions() {
 			},
 		},
 		{
+			id: 'createdBy',
+			header: '执行人',
+			width: 'w-[96px]',
+			hideBelow: 'lg',
+			cellClassName: 'text-xs text-muted-foreground',
+			cell: (r) => (r.createdBy ? <span className="truncate">{creatorName(r.createdBy)}</span> : <EmptyCellValue />),
+		},
+		{
 			id: 'createdAt',
 			header: '时间',
 			width: 'w-[110px]',
 			align: 'right',
 			cellClassName: 'text-xs text-muted-foreground tabular-nums',
-			cell: (r) => (
-				<span className="flex flex-col items-end gap-0.5">
-					<span title={fullDateTime(r.createdAt)}>{shortDateTime(r.createdAt)}</span>
-					<span>{creatorName(r.createdBy)}</span>
-				</span>
-			),
+			cell: (r) => <span title={fullDateTime(r.createdAt)}>{shortDateTime(r.createdAt)}</span>,
 		},
 	];
 

@@ -148,18 +148,21 @@ export default function Plans() {
       },
     },
     {
+      id: 'createdBy',
+      header: '创建人',
+      width: 'w-[96px]',
+      hideBelow: 'lg',
+      cellClassName: 'text-xs text-muted-foreground',
+      cell: (p) => (p.createdBy ? <span className="truncate">{creatorName(p.createdBy)}</span> : <EmptyCellValue />),
+    },
+    {
       id: 'createdAt',
       header: '创建时间',
       width: 'w-[110px]',
       align: 'right',
       hideBelow: 'md',
       cellClassName: 'text-xs text-muted-foreground tabular-nums',
-      cell: (p) => (
-        <span className="flex flex-col items-end gap-0.5">
-          <span title={fullDateTime(p.createdAt)}>{shortDateTime(p.createdAt)}</span>
-          <span>{creatorName(p.createdBy)}</span>
-        </span>
-      ),
+      cell: (p) => <span title={fullDateTime(p.createdAt)}>{shortDateTime(p.createdAt)}</span>,
     },
     {
       id: 'actions',
