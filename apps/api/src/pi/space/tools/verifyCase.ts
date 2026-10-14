@@ -29,6 +29,7 @@ import { tryParseJson } from '../../../agent/llm-client.js';
 import { extractPageElements } from '../../inspectPage.js';
 import { countRepoGrepBatch } from '../../repo.js';
 import { computeCaseOverlay, type EffectiveStep } from './case-ops-tools.js';
+import { judgeAssertionText } from './assertionJudge.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
 import { registerLiveView } from '../../../execute/liveView.js';
 import { repoToolCwd } from './context.js';
@@ -233,6 +234,7 @@ export function buildStepInstruction(
   step: { order: number; instruction: string | null; compiled: unknown; assertion: unknown },
   total: number,
   sec: { hasLogin: boolean; hasSecret: boolean },
+  droppedAssertion?: string | null,
 ): string {
   const lines: string[] = [];
   lines.push('你是网页测试执行器，在当前浏览器页面上完成下面这一步测试操作，完成后按输出契约结束。');
@@ -241,7 +243,13 @@ export function buildStepInstruction(
   lines.push(`- 自然语言：${step.instruction ?? '（无，以编译动作为准）'}`);
   lines.push('- 编译动作（compiled DSL，供参考；若页面实际与它不符，以实际页面为准自行调整）：');
   lines.push(JSON.stringify(step.compiled));
-  if (step.assertion != null) lines.push(`- 断言（预期结果，完成后自行核实）：${JSON.stringify(step.assertion)}`);
+  if (droppedAssertion) {
+    // 判定为描述性短语的断言已被丢弃：不写「预期结果」行，改为如实告知，
+    // 免得 AI 自行完成操作后又去核实一个页面上根本不存在的文案。
+    lines.push(`- 断言：已忽略（原预期「${droppedAssertion}」是描述状态的短语而非页面文案，页面上不会有这段文字）。仅完成上面的操作即可，不要为它编造失败理由。`);
+  } else if (step.assertion != null) {
+    lines.push(`- 断言（预期结果，完成后自行核实）：${JSON.stringify(step.assertion)}`);
+  }
   if (sec.hasLogin) {
     lines.push('');
     lines.push('## 登录凭据');
@@ -501,6 +509,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
 
           const reportId = `verify-${randomUUID()}`;
           const stepResults: AiStepResult[] = [];
+          /** 断言文本体检结论：step id → 判定为描述性短语而本轮不参与执行的断言原文。 */
+          const droppedAssertions = new Map<string, string>();
           let failedIndex = -1;
           let login: 'logged-in' | 'not-needed' = 'not-needed';
           // SSE 实时进度：验证全程可达数分钟，前端凭这些事件渲染逐步进度卡（spaceEventsStore.verify_progress）。
@@ -547,10 +557,26 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
 
             if (s.delayMs) await page.waitForTimeout(s.delayMs);
+            // 断言文本体检：描述性短语（「登录表单正常展示」）页面上永远匹配不到，
+            // 在真实页面上判一次，判为描述性就本轮不带它进指令，也不进机械回放。
+            let assertionForRun: unknown = s.assertion;
+            let droppedAssertion: string | null = null;
+            if (typeof s.assertion === 'string' && s.assertion.trim()) {
+              const pageText = await page
+                .evaluate(() => document.body?.innerText ?? '')
+                .catch(() => '');
+              const verdict = await judgeAssertionText(s.assertion, pageText, client);
+              if (!verdict.real) {
+                assertionForRun = null;
+                droppedAssertion = s.assertion;
+                droppedAssertions.set(s.id, s.assertion);
+              }
+            }
             const instruction = buildStepInstruction(
-              { order: s.order, instruction: s.instruction, compiled: s.compiled, assertion: s.assertion },
+              { order: s.order, instruction: s.instruction, compiled: s.compiled, assertion: assertionForRun },
               effectiveSteps.length,
               { hasLogin: !!envCtx.login, hasSecret: stepSecret !== undefined },
+              droppedAssertion,
             );
             ctx.emit({
               type: 'verify_progress', phase: 'step_start', order: s.order,
@@ -691,7 +717,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 caseId,
                 effectiveSteps.map((s) => ({
                   order: s.order,
-                  assertion: s.assertion,
+                  assertion: droppedAssertions.has(s.id) ? null : s.assertion,
                   delayMs: s.delayMs,
                   id: s.id,
                   sensitive: s.sensitive,
@@ -768,6 +794,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(r.screenshot ? { screenshot: r.screenshot } : {}),
             ...(r.hitLocator ? { hitLocator: r.hitLocator } : {}),
           }));
+          // 体检丢弃的断言原样回传：LLM 据此把「描述性短语」改写成页面上真实存在的
+          // UI 文案（或干脆删掉），而不是靠弱化断言蒙混过关。
+          const droppedNotes = [...droppedAssertions.entries()].map(([id, text]) => ({
+            order: effectiveSteps.find((s) => s.id === id)?.order ?? 0,
+            assertion: text,
+          }));
+          const droppedField = droppedNotes.length > 0 ? { droppedAssertions: droppedNotes } : {};
           if (failedIndex < 0 && !visionFailure && !replayFailure) {
             // cacheSaved: 正常收尾均无条件回写（watchdog 超时路径在循环内提前 return,无 end 事件）
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'passed', cacheSaved: true });
@@ -781,6 +814,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               stagedOpsApplied: opsApplied,
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
               steps: stepsSummary,
+              ...droppedField,
               replay: { result: 'passed' as const, durationMs: Date.now() - replayStartedAt },
             });
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
@@ -798,6 +832,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               stagedOpsApplied: opsApplied,
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
               steps: stepsSummary,
+              ...droppedField,
               failure: {
                 stepOrder: -1,
                 action: null,
@@ -827,6 +862,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               stagedOpsApplied: opsApplied,
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
               steps: stepsSummary,
+              ...droppedField,
               replay: replaySummary,
               failure: {
                 stepOrder: replayFailure.order,

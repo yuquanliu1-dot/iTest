@@ -56,36 +56,21 @@ export function migrateAssertion(raw: unknown): unknown {
 }
 
 /**
- * AI 写出来的 step-level assertion 文本里常含"描述性短语"（"登录表单正常展示"、"账号已触发锁定"、
- * "登录请求已发出"）——它们通过 `migrateAssertion` 后会被当成 `target:'page' match:'contains'` 子串
- * 校验，回放时拿 `document.body.innerText` 一定命中不到，整步 fail。
+ * step-level assertion 的写入清洗：**只做形状规范化，不再按措辞黑名单丢内容**。
  *
- * 这层做内容级过滤：识别"描述性短语"返回 `null`，调用方写 `null` 入库，回放阶段自然跳过断言。
- * 真实 UI 文案（按钮/toast/页面标题）短且具体，命中不到描述性动词表，得以保留。
+ *  历史版本这里有一张 28 词黑名单（DESCRIPTIVE_PHRASES：「展示」「回显」「触发」「应该」……），
+ *  凡命中即写 null 入库。动机是对的——AI 常写出「登录表单正常展示」这类描述性短语，
+ *  经 migrateAssertion 会变成 `target:'page' match:'contains'` 的整页子串断言，回放必挂；
+ *  但硬编码词表和曾经的 CAPTCHA_FAIL_RE 是同一类反模式：每遇一种新写法就得加词，永远追不完，
+ *  还误伤真实文案（任何含「提示」「需」字的按钮/toast 都会被丢掉）。
  *
- * 判定：
- *  - 空字符串 / 非 string → null
- *  - 长度 > 4 且命中描述性动词白名单任一项 → null
- *  - 其它原样返回（让调用方继续 migrateAssertion）
+ *  改为交给 LLM 判（pi/space/tools/assertionJudge.ts），在 verify_case 的真实页面上判一次，
+ *  判定依据是页面实际存在的文案而非猜。这里只保留空值归一：非 string / 全空白 → null。
  */
-const DESCRIPTIVE_PHRASES = [
-  '展示', '回显', '触发', '已发出', '发出', '应该', '预期', '需要',
-  '已实现', '可能', '大概', '或许', '应当', '可见', '已被', '已接收',
-  '提示', '需', '已成功', '成功提交', '提交了', '已完成', '完成回显',
-  '正常回显', '正常展示', '正常显示', '填写成功', '展示成功',
-];
-
 export function sanitizeAssertion(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const text = raw.trim();
-  if (text.length <= 4) {
-    // 短断言（按钮/toast 真实文案）放行；空/纯空白也走 null。
-    return text.length === 0 ? null : text;
-  }
-  for (const p of DESCRIPTIVE_PHRASES) {
-    if (text.includes(p)) return null;
-  }
-  return text;
+  return text.length === 0 ? null : text;
 }
 
 /** 把 unknown 当作 StepAction 类型断言，仅供已通过 Zod 的路径使用。 */
