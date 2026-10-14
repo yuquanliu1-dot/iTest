@@ -4,6 +4,7 @@ import { tryParseJson } from '../agent/llm-client.js';
 import type { AiUsageAddend } from './aiUsage.js';
 import { logger } from '../logger.js';
 import { annotateAction, clearAnnotation } from './liveView.js';
+import { waitForPageSettled } from './pageSettle.js';
 
 /** 单条指令的最大对话轮数（每轮一次 LLM 调用）。 */
 const MAX_TURNS = 8;
@@ -288,7 +289,12 @@ export async function solveCaptchaOnce(
       }).catch(() => undefined);
     }
   }
-  if (!buffer) buffer = await page.screenshot({ timeout: 5000 });
+  if (!buffer) {
+    // 整页兜底截图：等渲染稳定再拍，避免验证码图已就位但整页仍在骨架/接口回填时拍到过渡帧。
+    // 用较短预算（验证码 TTL 敏感），超时按当前帧继续。
+    await waitForPageSettled(page, { timeoutMs: 4000, settleMs: 300 });
+    buffer = await page.screenshot({ timeout: 5000 });
+  }
 
   const r = await client.complete({
     systemPrompt: CAPTCHA_OCR_PROMPT,
