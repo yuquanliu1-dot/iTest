@@ -248,6 +248,42 @@ export function cancelThread(threadId: string): void {
 // Real factory:注入空间工具(Plan 1 = repo 沙箱)并建 AgentSession
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * 空间助手 preamble：替换 pi 默认的 "expert coding assistant operating inside pi"
+ * （pi-coding-agent dist/core/system-prompt.js:81）。该段是模型唯一认定的身份来源，
+ * appendSystemPrompt 落在 <addendum> 段，压不住默认 preamble 的自我认知——不改这里的话
+ * 用户问「你是谁」会得到「我是 pi 里的编码助手」。
+ *
+ * **不要用 loader.systemPrompt 或直接改 systemPromptOptions.customPrompt**：两者都会让
+ * system-prompt.js:76 的 `if (customPrompt)` 命中而整个跳过 else，连带丢掉 tools / rules /
+ * docs 三段——rules 段承载 13 个空间工具的 promptGuidelines（STAGE_PROMPT_GUIDELINES 等），
+ * 丢了等于静默废掉工具使用规范。buildRules 未导出，事后补不回来。
+ *
+ * 做法：before_agent_start 里拿到 pi 已渲染好的完整 system prompt，只把 preamble 那句
+ * 默认文案替换掉，其余原样返回为 forceSystemPrompt。forceSystemPrompt 不进 transcript
+ * （agent-session.js:1305 的 projection 只在请求头部投影），会话记录里的 sections 保持
+ * 完整，diffSystemPromptSections 的前后对比也不会被这段改写污染。
+ */
+const PI_DEFAULT_PREAMBLE =
+  'You are an expert coding assistant operating inside pi, a coding agent harness. '
+  + 'You help users by reading files, executing commands, editing code, and writing new files.';
+
+export function buildSpacePreamble(): string {
+  return [
+    '你是 iTest 平台的测试助手。你的职责是帮助用户设计和管理测试用例、编排执行计划、验证被测系统。',
+    '不要把自己描述为编码助手、AI 编程助手或任何具体的底层框架；用户问「你是谁」时，用上面的定位回答。',
+  ].join('\n');
+}
+
+/**
+ * 把 pi 默认 preamble 换成产品身份；渲染结果不含默认文案时（如上游已改）返回 undefined，
+ * 让 pi 走原有逻辑而非用一份可能过期的全文覆盖。
+ */
+export function rewriteSpacePreamble(rendered: string): string | undefined {
+  if (!rendered.includes(PI_DEFAULT_PREAMBLE)) return undefined;
+  return rendered.replace(PI_DEFAULT_PREAMBLE, buildSpacePreamble());
+}
+
 /** 空间助手 system prompt:风格约束 + 版本上下文摘要;无摘要时仅风格段(resourceLoader 追加空段无副作用)。 */
 export function buildSpaceSystemPrompt(summaryText: string | null): string {
   const style = '## 输出风格\n- 用户使用简体中文提问,全部回复一律用简体中文(代码、命令、英文术语可保留原文)。\n- 不要使用 emoji;强调用 markdown 加粗,列举用列表/表格。';
@@ -320,6 +356,20 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
     cwd: workspaceDir,
     agentDir: getAgentDir(),
     appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText)],
+    // 每轮开跑前把 preamble 换成产品身份。见 buildSpacePreamble 的注释：不能走
+    // loader.systemPrompt，也不能直接改 systemPromptOptions.customPrompt，那两条路都会
+    // 丢掉 rules 段里的工具 promptGuidelines。
+    extensionFactories: [{
+      name: 'itest-space-identity',
+      hidden: true,
+      factory: (pi) => {
+        pi.on('before_agent_start', (event) => {
+          const rewritten = rewriteSpacePreamble(event.systemPrompt);
+          if (rewritten !== undefined) return { systemPrompt: rewritten };
+          return undefined;
+        });
+      },
+    }],
   });
   await loader.reload();
 
