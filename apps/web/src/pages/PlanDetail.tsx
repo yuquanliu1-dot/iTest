@@ -17,6 +17,7 @@ import {
   DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from '../components/ui/shadcn/dropdown-menu';
 import { caseStatusLabel } from '../lib/format';
+import { creatorName } from '../lib/creatorName';
 
 type Strategy = 'run_all' | 'fail_fast';
 
@@ -393,6 +394,9 @@ export default function PlanDetail() {
                 </details>
               </div>
             )}
+          </div>
+          <div className="mt-4 hairline-top pt-3 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+            创建人 {creatorName(plan.createdBy)}
           </div>
         </div>
 

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, type ProjectVersion } from '../api/client';
+import { api, type Creator, type ProjectVersion } from '../api/client';
 import { useProjectStore } from '../stores/project';
 import { useUIStore } from '../stores/ui';
 import { useAuthStore } from '../stores/auth';
+import { creatorName } from '../lib/creatorName';
 import Icon from '../components/Icon';
 import EmptyState from '../components/ui/EmptyState';
 import IconButton from '../components/ui/IconButton';
@@ -468,7 +469,7 @@ export default function ProjectsHome() {
 }
 
 interface ProjectRowProps {
-  project: { id: string; name: string; description: string | null; caseCount: number; versionCount: number; environmentCount: number; repoUrl: string | null };
+  project: { id: string; name: string; description: string | null; caseCount: number; versionCount: number; environmentCount: number; repoUrl: string | null; createdBy?: Creator | null };
   expanded: boolean;
   onToggle: () => void;
   onEdit: () => void;
@@ -550,6 +551,9 @@ function ProjectRow({
         </span>
         <span className="text-[12px] shrink-0 hidden md:inline" style={{ color: 'var(--muted-foreground)' }}>
           {p.environmentCount} 环境
+        </span>
+        <span className="text-[12px] shrink-0 hidden lg:inline" style={{ color: 'var(--muted-foreground)' }}>
+          创建人 {creatorName(p.createdBy)}
         </span>
         <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
           <IconButton icon="pencil" title="编辑项目" onClick={onEdit} />

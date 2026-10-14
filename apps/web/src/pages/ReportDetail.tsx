@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import Button from '../components/ui/Button';
 import { useUIStore } from '../stores/ui';
 import { fullDateTime } from '../lib/format';
+import { creatorName } from '../lib/creatorName';
 import type { DbQueryRowResult, ObserveLogLineResult, HttpStepResult } from '@itest/shared';
 
 /** 步骤级 LLM 用量（aiTask / 验证码 / vision 判定累加）；与 apps/api execute/aiUsage.ts 对齐。 */
@@ -503,6 +504,7 @@ export default function ReportDetail() {
               />
               <MetaRow label="用例 ID" value={<span className="font-mono text-[11px]">{data.caseId.slice(0, 8)}</span>} />
               <MetaRow label="报告 ID" value={<span className="font-mono text-[11px]">{data.id.slice(0, 8)}</span>} />
+              {data.createdBy && <MetaRow label="创建人" value={<span>{creatorName(data.createdBy)}</span>} />}
               {data.platform && (
                 <MetaRow label="平台" value={data.platform} />
               )}

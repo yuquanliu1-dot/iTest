@@ -52,6 +52,8 @@ stageRoute.post('/threads/:id/stage/list', async (req, res) => {
 stageRoute.post('/threads/:id/stage/save', async (req, res) => {
   const threadId = req.params.id!;
   const versionId = await assertSpaceThreadVisible(threadId, req.user as never);
+  // 暂存落库对象以当前操作用户为创建人（AI 代建路径的归属）。
+  const creatorId = (req.user as { userId?: string } | undefined)?.userId ?? null;
   const body = (req.body ?? {}) as Partial<SaveBody>;
   const cases = body.cases ?? [];
   const scenarios = body.scenarios ?? [];
@@ -83,7 +85,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
       description: row.description,
       columns: (row.columns ?? []) as Array<{ name: string; sensitive?: boolean }>,
       rows: (row.rows ?? []) as Array<{ disabled?: boolean; cells: Record<string, unknown> }>,
-    });
+    }, creatorId);
     createdDatasetIds.set(sel.localId, created.id);
   }
 
@@ -112,6 +114,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
       url: row.url,
       expectedOutcome: row.expectedOutcome,
       datasetId: datasetId ?? undefined,
+      createdByUserId: creatorId,
       steps: ((row.steps as unknown[]) ?? []).map((s) => {
         const o = s as { action?: unknown; assertion?: unknown; compiled?: unknown };
         return {
@@ -150,7 +153,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
         const x = o as { objectType: 'db' | 'syslog' | 'login'; label?: string; payload: Record<string, unknown>; isDefault?: boolean };
         return { objectType: x.objectType, label: x.label, payload: x.payload, isDefault: x.isDefault };
       }),
-    });
+    }, creatorId);
   }
 
   // 1e. plans: 先建计划,再按 caseLocalIds 解析真实 caseId。
@@ -189,7 +192,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
       name: row.name,
       versionId,
       environmentId: row.environmentId ?? undefined,
-    });
+    }, creatorId);
     if (realCaseIds.length > 0) {
       await plansSvc.replacePlanCases(plan.id, realCaseIds);
     }
@@ -212,6 +215,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
       projectId,
       repo: emptyRepoState(),
       emit: (e: unknown) => emitThreadEvent(threadId, e as Record<string, unknown>),
+      createdByUserId: creatorId,
     };
     await applyCaseOp(row.op, row.payload, ctx);
   }

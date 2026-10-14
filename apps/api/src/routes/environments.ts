@@ -40,7 +40,7 @@ environmentsRoute.post('/projects/:projectId/environments', async (req, res) => 
   const projectId = (req.params as { projectId: string }).projectId;
   await assertProjectVisible(projectId, req.user!);
   const body = CreateBody.parse(req.body);
-  const env = await createEnvironment(projectId, body);
+  const env = await createEnvironment(projectId, body, req.user!.userId);
   res.json(await getEnvironment(env.id));
 });
 

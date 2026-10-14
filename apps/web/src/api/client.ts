@@ -599,6 +599,13 @@ export interface LlmTestResult {
   error?: string;
 }
 
+/** 创建人/执行人摘要：后端各 list/detail 序列化统一追加；历史存量或用户已删时为 null。 */
+export interface Creator {
+  id: string;
+  username: string;
+  displayName: string;
+}
+
 export interface EnvironmentObject {
   id: string;
   environmentId: string;
@@ -625,6 +632,7 @@ export interface Environment {
   objects: EnvironmentObject[];
   createdAt: string;
   updatedAt: string;
+  createdBy?: Creator | null;
 }
 
 export interface Project {
@@ -639,6 +647,7 @@ export interface Project {
   hasPat: boolean;
   createdAt: string;
   updatedAt: string;
+  createdBy?: Creator | null;
 }
 
 export interface ProjectVersion {
@@ -681,6 +690,7 @@ export interface ExecutionPlan {
   environmentId?: string | null;
   createdAt: string;
   updatedAt: string;
+  createdBy?: Creator | null;
 }
 export interface PlanWithCount extends ExecutionPlan {
   caseCount: number;
@@ -726,6 +736,8 @@ export interface PlanRunDetail {
     /** 最后断言结论：vision 判定 reason 或失败步 error；无报告/未断言为 null。 */
     lastAssertion?: string | null;
   }>;
+  /** 触发人（=计划运行的执行人）。 */
+  triggeredBy?: Creator | null;
 }
 export interface PlanSchedule {
   id: string;
@@ -764,6 +776,8 @@ export type ExecutionEntry =
       /** 自愈通过标记：passed 且 aiTask 缓存分叉后 AI 自愈成功。 */
       healed?: boolean;
       createdAt: string;
+      /** 执行人（报告创建人 = 触发执行者）。 */
+      createdBy?: Creator | null;
     }
   | {
       kind: 'plan';
@@ -779,6 +793,7 @@ export type ExecutionEntry =
       skippedCases: number | null;
       durationMs: number | null;
       createdAt: string;
+      createdBy?: Creator | null;
     };
 export interface ProjectStats {
   requirements: number;
@@ -816,6 +831,7 @@ export interface TestCase {
   mobileOs?: 'ios' | 'android' | null;
   mobileDeviceTargetId?: string | null;
   appRef?: { bundleId: string; appPath?: string; launchArgs?: string[] } | null;
+  createdBy?: Creator | null;
 }
 export interface Scenario {
   id: string;
@@ -963,6 +979,8 @@ export interface TestCaseDetail extends TestCase {
   /** 计划运行成员报告：附带来源（后端从 plan_run_cases 查得）。返回按钮据此切到「返回计划运行」 */
   planRunId?: string | null;
   planId?: string | null;
+  /** 执行人 = 报告创建人（触发执行者）。 */
+  createdBy?: Creator | null;
 }
 export interface DatasetSaveBody {
   name: string;
@@ -981,6 +999,7 @@ export interface DatasetSummary {
   rowCount: number;
   enabledRowCount: number;
   updatedAt: string;
+  createdBy?: Creator | null;
 }
 export interface DatasetMaskedCell { __masked: true }
 /** 详情/新建/编辑出参：原始行字段 + 掩码 rows（与 Summary 不同，不含 rowCount/enabledRowCount 统计）。 */
@@ -993,6 +1012,7 @@ export interface DatasetDetail {
   rows: Array<{ disabled: boolean; cells: Record<string, string | DatasetMaskedCell> }>;
   createdAt: string;
   updatedAt: string;
+  createdBy?: Creator | null;
 }
 export interface DeviceTarget {
   id: string;

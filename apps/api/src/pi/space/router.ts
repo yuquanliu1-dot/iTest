@@ -50,7 +50,7 @@ spaceRoute.post('/threads', async (req, res) => {
   // 每次调用新建一线程(一版本多线程)。初始化失败(LLM 未配置等)→ 删行并透出错误,
   // 前端引导设置页;repo 不可用不阻断(session 照常建,原因经 lastError 透出)。
   const threadId = randomUUID();
-  await db.insert(aiThreads).values({ id: threadId, kind: 'version', versionId, piThreadId: '' });
+  await db.insert(aiThreads).values({ id: threadId, kind: 'version', versionId, piThreadId: '', createdByUserId: (req.user as AuthUser).userId });
   try {
     await ensureSpaceRecord(threadId);
   } catch (e) {

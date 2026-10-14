@@ -27,6 +27,7 @@ import TagChip from '../components/ui/Tag';
 import LabelsManagerDialog from '../components/labels/LabelsManagerDialog';
 import { stepKindLabel } from '../lib/format';
 import { stepSummary, fullStepDescription, getKind as getStepKind } from '../lib/stepSummary';
+import { creatorName } from '../lib/creatorName';
 
 /** 行内 instruction chip 用：截断到 n 字符,带 ellipsis。 */
 function clipInline(s: string, n: number): string {
@@ -797,6 +798,11 @@ export default function CaseDetail() {
                   <p className="text-[13px] mb-4" style={{ color: 'var(--muted-foreground)', lineHeight: 1.7 }}>
                     {caseDetail.description}
                   </p>
+                )}
+                {caseDetail.createdBy && (
+                  <div className="text-[11px] mb-2" style={{ color: 'var(--muted-foreground)' }}>
+                    创建人 {creatorName(caseDetail.createdBy)}
+                  </div>
                 )}
                 <div
                   className="rounded-[var(--radius-sm)] px-3 py-2 mb-4 flex items-center gap-2 text-[11px]"

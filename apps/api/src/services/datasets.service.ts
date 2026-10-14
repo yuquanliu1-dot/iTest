@@ -9,6 +9,7 @@ import { datasets, testCases } from '../db/schema.js';
 import type { DatasetColumn, DatasetRow, DatasetEncCell } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { encrypt, decrypt } from '../lib/secret-crypto.js';
+import { attachCreators, attachCreator } from '../lib/creator.js';
 import { validateVariableName } from '@itest/shared';
 
 export const DATASET_MASKED_CELL = { __masked: true } as const;
@@ -149,7 +150,7 @@ function isUniqueViolation(e: unknown): boolean {
 /** 列表出参：不带 rows 明细，带行数统计。 */
 export async function listDatasets(projectId: string) {
   const rows = await db.select().from(datasets).where(eq(datasets.projectId, projectId)).orderBy(asc(datasets.createdAt));
-  return rows.map((d) => ({
+  return attachCreators(rows.map((d) => ({
     id: d.id,
     projectId: d.projectId,
     name: d.name,
@@ -157,8 +158,10 @@ export async function listDatasets(projectId: string) {
     columns: d.columns,
     rowCount: d.rows.length,
     enabledRowCount: d.rows.filter((r) => !r.disabled).length,
+    createdByUserId: d.createdByUserId,
+    createdAt: d.createdAt,
     updatedAt: d.updatedAt,
-  }));
+  })));
 }
 
 /** 出参归一：敏感格密文 → {__masked:true} 占位。 */
@@ -176,13 +179,13 @@ function maskDatasetRows(columns: DatasetColumn[], rows: DatasetRow[]) {
 export async function getDataset(datasetId: string) {
   const d = (await db.select().from(datasets).where(eq(datasets.id, datasetId)).limit(1))[0];
   if (!d) return null;
-  return { ...d, rows: maskDatasetRows(d.columns, d.rows) };
+  return attachCreator({ ...d, rows: maskDatasetRows(d.columns, d.rows) });
 }
 
-export async function createDataset(projectId: string, input: DatasetSaveBody) {
+export async function createDataset(projectId: string, input: DatasetSaveBody, createdByUserId?: string | null) {
   const normalized = normalizeDataset(input);
   try {
-    const row = (await db.insert(datasets).values({ projectId, ...normalized }).returning())[0]!;
+    const row = (await db.insert(datasets).values({ projectId, ...normalized, ...(createdByUserId ? { createdByUserId } : {}) }).returning())[0]!;
     return { ...row, rows: maskDatasetRows(normalized.columns, normalized.rows) };
   } catch (e) {
     if (isUniqueViolation(e)) throw new HttpError(409, 'name_conflict', 'dataset name already exists in this project');

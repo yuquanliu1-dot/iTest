@@ -7,6 +7,7 @@ import { db } from '../db/client.js';
 import { reports, testCases, groups, planRunCases } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible, assertReportVisible, visibleProjectIds } from '../services/projectAccess.js';
+import { attachCreators, attachCreator } from '../lib/creator.js';
 
 export const reportsRoute = Router();
 
@@ -27,13 +28,13 @@ reportsRoute.get('/', async (req, res) => {
       : [];
     const rows = caseRows.length
       ? await db
-        .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt, datasetRowIndex: reports.datasetRowIndex, datasetSnapshot: reports.datasetSnapshot, platform: reports.platform, mobileOs: reports.mobileOs, deviceName: reports.deviceName, deviceTargetId: reports.deviceTargetId, healed: reports.healed })
+        .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt, datasetRowIndex: reports.datasetRowIndex, datasetSnapshot: reports.datasetSnapshot, platform: reports.platform, mobileOs: reports.mobileOs, deviceName: reports.deviceName, deviceTargetId: reports.deviceTargetId, healed: reports.healed, createdByUserId: reports.createdByUserId })
         .from(reports)
         .leftJoin(testCases, eq(testCases.id, reports.caseId))
         .where(inArray(reports.caseId, caseRows.map((c) => c.id)))
         .orderBy(desc(reports.createdAt))
       : [];
-    res.json(rows);
+    res.json(await attachCreators(rows));
     return;
   }
   // 无参：按可见项目过滤
@@ -46,18 +47,18 @@ reportsRoute.get('/', async (req, res) => {
     : [];
   const rows = caseRows.length
     ? await db
-      .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt, datasetRowIndex: reports.datasetRowIndex, datasetSnapshot: reports.datasetSnapshot, platform: reports.platform, mobileOs: reports.mobileOs, deviceName: reports.deviceName, deviceTargetId: reports.deviceTargetId, healed: reports.healed })
+      .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt, datasetRowIndex: reports.datasetRowIndex, datasetSnapshot: reports.datasetSnapshot, platform: reports.platform, mobileOs: reports.mobileOs, deviceName: reports.deviceName, deviceTargetId: reports.deviceTargetId, healed: reports.healed, createdByUserId: reports.createdByUserId })
       .from(reports)
       .leftJoin(testCases, eq(testCases.id, reports.caseId))
       .where(inArray(reports.caseId, caseRows.map((c) => c.id)))
       .orderBy(desc(reports.createdAt))
     : [];
-  res.json(rows);
+  res.json(await attachCreators(rows));
 });
 
 reportsRoute.get('/:id', async (req, res) => {
   const rows = await db
-    .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt, datasetRowIndex: reports.datasetRowIndex, datasetSnapshot: reports.datasetSnapshot, platform: reports.platform, mobileOs: reports.mobileOs, deviceName: reports.deviceName, deviceTargetId: reports.deviceTargetId, healed: reports.healed })
+    .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt, datasetRowIndex: reports.datasetRowIndex, datasetSnapshot: reports.datasetSnapshot, platform: reports.platform, mobileOs: reports.mobileOs, deviceName: reports.deviceName, deviceTargetId: reports.deviceTargetId, healed: reports.healed, createdByUserId: reports.createdByUserId })
     .from(reports)
     .leftJoin(testCases, eq(testCases.id, reports.caseId))
     .where(eq(reports.id, req.params.id));
@@ -83,13 +84,13 @@ reportsRoute.get('/:id', async (req, res) => {
   const link = prcRows.find((r) => r.reportId === report.id)
     ?? prcRows.find((r) => Array.isArray(r.reportIds) && r.reportIds.includes(report.id));
   if (!link) {
-    res.json(report);
+    res.json(await attachCreator(report));
     return;
   }
   // planId 来自 planRuns.planId，多查一次避免 join 整张表
   const { planRuns } = await import('../db/schema.js');
   const planRun = (await db.select({ planId: planRuns.planId }).from(planRuns).where(eq(planRuns.id, link.planRunId)))[0];
-  res.json({ ...report, planRunId: link.planRunId, planId: planRun?.planId ?? null });
+  res.json(await attachCreator({ ...report, planRunId: link.planRunId, planId: planRun?.planId ?? null }));
 });
 
 reportsRoute.delete('/:id', async (req, res) => {

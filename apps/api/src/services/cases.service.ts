@@ -11,6 +11,7 @@ import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { resolveDatasetProjectId, resolveDeviceTargetProjectId, resolveEnvironmentProjectId, resolveVersionProjectId } from './projectAccess.js';
 import { migrateAssertion, sanitizeAssertion } from '../lib/step-migration.js';
+import { attachCreator } from '../lib/creator.js';
 
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 const STATUSES = ['draft', 'review', 'ready', 'deprecated'];
@@ -82,6 +83,8 @@ export interface CreateCaseInput {
   expectedOutcome?: string | null;
   /** 绑定数据集（space-assistant stage 保存路径：数据集先落库再回填）。 */
   datasetId?: string | null;
+  /** 创建人（对齐 plan_schedules.created_by_user_id 约定）；caller 未传则 null。 */
+  createdByUserId?: string | null;
 }
 
 export async function createCase(input: CreateCaseInput) {
@@ -290,7 +293,7 @@ export async function getCaseDetail(caseId: string) {
   const sanitizedSteps = steps.map(({ secretCiphertext: _sc, secretIv: _si, secretTag: _st, ...rest }) => rest);
   const resolvedUrl = await resolveCaseUrl(row, { defaultEnvFallback: true });
   const tagsByCase = await tagsForCases([caseId]);
-  return { ...row, steps: sanitizedSteps, resolvedUrl, tags: tagsByCase.get(caseId) ?? [] };
+  return attachCreator({ ...row, steps: sanitizedSteps, resolvedUrl, tags: tagsByCase.get(caseId) ?? [] });
 }
 
 export async function searchCasesInVersion(versionId: string, o: { keyword?: string; groupId?: string; limit?: number } = {}) {
@@ -349,8 +352,9 @@ export interface CopyCaseInput {
 }
 
 /** 复制用例到目标分组（可跨版本）：克隆步骤（instruction/compiled/assertion）与标签关联，标题追加「副本 N」。
- *  只做机械复制；源/目标的存在性与可见性由调用方校验（HTTP 边界查 per-user，AI 工具查项目归属）。 */
-export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: CopyCaseInput) {
+ *  只做机械复制；源/目标的存在性与可见性由调用方校验（HTTP 边界查 per-user，AI 工具查项目归属）。
+ *  createdByUserId = 执行复制操作的用户（副本的创建人）。 */
+export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: CopyCaseInput, createdByUserId?: string | null) {
   const src = (await db.select().from(testCases).where(eq(testCases.id, caseId)).limit(1))[0];
   if (!src) throw new HttpError(404, 'not_found', 'case not found');
   const siblings = await db.select({ title: testCases.title }).from(testCases).where(eq(testCases.groupId, targetGroupId));
@@ -380,6 +384,7 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
       versionId: targetVersionId ?? src.versionId,
       url: src.url,
       datasetId,
+      ...(createdByUserId ? { createdByUserId } : {}),
     })
     .returning();
   const newCase = inserted[0]!;

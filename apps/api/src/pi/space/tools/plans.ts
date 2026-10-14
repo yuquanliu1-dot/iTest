@@ -92,7 +92,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
                 versionId: ctx.versionId,
                 environmentId: v.environmentId ?? undefined,
                 strategy: v.strategy,
-              });
+              }, ctx.createdByUserId);
               let added = 0;
               if (v.caseIds?.length) {
                 try {

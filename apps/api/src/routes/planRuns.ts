@@ -8,6 +8,7 @@ import { requestCancel, subscribeRun } from '../execute/runPlan.js';
 import { sseHeaders } from '../sse/pi.js';
 import { assertPlanRunVisible, assertProjectVisible } from '../services/projectAccess.js';
 import { handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf } from '../execute/liveView.js';
+import { resolveUsersByIds } from '../lib/creator.js';
 
 export const planRunsRoute = Router();
 
@@ -76,6 +77,7 @@ planRunsRoute.get('/:id', async (req, res) => {
     ...run,
     planName: plan?.name ?? null,
     cases,
+    triggeredBy: run.triggeredByUserId ? (await resolveUsersByIds([run.triggeredByUserId])).get(run.triggeredByUserId) ?? null : null,
   });
 });
 

@@ -30,4 +30,6 @@ export interface SpaceToolsContext {
   repo: RepoState;
   /** 向当前线程 SSE 订阅者广播自定义事件(confirm_request / stage / announce 等)。 */
   emit: (e: Record<string, unknown>) => void;
+  /** 线程创建人：AI 直建/暂存落库对象以此为归属；历史线程为 null。 */
+  createdByUserId: string | null;
 }

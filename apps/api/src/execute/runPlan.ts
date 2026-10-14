@@ -162,6 +162,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
               ownedBrowser: browser,
               ownedContext: ctx,
               liveView: live,
+              createdByUserId: run.triggeredByUserId,
             });
             await db
               .update(planRunCases)
@@ -254,6 +255,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
         forceFail: forceFailIds.has(c.caseId),
         ...(planEnv ? { envOverride: { envId: planEnv.envId } } : {}),
         liveView: live,
+        createdByUserId: run.triggeredByUserId,
       });
       await db
         .update(planRunCases)

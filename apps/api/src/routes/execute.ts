@@ -40,10 +40,10 @@ executeRoute.post('/cases/:caseId/execute', async (req, res) => {
       throw e;
     }
     for (const row of plan.rows) {
-      preseed.push({ reportId: await insertRunningReportRow(caseRow, row), rowIndex: row.rowIndex });
+      preseed.push({ reportId: await insertRunningReportRow(caseRow, row, req.user!.userId), rowIndex: row.rowIndex });
     }
   } else {
-    preseed.push({ reportId: await insertRunningReportRow(caseRow), rowIndex: null });
+    preseed.push({ reportId: await insertRunningReportRow(caseRow, undefined, req.user!.userId), rowIndex: null });
   }
 
   // 后台执行；live 源的生命周期绑定到整段 run（含数据集全部行）。

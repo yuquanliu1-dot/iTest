@@ -16,6 +16,7 @@ import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
 import Pagination from '../components/ui/Pagination';
 import { shortDateTime, fullDateTime } from '../lib/format';
+import { creatorName } from '../lib/creatorName';
 import {
   PageShell,
   PageShellActions,
@@ -153,7 +154,12 @@ export default function Plans() {
       align: 'right',
       hideBelow: 'md',
       cellClassName: 'text-xs text-muted-foreground tabular-nums',
-      cell: (p) => <span title={fullDateTime(p.createdAt)}>{shortDateTime(p.createdAt)}</span>,
+      cell: (p) => (
+        <span className="flex flex-col items-end gap-0.5">
+          <span title={fullDateTime(p.createdAt)}>{shortDateTime(p.createdAt)}</span>
+          <span>{creatorName(p.createdBy)}</span>
+        </span>
+      ),
     },
     {
       id: 'actions',
@@ -255,7 +261,7 @@ export default function Plans() {
                     {p.caseCount} 个用例
                   </div>
                   <div className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
-                    创建于 {fullDateTime(p.createdAt)}
+                    创建于 {fullDateTime(p.createdAt)} · {creatorName(p.createdBy)}
                   </div>
                   {(() => {
                     const last = latestByPlan.get(p.id);

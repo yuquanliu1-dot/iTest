@@ -12,6 +12,7 @@ import {
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { createPlan, updatePlan, getPlanDetail, replacePlanCases, planProjectId, removePlanCases, updatePlanCase } from '../services/plans.service.js';
+import { attachCreators } from '../lib/creator.js';
 import { logger } from '../logger.js';
 import { enqueuePlanRun } from '../execute/enqueuePlanRun.js';
 
@@ -81,11 +82,11 @@ plansRoute.get('/', async (req, res) => {
   const vIds = Array.from(new Set(ps.map((p) => p.versionId).filter((v): v is string => !!v)));
   const vRows = vIds.length ? await db.select().from(projectVersions).where(inArray(projectVersions.id, vIds)) : [];
   const vName = new Map(vRows.map((v) => [v.id, v.name] as const));
-  res.json(ps.map((p) => ({
+  res.json(await attachCreators(ps.map((p) => ({
     ...p,
     versionName: p.versionId ? vName.get(p.versionId) ?? null : null,
     caseCount: countByPlan.get(p.id) ?? 0,
-  })));
+  }))));
 });
 
 plansRoute.post('/', async (req, res) => {
@@ -101,7 +102,7 @@ plansRoute.post('/', async (req, res) => {
     if (vp !== projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
   }
   // 归属校验在 service 内重复一遍(有意冗余):AI 工具绕过 HTTP 层直调时无路由校验兜底
-  res.json(await createPlan(projectId, { ...body, versionId }));
+  res.json(await createPlan(projectId, { ...body, versionId }, req.user!.userId));
 });
 
 plansRoute.get('/:id', async (req, res) => {

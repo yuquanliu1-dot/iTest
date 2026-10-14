@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type DatasetMaskedCell, type DatasetSaveBody, type DatasetSummary } from '../api/client';
+import { api, type Creator, type DatasetMaskedCell, type DatasetSaveBody, type DatasetSummary } from '../api/client';
 import Icon from '../components/Icon';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -9,6 +9,7 @@ import EmptyState from '../components/ui/EmptyState';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import { useUIStore } from '../stores/ui';
 import { fullDateTime } from '../lib/format';
+import { creatorName } from '../lib/creatorName';
 
 type Masked = DatasetMaskedCell;
 type DraftCell = string | Masked;
@@ -20,6 +21,7 @@ interface Draft {
   description: string;
   columns: DraftColumn[];
   rows: DraftRow[];
+  createdBy?: Creator | null;
 }
 
 const emptyDraft: Draft = { name: '', description: '', columns: [{ name: 'col1', sensitive: false }], rows: [{ disabled: false, cells: {} }] };
@@ -51,6 +53,7 @@ export default function DatasetsPage() {
         description: d.description ?? '',
         columns: d.columns.map((c) => ({ name: c.name, sensitive: c.sensitive })),
         rows: d.rows.map((r) => ({ disabled: r.disabled, cells: { ...r.cells } })),
+        createdBy: d.createdBy ?? null,
       });
     },
     onError: (e: Error) => toast(e.message, 'error'),
@@ -223,6 +226,7 @@ export default function DatasetsPage() {
                 <thead>
                   <tr className="hairline-bottom" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>
                     <th className="text-left font-medium px-4 py-2">名称</th>
+                    <th className="text-left font-medium px-4 py-2">创建人</th>
                     <th className="text-left font-medium px-4 py-2">列</th>
                     <th className="text-left font-medium px-4 py-2">行（启用/总数）</th>
                     <th className="text-left font-medium px-4 py-2">更新时间</th>
@@ -234,6 +238,9 @@ export default function DatasetsPage() {
                     <tr key={d.id} className="hairline-bottom">
                       <td className="px-4 py-2.5" style={{ color: 'var(--foreground)' }}>
                         <button className="press text-left" onClick={() => loadDetail.mutate(d.id)}>{d.name}</button>
+                      </td>
+                      <td className="px-4 py-2.5" style={{ color: 'var(--muted-foreground)' }}>
+                        {creatorName(d.createdBy)}
                       </td>
                       <td className="px-4 py-2.5 font-mono" style={{ color: 'var(--muted-foreground)' }}>
                         {d.columns.map((c) => c.name + (c.sensitive ? '🔒' : '')).join(', ')}
@@ -301,6 +308,11 @@ export default function DatasetsPage() {
             <Input label="名称" value={draft.name} onChange={(e) => mutate((d) => ({ ...d, name: e.target.value }))} className="flex-1" />
             <Input label="描述（可选）" value={draft.description} onChange={(e) => mutate((d) => ({ ...d, description: e.target.value }))} className="flex-1" />
           </div>
+          {draft.createdBy && (
+            <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+              创建人 {creatorName(draft.createdBy)}
+            </p>
+          )}
           <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             列名即回放变量名（{'{{列名}}'}），须字母/下划线开头。敏感列加密存储，报告与详情中显示为掩码。禁用行回放时跳过。
           </p>

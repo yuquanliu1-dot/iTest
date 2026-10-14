@@ -10,6 +10,7 @@ import { isManagerOfOrg, requireManager } from '../middleware/auth.js';
 import { getOrgPath } from '../services/orgTree.js';
 import { verifyRepoAccess } from '../services/gitProvider.js';
 import { createGroup } from '../services/cases.service.js';
+import { attachCreators, attachCreator } from '../lib/creator.js';
 
 export const projectsRoute = Router({ mergeParams: true });
 
@@ -66,12 +67,14 @@ projectsRoute.get('/', async (req, res) => {
   const vByProject = new Map(vs.map((r) => [r.projectId, Number(r.count)]));
   const eByProject = new Map(es.map((r) => [r.projectId, Number(r.count)]));
   res.json(
-    ps.map((p) => ({
-      ...maskProject(p),
-      caseCount: byProject.get(p.id) ?? 0,
-      versionCount: vByProject.get(p.id) ?? 0,
-      environmentCount: eByProject.get(p.id) ?? 0,
-    })),
+    await attachCreators(
+      ps.map((p) => ({
+        ...maskProject(p),
+        caseCount: byProject.get(p.id) ?? 0,
+        versionCount: vByProject.get(p.id) ?? 0,
+        environmentCount: eByProject.get(p.id) ?? 0,
+      })),
+    ),
   );
 });
 
@@ -88,6 +91,7 @@ projectsRoute.post('/', requireManager, async (req, res) => {
       gitlabUrlOverride: body.gitlabUrlOverride,
       patOverride: body.patOverride,
       organizationId: req.user!.orgId,
+      createdByUserId: req.user!.userId,
     })
     .returning();
   res.status(201).json(maskProject(rows[0]!));
@@ -98,7 +102,7 @@ projectsRoute.get('/:id', async (req, res) => {
   await assertProjectVisible(projectId, req.user!);
   const rows = await db.select().from(projects).where(eq(projects.id, projectId));
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'project not found');
-  res.json(maskProject(rows[0]!));
+  res.json(await attachCreator(maskProject(rows[0]!)));
 });
 
 projectsRoute.patch('/:id', requireManager, async (req, res) => {
