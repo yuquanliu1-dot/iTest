@@ -113,6 +113,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
       priority: row.priority ?? undefined,
       url: row.url,
       expectedOutcome: row.expectedOutcome,
+      coverageTypes: (row.coverageTypes ?? []) as string[],
       datasetId: datasetId ?? undefined,
       createdByUserId: creatorId,
       steps: ((row.steps as unknown[]) ?? []).map((s) => {

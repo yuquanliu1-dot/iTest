@@ -9,7 +9,7 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
-import { validateVariableName, VAR_NAME_RE, StepAction } from '@itest/shared';
+import { validateVariableName, VAR_NAME_RE, StepAction, COVERAGE_TYPE_KEYS, COVERAGE_LABELS } from '@itest/shared';
 import { STEP_DSL_SPEC } from '../../../agent/prompts/step-dsl-spec.js';
 import { db } from '../../../db/client.js';
 import {
@@ -41,6 +41,9 @@ export interface StagedCase {
   expectedOutcome?: string | null;
   /** 配套绑定：同批暂存数据集的 localId（save 时数据集先落库、真实 datasetId 回填到用例）。 */
   datasetLocalId?: string | null;
+  /** 本条用例覆盖的测试类型；用户勾选的覆盖要求此前只是 prompt 里的一句话，
+   *  落到这字段后覆盖意图可被暂存区展示、可被后续覆盖矩阵统计。 */
+  coverageTypes?: string[];
 }
 export interface StagedScenario {
   localId: string;
@@ -102,6 +105,7 @@ function asStagedCase(row: typeof aiStageCases.$inferSelect): StagedCase & { sta
     defaultEnvId: row.defaultEnvId,
     expectedOutcome: row.expectedOutcome,
     datasetLocalId: row.datasetLocalId,
+    coverageTypes: (row.coverageTypes ?? []) as string[],
     stagedAt: row.stagedAt.toISOString(),
   };
 }
@@ -237,6 +241,7 @@ export async function stageCase(threadId: string, versionId: string, body: Stage
       defaultEnvId: body.defaultEnvId ?? null,
       expectedOutcome: body.expectedOutcome ?? null,
       datasetLocalId: body.datasetLocalId ?? null,
+      coverageTypes: body.coverageTypes ?? [],
     })
     .onConflictDoUpdate({
       target: [aiStageCases.threadId, aiStageCases.localId],
@@ -249,6 +254,7 @@ export async function stageCase(threadId: string, versionId: string, body: Stage
         defaultEnvId: body.defaultEnvId ?? null,
         expectedOutcome: body.expectedOutcome ?? null,
         datasetLocalId: body.datasetLocalId ?? null,
+        coverageTypes: body.coverageTypes ?? [],
       },
     });
 }
@@ -377,6 +383,7 @@ const StageCaseInput = z.object({
   defaultEnvId: z.string().uuid().nullable().optional(),
   expectedOutcome: z.string().max(4000).nullable().optional(),
   datasetLocalId: z.string().min(1).max(64).nullable().optional(),
+  coverageTypes: z.array(z.enum(COVERAGE_TYPE_KEYS as [string, ...string[]])).max(5).optional(),
 });
 const StageScenarioInput = z.object({
   localId: z.string().min(1).max(64),
@@ -447,6 +454,7 @@ export const STAGE_PROMPT_GUIDELINES = [
   '不要直接用 manage_cases 的 update/delete/move_group —— 那些 action 已下线,请改走 stage_case_op。',
   '数据驱动回放（同一流程跑多组数据）用 stage_dataset 生成数据集：列名即回放变量 {{列名}},行间差异（输入值/断言文案/预期提示）写成列值;配套的用例用 stage_case 的 datasetLocalId 绑定（同一批保存时数据集先落库并自动绑定）。用例步骤里 fill 的 value / 断言文案直接写 {{列名}}。',
   '步骤里的 {{变量名}} 必须与数据集列名逐字一致（列名只能字母/下划线开头,中文列名非法）——stage_case 响应附「变量体检」,引用未定义/不一致变量时请立即修正后重发。',
+  '每条用例都要用 coverageTypes 声明它实际覆盖的测试类型（用户勾选的覆盖要求只是上下文的一句话,勾了不等于你覆盖了）——照实标,不要把一条「登录成功」同时标成 functional+security。响应附「覆盖回执」点名当前暂存区各类分布,分布为 ×0 说明该类确实没人切,确有遗漏就继续补。',
   '登录步骤的凭据不要写明文：用户名输入框 fill 的 value 写字面量 __ITEST_USERNAME__、密码输入框写字面量 __ITEST_PASSWORD__,回放时平台自动替换为「项目设置→测试环境」里配的 login 凭据真实值（环境未配 login 则该步报 env-missing 失败,不会静默填字面量）。这与数据集变量 {{列名}} 的分工：数据集管同流程多组数据的差异,__ITEST_*__ 只指向环境的单一登录凭据。verify_case / solidify_case 的 AI 相也认同一套占位符,两相行为一致。除这三个字面量外不要臆造别的 __ITEST_xxx__。',
   '数据集敏感列（密码/密钥等）标 sensitive:true,单元格值仍以明文给出（落库时自动加密,预览对用户可见）;已有数据集的行值/敏感值对你永不可见（list_datasets 仅结构）。修改已有数据集暂不支持;给已有用例绑定已落库数据集走 stage_case_op update_case(patch.datasetId)。',
   'stage_case 的每条 step 必须输出 compiled 字段（DSL 步骤数组,回放直接执行,保存时不再编译）。增量需求/功能还不稳定、页面元素频繁变动时,可把整条步骤建成视觉模式：compiled 写成 [{"kind":"aiTask","instruction":"..."}]（不是 null）,回放时由 AI 看截图临场执行自然语言指令；功能稳定后再用 solidify_case 固化为机械步骤。规则：',
@@ -511,6 +519,36 @@ function caseOutcomeNote(body: StagedCase): string | null {
   });
 }
 
+/** 覆盖度回执：本条声明了什么 + 当前暂存区整体覆盖分布。
+ *
+ *  动机：用户勾选的覆盖要求此前只是拼进 prompt 的一句话，模型是否真的逐类切到无从核对
+ *  ——生成 1 条和生成 5 条都能声称「覆盖了异常场景」。coverageTypes 落库后，
+ *  汇总点名的分布让模型在暂存阶段就看到自己切了几条、有没有漏类，
+ *  而不是等人工翻暂存区才发现。
+ *
+ *  不做「缺类告警」：需求勾了哪几类只存在于 prompt 里，工具层读不到，
+ *  拿模型自己声明的 coverageTypes 当「要求集」自证只会恒真。
+ *
+ *  调用点在 stageCase() 之后，所以 DB 读到的分布已含本条（UPSERT 已覆盖旧值）。 */
+async function coverageNote(threadId: string, body: StagedCase): Promise<string> {
+  const self = body.coverageTypes ?? [];
+  const rows = await db
+    .select({ coverageTypes: aiStageCases.coverageTypes })
+    .from(aiStageCases)
+    .where(eq(aiStageCases.threadId, threadId));
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    for (const t of (r.coverageTypes ?? []) as string[]) counts.set(t, (counts.get(t) ?? 0) + 1);
+  }
+  const dist = COVERAGE_TYPE_KEYS
+    .map((k) => `${COVERAGE_LABELS.get(k) ?? k}×${counts.get(k) ?? 0}`)
+    .join('、');
+  const head = self.length > 0
+    ? `覆盖回执:本条覆盖 ${self.map((t) => COVERAGE_LABELS.get(t) ?? t).join('、')}。`
+    : '覆盖回执:本条未声明覆盖类型。';
+  return `${head}当前暂存区共 ${rows.length} 条用例,覆盖分布 ${dist}。若本次要求覆盖的类型里分布仍为 ×0,继续 stage_case 补齐。`;
+}
+
 export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
   return [
     {
@@ -530,6 +568,7 @@ export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
         defaultEnvId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
         expectedOutcome: Type.Optional(Type.Union([Type.String({ maxLength: 4000 }), Type.Null()])),
         datasetLocalId: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 64 }), Type.Null()])),
+        coverageTypes: Type.Optional(Type.Array(Type.Union(COVERAGE_TYPE_KEYS.map((k) => Type.Literal(k as 'functional'))) as never)), // 用户勾选的测试类型;落库后可统计覆盖分布
       }),
       promptGuidelines: STAGE_PROMPT_GUIDELINES,
       execute: async (input) => {
@@ -545,7 +584,8 @@ export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
         emitStage(ctx, { kind: 'case', id: v.data.localId, action: 'stage', payload: { ...body, stagedAt: new Date().toISOString() } });
         const varNote = await caseVarNote(ctx.threadId, body).catch(() => '');
         const outNote = caseOutcomeNote(body);
-        const notes = [varNote, outNote].filter(Boolean).join('\n');
+        const covNote = await coverageNote(ctx.threadId, body).catch(() => '');
+        const notes = [varNote, outNote, covNote].filter(Boolean).join('\n');
         return { ok: true, data: `已暂存用例「${v.data.title}」(草稿 ${v.data.localId});用户将在右侧预览区勾选 → 选目标分组 → 落库。${notes ? `\n${notes}` : ''}\n下一步:环境可用时用 verify_case(caseId=该草稿 localId)实测,验证通过后再引导用户在右侧暂存区勾选统一保存。` };
       },
     },

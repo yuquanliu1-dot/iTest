@@ -860,6 +860,8 @@ export interface StagedStageCase {
   expectedOutcome: string | null;
   /** 配套数据集 localId（同批 stage_dataset 生成；保存时数据集先落库并自动绑定）。 */
   datasetLocalId: string | null;
+  /** 本条声明覆盖的测试类型（COVERAGE_TYPE_KEYS 子集）；暂存区用来一眼看覆盖分布。 */
+  coverageTypes: string[];
   stagedAt: string;
 }
 export interface StagedStageScenario {

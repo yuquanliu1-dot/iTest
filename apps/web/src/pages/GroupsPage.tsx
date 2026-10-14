@@ -32,6 +32,7 @@ import { DataTable, type DataTableColumn, type DataTableFacet, type DataTableTab
 import { useTableSelection } from '../hooks/useTableSelection';
 import { caseStatusLabel, shortDateTime } from '../lib/format';
 import { creatorName } from '../lib/creatorName';
+import { COVERAGE_TYPES, coveragePrompt } from '@itest/shared';
 import {
 	PageShell,
 	PageShellActions,
@@ -62,23 +63,9 @@ const caseParsers = {
 type GroupForm = { open: boolean; mode: 'create' | 'edit'; id: string | null; name: string; defaultUrl: string };
 const EMPTY_GROUP_FORM: GroupForm = { open: false, mode: 'create', id: null, name: '', defaultUrl: '' };
 type AiForm = { open: boolean; title: string; content: string; coverage: string[] };
-/** 覆盖类型多选：勾选 = 必须覆盖，拼入首条用户消息；未勾选不禁止（AI 自行判断）。 */
-const COVERAGE_TYPES = [
-	{ key: 'functional', label: '功能（正常流）' },
-	{ key: 'exception', label: '异常场景' },
-	{ key: 'boundary', label: '边界值' },
-	{ key: 'security', label: '安全（SQL 注入·XSS·越权·未授权等）' },
-	{ key: 'uiux', label: 'UI/UX（呈现·交互）' },
-] as const;
 const DEFAULT_COVERAGE = ['functional', 'exception'];
 const EMPTY_AI_FORM: AiForm = { open: false, title: '', content: '', coverage: DEFAULT_COVERAGE };
 
-/** 勾选项 → 首条消息尾部的覆盖要求块；全不勾 = 不加约束（返回空串）。 */
-function coveragePrompt(keys: string[]): string {
-	const labels = COVERAGE_TYPES.filter((t) => keys.includes(t.key)).map((t) => t.label);
-	if (labels.length === 0) return '';
-	return `\n\n【覆盖要求】本次生成必须覆盖以下测试类型：${labels.join('、')}；每类至少 1 条用例，未列出的类型自行判断。`;
-}
 type CasePriority = 'P0' | 'P1' | 'P2' | 'P3';
 type CaseForm = { open: boolean; title: string; groupId: string; priority: CasePriority; url: string; description: string };
 const EMPTY_CASE_FORM: CaseForm = { open: false, title: '', groupId: '', priority: 'P1', url: '', description: '' };
