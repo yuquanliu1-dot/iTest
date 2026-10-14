@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { logger } from '../logger.js';
 import type { ExecStepResult } from './cdp.js';
 import { materializeExpectedOutcome, maskSensitiveValues } from './cdp.js';
+import { waitForPageSettled } from './pageSettle.js';
 import type { AiUsageStat } from './aiUsage.js';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
@@ -33,10 +34,10 @@ export async function runCaseVisionAssert(input: VisionAssertInput): Promise<Vis
   if (!input.page) return null; // mobile 路径不传 page → 短路(MVP 暂跳过 vision 终态判定)
   try {
     const expectedForJudge = materializeExpectedOutcome(input.expectedOutcome, input.vars);
-    // 终态判定前给 SPA 收尾时间:点击提交 → 接口往返 → 前端跳转是异步的,
-    // 立即截图会把「仍停在提交前页面」误判为失败(实测点击后 ~100ms 截图仍显示登录页)。
-    await input.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
-    await input.page.waitForTimeout(800);
+    // 终态判定前等整页渲染稳定（视觉稳定判定）：点击提交 → 接口往返 → 前端跳转是异步的，
+    // 固定 sleep（旧 800ms）在 SPA 懒加载 chunk / 骨架屏 / 接口回填晚于 networkidle 时不够，
+    // 会把「还没加载完」误判为「不符合预期」。连拍两帧像素指纹相同即静默，超时按当前帧继续。
+    await waitForPageSettled(input.page, { timeoutMs: 12000, settleMs: 400 });
     const buffer = await input.page.screenshot({ timeout: 5000 });
     // 终态判定截图单独保存,便于报告页把「最终页面 vs 预期」展示给用户。
     const visionScreenshotPath = `/screenshots/${input.reportId}/final.png`;
