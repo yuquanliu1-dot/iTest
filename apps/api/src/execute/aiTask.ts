@@ -1,5 +1,5 @@
 import type { Page } from 'playwright-core';
-import type { LLMClient } from '../agent/llm-client.js';
+import type { LLMClient, LLMMessage } from '../agent/llm-client.js';
 import { tryParseJson } from '../agent/llm-client.js';
 import type { AiUsageAddend } from './aiUsage.js';
 import { logger } from '../logger.js';
@@ -335,6 +335,12 @@ export async function runAiTask(
   const systemPrompt = mobile ? MOBILE_SYSTEM_PROMPT : SYSTEM_PROMPT;
   let lastResults: string[] = [];
   let pendingShot: string | null = null;
+  // 多轮累积：每轮把「本轮 user（+截图）」与「上轮 LLM 原始输出」追加到 history，
+  // 请求时整段回传。缓存按前缀匹配，只发当轮会让第 1..N-1 轮内容彻底消失、
+  // 每轮都从零建缓存（2026-10-14 网关实测命中率 2%）；累积后第 2 轮起可命中
+  // 全部历史前缀（实测 86~94%）。assistant 侧回放原始 JSON 输出而非 lastResults 摘要，
+  // 以保证与"当轮实际收到的上下文"逐字一致、缓存前缀不漂移。
+  const history: LLMMessage[] = [];
   for (let turn = 1; turn <= maxTurns; turn++) {
     let buffer: Buffer | null = null;
     let imageNote = '';
@@ -367,13 +373,26 @@ export async function runAiTask(
       lastResults.length > 0 ? `上轮动作结果：\n${lastResults.join('\n')}` : '（首轮，无历史动作）',
       `第 ${turn}/${maxTurns} 轮。`,
     ].join('\n');
+    // 截图放在文本之前：与单轮形态的历史顺序保持一致，且首轮前缀稳定。
+    history.push({
+      role: 'user',
+      content: [
+        ...(buffer ? [{ type: 'image' as const, base64: buffer.toString('base64'), mime: 'image/png' as const }] : []),
+        { type: 'text' as const, text: userMessage },
+      ],
+    });
     const r = await client.complete({
       systemPrompt,
+      messages: history,
+      // 单轮字段仍给：无 messages 支持的实现按它们走；回退路径共用。
       userMessage,
       ...(buffer ? { image: { base64: buffer.toString('base64'), mime: 'image/png' as const } } : {}),
     });
     opts?.onUsage?.(r);
     const raw = r.kind === 'json' ? JSON.stringify(r.value) : r.value;
+    // 回放 LLM 原始输出进历史（而非动作摘要）：保持与"模型实际说过的话"逐字一致，
+    // 否则下一轮前缀与本轮实际发送的不匹配，缓存断点漂移、命中率反降。
+    history.push({ role: 'assistant', content: [{ type: 'text', text: raw }] });
     const parsed = tryParseJson(raw);
     if (!parsed) {
       lastResults = ['[system] 你的输出不是合法 JSON，请只输出 JSON 对象。'];
