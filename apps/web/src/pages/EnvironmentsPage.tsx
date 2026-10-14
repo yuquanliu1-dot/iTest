@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Environment, type EnvironmentObject } from '../api/client';
 import { useUIStore } from '../stores/ui';
+import { creatorName } from '../lib/creatorName';
 import Icon from '../components/Icon';
 import EmptyState from '../components/ui/EmptyState';
 import IconButton from '../components/ui/IconButton';
@@ -289,6 +290,11 @@ export default function EnvironmentsPage() {
                     {env.baseUrl && (
                       <span className="text-[11px] font-mono truncate" style={{ color: 'var(--muted-foreground)' }}>
                         {env.baseUrl}
+                      </span>
+                    )}
+                    {env.createdBy && (
+                      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                        创建人 {creatorName(env.createdBy)}
                       </span>
                     )}
                   </div>

@@ -6,6 +6,7 @@ import { eq, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertCaseVisible, assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { copyCaseCore, createCase, deleteCase, getCaseDetail, groupProjectId, tagsForCases, updateCase } from '../services/cases.service.js';
+import { attachCreators } from '../lib/creator.js';
 
 export const casesRoute = Router();
 
@@ -130,12 +131,14 @@ casesRoute.get('/', async (req, res) => {
     for (const v of vRows) vById.set(v.id, v.name);
   }
   res.json(
-    rows.map((r) => ({
-      ...r,
-      scenarioTitle: r.scenarioId ? (sById.get(r.scenarioId)?.title ?? null) : null,
-      versionName: vById.get(r.versionId) ?? null,
-      tags: tagsByCase.get(r.id) ?? [],
-    })),
+    await attachCreators(
+      rows.map((r) => ({
+        ...r,
+        scenarioTitle: r.scenarioId ? (sById.get(r.scenarioId)?.title ?? null) : null,
+        versionName: vById.get(r.versionId) ?? null,
+        tags: tagsByCase.get(r.id) ?? [],
+      })),
+    ),
   );
 });
 
@@ -149,7 +152,7 @@ casesRoute.post('/', async (req, res) => {
   if (!versionId) throw new HttpError(400, 'version_required', 'versionId is required');
   const { projectId: vp } = await assertVersionVisible(versionId, req.user!);
   if (vp !== pid) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
-  res.json(await createCase({ ...body, versionId }));
+  res.json(await createCase({ ...body, versionId, createdByUserId: req.user!.userId }));
 });
 
 casesRoute.get('/:id', async (req, res) => {
@@ -214,7 +217,7 @@ async function copyOneCase(caseId: string, targetGroupId: string, targetVersionI
     const { projectId: vp } = await assertVersionVisible(targetVersionId, user);
     if (targetGroup && vp !== targetGroup.projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to target project');
   }
-  return copyCaseCore({ caseId, targetGroupId, targetVersionId });
+  return copyCaseCore({ caseId, targetGroupId, targetVersionId }, user.userId);
 }
 
 casesRoute.post('/:id/copy', async (req, res) => {

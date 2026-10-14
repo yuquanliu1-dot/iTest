@@ -58,6 +58,8 @@ export const testCases = pgTable('test_cases', {
   mobileOs: varchar('mobile_os', { length: 16 }),
   mobileDeviceTargetId: uuid('mobile_device_target_id').references(() => deviceTargets.id, { onDelete: 'set null' }),
   appRef: jsonb('app_ref').$type<AppRef | null>(),
+  /** 创建人（对齐 plan_schedules.created_by_user_id 约定）；用户删除后置 NULL，不牵连用例 */
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
@@ -82,6 +84,8 @@ export const aiThreads = pgTable('ai_threads', {
   versionId: uuid('version_id').references(() => projectVersions.id, { onDelete: 'cascade' }),
   title: text('title'),
   piThreadId: text('pi_thread_id').notNull(),
+  /** 线程创建人：AI 代建对象（env/plan/...）以它为归属 */
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
@@ -313,6 +317,8 @@ export const reports = pgTable('reports', {
   // 双通过率口径：passed 且 healed=true = 自愈通过（aiTask 缓存分叉后 AI 兜底成功）；
   // passed 且 healed=false = 一次通过；failed 恒 false。
   healed: boolean('healed').notNull().default(false),
+  /** 创建人 = 触发执行的人（单用例=请求用户；计划运行沿用 plan_runs.triggered_by_user_id） */
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -383,6 +389,8 @@ export const projects = pgTable('projects', {
   // 仓库 PAT：明文存盘仅为最小迁移代价；后续接 dispatch 时应改 encrypted column。
   // 现 read 路径全部 mask（projectsRoute / ProjectDetailPanel 都不得回传）。
   patOverride: text('pat_override'),
+  /** 创建人（对齐 plan_schedules.created_by_user_id 约定） */
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -442,6 +450,8 @@ export const executionPlans = pgTable('execution_plans', {
   detectionUrl: text('detection_url'),
   loginSuccessSelector: text('login_success_selector'),
   loginUnauthorizedKeywords: jsonb('login_unauthorized_keywords'),
+  /** 创建人（对齐 plan_schedules.created_by_user_id 约定） */
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
@@ -585,6 +595,8 @@ export const testEnvironments = pgTable('test_environments', {
   isDefault: boolean('is_default').notNull().default(false),
   // 部署入口 URL：执行期导航兜底（用例.url → 分组.defaultUrl → 环境.base_url → 项目.defaultUrl）
   baseUrl: text('base_url'),
+  /** 创建人（对齐 plan_schedules.created_by_user_id 约定） */
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
@@ -635,6 +647,8 @@ export const datasets = pgTable('datasets', {
   description: text('description'),
   columns: jsonb('columns').$type<DatasetColumn[]>().notNull().default([]),
   rows: jsonb('rows').$type<DatasetRow[]>().notNull().default([]),
+  /** 创建人（对齐 plan_schedules.created_by_user_id 约定） */
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({

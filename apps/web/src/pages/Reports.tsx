@@ -13,6 +13,7 @@ import { EmptyCellValue } from '../components/ui/Table';
 import { DataTable, type DataTableColumn, type DataTableFacet, type DataTableTabs } from '../components/ui/DataTable';
 import { useTableSelection } from '../hooks/useTableSelection';
 import { fullDateTime, shortDateTime, formatDuration } from '../lib/format';
+import { creatorName } from '../lib/creatorName';
 import { useUIStore } from '../stores/ui';
 import {
 	PageShell,
@@ -248,7 +249,10 @@ export default function Executions() {
 			align: 'right',
 			cellClassName: 'text-xs text-muted-foreground tabular-nums',
 			cell: (r) => (
-				<span title={fullDateTime(r.createdAt)}>{shortDateTime(r.createdAt)}</span>
+				<span className="flex flex-col items-end gap-0.5">
+					<span title={fullDateTime(r.createdAt)}>{shortDateTime(r.createdAt)}</span>
+					<span>{creatorName(r.createdBy)}</span>
+				</span>
 			),
 		},
 	];

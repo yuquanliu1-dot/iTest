@@ -8,6 +8,7 @@ import { db } from '../db/client.js';
 import { environmentObjects, executionPlans, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { encrypt } from '../lib/secret-crypto.js';
+import { attachCreators, attachCreator } from '../lib/creator.js';
 
 export const OBJECT_MASK = '••••••••';
 const OBJECT_TYPES = ['db', 'syslog', 'login'] as const;
@@ -78,21 +79,22 @@ export async function listEnvironments(projectId: string) {
     list.push(o);
     byEnv.set(o.environmentId, list);
   }
-  return envs.map((e) => ({ ...e, objects: (byEnv.get(e.id) ?? []).map(maskObjectPayload) }));
+  return attachCreators(envs.map((e) => ({ ...e, objects: (byEnv.get(e.id) ?? []).map(maskObjectPayload) })));
 }
 
 export async function getEnvironment(environmentId: string) {
   const env = (await db.select().from(testEnvironments).where(eq(testEnvironments.id, environmentId)).limit(1))[0];
   if (!env) return null;
-  return { ...env, objects: await objectsOf(env.id) };
+  return attachCreator({ ...env, objects: await objectsOf(env.id) });
 }
 
 export async function createEnvironment(
   projectId: string,
   input: { name: string; baseUrl?: string | null; objects?: Array<{ objectType: ObjectType; label?: string; payload: Record<string, unknown>; isDefault?: boolean }> },
+  createdByUserId?: string | null,
 ) {
   return db.transaction(async (tx) => {
-    const inserted = (await tx.insert(testEnvironments).values({ projectId, name: input.name, baseUrl: input.baseUrl ?? null }).returning())[0]!;
+    const inserted = (await tx.insert(testEnvironments).values({ projectId, name: input.name, baseUrl: input.baseUrl ?? null, ...(createdByUserId ? { createdByUserId } : {}) }).returning())[0]!;
     if (input.objects?.length) {
       await tx.insert(environmentObjects).values(input.objects.map((o) => ({
         environmentId: inserted.id,

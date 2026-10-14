@@ -31,10 +31,12 @@ export interface PreseedReport {
 }
 
 /** 插入一条 running 报告行（与 runCaseOnce 原插入值完全一致），返回 reportId。
- *  单用例执行路由提前调用（执行转后台后响应必须带回 reportId），runCaseOnce 靠 preseed 复用。 */
+ *  单用例执行路由提前调用（执行转后台后响应必须带回 reportId），runCaseOnce 靠 preseed 复用。
+ *  createdByUserId = 触发执行的人（报告创建人）。 */
 export async function insertRunningReportRow(
   caseRow: typeof testCases.$inferSelect,
   rowPlan?: DatasetRowExec,
+  createdByUserId?: string | null,
 ): Promise<string> {
   const inserted = await db
     .insert(reports)
@@ -44,6 +46,7 @@ export async function insertRunningReportRow(
       stepResults: [] as object,
       summary: 'execution in progress',
       platform: caseRow.platform,
+      ...(createdByUserId ? { createdByUserId } : {}),
       ...(caseRow.mobileOs ? { mobileOs: caseRow.mobileOs } : {}),
       ...(caseRow.mobileDeviceTargetId ? { deviceTargetId: caseRow.mobileDeviceTargetId } : {}),
       ...(rowPlan ? { datasetRowIndex: rowPlan.rowIndex, datasetSnapshot: rowPlan.snapshot } : {}),
@@ -64,6 +67,8 @@ export async function runCase(
     liveView?: import('./liveView.js').LiveViewHandle;
     /** 路由已预置的 running 报告行（执行即跳报告页）；提供后跳过本函数内的报告插入。 */
     preseed?: PreseedReport[];
+    /** 报告创建人 = 触发执行的人；preseed 路径已在路由落库，此处仅覆盖非 preseed 插入。 */
+    createdByUserId?: string | null;
   },
 ): Promise<{ reportId: string; status: string; reportIds?: string[] }> {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
@@ -98,6 +103,7 @@ async function runCaseOnce(
     ownedContext?: BrowserContext;
     liveView?: import('./liveView.js').LiveViewHandle;
     preseed?: PreseedReport[];
+    createdByUserId?: string | null;
   } | undefined,
   rowPlan?: DatasetRowExec,
 ): Promise<{ reportId: string; status: string }> {
@@ -121,7 +127,7 @@ async function runCaseOnce(
     if (!match) throw new Error(`preseed report missing for dataset row ${rowPlan?.rowIndex ?? 'none'}`);
     reportId = match.reportId;
   } else {
-    reportId = await insertRunningReportRow(caseRow, rowPlan);
+    reportId = await insertRunningReportRow(caseRow, rowPlan, opts?.createdByUserId);
   }
 
   // 非数据集模式保持原语义：内部错误照常上抛（由 HTTP 边界处理）。

@@ -115,7 +115,7 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
                 envId = v.environmentId;
               } else {
                 if (!v.name) return { ok: false, error: 'upsert 新建环境需要 name' };
-                envId = (await svc.createEnvironment(ctx.projectId, { name: v.name, baseUrl: v.baseUrl ?? null })).id;
+                envId = (await svc.createEnvironment(ctx.projectId, { name: v.name, baseUrl: v.baseUrl ?? null }, ctx.createdByUserId)).id;
               }
               for (const o of v.objects ?? []) await svc.upsertEnvironmentObject(envId, o);
               emitStage(ctx, { kind: 'environment', id: envId, action: 'upsert', diff: upsertDiff });

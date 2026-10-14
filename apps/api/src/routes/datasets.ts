@@ -44,7 +44,7 @@ datasetsRoute.get('/projects/:projectId/datasets', async (req, res) => {
 datasetsRoute.post('/projects/:projectId/datasets', async (req, res) => {
   await assertProjectVisible(req.params.projectId!, req.user!);
   const body = SaveBody.parse(req.body);
-  res.json(await createDataset(req.params.projectId!, body));
+  res.json(await createDataset(req.params.projectId!, body, req.user!.userId));
 });
 
 datasetsRoute.get('/projects/:projectId/datasets/:dsId', async (req, res) => {

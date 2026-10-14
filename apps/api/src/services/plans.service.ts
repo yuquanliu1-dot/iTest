@@ -7,6 +7,7 @@ import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { executionPlans, groups, planCases, projectVersions, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
+import { attachCreators, attachCreator } from '../lib/creator.js';
 
 export async function planProjectId(planId: string): Promise<string | null> {
   const row = (await db.select({ projectId: executionPlans.projectId }).from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
@@ -22,7 +23,7 @@ export async function listPlansByVersion(versionId: string) {
     : [];
   const countByPlan = new Map<string, number>();
   for (const pc of pcs) countByPlan.set(pc.planId, (countByPlan.get(pc.planId) ?? 0) + 1);
-  return plans.map((p) => ({ ...p, caseCount: countByPlan.get(p.id) ?? 0 }));
+  return attachCreators(plans.map((p) => ({ ...p, caseCount: countByPlan.get(p.id) ?? 0 })));
 }
 
 export interface LoginPrepareInput {
@@ -82,7 +83,7 @@ async function assertEnvInProject(environmentId: string, projectId: string): Pro
   if (e.projectId !== projectId) throw new HttpError(400, 'env_project_mismatch', 'environment does not belong to this project');
 }
 
-export async function createPlan(projectId: string, input: CreatePlanInput) {
+export async function createPlan(projectId: string, input: CreatePlanInput, createdByUserId?: string | null) {
   await assertVersionInProject(input.versionId, projectId);
   if (input.environmentId) await assertEnvInProject(input.environmentId, projectId);
   if (input.strategy && !['run_all', 'fail_fast'].includes(input.strategy)) {
@@ -101,6 +102,7 @@ export async function createPlan(projectId: string, input: CreatePlanInput) {
       detectionUrl: input.loginPrepare?.detectionUrl ?? null,
       loginSuccessSelector: input.loginPrepare?.successSelector ?? null,
       loginUnauthorizedKeywords: input.loginPrepare?.unauthorizedKeywords ?? null,
+      ...(createdByUserId ? { createdByUserId } : {}),
     }).returning()
   )[0]!;
 }
@@ -154,7 +156,7 @@ export async function getPlanDetail(planId: string) {
     const v = (await db.select({ name: projectVersions.name }).from(projectVersions).where(eq(projectVersions.id, plan.versionId)).limit(1))[0];
     versionName = v?.name ?? null;
   }
-  return {
+  return attachCreator({
     ...plan,
     versionName,
     cases: pcs.map((pc) => ({
@@ -164,7 +166,7 @@ export async function getPlanDetail(planId: string) {
       url: byId.get(pc.caseId)?.url ?? null,
       versionId: byId.get(pc.caseId)?.versionId ?? null,
     })),
-  };
+  });
 }
 
 /** 所有 caseIds 必须属于计划所属项目(经分组归属);重复 id 去重后校验,避免误报 409。 */

@@ -8,6 +8,7 @@ import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import LiveViewCard from '../components/LiveViewCard';
 import { fullDateTime } from '../lib/format';
+import { creatorName } from '../lib/creatorName';
 
 export default function PlanRunDetail() {
   const { id, runId, projectId, versionId } = useParams<{ id: string; runId: string; projectId: string; versionId: string }>();
@@ -68,6 +69,7 @@ export default function PlanRunDetail() {
         )}
         <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
           {fullDateTime(run.startedAt)} · {run.durationMs ?? 0} ms
+          {run.triggeredBy ? ` · 触发人 ${creatorName(run.triggeredBy)}` : ''}
         </span>
       </div>
 

@@ -33,6 +33,8 @@ export interface SpaceThreadContext {
   projectId: string;
   /** 仓库后台检出状态(session 建立时通常未就绪;检出完成/失败后字段就位)。 */
   repo: RepoState;
+  /** 线程创建人：AI 代建对象(env/plan/...)以它为归属；历史线程为 null。 */
+  createdByUserId: string | null;
 }
 
 export type SpaceSessionFactory = (ctx: SpaceThreadContext) => Promise<SpaceSessionLike>;
@@ -86,7 +88,7 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
   // repo 工具经共享 RepoState 每次调用动态解析 cwd;no_repo 静默(仅影响工具错误语态),
   // 其它失败记 repo.issue 供诊断,均不阻断会话。
   const repo = emptyRepoState();
-  const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo });
+  const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo, createdByUserId: row.createdByUserId });
   const rec: ThreadRecord = {
     threadId,
     versionId: row.versionId,

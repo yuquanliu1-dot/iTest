@@ -3,6 +3,7 @@ import { eq, desc, inArray, and, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { reports, planRuns, groups, testCases, executionPlans, projectVersions, planRunCases } from '../db/schema.js';
 import { assertProjectVisible, visibleProjectIds } from '../services/projectAccess.js';
+import { resolveUsersByIds, type ResolvedUser } from '../lib/creator.js';
 
 export const executionsRoute = Router();
 
@@ -21,6 +22,9 @@ interface CaseEntry {
   /** 自愈通过标记：passed 且 aiTask 缓存分叉后 AI 自愈成功；failed 恒 false。 */
   healed: boolean;
   createdAt: Date | string;
+  /** 执行人（即报告创建人 = 触发执行者）；列表统一返回 createdBy。 */
+  createdById: string | null;
+  createdBy: ResolvedUser | null;
 }
 interface PlanEntry {
   kind: 'plan';
@@ -36,6 +40,9 @@ interface PlanEntry {
   skippedCases: number | null;
   durationMs: number | null;
   createdAt: Date | string;
+  /** 执行人 = 计划运行触发者；列表统一返回 createdBy。 */
+  createdById: string | null;
+  createdBy: ResolvedUser | null;
 }
 type Entry = CaseEntry | PlanEntry;
 
@@ -117,6 +124,7 @@ executionsRoute.get('/', async (req, res) => {
             end`,
           createdAt: reports.createdAt,
           healed: reports.healed,
+          createdById: reports.createdByUserId,
         })
         .from(reports)
         .leftJoin(testCases, eq(testCases.id, reports.caseId))
@@ -147,7 +155,7 @@ executionsRoute.get('/', async (req, res) => {
     const where = conds.length ? and(...conds) : undefined;
     const rows = where
       ? await db
-          .select({ id: planRuns.id, planId: planRuns.planId, status: planRuns.status, summary: planRuns.summary, totalCases: planRuns.totalCases, passedCases: planRuns.passedCases, failedCases: planRuns.failedCases, skippedCases: planRuns.skippedCases, durationMs: planRuns.durationMs, startedAt: planRuns.startedAt, versionId: executionPlans.versionId })
+          .select({ id: planRuns.id, planId: planRuns.planId, status: planRuns.status, summary: planRuns.summary, totalCases: planRuns.totalCases, passedCases: planRuns.passedCases, failedCases: planRuns.failedCases, skippedCases: planRuns.skippedCases, durationMs: planRuns.durationMs, startedAt: planRuns.startedAt, versionId: executionPlans.versionId, createdById: planRuns.triggeredByUserId })
           .from(planRuns)
           .innerJoin(executionPlans, eq(executionPlans.id, planRuns.planId))
           .where(where)
@@ -167,6 +175,9 @@ executionsRoute.get('/', async (req, res) => {
       skippedCases: r.skippedCases,
       durationMs: r.durationMs,
       createdAt: r.startedAt,
+      createdById: r.createdById ?? null,
+      // 执行人统一在 merge 阶段批量解析后回填
+      createdBy: null,
     }));
     const pVids = Array.from(new Set(planRows.map((r) => r.versionId).filter((v): v is string => !!v)));
     if (pVids.length) {
@@ -176,10 +187,16 @@ executionsRoute.get('/', async (req, res) => {
     }
   }
 
-  const merged: Entry[] = [...caseRows, ...planRows].sort((a, b) => {
-    const ta = new Date(a.createdAt).getTime();
-    const tb = new Date(b.createdAt).getTime();
-    return tb - ta;
-  });
+  const actorIds = Array.from(
+    new Set([...caseRows, ...planRows].map((r) => r.createdById).filter((v): v is string => !!v)),
+  );
+  const actorMap = await resolveUsersByIds(actorIds);
+  const merged: Entry[] = [...caseRows, ...planRows]
+    .map((r) => ({ ...r, createdBy: r.createdById ? (actorMap.get(r.createdById) ?? null) : null }))
+    .sort((a, b) => {
+      const ta = new Date(a.createdAt).getTime();
+      const tb = new Date(b.createdAt).getTime();
+      return tb - ta;
+    });
   res.json(merged);
 });
