@@ -410,6 +410,8 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ events }),
       }),
+    /** 当前部署的扩展版本：徽标拿它与「已装版本」对比，检测出可升级更新。 */
+    extensionVersion: () => request<{ version: string }>('/recorder/extension/version'),
   },
   attachments: {
     upload: async (caseId: string, file: File) => {
