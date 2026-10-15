@@ -289,7 +289,7 @@ export function rewriteSpacePreamble(rendered: string): string | undefined {
 
 /** 空间助手 system prompt:风格约束 + 需求设计方法 + 工作空间 + 版本上下文摘要;无摘要时省略上下文段。 */
 export function buildSpaceSystemPrompt(summaryText: string | null): string {
-  const style = '## 输出风格\n- 用户使用简体中文提问,全部回复一律用简体中文(代码、命令、英文术语可保留原文)。\n- 不要使用 emoji;强调用 markdown 加粗,列举用列表/表格。';
+  const style = '## 输出风格\n- 用户使用简体中文提问,全部回复一律用简体中文(代码、命令、英文术语可保留原文)。这条约束覆盖**每一条**用户可见文本,包括最终答复、调用工具前的过程说明、以及思考/推理独白——不要出现「Let me check」「I found that」「I should」这类英文句子,想查什么直接调工具即可。\n- 不要使用 emoji;强调用 markdown 加粗,列举用列表/表格。';
   const workspace = '## 工作空间\n- 当前目录是版本专属工作空间，项目仓库已检出到 ./repo 子目录；读取代码请优先使用 repo_ls / repo_read / repo_grep 工具。';
   if (!summaryText) return `${style}\n\n${REQ_DESIGN_METHOD}\n\n${workspace}`;
   return `${style}\n\n${REQ_DESIGN_METHOD}\n\n${workspace}\n\n## 版本空间上下文\n${summaryText}`;
