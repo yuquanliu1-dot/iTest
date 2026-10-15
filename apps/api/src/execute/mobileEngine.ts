@@ -68,6 +68,8 @@ export class MobileEngine implements Engine {
       if (!Array.isArray(compiled) || compiled.length === 0) {
         const missing: ExecStepResult = {
           order: step.order, status: 'failed', durationMs: 0,
+          instruction: step.instruction ?? undefined,
+          compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
           error: `compile-missing: 第 ${step.order} 步未编译`,
           failureReason: 'MobileUnsupportedCapability',
           humanMessage: '移动端步骤缺少 compiled DSL',
@@ -83,6 +85,8 @@ export class MobileEngine implements Engine {
         const screenshot = await this.captureStepScreenshot(input.reportId, step.order);
         const passedResult: ExecStepResult = {
           order: step.order, status: 'passed', durationMs: Date.now() - started, screenshot,
+          instruction: step.instruction ?? undefined,
+          compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
         };
         results.push(passedResult);
         onStep?.(passedResult);
@@ -94,6 +98,8 @@ export class MobileEngine implements Engine {
           e instanceof Error && e.name === 'MobileUnsupportedCapability' ? 'MobileUnsupportedCapability' : 'MobileStepFailed';
         const failedResult: ExecStepResult = {
           order: step.order, status: 'failed', durationMs: Date.now() - started,
+          instruction: step.instruction ?? undefined,
+          compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
           error: msg, screenshot, failureReason: reason,
           humanMessage: reason === 'MobileUnsupportedCapability' ? '当前 mobile 引擎不支持该动作' : `agent-device 命令失败：${msg}`,
         };

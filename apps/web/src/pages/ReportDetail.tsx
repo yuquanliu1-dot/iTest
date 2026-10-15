@@ -9,7 +9,8 @@ import EmptyState from '../components/ui/EmptyState';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import Button from '../components/ui/Button';
 import { useUIStore } from '../stores/ui';
-import { fullDateTime } from '../lib/format';
+import { fullDateTime, stepKindLabel } from '../lib/format';
+import { getKind, stepSummary, fullStepDescription } from '../lib/stepSummary';
 import { creatorName } from '../lib/creatorName';
 import type { DbQueryRowResult, ObserveLogLineResult, HttpStepResult } from '@itest/shared';
 
@@ -27,6 +28,10 @@ interface StepResult {
   order: number;
   status: string;
   durationMs: number;
+  /** 行级自然语言说明快照（执行时步骤的 instruction；历史报告/录制用例可能缺省） */
+  instruction?: string;
+  /** compiled DSL 快照；无 instruction 时报告页据此生成动作摘要（与用例页同一套 stepSummary） */
+  compiled?: unknown[];
   error?: string;
   warning?: string;
   screenshot?: string;
@@ -182,6 +187,17 @@ export default function ReportDetail() {
           {passed ? '✓' : '✕'} #{s.order}
         </span>
         <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+          {/* 步骤说明：与用例详情页步骤列表同构——类型标签 + instruction，无 instruction 用动作摘要；历史报告缺快照则不渲染 */}
+          {(s.instruction?.trim() || (Array.isArray(s.compiled) && s.compiled.length > 0)) && (
+            <div className="flex items-baseline gap-1.5 min-w-0" title={fullStepDescription(s)}>
+              <span className="shrink-0 font-semibold" style={{ color: 'var(--primary)', fontSize: 10 }}>
+                {stepKindLabel(getKind(s))}
+              </span>
+              <span className="min-w-0 truncate text-[12px]" style={{ color: 'var(--foreground)' }}>
+                {s.instruction?.trim() || stepSummary(s)}
+              </span>
+            </div>
+          )}
           {/* 元信息：耗时 / 定位策略 / 标签页 —— 标签在前、值在后，分项独立，可读 */}
           <div className="flex items-center gap-2 flex-wrap text-[11px]">
             <Meta label="耗时" value={`${s.durationMs} ms`} mono />
