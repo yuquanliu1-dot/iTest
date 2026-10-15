@@ -279,9 +279,9 @@ export default function Settings() {
                 </div>
                 <div className="bg-card border flex items-center justify-between" style={{ padding: 16 }}>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>元素识别失败自动降级 AI 执行</div>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>机械执行失败自动降级 AI 执行</div>
                     <div className="text-[11px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
-                      click/fill 等机械动作全部定位失败时用指令重做本步。
+                      步骤机械执行报错（定位失败、断言不匹配等）时用指令重做本步。
                     </div>
                   </div>
                   <Toggle

@@ -6,7 +6,7 @@ import { settings } from '../db/schema.js';
 export interface AiFallbackSettings {
   /** compiled DSL 为空时用该步 instruction 调 AI 临场执行。 */
   compileMissing: boolean;
-  /** 机械动作 locator 全部探测失败（LocatorAllFailed）时用该步 instruction 让 AI 重做。 */
+  /** 机械步骤执行失败（任意失败原因）时用该步 instruction 让 AI 重做。 */
   locatorFailed: boolean;
 }
 
