@@ -9,7 +9,7 @@ export function buildInspectTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'inspect_page',
     description:
-      '抓取被测页面并返回实际可交互元素清单(按钮/输入框/链接/选择器/文案,含 data-testid)。创建带步骤的用例前,若知道页面 URL,先调用本工具获取真实元素,禁止凭「典型实现」臆造 locator。默认自动注入本环境的登录态;若返回的清单是登录页,再显式传 perform_login 返回的 storageState 重新抓取。快照仅为页面初始状态,操作后才出现的元素不在其中。',
+      '抓取被测页面并返回实际可交互元素清单(按钮/输入框/链接/选择器/文案,含 data-testid)与抓取质量自评。创建带步骤的用例前,若知道页面 URL,先调用本工具获取真实元素,禁止凭「典型实现」臆造 locator。默认自动注入本环境的登录态;若返回的清单是登录页,再显式传 perform_login 返回的 storageState 重新抓取。快照仅为页面初始状态,操作后才出现的元素不在其中。若返回「抓取质量: 低」,说明 URL 可能无效/是空壳页/登录页/404,不要基于该清单编造用例,先核对 URL 或跟用户确认真实路径。',
     parameters: Type.Object({
       url: Type.String({ minLength: 8, maxLength: 2000 }),
       storageState: Type.Optional(Type.String({ maxLength: 100_000 })),
