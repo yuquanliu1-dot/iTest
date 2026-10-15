@@ -92,10 +92,11 @@ describe('space session supervisor', () => {
     expect(captured[0]!.prompts[1]).toBe('再建一个');
   }, 30_000);
 
-  it('buildSpaceSystemPrompt:始终含风格段;有摘要追加版本空间上下文标题', async () => {
+  it('buildSpaceSystemPrompt:始终含风格段与需求设计方法;有摘要追加版本空间上下文标题', async () => {
     const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
     const base = buildSpaceSystemPrompt(null);
     expect(base).toContain('输出风格');
+    expect(base).toContain('需求→用例设计方法');
     const out = buildSpaceSystemPrompt('X');
     expect(out).toContain('X');
     expect(out).toContain('版本空间上下文');
