@@ -118,6 +118,9 @@ export class RecorderManager {
   private lastAiTaskSig: { signature: string; at: number } | null = null;
 
   start(handler: StepHandler, options: RecorderOptions = {}) {
+    // 幂等：同一副本可能在未 stop 的情况下收到多次 'start'（background 每次 complete 重发 start 广播到所有
+    // 存活的副本）。先卸掉旧监听再挂新监听，避免叠加 document 级 capture 监听导致一次点击被捕获多次。
+    this.detachListeners();
     this.active = true;
     this.paused = false;
     this.options = {

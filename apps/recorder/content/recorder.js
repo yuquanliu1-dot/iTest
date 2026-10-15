@@ -1,4 +1,11 @@
 (async () => {
+  // 注入幂等守卫：background 对录制 tab 每次 onUpdated('complete') 都会重复执行本脚本（同文档重注入，
+  // 旧副本不会被移除）。已存在正在监听的副本时直接跳过——同一份真实点击不应被 N 份独立监听各收一次：
+  // 每份有自己的 onClick 闭包与独立 200ms 去重窗口，互不感知，一次点击会产出 N 条逐字节相同的步骤
+  // （2026-10-15 病例：同一用例出现 2/2/5/4 的连续重复）。与 bridge.js 的 __itaBridge 同模式；
+  // 真实导航会销毁文档与副本，守卫随 isolated world 一起重置，不会误挡合法的重注入。
+  if (globalThis.__itaRecorder) return;
+  globalThis.__itaRecorder = true;
   const src = chrome.runtime.getURL('modules/recorder-manager.js');
   const mod = await import(src);
   const manager = new mod.RecorderManager();
