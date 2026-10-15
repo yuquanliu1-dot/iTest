@@ -411,6 +411,18 @@ describe('recorder-manager — phase1 change events + pause', () => {
     btn.remove();
   });
 
+  // 回归：同一副本未 stop 就再次 start()（background 每次 complete 重发的 start 广播都会命中存活的副本）
+  // 不应叠加 document 级监听——一次点击只能产一条。恢复于 2026-10-15 重复步骤病例。
+  it('re-start without stop does not stack listeners (one click → one step)', () => {
+    const { mgr, captured } = setup();
+    mgr.start((s) => captured.push(s));
+    const btn = document.createElement('button');
+    document.body.appendChild(btn);
+    btn.dispatchEvent(new Event('click', { bubbles: true }));
+    expect(captured).toHaveLength(1);
+    btn.remove();
+  });
+
   it('password input marks step sensitive', () => {
     const { captured } = setup();
     vi.useFakeTimers();
