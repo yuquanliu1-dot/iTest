@@ -392,3 +392,17 @@ recorderRoute.get('/extension.zip', async (req, res) => {
   await archive.finalize();
 });
 
+// 当前部署扩展的版本（manifest.json 里的 version，与 /extension.zip 同源）。
+// 前端徽标拿它和「已装版本」对比：已装较旧时亮出可升级态 + 下载入口。
+recorderRoute.get('/extension/version', async (_req, res) => {
+  const root = resolveRecorderRoot();
+  let version = '0.0.0';
+  try {
+    const text = await readFile(join(root, 'manifest.json'), 'utf8');
+    version = (JSON.parse(text) as { version?: string }).version ?? version;
+  } catch (err) {
+    logger.warn({ err }, 'extension/version: manifest.json read failed');
+  }
+  res.json({ version });
+});
+

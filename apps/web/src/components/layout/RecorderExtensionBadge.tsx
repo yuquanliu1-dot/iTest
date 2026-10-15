@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api/client';
 import { useAuthStore } from '../../stores/auth';
 import { useUIStore } from '../../stores/ui';
@@ -6,25 +6,48 @@ import { Button } from '../ui/shadcn/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 import Icon from '../Icon';
 
-type RecorderState = 'unknown' | 'ready' | 'stale' | 'missing';
+type RecorderState = 'unknown' | 'ready' | 'update' | 'stale' | 'missing';
 
 const PING_TIMEOUT_MS = 800;
 const PING_SOURCE = 'ita-web';
 const PONG_SOURCE = 'ita-ext';
 
+/** 简单 semver 比较：0.0.1 < 0.0.2。manifest version 恒为 x.y.z，够用。 */
+function versionLt(a: string, b: string): boolean {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d < 0;
+  }
+  return false;
+}
+
 /** 顶栏常驻徽标 + 弹层：探测 Chrome 录制扩展、下载 zip、安装说明。
  *  探测机制：ping/pong。扩展的 content/bridge.js 在收到 ping 时回 {source:'ita-ext',type:'pong',id,version}。
- *  详见 apps/recorder/content/bridge.js。 */
+ *  详见 apps/recorder/content/bridge.js。
+ *  升级感知：pong 回报的已装版本与 /api/recorder/extension/version 的当前版本对比，
+ *  已装较旧时进入 'update' 琥珀态并开放下载按钮——老用户无需留意版本号也能感知有新扩展可装。 */
 export default function RecorderExtensionBadge() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const toast = useUIStore((s) => s.showToast);
 
   const [state, setState] = useState<RecorderState>('unknown');
   const [version, setVersion] = useState<string | null>(null);
+  const [current, setCurrent] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [probeNonce, setProbeNonce] = useState(0);
   const pendingRef = useRef<{ id: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+
+  // 拉取当前部署版本：pong 回来后好比较。与探测同一次挂载触发，重检测时一并刷新。
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    api.recorder
+      .extensionVersion()
+      .then((r) => setCurrent(r.version))
+      .catch(() => setCurrent(null)); // 拉不到就不比较，保持 ready 不误报升级
+  }, [isAuthenticated, probeNonce]);
 
   const sendPing = useCallback(() => {
     if (!isAuthenticated) return;
@@ -67,8 +90,9 @@ export default function RecorderExtensionBadge() {
         pendingRef.current = null;
       }
       if (e.data.version) {
-        setState('ready');
+        // 已装版本是"探测到了扩展"的基态；最终 ready/update 由 effectiveState 按版本比较推出。
         setVersion(e.data.version);
+        setState('ready');
       } else {
         // pong 收到但 version 为空 → 扩展刚被重载过，context invalidated
         setState('stale');
@@ -78,6 +102,14 @@ export default function RecorderExtensionBadge() {
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   }, []);
+
+  // 派生状态：pong 有版本 + 拉到了当前版本 → 比较出 ready 还是 update。
+  // state 只存探测阶段的结果（unknown/missing/stale），ready 与 update 由版本比较推算。
+  const effectiveState: RecorderState = useMemo(() => {
+    if (state === 'missing' || state === 'stale' || state === 'unknown') return state;
+    if (version && current) return versionLt(version, current) ? 'update' : 'ready';
+    return 'ready'; // current 未拉到时不误报升级
+  }, [state, version, current]);
 
   const handleDownload = useCallback(async () => {
     setDownloading(true);
@@ -103,13 +135,21 @@ export default function RecorderExtensionBadge() {
   if (!isAuthenticated) return null;
 
   const dotColor =
-    state === 'ready' ? 'var(--success)' : state === 'stale' ? 'var(--warning)' : 'var(--destructive)';
+    effectiveState === 'ready'
+      ? 'var(--success)'
+      : effectiveState === 'update'
+        ? 'var(--warning)'
+        : effectiveState === 'stale'
+          ? 'var(--warning)'
+          : 'var(--destructive)';
   const label =
-    state === 'ready'
+    effectiveState === 'ready'
       ? `录制扩展 v${version ?? ''}`
-      : state === 'stale'
-        ? '录制扩展（连接失效）'
-        : '录制扩展（未安装）';
+      : effectiveState === 'update'
+        ? `扩展可升级 v${current ?? ''}`
+        : effectiveState === 'stale'
+          ? '录制扩展（连接失效）'
+          : '录制扩展（未安装）';
 
   return (
     <>
@@ -124,7 +164,7 @@ export default function RecorderExtensionBadge() {
           aria-hidden
           style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }}
         />
-        {state === 'unknown' ? '检测中…' : label}
+        {effectiveState === 'unknown' ? '检测中…' : label}
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -133,10 +173,22 @@ export default function RecorderExtensionBadge() {
             <DialogTitle>录制扩展状态</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4 text-xs/relaxed">
-            <StatusRow state={state} version={version} onRecheck={() => setProbeNonce((n) => n + 1)} />
+            <StatusRow state={effectiveState} version={version} current={current} onRecheck={() => setProbeNonce((n) => n + 1)} />
 
-            {state === 'ready' ? (
+            {effectiveState === 'ready' ? (
               <UpdateHint />
+            ) : effectiveState === 'update' ? (
+              <>
+                <p className="text-[11px]" style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}>
+                  有新版本扩展可用。下载并覆盖安装后，录制修复与新增能力即刻生效。
+                </p>
+                <ol className="flex flex-col gap-1 pl-4 text-xs/relaxed" style={{ listStyle: 'decimal' }}>
+                  <li>下载新版 <code>itest-recorder.zip</code> 并解压。</li>
+                  <li>在 <code>chrome://extensions/</code> 移除旧扩展（点「移除」）。</li>
+                  <li>点「加载已解压的扩展程序」→ 选择刚才解压的目录。</li>
+                  <li>回到本页面，徽标变为绿色 v{current ?? ''} 即完成升级。</li>
+                </ol>
+              </>
             ) : (
               <>
                 <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
@@ -163,12 +215,12 @@ export default function RecorderExtensionBadge() {
                 variant="outline"
                 size="sm"
                 onClick={() => setProbeNonce((n) => n + 1)}
-                disabled={state === 'unknown'}
+                disabled={effectiveState === 'unknown'}
               >
                 <Icon name="refresh" size={12} />
                 重新检测
               </Button>
-              {state !== 'ready' && (
+              {effectiveState !== 'ready' && (
                 <Button size="sm" onClick={handleDownload} disabled={downloading}>
                   <Icon name="download" size={12} />
                   {downloading ? '打包中…' : '下载扩展 zip'}
@@ -185,10 +237,12 @@ export default function RecorderExtensionBadge() {
 function StatusRow({
   state,
   version,
+  current,
   onRecheck,
 }: {
   state: RecorderState;
   version: string | null;
+  current: string | null;
   onRecheck: () => void;
 }) {
   if (state === 'ready') {
@@ -200,6 +254,25 @@ function StatusRow({
         <Icon name="check" size={14} />
         <span className="font-medium">已就绪</span>
         {version && <span className="text-[11px]">v{version}</span>}
+      </div>
+    );
+  }
+  if (state === 'update') {
+    return (
+      <div
+        className="flex items-center gap-2 rounded-md px-2 py-1.5"
+        style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}
+      >
+        <Icon name="download" size={14} />
+        <span className="font-medium">有新版本</span>
+        <span className="text-[11px]">已装 v{version ?? '?'} → v{current ?? '?'}</span>
+        <button
+          type="button"
+          className="ml-auto text-[11px] underline"
+          onClick={onRecheck}
+        >
+          重新检测
+        </button>
       </div>
     );
   }
@@ -253,8 +326,8 @@ function StatusRow({
 function UpdateHint() {
   return (
     <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--muted-foreground)' }}>
-      <p>更新扩展：在 <code>chrome://extensions/</code> 点扩展「刷新」按钮，再刷新本页面。</p>
-      <p>如需重新下载：先卸载当前扩展，按下方步骤重新加载。</p>
+      <p>已安装的是当前最新版本，无需升级。若扩展行为异常，可在 <code>chrome://extensions/</code> 点「刷新」重载。</p>
+      <p>如需重新下载：先卸载当前扩展，再点下方「下载扩展 zip」。备用下载入口：<code>中台地址/api/recorder/extension.zip</code>。</p>
     </div>
   );
 }
