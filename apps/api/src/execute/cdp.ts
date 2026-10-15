@@ -361,6 +361,11 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       return;
     }
     case 'waitFor': {
+      // 空定位 = 固定时长等待（不等待任何元素），睡满 timeoutMs。
+      if (!action.locator || action.locator.length === 0) {
+        await page.waitForTimeout(action.timeoutMs ?? 5000);
+        return;
+      }
       // tryFirstMatch 的 count() 是单帧探测：waitFor 语义是「等元素出现」，
       // 点击/导航后元素尚不存在时必须轮询重试，否则 t=0 探测一次 count=0 立即失败。
       const timeoutMs = action.timeoutMs ?? 5000;

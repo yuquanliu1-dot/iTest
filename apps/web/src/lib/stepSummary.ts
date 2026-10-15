@@ -100,6 +100,8 @@ function actionSummary(a: KnownAction): string {
     case 'check':
       return a.checked === false ? '取消勾选' : '勾选';
     case 'waitFor':
+      // 空定位 = 固定时长等待；有定位 = 等待元素出现
+      if (!t) return `固定等待 ${typeof a.timeoutMs === 'number' ? a.timeoutMs : 5000} ms`;
       return `等待元素 ${clip(t, 20)}`;
     case 'assertVisible':
       return `断言可见 ${clip(t, 20)}`;

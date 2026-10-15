@@ -20,6 +20,11 @@ describe('validateStepEdit', () => {
     expect(r.errors['action.locator']).toBeTruthy();
   });
 
+  it('waitFor 空 locator = 合法空等待（固定时长）', () => {
+    expect(validateStepEdit({ action: { kind: 'waitFor', locator: [] } }).ok).toBe(true);
+    expect(validateStepEdit({ action: { kind: 'waitFor', locator: [], timeoutMs: 3000 } }).ok).toBe(true);
+  });
+
   it('navigate URL 不合法', () => {
     const r = validateStepEdit({ action: { kind: 'navigate', url: 'notaurl' } });
     expect(r.errors['action.url']).toBeTruthy();
