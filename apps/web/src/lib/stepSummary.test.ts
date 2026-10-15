@@ -42,6 +42,11 @@ describe('stepSummary', () => {
     expect(stepSummary({ compiled: [{ kind: 'assertVisible', locator: loc() }] })).toBe('断言可见 css=#btn');
   });
 
+  it('waitFor 空定位 = 固定时长等待（默认 5000）', () => {
+    expect(stepSummary({ compiled: [{ kind: 'waitFor', locator: [], timeoutMs: 3000 }] })).toBe('固定等待 3000 ms');
+    expect(stepSummary({ compiled: [{ kind: 'waitFor', locator: [] }] })).toBe('固定等待 5000 ms');
+  });
+
   it('assertText 按 match 生成', () => {
     expect(stepSummary({ compiled: [{ kind: 'assertText', locator: [], target: 'page', match: 'contains', equals: '登录成功' }] })).toBe('断言文本 包含「登录成功」');
   });

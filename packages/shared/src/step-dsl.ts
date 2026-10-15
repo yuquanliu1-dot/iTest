@@ -91,7 +91,8 @@ export const FillAction = z.object({
 export const HoverAction = z.object({ kind: z.literal('hover'), locator: z.array(Locator).min(1) });
 export const WaitForAction = z.object({
   kind: z.literal('waitFor'),
-  locator: z.array(Locator).min(1),
+  /** 空数组 = 固定时长等待（不等待具体元素），睡 timeoutMs（默认 5000）。 */
+  locator: z.array(Locator),
   intentLocator: IntentLocator.optional(),
   timeoutMs: z.number().int().positive().optional(),
 });

@@ -272,7 +272,13 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
   const buildAction = (): Record<string, unknown> | null => {
     const next: Record<string, unknown> = { ...action };
 
-    if (kindNeedsLocator(kind)) next.locator = locators;
+    // waitFor 定位可选：滤掉没填值的候选，全空 → locator:[] = 固定时长等待；
+    // 其他类型原样透传，空值候选仍由 zod 逐个拦截。
+    if (kindNeedsLocator(kind)) {
+      next.locator = kind === 'waitFor'
+        ? locators.filter((l) => String(l.value ?? '').trim())
+        : locators;
+    }
     if (kind === 'fill' || kind === 'select') {
       if (kind === 'fill') {
         if (sensitive) {
@@ -429,6 +435,18 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       setFieldErrors({ 'action.instruction': '指令不能为空' });
       return;
     }
+    // 自然语言描述里填 DSL JSON 是常见误操作（参数应填下方表单字段）——拦截并指路，
+    // 否则保存后 AI 编译拿到的"指令"是一段 JSON，无从编译。
+    {
+      const inst = rowInstruction.trim();
+      if (/^[[{]/.test(inst)) {
+        try {
+          JSON.parse(inst);
+          setFieldErrors({ instruction: '描述不应填 DSL JSON——动作参数请填下方表单字段，此处用自然语言（例：等待查询结果出现）' });
+          return;
+        } catch { /* 不是合法 JSON，按普通文本放行 */ }
+      }
+    }
     // 占位保存分支：create 模式下 locator 全空时跳过 zod 校验,直接入库 compiled:[]
     if (saveAsPlaceholder) {
       const placeholderAction: Record<string, unknown> = { kind, locator: [] };
@@ -469,8 +487,8 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
 
   const showLocator = kindNeedsLocator(kind) && !(kind === 'assertText' && assertTarget !== 'specifiedElement');
   // create 模式下用户没填 locator 时给一条「存为未编译占位」出口 —— 抽屉关闭后顶部执行仍置灰,
-  //   行级「AI 智能任务」按钮把 compiled 填回来。
-  const saveAsPlaceholder = saveMode === 'create' && kindNeedsLocator(kind) && locators.every((l) => !String(l.value ?? '').trim());
+  //   行级「AI 智能任务」按钮把 compiled 填回来。waitFor 例外：不填定位 = 合法空等待，正常保存。
+  const saveAsPlaceholder = saveMode === 'create' && kindNeedsLocator(kind) && kind !== 'waitFor' && locators.every((l) => !String(l.value ?? '').trim());
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -480,11 +498,13 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
           <span>自然语言描述（行级 instruction,人看 / 给 LLM 起手;回放不读）</span>
           <textarea
             className="input-base input-xs"
+            aria-invalid={!!fieldErrors.instruction}
             value={rowInstruction}
             onChange={(e) => setRowInstruction(e.target.value)}
             placeholder="必填。例:在用户名框输入管理员账号"
             rows={2}
           />
+          <FieldError msg={fieldErrors.instruction} />
         </label>
         <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
           <span>执行前等待 (ms)</span>
@@ -560,6 +580,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
         {kind === 'waitFor' && (
           <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             <span>超时 (ms，留空默认 5000)</span>
+            <span className="text-[10px]">不填定位候选 = 固定等待该时长（空等待），不等待任何元素</span>
             <input
               className="input-base input-xs"
               aria-invalid={!!fieldErrors['action.timeoutMs']}

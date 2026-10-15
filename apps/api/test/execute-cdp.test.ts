@@ -244,6 +244,28 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(mocked.__page.waitForTimeout).toHaveBeenCalledWith(300);
   });
 
+  it('waitFor 空定位 = 固定时长等待（睡 timeoutMs，不探测元素）', async () => {
+    mocked.__page.waitForTimeout.mockClear();
+    mocked.__locator.mockClear();
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000053',
+      [{ order: 1, compiled: [{ kind: 'waitFor', locator: [], timeoutMs: 1200 }] }],
+      { reportId: 'r-fixed-wait' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(mocked.__page.waitForTimeout).toHaveBeenCalledWith(1200);
+    // 空等待不解析任何 locator
+    expect(mocked.__locator).not.toHaveBeenCalled();
+
+    // 缺省 timeoutMs → 5000
+    await executeCaseReal(
+      '00000000-0000-0000-0000-000000054',
+      [{ order: 1, compiled: [{ kind: 'waitFor', locator: [] }] }],
+      { reportId: 'r-fixed-wait-default' },
+    );
+    expect(mocked.__page.waitForTimeout).toHaveBeenCalledWith(5000);
+  });
+
   it('waits for networkidle before capturing step screenshot', async () => {
     const waitForLoadState = (mocked.__page as unknown as { waitForLoadState: ReturnType<typeof vi.fn> }).waitForLoadState;
     waitForLoadState.mockClear();

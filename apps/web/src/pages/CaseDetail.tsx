@@ -1016,7 +1016,7 @@ export default function CaseDetail() {
                                 style={{ border: '1px solid var(--warning-soft-border)', color: 'var(--warning)', background: 'var(--warning-soft)' }}
                                 title="该步骤缺少 compiled DSL，回放将被 dispatcher 阻塞。点此跳到 AI 助手走 stage_case_op 重新编译。"
                               >
-                                AI 编译失败 · 跳助手重编
+                                未编译 · 跳助手回填
                               </button>
                             )}
                             <div className="flex items-center gap-1 shrink-0">
