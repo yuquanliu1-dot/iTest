@@ -3,8 +3,8 @@
  *   - 服务：listStage / stageCase / stageScenario / stageEnvironment / stagePlan / stageDataset / deleteStaged
  *   - 工具：stage_case / stage_scenario / stage_environment / stage_plan / stage_dataset (供 LLM 走预览流)
  *
- * 与 ai_workspace_*（requirementId-keyed）不共享；这里按 (threadId, localId) 复合主键，
- * 落到 ai_stage_* 表。前端 StagePanel 勾选 → /stage/save 一次性落正式表。
+ * 暂存以 (threadId, localId) 复合主键落到 ai_stage_* 表（version 线程作用域，空间助手无 requirementId，
+ * localId 由 LLM 自生成）。前端 StagePanel 勾选 → /stage/save 一次性落正式表。
  */
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { Type } from '@earendil-works/pi-ai';

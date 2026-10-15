@@ -173,7 +173,7 @@ beforeEach(async () => {
   __testState.mountAfter = {};
   __testState.countCalls = {};
   await pool.query(`TRUNCATE test_steps, test_cases, test_environments, environment_objects,
-    requirements, "groups", projects, project_versions, ai_threads, ai_workspace_state, ai_stage_case_ops, ai_stage_cases
+    requirements, "groups", projects, project_versions, ai_threads, ai_stage_case_ops, ai_stage_cases
     RESTART IDENTITY CASCADE`);
   const seed = await seedProject(pool);
   projectId = seed.projectId;

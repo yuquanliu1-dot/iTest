@@ -80,7 +80,11 @@ export const scenarios = pgTable('scenarios', {
 
 export const aiThreads = pgTable('ai_threads', {
   id: uuid('id').primaryKey().defaultRandom(),
-  /** 'requirement'(存量需求级生成会话)| 'version'(版本空间助手线程)。 */
+  /** 2026-10-15 起只有 'version' 在用：需求级线程（kind='requirement'）与其配套的
+   *  ai_workspace_state / ai_scenarios / ai_cases 三张表已随死代码清理移除（生产库均为空表）。
+   *  保留默认值 'requirement' 而非改 'version'——改默认值对存量 version 行没有收益，
+   *  却要让每个读代码的人重新确认一次「现在到底哪种线程活着」。
+   *  新建线程一律显式传 kind: 'version'（见 session.ts ensureSpaceRecord）。 */
   kind: varchar('kind', { length: 20 }).notNull().default('requirement'),
   // requirement 线程 1:1 需求;version 线程此列为 NULL(Postgres 唯一索引不约束 NULL,多条 version 线程合法)
   requirementId: uuid('requirement_id').references(() => requirements.id, { onDelete: 'cascade' }),
@@ -96,46 +100,8 @@ export const aiThreads = pgTable('ai_threads', {
   versionIdx: index('ai_threads_version_idx').on(t.versionId),
 }));
 
-export const aiWorkspaceState = pgTable('ai_workspace_state', {
-  requirementId: uuid('requirement_id').primaryKey().references(() => requirements.id, { onDelete: 'cascade' }),
-  doc: jsonb('doc').notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
-
-export const aiScenarios = pgTable(
-  'ai_scenarios',
-  {
-    requirementId: uuid('requirement_id').notNull().references(() => requirements.id, { onDelete: 'cascade' }),
-    id: text('id').notNull(),
-    title: varchar('title', { length: 200 }).notNull(),
-    description: text('description'),
-    order: integer('order').notNull().default(0),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-  },
-  (t) => ({ pk: primaryKey({ columns: [t.requirementId, t.id] }) }),
-);
-
-export const aiCases = pgTable(
-  'ai_cases',
-  {
-    requirementId: uuid('requirement_id').notNull().references(() => requirements.id, { onDelete: 'cascade' }),
-    id: text('id').notNull(),
-    scenarioId: text('scenario_id'),
-    title: varchar('title', { length: 200 }).notNull(),
-    description: text('description'),
-    priority: varchar('priority', { length: 20 }).notNull().default('P1'),
-    steps: jsonb('steps').notNull().default([]),
-    position: integer('position').notNull().default(0),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-  },
-  (t) => ({
-    pk: primaryKey({ columns: [t.requirementId, t.id] }),
-    byReqScenario: index('ai_cases_requirement_scenario_idx').on(t.requirementId, t.scenarioId),
-  }),
-);
-
-// 版本空间助手暂存表（thread-scoped）：AI 在 stage_* 工具里写这里，前端 StagePanel 勾选 → /stage/save 落正式表。
-// 与 ai_workspace_*（requirementId-keyed）并列存在但不复用：空间助手无 requirementId，localId 由 LLM 自生成。
+// 按 version 线程作用域：AI 在 stage_* 工具里写这里，前端 StagePanel 勾选 → /stage/save 落正式表。
+// 空间助手无 requirementId（需求由用户在弹窗/助手里直接输入，不落 requirements 表），localId 由 LLM 自生成。
 export const aiStageCases = pgTable(
   'ai_stage_cases',
   {
