@@ -163,6 +163,8 @@ describe('回放 AI 降级 — 机械执行失败（任意失败原因）', () =
     );
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.failureReason).toBe('LocatorAllFailed');
+    // 说明快照：failed 结果同样携带，报告页失败步也能看到意图
+    expect(results[0]!.instruction).toBe('点击已删除按钮');
   });
 
   it('开关 on + 有指令：AI 重做本步通过 + warning，并 continue 到下一步', async () => {
@@ -184,6 +186,9 @@ describe('回放 AI 降级 — 机械执行失败（任意失败原因）', () =
     expect(results[0]!.warning).toMatch(/count=0/);
     expect(results[0]!.degraded).toBe(true);
     expect(results[0]!.aiUsage?.calls).toBeGreaterThanOrEqual(1);
+    // 说明快照：报告页据此展示步骤意图（降级 passed 也带）
+    expect(results[0]!.instruction).toBe('点击已删除按钮');
+    expect(results[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '#gone' }] }]);
     expect(results[1]!.status).toBe('passed');
   });
 

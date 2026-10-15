@@ -84,6 +84,10 @@ export interface ExecStepResult {
   healed?: boolean;
   /** 本步机械执行受阻，由 AI 按步骤指令临场执行通过（回放 AI 降级）；报告据此醒目标注。 */
   degraded?: boolean;
+  /** 行级自然语言说明快照（执行时的步骤 instruction；录制用例为空）。报告页据此展示步骤意图。 */
+  instruction?: string;
+  /** compiled DSL 快照（与 test_steps 落库内容一致，敏感值为模板/占位）。报告页据此生成动作摘要。 */
+  compiled?: unknown[];
 }
 
 export interface ExecContext {
@@ -951,6 +955,8 @@ async function runStepsInContext(
         order: step.order,
         status: 'passed',
         durationMs: Date.now() - started,
+        instruction: step.instruction ?? undefined,
+        compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
         warning,
         screenshot,
         hitLocator: opts.hitSink.current ?? undefined,
@@ -1008,6 +1014,8 @@ async function runStepsInContext(
               order: step.order,
               status: 'passed',
               durationMs: Date.now() - started,
+              instruction: step.instruction ?? undefined,
+              compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
               // 原机械失败原因（如 count=0 (css #gone)）一并带进 warning，报告页可看到“识别到什么程度失败”。
               warning: `机械执行失败（${rawMsg}），AI 按指令重做本步${aiSummary ? `：${aiSummary}` : ''}`,
               screenshot: aiScreenshot,
@@ -1029,6 +1037,8 @@ async function runStepsInContext(
         order: step.order,
         status: 'failed',
         durationMs,
+        instruction: step.instruction ?? undefined,
+        compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
         error: rawMsg,
         screenshot,
         failureReason: classified.reason,
