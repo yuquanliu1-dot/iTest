@@ -240,6 +240,32 @@ describe('回放 AI 降级 — 机械执行失败（任意失败原因）', () =
     expect(calls).toHaveLength(0);
   });
 
+  it('开关 on + 有指令但 AI 降级抛错：仍失败 + warning 记录 AI 未成功 + aiUsage 有计数', async () => {
+    // b7d40426 实测根因：机械 LocatorAllFailed → 触发降级 → runAiTask 跑了 LLM（onUsage 已计数）
+    // 但模型回 {"fail":...} → 抛 "aiTask 放弃"。旧逻辑静默 catch 落回机械报错，报告只留孤立
+    // aiUsage 看不出 AI 已介入却没救回来。脚本给一条 fail 响应（非空脚本）以复现"用到了 AI 但放弃"。
+    const { llm, calls } = makeMockLlm([{ fail: '找不到规则tab的关闭按钮' }]);
+    mocked.__locator.mockImplementationOnce(() => missingLocator());
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000121',
+      [{ order: 1, id: 's-1', instruction: '关闭打开的规则tab', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#gone' }] }] }],
+      { reportId: 'r-lf-ai-err', aiFallback: ON, llmClient: llm },
+    );
+    // AI 确实被调用过（complete 至少一次）
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    // 仍维持机械失败（status/failureReason 不变）
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.failureReason).toBe('LocatorAllFailed');
+    // 不再孤立：warning 记录 AI 降级尝试未成功 + 放弃原因
+    expect(results[0]!.warning).toMatch(/AI 降级尝试未成功/);
+    expect(results[0]!.warning).toMatch(/aiTask 放弃/);
+    expect(results[0]!.warning).toMatch(/找不到规则tab的关闭按钮/);
+    // aiUsage 有计数（与 warning 呼应，不再是孤零零的调用记录）
+    expect(results[0]!.aiUsage?.calls).toBeGreaterThanOrEqual(1);
+    // 未降级通过
+    expect(results[0]!.degraded).toBeUndefined();
+  });
+
   it('开关 on 但本身是 aiTask 步骤：识别失败不降级，仍 LocatorAllFailed 失败', async () => {
     // aiTask 步骤本就在跑 AI，识别失败时再“按指令临场执行”无增益 → 维持原失败。
     // LLM 脚本给了 2 条：若降级误触发会消费第 2 条并“通过”，实测仍 failed 即证明 guard 生效。

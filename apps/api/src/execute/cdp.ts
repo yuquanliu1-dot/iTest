@@ -999,6 +999,8 @@ async function runStepsInContext(
       // 成功 → 步骤 passed + warning 标注（不置 healed，避免污染双通过率口径）；失败维持原 failedResult。
       // aiTask 步骤本就在跑 AI，失败时再“按指令临场执行”毫无增益 → 一律不降级，维持原失败。
       const inst = step.instruction?.trim();
+      // AI 降级失败时的错误文本（降级跑了 LLM 但抛错：放弃/超轮/异常）；失败结果据此补 warning。
+      let aiDegradedErr: string | undefined;
       if (
         fallback.locatorFailed
         && inst
@@ -1010,8 +1012,9 @@ async function runStepsInContext(
           try {
             const client = ctx.llmClient ?? (await resolveLlmClient()).client;
             aiSummary = (await runAiTask(opts.page, instResolved, client, undefined, { onUsage: (r) => aiUsage.add(r) })) || undefined;
-          } catch {
-            // AI 不可用/失败 → 维持原失败（走下方 failedResult）
+          } catch (err) {
+            // AI 不可用/放弃/超轮 → 维持原失败（走下方 failedResult），但记下原因供 warning 展示
+            aiDegradedErr = err instanceof Error ? err.message : String(err);
           }
           if (aiSummary !== undefined) {
             const aiScreenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
@@ -1053,6 +1056,9 @@ async function runStepsInContext(
         db: opts.dbSink.current ?? undefined,
         log: opts.logSink.current ?? undefined,
         http: opts.httpSink.current ?? undefined,
+        // AI 降级跑了但失败（放弃/超轮/异常）：补一条 warning 说明 AI 这一下的结局，
+        // 否则报告只留机械报错 + 孤立 aiUsage，看不出 AI 已介入却没救回来。
+        ...(aiDegradedErr ? { warning: `AI 降级尝试未成功：${aiDegradedErr}` } : {}),
         ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
       };
       results.push(failedResult);
