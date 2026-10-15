@@ -36,6 +36,7 @@ vi.mock('../src/pi/inspectPage.js', () => ({
   extractPageElements: vi.fn(async () => ({
     title: '失败页',
     url: 'http://env.example/page',
+    bodyLen: 120,
     elements: ['- button#del "删除" 选择器: #del'],
     truncated: false,
   })),

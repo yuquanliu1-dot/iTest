@@ -65,20 +65,33 @@ const EXTRACT_JS = `(() => {
     ].filter(Boolean);
     elements.push(parts.join(' '));
   }
-  return { title, elements, truncated: nodes.length > maxElements };
+  const bodyLen = document.body ? document.body.innerText.length : 0;
+  return { title, bodyLen, elements, truncated: nodes.length > maxElements };
 })()`;
 
 export interface PageElementSnapshot {
   url: string;
   title: string;
+  bodyLen: number;
   elements: string[];
   truncated: boolean;
 }
 
+export type PageQuality = 'ok' | 'low';
+
+/** 页面抓取质量自评:判断"抓到的是真实功能页还是空壳/错误页",供 inspect_page 告知模型 URL 是否可信。
+ *  判据是页面自身特征(可交互元素数 / body 文本长度),不绑定任何具体目标系统——
+ *  空壳页(登录外壳、404、未挂载的微前端容器)在任意系统都表现为这两项极低。
+ *  阈值:可交互元素 < 5 或 body 文本 < 100 字符判为低质量。 */
+export function assessPageQuality(snap: Pick<PageElementSnapshot, 'title' | 'bodyLen' | 'elements'>): PageQuality {
+  if (snap.elements.length < 5 || snap.bodyLen < 100) return 'low';
+  return 'ok';
+}
+
 /** 在已打开的页面上提取可交互元素清单（inspect_page 与 verify_case 失败页快照共用）。 */
 export async function extractPageElements(page: Page, url?: string): Promise<PageElementSnapshot> {
-  const extracted = (await page.evaluate(EXTRACT_JS)) as { title: string; elements: string[]; truncated: boolean };
-  return { url: url ?? page.url(), title: extracted.title, elements: extracted.elements, truncated: extracted.truncated };
+  const extracted = (await page.evaluate(EXTRACT_JS)) as { title: string; bodyLen: number; elements: string[]; truncated: boolean };
+  return { url: url ?? page.url(), title: extracted.title, bodyLen: extracted.bodyLen, elements: extracted.elements, truncated: extracted.truncated };
 }
 
 export async function inspectPage(rawUrl: string, opts?: { storageState?: unknown }): Promise<string> {
@@ -108,10 +121,14 @@ export async function inspectPage(rawUrl: string, opts?: { storageState?: unknow
     await page.waitForTimeout(SETTLE_MS);
 
     const snap = await extractPageElements(page, url.toString());
-
+    const quality = assessPageQuality(snap);
+    const qualityLine = quality === 'low'
+      ? `抓取质量: 低(可交互元素 ${snap.elements.length} 个,正文 ${snap.bodyLen} 字符)——该 URL 可能无效、是空壳页(未渲染的微前端容器)、登录页或 404。请勿基于此清单编造用例,先核对 URL 是否正确;若不确定,跟用户确认目标页面的真实路径。`
+      : `抓取质量: 正常(可交互元素 ${snap.elements.length} 个,正文 ${snap.bodyLen} 字符)`;
     const lines = [
       `页面: ${url.toString()}`,
       `标题: ${snap.title || '(无)'}`,
+      qualityLine,
       '注意: 此快照仅为页面初始状态。点击/提交后才出现的元素（结果区、错误提示等）不在清单中——断言这类元素必须先触发相应操作，或断言清单中其稳定的父容器；清单里不存在的 testid/id 绝对禁止编造。',
       `可交互元素 (${snap.elements.length}${snap.truncated ? `，已截断至 ${MAX_ELEMENTS}` : ''}):`,
       ...snap.elements,
