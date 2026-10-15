@@ -78,19 +78,9 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
         const assertion = clean !== null
           ? (migrateAction({ kind: 'assertText', text: clean }) as object)
           : null;
-        const a = s.action as { kind?: string; url?: string; value?: unknown } | undefined;
-        const c0 = (Array.isArray(s.compiled) && s.compiled.length > 0
-          ? (s.compiled[0] as { kind?: string; url?: string; value?: unknown })
-          : undefined);
-        const a2 = a ?? c0 ?? {};
-        const fallbackInstruction = s.instruction?.trim() || (() => {
-          switch (a2.kind) {
-            case 'navigate': return `打开 ${a2.url ?? ''}`;
-            case 'click': return '点击';
-            case 'fill': return `输入 ${typeof a2.value === 'string' ? a2.value : '...'}`;
-            default: return a2.kind ?? '';
-          }
-        })();
+        // instruction 缺省存空 —— 显示层（用例页/报告页）有 stepSummary 实时兜底,
+        // 服务端不再捏造"点击"这类裸标签（会遮蔽实时摘要、污染 AI 降级输入）。
+        const instruction = s.instruction?.trim() ?? '';
         // compiled 元素做 migrate 同步:sensitive 字段保留(由 dispatcher 决定是否入密),value 入密后从 compiled 里抹掉避免泄漏。
         const compiled = Array.isArray(s.compiled)
           ? (s.compiled.map((c) => {
@@ -103,7 +93,7 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
           caseId: req.params.caseId,
           order: s.order,
           source: s.source,
-          instruction: fallbackInstruction.slice(0, 2000),
+          instruction,
           compiled,
           assertion,
         };
@@ -187,7 +177,7 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
             .optional(),
           source: z.enum(['agent', 'recorder', 'manual']).default('manual'),
           delayMs: z.number().int().nonnegative().max(60000).optional(),
-          /** 行级自然语言（人看/给 LLM 起手用；回放不读）。必填,缺省时由 action 内容拼一行兜底。 */
+          /** 行级自然语言（人看/给 LLM 起手用；回放不读）。缺省存空,显示层走 stepSummary 兜底。 */
           instruction: z.string().max(2000).optional(),
           /** 已编译 DSL 数组；缺省时按"未编译"处理（dispatcher 阻塞执行）。 */
           compiled: z.array(z.unknown()).optional(),
@@ -311,28 +301,14 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
                 return m;
               }) as unknown[])
             : null;
-          // instruction 缺省时按 action 内容自动拼一行(2026-10-07 name 列退役,此处不再写 name 列)。
-          // action 缺省时优先从 compiled[0] 取 kind/url/value 拼。
-          const fallbackInstruction = s.instruction?.trim()
-            || (() => {
-                const a2 = s.action as { kind?: string; url?: string; value?: unknown; tabRef?: string } | undefined;
-                const c0b = (Array.isArray(compiled) && compiled.length > 0
-                  ? (compiled[0] as { kind?: string; url?: string; value?: unknown; tabRef?: string })
-                  : undefined);
-                const knd = a2?.kind ?? c0b?.kind;
-                switch (knd) {
-                  case 'navigate': return `打开 ${a2?.url ?? c0b?.url ?? ''}`;
-                  case 'click': return '点击';
-                  case 'fill': return `输入 ${typeof (a2?.value ?? c0b?.value) === 'string' ? (a2?.value ?? c0b?.value) : '...'}`;
-                  case 'switchTab': return `切换标签页 ${a2?.tabRef ?? c0b?.tabRef ?? ''}`;
-                  default: return a2 ? JSON.stringify(a2) : (c0b ? JSON.stringify(c0b) : '');
-                }
-              })();
+          // instruction 缺省存空 —— 显示层（用例页/报告页）有 stepSummary 实时兜底,
+          // 服务端不再捏造"点击"这类裸标签（会遮蔽实时摘要、污染 AI 降级输入）。
+          const instruction = s.instruction?.trim() ?? '';
           return {
             caseId: req.params.caseId,
             order: i + 1,
             source: s.source,
-            instruction: fallbackInstruction.slice(0, 2000),
+            instruction,
             compiled,
             delayMs: s.delayMs ?? null,
             sensitive: kind === 'fill' && !!sensitive,
