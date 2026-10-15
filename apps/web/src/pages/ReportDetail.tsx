@@ -203,7 +203,7 @@ export default function ReportDetail() {
               <Meta label="执行" value="AI 自愈" title="缓存动作与页面分叉，AI 兜底重做后通过" />
             )}
             {s.degraded && (
-              <Meta label="执行" value="AI 降级" title="机械执行受阻（如未编译 / 元素识别失败），由 AI 按步骤指令临场执行通过" />
+              <Meta label="执行" value="AI 降级" title="机械执行受阻（如未编译 / 执行失败），由 AI 按步骤指令临场执行通过" />
             )}
             {s.aiUsage && (
               <Meta

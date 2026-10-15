@@ -152,7 +152,7 @@ describe('回放 AI 降级 — compiled DSL 为空（compile-missing）', () => 
   });
 });
 
-describe('回放 AI 降级 — 元素识别失败（LocatorAllFailed）', () => {
+describe('回放 AI 降级 — 机械执行失败（任意失败原因）', () => {
   it('开关 off：仍 LocatorAllFailed 判失败', async () => {
     const { llm } = makeMockLlm([]);
     mocked.__locator.mockImplementationOnce(() => missingLocator());
@@ -180,11 +180,33 @@ describe('回放 AI 降级 — 元素识别失败（LocatorAllFailed）', () => 
     );
     expect(results).toHaveLength(2);
     expect(results[0]!.status).toBe('passed');
-    expect(results[0]!.warning).toMatch(/元素识别失败（/);
+    expect(results[0]!.warning).toMatch(/机械执行失败（/);
     expect(results[0]!.warning).toMatch(/count=0/);
     expect(results[0]!.degraded).toBe(true);
     expect(results[0]!.aiUsage?.calls).toBeGreaterThanOrEqual(1);
     expect(results[1]!.status).toBe('passed');
+  });
+
+  it('非 LocatorAllFailed 失败（AssertionMismatch）：同样降级 AI 重做通过', async () => {
+    // 需求口径：任意机械执行失败都降级，不限元素识别失败。assertText contains 不命中 → AssertionMismatch。
+    const { llm } = makeMockLlm([{ done: true, summary: '已确认操作成功' }]);
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve('页面正文文本'));
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000114',
+      [{
+        order: 1,
+        id: 's-1',
+        instruction: '断言页面显示操作成功',
+        compiled: [{ kind: 'assertText', locator: [], target: 'page', match: 'contains', equals: '操作成功' }],
+      }],
+      { reportId: 'r-am-on', aiFallback: ON, llmClient: llm },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(results[0]!.warning).toMatch(/机械执行失败（/);
+    expect(results[0]!.warning).toMatch(/assertText failed/);
+    expect(results[0]!.degraded).toBe(true);
+    expect(results[0]!.aiUsage?.calls).toBeGreaterThanOrEqual(1);
   });
 
   it('开关 on 但无 instruction：无指令不降级，仍 LocatorAllFailed 失败', async () => {

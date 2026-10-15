@@ -984,13 +984,12 @@ async function runStepsInContext(
         if (e instanceof Error) e.message = rawMsg;
       }
       const classified = classify(e, { action: failedAction, durationMs });
-      // AI 降级（可选）：元素识别失败（LocatorAllFailed）+ 全局开关开 + 有行级指令 → 用指令让 AI 整步重做。
+      // AI 降级（可选）：机械执行失败（任意失败原因）+ 全局开关开 + 有行级指令 → 用指令让 AI 整步重做。
       // 成功 → 步骤 passed + warning 标注（不置 healed，避免污染双通过率口径）；失败维持原 failedResult。
-      // aiTask 步骤本就在跑 AI，元素识别失败时再“按指令临场执行”毫无增益 → 一律不降级，维持原失败。
+      // aiTask 步骤本就在跑 AI，失败时再“按指令临场执行”毫无增益 → 一律不降级，维持原失败。
       const inst = step.instruction?.trim();
       if (
-        classified.reason === 'LocatorAllFailed'
-        && fallback.locatorFailed
+        fallback.locatorFailed
         && inst
         && failedAction?.kind !== 'aiTask'
       ) {
@@ -1001,7 +1000,7 @@ async function runStepsInContext(
             const client = ctx.llmClient ?? (await resolveLlmClient()).client;
             aiSummary = (await runAiTask(opts.page, instResolved, client, undefined, { onUsage: (r) => aiUsage.add(r) })) || undefined;
           } catch {
-            // AI 不可用/失败 → 维持原 LocatorAllFailed 失败（走下方 failedResult）
+            // AI 不可用/失败 → 维持原失败（走下方 failedResult）
           }
           if (aiSummary !== undefined) {
             const aiScreenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
@@ -1010,7 +1009,7 @@ async function runStepsInContext(
               status: 'passed',
               durationMs: Date.now() - started,
               // 原机械失败原因（如 count=0 (css #gone)）一并带进 warning，报告页可看到“识别到什么程度失败”。
-              warning: `元素识别失败（${rawMsg}），AI 按指令重做本步${aiSummary ? `：${aiSummary}` : ''}`,
+              warning: `机械执行失败（${rawMsg}），AI 按指令重做本步${aiSummary ? `：${aiSummary}` : ''}`,
               screenshot: aiScreenshot,
               hitLocator: opts.hitSink.current ?? undefined,
               tabIndex: tabIndex >= 0 ? tabIndex : 0,
