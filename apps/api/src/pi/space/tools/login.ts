@@ -78,7 +78,7 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
           if (!envCtx.login) {
             return { ok: false, error: '当前默认环境未配置 login 凭据' };
           }
-          const targetUrl = url || envCtx.login.loginUrl || envCtx.baseUrl || '';
+          const targetUrl = url || (envCtx.login?.loginUrl?.startsWith('/') ? `${envCtx.baseUrl ?? ''}${envCtx.login.loginUrl}` : envCtx.login?.loginUrl ?? '') || envCtx.baseUrl || '';
           if (!targetUrl) {
             return { ok: false, error: '缺少登录目标 URL（未传 url，且环境未配置 loginUrl/baseUrl）' };
           }

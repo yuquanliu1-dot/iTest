@@ -178,4 +178,25 @@ describe('manage_environments 工具', () => {
     expect((await pool.query(`SELECT id FROM test_environments WHERE id=$1`, [envId])).rowCount).toBe(0);
     expect((await pool.query(`SELECT default_env_id FROM test_cases WHERE title='c'`)).rows[0]!.default_env_id).toBeNull();
   }, 30_000);
+
+  it('upsert 新建环境+web 对象:object_type=web,payload.name 落库,isDefault=true', async () => {
+    const seed = await seedProject(pool);
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx);
+
+    const created = await tool.execute({
+      action: 'upsert', name: 'web 环境',
+      objects: [{ objectType: 'web', label: '后端服务', payload: { name: 'backend', scheme: 'http', host: '1.2.3.4', port: 8080 }, isDefault: true }],
+    });
+    expect(created.ok).toBe(true);
+    const envId = (await pool.query(`SELECT id FROM test_environments WHERE name='web 环境'`)).rows[0]!.id as string;
+    const rows = (await pool.query(`SELECT object_type, label, payload, is_default FROM environment_objects WHERE environment_id=$1`, [envId])).rows as Array<{
+      object_type: string; label: string; payload: { name?: string }; is_default: boolean;
+    }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.object_type).toBe('web');
+    expect(rows[0]!.label).toBe('后端服务');
+    expect(rows[0]!.payload.name).toBe('backend');
+    expect(rows[0]!.is_default).toBe(true);
+  }, 30_000);
 });

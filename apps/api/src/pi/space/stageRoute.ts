@@ -147,7 +147,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
   for (const sel of environments) {
     const row = stageEnvRows.find((r) => r.localId === sel.localId);
     if (!row) throw new HttpError(404, 'not_found', `stage environment ${sel.localId} 已不存在`);
-    await environmentsSvc.createEnvironment(pid, {
+    const insertedEnv = await environmentsSvc.createEnvironment(pid, {
       name: row.name,
       baseUrl: row.baseUrl,
       objects: ((row.objects as unknown[]) ?? []).map((o) => {
@@ -155,6 +155,21 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
         return { objectType: x.objectType, label: x.label, payload: x.payload, isDefault: x.isDefault };
       }),
     }, creatorId);
+    // staged.baseUrl 绝对地址 → 派生默认 web 服务对象(尽力而为:解析失败跳过,不阻塞 save)。
+    // 用例 url 相对化后靠 web 对象 origin 拼接,老数据仍在 baseUrl 的暂存环境需要这个兜底。
+    if (insertedEnv && row.baseUrl && /^https?:\/\//.test(row.baseUrl)) {
+      try {
+        const u = new URL(row.baseUrl);
+        await environmentsSvc.insertEnvironmentObject(insertedEnv.id, {
+          objectType: 'web',
+          label: '默认 Web',
+          payload: { name: 'web', scheme: u.protocol === 'https:' ? 'https' : 'http', host: u.hostname, ...(u.port ? { port: Number(u.port) } : {}) },
+          isDefault: true,
+        });
+      } catch {
+        /* 尽力而为:解析失败跳过,不阻塞 save */
+      }
+    }
   }
 
   // 1e. plans: 先建计划,再按 caseLocalIds 解析真实 caseId。
