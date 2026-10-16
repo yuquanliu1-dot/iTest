@@ -327,6 +327,7 @@ describe('webServices / resolveWebOrigin', () => {
     });
     const ctx = await resolveEnv({ caseEnvId: 'env-1' });
     expect(() => ctx.resolveWebOrigin('nope')).toThrow(/nope/);
+    expect(() => ctx.resolveWebOrigin('nope')).toThrow(/backend/);
     expect(() => ctx.resolveWebOrigin('nope')).toThrow(WebServiceMissing);
   });
 
