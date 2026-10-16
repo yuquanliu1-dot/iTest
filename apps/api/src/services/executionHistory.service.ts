@@ -90,7 +90,8 @@ export async function historyOverview(
   const days = opts.days ?? 30;
   const caseConds = [eq(groups.projectId, projectId), gte(reports.createdAt, since(days))];
   if (opts.versionId) caseConds.push(eq(testCases.versionId, opts.versionId));
-  const [agg] = await db
+  // 聚合无 groupBy 恒返回一行,非空断言与 user.service.ts 的 row! 惯例一致
+  const agg = (await db
     .select({
       total: sql<number>`(count(*))::int`,
       passed: sql<number>`(count(*) filter (where ${reports.status} = 'passed' and ${reports.healed} = false))::int`,
@@ -100,10 +101,10 @@ export async function historyOverview(
     .from(reports)
     .innerJoin(testCases, eq(testCases.id, reports.caseId))
     .innerJoin(groups, eq(groups.id, testCases.groupId))
-    .where(and(...caseConds));
+    .where(and(...caseConds)))[0]!;
   const planConds = [eq(planRuns.projectId, projectId), gte(planRuns.startedAt, since(days))];
   if (opts.versionId) planConds.push(eq(executionPlans.versionId, opts.versionId));
-  const [pagg] = await db
+  const pagg = (await db
     .select({
       total: sql<number>`(count(*))::int`,
       passed: sql<number>`(count(*) filter (where ${planRuns.status} = 'passed'))::int`,
@@ -113,7 +114,7 @@ export async function historyOverview(
     })
     .from(planRuns)
     .innerJoin(executionPlans, eq(executionPlans.id, planRuns.planId))
-    .where(and(...planConds));
+    .where(and(...planConds)))[0]!;
   const topFailedCases = (await caseStats(projectId, { days, versionId: opts.versionId })).slice(0, 5);
   return {
     days,
@@ -255,7 +256,7 @@ export async function reportDetail(projectId: string, reportId: string): Promise
     ...(s.degraded === true ? { degraded: true } : {}),
     ...(s.cached === true ? { cached: true } : {}),
   }));
-  const [named] = await attachVersionNames([{ versionId: r.versionId }]);
+  const named = (await attachVersionNames([{ versionId: r.versionId }]))[0]!;
   return {
     reportId: r.reportId,
     caseId: r.caseId,
