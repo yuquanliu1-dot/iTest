@@ -90,6 +90,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   // fall back to per-case defaultEnv). The ctx is closed immediately — per-case runCase will re-resolve
   // the same envId to obtain a fresh pg.Pool when it actually needs one.
   let planEnv: { envId: string } | undefined;
+  let planWebOrigin: string | null | undefined;
   let loginCred: import('./envContext.js').LoginCtx | undefined;
   if (plan.environmentId) {
     try {
@@ -98,6 +99,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
         { planEnvId: plan.environmentId },
         { expectedProjectId: plan.projectId },
       );
+      planWebOrigin = ctx.resolveWebOrigin();
       planEnv = { envId: ctx.envId };
       loginCred = ctx.login;
       await ctx.close();
@@ -143,6 +145,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       {
         // 未配登录用例且环境配置了登录凭据时，走自动填表登录（探测/填表页纳入实时画面）
         autoLogin: !loginCaseId && loginCred ? loginCred : undefined,
+        defaultWebOrigin: planWebOrigin ?? null,
         liveView: live,
         loginCaseRunner: async (cid, ctx, browser) => {
           // 写入 plan_run_cases（step_kind=login_prepare, status=running）
