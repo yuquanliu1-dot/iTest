@@ -1012,6 +1012,26 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
     expect(mocked.__page.goto.mock.calls.some((c) => c[0] === 'http://10.0.0.1:8080/login')).toBe(true);
   });
 
+  it('navigate 步骤相对 url → 拼用例绑定 web 服务 origin,报告 passed', async () => {
+    const envId = await insertEnv('web-env-nav-rel', [
+      { label: '前端', payload: { name: 'frontend', scheme: 'http', host: '10.0.0.1', port: 8080 }, isDefault: true },
+    ]);
+    const caseId = await insertCase('http://init.example.com', envId);
+    await pool.query(
+      `INSERT INTO test_steps(case_id, "order", source, compiled) VALUES ($1, 1, 'manual', $2::jsonb)`,
+      [caseId, JSON.stringify([{ kind: 'navigate', url: '/second/page' }])],
+    );
+
+    mocked.__page.goto.mockClear();
+    const { runCase } = await import('../src/execute/runCase.js');
+    const res = await runCase(caseId);
+    await waitReportDone(caseId);
+
+    expect(res.status).toBe('passed');
+    // T7: navigate 步骤相对 url(/开头)拼用例绑定 web 服务 origin,而非沿用 init 页 origin。
+    expect(mocked.__page.goto.mock.calls.some((c) => c[0] === 'http://10.0.0.1:8080/second/page')).toBe(true);
+  });
+
   it('环境无 web 对象 + 相对 url → WebServiceMissing 失败报告', async () => {
     const envId = await insertEnv('no-web-env', []);
     const caseId = await insertCase('/login', envId);
