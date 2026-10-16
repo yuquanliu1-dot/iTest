@@ -139,3 +139,64 @@ describe('executionHistory.service overview + failures', () => {
     expect((await svc.failureList(a.projectId, { limit: 1 }))).toHaveLength(1);
   }, 30_000);
 });
+
+describe('executionHistory.service reportDetail + planRunList', () => {
+  it('reportDetail:步骤时间线映射 visionAssertReason/healed/degraded;跨项目/不存在 → null', async () => {
+    const a = await seedProject(pool);
+    const b = await seedProject(pool);
+    const c1 = await makeCase(a.groupId, a.versionId, '导出-报表');
+    const rid = await makeReport(c1, 'failed', {
+      stepResults: [
+        { order: 1, status: 'passed', durationMs: 12, instruction: '打开报表页' },
+        { order: 2, status: 'failed', durationMs: 30, instruction: '点击导出按钮', error: 'timeout 30000ms exceeded', humanMessage: '导出按钮未响应', failureReason: 'LocatorMismatch', degraded: true },
+        { order: -1, status: 'failed', durationMs: 0, visionAssert: { passed: false, reason: '页面未出现下载提示' } },
+      ],
+    });
+    const ridB = await makeReport((await makeCase(b.groupId, b.versionId, '隔离用')), 'passed');
+
+    const svc = await import('../src/services/executionHistory.service.js');
+    const d = await svc.reportDetail(a.projectId, rid);
+    expect(d!.caseTitle).toBe('导出-报表');
+    expect(d!.versionName).toBe('v0');
+    expect(d!.steps).toHaveLength(3);
+    expect(d!.steps[0]).toMatchObject({ order: 1, status: 'passed', instruction: '打开报表页' });
+    expect(d!.steps[1]).toMatchObject({ status: 'failed', error: 'timeout 30000ms exceeded', humanMessage: '导出按钮未响应', failureReason: 'LocatorMismatch', degraded: true });
+    expect(d!.steps[2]!.visionAssertReason).toBe('页面未出现下载提示');
+    expect(await svc.reportDetail(a.projectId, ridB)).toBeNull(); // 跨项目不可见
+    expect(await svc.reportDetail(a.projectId, '00000000-0000-0000-0000-000000000000')).toBeNull();
+  }, 30_000);
+
+  it('planRunList:版本标注(无版本→null);触发人解析;status/planId 过滤', async () => {
+    const a = await seedProject(pool);
+    const c1 = await makeCase(a.groupId, a.versionId, 'p-用例');
+    const planV = (await pool.query(
+      `INSERT INTO execution_plans(project_id, version_id, name) VALUES ($1,$2,'带版本计划') RETURNING id`, [a.projectId, a.versionId],
+    )).rows[0]!.id as string;
+    const planN = (await pool.query(
+      `INSERT INTO execution_plans(project_id, name) VALUES ($1,'无版本计划') RETURNING id`, [a.projectId],
+    )).rows[0]!.id as string;
+    // 触发人 = seed 管理员
+    const org = (await pool.query(`SELECT id FROM users ORDER BY created_at DESC LIMIT 1`)).rows[0]!;
+    await pool.query(
+      `INSERT INTO plan_runs(plan_id, project_id, status, strategy, total_cases, passed_cases, triggered_by_user_id, started_at)
+       VALUES ($1,$2,'passed','run_all',1,1,$3, now() - interval '1 hour'), ($4,$2,'failed','run_all',1,0,$3, now())`,
+      [planV, a.projectId, org.id, planN],
+    );
+    // 别的项目的 run:不可见
+    const b = await seedProject(pool);
+    await pool.query(
+      `INSERT INTO plan_runs(plan_id, project_id, status, strategy) VALUES ($1,$2,'failed','run_all')`,
+      [(await pool.query(`INSERT INTO execution_plans(project_id, name) VALUES ($1,'B计划') RETURNING id`, [b.projectId])).rows[0]!.id, b.projectId],
+    );
+
+    const svc = await import('../src/services/executionHistory.service.js');
+    const rows = await svc.planRunList(a.projectId);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.planName).toBe('无版本计划'); // 最新在前
+    expect(rows[0]!.versionName).toBeNull();
+    expect(rows[1]!.versionName).toBe('v0');
+    expect(rows.every((r: { triggeredBy: string | null }) => r.triggeredBy === '测试管理员')).toBe(true);
+    expect((await svc.planRunList(a.projectId, { status: 'passed' })).map((r: { planName: string }) => r.planName)).toEqual(['带版本计划']);
+    expect((await svc.planRunList(a.projectId, { planId: planN }))).toHaveLength(1);
+  }, 30_000);
+});
