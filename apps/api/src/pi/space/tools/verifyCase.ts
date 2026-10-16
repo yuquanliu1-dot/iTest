@@ -461,7 +461,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           if (browser) void browser.close().catch(() => undefined);
         }, VERIFY_TIMEOUT_MS);
         try {
-          // resolveCaseUrl 有 db 查询，放进本 try 让 finally 的 envCtx.close 兜底（否则查询抛错会泄漏连接池）
+          // resolveCaseUrl 可能抛 WebServiceMissing(相对 url 但环境无 web 服务),放进本 try 让 finally
+          // 的 envCtx.close 兜底(异常路径也不泄漏连接池)。
           // 草稿无分组，share null groupId:resolveCaseUrl 在传 envCtx 时只用 resolveWebOrigin 拼相对路径,
           // 相对 url(/开头)→默认 web 服务 origin + path;绝对直通;空 → 默认 origin(空 url 无服务则 null)。
           const resolvedUrl = await resolveCaseUrl(
