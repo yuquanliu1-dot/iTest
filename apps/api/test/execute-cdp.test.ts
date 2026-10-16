@@ -1062,4 +1062,34 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
     expect(row.status).toBe('failed');
     expect(row.step_results[0]!.failureReason).toBe('WebServiceMissing');
   });
+
+  it('黄金路径:同用例换环境(计划级 envOverride)执行 → 初始导航 origin 随环境 web 服务切换', async () => {
+    // 验收点:同一相对 url + 绑定 frontend,经计划所在环境的 envOverride(runPlan 同款走线)执行,
+    // goto 目标应随环境解析出不同的 origin——而非固化在用例上。
+    const envA = await insertEnv('golden-env-a', [
+      { label: '前端', payload: { name: 'frontend', scheme: 'http', host: '10.0.0.1', port: 8080 }, isDefault: true },
+    ]);
+    const envB = await insertEnv('golden-env-b', [
+      { label: '前端', payload: { name: 'frontend', scheme: 'http', host: '192.168.1.10', port: 8080 }, isDefault: true },
+    ]);
+    // 用例不设 default_env_id:证明 origin 完全由计划环境(envOverride)决定。
+    const c = await pool.query(
+      `INSERT INTO test_cases(group_id, title, url, web_service_ref) VALUES ($1, 'golden', '/login', 'frontend') RETURNING id`,
+      [groupId],
+    );
+    const caseId = c.rows[0]!.id as string;
+
+    const { runCase } = await import('../src/execute/runCase.js');
+    mocked.__page.goto.mockClear();
+    const resA = await runCase(caseId, { envOverride: { envId: envA } });
+    await waitReportDone(caseId);
+    expect(resA.status).toBe('passed');
+    expect(mocked.__page.goto.mock.calls.some((x) => x[0] === 'http://10.0.0.1:8080/login')).toBe(true);
+
+    mocked.__page.goto.mockClear();
+    const resB = await runCase(caseId, { envOverride: { envId: envB } });
+    await waitReportDone(caseId);
+    expect(resB.status).toBe('passed');
+    expect(mocked.__page.goto.mock.calls.some((x) => x[0] === 'http://192.168.1.10:8080/login')).toBe(true);
+  });
 });
