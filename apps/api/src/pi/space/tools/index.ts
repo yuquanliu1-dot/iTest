@@ -13,6 +13,7 @@ import { buildCasesTools } from './cases.js';
 import { buildScenariosTools } from './scenarios.js';
 import { buildEnvironmentsTools } from './environments.js';
 import { buildPlansTools } from './plans.js';
+import { buildHistoryTools } from './history.js';
 import { buildStageTools } from './stage-tools.js';
 import { buildLoginTools } from './login.js';
 import { buildVerifyCaseTool } from './verifyCase.js';
@@ -65,5 +66,6 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   tools.push(...buildScenariosTools(ctx));
   tools.push(...buildEnvironmentsTools(ctx));
   tools.push(...buildPlansTools(ctx));
+  tools.push(...buildHistoryTools(ctx));
   return tools;
 }
