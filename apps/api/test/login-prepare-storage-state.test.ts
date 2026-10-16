@@ -14,6 +14,7 @@ const mockState = vi.hoisted(() => ({
   ctx: undefined as unknown as BrowserContext,
   storageState: { cookies: [], origins: [] },
   newContextOpts: [] as unknown[],
+  lastPage: undefined as unknown as Page,
 }));
 
 vi.mock('playwright-core', () => {
@@ -62,7 +63,11 @@ vi.mock('playwright-core', () => {
 
   // 单例 ctx —— 每次 newContext(opts) 都记录 opts 并返回同一 ctx。
   const ctx: BrowserContext = {
-    newPage: vi.fn().mockImplementation(async () => makePage()),
+    newPage: vi.fn().mockImplementation(async () => {
+      const page = makePage();
+      mockState.lastPage = page;
+      return page;
+    }),
     storageState: vi.fn().mockImplementation(async () => mockState.storageState),
     close: vi.fn().mockResolvedValue(undefined),
     cookies: vi.fn().mockResolvedValue([]),
@@ -254,5 +259,33 @@ describe('loginPrepare — takeOwnership flow keeps browser alive', () => {
     // default 路径 finally 调 browser.close
     expect((observedBrowser as unknown as { close: ReturnType<typeof vi.fn> }).close).toHaveBeenCalledTimes(1);
     expect(mockState.closeCount).toBe(1);
+  });
+});
+
+describe('loginPrepare — autoFillLogin 相对 loginUrl 拼接', () => {
+  it('loginUrl 以 / 开头 + defaultWebOrigin → page.goto 收到拼接后的完整 URL', async () => {
+    await loginPrepare(
+      { enabled: true, detectionUrl: 'https://login.example.com/', unauthorizedKeywords: null },
+      {
+        autoLogin: { user: 'u', password: 'p', loginUrl: '/login.html' },
+        defaultWebOrigin: 'http://10.0.0.1:8080',
+        loginCaseRunner: async () => ({ passed: false }),
+      },
+    );
+    const page = mockState.lastPage as unknown as { goto: ReturnType<typeof vi.fn> };
+    expect(page.goto).toHaveBeenCalledWith('http://10.0.0.1:8080/login.html', expect.anything());
+  });
+
+  it('绝对 loginUrl + defaultWebOrigin → goto 直通，不拼 origin', async () => {
+    await loginPrepare(
+      { enabled: true, detectionUrl: 'https://login.example.com/', unauthorizedKeywords: null },
+      {
+        autoLogin: { user: 'u', password: 'p', loginUrl: 'https://sso.example.com/login' },
+        defaultWebOrigin: 'http://10.0.0.1:8080',
+        loginCaseRunner: async () => ({ passed: false }),
+      },
+    );
+    const page = mockState.lastPage as unknown as { goto: ReturnType<typeof vi.fn> };
+    expect(page.goto).toHaveBeenCalledWith('https://sso.example.com/login', expect.anything());
   });
 });

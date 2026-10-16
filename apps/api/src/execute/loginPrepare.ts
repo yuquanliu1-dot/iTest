@@ -35,7 +35,11 @@ function buildKeywords(c: LoginPrepareConfig): string[] {
 async function resolveDetectionUrl(c: LoginPrepareConfig): Promise<string | null> {
   if (c.detectionUrl) return c.detectionUrl;
   if (!c.firstCaseId) return null;
-  const row = (await db.select().from(testCases).where(eq(testCases.id, c.firstCaseId)))[0];
+  const row = (await db.select({
+    url: testCases.url,
+    webServiceRef: testCases.webServiceRef,
+    groupId: testCases.groupId,
+  }).from(testCases).where(eq(testCases.id, c.firstCaseId)))[0];
   if (!row) return null;
   return resolveCaseUrl(row, { defaultEnvFallback: true });
 }
@@ -87,11 +91,18 @@ async function autoFillLogin(
   page: Page,
   cfg: LoginPrepareConfig,
   cred: LoginCtx,
+  defaultWebOrigin: string | null,
 ): Promise<LoginPrepareResult> {
   try {
-    // 检测页未被重定向到登录页时，先去配置的登录页
+    // 检测页未被重定向到登录页时，先去配置的登录页（相对 loginUrl 拼环境默认 web 服务 origin）
     if (cred.loginUrl && !URL_LOGIN_HINTS.test(page.url())) {
-      await page.goto(cred.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      const loginTarget = cred.loginUrl.startsWith('/')
+        ? `${defaultWebOrigin ?? ''}${cred.loginUrl}`
+        : cred.loginUrl;
+      if (!/^https?:\/\//.test(loginTarget)) {
+        return { status: 'failed', reason: 'auto login: loginUrl is relative but no default web origin' };
+      }
+      await page.goto(loginTarget, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
     const inputs = page.locator('input');
     // IIFE 字符串表达式（tsx/esbuild 会给函数形式回调注入 __name 助手致页面炸；且 evaluateAll
@@ -163,6 +174,8 @@ export async function loginPrepare(
     ) => Promise<{ passed: boolean; storageState?: unknown; takeOwnership?: boolean }>;
     /** 环境登录凭据：未配登录用例（cfg.caseId 为空）时的自动填表登录。 */
     autoLogin?: LoginCtx;
+    /** 环境默认 web 服务 origin：loginUrl 为相对路径时拼接用。 */
+    defaultWebOrigin?: string | null;
     /** playground 实时画面源：探测页/自动登录页也纳入画面（自动填表登录过程可见）。 */
     liveView?: { setPage(p: Page): void };
   },
@@ -192,7 +205,7 @@ export async function loginPrepare(
     }
 
     if (!cfg.caseId && opts.autoLogin) {
-      const result = await autoFillLogin(ctx, page, cfg, opts.autoLogin);
+      const result = await autoFillLogin(ctx, page, cfg, opts.autoLogin, opts.defaultWebOrigin ?? null);
       await page.close().catch(() => undefined);
       return result;
     }
