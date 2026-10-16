@@ -90,3 +90,52 @@ describe('executionHistory.service caseStats', () => {
     expect((await svc.caseStats(a.projectId, { caseIds: [c1] })).map((r: { caseId: string }) => r.caseId)).toEqual([c1]);
   }, 30_000);
 });
+
+describe('executionHistory.service overview + failures', () => {
+  it('overview:总数/通过率/top5;failures:失败明细含 lastAssertion 与 planRunId', async () => {
+    const a = await seedProject(pool);
+    const c1 = await makeCase(a.groupId, a.versionId, '充值-超时');
+    const c2 = await makeCase(a.groupId, a.versionId, '查询-正常');
+    await makeReport(c2, 'passed');
+    await makeReport(c1, 'failed', {
+      stepResults: [
+        { order: 1, status: 'passed', durationMs: 10 },
+        { order: 2, status: 'passed', durationMs: 10 },
+        { order: -1, status: 'failed', durationMs: 0, error: 'vision 追加失败步', visionAssert: { passed: false, reason: '页面缺少充值入口' } },
+      ],
+    });
+    const member = await makeReport(c1, 'failed', {
+      stepResults: [{ order: 1, status: 'failed', durationMs: 3, error: '按钮不可点击' }],
+    });
+    const plan = (await pool.query(
+      `INSERT INTO execution_plans(project_id, name) VALUES ($1,'无版本计划') RETURNING id`, [a.projectId], // version_id 为 null
+    )).rows[0]!.id as string;
+    const run = (await pool.query(
+      `INSERT INTO plan_runs(plan_id, project_id, status, strategy, total_cases, passed_cases, failed_cases) VALUES ($1,$2,'failed','run_all',2,0,2) RETURNING id`, [plan, a.projectId],
+    )).rows[0]!.id as string;
+    await pool.query(
+      `INSERT INTO plan_run_cases(plan_run_id, case_id, report_id, "order", status, step_kind) VALUES ($1,$2,$3,1,'failed','mechanical')`,
+      [run, c1, member],
+    );
+
+    const svc = await import('../src/services/executionHistory.service.js');
+    const ov = await svc.historyOverview(a.projectId);
+    expect(ov.caseReports).toMatchObject({ total: 3, passed: 1, healed: 0, failed: 2 });
+    expect(ov.caseReports.passRatePct).toBeCloseTo(33.3, 1);
+    expect(ov.planRuns).toMatchObject({ total: 1, failed: 1, passed: 0 });
+    expect(ov.topFailedCases[0]!.caseId).toBe(c1);
+    expect(ov.topFailedCases.length).toBeLessThanOrEqual(5);
+
+    const fs = await svc.failureList(a.projectId);
+    expect(fs).toHaveLength(2);
+    expect(fs[0]!.caseId).toBe(c1); // 最新失败在前(member 后插)
+    const byId = new Map(fs.map((f: { reportId: string }) => [f.reportId, f]));
+    const visionRow = fs.find((f: { lastAssertion: string | null }) => f.lastAssertion === '页面缺少充值入口');
+    expect(visionRow).toBeTruthy(); // lastAssertion 优先取 visionAssert.reason
+    expect(byId.get(member)!.lastAssertion).toBe('按钮不可点击'); // 失败步 error 兜底
+    expect(byId.get(member)!.planRunId).toBe(run); // 计划成员可追溯到 plan_run
+    // caseId 过滤 + limit
+    expect((await svc.failureList(a.projectId, { caseId: c2 }))).toHaveLength(0);
+    expect((await svc.failureList(a.projectId, { limit: 1 }))).toHaveLength(1);
+  }, 30_000);
+});

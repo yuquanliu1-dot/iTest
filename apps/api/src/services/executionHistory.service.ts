@@ -74,3 +74,112 @@ async function attachVersionNames<T extends { versionId: string | null }>(
   }
   return rows.map((r) => ({ ...r, versionName: r.versionId ? (map.get(r.versionId) ?? null) : null }));
 }
+
+export interface HistoryOverview {
+  days: number;
+  caseReports: { total: number; passed: number; healed: number; failed: number; passRatePct: number | null };
+  planRuns: { total: number; passed: number; failed: number; cancelled: number; running: number };
+  topFailedCases: HistoryCaseStat[];
+}
+
+/** 项目执行概览:case 报告口径(通过=一次通过+自愈通过)/计划运行状态分布/失败 top5。 */
+export async function historyOverview(
+  projectId: string,
+  opts: { days?: number; versionId?: string } = {},
+): Promise<HistoryOverview> {
+  const days = opts.days ?? 30;
+  const caseConds = [eq(groups.projectId, projectId), gte(reports.createdAt, since(days))];
+  if (opts.versionId) caseConds.push(eq(testCases.versionId, opts.versionId));
+  const [agg] = await db
+    .select({
+      total: sql<number>`(count(*))::int`,
+      passed: sql<number>`(count(*) filter (where ${reports.status} = 'passed' and ${reports.healed} = false))::int`,
+      healed: sql<number>`(count(*) filter (where ${reports.status} = 'passed' and ${reports.healed} = true))::int`,
+      failed: sql<number>`(count(*) filter (where ${reports.status} = 'failed'))::int`,
+    })
+    .from(reports)
+    .innerJoin(testCases, eq(testCases.id, reports.caseId))
+    .innerJoin(groups, eq(groups.id, testCases.groupId))
+    .where(and(...caseConds));
+  const planConds = [eq(planRuns.projectId, projectId), gte(planRuns.startedAt, since(days))];
+  if (opts.versionId) planConds.push(eq(executionPlans.versionId, opts.versionId));
+  const [pagg] = await db
+    .select({
+      total: sql<number>`(count(*))::int`,
+      passed: sql<number>`(count(*) filter (where ${planRuns.status} = 'passed'))::int`,
+      failed: sql<number>`(count(*) filter (where ${planRuns.status} = 'failed'))::int`,
+      cancelled: sql<number>`(count(*) filter (where ${planRuns.status} = 'cancelled'))::int`,
+      running: sql<number>`(count(*) filter (where ${planRuns.status} = 'running'))::int`,
+    })
+    .from(planRuns)
+    .innerJoin(executionPlans, eq(executionPlans.id, planRuns.planId))
+    .where(and(...planConds));
+  const topFailedCases = (await caseStats(projectId, { days, versionId: opts.versionId })).slice(0, 5);
+  return {
+    days,
+    caseReports: {
+      ...agg,
+      passRatePct: agg.total > 0 ? Math.round(((agg.passed + agg.healed) / agg.total) * 1000) / 10 : null,
+    },
+    planRuns: pagg,
+    topFailedCases,
+  };
+}
+
+export interface HistoryFailure {
+  reportId: string;
+  caseId: string;
+  caseTitle: string;
+  versionId: string;
+  versionName: string | null;
+  durationMs: number | null;
+  summary: string | null;
+  /** 最后断言信息:vision reason 优先,失败步 error 兜底(与 executions 列表页同款 SQL) */
+  lastAssertion: string | null;
+  /** 计划成员执行回溯到的 plan_run id;单用例执行为 null */
+  planRunId: string | null;
+  createdAt: string | null;
+}
+
+/** 失败报告明细(归因下钻原材料),最新在前。含计划成员执行。 */
+export async function failureList(
+  projectId: string,
+  opts: { caseId?: string; days?: number; limit?: number } = {},
+): Promise<HistoryFailure[]> {
+  const conds = [
+    eq(groups.projectId, projectId),
+    eq(reports.status, 'failed'),
+    gte(reports.createdAt, since(opts.days ?? 30)),
+  ];
+  if (opts.caseId) conds.push(eq(reports.caseId, opts.caseId));
+  const rows = await db
+    .select({
+      reportId: reports.id,
+      caseId: reports.caseId,
+      caseTitle: testCases.title,
+      versionId: testCases.versionId,
+      durationMs: reports.durationMs,
+      summary: reports.summary,
+      lastAssertion: sql<string | null>`
+        case
+          when jsonb_typeof(${reports.stepResults}) = 'array' and jsonb_array_length(${reports.stepResults}) > 0 then
+            (select coalesce(
+               e -> 'visionAssert' ->> 'reason',
+               case when e ->> 'status' = 'failed' then e ->> 'error' end
+             )
+             from jsonb_array_elements(${reports.stepResults}) with ordinality as t(e, ord)
+             order by ord desc
+             limit 1)
+          else null
+        end`,
+      planRunId: sql<string | null>`(select pr.plan_run_id::text from plan_run_cases pr where pr.report_id = ${reports.id} limit 1)`,
+      createdAt: sql<string | null>`${reports.createdAt}::text`,
+    })
+    .from(reports)
+    .innerJoin(testCases, eq(testCases.id, reports.caseId))
+    .innerJoin(groups, eq(groups.id, testCases.groupId))
+    .where(and(...conds))
+    .orderBy(desc(reports.createdAt))
+    .limit(opts.limit ?? 20);
+  return attachVersionNames(rows);
+}
