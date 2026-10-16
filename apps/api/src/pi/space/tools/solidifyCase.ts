@@ -172,12 +172,16 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           if (browser) void browser.close().catch(() => undefined);
         }, SOLIDIFY_TIMEOUT_MS);
         try {
-          const resolvedUrl = stagedCase
-            ? (effectiveCase.url ?? envCtx.baseUrl)
-            : await resolveCaseUrl(
-                { url: effectiveCase.url, groupId: dbCase!.groupId },
-                { envBaseUrl: envCtx.baseUrl },
-              );
+          const resolvedUrl = await resolveCaseUrl(
+            {
+              url: effectiveCase.url,
+              // 草稿无 DB 行:groupId 在传 envCtx 时未被使用(仅 defaultEnvFallback 的 displayWebEnv 需要),填空串;
+              // webServiceRef 草稿无法绑定命名服务 → null 走默认 web 服务。
+              groupId: stagedCase ? '' : dbCase!.groupId,
+              webServiceRef: stagedCase ? null : (dbCase!.webServiceRef ?? null),
+            },
+            { envCtx },
+          );
           const targetUrl = resolvedUrl && /^https?:\/\//.test(resolvedUrl) ? resolvedUrl : undefined;
           browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
           const loginKey = loginStateKey(envCtx.envId, envCtx.login?.user);

@@ -26,6 +26,7 @@ export class WebEngine implements Engine {
       ...(input.expectedOutcome ? { expectedOutcome: input.expectedOutcome } : {}),
       caseTitle: input.caseTitle,
       caseUrl: input.caseUrl,
+      ...(input.caseWebOrigin ? { caseWebOrigin: input.caseWebOrigin } : {}),
       ...(input.initialVars ? { initialVars: input.initialVars } : {}),
       ...(input.sensitiveVarKeys ? { sensitiveVarKeys: input.sensitiveVarKeys } : {}),
       ...(input.liveView ? { liveView: input.liveView } : {}),

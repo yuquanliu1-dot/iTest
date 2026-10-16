@@ -38,6 +38,9 @@ export const testCases = pgTable('test_cases', {
   groupId: uuid('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
   versionId: uuid('version_id').notNull().references(() => projectVersions.id, { onDelete: 'restrict' }),
   url: text('url'),
+  /** 用例绑定的 web 服务对象标识(environment_objects objectType='web' 的 payload.name);
+   *  空=用环境默认 web 服务。执行时与相对 url 拼绝对地址。 */
+  webServiceRef: varchar('web_service_ref', { length: 64 }),
   title: varchar('title', { length: 200 }).notNull(),
   description: text('description'),
   priority: varchar('priority', { length: 20 }).notNull().default('P1'),
@@ -315,7 +318,7 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  // 与 drizzle/0039 中「email 唯一」声明同源；drizzle-kit migrate 同步建索引
+  // 与 drizzle/0017 中「email 唯一」声明同源；drizzle-kit migrate 同步建索引
   emailUq: uniqueIndex('users_email_uq').on(t.email).where(sql`${t.email} IS NOT NULL`),
 }));
 
@@ -387,7 +390,6 @@ export const groups = pgTable('groups', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 200 }).notNull(),
-  defaultUrl: text('default_url'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -566,8 +568,6 @@ export const testEnvironments = pgTable('test_environments', {
   name: varchar('name', { length: 120 }).notNull(),
   // 项目默认环境：未被 case/plan/version 显式指定环境时的兜底；项目内至多一个
   isDefault: boolean('is_default').notNull().default(false),
-  // 部署入口 URL：执行期导航兜底（用例.url → 分组.defaultUrl → 环境.base_url → 项目.defaultUrl）
-  baseUrl: text('base_url'),
   /** 创建人（对齐 plan_schedules.created_by_user_id 约定） */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),

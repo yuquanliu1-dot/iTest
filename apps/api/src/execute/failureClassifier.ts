@@ -31,6 +31,8 @@ const HUMAN: Record<FailureReason, string> = {
   QueryDbAssertionFailed: '数据库断言未命中',
   EnvMissing: '缺少环境配置，请到项目设置配置测试环境',
   EnvProjectMismatch: '环境所属项目与当前用例不匹配',
+  /** 2026-10-16: 相对 url 执行——环境无可拼 origin 的 web 服务，或 web_service_ref 非法 */
+  WebServiceMissing: '用例 url 为相对地址，但环境未配置可用的 web 服务或引用的服务不存在',
   EnvDbMissing: '当前环境未配置数据库连接',
   EnvSyslogMissing: '当前环境未配置 syslog 连接',
   SyslogConnectFailed: '连接 syslog 服务器失败',

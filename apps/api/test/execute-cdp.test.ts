@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import type { Page } from 'playwright-core';
 
 // Mock playwright-core so we can verify dispatch logic without a real browser.
@@ -902,5 +902,194 @@ describe('机械 fill 的环境凭据占位符（compiled 不再需要明文密�
     );
     expect(results[0]!.status).toBe('passed');
     expect(lastTypedValue()).toBe('S3cret!');
+  });
+});
+
+// ===== T6: runCase 相对 url 集成（testcontainers + 真实 DB；浏览器仍走上方 playwright mock）=====
+// runCase → WebEngine → executeCaseReal：同一 mock chromium 驱动，断言 goto 目标 + WebServiceMissing 失败报告。
+import { Pool } from 'pg';
+import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
+
+describe('runCase — 相对 url 与环境 web 服务', () => {
+  let container: StartedPostgreSqlContainer;
+  let pool: Pool;
+  let projectId: string;
+  let groupId: string;
+
+  const insertEnv = async (name: string, webObjs: Array<{ label: string; payload: object; isDefault: boolean }>): Promise<string> => {
+    const e = await pool.query(`INSERT INTO test_environments(project_id, name) VALUES ($1, $2) RETURNING id`, [projectId, name]);
+    const envId = e.rows[0]!.id as string;
+    for (const o of webObjs) {
+      await pool.query(
+        `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', $2, $3::jsonb, $4)`,
+        [envId, o.label, JSON.stringify(o.payload), o.isDefault],
+      );
+    }
+    return envId;
+  };
+
+  const insertCase = async (url: string, defaultEnvId: string): Promise<string> => {
+    const r = await pool.query(
+      `INSERT INTO test_cases(group_id, title, url, default_env_id) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [groupId, `T6-${url}`, url, defaultEnvId],
+    );
+    return r.rows[0]!.id as string;
+  };
+
+  const latestReport = async (caseId: string): Promise<{ status: string; step_results: Array<{ failureReason?: string }> } | undefined> => {
+    const r = await pool.query(`SELECT status, step_results FROM reports WHERE case_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1`, [caseId]);
+    return r.rows[0] as { status: string; step_results: Array<{ failureReason?: string }> } | undefined;
+  };
+
+  const waitReportDone = async (caseId: string, timeoutMs = 10000): Promise<{ status: string; step_results: Array<{ status?: string; failureReason?: string; error?: string }> }> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const row = await latestReport(caseId);
+      if (row && row.status !== 'running') return row;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error(`report for case ${caseId} still running`);
+  };
+
+  beforeAll(async () => {
+    container = await new PostgreSqlContainer('postgres:16-alpine').start();
+    process.env.DATABASE_URL = container.getConnectionUri();
+    process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? 'nqh12UCAW+ZhepC+gqL/n1phEn5mo+xq82Key67ePXI=';
+    pool = new Pool({ connectionString: container.getConnectionUri() });
+    await pool.query(SCHEMA_SQL);
+    const seed = await seedOrg(pool);
+    const s = await seedProject(pool);
+    projectId = s.projectId;
+    groupId = s.groupId;
+    // 本文件顶部静态 import cdp.js → db/client.js，pool 已按兜底 localhost 建好（上部单测未发过任何
+    // 真实连接）。把共享 pool 的 connectionString 改指测试容器——runCase 走同一 pool，新连接落容器 DB。
+    const { pool: sharedPool } = await import('../src/db/client.js');
+    (sharedPool as unknown as { options: { connectionString: string } }).options.connectionString = container.getConnectionUri();
+  }, 60000);
+
+  afterAll(async () => {
+    const { pool: sharedPool } = await import('../src/db/client.js');
+    await sharedPool.end().catch(() => undefined);
+    await pool.end();
+    await container.stop();
+  });
+
+  it('相对 url + 环境 web 对象 → goto 拼接地址，报告 passed', async () => {
+    const envId = await insertEnv('web-env', [
+      { label: '前端', payload: { name: 'frontend', scheme: 'http', host: '10.0.0.1', port: 8080 }, isDefault: true },
+    ]);
+    const caseId = await insertCase('/login', envId);
+
+    mocked.__page.goto.mockClear();
+    const { runCase } = await import('../src/execute/runCase.js');
+    const res = await runCase(caseId);
+    await waitReportDone(caseId);
+
+    expect(res.status).toBe('passed');
+    expect(mocked.__page.goto.mock.calls.some((c) => c[0] === 'http://10.0.0.1:8080/login')).toBe(true);
+  });
+
+  it('web_<name> 系统变量注入 → navigate 步骤 {{web_frontend}} 替换为服务 origin,报告 passed', async () => {
+    const envId = await insertEnv('web-env-inject', [
+      { label: '前端', payload: { name: 'frontend', scheme: 'http', host: '10.0.0.1', port: 8080 }, isDefault: true },
+    ]);
+    // 绝对 case.url 直通(不走初始导航拼 origin);navigate 步骤的 {{web_frontend}} 依赖 T6 注入的
+    // web_<name> 系统变量替换成 origin(=10.0.0.1:8080),而非写死。
+    const caseId = await insertCase('http://init.example.com', envId);
+    await pool.query(
+      `INSERT INTO test_steps(case_id, "order", source, compiled) VALUES ($1, 1, 'manual', $2::jsonb)`,
+      [caseId, JSON.stringify([{ kind: 'navigate', url: '{{web_frontend}}/login' }])],
+    );
+
+    mocked.__page.goto.mockClear();
+    const { runCase } = await import('../src/execute/runCase.js');
+    const res = await runCase(caseId);
+    await waitReportDone(caseId);
+
+    expect(res.status).toBe('passed');
+    // substituteVars 把 {{web_frontend}} → http://10.0.0.1:8080,再拼 /login 成完整导航地址。
+    expect(mocked.__page.goto.mock.calls.some((c) => c[0] === 'http://10.0.0.1:8080/login')).toBe(true);
+  });
+
+  it('navigate 步骤相对 url → 拼用例绑定 web 服务 origin,报告 passed', async () => {
+    const envId = await insertEnv('web-env-nav-rel', [
+      { label: '前端', payload: { name: 'frontend', scheme: 'http', host: '10.0.0.1', port: 8080 }, isDefault: true },
+    ]);
+    const caseId = await insertCase('http://init.example.com', envId);
+    await pool.query(
+      `INSERT INTO test_steps(case_id, "order", source, compiled) VALUES ($1, 1, 'manual', $2::jsonb)`,
+      [caseId, JSON.stringify([{ kind: 'navigate', url: '/second/page' }])],
+    );
+
+    mocked.__page.goto.mockClear();
+    const { runCase } = await import('../src/execute/runCase.js');
+    const res = await runCase(caseId);
+    await waitReportDone(caseId);
+
+    expect(res.status).toBe('passed');
+    // T7: navigate 步骤相对 url(/开头)拼用例绑定 web 服务 origin,而非沿用 init 页 origin。
+    expect(mocked.__page.goto.mock.calls.some((c) => c[0] === 'http://10.0.0.1:8080/second/page')).toBe(true);
+  });
+
+  it('navigate 相对 url 但环境无 web 服务 → invalid-navigate-url 步骤失败', async () => {
+    const envId = await insertEnv('no-web-nav-rel', []);
+    const caseId = await insertCase('https://init.example.com', envId);
+    await pool.query(
+      `INSERT INTO test_steps(case_id, "order", source, compiled) VALUES ($1, 1, 'manual', $2::jsonb)`,
+      [caseId, JSON.stringify([{ kind: 'navigate', url: '/x' }])],
+    );
+
+    mocked.__page.goto.mockClear();
+    const { runCase } = await import('../src/execute/runCase.js');
+    const res = await runCase(caseId);
+    const row = await waitReportDone(caseId);
+
+    expect(res.status).toBe('failed');
+    expect(row.step_results[0]!.error).toMatch(/invalid-navigate-url/);
+    expect(mocked.__page.goto.mock.calls.some((c) => c[0] === '/x')).toBe(false);
+  });
+
+  it('环境无 web 对象 + 相对 url → WebServiceMissing 失败报告', async () => {
+    const envId = await insertEnv('no-web-env', []);
+    const caseId = await insertCase('/login', envId);
+
+    const { runCase } = await import('../src/execute/runCase.js');
+    const res = await runCase(caseId);
+    const row = await waitReportDone(caseId);
+
+    expect(res.status).toBe('failed');
+    expect(row.status).toBe('failed');
+    expect(row.step_results[0]!.failureReason).toBe('WebServiceMissing');
+  });
+
+  it('黄金路径:同用例换环境(计划级 envOverride)执行 → 初始导航 origin 随环境 web 服务切换', async () => {
+    // 验收点:同一相对 url + 绑定 frontend,经计划所在环境的 envOverride(runPlan 同款走线)执行,
+    // goto 目标应随环境解析出不同的 origin——而非固化在用例上。
+    const envA = await insertEnv('golden-env-a', [
+      { label: '前端', payload: { name: 'frontend', scheme: 'http', host: '10.0.0.1', port: 8080 }, isDefault: true },
+    ]);
+    const envB = await insertEnv('golden-env-b', [
+      { label: '前端', payload: { name: 'frontend', scheme: 'http', host: '192.168.1.10', port: 8080 }, isDefault: true },
+    ]);
+    // 用例不设 default_env_id:证明 origin 完全由计划环境(envOverride)决定。
+    const c = await pool.query(
+      `INSERT INTO test_cases(group_id, title, url, web_service_ref) VALUES ($1, 'golden', '/login', 'frontend') RETURNING id`,
+      [groupId],
+    );
+    const caseId = c.rows[0]!.id as string;
+
+    const { runCase } = await import('../src/execute/runCase.js');
+    mocked.__page.goto.mockClear();
+    const resA = await runCase(caseId, { envOverride: { envId: envA } });
+    await waitReportDone(caseId);
+    expect(resA.status).toBe('passed');
+    expect(mocked.__page.goto.mock.calls.some((x) => x[0] === 'http://10.0.0.1:8080/login')).toBe(true);
+
+    mocked.__page.goto.mockClear();
+    const resB = await runCase(caseId, { envOverride: { envId: envB } });
+    await waitReportDone(caseId);
+    expect(resB.status).toBe('passed');
+    expect(mocked.__page.goto.mock.calls.some((x) => x[0] === 'http://192.168.1.10:8080/login')).toBe(true);
   });
 });

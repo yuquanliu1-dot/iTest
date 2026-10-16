@@ -17,6 +17,10 @@ export class DecryptError extends Error {
   constructor(cause: string) { super(`decrypt failed: ${cause}`); this.name = 'DecryptError'; }
 }
 
+export class WebServiceMissing extends Error {
+  constructor(message: string) { super(message); this.name = 'WebServiceMissing'; }
+}
+
 export type DbDialect = 'postgres' | 'mysql';
 
 /** 方言归一的查询池：queryDb 步骤与连接测试共用，屏蔽 pg / mysql2 的结果形状差异。 */
@@ -82,10 +86,25 @@ export interface LoginCtx {
   loginUrl: string | null;
 }
 
+export interface WebServiceEntry {
+  /** payload.name;null=未命名(仅默认服务,不可被用例引用) */
+  name: string | null;
+  label: string;
+  origin: string;
+  isDefault: boolean;
+}
+
 export interface EnvCtx {
   envId: string;
-  /** 部署入口 URL：执行期导航兜底用（用例.url → 分组.defaultUrl → 环境.base_url → 项目.defaultUrl） */
-  baseUrl: string | null;
+  /** 环境显示名（WebServiceMissing 等用户可见消息带名;与 resolve-url 的 ResolveUrlEnv 对齐）。 */
+  envName: string;
+  /** 全部 web 服务对象(objectType='web')。 */
+  webServices: WebServiceEntry[];
+  /** ref 非空按 name 精确匹配(找不到抛 WebServiceMissing);空取 isDefault→最早。
+   *  环境无任何 web 对象返回 null。 */
+  resolveWebOrigin(ref?: string | null): string | null;
+  /** 派生:默认 web 服务 origin(兼容旧消费点)。 */
+  readonly baseUrl: string | null;
   db?: { host: string; port: number; database: string; user: string; password: string };
   /** 已建立好的查询池；缺省表示该环境未配置 DB。close() 时统一 end()。 */
   pool?: QueryPool;
@@ -117,6 +136,12 @@ interface LoginPayload {
   user?: string | null;
   loginUrl?: string | null;
   secret?: { c?: string | null; i?: string | null; t?: string | null } | null;
+}
+interface WebPayload {
+  name?: string | null;
+  scheme?: string | null;
+  host?: string | null;
+  port?: number | null;
 }
 
 export function safeDecrypt(secret: { c?: string | null; i?: string | null; t?: string | null }): string {
@@ -216,9 +241,39 @@ export async function resolveEnv(
     }
   }
 
+  const webServices: WebServiceEntry[] = objects
+    .filter((o) => o.objectType === 'web')
+    .map((o) => {
+      const p = (o.payload ?? {}) as WebPayload;
+      if (!p.host) return null;
+      const scheme = p.scheme === 'https' ? 'https' : 'http';
+      const port = p.port ?? (scheme === 'https' ? 443 : 80);
+      const defaultPort = (scheme === 'http' && port === 80) || (scheme === 'https' && port === 443);
+      return {
+        name: typeof p.name === 'string' && p.name.length > 0 ? p.name : null,
+        label: o.label,
+        origin: `${scheme}://${p.host}${defaultPort ? '' : `:${port}`}`,
+        isDefault: o.isDefault,
+      };
+    })
+    .filter((w): w is WebServiceEntry => w !== null);
+  const namedList = () => webServices.filter((w) => w.name).map((w) => w.name).join('、') || '(无命名服务)';
+  const resolveWebOrigin = (ref?: string | null): string | null => {
+    if (webServices.length === 0) return null;
+    if (ref) {
+      const hit = webServices.find((w) => w.name === ref);
+      if (!hit) throw new WebServiceMissing(`环境「${env.name}」不存在 web 服务 ${ref},可用:${namedList()}`);
+      return hit.origin;
+    }
+    return (webServices.find((w) => w.isDefault) ?? webServices[0]!).origin;
+  };
+
   return {
     envId,
-    baseUrl: env.baseUrl ?? null,
+    envName: env.name,
+    webServices,
+    resolveWebOrigin,
+    get baseUrl() { return resolveWebOrigin(); },
     db: dbCfg,
     pool,
     syslog: syslogCfg,
@@ -226,5 +281,5 @@ export async function resolveEnv(
     async close() {
       if (pool) await pool.end();
     },
-  };
+  } satisfies EnvCtx;
 }

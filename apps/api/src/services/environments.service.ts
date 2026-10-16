@@ -4,6 +4,7 @@
  * 用户可见性(assertProjectVisible/assertEnvironmentVisible)由调用方(HTTP 边界)负责。
  */
 import { and, asc, eq, inArray } from 'drizzle-orm';
+import { VAR_NAME_RE } from '@itest/shared';
 import { db } from '../db/client.js';
 import { environmentObjects, executionPlans, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
@@ -11,7 +12,7 @@ import { encrypt } from '../lib/secret-crypto.js';
 import { attachCreators, attachCreator } from '../lib/creator.js';
 
 export const OBJECT_MASK = '••••••••';
-const OBJECT_TYPES = ['db', 'syslog', 'login'] as const;
+const OBJECT_TYPES = ['db', 'syslog', 'login', 'web'] as const;
 export type ObjectType = (typeof OBJECT_TYPES)[number];
 
 /** 出参掩码:payload.secret(AES 三元组)→ OBJECT_MASK,同时输出 hasSecret 标志位
@@ -53,6 +54,43 @@ export function normalizeObjectPayload(
   return out;
 }
 
+/** web 对象 payload 校验:name 可空(空=仅默认服务不可被引用)、合法则须为变量名字符且 ≤64;
+ *  scheme http/https(缺省 http);host 必填;port 可空整数。同环境 name 唯一。 */
+async function assertWebPayload(
+  tx: Pick<typeof db, 'select'>,
+  environmentId: string,
+  payload: Record<string, unknown>,
+  selfObjectId?: string,
+) {
+  const name = typeof payload.name === 'string' && payload.name.length > 0 ? payload.name : null;
+  if (name !== null && !VAR_NAME_RE.test(name)) {
+    throw new HttpError(400, 'invalid_web_name', 'web 服务 name 只能包含字母、数字、下划线,且以字母或下划线开头');
+  }
+  // name 上限 64,与 test_cases.web_service_ref varchar(64) 对齐
+  if (name !== null && name.length > 64) {
+    throw new HttpError(400, 'invalid_web_name', 'web 服务 name 长度不能超过 64');
+  }
+  if (payload.scheme !== undefined && payload.scheme !== null && payload.scheme !== 'http' && payload.scheme !== 'https') {
+    throw new HttpError(400, 'invalid_web_scheme', 'web 服务 scheme 只能是 http 或 https');
+  }
+  if (typeof payload.host !== 'string' || payload.host.trim().length === 0) {
+    throw new HttpError(400, 'invalid_web_host', 'web 服务 host 不能为空');
+  }
+  if (payload.port !== undefined && payload.port !== null && !Number.isInteger(payload.port)) {
+    throw new HttpError(400, 'invalid_web_port', 'web 服务 port 必须是整数');
+  }
+  if (name !== null) {
+    const rows = await tx.select({ id: environmentObjects.id, payload: environmentObjects.payload }).from(environmentObjects)
+      .where(eq(environmentObjects.environmentId, environmentId));
+    const dup = rows.some((r) => {
+      if (selfObjectId && r.id === selfObjectId) return false;
+      const p = r.payload as Record<string, unknown>;
+      return p?.name === name;
+    });
+    if (dup) throw new HttpError(409, 'web_name_conflict', `web 服务 name "${name}" 在该环境已存在`);
+  }
+}
+
 export function isUniqueViolation(e: unknown): boolean {
   return typeof e === 'object' && e !== null && (e as { code?: string }).code === '23505';
 }
@@ -90,19 +128,26 @@ export async function getEnvironment(environmentId: string) {
 
 export async function createEnvironment(
   projectId: string,
-  input: { name: string; baseUrl?: string | null; objects?: Array<{ objectType: ObjectType; label?: string; payload: Record<string, unknown>; isDefault?: boolean }> },
+  input: { name: string; objects?: Array<{ objectType: ObjectType; label?: string; payload: Record<string, unknown>; isDefault?: boolean }> },
   createdByUserId?: string | null,
 ) {
   return db.transaction(async (tx) => {
-    const inserted = (await tx.insert(testEnvironments).values({ projectId, name: input.name, baseUrl: input.baseUrl ?? null, ...(createdByUserId ? { createdByUserId } : {}) }).returning())[0]!;
+    const inserted = (await tx.insert(testEnvironments).values({ projectId, name: input.name, ...(createdByUserId ? { createdByUserId } : {}) }).returning())[0]!;
     if (input.objects?.length) {
-      await tx.insert(environmentObjects).values(input.objects.map((o) => ({
-        environmentId: inserted.id,
-        objectType: o.objectType,
-        label: o.label ?? '默认',
-        payload: normalizeObjectPayload(o.objectType, o.payload),
-        isDefault: o.isDefault ?? false,
-      })));
+      // 逐条先校验再插入:web 对象走 assertWebPayload;同事务内后续校验能看到已插入行,
+      // 同请求里两个同名 web 对象因此同样被拒(409)。
+      for (const o of input.objects) {
+        if (o.objectType === 'web') {
+          await assertWebPayload(tx, inserted.id, o.payload);
+        }
+        await tx.insert(environmentObjects).values({
+          environmentId: inserted.id,
+          objectType: o.objectType,
+          label: o.label ?? '默认',
+          payload: normalizeObjectPayload(o.objectType, o.payload),
+          isDefault: o.isDefault ?? false,
+        });
+      }
     }
     return inserted;
   }).catch((e) => {
@@ -111,7 +156,7 @@ export async function createEnvironment(
   });
 }
 
-export async function updateEnvironment(environmentId: string, patch: { name?: string; baseUrl?: string | null; isDefault?: boolean }) {
+export async function updateEnvironment(environmentId: string, patch: { name?: string; isDefault?: boolean }) {
   const row = await db.transaction(async (tx) => {
     const env = (await tx.select().from(testEnvironments).where(eq(testEnvironments.id, environmentId)).limit(1))[0];
     if (!env) throw new HttpError(404, 'not_found', 'environment not found');
@@ -120,7 +165,6 @@ export async function updateEnvironment(environmentId: string, patch: { name?: s
     }
     const update: Record<string, unknown> = { updatedAt: new Date() };
     if (patch.name !== undefined) update.name = patch.name;
-    if (patch.baseUrl !== undefined) update.baseUrl = patch.baseUrl;
     if (patch.isDefault !== undefined) update.isDefault = patch.isDefault;
     return (await tx.update(testEnvironments).set(update).where(eq(testEnvironments.id, environmentId)).returning())[0]!;
   }).catch((e) => {
@@ -148,6 +192,9 @@ export async function insertEnvironmentObject(
   input: { objectType: ObjectType; label?: string; payload: Record<string, unknown>; isDefault?: boolean },
 ) {
   const row = await db.transaction(async (tx) => {
+    if (input.objectType === 'web') {
+      await assertWebPayload(tx, environmentId, input.payload);
+    }
     if (input.isDefault) {
       await tx.update(environmentObjects).set({ isDefault: false })
         .where(and(eq(environmentObjects.environmentId, environmentId), eq(environmentObjects.objectType, input.objectType)));
@@ -179,12 +226,19 @@ export async function upsertEnvironmentObject(
       .limit(1))[0];
     if (existing) {
       const prev = (existing.payload ?? {}) as Record<string, unknown>;
+      if (input.objectType === 'web') {
+        // 合并后校验:部分字段 upsert 靠 merge 补全(如只改 port),不能按裸入参全量卡
+        await assertWebPayload(tx, environmentId, { ...prev, ...input.payload }, existing.id);
+      }
       // prev 是从 DB 直读的原始行（含密文三元组），不是掩码后行——直接传进 normalizeObjectPayload 即可
       // input.payload 通常来自调用方（AI 工具 / HTTP 入参），不含 secret
       const payload = normalizeObjectPayload(input.objectType, { ...prev, ...input.payload }, prev);
       const update: Record<string, unknown> = { payload, updatedAt: new Date() };
       if (input.isDefault !== undefined) update.isDefault = input.isDefault;
       return (await tx.update(environmentObjects).set(update).where(eq(environmentObjects.id, existing.id)).returning())[0]!;
+    }
+    if (input.objectType === 'web') {
+      await assertWebPayload(tx, environmentId, input.payload);
     }
     return (await tx.insert(environmentObjects).values({
       environmentId,
@@ -203,6 +257,9 @@ export async function updateEnvironmentObject(objectId: string, patch: { label?:
   const payload = patch.payload !== undefined
     ? normalizeObjectPayload(existing.objectType as ObjectType, patch.payload, (existing.payload ?? {}) as Record<string, unknown>)
     : undefined;
+  if (payload !== undefined && existing.objectType === 'web') {
+    await assertWebPayload(db, existing.environmentId, payload, objectId);
+  }
   const rows = await db.update(environmentObjects).set({
     ...(patch.label !== undefined ? { label: patch.label } : {}),
     ...(payload !== undefined ? { payload: payload as object, updatedAt: new Date() } : {}),

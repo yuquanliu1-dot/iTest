@@ -113,6 +113,8 @@ export interface ExecContext {
   caseTitle?: string;
   /** 用例 url（兜底语义锚，给 vision prompt 用）。 */
   caseUrl?: string | null;
+  /** 用例绑定 web 服务的 origin：中途 navigate 相对 url 拼接用；无环境 web 服务时缺省。 */
+  caseWebOrigin?: string | null;
   /** 数据集行初始变量（解密后明文，仅存在于执行期内存，不落库）。 */
   initialVars?: Record<string, string>;
   /** 数据集敏感列名集合：错误信息落报告前对相关变量值打码（与 recorder 敏感处理对齐）。 */
@@ -287,7 +289,14 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
     case 'navigate': {
       const { value, missing } = substituteVars(action.url, vars);
       if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.url}")`);
-      await page.goto(value, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      // 相对 url(/开头)拼用例绑定 web 服务 origin;绝对直通;其余形态报错(spec 2026-10-16)。
+      const target = value.startsWith('/')
+        ? `${opts.ctx.caseWebOrigin ?? ''}${value}`
+        : value;
+      if (!/^https?:\/\//.test(target)) {
+        throw new Error(`invalid-navigate-url: ${target}${value.startsWith('/') ? '(环境未配置 web 服务,无法拼接相对地址)' : ''}`);
+      }
+      await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 30000 });
       // navigate 同样需要等 SPA hydrate 后再让后续步骤探测元素（与 init-goto 行为对齐）。
       await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
       return;
@@ -1077,6 +1086,7 @@ async function runStepsInContext(
       reportId: ctx.reportId,
       caseTitle: ctx.caseTitle ?? caseId,
       caseUrl: ctx.caseUrl ?? null,
+      caseWebOrigin: ctx.caseWebOrigin ?? null,
       expectedOutcome: ctx.expectedOutcome,
       vars,
       sensitiveVarKeys: ctx.sensitiveVarKeys ?? [],

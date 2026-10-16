@@ -5,12 +5,12 @@ import { stat, readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import archiver from 'archiver';
 import { db } from '../db/client.js';
-import { testCases, testSteps, testAttachments, testSessions } from '../db/schema.js';
+import { testCases, testSteps, testAttachments, testSessions, groups } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { StepAction } from '@itest/shared';
 import { createSession, getSession } from '../recorder/ws.js';
-import { resolveCaseUrl } from '../lib/resolve-url.js';
+import { resolveCaseUrl, projectWebOrigins, relativizeUrl } from '../lib/resolve-url.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
 import { encrypt } from '../lib/secret-crypto.js';
 import { migrateAction } from '../lib/step-migration.js';
@@ -126,12 +126,22 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
   // 由 runCase / executeCaseReal 在每次回放前 goto 一次。来源优先级：web 中台传入的 targetUrl
   // > 录制第一步发生的页面 URL > 用例解析链兜底。已有的 case.url 不覆盖（避免 append/resume
   // 把首录的 URL 写到一条已配置过的用例上）。
+  // 尽力相对化（spec 2026-10-16）：origin 命中项目任一环境 web 服务 → 存相对路径 + 绑定服务；
+  // 未命中（外站）保留绝对。
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, session.caseId)))[0];
+  const origins = caseRow
+    ? await projectWebOrigins((await db.select({ projectId: groups.projectId }).from(groups).where(eq(groups.id, caseRow.groupId)))[0]!.projectId)
+    : new Map<string, string | null>();
   if (caseRow && !caseRow.url) {
     const firstStepUrl = (session.steps[0] as { url?: string | null } | undefined)?.url ?? null;
     const candidate = session.targetUrl ?? firstStepUrl ?? (await resolveCaseUrl(caseRow, { defaultEnvFallback: true }));
     if (candidate && /^https?:\/\//.test(candidate)) {
-      await db.update(testCases).set({ url: candidate, updatedAt: new Date() }).where(eq(testCases.id, session.caseId));
+      const rel = relativizeUrl(candidate, origins);
+      await db.update(testCases).set({
+        url: rel ? (rel.path || null) : candidate,
+        ...(rel ? { webServiceRef: rel.ref } : {}),
+        updatedAt: new Date(),
+      }).where(eq(testCases.id, session.caseId));
     }
   }
   const mergedSteps = mergeConsecutiveFills(session.steps);
@@ -144,6 +154,12 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
       value?: unknown;
       sensitive?: boolean;
     };
+    // 中途 navigate 尽力相对化：origin 命中项目任一环境 web 服务 → 存相对路径（执行时再拼）；
+    // 未命中（外站）保留绝对。只改内存里的 action 再落库，不动原目标。
+    if (action.kind === 'navigate' && typeof action.url === 'string') {
+      const rel = relativizeUrl(action.url, origins);
+      if (rel) action.url = rel.path || '/';
+    }
     const sensitive = action.kind === 'fill' && !!action.sensitive;
     let secretCiphertext: string | null = null;
     let secretIv: string | null = null;

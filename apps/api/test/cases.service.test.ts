@@ -114,7 +114,7 @@ describe('cases.service', () => {
   it('createGroup:项目不存在 → 404;成功后 groupProjectId 可解析', async () => {
     const { projectId } = await seedProject(pool);
     const svc = await import('../src/services/cases.service.js');
-    const g = await svc.createGroup(projectId, { name: '新分组', defaultUrl: 'https://g.example.com' });
+    const g = await svc.createGroup(projectId, { name: '新分组' });
     expect(await svc.groupProjectId(g.id)).toBe(projectId);
     await expect(svc.createGroup('00000000-0000-0000-0000-000000000000', { name: 'x' }))
       .rejects.toMatchObject({ status: 404 });
@@ -152,5 +152,41 @@ describe('cases.service', () => {
     const g2 = (await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1,'第二分组') RETURNING id`, [a.projectId])).rows[0]!.id as string;
     const moved = await svc.updateCase(c.id, { groupId: g2 });
     expect(moved.groupId).toBe(g2);
+  }, 30_000);
+
+  it('webServiceRef 随 create/patch 透传;resolvedUrl 相对拼接展示', async () => {
+    const { groupId, versionId, projectId } = await seedProject(pool);
+    const svc = await import('../src/services/cases.service.js');
+    // 建默认环境 + web 对象(origin http://10.0.0.1:8080,name=frontend,isDefault),共享进该项目
+    const env = await pool.query(
+      `INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认环境', true) RETURNING id`,
+      [projectId],
+    );
+    const envId = env.rows[0]!.id as string;
+    await pool.query(
+      `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', '前端', $2::jsonb, true)`,
+      [envId, JSON.stringify({ name: 'frontend', scheme: 'http', host: '10.0.0.1', port: 8080 })],
+    );
+    const c = await svc.createCase({ groupId, versionId, title: 't', url: '/login', webServiceRef: 'frontend' });
+    expect(c.webServiceRef).toBe('frontend');
+    const detail = await svc.getCaseDetail(c.id);
+    expect(detail!.webServiceRef).toBe('frontend');
+    expect(detail!.resolvedUrl).toBe('http://10.0.0.1:8080/login');
+    const list = await svc.searchCasesInVersion(versionId, {});
+    expect(list[0]!.webServiceRef).toBe('frontend');
+    expect(list[0]!.resolvedUrl).toBe('http://10.0.0.1:8080/login');
+    // patch 路径：换绑第二个命名服务 → resolvedUrl 跟随 origin;再置 null → 回落默认服务
+    await pool.query(
+      `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', '后端', $2::jsonb, false)`,
+      [envId, JSON.stringify({ name: 'backend', scheme: 'http', host: '10.0.0.2', port: 8081 })],
+    );
+    await svc.updateCase(c.id, { webServiceRef: 'backend' });
+    const swapped = await svc.getCaseDetail(c.id);
+    expect(swapped!.webServiceRef).toBe('backend');
+    expect(swapped!.resolvedUrl).toBe('http://10.0.0.2:8081/login');
+    await svc.updateCase(c.id, { webServiceRef: null });
+    const cleared = await svc.getCaseDetail(c.id);
+    expect(cleared!.webServiceRef).toBeNull();
+    expect(cleared!.resolvedUrl).toBe('http://10.0.0.1:8080/login');
   }, 30_000);
 });
