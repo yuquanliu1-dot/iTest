@@ -451,7 +451,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
 
   return (
     <CollapsiblePanel title={`暂存对象（${total}）`} defaultOpen divider={false}>
-      <div className="flex flex-col h-full min-h-0">
+      <div className="flex flex-col flex-1 min-h-0">
         <div className="flex items-center gap-1 px-3 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
         {TABS.map((t) => (
           <button
