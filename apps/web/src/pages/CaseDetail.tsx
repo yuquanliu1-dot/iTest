@@ -72,6 +72,8 @@ export default function CaseDetail() {
   const [datasetId, setDatasetId] = useState<string | null>(null);
   const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [urlDraft, setUrlDraft] = useState('');
+  /** 初始化导航 URL 弹窗里选中的 web 服务（环境 web 对象 payload.name；空 → 默认服务）。 */
+  const [webRefDraft, setWebRefDraft] = useState('');
   const [urlSaving, setUrlSaving] = useState(false);
   /** 2026-10-07：移动端录制弹窗开关（仅 platform === 'mobile' 时显示入口）。 */
   const [mobileRecorderOpen, setMobileRecorderOpen] = useState(false);
@@ -201,8 +203,8 @@ export default function CaseDetail() {
     enabled: !!id,
   });
 
-  // 录制目标 URL 实时跟随"初始化导航 URL"（用例.url → 分组.defaultUrl → 环境.base_url 解析结果）。
-  // 用户手动改过之后不再被 caseDetail refetch 静默覆盖；点输入框右侧"↺"可恢复继承链结果。
+  // 录制目标 URL 实时跟随"初始化导航 URL"（用例相对路径 + 环境 web 服务解析结果）。
+  // 用户手动改过之后不再被 caseDetail refetch 静默覆盖；点输入框右侧"↺"可恢复解析结果。
   const targetUrlDirtyRef = useRef(false);
   useEffect(() => {
     if (!caseDetail?.resolvedUrl) return;
@@ -266,6 +268,21 @@ export default function CaseDetail() {
     queryFn: () => api.environments.list(projectId!),
     enabled: !!projectId,
   });
+
+  // 初始化导航的 web 服务候选 = 用例所处环境（用例.defaultEnvId → 项目默认）里的具名 web 对象。
+  // 下拉不选 → 用该环境默认 web 服务（后端 resolve 处理）。
+  const caseEnvId = caseDetail?.defaultEnvId ?? environments?.find((e) => e.isDefault)?.id ?? null;
+  const webOptions = useMemo(() => {
+    const env = environments?.find((e) => e.id === caseEnvId);
+    if (!env) return [];
+    const names: string[] = [];
+    for (const o of env.objects) {
+      if (o.objectType !== 'web') continue;
+      const n = String((o.payload as Record<string, unknown>)?.name ?? '').trim();
+      if (n) names.push(n);
+    }
+    return names;
+  }, [environments, caseEnvId]);
 
   const { data: datasetList } = useQuery({
     queryKey: ['datasets', projectId],
@@ -809,19 +826,27 @@ export default function CaseDetail() {
                   }}
                 >
                   <Icon name="link" size={11} style={{ opacity: 0.6 }} />
-                  <span className="font-medium" style={{ color: 'var(--muted-foreground)' }}>初始化导航 URL</span>
-                  <span className="flex-1 truncate font-mono" title={caseDetail.resolvedUrl ?? ''}>
-                    {caseDetail.resolvedUrl ?? '未配置（回放将以 about:blank 开始）'}
+                  <span className="font-medium shrink-0" style={{ color: 'var(--muted-foreground)' }}>初始化导航 URL</span>
+                  <span className="min-w-0 flex-1 truncate font-mono" title={caseDetail.url ?? undefined}>
+                    {caseDetail.url
+                      ? (caseDetail.url.startsWith('/') ? `相对 ${caseDetail.url}` : caseDetail.url)
+                      : '未配置'}
                   </span>
+                  {caseDetail.resolvedUrl && (
+                    <span className="max-w-[40%] truncate font-mono text-[10px]" style={{ color: 'var(--muted-foreground)', opacity: 0.8 }} title={caseDetail.resolvedUrl}>
+                      解析为 {caseDetail.resolvedUrl}
+                    </span>
+                  )}
                   <Button
                     variant="ghost"
                     size="sm"
                     onClick={() => {
                       setUrlDraft(caseDetail.url ?? '');
+                      setWebRefDraft(caseDetail.webServiceRef ?? '');
                       setUrlDialogOpen(true);
                     }}
                   >
-                    {caseDetail.url ? '编辑覆盖' : '设为独立 URL'}
+                    编辑
                   </Button>
                 </div>
                 <div className="flex items-center gap-2 mb-3">
@@ -1220,7 +1245,7 @@ export default function CaseDetail() {
                 ))}
               </select>
               <p className="text-[11px] mt-2" style={{ color: 'var(--muted-foreground)' }}>
-                录制目标 URL 解析链：用例 URL → 分组域名 → 项目域名。
+                录制目标 URL 解析方式：用例相对路径 + 环境 web 服务（默认或指定具名服务）。
               </p>
             </div>
 
@@ -1393,20 +1418,34 @@ export default function CaseDetail() {
         />
       )}
 
-      {/* 编辑初始化导航 URL 覆盖 */}
+      {/* 编辑初始化导航 URL */}
       <Dialog open={urlDialogOpen} onOpenChange={setUrlDialogOpen}>
         <DialogContent style={{ maxWidth: 420 }}>
-          <DialogHeader><DialogTitle>覆盖初始化导航 URL</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>初始化导航 URL</DialogTitle></DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
             <Input
-              label="用例 URL（可空）"
-              placeholder="https://example.com/login"
+              label="相对路径 URL（可空）"
+              placeholder="/admin/login（相对路径，执行时拼接环境 web 服务）"
               value={urlDraft}
               onChange={(e) => setUrlDraft(e.target.value)}
               autoFocus
             />
+            <div className="flex flex-col gap-1">
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>web 服务</label>
+              <select
+                className="input-base"
+                value={webRefDraft}
+                onChange={(e) => setWebRefDraft(e.target.value)}
+                disabled={webOptions.length === 0}
+              >
+                <option value="">默认 web 服务</option>
+                {webOptions.map((w) => (
+                  <option key={w} value={w}>{w}</option>
+                ))}
+              </select>
+            </div>
             <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              留空清除覆盖，回放 URL 将回退到分组默认域名 / 项目域名。
+              留空清除覆盖，回放 URL 回到环境 web 服务解析。旧数据的绝对 URL 仍可直接执行，但新用例建议改存相对路径（以 / 开头）。
             </p>
           </div>
           <DialogFooter>
@@ -1416,7 +1455,10 @@ export default function CaseDetail() {
               onClick={() => {
                 setUrlSaving(true);
                 api.cases
-                  .patch(id!, { url: urlDraft.trim() ? urlDraft.trim() : null })
+                  .patch(id!, {
+                    url: urlDraft.trim() ? urlDraft.trim() : null,
+                    webServiceRef: webRefDraft || null,
+                  })
                   .then(() => {
                     qc.invalidateQueries({ queryKey: ['case', id] });
                     toast('已保存', 'success');

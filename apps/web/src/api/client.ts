@@ -82,7 +82,7 @@ export const api = {
     unassignUser: (id: string, userId: string) =>
       request<void>(`/projects/${id}/assignments/${userId}`, { method: 'DELETE' }),
     groups: (id: string) => request<GroupWithCount[]>(`/projects/${id}/groups`),
-    createGroup: (id: string, body: { name: string; defaultUrl?: string }) =>
+    createGroup: (id: string, body: { name: string }) =>
       request<Group>(`/projects/${id}/groups`, { method: 'POST', body: JSON.stringify(body) }),
     stats: (id: string) => request<ProjectStats>(`/projects/${id}/stats`),
     overview: (id: string, range: '7d' | '30d' = '7d') =>
@@ -94,7 +94,7 @@ export const api = {
       request<ExecutionPlan>(`/projects/${id}/plans`, { method: 'POST', body: JSON.stringify(body) }),
   },
   groups: {
-    patch: (id: string, body: Partial<{ name: string; defaultUrl: string }>) =>
+    patch: (id: string, body: Partial<{ name: string }>) =>
       request<Group>(`/groups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/groups/${id}`, { method: 'DELETE' }),
   },
@@ -199,15 +199,14 @@ export const api = {
       projectId: string,
       body: {
         name: string;
-        baseUrl?: string;
-        objects?: Array<{ objectType: 'db' | 'syslog' | 'login'; label?: string; payload: Record<string, unknown>; isDefault?: boolean }>;
+        objects?: Array<{ objectType: 'db' | 'syslog' | 'login' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean }>;
       },
     ) =>
       request<Environment>(`/projects/${projectId}/environments`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    patch: (id: string, body: Partial<{ name: string; baseUrl: string | null; isDefault: boolean }>) =>
+    patch: (id: string, body: Partial<{ name: string; isDefault: boolean }>) =>
       request<Environment>(`/environments/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string, opts?: { confirm?: boolean }) =>
       request<{ ok: boolean; requiresConfirm?: boolean; caseCount?: number; planCount?: number }>(
@@ -216,7 +215,7 @@ export const api = {
       ),
     createObject: (
       envId: string,
-      body: { objectType: 'db' | 'syslog' | 'login'; label?: string; payload: Record<string, unknown>; isDefault?: boolean },
+      body: { objectType: 'db' | 'syslog' | 'login' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean },
     ) =>
       request<EnvironmentObject>(`/environments/${envId}/objects`, {
         method: 'POST',
@@ -313,6 +312,7 @@ export const api = {
         status: CaseStatus;
         tagIds: string[];
         defaultEnvId: string | null;
+        webServiceRef: string | null;
         datasetId: string | null;
         /** Track 1：用例级预期描述。空字符串由调用方转 null。 */
         expectedOutcome: string | null;
@@ -611,10 +611,10 @@ export interface Creator {
 export interface EnvironmentObject {
   id: string;
   environmentId: string;
-  objectType: 'db' | 'syslog' | 'login';
+  objectType: 'db' | 'syslog' | 'login' | 'web';
   label: string;
   /** db: { host, port, dbName, user, password?, secret? }；syslog: { host, user, sshPort, filePath, privateKey?, secret? }；
-   *  login: { user, loginUrl?, password?, secret? }。
+   *  login: { user, loginUrl?, password?, secret? }；web: { name?, scheme, host, port? }。
    *  出参里 secret 为 '••••••••' 掩码；入参传明文 password/privateKey，留空不覆盖旧密文。 */
   payload: Record<string, unknown>;
   /** 后端基于 DB 行加上的标志：原 payload.secret 是否存在；前端用此判定"已配置凭据"，不依赖反向解析被 mask 的 secret。 */
@@ -629,8 +629,6 @@ export interface Environment {
   projectId: string;
   name: string;
   isDefault: boolean;
-  /** 部署入口 URL：执行期导航兜底（用例.url → 分组.defaultUrl → 环境.baseUrl → 项目.defaultUrl） */
-  baseUrl: string | null;
   objects: EnvironmentObject[];
   createdAt: string;
   updatedAt: string;
@@ -675,7 +673,6 @@ export interface Group {
   id: string;
   projectId: string;
   name: string;
-  defaultUrl: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -826,6 +823,8 @@ export interface TestCase {
   windowHeight?: number | null;
   incognito?: boolean;
   defaultEnvId?: string | null;
+  /** 环境 web 服务对象名（payload.name）；空 → 用环境默认 web 服务拼相对 URL。 */
+  webServiceRef?: string | null;
   datasetId?: string | null;
   /** Track 1：用例级预期描述（自然语言）。回放结束后由 vision LLM 拿最终截图判定。 */
   expectedOutcome?: string | null;
