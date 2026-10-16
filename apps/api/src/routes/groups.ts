@@ -10,7 +10,6 @@ export const groupsRoute = Router();
 
 const PatchBody = z.object({
   name: z.string().min(1).max(200).optional(),
-  defaultUrl: z.string().optional(),
 });
 
 groupsRoute.patch('/:id', async (req, res) => {

@@ -156,9 +156,13 @@ beforeEach(async () => {
   projectId = seed.projectId;
   groupId = seed.groupId;
   versionId = seed.versionId;
-  await pool.query(
-    `INSERT INTO test_environments(project_id, name, is_default, base_url) VALUES ($1, '默认环境', true, 'http://env.example')`,
+  const seedEnv = await pool.query(
+    `INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认环境', true) RETURNING id`,
     [projectId],
+  );
+  await pool.query(
+    `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', '默认', '{"name":"web","scheme":"http","host":"env.example"}', true)`,
+    [seedEnv.rows[0]!.id],
   );
 });
 
@@ -538,11 +542,12 @@ describe('solidify_case 编排', () => {
   it('草稿相对 url → resolveCaseUrl 拼默认 web 服务 origin（不落 about:blank）', async () => {
     // 回归:stage-tools 约束要求 AI 写相对 case.url,草稿分支若按字面量渲染相对地址会得到
     // targetUrl=undefined → about:blank。此处断言初始 goto 落在 web 服务 origin + 路径。
-    const envRow = await pool.query(`SELECT id FROM test_environments WHERE project_id = $1`, [projectId]);
+    const envRow = await pool.query(`SELECT id FROM test_environments WHERE project_id = $1 AND is_default = true`, [projectId]);
     const envId = envRow.rows[0]!.id as string;
+    // beforeEach 已在该默认环境种入默认 web 对象；改写其 host/port 验证相对 url 拼接
     await pool.query(
-      `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default)
-       VALUES ($1, 'web', '前端', $2::jsonb, true)`,
+      `UPDATE environment_objects SET payload = $2::jsonb
+       WHERE environment_id = $1 AND object_type = 'web' AND is_default = true`,
       [envId, JSON.stringify({ name: 'web', scheme: 'http', host: '10.0.0.1', port: 8080 })],
     );
     const localId = randomUUID();

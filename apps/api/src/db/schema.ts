@@ -390,7 +390,6 @@ export const groups = pgTable('groups', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 200 }).notNull(),
-  defaultUrl: text('default_url'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -569,8 +568,6 @@ export const testEnvironments = pgTable('test_environments', {
   name: varchar('name', { length: 120 }).notNull(),
   // 项目默认环境：未被 case/plan/version 显式指定环境时的兜底；项目内至多一个
   isDefault: boolean('is_default').notNull().default(false),
-  // 部署入口 URL：执行期导航兜底（用例.url → 分组.defaultUrl → 环境.base_url → 项目.defaultUrl）
-  baseUrl: text('base_url'),
   /** 创建人（对齐 plan_schedules.created_by_user_id 约定） */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),

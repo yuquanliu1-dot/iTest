@@ -75,28 +75,6 @@ describe('environments CRUD', () => {
     expect(r.body.error).toBe('name_conflict');
   });
 
-  it('POST baseUrl 落库并随 GET 返回', async () => {
-    const r = await request(app).post(`/api/projects/${projectId}/environments`).send({
-      name: 'env-with-url',
-      baseUrl: 'https://pre.example.com',
-    });
-    expect(r.status).toBe(200);
-    expect(r.body.baseUrl).toBe('https://pre.example.com');
-    const list = await request(app).get(`/api/projects/${projectId}/environments`);
-    const env = list.body.find((e: { id: string }) => e.id === r.body.id);
-    expect(env.baseUrl).toBe('https://pre.example.com');
-  });
-
-  it('PATCH baseUrl null 清空', async () => {
-    const created = await request(app).post(`/api/projects/${projectId}/environments`).send({
-      name: 'clear-url',
-      baseUrl: 'https://tmp.example.com',
-    });
-    const r = await request(app).patch(`/api/environments/${created.body.id}`).send({ baseUrl: null });
-    expect(r.status).toBe(200);
-    expect(r.body.baseUrl).toBeNull();
-  });
-
   it('GET lists all project envs with objects', async () => {
     await request(app).post(`/api/projects/${projectId}/environments`).send({ name: 'syslog-env', objects: [{ objectType: 'syslog', payload: { host: 'log', user: 'root', filePath: '/var/log/app.log' } }] });
     const r = await request(app).get(`/api/projects/${projectId}/environments`);

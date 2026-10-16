@@ -26,7 +26,7 @@ describe('environments.service', () => {
   it('createEnvironment:name 唯一,重复 → 409;listEnvironments 带脱敏 objects', async () => {
     const { projectId } = await seedProject(pool);
     const svc = await import('../src/services/environments.service.js');
-    const env = await svc.createEnvironment(projectId, { name: '生产', baseUrl: 'https://prod.example.com' });
+    const env = await svc.createEnvironment(projectId, { name: '生产' });
     await svc.insertEnvironmentObject(env.id, { objectType: 'db', payload: { host: 'h', dbName: 'd', user: 'u', password: 'SUPER-SECRET' }, isDefault: true });
     await expect(svc.createEnvironment(projectId, { name: '生产' })).rejects.toMatchObject({ status: 409, code: 'name_conflict' });
 

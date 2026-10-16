@@ -35,7 +35,7 @@ export async function buildSpaceSummary(versionId: string): Promise<SpaceSummary
   lines.push(`项目:${v.projectName} / 版本:${v.versionName}${refText}`);
 
   const envs = await db
-    .select({ id: testEnvironments.id, name: testEnvironments.name, baseUrl: testEnvironments.baseUrl, isDefault: testEnvironments.isDefault })
+    .select({ id: testEnvironments.id, name: testEnvironments.name, isDefault: testEnvironments.isDefault })
     .from(testEnvironments)
     .where(eq(testEnvironments.projectId, v.projectId))
     .limit(MAX_ENVS + 1);
@@ -62,7 +62,7 @@ export async function buildSpaceSummary(versionId: string): Promise<SpaceSummary
   if (envs.length === 0) {
     lines.push('环境:无');
   } else {
-    const parts = shownEnvs.map((e) => `${e.name}${e.baseUrl ? `(${e.baseUrl})` : ''}${e.isDefault ? '[默认]' : ''}`);
+    const parts = shownEnvs.map((e) => `${e.name}${e.isDefault ? '[默认]' : ''}`);
     lines.push(`环境:${parts.join('、')}${envs.length > MAX_ENVS ? ' …' : ''}`);
     for (const e of shownEnvs) {
       const webServices = webByEnv.get(e.id) ?? [];
