@@ -110,16 +110,21 @@ describe('resolveCaseUrl 新解析链', () => {
 });
 
 describe('relativizeUrl', () => {
-  const origins = new Map([
+  const origins: Map<string, string | null> = new Map([
     ['http://10.0.0.1:8080', 'frontend'],
     ['https://10.0.0.2', 'backend'],
+    ['http://10.0.0.3', null],
   ]);
 
-  it('命中项目 web origin 返回 { path, ref }', () => {
+  it('命中命名服务返回 { path, ref: name }', () => {
     expect(relativizeUrl('http://10.0.0.1:8080/admin/user?x=1#sec', origins)).toEqual({
       path: '/admin/user?x=1#sec',
       ref: 'frontend',
     });
+  });
+
+  it('命中未命名默认服务返回 { path, ref: null }', () => {
+    expect(relativizeUrl('http://10.0.0.3/home', origins)).toEqual({ path: '/home', ref: null });
   });
 
   it('未命中 origin 返回 null（保留绝对）', () => {

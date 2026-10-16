@@ -64,28 +64,33 @@ export async function displayWebEnv(caseRow: { defaultEnvId?: string | null; gro
   return { envName: env.name, webServices: entries, resolveWebOrigin: resolverOf(entries, env.name) };
 }
 
-/** 项目全部 web 服务 origin → ref 名映射（录制回填相对化用）。 */
-export async function projectWebOrigins(projectId: string): Promise<Map<string, string>> {
+/** 项目全部 web 服务 origin → ref 名映射（录制回填相对化用）。
+ *  value=服务 name；未命名默认服务为 null（相对 URL 不填 ref 即命中默认）；未命名非默认不可被引用，跳过。 */
+export async function projectWebOrigins(projectId: string): Promise<Map<string, string | null>> {
   const envs = await db.select({ id: testEnvironments.id }).from(testEnvironments).where(eq(testEnvironments.projectId, projectId));
-  const map = new Map<string, string>();
+  const map = new Map<string, string | null>();
   if (envs.length === 0) return map;
   const objs = await db.select().from(environmentObjects)
     .where(inArray(environmentObjects.environmentId, envs.map((e) => e.id)));
   for (const o of objs) {
     if (o.objectType !== 'web') continue;
     const w = webEntriesOf([o])[0];
-    if (w && !map.has(w.origin)) map.set(w.origin, w.name ?? 'web');
+    if (!w || map.has(w.origin)) continue;
+    if (w.name) map.set(w.origin, w.name);
+    else if (w.isDefault) map.set(w.origin, null);
   }
   return map;
 }
 
-/** 绝对 URL → { path, ref } 命中项目任一 web origin；未命中返回 null（保留绝对）。 */
-export function relativizeUrl(absolute: string, origins: Map<string, string>): { path: string; ref: string } | null {
+/** 绝对 URL → { path, ref } 命中项目任一 web origin；未命中返回 null（保留绝对）。ref 为 null 表示
+ *  命中未命名默认服务，相对化后不填 web_service_ref。 */
+export function relativizeUrl(absolute: string, origins: Map<string, string | null>): { path: string; ref: string | null } | null {
   if (!/^https?:\/\//.test(absolute)) return null;
   try {
     const u = new URL(absolute);
-    if (!origins.has(u.origin)) return null;
-    return { path: `${u.pathname}${u.search}${u.hash}`, ref: origins.get(u.origin)! };
+    const ref = origins.get(u.origin);
+    if (ref === undefined) return null;
+    return { path: `${u.pathname}${u.search}${u.hash}`, ref };
   } catch {
     return null;
   }
