@@ -942,7 +942,7 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
     return r.rows[0] as { status: string; step_results: Array<{ failureReason?: string }> } | undefined;
   };
 
-  const waitReportDone = async (caseId: string, timeoutMs = 10000): Promise<{ status: string; step_results: Array<{ failureReason?: string }> }> => {
+  const waitReportDone = async (caseId: string, timeoutMs = 10000): Promise<{ status: string; step_results: Array<{ status?: string; failureReason?: string; error?: string }> }> => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const row = await latestReport(caseId);
@@ -1030,6 +1030,24 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
     expect(res.status).toBe('passed');
     // T7: navigate 步骤相对 url(/开头)拼用例绑定 web 服务 origin,而非沿用 init 页 origin。
     expect(mocked.__page.goto.mock.calls.some((c) => c[0] === 'http://10.0.0.1:8080/second/page')).toBe(true);
+  });
+
+  it('navigate 相对 url 但环境无 web 服务 → invalid-navigate-url 步骤失败', async () => {
+    const envId = await insertEnv('no-web-nav-rel', []);
+    const caseId = await insertCase('https://init.example.com', envId);
+    await pool.query(
+      `INSERT INTO test_steps(case_id, "order", source, compiled) VALUES ($1, 1, 'manual', $2::jsonb)`,
+      [caseId, JSON.stringify([{ kind: 'navigate', url: '/x' }])],
+    );
+
+    mocked.__page.goto.mockClear();
+    const { runCase } = await import('../src/execute/runCase.js');
+    const res = await runCase(caseId);
+    const row = await waitReportDone(caseId);
+
+    expect(res.status).toBe('failed');
+    expect(row.step_results[0]!.error).toMatch(/invalid-navigate-url/);
+    expect(mocked.__page.goto.mock.calls.some((c) => c[0] === '/x')).toBe(false);
   });
 
   it('环境无 web 对象 + 相对 url → WebServiceMissing 失败报告', async () => {
