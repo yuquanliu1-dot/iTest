@@ -13,12 +13,12 @@ export class QueryDbColumnNotAllowed extends Error {
 
 export const ALLOWED_QUERY_COLUMNS: Record<string, ReadonlySet<string>> = {
   projects: new Set(['id', 'organization_id', 'name', 'description', 'repo_url', 'default_branch', 'provider', 'gitlab_url_override', 'created_at', 'updated_at']),
-  groups: new Set(['id', 'project_id', 'name', 'default_url', 'created_at', 'updated_at']),
+  groups: new Set(['id', 'project_id', 'name', 'created_at', 'updated_at']),
   users: new Set(['id', 'username', 'display_name', 'email', 'language_preference', 'created_at', 'updated_at']),
   test_cases: new Set(['id', 'requirement_id', 'group_id', 'title', 'priority', 'status', 'scenario_id', 'default_env_id', 'created_at', 'updated_at']),
   test_steps: new Set(['id', 'case_id', 'order', 'name', 'source', 'tab_ref', 'component_kind', 'created_at']),
   reports: new Set(['id', 'case_id', 'status', 'duration_ms', 'created_at']),
-  test_environments: new Set(['id', 'project_id', 'name', 'is_default', 'base_url', 'created_at', 'updated_at']),
+  test_environments: new Set(['id', 'project_id', 'name', 'is_default', 'created_at', 'updated_at']),
   environment_objects: new Set(['id', 'environment_id', 'object_type', 'label', 'is_default', 'created_at', 'updated_at']),
   execution_plans: new Set(['id', 'project_id', 'name', 'environment', 'environment_id', 'strategy', 'login_prepare_enabled', 'created_at', 'updated_at']),
   plan_runs: new Set(['id', 'plan_id', 'project_id', 'status', 'started_at', 'finished_at', 'duration_ms', 'total_cases', 'passed_cases', 'failed_cases', 'skipped_cases']),

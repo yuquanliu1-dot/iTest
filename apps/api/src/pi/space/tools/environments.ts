@@ -18,7 +18,6 @@ const Actions = z.object({
   action: z.enum(['list', 'get', 'upsert', 'set_secret', 'delete']),
   environmentId: z.string().uuid().optional(),
   name: z.string().min(1).max(120).optional(),
-  baseUrl: z.string().max(2000).nullable().optional(),
   isDefault: z.boolean().optional(),
   objects: z.array(z.object({
     objectType: z.enum(['db', 'syslog', 'login', 'web']),
@@ -41,7 +40,6 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
         action: Type.Union([Type.Literal('list'), Type.Literal('get'), Type.Literal('upsert'), Type.Literal('set_secret'), Type.Literal('delete')]),
         environmentId: Type.Optional(Type.String()),
         name: Type.Optional(Type.String()),
-        baseUrl: Type.Optional(Type.Union([Type.String(), Type.Null()])),
         isDefault: Type.Optional(Type.Boolean()),
         objects: Type.Optional(Type.Array(Type.Object({
           objectType: Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('login'), Type.Literal('web')]),
@@ -92,9 +90,8 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (v.environmentId) {
                 const pid = await resolveEnvironmentProjectId(v.environmentId);
                 if (pid !== ctx.projectId) return { ok: false, error: '环境不存在或不属于当前项目' };
-                const patch: { name?: string; baseUrl?: string | null; isDefault?: boolean } = {};
+                const patch: { name?: string; isDefault?: boolean } = {};
                 if (v.name !== undefined) patch.name = v.name;
-                if (v.baseUrl !== undefined) patch.baseUrl = v.baseUrl;
                 if (v.isDefault !== undefined) patch.isDefault = v.isDefault;
                 if (Object.keys(patch).length > 0) {
                   // 更新路径走阻塞确认:挂起前预计算 diff(旧值 vs 合成新值),确认卡与实际执行共用一份数据
@@ -115,7 +112,7 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
                 envId = v.environmentId;
               } else {
                 if (!v.name) return { ok: false, error: 'upsert 新建环境需要 name' };
-                envId = (await svc.createEnvironment(ctx.projectId, { name: v.name, baseUrl: v.baseUrl ?? null }, ctx.createdByUserId)).id;
+                envId = (await svc.createEnvironment(ctx.projectId, { name: v.name }, ctx.createdByUserId)).id;
               }
               for (const o of v.objects ?? []) await svc.upsertEnvironmentObject(envId, o);
               emitStage(ctx, { kind: 'environment', id: envId, action: 'upsert', diff: upsertDiff });

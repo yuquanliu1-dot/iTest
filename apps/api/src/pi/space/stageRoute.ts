@@ -149,7 +149,6 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     if (!row) throw new HttpError(404, 'not_found', `stage environment ${sel.localId} 已不存在`);
     const insertedEnv = await environmentsSvc.createEnvironment(pid, {
       name: row.name,
-      baseUrl: row.baseUrl,
       objects: ((row.objects as unknown[]) ?? []).map((o) => {
         const x = o as { objectType: 'db' | 'syslog' | 'login' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean };
         return { objectType: x.objectType, label: x.label, payload: x.payload, isDefault: x.isDefault };

@@ -331,12 +331,12 @@ export async function searchCasesInVersion(versionId: string, o: { keyword?: str
   );
 }
 
-export async function createGroup(projectId: string, input: { name: string; defaultUrl?: string | null }) {
+export async function createGroup(projectId: string, input: { name: string }) {
   const p = (await db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).limit(1))[0];
   if (!p) throw new HttpError(404, 'not_found', 'project not found');
   return (await db
     .insert(groups)
-    .values({ projectId, name: input.name, ...(input.defaultUrl !== undefined ? { defaultUrl: input.defaultUrl } : {}) })
+    .values({ projectId, name: input.name })
     .returning())[0]!;
 }
 

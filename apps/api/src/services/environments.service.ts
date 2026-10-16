@@ -128,11 +128,11 @@ export async function getEnvironment(environmentId: string) {
 
 export async function createEnvironment(
   projectId: string,
-  input: { name: string; baseUrl?: string | null; objects?: Array<{ objectType: ObjectType; label?: string; payload: Record<string, unknown>; isDefault?: boolean }> },
+  input: { name: string; objects?: Array<{ objectType: ObjectType; label?: string; payload: Record<string, unknown>; isDefault?: boolean }> },
   createdByUserId?: string | null,
 ) {
   return db.transaction(async (tx) => {
-    const inserted = (await tx.insert(testEnvironments).values({ projectId, name: input.name, baseUrl: input.baseUrl ?? null, ...(createdByUserId ? { createdByUserId } : {}) }).returning())[0]!;
+    const inserted = (await tx.insert(testEnvironments).values({ projectId, name: input.name, ...(createdByUserId ? { createdByUserId } : {}) }).returning())[0]!;
     if (input.objects?.length) {
       // 逐条先校验再插入:web 对象走 assertWebPayload;同事务内后续校验能看到已插入行,
       // 同请求里两个同名 web 对象因此同样被拒(409)。
@@ -156,7 +156,7 @@ export async function createEnvironment(
   });
 }
 
-export async function updateEnvironment(environmentId: string, patch: { name?: string; baseUrl?: string | null; isDefault?: boolean }) {
+export async function updateEnvironment(environmentId: string, patch: { name?: string; isDefault?: boolean }) {
   const row = await db.transaction(async (tx) => {
     const env = (await tx.select().from(testEnvironments).where(eq(testEnvironments.id, environmentId)).limit(1))[0];
     if (!env) throw new HttpError(404, 'not_found', 'environment not found');
@@ -165,7 +165,6 @@ export async function updateEnvironment(environmentId: string, patch: { name?: s
     }
     const update: Record<string, unknown> = { updatedAt: new Date() };
     if (patch.name !== undefined) update.name = patch.name;
-    if (patch.baseUrl !== undefined) update.baseUrl = patch.baseUrl;
     if (patch.isDefault !== undefined) update.isDefault = patch.isDefault;
     return (await tx.update(testEnvironments).set(update).where(eq(testEnvironments.id, environmentId)).returning())[0]!;
   }).catch((e) => {

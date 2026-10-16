@@ -114,7 +114,7 @@ describe('cases.service', () => {
   it('createGroup:项目不存在 → 404;成功后 groupProjectId 可解析', async () => {
     const { projectId } = await seedProject(pool);
     const svc = await import('../src/services/cases.service.js');
-    const g = await svc.createGroup(projectId, { name: '新分组', defaultUrl: 'https://g.example.com' });
+    const g = await svc.createGroup(projectId, { name: '新分组' });
     expect(await svc.groupProjectId(g.id)).toBe(projectId);
     await expect(svc.createGroup('00000000-0000-0000-0000-000000000000', { name: 'x' }))
       .rejects.toMatchObject({ status: 404 });

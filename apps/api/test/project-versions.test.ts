@@ -97,8 +97,10 @@ describe('project versions', () => {
       `INSERT INTO test_cases(group_id, version_id, title) VALUES ((SELECT id FROM "groups" WHERE project_id=$1), (SELECT id FROM project_versions WHERE project_id=$1 AND name='v0'), 'x')`,
       [projectId],
     );
-    const list = await request(app).get(`/api/projects/${projectId}/versions`);
-    const r = await request(app).delete(`/api/project-versions/${list.body[0].id}`);
+    // 显式删除 v0（此版本的用例计数 ≥1）而非 list.body[0]——GET 列表按 created_at 排序,
+    // v0/v1.0 同毫秒时会乱序,list.body[0] 可能命中空版本导致误断言（时敏 flake）
+    const v0 = (await pool.query(`SELECT id FROM project_versions WHERE project_id=$1 AND name='v0'`, [projectId])).rows[0] as { id: string };
+    const r = await request(app).delete(`/api/project-versions/${v0.id}`);
     expect(r.status).toBe(400);
     expect(r.body.error).toBe('version_not_empty');
     expect(r.body.details?.caseCount).toBeGreaterThanOrEqual(1);

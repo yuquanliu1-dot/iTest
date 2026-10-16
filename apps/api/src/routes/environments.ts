@@ -32,7 +32,6 @@ const ObjectBody = z.object({
 });
 const CreateBody = z.object({
   name: z.string().min(1).max(120),
-  baseUrl: z.string().max(2000).optional(),
   objects: z.array(ObjectBody).max(10).optional(),
 });
 
@@ -46,7 +45,6 @@ environmentsRoute.post('/projects/:projectId/environments', async (req, res) => 
 
 const EnvPatchBody = z.object({
   name: z.string().min(1).max(120).optional(),
-  baseUrl: z.string().max(2000).nullable().optional(),
   isDefault: z.boolean().optional(),
 });
 
