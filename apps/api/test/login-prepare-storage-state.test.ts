@@ -288,4 +288,16 @@ describe('loginPrepare — autoFillLogin 相对 loginUrl 拼接', () => {
     const page = mockState.lastPage as unknown as { goto: ReturnType<typeof vi.fn> };
     expect(page.goto).toHaveBeenCalledWith('https://sso.example.com/login', expect.anything());
   });
+
+  it('loginUrl 相对但无 defaultWebOrigin → failed(拼接不出绝对地址)', async () => {
+    const res = await loginPrepare(
+      { enabled: true, detectionUrl: 'https://login.example.com/', unauthorizedKeywords: null },
+      {
+        autoLogin: { user: 'u', password: 'p', loginUrl: '/login.html' },
+        loginCaseRunner: async () => ({ passed: false }),
+      },
+    );
+    expect(res.status).toBe('failed');
+    expect(res.reason).toBe('auto login: loginUrl is relative but no default web origin');
+  });
 });
