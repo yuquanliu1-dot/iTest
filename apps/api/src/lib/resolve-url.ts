@@ -14,7 +14,7 @@ export interface ResolveUrlEnv {
   resolveWebOrigin(ref?: string | null): string | null;
 }
 
-function webEntriesOf(rows: Array<{ label: string; isDefault: boolean; payload: unknown }>): WebServiceEntry[] {
+export function webEntriesOf(rows: Array<{ label: string; isDefault: boolean; payload: unknown }>): WebServiceEntry[] {
   return rows
     .map((o) => {
       const p = (o.payload ?? {}) as { name?: unknown; scheme?: unknown; host?: unknown; port?: unknown };

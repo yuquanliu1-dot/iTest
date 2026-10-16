@@ -56,7 +56,7 @@ export interface StagedEnvironment {
   localId: string;
   name: string;
   baseUrl?: string | null;
-  objects: Array<{ objectType: 'db' | 'syslog' | 'login'; label?: string; payload: Record<string, unknown>; isDefault?: boolean }>;
+  objects: Array<{ objectType: 'db' | 'syslog' | 'login' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean }>;
 }
 export interface StagedPlan {
   localId: string;
@@ -397,7 +397,7 @@ const StageEnvironmentInput = z.object({
   name: z.string().min(1).max(120),
   baseUrl: z.string().max(2000).nullable().optional(),
   objects: z.array(z.object({
-    objectType: z.enum(['db', 'syslog', 'login']),
+    objectType: z.enum(['db', 'syslog', 'login', 'web']),
     label: z.string().max(120).optional(),
     payload: z.record(z.unknown()),
     isDefault: z.boolean().optional(),
@@ -617,7 +617,7 @@ export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
         name: Type.String({ minLength: 1, maxLength: 120 }),
         baseUrl: Type.Optional(Type.Union([Type.String({ maxLength: 2000 }), Type.Null()])),
         objects: Type.Optional(Type.Array(Type.Object({
-          objectType: Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('login')]),
+          objectType: Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('login'), Type.Literal('web')]),
           label: Type.Optional(Type.String({ maxLength: 120 })),
           payload: Type.Record(Type.String(), Type.Unknown()),
           isDefault: Type.Optional(Type.Boolean()),
