@@ -270,8 +270,10 @@ export default function CaseDetail() {
   });
 
   // 初始化导航的 web 服务候选 = 用例所处环境（用例.defaultEnvId → 项目默认）里的具名 web 对象。
+  // 用本地 defaultEnvId state（非 caseDetail.defaultEnvId）：环境下拉改过而未保存的窗口内，
+  // 弹窗选出的 web 服务与即将落库的环境保持一致，避免存下孤儿 ref。
   // 下拉不选 → 用该环境默认 web 服务（后端 resolve 处理）。
-  const caseEnvId = caseDetail?.defaultEnvId ?? environments?.find((e) => e.isDefault)?.id ?? null;
+  const caseEnvId = defaultEnvId ?? environments?.find((e) => e.isDefault)?.id ?? null;
   const webOptions = useMemo(() => {
     const env = environments?.find((e) => e.id === caseEnvId);
     if (!env) return [];
@@ -279,7 +281,7 @@ export default function CaseDetail() {
     for (const o of env.objects) {
       if (o.objectType !== 'web') continue;
       const n = String((o.payload as Record<string, unknown>)?.name ?? '').trim();
-      if (n) names.push(n);
+      if (n && !names.includes(n)) names.push(n);
     }
     return names;
   }, [environments, caseEnvId]);
@@ -1436,7 +1438,7 @@ export default function CaseDetail() {
                 className="input-base"
                 value={webRefDraft}
                 onChange={(e) => setWebRefDraft(e.target.value)}
-                disabled={webOptions.length === 0}
+                disabled={webOptions.length === 0 && !webRefDraft}
               >
                 <option value="">默认 web 服务</option>
                 {webOptions.map((w) => (

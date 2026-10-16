@@ -504,7 +504,7 @@ function ProjectRow({
     queryFn: () => api.versions.list(p.id),
     enabled: expanded,
   });
-  // 版本行「打开环境域名」需要环境 baseUrl；展开时拉一次（与版本弹窗共享缓存）
+  // 版本行「打开环境域名」取自环境 web 服务 origin；展开时拉一次（与版本弹窗共享缓存）
   const envsQ = useQuery({
     queryKey: ['environments', p.id],
     queryFn: () => api.environments.list(p.id),
