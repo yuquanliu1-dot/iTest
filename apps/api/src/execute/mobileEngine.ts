@@ -115,6 +115,7 @@ export class MobileEngine implements Engine {
         reportId: input.reportId,
         caseTitle: input.caseTitle,
         caseUrl: input.caseUrl,
+        caseWebOrigin: input.caseWebOrigin ?? null,
         expectedOutcome: materializeExpectedOutcome(input.expectedOutcome, vars),
         vars,
         sensitiveVarKeys: input.sensitiveVarKeys ?? [],

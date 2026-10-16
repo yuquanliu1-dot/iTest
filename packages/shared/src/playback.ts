@@ -41,6 +41,8 @@ export const FailureReason = z.enum([
   'LLMProviderError',
   'EnvMissing',
   'EnvProjectMismatch',
+  /** 2026-10-16: 相对 url 执行——环境无可拼 origin 的 web 服务或 ref 非法 */
+  'WebServiceMissing',
   /** Track 1: 用例级 vision LLM 判定最终截图与 expectedOutcome 不符 */
   'VisionAssertionFailed',
   /** 2026-10-07: mobile engine 失败归类 */

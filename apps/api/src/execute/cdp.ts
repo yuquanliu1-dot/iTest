@@ -113,6 +113,8 @@ export interface ExecContext {
   caseTitle?: string;
   /** 用例 url（兜底语义锚，给 vision prompt 用）。 */
   caseUrl?: string | null;
+  /** 用例绑定 web 服务的 origin：中途 navigate 相对 url 拼接用；无环境 web 服务时缺省。 */
+  caseWebOrigin?: string | null;
   /** 数据集行初始变量（解密后明文，仅存在于执行期内存，不落库）。 */
   initialVars?: Record<string, string>;
   /** 数据集敏感列名集合：错误信息落报告前对相关变量值打码（与 recorder 敏感处理对齐）。 */
@@ -1077,6 +1079,7 @@ async function runStepsInContext(
       reportId: ctx.reportId,
       caseTitle: ctx.caseTitle ?? caseId,
       caseUrl: ctx.caseUrl ?? null,
+      caseWebOrigin: ctx.caseWebOrigin ?? null,
       expectedOutcome: ctx.expectedOutcome,
       vars,
       sensitiveVarKeys: ctx.sensitiveVarKeys ?? [],
