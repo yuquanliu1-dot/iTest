@@ -462,13 +462,18 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         }, VERIFY_TIMEOUT_MS);
         try {
           // resolveCaseUrl 有 db 查询，放进本 try 让 finally 的 envCtx.close 兜底（否则查询抛错会泄漏连接池）
-          // 草稿无分组，不走 resolveCaseUrl 的 group.defaultUrl 链：url → 环境 baseUrl
-          const resolvedUrl = stagedCase
-            ? (effectiveCase.url ?? envCtx.baseUrl)
-            : await resolveCaseUrl(
-                { url: effectiveCase.url, groupId: dbCase!.groupId, webServiceRef: dbCase!.webServiceRef ?? null },
-                { envCtx },
-              );
+          // 草稿无分组，share null groupId:resolveCaseUrl 在传 envCtx 时只用 resolveWebOrigin 拼相对路径,
+          // 相对 url(/开头)→默认 web 服务 origin + path;绝对直通;空 → 默认 origin(空 url 无服务则 null)。
+          const resolvedUrl = await resolveCaseUrl(
+            {
+              url: effectiveCase.url,
+              // 草稿无 DB 行:groupId 传 envCtx 时未被使用(仅 defaultEnvFallback 的 displayWebEnv 需要),填空串;
+              // webServiceRef 草稿无法绑定命名服务 → null 走默认 web 服务。
+              groupId: stagedCase ? '' : dbCase!.groupId,
+              webServiceRef: stagedCase ? null : (dbCase!.webServiceRef ?? null),
+            },
+            { envCtx },
+          );
           const targetUrl = resolvedUrl && /^https?:\/\//.test(resolvedUrl) ? resolvedUrl : undefined;
           browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
           // 命中登录态缓存则注入 context:同环境重试轮/后续用例免登录（过期自愈,见 loginStateCache）
