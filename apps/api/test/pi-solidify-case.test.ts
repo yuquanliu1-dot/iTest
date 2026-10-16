@@ -535,6 +535,32 @@ describe('solidify_case 编排', () => {
     expect(dbRows.rows).toHaveLength(0);
   });
 
+  it('草稿相对 url → resolveCaseUrl 拼默认 web 服务 origin（不落 about:blank）', async () => {
+    // 回归:stage-tools 约束要求 AI 写相对 case.url,草稿分支若按字面量渲染相对地址会得到
+    // targetUrl=undefined → about:blank。此处断言初始 goto 落在 web 服务 origin + 路径。
+    const envRow = await pool.query(`SELECT id FROM test_environments WHERE project_id = $1`, [projectId]);
+    const envId = envRow.rows[0]!.id as string;
+    await pool.query(
+      `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default)
+       VALUES ($1, 'web', '前端', $2::jsonb, true)`,
+      [envId, JSON.stringify({ name: 'web', scheme: 'http', host: '10.0.0.1', port: 8080 })],
+    );
+    const localId = randomUUID();
+    await pool.query(
+      `INSERT INTO ai_stage_cases(thread_id, local_id, version_id, title, url, steps, staged_at)
+       VALUES ('t1', $1, $2, '草稿相对url', '/page', $3::jsonb, now())`,
+      [localId, versionId, JSON.stringify([{ action: '点击删除按钮', compiled: null, assertion: null }])],
+    );
+    stepQueue = [{ actions: [[{ type: 'click', selector: '#del' }, true]] }];
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const r = await buildSolidifyCaseTool(toolCtx()).execute({ caseId: localId });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(JSON.parse(r.data!)).toMatchObject({ result: 'solidified', basedOn: 'staged' });
+    const { __testState } = (await import('playwright-core')) as unknown as { __testState: { gotos: string[] } };
+    expect(__testState.gotos).toContain('http://10.0.0.1:8080/page');
+    expect(__testState.gotos.some((g) => !/^https?:\/\//.test(g))).toBe(false);
+  });
+
   it('基于 stage_case_op 暂存叠加：update_step 置 null 回退视觉后固化 → basedOn=staged', async () => {
     // DB 步骤已编译；暂存 update_step 把 compiled 置 null（回退视觉模式）→ 固化基于叠加态
     const caseId = await seedCase({
