@@ -443,5 +443,6 @@ describe('NavigateAction.url 相对/变量形态', () => {
   it('裸文本与 ftp 非法', () => {
     expect(NavigateAction.safeParse({ kind: 'navigate', url: 'admin/user' }).success).toBe(false);
     expect(NavigateAction.safeParse({ kind: 'navigate', url: 'ftp://a.com/x' }).success).toBe(false);
+    expect(NavigateAction.safeParse({ kind: 'navigate', url: '' }).success).toBe(false);
   });
 });
