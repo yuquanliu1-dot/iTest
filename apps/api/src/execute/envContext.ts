@@ -101,7 +101,7 @@ export interface EnvCtx {
   /** ref 非空按 name 精确匹配(找不到抛 WebServiceMissing);空取 isDefault→最早。
    *  环境无任何 web 对象返回 null。 */
   resolveWebOrigin(ref?: string | null): string | null;
-  /** 派生:默认 web 服务 origin(兼容旧消费点)。(用例.url → 分组.defaultUrl → 默认 web 服务 → 项目.defaultUrl) */
+  /** 派生:默认 web 服务 origin(兼容旧消费点)。 */
   readonly baseUrl: string | null;
   db?: { host: string; port: number; database: string; user: string; password: string };
   /** 已建立好的查询池；缺省表示该环境未配置 DB。close() 时统一 end()。 */
