@@ -318,7 +318,7 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  // 与 drizzle/0039 中「email 唯一」声明同源；drizzle-kit migrate 同步建索引
+  // 与 drizzle/0017 中「email 唯一」声明同源；drizzle-kit migrate 同步建索引
   emailUq: uniqueIndex('users_email_uq').on(t.email).where(sql`${t.email} IS NOT NULL`),
 }));
 
