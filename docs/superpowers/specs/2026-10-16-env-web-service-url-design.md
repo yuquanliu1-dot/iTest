@@ -28,6 +28,7 @@
    - 显示名走现有 `label`(可中文,默认"默认")
    - 无 secret;mask/normalize 逻辑空转无副作用
    - `isDefault` 复用"每 (envId, objectType) 唯一默认"语义与 UI 徽标
+   - **唯一性校验在 service 层**(environments.service):同环境内 name 重复(不同 label)拒绝——HTTP 边界与 AI 工具写入都经过它;现有 upsert 仍按 (envId, objectType, label) 定位,改 label 不影响 name 引用
 2. `test_cases` 加列 `web_service_ref varchar(64) null`:空=用环境的默认 web 服务;值=web 对象 `name`
 3. 删列:`groups.default_url`(schema.ts:390)、`test_environments.base_url`(schema.ts:570)
 4. AI 草稿表 `aiStageEnvironments` 保留 baseUrl 字段(草稿宽松),save 落库时自动转默认 web 对象(见 AI 链路)
@@ -42,7 +43,7 @@
 
 **顺序约束**:搬迁步骤 1-3 必须先于步骤 5 删列(同一迁移文件内保证)。prod 走 drizzle-kit push 的现实下:先执行 `drizzle migrate`(数据搬迁+DDL),再部署新镜像;push 的 DDL diff 与迁移结果一致,无冲突。
 
-**执行链运行时解析**
+## 执行链运行时解析
 
 ### EnvCtx 扩展(envContext.ts)
 
@@ -66,7 +67,9 @@
 
 ### 中途 navigate(cdp.ts:287)
 
-dispatch 顺序调整:先 `substituteVars(url)` → 结果以 `/` 开头 → 拼**用例绑定服务**的 origin(绝对原样)→ 其他形态(如 `foo/bar`)步骤失败。用例绑定的 origin 由 runCase 在解析初始导航时一并求出,注入 ExecContext(如 `ctx.caseWebOrigin`)。
+dispatch 顺序调整:先 `substituteVars(url)` → 结果以 `/` 开头 → 拼**用例绑定服务**的 origin(绝对原样)→ 其他形态(如 `foo/bar`)步骤失败。
+
+`ctx.caseWebOrigin` 求值规则(runCase 解析初始导航时求出注入):`resolveWebOrigin(caseRow.web_service_ref)` 的结果;环境无 web 服务或 ref 不匹配 → undefined,此时出现相对 navigate 步骤则以 `WebServiceMissing` 语义步骤失败。存量绝对 url 用例(无 web 服务也可执行)不受影响——其 navigate 均为绝对,不触发拼接。
 
 **跨服务跳转零新语法**:`{{web_backend}}/api/x` 变量替换后为绝对,直通现有逻辑;`/api/x` 拼绑定服务 origin。
 
@@ -145,7 +148,7 @@ goto 前 loginUrl 以 `/` 开头 → 拼默认 web origin;绝对原样。preflig
 - **cdp**:navigate 相对拼接(ctx.caseWebOrigin)、`{{web_x}}` 跨服务直通、非法形态失败
 - **loginPrepare**:loginUrl 相对拼接
 - **recorder finish**:命中剥离(存相对+ref)/ 未命中保留绝对
-- **迁移**:fixture 覆盖 base_url/loginUrl 生成 web 对象、case.url 与 navigate 剥离、未命中保留、列删除;以及"迁移幂等"(重跑不重复插对象)
+- **迁移**:fixture 覆盖 base_url 生成 web 对象、base_url 空但 loginUrl 非空时取 loginUrl origin(两者并存只插一个对象)、case.url 与 navigate 剥离、未命中保留、列删除
 - **AI 工具**:stage-tools 约束新文案、web 对象创建、stageRoute 落库转默认 web 对象、summary 列 web 服务
 - **UI 手工清单**:环境页 web 表单与默认徽标、CaseDetail 相对输入+下拉+resolvedUrl、GroupsPage 无 URL、录制→回放跨环境黄金路径(A 环境录,B 环境跑)
 
