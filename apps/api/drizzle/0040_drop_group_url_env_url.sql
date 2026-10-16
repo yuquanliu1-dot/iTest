@@ -16,13 +16,14 @@
 --   不执行本文件的 INSERT/UPDATE(数据搬迁段)。故:
 --     ① 先手工 psql 执行"数据搬迁段"(本文件中 DROP TABLE _mig_web_origins 之前的部分),
 --        在旧列仍存在时完成 base_url/loginUrl → web 对象 且 case/step url 相对化;
+--        _mig_web_origins 是 TEMP(会话级),搬迁段收尾自动消失,不会在库里留孤儿表;
 --     ② 再放行 api 容器启动的 push(或与搬迁一起 psql 执行下方 DDL,
 --        DROP COLUMN IF EXISTS 幂等,即使先 push 也安全)。
 --     若先 push 后搬迁,迁移 SQL 会因列已删除而报错——因此务必先搬迁后 push/DDL。
 -- ============================================================================
 
 -- 0. 临时表:项目 → web origin/name
-CREATE TABLE "_mig_web_origins" ("project_id" uuid, "origin" text, "name" text);
+CREATE TEMP TABLE "_mig_web_origins" ("project_id" uuid, "origin" text, "name" text);
 
 -- 1. 每环境插默认 web 对象:base_url 优先,空则取 login 对象 loginUrl 的 origin
 INSERT INTO "environment_objects" ("environment_id", "object_type", "label", "payload", "is_default")
@@ -82,7 +83,7 @@ UPDATE test_steps ts SET compiled = (
 )
 WHERE ts.compiled IS NOT NULL AND jsonb_typeof(ts.compiled) = 'array';
 
-DROP TABLE "_mig_web_origins";
+DROP TABLE IF EXISTS "_mig_web_origins";
 
 -- DDL:由 api 容器 push --force 应用(或与搬迁一起 psql 执行;IF EXISTS 幂等)
 ALTER TABLE "groups" DROP COLUMN IF EXISTS "default_url";
