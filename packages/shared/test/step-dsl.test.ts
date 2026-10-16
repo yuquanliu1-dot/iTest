@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { StepAction, Locator, LocatorStrategy } from '../src/step-dsl.js';
+import { StepAction, Locator, LocatorStrategy, NavigateAction } from '../src/step-dsl.js';
 
 describe('step-dsl', () => {
   it('accepts valid click action', () => {
@@ -427,5 +427,21 @@ describe('step-dsl — mobile extensions (2026-10-07)', () => {
   it('parses accessibilityId locator strategy', () => {
     const r = LocatorStrategy.safeParse('accessibilityId');
     expect(r.success).toBe(true);
+  });
+});
+
+describe('NavigateAction.url 相对/变量形态', () => {
+  it('绝对 URL 合法', () => {
+    expect(NavigateAction.safeParse({ kind: 'navigate', url: 'https://a.com/x?y=1#z' }).success).toBe(true);
+  });
+  it('以 / 开头的相对 URL 合法(含 query/hash)', () => {
+    expect(NavigateAction.safeParse({ kind: 'navigate', url: '/admin/user?tab=1#sec' }).success).toBe(true);
+  });
+  it('{{变量}} 打头合法(替换后由运行时判断)', () => {
+    expect(NavigateAction.safeParse({ kind: 'navigate', url: '{{web_backend}}/api/x' }).success).toBe(true);
+  });
+  it('裸文本与 ftp 非法', () => {
+    expect(NavigateAction.safeParse({ kind: 'navigate', url: 'admin/user' }).success).toBe(false);
+    expect(NavigateAction.safeParse({ kind: 'navigate', url: 'ftp://a.com/x' }).success).toBe(false);
   });
 });

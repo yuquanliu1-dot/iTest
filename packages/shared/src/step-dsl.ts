@@ -10,7 +10,13 @@ export const Locator = z.object({
 });
 export type Locator = z.infer<typeof Locator>;
 
-export const NavigateAction = z.object({ kind: z.literal('navigate'), url: z.string().url() });
+/** navigate.url 三形态:绝对 http(s)(外链)/ 相对(以 / 开头,执行时拼用例绑定的 web 服务)/
+ *  {{变量}} 打头(如 {{web_backend}}/api/x,替换后再按前两形态判断)。 */
+const navigateUrl = z.string().refine(
+  (u) => /^https?:\/\//.test(u) || u.startsWith('/') || u.startsWith('{{'),
+  { message: 'url 必须是绝对 http(s) 地址、以 / 开头的相对路径,或 {{变量}} 打头' },
+);
+export const NavigateAction = z.object({ kind: z.literal('navigate'), url: navigateUrl });
 
 export const IntentLocator = z.object({
   /** 录制阶段确定的语义角色（data-testid / name 等），回放时作为补充候选。 */
