@@ -117,4 +117,48 @@ describe('environments.service', () => {
     // 密钥未变 → 密文不变（沿用而非重新加密）
     expect(raw2.secret!.c).toBe(before);
   }, 30_000);
+
+  describe('web 对象', () => {
+    it('可创建 web 对象,name 合法时保存', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, { name: 'W' });
+      const obj = await svc.insertEnvironmentObject(env.id, {
+        objectType: 'web',
+        payload: { name: 'backend', scheme: 'https', host: '192.168.1.11', port: 8081 },
+        isDefault: true,
+      });
+      expect(obj.objectType).toBe('web');
+      expect((obj.payload as Record<string, unknown>).name).toBe('backend');
+    }, 30_000);
+
+    it('同环境 name 重复(不同 label)被拒', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, { name: 'W' });
+      await svc.insertEnvironmentObject(env.id, { objectType: 'web', payload: { name: 'web', scheme: 'http', host: 'a.com' } });
+      await expect(svc.insertEnvironmentObject(env.id, {
+        objectType: 'web', label: '第二个',
+        payload: { name: 'web', scheme: 'http', host: 'b.com' },
+      })).rejects.toThrow(/name.*已存在|conflict/i);
+    }, 30_000);
+
+    it('name 非法变量名字符被拒', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, { name: 'W' });
+      await expect(svc.insertEnvironmentObject(env.id, {
+        objectType: 'web', payload: { name: '后端', scheme: 'http', host: 'a.com' },
+      })).rejects.toThrow(/name/);
+    }, 30_000);
+
+    it('host 缺失被拒', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, { name: 'W' });
+      await expect(svc.insertEnvironmentObject(env.id, {
+        objectType: 'web', payload: { name: 'web', scheme: 'http' },
+      })).rejects.toThrow(/host/);
+    }, 30_000);
+  });
 });
