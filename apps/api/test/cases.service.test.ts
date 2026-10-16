@@ -175,5 +175,18 @@ describe('cases.service', () => {
     const list = await svc.searchCasesInVersion(versionId, {});
     expect(list[0]!.webServiceRef).toBe('frontend');
     expect(list[0]!.resolvedUrl).toBe('http://10.0.0.1:8080/login');
+    // patch 路径：换绑第二个命名服务 → resolvedUrl 跟随 origin;再置 null → 回落默认服务
+    await pool.query(
+      `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', '后端', $2::jsonb, false)`,
+      [envId, JSON.stringify({ name: 'backend', scheme: 'http', host: '10.0.0.2', port: 8081 })],
+    );
+    await svc.updateCase(c.id, { webServiceRef: 'backend' });
+    const swapped = await svc.getCaseDetail(c.id);
+    expect(swapped!.webServiceRef).toBe('backend');
+    expect(swapped!.resolvedUrl).toBe('http://10.0.0.2:8081/login');
+    await svc.updateCase(c.id, { webServiceRef: null });
+    const cleared = await svc.getCaseDetail(c.id);
+    expect(cleared!.webServiceRef).toBeNull();
+    expect(cleared!.resolvedUrl).toBe('http://10.0.0.1:8080/login');
   }, 30_000);
 });
