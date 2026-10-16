@@ -24,11 +24,10 @@ interface EnvFormState {
   mode: 'create' | 'edit';
   id: string | null;
   name: string;
-  baseUrl: string;
 }
-const EMPTY_ENV_FORM: EnvFormState = { open: false, mode: 'create', id: null, name: '', baseUrl: '' };
+const EMPTY_ENV_FORM: EnvFormState = { open: false, mode: 'create', id: null, name: '' };
 
-type ObjType = 'db' | 'syslog' | 'login';
+type ObjType = 'db' | 'syslog' | 'login' | 'web';
 interface ObjFormState {
   open: boolean;
   envId: string;
@@ -47,12 +46,16 @@ interface ObjFormState {
   filePath: string;
   privateKey: string;
   loginUrl: string;
+  /** web 服务：payload.name（可空，空则视为默认服务）+ scheme + host + port(复用 host/port 字段)。 */
+  webName: string;
+  webScheme: 'http' | 'https';
 }
 const EMPTY_OBJ_FORM: ObjFormState = {
   open: false, envId: '', envName: '', objectType: 'db', object: null,
   dbType: 'postgres', syslogAuth: 'key',
   host: '', port: '', dbName: '', user: '', password: '', sshPort: '22', filePath: '', privateKey: '',
   loginUrl: '',
+  webName: '', webScheme: 'http',
 };
 
 /** db 表单 → 连接参数：保存 payload 与「测试连接」共用同一映射。密码留空不上送（后端保留旧密文）。 */
@@ -93,6 +96,14 @@ function buildObjectPayload(f: ObjFormState): Record<string, unknown> {
       ...(f.password ? { password: f.password } : {}),
     };
   }
+  if (f.objectType === 'web') {
+    return {
+      ...(f.webName.trim() ? { name: f.webName.trim() } : {}),
+      scheme: f.webScheme,
+      host: f.host.trim(),
+      ...(f.port.trim() ? { port: Number(f.port) } : {}),
+    };
+  }
   return syslogFormConn(f);
 }
 
@@ -103,6 +114,9 @@ function objectSummary(o: EnvironmentObject): string {
   }
   if (o.objectType === 'login') {
     return String(p.user ?? '');
+  }
+  if (o.objectType === 'web') {
+    return [`${p.scheme}://${p.host}`, p.port != null ? String(p.port) : null].filter(Boolean).join(':');
   }
   return [p.host, p.filePath].filter(Boolean).join(' · ');
 }
@@ -135,10 +149,9 @@ export default function EnvironmentsPage() {
   const saveEnv = useMutation({
     mutationFn: () => {
       const name = envForm.name.trim();
-      const baseUrl = envForm.baseUrl.trim();
       return envForm.mode === 'create'
-        ? api.environments.create(projectId!, { name, baseUrl: baseUrl || undefined })
-        : api.environments.patch(envForm.id!, { name, baseUrl: baseUrl || null });
+        ? api.environments.create(projectId!, { name })
+        : api.environments.patch(envForm.id!, { name });
     },
     onSuccess: () => {
       toast(envForm.mode === 'create' ? '环境已创建' : '环境已更新', 'success');
@@ -236,6 +249,8 @@ export default function EnvironmentsPage() {
       sshPort: p.sshPort != null ? String(p.sshPort) : '22',
       filePath: String(p.filePath ?? ''),
       loginUrl: String(p.loginUrl ?? ''),
+      webName: String(p.name ?? ''),
+      webScheme: p.scheme === 'https' ? 'https' : 'http',
     });
   };
 
@@ -251,13 +266,13 @@ export default function EnvironmentsPage() {
           </h1>
         </div>
         <PageShellActions>
-          <Button onClick={() => setEnvForm({ open: true, mode: 'create', id: null, name: '', baseUrl: '' })}>
+          <Button onClick={() => setEnvForm({ open: true, mode: 'create', id: null, name: '' })}>
             <Icon name="plus" size={14} />
             新建环境
           </Button>
         </PageShellActions>
         <PageShellDescription>
-          项目级维护 DB / syslog / 登录凭据对象；未被用例、计划、版本显式指定时使用默认环境
+          项目级维护 DB / syslog / 登录凭据 / Web 服务对象；未被用例、计划、版本显式指定时使用默认环境
         </PageShellDescription>
       </PageShellHeader>
 
@@ -287,11 +302,6 @@ export default function EnvironmentsPage() {
                     <span className="text-[13px] font-semibold" style={{ color: 'var(--foreground)' }}>
                       {env.name}
                     </span>
-                    {env.baseUrl && (
-                      <span className="text-[11px] font-mono truncate" style={{ color: 'var(--muted-foreground)' }}>
-                        {env.baseUrl}
-                      </span>
-                    )}
                     {env.createdBy && (
                       <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                         创建人 {creatorName(env.createdBy)}
@@ -314,7 +324,7 @@ export default function EnvironmentsPage() {
                       onClick={() => setDefault.mutate(env.id)}
                       disabled={env.isDefault}
                     />
-                    <IconButton icon="pencil" title="编辑环境" onClick={() => setEnvForm({ open: true, mode: 'edit', id: env.id, name: env.name, baseUrl: env.baseUrl ?? '' })} />
+                    <IconButton icon="pencil" title="编辑环境" onClick={() => setEnvForm({ open: true, mode: 'edit', id: env.id, name: env.name })} />
                     <IconButton
                       icon="trash"
                       title="删除环境"
@@ -326,7 +336,7 @@ export default function EnvironmentsPage() {
                 <div className="px-3 py-2 flex flex-col">
                   {env.objects.length === 0 && (
                     <div className="text-[12px] py-1" style={{ color: 'var(--muted-foreground)' }}>
-                      暂无对象，可添加数据库、syslog 或登录凭据配置
+                      暂无对象，可添加数据库、syslog、登录凭据或 Web 服务配置
                     </div>
                   )}
                   {env.objects.map((o) => (
@@ -336,12 +346,12 @@ export default function EnvironmentsPage() {
                       style={{ borderColor: 'var(--muted)' }}
                     >
                       <Icon
-                        name={o.objectType === 'db' ? 'database' : o.objectType === 'login' ? 'user' : 'terminal'}
+                        name={o.objectType === 'db' ? 'database' : o.objectType === 'login' ? 'user' : o.objectType === 'web' ? 'globe' : 'terminal'}
                         size={12}
                         style={{ color: 'var(--muted-foreground)', flexShrink: 0 }}
                       />
                       <span className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
-                        {o.objectType === 'db' ? '数据库' : o.objectType === 'login' ? '登录凭据' : 'syslog'}
+                        {o.objectType === 'db' ? '数据库' : o.objectType === 'login' ? '登录凭据' : o.objectType === 'web' ? 'Web 服务' : 'syslog'}
                         {o.label ? ` · ${o.label}` : ''}
                       </span>
                       {o.isDefault && (
@@ -385,7 +395,7 @@ export default function EnvironmentsPage() {
                           icon="trash"
                           title="删除对象"
                           tone="destructive"
-                          onClick={() => setConfirmObj({ id: o.id, label: `${o.objectType === 'db' ? '数据库' : o.objectType === 'login' ? '登录凭据' : 'syslog'}${o.label ? ` · ${o.label}` : ''}` })}
+                          onClick={() => setConfirmObj({ id: o.id, label: `${o.objectType === 'db' ? '数据库' : o.objectType === 'login' ? '登录凭据' : o.objectType === 'web' ? 'Web 服务' : 'syslog'}${o.label ? ` · ${o.label}` : ''}` })}
                         />
                       </div>
                     </div>
@@ -418,6 +428,15 @@ export default function EnvironmentsPage() {
                       <Icon name="plus" size={12} />
                       登录凭据
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => openObjForm(env, 'web', null)}
+                      className="flex items-center gap-1.5 text-[12px]"
+                      style={{ background: 'transparent', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
+                    >
+                      <Icon name="globe" size={12} />
+                      Web 服务
+                    </button>
                   </div>
                 </div>
               </div>
@@ -439,12 +458,6 @@ export default function EnvironmentsPage() {
               value={envForm.name}
               onChange={(e) => setEnvForm((f) => ({ ...f, name: e.target.value }))}
             />
-            <Input
-              label="基础 URL（可空，执行期导航兜底）"
-              placeholder="https://example.com"
-              value={envForm.baseUrl}
-              onChange={(e) => setEnvForm((f) => ({ ...f, baseUrl: e.target.value }))}
-            />
           </div>
           <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
             <Button variant="ghost" onClick={() => setEnvForm(EMPTY_ENV_FORM)}>取消</Button>
@@ -460,7 +473,7 @@ export default function EnvironmentsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {objForm.object ? '编辑' : '添加'}{objForm.objectType === 'db' ? ' 数据库' : objForm.objectType === 'login' ? ' 登录凭据' : ' syslog'} · {objForm.envName}
+              {objForm.object ? '编辑' : '添加'}{objForm.objectType === 'db' ? ' 数据库' : objForm.objectType === 'login' ? ' 登录凭据' : objForm.objectType === 'web' ? ' Web 服务' : ' syslog'} · {objForm.envName}
             </DialogTitle>
           </DialogHeader>
           <div className="flex-1 min-h-0 px-5 py-4 overflow-y-auto flex flex-col gap-3">
@@ -509,6 +522,41 @@ export default function EnvironmentsPage() {
                   计划开启「登录准备」且未选登录用例时，执行将用此凭据自动填表登录。
                 </p>
               </>
+            ) : objForm.objectType === 'web' ? (
+              <>
+                <Input
+                  label="服务名（可选）"
+                  value={objForm.webName}
+                  onChange={(e) => setObjForm((f) => ({ ...f, webName: e.target.value }))}
+                  placeholder="如 backend，留空则为该环境默认 web 服务"
+                />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>协议</label>
+                  <select
+                    className="input-base"
+                    value={objForm.webScheme}
+                    onChange={(e) => setObjForm((f) => ({ ...f, webScheme: e.target.value as 'http' | 'https' }))}
+                  >
+                    <option value="http">http</option>
+                    <option value="https">https</option>
+                  </select>
+                </div>
+                <Input
+                  label="主机"
+                  value={objForm.host}
+                  onChange={(e) => setObjForm((f) => ({ ...f, host: e.target.value }))}
+                  placeholder="example.com 或 192.168.1.10"
+                />
+                <Input
+                  label="端口（可选）"
+                  value={objForm.port}
+                  onChange={(e) => setObjForm((f) => ({ ...f, port: e.target.value }))}
+                  placeholder="留空用协议默认端口"
+                />
+                <p className="text-[11px] m-0" style={{ color: 'var(--muted-foreground)' }}>
+                  用例填相对路径 URL（如 /admin/login）时，执行期与此服务 origin 拼接成完整地址。
+                </p>
+              </>
             ) : (
               <>
                 <Input label="syslog 主机" value={objForm.host} onChange={(e) => setObjForm((f) => ({ ...f, host: e.target.value }))} placeholder="logs.example.com" />
@@ -550,7 +598,7 @@ export default function EnvironmentsPage() {
             )}
           </div>
           <div className="flex items-center gap-2 px-5 py-3 hairline-top shrink-0" style={{ borderColor: 'var(--border)' }}>
-            {objForm.objectType !== 'login' && (
+            {objForm.objectType !== 'login' && objForm.objectType !== 'web' && (
               <>
                 <Button
                   variant="ghost"

@@ -60,15 +60,15 @@ const caseParsers = {
 	tab: parseAsStringEnum([...TAB_VALUES]).withDefault('all'),
 };
 
-type GroupForm = { open: boolean; mode: 'create' | 'edit'; id: string | null; name: string; defaultUrl: string };
-const EMPTY_GROUP_FORM: GroupForm = { open: false, mode: 'create', id: null, name: '', defaultUrl: '' };
+type GroupForm = { open: boolean; mode: 'create' | 'edit'; id: string | null; name: string };
+const EMPTY_GROUP_FORM: GroupForm = { open: false, mode: 'create', id: null, name: '' };
 type AiForm = { open: boolean; title: string; content: string; coverage: string[] };
 const DEFAULT_COVERAGE = ['functional', 'exception'];
 const EMPTY_AI_FORM: AiForm = { open: false, title: '', content: '', coverage: DEFAULT_COVERAGE };
 
 type CasePriority = 'P0' | 'P1' | 'P2' | 'P3';
-type CaseForm = { open: boolean; title: string; groupId: string; priority: CasePriority; url: string; description: string };
-const EMPTY_CASE_FORM: CaseForm = { open: false, title: '', groupId: '', priority: 'P1', url: '', description: '' };
+type CaseForm = { open: boolean; title: string; groupId: string; priority: CasePriority; description: string };
+const EMPTY_CASE_FORM: CaseForm = { open: false, title: '', groupId: '', priority: 'P1', description: '' };
 
 export default function GroupsPage() {
 	const { projectId, groupId, versionId: vidParam } = useParams<{ projectId: string; groupId: string; versionId: string }>();
@@ -149,10 +149,6 @@ export default function GroupsPage() {
 		[groups],
 	);
 
-	// 新建用例的 URL 预填：分组.defaultUrl；环境兜底由服务端 resolvedUrl 负责（录制/详情链）
-	const inheritUrl = (gid: string) =>
-		(groups ?? []).find((g) => g.id === gid)?.defaultUrl || '';
-
 	// 场景过滤下拉选项 = 项目下全部 scenario 去重 + 「无场景」sentinel。
 	// 「无场景」是否出现，看当前列表里有没有 scenarioId == null 的用例（仅首次观察一次）。
 	const scenarioOptions = useMemo(() => {
@@ -182,7 +178,7 @@ export default function GroupsPage() {
 
 	const saveGroup = useMutation({
 		mutationFn: async () => {
-			const body = { name: groupForm.name, defaultUrl: groupForm.defaultUrl || undefined };
+			const body = { name: groupForm.name };
 			if (groupForm.mode === 'create') return api.projects.createGroup(projectId!, body);
 			return api.groups.patch(groupForm.id!, body);
 		},
@@ -511,7 +507,6 @@ export default function GroupsPage() {
 				groupId: caseForm.groupId,
 				versionId: versionId ?? undefined,
 				priority: caseForm.priority,
-				url: caseForm.url.trim() || undefined,
 				description: caseForm.description.trim() || undefined,
 			}),
 		onSuccess: (r) => {
@@ -534,7 +529,7 @@ export default function GroupsPage() {
 					<Button
 						onClick={() => {
 							const gid = effectiveGroupId || groups?.[0]?.id || '';
-							setCaseForm({ ...EMPTY_CASE_FORM, open: true, groupId: gid, url: inheritUrl(gid) });
+							setCaseForm({ ...EMPTY_CASE_FORM, open: true, groupId: gid });
 						}}
 					>
 						<Icon name="plus" size={12} />
@@ -560,7 +555,7 @@ export default function GroupsPage() {
 							</span>
 							<button
 								title="新建分组"
-								onClick={() => setGroupForm({ open: true, mode: 'create', id: null, name: '', defaultUrl: '' })}
+								onClick={() => setGroupForm({ open: true, mode: 'create', id: null, name: '' })}
 								style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 2 }}
 							>
 								<Icon name="plus" size={13} />
@@ -598,7 +593,6 @@ export default function GroupsPage() {
 										<span
 											className="flex-1 truncate text-[13px]"
 											style={{ color: active ? 'var(--primary)' : 'var(--muted-foreground)', fontWeight: active ? 500 : 400 }}
-											title={g.defaultUrl ?? undefined}
 										>
 											{g.name}
 										</span>
@@ -607,7 +601,7 @@ export default function GroupsPage() {
 											<IconButton
 												icon="pencil"
 												title="重命名"
-												onClick={() => setGroupForm({ open: true, mode: 'edit', id: g.id, name: g.name, defaultUrl: g.defaultUrl ?? '' })}
+												onClick={() => setGroupForm({ open: true, mode: 'edit', id: g.id, name: g.name })}
 											/>
 											<IconButton
 												icon="trash"
@@ -718,7 +712,7 @@ export default function GroupsPage() {
 				</div>
 			</PageShellContent>
 
-			{/* 分组弹窗（新建/重命名/默认域名） */}
+			{/* 分组弹窗（新建/重命名） */}
 			<Dialog open={groupForm.open} onOpenChange={(open) => setGroupForm((f) => ({ ...f, open }))}>
 				<DialogContent>
 					<DialogHeader>
@@ -728,12 +722,6 @@ export default function GroupsPage() {
 					</DialogHeader>
 					<div className="flex flex-col gap-3 px-5 py-4">
 						<Input label="名称" placeholder="如：登录与账号" value={groupForm.name} onChange={(e) => setGroupForm((f) => ({ ...f, name: e.target.value }))} />
-						<Input
-							label="默认域名（可空）"
-							placeholder="https://example.com"
-							value={groupForm.defaultUrl}
-							onChange={(e) => setGroupForm((f) => ({ ...f, defaultUrl: e.target.value }))}
-						/>
 					</div>
 					<div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--border)' }}>
 						<Button variant="ghost" onClick={() => setGroupForm(EMPTY_GROUP_FORM)}>取消</Button>
@@ -936,17 +924,7 @@ export default function GroupsPage() {
 							<select
 								className="input-base"
 								value={caseForm.groupId}
-								onChange={(e) =>
-									setCaseForm((f) => {
-										// 换分组时：URL 为空或还是上一个分组的继承值 → 重新继承；用户已手输则保留
-										const prev = inheritUrl(f.groupId);
-										return {
-											...f,
-											groupId: e.target.value,
-											url: !f.url || f.url === prev ? inheritUrl(e.target.value) : f.url,
-										};
-									})
-								}
+								onChange={(e) => setCaseForm((f) => ({ ...f, groupId: e.target.value }))}
 								disabled={(groups ?? []).length === 0}
 							>
 								{(groups ?? []).length === 0 && <option value="">请先创建分组</option>}
@@ -963,12 +941,6 @@ export default function GroupsPage() {
 								onChange={(v) => setCaseForm((f) => ({ ...f, priority: v }))}
 							/>
 						</div>
-						<Input
-							label="URL（可空）"
-							placeholder="https://example.com/login"
-							value={caseForm.url}
-							onChange={(e) => setCaseForm((f) => ({ ...f, url: e.target.value }))}
-						/>
 						<div className="flex flex-col gap-1">
 							<label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>描述（可空）</label>
 							<textarea

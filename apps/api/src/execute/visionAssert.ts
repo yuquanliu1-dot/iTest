@@ -14,6 +14,8 @@ export interface VisionAssertInput {
   reportId: string;
   caseTitle: string;
   caseUrl: string | null;
+  /** 用例绑定 web 服务的 origin（T7 中途 navigate 相对 url 拼接用）；无环境 web 服务时缺省。 */
+  caseWebOrigin?: string | null;
   expectedOutcome: string;
   vars: Record<string, string>;
   sensitiveVarKeys: string[];

@@ -9,7 +9,7 @@ vi.mock('../db/client.js', () => {
   };
 });
 
-import { resolveEnv, EnvMissing, EnvProjectMismatch, DecryptError } from './envContext.js';
+import { resolveEnv, EnvMissing, EnvProjectMismatch, DecryptError, WebServiceMissing } from './envContext.js';
 import { db } from '../db/client.js';
 import { encrypt } from '../lib/secret-crypto.js';
 
@@ -23,6 +23,7 @@ function mockTables(tables: Record<string, unknown[]>) {
       return {
         where: () => ({
           limit: () => Promise.resolve(rows),
+          orderBy: () => ({ limit: () => Promise.resolve(rows) }),
           then: (onFulfilled: (v: unknown[]) => unknown) => Promise.resolve(rows).then(onFulfilled),
         }),
       };
@@ -36,12 +37,20 @@ beforeEach(() => {
 });
 
 describe('resolveEnv', () => {
-  it('passes baseUrl through to ctx', async () => {
+  it('baseUrl 派生自默认 web 服务 origin', async () => {
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [{
+        id: 'obj-web', environmentId: 'env-1', objectType: 'web', label: '默认', isDefault: true,
+        payload: { name: 'frontend', scheme: 'https', host: 'staging.example.com' },
+      }],
+      project_versions: [],
+    });
     const env = await resolveEnv({ caseEnvId: 'env-1' });
     expect(env.baseUrl).toBe('https://staging.example.com');
   });
 
-  it('returns null baseUrl when env row has none', async () => {
+  it('returns null baseUrl when env has no web objects', async () => {
     mockTables({
       test_environments: [{ ...ENV_ROW, baseUrl: null }],
       environment_objects: [],
@@ -288,5 +297,62 @@ describe('resolveEnv', () => {
     const env = await resolveEnv({ caseEnvId: 'env-1' });
     expect(env.login).toEqual({ user: 'tom', password: 'p@ss', loginUrl: null });
     await env.close();
+  });
+});
+
+describe('webServices / resolveWebOrigin', () => {
+  it('构建 web 服务列表,resolveWebOrigin 默认取 isDefault', async () => {
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [
+        { id: 'obj-web-fe', environmentId: 'env-1', objectType: 'web', label: '前端', isDefault: true, payload: { name: 'frontend', scheme: 'http', host: '192.168.1.10', port: 8080 } },
+        { id: 'obj-web-be', environmentId: 'env-1', objectType: 'web', label: '后端', isDefault: false, payload: { name: 'backend', scheme: 'https', host: '192.168.1.11' } },
+      ],
+      project_versions: [],
+    });
+    const ctx = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(ctx.webServices.map((w) => w.origin).sort()).toEqual(['http://192.168.1.10:8080', 'https://192.168.1.11'].sort());
+    expect(ctx.resolveWebOrigin()).toBe('http://192.168.1.10:8080');
+    expect(ctx.resolveWebOrigin('backend')).toBe('https://192.168.1.11');
+    expect(ctx.baseUrl).toBe('http://192.168.1.10:8080');
+  });
+
+  it('ref 不存在抛 WebServiceMissing(带可用清单)', async () => {
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [
+        { id: 'obj-web-be', environmentId: 'env-1', objectType: 'web', label: '后端', isDefault: false, payload: { name: 'backend', scheme: 'https', host: '192.168.1.11' } },
+      ],
+      project_versions: [],
+    });
+    const ctx = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(() => ctx.resolveWebOrigin('nope')).toThrow(/nope/);
+    expect(() => ctx.resolveWebOrigin('nope')).toThrow(/backend/);
+    expect(() => ctx.resolveWebOrigin('nope')).toThrow(WebServiceMissing);
+  });
+
+  it('环境无 web 对象返回 null;baseUrl 同为 null(忽略 base_url 列)', async () => {
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [],
+      project_versions: [],
+    });
+    const ctx = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(ctx.resolveWebOrigin()).toBeNull();
+    expect(ctx.baseUrl).toBeNull();
+  });
+
+  it('默认端口省略:http:80 与 https:443 不带端口', async () => {
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [
+        { id: 'obj-web-plain', environmentId: 'env-1', objectType: 'web', label: '默认站', isDefault: false, payload: { name: 'plain', scheme: 'http', host: 'a.com', port: 80 } },
+        { id: 'obj-web-secure', environmentId: 'env-1', objectType: 'web', label: '安全站', isDefault: false, payload: { name: 'secure', scheme: 'https', host: 'b.com', port: 443 } },
+      ],
+      project_versions: [],
+    });
+    const ctx = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(ctx.webServices.find((w) => w.name === 'plain')!.origin).toBe('http://a.com');
+    expect(ctx.webServices.find((w) => w.name === 'secure')!.origin).toBe('https://b.com');
   });
 });

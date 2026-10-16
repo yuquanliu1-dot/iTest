@@ -203,20 +203,21 @@ describe('cases + steps', () => {
     expect(r.body[0].title).toBe('p1');
   });
 
-  it('GET /api/cases/:id resolves url by chain case > group > default env', async () => {
+  it('GET /api/cases/:id resolves url by case url → default env web origin', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
-    await pool.query(`INSERT INTO test_environments(project_id, name, is_default, base_url) VALUES ($1, '默认', true, 'https://proj.test')`, [projectId]);
+    const e = await pool.query(`INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认', true) RETURNING id`, [projectId]);
+    await pool.query(`INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1,'web','默认 Web','{"name":"web","scheme":"https","host":"proj.test","port":443}', true)`, [e.rows[0]!.id]);
     const c1 = await request(app).post('/api/cases').send({ title: 'inherit', groupId, versionId });
     const d1 = await request(app).get(`/api/cases/${c1.body.id}`);
     expect(d1.body.resolvedUrl).toBe('https://proj.test');
 
-    await pool.query(`UPDATE "groups" SET default_url = 'https://group.test' WHERE id = $1`, [groupId]);
-    const d2 = await request(app).get(`/api/cases/${c1.body.id}`);
-    expect(d2.body.resolvedUrl).toBe('https://group.test');
-
     const c2 = await request(app).post('/api/cases').send({ title: 'own', groupId, versionId, url: 'https://case.test' });
     const d3 = await request(app).get(`/api/cases/${c2.body.id}`);
     expect(d3.body.resolvedUrl).toBe('https://case.test');
+
+    const c3 = await request(app).post('/api/cases').send({ title: 'rel', groupId, versionId, url: '/admin' });
+    const d4 = await request(app).get(`/api/cases/${c3.body.id}`);
+    expect(d4.body.resolvedUrl).toBe('https://proj.test/admin');
   });
 
   it('PATCH /api/cases/:id moves case to another group', async () => {

@@ -26,7 +26,8 @@ describe('buildSpaceSummary', () => {
   it('拼出项目/版本/ref、环境、分组、需求与计数,且不含密钥', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     await pool.query(`UPDATE project_versions SET ref='release-1', ref_kind='tag' WHERE id=$1`, [versionId]);
-    await pool.query(`INSERT INTO test_environments(project_id, name, base_url, is_default) VALUES ($1,'生产','https://prod.example.com',true), ($1,'灰度','https://gray.example.com',false)`, [projectId]);
+    await pool.query(`INSERT INTO test_environments(project_id, name, is_default) VALUES ($1,'生产',true), ($1,'灰度',false)`, [projectId]);
+    await pool.query(`INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) SELECT id,'web','默认 Web',$2,true FROM test_environments WHERE project_id=$1 AND name='生产'`, [projectId, JSON.stringify({ name: 'web', scheme: 'https', host: 'prod.example.com', port: 443 })]);
     await pool.query(`INSERT INTO environment_objects(environment_id, object_type, payload) SELECT id,'db',$2 FROM test_environments WHERE project_id=$1 LIMIT 1`, [projectId, JSON.stringify({ host: 'h', password: 'SUPER-SECRET' })]);
     await pool.query(`INSERT INTO requirements(project_id, title, content) VALUES ($1,'登录模块','内容'), ($1,'支付模块','内容')`, [projectId]);
     await pool.query(`INSERT INTO test_cases(group_id, version_id, title) VALUES ($1,$2,'用例A'), ($1,$2,'用例B')`, [groupId, versionId]);
@@ -36,7 +37,7 @@ describe('buildSpaceSummary', () => {
     const s = await buildSpaceSummary(versionId);
     expect(s.projectId).toBe(projectId);
     expect(s.text).toContain('生产');
-    expect(s.text).toContain('https://prod.example.com');
+    expect(s.text).toContain('web 服务:web=https://prod.example.com');
     expect(s.text).toContain('release-1');
     expect(s.text).toContain('登录模块');
     expect(s.text).toContain('用例 2 条');

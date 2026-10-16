@@ -73,6 +73,7 @@ export interface CreateCaseInput {
   description?: string | null;
   priority?: string;
   url?: string | null;
+  webServiceRef?: string | null;
   windowStrategy?: string;
   windowWidth?: number | null;
   windowHeight?: number | null;
@@ -165,6 +166,7 @@ export interface UpdateCasePatch {
   priority?: string;
   status?: string;
   url?: string | null;
+  webServiceRef?: string | null;
   groupId?: string;
   scenarioId?: string | null;
   defaultEnvId?: string | null;
@@ -308,6 +310,8 @@ export async function searchCasesInVersion(versionId: string, o: { keyword?: str
       groupId: testCases.groupId,
       scenarioId: testCases.scenarioId,
       url: testCases.url,
+      webServiceRef: testCases.webServiceRef,
+      defaultEnvId: testCases.defaultEnvId,
       updatedAt: testCases.updatedAt,
     })
     .from(testCases)
@@ -317,15 +321,22 @@ export async function searchCasesInVersion(versionId: string, o: { keyword?: str
   if (o.groupId) out = out.filter((r) => r.groupId === o.groupId);
   const kw = o.keyword?.trim().toLowerCase();
   if (kw) out = out.filter((r) => r.title.toLowerCase().includes(kw));
-  return out.slice(0, o.limit ?? 50);
+  const limited = out.slice(0, o.limit ?? 50);
+  return await Promise.all(
+    limited.map(async (r) => ({
+      ...r,
+      webServiceRef: r.webServiceRef ?? null,
+      resolvedUrl: await resolveCaseUrl(r, { defaultEnvFallback: true }),
+    })),
+  );
 }
 
-export async function createGroup(projectId: string, input: { name: string; defaultUrl?: string | null }) {
+export async function createGroup(projectId: string, input: { name: string }) {
   const p = (await db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).limit(1))[0];
   if (!p) throw new HttpError(404, 'not_found', 'project not found');
   return (await db
     .insert(groups)
-    .values({ projectId, name: input.name, ...(input.defaultUrl !== undefined ? { defaultUrl: input.defaultUrl } : {}) })
+    .values({ projectId, name: input.name })
     .returning())[0]!;
 }
 

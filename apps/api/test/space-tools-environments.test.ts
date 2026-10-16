@@ -66,13 +66,16 @@ describe('manage_environments 工具', () => {
     expect(JSON.stringify(events)).not.toContain('SUPER-SECRET');
 
     const created = await tool.execute({
-      action: 'upsert', name: '生产', baseUrl: 'https://prod.example.com',
-      objects: [{ objectType: 'db', payload: { host: 'h', dbName: 'd', user: 'u' }, isDefault: true }],
+      action: 'upsert', name: '生产',
+      objects: [
+        { objectType: 'db', payload: { host: 'h', dbName: 'd', user: 'u' }, isDefault: true },
+        { objectType: 'web', payload: { name: 'web', scheme: 'https', host: 'prod.example.com' } },
+      ],
     });
     expect(created.ok).toBe(true);
     expect((created as { data: string }).data).not.toContain('SUPER-SECRET');
     const envId = (await pool.query(`SELECT id FROM test_environments WHERE name='生产'`)).rows[0]!.id as string;
-    const objId = (await pool.query(`SELECT id FROM environment_objects WHERE environment_id=$1`, [envId])).rows[0]!.id as string;
+    const objId = (await pool.query(`SELECT id FROM environment_objects WHERE environment_id=$1 AND object_type='db'`, [envId])).rows[0]!.id as string;
 
     events.length = 0;
     const secret = tool.execute({ action: 'set_secret', environmentId: envId, objectType: 'db', value: 'SUPER-SECRET' });
@@ -90,7 +93,7 @@ describe('manage_environments 工具', () => {
 
     const list = await tool.execute({ action: 'list' });
     expect((list as { data: string }).data).toContain('••••••••');
-    expect((list as { data: string }).data).toContain('https://prod.example.com');
+    expect((list as { data: string }).data).toContain('"host": "prod.example.com"');
   }, 30_000);
 
   it('set_secret 被拒 → payload 无 secret;对象不存在 → 不进确认直接报错', async () => {
@@ -125,29 +128,29 @@ describe('manage_environments 工具', () => {
     const seed = await seedProject(pool);
     const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await toolOf(ctx);
-    await tool.execute({ action: 'upsert', name: '灰度环境', baseUrl: 'https://old.example.com' });
+    await tool.execute({ action: 'upsert', name: '灰度环境' });
     const envId = (await pool.query(`SELECT id FROM test_environments WHERE name='灰度环境'`)).rows[0]!.id as string;
 
     events.length = 0;
-    const rejected = tool.execute({ action: 'upsert', environmentId: envId, name: '改名环境', baseUrl: 'https://new.example.com' });
+    const rejected = tool.execute({ action: 'upsert', environmentId: envId, name: '改名环境', isDefault: true });
     await untilConfirm(events);
     const req = events.find((e) => e.type === 'confirm_request') as Record<string, unknown>;
     expect(req).toMatchObject({ toolName: 'manage_environments', action: 'upsert', risk: 'update', summary: '更新环境「灰度环境」' });
     expect(String(req.diff)).toContain('name: 灰度环境 → 改名环境');
-    expect(String(req.diff)).toContain('baseUrl: https://old.example.com → https://new.example.com');
+    expect(String(req.diff)).toContain('isDefault: false → true');
     resolveConfirmation(String(req.confirmId), false);
     expect(await rejected).toMatchObject({ ok: false, error: '用户取消了该操作' });
-    const row = (await pool.query(`SELECT name, base_url FROM test_environments WHERE id=$1`, [envId])).rows[0]!;
+    const row = (await pool.query(`SELECT name, is_default FROM test_environments WHERE id=$1`, [envId])).rows[0]!;
     expect(row.name).toBe('灰度环境');
-    expect(row.base_url).toBe('https://old.example.com');
+    expect(row.is_default).toBe(false);
 
     events.length = 0;
-    const approved = tool.execute({ action: 'upsert', environmentId: envId, name: '改名环境', baseUrl: 'https://new.example.com' });
+    const approved = tool.execute({ action: 'upsert', environmentId: envId, name: '改名环境', isDefault: true });
     resolveConfirmation(await untilConfirm(events), true);
     expect(await approved).toMatchObject({ ok: true });
     const stage = events.find((e) => e.type === 'stage') as { diff?: string };
     expect(stage.diff).toContain('name: 灰度环境 → 改名环境');
-    expect((await pool.query(`SELECT name, base_url FROM test_environments WHERE id=$1`, [envId])).rows[0]).toMatchObject({ name: '改名环境', base_url: 'https://new.example.com' });
+    expect((await pool.query(`SELECT name, is_default FROM test_environments WHERE id=$1`, [envId])).rows[0]).toMatchObject({ name: '改名环境', is_default: true });
 
     // patch 为空、仅 objects 合并 → 保持自动执行,不进确认
     events.length = 0;
@@ -177,5 +180,26 @@ describe('manage_environments 工具', () => {
     expect(await pending).toMatchObject({ ok: true });
     expect((await pool.query(`SELECT id FROM test_environments WHERE id=$1`, [envId])).rowCount).toBe(0);
     expect((await pool.query(`SELECT default_env_id FROM test_cases WHERE title='c'`)).rows[0]!.default_env_id).toBeNull();
+  }, 30_000);
+
+  it('upsert 新建环境+web 对象:object_type=web,payload.name 落库,isDefault=true', async () => {
+    const seed = await seedProject(pool);
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx);
+
+    const created = await tool.execute({
+      action: 'upsert', name: 'web 环境',
+      objects: [{ objectType: 'web', label: '后端服务', payload: { name: 'backend', scheme: 'http', host: '1.2.3.4', port: 8080 }, isDefault: true }],
+    });
+    expect(created.ok).toBe(true);
+    const envId = (await pool.query(`SELECT id FROM test_environments WHERE name='web 环境'`)).rows[0]!.id as string;
+    const rows = (await pool.query(`SELECT object_type, label, payload, is_default FROM environment_objects WHERE environment_id=$1`, [envId])).rows as Array<{
+      object_type: string; label: string; payload: { name?: string }; is_default: boolean;
+    }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.object_type).toBe('web');
+    expect(rows[0]!.label).toBe('后端服务');
+    expect(rows[0]!.payload.name).toBe('backend');
+    expect(rows[0]!.is_default).toBe(true);
   }, 30_000);
 });

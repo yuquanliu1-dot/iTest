@@ -4,6 +4,9 @@ import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
+// finish 对 sensitive fill 走 AES-256-GCM 加密，独立跑本文件时无其它用例注入该键
+process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? Buffer.alloc(32, 1).toString('base64');
+
 let pg: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
@@ -153,27 +156,36 @@ describe('recorder routes', () => {
     expect(f.status).toBe(200);
     expect(f.body.inserted).toBe(4);
     const rows = await pool.query(
-      `SELECT "order", compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
+      `SELECT "order", compiled, secret_ciphertext, secret_iv, secret_tag FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
       [c.body.id],
     );
     const kinds = rows.rows.map((r: { compiled: Array<{ kind: string; value?: string }> }) => r.compiled[0]);
     expect(kinds.map((a: { kind: string }) => a.kind)).toEqual(['click', 'fill', 'click', 'fill']);
-    expect(kinds[1]!.value).toBe('admin123');
+    // sensitive fill：明文不进 compiled(value 已加密),compiled 仅标记 sensitive=true
+    expect((kinds[1] as { value?: string }).value).toBeUndefined();
     expect((kinds[1]! as { sensitive?: boolean }).sensitive).toBe(true);
     expect(kinds[3]!.value).toBe('changed');
+    // 明文落 secret_ciphertext（AES-256-GCM 三元组），解密回 'admin123'
+    const { decrypt } = await import('../src/lib/secret-crypto.js');
+    const merged = rows.rows[1] as { compiled: Array<{ kind: string }>; secret_iv: string; secret_tag: string; secret_ciphertext: string };
+    expect(merged.compiled[0]!.kind).toBe('fill');
+    expect(decrypt({ ciphertext: Buffer.from(merged.secret_ciphertext, 'base64'), iv: Buffer.from(merged.secret_iv, 'base64'), tag: Buffer.from(merged.secret_tag, 'base64') })).toBe('admin123');
   });
 
-  it('finish falls back to default env base_url when steps carry no url', async () => {
+  it('finish falls back to default env web origin when steps carry no url', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
-    await pool.query(`INSERT INTO test_environments(project_id, name, is_default, base_url) VALUES ($1, '默认', true, $2)`, [projectId, 'https://prod.example.com']);
+    const e = await pool.query(`INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认', true) RETURNING id`, [projectId]);
+    await pool.query(`INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1,'web','默认 Web','{"name":"web","scheme":"https","host":"prod.example.com"}',true)`, [e.rows[0]!.id]);
     const c = await request(app).post('/api/cases').send({ title: 'NVD', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'incognito' });
     const session = getSession(s.body.sessionId)!;
     session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] } });
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
-    const tcRows = await pool.query(`SELECT url FROM test_cases WHERE id = $1`, [c.body.id]);
-    expect(tcRows.rows[0]!.url).toBe('https://prod.example.com');
+    const tcRows = await pool.query(`SELECT url, web_service_ref FROM test_cases WHERE id = $1`, [c.body.id]);
+    // 兜底 origin 命中命名默认 web 服务对象(name=web) → 相对化 '/' + web_service_ref='web'
+    expect(tcRows.rows[0]!.url).toBe('/');
+    expect(tcRows.rows[0]!.web_service_ref).toBe('web');
     const stepRows = await pool.query(
       `SELECT compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
       [c.body.id],

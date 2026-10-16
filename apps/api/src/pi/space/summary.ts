@@ -2,9 +2,10 @@
  * 版本空间上下文摘要:经 system prompt 注入(线程创建时),让 AI 免查直答"有哪些环境/分组/需求"。
  * 上限防 prompt 膨胀;密钥只计数量,绝不进摘要。
  */
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../../db/client.js';
-import { executionPlans, groups, projectVersions, projects, requirements, testCases, testEnvironments } from '../../db/schema.js';
+import { environmentObjects, executionPlans, groups, projectVersions, projects, requirements, testCases, testEnvironments } from '../../db/schema.js';
+import { webEntriesOf } from '../../lib/resolve-url.js';
 
 export interface SpaceSummary {
   projectId: string;
@@ -35,15 +36,31 @@ export async function buildSpaceSummary(versionId: string): Promise<SpaceSummary
   lines.push(`项目:${v.projectName} / 版本:${v.versionName}${refText}`);
 
   const envs = await db
-    .select({ name: testEnvironments.name, baseUrl: testEnvironments.baseUrl, isDefault: testEnvironments.isDefault })
+    .select({ id: testEnvironments.id, name: testEnvironments.name, isDefault: testEnvironments.isDefault })
     .from(testEnvironments)
     .where(eq(testEnvironments.projectId, v.projectId))
     .limit(MAX_ENVS + 1);
+  const shownEnvs = envs.slice(0, MAX_ENVS);
+  const webObjs = shownEnvs.length
+    ? await db.select({ environmentId: environmentObjects.environmentId, label: environmentObjects.label, isDefault: environmentObjects.isDefault, payload: environmentObjects.payload })
+        .from(environmentObjects)
+        .where(and(eq(environmentObjects.objectType, 'web'), inArray(environmentObjects.environmentId, shownEnvs.map((e) => e.id))))
+    : [];
+  const webByEnv = new Map<string, Array<{ name: string | null; origin: string; isDefault: boolean }>>();
+  for (const o of webObjs) {
+    const list = webByEnv.get(o.environmentId) ?? [];
+    for (const w of webEntriesOf([o])) list.push({ name: w.name, origin: w.origin, isDefault: w.isDefault });
+    webByEnv.set(o.environmentId, list);
+  }
   if (envs.length === 0) {
     lines.push('环境:无');
   } else {
-    const parts = envs.slice(0, MAX_ENVS).map((e) => `${e.name}${e.baseUrl ? `(${e.baseUrl})` : ''}${e.isDefault ? '[默认]' : ''}`);
+    const parts = shownEnvs.map((e) => `${e.name}${e.isDefault ? '[默认]' : ''}`);
     lines.push(`环境:${parts.join('、')}${envs.length > MAX_ENVS ? ' …' : ''}`);
+    for (const e of shownEnvs) {
+      const webServices = webByEnv.get(e.id) ?? [];
+      if (webServices.length) lines.push(`web 服务:${webServices.map((w) => `${w.name ?? (w.isDefault ? '(默认)' : '(未命名)')}=${w.origin}`).join(', ')}`);
+    }
   }
 
   const gs = await db

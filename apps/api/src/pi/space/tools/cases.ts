@@ -148,7 +148,6 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (!v.groupName) return { ok: false, error: 'create_group 需要 groupName' };
               const g = await svc.createGroup(ctx.projectId, {
                 name: v.groupName,
-                ...(v.groupDefaultUrl !== undefined ? { defaultUrl: v.groupDefaultUrl } : {}),
               });
               emitStage(ctx, { kind: 'group', id: g.id, action: 'create' });
               return { ok: true, data: `已创建分组「${g.name}」(${g.id})` };

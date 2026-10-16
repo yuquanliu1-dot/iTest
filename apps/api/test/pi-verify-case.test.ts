@@ -181,9 +181,13 @@ beforeEach(async () => {
   groupId = seed.groupId;
   versionId = seed.versionId;
   // 每个用例都要求环境可解析（resolveEnv 需要）：默认环境无 login 凭据
-  await pool.query(
-    `INSERT INTO test_environments(project_id, name, is_default, base_url) VALUES ($1, '默认环境', true, 'http://env.example')`,
+  const seedEnv = await pool.query(
+    `INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认环境', true) RETURNING id`,
     [projectId],
+  );
+  await pool.query(
+    `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', '默认', '{"name":"web","scheme":"http","host":"env.example"}', true)`,
+    [seedEnv.rows[0]!.id],
   );
 });
 
@@ -239,7 +243,7 @@ async function seedLoginObject(): Promise<void> {
   // 先降级 beforeEach 插入的默认环境（唯一部分索引 test_environments_project_default_uq），再插新默认
   await pool.query(`UPDATE test_environments SET is_default = false WHERE project_id = $1`, [projectId]);
   const env = await pool.query(
-    `INSERT INTO test_environments(project_id, name, is_default, base_url) VALUES ($1, '登录环境', true, 'http://env.example') RETURNING id`,
+    `INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '登录环境', true) RETURNING id`,
     [projectId],
   );
   const payload = {
@@ -250,6 +254,10 @@ async function seedLoginObject(): Promise<void> {
   await pool.query(
     `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'login', '默认', $2::jsonb, true)`,
     [env.rows[0]!.id, JSON.stringify(payload)],
+  );
+  await pool.query(
+    `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', '默认', '{"name":"web","scheme":"http","host":"env.example"}', true)`,
+    [env.rows[0]!.id],
   );
 }
 
