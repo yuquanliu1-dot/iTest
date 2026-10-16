@@ -31,7 +31,7 @@ export default function CollapsiblePanel({
         <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} style={{ flexShrink: 0 }} />
         {title}
       </button>
-      {open && <div className="min-h-0">{children}</div>}
+      {open && <div className="flex-1 min-h-0">{children}</div>}
     </div>
   );
 }
