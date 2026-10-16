@@ -39,6 +39,7 @@ async function resolveDetectionUrl(c: LoginPrepareConfig): Promise<string | null
     url: testCases.url,
     webServiceRef: testCases.webServiceRef,
     groupId: testCases.groupId,
+    defaultEnvId: testCases.defaultEnvId,
   }).from(testCases).where(eq(testCases.id, c.firstCaseId)))[0];
   if (!row) return null;
   return resolveCaseUrl(row, { defaultEnvFallback: true });
