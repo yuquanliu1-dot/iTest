@@ -289,7 +289,14 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
     case 'navigate': {
       const { value, missing } = substituteVars(action.url, vars);
       if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.url}")`);
-      await page.goto(value, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      // 相对 url(/开头)拼用例绑定 web 服务 origin;绝对直通;其余形态报错(spec 2026-10-16)。
+      const target = value.startsWith('/')
+        ? `${opts.ctx.caseWebOrigin ?? ''}${value}`
+        : value;
+      if (!/^https?:\/\//.test(target)) {
+        throw new Error(`invalid-navigate-url: ${target}${value.startsWith('/') ? '(环境未配置 web 服务,无法拼接相对地址)' : ''}`);
+      }
+      await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 30000 });
       // navigate 同样需要等 SPA hydrate 后再让后续步骤探测元素（与 init-goto 行为对齐）。
       await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
       return;
