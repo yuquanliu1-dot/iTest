@@ -70,7 +70,7 @@ async function assertWebPayload(
   if (name !== null && name.length > 64) {
     throw new HttpError(400, 'invalid_web_name', 'web 服务 name 长度不能超过 64');
   }
-  if (payload.scheme !== undefined && payload.scheme !== 'http' && payload.scheme !== 'https') {
+  if (payload.scheme !== undefined && payload.scheme !== null && payload.scheme !== 'http' && payload.scheme !== 'https') {
     throw new HttpError(400, 'invalid_web_scheme', 'web 服务 scheme 只能是 http 或 https');
   }
   if (typeof payload.host !== 'string' || payload.host.trim().length === 0) {
