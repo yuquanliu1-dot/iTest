@@ -5,6 +5,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import { environmentObjects, executionPlans, groups, projectVersions, projects, requirements, testCases, testEnvironments } from '../../db/schema.js';
+import { webEntriesOf } from '../../lib/resolve-url.js';
 
 export interface SpaceSummary {
   projectId: string;
@@ -41,22 +42,14 @@ export async function buildSpaceSummary(versionId: string): Promise<SpaceSummary
     .limit(MAX_ENVS + 1);
   const shownEnvs = envs.slice(0, MAX_ENVS);
   const webObjs = shownEnvs.length
-    ? await db.select({ environmentId: environmentObjects.environmentId, payload: environmentObjects.payload })
+    ? await db.select({ environmentId: environmentObjects.environmentId, label: environmentObjects.label, isDefault: environmentObjects.isDefault, payload: environmentObjects.payload })
         .from(environmentObjects)
         .where(and(eq(environmentObjects.objectType, 'web'), inArray(environmentObjects.environmentId, shownEnvs.map((e) => e.id))))
     : [];
-  const webByEnv = new Map<string, Array<{ name: string | null; origin: string }>>();
+  const webByEnv = new Map<string, Array<{ name: string | null; origin: string; isDefault: boolean }>>();
   for (const o of webObjs) {
-    const p = (o.payload ?? {}) as { name?: unknown; scheme?: unknown; host?: unknown; port?: unknown };
-    if (typeof p.host !== 'string' || p.host.length === 0) continue;
-    const scheme = p.scheme === 'https' ? 'https' : 'http';
-    const port = typeof p.port === 'number' ? p.port : (scheme === 'https' ? 443 : 80);
-    const defaultPort = (scheme === 'http' && port === 80) || (scheme === 'https' && port === 443);
     const list = webByEnv.get(o.environmentId) ?? [];
-    list.push({
-      name: typeof p.name === 'string' && p.name.length > 0 ? p.name : null,
-      origin: `${scheme}://${p.host}${defaultPort ? '' : `:${port}`}`,
-    });
+    for (const w of webEntriesOf([o])) list.push({ name: w.name, origin: w.origin, isDefault: w.isDefault });
     webByEnv.set(o.environmentId, list);
   }
   if (envs.length === 0) {
@@ -66,7 +59,7 @@ export async function buildSpaceSummary(versionId: string): Promise<SpaceSummary
     lines.push(`环境:${parts.join('、')}${envs.length > MAX_ENVS ? ' …' : ''}`);
     for (const e of shownEnvs) {
       const webServices = webByEnv.get(e.id) ?? [];
-      if (webServices.length) lines.push(`web 服务:${webServices.map((w) => `${w.name ?? '(默认)'}=${w.origin}`).join(', ')}`);
+      if (webServices.length) lines.push(`web 服务:${webServices.map((w) => `${w.name ?? (w.isDefault ? '(默认)' : '(未命名)')}=${w.origin}`).join(', ')}`);
     }
   }
 
