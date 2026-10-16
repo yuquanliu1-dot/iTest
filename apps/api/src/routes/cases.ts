@@ -18,6 +18,7 @@ const CaseBodyBase = z.object({
   groupId: z.string().uuid(),
   versionId: z.string().uuid().optional(),
   url: z.string().optional(),
+  webServiceRef: z.string().max(64).nullable().optional(),
   windowStrategy: z.enum(['maximize', 'current', 'custom']).default('maximize'),
   windowWidth: z.number().int().min(200).max(10000).optional(),
   windowHeight: z.number().int().min(200).max(10000).optional(),
@@ -49,6 +50,7 @@ const PatchBody = CaseBodyBase.partial()
     status: CaseStatusEnum.optional(),
     // 用例级 init URL 允许置空（清除覆盖，回到分组/项目继承链）
     url: z.string().url().nullable().optional(),
+    webServiceRef: z.string().max(64).nullable().optional(),
     // 用例默认 environment id；null 表示清空，undefined 表示不动
     defaultEnvId: z.string().uuid().nullable().optional(),
     // 绑定数据集 id；null 表示解绑，undefined 表示不动
