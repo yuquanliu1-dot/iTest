@@ -590,7 +590,14 @@ function ProjectRow({
                     // 版本显式绑定的环境优先，未绑定走项目默认环境（与执行期解析一致）
                     const envs = envsQ.data ?? [];
                     const env = envs.find((e) => e.id === v.environmentId) ?? envs.find((e) => e.isDefault);
-                    const envUrl = env?.baseUrl ?? null;
+                    // 「打开环境域名」取自环境 web 服务 origin（优先默认服务）
+                    const envUrl = (() => {
+                      const web = env?.objects.find((o) => o.objectType === 'web' && o.isDefault)
+                        ?? env?.objects.find((o) => o.objectType === 'web');
+                      const p = (web?.payload ?? {}) as { scheme?: string; host?: string; port?: number };
+                      if (!p.host) return null;
+                      return `${p.scheme === 'https' ? 'https' : 'http'}://${p.host}${p.port != null ? `:${p.port}` : ''}`;
+                    })();
                     return (
                     <li
                       key={v.id}
