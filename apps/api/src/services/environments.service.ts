@@ -134,13 +134,20 @@ export async function createEnvironment(
   return db.transaction(async (tx) => {
     const inserted = (await tx.insert(testEnvironments).values({ projectId, name: input.name, baseUrl: input.baseUrl ?? null, ...(createdByUserId ? { createdByUserId } : {}) }).returning())[0]!;
     if (input.objects?.length) {
-      await tx.insert(environmentObjects).values(input.objects.map((o) => ({
-        environmentId: inserted.id,
-        objectType: o.objectType,
-        label: o.label ?? '默认',
-        payload: normalizeObjectPayload(o.objectType, o.payload),
-        isDefault: o.isDefault ?? false,
-      })));
+      // 逐条先校验再插入:web 对象走 assertWebPayload;同事务内后续校验能看到已插入行,
+      // 同请求里两个同名 web 对象因此同样被拒(409)。
+      for (const o of input.objects) {
+        if (o.objectType === 'web') {
+          await assertWebPayload(tx, inserted.id, o.payload);
+        }
+        await tx.insert(environmentObjects).values({
+          environmentId: inserted.id,
+          objectType: o.objectType,
+          label: o.label ?? '默认',
+          payload: normalizeObjectPayload(o.objectType, o.payload),
+          isDefault: o.isDefault ?? false,
+        });
+      }
     }
     return inserted;
   }).catch((e) => {

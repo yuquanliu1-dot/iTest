@@ -160,5 +160,41 @@ describe('environments.service', () => {
         objectType: 'web', payload: { name: 'web', scheme: 'http' },
       })).rejects.toThrow(/host/);
     }, 30_000);
+
+    it('createEnvironment objects[] 带合法 web 对象创建成功', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, {
+        name: 'W',
+        objects: [{ objectType: 'web', payload: { name: 'api', scheme: 'https', host: '192.168.1.11', port: 8081 }, isDefault: true }],
+      });
+      const detail = await svc.getEnvironment(env.id);
+      const web = detail!.objects.find((o) => o.objectType === 'web');
+      expect((web!.payload as Record<string, unknown>).name).toBe('api');
+    }, 30_000);
+
+    it('createEnvironment objects[] 两个同名 web 对象被拒', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      await expect(svc.createEnvironment(projectId, {
+        name: 'W',
+        objects: [
+          { objectType: 'web', payload: { name: 'dup', scheme: 'http', host: 'a.com' } },
+          { objectType: 'web', label: '第二个', payload: { name: 'dup', scheme: 'http', host: 'b.com' } },
+        ],
+      })).rejects.toMatchObject({ status: 409, code: 'web_name_conflict' });
+    }, 30_000);
+
+    it('createEnvironment objects[] 混入非法 host 的 web 对象被拒', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      await expect(svc.createEnvironment(projectId, {
+        name: 'W',
+        objects: [
+          { objectType: 'db', payload: { host: 'h' } },
+          { objectType: 'web', payload: { name: 'web', scheme: 'http' } },
+        ],
+      })).rejects.toThrow(/host/);
+    }, 30_000);
   });
 });
