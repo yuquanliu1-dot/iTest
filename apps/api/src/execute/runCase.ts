@@ -251,7 +251,6 @@ async function runCaseOnceInner(
     resolved = envCtx
       ? await resolveCaseUrl(caseRow, { envCtx })
       : await resolveCaseUrl(caseRow, { defaultEnvFallback: true });
-    caseWebOrigin = envCtx ? envCtx.resolveWebOrigin(caseRow.webServiceRef ?? null) : null;
   } catch (e) {
     if (e instanceof WebServiceMissing) {
       const stepResults: ExecStepResult[] = [{
@@ -265,6 +264,15 @@ async function runCaseOnceInner(
       return { reportId, status: 'failed' };
     }
     throw e;
+  }
+  // 绝对 url 直通用例:bad webServiceRef 不参与初始导航,容忍为 null(T7 相对 navigate 步骤级再报错)。
+  // WebServiceMissing 消息此刻丢弃是刻意的——相对 url 用例已在上方 resolveCaseUrl 抛过,不会到这里。
+  if (envCtx) {
+    try {
+      caseWebOrigin = envCtx.resolveWebOrigin(caseRow.webServiceRef ?? null);
+    } catch {
+      caseWebOrigin = null;
+    }
   }
   const targetUrl = resolved && /^https?:\/\//.test(resolved) ? resolved : undefined;
 

@@ -990,6 +990,28 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
     expect(mocked.__page.goto.mock.calls.some((c) => c[0] === 'http://10.0.0.1:8080/login')).toBe(true);
   });
 
+  it('web_<name> 系统变量注入 → navigate 步骤 {{web_frontend}} 替换为服务 origin,报告 passed', async () => {
+    const envId = await insertEnv('web-env-inject', [
+      { label: '前端', payload: { name: 'frontend', scheme: 'http', host: '10.0.0.1', port: 8080 }, isDefault: true },
+    ]);
+    // 绝对 case.url 直通(不走初始导航拼 origin);navigate 步骤的 {{web_frontend}} 依赖 T6 注入的
+    // web_<name> 系统变量替换成 origin(=10.0.0.1:8080),而非写死。
+    const caseId = await insertCase('http://init.example.com', envId);
+    await pool.query(
+      `INSERT INTO test_steps(case_id, "order", source, compiled) VALUES ($1, 1, 'manual', $2::jsonb)`,
+      [caseId, JSON.stringify([{ kind: 'navigate', url: '{{web_frontend}}/login' }])],
+    );
+
+    mocked.__page.goto.mockClear();
+    const { runCase } = await import('../src/execute/runCase.js');
+    const res = await runCase(caseId);
+    await waitReportDone(caseId);
+
+    expect(res.status).toBe('passed');
+    // substituteVars 把 {{web_frontend}} → http://10.0.0.1:8080,再拼 /login 成完整导航地址。
+    expect(mocked.__page.goto.mock.calls.some((c) => c[0] === 'http://10.0.0.1:8080/login')).toBe(true);
+  });
+
   it('环境无 web 对象 + 相对 url → WebServiceMissing 失败报告', async () => {
     const envId = await insertEnv('no-web-env', []);
     const caseId = await insertCase('/login', envId);
