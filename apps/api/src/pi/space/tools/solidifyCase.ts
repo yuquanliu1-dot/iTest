@@ -175,8 +175,8 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           const resolvedUrl = stagedCase
             ? (effectiveCase.url ?? envCtx.baseUrl)
             : await resolveCaseUrl(
-                { url: effectiveCase.url, groupId: dbCase!.groupId },
-                { envBaseUrl: envCtx.baseUrl },
+                { url: effectiveCase.url, groupId: dbCase!.groupId, webServiceRef: dbCase!.webServiceRef ?? null },
+                { envCtx },
               );
           const targetUrl = resolvedUrl && /^https?:\/\//.test(resolvedUrl) ? resolvedUrl : undefined;
           browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });

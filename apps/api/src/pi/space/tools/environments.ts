@@ -21,12 +21,12 @@ const Actions = z.object({
   baseUrl: z.string().max(2000).nullable().optional(),
   isDefault: z.boolean().optional(),
   objects: z.array(z.object({
-    objectType: z.enum(['db', 'syslog', 'login']),
+    objectType: z.enum(['db', 'syslog', 'login', 'web']),
     label: z.string().max(120).optional(),
     payload: z.record(z.unknown()),
     isDefault: z.boolean().optional(),
   })).max(10).optional(),
-  objectType: z.enum(['db', 'syslog', 'login']).optional(), // set_secret 用
+  objectType: z.enum(['db', 'syslog', 'login', 'web']).optional(), // set_secret 用
   label: z.string().max(120).optional(), // set_secret 用(缺省「默认」)
   value: z.string().min(1).max(8000).optional(), // set_secret 明文(仅进加密,不进任何输出)
 });
@@ -36,7 +36,7 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
     {
       name: 'manage_environments',
       description:
-        '测试环境管理。action=list(项目环境全集,对象凭据已掩码)| get(environmentId)| upsert(新建或更新环境与对象字段:environmentId 缺省=新建需 name;objects 按 objectType+label 合并;payload 禁带 password/privateKey)| set_secret(environmentId+objectType+value,需用户确认,值不回显)| delete(environmentId,需用户确认)。',
+        '测试环境管理。action=list(项目环境全集,对象凭据已掩码)| get(environmentId)| upsert(新建或更新环境与对象字段:environmentId 缺省=新建需 name;objects 按 objectType+label 合并;payload 禁带 password/privateKey)| set_secret(environmentId+objectType+value,需用户确认,值不回显)| delete(environmentId,需用户确认)。 web 对象 payload:{"name":"backend"(可选,英文标识,用例可绑定),"scheme":"http|https","host":"1.2.3.4","port":8080(可选)}。一个环境可有多个 web 服务(如前端+后端在不同主机),其中至多一个 isDefault。',
       parameters: Type.Object({
         action: Type.Union([Type.Literal('list'), Type.Literal('get'), Type.Literal('upsert'), Type.Literal('set_secret'), Type.Literal('delete')]),
         environmentId: Type.Optional(Type.String()),
@@ -44,12 +44,12 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
         baseUrl: Type.Optional(Type.Union([Type.String(), Type.Null()])),
         isDefault: Type.Optional(Type.Boolean()),
         objects: Type.Optional(Type.Array(Type.Object({
-          objectType: Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('login')]),
+          objectType: Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('login'), Type.Literal('web')]),
           label: Type.Optional(Type.String()),
           payload: Type.Record(Type.String(), Type.Unknown()),
           isDefault: Type.Optional(Type.Boolean()),
         }), { maxItems: 10 })),
-        objectType: Type.Optional(Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('login')])),
+        objectType: Type.Optional(Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('login'), Type.Literal('web')])),
         label: Type.Optional(Type.String()),
         value: Type.Optional(Type.String()),
       }),
