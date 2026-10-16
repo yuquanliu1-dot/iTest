@@ -38,6 +38,9 @@ export const testCases = pgTable('test_cases', {
   groupId: uuid('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
   versionId: uuid('version_id').notNull().references(() => projectVersions.id, { onDelete: 'restrict' }),
   url: text('url'),
+  /** 用例绑定的 web 服务对象标识(environment_objects objectType='web' 的 payload.name);
+   *  空=用环境默认 web 服务。执行时与相对 url 拼绝对地址。 */
+  webServiceRef: varchar('web_service_ref', { length: 64 }),
   title: varchar('title', { length: 200 }).notNull(),
   description: text('description'),
   priority: varchar('priority', { length: 20 }).notNull().default('P1'),
