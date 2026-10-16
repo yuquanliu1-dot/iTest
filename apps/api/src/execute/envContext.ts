@@ -96,6 +96,8 @@ export interface WebServiceEntry {
 
 export interface EnvCtx {
   envId: string;
+  /** 环境显示名（WebServiceMissing 等用户可见消息带名;与 resolve-url 的 ResolveUrlEnv 对齐）。 */
+  envName: string;
   /** 全部 web 服务对象(objectType='web')。 */
   webServices: WebServiceEntry[];
   /** ref 非空按 name 精确匹配(找不到抛 WebServiceMissing);空取 isDefault→最早。
@@ -268,6 +270,7 @@ export async function resolveEnv(
 
   return {
     envId,
+    envName: env.name,
     webServices,
     resolveWebOrigin,
     get baseUrl() { return resolveWebOrigin(); },

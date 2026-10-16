@@ -39,7 +39,7 @@ function resolverOf(entries: WebServiceEntry[], envName: string) {
       const hit = entries.find((w) => w.name === ref);
       if (!hit) {
         const list = entries.filter((w) => w.name).map((w) => w.name).join('、') || '(无命名服务)';
-        throw new WebServiceMissing(`环境「${envName}」不存在 web 服务 ${ref}，可用：${list}`);
+        throw new WebServiceMissing(`环境「${envName}」不存在 web 服务 ${ref},可用:${list}`);
       }
       return hit.origin;
     }
@@ -108,5 +108,11 @@ export async function resolveCaseUrl(
     if (caseRow.url) throw new WebServiceMissing(`环境「${env.envName}」未配置 web 服务，请到项目环境页添加`);
     return null; // 空 url + 无服务：维持 about:blank 开始的现状
   }
-  return caseRow.url ? `${origin}${caseRow.url}` : origin;
+  if (!caseRow.url) return origin;
+  // 只对 / 开头的相对 url 拼 origin；非绝对、非空、非 / 开头的 url 一律拒绝（避免拼出
+  // http://origin/about:blank 之类，统一为绝对 http(s) 或 / 开头两种合法形态）。
+  if (!caseRow.url.startsWith('/')) {
+    throw new WebServiceMissing(`环境「${env.envName}」:用例 url 需为绝对 http(s) 地址或以 / 开头`);
+  }
+  return `${origin}${caseRow.url}`;
 }

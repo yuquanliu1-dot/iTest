@@ -10,6 +10,7 @@ import type { WindowStrategy, PreflightReport } from '@itest/shared';
 import { WebEngine } from './webEngine.js';
 import { MobileEngine } from './mobileEngine.js';
 import { EngineUnavailable, type Engine, type EngineInput } from './engine.js';
+import { WebServiceMissing } from './envContext.js';
 import { readAiFallbackSettings } from './aiFallback.js';
 
 /**
@@ -242,10 +243,29 @@ async function runCaseOnceInner(
     throw e;
   }
 
-  // 初始导航由用例级 init URL（test_cases.url → 分组.default_url → 已解析环境.base_url）保证。
-  // 回放前 always goto 一次，执行器内部对首条同 URL navigate 做去重（cdp.ts init-goto dedupe），
-  // 避免与录制残留的首步重复。
-  const resolved = await resolveCaseUrl(caseRow, { envBaseUrl: envCtx?.baseUrl });
+  // 初始导航:绝对 url 直通;相对 url 由环境 web 服务拼 origin(spec 2026-10-16)。
+  // WebServiceMissing 与 EnvMissing 同呈现:单步失败报告。
+  let resolved: string | null = null;
+  let caseWebOrigin: string | null = null;
+  try {
+    resolved = envCtx
+      ? await resolveCaseUrl(caseRow, { envCtx })
+      : await resolveCaseUrl(caseRow, { defaultEnvFallback: true });
+    caseWebOrigin = envCtx ? envCtx.resolveWebOrigin(caseRow.webServiceRef ?? null) : null;
+  } catch (e) {
+    if (e instanceof WebServiceMissing) {
+      const stepResults: ExecStepResult[] = [{
+        order: 1, status: 'failed', durationMs: 0,
+        error: e.message, failureReason: 'WebServiceMissing', humanMessage: e.message,
+      }];
+      await db.update(reports)
+        .set({ status: 'failed', durationMs: 0, stepResults: stepResults as object, summary: e.message })
+        .where(eq(reports.id, reportId));
+      if (envCtx) envCtx.close().catch(() => undefined);
+      return { reportId, status: 'failed' };
+    }
+    throw e;
+  }
   const targetUrl = resolved && /^https?:\/\//.test(resolved) ? resolved : undefined;
 
   const startedAt = Date.now();
@@ -287,6 +307,12 @@ async function runCaseOnceInner(
       // AI 降级兜底用：行级自然语言指令（正常机械回放不读）。
       instruction: s.instruction,
     }));
+    // web_<name> 系统变量：环境 web 服务 origin（覆盖同名数据集变量；web_ 为保留前缀）。
+    const webVars: Record<string, string> = {};
+    for (const w of envCtx?.webServices ?? []) {
+      if (w.name) webVars[`web_${w.name}`] = w.origin;
+    }
+    const initialVars = rowPlan ? { ...rowPlan.vars, ...webVars } : (Object.keys(webVars).length ? webVars : undefined);
     const execCtx = {
       reportId,
       projectId,
@@ -296,8 +322,10 @@ async function runCaseOnceInner(
       caseTitle: caseRow.title,
       caseUrl: caseRow.url ?? null,
       ...(rowPlan
-        ? { initialVars: rowPlan.vars, sensitiveVarKeys: rowPlan.sensitiveVarKeys }
+        ? { sensitiveVarKeys: rowPlan.sensitiveVarKeys }
         : {}),
+      ...(initialVars ? { initialVars } : {}),
+      ...(caseWebOrigin ? { caseWebOrigin } : {}),
       ...(opts?.liveView ? { liveView: opts.liveView } : {}),
       ...(aiFallback.compileMissing || aiFallback.locatorFailed ? { aiFallback } : {}),
     };
@@ -322,7 +350,9 @@ async function runCaseOnceInner(
         appRef: caseRow.appRef ?? null,
         deviceTargetId: caseRow.mobileDeviceTargetId ?? null,
         mobileOs,
-        ...(rowPlan ? { initialVars: rowPlan.vars, sensitiveVarKeys: rowPlan.sensitiveVarKeys } : {}),
+        ...(rowPlan ? { sensitiveVarKeys: rowPlan.sensitiveVarKeys } : {}),
+        ...(initialVars ? { initialVars } : {}),
+        ...(caseWebOrigin ? { caseWebOrigin } : {}),
       };
       try {
         await engine.prepare(engineInput);
@@ -387,7 +417,9 @@ async function runCaseOnceInner(
         deviceTargetId: caseRow.mobileDeviceTargetId ?? null,
         mobileOs,
         ...(opts?.liveView ? { liveView: opts.liveView } : {}),
-        ...(rowPlan ? { initialVars: rowPlan.vars, sensitiveVarKeys: rowPlan.sensitiveVarKeys } : {}),
+        ...(rowPlan ? { sensitiveVarKeys: rowPlan.sensitiveVarKeys } : {}),
+        ...(initialVars ? { initialVars } : {}),
+        ...(caseWebOrigin ? { caseWebOrigin } : {}),
         ...(aiFallback.compileMissing || aiFallback.locatorFailed ? { aiFallback } : {}),
       };
       try {
