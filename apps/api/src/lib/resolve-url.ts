@@ -105,7 +105,7 @@ export async function resolveCaseUrl(
   if (!env) return null;
   const origin = env.resolveWebOrigin(caseRow.webServiceRef ?? null);
   if (!origin) {
-    if (caseRow.url) throw new WebServiceMissing(`环境「${env.envName}」未配置 web 服务，请到项目环境页添加`);
+    if (caseRow.url) throw new WebServiceMissing(`环境「${env.envName}」未配置 web 服务,请到项目环境页添加`);
     return null; // 空 url + 无服务：维持 about:blank 开始的现状
   }
   if (!caseRow.url) return origin;
