@@ -1076,7 +1076,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
             return { ok: true, data: rdata };
           }
-          const failed = stepResults[failedIndex]!;
+          // resume 轮 stepResults 只从 resumeIndex 起收集（局部下标），failedIndex 是全局步序，
+          // 二者差一个 resumeIndex 偏移——直接取 stepResults[failedIndex] 会是 undefined（
+          // "Cannot read properties of undefined (reading 'order')"）
+          const failed = stepResults[failedIndex - resumeIndex]!;
           const failedStep = effectiveSteps[failedIndex]!;
           const failedHint = summarizeStaticReports(staticByStep[failedIndex] ?? []);
           // 归因全交 LLM：失败页候选命中 + 浮层 + 元素清单

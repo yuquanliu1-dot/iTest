@@ -363,6 +363,51 @@ describe('verify_case 逐步 AI 执行编排', () => {
     expect(end.cacheSaved).toBe(true);
   });
 
+  it('resume 轮后缀步失败 → 响应仍 ok:true（回归：stepResults 局部下标 vs failedIndex 全局下标）', async () => {
+    // prod228 实测暴露：第 1 轮步 1 过 / 步 2 败(confirmedThrough=1)后,第 2 轮 resume 前缀、
+    // 步 2 再次失败时,旧代码 stepResults[failedIndex] 越过局部数组头(undefined→读 .order 抛错)。
+    const caseId = await seedCase({
+      steps: [
+        CLICK_COMPILED, // 步 1:count=1 命中,AI 相通过
+        [{ kind: 'click', locator: [{ strategy: 'css', value: '.ghost-element' }] }], // 步 2:pre-check 命中 0 失败
+      ],
+    });
+    const { __testState } = (await import('playwright-core')) as unknown as { __testState: { zeroLocators: string[] } };
+    __testState.zeroLocators.push('.ghost-element');
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+
+    // 第 1 轮：步 1 过、步 2 pre-check 失败
+    const r1 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r1.ok).toBe(true);
+    if (r1.ok) {
+      const d1 = JSON.parse(r1.data!);
+      expect(d1.result).toBe('failed');
+      expect(d1.failure.failureReason).toBe('LocatorMismatch');
+    }
+
+    // 第 2 轮：resume 步 1(机械回放,不重跑 AI),步 2 仍失败——必须 ok:true 带完整 failure,而非抛错
+    const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r2.ok, r2.ok ? '' : r2.error).toBe(true);
+    if (r2.ok) {
+      const d2 = JSON.parse(r2.data!);
+      expect(d2.result).toBe('failed');
+      expect(d2.resumeFrom).toBe(1);
+      expect(d2.steps).toHaveLength(2);
+      expect(d2.steps[0].status).toBe('passed');
+      expect(d2.steps[1].status).toBe('failed');
+      expect(d2.failure.stepOrder).toBe(2);
+      expect(d2.failure.failureReason).toBe('LocatorMismatch');
+      expect(d2.failure.error).toContain('.ghost-element');
+      expect(d2.failure.evidence).toMatchObject({
+        probes: [{ strategy: 'css', value: '.ghost-element', hitCount: 0 }],
+      });
+    }
+    // 前缀不重跑 AI：两轮合计只有第 1 轮步 1 调过 runAiTask 一次
+    expect(vi.mocked(runAiTask)).toHaveBeenCalledTimes(1);
+  });
+
   it('配置 login 凭据：instruction 含占位符不含明文，valueSub 还原真实值 → login logged-in', async () => {
     await seedLoginObject();
     const caseId = await seedCase({ steps: [CLICK_COMPILED] });
