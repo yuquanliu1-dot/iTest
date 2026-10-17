@@ -14,6 +14,8 @@
   "executeDone": "执行完成",
   "deletedCases": "已删除 {{count}} 条用例",
   "deletedCases_other": "已删除 {{count}} 条用例",
+  "batchDeleteButton": "删除 {{count}} 条用例",
+  "batchDeleteButton_other": "删除 {{count}} 条用例",
   "updatedCases": "已更新 {{count}} 条",
   "updatedCases_other": "已更新 {{count}} 条",
   "priority": "优先级",

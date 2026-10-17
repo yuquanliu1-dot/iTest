@@ -783,7 +783,7 @@ export default function GroupsPage() {
 							disabled={batchDeleteCases.isPending || selection.count === 0}
 							onClick={() => batchDeleteCases.mutate(selection.ids)}
 						>
-							{batchDeleteCases.isPending ? t('groups:deleting') : t('groups:deletedCases', { count: selection.count })}
+							{batchDeleteCases.isPending ? t('groups:deleting') : t('groups:batchDeleteButton', { count: selection.count })}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
