@@ -28,6 +28,7 @@ vi.mock('../src/pi/inspectPage.js', () => ({
     elements: ['- button#del "删除" 选择器: #del'],
     truncated: false,
   })),
+  extractPageEvidence: vi.fn(async () => ({ overlays: [] })),
 }));
 vi.mock('../src/agent/llmSettings.js', () => ({
   resolveLlmClient: vi.fn(async () => ({

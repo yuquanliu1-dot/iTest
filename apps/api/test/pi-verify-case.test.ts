@@ -40,6 +40,7 @@ vi.mock('../src/pi/inspectPage.js', () => ({
     elements: ['- button#del "删除" 选择器: #del'],
     truncated: false,
   })),
+  extractPageEvidence: vi.fn(async () => ({ overlays: [] })),
 }));
 // LLM 模块桩：resolveLlmClient 缺省走 settings 表（测试库无 provider 配置会抛），先注入假 client。
 vi.mock('../src/agent/llmSettings.js', () => ({
@@ -384,15 +385,17 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.login).toBe('logged-in');
       expect(r.data).not.toContain('Passw0rd!');
     }
-    // start 事件上报凭据用户与缓存未命中；step_done 上报当轮登录行为
+    // start 事件上报凭据用户与缓存未命中；重跑一次捕获事件（登录态缓存已回写,本次应为 hit——顺带覆盖 hit 断言）
     const emitLog: unknown[] = [];
-    // 重跑一次以捕获事件（缓存已回写,本次应为 hit——顺带覆盖 hit 断言）
     const r2 = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId });
     expect(r2.ok).toBe(true);
     const start2 = emitLog[0] as { loginCache: string; loginUser: string | null };
     expect(start2).toMatchObject({ loginCache: 'hit', loginUser: 'qa01' });
-    const stepDone2 = emitLog[2] as { login?: string };
-    expect(stepDone2.login).toBe('logged-in');
+    // 前缀确认复用：round 1 全过后 round 2 的 AI 相不再重跑（已确认步骤以机械回放重建 DOM 状态），
+    // runAiTask 仍只有 round 1 那一次调用；事件序列无 step_*，只有 start → replay_start → replay_done → end。
+    expect(vi.mocked(runAiTask)).toHaveBeenCalledTimes(1);
+    const phases2 = emitLog.map((e) => (e as { phase: string }).phase);
+    expect(phases2).toEqual(['start', 'replay_start', 'replay_done', 'end']);
   });
 
   it('敏感步骤：instruction 含 __ITEST_STEP_SECRET__，valueSub 还原明文，返回无明文', async () => {
@@ -952,7 +955,15 @@ describe('verify_case compiled 机械回放干跑', () => {
     const caseId = await seedCase({ steps: [CLICK_COMPILED] });
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
-    const replayPageStub = { url: () => 'http://env.example/page', marker: 'replay-page' };
+    const replayPageStub = {
+      url: () => 'http://env.example/page',
+      marker: 'replay-page' as const,
+      // 归因证据（probeLocatorHits）要对干跑页做候选实时命中探测——真实回放 page 有 locator，桩补全同形。
+      locator: (sel: string) => ({ count: async () => (sel.includes('#missing') ? 0 : 1) }),
+      getByText: (t: string) => ({ count: async () => 1 }),
+      getByRole: () => ({ count: async () => 1 }),
+      getByTestId: () => ({ count: async () => 1 }),
+    };
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
     vi.mocked(executeCaseInBrowser).mockImplementationOnce(
       async (
