@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 /** 行内编辑文本：常态只渲染一段文字，点一下（或聚焦）变 input。
  *  Enter / blur 提交，Esc 还原。空串与未改动一律不提交（避免误触清空）。
@@ -7,7 +8,7 @@ export default function InlineEdit({
   value,
   onSave,
   disabled,
-  placeholder = '未命名',
+  placeholder,
   className,
   inputClassName,
   style,
@@ -24,6 +25,8 @@ export default function InlineEdit({
   ariaLabel?: string;
   maxLength?: number;
 }) {
+  const { t } = useTranslation();
+  const placeholderText = placeholder ?? t('common:unnamed');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
@@ -63,12 +66,12 @@ export default function InlineEdit({
         type="button"
         disabled={disabled || saving}
         onClick={() => setEditing(true)}
-        title="点击修改"
+        title={t('common:clickToEdit')}
         aria-label={ariaLabel}
         className={`text-left truncate disabled:cursor-default ${className ?? ''}`}
         style={{ ...style, cursor: disabled || saving ? 'default' : 'text' }}
       >
-        {value || placeholder}
+        {value || placeholderText}
       </button>
     );
   }
@@ -81,7 +84,7 @@ export default function InlineEdit({
       maxLength={maxLength}
       disabled={saving}
       aria-label={ariaLabel}
-      placeholder={placeholder}
+      placeholder={placeholderText}
       className={`input-base input-sm ${inputClassName ?? ''}`}
       style={style}
       onChange={(e) => setDraft(e.target.value)}

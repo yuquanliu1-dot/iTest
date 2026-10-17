@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import AppHeader from './AppHeader';
 import AppIconRail from './AppIconRail';
 import { TooltipProvider } from '../ui/shadcn/tooltip';
 
 export default function AppShell({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   return (
     <TooltipProvider delayDuration={300}>
       <div className="flex h-dvh flex-col overflow-hidden bg-[var(--background)]">
@@ -13,7 +15,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           className="absolute left-2 top-2 z-[60] -translate-y-12 rounded-[var(--radius-sm)] px-3 py-1.5 text-[12px] font-semibold text-[var(--primary-foreground)] shadow-[var(--shadow-2xl)] outline-none transition-transform duration-150 focus:translate-y-0"
           style={{ background: 'var(--primary)' }}
         >
-          跳到主内容
+          {t('common:skipToContent')}
         </a>
         <AppHeader />
         <div className="flex min-h-0 flex-1">

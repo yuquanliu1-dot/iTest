@@ -39,7 +39,7 @@ export default function UserMenu() {
   const logout = useAuthStore((s) => s.logout);
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   const activeOrg = organizations.find((o) => o.id === activeOrgId);
   const showOrgList = organizations.length > 1;
@@ -51,7 +51,7 @@ export default function UserMenu() {
     setOpen(false);
     try {
       await switchOrg(orgId);
-      toast('已切换组织', 'success');
+      toast(t('common:orgSwitched'), 'success');
       navigate('/');
     } catch (e) {
       toast((e as Error).message, 'error');
@@ -75,7 +75,7 @@ export default function UserMenu() {
         <Button
           variant="ghost"
           size="icon"
-          aria-label="用户菜单"
+          aria-label={t('common:userMenu')}
           className="rounded-full hover:bg-transparent aria-expanded:bg-transparent"
         >
           <span
@@ -101,7 +101,7 @@ export default function UserMenu() {
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
               <Icon name="layers" size={14} />
-              切换组织
+              {t('common:switchOrg')}
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="min-w-44">
               {organizations.map((o) => (
@@ -122,7 +122,7 @@ export default function UserMenu() {
           }}
         >
           <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} />
-          {theme === 'dark' ? '浅色主题' : '深色主题'}
+          {theme === 'dark' ? t('common:lightTheme') : t('common:darkTheme')}
         </DropdownMenuItem>
 
         {/* 语言切换（单击切换，图标为地球） */}
@@ -145,7 +145,7 @@ export default function UserMenu() {
 
         <DropdownMenuItem onSelect={(event) => { event.preventDefault(); handleOpenPwd(); }}>
           <Icon name="settings" size={14} />
-          修改密码
+          {t('common:changePassword')}
         </DropdownMenuItem>
 
         <DropdownMenuSeparator />
@@ -154,7 +154,7 @@ export default function UserMenu() {
           onSelect={() => void handleLogout()}
         >
           <Icon name="logOut" size={14} />
-          退出登录
+          {t('common:logout')}
         </DropdownMenuItem>
       </DropdownMenuContent>
       <ChangeMyPasswordModal open={pwdOpen} onOpenChange={setPwdOpen} />

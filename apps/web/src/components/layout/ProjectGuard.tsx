@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { Navigate, Outlet, useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { useProjectStore } from '../../stores/project';
@@ -9,6 +10,7 @@ import Icon from '../Icon';
  *  版本上下文由 ProjectsHome 版本行「进入」时写入 store；版本化二级路径由 /v/:versionId 段负责。
  *  与 ProjectsHome 共用 ['projects'] 缓存，常规导航命中缓存不会多发请求。 */
 export default function ProjectGuard() {
+  const { t } = useTranslation();
   const { projectId } = useParams<{ projectId: string }>();
   const current = useProjectStore((s) => s.current);
   const exit = useProjectStore((s) => s.exit);
@@ -24,7 +26,7 @@ export default function ProjectGuard() {
   if (isError) {
     return (
       <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
-        加载失败：{error?.message ?? '未知错误'}
+        {t('common:loadFailed')}：{error?.message ?? t('common:unknownError')}
       </div>
     );
   }
@@ -33,7 +35,7 @@ export default function ProjectGuard() {
     return (
       <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
         <Icon name="loader" size={16} className="animate-spin" />
-        <span style={{ marginLeft: 8 }}>加载中...</span>
+        <span style={{ marginLeft: 8 }}>{t('common:loading')}</span>
       </div>
     );
   }

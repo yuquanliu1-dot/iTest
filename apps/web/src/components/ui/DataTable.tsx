@@ -14,6 +14,7 @@ import {
 	useMemo,
 	useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 
 import Button from "./Button";
 import Pagination from "./Pagination";
@@ -175,6 +176,7 @@ function FacetSubmenu({
 	selected: string[];
 	onChange: (values: string[]) => void;
 }) {
+	const { t } = useTranslation();
 	const hasOptions = facet.options.length > 0;
 	return (
 		<DropdownMenuSub>
@@ -188,7 +190,7 @@ function FacetSubmenu({
 			</DropdownMenuSubTrigger>
 			<DropdownMenuSubContent className="max-h-72 min-w-52 overflow-hidden">
 				{!hasOptions ? (
-					<DropdownMenuItem disabled>无可选项</DropdownMenuItem>
+					<DropdownMenuItem disabled>{t("common:noOptions")}</DropdownMenuItem>
 				) : (
 					<>
 						{selected.length > 0 && (

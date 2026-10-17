@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import Input from './Input';
 import Button from './Button';
@@ -31,6 +32,7 @@ interface Props {
 }
 
 export default function RepoFields({ value, onChange }: Props) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState<boolean>(!!value.repoUrl);
   const [verifyState, setVerifyState] = useState<
     | { kind: 'idle' }
@@ -55,7 +57,7 @@ export default function RepoFields({ value, onChange }: Props) {
           onChange({ ...value, defaultBranch: r.defaultBranch });
         }
       } else {
-        setVerifyState({ kind: 'fail', error: r.error ?? '连接失败' });
+        setVerifyState({ kind: 'fail', error: r.error ?? t('common:testConnectionFailed') });
       }
     },
     onError: (e: Error) => setVerifyState({ kind: 'fail', error: e.message }),
@@ -78,7 +80,7 @@ export default function RepoFields({ value, onChange }: Props) {
         style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
       >
         <span className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
-          仓库配置（可选，用于 AI 工作台参考源码）
+          {t('common:repoFieldsTitle')}
         </span>
         <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} style={{ color: 'var(--muted-foreground)' }} />
       </button>
@@ -86,7 +88,7 @@ export default function RepoFields({ value, onChange }: Props) {
         <div className="grid grid-cols-2 gap-x-3 gap-y-2 px-3 pb-3" style={{ borderTop: '1px solid var(--border)' }}>
           <div className="flex flex-col gap-1" style={{ marginTop: 10 }}>
             <label className="text-[11px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
-              Git 提供方
+              {t('common:repoProvider')}
             </label>
             <select
               className="input-base"
@@ -95,12 +97,12 @@ export default function RepoFields({ value, onChange }: Props) {
             >
               <option value="github">GitHub</option>
               <option value="gitee">Gitee</option>
-              <option value="gitlab">GitLab（自建 / 官方）</option>
+              <option value="gitlab">{t('common:repoProviderGitlab')}</option>
             </select>
           </div>
           <div style={{ marginTop: 10 }}>
             <Input
-              label="默认分支"
+              label={t('common:repoDefaultBranch')}
               placeholder="main"
               value={value.defaultBranch}
               onChange={(e) => onChange({ ...value, defaultBranch: e.target.value })}
@@ -108,7 +110,7 @@ export default function RepoFields({ value, onChange }: Props) {
           </div>
           <div className="col-span-2">
             <Input
-              label="仓库 URL"
+              label={t('common:repoUrl')}
               placeholder={value.provider === 'github' ? 'https://github.com/<owner>/<repo>' : 'https://...'}
               value={value.repoUrl}
               onChange={(e) => onChange({ ...value, repoUrl: e.target.value })}
@@ -117,7 +119,7 @@ export default function RepoFields({ value, onChange }: Props) {
           {value.provider === 'gitlab' && (
             <div className="col-span-2">
               <Input
-                label="GitLab 实例 URL（自建时填写，留空走仓库 URL）"
+                label={t('common:repoGitlabUrlOverride')}
                 placeholder="https://gitlab.example.com"
                 value={value.gitlabUrlOverride}
                 onChange={(e) => onChange({ ...value, gitlabUrlOverride: e.target.value })}
@@ -126,9 +128,9 @@ export default function RepoFields({ value, onChange }: Props) {
           )}
           <div className="col-span-2">
             <Input
-              label={`Personal Access Token${value.hasPat ? '（已存，输入覆盖）' : ''}`}
+              label={`${t('common:repoPat')}${value.hasPat ? t('common:repoPatStored') : ''}`}
               type="password"
-              placeholder={value.hasPat ? '已配置，输入新值覆盖' : '可选；私有仓库 / 提高限速必填'}
+              placeholder={value.hasPat ? t('common:repoPatPlaceholderStored') : t('common:repoPatPlaceholderOptional')}
               value={value.patOverride}
               onChange={(e) => onChange({ ...value, patOverride: e.target.value })}
             />
@@ -140,11 +142,11 @@ export default function RepoFields({ value, onChange }: Props) {
               disabled={verify.isPending || !value.repoUrl.trim()}
               onClick={() => verify.mutate()}
             >
-              {verify.isPending ? '测试中...' : '测试连接'}
+              {verify.isPending ? t('common:testing') : t('common:testConnection')}
             </Button>
             {verifyState.kind === 'ok' && (
               <span className="text-[11px]" style={{ color: 'var(--success, #16a34a)' }}>
-                ✓ 连接成功{verifyState.defaultBranch ? ` · 默认分支 ${verifyState.defaultBranch}` : ''}
+                ✓ {t('common:connected')}{verifyState.defaultBranch ? t('common:repoDefaultBranchLabel', { branch: verifyState.defaultBranch }) : ''}
               </span>
             )}
             {verifyState.kind === 'fail' && (
@@ -154,7 +156,7 @@ export default function RepoFields({ value, onChange }: Props) {
             )}
           </div>
           <p className="col-span-2 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-            PAT 仅用于仓库元数据 + 测试连接；列表查询会返回 hasPat，原始值不会回传前端。
+            {t('common:repoPatHelp')}
           </p>
         </div>
       )}

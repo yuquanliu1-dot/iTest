@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import Icon from '../Icon';
 import { paginationRange } from '../../lib/paginationRange';
 
@@ -34,6 +35,7 @@ export default function Pagination({
   pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
   left,
 }: Props) {
+  const { t } = useTranslation();
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const [jumpInput, setJumpInput] = useState('');
 
@@ -66,19 +68,19 @@ export default function Pagination({
       {left}
       <div className="flex-1" />
       <div className="flex items-center justify-end gap-3">
-      <span>共 {total} 条</span>
+      <span>{t('common:paginationTotal', { count: total })}</span>
 
       <select
         value={pageSize}
         onChange={(e) => onPageSizeChange(Number(e.target.value))}
-        aria-label="每页条数"
+        aria-label={t('common:paginationPageSizeAria')}
         // CRM 风格：去掉 input-base 的边框 + 浅底色，hover 加深。
         className="border-0 hover:bg-[var(--muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         style={{ height: CONTROL_H, padding: '0 8px', fontSize: 12, borderRadius: 'var(--radius-md)', cursor: 'pointer', background: 'var(--muted)/40', backgroundColor: 'color-mix(in oklch, var(--muted) 40%, transparent)' }}
       >
         {pageSizeOptions.map((size) => (
           <option key={size} value={size}>
-            {size} 条/页
+            {t('common:paginationPageSize', { size })}
           </option>
         ))}
       </select>
@@ -89,7 +91,7 @@ export default function Pagination({
             type="button"
             onClick={() => onPageChange(page - 1)}
             disabled={page <= 1}
-            aria-label="上一页"
+            aria-label={t('common:paginationPrev')}
             className={navBtnCls}
             style={{ height: CONTROL_H, width: CONTROL_H }}
           >
@@ -133,7 +135,7 @@ export default function Pagination({
             type="button"
             onClick={() => onPageChange(page + 1)}
             disabled={page >= totalPages}
-            aria-label="下一页"
+            aria-label={t('common:paginationNext')}
             className={navBtnCls}
             style={{ height: CONTROL_H, width: CONTROL_H }}
           >
@@ -144,7 +146,7 @@ export default function Pagination({
 
       {totalPages > 1 && (
         <span className="flex items-center gap-1.5">
-          前往
+          {t('common:paginationGoTo')}
           <input
             type="text"
             inputMode="numeric"
@@ -152,11 +154,11 @@ export default function Pagination({
             onChange={(e) => setJumpInput(e.target.value.replace(/\D/g, ''))}
             onKeyDown={(e) => { if (e.key === 'Enter') commitJump(); }}
             onBlur={commitJump}
-            aria-label="跳转到页"
+            aria-label={t('common:paginationJumpToPage')}
             className="border-0 hover:bg-[var(--muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
             style={{ height: CONTROL_H, width: 48, padding: '0 4px', fontSize: 12, textAlign: 'center', borderRadius: 'var(--radius-md)', backgroundColor: 'color-mix(in oklch, var(--muted) 40%, transparent)' }}
           />
-          页
+          {t('common:paginationPageUnit')}
         </span>
       )}
       </div>
