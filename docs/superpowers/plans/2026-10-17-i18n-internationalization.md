@@ -309,6 +309,54 @@ Expected:全 PASS。zh 界面零变化(所有迁移还没开始)。
 git add -A && git commit -m "chore(web): Phase 0 i18n 基础设施收尾"
 ```
 
+### Task 5b:后端序列化 languagePreference(执行中发现的设计缺口)
+
+**Files:**
+- Modify: `apps/api/src/services/auth.service.ts:49-58`(SafeUser 接口 + toSafeUser 返回)
+- Modify: `apps/api/test/auth.test.ts`(新增最小断言)
+
+**背景**:spec 假设「登录/me 响应已含语言偏好」,但 `toSafeUser` 未序列化该字段 → 前端 auth-sync 恒走 localStorage 兜底,「语言真相源=后端」runtime 不生效。此任务补齐,使登录响应带出用户语言偏好。
+
+- [ ] **Step 1:接口与序列化补字段**
+
+`SafeUser` 接口追加:
+```ts
+  languagePreference: string;
+```
+`toSafeUser` 返回追加:
+```ts
+  languagePreference: row.languagePreference,
+```
+
+- [ ] **Step 2:auth 测试补断言**
+
+`apps/api/test/auth.test.ts` 登录成功用例附近新增:
+```ts
+it('登录成功 → user 带 languagePreference(DB 默认 zh-CN)', async () => {
+  const r = await request(app).post('/api/auth/login').send({ username: 'manager1', password: SEED_USER_PASSWORD });
+  expect(r.body.user.languagePreference).toBe('zh-CN');
+});
+```
+(以该测试文件实际常量名/seed 为准;若 DB 该用户 language_preference 非默认,断言改为匹配 seed 实际值。)
+
+- [ ] **Step 3:验证**
+
+```bash
+cd /Users/lyq/workdir/codedev/iTest/.claude/worktrees/i18n/apps/api && pnpm vitest run test/auth.test.ts && pnpm typecheck
+```
+Expected:全 PASS。
+
+- [ ] **Step 4:Commit**
+
+```bash
+git add apps/api/src/services/auth.service.ts apps/api/test/auth.test.ts
+git commit -m "feat(api): 登录/me 序列化 languagePreference——语言真相源生效"
+```
+
+- [ ] **Step 5:前端接收确认**
+
+前端 `SafeUser` 已声明 `languagePreference?`(`apps/web/src/api/client.ts`),无需改动;登录后 `App.tsx` auth-sync effect 从 `user.languagePreference` 取真实值生效。
+
 ---
 
 ## Phase 1:web UI 文案迁移(common → features)
