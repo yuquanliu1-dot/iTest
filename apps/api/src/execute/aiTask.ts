@@ -354,7 +354,7 @@ export async function runAiTask(
   opts?: RunAiTaskOpts,
 ): Promise<string> {
   const maxTurns = opts?.maxTurns ?? MAX_TURNS;
-  const lang = opts?.lang ?? aiLangFrom(null);
+  const lang = aiLangFrom(opts?.lang);
   const systemPrompt = mobile ? MOBILE_SYSTEM_PROMPT : SYSTEM_PROMPT;
   let lastResults: string[] = [];
   let pendingShot: string | null = null;
