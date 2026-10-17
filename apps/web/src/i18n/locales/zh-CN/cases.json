@@ -11,7 +11,8 @@
     "completed": "已完成",
     "pending": "待处理",
     "error": "错误",
-    "success": "成功"
+    "success": "成功",
+    "cancelled": "已取消"
   },
   "stepKind": {
     "click": "点击",

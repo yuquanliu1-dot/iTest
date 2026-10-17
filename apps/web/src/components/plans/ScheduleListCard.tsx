@@ -3,10 +3,10 @@
  * iDO AutomationListItem 风格：avatar + cron 描述 + 下次执行时间 + 启停开关。
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import 'dayjs/locale/zh-cn';
 import { api, type PlanSchedule, type PlanScheduleCreateInput, type PlanSchedulePatchInput } from '../../api/client';
 import { useUIStore } from '../../stores/ui';
 import Button from '../ui/Button';
@@ -16,13 +16,13 @@ import ScheduleDialog from './ScheduleDialog';
 import { formatSchedule } from './schedule-format';
 
 dayjs.extend(relativeTime);
-dayjs.locale('zh-cn');
 
 interface Props {
   planId: string;
 }
 
 export default function ScheduleListCard({ planId }: Props) {
+  const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
   const [editing, setEditing] = useState<PlanSchedule | null>(null);
@@ -37,7 +37,7 @@ export default function ScheduleListCard({ planId }: Props) {
   const create = useMutation({
     mutationFn: (body: PlanScheduleCreateInput) => api.planSchedules.create(planId, body),
     onSuccess: () => {
-      toast('已新增调度', 'success');
+      toast(t('plans:scheduleAdded'), 'success');
       qc.invalidateQueries({ queryKey: ['plan', planId, 'schedules'] });
     },
     onError: (e: Error) => toast(e.message, 'error'),
@@ -47,7 +47,7 @@ export default function ScheduleListCard({ planId }: Props) {
     mutationFn: ({ id, body }: { id: string; body: PlanSchedulePatchInput }) =>
       api.planSchedules.patch(id, body),
     onSuccess: () => {
-      toast('已更新', 'success');
+      toast(t('plans:scheduleUpdated'), 'success');
       qc.invalidateQueries({ queryKey: ['plan', planId, 'schedules'] });
     },
     onError: (e: Error) => toast(e.message, 'error'),
@@ -56,7 +56,7 @@ export default function ScheduleListCard({ planId }: Props) {
   const remove = useMutation({
     mutationFn: (id: string) => api.planSchedules.remove(id),
     onSuccess: () => {
-      toast('已删除调度', 'success');
+      toast(t('plans:scheduleRemoved'), 'success');
       qc.invalidateQueries({ queryKey: ['plan', planId, 'schedules'] });
     },
     onError: (e: Error) => toast(e.message, 'error'),
@@ -67,19 +67,19 @@ export default function ScheduleListCard({ planId }: Props) {
   return (
     <div className="bg-card border rounded-[var(--radius-md)] p-5">
       <div className="flex items-center gap-2 mb-3">
-        <h2 className="text-[14px] font-semibold m-0">调度</h2>
+        <h2 className="text-[14px] font-semibold m-0">{t('plans:schedule')}</h2>
         <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-          {schedules.length === 0 ? '暂无调度' : `共 ${schedules.length} 个`}
+          {schedules.length === 0 ? t('plans:noSchedule') : t('plans:scheduleCount', { count: schedules.length })}
         </span>
         <div className="flex-1" />
         <Button size="sm" variant="ghost" onClick={() => setCreating(true)}>
-          + 新增调度
+          {t('plans:addSchedule')}
         </Button>
       </div>
 
       {schedules.length === 0 ? (
         <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-          基于 cron 表达式按固定时刻重复执行；新增后会立即生效。
+          {t('plans:addScheduleHint')}
         </div>
       ) : (
         <div className="flex flex-col gap-2">
@@ -118,7 +118,8 @@ function ScheduleRow({
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  const scheduleLabel = formatSchedule(schedule.cronExpr) ?? schedule.cronExpr;
+  const { t } = useTranslation();
+  const scheduleLabel = formatSchedule(schedule.cronExpr, t) ?? schedule.cronExpr;
   const nextRun = schedule.nextRunAt ? dayjs(schedule.nextRunAt) : null;
   return (
     <div className="flex items-center gap-3 px-3 py-2 border rounded-[var(--radius-sm)]" style={{ borderColor: 'var(--border)' }}>
@@ -134,16 +135,16 @@ function ScheduleRow({
             {scheduleLabel}
           </span>
           <StatusPill tone={schedule.enabled ? 'success' : 'muted'}>
-            {schedule.enabled ? '启用' : '已暂停'}
+            {schedule.enabled ? t('plans:enabled') : t('plans:paused')}
           </StatusPill>
         </div>
         <div className="text-[11px] mt-0.5 leading-snug truncate" style={{ color: 'var(--muted-foreground)' }}>
           cron <code className="font-mono">{schedule.cronExpr}</code>（{schedule.timezone}）
-          {nextRun ? ` · 下次执行：${nextRun.fromNow()}（${nextRun.format('YYYY-MM-DD HH:mm')}）` : ''}
+          {nextRun ? t('plans:nextRunRow', { relative: nextRun.fromNow(), full: nextRun.format('YYYY-MM-DD HH:mm') }) : ''}
         </div>
       </div>
-      <IconButton icon="pencil" title="编辑" onClick={onEdit} />
-      <IconButton icon="trash" title="删除" tone="destructive" onClick={onDelete} />
+      <IconButton icon="pencil" title={t('cases:edit')} onClick={onEdit} />
+      <IconButton icon="trash" title={t('common:delete')} tone="destructive" onClick={onDelete} />
     </div>
   );
 }

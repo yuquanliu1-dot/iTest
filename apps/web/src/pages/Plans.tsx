@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type PlanWithCount } from '../api/client';
 import { useProjectStore } from '../stores/project';
@@ -31,6 +32,7 @@ type ViewMode = 'card' | 'table';
 export default function Plans() {
   const { projectId, versionId } = useParams<{ projectId: string; versionId?: string }>();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
   const currentVersionName = useProjectStore((s) => s.current?.versionName ?? null);
@@ -73,7 +75,7 @@ export default function Plans() {
       setName('');
       setEnvironment('');
       setShowCreate(false);
-      toast('执行计划已创建', 'success');
+      toast(t('plans:createdToast'), 'success');
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
     },
     onError: (e: Error) => toast(e.message, 'error'),
@@ -82,7 +84,7 @@ export default function Plans() {
   const runPlan = useMutation({
     mutationFn: (planId: string) => api.plans.run(planId),
     onSuccess: (r, planId) => {
-      toast('执行启动', 'success');
+      toast(t('plans:runStartedToast'), 'success');
       qc.invalidateQueries({ queryKey: ['executions'] });
       navigate(versionId ? `/p/${projectId}/v/${versionId}/plans/${planId}/runs/${r.runId}` : `/`);
     },
@@ -92,7 +94,7 @@ export default function Plans() {
   const deletePlan = useMutation({
     mutationFn: (id: string) => api.plans.remove(id),
     onSuccess: () => {
-      toast('已删除', 'success');
+      toast(t('plans:deletedToast'), 'success');
       setConfirmDelete(null);
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
       qc.invalidateQueries({ queryKey: ['executions'] });
@@ -106,13 +108,13 @@ export default function Plans() {
   const columnsDef: DataTableColumn<PlanWithCount>[] = [
     {
       id: 'name',
-      header: '名称',
+      header: t('plans:name'),
       cell: (p) => <span className="font-semibold truncate" title={p.name}>{p.name}</span>,
       cellClassName: 'min-w-0',
     },
     {
       id: 'environment',
-      header: '环境',
+      header: t('plans:environment'),
       width: 'w-[10%]',
       hideBelow: 'lg',
       cellClassName: 'text-muted-foreground',
@@ -120,7 +122,7 @@ export default function Plans() {
     },
     {
       id: 'caseCount',
-      header: '用例数',
+      header: t('plans:caseCount'),
       width: 'w-[8%]',
       align: 'right',
       cellClassName: 'text-xs text-muted-foreground tabular-nums',
@@ -128,16 +130,16 @@ export default function Plans() {
     },
     {
       id: 'latestStatus',
-      header: '最近状态',
+      header: t('plans:latestStatus'),
       width: 'w-[110px]',
       cell: (p) => {
         const last = latestByPlan.get(p.id);
-        return last ? <StatusPill status={last.status}>{last.status}</StatusPill> : <EmptyCellValue />;
+        return last ? <StatusPill status={last.status}>{t(`cases:status.${last.status}`)}</StatusPill> : <EmptyCellValue />;
       },
     },
     {
       id: 'latestRunAt',
-      header: '最近执行',
+      header: t('plans:latestRunAt'),
       width: 'w-[110px]',
       align: 'right',
       hideBelow: 'md',
@@ -149,7 +151,7 @@ export default function Plans() {
     },
     {
       id: 'createdBy',
-      header: '创建人',
+      header: t('groups:createdBy'),
       width: 'w-[96px]',
       hideBelow: 'lg',
       cellClassName: 'text-xs text-muted-foreground',
@@ -157,7 +159,7 @@ export default function Plans() {
     },
     {
       id: 'createdAt',
-      header: '创建时间',
+      header: t('plans:createdAt'),
       width: 'w-[110px]',
       align: 'right',
       hideBelow: 'md',
@@ -177,19 +179,19 @@ export default function Plans() {
         >
           <IconButton
             icon={runPlan.isPending && runPlan.variables === p.id ? 'loader' : 'play'}
-            title="运行"
+            title={t('plans:run')}
             tone="accent"
             disabled={runPlan.isPending && runPlan.variables === p.id}
             onClick={() => runPlan.mutate(p.id)}
           />
           <IconButton
             icon="reportView"
-            title="查看报告"
+            title={t('cases:viewReport')}
             onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/reports?planId=${p.id}&tab=plan` : `/`)}
           />
           <IconButton
             icon="trash"
-            title="删除"
+            title={t('common:delete')}
             tone="destructive"
             onClick={() => setConfirmDelete({ id: p.id, name: p.name })}
           />
@@ -201,23 +203,23 @@ export default function Plans() {
   return (
     <PageShell contained>
       <PageShellHeader>
-        <PageShellTitle>执行计划</PageShellTitle>
+        <PageShellTitle>{t('plans:title')}</PageShellTitle>
         <PageShellActions>
           <Segmented<ViewMode>
             options={[
-              { value: 'card', label: '', icon: 'grid', title: '卡片视图' },
-              { value: 'table', label: '', icon: 'table', title: '表格视图' },
+              { value: 'card', label: '', icon: 'grid', title: t('plans:cardView') },
+              { value: 'table', label: '', icon: 'table', title: t('plans:tableView') },
             ]}
             value={view}
             onChange={setView}
           />
           <Button onClick={() => setShowCreate(true)}>
             <Icon name="plus" size={14} />
-            新建执行计划
+            {t('plans:newPlan')}
           </Button>
         </PageShellActions>
         <PageShellDescription>
-          把用例按目标场景组合，一键运行
+          {t('plans:newPlanHint')}
           {currentVersionName ? ` · ${currentVersionName}` : null}
         </PageShellDescription>
       </PageShellHeader>
@@ -226,18 +228,18 @@ export default function Plans() {
         {isLoading ? (
           <div className="flex items-center justify-center py-12" style={{ color: 'var(--muted-foreground)' }}>
             <Icon name="loader" size={16} className="animate-spin" />
-            <span style={{ marginLeft: 8 }}>加载中...</span>
+            <span style={{ marginLeft: 8 }}>{t('cases:loading')}</span>
           </div>
         ) : isError ? (
           <div className="flex items-center justify-center py-12" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
-            加载失败：{error?.message ?? '未知错误'}
+            {t('common:loadFailed')}：{error?.message ?? t('common:unknownError')}
           </div>
         ) : !plans || plans.length === 0 ? (
           <EmptyState
             icon="flag"
-            title="还没有执行计划"
-            description="按场景组织用例，比如「预发冒烟」或「回归核心」。"
-            action={<Button size="sm" onClick={() => setShowCreate(true)}>+ 新建执行计划</Button>}
+            title={t('plans:noPlans')}
+            description={t('plans:noPlansHint')}
+            action={<Button size="sm" onClick={() => setShowCreate(true)}>+ {t('plans:newPlan')}</Button>}
           />
         ) : view === 'card' ? (
           <>
@@ -257,21 +259,21 @@ export default function Plans() {
                       {p.name}
                     </div>
                     <span className="text-[10px] uppercase font-semibold px-2 py-[2px] rounded-full" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>
-                      {p.environment ?? '默认'}
+                      {p.environment ?? t('plans:defaultEnvironment')}
                     </span>
                   </div>
                   <div className="text-[12px] mt-2" style={{ color: 'var(--muted-foreground)' }}>
-                    {p.caseCount} 个用例
+                    {t('plans:caseCountLabel', { count: p.caseCount })}
                   </div>
                   <div className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
-                    创建于 {fullDateTime(p.createdAt)} · {creatorName(p.createdBy)}
+                    {t('plans:createdAtFull', { time: fullDateTime(p.createdAt), creator: creatorName(p.createdBy) })}
                   </div>
                   {(() => {
                     const last = latestByPlan.get(p.id);
                     if (!last) return null;
                     return (
                       <div className="text-[11px] mt-1 flex items-center gap-2" style={{ color: 'var(--muted-foreground)' }}>
-                        <StatusPill status={last.status}>{last.status}</StatusPill>
+                        <StatusPill status={last.status}>{t(`cases:status.${last.status}`)}</StatusPill>
                         <span>{shortDateTime(last.createdAt)}</span>
                       </div>
                     );
@@ -284,7 +286,7 @@ export default function Plans() {
                       onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/reports?planId=${p.id}&tab=plan` : `/`)}
                     >
                       <Icon name="reportView" size={12} />
-                      查看报告
+                      {t('cases:viewReport')}
                     </button>
                   </div>
                 </div>
@@ -327,7 +329,7 @@ export default function Plans() {
             total={filteredPlans.length}
             onRowClick={goPlanDetail}
             empty={
-              <EmptyState icon="flag" title="本页无计划" description="切换到上一页或调整筛选。" />
+              <EmptyState icon="flag" title={t('plans:noPlansOnPage')} description={t('plans:noPlansOnPageHint')} />
             }
           />
         )}
@@ -336,16 +338,16 @@ export default function Plans() {
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>新建执行计划</DialogTitle>
+            <DialogTitle>{t('plans:newPlan')}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
-            <Input label="名称" placeholder="例如：预发冒烟" value={name} onChange={(e) => setName(e.target.value)} />
-            <Input label="环境（可选）" placeholder="预发 / 生产 / staging" value={environment} onChange={(e) => setEnvironment(e.target.value)} />
+            <Input label={t('plans:name')} placeholder={t('plans:namePlaceholder')} value={name} onChange={(e) => setName(e.target.value)} />
+            <Input label={t('plans:environmentOptional')} placeholder={t('plans:environmentPlaceholder')} value={environment} onChange={(e) => setEnvironment(e.target.value)} />
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowCreate(false)}>取消</Button>
+            <Button variant="ghost" onClick={() => setShowCreate(false)}>{t('common:cancel')}</Button>
             <Button disabled={!name || create.isPending} onClick={() => create.mutate()}>
-              {create.isPending ? '创建中...' : '创建'}
+              {create.isPending ? t('groups:creating') : t('groups:create')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -353,18 +355,18 @@ export default function Plans() {
 
       <Dialog open={!!confirmDelete} onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}>
         <DialogContent style={{ maxWidth: 420 }}>
-          <DialogHeader><DialogTitle>删除执行计划</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('plans:deletePlanTitle')}</DialogTitle></DialogHeader>
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            确认删除「{confirmDelete?.name}」？历史执行报告将保留，但计划本身不可恢复。
+            {t('plans:deletePlanConfirm', { name: confirmDelete?.name })}
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirmDelete(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setConfirmDelete(null)}>{t('common:cancel')}</Button>
             <Button
               variant="destructive"
               disabled={deletePlan.isPending}
               onClick={() => confirmDelete && deletePlan.mutate(confirmDelete.id)}
             >
-              {deletePlan.isPending ? '删除中...' : '确认删除'}
+              {deletePlan.isPending ? t('cases:deleting') : t('cases:confirmDelete')}
             </Button>
           </DialogFooter>
         </DialogContent>
