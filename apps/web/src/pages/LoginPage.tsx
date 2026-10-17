@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { useUIStore } from '../stores/ui';
@@ -8,10 +9,9 @@ import Button from '../components/ui/Button';
 import BrandGlyph from '../components/BrandGlyph';
 import Icon from '../components/Icon';
 
-/** 与后端 PASSWORD_POLICY 一致（auth.service.ts）。 */
-const PASSWORD_HINT = '密码需 10-64 位，且包含大小写字母、数字和特殊字符';
-
+/** 密码提示文案与后端 PASSWORD_POLICY 一致（auth.service.ts），见 i18n auth:passwordHint。 */
 export default function LoginPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -53,7 +53,7 @@ export default function LoginPage() {
     e.preventDefault();
     if (submitting) return;
     if (newPassword !== confirmPassword) {
-      toast('两次输入的新密码不一致', 'error');
+      toast(t('auth:passwordMismatch'), 'error');
       return;
     }
     setSubmitting(true);
@@ -61,7 +61,7 @@ export default function LoginPage() {
       // 改密成功即自动登录（响应同登录 ok 分支，并种下新会话 cookie）
       const r = await api.auth.changePassword(changeToken!, newPassword);
       await applyLogin(r);
-      toast('密码已更新', 'success');
+      toast(t('auth:passwordUpdated'), 'success');
       navigate('/', { replace: true });
     } catch (err) {
       toast((err as Error).message, 'error');
@@ -121,7 +121,7 @@ export default function LoginPage() {
               maxWidth: 480,
             }}
           >
-            把回归测试，交给一个
+            {t('auth:heroLead')}
             <span
               style={{
                 background: 'var(--brand-gradient)',
@@ -131,9 +131,9 @@ export default function LoginPage() {
                 fontStyle: 'italic',
               }}
             >
-              &nbsp;可控的 Agent
+              &nbsp;{t('auth:heroAgent')}
             </span>
-            。
+            {t('auth:heroTail')}
           </h1>
 
           <p
@@ -145,7 +145,7 @@ export default function LoginPage() {
               maxWidth: 460,
             }}
           >
-            从需求生成用例、浏览器录制回放、计划一键回归。登录后按项目与版本组织你的测试资产。
+            {t('auth:heroDescription')}
           </p>
 
           <ul
@@ -160,7 +160,7 @@ export default function LoginPage() {
                   flexShrink: 0,
                 }}
               />
-              AI 拆解需求为场景与用例，可绑定 Git 仓库参考真实源码
+              {t('auth:feature1')}
             </li>
             <li className="flex items-center gap-2">
               <span
@@ -170,7 +170,7 @@ export default function LoginPage() {
                   flexShrink: 0,
                 }}
               />
-              浏览器录制转为可编辑步骤，可控 Agent 回放并截图留证
+              {t('auth:feature2')}
             </li>
             <li className="flex items-center gap-2">
               <span
@@ -180,7 +180,7 @@ export default function LoginPage() {
                   flexShrink: 0,
                 }}
               />
-              项目 × 版本管理用例，执行计划一键回归，报告全程可回溯
+              {t('auth:feature3')}
             </li>
           </ul>
         </div>
@@ -208,37 +208,37 @@ export default function LoginPage() {
               </span>
             </div>
             <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--foreground)', letterSpacing: '-0.01em' }}>
-              {changeToken ? '设置新密码' : '登录'}
+              {changeToken ? t('auth:setNewPassword') : t('auth:signIn')}
             </div>
             <div style={{ fontSize: 12, color: 'var(--muted-foreground)', lineHeight: 1.5 }}>
-              {changeToken ? PASSWORD_HINT : '使用组织账号登录自动化测试平台'}
+              {changeToken ? t('auth:passwordHint') : t('auth:subtitle')}
             </div>
           </div>
 
           {!changeToken ? (
             <form onSubmit={submitLogin} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <Input
-                aria-label="用户名"
+                aria-label={t('auth:username')}
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="用户名"
+                placeholder={t('auth:username')}
                 autoComplete="username"
                 name="username"
                 autoFocus
               />
               <Input
-                aria-label="密码"
+                aria-label={t('auth:password')}
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="密码"
+                placeholder={t('auth:password')}
                 autoComplete="current-password"
                 name="password"
                 trailingIcon={
                   <button
                     type="button"
                     onClick={() => setShowPassword((v) => !v)}
-                    aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                    aria-label={showPassword ? t('auth:hidePassword') : t('auth:showPassword')}
                     className="press"
                     style={{
                       background: 'transparent',
@@ -259,24 +259,24 @@ export default function LoginPage() {
                 disabled={submitting || !username.trim() || !password}
                 style={{ width: '100%', marginTop: 4 }}
               >
-                {submitting ? '登录中…' : '登录'}
+                {submitting ? t('auth:signingIn') : t('auth:signIn')}
               </Button>
             </form>
           ) : (
             <form onSubmit={submitChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <Input
-                aria-label="新密码"
+                aria-label={t('auth:newPassword')}
                 type={showNewPassword ? 'text' : 'password'}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="新密码"
+                placeholder={t('auth:newPassword')}
                 autoComplete="new-password"
                 autoFocus
                 trailingIcon={
                   <button
                     type="button"
                     onClick={() => setShowNewPassword((v) => !v)}
-                    aria-label={showNewPassword ? '隐藏密码' : '显示密码'}
+                    aria-label={showNewPassword ? t('auth:hidePassword') : t('auth:showPassword')}
                     className="press"
                     style={{
                       background: 'transparent',
@@ -292,11 +292,11 @@ export default function LoginPage() {
                 }
               />
               <Input
-                aria-label="确认新密码"
+                aria-label={t('auth:confirmPassword')}
                 type={showNewPassword ? 'text' : 'password'}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="再次输入新密码"
+                placeholder={t('auth:confirmPasswordPlaceholder')}
                 autoComplete="new-password"
               />
               <Button
@@ -305,7 +305,7 @@ export default function LoginPage() {
                 disabled={submitting || !newPassword || !confirmPassword}
                 style={{ width: '100%', marginTop: 4 }}
               >
-                {submitting ? '提交中…' : '确认修改并登录'}
+                {submitting ? t('auth:submitting') : t('auth:saveAndSignIn')}
               </Button>
               <button
                 type="button"
@@ -325,7 +325,7 @@ export default function LoginPage() {
                   marginTop: 2,
                 }}
               >
-                返回重新登录
+                {t('auth:backToSignIn')}
               </button>
             </form>
           )}

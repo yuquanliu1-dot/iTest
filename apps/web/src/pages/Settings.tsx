@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
 import { useUIStore } from '../stores/ui';
 import { useThemeStore } from '../stores/theme';
@@ -33,13 +34,14 @@ const AI_FALLBACK_LOCATOR_FAILED_KEY = 'ai_fallback_locator_failed';
 
 type Panel = 'llm' | 'appearance' | 'replay';
 
-const PANELS: Array<{ key: Panel; label: string; icon: 'beaker' | 'sparkles' | 'layers' }> = [
-  { key: 'llm', label: 'LLM Provider', icon: 'beaker' },
-  { key: 'appearance', label: '外观', icon: 'sparkles' },
-  { key: 'replay', label: '回放降级', icon: 'layers' },
+const PANELS: Array<{ key: Panel; labelKey: string; icon: 'beaker' | 'sparkles' | 'layers' }> = [
+  { key: 'llm', labelKey: 'settings:llmProvider', icon: 'beaker' },
+  { key: 'appearance', labelKey: 'settings:panelAppearance', icon: 'sparkles' },
+  { key: 'replay', labelKey: 'settings:panelReplay', icon: 'layers' },
 ];
 
 export default function Settings() {
+  const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
@@ -74,7 +76,7 @@ export default function Settings() {
       await api.settings.put('llm_model', model);
       await api.settings.put('llm_base_url', baseUrl);
     },
-    onSuccess: () => toast('设置已保存', 'success'),
+    onSuccess: () => toast(t('settings:saved'), 'success'),
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
@@ -85,14 +87,14 @@ export default function Settings() {
   // 回放降级开关即时保存
   const saveFallback = useMutation({
     mutationFn: ({ key, value }: { key: string; value: boolean }) => api.settings.put(key, value),
-    onError: (e: Error) => toast((e as Error).message || '保存失败', 'error'),
+    onError: (e: Error) => toast((e as Error).message || t('settings:saveFailed'), 'error'),
   });
 
   if (isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)' }}>
         <Icon name="loader" size={16} className="animate-spin" />
-        <span style={{ marginLeft: 8 }}>加载中...</span>
+        <span style={{ marginLeft: 8 }}>{t('common:loading')}</span>
       </div>
     );
   }
@@ -100,8 +102,8 @@ export default function Settings() {
   return (
     <PageShell contained className="gap-4">
       <PageShellHeader>
-        <PageShellTitle>设置</PageShellTitle>
-        <PageShellDescription>LLM provider 与偏好配置</PageShellDescription>
+        <PageShellTitle>{t('settings:title')}</PageShellTitle>
+        <PageShellDescription>{t('settings:description')}</PageShellDescription>
       </PageShellHeader>
 
       {/* Two-panel card（iDO 设置页规范） */}
@@ -112,7 +114,7 @@ export default function Settings() {
         >
           <div className="hairline-bottom" style={{ padding: '12px 16px' }}>
             <h2 className="text-[14px] font-semibold m-0" style={{ color: 'var(--foreground)' }}>
-              设置面板
+              {t('settings:panelTitle')}
             </h2>
           </div>
           <div className="flex-1 overflow-y-auto" style={{ padding: 8 }}>
@@ -139,7 +141,7 @@ export default function Settings() {
                     }}
                   >
                     <Icon name={p.icon} size={14} />
-                    <span className="flex-1">{p.label}</span>
+                    <span className="flex-1">{t(p.labelKey)}</span>
                   </div>
                 </button>
               );
@@ -155,7 +157,7 @@ export default function Settings() {
                   LLM Provider
                 </h3>
                 <p className="text-[12px] mb-3" style={{ color: 'var(--muted-foreground)' }}>
-                  选择 provider 并填写 API key 后即可使用。
+                  {t('settings:llmIntro')}
                 </p>
                 <select className="input-base" value={provider} onChange={(e) => setProvider(e.target.value)}>
                   {PROVIDERS.map((p) => (
@@ -174,53 +176,53 @@ export default function Settings() {
               />
               <div>
                 <Input
-                  label="Base URL（可选）"
-                  placeholder="https://api.anthropic.com（留空用官方地址）"
+                  label={t('settings:baseUrlLabel')}
+                  placeholder={t('settings:baseUrlPlaceholder')}
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
                 />
                 <p className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
-                  内网网关 / 代理地址，如 http://192.168.2.197:3000
+                  {t('settings:baseUrlHelp')}
                 </p>
               </div>
               <div>
                 <Input
                   label="Model"
-                  placeholder="留空使用默认模型"
+                  placeholder={t('settings:modelPlaceholder')}
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
                 />
                 {DEFAULT_MODELS[provider] && (
                   <p className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
-                    默认：{DEFAULT_MODELS[provider]}（留空时服务端自动使用）
+                    {t('settings:defaultModel', { model: DEFAULT_MODELS[provider] })}
                   </p>
                 )}
               </div>
               <div className="flex items-center gap-3">
                 <Button disabled={save.isPending} onClick={() => save.mutate()}>
-                  {save.isPending ? '保存中...' : '保存'}
+                  {save.isPending ? t('settings:saving') : t('common:save')}
                 </Button>
                 <Button variant="ghost" disabled={test.isPending} onClick={() => test.mutate()}>
-                  {test.isPending ? '测试中...' : '测试连接'}
+                  {test.isPending ? t('settings:testing') : t('settings:testConnection')}
                 </Button>
                 {test.isPending && (
                   <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-                    正在发送探测请求...
+                    {t('settings:testingProbe')}
                   </span>
                 )}
                 {test.isSuccess && test.data.ok && (
                   <span className="text-[12px]" style={{ color: 'var(--success)' }}>
-                    连接成功 · {test.data.latencyMs}ms
+                    {t('settings:testOk', { latencyMs: test.data.latencyMs })}
                   </span>
                 )}
                 {test.isSuccess && !test.data.ok && (
                   <span className="text-[12px]" style={{ color: 'var(--destructive)' }}>
-                    连接失败：{test.data.error}
+                    {t('settings:testFail', { error: test.data.error })}
                   </span>
                 )}
                 {test.isError && (
                   <span className="text-[12px]" style={{ color: 'var(--destructive)' }}>
-                    连接失败：{(test.error as Error).message}
+                    {t('settings:testFail', { error: (test.error as Error).message })}
                   </span>
                 )}
               </div>
@@ -231,18 +233,18 @@ export default function Settings() {
             <div className="flex flex-col gap-4 max-w-xl">
               <div>
                 <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--foreground)' }}>
-                  外观
+                  {t('settings:appearance')}
                 </h3>
                 <p className="text-[12px] mb-4" style={{ color: 'var(--muted-foreground)' }}>
-                  当前主题：{theme === 'dark' ? '深色玻璃' : '浅色玻璃'}
+                  {t('settings:currentTheme', { theme: theme === 'dark' ? t('settings:darkGlass') : t('settings:lightGlass') })}
                 </p>
               </div>
               <div className="flex flex-col gap-3">
                 <div className="bg-card border flex items-center justify-between" style={{ padding: 16 }}>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>深色玻璃</div>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>{t('settings:darkGlass')}</div>
                     <div className="text-[11px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
-                      高对比，适合长时间使用
+                      {t('settings:darkGlassDesc')}
                     </div>
                   </div>
                   <Toggle checked={theme === 'dark'} onChange={() => toggleTheme()} />
@@ -255,18 +257,18 @@ export default function Settings() {
             <div className="flex flex-col gap-4 max-w-xl">
               <div>
                 <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--foreground)' }}>
-                  回放降级
+                  {t('settings:replayTitle')}
                 </h3>
                 <p className="text-[12px] mb-4" style={{ color: 'var(--muted-foreground)' }}>
-                  步骤机械执行受阻时，可用该步骤的自然语言指令让 AI 临场兜底执行（成功计通过并标注「AI 降级执行」，失败维持原失败）。
+                  {t('settings:replayIntro')}
                 </p>
               </div>
               <div className="flex flex-col gap-3">
                 <div className="bg-card border flex items-center justify-between" style={{ padding: 16 }}>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>compiled DSL 为空自动降级 AI 执行</div>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>{t('settings:compileFallbackTitle')}</div>
                     <div className="text-[11px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
-                      步骤未编译时用其指令临场执行，不再以 compile-missing 直接判失败。
+                      {t('settings:compileFallbackDesc')}
                     </div>
                   </div>
                   <Toggle
@@ -279,9 +281,9 @@ export default function Settings() {
                 </div>
                 <div className="bg-card border flex items-center justify-between" style={{ padding: 16 }}>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>机械执行失败自动降级 AI 执行</div>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>{t('settings:locatorFallbackTitle')}</div>
                     <div className="text-[11px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
-                      步骤机械执行报错（定位失败、断言不匹配等）时用指令重做本步。
+                      {t('settings:locatorFallbackDesc')}
                     </div>
                   </div>
                   <Toggle
