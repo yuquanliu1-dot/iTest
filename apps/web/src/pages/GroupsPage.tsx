@@ -160,10 +160,10 @@ export default function GroupsPage() {
 		}
 		const hasNone = (cases ?? []).some((c) => c.scenarioId == null);
 		const opts: Array<{ id: string; title: string }> = [];
-		if (hasNone) opts.push({ id: 'none', title: '（无场景）' });
+		if (hasNone) opts.push({ id: 'none', title: t('groups:noScenario') });
 		for (const v of map.values()) opts.push(v);
 		return opts;
-	}, [projectScenarios, cases]);
+	}, [projectScenarios, cases, t]);
 
 	// 切换分组时：tab 跳回 all + 页码归 1（URL 同步）。
 	// 注：useTableSelection 在下方定义，跨 useEffect 引用会撞 "used before declaration"，
@@ -185,7 +185,7 @@ export default function GroupsPage() {
 			return api.groups.patch(groupForm.id!, body);
 		},
 		onSuccess: () => {
-			toast('分组已保存', 'success');
+			toast(t('groups:groupSaved'), 'success');
 			setGroupForm(EMPTY_GROUP_FORM);
 			qc.invalidateQueries({ queryKey: ['groups', projectId] });
 		},
@@ -195,13 +195,13 @@ export default function GroupsPage() {
 	const deleteGroup = useMutation({
 		mutationFn: (id: string) => api.groups.remove(id),
 		onSuccess: () => {
-			toast('分组已删除', 'success');
+			toast(t('groups:groupDeleted'), 'success');
 			setConfirmDeleteGroup(null);
 			if (effectiveGroupId) navigate(`/p/${projectId}/v/${vidParam}/groups`);
 			qc.invalidateQueries({ queryKey: ['groups', projectId] });
 		},
 		onError: (e: Error) => {
-			toast(e.message.includes('409') || e.message.includes('cases') ? '分组内仍有用例，无法删除' : e.message, 'error');
+			toast(e.message.includes('409') || e.message.includes('cases') ? t('groups:groupDeleteBlocked') : e.message, 'error');
 			setConfirmDeleteGroup(null);
 		},
 	});
@@ -213,7 +213,7 @@ export default function GroupsPage() {
 			return api.cases.copyBatch(caseIds, targetGroupId, versionId ?? undefined);
 		},
 		onSuccess: () => {
-			toast('复制完成', 'success');
+			toast(t('groups:copyDone'), 'success');
 			setCopyModal(null);
 			setCopyTarget('');
 			invalidate();
@@ -229,7 +229,7 @@ export default function GroupsPage() {
 			return api.plans.setCases(planId, merged);
 		},
 		onSuccess: () => {
-			toast('已加入执行计划', 'success');
+			toast(t('groups:addedToPlan'), 'success');
 			setPlanModal(null);
 			setPlanTarget('');
 			qc.invalidateQueries({ queryKey: ['plans', projectId] });
@@ -240,7 +240,7 @@ export default function GroupsPage() {
 	const deleteCase = useMutation({
 		mutationFn: (id: string) => api.cases.remove(id),
 		onSuccess: () => {
-			toast('用例已删除', 'success');
+			toast(t('groups:caseDeleted'), 'success');
 			setConfirmDeleteCase(null);
 			invalidate();
 		},
@@ -251,7 +251,7 @@ export default function GroupsPage() {
 	const executeCase = useMutation({
 		mutationFn: (id: string) => api.cases.execute(id),
 		onSuccess: (r) => {
-			toast('执行完成', 'success');
+			toast(t('groups:executeDone'), 'success');
 			qc.invalidateQueries({ queryKey: ['reports'] });
 			navigate(versionId ? `/p/${projectId}/v/${versionId}/reports/${r.reportId}` : `/`);
 		},
@@ -261,7 +261,7 @@ export default function GroupsPage() {
 	const batchDeleteCases = useMutation({
 		mutationFn: (caseIds: string[]) => api.cases.removeBatch(caseIds),
 		onSuccess: (r) => {
-			toast(`已删除 ${r.count} 条用例`, 'success');
+			toast(t('groups:deletedCases', { count: r.count }), 'success');
 			setConfirmBatchDelete(false);
 			selection.clear();
 			invalidate();
@@ -275,7 +275,7 @@ export default function GroupsPage() {
 	const batchStatus = useMutation({
 		mutationFn: (status: CaseStatus) => api.cases.updateStatusBatch(selection.ids, status),
 		onSuccess: (r) => {
-			toast(`已更新 ${r.count} 条`, 'success');
+			toast(t('groups:updatedCases', { count: r.count }), 'success');
 			selection.clear();
 			invalidate();
 		},
@@ -321,39 +321,39 @@ export default function GroupsPage() {
 
 	const tabs: DataTableTabs = {
 		id: 'tab',
-		allLabel: '全部',
+		allLabel: t('groups:all'),
 		options: [
-			{ value: 'draft', label: '草稿' },
-			{ value: 'review', label: '评审中' },
-			{ value: 'ready', label: '就绪' },
-			{ value: 'deprecated', label: '废弃' },
+			{ value: 'draft', label: t('cases:status.draft') },
+			{ value: 'review', label: t('cases:status.review') },
+			{ value: 'ready', label: t('cases:status.ready') },
+			{ value: 'deprecated', label: t('cases:status.deprecated') },
 		],
 	};
 
 	const facets: DataTableFacet[] = [
 		{
 			id: 'priority',
-			label: '优先级',
+			label: t('groups:priority'),
 			options: PRIORITY_VALUES.filter((p) => p !== '').map((p) => ({ value: p, label: p })),
 		},
 		{
 			id: 'version',
-			label: '版本',
+			label: t('groups:version'),
 			options: (projectVersionList ?? []).map((v) => ({ value: v.id, label: v.name })),
 		},
 		{
 			id: 'scenario',
-			label: '场景',
+			label: t('groups:scenario'),
 			options: scenarioOptions.map((o) => ({ value: o.id, label: o.title })),
 		},
 		{
 			id: 'status',
-			label: '状态',
+			label: t('groups:statusLabel'),
 			options: STATUS_FILTER_VALUES.filter((s) => s !== '').map((s) => ({ value: s, label: t(caseStatusLabel(s)) })),
 		},
 		{
 			id: 'tag',
-			label: '标签',
+			label: t('groups:tagLabel'),
 			options: (projectTags ?? []).map((t) => ({ value: t.id, label: t.name })),
 		},
 	];
@@ -361,14 +361,14 @@ export default function GroupsPage() {
 	const columnsDef: DataTableColumn<TestCase>[] = [
 		{
 				id: 'priority',
-				header: '优先级',
+				header: t('groups:priority'),
 				width: 'w-[64px]',
 				hideBelow: 'md',
 				cell: (c) => <PriorityBadge priority={c.priority} />,
 			},
 			{
 				id: 'title',
-				header: '标题',
+				header: t('groups:title'),
 				sortable: false,
 				cell: (c) => (
 					<span className="font-semibold truncate" title={c.title}>{c.title}</span>
@@ -377,7 +377,7 @@ export default function GroupsPage() {
 			},
 			{
 				id: 'group',
-				header: '所属分组',
+				header: t('groups:groupColumn'),
 				width: 'w-[10%]',
 				hideBelow: 'lg',
 				cellClassName: 'text-muted-foreground',
@@ -385,7 +385,7 @@ export default function GroupsPage() {
 			},
 			{
 				id: 'version',
-				header: '版本',
+				header: t('groups:version'),
 				width: 'w-[7%]',
 				hideBelow: 'lg',
 				cellClassName: 'text-muted-foreground',
@@ -397,7 +397,7 @@ export default function GroupsPage() {
 			},
 			{
 				id: 'scenario',
-				header: '场景',
+				header: t('groups:scenario'),
 				width: 'w-[10%]',
 				hideBelow: 'lg',
 				cellClassName: 'text-muted-foreground',
@@ -409,7 +409,7 @@ export default function GroupsPage() {
 			},
 			{
 				id: 'tags',
-				header: '标签',
+				header: t('groups:tagLabel'),
 				width: 'w-[12%]',
 				hideBelow: 'md',
 				cell: (c) => {
@@ -429,13 +429,13 @@ export default function GroupsPage() {
 			},
 			{
 				id: 'status',
-				header: '状态',
+				header: t('groups:statusLabel'),
 				width: 'w-[9%]',
 				cell: (c) => <CaseStatusMenu caseId={c.id} status={c.status} projectId={projectId} />,
 			},
 			{
 				id: 'createdBy',
-				header: '创建人',
+				header: t('groups:createdBy'),
 				width: 'w-[8%]',
 				hideBelow: 'lg',
 				cellClassName: 'text-xs text-muted-foreground',
@@ -443,7 +443,7 @@ export default function GroupsPage() {
 			},
 			{
 				id: 'updatedAt',
-				header: '更新时间',
+				header: t('groups:updatedAt'),
 				width: 'w-[8%]',
 				align: 'right',
 				cellClassName: 'text-xs text-muted-foreground tabular-nums',
@@ -462,24 +462,24 @@ export default function GroupsPage() {
 					>
 						<IconButton
 							icon={executeCase.isPending && executeCase.variables === c.id ? 'loader' : 'play'}
-							title="执行"
+							title={t('groups:execute')}
 							tone="accent"
 							disabled={executeCase.isPending && executeCase.variables === c.id}
 							onClick={() => executeCase.mutate(c.id)}
 						/>
 						<IconButton
 							icon="reportView"
-							title="查看报告"
+							title={t('groups:viewReport')}
 							onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/reports?caseId=${c.id}&q=${encodeURIComponent(c.title)}&tab=case` : `/`)}
 						/>
 						<IconButton
 							icon="copy"
-							title="复制"
+							title={t('groups:copy')}
 							onClick={() => { setCopyTarget(''); setCopyModal({ caseIds: [c.id] }); }}
 						/>
 						<IconButton
 							icon="trash"
-							title="删除"
+							title={t('common:delete')}
 							tone="destructive"
 							onClick={() => setConfirmDeleteCase({ id: c.id, title: c.title })}
 						/>
@@ -512,7 +512,7 @@ export default function GroupsPage() {
 				description: caseForm.description.trim() || undefined,
 			}),
 		onSuccess: (r) => {
-			toast('用例已创建', 'success');
+			toast(t('groups:caseCreated'), 'success');
 			setCaseForm(EMPTY_CASE_FORM);
 			invalidate();
 			navigate(versionId ? `/p/${projectId}/v/${versionId}/cases/${r.id}` : `/`);
@@ -523,9 +523,9 @@ export default function GroupsPage() {
 	return (
 		<PageShell contained>
 			<PageShellHeader>
-				<PageShellTitle>用例</PageShellTitle>
+				<PageShellTitle>{t('common:navCases')}</PageShellTitle>
 				<PageShellDescription>
-					{effectiveGroupId ? (groupName.get(effectiveGroupId) ?? '分组') : '项目全部用例'} · {current?.name}
+					{effectiveGroupId ? (groupName.get(effectiveGroupId) ?? t('groups:group')) : t('groups:allCases')} · {current?.name}
 				</PageShellDescription>
 				<PageShellActions>
 					<Button
@@ -535,11 +535,11 @@ export default function GroupsPage() {
 						}}
 					>
 						<Icon name="plus" size={12} />
-						新建用例
+							{t('groups:newCase')}
 					</Button>
 					<Button onClick={() => setAiForm({ ...EMPTY_AI_FORM, open: true })}>
 						<Icon name="bolt" size={12} />
-						AI 创建用例
+						{t('groups:aiCreateCase')}
 					</Button>
 				</PageShellActions>
 			</PageShellHeader>
@@ -553,10 +553,10 @@ export default function GroupsPage() {
 					>
 						<div className="flex items-center justify-between px-2 py-1">
 							<span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
-								分组
+								{t('groups:group')}
 							</span>
 							<button
-								title="新建分组"
+								title={t('groups:newGroup')}
 								onClick={() => setGroupForm({ open: true, mode: 'create', id: null, name: '' })}
 								style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 2 }}
 							>
@@ -574,7 +574,7 @@ export default function GroupsPage() {
 								border: 'none', cursor: 'pointer',
 							}}
 						>
-							全部用例（{cases?.length ?? 0}）
+							{t('groups:allCasesCount', { count: cases?.length ?? 0 })}
 						</button>
 
 						{groupsLoading ? (
@@ -602,12 +602,12 @@ export default function GroupsPage() {
 										<span className="hidden group-hover:flex items-center" onClick={(e) => e.stopPropagation()}>
 											<IconButton
 												icon="pencil"
-												title="重命名"
+												title={t('groups:renameGroup')}
 												onClick={() => setGroupForm({ open: true, mode: 'edit', id: g.id, name: g.name })}
 											/>
 											<IconButton
 												icon="trash"
-												title="删除分组"
+												title={t('groups:deleteGroup')}
 												tone="destructive"
 												onClick={() => setConfirmDeleteGroup({ id: g.id, name: g.name })}
 											/>
@@ -622,7 +622,7 @@ export default function GroupsPage() {
 					<div className="flex-1 min-w-0 flex flex-col overflow-hidden p-3">
 						{casesError ? (
 							<div className="flex flex-1 items-center justify-center text-muted-foreground" style={{ fontSize: 13 }}>
-								加载失败：{casesErrorObj?.message ?? '未知错误'}
+								{t('common:loadFailed')}：{casesErrorObj?.message ?? t('common:unknownError')}
 							</div>
 						) : (
 							<DataTable<TestCase>
@@ -666,14 +666,14 @@ export default function GroupsPage() {
 									<>
 										<Button size="sm" variant="ghost" onClick={() => { setCopyTarget(''); setCopyModal({ caseIds: selection.ids }); }}>
 											<Icon name="copy" size={12} />
-											批量复制
+												{t('groups:batchCopy')}
 										</Button>
 										<Button size="sm" variant="ghost" onClick={() => { setPlanTarget(''); setPlanModal({ caseIds: selection.ids }); }}>
 											<Icon name="play" size={12} />
-											加入计划
+												{t('groups:addToPlan')}
 										</Button>
 										<select
-											aria-label="批量修改状态"
+											aria-label={t('groups:batchStatusAria')}
 											className="h-7 rounded-md border border-border bg-background px-2 text-xs outline-none cursor-pointer"
 											value=""
 											disabled={batchStatus.isPending}
@@ -681,15 +681,15 @@ export default function GroupsPage() {
 												if (e.target.value) batchStatus.mutate(e.target.value as CaseStatus);
 											}}
 										>
-											<option value="">改状态…</option>
-											<option value="draft">→ 草稿</option>
-											<option value="review">→ 评审中</option>
-											<option value="ready">→ 就绪</option>
-											<option value="deprecated">→ 废弃</option>
+											<option value="">{t('groups:changeStatus')}</option>
+											<option value="draft">→ {t('cases:status.draft')}</option>
+											<option value="review">→ {t('cases:status.review')}</option>
+											<option value="ready">→ {t('cases:status.ready')}</option>
+											<option value="deprecated">→ {t('cases:status.deprecated')}</option>
 										</select>
 										<Button size="sm" variant="destructive" onClick={() => setConfirmBatchDelete(true)}>
 											<Icon name="trash" size={12} />
-											批量删除
+												{t('groups:batchDelete')}
 										</Button>
 									</>
 								) }}
@@ -699,14 +699,14 @@ export default function GroupsPage() {
 										<Input
 											value={q}
 											onChange={(e) => setSearch(e.target.value)}
-											placeholder="搜索用例标题…"
+											placeholder={t('groups:searchPlaceholder')}
 											className="pl-7"
 											size="sm"
 										/>
 									</div>
 								)}
 								empty={
-									<EmptyState icon="beaker" title="还没有用例" description="点击右上角「AI 创建用例」，粘贴需求让 AI 生成。" />
+									<EmptyState icon="beaker" title={t('groups:noCases')} description={t('groups:noCasesHint')} />
 								}
 							/>
 						)}
@@ -719,19 +719,19 @@ export default function GroupsPage() {
 				<DialogContent>
 					<DialogHeader>
 						<DialogTitle>
-							{groupForm.mode === 'create' ? '新建分组' : '重命名分组'}
+							{groupForm.mode === 'create' ? t('groups:newGroup') : t('groups:renameGroup')}
 						</DialogTitle>
 					</DialogHeader>
 					<div className="flex flex-col gap-3 px-5 py-4">
-						<Input label="名称" placeholder="如：登录与账号" value={groupForm.name} onChange={(e) => setGroupForm((f) => ({ ...f, name: e.target.value }))} />
+						<Input label={t('groups:name')} placeholder={t('groups:namePlaceholder')} value={groupForm.name} onChange={(e) => setGroupForm((f) => ({ ...f, name: e.target.value }))} />
 					</div>
 					<div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--border)' }}>
-						<Button variant="ghost" onClick={() => setGroupForm(EMPTY_GROUP_FORM)}>取消</Button>
+						<Button variant="ghost" onClick={() => setGroupForm(EMPTY_GROUP_FORM)}>{t('common:cancel')}</Button>
 						<Button
 							disabled={!groupForm.name.trim() || saveGroup.isPending}
 							onClick={() => saveGroup.mutate()}
 						>
-							{saveGroup.isPending ? '保存中...' : '保存'}
+							{saveGroup.isPending ? t('groups:saving') : t('common:save')}
 						</Button>
 					</div>
 				</DialogContent>
@@ -740,14 +740,14 @@ export default function GroupsPage() {
 			{/* 删除分组确认 */}
 			<Dialog open={!!confirmDeleteGroup} onOpenChange={(open) => { if (!open) setConfirmDeleteGroup(null); }}>
 				<DialogContent>
-					<DialogHeader><DialogTitle>删除分组</DialogTitle></DialogHeader>
+					<DialogHeader><DialogTitle>{t('groups:deleteGroup')}</DialogTitle></DialogHeader>
 					<div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-						确定删除「{confirmDeleteGroup?.name}」？分组内存在用例时将被拒绝删除。
+						{t('groups:deleteGroupConfirm', { name: confirmDeleteGroup?.name })}
 					</div>
 					<div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--border)' }}>
-						<Button variant="ghost" onClick={() => setConfirmDeleteGroup(null)}>取消</Button>
+						<Button variant="ghost" onClick={() => setConfirmDeleteGroup(null)}>{t('common:cancel')}</Button>
 						<Button variant="destructive" disabled={deleteGroup.isPending} onClick={() => confirmDeleteGroup && deleteGroup.mutate(confirmDeleteGroup.id)}>
-							{deleteGroup.isPending ? '删除中...' : '确认删除'}
+							{deleteGroup.isPending ? t('groups:deleting') : t('groups:confirmDelete')}
 						</Button>
 					</div>
 				</DialogContent>
@@ -756,14 +756,14 @@ export default function GroupsPage() {
 			{/* 删除用例确认 */}
 			<Dialog open={!!confirmDeleteCase} onOpenChange={(open) => { if (!open) setConfirmDeleteCase(null); }}>
 				<DialogContent>
-					<DialogHeader><DialogTitle>删除用例</DialogTitle></DialogHeader>
+					<DialogHeader><DialogTitle>{t('groups:deleteCase')}</DialogTitle></DialogHeader>
 					<div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-						确定删除「{confirmDeleteCase?.title}」？该用例的步骤与报告将一并删除。
+						{t('groups:deleteCaseConfirm', { title: confirmDeleteCase?.title })}
 					</div>
 					<DialogFooter>
-						<Button variant="ghost" onClick={() => setConfirmDeleteCase(null)}>取消</Button>
+						<Button variant="ghost" onClick={() => setConfirmDeleteCase(null)}>{t('common:cancel')}</Button>
 						<Button variant="destructive" disabled={deleteCase.isPending} onClick={() => confirmDeleteCase && deleteCase.mutate(confirmDeleteCase.id)}>
-							{deleteCase.isPending ? '删除中...' : '确认删除'}
+							{deleteCase.isPending ? t('groups:deleting') : t('groups:confirmDelete')}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -772,18 +772,18 @@ export default function GroupsPage() {
 			{/* 批量删除确认 */}
 			<Dialog open={confirmBatchDelete} onOpenChange={(open) => { if (!open) setConfirmBatchDelete(false); }}>
 				<DialogContent>
-					<DialogHeader><DialogTitle>批量删除用例</DialogTitle></DialogHeader>
+					<DialogHeader><DialogTitle>{t('groups:batchDeleteCases')}</DialogTitle></DialogHeader>
 					<div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-						确定删除已选的 <span style={{ color: 'var(--destructive)', fontWeight: 600 }}>{selection.count}</span> 条用例？这些用例的步骤、报告、附件将被一并删除，且不可恢复。
+						{t('groups:batchDeleteConfirm')} <span style={{ color: 'var(--destructive)', fontWeight: 600 }}>{selection.count}</span> {t('groups:batchDeleteSuffix')}
 					</div>
 					<DialogFooter>
-						<Button variant="ghost" onClick={() => setConfirmBatchDelete(false)}>取消</Button>
+						<Button variant="ghost" onClick={() => setConfirmBatchDelete(false)}>{t('common:cancel')}</Button>
 						<Button
 							variant="destructive"
 							disabled={batchDeleteCases.isPending || selection.count === 0}
 							onClick={() => batchDeleteCases.mutate(selection.ids)}
 						>
-							{batchDeleteCases.isPending ? '删除中...' : `删除 ${selection.count} 条`}
+							{batchDeleteCases.isPending ? t('groups:deleting') : t('groups:deletedCases', { count: selection.count })}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -792,26 +792,26 @@ export default function GroupsPage() {
 			{/* 复制目标分组弹窗 */}
 			<Dialog open={!!copyModal} onOpenChange={(open) => { if (!open) setCopyModal(null); }}>
 				<DialogContent>
-					<DialogHeader><DialogTitle>复制用例（{copyModal?.caseIds.length} 条）</DialogTitle></DialogHeader>
+					<DialogHeader><DialogTitle>{t('groups:copyCasesTitle', { count: copyModal?.caseIds.length ?? 0 })}</DialogTitle></DialogHeader>
 					<div className="flex flex-col gap-3 px-5 py-4">
-						<label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>目标分组</label>
+						<label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>{t('groups:targetGroup')}</label>
 						<select className="input-base" value={copyTarget} onChange={(e) => setCopyTarget(e.target.value)}>
-							<option value="">请选择</option>
+							<option value="">{t('groups:pleaseSelect')}</option>
 							{(groups ?? []).map((g) => (
 								<option key={g.id} value={g.id}>{g.name}</option>
 							))}
 						</select>
 						<p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-							副本命名：原名 +「副本」，重名自动追加数字（副本1、副本2…）。
+							{t('groups:copyNamingHint')}
 						</p>
 					</div>
 					<DialogFooter>
-						<Button variant="ghost" onClick={() => setCopyModal(null)}>取消</Button>
+						<Button variant="ghost" onClick={() => setCopyModal(null)}>{t('common:cancel')}</Button>
 						<Button
 							disabled={!copyTarget || copyCases.isPending}
 							onClick={() => copyModal && copyCases.mutate({ caseIds: copyModal.caseIds, targetGroupId: copyTarget })}
 						>
-							{copyCases.isPending ? '复制中...' : '复制'}
+							{copyCases.isPending ? t('groups:copying') : t('groups:copy')}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -820,28 +820,28 @@ export default function GroupsPage() {
 			{/* 加入计划弹窗 */}
 			<Dialog open={!!planModal} onOpenChange={(open) => { if (!open) setPlanModal(null); }}>
 				<DialogContent>
-					<DialogHeader><DialogTitle>加入执行计划（{planModal?.caseIds.length} 条）</DialogTitle></DialogHeader>
+					<DialogHeader><DialogTitle>{t('groups:addToPlanTitle', { count: planModal?.caseIds.length ?? 0 })}</DialogTitle></DialogHeader>
 					<div className="flex flex-col gap-3 px-5 py-4">
-						<label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>选择计划</label>
+						<label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>{t('groups:selectPlan')}</label>
 						<select className="input-base" value={planTarget} onChange={(e) => setPlanTarget(e.target.value)}>
-							<option value="">请选择</option>
+							<option value="">{t('groups:pleaseSelect')}</option>
 							{(plans ?? []).map((p) => (
 								<option key={p.id} value={p.id}>{p.name}{p.environment ? `（${p.environment}）` : ''}</option>
 							))}
 						</select>
 						{(plans ?? []).length === 0 && (
 							<p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-								还没有执行计划，请先到「执行计划」页创建。
+								{t('groups:noPlansHint')}
 							</p>
 						)}
 					</div>
 					<DialogFooter>
-						<Button variant="ghost" onClick={() => setPlanModal(null)}>取消</Button>
+						<Button variant="ghost" onClick={() => setPlanModal(null)}>{t('common:cancel')}</Button>
 						<Button
 							disabled={!planTarget || addToPlan.isPending}
 							onClick={() => planModal && addToPlan.mutate({ caseIds: planModal.caseIds, planId: planTarget })}
 						>
-							{addToPlan.isPending ? '添加中...' : '加入'}
+							{addToPlan.isPending ? t('groups:adding') : t('groups:add')}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -850,32 +850,32 @@ export default function GroupsPage() {
 			{/* AI 创建用例 — 收集需求标题/内容后跳到 AI 工作台 */}
 			<Dialog open={aiForm.open} onOpenChange={(open) => setAiForm((f) => ({ ...f, open }))}>
 				<DialogContent>
-					<DialogHeader><DialogTitle>AI 创建用例</DialogTitle></DialogHeader>
+					<DialogHeader><DialogTitle>{t('groups:aiCreateCase')}</DialogTitle></DialogHeader>
 					<div className="flex flex-col gap-3 px-5 py-4">
 						<p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-							描述要测的需求，AI 会基于此生成场景和用例。
+							{t('groups:aiDialogHint')}
 						</p>
 						<Input
-							label="需求标题"
-							placeholder="如：登录与账号体系"
+							label={t('groups:reqTitle')}
+							placeholder={t('groups:reqTitlePlaceholder')}
 							value={aiForm.title}
 							onChange={(e) => setAiForm((f) => ({ ...f, title: e.target.value }))}
 						/>
 						<div className="flex flex-col gap-1">
 							<label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
-								需求描述
+								{t('groups:reqDescription')}
 							</label>
 							<textarea
 								className="input-base"
 								rows={6}
-								placeholder="把要测的需求贴在这里，AI 会拆解为场景与用例。"
+								placeholder={t('groups:reqDescriptionPlaceholder')}
 								value={aiForm.content}
 								onChange={(e) => setAiForm((f) => ({ ...f, content: e.target.value }))}
 							/>
 						</div>
 						<div className="flex flex-col gap-1">
 							<label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
-								覆盖类型（勾选 = 必须覆盖，未勾选由 AI 自行判断）
+								{t('groups:coverageTypeHint')}
 							</label>
 							<div className="flex flex-wrap gap-x-4 gap-y-1.5">
 								{COVERAGE_TYPES.map((t) => (
@@ -899,12 +899,12 @@ export default function GroupsPage() {
 						</div>
 					</div>
 					<div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--border)' }}>
-						<Button variant="ghost" onClick={() => setAiForm(EMPTY_AI_FORM)}>取消</Button>
+						<Button variant="ghost" onClick={() => setAiForm(EMPTY_AI_FORM)}>{t('common:cancel')}</Button>
 						<Button
 							disabled={!aiForm.title.trim() || !aiForm.content.trim() || startAiCaseSession.isPending}
 							onClick={() => startAiCaseSession.mutate()}
 						>
-							{startAiCaseSession.isPending ? '打开中...' : '开始 AI 会话'}
+							{startAiCaseSession.isPending ? t('groups:opening') : t('groups:startAiSession')}
 						</Button>
 					</div>
 				</DialogContent>
@@ -913,30 +913,30 @@ export default function GroupsPage() {
 			{/* 手动新建用例 */}
 			<Dialog open={caseForm.open} onOpenChange={(open) => setCaseForm((f) => ({ ...f, open }))}>
 				<DialogContent>
-					<DialogHeader><DialogTitle>新建用例</DialogTitle></DialogHeader>
+					<DialogHeader><DialogTitle>{t('groups:newCase')}</DialogTitle></DialogHeader>
 					<div className="flex flex-col gap-3 px-5 py-4">
 						<Input
-							label="标题"
-							placeholder="如：登录 - 正确账号密码"
+							label={t('groups:title')}
+							placeholder={t('groups:caseTitlePlaceholder')}
 							value={caseForm.title}
 							onChange={(e) => setCaseForm((f) => ({ ...f, title: e.target.value }))}
 						/>
 						<div className="flex flex-col gap-1">
-							<label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>分组</label>
+							<label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>{t('groups:group')}</label>
 							<select
 								className="input-base"
 								value={caseForm.groupId}
 								onChange={(e) => setCaseForm((f) => ({ ...f, groupId: e.target.value }))}
 								disabled={(groups ?? []).length === 0}
 							>
-								{(groups ?? []).length === 0 && <option value="">请先创建分组</option>}
+								{(groups ?? []).length === 0 && <option value="">{t('groups:createGroupFirst')}</option>}
 								{(groups ?? []).map((g) => (
 									<option key={g.id} value={g.id}>{g.name}</option>
 								))}
 							</select>
 						</div>
 						<div className="flex flex-col gap-1">
-							<label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>优先级</label>
+							<label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>{t('groups:priority')}</label>
 							<Segmented
 								options={(['P0', 'P1', 'P2', 'P3'] as const).map((p) => ({ value: p, label: p }))}
 								value={caseForm.priority}
@@ -944,23 +944,23 @@ export default function GroupsPage() {
 							/>
 						</div>
 						<div className="flex flex-col gap-1">
-							<label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>描述（可空）</label>
+							<label className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>{t('groups:descriptionOptional')}</label>
 							<textarea
 								className="input-base"
 								rows={3}
-								placeholder="补充前置条件、测试要点等。"
+								placeholder={t('groups:descriptionPlaceholder')}
 								value={caseForm.description}
 								onChange={(e) => setCaseForm((f) => ({ ...f, description: e.target.value }))}
 							/>
 						</div>
 					</div>
 					<div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: 'var(--border)' }}>
-						<Button variant="ghost" onClick={() => setCaseForm(EMPTY_CASE_FORM)}>取消</Button>
+						<Button variant="ghost" onClick={() => setCaseForm(EMPTY_CASE_FORM)}>{t('common:cancel')}</Button>
 						<Button
 							disabled={!caseForm.title.trim() || !caseForm.groupId || createCase.isPending}
 							onClick={() => createCase.mutate()}
 						>
-							{createCase.isPending ? '创建中...' : '创建'}
+							{createCase.isPending ? t('groups:creating') : t('groups:create')}
 						</Button>
 					</div>
 				</DialogContent>
