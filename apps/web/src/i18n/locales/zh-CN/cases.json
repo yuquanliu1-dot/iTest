@@ -44,6 +44,8 @@
   "edit": "编辑",
   "undo": "撤销",
   "deleteStep": "删除步骤",
+  "steps": "步骤",
+  "steps_other": "步骤",
   "confirmDelete": "确认删除",
   "deleting": "删除中...",
   "saving": "保存中...",
