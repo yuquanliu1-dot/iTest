@@ -66,6 +66,11 @@ export function applyHtmlLang(lang: Lang): void {
 
 /** API 错误 → 本地化文案。命中错误码目录用目录；未知 code 回落原始 message。 */
 export function localizeApiError(err: { code?: string; message?: string } | null | undefined): string {
+  // bad_request 被后端复用：datasets.service.ts 用它回传「第 3 行列 x 回传了敏感占位符…请刷新后重试」等具体可执行文案，
+  // 目录里只有通用「请求参数错误，请检查输入」会误导用户去查输入而非刷新。有 message 时优先透传。
+  if (err?.code === 'bad_request' && err.message) {
+    return err.message;
+  }
   if (err?.code && i18n.exists(`errors:${err.code}`)) {
     return i18n.t(`errors:${err.code}`);
   }
