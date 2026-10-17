@@ -136,3 +136,4 @@ UserMenu 下拉内置语言切换项(theme 切换同类入口)。用户点击 �
 - **api 全量测试并行 testcontainers flake(既存,非 i18n)**。recorder-relativize/cases-versions 全量并行会争 postgres:16-alpine 容器偶发失败,单文件跑全过。
 - **web lint react-hooks/exhaustive-deps error(既存,非 i18n)**。6e11b81 起的配置问题,branch 未动 eslint 配置;本计划闸 = typecheck + i18n:check + test,不含 lint。
 - **recorder typecheck selector-core TS2367 ×3(既存,非 i18n)**。b37dbc0 起,'xpath' 与 'text'|'role'|'testId'|'css' 无重叠;Task 21 闸 = vitest run + build。
+- **recorder popup/panel 静态 `__MSG_*__` 字面量显示为原始 key(已修,commit 3d1c18d)**。`_locales` 机制只替换 manifest.json 字段与 `chrome.i18n.getMessage()` 运行时调用,`popup.html`/`panel.html` 里的 `__MSG_desc__` 等静态字面量从未被替换,直接渲染成原始 key(生产用户可见)。修复:popup.js 用 TreeWalker 遍历 body 文本节点做正则替换,panel.js 对 submit/close 两个按钮做单点替换(title 已被 TITLES[mode] 覆盖);缺失 key 保留原字面量便于排查。124/124 recorder 测试通过。prod228 服务器已热修复(直接覆盖 popup.js/panel.js),用户侧需 chrome://extensions 点刷新或重新 load unpacked 才生效。
