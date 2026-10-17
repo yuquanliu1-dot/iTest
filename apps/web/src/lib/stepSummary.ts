@@ -1,5 +1,4 @@
 // apps/web/src/lib/stepSummary.ts
-import type { StepAction } from '@itest/shared';
 import type { TFunction } from 'i18next';
 /** 步骤一览（列表/抽屉预览/悬浮卡）—— 人读摘要，纯函数，文案走 i18n key。 */
 
@@ -54,10 +53,6 @@ function pickAllActions(row: StepRowLike): KnownAction[] {
 export function isUncompiled(row: StepRowLike): boolean {
   return !Array.isArray(row.compiled) || row.compiled.length === 0;
 }
-
-// 兼容旧类型引用
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-type _StepAction = StepAction;
 
 /** 定位对象描述：优先语义文案，否则首个 locator 的 strategy=value。 */
 function targetText(action: KnownAction): string {
