@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import Icon from '../Icon';
 
 export interface TagChipData {
@@ -19,6 +20,7 @@ interface TagChipProps {
  * 文字 = 标签色混入少量前景色保证对比度。
  */
 export default function TagChip({ tag, onRemove, size = 'sm', className }: TagChipProps) {
+  const { t } = useTranslation();
   const padding = size === 'md' ? '3px 10px' : '2px 8px';
   return (
     <span
@@ -39,7 +41,7 @@ export default function TagChip({ tag, onRemove, size = 'sm', className }: TagCh
             e.stopPropagation();
             onRemove();
           }}
-          aria-label={`移除标签 ${tag.name}`}
+          aria-label={t('common:removeTag', { name: tag.name })}
           className="inline-flex items-center justify-center"
           style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, color: 'inherit', opacity: 0.7 }}
         >

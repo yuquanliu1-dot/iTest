@@ -1,4 +1,5 @@
 import { Link, useLocation, useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../stores/project';
 import { useAuthStore } from '../../stores/auth';
 import BrandGlyph from '../BrandGlyph';
@@ -11,6 +12,7 @@ import { Separator } from '../ui/shadcn/separator';
  * 主题切换入口在 UserMenu 下拉里（CRM 模式）；返回项目选择页走左侧栏「项目」。
  */
 export default function AppHeader() {
+  const { t } = useTranslation();
   const { projectId } = useParams<{ projectId: string }>();
   const { pathname } = useLocation();
   const current = useProjectStore((s) => s.current);
@@ -26,7 +28,7 @@ export default function AppHeader() {
       <div className="flex shrink-0 items-center gap-1">
         <Link
           to="/"
-          aria-label="首页"
+          aria-label={t('common:home')}
           className="flex size-8 items-center justify-center text-[var(--foreground)]"
         >
           <BrandGlyph size={20} animated={false} />

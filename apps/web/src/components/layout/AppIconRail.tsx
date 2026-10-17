@@ -1,4 +1,5 @@
 import { Link, useLocation, useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '../../stores/auth';
 import { useProjectStore } from '../../stores/project';
 import Icon, { type IconName } from '../Icon';
@@ -7,22 +8,22 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/shadcn/tooltip';
 import { cn } from '../../lib/cn';
 
 type RailItem = {
-  title: string;
+  titleKey: string;
   to: string;
   icon: IconName;
 };
 
 /** 顶部：全局入口 */
-const TOP_ITEMS: RailItem[] = [{ title: '项目', to: '/', icon: 'layers' }];
+const TOP_ITEMS: RailItem[] = [{ titleKey: 'common:navProjects', to: '/', icon: 'layers' }];
 
 /** 底部（mt-auto）：管理入口 */
 const BOTTOM_ITEMS: RailItem[] = [
-  { title: '成员管理', to: '/members', icon: 'user' },
-  { title: '系统配置', to: '/settings', icon: 'settings' },
+  { titleKey: 'common:navMembers', to: '/members', icon: 'user' },
+  { titleKey: 'common:navSettings', to: '/settings', icon: 'settings' },
 ];
 
 type ProjectNavItem = {
-  title: string;
+  titleKey: string;
   path: string;
   icon: IconName;
   /** 除自身前缀外额外归属的前缀（如用例详情 /cases 归属「用例」） */
@@ -30,11 +31,11 @@ type ProjectNavItem = {
 };
 
 const PROJECT_ITEMS: ProjectNavItem[] = [
-  { title: '工作台', path: 'overview', icon: 'sparkles' },
-  { title: 'AI 助手', path: 'assistant', icon: 'message' },
-  { title: '用例', path: 'groups', icon: 'beaker', related: ['cases', 'ai'] },
-  { title: '执行计划', path: 'plans', icon: 'play' },
-  { title: '执行历史', path: 'reports', icon: 'flag' },
+  { titleKey: 'common:navWorkspace', path: 'overview', icon: 'sparkles' },
+  { titleKey: 'common:navAssistant', path: 'assistant', icon: 'message' },
+  { titleKey: 'common:navCases', path: 'groups', icon: 'beaker', related: ['cases', 'ai'] },
+  { titleKey: 'common:navPlans', path: 'plans', icon: 'play' },
+  { titleKey: 'common:navReports', path: 'reports', icon: 'flag' },
 ];
 
 function isActive(item: RailItem, pathname: string): boolean {
@@ -53,11 +54,13 @@ function isProjectActive(
 }
 
 function RailLink({
-  title,
+  titleKey,
   to,
   icon,
   active,
 }: RailItem & { active: boolean }) {
+  const { t } = useTranslation();
+  const title = t(titleKey);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -88,6 +91,7 @@ function RailLink({
  * active=bg-muted，hover tooltip。
  */
 export default function AppIconRail() {
+  const { t } = useTranslation();
   const { pathname } = useLocation();
   const canManageMembers = useAuthStore((s) => s.organizations.some((o) => o.isManager));
   const { projectId: urlProjectId, versionId: urlVersionId } = useParams<{
@@ -114,7 +118,7 @@ export default function AppIconRail() {
 
   return (
     <div className="flex w-14 shrink-0 flex-col items-center border-r py-3">
-      <nav aria-label="主导航" className="flex flex-col items-center gap-1">
+      <nav aria-label={t('common:navMain')} className="flex flex-col items-center gap-1">
         {TOP_ITEMS.map((item) => (
           <RailLink key={item.to} {...item} active={isActive(item, pathname)} />
         ))}
@@ -122,11 +126,11 @@ export default function AppIconRail() {
       {inProject && (
         <>
           <hr aria-hidden className="my-2 w-6 border-[var(--border)]" />
-          <nav aria-label="项目导航" className="flex flex-col items-center gap-1">
+          <nav aria-label={t('common:navProject')} className="flex flex-col items-center gap-1">
             {PROJECT_ITEMS.map((item) => (
               <RailLink
                 key={item.path}
-                title={item.title}
+                titleKey={item.titleKey}
                 to={`${basePath}/${item.path}`}
                 icon={item.icon}
                 active={isProjectActive(item, basePath, pathname)}
@@ -136,7 +140,7 @@ export default function AppIconRail() {
         </>
       )}
       <nav
-        aria-label="管理导航"
+        aria-label={t('common:navManagement')}
         className="mt-auto flex flex-col items-center gap-1"
       >
         {bottomItems.map((item) => (

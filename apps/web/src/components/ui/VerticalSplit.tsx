@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
 /** 竖直分栏：上半固定像素高(top)，分隔条支持鼠标/触控拖拽调整高度，下半 flex-1。
@@ -16,6 +17,7 @@ export default function VerticalSplit({
   minTopPx?: number;
   maxTopPx?: number;
 }) {
+  const { t } = useTranslation();
   const [topPx, setTopPx] = useState(defaultTopPx);
   const dragRef = useRef<{ startY: number; startPx: number } | null>(null);
 
@@ -50,7 +52,7 @@ export default function VerticalSplit({
       <div
         role="separator"
         aria-orientation="horizontal"
-        aria-label="拖动调整上方高度"
+        aria-label={t('common:dragToResize')}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
