@@ -1,0 +1,21 @@
+{
+  "title": "Device Targets",
+  "back": "Back",
+  "addTitle": "New device target",
+  "editTitle": "Edit device target",
+  "saved": "Saved",
+  "deleted": "Deleted",
+  "saving": "Saving...",
+  "deleting": "Deleting...",
+  "confirmDelete": "Confirm delete",
+  "emptyTitle": "No device targets yet",
+  "emptyDescription": "Specify iOS Simulator / Android Emulator devices for mobile cases.",
+  "edit": "Edit",
+  "nameLabel": "Name",
+  "platform": "Platform",
+  "deviceRefLabel": "Device identifier (simulator name / Android emulator name)",
+  "bundleIdLabel": "Default bundleId (optional)",
+  "appPathLabel": "Default .app / .apk path (optional)",
+  "deleteTitle": "Delete device target",
+  "deleteConfirm": "Delete “{{name}}”? Bound mobile cases are unbound automatically (mobileDeviceTargetId set to null)."
+}

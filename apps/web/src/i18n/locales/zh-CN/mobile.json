@@ -1,0 +1,15 @@
+{
+  "title": "移动录制",
+  "selectTarget": "选择设备目标",
+  "pleaseSelectTarget": "请先选择设备目标",
+  "start": "启动",
+  "finish": "完成",
+  "startFailed": "启动失败",
+  "wroteSteps": "已写入 {{count}} 个步骤",
+  "startSessionFirst": "请先启动会话",
+  "noStepsRecorded": "尚未记录任何步骤",
+  "previewHint": "启动 daemon 后内嵌预览",
+  "noNodes": "无节点",
+  "recordedCount": "本会话已记录 {{count}} 步",
+  "writeToCase": "写入用例"
+}

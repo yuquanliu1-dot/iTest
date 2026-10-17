@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { api, type DeviceTarget } from '../../api/client';
 import { useUIStore } from '../../stores/ui';
@@ -32,6 +33,7 @@ export interface MobileRecorderProps {
  * 此组件只负责「呈现 + 事件流」，不直连协议。 */
 export default function MobileRecorder({ caseId, defaultTargetId, projectId, onClose }: MobileRecorderProps) {
   const toast = useUIStore((s) => s.showToast);
+  const { t } = useTranslation();
   const [targetId, setTargetId] = useState<string | undefined>(defaultTargetId);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [viewerUrl, setViewerUrl] = useState<string | null>(null);
@@ -46,7 +48,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
 
   // 启动 mobile recording 会话（占位实现：用 fetch 直连后端，后续与 ws 协议合并）
   const start = async () => {
-    if (!targetId) { toast('请先选择设备目标', 'error'); return; }
+    if (!targetId) { toast(t('mobile:pleaseSelectTarget'), 'error'); return; }
     try {
       const r = await fetch('/api/recorder/mobile-sessions', {
         method: 'POST',
@@ -54,8 +56,8 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
         body: JSON.stringify({ caseId, deviceTargetId: targetId }),
       });
       if (!r.ok) {
-        const err = await r.json().catch(() => ({ message: '启动失败' }));
-        throw new Error(err.message ?? '启动失败');
+        const err = await r.json().catch(() => ({ message: t('mobile:startFailed') }));
+        throw new Error(err.message ?? t('mobile:startFailed'));
       }
       const data = await r.json() as { sessionId: string; viewerUrl: string; wsToken: string };
       setSessionId(data.sessionId);
@@ -76,7 +78,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
       const r = await fetch(`/api/recorder/mobile-sessions/${sessionId}/finish`, { method: 'POST' });
       if (!r.ok) throw new Error('finish failed');
       const data = await r.json() as { inserted: number };
-      toast(`已写入 ${data.inserted} 个步骤`, 'success');
+      toast(t('mobile:wroteSteps', { count: data.inserted }), 'success');
       onClose();
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), 'error');
@@ -84,7 +86,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
   };
 
   const tapNode = (n: AccessibilityNode) => {
-    if (!sessionId) { toast('请先启动会话', 'error'); return; }
+    if (!sessionId) { toast(t('mobile:startSessionFirst'), 'error'); return; }
     if (!n.accessibilityId && !n.label) return;
     const compiled = [{
       kind: 'tap',
@@ -104,7 +106,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
 
   /** 把已记录的步骤批量追加到用例（走 replaceSteps 是与既有 UI 入口对齐的统一方式）。 */
   const flushToCase = async () => {
-    if (recordedSteps.length === 0) { toast('尚未记录任何步骤', 'info'); return; }
+    if (recordedSteps.length === 0) { toast(t('mobile:noStepsRecorded'), 'info'); return; }
     try {
       const current = await api.cases.get(caseId);
       const next = [
@@ -124,7 +126,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
         })),
       ];
       await api.cases.replaceSteps(caseId, next);
-      toast(`已写入 ${recordedSteps.length} 个步骤`, 'success');
+      toast(t('mobile:wroteSteps', { count: recordedSteps.length }), 'success');
       onClose();
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), 'error');
@@ -139,27 +141,27 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-3 px-4 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
         <Icon name="tablet" size={14} />
-        <span className="text-[13px] font-medium">移动录制</span>
+        <span className="text-[13px] font-medium">{t('mobile:title')}</span>
         <select
           className="input-base input-sm"
           value={targetId ?? ''}
           onChange={(e) => setTargetId(e.target.value || undefined)}
         >
-          <option value="">选择设备目标</option>
+          <option value="">{t('mobile:selectTarget')}</option>
           {(targets ?? []).map((t: DeviceTarget) => (
             <option key={t.id} value={t.id}>{t.name} ({t.mobileOs})</option>
           ))}
         </select>
         <Button size="sm" onClick={start} disabled={!targetId || !!sessionId}>
           <Icon name="play" size={12} />
-          启动
+          {t('mobile:start')}
         </Button>
         <Button size="sm" onClick={finish} disabled={!sessionId}>
           <Icon name="check" size={12} />
-          完成
+          {t('mobile:finish')}
         </Button>
         <div className="flex-1" />
-        <Button size="sm" variant="ghost" onClick={onClose}>关闭</Button>
+        <Button size="sm" variant="ghost" onClick={onClose}>{t('common:close')}</Button>
       </div>
       <div className="flex-1 grid grid-cols-2 gap-3 p-3 min-h-0">
         <div className="border rounded-[var(--radius-md)] overflow-hidden bg-[#000]">
@@ -167,7 +169,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
             <iframe src={viewerUrl} className="w-full h-full" title="device preview" />
           ) : (
             <div className="flex items-center justify-center h-full text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-              启动 daemon 后内嵌预览
+              {t('mobile:previewHint')}
             </div>
           )}
         </div>
@@ -176,7 +178,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
             Accessibility Tree
           </div>
           {tree.length === 0 ? (
-            <div style={{ color: 'var(--muted-foreground)' }}>无节点</div>
+            <div style={{ color: 'var(--muted-foreground)' }}>{t('mobile:noNodes')}</div>
           ) : (
             tree.map((n, i) => (
               <button
@@ -199,11 +201,11 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
           {recordedSteps.length > 0 && (
             <div className="mt-3 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
               <div className="text-[11px] mb-1 font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
-                本会话已记录 {recordedSteps.length} 步
+                {t('mobile:recordedCount', { count: recordedSteps.length })}
               </div>
               <Button size="sm" onClick={flushToCase}>
                 <Icon name="save" size={12} />
-                写入用例
+                {t('mobile:writeToCase')}
               </Button>
             </div>
           )}

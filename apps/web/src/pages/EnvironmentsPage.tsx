@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Environment, type EnvironmentObject } from '../api/client';
@@ -131,6 +132,7 @@ export default function EnvironmentsPage() {
   const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
+  const { t } = useTranslation();
 
   const envsQ = useQuery({
     queryKey: ['environments', projectId],
@@ -154,7 +156,7 @@ export default function EnvironmentsPage() {
         : api.environments.patch(envForm.id!, { name });
     },
     onSuccess: () => {
-      toast(envForm.mode === 'create' ? '环境已创建' : '环境已更新', 'success');
+      toast(envForm.mode === 'create' ? t('environments:created') : t('environments:updated'), 'success');
       setEnvForm(EMPTY_ENV_FORM);
       invalidate();
     },
@@ -164,7 +166,7 @@ export default function EnvironmentsPage() {
   const setDefault = useMutation({
     mutationFn: (id: string) => api.environments.patch(id, { isDefault: true }),
     onSuccess: () => {
-      toast('默认环境已更新', 'success');
+      toast(t('environments:defaultUpdated'), 'success');
       invalidate();
     },
     onError: (e: Error) => toast(e.message, 'error'),
@@ -180,7 +182,7 @@ export default function EnvironmentsPage() {
         if (env) setConfirmEnv({ env, caseCount: r.caseCount ?? 0, planCount: r.planCount ?? 0 });
         return;
       }
-      toast('环境已删除', 'success');
+      toast(t('environments:deleted'), 'success');
       setConfirmEnv(null);
       invalidate();
     },
@@ -203,7 +205,7 @@ export default function EnvironmentsPage() {
       });
     },
     onSuccess: () => {
-      toast(objForm.object ? '配置已保存' : '对象已添加', 'success');
+      toast(objForm.object ? t('environments:objConfigSaved') : t('environments:objAdded'), 'success');
       setObjForm(EMPTY_OBJ_FORM);
       invalidate();
     },
@@ -213,7 +215,7 @@ export default function EnvironmentsPage() {
   const removeObj = useMutation({
     mutationFn: (id: string) => api.environments.removeObject(id),
     onSuccess: () => {
-      toast('对象已删除', 'success');
+      toast(t('environments:objDeleted'), 'success');
       invalidate();
     },
     onError: (e: Error) => toast(e.message, 'error'),
@@ -260,19 +262,19 @@ export default function EnvironmentsPage() {
     <PageShell>
       <PageShellHeader>
         <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2 self-center">
-          <IconButton icon="chevronLeft" title="返回项目" onClick={() => navigate('/')} />
+          <IconButton icon="chevronLeft" title={t('environments:backToProject')} onClick={() => navigate('/')} />
           <h1 className="min-w-0 truncate text-2xl font-medium tracking-tight md:text-3xl">
-            环境管理
+            {t('environments:title')}
           </h1>
         </div>
         <PageShellActions>
           <Button onClick={() => setEnvForm({ open: true, mode: 'create', id: null, name: '' })}>
             <Icon name="plus" size={14} />
-            新建环境
+            {t('environments:createEnv')}
           </Button>
         </PageShellActions>
         <PageShellDescription>
-          项目级维护 DB / syslog / 登录凭据 / Web 服务对象；未被用例、计划、版本显式指定时使用默认环境
+          {t('environments:description')}
         </PageShellDescription>
       </PageShellHeader>
 
@@ -280,14 +282,14 @@ export default function EnvironmentsPage() {
         {envsQ.isLoading ? (
           <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
             <Icon name="loader" size={16} className="animate-spin" />
-            <span style={{ marginLeft: 8 }}>加载中...</span>
+            <span style={{ marginLeft: 8 }}>{t('environments:loading')}</span>
           </div>
         ) : envsQ.isError ? (
           <div className="text-[13px]" style={{ color: 'var(--destructive)' }}>
-            加载失败：{(envsQ.error as Error | null)?.message ?? '未知错误'}
+            {t('common:loadFailed')}：{(envsQ.error as Error | null)?.message ?? t('common:unknownError')}
           </div>
         ) : envs.length === 0 ? (
-          <EmptyState icon="database" title="还没有环境" description="创建环境并录入数据库 / syslog 对象，供执行时解析连接信息。" />
+          <EmptyState icon="database" title={t('environments:emptyTitle')} description={t('environments:emptyDescription')} />
         ) : (
           <div className="flex flex-col gap-3" data-stagger>
             {envs.map((env) => (
@@ -304,7 +306,7 @@ export default function EnvironmentsPage() {
                     </span>
                     {env.createdBy && (
                       <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                        创建人 {creatorName(env.createdBy)}
+                        {t('environments:createdByWithName', { name: creatorName(env.createdBy) })}
                       </span>
                     )}
                   </div>
@@ -313,21 +315,21 @@ export default function EnvironmentsPage() {
                       className="text-[10px] font-semibold uppercase px-1.5 py-[1px] rounded"
                       style={{ background: 'var(--primary-soft)', color: 'var(--primary)', letterSpacing: '0.04em' }}
                     >
-                      默认
+                      {t('environments:default')}
                     </span>
                   )}
                   <div className="flex-1" />
                   <div className="flex items-center gap-1">
                     <IconButton
                       icon="star"
-                      title={env.isDefault ? '已是默认环境' : '设为默认环境'}
+                      title={env.isDefault ? t('environments:alreadyDefaultEnv') : t('environments:setDefaultEnv')}
                       onClick={() => setDefault.mutate(env.id)}
                       disabled={env.isDefault}
                     />
-                    <IconButton icon="pencil" title="编辑环境" onClick={() => setEnvForm({ open: true, mode: 'edit', id: env.id, name: env.name })} />
+                    <IconButton icon="pencil" title={t('environments:editEnv')} onClick={() => setEnvForm({ open: true, mode: 'edit', id: env.id, name: env.name })} />
                     <IconButton
                       icon="trash"
-                      title="删除环境"
+                      title={t('environments:deleteEnv')}
                       tone="destructive"
                       onClick={() => setConfirmEnv({ env, caseCount: 0, planCount: 0 })}
                     />
@@ -336,7 +338,7 @@ export default function EnvironmentsPage() {
                 <div className="px-3 py-2 flex flex-col">
                   {env.objects.length === 0 && (
                     <div className="text-[12px] py-1" style={{ color: 'var(--muted-foreground)' }}>
-                      暂无对象，可添加数据库、syslog、登录凭据或 Web 服务配置
+                      {t('environments:emptyObjects')}
                     </div>
                   )}
                   {env.objects.map((o) => (
@@ -351,7 +353,7 @@ export default function EnvironmentsPage() {
                         style={{ color: 'var(--muted-foreground)', flexShrink: 0 }}
                       />
                       <span className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
-                        {o.objectType === 'db' ? '数据库' : o.objectType === 'login' ? '登录凭据' : o.objectType === 'web' ? 'Web 服务' : 'syslog'}
+                        {o.objectType === 'db' ? t('environments:objTypes.db') : o.objectType === 'login' ? t('environments:objTypes.login') : o.objectType === 'web' ? t('environments:objTypes.web') : 'syslog'}
                         {o.label ? ` · ${o.label}` : ''}
                       </span>
                       {o.isDefault && (
@@ -359,11 +361,11 @@ export default function EnvironmentsPage() {
                           className="text-[10px] px-1.5 py-[1px] rounded"
                           style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}
                         >
-                          默认
+                          {t('environments:default')}
                         </span>
                       )}
                       <span className="text-[11px] truncate" style={{ color: 'var(--muted-foreground)' }}>
-                        {objectSummary(o) || '未填写'}
+                        {objectSummary(o) || t('environments:notFilled')}
                       </span>
                       {objectHasSecret(o) ? (
                         <span
@@ -372,9 +374,9 @@ export default function EnvironmentsPage() {
                             background: 'var(--success-soft, rgba(16, 185, 129, 0.12))',
                             color: 'var(--success, #16a34a)',
                           }}
-                          title="已加密保存访问凭据"
+                          title={t('environments:secretStoredTooltip')}
                         >
-                          已配置
+                          {t('environments:configured')}
                         </span>
                       ) : (
                         <span
@@ -383,19 +385,19 @@ export default function EnvironmentsPage() {
                             background: 'var(--warning-soft, rgba(234, 179, 8, 0.12))',
                             color: 'var(--warning, #ca8a04)',
                           }}
-                          title="尚未设置访问凭据（编辑对象 → 输入密码/私钥保存）"
+                          title={t('environments:noSecretTooltip')}
                         >
-                          未配置凭据
+                          {t('environments:notConfigured')}
                         </span>
                       )}
                       <div className="flex-1" />
                       <div className="flex items-center gap-1">
-                        <IconButton icon="pencil" title="编辑对象" onClick={() => openObjForm(env, o.objectType, o)} />
+                        <IconButton icon="pencil" title={t('environments:editObj')} onClick={() => openObjForm(env, o.objectType, o)} />
                         <IconButton
                           icon="trash"
-                          title="删除对象"
+                          title={t('environments:deleteObj')}
                           tone="destructive"
-                          onClick={() => setConfirmObj({ id: o.id, label: `${o.objectType === 'db' ? '数据库' : o.objectType === 'login' ? '登录凭据' : o.objectType === 'web' ? 'Web 服务' : 'syslog'}${o.label ? ` · ${o.label}` : ''}` })}
+                          onClick={() => setConfirmObj({ id: o.id, label: `${o.objectType === 'db' ? t('environments:objTypes.db') : o.objectType === 'login' ? t('environments:objTypes.login') : o.objectType === 'web' ? t('environments:objTypes.web') : 'syslog'}${o.label ? ` · ${o.label}` : ''}` })}
                         />
                       </div>
                     </div>
@@ -408,7 +410,7 @@ export default function EnvironmentsPage() {
                       style={{ background: 'transparent', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
                     >
                       <Icon name="plus" size={12} />
-                      数据库
+                      {t('environments:objTypes.db')}
                     </button>
                     <button
                       type="button"
@@ -426,7 +428,7 @@ export default function EnvironmentsPage() {
                       style={{ background: 'transparent', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
                     >
                       <Icon name="plus" size={12} />
-                      登录凭据
+                      {t('environments:objTypes.login')}
                     </button>
                     <button
                       type="button"
@@ -435,7 +437,7 @@ export default function EnvironmentsPage() {
                       style={{ background: 'transparent', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
                     >
                       <Icon name="globe" size={12} />
-                      Web 服务
+                      {t('environments:objTypes.web')}
                     </button>
                   </div>
                 </div>
@@ -449,20 +451,20 @@ export default function EnvironmentsPage() {
       <Dialog open={envForm.open} onOpenChange={(open) => setEnvForm((f) => ({ ...f, open }))}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{envForm.mode === 'create' ? '新建环境' : '编辑环境'}</DialogTitle>
+            <DialogTitle>{envForm.mode === 'create' ? t('environments:createEnv') : t('environments:editEnv')}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
             <Input
-              label="环境名"
-              placeholder="如：开发测试、预生产"
+              label={t('environments:form.nameLabel')}
+              placeholder={t('environments:form.namePlaceholder')}
               value={envForm.name}
               onChange={(e) => setEnvForm((f) => ({ ...f, name: e.target.value }))}
             />
           </div>
           <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
-            <Button variant="ghost" onClick={() => setEnvForm(EMPTY_ENV_FORM)}>取消</Button>
+            <Button variant="ghost" onClick={() => setEnvForm(EMPTY_ENV_FORM)}>{t('common:cancel')}</Button>
             <Button disabled={!envForm.name.trim() || saveEnv.isPending} onClick={() => saveEnv.mutate()}>
-              {saveEnv.isPending ? '保存中...' : '保存'}
+              {saveEnv.isPending ? t('environments:saving') : t('common:save')}
             </Button>
           </div>
         </DialogContent>
@@ -473,14 +475,14 @@ export default function EnvironmentsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {objForm.object ? '编辑' : '添加'}{objForm.objectType === 'db' ? ' 数据库' : objForm.objectType === 'login' ? ' 登录凭据' : objForm.objectType === 'web' ? ' Web 服务' : ' syslog'} · {objForm.envName}
+              {t(objForm.object ? 'environments:form.modeEdit' : 'environments:form.modeAdd')}{objForm.objectType === 'db' ? ` ${t('environments:objTypes.db')}` : objForm.objectType === 'login' ? ` ${t('environments:objTypes.login')}` : objForm.objectType === 'web' ? ` ${t('environments:objTypes.web')}` : ' syslog'} · {objForm.envName}
             </DialogTitle>
           </DialogHeader>
           <div className="flex-1 min-h-0 px-5 py-4 overflow-y-auto flex flex-col gap-3">
             {objForm.objectType === 'db' ? (
               <>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>数据库类型</label>
+                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>{t('environments:form.dbTypeLabel')}</label>
                   <Segmented
                     value={objForm.dbType}
                     onChange={(v) => setObjForm((f) => ({ ...f, dbType: v }))}
@@ -490,48 +492,48 @@ export default function EnvironmentsPage() {
                     ]}
                   />
                 </div>
-                <Input label="数据库主机" value={objForm.host} onChange={(e) => setObjForm((f) => ({ ...f, host: e.target.value }))} placeholder="db.example.com" />
-                <Input label="数据库端口" value={objForm.port} onChange={(e) => setObjForm((f) => ({ ...f, port: e.target.value }))} placeholder={objForm.dbType === 'mysql' ? '3306' : '5432'} />
-                <Input label="数据库名" value={objForm.dbName} onChange={(e) => setObjForm((f) => ({ ...f, dbName: e.target.value }))} />
-                <Input label="数据库用户" value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
+                <Input label={t('environments:form.dbHost')} value={objForm.host} onChange={(e) => setObjForm((f) => ({ ...f, host: e.target.value }))} placeholder="db.example.com" />
+                <Input label={t('environments:form.dbPort')} value={objForm.port} onChange={(e) => setObjForm((f) => ({ ...f, port: e.target.value }))} placeholder={objForm.dbType === 'mysql' ? '3306' : '5432'} />
+                <Input label={t('environments:form.dbName')} value={objForm.dbName} onChange={(e) => setObjForm((f) => ({ ...f, dbName: e.target.value }))} />
+                <Input label={t('environments:form.dbUser')} value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
                 <Input
-                  label="数据库密码"
+                  label={t('environments:form.dbPassword')}
                   type="password"
                   value={objForm.password}
                   onChange={(e) => setObjForm((f) => ({ ...f, password: e.target.value }))}
-                  placeholder={objForm.object ? '留空表示不修改' : '留空表示不设置'}
+                  placeholder={objForm.object ? t('environments:form.leaveBlankModify') : t('environments:form.leaveBlankUnset')}
                 />
               </>
             ) : objForm.objectType === 'login' ? (
               <>
                 <Input
-                  label="登录页地址（可选）"
+                  label={t('environments:form.loginUrl')}
                   value={objForm.loginUrl}
                   onChange={(e) => setObjForm((f) => ({ ...f, loginUrl: e.target.value }))}
-                  placeholder="留空用计划检测页，如 https://example.com/login"
+                  placeholder={t('environments:form.loginUrlPlaceholder')}
                 />
-                <Input label="用户名" value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
+                <Input label={t('environments:form.userName')} value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
                 <Input
-                  label="密码"
+                  label={t('environments:form.password')}
                   type="password"
                   value={objForm.password}
                   onChange={(e) => setObjForm((f) => ({ ...f, password: e.target.value }))}
-                  placeholder={objForm.object ? '留空表示不修改' : '留空表示不设置'}
+                  placeholder={objForm.object ? t('environments:form.leaveBlankModify') : t('environments:form.leaveBlankUnset')}
                 />
                 <p className="text-[11px] m-0" style={{ color: 'var(--muted-foreground)' }}>
-                  计划开启「登录准备」且未选登录用例时，执行将用此凭据自动填表登录。
+                  {t('environments:form.loginHelp')}
                 </p>
               </>
             ) : objForm.objectType === 'web' ? (
               <>
                 <Input
-                  label="服务名（可选）"
+                  label={t('environments:form.webNameLabel')}
                   value={objForm.webName}
                   onChange={(e) => setObjForm((f) => ({ ...f, webName: e.target.value }))}
-                  placeholder="如 backend，留空则为该环境默认 web 服务"
+                  placeholder={t('environments:form.webNamePlaceholder')}
                 />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>协议</label>
+                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>{t('environments:form.scheme')}</label>
                   <select
                     className="input-base"
                     value={objForm.webScheme}
@@ -542,58 +544,58 @@ export default function EnvironmentsPage() {
                   </select>
                 </div>
                 <Input
-                  label="主机"
+                  label={t('environments:form.host')}
                   value={objForm.host}
                   onChange={(e) => setObjForm((f) => ({ ...f, host: e.target.value }))}
-                  placeholder="example.com 或 192.168.1.10"
+                  placeholder={t('environments:form.hostPlaceholder')}
                 />
                 <Input
-                  label="端口（可选）"
+                  label={t('environments:form.port')}
                   value={objForm.port}
                   onChange={(e) => setObjForm((f) => ({ ...f, port: e.target.value }))}
-                  placeholder="留空用协议默认端口"
+                  placeholder={t('environments:form.portPlaceholder')}
                 />
                 <p className="text-[11px] m-0" style={{ color: 'var(--muted-foreground)' }}>
-                  用例填相对路径 URL（如 /admin/login）时，执行期与此服务 origin 拼接成完整地址。
+                  {t('environments:form.webHelp')}
                 </p>
               </>
             ) : (
               <>
-                <Input label="syslog 主机" value={objForm.host} onChange={(e) => setObjForm((f) => ({ ...f, host: e.target.value }))} placeholder="logs.example.com" />
-                <Input label="syslog 用户" value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
-                <Input label="SSH 端口" value={objForm.sshPort} onChange={(e) => setObjForm((f) => ({ ...f, sshPort: e.target.value }))} placeholder="22" />
+                <Input label={t('environments:form.syslogHost')} value={objForm.host} onChange={(e) => setObjForm((f) => ({ ...f, host: e.target.value }))} placeholder="logs.example.com" />
+                <Input label={t('environments:form.syslogUser')} value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
+                <Input label={t('environments:form.sshPort')} value={objForm.sshPort} onChange={(e) => setObjForm((f) => ({ ...f, sshPort: e.target.value }))} placeholder="22" />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>认证方式</label>
+                  <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>{t('environments:form.authTypeLabel')}</label>
                   <Segmented
                     value={objForm.syslogAuth}
                     onChange={(v) => setObjForm((f) => ({ ...f, syslogAuth: v }))}
                     options={[
-                      { value: 'key', label: 'SSH 私钥' },
-                      { value: 'password', label: '密码' },
+                      { value: 'key', label: t('environments:form.sshPrivateKey') },
+                      { value: 'password', label: t('environments:form.password') },
                     ]}
                   />
                 </div>
                 {objForm.syslogAuth === 'password' ? (
                   <Input
-                    label="SSH 密码"
+                    label={t('environments:form.sshPassword')}
                     type="password"
                     value={objForm.password}
                     onChange={(e) => setObjForm((f) => ({ ...f, password: e.target.value }))}
-                    placeholder={objForm.object ? '留空表示不修改' : '留空表示不设置'}
+                    placeholder={objForm.object ? t('environments:form.leaveBlankModify') : t('environments:form.leaveBlankUnset')}
                   />
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>SSH 私钥（PEM）</label>
+                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>{t('environments:form.sshPrivateKeyPem')}</label>
                     <textarea
                       className="input-base"
                       rows={6}
                       value={objForm.privateKey}
                       onChange={(e) => setObjForm((f) => ({ ...f, privateKey: e.target.value }))}
-                      placeholder={objForm.object ? '留空表示不修改' : '首次添加时填写'}
+                      placeholder={objForm.object ? t('environments:form.leaveBlankModify') : t('environments:form.firstAddFill')}
                     />
                   </div>
                 )}
-                <Input label="syslog 文件路径" value={objForm.filePath} onChange={(e) => setObjForm((f) => ({ ...f, filePath: e.target.value }))} placeholder="/var/log/syslog" />
+                <Input label={t('environments:form.syslogFilePath')} value={objForm.filePath} onChange={(e) => setObjForm((f) => ({ ...f, filePath: e.target.value }))} placeholder="/var/log/syslog" />
               </>
             )}
           </div>
@@ -611,23 +613,23 @@ export default function EnvironmentsPage() {
                   }
                   onClick={() => testConn.mutate()}
                 >
-                  {testConn.isPending ? '测试中...' : '测试连接'}
+                  {testConn.isPending ? t('environments:testing') : t('common:testConnection')}
                 </Button>
                 {testConn.isPending && (
-                  <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--muted-foreground)' }}>正在连接...</span>
+                  <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--muted-foreground)' }}>{t('environments:connecting')}</span>
                 )}
                 {testConn.isSuccess && testConn.data.ok && (
-                  <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--success)' }}>连接成功 · {testConn.data.latencyMs}ms</span>
+                  <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--success)' }}>{t('common:connected')} · {testConn.data.latencyMs}ms</span>
                 )}
                 {testConn.isSuccess && !testConn.data.ok && (
-                  <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--destructive)' }}>连接失败：{testConn.data.error}</span>
+                  <span className="text-[12px] min-w-0 break-words" style={{ color: 'var(--destructive)' }}>{t('common:testConnectionFailed')}：{testConn.data.error}</span>
                 )}
               </>
             )}
             <div className="flex-1" />
-            <Button variant="ghost" className="shrink-0" onClick={() => setObjForm(EMPTY_OBJ_FORM)} disabled={saveObj.isPending}>取消</Button>
+            <Button variant="ghost" className="shrink-0" onClick={() => setObjForm(EMPTY_OBJ_FORM)} disabled={saveObj.isPending}>{t('common:cancel')}</Button>
             <Button className="shrink-0" disabled={saveObj.isPending} onClick={() => saveObj.mutate()}>
-              {saveObj.isPending ? '保存中...' : objForm.object ? '保存' : '添加'}
+              {saveObj.isPending ? t('environments:saving') : objForm.object ? t('common:save') : t('environments:form.modeAdd')}
             </Button>
           </div>
         </DialogContent>
@@ -636,20 +638,20 @@ export default function EnvironmentsPage() {
       {/* 删除环境确认:前端一律先弹 modal,再发请求;后端 requiresConfirm 作为双保险保留。 */}
       <Dialog open={!!confirmEnv} onOpenChange={(open) => { if (!open) setConfirmEnv(null); }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>删除环境</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('environments:deleteEnv')}</DialogTitle></DialogHeader>
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            确认删除「{confirmEnv?.env.name}」？{confirmEnv && (confirmEnv.caseCount > 0 || confirmEnv.planCount > 0)
-              ? `该环境被 ${confirmEnv.caseCount} 个用例、${confirmEnv.planCount} 个计划引用，删除后这些引用会自动清空，执行时回退到项目默认环境。`
-              : '该环境当前未被任何用例或计划引用。'}
+            {t('environments:deleteConfirmPrefix', { name: confirmEnv?.env.name })}{confirmEnv && (confirmEnv.caseCount > 0 || confirmEnv.planCount > 0)
+              ? t('environments:deleteConfirmReferenced', { caseCount: confirmEnv.caseCount, planCount: confirmEnv.planCount })
+              : t('environments:deleteConfirmUnreferenced')}
           </div>
           <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
-            <Button variant="ghost" onClick={() => setConfirmEnv(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setConfirmEnv(null)}>{t('common:cancel')}</Button>
             <Button
               variant="danger"
               disabled={removeEnv.isPending}
               onClick={() => confirmEnv && removeEnv.mutate({ id: confirmEnv.env.id, confirm: true })}
             >
-              {removeEnv.isPending ? '删除中...' : '确认删除'}
+              {removeEnv.isPending ? t('environments:deleting') : t('environments:confirmDelete')}
             </Button>
           </div>
         </DialogContent>
@@ -657,12 +659,12 @@ export default function EnvironmentsPage() {
     {/* 删除对象确认弹窗 —— 不论引用计数,先弹再发请求,避免误点。 */}
       <Dialog open={!!confirmObj} onOpenChange={(open) => { if (!open) setConfirmObj(null); }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>删除对象</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('environments:deleteObj')}</DialogTitle></DialogHeader>
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            删除「{confirmObj?.label}」？已配置的访问凭据会同时清除,执行期将无法再解析。
+            {t('environments:objDeleteConfirm', { label: confirmObj?.label })}
           </div>
           <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
-            <Button variant="ghost" onClick={() => setConfirmObj(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setConfirmObj(null)}>{t('common:cancel')}</Button>
             <Button
               variant="danger"
               disabled={removeObj.isPending}
@@ -672,7 +674,7 @@ export default function EnvironmentsPage() {
                 setConfirmObj(null);
               }}
             >
-              {removeObj.isPending ? '删除中...' : '确认删除'}
+              {removeObj.isPending ? t('environments:deleting') : t('environments:confirmDelete')}
             </Button>
           </div>
         </DialogContent>
