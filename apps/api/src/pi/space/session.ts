@@ -385,7 +385,7 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
       hidden: true,
       factory: (pi) => {
         pi.on('before_agent_start', (event) => {
-          const rewritten = rewriteSpacePreamble(event.systemPrompt, ctx.lang ?? aiLangFrom(null));
+          const rewritten = rewriteSpacePreamble(event.systemPrompt, aiLangFrom(ctx.lang));
           if (rewritten !== undefined) return { systemPrompt: rewritten };
           return undefined;
         });
