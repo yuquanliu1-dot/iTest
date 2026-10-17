@@ -58,6 +58,13 @@
   "reqDescription": "需求描述",
   "reqDescriptionPlaceholder": "把要测的需求贴在这里，AI 会拆解为场景与用例。",
   "coverageTypeHint": "覆盖类型（勾选 = 必须覆盖，未勾选由 AI 自行判断）",
+  "coverage": {
+    "functional": "功能（正常流）",
+    "exception": "异常场景",
+    "boundary": "边界值",
+    "security": "安全（SQL 注入·XSS·越权·未授权等）",
+    "uiux": "UI/UX（呈现·交互）"
+  },
   "opening": "打开中...",
   "startAiSession": "开始 AI 会话",
   "caseTitlePlaceholder": "如：登录 - 正确账号密码",

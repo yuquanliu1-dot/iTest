@@ -63,6 +63,13 @@
   "reqDescription": "Requirement description",
   "reqDescriptionPlaceholder": "Paste the requirement to test here; AI will break it down into scenarios and cases.",
   "coverageTypeHint": "Coverage types (checked = must cover; unchecked = AI decides)",
+  "coverage": {
+    "functional": "Functional (happy path)",
+    "exception": "Exception scenarios",
+    "boundary": "Boundary values",
+    "security": "Security (SQL injection·XSS·privilege escalation·unauthorized)",
+    "uiux": "UI/UX (rendering·interaction)"
+  },
   "opening": "Opening…",
   "startAiSession": "Start AI session",
   "caseTitlePlaceholder": "e.g. Login - valid credentials",

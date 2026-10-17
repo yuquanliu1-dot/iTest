@@ -878,21 +878,21 @@ export default function GroupsPage() {
 								{t('groups:coverageTypeHint')}
 							</label>
 							<div className="flex flex-wrap gap-x-4 gap-y-1.5">
-								{COVERAGE_TYPES.map((t) => (
-									<label key={t.key} className="flex items-center gap-1.5 text-[13px] cursor-pointer" style={{ color: 'var(--foreground)' }}>
+								{COVERAGE_TYPES.map((ct) => (
+									<label key={ct.key} className="flex items-center gap-1.5 text-[13px] cursor-pointer" style={{ color: 'var(--foreground)' }}>
 										<input
 											type="checkbox"
-											checked={aiForm.coverage.includes(t.key)}
+											checked={aiForm.coverage.includes(ct.key)}
 											onChange={() =>
 												setAiForm((f) => ({
 													...f,
-													coverage: f.coverage.includes(t.key)
-														? f.coverage.filter((x) => x !== t.key)
-														: [...f.coverage, t.key],
+													coverage: f.coverage.includes(ct.key)
+														? f.coverage.filter((x) => x !== ct.key)
+														: [...f.coverage, ct.key],
 												}))
 											}
 										/>
-										{t.label}
+										{t(`groups:coverage.${ct.key}`)}
 									</label>
 								))}
 							</div>
