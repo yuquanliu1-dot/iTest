@@ -147,7 +147,7 @@ export default function Executions() {
 			options: [
 				{ value: 'passed', label: t('cases:status.passed') },
 				{ value: 'failed', label: t('cases:status.failed') },
-				{ value: 'running', label: t('cases:status.running') },
+				{ value: 'running', label: t('reports:list.statusRunning') },
 			],
 		},
 		{
