@@ -24,9 +24,9 @@
     "searchPlaceholder": "Search case title…",
     "emptyTitle": "No execution records yet",
     "emptyDesc": "Run a test from a plan or a case detail page and it will show up here.",
-    "deletedToast": "Deleted {{total}} items ({{parts}})",
-    "deletedToast_one": "Deleted {{total}} item ({{parts}})",
-    "deletedToast_other": "Deleted {{total}} items ({{parts}})",
+    "deletedToast": "Deleted {{count}} items ({{parts}})",
+    "deletedToast_one": "Deleted {{count}} item ({{parts}})",
+    "deletedToast_other": "Deleted {{count}} items ({{parts}})",
     "listSeparator": ", ",
     "tabsAll": "All",
     "tabsCase": "Single case"
