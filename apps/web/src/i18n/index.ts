@@ -3,14 +3,18 @@ import { initReactI18next } from 'react-i18next';
 
 import zhCommon from './locales/zh-CN/common.json';
 import enCommon from './locales/en-US/common.json';
+import zhAuth from './locales/zh-CN/auth.json';
+import enAuth from './locales/en-US/auth.json';
+import zhSettings from './locales/zh-CN/settings.json';
+import enSettings from './locales/en-US/settings.json';
 
 export type Lang = 'zh-CN' | 'en-US';
 
 export const LANG_STORAGE_KEY = 'itest-lang';
 
 const resources = {
-  'zh-CN': { common: zhCommon },
-  'en-US': { common: enCommon },
+  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings },
+  'en-US': { common: enCommon, auth: enAuth, settings: enSettings },
 };
 
 void i18n.use(initReactI18next).init({
