@@ -2,7 +2,8 @@
   "manifest_version": 3,
   "name": "iTest Recorder",
   "version": "0.0.2",
-  "description": "iTest 自动化测试录制扩展",
+  "default_locale": "zh_CN",
+  "description": "__MSG_extDesc__",
   "permissions": ["scripting", "storage"],
   "host_permissions": ["<all_urls>"],
   "background": {

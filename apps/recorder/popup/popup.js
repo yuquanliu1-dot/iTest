@@ -1,5 +1,7 @@
 import { DEFAULT_CONSOLE_ORIGIN, normalizeConsoleOrigin } from '../modules/console-config.js';
 
+document.documentElement.lang = chrome.i18n.getUILanguage();
+
 // 打开中台：优先切回发起录制的用例详情页 tab，无会话或 tab 已关则新开配置的中台首页
 document.getElementById('open').addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'open-console' });
@@ -26,10 +28,10 @@ function setStatus(text, ok) {
 saveBtn.addEventListener('click', async () => {
   const origin = normalizeConsoleOrigin(input.value);
   if (!origin) {
-    setStatus('需 http(s) 地址', false);
+    setStatus(chrome.i18n.getMessage('needHttp'), false);
     return;
   }
   await chrome.storage.sync.set({ consoleOrigin: origin });
   input.value = origin;
-  setStatus('已保存', true);
+  setStatus(chrome.i18n.getMessage('saved'), true);
 });

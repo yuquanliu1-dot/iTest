@@ -246,7 +246,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'pick' || msg.type === 'emit-step' || msg.type === 'set-options') {
-    if (recordingTabId === null) { sendResponse({ ok: false, error: '当前没有录制中的标签页' }); return; }
+    if (recordingTabId === null) { sendResponse({ ok: false, error: chrome.i18n.getMessage('notRecordingTab') }); return; }
     chrome.tabs.sendMessage(recordingTabId, msg, (resp) => sendResponse(resp ?? { ok: false }));
     return true;
   }

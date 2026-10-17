@@ -1,3 +1,7 @@
+const t = (k, s) => chrome.i18n.getMessage(k, s);
+
+document.documentElement.lang = chrome.i18n.getUILanguage();
+
 const mode = new URLSearchParams(location.search).get('mode') ?? 'ai';
 const statusEl = document.getElementById('status');
 const form = document.getElementById('form');
@@ -7,23 +11,23 @@ const field2 = document.getElementById('field2');
 const field2Label = document.getElementById('field2-label');
 
 const TITLES = {
-  variable: '保存变量',
-  assert: '添加断言',
-  hover: '记录悬浮',
-  ai: 'AI 自然语言步骤',
+  variable: t('modeSavingVariable'),
+  assert: t('modeAddAssertion'),
+  hover: t('modeRecordHover'),
+  ai: t('modeAiStep'),
 };
-document.getElementById('title').textContent = TITLES[mode] ?? '录制面板';
+document.getElementById('title').textContent = TITLES[mode] ?? t('recordingPanel');
 
 closeBtn.addEventListener('click', () => window.close());
 
 function emit(dsl) {
   chrome.runtime.sendMessage({ type: 'emit-step', dsl }, (resp) => {
     if (resp?.ok) {
-      statusEl.textContent = '已生成步骤 ✓';
+      statusEl.textContent = t('stepGenerated');
       form.classList.add('hidden');
       closeBtn.classList.remove('hidden');
     } else {
-      statusEl.textContent = `失败: ${resp?.error ?? '未知错误'}`;
+      statusEl.textContent = t('failStatus', [resp?.error ?? t('unknownError')]);
     }
   });
 }
@@ -50,28 +54,28 @@ function suggestVarName(r) {
 
 if (mode === 'ai') {
   showForm({
-    hint: '描述要执行的操作，可用 #cssSelector 引用页面元素（如识别图片 #captchaImg），回放时由 AI 智能体实时执行：',
-    label1: '指令',
+    hint: t('aiHint'),
+    label1: t('labelInstruction'),
     value1: '',
     onSubmit: () => {
       const instruction = field1.value.trim();
       if (!instruction) {
-        statusEl.textContent = '请输入指令';
+        statusEl.textContent = t('enterInstruction');
         return;
       }
       emit({ kind: 'aiTask', instruction });
     },
   });
 } else {
-  statusEl.textContent = '请在页面中点击目标元素（Esc 取消）...';
+  statusEl.textContent = t('pickHint');
   chrome.runtime.sendMessage({ type: 'pick' }, (r) => {
     if (!r || r.ok === false) {
-      statusEl.textContent = `无法拾取: ${r?.error ?? '扩展未在录制中'}`;
+      statusEl.textContent = t('pickFailed', [r?.error ?? t('notRecording')]);
       closeBtn.classList.remove('hidden');
       return;
     }
     if (r.canceled) {
-      statusEl.textContent = '已取消';
+      statusEl.textContent = t('canceled');
       closeBtn.classList.remove('hidden');
       return;
     }
@@ -81,13 +85,13 @@ if (mode === 'ai') {
     }
     if (mode === 'variable') {
       showForm({
-        hint: `元素文本: ${r.text.slice(0, 60) || r.inputValue.slice(0, 60) || '（空）'}`,
-        label1: '变量名',
+        hint: t('elementText', [r.text.slice(0, 60) || r.inputValue.slice(0, 60) || t('emptyText')]),
+        label1: t('labelVarName'),
         value1: suggestVarName(r),
         onSubmit: () => {
           const varName = field1.value.trim();
           if (!varName) {
-            statusEl.textContent = '请输入变量名';
+            statusEl.textContent = t('enterVarName');
             return;
           }
           emit({ kind: 'extract', locator: r.locators, varName });
@@ -97,10 +101,10 @@ if (mode === 'ai') {
     }
     if (mode === 'assert') {
       showForm({
-        hint: '选择断言类型并填写期望值：',
-        label1: '断言类型（text / json）',
+        hint: t('assertHint'),
+        label1: t('assertType'),
         value1: 'text',
-        label2: '期望值（默认已填入元素当前文本）',
+        label2: t('assertExpected'),
         value2: r.text || r.inputValue,
         onSubmit: () => {
           const type = field1.value.trim();
@@ -110,7 +114,7 @@ if (mode === 'ai') {
             try {
               parsed = JSON.parse(expected);
             } catch {
-              statusEl.textContent = '期望值不是合法 JSON';
+              statusEl.textContent = t('invalidJson');
               return;
             }
             emit({ kind: 'assertJson', locator: r.locators, equals: parsed });
