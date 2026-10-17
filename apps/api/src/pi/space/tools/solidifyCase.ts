@@ -35,6 +35,8 @@ import { registerLiveView } from '../../../execute/liveView.js';
 import { buildStepInstruction, collectStepLocators, USER_PH, PASSWORD_PH, SECRET_PH } from './verifyCase.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
+import { st, type StLang } from '../../../i18n.js';
+import { aiLangFrom } from '../../../agent/langDirective.js';
 
 // 与 verify_case 同量级：AI 逐步骤临场执行是慢路径。
 const SOLIDIFY_TIMEOUT_MS = 300_000;
@@ -68,6 +70,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       '被固化的 fill value 是 AI 当轮填入的原始值：若 instruction 引用了 {{变量}} 而 AI 填了具体值，固化会把该值冻结进 compiled——数据驱动用例（绑定数据集）不建议固化含变量填写的步骤，或固化后把 value 手工改回 {{变量}}。',
     ],
     execute: async (input) => {
+      const lang: StLang = aiLangFrom(ctx.lang);
       const { caseId } = input as { caseId: string };
       try {
         // ── 前置校验（不启动浏览器）：caseId 双形态，与 verify_case 一致 ──
@@ -366,7 +369,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 caseId,
                 op: 'update_step',
                 payload: { action: 'update_step', caseId, stepId: s.id, compiled: mapped.compiled },
-                summary: `固化步骤 #${s.order}（aiTask → ${mapped.compiled.length} 个机械动作）`,
+                summary: st(lang, 'step.solidified', { order: s.order, count: mapped.compiled.length }),
                 diff: diffText({ compiled: s.compiled ?? null }, { compiled: mapped.compiled }),
                 stagedAt: new Date().toISOString(),
               };

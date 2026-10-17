@@ -8,6 +8,8 @@ import type { SpaceToolsContext } from './context.js';
 import { emitStage } from './stage.js';
 import { diffText } from './diff.js';
 import { requestConfirmation } from '../confirm.js';
+import { st, type StLang } from '../../../i18n.js';
+import { aiLangFrom } from '../../../agent/langDirective.js';
 
 const Actions = z.object({
   action: z.enum(['list', 'create', 'update', 'delete']),
@@ -35,6 +37,7 @@ export function buildScenariosTools(ctx: SpaceToolsContext): ToolExecutor[] {
         'delete 会向用户发确认卡;被拒或超时视为放弃,不要重试。',
       ],
       execute: async (input) => {
+        const lang: StLang = aiLangFrom(ctx.lang);
         let v: z.infer<typeof Actions>;
         try {
           v = Actions.parse(input);
@@ -71,7 +74,7 @@ export function buildScenariosTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const diff = diffText(before ?? {}, { ...(before ?? {}), ...patch });
               if (diff !== undefined) {
                 const approved = await requestConfirmation(
-                  { threadId: ctx.threadId, toolName: 'manage_scenarios', action: 'update', summary: `更新场景「${before?.title ?? v.scenarioId}」`, risk: 'update', diff },
+                  { threadId: ctx.threadId, toolName: 'manage_scenarios', action: 'update', summary: st(lang, 'scenario.updated', { title: before?.title ?? v.scenarioId }), risk: 'update', diff },
                   ctx.emit,
                 );
                 if (!approved) return { ok: false, error: '用户取消了该操作' };
@@ -86,7 +89,7 @@ export function buildScenariosTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const pid = sc ? await svc.scenarioProjectId(sc.id) : null;
               if (!sc || pid !== ctx.projectId) return { ok: false, error: '场景不存在或不属于当前项目' };
               const approved = await requestConfirmation(
-                { threadId: ctx.threadId, toolName: 'manage_scenarios', action: 'delete', summary: `删除场景「${sc.title}」(关联用例将解绑)`, risk: 'delete' },
+                { threadId: ctx.threadId, toolName: 'manage_scenarios', action: 'delete', summary: st(lang, 'scenario.deleted', { title: sc.title }), risk: 'delete' },
                 ctx.emit,
               );
               if (!approved) return { ok: false, error: '用户取消了该操作' };

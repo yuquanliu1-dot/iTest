@@ -29,6 +29,8 @@ import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 import { emitStage } from './stage.js';
 import { diffText } from './diff.js';
+import { st, type StLang } from '../../../i18n.js';
+import { aiLangFrom } from '../../../agent/langDirective.js';
 import type { StageKind } from './stage-tools.js';
 export type { SpaceToolsContext } from './context.js';
 
@@ -129,40 +131,42 @@ async function loadCaseOrThrow(ctx: SpaceToolsContext, caseId: string) {
   return detail;
 }
 
-function summaryFor(input: StageCaseOpInput, before: Awaited<ReturnType<typeof svc.getCaseDetail>>): { summary: string; diff?: string } {
+function summaryFor(input: StageCaseOpInput, before: Awaited<ReturnType<typeof svc.getCaseDetail>>, lang: StLang): { summary: string; diff?: string } {
   const title = before?.title ?? '用例';
   switch (input.action) {
     case 'update_case': {
       const keys = Object.keys(input.patch);
-      const summary = `更新「${title}」(${keys.join('/')})`;
+      const summary = st(lang, 'case.updated', { title, keys: keys.join('/') });
       const after = { ...before, ...input.patch };
       return { summary, diff: diffText(before ?? {}, after as Record<string, unknown>) };
     }
     case 'delete_case':
-      return { summary: `删除「${title}」` };
+      return { summary: st(lang, 'case.deleted', { title }) };
     case 'move_case':
-      return { summary: `移动「${title}」到分组 ${input.targetGroupId}`, diff: `groupId: ${before?.groupId ?? '?'} → ${input.targetGroupId}` };
+      return { summary: st(lang, 'case.moved', { title, target: input.targetGroupId }), diff: `groupId: ${before?.groupId ?? '?'} → ${input.targetGroupId}` };
     case 'update_step': {
       const step = before?.steps.find((s) => s.id === input.stepId);
       const order = step?.order ?? '?';
       const willChange: string[] = [];
       if (input.instruction !== undefined) willChange.push('instruction');
       if (input.compiled !== undefined) willChange.push('compiled');
-      const summary = `更新步骤 #${order}（${willChange.join('+') || 'noop'}）`;
+      const summary = st(lang, 'step.updated', { order, changes: willChange.join('+') || 'noop' });
       const afterStep = { ...step, instruction: input.instruction ?? step?.instruction, compiled: input.compiled ?? step?.compiled };
       const diff = diffText({ instruction: step?.instruction, compiled: step?.compiled }, { instruction: afterStep?.instruction, compiled: afterStep?.compiled });
       return { summary, diff };
     }
-    case 'insert_step': {
-      const target = input.afterOrder !== undefined ? `#${input.afterOrder} 后` : '末尾';
-      return { summary: `在${target} 插入新步骤` };
-    }
+    case 'insert_step':
+      return {
+        summary: input.afterOrder !== undefined
+          ? st(lang, 'step.insertAfter', { order: input.afterOrder })
+          : st(lang, 'step.insertEnd'),
+      };
     case 'delete_step': {
       const step = before?.steps.find((s) => s.id === input.stepId);
-      return { summary: `删除步骤 #${step?.order ?? '?'}` };
+      return { summary: st(lang, 'step.deleted', { order: step?.order ?? '?' }) };
     }
     case 'move_step':
-      return { summary: `重排 ${input.stepIds.length} 个步骤` };
+      return { summary: st(lang, 'step.reordered', { count: input.stepIds.length }) };
   }
 }
 
@@ -313,7 +317,7 @@ export function buildCaseOpsTools(ctx: SpaceToolsContext): ToolExecutor[] {
           if (!step) return { ok: false, error: `step ${v.stepId} 不属于 case ${v.caseId}` };
         }
 
-        const { summary, diff } = summaryFor(v, before);
+        const { summary, diff } = summaryFor(v, before, aiLangFrom(ctx.lang));
         const doc: StagedCaseOpDoc & { caseId: string; op: string; payload: unknown } = {
           localId: (input as { localId?: string }).localId ?? genLocalId(),
           caseId: v.caseId ?? '',
