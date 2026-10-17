@@ -715,7 +715,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               const pageText = await page
                 .evaluate(() => document.body?.innerText ?? '')
                 .catch(() => '');
-              const verdict = await judgeAssertionText(s.assertion, pageText, client);
+              const verdict = await judgeAssertionText(s.assertion, pageText, client, ctx.lang);
               // 判定写回本轮缓存：续跑轮的前缀步按上一轮判定复用（mechanical restore 不再逐轮 judge）
               verdictsThisRound.set(s.id, { real: verdict.real, ...(verdict.real ? {} : { dropped: s.assertion }) });
               if (verdict.real) {
@@ -754,6 +754,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               const summary = await runAiTask(page, instruction, client, false, {
                 maxTurns: STEP_MAX_TURNS,
                 valueSub,
+                lang: ctx.lang,
               });
               const parsed = tryParseJson(summary);
               if (parsed && parsed.status === 'failed') {
@@ -995,6 +996,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   probes: visionProbes,
                   overlays: visionOverlays,
                   elements: failurePage,
+                  lang: ctx.lang,
                   ...(emptyDataHint ? { extraHint: `失败页检出空数据信号「${emptyDataHint}」` } : {}),
                 })
               : null;
@@ -1045,6 +1047,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   probes: replayProbes,
                   overlays: replayOverlays,
                   elements: failurePage,
+                  lang: ctx.lang,
                 })
               : null;
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
@@ -1097,6 +1100,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 probes: stepProbes,
                 overlays: stepOverlays,
                 elements: failurePage,
+                lang: ctx.lang,
               })
             : null;
           ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });

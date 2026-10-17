@@ -1,3 +1,5 @@
+import type { AiLang } from '../../../agent/langDirective.js';
+
 /** 版本仓库后台检出状态(session 建立时通常未就绪;检出完成/失败后就位)。 */
 export interface RepoState {
   /** 仓库沙箱目录;后台检出完成前为 null。 */
@@ -32,4 +34,6 @@ export interface SpaceToolsContext {
   emit: (e: Record<string, unknown>) => void;
   /** 线程创建人：AI 直建/暂存落库对象以此为归属；历史线程为 null。 */
   createdByUserId: string | null;
+  /** 界面语言：线程创建人语言，历史线程缺省 zh-CN。 */
+  lang?: AiLang;
 }

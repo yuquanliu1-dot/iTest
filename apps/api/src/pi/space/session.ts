@@ -7,7 +7,8 @@ import { and, eq } from 'drizzle-orm';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { db } from '../../db/client.js';
-import { aiThreads, projectVersions } from '../../db/schema.js';
+import { aiThreads, projectVersions, users } from '../../db/schema.js';
+import { aiLangFrom, type AiLang } from '../../agent/langDirective.js';
 import { logger } from '../../logger.js';
 import { buildSpaceTools } from './tools/index.js';
 import { buildSpaceSummary } from './summary.js';
@@ -36,6 +37,8 @@ export interface SpaceThreadContext {
   repo: RepoState;
   /** 线程创建人：AI 代建对象(env/plan/...)以它为归属；历史线程为 null。 */
   createdByUserId: string | null;
+  /** 线程创建人界面语言，历史线程缺省 zh-CN。 */
+  lang?: AiLang;
 }
 
 export type SpaceSessionFactory = (ctx: SpaceThreadContext) => Promise<SpaceSessionLike>;
@@ -85,11 +88,18 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
   const v = (await db.select({ projectId: projectVersions.projectId }).from(projectVersions).where(eq(projectVersions.id, row.versionId)).limit(1))[0];
   if (!v) throw new Error('space thread version missing');
 
+  // 线程创建人界面语言解析：session 的 AI 输出语言跟随创建人偏好；历史线程（创建人 null）缺省 zh-CN。
+  let lang: AiLang = 'zh-CN';
+  if (row.createdByUserId) {
+    const u = (await db.select({ languagePreference: users.languagePreference }).from(users).where(eq(users.id, row.createdByUserId)).limit(1))[0];
+    lang = aiLangFrom(u?.languagePreference ?? null);
+  }
+
   // repo 后台异步检出:session 立即构建(新会话秒开,不等 git fetch 的网络往返),
   // repo 工具经共享 RepoState 每次调用动态解析 cwd;no_repo 静默(仅影响工具错误语态),
   // 其它失败记 repo.issue 供诊断,均不阻断会话。
   const repo = emptyRepoState();
-  const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo, createdByUserId: row.createdByUserId });
+  const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo, createdByUserId: row.createdByUserId, lang });
   const rec: ThreadRecord = {
     threadId,
     versionId: row.versionId,
@@ -271,25 +281,33 @@ const PI_DEFAULT_PREAMBLE =
   'You are an expert coding assistant operating inside pi, a coding agent harness. '
   + 'You help users by reading files, executing commands, editing code, and writing new files.';
 
-export function buildSpacePreamble(): string {
-  return [
-    '你是 iTest 平台的测试助手。你的职责是帮助用户设计和管理测试用例、编排执行计划、验证被测系统。',
-    '不要把自己描述为编码助手、AI 编程助手或任何具体的底层框架；用户问「你是谁」时，用上面的定位回答。',
-  ].join('\n');
+export function buildSpacePreamble(lang?: AiLang): string {
+  const zh = 'zh-CN' === aiLangFrom(lang ?? null);
+  return zh
+    ? [
+        '你是 iTest 平台的测试助手。你的职责是帮助用户设计和管理测试用例、编排执行计划、验证被测系统。',
+        '不要把自己描述为编码助手、AI 编程助手或任何具体的底层框架；用户问「你是谁」时，用上面的定位回答。',
+      ].join('\n')
+    : [
+        'You are the test assistant on the iTest platform. Your role is to help users design and manage test cases, orchestrate execution plans, and verify systems under test.',
+        'Do not describe yourself as a coding assistant, an AI programming assistant, or any specific underlying framework; when asked "who are you", answer with the positioning above.',
+      ].join('\n');
 }
 
 /**
  * 把 pi 默认 preamble 换成产品身份；渲染结果不含默认文案时（如上游已改）返回 undefined，
  * 让 pi 走原有逻辑而非用一份可能过期的全文覆盖。
  */
-export function rewriteSpacePreamble(rendered: string): string | undefined {
+export function rewriteSpacePreamble(rendered: string, lang?: AiLang): string | undefined {
   if (!rendered.includes(PI_DEFAULT_PREAMBLE)) return undefined;
-  return rendered.replace(PI_DEFAULT_PREAMBLE, buildSpacePreamble());
+  return rendered.replace(PI_DEFAULT_PREAMBLE, buildSpacePreamble(lang));
 }
 
 /** 空间助手 system prompt:风格约束 + 需求设计方法 + 工作空间 + 版本上下文摘要;无摘要时省略上下文段。 */
-export function buildSpaceSystemPrompt(summaryText: string | null): string {
-  const style = '## 输出风格\n- 用户使用简体中文提问,全部回复一律用简体中文(代码、命令、英文术语可保留原文)。这条约束覆盖**每一条**用户可见文本,包括最终答复、调用工具前的过程说明、以及思考/推理独白——不要出现「Let me check」「I found that」「I should」这类英文句子,想查什么直接调工具即可。\n- 不要使用 emoji;强调用 markdown 加粗,列举用列表/表格。';
+export function buildSpaceSystemPrompt(summaryText: string | null, lang?: AiLang): string {
+  const style = aiLangFrom(lang ?? null) === 'en-US'
+    ? '## Output style\n- The user writes in English. All replies MUST be in English (code, commands, and English terms may stay). This constraint covers every piece of user-visible text, including final replies, process explanations before tool calls, and reasoning monologues — do not write Chinese sentences like 「让我检查一下」, if you need to check something just call a tool.\n- Do not use emoji; emphasize with markdown bold, and enumerate with lists/tables.'
+    : '## 输出风格\n- 用户使用简体中文提问,全部回复一律用简体中文(代码、命令、英文术语可保留原文)。这条约束覆盖**每一条**用户可见文本,包括最终答复、调用工具前的过程说明、以及思考/推理独白——不要出现「Let me check」「I found that」「I should」这类英文句子,想查什么直接调工具即可。\n- 不要使用 emoji;强调用 markdown 加粗,列举用列表/表格。';
   const workspace = '## 工作空间\n- 当前目录是版本专属工作空间，项目仓库已检出到 ./repo 子目录；读取代码请优先使用 repo_ls / repo_read / repo_grep 工具。';
   if (!summaryText) return `${style}\n\n${REQ_DESIGN_METHOD}\n\n${workspace}`;
   return `${style}\n\n${REQ_DESIGN_METHOD}\n\n${workspace}\n\n## 版本空间上下文\n${summaryText}`;
@@ -358,7 +376,7 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
   const loader = new DefaultResourceLoader({
     cwd: workspaceDir,
     agentDir: getAgentDir(),
-    appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText)],
+    appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText, ctx.lang)],
     // 每轮开跑前把 preamble 换成产品身份。见 buildSpacePreamble 的注释：不能走
     // loader.systemPrompt，也不能直接改 systemPromptOptions.customPrompt，那两条路都会
     // 丢掉 rules 段里的工具 promptGuidelines。
@@ -367,7 +385,7 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
       hidden: true,
       factory: (pi) => {
         pi.on('before_agent_start', (event) => {
-          const rewritten = rewriteSpacePreamble(event.systemPrompt);
+          const rewritten = rewriteSpacePreamble(event.systemPrompt, ctx.lang ?? aiLangFrom(null));
           if (rewritten !== undefined) return { systemPrompt: rewritten };
           return undefined;
         });

@@ -265,6 +265,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               const summary = await runAiTask(page, instruction, client, false, {
                 maxTurns: STEP_MAX_TURNS,
                 valueSub,
+                lang: ctx.lang,
                 // 只收集可固化步骤的动作；敏感步骤凭据动作不进收集（占位符协议值本就无真实凭据，但语义上凭据不属于用例）
                 onAction: (action, ok) => {
                   if (solidifiable && ok) stepActions.push(action);
@@ -299,7 +300,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             const probes = await probeLocatorHits(page, collectStepLocators(failedStep.compiled));
             const evidence = await extractPageEvidence(page).catch(() => ({ overlays: [] as Array<{ tag: string; selector: string; text: string }> }));
             const diag = failurePage
-              ? await diagnoseFailure({ client, step: failedStep, assertion: failedStep.assertion, probes, overlays: evidence.overlays, elements: failurePage })
+              ? await diagnoseFailure({ client, step: failedStep, assertion: failedStep.assertion, probes, overlays: evidence.overlays, elements: failurePage, lang: ctx.lang })
               : null;
             const evidenceField =
               probes.length > 0 || evidence.overlays.length > 0

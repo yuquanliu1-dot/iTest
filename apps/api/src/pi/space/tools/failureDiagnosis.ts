@@ -18,6 +18,7 @@ import type { Page } from 'playwright-core';
 import type { Locator } from '@itest/shared';
 import { buildCandidates } from '../../../execute/locator-resolver.js';
 import { tryParseJson, type LLMClient } from '../../../agent/llm-client.js';
+import { aiLangFrom, type AiLang } from '../../../agent/langDirective.js';
 import type { PageElementSnapshot } from '../../inspectPage.js';
 import type { EffectiveStep } from './case-ops-tools.js';
 
@@ -121,11 +122,13 @@ export async function diagnoseFailure(o: {
   overlays: Array<{ tag: string; selector: string; text: string }>;
   elements: PageElementSnapshot;
   extraHint?: string;
+  lang?: AiLang;
 }): Promise<FailureDiagnosis | null> {
   try {
     const r = await o.client.complete({
       systemPrompt: DIAG_PROMPT,
       userMessage: buildEvidenceText(o),
+      lang: aiLangFrom(o.lang ?? null),
     });
     const raw = r.kind === 'json' ? JSON.stringify(r.value) : r.value;
     const parsed = tryParseJson(raw) as { diagnosis?: string; note?: string } | null;
