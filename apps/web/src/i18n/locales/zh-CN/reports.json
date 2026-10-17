@@ -1,0 +1,113 @@
+{
+  "pageDesc": "用例执行结果与计划运行汇总",
+  "reportTitle": "测试报告",
+  "report": "报告",
+  "backToList": "返回报告列表",
+  "backToPlanRun": "返回计划运行",
+  "healedTooltip": "存在 aiTask 步骤缓存分叉后 AI 自愈通过——通过但不够稳定",
+  "healedBadge": "自愈",
+  "healedPassed": "自愈通过",
+  "truncated": "（截断）",
+  "list": {
+    "status": "状态",
+    "version": "版本",
+    "columnKind": "类型",
+    "columnTitle": "标识",
+    "columnLastAssertion": "最后断言",
+    "columnDuration": "耗时",
+    "columnCreatedBy": "执行人",
+    "columnCreatedAt": "时间",
+    "kindPlan": "计划",
+    "kindCase": "用例",
+    "batchDelete": "批量删除",
+    "searchPlaceholder": "搜索用例标题…",
+    "emptyTitle": "还没有执行记录",
+    "emptyDesc": "在执行计划或用例详情页运行测试后会出现在这里。",
+    "deletedToast": "已删除 {{count}} 条（{{parts}}）",
+    "listSeparator": "，",
+    "tabsAll": "所有",
+    "tabsCase": "单用例"
+  },
+  "delete": {
+    "title": "删除测试报告",
+    "confirm": "确认删除该测试报告？相关截图将一并清理，且不可恢复。"
+  },
+  "detail": {
+    "stepTimeline": "步骤时间线",
+    "waitingFirstStep": "执行中，等待第 1 步结果…",
+    "noStepsResult": "无步骤结果",
+    "summaryTitle": "汇总",
+    "metadataTitle": "元数据",
+    "dataRowTitle": "当次数据行",
+    "allReports": "全部 {{count}} 份",
+    "datasetCountTitle": "该用例数据集共 {{count}} 行，每行一份报告",
+    "openCase": "打开用例详情"
+  },
+  "meta": {
+    "duration": "耗时",
+    "locator": "定位",
+    "tabIndex": "标签页",
+    "exec": "执行",
+    "usage": "用量",
+    "caseName": "用例",
+    "caseId": "用例 ID",
+    "reportId": "报告 ID",
+    "platform": "平台",
+    "device": "设备",
+    "dataRow": "数据行"
+  },
+  "stepExec": {
+    "cached": "缓存命中",
+    "healed": "AI 自愈",
+    "healedTitle": "缓存动作与页面分叉，AI 兜底重做后通过",
+    "degraded": "AI 降级",
+    "degradedTitle": "机械执行受阻（如未编译 / 执行失败），由 AI 按步骤指令临场执行通过"
+  },
+  "stepNote": {
+    "var": "变量",
+    "varUndefined": "未定义：在该步骤之前添加 extract 步骤抽取该变量，或检查变量名拼写（用例页保存步骤时会显示变量体检提示）。",
+    "degradedExec": "AI 降级执行",
+    "warning": "警告",
+    "visionPassed": "视觉判定通过",
+    "visionFailed": "视觉判定失败",
+    "visionExpected": "判定预期（按本行数据物化）：{{expected}}",
+    "visionUsage": "视觉判定 {{usage}}",
+    "reason": "原因",
+    "note": "说明"
+  },
+  "shots": {
+    "stepShot": "Step #{{order}} 截图",
+    "stepShotVision": "Step #{{order}} 视觉判定截图",
+    "zoomStep": "放大 step {{order}} 截图",
+    "zoomStepVision": "放大 step {{order}} 视觉判定截图",
+    "altVision": "step {{order}} 视觉判定",
+    "prev": "上一步截图",
+    "next": "下一步截图"
+  },
+  "summary": {
+    "totalSteps": "总步骤",
+    "aiCalls": "AI 调用"
+  },
+  "aiUsage": "AI {{count}} 次调用 · {{tokens}} tokens · {{seconds}}s",
+  "aiCallsSummary": "{{count}} 次 · {{tokens}} tokens · {{seconds}}s",
+  "retrySuffix": " · 重试 {{count}}",
+  "db": {
+    "summary": "DB 查询：{{count}} 行",
+    "logSummary": "日志：匹配 {{count}} 行"
+  },
+  "http": {
+    "summary": "HTTP：{{method}} {{path}} → {{status}}（{{ms}}ms）",
+    "headers": "请求头",
+    "body": "请求体",
+    "response": "响应 {{status}} {{statusText}}",
+    "emptyBody": "（空）",
+    "extract": "提取 {{name}}",
+    "extractVar": "提取变量"
+  },
+  "assertion": {
+    "hit": "✓ 命中",
+    "miss": "✕ 未命中",
+    "quote": "「{{expected}}」",
+    "statusCode": " 状态码 {{code}}"
+  }
+}

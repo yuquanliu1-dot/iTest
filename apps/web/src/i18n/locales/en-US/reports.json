@@ -1,0 +1,129 @@
+{
+  "pageDesc": "Case execution results and plan run summary",
+  "reportTitle": "Test Report",
+  "report": "Report",
+  "backToList": "Back to report list",
+  "backToPlanRun": "Back to plan run",
+  "healedTooltip": "AI self-healed after a cached aiTask step diverged — passed but not stable",
+  "healedBadge": "Healed",
+  "healedPassed": "Self-healed",
+  "truncated": " (truncated)",
+  "list": {
+    "status": "Status",
+    "version": "Version",
+    "columnKind": "Type",
+    "columnTitle": "Identifier",
+    "columnLastAssertion": "Last assertion",
+    "columnDuration": "Duration",
+    "columnCreatedBy": "Executor",
+    "columnCreatedAt": "Time",
+    "kindPlan": "Plan",
+    "kindCase": "Case",
+    "batchDelete": "Batch delete",
+    "searchPlaceholder": "Search case title…",
+    "emptyTitle": "No execution records yet",
+    "emptyDesc": "Run a test from a plan or a case detail page and it will show up here.",
+    "deletedToast": "Deleted {{total}} items ({{parts}})",
+    "deletedToast_one": "Deleted {{total}} item ({{parts}})",
+    "deletedToast_other": "Deleted {{total}} items ({{parts}})",
+    "listSeparator": ", ",
+    "tabsAll": "All",
+    "tabsCase": "Single case"
+  },
+  "delete": {
+    "title": "Delete test report",
+    "confirm": "Delete this test report? Related screenshots will be removed too and cannot be recovered."
+  },
+  "detail": {
+    "stepTimeline": "Step timeline",
+    "waitingFirstStep": "Executing, waiting for step 1…",
+    "noStepsResult": "No step results",
+    "summaryTitle": "Summary",
+    "metadataTitle": "Metadata",
+    "dataRowTitle": "Current data row",
+    "allReports": "All {{count}} reports",
+    "allReports_one": "All {{count}} report",
+    "allReports_other": "All {{count}} reports",
+    "datasetCountTitle": "This case dataset has {{count}} rows, one report per row",
+    "datasetCountTitle_one": "This case dataset has {{count}} row, one report per row",
+    "datasetCountTitle_other": "This case dataset has {{count}} rows, one report per row",
+    "openCase": "Open case detail"
+  },
+  "meta": {
+    "duration": "Duration",
+    "locator": "Locator",
+    "tabIndex": "Tab",
+    "exec": "Exec",
+    "usage": "Usage",
+    "caseName": "Case",
+    "caseId": "Case ID",
+    "reportId": "Report ID",
+    "platform": "Platform",
+    "device": "Device",
+    "dataRow": "Data row"
+  },
+  "stepExec": {
+    "cached": "Cache hit",
+    "healed": "AI self-healed",
+    "healedTitle": "Cached actions diverged from the page; AI redid them as a fallback and passed",
+    "degraded": "AI fallback",
+    "degradedTitle": "Mechanical execution was blocked (e.g. uncompiled / execution failed), so AI executed on the fly from the step instruction and passed"
+  },
+  "stepNote": {
+    "var": "Variable",
+    "varUndefined": "Undefined: add an extract step before this step to capture the variable, or check the variable name spelling (the case page shows a variable check hint when saving steps).",
+    "degradedExec": "AI fallback execution",
+    "warning": "Warning",
+    "visionPassed": "Vision check passed",
+    "visionFailed": "Vision check failed",
+    "visionExpected": "Expected for this check (materialized from this row's data): {{expected}}",
+    "visionUsage": "Vision check {{usage}}",
+    "reason": "Reason",
+    "note": "Note"
+  },
+  "shots": {
+    "stepShot": "Step #{{order}} screenshot",
+    "stepShotVision": "Step #{{order}} vision check screenshot",
+    "zoomStep": "Enlarge step {{order}} screenshot",
+    "zoomStepVision": "Enlarge step {{order}} vision check screenshot",
+    "altVision": "step {{order}} vision check",
+    "prev": "Previous screenshot",
+    "next": "Next screenshot"
+  },
+  "summary": {
+    "totalSteps": "Total steps",
+    "aiCalls": "AI calls"
+  },
+  "aiUsage": "AI {{count}} calls · {{tokens}} tokens · {{seconds}}s",
+  "aiUsage_one": "AI {{count}} call · {{tokens}} tokens · {{seconds}}s",
+  "aiUsage_other": "AI {{count}} calls · {{tokens}} tokens · {{seconds}}s",
+  "aiCallsSummary": "{{count}} calls · {{tokens}} tokens · {{seconds}}s",
+  "aiCallsSummary_one": "{{count}} call · {{tokens}} tokens · {{seconds}}s",
+  "aiCallsSummary_other": "{{count}} calls · {{tokens}} tokens · {{seconds}}s",
+  "retrySuffix": " · {{count}} retries",
+  "retrySuffix_one": " · {{count}} retry",
+  "retrySuffix_other": " · {{count}} retries",
+  "db": {
+    "summary": "DB query: {{count}} rows",
+    "summary_one": "DB query: {{count}} row",
+    "summary_other": "DB query: {{count}} rows",
+    "logSummary": "Log: matched {{count}} lines",
+    "logSummary_one": "Log: matched {{count}} line",
+    "logSummary_other": "Log: matched {{count}} lines"
+  },
+  "http": {
+    "summary": "HTTP: {{method}} {{path}} → {{status}} ({{ms}}ms)",
+    "headers": "Request headers",
+    "body": "Request body",
+    "response": "Response {{status}} {{statusText}}",
+    "emptyBody": "(empty)",
+    "extract": "Extracted {{name}}",
+    "extractVar": "Extracted variables"
+  },
+  "assertion": {
+    "hit": "✓ matched",
+    "miss": "✕ not matched",
+    "quote": " \"{{expected}}\"",
+    "statusCode": " status {{code}}"
+  }
+}
