@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type StageDoc, type StageSaveBody } from '../../api/client';
 import Button from '../../components/ui/Button';
@@ -51,6 +52,7 @@ function partition(staged: Map<string, StagedItem> | undefined): Record<Tab, Sta
 
 /** cases 行的步骤渲染（折叠）。 */
 function CaseSteps({ steps }: { steps: StageDoc['cases'][number]['steps'] }) {
+  const { t } = useTranslation();
   if (!steps.length) return null;
   return (
     <details className="mt-1">
@@ -77,7 +79,7 @@ function CaseSteps({ steps }: { steps: StageDoc['cases'][number]['steps'] }) {
                 <ol className="ml-4 list-decimal">
                   {s.compiled.map((sub, j) => (
                     <li key={j}>
-                      <span style={{ color: 'var(--primary)' }}>{stepKindLabel((sub as { kind?: string }).kind ?? '')}</span>{' '}
+                      <span style={{ color: 'var(--primary)' }}>{t(stepKindLabel((sub as { kind?: string }).kind ?? ''))}</span>{' '}
                       {stepSummary({ compiled: [sub] })}
                     </li>
                   ))}

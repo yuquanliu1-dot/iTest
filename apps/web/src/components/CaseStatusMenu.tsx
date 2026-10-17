@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type CaseStatus } from '../api/client';
 import { useUIStore } from '../stores/ui';
@@ -26,13 +27,14 @@ export default function CaseStatusMenu({
   const ref = useRef<HTMLSpanElement>(null);
   const qc = useQueryClient();
   const toast = useUIStore((s) => s.showToast);
+  const { t } = useTranslation();
 
   const patch = useMutation({
     mutationFn: (next: CaseStatus) => api.cases.patch(caseId, { status: next }),
     onSuccess: (_r, next) => {
       qc.invalidateQueries({ queryKey: ['case', caseId] });
       if (projectId) qc.invalidateQueries({ queryKey: ['cases', projectId] });
-      toast(`状态已改为${caseStatusLabel(next)}`, 'success');
+      toast(t('cases:statusChanged', { status: t(caseStatusLabel(next)) }), 'success');
       setOpen(false);
       onChanged?.(next);
     },
@@ -55,14 +57,14 @@ export default function CaseStatusMenu({
     <span ref={ref} className="relative inline-flex">
       <button
         type="button"
-        title="点击修改状态"
+        title={t('cases:changeStatus')}
         onClick={(e) => {
           e.stopPropagation();
           setOpen((v) => !v);
         }}
         style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}
       >
-        <StatusPill status={status}>{caseStatusLabel(status)}</StatusPill>
+        <StatusPill status={status}>{t(caseStatusLabel(status))}</StatusPill>
       </button>
       {open &&
         anchor &&
@@ -97,7 +99,7 @@ export default function CaseStatusMenu({
                   color: s === status ? 'var(--primary)' : 'var(--foreground)',
                 }}
               >
-                {caseStatusLabel(s)}
+                {t(caseStatusLabel(s))}
                 {s === status && <span>✓</span>}
               </button>
             ))}

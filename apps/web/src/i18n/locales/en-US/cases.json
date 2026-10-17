@@ -1,0 +1,38 @@
+{
+  "status": {
+    "draft": "Draft",
+    "review": "Under Review",
+    "ready": "Ready",
+    "deprecated": "Deprecated",
+    "queued": "Queued",
+    "running": "Running",
+    "passed": "Passed",
+    "failed": "Failed",
+    "completed": "Completed",
+    "pending": "Pending",
+    "error": "Error",
+    "success": "Success"
+  },
+  "stepKind": {
+    "click": "Click",
+    "hover": "Hover",
+    "fill": "Fill",
+    "select": "Select from dropdown",
+    "check": "Check",
+    "waitFor": "Wait for element",
+    "assertVisible": "Assert visible",
+    "assertText": "Assert text",
+    "assertJson": "Assert JSON",
+    "navigate": "Open page",
+    "upload": "Upload file",
+    "extract": "Extract variable",
+    "aiTask": "AI step",
+    "switchTab": "Switch tab",
+    "screenshot": "Screenshot",
+    "queryDb": "Database query",
+    "observeLog": "Watch log",
+    "httpRequest": "HTTP request"
+  },
+  "statusChanged": "Status changed to {{status}}",
+  "changeStatus": "Click to change status"
+}

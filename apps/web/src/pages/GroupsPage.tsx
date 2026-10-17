@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
 	parseAsArrayOf,
 	parseAsString,
@@ -76,6 +77,7 @@ export default function GroupsPage() {
 	const navigate = useNavigate();
 	const toast = useUIStore((s) => s.showToast);
 	const qc = useQueryClient();
+	const { t } = useTranslation();
 	const current = useProjectStore((s) => s.current);
 
 	const [raw, setRaw] = useQueryStates(caseParsers, { history: 'replace' });
@@ -347,7 +349,7 @@ export default function GroupsPage() {
 		{
 			id: 'status',
 			label: '状态',
-			options: STATUS_FILTER_VALUES.filter((s) => s !== '').map((s) => ({ value: s, label: caseStatusLabel(s) })),
+			options: STATUS_FILTER_VALUES.filter((s) => s !== '').map((s) => ({ value: s, label: t(caseStatusLabel(s)) })),
 		},
 		{
 			id: 'tag',

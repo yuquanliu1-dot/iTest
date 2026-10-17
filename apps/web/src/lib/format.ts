@@ -36,38 +36,38 @@ export function formatBytes(bytes: number): string {
   return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`;
 }
 
-/** 步骤类型中文名（仅展示用，存储值仍为英文 kind）。 */
+/** 步骤类型展示名 = i18n key（仅展示用，存储值仍为英文 kind；由调用方组件 t() 渲染）。 */
 export const STEP_KIND_LABELS: Record<string, string> = {
-  click: '点击',
-  hover: '悬停',
-  fill: '输入',
-  select: '下拉选择',
-  check: '勾选',
-  waitFor: '等待元素',
-  assertVisible: '断言可见',
-  assertText: '断言文本',
-  assertJson: '断言JSON',
-  navigate: '打开页面',
-  upload: '上传文件',
-  extract: '提取变量',
-  aiTask: '智能步骤',
-  switchTab: '切换标签页',
-  screenshot: '截图',
-  queryDb: '数据库查询',
-  observeLog: '日志观察',
-  httpRequest: 'HTTP 请求',
+  click: 'cases:stepKind.click',
+  hover: 'cases:stepKind.hover',
+  fill: 'cases:stepKind.fill',
+  select: 'cases:stepKind.select',
+  check: 'cases:stepKind.check',
+  waitFor: 'cases:stepKind.waitFor',
+  assertVisible: 'cases:stepKind.assertVisible',
+  assertText: 'cases:stepKind.assertText',
+  assertJson: 'cases:stepKind.assertJson',
+  navigate: 'cases:stepKind.navigate',
+  upload: 'cases:stepKind.upload',
+  extract: 'cases:stepKind.extract',
+  aiTask: 'cases:stepKind.aiTask',
+  switchTab: 'cases:stepKind.switchTab',
+  screenshot: 'cases:stepKind.screenshot',
+  queryDb: 'cases:stepKind.queryDb',
+  observeLog: 'cases:stepKind.observeLog',
+  httpRequest: 'cases:stepKind.httpRequest',
 };
 
 export function stepKindLabel(kind: string): string {
   return STEP_KIND_LABELS[kind] ?? kind;
 }
 
-/** 用例状态中文名（仅展示用，存储值仍为英文）。 */
+/** 用例状态展示名 = i18n key（仅展示用，存储值仍为英文；由调用方组件 t() 渲染）。 */
 export const CASE_STATUS_LABELS: Record<string, string> = {
-  draft: '草稿',
-  review: '评审中',
-  ready: '就绪',
-  deprecated: '废弃',
+  draft: 'cases:status.draft',
+  review: 'cases:status.review',
+  ready: 'cases:status.ready',
+  deprecated: 'cases:status.deprecated',
 };
 
 export function caseStatusLabel(status: string): string {

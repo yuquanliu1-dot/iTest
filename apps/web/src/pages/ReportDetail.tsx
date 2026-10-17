@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -78,6 +79,7 @@ function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
 export default function ReportDetail() {
   const { id, projectId, versionId } = useParams<{ id: string; projectId: string; versionId: string }>();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const toast = useUIStore((s) => s.showToast);
   const [zoomIndex, setZoomIndex] = useState<number | null>(null);
@@ -191,7 +193,7 @@ export default function ReportDetail() {
           {(s.instruction?.trim() || (Array.isArray(s.compiled) && s.compiled.length > 0)) && (
             <div className="flex items-baseline gap-1.5 min-w-0" title={fullStepDescription(s)}>
               <span className="shrink-0 font-semibold" style={{ color: 'var(--primary)', fontSize: 10 }}>
-                {stepKindLabel(getKind(s))}
+                {t(stepKindLabel(getKind(s)))}
               </span>
               <span className="min-w-0 truncate text-[12px]" style={{ color: 'var(--foreground)' }}>
                 {s.instruction?.trim() || stepSummary(s)}
