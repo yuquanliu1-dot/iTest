@@ -1150,6 +1150,21 @@ describe('verify_case 空转硬上限', () => {
   });
 });
 
+describe('verify_case 超时预算', () => {
+  it('全局预算随步数缩放：1-3 步保底 300s，4 步起线性增至 130s/步', async () => {
+    // 回归动机（2026-10-17 prod228）：固定 300s 全局看门狗装不下 10 步用例——每步 AI 相 ~85-107s，
+    // 3 步就烧 286.8s，第 4 步中途被 300s 预算强杀。预算必须随步数增长才谈得上多步用例可重复验证。
+    const { computeVerifyTimeoutMs } = await import('../src/pi/space/tools/verifyCase.js');
+    expect(computeVerifyTimeoutMs(0)).toBe(300_000); // 兜底（无步骤前置已拦截，绝不至于 0）
+    expect(computeVerifyTimeoutMs(1)).toBe(300_000);
+    expect(computeVerifyTimeoutMs(2)).toBe(300_000); // 2×130k=260k < 保底 → 仍 300k
+    expect(computeVerifyTimeoutMs(3)).toBe(3 * 130_000); // 3×130k=390k 起越保底，线性爬升
+    expect(computeVerifyTimeoutMs(4)).toBe(4 * 130_000);
+    expect(computeVerifyTimeoutMs(10)).toBe(10 * 130_000); // 10 步 ≈ 21.7min
+    expect(computeVerifyTimeoutMs(10)).toBeGreaterThan(300_000);
+  });
+});
+
 describe('verify_case 注册', () => {
   it('buildSpaceTools 包含 verify_case', async () => {
     const { buildSpaceTools } = await import('../src/pi/space/tools/index.js');

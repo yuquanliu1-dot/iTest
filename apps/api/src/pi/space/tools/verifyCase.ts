@@ -37,9 +37,22 @@ import { repoToolCwd } from './context.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
-// AI 轮次慢于编译回放，watchdog 从 120s 放宽到 300s；单步对话轮上限独立收紧。
-const VERIFY_TIMEOUT_MS = 300_000;
+// AI 轮次慢于编译回放，watchdog 基础 300s；多步用例按步数缩放（每步 ~130s 预算，
+// prod228 实测每步 AI 相 ~85-107s，130s/步留出机械回放/restore 余量）——固定 300s 装不下 10 步用例。
+// 单步对话轮上限独立收紧（STEP_MAX_TURNS）；单步 AI 相另有秒级帽子 STEP_AI_TIMEOUT_MS：
+// 某一步在慢 SUT 上拖到该帽子 → fail-stop 该步（StepTimedOut），而不是让整轮到全局预算耗尽才死。
+// 帽子取 240s（初版 150s 偏紧）：prod228 实测「冷容器重建后全新一轮 = 登录 + 步1 AI 相」就要 183.7s
+// （步内至多 maxTurns=5 轮，不同步冷启动+登录会到分钟级）——150s 会把这类合法慢步误杀成 StepTimedOut，
+// 240s 在 183.7s 上留 ~30% 余量，同时仍能兜住 LLM 客户端挂起这类轮数计数不到的异常。
+const VERIFY_TIMEOUT_BASE_MS = 300_000;
+const VERIFY_TIME_PER_STEP_MS = 130_000;
+const STEP_AI_TIMEOUT_MS = 240_000;
 const STEP_MAX_TURNS = 5;
+
+/** 全局看门狗预算 = max(基础 300s, 步数 × 每步 130s)。多步用例的慢是渐进累计的，预算必须随步数增长。 */
+export function computeVerifyTimeoutMs(stepCount: number): number {
+  return Math.max(VERIFY_TIMEOUT_BASE_MS, stepCount * VERIFY_TIME_PER_STEP_MS);
+}
 // 同一用例连续失败上限：prompt 建议 3 轮，但 prompt 建议不硬——agent 可无视。这里加硬约束：
 // 第 N+1 轮若失败原因签名与前一轮相同（无进展）即强制停止并给出"环境/前置问题"提示，
 // 避免在环境缺数据/页面持续不稳定的场景里空转烧 LLM 调用。
@@ -56,7 +69,7 @@ interface AiStepResult {
   warning?: string;
   screenshot?: string;
   error?: string;
-  failureReason?: 'StepReportedFailed' | 'AiTaskAborted' | 'SecretMissing' | 'LocatorMismatch' | 'AmbiguousLocator';
+  failureReason?: 'StepReportedFailed' | 'AiTaskAborted' | 'SecretMissing' | 'LocatorMismatch' | 'AmbiguousLocator' | 'StepTimedOut';
 }
 
 /** 按 thread×case 维度跟踪连续同因失败轮次（防空转硬约束用）。
@@ -455,6 +468,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         }
         if (effectiveSteps.length === 0) return { ok: false, error: '用例没有可验证的步骤' };
         const effectiveCase = { ...caseMeta, ...overlayPatches };
+        // 全局看门狗预算随有效步数缩放：慢 SUT 上每步 AI 相渐进累计，固定预算装不下多步用例
+        const verifyTimeoutMs = computeVerifyTimeoutMs(effectiveSteps.length);
 
         // ── 前缀确认决策（Problem 1：跨轮砍 AI 相前缀重跑，保留结尾完整机械回放）──
         // validPrefixLen>0 表示上轮已确认、且本步骤未变/环境未换的前缀条数。本轮用机械回放重建
@@ -544,7 +559,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         const timer = setTimeout(() => {
           timedOut = true;
           if (browser) void browser.close().catch(() => undefined);
-        }, VERIFY_TIMEOUT_MS);
+        }, verifyTimeoutMs);
         try {
           // resolveCaseUrl 可能抛 WebServiceMissing(相对 url 但环境无 web 服务),放进本 try 让 finally
           // 的 envCtx.close 兜底(异常路径也不泄漏连接池)。
@@ -660,6 +675,23 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           const stepResults: AiStepResult[] = [];
           /** 本轮 AI 相产生的断言判定（写回上一轮缓存，续跑前逐步复用）。 */
           const verdictsThisRound = new Map<string, { real: boolean; dropped?: string }>();
+          // 全局看门狗超时收尾（步骤中断 / 机械回放中断共用）：把本地已完成前缀写回缓存——
+          // 否则下轮从头重跑，已确认步骤全丢（Problem 1 续跑设计被架空）。错误带完成步数，
+          // 下轮 resume 从中断步续跑而非从第 1 步重来。stepResults 局部下标自 resumeIndex 起，
+          // 完成条数 = resumeIndex（沿用上轮确认的前缀） + stepResults.length（本轮实走）。
+          const commitTimeoutPrefix = (where: string): { ok: false; error: string } => {
+            const merged = new Map<string, { real: boolean; dropped?: string }>(prevConfirm?.assertionVerdicts ?? []);
+            for (const [id, v] of verdictsThisRound) merged.set(id, v);
+            const completed: AiStepResult[] = [...prefixConfirmedResults.slice(0, resumeIndex), ...stepResults];
+            verifyConfirmCache.set(ckey, {
+              stepsHash: curStepsHash,
+              metaHash: curMetaHash,
+              confirmedThrough: completed.length,
+              assertionVerdicts: merged,
+              confirmedStepResults: completed,
+            });
+            return { ok: false, error: `验证超时（${verifyTimeoutMs / 1000}s）已终止：已完成 ${completed.length}/${effectiveSteps.length} 步（${where}），后续轮次将从中断步 resume 续跑` };
+          };
           let failedIndex = -1;
           let login: 'logged-in' | 'not-needed' = 'not-needed';
           // SSE 实时进度：验证全程可达数分钟，前端凭这些事件渲染逐步进度卡（spaceEventsStore.verify_progress）。
@@ -750,12 +782,22 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               failedIndex = i;
               break;
             }
+            let aiRun: Promise<string> | undefined;
+            let guardTimer: NodeJS.Timeout | undefined;
             try {
-              const summary = await runAiTask(page, instruction, client, false, {
+              // 单步 AI 相秒级帽子：runAiTask 只按轮数受限（STEP_MAX_TURNS）无墙钟上限，慢 SUT 上一轮
+              // 拖到分钟级就会吃光整个全局预算。帽子触发 → fail-stop 该步（StepTimedOut），在途 aiRun 放弃
+              // （catch 里吞掉其 rejection，浏览器最终收尾关闭）。
+              aiRun = runAiTask(page, instruction, client, false, {
                 maxTurns: STEP_MAX_TURNS,
                 valueSub,
                 lang: ctx.lang,
               });
+              const stepGuard = new Promise<never>((_, reject) => {
+                guardTimer = setTimeout(() => reject(new Error(`STEP_TIMEOUT:${s.order}`)), STEP_AI_TIMEOUT_MS);
+              });
+              const summary = await Promise.race([aiRun, stepGuard]);
+              clearTimeout(guardTimer);
               const parsed = tryParseJson(summary);
               if (parsed && parsed.status === 'failed') {
                 // LLM 自报失败：fail-stop，原因直达反馈
@@ -800,14 +842,31 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 ...(parsed ? {} : { reason: summary.slice(0, 120) }),
               });
             } catch (e) {
+              clearTimeout(guardTimer);
               // watchdog 强关浏览器会让在途 runAiTask 抛错——此时真实原因是超时而非步骤失败
-              if (timedOut) return { ok: false, error: `验证超时（${VERIFY_TIMEOUT_MS / 1000}s）已终止` };
+              if (timedOut) {
+                // 全局超时:前缀写缓存 + 带完成步数,下轮 resume 续跑(见 commitTimeoutPrefix)
+                return commitTimeoutPrefix('步骤执行中');
+              }
+              const eMsg = (e as Error).message ?? '';
+              if (eMsg.startsWith('STEP_TIMEOUT:')) {
+                // 单步 AI 相超过 STEP_AI_TIMEOUT_MS：fail-stop 该步而非整轮超时（在途 aiRun 放弃）
+                void aiRun?.catch(() => undefined);
+                stepResults.push({
+                  order: s.order, status: 'failed', durationMs: Date.now() - started,
+                  error: `步骤 ${s.order} AI 执行超过 ${STEP_AI_TIMEOUT_MS / 1000}s`, failureReason: 'StepTimedOut',
+                  screenshot: await writeStepScreenshot(reportId, i + 1, page),
+                });
+                ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: `步骤 ${s.order} AI 执行超过 ${STEP_AI_TIMEOUT_MS / 1000}s` });
+                failedIndex = i;
+                break;
+              }
               stepResults.push({
                 order: s.order, status: 'failed', durationMs: Date.now() - started,
-                error: (e as Error).message.slice(0, 300), failureReason: 'AiTaskAborted',
+                error: eMsg.slice(0, 300), failureReason: 'AiTaskAborted',
                 screenshot: await writeStepScreenshot(reportId, i + 1, page),
               });
-              ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: (e as Error).message.slice(0, 120) });
+              ctx.emit({ type: 'verify_progress', phase: 'step_done', order: s.order, status: 'failed', durationMs: Date.now() - started, reason: eMsg.slice(0, 120) });
               failedIndex = i;
               break;
             }
@@ -902,10 +961,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               );
               replayFailure = replaySteps.find((r) => r.status === 'failed') ?? null;
             } catch (e) {
-              if (timedOut) return { ok: false, error: `验证超时（${VERIFY_TIMEOUT_MS / 1000}s）已终止` };
+              if (timedOut) return commitTimeoutPrefix('机械回放中');
               throw e;
             }
-            if (timedOut) return { ok: false, error: `验证超时（${VERIFY_TIMEOUT_MS / 1000}s）已终止` };
+            if (timedOut) return commitTimeoutPrefix('机械回放中');
             ctx.emit({
               type: 'verify_progress',
               phase: 'replay_done',
