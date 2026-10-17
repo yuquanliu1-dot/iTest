@@ -6,6 +6,7 @@
  * Shadow DOM 隔离，避免与宿主页面样式互相污染。
  */
 (() => {
+  const t = (k, s) => chrome.i18n.getMessage(k, s);
   const HOST_ID = 'itest-recorder-panel-host';
   let paused = false;
   let count = 0;
@@ -98,26 +99,26 @@
     <div class="panel">
       <div class="head">
         <span class="dot"></span>
-        <span class="title">iTest 录制中</span>
-        <span class="count">0 步</span>
-        <button class="toggle" title="收起面板">—</button>
+        <span class="title">${t('panelTitle')}</span>
+        <span class="count">${t('stepCount', ['0'])}</span>
+        <button class="toggle" title="${t('collapsePanel')}">—</button>
       </div>
       <div class="body">
         <div class="row">
-          <button class="btn ghost pause">暂停</button>
-          <button class="btn danger stop">停止录制</button>
+          <button class="btn ghost pause">${t('pause')}</button>
+          <button class="btn danger stop">${t('stopRecording')}</button>
         </div>
         <div class="opts">
-          <label title="自动捕获：录制期间光标在元素上停留 ≥500ms 就生成一条 hover 步骤（噪声大，默认关闭）"><input type="checkbox" class="opt-hover" /> 录制 hover 步骤</label>
-          <label>fill 合并窗 (ms)<input type="number" class="opt-fill-ms" min="50" max="2000" step="50" value="250" /></label>
+          <label title="${t('autoCaptureHint')}"><input type="checkbox" class="opt-hover" /> ${t('recordHoverSteps')}</label>
+          <label>${t('fillMergeWindow')}<input type="number" class="opt-fill-ms" min="50" max="2000" step="50" value="250" /></label>
         </div>
         <div class="grid">
-          <button class="btn ghost feat" data-mode="variable">保存变量</button>
-          <button class="btn ghost feat" data-mode="assert">添加断言</button>
-          <button class="btn ghost feat" data-mode="hover" title="手动插入：点选页面中的一个元素，立即生成一条 hover 步骤">插入 hover 步骤</button>
-          <button class="btn ghost feat" data-mode="ai">AI 自然语言</button>
+          <button class="btn ghost feat" data-mode="variable">${t('modeSavingVariable')}</button>
+          <button class="btn ghost feat" data-mode="assert">${t('modeAddAssertion')}</button>
+          <button class="btn ghost feat" data-mode="hover" title="${t('manualHoverHint')}">${t('insertHoverStep')}</button>
+          <button class="btn ghost feat" data-mode="ai">${t('aiNaturalLang')}</button>
         </div>
-        <button class="btn primary back">返回用例详情页</button>
+        <button class="btn primary back">${t('backToCase')}</button>
       </div>
     </div>
   `;
@@ -138,11 +139,11 @@
   const render = () => {
     panel.classList.toggle('collapsed', collapsed);
     dot.classList.toggle('paused', paused);
-    title.textContent = paused ? '已暂停' : 'iTest 录制中';
-    countEl.textContent = `${count} 步`;
-    pauseBtn.textContent = paused ? '继续' : '暂停';
+    title.textContent = paused ? t('panelPaused') : t('panelTitle');
+    countEl.textContent = t('stepCount', [String(count)]);
+    pauseBtn.textContent = paused ? t('resume') : t('pause');
     toggleBtn.textContent = collapsed ? '◼' : '—';
-    toggleBtn.title = collapsed ? '展开面板' : '收起面板';
+    toggleBtn.title = collapsed ? t('expandPanel') : t('collapsePanel');
   };
 
   // 选项变更 → 透传到 content/recorder.js 的 manager。用 set-options 消息实时生效。
