@@ -1,4 +1,5 @@
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { useTranslation } from 'react-i18next';
 import { chartColors, tooltipContentStyle } from '../chartTheme';
 import type { OverviewResponse } from '../api';
 
@@ -11,32 +12,33 @@ const COLOR_BY_PRIORITY: Record<Dist[number]['priority'], string> = {
   low: chartColors.chart3,
 };
 
-const LABELS: Record<Dist[number]['priority'], string> = {
-  urgent: '紧急',
-  high: '高',
-  medium: '中',
-  low: '低',
+const LABEL_KEY: Record<Dist[number]['priority'], string> = {
+  urgent: 'priorityUrgent',
+  high: 'priorityHigh',
+  medium: 'priorityMedium',
+  low: 'priorityLow',
 };
 
 export default function PriorityDonut({ data }: { data: Dist }) {
+  const { t } = useTranslation();
   const total = data.reduce((s, d) => s + d.count, 0);
   const filtered = data.filter((d) => d.count > 0).map((d) => ({
     ...d,
-    label: LABELS[d.priority],
+    label: t(`overview:${LABEL_KEY[d.priority]}`),
   }));
 
   return (
     <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-[14px] font-semibold" style={{ color: 'var(--foreground)' }}>
-          用例优先级分布
+          {t('overview:priorityTitle')}
         </h3>
         <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-          共 {total}
+          {t('overview:priorityTotal', { count: total })}
         </span>
       </div>
       {total === 0 ? (
-        <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>暂无用例</p>
+        <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>{t('overview:priorityEmpty')}</p>
       ) : (
         <div style={{ width: '100%', height: 220 }}>
           <ResponsiveContainer>

@@ -19,14 +19,16 @@ import zhPlans from './locales/zh-CN/plans.json';
 import enPlans from './locales/en-US/plans.json';
 import zhReports from './locales/zh-CN/reports.json';
 import enReports from './locales/en-US/reports.json';
+import zhOverview from './locales/zh-CN/overview.json';
+import enOverview from './locales/en-US/overview.json';
 
 export type Lang = 'zh-CN' | 'en-US';
 
 export const LANG_STORAGE_KEY = 'itest-lang';
 
 const resources = {
-  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, members: zhMembers, cases: zhCases, groups: zhGroups, plans: zhPlans, reports: zhReports },
-  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, members: enMembers, cases: enCases, groups: enGroups, plans: enPlans, reports: enReports },
+  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, members: zhMembers, cases: zhCases, groups: zhGroups, plans: zhPlans, reports: zhReports, overview: zhOverview },
+  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, members: enMembers, cases: enCases, groups: enGroups, plans: enPlans, reports: enReports, overview: enOverview },
 };
 
 void i18n.use(initReactI18next).init({
