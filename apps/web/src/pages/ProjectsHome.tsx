@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { api, type Creator, type ProjectVersion } from '../api/client';
 import { useProjectStore } from '../stores/project';
 import { useUIStore } from '../stores/ui';
@@ -75,6 +76,7 @@ const EMPTY_VERSION_FORM: VersionFormState = {
 };
 
 export default function ProjectsHome() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
@@ -129,7 +131,7 @@ export default function ProjectsHome() {
       return api.projects.patch(form.id!, baseBody);
     },
     onSuccess: () => {
-      toast(form.mode === 'create-project' ? '项目已创建' : '项目已更新', 'success');
+      toast(form.mode === 'create-project' ? t('projects:created') : t('projects:updated'), 'success');
       setForm(EMPTY_FORM);
       qc.invalidateQueries({ queryKey: ['projects'] });
     },
@@ -139,7 +141,7 @@ export default function ProjectsHome() {
   const remove = useMutation({
     mutationFn: (id: string) => api.projects.remove(id),
     onSuccess: () => {
-      toast('项目已删除', 'success');
+      toast(t('projects:deleted'), 'success');
       setConfirmDelete(null);
       setExpanded((prev) => {
         if (!prev.has(confirmDelete?.id ?? '')) return prev;
@@ -150,7 +152,7 @@ export default function ProjectsHome() {
       qc.invalidateQueries({ queryKey: ['projects'] });
     },
     onError: (e: Error) => {
-      toast(e.message.includes('409') || e.message.includes('cases') ? '项目内仍有用例，请先清空再删除' : e.message, 'error');
+      toast(e.message.includes('409') || e.message.includes('cases') ? t('projects:deleteBlockedByCases') : e.message, 'error');
       setConfirmDelete(null);
     },
   });
@@ -163,7 +165,7 @@ export default function ProjectsHome() {
         environmentId: versionForm.environmentId || null,
       }),
     onSuccess: (v) => {
-      toast(`已新建版本 ${v.name}`, 'success');
+      toast(t('projects:versionCreated', { name: v.name }), 'success');
       setVersionForm(EMPTY_VERSION_FORM);
       qc.invalidateQueries({ queryKey: ['versions', versionForm.projectId] });
     },
@@ -178,7 +180,7 @@ export default function ProjectsHome() {
         environmentId: versionForm.environmentId || null,
       }),
     onSuccess: (v) => {
-      toast(`已更新版本 ${v.name}`, 'success');
+      toast(t('projects:versionUpdated', { name: v.name }), 'success');
       setVersionForm(EMPTY_VERSION_FORM);
       qc.invalidateQueries({ queryKey: ['versions', versionForm.projectId] });
     },
@@ -189,7 +191,7 @@ export default function ProjectsHome() {
     mutationFn: ({ projectId, versionId }: { projectId: string; versionId: string }) =>
       api.versions.remove(projectId, versionId),
     onSuccess: () => {
-      toast('版本已删除', 'success');
+      toast(t('projects:versionDeleted'), 'success');
       setConfirmDeleteVersion(null);
       qc.invalidateQueries({ queryKey: ['versions'] });
     },
@@ -203,7 +205,7 @@ export default function ProjectsHome() {
     mutationFn: ({ versionId, ref, refKind }: { versionId: string; ref: string | null; refKind: 'branch' | 'tag' | null }) =>
       api.versions.setRef(versionId, { ref, refKind }),
     onSuccess: () => {
-      toast('已保存', 'success');
+      toast(t('projects:saved'), 'success');
       setRefForm(EMPTY_REF_FORM);
       qc.invalidateQueries({ queryKey: ['versions'] });
     },
@@ -219,7 +221,7 @@ export default function ProjectsHome() {
   return (
     <PageShell>
       <PageShellHeader>
-        <PageShellTitle>项目</PageShellTitle>
+        <PageShellTitle>{t('projects:title')}</PageShellTitle>
         <PageShellActions>
           <Button
             onClick={() =>
@@ -234,20 +236,20 @@ export default function ProjectsHome() {
             }
           >
             <Icon name="plus" size={14} />
-            新建项目
+            {t('projects:createProject')}
           </Button>
         </PageShellActions>
-        <PageShellDescription>选择一个项目进入工作区，或创建新项目</PageShellDescription>
+        <PageShellDescription>{t('projects:subtitle')}</PageShellDescription>
       </PageShellHeader>
 
       <PageShellContent>
         {isLoading ? (
           <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
             <Icon name="loader" size={16} className="animate-spin" />
-            <span style={{ marginLeft: 8 }}>加载中...</span>
+            <span style={{ marginLeft: 8 }}>{t('common:loading')}</span>
           </div>
         ) : (data ?? []).length === 0 ? (
-          <EmptyState icon="layers" title="还没有项目" description="创建第一个项目，开始组织测试资产。" />
+          <EmptyState icon="layers" title={t('projects:emptyTitle')} description={t('projects:emptyDescription')} />
         ) : (
           <div className="flex flex-col" data-stagger>
             {(data ?? []).map((p) => (
@@ -314,15 +316,15 @@ export default function ProjectsHome() {
       <Dialog open={form.open} onOpenChange={(open) => setForm((f) => ({ ...f, open }))}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{form.mode === 'create-project' ? '新建项目' : '编辑项目'}</DialogTitle>
+            <DialogTitle>{form.mode === 'create-project' ? t('projects:createProject') : t('projects:editProject')}</DialogTitle>
           </DialogHeader>
           <div className="flex-1 min-h-0 flex flex-col gap-3 px-5 py-4 overflow-y-auto">
-            <Input label="名称" placeholder="如：iTest 官网" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+            <Input label={t('projects:name')} placeholder={t('projects:namePlaceholder')} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>描述（可空）</label>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>{t('projects:description')}</label>
               <textarea
                 className="input-base"
-                placeholder="简要说明项目用途"
+                placeholder={t('projects:descriptionPlaceholder')}
                 rows={2}
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
@@ -337,9 +339,9 @@ export default function ProjectsHome() {
             className="flex justify-end gap-2 px-5 py-3 hairline-top shrink-0"
             style={{ borderColor: 'var(--border)' }}
           >
-            <Button variant="ghost" onClick={() => setForm(EMPTY_FORM)}>取消</Button>
+            <Button variant="ghost" onClick={() => setForm(EMPTY_FORM)}>{t('common:cancel')}</Button>
             <Button disabled={!form.name.trim() || save.isPending} onClick={() => save.mutate()}>
-              {save.isPending ? '保存中...' : '保存'}
+              {save.isPending ? t('common:saving') : t('common:save')}
             </Button>
           </div>
         </DialogContent>
@@ -349,38 +351,40 @@ export default function ProjectsHome() {
       <Dialog open={versionForm.open} onOpenChange={(open) => setVersionForm((f) => ({ ...f, open }))}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{versionForm.mode === 'create' ? '新建版本' : '编辑版本'}</DialogTitle>
+            <DialogTitle>{versionForm.mode === 'create' ? t('projects:createVersion') : t('projects:editVersion')}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
             <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-              {versionForm.mode === 'create' ? '为' : '编辑「'}{versionForm.projectName}{versionForm.mode === 'create' ? '」添加新版本' : '」'}
+              {versionForm.mode === 'create'
+                ? t('projects:versionCreateIntro', { project: versionForm.projectName })
+                : t('projects:versionEditIntro', { project: versionForm.projectName })}
             </p>
             <Input
-              label="版本名"
-              placeholder="如：v1.0、需求-0421"
+              label={t('projects:versionName')}
+              placeholder={t('projects:versionNamePlaceholder')}
               value={versionForm.name}
               onChange={(e) => setVersionForm((f) => ({ ...f, name: e.target.value }))}
             />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>关联环境（可空，留空走项目默认）</label>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>{t('projects:versionEnvLabel')}</label>
               <select
                 className="input-base input-sm"
                 value={versionForm.environmentId}
                 onChange={(e) => setVersionForm((f) => ({ ...f, environmentId: e.target.value }))}
               >
-                <option value="">不在版本层指定</option>
+                <option value="">{t('projects:versionEnvNone')}</option>
                 {(envsQ.data ?? []).map((env) => (
                   <option key={env.id} value={env.id}>
-                    {env.name}{env.isDefault ? '（默认）' : ''}
+                    {env.name}{env.isDefault ? t('projects:envDefaultSuffix') : ''}
                   </option>
                 ))}
               </select>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>描述（可空）</label>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>{t('projects:description')}</label>
               <textarea
                 className="input-base"
-                placeholder="如：双十一大促版本"
+                placeholder={t('projects:versionDescriptionPlaceholder')}
                 rows={3}
                 value={versionForm.description}
                 onChange={(e) => setVersionForm((f) => ({ ...f, description: e.target.value }))}
@@ -391,7 +395,7 @@ export default function ProjectsHome() {
             className="flex justify-end gap-2 px-5 py-4 hairline-top"
             style={{ borderColor: 'var(--border)' }}
           >
-            <Button variant="ghost" onClick={() => setVersionForm(EMPTY_VERSION_FORM)}>取消</Button>
+            <Button variant="ghost" onClick={() => setVersionForm(EMPTY_VERSION_FORM)}>{t('common:cancel')}</Button>
             <Button
               disabled={
                 !versionForm.name.trim() ||
@@ -400,8 +404,8 @@ export default function ProjectsHome() {
               onClick={() => (versionForm.mode === 'create' ? createVersion.mutate() : editVersion.mutate())}
             >
               {versionForm.mode === 'create'
-                ? createVersion.isPending ? '创建中...' : '创建'
-                : editVersion.isPending ? '保存中...' : '保存'}
+                ? createVersion.isPending ? t('projects:creating') : t('projects:create')
+                : editVersion.isPending ? t('common:saving') : t('common:save')}
             </Button>
           </div>
         </DialogContent>
@@ -410,21 +414,21 @@ export default function ProjectsHome() {
       {/* 删除项目确认 */}
       <Dialog open={!!confirmDelete} onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>删除项目</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('projects:deleteProject')}</DialogTitle></DialogHeader>
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            确定删除「{confirmDelete?.name}」？项目内存在用例时将被拒绝删除。
+            {t('projects:deleteProjectConfirm', { name: confirmDelete?.name })}
           </div>
           <div
             className="flex justify-end gap-2 px-5 py-4 hairline-top"
             style={{ borderColor: 'var(--border)' }}
           >
-            <Button variant="ghost" onClick={() => setConfirmDelete(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setConfirmDelete(null)}>{t('common:cancel')}</Button>
             <Button
               variant="danger"
               disabled={remove.isPending}
               onClick={() => confirmDelete && remove.mutate(confirmDelete.id)}
             >
-              {remove.isPending ? '删除中...' : '确认删除'}
+              {remove.isPending ? t('projects:deleting') : t('projects:confirmDelete')}
             </Button>
           </div>
         </DialogContent>
@@ -433,21 +437,21 @@ export default function ProjectsHome() {
       {/* 删除版本确认:数据丢失风险最大,前端一律先弹再发请求 */}
       <Dialog open={!!confirmDeleteVersion} onOpenChange={(open) => { if (!open) setConfirmDeleteVersion(null); }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>删除版本</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('projects:deleteVersion')}</DialogTitle></DialogHeader>
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            确认删除版本「{confirmDeleteVersion?.versionName}」？该版本下的用例、计划与历史执行报告将一并被删除,不可恢复。
+            {t('projects:deleteVersionConfirm', { versionName: confirmDeleteVersion?.versionName })}
           </div>
           <div
             className="flex justify-end gap-2 px-5 py-4 hairline-top"
             style={{ borderColor: 'var(--border)' }}
           >
-            <Button variant="ghost" onClick={() => setConfirmDeleteVersion(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setConfirmDeleteVersion(null)}>{t('common:cancel')}</Button>
             <Button
               variant="danger"
               disabled={removeVersion.isPending}
               onClick={() => confirmDeleteVersion && removeVersion.mutate({ projectId: confirmDeleteVersion.projectId, versionId: confirmDeleteVersion.versionId })}
             >
-              {removeVersion.isPending ? '删除中...' : '确认删除'}
+              {removeVersion.isPending ? t('projects:deleting') : t('projects:confirmDelete')}
             </Button>
           </div>
         </DialogContent>
@@ -499,6 +503,7 @@ function ProjectRow({
   onOpenDatasets,
   onOpenDeviceTargets,
 }: ProjectRowProps) {
+  const { t } = useTranslation();
   const versionsQ = useQuery({
     queryKey: ['versions', p.id],
     queryFn: () => api.versions.list(p.id),
@@ -544,23 +549,23 @@ function ProjectRow({
           )}
         </div>
         <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>
-          {p.caseCount} 条用例
+          {t('projects:caseCount', { count: p.caseCount })}
         </span>
         <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>
-          {p.versionCount} 版本
+          {t('projects:versionCount', { count: p.versionCount })}
         </span>
         <span className="text-[12px] shrink-0 hidden md:inline" style={{ color: 'var(--muted-foreground)' }}>
-          {p.environmentCount} 环境
+          {t('projects:environmentCount', { count: p.environmentCount })}
         </span>
         <span className="text-[12px] shrink-0 hidden lg:inline" style={{ color: 'var(--muted-foreground)' }}>
-          创建人 {creatorName(p.createdBy)}
+          {t('projects:createdBy', { name: creatorName(p.createdBy) })}
         </span>
         <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-          <IconButton icon="pencil" title="编辑项目" onClick={onEdit} />
-          <IconButton icon="database" title="环境管理" onClick={onOpenEnvironments} />
-          <IconButton icon="table" title="数据集" onClick={onOpenDatasets} />
-          <IconButton icon="tablet" title="设备目标" onClick={onOpenDeviceTargets} />
-          <IconButton icon="trash" title="删除项目" tone="destructive" onClick={onDelete} />
+          <IconButton icon="pencil" title={t('projects:editProject')} onClick={onEdit} />
+          <IconButton icon="database" title={t('projects:manageEnvironments')} onClick={onOpenEnvironments} />
+          <IconButton icon="table" title={t('projects:datasets')} onClick={onOpenDatasets} />
+          <IconButton icon="tablet" title={t('projects:deviceTargets')} onClick={onOpenDeviceTargets} />
+          <IconButton icon="trash" title={t('projects:deleteProject')} tone="destructive" onClick={onDelete} />
         </div>
       </div>
 
@@ -569,11 +574,11 @@ function ProjectRow({
           {versionsQ.isLoading ? (
             <div className="flex items-center gap-2 px-3 py-3 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
               <Icon name="loader" size={14} className="animate-spin" />
-              加载版本…
+              {t('projects:loadingVersions')}
             </div>
           ) : versionsQ.isError ? (
             <div className="px-3 py-3 text-[12px]" style={{ color: 'var(--destructive)' }}>
-              加载失败：{(versionsQ.error as Error | null)?.message ?? '未知错误'}
+              {t('common:loadFailed')}：{(versionsQ.error as Error | null)?.message ?? t('common:unknownError')}
             </div>
           ) : (
             <div
@@ -582,7 +587,7 @@ function ProjectRow({
             >
               {(versionsQ.data ?? []).length === 0 ? (
                 <div className="px-3 py-3 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-                  暂无版本
+                  {t('projects:noVersions')}
                 </div>
               ) : (
                 <ul>
@@ -609,10 +614,10 @@ function ProjectRow({
                         {v.name}
                       </span>
                       <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                        用例 {v.caseCount ?? 0} · 计划 {v.planCount ?? 0}
+                        {t('projects:versionStats', { cases: v.caseCount ?? 0, plans: v.planCount ?? 0 })}
                       </span>
                       <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                        环境 {v.environmentName ?? '项目默认'}
+                        {t('projects:versionEnv', { env: v.environmentName ?? t('projects:projectDefault') })}
                       </span>
                       {v.ref && v.refKind && (
                         <span
@@ -622,29 +627,29 @@ function ProjectRow({
                             border: '1px solid var(--border)',
                             color: 'var(--muted-foreground)',
                           }}
-                          title={`绑定的 git ${v.refKind}`}
+                          title={t('projects:boundGit', { kind: v.refKind })}
                         >
                           {v.refKind === 'branch' ? '⎇' : '⌖'} {v.ref}
                         </span>
                       )}
                       <div className="flex-1" />
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                        <IconButton icon="pencil" title="编辑版本" onClick={() => onEditVersion(v)} />
+                        <IconButton icon="pencil" title={t('projects:editVersion')} onClick={() => onEditVersion(v)} />
                         <IconButton
                           icon="gitBranch"
-                          title={p.repoUrl ? '设置分支' : '请先配置仓库'}
+                          title={p.repoUrl ? t('projects:setBranch') : t('projects:configureRepoFirst')}
                           onClick={() => onEditVersionRef(v)}
                           disabled={!p.repoUrl}
                         />
                         <IconButton
                           icon="externalLink"
-                          title={envUrl ? `打开 ${envUrl}` : '环境未配置域名'}
+                          title={envUrl ? t('projects:openEnv', { url: envUrl }) : t('projects:envNoDomain')}
                           onClick={() => envUrl && window.open(envUrl, '_blank', 'noopener')}
                           disabled={!envUrl}
                         />
-                        <IconButton icon="trash" title="删除版本" tone="destructive" onClick={() => onRemoveVersion(v)} />
+                        <IconButton icon="trash" title={t('projects:deleteVersion')} tone="destructive" onClick={() => onRemoveVersion(v)} />
                         <Button size="sm" onClick={() => onEnterVersion(v)}>
-                          进入
+                          {t('projects:enter')}
                         </Button>
                       </div>
                     </li>
@@ -660,7 +665,7 @@ function ProjectRow({
                   style={{ background: 'transparent', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
                 >
                   <Icon name="plus" size={12} />
-                  添加版本
+                  {t('projects:addVersion')}
                 </button>
               </div>
             </div>
