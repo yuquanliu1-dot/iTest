@@ -63,7 +63,7 @@ export default function DeviceTargetsPage() {
   });
 
   const remove = useMutation({
-    mutationFn: (t: DeviceTarget) => api.deviceTargets.remove(projectId!, t.id),
+    mutationFn: (target: DeviceTarget) => api.deviceTargets.remove(projectId!, target.id),
     onSuccess: () => {
       toast(t('device:deleted'), 'success');
       setConfirmDelete(null);
