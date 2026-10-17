@@ -24,6 +24,9 @@ const dict = {
   'scenario.updated': { 'zh-CN': '更新场景「{title}」', 'en-US': 'Updated scenario "{title}"' },
   'scenario.deleted': { 'zh-CN': '删除场景「{title}」(关联用例将解绑)', 'en-US': 'Deleted scenario "{title}" (linked cases will be unbound)' },
   'step.solidified': { 'zh-CN': '固化步骤 #{order}（aiTask → {count} 个机械动作）', 'en-US': 'Solidified step #{order} (aiTask → {count} mechanical actions)' },
+  'planRun.summary': { 'zh-CN': '{passed} 通过 / {failed} 失败 / {skipped} 跳过', 'en-US': '{passed} passed / {failed} failed / {skipped} skipped' },
+  'planRun.incognitoConflict': { 'zh-CN': 'incognito 模式与登录准备互斥:{caseIds}', 'en-US': 'incognito mode conflicts with login prepare: {caseIds}' },
+  'planRun.loginPrepareFailed': { 'zh-CN': '登录准备失败:{reason}', 'en-US': 'login prepare failed: {reason}' },
 } as const;
 
 export type StKey = keyof typeof dict;

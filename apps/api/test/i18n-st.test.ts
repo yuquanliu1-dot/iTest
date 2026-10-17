@@ -26,6 +26,9 @@ const ZH_BYTE_IDENTITY: Array<[StKey, Record<string, string | number | boolean>,
   ['scenario.updated', { title: 'S' }, '更新场景「S」'],
   ['scenario.deleted', { title: 'S' }, '删除场景「S」(关联用例将解绑)'],
   ['step.solidified', { order: 1, count: 2 }, '固化步骤 #1（aiTask → 2 个机械动作）'],
+  ['planRun.summary', { passed: 1, failed: 0, skipped: 0 }, '1 通过 / 0 失败 / 0 跳过'],
+  ['planRun.incognitoConflict', { caseIds: 'a,b' }, 'incognito 模式与登录准备互斥:a,b'],
+  ['planRun.loginPrepareFailed', { reason: 'unknown' }, '登录准备失败:unknown'],
 ];
 
 describe('st 服务端最小 t', () => {
@@ -36,6 +39,12 @@ describe('st 服务端最小 t', () => {
   it('en-US 输出英文文案', () => {
     expect(st('en-US', 'case.deleted', { title: 'Login' })).toBe('Deleted "Login"');
     expect(st('en-US', 'step.insertAfter', { order: 1 })).toBe('Insert new step after #1');
+  });
+
+  it('en-US planRun summary 双语 + 数字插值', () => {
+    expect(st('en-US', 'planRun.summary', { passed: 1, failed: 0, skipped: 0 })).toBe('1 passed / 0 failed / 0 skipped');
+    expect(st('en-US', 'planRun.incognitoConflict', { caseIds: 'a,b' })).toBe('incognito mode conflicts with login prepare: a,b');
+    expect(st('en-US', 'planRun.loginPrepareFailed', { reason: 'timeout' })).toBe('login prepare failed: timeout');
   });
 
   it('多变量插值(数字值)', () => {

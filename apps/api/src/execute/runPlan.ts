@@ -7,12 +7,14 @@ import {
   planRuns,
   planRunCases,
   testCases,
+  users,
 } from '../db/schema.js';
 import { runCase } from './runCase.js';
 import { loginPrepare } from './loginPrepare.js';
 import { publishRunEvent, subscribeRunEvent } from '../sse/planRunBus.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { registerLiveView } from './liveView.js';
+import { st, type StLang } from '../i18n.js';
 
 /** 单 planRun 的运行控制器：内存中保存 storageState 与 cancelRequested。 */
 const runState = new Map<string, { cancelRequested: boolean; storageState?: unknown }>();
@@ -61,6 +63,13 @@ export async function findIncognitoCaseIds(planId: string): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
+/** 查触发执行用户的语言偏好(未触发或用户不存在回落 zh-CN)。 */
+async function resolveRunLang(triggeredByUserId: string | null | undefined): Promise<StLang> {
+  if (!triggeredByUserId) return 'zh-CN';
+  const row = (await db.select({ lang: users.languagePreference }).from(users).where(eq(users.id, triggeredByUserId)).limit(1))[0];
+  return (row?.lang === 'en-US' ? 'en-US' : 'zh-CN') as StLang;
+}
+
 /** 启动一次计划执行（异步）。调用方立即返回 planRunId。 */
 export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   const { planRunId } = input;
@@ -68,6 +77,8 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   if (!run) return;
   const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, run.planId)))[0];
   if (!plan) return;
+
+  const lang = await resolveRunLang(run.triggeredByUserId);
 
   runState.set(planRunId, { cancelRequested: false });
   // playground 实时画面：整个计划运行一个画面源，逐用例 setPage 跟随（含登录准备/登录用例共用浏览器）。
@@ -119,11 +130,12 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   if (run.loginPrepareEnabled) {
     const incognitoIds = await findIncognitoCaseIds(plan.id);
     if (incognitoIds.length > 0) {
+      const incognitoSummary = st(lang, 'planRun.incognitoConflict', { caseIds: incognitoIds.join(',') });
       await finalizeRun(planRunId, 'failed', {
         passed: 0, failed: 0, skipped: cases.length,
-        summary: `incognito 模式与登录准备互斥：${incognitoIds.join(',')}`,
+        summary: incognitoSummary,
       });
-      publish(planRunId, { type: 'plan_run_complete', status: 'failed', summary: 'incognito × loginPrepare 互斥' });
+      publish(planRunId, { type: 'plan_run_complete', status: 'failed', summary: incognitoSummary });
       runState.delete(planRunId);
       return;
     }
@@ -197,8 +209,9 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       },
     );
     if (result.status === 'failed') {
-      await finalizeRun(planRunId, 'failed', { passed, failed, skipped: cases.length, summary: `登录准备失败：${result.reason ?? 'unknown'}` });
-      publish(planRunId, { type: 'plan_run_complete', status: 'failed', summary: '登录准备失败' });
+      const loginFailedSummary = st(lang, 'planRun.loginPrepareFailed', { reason: result.reason ?? 'unknown' });
+      await finalizeRun(planRunId, 'failed', { passed, failed, skipped: cases.length, summary: loginFailedSummary });
+      publish(planRunId, { type: 'plan_run_complete', status: 'failed', summary: loginFailedSummary });
       runState.delete(planRunId);
       return;
     }
@@ -313,8 +326,9 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   }
 
   const finalStatus = isCancelRequested(planRunId) ? 'cancelled' : failed > 0 ? 'failed' : 'passed';
-  await finalizeRun(planRunId, finalStatus, { passed, failed, skipped, summary: `${passed} 通过 / ${failed} 失败 / ${skipped} 跳过` });
-  publish(planRunId, { type: 'plan_run_complete', status: finalStatus, summary: `${passed} 通过 / ${failed} 失败 / ${skipped} 跳过` });
+  const finalSummary = st(lang, 'planRun.summary', { passed, failed, skipped });
+  await finalizeRun(planRunId, finalStatus, { passed, failed, skipped, summary: finalSummary });
+  publish(planRunId, { type: 'plan_run_complete', status: finalStatus, summary: finalSummary });
   runState.delete(planRunId);
   } finally {
     // 登录准备 take ownership 后由本函数负责关浏览器+context；异常路径（登录 prepare 失败早返回）
