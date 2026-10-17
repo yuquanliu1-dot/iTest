@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import Icon from './Icon';
 import { Dialog, DialogContent } from './ui/Modal';
 
@@ -6,12 +7,13 @@ import { Dialog, DialogContent } from './ui/Modal';
 export type LiveViewMode = 'live' | 'replay' | 'frozen';
 
 const BADGE: Record<LiveViewMode, { text: string; dot: string }> = {
-  live: { text: '实时', dot: 'var(--destructive)' },
-  replay: { text: '回放', dot: 'var(--info)' },
-  frozen: { text: '已结束', dot: 'var(--muted-foreground)' },
+  live: { text: 'cases:live', dot: 'var(--destructive)' },
+  replay: { text: 'cases:replay', dot: 'var(--info)' },
+  frozen: { text: 'cases:ended', dot: 'var(--muted-foreground)' },
 };
 
 function ModeBadge({ mode }: { mode: LiveViewMode }) {
+  const { t } = useTranslation();
   const badge = BADGE[mode];
   return (
     <span
@@ -19,7 +21,7 @@ function ModeBadge({ mode }: { mode: LiveViewMode }) {
       style={{ background: 'rgba(0,0,0,0.55)', color: '#fff' }}
     >
       <span className="inline-block size-1.5 rounded-full" style={{ background: badge.dot }} />
-      {badge.text}
+      {t(badge.text)}
     </span>
   );
 }
@@ -30,6 +32,7 @@ function ModeBadge({ mode }: { mode: LiveViewMode }) {
  *  点画面（或右上角放大按钮）弹窗全屏查看：弹窗内另开一路同源流——实时模式是多订阅 hub，
  *  回放模式则从录制头部重新播一遍。 */
 export default function LiveViewImg({ url, mode = 'live' }: { url: string; mode?: LiveViewMode }) {
+  const { t } = useTranslation();
   const [broken, setBroken] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   if (broken) return null;
@@ -41,13 +44,13 @@ export default function LiveViewImg({ url, mode = 'live' }: { url: string; mode?
         onClick={() => setZoomed(true)}
         role="button"
         tabIndex={0}
-        aria-label="放大画面"
+        aria-label={t('cases:zoomStage')}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setZoomed(true); } }}
       >
         <img
           src={url}
           onError={() => setBroken(true)}
-          alt={BADGE[mode].text}
+          alt={t(BADGE[mode].text)}
           className="block w-full object-contain"
           style={{ maxHeight: 220 }}
         />
@@ -74,7 +77,7 @@ export default function LiveViewImg({ url, mode = 'live' }: { url: string; mode?
           <div className="relative">
             <img
               src={url}
-              alt={BADGE[mode].text}
+              alt={t(BADGE[mode].text)}
               className="block rounded-[6px] object-contain"
               style={{ maxWidth: 'calc(100vw - 48px)', maxHeight: 'calc(100vh - 100px)' }}
             />

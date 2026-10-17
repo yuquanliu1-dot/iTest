@@ -322,6 +322,9 @@
   "overLimit": " · over limit",
   "replay": "Replay",
   "replayAgain": "Replay again",
+  "live": "Live",
+  "ended": "Ended",
+  "zoomStage": "Enlarge view",
   "labelEdit": {
     "titleEdit": "Edit tag",
     "titleCreate": "New tag",
