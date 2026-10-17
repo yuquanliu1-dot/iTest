@@ -92,7 +92,11 @@ interface SpaceEventsState {
   /** 当前激活线程 id；SpaceWorkspace mount 时写入,StagePanel 据此拉暂存列表。 */
   threadId: string;
   confirms: SpaceConfirmRequest[];
+  /** stage 事件序号(仅前端 stageHistory 渲染局部 key,勿与后端 seq 混)。 */
   stageHistory: StageObject[];
+  /** 断线重连重放去重基线:threadId → 该线程已处理过的最大事件 seq。重放事件(快照后按原
+   *  seq 重发)与实时事件重叠时,seq ≤ 基线直接丢弃;漏掉的事件(seq > 基线)自然补上。 */
+  lastSeqByThread: Map<string, number>;
   announce: AnnounceState | null;
   /** verify_case 实时进度卡数据（verify_progress 事件驱动；agent_start/新一轮清空）。 */
   verifyProgress: VerifyProgressState | null;
@@ -125,19 +129,39 @@ function keyOf(kind: Exclude<StageKind, 'group'>, localId: string): string {
 }
 
 /**
- * 已知限制(刻意不建机制):SSE 断线重连只重放 snapshot,挂起中的确认卡会丢,
- * 后端 5 分钟超时后 AI 会收到"用户取消"。快照帧(type='snapshot')不在分支内,天然忽略。
+ * 断线重连契约:react-pi 自动重连后,服务端在快照后按原序重放缓冲的会话内自定义事件
+ * (verify_progress/announce/stage/solidify_progress,60min 内)与仍挂起的确认卡。
+ * 本 store 按线程 seq 去重:已处理过的实时事件不因重放二次生效,漏掉的事件自然补上,
+ * 因此重连期间的进度卡/确认卡/暂存预览不丢。快照帧(type='snapshot')不在分支内,天然忽略。
  */
-export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
+export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
   threadId: '',
   confirms: [],
   stageHistory: [],
+  lastSeqByThread: new Map(),
   announce: null,
   verifyProgress: null,
   solidifyProgress: null,
   stagedByThread: new Map(),
   stagedSelection: new Map(),
   ingest: (e) => {
+    // 断线重连重放去重:服务端在快照后按原 seq 重发缓冲的会话内事件,与已实时处理的可能重叠——
+    // seq <= 该线程已见最大值 = 已处理过,丢弃;首次见到的推进基线。快照帧不进本 store 的分支,
+    // 但携带更高的 seq,必须先排除,否则会把重放事件(seq < 快照 seq)一律滤掉。
+    if (e.type !== 'snapshot') {
+      const seq = e.seq;
+      if (typeof seq === 'number') {
+        const tid = typeof e.threadId === 'string' ? e.threadId : '';
+        if (tid) {
+          if (seq <= (get().lastSeqByThread.get(tid) ?? -1)) return;
+          set((s) => {
+            const next = new Map(s.lastSeqByThread);
+            next.set(tid, seq);
+            return { lastSeqByThread: next };
+          });
+        }
+      }
+    }
     if (e.type === 'confirm_request') {
       const c = e as unknown as SpaceConfirmRequest;
       set((s) => (s.confirms.some((x) => x.confirmId === c.confirmId) ? s : { confirms: [...s.confirms, c] }));
@@ -377,6 +401,6 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set) => ({
   }),
   reset: () => set({
     confirms: [], stageHistory: [], announce: null, verifyProgress: null, solidifyProgress: null,
-    stagedByThread: new Map(), stagedSelection: new Map(),
+    stagedByThread: new Map(), stagedSelection: new Map(), lastSeqByThread: new Map(),
   }),
 }));

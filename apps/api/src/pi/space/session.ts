@@ -19,6 +19,7 @@ import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
 import { checkoutRepoForVersion, LockTimeoutError, RepoUnavailableError, REPOS_ROOT, WORKSPACES_ROOT } from '../repo.js';
 import { emptyRepoState, type RepoState } from './tools/context.js';
+import { pendingConfirmPayloads } from './confirm.js';
 
 export interface SpaceSessionLike {
   subscribe(fn: (e: unknown) => void): () => void;
@@ -53,7 +54,21 @@ interface ThreadRecord {
   turnIndex: number;
   /** 仓库后台检出状态(与工厂/工具共享同一可变引用)。 */
   repo: RepoState;
+  /** 断线重连重放缓冲:emitThreadEvent 追加的会话内自定义事件(条数有界 + TTL 双重上限)。 */
+  customEvents: CustomEventRecord[];
 }
+
+/** 重放缓冲条目:事件体 + 发布时间。重放只补最近 CUSTOM_EVENT_REPLAY_TTL_MS 内的事件——
+ *  隔夜/跨会话的陈旧进度卡(verify/announce)不会在重开线程或重进页面时复活。 */
+interface CustomEventRecord {
+  publishedAt: number;
+  ev: Record<string, unknown>;
+}
+
+/** 缓冲条数上限:超限从最旧丢起(verify_case 20 步约 43 条事件,100 足够装下两轮)。 */
+const MAX_CUSTOM_EVENT_BUFFER = 100;
+/** 重放 TTL:只补 60min 内的事件(覆盖 verify_case 全局看门狗上限与 confirm 5min 挂起)。 */
+const CUSTOM_EVENT_REPLAY_TTL_MS = 60 * 60_000;
 
 const records = new Map<string, ThreadRecord>();
 const inflight = new Map<string, Promise<ThreadRecord>>();
@@ -109,6 +124,7 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
     seq: 0,
     turnIndex: -1,
     repo,
+    customEvents: [],
   };
   const unsub = session.subscribe((event) => fanOut(rec, event));
   rec.unsub = unsub;
@@ -180,6 +196,12 @@ export function emitThreadEvent(threadId: string, e: Record<string, unknown>): v
   if (!rec) return;
   rec.seq += 1;
   const stamped = { ...e, threadId, seq: rec.seq };
+  // 缓冲自定义事件供断线重放。confirm_request 除外——确认卡的挂起协议在 confirm.ts,
+  // 由 pending 表重放(只补仍挂起的卡,已处理/超时的不复活,见 subscribeThread)。
+  if (e.type !== 'confirm_request') {
+    rec.customEvents.push({ publishedAt: Date.now(), ev: stamped });
+    if (rec.customEvents.length > MAX_CUSTOM_EVENT_BUFFER) rec.customEvents.shift();
+  }
   for (const fn of rec.listeners) {
     try { fn(stamped); } catch { /* ignore */ }
   }
@@ -218,7 +240,19 @@ export function subscribeThread(
     return () => {};
   }
   if (opts.includeSnapshot === true) {
+    // 快照携带当前 seq 先把会话基线定住,随后在同一同步帧内按发布时间重放缓冲事件
+    // (verify_progress/announce/stage/solidify_progress)与仍挂起的确认卡,再注册监听器——
+    // 重放先于任何后续实时事件,seq 单调不逆。前端 store 按 seq 去重:已处理过的实时
+    // 事件不因重放二次生效,断线期间漏掉的事件自然补上(状态重建)。
     fn(snapshotEventOf(rec.threadId, rec.seq, snapshotOf(rec)));
+    const now = Date.now();
+    for (const r of rec.customEvents) {
+      if (now - r.publishedAt > CUSTOM_EVENT_REPLAY_TTL_MS) continue;
+      fn(r.ev);
+    }
+    for (const p of pendingConfirmPayloads()) {
+      if (p.threadId === threadId) fn(p);
+    }
   }
   rec.listeners.add(fn);
   return () => { rec.listeners.delete(fn); };
