@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { parseAsArrayOf, parseAsString, parseAsStringEnum, useQueryStates } from 'nuqs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -46,6 +47,7 @@ export default function Executions() {
 	const versionId = vidParam ?? null;
 	const qc = useQueryClient();
 	const toast = useUIStore((s) => s.showToast);
+	const { t } = useTranslation();
 
 	const [raw, setRaw] = useQueryStates(executionsParsers, { history: 'replace' });
 	const tab = raw.tab as Tab;
@@ -117,8 +119,10 @@ export default function Executions() {
 		},
 		onSuccess: (results) => {
 			const total = results.reduce((sum, r) => sum + r.count, 0);
-			const parts = results.map((r) => `${r.kind === 'plan' ? '计划运行' : '报告'} ${r.count}`).join('，');
-			toast(`已删除 ${total} 条（${parts}）`, 'success');
+			const parts = results
+				.map((r) => `${t(r.kind === 'plan' ? 'plans:planRunTitle' : 'reports:report')} ${r.count}`)
+				.join(t('reports:list.listSeparator'));
+			toast(t('reports:list.deletedToast', { count: total, parts }), 'success');
 			selection.clear();
 			qc.invalidateQueries({ queryKey: ['executions'] });
 			qc.invalidateQueries({ queryKey: ['reports'] });
@@ -129,26 +133,26 @@ export default function Executions() {
 
 	const tabs: DataTableTabs = {
 		id: 'tab',
-		allLabel: '所有',
+		allLabel: t('reports:list.tabsAll'),
 		options: [
-			{ value: 'case', label: '单用例' },
-			{ value: 'plan', label: '计划运行' },
+			{ value: 'case', label: t('reports:list.tabsCase') },
+			{ value: 'plan', label: t('plans:planRunTitle') },
 		],
 	};
 
 	const facets: DataTableFacet[] = [
 		{
 			id: 'status',
-			label: '状态',
+			label: t('reports:list.status'),
 			options: [
-				{ value: 'passed', label: '通过' },
-				{ value: 'failed', label: '失败' },
-				{ value: 'running', label: '运行中' },
+				{ value: 'passed', label: t('cases:status.passed') },
+				{ value: 'failed', label: t('cases:status.failed') },
+				{ value: 'running', label: t('cases:status.running') },
 			],
 		},
 		{
 			id: 'version',
-			label: '版本',
+			label: t('reports:list.version'),
 			options: (projectVersionList ?? []).map((v) => ({ value: v.id, label: v.name })),
 		},
 	];
@@ -156,14 +160,14 @@ export default function Executions() {
 	const columnsDef: DataTableColumn<(typeof rows)[number]>[] = [
 		{
 			id: 'kind',
-			header: '类型',
+			header: t('reports:list.columnKind'),
 			width: 'w-[88px]',
 			cellClassName: 'text-muted-foreground',
-			cell: (r) => (r.kind === 'plan' ? '计划' : '用例'),
+			cell: (r) => (r.kind === 'plan' ? t('reports:list.kindPlan') : t('reports:list.kindCase')),
 		},
 		{
 			id: 'title',
-			header: '标识',
+			header: t('reports:list.columnTitle'),
 			cell: (r) => {
 				if (r.kind === 'plan') {
 					return (
@@ -174,7 +178,7 @@ export default function Executions() {
 				}
 				return (
 					<span className="flex items-center gap-2 min-w-0">
-						<span className="truncate">{(r as { caseTitle: string | null }).caseTitle ?? '已删除用例'}</span>
+						<span className="truncate">{(r as { caseTitle: string | null }).caseTitle ?? t('plans:deletedCase')}</span>
 						<span className="font-mono text-[11px] text-muted-foreground">case {(r as { caseId: string }).caseId.slice(0, 8)}</span>
 					</span>
 				);
@@ -183,7 +187,7 @@ export default function Executions() {
 		},
 		{
 			id: 'version',
-			header: '版本',
+			header: t('reports:list.version'),
 			width: 'w-[140px]',
 			hideBelow: 'md',
 			cellClassName: 'text-xs text-muted-foreground',
@@ -195,7 +199,7 @@ export default function Executions() {
 		},
 		{
 			id: 'status',
-			header: '状态',
+			header: t('reports:list.status'),
 			width: 'w-[120px]',
 			cell: (r) => (
 				<span className="inline-flex items-center gap-1.5">
@@ -204,9 +208,9 @@ export default function Executions() {
 						<span
 							className="px-1.5 py-px text-[10px] rounded-full"
 							style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}
-							title="存在 aiTask 步骤缓存分叉后 AI 自愈通过——通过但不够稳定"
+							title={t('reports:healedTooltip')}
 						>
-							自愈
+							{t('reports:healedBadge')}
 						</span>
 					)}
 				</span>
@@ -214,7 +218,7 @@ export default function Executions() {
 		},
 		{
 			id: 'assertion',
-			header: '最后断言',
+			header: t('reports:list.columnLastAssertion'),
 			width: 'w-[240px]',
 			hideBelow: 'lg',
 			cellClassName: 'text-xs text-muted-foreground',
@@ -231,7 +235,7 @@ export default function Executions() {
 		},
 		{
 			id: 'duration',
-			header: '耗时',
+			header: t('reports:list.columnDuration'),
 			width: 'w-[88px]',
 			hideBelow: 'md',
 			align: 'right',
@@ -244,7 +248,7 @@ export default function Executions() {
 		},
 		{
 			id: 'createdBy',
-			header: '执行人',
+			header: t('reports:list.columnCreatedBy'),
 			width: 'w-[96px]',
 			hideBelow: 'lg',
 			cellClassName: 'text-xs text-muted-foreground',
@@ -252,7 +256,7 @@ export default function Executions() {
 		},
 		{
 			id: 'createdAt',
-			header: '时间',
+			header: t('reports:list.columnCreatedAt'),
 			width: 'w-[110px]',
 			align: 'right',
 			cellClassName: 'text-xs text-muted-foreground tabular-nums',
@@ -272,14 +276,14 @@ export default function Executions() {
 	return (
 		<PageShell contained className="gap-3">
 			<PageShellHeader>
-				<PageShellTitle>执行历史</PageShellTitle>
-				<PageShellDescription>用例执行结果与计划运行汇总</PageShellDescription>
+				<PageShellTitle>{t('common:navReports')}</PageShellTitle>
+				<PageShellDescription>{t('reports:pageDesc')}</PageShellDescription>
 			</PageShellHeader>
 
 			<PageShellContent>
 				{isError ? (
 					<div className="flex flex-1 items-center justify-center text-muted-foreground text-xs">
-						加载失败：{error?.message ?? '未知错误'}
+						{t('common:loadFailed')}：{error?.message ?? t('common:unknownError')}
 					</div>
 				) : (
 					<DataTable<(typeof rows)[number]>
@@ -324,7 +328,7 @@ export default function Executions() {
 									disabled={batchDeleteReports.isPending || selection.count === 0}
 								>
 									<Icon name="trash" size={12} />
-									批量删除
+									{t('reports:list.batchDelete')}
 								</Button>
 							),
 						}}
@@ -334,14 +338,14 @@ export default function Executions() {
 								<Input
 									value={raw.q}
 									onChange={(e) => setSearch(e.target.value)}
-									placeholder="搜索用例标题…"
+									placeholder={t('reports:list.searchPlaceholder')}
 									className="pl-7"
 									size="sm"
 								/>
 							</div>
 						)}
 						empty={
-							<EmptyState icon="flag" title="还没有执行记录" description="在执行计划或用例详情页运行测试后会出现在这里。" />
+							<EmptyState icon="flag" title={t('reports:list.emptyTitle')} description={t('reports:list.emptyDesc')} />
 						}
 					/>
 				)}

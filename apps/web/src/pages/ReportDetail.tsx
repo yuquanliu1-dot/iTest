@@ -63,8 +63,12 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
-function aiUsageText(u: AiUsage): string {
-  return `AI ${u.calls} 次调用 · ${fmtTokens(u.promptTokens + u.completionTokens)} tokens · ${(u.modelCallMs / 1000).toFixed(1)}s`;
+function aiUsageText(t: ReturnType<typeof useTranslation>['t'], u: AiUsage): string {
+  return t('reports:aiUsage', {
+    count: u.calls,
+    tokens: fmtTokens(u.promptTokens + u.completionTokens),
+    seconds: (u.modelCallMs / 1000).toFixed(1),
+  });
 }
 
 function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -95,7 +99,7 @@ export default function ReportDetail() {
   const remove = useMutation({
     mutationFn: () => api.reports.remove(id!),
     onSuccess: () => {
-      toast('已删除', 'success');
+      toast(t('plans:deletedToast'), 'success');
       qc.invalidateQueries({ queryKey: ['reports'] });
       qc.invalidateQueries({ queryKey: ['executions'] });
       qc.invalidateQueries({ queryKey: ['stats', projectId] });
@@ -107,7 +111,7 @@ export default function ReportDetail() {
   if (isError) {
     return (
       <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
-        加载失败：{error?.message ?? '未知错误'}
+        {t('common:loadFailed')}：{error?.message ?? t('common:unknownError')}
       </div>
     );
   }
@@ -116,7 +120,7 @@ export default function ReportDetail() {
     return (
       <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)' }}>
         <Icon name="loader" size={16} className="animate-spin" />
-        <span style={{ marginLeft: 8 }}>加载中...</span>
+        <span style={{ marginLeft: 8 }}>{t('common:loading')}</span>
       </div>
     );
   }
@@ -163,9 +167,9 @@ export default function ReportDetail() {
   // 放大灯箱按「图片」而非「步骤」建索引：一步可能有「执行截图」+「视觉判定截图」两张，
   // 若按步骤索引，点第二张缩略图会定位到该步、再渲染出第一张（被盖住的那张永远放大不出来）。
   const shots = stepResults.flatMap((s) => [
-    ...(s.screenshot ? [{ s, url: s.screenshot, label: `Step #${s.order} 截图` }] : []),
+    ...(s.screenshot ? [{ s, url: s.screenshot, label: t('reports:shots.stepShot', { order: s.order }) }] : []),
     ...(s.visionAssert?.screenshot && s.visionAssert.screenshot !== s.screenshot
-      ? [{ s, url: s.visionAssert.screenshot, label: `Step #${s.order} 视觉判定截图` }]
+      ? [{ s, url: s.visionAssert.screenshot, label: t('reports:shots.stepShotVision', { order: s.order }) }]
       : []),
   ]);
   const zoomed = zoomIndex !== null ? shots[zoomIndex] ?? null : null;
@@ -202,31 +206,31 @@ export default function ReportDetail() {
           )}
           {/* 元信息：耗时 / 定位策略 / 标签页 —— 标签在前、值在后，分项独立，可读 */}
           <div className="flex items-center gap-2 flex-wrap text-[11px]">
-            <Meta label="耗时" value={`${s.durationMs} ms`} mono />
+            <Meta label={t('reports:meta.duration')} value={`${s.durationMs} ms`} mono />
             {s.hitLocator && (
               <Meta
-                label="定位"
+                label={t('reports:meta.locator')}
                 value={s.hitLocator.kind}
                 mono
                 title={`${s.hitLocator.kind}: ${s.hitLocator.value}`}
               />
             )}
             {s.tabIndex !== undefined && (
-              <Meta label="标签页" value={`#${s.tabIndex}`} mono muted />
+              <Meta label={t('reports:meta.tabIndex')} value={`#${s.tabIndex}`} mono muted />
             )}
             {s.cached && (
-              <Meta label="执行" value="缓存命中" muted />
+              <Meta label={t('reports:meta.exec')} value={t('reports:stepExec.cached')} muted />
             )}
             {s.healed && (
-              <Meta label="执行" value="AI 自愈" title="缓存动作与页面分叉，AI 兜底重做后通过" />
+              <Meta label={t('reports:meta.exec')} value={t('reports:stepExec.healed')} title={t('reports:stepExec.healedTitle')} />
             )}
             {s.degraded && (
-              <Meta label="执行" value="AI 降级" title="机械执行受阻（如未编译 / 执行失败），由 AI 按步骤指令临场执行通过" />
+              <Meta label={t('reports:meta.exec')} value={t('reports:stepExec.degraded')} title={t('reports:stepExec.degradedTitle')} />
             )}
             {s.aiUsage && (
               <Meta
-                label="用量"
-                value={aiUsageText(s.aiUsage) + (s.aiUsage.retries > 0 ? ` · 重试 ${s.aiUsage.retries}` : '')}
+                label={t('reports:meta.usage')}
+                value={aiUsageText(t, s.aiUsage) + (s.aiUsage.retries > 0 ? t('reports:retrySuffix', { count: s.aiUsage.retries }) : '')}
                 mono
                 muted
               />
@@ -238,7 +242,7 @@ export default function ReportDetail() {
               className="flex gap-2 items-start text-[12px] px-2 py-1 rounded-[4px]"
               style={{ background: 'var(--destructive-soft-strong)', color: 'var(--destructive, var(--destructive))' }}
             >
-              <span className="shrink-0 font-medium">错误</span>
+              <span className="shrink-0 font-medium">{t('cases:status.error')}</span>
               <span className="min-w-0 break-words">{s.error}</span>
             </div>
           )}
@@ -247,8 +251,8 @@ export default function ReportDetail() {
               className="flex gap-2 items-start text-[11px] px-2 py-1 rounded-[4px]"
               style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}
             >
-              <span className="shrink-0 font-medium">变量</span>
-              <span>未定义：在该步骤之前添加 extract 步骤抽取该变量，或检查变量名拼写（用例页保存步骤时会显示变量体检提示）。</span>
+              <span className="shrink-0 font-medium">{t('reports:stepNote.var')}</span>
+              <span>{t('reports:stepNote.varUndefined')}</span>
             </div>
           )}
           {s.warning && (
@@ -258,7 +262,7 @@ export default function ReportDetail() {
                 ? { background: 'var(--info-soft)', color: 'var(--info)' }
                 : { background: 'var(--warning-soft)', color: 'var(--warning)' }}
             >
-              <span className="shrink-0 font-medium">{s.degraded ? 'AI 降级执行' : '警告'}</span>
+              <span className="shrink-0 font-medium">{s.degraded ? t('reports:stepNote.degradedExec') : t('reports:stepNote.warning')}</span>
               <span className="min-w-0 break-words">{s.warning}</span>
             </div>
           )}
@@ -270,31 +274,31 @@ export default function ReportDetail() {
                 color: s.visionAssert.passed ? 'var(--success)' : 'var(--destructive)',
               }}
             >
-              <span className="shrink-0 font-medium">{s.visionAssert.passed ? '视觉判定通过' : '视觉判定失败'}</span>
+              <span className="shrink-0 font-medium">{s.visionAssert.passed ? t('reports:stepNote.visionPassed') : t('reports:stepNote.visionFailed')}</span>
               <span className="min-w-0 break-words">{s.visionAssert.reason}</span>
             </div>
           )}
           {s.visionAssert?.expected && (
             <div className="text-[11px] font-mono px-2 py-1 min-w-0 break-words" style={{ color: 'var(--muted-foreground)' }}>
-              判定预期（按本行数据物化）：{s.visionAssert.expected}
+              {t('reports:stepNote.visionExpected', { expected: s.visionAssert.expected })}
             </div>
           )}
           {s.visionAssert?.aiUsage && (
             <div className="text-[11px] font-mono px-2 py-1" style={{ color: 'var(--muted-foreground)' }}>
-              视觉判定 {aiUsageText(s.visionAssert.aiUsage)}
+              {t('reports:stepNote.visionUsage', { usage: aiUsageText(t, s.visionAssert.aiUsage) })}
             </div>
           )}
           {s.status !== 'passed' && (s.failureReason || s.humanMessage) && (
             <div className="flex flex-col gap-0.5 pl-2" style={{ borderLeft: '2px solid var(--destructive)' }}>
               {s.failureReason && (
                 <div className="flex gap-2 items-start text-[11px]">
-                  <span className="shrink-0 font-medium" style={{ color: 'var(--muted-foreground)' }}>原因</span>
+                  <span className="shrink-0 font-medium" style={{ color: 'var(--muted-foreground)' }}>{t('reports:stepNote.reason')}</span>
                   <span className="font-mono min-w-0 break-words" style={{ color: 'var(--destructive)' }}>{s.failureReason}</span>
                 </div>
               )}
               {s.humanMessage && (
                 <div className="flex gap-2 items-start text-[11px]">
-                  <span className="shrink-0 font-medium" style={{ color: 'var(--muted-foreground)' }}>说明</span>
+                  <span className="shrink-0 font-medium" style={{ color: 'var(--muted-foreground)' }}>{t('reports:stepNote.note')}</span>
                   <span className="min-w-0 break-words" style={{ color: 'var(--muted-foreground)' }}>{s.humanMessage}</span>
                 </div>
               )}
@@ -311,7 +315,7 @@ export default function ReportDetail() {
               const idx = shots.findIndex((x) => x.url === s.screenshot);
               setZoomIndex(idx >= 0 ? idx : 0);
             }}
-            aria-label={`放大 step ${s.order} 截图`}
+            aria-label={t('reports:shots.zoomStep', { order: s.order })}
             className="shrink-0 rounded-[var(--radius-sm)] overflow-hidden press"
             style={{ border: '1px solid var(--border)', background: 'var(--popover)', padding: 0, cursor: 'zoom-in' }}
           >
@@ -329,13 +333,13 @@ export default function ReportDetail() {
               const idx = shots.findIndex((x) => x.url === s.visionAssert!.screenshot);
               setZoomIndex(idx >= 0 ? idx : 0);
             }}
-            aria-label={`放大 step ${s.order} 视觉判定截图`}
+            aria-label={t('reports:shots.zoomStepVision', { order: s.order })}
             className="shrink-0 rounded-[var(--radius-sm)] overflow-hidden press"
             style={{ border: '1px solid var(--border)', background: 'var(--popover)', padding: 0, cursor: 'zoom-in' }}
           >
             <img
               src={s.visionAssert.screenshot}
-              alt={`step ${s.order} 视觉判定`}
+              alt={t('reports:shots.altVision', { order: s.order })}
               className="w-16 h-16 object-cover block"
             />
           </button>
@@ -373,17 +377,17 @@ export default function ReportDetail() {
             onClick={() => navigate(`/p/${projectId}/v/${versionId}/plans/${data.planId}/runs/${data.planRunId}`)}
           >
             <Icon name="chevronLeft" size={12} />
-            返回计划运行
+            {t('reports:backToPlanRun')}
           </Button>
         ) : (
           <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports`)}>
             <Icon name="chevronLeft" size={12} />
-            返回报告列表
+            {t('reports:backToList')}
           </Button>
         )}
         <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
         <h1 className="text-[16px] font-semibold" style={{ color: 'var(--foreground)' }}>
-          测试报告
+          {t('reports:reportTitle')}
         </h1>
         <StatusPill status={data.status}>{data.status.toUpperCase()}</StatusPill>
         {data.datasetSnapshot && data.datasetSnapshot.totalRows > 1 && (
@@ -391,18 +395,18 @@ export default function ReportDetail() {
             variant="ghost"
             size="sm"
             onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports?tab=case&caseId=${data.caseId}`)}
-            title={`该用例数据集共 ${data.datasetSnapshot.totalRows} 行，每行一份报告`}
+            title={t('reports:detail.datasetCountTitle', { count: data.datasetSnapshot.totalRows })}
           >
-            全部 {data.datasetSnapshot.totalRows} 份
+            {t('reports:detail.allReports', { count: data.datasetSnapshot.totalRows })}
           </Button>
         )}
         {data.healed && (
           <span
             className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded-full"
             style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}
-            title="存在 aiTask 步骤缓存分叉后 AI 自愈通过——通过但不够稳定"
+            title={t('reports:healedTooltip')}
           >
-            自愈通过
+            {t('reports:healedPassed')}
           </span>
         )}
         {data.platform === 'mobile' && (
@@ -418,8 +422,8 @@ export default function ReportDetail() {
           variant="ghost"
           onClick={() => setShowDelete(true)}
           style={{ color: 'var(--destructive)' }}
-          aria-label="删除测试报告"
-          title="删除测试报告"
+          aria-label={t('reports:delete.title')}
+          title={t('reports:delete.title')}
         >
           <Icon name="trash" size={12} />
         </Button>
@@ -448,7 +452,7 @@ export default function ReportDetail() {
             <div className="bg-card border rounded-[var(--radius-md)] overflow-hidden">
               <div className="px-5 py-[10px] hairline-bottom" style={{ background: 'var(--muted)' }}>
                 <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
-                  步骤时间线
+                  {t('reports:detail.stepTimeline')}
                 </span>
               </div>
               {stepResults.length === 0 ? (
@@ -459,10 +463,10 @@ export default function ReportDetail() {
                     style={{ color: 'var(--muted-foreground)' }}
                   >
                     <Icon name="loader" size={16} className="animate-spin" />
-                    <span style={{ fontSize: 13 }}>执行中，等待第 1 步结果…</span>
+                    <span style={{ fontSize: 13 }}>{t('reports:detail.waitingFirstStep')}</span>
                   </div>
                 ) : (
-                  <EmptyState icon="listChecks" title="无步骤结果" />
+                  <EmptyState icon="listChecks" title={t('reports:detail.noStepsResult')} />
                 )
               ) : (
                 <div className="flex flex-col" data-stagger>
@@ -492,24 +496,24 @@ export default function ReportDetail() {
           <div className="w-[280px] shrink-0 flex flex-col gap-3">
             <div className="bg-card border rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
-                汇总
+                {t('reports:detail.summaryTitle')}
               </div>
-              <MetaRow label="总步骤" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{stepResults.length}</span>} />
-              <MetaRow label="通过" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--success)' }}>{passed}</span>} />
-              <MetaRow label="失败" value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--destructive)' }}>{failed}</span>} />
+              <MetaRow label={t('reports:summary.totalSteps')} value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{stepResults.length}</span>} />
+              <MetaRow label={t('cases:status.passed')} value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--success)' }}>{passed}</span>} />
+              <MetaRow label={t('cases:status.failed')} value={<span style={{ fontSize: 14, fontWeight: 600, color: 'var(--destructive)' }}>{failed}</span>} />
               {aiTotal.calls > 0 && (
                 <MetaRow
-                  label="AI 调用"
-                  value={<span className="font-mono text-[11px]">{aiTotal.calls} 次 · {fmtTokens(aiTotal.tokens)} tokens · {(aiTotal.ms / 1000).toFixed(1)}s</span>}
+                  label={t('reports:summary.aiCalls')}
+                  value={<span className="font-mono text-[11px]">{t('reports:aiCallsSummary', { count: aiTotal.calls, tokens: fmtTokens(aiTotal.tokens), seconds: (aiTotal.ms / 1000).toFixed(1) })}</span>}
                 />
               )}
             </div>
             <div className="bg-card border rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
-                元数据
+                {t('reports:detail.metadataTitle')}
               </div>
               <MetaRow
-                label="用例"
+                label={t('reports:meta.caseName')}
                 value={
                   data.caseTitle ? (
                     /* 用例名称跳用例详情：报告与用例是多对多，靠 caseId 定位 */
@@ -518,32 +522,32 @@ export default function ReportDetail() {
                       onClick={() => navigate(`/p/${projectId}/v/${versionId}/cases/${data.caseId}`)}
                       className="underline-offset-2 hover:underline"
                       style={{ color: 'var(--primary)', cursor: 'pointer' }}
-                      title="打开用例详情"
+                      title={t('reports:detail.openCase')}
                     >
                       {data.caseTitle}
                     </button>
                   ) : (
-                    <span style={{ color: 'var(--muted-foreground)' }}>已删除用例</span>
+                    <span style={{ color: 'var(--muted-foreground)' }}>{t('plans:deletedCase')}</span>
                   )
                 }
               />
-              <MetaRow label="用例 ID" value={<span className="font-mono text-[11px]">{data.caseId.slice(0, 8)}</span>} />
-              <MetaRow label="报告 ID" value={<span className="font-mono text-[11px]">{data.id.slice(0, 8)}</span>} />
-              {data.createdBy && <MetaRow label="创建人" value={<span>{creatorName(data.createdBy)}</span>} />}
+              <MetaRow label={t('reports:meta.caseId')} value={<span className="font-mono text-[11px]">{data.caseId.slice(0, 8)}</span>} />
+              <MetaRow label={t('reports:meta.reportId')} value={<span className="font-mono text-[11px]">{data.id.slice(0, 8)}</span>} />
+              {data.createdBy && <MetaRow label={t('cases:createdBy')} value={<span>{creatorName(data.createdBy)}</span>} />}
               {data.platform && (
-                <MetaRow label="平台" value={data.platform} />
+                <MetaRow label={t('reports:meta.platform')} value={data.platform} />
               )}
               {data.platform && (
-                <MetaRow label="设备" value={`${data.mobileOs ?? data.platform}${data.deviceName ? ` · ${data.deviceName}` : ''}`} />
+                <MetaRow label={t('reports:meta.device')} value={`${data.mobileOs ?? data.platform}${data.deviceName ? ` · ${data.deviceName}` : ''}`} />
               )}
               {data.datasetRowIndex != null && data.datasetSnapshot && (
-                <MetaRow label="数据行" value={`${data.datasetSnapshot.rowIndex + 1}/${data.datasetSnapshot.totalRows}`} />
+                <MetaRow label={t('reports:meta.dataRow')} value={`${data.datasetSnapshot.rowIndex + 1}/${data.datasetSnapshot.totalRows}`} />
               )}
             </div>
             {data.datasetSnapshot && (
               <div className="bg-card border rounded-[var(--radius-md)] p-4">
                 <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
-                  当次数据行
+                  {t('reports:detail.dataRowTitle')}
                 </div>
                 {Object.entries(data.datasetSnapshot.values).map(([k, v]) => (
                   <MetaRow key={k} label={k} value={<span className="font-mono text-[11px]">{v}</span>} />
@@ -599,7 +603,7 @@ export default function ReportDetail() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <button
                   type="button"
-                  aria-label="上一步截图"
+                  aria-label={t('reports:shots.prev')}
                   onClick={(e) => { e.stopPropagation(); gotoZoom(zoomIndex! - 1); }}
                   disabled={shots.length <= 1}
                   className="zoom-nav-btn"
@@ -629,7 +633,7 @@ export default function ReportDetail() {
                 </div>
                 <button
                   type="button"
-                  aria-label="下一步截图"
+                  aria-label={t('reports:shots.next')}
                   onClick={(e) => { e.stopPropagation(); gotoZoom(zoomIndex! + 1); }}
                   disabled={shots.length <= 1}
                   className="zoom-nav-btn"
@@ -646,19 +650,19 @@ export default function ReportDetail() {
       <Dialog open={showDelete} onOpenChange={setShowDelete}>
         <DialogContent style={{ maxWidth: 420 }}>
           <DialogHeader>
-            <DialogTitle>删除测试报告</DialogTitle>
+            <DialogTitle>{t('reports:delete.title')}</DialogTitle>
           </DialogHeader>
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            确认删除该测试报告？相关截图将一并清理，且不可恢复。
+            {t('reports:delete.confirm')}
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowDelete(false)}>取消</Button>
+            <Button variant="ghost" onClick={() => setShowDelete(false)}>{t('common:cancel')}</Button>
             <Button
               variant="danger"
               disabled={remove.isPending}
               onClick={() => { setShowDelete(false); remove.mutate(); }}
             >
-              {remove.isPending ? '删除中...' : '确认删除'}
+              {remove.isPending ? t('cases:deleting') : t('cases:confirmDelete')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -668,13 +672,14 @@ export default function ReportDetail() {
 }
 
 function DbResultCell({ db }: { db: DbQueryRowResult }) {
+  const { t } = useTranslation();
   return (
     <details className="text-[11px]">
       <summary
         className="cursor-pointer"
         style={{ color: 'var(--muted-foreground)' }}
       >
-        DB 查询：{db.rowCount} 行{db.truncated ? '（截断）' : ''}
+        {t('reports:db.summary', { count: db.rowCount })}{db.truncated ? t('reports:truncated') : ''}
         {db.assertion && (
           <span
             style={{
@@ -682,7 +687,7 @@ function DbResultCell({ db }: { db: DbQueryRowResult }) {
               marginLeft: 8,
             }}
           >
-            {db.assertion.matched ? '✓ 命中' : '✕ 未命中'}「{db.assertion.expected}」
+            {t(db.assertion.matched ? 'reports:assertion.hit' : 'reports:assertion.miss')}{t('reports:assertion.quote', { expected: db.assertion.expected })}
           </span>
         )}
       </summary>
@@ -706,6 +711,7 @@ function DbResultCell({ db }: { db: DbQueryRowResult }) {
 }
 
 function HttpResultCell({ http }: { http: HttpStepResult }) {
+  const { t } = useTranslation();
   const PRE_STYLE: React.CSSProperties = {
     maxHeight: 240,
     overflow: 'auto',
@@ -727,7 +733,7 @@ function HttpResultCell({ http }: { http: HttpStepResult }) {
         className="cursor-pointer"
         style={{ color: 'var(--muted-foreground)' }}
       >
-        HTTP：{http.request.method} {path} → {http.response.status}（{http.response.durationMs}ms）
+        {t('reports:http.summary', { method: http.request.method, path, status: http.response.status, ms: http.response.durationMs })}
         {http.assertion && (
           <span
             style={{
@@ -735,37 +741,37 @@ function HttpResultCell({ http }: { http: HttpStepResult }) {
               marginLeft: 8,
             }}
           >
-            {http.assertion.matched ? '✓ 命中' : '✕ 未命中'}
-            {http.assertion.statusExpected !== undefined && ` 状态码 ${http.assertion.statusExpected}`}
-            {http.assertion.expected !== undefined && `「${http.assertion.expected}」`}
+            {t(http.assertion.matched ? 'reports:assertion.hit' : 'reports:assertion.miss')}
+            {http.assertion.statusExpected !== undefined && t('reports:assertion.statusCode', { code: http.assertion.statusExpected })}
+            {http.assertion.expected !== undefined && t('reports:assertion.quote', { expected: http.assertion.expected })}
           </span>
         )}
         {http.saved && (
           <span style={{ marginLeft: 8, color: 'var(--muted-foreground)' }}>
-            提取 {`{{${http.saved.varName}}}`}
+            {t('reports:http.extract', { name: `{{${http.saved.varName}}}` })}
           </span>
         )}
       </summary>
       <div style={{ margin: '4px 0', display: 'flex', flexDirection: 'column', gap: 4 }}>
         <div>
-          <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>请求头</div>
+          <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:http.headers')}</div>
           <pre style={PRE_STYLE}>{JSON.stringify(http.request.headers, null, 2)}</pre>
         </div>
         {http.request.bodyPreview !== undefined && (
           <div>
-            <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>请求体</div>
+            <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:http.body')}</div>
             <pre style={PRE_STYLE}>{http.request.bodyPreview}</pre>
           </div>
         )}
         <div>
           <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>
-            响应 {http.response.status} {http.response.statusText}
+            {t('reports:http.response', { status: http.response.status, statusText: http.response.statusText })}
           </div>
-          <pre style={PRE_STYLE}>{http.response.bodyText || '（空）'}</pre>
+          <pre style={PRE_STYLE}>{http.response.bodyText || t('reports:http.emptyBody')}</pre>
         </div>
         {http.saved && (
           <div>
-            <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>提取变量</div>
+            <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:http.extractVar')}</div>
             <pre style={PRE_STYLE}>{`{{${http.saved.varName}}} = ${http.saved.value}`}</pre>
           </div>
         )}
@@ -775,13 +781,14 @@ function HttpResultCell({ http }: { http: HttpStepResult }) {
 }
 
 function LogResultCell({ log }: { log: ObserveLogLineResult }) {
+  const { t } = useTranslation();
   return (
     <details className="text-[11px]">
       <summary
         className="cursor-pointer"
         style={{ color: 'var(--muted-foreground)' }}
       >
-        日志：匹配 {log.matchedLineCount} 行{log.truncated ? '（截断）' : ''}
+        {t('reports:db.logSummary', { count: log.matchedLineCount })}{log.truncated ? t('reports:truncated') : ''}
         {log.assertion && (
           <span
             style={{
@@ -789,7 +796,7 @@ function LogResultCell({ log }: { log: ObserveLogLineResult }) {
               marginLeft: 8,
             }}
           >
-            {log.assertion.matched ? '✓ 命中' : '✕ 未命中'}「{log.assertion.expected}」
+            {t(log.assertion.matched ? 'reports:assertion.hit' : 'reports:assertion.miss')}{t('reports:assertion.quote', { expected: log.assertion.expected })}
           </span>
         )}
       </summary>

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const localesDir = fileURLToPath(new URL('../src/i18n/locales/', import.meta.url));
-const namespaces = ['common', 'auth', 'settings', 'projects', 'members', 'cases', 'groups', 'plans'];
+const namespaces = ['common', 'auth', 'settings', 'projects', 'members', 'cases', 'groups', 'plans', 'reports'];
 
 function flatKeys(obj, prefix = '') {
   return Object.entries(obj).flatMap(([k, v]) =>
