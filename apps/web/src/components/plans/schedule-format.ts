@@ -3,31 +3,34 @@
  * 参考 iDO Automation 的 schedule-format.ts：5 字段 cron ↔ preset（每小时 / 每天 / 工作日 / 每周 / 每月 / 自定义）。
  */
 import { parseExpression } from 'cron-parser';
+import type { TFunction } from 'i18next';
 
 export type SchedulePreset = 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'monthly' | 'custom';
 
 export const PRESET_VALUES: SchedulePreset[] = ['hourly', 'daily', 'weekdays', 'weekly', 'monthly', 'custom'];
 
+/** preset 展示名 = i18n key（由调用方组件 t() 渲染）。 */
 export const PRESET_LABELS: Record<SchedulePreset, string> = {
-  hourly: '每小时',
-  daily: '每天',
-  weekdays: '工作日（周一至周五）',
-  weekly: '每周',
-  monthly: '每月',
-  custom: '自定义（cron 表达式）',
+  hourly: 'plans:preset.hourly',
+  daily: 'plans:preset.daily',
+  weekdays: 'plans:preset.weekdays',
+  weekly: 'plans:preset.weekly',
+  monthly: 'plans:preset.monthly',
+  custom: 'plans:preset.custom',
 };
 
+/** 星期选项（value = cron DOW；label = i18n key，由调用方组件 t() 渲染）。 */
 export const WEEKLY_DAY_VALUES: Array<{ value: string; label: string }> = [
-  { value: '1', label: '周一' },
-  { value: '2', label: '周二' },
-  { value: '3', label: '周三' },
-  { value: '4', label: '周四' },
-  { value: '5', label: '周五' },
-  { value: '6', label: '周六' },
-  { value: '0', label: '周日' },
+  { value: '1', label: 'plans:weekday.1' },
+  { value: '2', label: 'plans:weekday.2' },
+  { value: '3', label: 'plans:weekday.3' },
+  { value: '4', label: 'plans:weekday.4' },
+  { value: '5', label: 'plans:weekday.5' },
+  { value: '6', label: 'plans:weekday.6' },
+  { value: '0', label: 'plans:weekday.0' },
 ];
 
-const WEEKDAY_INDEX_BY_NUM = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const WEEKDAY_INDEX_BY_NUM = ['plans:weekday.0', 'plans:weekday.1', 'plans:weekday.2', 'plans:weekday.3', 'plans:weekday.4', 'plans:weekday.5', 'plans:weekday.6'];
 
 /** 把 cron 表达式映射到 preset；无法识别则返回 'custom'。 */
 export function detectPreset(cron: string): SchedulePreset {
@@ -42,8 +45,8 @@ export function detectPreset(cron: string): SchedulePreset {
   return 'custom';
 }
 
-/** 把 cron 转成中文描述；无法解析时返回 null。 */
-export function formatSchedule(cron: string): string | null {
+/** 把 cron 转成当前语言的人机可读描述；无法解析时返回 null。 */
+export function formatSchedule(cron: string, t: TFunction): string | null {
   const preset = detectPreset(cron);
   if (preset === 'custom') return null;
   const m = cron.trim().match(/^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
@@ -54,18 +57,21 @@ export function formatSchedule(cron: string): string | null {
 
   switch (preset) {
     case 'hourly':
-      return minNum === 0 ? '每小时整点' : `每小时第 ${minNum} 分`;
+      return minNum === 0
+        ? t('plans:formatSchedule.hourlyOnTheHour')
+        : t('plans:formatSchedule.hourlyAtMinute', { minute: minNum });
     case 'daily':
-      return `每天 ${time}`;
+      return t('plans:formatSchedule.daily', { time });
     case 'weekdays':
-      return `工作日 ${time}`;
+      return t('plans:formatSchedule.weekdays', { time });
     case 'weekly': {
       const dayNum = parseInt(m[5] ?? '0', 10);
-      const day = Number.isNaN(dayNum) ? (m[5] ?? '?') : (WEEKDAY_INDEX_BY_NUM[dayNum % 7] ?? (m[5] ?? '?'));
-      return `每${day} ${time}`;
+      const rawDay = m[5] ?? '?';
+      const dayKey = Number.isNaN(dayNum) ? null : (WEEKDAY_INDEX_BY_NUM[dayNum % 7] ?? null);
+      return t('plans:formatSchedule.weeklyPerDay', { day: dayKey ? t(dayKey) : rawDay, time });
     }
     case 'monthly':
-      return `每月 ${m[3] ?? '1'} 日 ${time}`;
+      return t('plans:formatSchedule.monthly', { day: m[3] ?? '1', time });
     default:
       return null;
   }

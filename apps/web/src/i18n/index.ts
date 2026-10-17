@@ -15,14 +15,16 @@ import zhCases from './locales/zh-CN/cases.json';
 import enCases from './locales/en-US/cases.json';
 import zhGroups from './locales/zh-CN/groups.json';
 import enGroups from './locales/en-US/groups.json';
+import zhPlans from './locales/zh-CN/plans.json';
+import enPlans from './locales/en-US/plans.json';
 
 export type Lang = 'zh-CN' | 'en-US';
 
 export const LANG_STORAGE_KEY = 'itest-lang';
 
 const resources = {
-  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, members: zhMembers, cases: zhCases, groups: zhGroups },
-  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, members: enMembers, cases: enCases, groups: enGroups },
+  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, members: zhMembers, cases: zhCases, groups: zhGroups, plans: zhPlans },
+  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, members: enMembers, cases: enCases, groups: enGroups, plans: enPlans },
 };
 
 void i18n.use(initReactI18next).init({

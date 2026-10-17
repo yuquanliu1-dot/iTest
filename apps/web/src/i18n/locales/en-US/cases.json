@@ -11,7 +11,8 @@
     "completed": "Completed",
     "pending": "Pending",
     "error": "Error",
-    "success": "Success"
+    "success": "Success",
+    "cancelled": "Cancelled"
   },
   "stepKind": {
     "click": "Click",

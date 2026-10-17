@@ -6,6 +6,7 @@
  *     + 条件性的周/时间 Select + 「自定义」模式下展开 5 字段 cron 输入面板。
  */
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   detectPreset,
   extractTime,
@@ -21,18 +22,20 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/Modal';
 import Button from '../ui/Button';
 import FieldLabel from '../ui/FieldLabel';
+import i18n from '../../i18n';
 import type { PlanSchedule, PlanScheduleCreateInput, PlanSchedulePatchInput } from '../../api/client';
 
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
 const MINUTE_OPTIONS = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'));
 
 const FIELD_KEYS = ['minute', 'hour', 'day', 'month', 'weekday'] as const;
+/** cron 5 字段名 = i18n key（由组件 t() 渲染）。 */
 const FIELD_LABELS: Record<typeof FIELD_KEYS[number], string> = {
-  minute: '分钟',
-  hour: '小时',
-  day: '日',
-  month: '月',
-  weekday: '周',
+  minute: 'plans:field.minute',
+  hour: 'plans:field.hour',
+  day: 'plans:field.day',
+  month: 'plans:field.month',
+  weekday: 'plans:field.weekday',
 };
 
 interface ScheduleDialogProps {
@@ -43,6 +46,7 @@ interface ScheduleDialogProps {
 }
 
 export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: ScheduleDialogProps) {
+  const { t } = useTranslation();
   const initial = editing?.cronExpr ?? '0 9 * * *';
   const [cronExpr, setCronExpr] = useState<string>(initial);
   const [timezone, setTimezone] = useState<string>(editing?.timezone ?? 'Asia/Shanghai');
@@ -68,7 +72,7 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
     if (cronError) return null;
     return nextRunAt(cronExpr, timezone);
   }, [cronExpr, timezone, cronError]);
-  const label = useMemo(() => formatSchedule(cronExpr) ?? cronExpr.trim(), [cronExpr]);
+  const label = useMemo(() => formatSchedule(cronExpr, t) ?? cronExpr.trim(), [cronExpr, t]);
   const trimmedCron = cronExpr.trim();
   const fieldValues = useMemo(() => {
     const parts = trimmedCron.split(/\s+/);
@@ -103,7 +107,7 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
       return;
     }
     if (!cronExpr.trim()) {
-      setError('cron 表达式不能为空');
+      setError(t('plans:cronRequired'));
       return;
     }
     setSubmitting(true);
@@ -127,19 +131,19 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent style={{ maxWidth: 520 }}>
         <DialogHeader>
-          <DialogTitle>{editing ? '编辑调度' : '新增调度'}</DialogTitle>
+          <DialogTitle>{editing ? t('plans:editSchedule') : t('plans:addScheduleTitle')}</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-3 text-[13px] px-5 py-2">
           {/* 频率 Select */}
           <div className="flex items-center gap-2">
-            <FieldLabel className="shrink-0 w-16">频率</FieldLabel>
+            <FieldLabel className="shrink-0 w-16">{t('plans:frequency')}</FieldLabel>
             <select
               value={preset}
               onChange={(e) => handlePresetChange(e.target.value as SchedulePreset)}
               className="input-base input-sm flex-1"
             >
               {PRESET_VALUES.map((p) => (
-                <option key={p} value={p}>{PRESET_LABELS[p]}</option>
+                <option key={p} value={p}>{t(PRESET_LABELS[p])}</option>
               ))}
             </select>
           </div>
@@ -147,14 +151,14 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
           {/* 每周模式：星期 Select */}
           {preset === 'weekly' && (
             <div className="flex items-center gap-2">
-              <FieldLabel className="shrink-0 w-16">星期</FieldLabel>
+              <FieldLabel className="shrink-0 w-16">{t('plans:weekdayLabel')}</FieldLabel>
               <select
                 value={weeklyDayValue}
                 onChange={(e) => handleWeeklyDayChange(e.target.value)}
                 className="input-base input-sm flex-1"
               >
                 {WEEKLY_DAY_VALUES.map((d) => (
-                  <option key={d.value} value={d.value}>{d.label}</option>
+                  <option key={d.value} value={d.value}>{t(d.label)}</option>
                 ))}
               </select>
             </div>
@@ -163,12 +167,12 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
           {/* 时间 / 分钟 Select（hourly 仅显示分钟） */}
           {preset !== 'custom' && preset !== 'hourly' && (
             <div className="flex items-center gap-2">
-              <FieldLabel className="shrink-0 w-16">时间</FieldLabel>
+              <FieldLabel className="shrink-0 w-16">{t('plans:timeLabel')}</FieldLabel>
               <select
                 value={hour}
                 onChange={(e) => handleHourChange(e.target.value)}
                 className="input-base input-sm flex-1"
-                aria-label="小时"
+                aria-label={t('plans:field.hour')}
               >
                 {HOUR_OPTIONS.map((h) => <option key={h} value={h}>{h}</option>)}
               </select>
@@ -177,7 +181,7 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
                 value={minute}
                 onChange={(e) => handleMinuteChange(e.target.value)}
                 className="input-base input-sm flex-1"
-                aria-label="分钟"
+                aria-label={t('plans:field.minute')}
               >
                 {MINUTE_OPTIONS.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
@@ -185,12 +189,12 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
           )}
           {preset === 'hourly' && (
             <div className="flex items-center gap-2">
-              <FieldLabel className="shrink-0 w-16">分钟</FieldLabel>
+              <FieldLabel className="shrink-0 w-16">{t('plans:minuteLabel')}</FieldLabel>
               <select
                 value={minute}
                 onChange={(e) => handleMinuteChange(e.target.value)}
                 className="input-base input-sm flex-1"
-                aria-label="分钟"
+                aria-label={t('plans:field.minute')}
               >
                 {MINUTE_OPTIONS.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
@@ -200,12 +204,12 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
           {/* 自定义 cron：5 字段卡 + 状态行 */}
           {preset === 'custom' && (
             <div className="flex flex-col gap-1">
-              <FieldLabel>cron 表达式</FieldLabel>
+              <FieldLabel>{t('plans:cronExpr')}</FieldLabel>
               <input
                 type="text"
                 value={cronExpr}
                 onChange={(e) => setCronExpr(e.target.value)}
-                placeholder="例如 0 9 * * 1-5"
+                placeholder={t('plans:cronExprPlaceholder')}
                 spellCheck={false}
                 className="input-base input-sm font-mono"
                 aria-invalid={!!cronError}
@@ -218,7 +222,7 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
                     style={{ borderColor: 'var(--border)', background: 'var(--muted)' }}
                   >
                     <div className="truncate text-[10px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
-                      {FIELD_LABELS[key]}
+                      {t(FIELD_LABELS[key])}
                     </div>
                     <div className="mt-0.5 truncate font-mono text-[11px]" style={{ color: 'var(--foreground)' }}>
                       {fieldValues[i]}
@@ -234,27 +238,27 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
                     : { borderColor: 'var(--border)', background: 'var(--muted)', color: 'var(--muted-foreground)' }
                 }
               >
-                <span className="min-w-0 truncate">{cronError ? `非法：${cronError}` : label || '空'}</span>
+                <span className="min-w-0 truncate">{cronError ? t('plans:invalidCron', { error: cronError }) : label || t('plans:empty')}</span>
               </div>
             </div>
           )}
 
           {/* 时区（默认 Asia/Shanghai；开放编辑以便将来多区域场景） */}
           <div className="flex items-center gap-2">
-            <FieldLabel className="shrink-0 w-16">时区</FieldLabel>
+            <FieldLabel className="shrink-0 w-16">{t('plans:timezone')}</FieldLabel>
             <input
               type="text"
               value={timezone}
               onChange={(e) => setTimezone(e.target.value)}
               className="input-base input-sm flex-1"
-              placeholder="IANA 时区名，如 Asia/Shanghai"
+              placeholder={t('plans:timezonePlaceholder')}
             />
           </div>
 
           {/* 下次执行预览 */}
           <div className="flex items-baseline justify-between gap-2 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             <span className="truncate">{label}</span>
-            {nextRun && <span>下次执行：{formatLocal(nextRun, timezone)}</span>}
+            {nextRun && <span>{t('plans:nextRunAt', { time: formatLocal(nextRun, timezone) })}</span>}
           </div>
 
           <label className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
@@ -263,7 +267,7 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
               checked={enabled}
               onChange={(e) => setEnabled(e.target.checked)}
             />
-            立即启用（取消勾选则仅保存，不入队）
+            {t('plans:enableNow')}
           </label>
 
           {error && (
@@ -273,9 +277,9 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
           )}
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose} disabled={submitting}>取消</Button>
+          <Button variant="ghost" onClick={onClose} disabled={submitting}>{t('common:cancel')}</Button>
           <Button onClick={submit} disabled={submitting || !!cronError || !cronExpr.trim()}>
-            {submitting ? '提交中...' : '保存'}
+            {submitting ? t('plans:submitting') : t('common:save')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -283,10 +287,10 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
   );
 }
 
-/** 把 Date 渲染成「YYYY-MM-DD HH:mm」并按 tz 校准。 */
+/** 把 Date 渲染成「YYYY-MM-DD HH:mm」并按 tz 校准；数字格式跟随当前界面语言。 */
 function formatLocal(d: Date, tz: string): string {
   try {
-    const fmt = new Intl.DateTimeFormat('zh-CN', {
+    const fmt = new Intl.DateTimeFormat(i18n.language === 'en-US' ? 'en-US' : 'zh-CN', {
       timeZone: tz,
       year: 'numeric',
       month: '2-digit',

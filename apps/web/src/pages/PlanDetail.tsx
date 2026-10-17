@@ -132,7 +132,7 @@ export default function PlanDetail() {
   const setCases = useMutation({
     mutationFn: (caseIds: string[]) => api.plans.setCases(id!, caseIds),
     onSuccess: () => {
-      toast('用例已更新', 'success');
+      toast(t('plans:casesUpdated'), 'success');
       qc.invalidateQueries({ queryKey: ['plan', id] });
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
       setShowAdd(false);
@@ -152,7 +152,7 @@ export default function PlanDetail() {
   const removeCases = useMutation({
     mutationFn: (caseIds: string[]) => api.plans.removeCases(id!, caseIds),
     onSuccess: (data, vars) => {
-      toast(`已移除 ${vars.length} 个用例`, 'success');
+      toast(t('plans:removedCount', { count: vars.length }), 'success');
       setConfirmRemoveCase(null);
       qc.invalidateQueries({ queryKey: ['plan', id] });
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
@@ -163,7 +163,7 @@ export default function PlanDetail() {
   const remove = useMutation({
     mutationFn: () => api.plans.remove(id!),
     onSuccess: () => {
-      toast('已删除', 'success');
+      toast(t('plans:deletedToast'), 'success');
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
       navigate(versionId ? `/p/${projectId}/v/${versionId}/plans` : `/`);
     },
@@ -187,7 +187,7 @@ export default function PlanDetail() {
   if (isError) {
     return (
       <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
-        加载失败：{error?.message ?? '未知错误'}
+        {t('common:loadFailed')}：{error?.message ?? t('common:unknownError')}
       </div>
     );
   }
@@ -196,7 +196,7 @@ export default function PlanDetail() {
     return (
       <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)' }}>
         <Icon name="loader" size={16} className="animate-spin" />
-        <span style={{ marginLeft: 8 }}>加载中...</span>
+        <span style={{ marginLeft: 8 }}>{t('cases:loading')}</span>
       </div>
     );
   }
@@ -243,14 +243,14 @@ export default function PlanDetail() {
           onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/plans` : `/`)}
         >
           <Icon name="chevronLeft" size={12} />
-          返回计划列表
+          {t('plans:backToList')}
         </Button>
         <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
         {/* 计划名称行内可编辑：点标题改，走 PATCH /plans/:id { name } */}
         <InlineEdit
           value={plan.name}
           disabled={patchPlan.isPending}
-          ariaLabel="计划名称"
+          ariaLabel={t('plans:planNameAria')}
           onSave={(next) => patchPlan.mutateAsync({ name: next })}
           className="text-[16px] font-semibold max-w-[420px]"
           inputClassName="text-[16px] font-semibold max-w-[420px]"
@@ -260,7 +260,7 @@ export default function PlanDetail() {
           <span
             className="text-[10px] font-semibold uppercase px-2 py-[2px] rounded-full"
             style={{ background: 'var(--primary-soft)', color: 'var(--primary)', letterSpacing: '0.04em' }}
-            title="所属版本"
+            title={t('plans:belongsVersion')}
           >
             {plan.versionName}
           </span>
@@ -268,18 +268,18 @@ export default function PlanDetail() {
         <div className="flex-1" />
         <Button variant="ghost" onClick={() => { setShowAdd(true); setAddFilters(EMPTY_ADD_FILTERS); setSearch(''); }}>
           <Icon name="plus" size={12} />
-          添加用例
+          {t('plans:addCases')}
         </Button>
         <Button onClick={() => run.mutate()} disabled={run.isPending || plan.cases.length === 0}>
           <Icon name="play" size={12} />
-          {run.isPending ? '启动中...' : '一键执行'}
+          {run.isPending ? t('plans:starting') : t('plans:runOnce')}
         </Button>
         <Button
           variant="ghost"
           onClick={() => setShowDelete(true)}
           style={{ color: 'var(--destructive)' }}
-          aria-label="删除执行计划"
-          title="删除执行计划"
+          aria-label={t('plans:deletePlanTitle')}
+          title={t('plans:deletePlanTitle')}
         >
           <Icon name="trash" size={12} />
         </Button>
@@ -290,17 +290,17 @@ export default function PlanDetail() {
         <div className="bg-card border rounded-[var(--radius-md)] p-5">
           {/* input-base 默认 width:100%，flex 行内会把标签挤到竖排；控件 flex-1 弹性填充 + 标签 shrink-0 */}
           <div className="flex items-center gap-4">
-            <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>执行策略</span>
+            <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:strategy')}</span>
             <select
               value={plan.strategy}
               onChange={(e) => updateStrategy(e.target.value as Strategy)}
               className="input-base input-sm flex-1"
               style={{ minWidth: 160 }}
             >
-              <option value="run_all">全部执行完成</option>
-              <option value="fail_fast">失败即停止</option>
+              <option value="run_all">{t('plans:strategyRunAll')}</option>
+              <option value="fail_fast">{t('plans:strategyFailFast')}</option>
             </select>
-            <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>目标环境</span>
+            <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:targetEnvironment')}</span>
             <select
               value={environmentId ?? ''}
               onChange={(e) => setEnvironmentId(e.target.value || null)}
@@ -308,7 +308,7 @@ export default function PlanDetail() {
               style={{ minWidth: 160 }}
               disabled={(environments ?? []).length === 0}
             >
-              <option value="">不在计划层指定</option>
+              <option value="">{t('plans:noEnvironmentSpecified')}</option>
               {(environments ?? []).map((env) => (
                 <option key={env.id} value={env.id}>
                   {env.name}
@@ -321,7 +321,7 @@ export default function PlanDetail() {
               disabled={patchPlan.isPending}
               onClick={() => patchPlan.mutate({ environmentId })}
             >
-              保存
+              {t('common:save')}
             </Button>
           </div>
           <div className="mt-4">
@@ -331,26 +331,26 @@ export default function PlanDetail() {
                 checked={plan.loginPrepareEnabled}
                 onChange={(e) => updateLoginPrepare({ enabled: e.target.checked })}
               />
-              启用登录准备
+              {t('plans:enableLoginPrepare')}
             </label>
             {plan.loginPrepareEnabled && (
               <div className="mt-3 flex flex-col gap-2 pl-5">
                 <div className="flex items-center gap-2">
-                  <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>登录用例</span>
+                  <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:loginCase')}</span>
                   <select
                     value={plan.loginCaseId ?? ''}
                     onChange={(e) => updateLoginPrepare({ caseId: e.target.value || null })}
                     className="input-base input-sm flex-1"
                     style={{ minWidth: 220 }}
                   >
-                    <option value="">— 请选择 —</option>
+                    <option value="">{t('plans:pleaseSelect')}</option>
                     {(loginCases ?? []).map((c) => (
                       <option key={c.id} value={c.id}>{c.title}</option>
                     ))}
                   </select>
                   <input
                     type="text"
-                    placeholder="搜索用例或分组"
+                    placeholder={t('plans:searchCaseOrGroup')}
                     value={loginQ}
                     onChange={(e) => setLoginQ(e.target.value)}
                     className="input-base input-sm flex-1"
@@ -358,30 +358,30 @@ export default function PlanDetail() {
                   />
                 </div>
                 <details className="text-[12px]">
-                  <summary className="cursor-pointer" style={{ color: 'var(--muted-foreground)' }}>高级配置</summary>
+                  <summary className="cursor-pointer" style={{ color: 'var(--muted-foreground)' }}>{t('plans:advancedConfig')}</summary>
                   <div className="mt-2 flex flex-col gap-2 pl-4 max-w-[520px]">
                     <label className="flex flex-col gap-1">
-                      <span style={{ color: 'var(--muted-foreground)' }}>检测页面 URL</span>
+                      <span style={{ color: 'var(--muted-foreground)' }}>{t('plans:detectionUrl')}</span>
                       <input
                         type="text"
-                        placeholder="留空使用第一个业务用例的 URL"
+                        placeholder={t('plans:detectionUrlPlaceholder')}
                         defaultValue={plan.detectionUrl ?? ''}
                         onBlur={(e) => updateLoginPrepare({ detectionUrl: e.target.value || null })}
                         className="input-base input-sm"
                       />
                     </label>
                     <label className="flex flex-col gap-1">
-                      <span style={{ color: 'var(--muted-foreground)' }}>登录成功标识（CSS 选择器）</span>
+                      <span style={{ color: 'var(--muted-foreground)' }}>{t('plans:successSelector')}</span>
                       <input
                         type="text"
-                        placeholder="例如 .user-menu"
+                        placeholder={t('plans:successSelectorPlaceholder')}
                         defaultValue={plan.loginSuccessSelector ?? ''}
                         onBlur={(e) => updateLoginPrepare({ successSelector: e.target.value || null })}
                         className="input-base input-sm"
                       />
                     </label>
                     <label className="flex flex-col gap-1">
-                      <span style={{ color: 'var(--muted-foreground)' }}>未授权关键字（一行一个）</span>
+                      <span style={{ color: 'var(--muted-foreground)' }}>{t('plans:unauthorizedKeywords')}</span>
                       <textarea
                         defaultValue={((plan.loginUnauthorizedKeywords as string[] | null) ?? []).join('\n')}
                         onBlur={(e) => {
@@ -398,7 +398,7 @@ export default function PlanDetail() {
             )}
           </div>
           <div className="mt-4 hairline-top pt-3 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-            创建人 {creatorName(plan.createdBy)}
+            {t('groups:createdBy')} {creatorName(plan.createdBy)}
           </div>
         </div>
 
@@ -406,10 +406,10 @@ export default function PlanDetail() {
 
         <div className="bg-card border rounded-[var(--radius-md)] p-5">
           <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3 hairline-bottom pb-2" style={{ color: 'var(--muted-foreground)' }}>
-            用例顺序 ({plan.cases.length})
+            {t('plans:caseOrder', { count: plan.cases.length })}
           </div>
           {plan.cases.length === 0 ? (
-            <EmptyState icon="flag" title="还没有用例" description="点击右上「添加用例」选择场景。" />
+            <EmptyState icon="flag" title={t('plans:noCases')} description={t('plans:noCasesHint')} />
           ) : (
             <ol className="flex flex-col gap-2" data-stagger>
               {plan.cases.map((c, idx) => {
@@ -438,16 +438,16 @@ export default function PlanDetail() {
                         <span
                           className="text-[10px] font-semibold uppercase px-1.5 py-[1px] rounded"
                           style={{ background: 'var(--warning-soft, var(--primary-soft))', color: 'var(--warning, var(--primary))', letterSpacing: '0.04em' }}
-                          title="此用例属于其他版本"
+                          title={t('plans:crossVersionTitle')}
                         >
-                          跨版本
+                          {t('plans:crossVersion')}
                         </span>
                       ) : null}
-                      <IconButton icon="chevronUp" title="上移" onClick={() => moveBy(idx, -1)} />
-                      <IconButton icon="chevronDown" title="下移" onClick={() => moveBy(idx, 1)} />
+                      <IconButton icon="chevronUp" title={t('cases:moveUp')} onClick={() => moveBy(idx, -1)} />
+                      <IconButton icon="chevronDown" title={t('cases:moveDown')} onClick={() => moveBy(idx, 1)} />
                       <IconButton
                         icon="trash"
-                        title="从计划中移除"
+                        title={t('plans:removeFromPlan')}
                         tone="destructive"
                         disabled={removeCases.isPending}
                         onClick={() => setConfirmRemoveCase({ id: c.id, title: c.title })}
@@ -464,14 +464,14 @@ export default function PlanDetail() {
       <Dialog open={showAdd} onOpenChange={setShowAdd}>
         <DialogContent style={{ maxWidth: 600 }}>
           <DialogHeader>
-            <DialogTitle>添加用例</DialogTitle>
+            <DialogTitle>{t('plans:addCases')}</DialogTitle>
           </DialogHeader>
           <div className="px-5 py-3 flex items-center gap-2">
             <div className="input-wrap flex-1 min-w-0">
               <Icon name="search" size={14} className="input-icon" />
               <input
                 type="text"
-                placeholder="搜索用例"
+                placeholder={t('plans:searchCase')}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="input-base input-sm input-with-leading"
@@ -481,7 +481,7 @@ export default function PlanDetail() {
               <DropdownMenuTrigger asChild>
                 <Button type="button" variant="ghost" size="sm" className="shrink-0">
                   <Icon name="settings" size={12} />
-                  过滤
+                  {t('plans:filter')}
                   {activeFilterCount > 0 && (
                     <span className="text-[11px] tabular-nums opacity-70">({activeFilterCount})</span>
                   )}
@@ -491,37 +491,37 @@ export default function PlanDetail() {
                 {activeFilterCount > 0 && (
                   <>
                     <DropdownMenuItem onSelect={() => setAddFilters(EMPTY_ADD_FILTERS)}>
-                      清除全部筛选
+                      {t('plans:clearAllFilters')}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
                 )}
                 <FilterSubmenu
-                  label="分组"
+                  label={t('groups:group')}
                   options={(projectGroups ?? []).map((g) => ({ value: g.id, label: g.name }))}
                   selected={addFilters.groups}
                   onChange={(v) => setAddFilters({ ...addFilters, groups: v })}
                 />
                 <FilterSubmenu
-                  label="版本"
+                  label={t('groups:version')}
                   options={(projectVersions ?? []).map((v) => ({ value: v.id, label: v.name }))}
                   selected={addFilters.versions}
                   onChange={(v) => setAddFilters({ ...addFilters, versions: v })}
                 />
                 <FilterSubmenu
-                  label="状态"
+                  label={t('groups:statusLabel')}
                   options={(['draft', 'review', 'ready', 'deprecated'] as const).map((s) => ({ value: s, label: t(caseStatusLabel(s)) }))}
                   selected={addFilters.statuses}
                   onChange={(v) => setAddFilters({ ...addFilters, statuses: v })}
                 />
                 <FilterSubmenu
-                  label="优先级"
+                  label={t('groups:priority')}
                   options={['P0', 'P1', 'P2', 'P3'].map((p) => ({ value: p, label: p }))}
                   selected={addFilters.priorities}
                   onChange={(v) => setAddFilters({ ...addFilters, priorities: v })}
                 />
                 <FilterSubmenu
-                  label="标签"
+                  label={t('groups:tagLabel')}
                   options={(projectTags ?? []).map((t) => ({ value: t.id, label: t.name }))}
                   selected={addFilters.tags}
                   onChange={(v) => setAddFilters({ ...addFilters, tags: v })}
@@ -532,7 +532,7 @@ export default function PlanDetail() {
           <div className="px-5 pb-4 max-h-[400px] overflow-y-auto flex flex-col gap-1">
             {candidates.length === 0 ? (
               <div className="text-[12px] py-8 text-center" style={{ color: 'var(--muted-foreground)' }}>
-                {hasAddFilter || search.trim() ? '无匹配当前筛选的用例' : '没有可添加的用例'}
+                {hasAddFilter || search.trim() ? t('plans:noMatchingCases') : t('plans:noAddableCases')}
               </div>
             ) : (
               candidates.map((c) => {
@@ -561,8 +561,8 @@ export default function PlanDetail() {
             )}
           </div>
           <DialogFooter>
-            <span className="text-[12px] mr-auto" style={{ color: 'var(--muted-foreground)' }}>已选 {selectedAdd.size}</span>
-            <Button variant="ghost" onClick={() => setShowAdd(false)}>取消</Button>
+            <span className="text-[12px] mr-auto" style={{ color: 'var(--muted-foreground)' }}>{t('plans:selectedCount', { count: selectedAdd.size })}</span>
+            <Button variant="ghost" onClick={() => setShowAdd(false)}>{t('common:cancel')}</Button>
             <Button
               disabled={selectedAdd.size === 0}
               onClick={() => {
@@ -570,7 +570,7 @@ export default function PlanDetail() {
                 setCases.mutate(next);
               }}
             >
-              加入计划
+              {t('groups:addToPlan')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -579,15 +579,15 @@ export default function PlanDetail() {
       <Dialog open={showDelete} onOpenChange={setShowDelete}>
         <DialogContent style={{ maxWidth: 420 }}>
           <DialogHeader>
-            <DialogTitle>删除执行计划</DialogTitle>
+            <DialogTitle>{t('plans:deletePlanTitle')}</DialogTitle>
           </DialogHeader>
           <div className="px-5 py-4 flex flex-col gap-2">
             <p className="text-[13px]" style={{ color: 'var(--foreground)' }}>
-              确认删除「{plan.name}」？历史执行报告将保留，但计划本身不可恢复。
+              {t('plans:deletePlanConfirm', { name: plan.name })}
             </p>
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowDelete(false)}>取消</Button>
+            <Button variant="ghost" onClick={() => setShowDelete(false)}>{t('common:cancel')}</Button>
             <Button
               onClick={() => {
                 setShowDelete(false);
@@ -596,7 +596,7 @@ export default function PlanDetail() {
               disabled={remove.isPending}
               style={{ background: 'var(--destructive)', color: '#fff', border: 'none' }}
             >
-              {remove.isPending ? '删除中...' : '确认删除'}
+              {remove.isPending ? t('cases:deleting') : t('cases:confirmDelete')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -605,18 +605,18 @@ export default function PlanDetail() {
       {/* 用例移除确认:误删需重新打开"添加用例"找回,前端一律先弹再发请求 */}
       <Dialog open={!!confirmRemoveCase} onOpenChange={(o) => !o && setConfirmRemoveCase(null)}>
         <DialogContent style={{ maxWidth: 420 }}>
-          <DialogHeader><DialogTitle>从计划中移除用例</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('plans:removeCaseTitle')}</DialogTitle></DialogHeader>
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            确认将「{confirmRemoveCase?.title}」从本计划中移除？后续顺序会自动重排,但用例本身与历史报告保留,可在「添加用例」中重新加入。
+            {t('plans:removeCaseConfirm', { title: confirmRemoveCase?.title })}
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirmRemoveCase(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setConfirmRemoveCase(null)}>{t('common:cancel')}</Button>
             <Button
               variant="danger"
               disabled={removeCases.isPending}
               onClick={() => confirmRemoveCase && removeCases.mutate([confirmRemoveCase.id])}
             >
-              {removeCases.isPending ? '移除中...' : '确认移除'}
+              {removeCases.isPending ? t('plans:removing') : t('plans:confirmRemove')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -638,6 +638,7 @@ function FilterSubmenu({
   selected: string[];
   onChange: (values: string[]) => void;
 }) {
+  const { t } = useTranslation();
   const active = selected.length > 0;
   return (
     <DropdownMenuSub>
@@ -647,12 +648,12 @@ function FilterSubmenu({
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="max-h-72 min-w-52 overflow-y-auto">
         {options.length === 0 ? (
-          <DropdownMenuItem disabled>无可选项</DropdownMenuItem>
+          <DropdownMenuItem disabled>{t('common:noOptions')}</DropdownMenuItem>
         ) : (
           <>
             {active && (
               <>
-                <DropdownMenuItem onSelect={() => onChange([])}>清除</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => onChange([])}>{t('plans:clear')}</DropdownMenuItem>
                 <DropdownMenuSeparator />
               </>
             )}
