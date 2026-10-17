@@ -148,8 +148,8 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
           onChange={(e) => setTargetId(e.target.value || undefined)}
         >
           <option value="">{t('mobile:selectTarget')}</option>
-          {(targets ?? []).map((t: DeviceTarget) => (
-            <option key={t.id} value={t.id}>{t.name} ({t.mobileOs})</option>
+          {(targets ?? []).map((target: DeviceTarget) => (
+            <option key={target.id} value={target.id}>{target.name} ({target.mobileOs})</option>
           ))}
         </select>
         <Button size="sm" onClick={start} disabled={!targetId || !!sessionId}>
