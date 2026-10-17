@@ -52,10 +52,18 @@ export interface SafeUser {
   displayName: string;
   createdAt: Date;
   updatedAt: Date;
+  languagePreference: string;
 }
 
 function toSafeUser(row: typeof users.$inferSelect): SafeUser {
-  return { id: row.id, username: row.username, displayName: row.displayName, createdAt: row.createdAt, updatedAt: row.updatedAt };
+  return {
+    id: row.id,
+    username: row.username,
+    displayName: row.displayName,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    languagePreference: row.languagePreference,
+  };
 }
 
 /** JWT payload：携带完整租户上下文（激活组织 + 角色 + 可管理子树 + 吊销版本号）。 */
