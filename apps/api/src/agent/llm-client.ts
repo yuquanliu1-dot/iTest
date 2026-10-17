@@ -1,3 +1,5 @@
+import { type AiLang } from './langDirective.js';
+
 export type LLMProvider = 'openai' | 'anthropic' | 'google';
 
 export interface LLMConfig {
@@ -22,6 +24,8 @@ export interface LLMRequest {
   /** 多轮累积历史（可选）。给了就用它替代单轮 userMessage/image。
    *  缺省时退化为原来的单轮形态，行为不变。 */
   messages?: LLMMessage[];
+  /** 界面语言。存在时 systemPrompt 末尾自动追加语言指令块;缺省不追加(兼容旧调用)。 */
+  lang?: AiLang;
 }
 
 export type LLMCompleteResult =

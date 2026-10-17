@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import type { LLMClient, LLMCompleteResult, LLMConfig, LLMMessage, LLMRequest, LLMResult } from './llm-client.js';
 import { tryParseJson } from './llm-client.js';
+import { langDirective } from './langDirective.js';
 
 export class OpenAIClient implements LLMClient {
   provider = 'openai' as const;
@@ -29,10 +30,11 @@ export class OpenAIClient implements LLMClient {
         : { type: 'text', text: b.text })),
     }));
     const t0 = Date.now();
+    const systemPrompt = req.lang ? `${req.systemPrompt}\n${langDirective(req.lang)}` : req.systemPrompt;
     const resp = await this.client.chat.completions.create({
       model,
       messages: [
-        ...(req.systemPrompt ? [{ role: 'system' as const, content: req.systemPrompt }] : []),
+        ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
         ...(history as OpenAI.Chat.ChatCompletionMessageParam[]),
       ],
       response_format: { type: 'json_object' as const },

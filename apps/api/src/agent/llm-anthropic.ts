@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { LLMClient, LLMCompleteResult, LLMConfig, LLMMessage, LLMRequest, LLMResult } from './llm-client.js';
 import { tryParseJson } from './llm-client.js';
+import { langDirective } from './langDirective.js';
 
 /** 滚动缓存断点：system 与最后一条消息各打一个。缓存按前缀匹配，断点只打在
  *  system 上时，多轮累积的前缀从第 2 轮起全部 miss（2026-10-14 网关实测 2%）；
@@ -39,11 +40,12 @@ export class AnthropicClient implements LLMClient {
   }
   async complete(req: LLMRequest): Promise<LLMResult> {
     const model = this.cfg.model || 'claude-sonnet-4-6';
+    const systemPrompt = req.lang ? `${req.systemPrompt}\n${langDirective(req.lang)}` : req.systemPrompt;
     const t0 = Date.now();
     const resp = await this.client.messages.create({
       model,
       max_tokens: 4096,
-      system: [{ type: 'text', text: req.systemPrompt || 'You are a helpful assistant. Reply with JSON only.', cache_control: EPHEMERAL }],
+      system: [{ type: 'text', text: systemPrompt || 'You are a helpful assistant. Reply with JSON only.', cache_control: EPHEMERAL }],
       messages: buildMessages(req),
     });
     const durationMs = Date.now() - t0;

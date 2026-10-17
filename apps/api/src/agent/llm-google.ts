@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { LLMClient, LLMCompleteResult, LLMConfig, LLMRequest, LLMResult } from './llm-client.js';
 import { tryParseJson } from './llm-client.js';
+import { langDirective } from './langDirective.js';
 
 export class GoogleClient implements LLMClient {
   provider = 'google' as const;
@@ -10,9 +11,10 @@ export class GoogleClient implements LLMClient {
   }
   async complete(req: LLMRequest): Promise<LLMResult> {
     const model = this.cfg.model || 'gemini-2.0-flash';
+    const systemPrompt = req.lang ? `${req.systemPrompt}\n${langDirective(req.lang)}` : req.systemPrompt;
     const m = this.client.getGenerativeModel({
       model,
-      systemInstruction: req.systemPrompt || 'You are a helpful assistant. Reply with JSON only.',
+      systemInstruction: systemPrompt || 'You are a helpful assistant. Reply with JSON only.',
       generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
     });
     // 多轮累积：req.messages 存在时按 user/assistant 交替回传，否则退化为单轮。
