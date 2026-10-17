@@ -195,12 +195,12 @@ export default function ReportDetail() {
         <div className="flex-1 min-w-0 flex flex-col gap-1.5">
           {/* 步骤说明：与用例详情页步骤列表同构——类型标签 + instruction，无 instruction 用动作摘要；历史报告缺快照则不渲染 */}
           {(s.instruction?.trim() || (Array.isArray(s.compiled) && s.compiled.length > 0)) && (
-            <div className="flex items-baseline gap-1.5 min-w-0" title={fullStepDescription(s)}>
+            <div className="flex items-baseline gap-1.5 min-w-0" title={fullStepDescription(s, t)}>
               <span className="shrink-0 font-semibold" style={{ color: 'var(--primary)', fontSize: 10 }}>
                 {t(stepKindLabel(getKind(s)))}
               </span>
               <span className="min-w-0 truncate text-[12px]" style={{ color: 'var(--foreground)' }}>
-                {s.instruction?.trim() || stepSummary(s)}
+                {s.instruction?.trim() || stepSummary(s, t)}
               </span>
             </div>
           )}

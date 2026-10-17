@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import { useAuthStore } from '../../stores/auth';
 import { useUIStore } from '../../stores/ui';
@@ -29,6 +30,7 @@ function versionLt(a: string, b: string): boolean {
  *  升级感知：pong 回报的已装版本与 /api/recorder/extension/version 的当前版本对比，
  *  已装较旧时进入 'update' 琥珀态并开放下载按钮——老用户无需留意版本号也能感知有新扩展可装。 */
 export default function RecorderExtensionBadge() {
+  const { t } = useTranslation();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const toast = useUIStore((s) => s.showToast);
 
@@ -144,12 +146,12 @@ export default function RecorderExtensionBadge() {
           : 'var(--destructive)';
   const label =
     effectiveState === 'ready'
-      ? `录制扩展 v${version ?? ''}`
+      ? t('mobile:recorderExt.installedVer', { version: version ?? '' })
       : effectiveState === 'update'
-        ? `扩展可升级 v${current ?? ''}`
+        ? t('mobile:recorderExt.updatableVer', { version: current ?? '' })
         : effectiveState === 'stale'
-          ? '录制扩展（连接失效）'
-          : '录制扩展（未安装）';
+          ? t('mobile:recorderExt.labelStale')
+          : t('mobile:recorderExt.labelMissing');
 
   return (
     <>
@@ -157,20 +159,20 @@ export default function RecorderExtensionBadge() {
         variant="outline-ghost"
         size="sm"
         onClick={() => setOpen(true)}
-        aria-label="录制扩展状态"
+        aria-label={t('mobile:recorderExt.statusTitle')}
         className="h-7 gap-1.5 px-2 text-xs"
       >
         <span
           aria-hidden
           style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }}
         />
-        {effectiveState === 'unknown' ? '检测中…' : label}
+        {effectiveState === 'unknown' ? t('mobile:recorderExt.detecting') : label}
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>录制扩展状态</DialogTitle>
+            <DialogTitle>{t('mobile:recorderExt.statusTitle')}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4 text-xs/relaxed">
             <StatusRow state={effectiveState} version={version} current={current} onRecheck={() => setProbeNonce((n) => n + 1)} />
@@ -180,32 +182,31 @@ export default function RecorderExtensionBadge() {
             ) : effectiveState === 'update' ? (
               <>
                 <p className="text-[11px]" style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}>
-                  有新版本扩展可用。下载并覆盖安装后，录制修复与新增能力即刻生效。
+                  {t('mobile:recorderExt.updateTip')}
                 </p>
                 <ol className="flex flex-col gap-1 pl-4 text-xs/relaxed" style={{ listStyle: 'decimal' }}>
-                  <li>下载新版 <code>itest-recorder.zip</code> 并解压。</li>
-                  <li>在 <code>chrome://extensions/</code> 移除旧扩展（点「移除」）。</li>
-                  <li>点「加载已解压的扩展程序」→ 选择刚才解压的目录。</li>
-                  <li>回到本页面，徽标变为绿色 v{current ?? ''} 即完成升级。</li>
+                  <li>{t('mobile:recorderExt.updateStep1a')}<code>itest-recorder.zip</code>{t('mobile:recorderExt.updateStep1b')}</li>
+                  <li>{t('mobile:recorderExt.updateStep2a')}<code>chrome://extensions/</code>{t('mobile:recorderExt.updateStep2b')}</li>
+                  <li>{t('mobile:recorderExt.loadUnpacked')}</li>
+                  <li>{t('mobile:recorderExt.goGreenVer', { version: current ?? '' })}</li>
                 </ol>
               </>
             ) : (
               <>
                 <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                  iTest Web 录制依赖 Chrome 扩展。下载后按下列步骤安装。
+                  {t('mobile:recorderExt.installTip')}
                 </p>
                 <ol className="flex flex-col gap-1 pl-4 text-xs/relaxed" style={{ listStyle: 'decimal' }}>
-                  <li>下载并解压 <code>itest-recorder.zip</code> 到一个固定目录。</li>
+                  <li>{t('mobile:recorderExt.installStep1a')}<code>itest-recorder.zip</code>{t('mobile:recorderExt.installStep1b')}</li>
                   <li>
-                    Chrome 地址栏访问 <code>chrome://extensions/</code>。
+                    {t('mobile:recorderExt.installStep2a')}<code>chrome://extensions/</code>{t('mobile:recorderExt.installStep2b')}
                   </li>
-                  <li>右上角打开「开发者模式」。</li>
-                  <li>点「加载已解压的扩展程序」→ 选择刚才解压的目录。</li>
-                  <li>回到本页面，徽标变绿即代表已就绪。</li>
+                  <li>{t('mobile:recorderExt.installStep3')}</li>
+                  <li>{t('mobile:recorderExt.loadUnpacked')}</li>
+                  <li>{t('mobile:recorderExt.goGreen')}</li>
                 </ol>
                 <p className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
-                  提示：扩展默认在当前中台域名下注入；若扩展所在机器访问中台的地址与这里不同（例如跨机器访问），
-                  可点击扩展图标，在弹窗里把「中台地址」改成实际访问地址后保存。
+                  {t('mobile:recorderExt.installHint')}
                 </p>
               </>
             )}
@@ -218,12 +219,12 @@ export default function RecorderExtensionBadge() {
                 disabled={effectiveState === 'unknown'}
               >
                 <Icon name="refresh" size={12} />
-                重新检测
+                {t('mobile:recorderExt.recheck')}
               </Button>
               {effectiveState !== 'ready' && (
                 <Button size="sm" onClick={handleDownload} disabled={downloading}>
                   <Icon name="download" size={12} />
-                  {downloading ? '打包中…' : '下载扩展 zip'}
+                  {downloading ? t('mobile:recorderExt.packing') : t('mobile:recorderExt.downloadZip')}
                 </Button>
               )}
             </div>
@@ -245,6 +246,7 @@ function StatusRow({
   current: string | null;
   onRecheck: () => void;
 }) {
+  const { t } = useTranslation();
   if (state === 'ready') {
     return (
       <div
@@ -252,7 +254,7 @@ function StatusRow({
         style={{ background: 'var(--success-soft)', color: 'var(--success)' }}
       >
         <Icon name="check" size={14} />
-        <span className="font-medium">已就绪</span>
+        <span className="font-medium">{t('mobile:recorderExt.statusReady')}</span>
         {version && <span className="text-[11px]">v{version}</span>}
       </div>
     );
@@ -264,14 +266,14 @@ function StatusRow({
         style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}
       >
         <Icon name="download" size={14} />
-        <span className="font-medium">有新版本</span>
-        <span className="text-[11px]">已装 v{version ?? '?'} → v{current ?? '?'}</span>
+        <span className="font-medium">{t('mobile:recorderExt.statusUpdate')}</span>
+        <span className="text-[11px]">{t('mobile:recorderExt.statusVersions', { installed: version ?? '?', latest: current ?? '?' })}</span>
         <button
           type="button"
           className="ml-auto text-[11px] underline"
           onClick={onRecheck}
         >
-          重新检测
+          {t('mobile:recorderExt.recheck')}
         </button>
       </div>
     );
@@ -283,13 +285,13 @@ function StatusRow({
         style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}
       >
         <Icon name="warning" size={14} />
-        <span className="font-medium">连接已失效</span>
+        <span className="font-medium">{t('mobile:recorderExt.statusStale')}</span>
         <button
           type="button"
           className="ml-auto text-[11px] underline"
           onClick={onRecheck}
         >
-          重新检测
+          {t('mobile:recorderExt.recheck')}
         </button>
       </div>
     );
@@ -301,13 +303,13 @@ function StatusRow({
         style={{ background: 'var(--destructive-soft)', color: 'var(--destructive)' }}
       >
         <Icon name="plug" size={14} />
-        <span className="font-medium">未检测到扩展</span>
+        <span className="font-medium">{t('mobile:recorderExt.statusMissing')}</span>
         <button
           type="button"
           className="ml-auto text-[11px] underline"
           onClick={onRecheck}
         >
-          重新检测
+          {t('mobile:recorderExt.recheck')}
         </button>
       </div>
     );
@@ -318,16 +320,21 @@ function StatusRow({
       style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
     >
       <Icon name="loader" size={14} />
-      <span className="font-medium">检测中…</span>
+      <span className="font-medium">{t('mobile:recorderExt.detecting')}</span>
     </div>
   );
 }
 
 function UpdateHint() {
+  const { t } = useTranslation();
   return (
     <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--muted-foreground)' }}>
-      <p>已安装的是当前最新版本，无需升级。若扩展行为异常，可在 <code>chrome://extensions/</code> 点「刷新」重载。</p>
-      <p>如需重新下载：先卸载当前扩展，再点下方「下载扩展 zip」。备用下载入口：<code>中台地址/api/recorder/extension.zip</code>。</p>
+      <p>
+        {t('mobile:recorderExt.currentOk1a')}<code>chrome://extensions/</code>{t('mobile:recorderExt.currentOk1b')}
+      </p>
+      <p>
+        {t('mobile:recorderExt.currentOk2a')}<code>中台地址/api/recorder/extension.zip</code>{t('mobile:recorderExt.currentOk2b')}
+      </p>
     </div>
   );
 }

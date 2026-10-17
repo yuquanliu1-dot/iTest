@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, type UserSummary } from '../../api/client';
 
 interface Props { onPick: (userId: string) => void }
@@ -8,6 +9,7 @@ interface Props { onPick: (userId: string) => void }
  * 命中后直接进用户详情。
  */
 export default function GlobalUserSearch({ onPick }: Props) {
+  const { t } = useTranslation();
   const [input, setInput] = useState('');
   const [results, setResults] = useState<UserSummary[]>([]);
   const [open, setOpen] = useState(false);
@@ -41,7 +43,7 @@ export default function GlobalUserSearch({ onPick }: Props) {
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onFocus={() => { if (results.length > 0) setOpen(true); }}
-        placeholder="搜索任意用户…"
+        placeholder={t('members:searchAnyUser')}
         className="input-base input-sm"
       />
       {open && (
@@ -51,7 +53,7 @@ export default function GlobalUserSearch({ onPick }: Props) {
           borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-sm)', maxHeight: 260, overflowY: 'auto',
         }}>
           {results.length === 0 ? (
-            <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>无匹配</div>
+            <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>{t('members:noMatch')}</div>
           ) : results.map((u) => (
             <div
               key={u.id}

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 import Input from '../ui/Input';
 import Button from '../ui/Button';
@@ -25,6 +26,7 @@ export default function RefEditDialog({
   onSubmit: (ref: string | null, refKind: 'branch' | 'tag' | null) => void;
   saving: boolean;
 }) {
+  const { t } = useTranslation();
   const v = state.version;
   const [refKind, setRefKind] = useState<'branch' | 'tag' | null>(v?.refKind ?? 'branch');
   const [refValue, setRefValue] = useState<string>(v?.ref ?? '');
@@ -50,7 +52,7 @@ export default function RefEditDialog({
   return (
     <Dialog open={state.open} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent>
-        <DialogHeader><DialogTitle>编辑版本 ref · {v?.name ?? ''}</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{t('projects:refEdit.title', { name: v?.name ?? '' })}</DialogTitle></DialogHeader>
         <div className="flex flex-col gap-3 px-5 py-4">
           <div className="flex gap-2">
             <button
@@ -63,7 +65,7 @@ export default function RefEditDialog({
                 border: '1px solid var(--border)',
               }}
             >
-              分支 (branch)
+              {t('projects:refEdit.branch')}
             </button>
             <button
               type="button"
@@ -75,17 +77,17 @@ export default function RefEditDialog({
                 border: '1px solid var(--border)',
               }}
             >
-              标签 (tag)
+              {t('projects:refEdit.tag')}
             </button>
           </div>
           {refKind && (
             <div className="flex flex-col gap-1">
               <label className="text-[11px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
-                远端 {refKind}（项目未配置仓库时不可用）
+                {t('projects:refEdit.remoteLabel', { refKind })}
               </label>
               {loadingRefs ? (
                 <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-                  加载中…
+                  {t('common:loading')}
                 </span>
               ) : refsError ? (
                 <div className="flex flex-col gap-1">
@@ -93,16 +95,16 @@ export default function RefEditDialog({
                     {refsError}
                   </span>
                   <Input
-                    placeholder="手动输入 ref 名称"
+                    placeholder={t('projects:refEdit.manualPlaceholder')}
                     value={refValue}
                     onChange={(e) => setRefValue(e.target.value)}
                   />
                 </div>
               ) : refs.length === 0 ? (
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" onClick={() => loadRefs(refKind)}>重新拉取</Button>
+                  <Button variant="ghost" onClick={() => loadRefs(refKind)}>{t('projects:refEdit.refetch')}</Button>
                   <Input
-                    placeholder="手动输入 ref 名称"
+                    placeholder={t('projects:refEdit.manualPlaceholder')}
                     value={refValue}
                     onChange={(e) => setRefValue(e.target.value)}
                   />
@@ -113,7 +115,7 @@ export default function RefEditDialog({
                   value={refValue}
                   onChange={(e) => setRefValue(e.target.value)}
                 >
-                  <option value="">— 不指定 —</option>
+                  <option value="">{t('projects:refEdit.none')}</option>
                   {refs.map((r) => (
                     <option key={r} value={r}>{r}</option>
                   ))}
@@ -128,7 +130,7 @@ export default function RefEditDialog({
               style={{ background: 'transparent', border: 'none', color: 'var(--muted-foreground)', cursor: 'pointer' }}
               onClick={() => { setRefKind(null); setRefValue(''); }}
             >
-              清空 ref（不绑定）
+              {t('projects:refEdit.clearRef')}
             </button>
           </div>
         </div>
@@ -136,12 +138,12 @@ export default function RefEditDialog({
           className="flex justify-end gap-2 px-5 py-4 hairline-top"
           style={{ borderColor: 'var(--border)' }}
         >
-          <Button variant="ghost" onClick={onClose}>取消</Button>
+          <Button variant="ghost" onClick={onClose}>{t('common:cancel')}</Button>
           <Button
             disabled={saving || (refKind !== null && !refValue.trim())}
             onClick={() => onSubmit(refKind ? refValue.trim() : null, refKind)}
           >
-            {saving ? '保存中...' : '保存'}
+            {saving ? t('cases:saving') : t('common:save')}
           </Button>
         </div>
       </DialogContent>

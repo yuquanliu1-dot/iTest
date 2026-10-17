@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../stores/ui';
 import { api, type UserOrgMembership, type UserDetail, type UserProjectSummary } from '../../api/client';
 import { useAuthStore } from '../../stores/auth';
@@ -8,6 +9,7 @@ import ResetPasswordModal from './ResetPasswordModal';
 interface Props { userId: string; onBack: () => void }
 
 export default function UserDetailPanel({ userId, onBack }: Props) {
+  const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const currentUserId = useAuthStore((s) => s.user?.id);
   const myOrganizations = useAuthStore((s) => s.organizations);
@@ -37,7 +39,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
   }, [userId, projectPage]);
 
   if (!detail) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>加载中…</div>;
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>{t('common:loading')}</div>;
   }
 
   const projectPages = Math.max(1, Math.ceil(projectTotal / projectPageSize));
@@ -49,7 +51,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
       await api.orgs.updateMember(orgId, userId, { [field]: next });
       api.users.get(userId).then((d) => setDetail(d)).catch(() => {});
     } catch (e) {
-      toast(e instanceof Error ? e.message : '操作失败', 'error');
+      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
     }
   };
 
@@ -57,11 +59,11 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
     if (!pendingRemove) return;
     try {
       await api.orgs.removeMember(pendingRemove.organizationId, userId);
-      toast('已移出组织', 'success');
+      toast(t('members:removedFromOrg'), 'success');
       setPendingRemove(null);
       api.users.get(userId).then((d) => setDetail(d)).catch(() => {});
     } catch (e) {
-      toast(e instanceof Error ? e.message : '操作失败', 'error');
+      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
       setPendingRemove(null);
     }
   };
@@ -69,11 +71,11 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
   const deleteAccount = async () => {
     try {
       await api.users.remove(userId);
-      toast('账号已停用', 'success');
+      toast(t('members:accountDeactivated'), 'success');
       setDeleteAccountOpen(false);
       onBack();
     } catch (e) {
-      toast(e instanceof Error ? e.message : '操作失败', 'error');
+      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
       setDeleteAccountOpen(false);
     }
   };
@@ -85,7 +87,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
         .then((res) => { setProjects(res.items); setProjectTotal(res.total); })
         .catch(() => {});
     } catch (e) {
-      toast(e instanceof Error ? e.message : '操作失败', 'error');
+      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
     }
   };
 
@@ -93,7 +95,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
     <div className="flex flex-col h-full">
       <div className="shrink-0 flex items-center gap-2" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
         <button onClick={onBack} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 13 }}>
-          ‹ 返回
+          {t('members:back')}
         </button>
         <span style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
           {detail.displayName}
@@ -112,11 +114,11 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
               style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer' }}
               onClick={() => setEditOpen(true)}
             >
-              编辑
+              {t('members:edit')}
             </button>
             {canReset && (
               <button className="text-[12px]" style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer' }} onClick={() => setResetOpen(true)}>
-                重置密码
+                {t('members:resetPwd')}
               </button>
             )}
             <button
@@ -128,20 +130,20 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
               }}
               onClick={() => setDeleteAccountOpen(true)}
             >
-              删除账号
+              {t('members:deleteAccount')}
             </button>
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginTop: 6 }}>
-            {detail.email || '无邮箱'} · 注册于 {new Date(detail.createdAt).toLocaleDateString()}
+            {detail.email || t('members:noEmail')} {t('members:registeredAt', { date: new Date(detail.createdAt).toLocaleDateString() })}
           </div>
         </Card>
 
-        <Card title={`组织与角色（${detail.organizations.length}）`}>
+        <Card title={t('members:orgRolesTitle', { count: detail.organizations.length })}>
           {detail.organizations.map((o) => (
             <div key={o.organizationId} className="flex items-center gap-2" style={{ padding: '6px 4px', fontSize: 13 }}>
               <span className="truncate" style={{ flex: 1, color: 'var(--foreground)' }}>{o.organizationName}</span>
-              <RoleToggle label="管理员" checked={o.isManager} onChange={(v) => toggleRole(o.organizationId, 'isManager', v)} />
-              <RoleToggle label="可执行" checked={o.isUser} onChange={(v) => toggleRole(o.organizationId, 'isUser', v)} />
+              <RoleToggle label={t('members:roleManager')} checked={o.isManager} onChange={(v) => toggleRole(o.organizationId, 'isManager', v)} />
+              <RoleToggle label={t('members:roleUserShort')} checked={o.isUser} onChange={(v) => toggleRole(o.organizationId, 'isUser', v)} />
               <button
                 className="text-[11px]"
                 disabled={isSelf || detail.organizations.length <= 1}
@@ -153,16 +155,16 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
                 }}
                 onClick={() => setPendingRemove(o)}
               >
-                移出
+                {t('members:remove')}
               </button>
             </div>
           ))}
         </Card>
 
-        <Card title={`可访问项目（${projectTotal}）`}>
+        <Card title={t('members:accessibleProjects', { count: projectTotal })}>
           <div style={{ maxHeight: 220, overflowY: 'auto' }}>
             {projects.length === 0 ? (
-              <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>暂无项目</div>
+              <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>{t('members:noProjects')}</div>
             ) : projects.map((p) => (
               <div key={p.id} className="flex items-center gap-2" style={{ padding: '6px 4px', fontSize: 13 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -172,7 +174,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
                   )}
                 </div>
                 <button className="text-[11px]" style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: 'pointer' }} onClick={() => void removeFromProject(p.id)}>
-                  移出
+                  {t('members:remove')}
                 </button>
               </div>
             ))}
@@ -190,13 +192,13 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
       {pendingRemove && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) setPendingRemove(null); }}>
           <div style={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
-            <h3 style={{ margin: 0, marginBottom: 8, fontSize: 14, fontWeight: 600 }}>移出组织</h3>
+            <h3 style={{ margin: 0, marginBottom: 8, fontSize: 14, fontWeight: 600 }}>{t('members:removeOrgTitle')}</h3>
             <div style={{ fontSize: 13, color: 'var(--muted-foreground)', marginBottom: 12 }}>
-              将「{detail.displayName}」移出「{pendingRemove.organizationName}」？
+              {t('members:removeOrgConfirm', { name: detail.displayName, orgName: pendingRemove.organizationName })}
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setPendingRemove(null)} style={{ padding: '6px 12px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
-              <button onClick={() => void removeFromOrg()} style={{ padding: '6px 12px', background: 'var(--destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>确认</button>
+              <button onClick={() => setPendingRemove(null)} style={{ padding: '6px 12px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>{t('common:cancel')}</button>
+              <button onClick={() => void removeFromOrg()} style={{ padding: '6px 12px', background: 'var(--destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>{t('common:confirm')}</button>
             </div>
           </div>
         </div>
@@ -205,13 +207,13 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
       {deleteAccountOpen && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) setDeleteAccountOpen(false); }}>
           <div style={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
-            <h3 style={{ margin: 0, marginBottom: 8, fontSize: 14, fontWeight: 600 }}>停用账号</h3>
+            <h3 style={{ margin: 0, marginBottom: 8, fontSize: 14, fontWeight: 600 }}>{t('members:deactivateAccountTitle')}</h3>
             <div style={{ fontSize: 13, color: 'var(--muted-foreground)', marginBottom: 12 }}>
-              停用「{detail.displayName}」？账号将无法登录、组织与项目授权一并清理。
+              {t('members:deactivateAccountConfirm', { name: detail.displayName })}
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setDeleteAccountOpen(false)} style={{ padding: '6px 12px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
-              <button onClick={() => void deleteAccount()} style={{ padding: '6px 12px', background: 'var(--destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>确认停用</button>
+              <button onClick={() => setDeleteAccountOpen(false)} style={{ padding: '6px 12px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>{t('common:cancel')}</button>
+              <button onClick={() => void deleteAccount()} style={{ padding: '6px 12px', background: 'var(--destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>{t('members:confirmDeactivate')}</button>
             </div>
           </div>
         </div>
@@ -224,11 +226,11 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
           onSaved={async (vals) => {
             try {
               await api.users.update(userId, { displayName: vals.displayName, email: vals.email || null });
-              toast('已保存', 'success');
+              toast(t('members:saved'), 'success');
               setEditOpen(false);
               api.users.get(userId).then((d) => setDetail(d)).catch(() => {});
             } catch (e) {
-              toast(e instanceof Error ? e.message : '保存失败', 'error');
+              toast(e instanceof Error ? e.message : t('members:saveFailed'), 'error');
             }
           }}
         />
@@ -262,18 +264,19 @@ function RoleToggle({ label, checked, onChange }: { label: string; checked: bool
 }
 
 function EditProfileDialog({ initial, onClose, onSaved }: { initial: { displayName: string; email: string }; onClose: () => void; onSaved: (vals: { displayName: string; email: string }) => void }) {
+  const { t } = useTranslation();
   const [displayName, setDisplayName] = useState(initial.displayName);
   const [email, setEmail] = useState(initial.email);
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16, width: 420, maxWidth: 'calc(100vw - 32px)' }}>
-        <h3 style={{ margin: 0, marginBottom: 12, fontSize: 14, fontWeight: 600 }}>编辑档案</h3>
+        <h3 style={{ margin: 0, marginBottom: 12, fontSize: 14, fontWeight: 600 }}>{t('members:editProfileTitle')}</h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="显示名" className="input-base" />
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="邮箱（可留空）" className="input-base" />
+          <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder={t('members:displayNamePlaceholder')} className="input-base" />
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={t('members:emailOptional2')} className="input-base" />
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
-            <button onClick={onClose} style={{ padding: '6px 14px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
-            <button onClick={() => onSaved({ displayName: displayName.trim(), email: email.trim() })} style={{ padding: '6px 14px', background: 'var(--primary)', color: 'var(--primary-foreground)', border: 'none', borderRadius: 6, cursor: 'pointer' }}>保存</button>
+            <button onClick={onClose} style={{ padding: '6px 14px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>{t('common:cancel')}</button>
+            <button onClick={() => onSaved({ displayName: displayName.trim(), email: email.trim() })} style={{ padding: '6px 14px', background: 'var(--primary)', color: 'var(--primary-foreground)', border: 'none', borderRadius: 6, cursor: 'pointer' }}>{t('common:save')}</button>
           </div>
         </div>
       </div>

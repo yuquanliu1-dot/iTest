@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, type OrgMemberRow } from '../../api/client';
 import Badge from './Badge';
 
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export default function MemberListTab({ orgId, includeSubtree, q, page, pageSize, reloadToken, onTotal, onOpen }: Props) {
+  const { t } = useTranslation();
   const [items, setItems] = useState<OrgMemberRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -32,10 +34,10 @@ export default function MemberListTab({ orgId, includeSubtree, q, page, pageSize
   }, [orgId, includeSubtree, q, page, pageSize, onTotal, reloadToken]);
 
   if (loading && items.length === 0) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>加载中…</div>;
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>{t('common:loading')}</div>;
   }
   if (items.length === 0) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>暂无成员</div>;
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>{t('members:noMembers')}</div>;
   }
   return (
     <>
@@ -51,8 +53,8 @@ export default function MemberListTab({ orgId, includeSubtree, q, page, pageSize
             <span style={{ color: 'var(--muted-foreground)' }}>@{m.username}</span>
           </span>
           {includeSubtree && m.organizationName && <Badge label={m.organizationName} />}
-          {m.isManager && <Badge label="管理员" accent />}
-          {m.isUser && <Badge label="可执行" />}
+          {m.isManager && <Badge label={t('members:roleManager')} accent />}
+          {m.isUser && <Badge label={t('members:roleUserShort')} />}
         </div>
       ))}
     </>

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { useUIStore } from '../../stores/ui';
@@ -20,6 +21,7 @@ interface LabelsManagerDialogProps {
 /** 项目内标签管理弹窗：列表 + 搜索 + 新建/编辑/删除。
  * 从 GroupsPage 标签过滤下拉里的「管理标签 →」按钮打开，取代原先的独立 /labels 页面。 */
 export default function LabelsManagerDialog({ open, projectId, onClose }: LabelsManagerDialogProps) {
+  const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
 
@@ -60,7 +62,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
   const createMut = useMutation({
     mutationFn: (body: { name: string; color: string; description: string | null }) => api.tags.create(projectId!, body),
     onSuccess: () => {
-      toast('标签已创建', 'success');
+      toast(t('cases:labelDialog.created'), 'success');
       qc.invalidateQueries({ queryKey: ['tags', projectId] });
     },
     onError: (e: Error) => toast(e.message, 'error'),
@@ -70,7 +72,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
     mutationFn: ({ id, body }: { id: string; body: { name?: string; color?: string; description?: string | null } }) =>
       api.tags.update(projectId!, id, body),
     onSuccess: () => {
-      toast('标签已更新', 'success');
+      toast(t('cases:labelDialog.updated'), 'success');
       qc.invalidateQueries({ queryKey: ['tags', projectId] });
       qc.invalidateQueries({ queryKey: ['cases', projectId] });
     },
@@ -80,7 +82,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
   const removeMut = useMutation({
     mutationFn: (id: string) => api.tags.remove(projectId!, id),
     onSuccess: () => {
-      toast('标签已删除', 'success');
+      toast(t('cases:labelDialog.deleted'), 'success');
       setPendingDelete(null);
       qc.invalidateQueries({ queryKey: ['tags', projectId] });
       qc.invalidateQueries({ queryKey: ['cases', projectId] });
@@ -106,14 +108,14 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
       <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
         <DialogContent className="max-w-[560px]">
           <DialogHeader>
-            <DialogTitle>管理标签</DialogTitle>
+            <DialogTitle>{t('cases:labelDialog.title')}</DialogTitle>
           </DialogHeader>
           <div
             className="flex items-center gap-2 px-5 py-3 hairline-bottom"
             style={{ borderColor: 'var(--border)' }}
           >
             <Input
-              placeholder="搜索标签"
+              placeholder={t('cases:searchTags')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               size="sm"
@@ -121,7 +123,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
             />
             <Button size="sm" onClick={openCreate}>
               <Icon name="plus" size={12} />
-              新建标签
+              {t('cases:labelDialog.create')}
             </Button>
           </div>
 
@@ -129,50 +131,50 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
             {isLoading ? (
               <div className="flex items-center justify-center py-8" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
                 <Icon name="loader" size={16} className="animate-spin" />
-                <span style={{ marginLeft: 8 }}>加载中...</span>
+                <span style={{ marginLeft: 8 }}>{t('cases:loading')}</span>
               </div>
             ) : filtered.length === 0 ? (
               <EmptyState
                 icon="tag"
-                title={search ? '没有匹配的标签' : '还没有标签'}
-                description={search ? '试试别的关键词' : '点击右上角「新建标签」创建一个。'}
+                title={search ? t('cases:labelDialog.emptySearchTitle') : t('cases:labelDialog.emptyTitle')}
+                description={search ? t('cases:labelDialog.emptySearchDesc') : t('cases:labelDialog.emptyDesc')}
               />
             ) : (
               <div className="divide-y" style={{ borderColor: 'var(--muted)' }} data-stagger>
-                {filtered.map((t) => (
+                {filtered.map((tag) => (
                   <div
-                    key={t.id}
+                    key={tag.id}
                     data-stagger-item
                     className="flex items-center gap-3 px-5 py-3 hover:bg-[var(--muted)]"
                     style={{ transition: 'background 0.15s ease' }}
                   >
                     <span
                       className="w-3 h-3 rounded-full shrink-0"
-                      style={{ background: `#${t.color}`, boxShadow: `0 0 0 2px ${t.color}22` }}
+                      style={{ background: `#${tag.color}`, boxShadow: `0 0 0 2px ${tag.color}22` }}
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <TagChip tag={{ id: t.id, name: t.name, color: t.color }} />
+                        <TagChip tag={{ id: tag.id, name: tag.name, color: tag.color }} />
                         <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                          {tagCount.get(t.id) ?? 0} 个用例
+                          {t('cases:labelDialog.caseCount', { count: tagCount.get(tag.id) ?? 0 })}
                         </span>
                       </div>
-                      {t.description && (
+                      {tag.description && (
                         <div className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
-                          {t.description}
+                          {tag.description}
                         </div>
                       )}
                     </div>
                     <IconButton
                       icon="pencil"
-                      title="编辑"
-                      onClick={() => openEdit({ id: t.id, name: t.name, color: t.color, description: t.description })}
+                      title={t('cases:edit')}
+                      onClick={() => openEdit({ id: tag.id, name: tag.name, color: tag.color, description: tag.description })}
                     />
                     <IconButton
                       icon="trash"
-                      title="删除"
+                      title={t('common:delete')}
                       tone="destructive"
-                      onClick={() => setPendingDelete({ id: t.id, name: t.name })}
+                      onClick={() => setPendingDelete({ id: tag.id, name: tag.name })}
                     />
                   </div>
                 ))}
@@ -191,17 +193,17 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
 
       <Dialog open={!!pendingDelete} onOpenChange={(v) => { if (!v) setPendingDelete(null); }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>删除标签</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('cases:labelDialog.deleteTitle')}</DialogTitle></DialogHeader>
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            确定删除「{pendingDelete?.name}」？该标签会从所有用例上解除，但不会删除用例。
+            {t('cases:labelDialog.deleteConfirm', { name: pendingDelete?.name ?? '' })}
           </div>
           <div
             className="flex justify-end gap-2 px-5 py-4 hairline-top"
             style={{ borderColor: 'var(--border)' }}
           >
-            <Button variant="ghost" onClick={() => setPendingDelete(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setPendingDelete(null)}>{t('common:cancel')}</Button>
             <Button variant="danger" disabled={removeMut.isPending} onClick={() => pendingDelete && removeMut.mutate(pendingDelete.id)}>
-              {removeMut.isPending ? '删除中...' : '确认删除'}
+              {removeMut.isPending ? t('cases:deleting') : t('cases:confirmDelete')}
             </Button>
           </div>
         </DialogContent>

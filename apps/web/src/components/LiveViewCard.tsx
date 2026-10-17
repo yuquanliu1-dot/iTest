@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import LiveViewImg from './LiveViewImg';
 import Button from './ui/Button';
 import Segmented from './ui/Segmented';
@@ -28,6 +29,7 @@ export default function LiveViewCard({
   replayMetaUrl: string;
   running: boolean;
 }) {
+  const { t } = useTranslation();
   const [replaying, setReplaying] = useState(false);
   const [speed, setSpeed] = useState<number>(1);
   const [session, setSession] = useState(0);
@@ -83,7 +85,7 @@ export default function LiveViewCard({
             size="sm"
             onClick={() => restart(speed)}
           >
-            {replaying ? '重新回放' : '回放'}
+            {replaying ? t('cases:replayAgain') : t('cases:replay')}
           </Button>
         </div>
       )}

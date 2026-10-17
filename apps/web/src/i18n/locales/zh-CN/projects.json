@@ -53,5 +53,15 @@
   "deleting": "删除中...",
   "confirmDelete": "确认删除",
   "deleteProjectConfirm": "确定删除「{{name}}」？项目内存在用例时将被拒绝删除。",
-  "deleteVersionConfirm": "确认删除版本「{{versionName}}」？该版本下的用例、计划与历史执行报告将一并被删除,不可恢复。"
+  "deleteVersionConfirm": "确认删除版本「{{versionName}}」？该版本下的用例、计划与历史执行报告将一并被删除,不可恢复。",
+  "refEdit": {
+    "title": "编辑版本 ref · {{name}}",
+    "branch": "分支 (branch)",
+    "tag": "标签 (tag)",
+    "remoteLabel": "远端 {{refKind}}（项目未配置仓库时不可用）",
+    "manualPlaceholder": "手动输入 ref 名称",
+    "refetch": "重新拉取",
+    "none": "— 不指定 —",
+    "clearRef": "清空 ref（不绑定）"
+  }
 }

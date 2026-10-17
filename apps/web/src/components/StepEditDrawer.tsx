@@ -1111,7 +1111,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
             <ol className="flex flex-col gap-0.5 m-0 p-0 list-none">
               {compiled.map((c, i) => (
                 <li key={i} className="text-[11px] font-mono" style={{ color: 'var(--muted-foreground)' }}>
-                  {i + 1}. {stepSummary({ compiled: [c] })}
+                  {i + 1}. {stepSummary({ compiled: [c] }, t)}
                 </li>
               ))}
             </ol>

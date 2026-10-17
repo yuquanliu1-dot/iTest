@@ -95,5 +95,14 @@
   },
   "liveView": {
     "title": "实时画面"
-  }
+  },
+  "subtitle": "用一句话管理用例、环境与计划;意图不明时 AI 会主动追问",
+  "createInProgress": "创建中…",
+  "newChat": "新对话",
+  "historyAria": "历史对话",
+  "startNewChat": "开始新对话",
+  "goConfigureModel": "去设置模型",
+  "retry": "重试",
+  "emptyTitle": "开始与 AI 的第一次对话",
+  "emptyDesc": "试试「看看现在有哪些环境」或「帮我建三条登录用例」。"
 }

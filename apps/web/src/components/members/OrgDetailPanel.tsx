@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../stores/ui';
 import { api } from '../../api/client';
 import { useAuthStore } from '../../stores/auth';
@@ -34,6 +35,7 @@ interface OrgDetails {
 export default function OrgDetailPanel({
   orgId, tab, includeSubtree, q, page, pageSize, onPatchParams, onOpenUser, onOpenProject, onOrgChanged, onEditOrg,
 }: Props) {
+  const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const organizations = useAuthStore((s) => s.organizations);
   const activeOrgId = useAuthStore((s) => s.activeOrgId);
@@ -63,7 +65,7 @@ export default function OrgDetailPanel({
     const deletedPath = orgDetails?.path ?? null;
     try {
       await api.orgs.remove(orgId);
-      toast('组织已删除', 'success');
+      toast(t('members:orgDeleted'), 'success');
       setConfirmDelete(false);
       onOrgChanged();
       onPatchParams({ org: null });
@@ -73,12 +75,12 @@ export default function OrgDetailPanel({
           try {
             await switchOrg(fallback.id);
           } catch {
-            toast('已切换失败，请手动重选', 'error');
+            toast(t('members:switchOrgFailed'), 'error');
           }
         }
       }
     } catch (e) {
-      toast(e instanceof Error ? e.message : '操作失败', 'error');
+      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
       setConfirmDelete(false);
     }
   };
@@ -106,14 +108,14 @@ export default function OrgDetailPanel({
                   });
                 } }}
               >
-                编辑
+                {t('members:edit')}
               </button>
               <button
                 className="text-[12px]"
                 style={{ color: 'var(--destructive)', background: 'none', border: 'none', cursor: 'pointer' }}
                 onClick={() => setConfirmDelete(true)}
               >
-                删除
+                {t('common:delete')}
               </button>
             </>
           )}
@@ -122,10 +124,10 @@ export default function OrgDetailPanel({
 
       <div className="shrink-0 flex" style={{ borderBottom: '1px solid var(--border)' }}>
         <TabButton active={tab === 'users'} onClick={() => onPatchParams({ tab: 'users', page: '1' })}>
-          成员 ({memberTotal})
+          {t('members:memberCount', { count: memberTotal })}
         </TabButton>
         <TabButton active={tab === 'projects'} onClick={() => onPatchParams({ tab: 'projects', page: '1' })}>
-          项目 ({projectTotal})
+          {t('members:projectCount', { count: projectTotal })}
         </TabButton>
       </div>
 
@@ -133,7 +135,7 @@ export default function OrgDetailPanel({
         <input
           value={q}
           onChange={(e) => onPatchParams({ q: e.target.value || null, page: '1' })}
-          placeholder={tab === 'users' ? '搜索成员' : '搜索项目'}
+          placeholder={tab === 'users' ? t('members:searchMembers') : t('members:searchProjects')}
           className="flex-1 input-base input-sm"
         />
         <label className="flex items-center gap-1.5 text-[12px]" style={{ color: 'var(--muted-foreground)', whiteSpace: 'nowrap', cursor: 'pointer' }}>
@@ -142,7 +144,7 @@ export default function OrgDetailPanel({
             checked={includeSubtree}
             onChange={(e) => onPatchParams({ subtree: e.target.checked ? '1' : '0', page: '1' })}
           />
-          包含子组织
+          {t('members:includeSubtree')}
         </label>
         {tab === 'users' && canManageMembers && (
           <>
@@ -151,14 +153,14 @@ export default function OrgDetailPanel({
               className="rounded text-[12px]"
               style={{ padding: '4px 10px', whiteSpace: 'nowrap', border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--primary)', cursor: 'pointer' }}
             >
-              + 添加成员
+              {t('members:addMemberBtn')}
             </button>
             <button
               onClick={() => setCreateUserOpen(true)}
               className="rounded text-[12px]"
               style={{ padding: '4px 10px', whiteSpace: 'nowrap', border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--primary)', cursor: 'pointer' }}
             >
-              + 创建用户
+              {t('members:createUserBtn')}
             </button>
           </>
         )}
@@ -178,7 +180,7 @@ export default function OrgDetailPanel({
       {totalPages > 1 && (
         <div className="shrink-0 flex items-center justify-center gap-3" style={{ padding: '8px 16px', borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--muted-foreground)' }}>
           <button disabled={page <= 1} onClick={() => onPatchParams({ page: String(page - 1) })} style={pagerBtn(page <= 1)}>←</button>
-          <span>{page} / {totalPages}（共 {total}）</span>
+          <span>{t('members:pagerInfo', { page, totalPages, total })}</span>
           <button disabled={page >= totalPages} onClick={() => onPatchParams({ page: String(page + 1) })} style={pagerBtn(page >= totalPages)}>→</button>
         </div>
       )}
@@ -211,13 +213,13 @@ export default function OrgDetailPanel({
       {confirmDelete && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) setConfirmDelete(false); }}>
           <div style={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-2xl)', padding: 16, width: 380, maxWidth: 'calc(100vw - 32px)' }}>
-            <h3 style={{ margin: 0, marginBottom: 8, fontSize: 14, fontWeight: 600 }}>删除组织</h3>
+            <h3 style={{ margin: 0, marginBottom: 8, fontSize: 14, fontWeight: 600 }}>{t('members:deleteOrgTitle')}</h3>
             <div style={{ fontSize: 13, color: 'var(--muted-foreground)', marginBottom: 12 }}>
-              确定删除「{orgDetails?.name}」？子组织或项目非空时会被后端拒删。
+              {t('members:deleteOrgConfirm', { name: orgDetails?.name ?? '' })}
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setConfirmDelete(false)} style={{ padding: '6px 12px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
-              <button onClick={() => void handleDelete()} style={{ padding: '6px 12px', background: 'var(--destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>删除</button>
+              <button onClick={() => setConfirmDelete(false)} style={{ padding: '6px 12px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>{t('common:cancel')}</button>
+              <button onClick={() => void handleDelete()} style={{ padding: '6px 12px', background: 'var(--destructive)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>{t('common:delete')}</button>
             </div>
           </div>
         </div>

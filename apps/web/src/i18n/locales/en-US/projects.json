@@ -59,5 +59,15 @@
   "deleting": "Deleting...",
   "confirmDelete": "Confirm delete",
   "deleteProjectConfirm": "Delete “{{name}}”? Projects that still contain cases will be refused deletion.",
-  "deleteVersionConfirm": "Confirm deleting version “{{versionName}}”? Its cases, plans and historical execution reports will all be deleted and cannot be recovered."
+  "deleteVersionConfirm": "Confirm deleting version “{{versionName}}”? Its cases, plans and historical execution reports will all be deleted and cannot be recovered.",
+  "refEdit": {
+    "title": "Edit version ref · {{name}}",
+    "branch": "Branch",
+    "tag": "Tag",
+    "remoteLabel": "Remote {{refKind}} (unavailable when the project has no repository configured)",
+    "manualPlaceholder": "Type a ref name manually",
+    "refetch": "Refetch",
+    "none": "— Unspecified —",
+    "clearRef": "Clear ref (unbind)"
+  }
 }
