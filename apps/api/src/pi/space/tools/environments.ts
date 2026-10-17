@@ -13,6 +13,8 @@ import type { SpaceToolsContext } from './context.js';
 import { emitStage } from './stage.js';
 import { diffText } from './diff.js';
 import { requestConfirmation } from '../confirm.js';
+import { st, type StLang } from '../../../i18n.js';
+import { aiLangFrom } from '../../../agent/langDirective.js';
 
 const Actions = z.object({
   action: z.enum(['list', 'get', 'upsert', 'set_secret', 'delete']),
@@ -57,6 +59,7 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
         'set_secret 的 value 是明文凭据,只会被加密保存,不会出现在任何输出里;用户拒绝即放弃。',
       ],
       execute: async (input) => {
+        const lang: StLang = aiLangFrom(ctx.lang);
         let v: z.infer<typeof Actions>;
         try {
           v = Actions.parse(input);
@@ -101,7 +104,7 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
                     const approved = await requestConfirmation(
                       {
                         threadId: ctx.threadId, toolName: 'manage_environments', action: 'upsert',
-                        summary: `更新环境「${before?.name ?? v.environmentId}」`, risk: 'update', diff: upsertDiff,
+                        summary: st(lang, 'env.updated', { name: before?.name ?? v.environmentId }), risk: 'update', diff: upsertDiff,
                       },
                       ctx.emit,
                     );
@@ -128,7 +131,7 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const approved = await requestConfirmation(
                 {
                   threadId: ctx.threadId, toolName: 'manage_environments', action: 'set_secret',
-                  summary: `设置环境「${env?.name ?? v.environmentId}」的 ${v.objectType} 对象「${obj.label}」访问凭据(值不回显)`,
+                  summary: st(lang, 'env.credentialsSet', { name: env?.name ?? v.environmentId, type: v.objectType, label: obj.label }),
                   risk: 'secret',
                 },
                 ctx.emit,
@@ -145,12 +148,12 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const env = await svc.getEnvironment(v.environmentId);
               const usage = await svc.environmentUsage(v.environmentId);
               const usageText = usage.caseCount + usage.planCount > 0
-                ? `(将使 ${usage.caseCount} 个用例与 ${usage.planCount} 个计划的引用置空)`
-                : '(无引用)';
+                ? st(lang, 'env.usageReferenced', { caseCount: usage.caseCount, planCount: usage.planCount })
+                : st(lang, 'env.usageNone');
               const approved = await requestConfirmation(
                 {
                   threadId: ctx.threadId, toolName: 'manage_environments', action: 'delete',
-                  summary: `删除环境「${env?.name ?? v.environmentId}」${usageText}`,
+                  summary: st(lang, 'env.deleted', { name: env?.name ?? v.environmentId, usage: usageText }),
                   risk: 'delete',
                 },
                 ctx.emit,

@@ -9,6 +9,8 @@ import type { SpaceToolsContext } from './context.js';
 import { emitStage } from './stage.js';
 import { diffText } from './diff.js';
 import { requestConfirmation } from '../confirm.js';
+import { st, type StLang } from '../../../i18n.js';
+import { aiLangFrom } from '../../../agent/langDirective.js';
 
 const Actions = z.object({
   action: z.enum(['list', 'get', 'create', 'update', 'add_cases', 'remove_cases', 'list_schedules', 'create_schedule', 'update_schedule', 'delete_schedule']),
@@ -63,6 +65,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
         'update_schedule 仅改启用/关闭时只传 enabled 字段;改 cron 或 timezone 时显式带新值。',
       ],
       execute: async (input) => {
+        const lang: StLang = aiLangFrom(ctx.lang);
         let v: z.infer<typeof Actions>;
         try {
           v = Actions.parse(input);
@@ -119,7 +122,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const diff = diffText(before ?? {}, { ...(before ?? {}), ...patch });
               if (diff !== undefined) {
                 const approved = await requestConfirmation(
-                  { threadId: ctx.threadId, toolName: 'manage_plans', action: 'update', summary: `更新计划「${before?.name ?? v.planId}」`, risk: 'update', diff },
+                  { threadId: ctx.threadId, toolName: 'manage_plans', action: 'update', summary: st(lang, 'plan.updated', { name: before?.name ?? v.planId }), risk: 'update', diff },
                   ctx.emit,
                 );
                 if (!approved) return { ok: false, error: '用户取消了该操作' };
@@ -145,7 +148,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const approved = await requestConfirmation(
                 {
                   threadId: ctx.threadId, toolName: 'manage_plans', action: 'add_cases',
-                  summary: `向计划「${detail?.name ?? v.planId}」添加 ${pendingCount} 个用例`, risk: 'update', diff,
+                  summary: st(lang, 'plan.casesAdded', { name: detail?.name ?? v.planId, count: pendingCount }), risk: 'update', diff,
                 },
                 ctx.emit,
               );
@@ -167,7 +170,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const approved = await requestConfirmation(
                 {
                   threadId: ctx.threadId, toolName: 'manage_plans', action: 'remove_cases',
-                  summary: `从计划「${detail?.name ?? v.planId}」移除 ${pendingCount} 个用例`, risk: 'update', diff,
+                  summary: st(lang, 'plan.casesRemoved', { name: detail?.name ?? v.planId, count: pendingCount }), risk: 'update', diff,
                 },
                 ctx.emit,
               );
