@@ -6,6 +6,10 @@ import { NuqsAdapter } from 'nuqs/adapters/react-router/v6';
 import App from './App';
 import { ApiError } from './api/client';
 import './index.css';
+import './i18n';
+import { applyHtmlLang, readStoredLang } from './i18n';
+
+applyHtmlLang(readStoredLang());
 
 const queryClient = new QueryClient({
   defaultOptions: {
