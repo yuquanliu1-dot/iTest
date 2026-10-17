@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import LiveViewCard from '../../components/LiveViewCard';
 import CollapsiblePanel from '../../components/ui/CollapsiblePanel';
 import { useSpaceEventsStore } from './spaceEventsStore';
@@ -25,11 +26,12 @@ export function useActiveLiveView() {
 
 /** 实时画面栏：渲染成 live + 回放画面，无活跃画面时返回 null。 */
 export default function LiveViewRail() {
+  const { t } = useTranslation();
   const vp = useActiveLiveView();
   if (!vp) return null;
   const running = vp.result === null;
   return (
-    <CollapsiblePanel title="实时画面" defaultOpen>
+    <CollapsiblePanel title={t('assistant:liveView.title')} defaultOpen>
       <div className="px-4 pb-3">
         <LiveViewCard
           liveUrl={vp.liveUrl!}

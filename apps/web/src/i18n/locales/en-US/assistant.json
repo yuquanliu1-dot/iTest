@@ -1,0 +1,99 @@
+{
+  "composer": {
+    "placeholder": "Ask AI to inspect the environment, create cases, plan runs…",
+    "send": "Send",
+    "stop": "Stop"
+  },
+  "runningIndicator": "Running",
+  "thinking": "Thinking",
+  "tool": {
+    "inspectPage": "Inspect page",
+    "announcePlan": "Generate plan",
+    "manageCases": "Manage cases",
+    "manageScenarios": "Manage scenarios",
+    "manageEnvironments": "Manage environments",
+    "managePlans": "Manage plans",
+    "verifyCase": "Verify case",
+    "solidifyCase": "Solidify case",
+    "readRepo": "Read repo"
+  },
+  "verify": {
+    "cardTitle": "Live verify ({{done}}/{{total}} steps{{targetSuffix}})",
+    "targetUrlSuffix": " · {{url}}",
+    "loginCacheHit": "Login cache hit{{userSuffix}}",
+    "userSuffix": " ({{user}})",
+    "loginCacheMissUser": "Login cache miss ({{user}})",
+    "loginCacheMissNoUser": "No login credentials configured",
+    "stagedOps": "Running on staged changes ({{count}} modifications)",
+    "cacheWritten": " · login cache rewritten",
+    "stepBriefSuffix": ": {{brief}}",
+    "stepLoggedIn": " · logged in",
+    "stepDuration": " ({{sec}}s)",
+    "compiledReplay": "Compiled mechanical replay check"
+  },
+  "solidify": {
+    "cardTitle": "Solidify case ({{solidifiable}}/{{total}} steps solidifiable){{statusSuffix}}",
+    "statusSuffix": " · {{status}}",
+    "done": "Solidified {{count}} steps{{keptSuffix}}",
+    "keptSuffix": ", kept {{count}} steps in visual mode",
+    "nothingWithKept": "Nothing to solidify, {{count}} steps stay in visual mode",
+    "nothing": "Nothing to solidify"
+  },
+  "kind": {
+    "case": "Case",
+    "caseOp": "Modification",
+    "scenario": "Scenario",
+    "environment": "Environment",
+    "plan": "Plan",
+    "dataset": "Dataset"
+  },
+  "stage": {
+    "stepsCount": "Steps ({{count}})",
+    "assertion": "Assertion: {{text}}",
+    "compiledLabel": "Compiled: ",
+    "uncompiledWarning": "Not compiled: this step will not run after saving. Use [{\"kind\":\"aiTask\",\"instruction\":\"...\"}] so the AI executes it at run time.",
+    "savedCount": "Saved {{count}} items",
+    "saveFailed": "Save failed",
+    "coverage": "Coverage: {{items}}",
+    "coverageJoin": ", ",
+    "datasetBound": "Bound dataset: \"{{name}}\" (auto-bound when saved together)",
+    "datasetMissing": "Draft no longer in staging; will not bind when saving",
+    "envObjects": "Credential objects: {{count}}",
+    "planCases": "Linked to {{count}} cases",
+    "sensitiveTitle": "Sensitive column; encrypted at rest",
+    "rows": "Rows ({{count}}{{disabledSuffix}}; sensitive columns are plaintext drafts, encrypted when saved)",
+    "rowsDisabled": ", {{count}} rows disabled",
+    "emptyList": "Staging is empty; AI-created objects will appear here",
+    "panelTitle": "Staged objects ({{count}})",
+    "selectAll": "Select all",
+    "deselectAll": "Deselect all",
+    "emptyHint": "Objects staged by AI will appear here",
+    "saveSelected": "Save selected"
+  },
+  "saveDialog": {
+    "title": "Save staged objects",
+    "currentTab": "Current tab: {{kind}}, {{count}} items selected",
+    "countCase": " · cases {{count}}",
+    "countCaseOp": " · modifications {{count}}",
+    "countScenario": " · scenarios {{count}}",
+    "countEnvironment": " · environments {{count}}",
+    "countPlan": " · plans {{count}}",
+    "countDataset": " · datasets {{count}}",
+    "needGroup": "Target group (required for cases / plans)",
+    "chooseGroup": "Select a group…",
+    "noGroupHint": "Saving only environments/scenarios/datasets — they are stored at the project default location, no group needed.",
+    "save": "Save selected"
+  },
+  "confirm": {
+    "risk": {
+      "update": "Update",
+      "secret": "Secret key"
+    },
+    "viewDiff": "View change details",
+    "processing": "Processing…",
+    "confirmExecute": "Confirm & execute"
+  },
+  "liveView": {
+    "title": "Live view"
+  }
+}

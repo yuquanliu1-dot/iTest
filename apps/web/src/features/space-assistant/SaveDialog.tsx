@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/Modal';
 import Button from '../../components/ui/Button';
 
@@ -23,6 +24,7 @@ const LAST_GROUP_KEY = 'space-assistant-last-group';
  * 选中条目包含用例/计划时必选 group；纯 environment/scenario 时允许空（落库到项目下默认）。
  */
 export default function SaveDialog({ open, onOpenChange, groups, saving, partitioned, selection, onSave, kindLabel }: Props) {
+  const { t } = useTranslation();
   const initial = (() => {
     try {
       return localStorage.getItem(LAST_GROUP_KEY) ?? '';
@@ -59,22 +61,22 @@ export default function SaveDialog({ open, onOpenChange, groups, saving, partiti
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>保存暂存对象</DialogTitle>
+          <DialogTitle>{t('assistant:saveDialog.title')}</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-3 px-5 py-4">
           <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-            当前 Tab：{kindLabel}。选中 {totalSelected} 项
-            {selectedCounts.case > 0 && ` · 用例 ${selectedCounts.case}`}
-            {selectedCounts.case_op > 0 && ` · 修改 ${selectedCounts.case_op}`}
-            {selectedCounts.scenario > 0 && ` · 场景 ${selectedCounts.scenario}`}
-            {selectedCounts.environment > 0 && ` · 环境 ${selectedCounts.environment}`}
-            {selectedCounts.plan > 0 && ` · 计划 ${selectedCounts.plan}`}
-            {selectedCounts.dataset > 0 && ` · 数据集 ${selectedCounts.dataset}`}
+            {t('assistant:saveDialog.currentTab', { kind: kindLabel, count: totalSelected })}
+            {selectedCounts.case > 0 && t('assistant:saveDialog.countCase', { count: selectedCounts.case })}
+            {selectedCounts.case_op > 0 && t('assistant:saveDialog.countCaseOp', { count: selectedCounts.case_op })}
+            {selectedCounts.scenario > 0 && t('assistant:saveDialog.countScenario', { count: selectedCounts.scenario })}
+            {selectedCounts.environment > 0 && t('assistant:saveDialog.countEnvironment', { count: selectedCounts.environment })}
+            {selectedCounts.plan > 0 && t('assistant:saveDialog.countPlan', { count: selectedCounts.plan })}
+            {selectedCounts.dataset > 0 && t('assistant:saveDialog.countDataset', { count: selectedCounts.dataset })}
           </div>
           {needGroup ? (
             <div className="flex flex-col gap-1">
               <label className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-                目标分组（用例 / 计划必选）
+                {t('assistant:saveDialog.needGroup')}
               </label>
               <select
                 className="input-base"
@@ -88,7 +90,7 @@ export default function SaveDialog({ open, onOpenChange, groups, saving, partiti
                   }
                 }}
               >
-                <option value="">选择分组…</option>
+                <option value="">{t('assistant:saveDialog.chooseGroup')}</option>
                 {groups.map((g) => (
                   <option key={g.id} value={g.id}>
                     {g.name}
@@ -98,16 +100,16 @@ export default function SaveDialog({ open, onOpenChange, groups, saving, partiti
             </div>
           ) : (
             <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-              仅保存环境/场景/数据集，落库时按项目默认位置放置，无需选分组。
+              {t('assistant:saveDialog.noGroupHint')}
             </div>
           )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            取消
+            {t('common:cancel')}
           </Button>
           <Button disabled={!canSubmit || saving} onClick={() => onSave(groupId)}>
-            {saving ? '保存中…' : '保存所选'}
+            {saving ? t('common:saving') : t('assistant:saveDialog.save')}
           </Button>
         </DialogFooter>
       </DialogContent>
