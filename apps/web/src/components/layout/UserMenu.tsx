@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,6 +16,9 @@ import { Button } from '../ui/shadcn/button';
 import { useAuthStore } from '../../stores/auth';
 import { useThemeStore } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
+import { applyLang, langFromPref } from '../../stores/lang';
+import { api } from '../../api/client';
+import type { Lang } from '../../i18n';
 import ChangeMyPasswordModal from '../auth/ChangeMyPasswordModal';
 import Icon from '../Icon';
 
@@ -35,6 +39,7 @@ export default function UserMenu() {
   const logout = useAuthStore((s) => s.logout);
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
+  const { i18n } = useTranslation();
 
   const activeOrg = organizations.find((o) => o.id === activeOrgId);
   const showOrgList = organizations.length > 1;
@@ -118,6 +123,24 @@ export default function UserMenu() {
         >
           <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} />
           {theme === 'dark' ? '浅色主题' : '深色主题'}
+        </DropdownMenuItem>
+
+        {/* 语言切换（单击切换，图标为地球） */}
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault();
+            const next: Lang = langFromPref(i18n.language) === 'en-US' ? 'zh-CN' : 'en-US';
+            applyLang(next);
+            if (user?.id) {
+              void api.users.update(user.id, { languagePreference: next }).catch(() => {
+                // 后端持久化失败不阻断切换;下次登录恢复原语言。
+              });
+            }
+            try { localStorage.setItem('itest-lang', next); } catch { /* no-op */ }
+          }}
+        >
+          <Icon name="globe" size={14} />
+          {langFromPref(i18n.language) === 'en-US' ? '中文' : 'English'}
         </DropdownMenuItem>
 
         <DropdownMenuItem onSelect={(event) => { event.preventDefault(); handleOpenPwd(); }}>
