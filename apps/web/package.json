@@ -10,7 +10,8 @@
     "test": "vitest run --passWithNoTests",
     "i18n:check": "node scripts/check-i18n-keys.mjs",
     "lint": "eslint src --ext .ts,.tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify": "pnpm typecheck && pnpm i18n:check && pnpm test"
   },
   "dependencies": {
     "@assistant-ui/react": "0.15.22",
