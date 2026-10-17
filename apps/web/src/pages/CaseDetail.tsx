@@ -121,7 +121,7 @@ export default function CaseDetail() {
     if (!target) return;
     const instructionText = target.instruction?.trim() ?? '';
     if (!instructionText) {
-      toast('该步骤没有自然语言指令，无法 AI 编译', 'error');
+      toast(t('cases:noInstructionForAiCompile'), 'error');
       return;
     }
     openAssistantWithMessage(
@@ -175,12 +175,12 @@ export default function CaseDetail() {
   const undo = () => {
     // 抽屉打开时步骤列表可能已被并发变更（行号会错位），先关抽屉再撤销
     if (editing) {
-      toast('请先关闭编辑抽屉再撤销', 'info');
+      toast(t('cases:closeDrawerBeforeUndo'), 'info');
       return;
     }
     const snapshot = historyRef.current.pop();
     if (!snapshot) {
-      toast('没有可撤销的操作', 'info');
+      toast(t('cases:nothingToUndo'), 'info');
       return;
     }
     replaceSteps.mutate(snapshot);
@@ -345,7 +345,7 @@ export default function CaseDetail() {
       qc.invalidateQueries({ queryKey: ['cases', projectId] });
       qc.invalidateQueries({ queryKey: ['plan'] });
       qc.invalidateQueries({ queryKey: ['reports'] });
-      toast('已重命名', 'success');
+      toast(t('cases:renamed'), 'success');
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -394,7 +394,7 @@ export default function CaseDetail() {
         );
       });
       if (!ok) {
-        recorder.setError('请确认已加载 Chrome 录制扩展');
+        recorder.setError(t('cases:loadRecorderExtension'));
         sessionRef.current = null;
       }
     },
@@ -430,7 +430,7 @@ export default function CaseDetail() {
       sessionRef.current = null;
       recorder.reset();
       setTargetUrl('');
-      toast(`已写入 ${r.inserted} 个步骤`, 'success');
+      toast(t('cases:stepsWritten', { count: r.inserted }), 'success');
       qc.invalidateQueries({ queryKey: ['case', id] });
     },
   });
@@ -446,7 +446,7 @@ export default function CaseDetail() {
       api.recorder
         .finish(sessionId)
         .then((r) => {
-          toast(`已写入 ${r.inserted} 个步骤`, 'success');
+          toast(t('cases:stepsWritten', { count: r.inserted }), 'success');
           qc.invalidateQueries({ queryKey: ['case', id] });
         })
         .catch((err: Error) => toast(err.message, 'error'));
@@ -481,7 +481,7 @@ export default function CaseDetail() {
   const moveGroup = useMutation({
     mutationFn: (groupId: string) => api.cases.patch(id!, { groupId }),
     onSuccess: () => {
-      toast('已移动分组', 'success');
+      toast(t('cases:groupMoved'), 'success');
       qc.invalidateQueries({ queryKey: ['case', id] });
       qc.invalidateQueries({ queryKey: ['cases', projectId] });
       qc.invalidateQueries({ queryKey: ['groups', projectId] });
@@ -492,7 +492,7 @@ export default function CaseDetail() {
   const moveScenario = useMutation({
     mutationFn: (scenarioId: string | null) => api.cases.patch(id!, { scenarioId }),
     onSuccess: () => {
-      toast('已切换场景', 'success');
+      toast(t('cases:scenarioSwitched'), 'success');
       qc.invalidateQueries({ queryKey: ['case', id] });
       qc.invalidateQueries({ queryKey: ['cases', projectId] });
     },
@@ -587,7 +587,7 @@ export default function CaseDetail() {
     onSuccess: () => {
       expectedOutcomeSyncRef.current = expectedOutcome.trim() ? expectedOutcome : '';
       qc.invalidateQueries({ queryKey: ['case', id] });
-      toast('已保存', 'success');
+      toast(t('cases:saved'), 'success');
     },
     onError: (e: Error) => toast(e.message, 'error'),
   });
@@ -604,7 +604,7 @@ export default function CaseDetail() {
   if (isError) {
     return (
       <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
-        加载失败：{error?.message ?? '未知错误'}
+        {t('common:loadFailed')}：{error?.message ?? t('common:unknownError')}
       </div>
     );
   }
@@ -613,7 +613,7 @@ export default function CaseDetail() {
     return (
       <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)' }}>
         <Icon name="loader" size={16} className="animate-spin" />
-        <span style={{ marginLeft: 8 }}>加载中...</span>
+        <span style={{ marginLeft: 8 }}>{t('cases:loading')}</span>
       </div>
     );
   }
@@ -637,14 +637,14 @@ export default function CaseDetail() {
           onClick={() => navigate(`/p/${projectId}/v/${versionId}/groups/${caseDetail.groupId ?? ''}`)}
         >
           <Icon name="chevronLeft" size={12} />
-          {group?.name ?? '用例列表'}
+          {group?.name ?? t('cases:caseList')}
         </Button>
         <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
         {/* 用例名称行内可编辑：点标题改，走 PATCH /cases/:id { title } */}
         <InlineEdit
           value={caseDetail.title}
           disabled={rename.isPending}
-          ariaLabel="用例名称"
+          ariaLabel={t('cases:caseName')}
           onSave={(next) => rename.mutateAsync(next)}
           className="text-[16px] font-semibold max-w-[420px]"
           inputClassName="text-[16px] font-semibold max-w-[420px]"
@@ -660,10 +660,10 @@ export default function CaseDetail() {
               `/p/${projectId}/v/${versionId}/reports?caseId=${caseDetail.id}&q=${encodeURIComponent(caseDetail.title)}&tab=case`,
             )
           }
-          title="查看该用例的全部执行报告"
+          title={t('cases:viewAllReports')}
         >
           <Icon name="reportView" size={12} />
-          查看报告
+          {t('cases:viewReport')}
         </Button>
         {(() => {
           // 2026-10-06：未编译 step 阻塞执行（dispatcher 抛 compile-missing）。
@@ -674,14 +674,14 @@ export default function CaseDetail() {
             <Button
               variant="ghost"
               onClick={() => {
-                if (caseDetail.status === 'deprecated' && !window.confirm('用例已废弃，仍要执行？')) return;
+                if (caseDetail.status === 'deprecated' && !window.confirm(t('cases:deprecatedExecuteConfirm'))) return;
                 execute.mutate();
               }}
               disabled={execute.isPending || caseDetail.steps.length === 0 || blocked}
-              title={blocked ? `存在 ${uncompiled.length} 个未编译步骤，请先点击「AI 编译」补齐` : undefined}
+              title={blocked ? t('cases:uncompiledBlocking', { count: uncompiled.length }) : undefined}
             >
               <Icon name="play" size={12} />
-              执行
+              {t('cases:execute')}
             </Button>
           );
         })()}
@@ -691,9 +691,9 @@ export default function CaseDetail() {
       <div className="flex items-center gap-2 px-6 py-3 shrink-0">
         <Segmented
           options={[
-            { value: 'description', label: '描述 / 步骤', icon: 'list' },
-            { value: 'reports', label: '报告', icon: 'flag' },
-            { value: 'recording', label: '录制历史', icon: 'clock' },
+            { value: 'description', label: t('cases:tabDescription'), icon: 'list' },
+            { value: 'reports', label: t('cases:tabReports'), icon: 'flag' },
+            { value: 'recording', label: t('cases:tabRecording'), icon: 'clock' },
           ]}
           value={tab}
           onChange={(v) => setTab(v)}
@@ -707,23 +707,23 @@ export default function CaseDetail() {
             {tab === 'description' && (
               <div className="flex flex-col gap-4">
                 <div className="bg-card border rounded-[var(--radius-md)] p-5 flex flex-col gap-4">
-                  <div className="text-[13px] font-medium" style={{ color: 'var(--foreground)' }}>执行设置</div>
+                  <div className="text-[13px] font-medium" style={{ color: 'var(--foreground)' }}>{t('cases:executionSettings')}</div>
                   <div className="flex flex-col gap-2">
-                    <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>窗口策略</span>
+                    <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:windowStrategy')}</span>
                     <Segmented
                       value={windowStrategy}
                       onChange={setWindowStrategy}
                       options={[
-                        { label: '默认最大化', value: 'maximize' },
-                        { label: '当前窗口', value: 'current' },
-                        { label: '自定义', value: 'custom' },
+                        { label: t('cases:windowMaximize'), value: 'maximize' },
+                        { label: t('cases:windowCurrent'), value: 'current' },
+                        { label: t('cases:windowCustom'), value: 'custom' },
                       ]}
                     />
                   </div>
                   {windowStrategy === 'custom' && (
                     <div className="flex gap-3">
                       <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                        宽
+                        {t('cases:width')}
                         <Input
                           type="number"
                           value={windowWidth ?? ''}
@@ -731,7 +731,7 @@ export default function CaseDetail() {
                         />
                       </label>
                       <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                        高
+                        {t('cases:height')}
                         <Input
                           type="number"
                           value={windowHeight ?? ''}
@@ -741,20 +741,20 @@ export default function CaseDetail() {
                     </div>
                   )}
                   <div className="flex items-center gap-3">
-                    <Toggle checked={incognito} onChange={setIncognito} label="无痕模式" />
+                    <Toggle checked={incognito} onChange={setIncognito} label={t('cases:incognitoMode')} />
                     <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                      每次回放从新会话开始，不保留登录态
+                      {t('cases:incognitoHint')}
                     </span>
                   </div>
                   <label className="flex flex-col gap-1">
-                    <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>默认环境</span>
+                    <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:defaultEnv')}</span>
                     <select
                       className="input-base input-sm"
                       value={defaultEnvId ?? ''}
                       onChange={(e) => setDefaultEnvId(e.target.value || null)}
                       disabled={(environments ?? []).length === 0}
                     >
-                      <option value="">不在用例层指定</option>
+                      <option value="">{t('cases:noEnvOverride')}</option>
                       {(environments ?? []).map((e) => (
                         <option key={e.id} value={e.id}>
                           {e.name}
@@ -763,22 +763,22 @@ export default function CaseDetail() {
                     </select>
                   </label>
                   <label className="flex flex-col gap-1">
-                    <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>测试数据集</span>
+                    <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:testDataset')}</span>
                     <select
                       className="input-base input-sm"
                       value={datasetId ?? ''}
                       onChange={(e) => setDatasetId(e.target.value || null)}
                     >
-                      <option value="">不绑定（单次回放）</option>
+                      <option value="">{t('cases:noDataset')}</option>
                       {(datasetList ?? []).map((d) => (
                         <option key={d.id} value={d.id}>
-                          {d.name}（{d.enabledRowCount} 启用行）
+                          {d.name}{t('cases:datasetEnabledRows', { count: d.enabledRowCount })}
                         </option>
                       ))}
                     </select>
                     {datasetId && (
                       <span className="text-[10px]" style={{ color: 'var(--info)' }}>
-                        回放将按启用行数逐行执行，每行产生一条独立报告；步骤中用 {'{{列名}}'} 引用数据。
+                        {t('cases:datasetRunHint', { col: '{{列名}}' })}
                       </span>
                     )}
                   </label>
@@ -786,30 +786,30 @@ export default function CaseDetail() {
                       步骤级 assertion 在回放层已被收紧为「指定元素可见」才生效，整页模糊断言一律跳过。 */}
                   <label className="flex flex-col gap-1">
                     <span className="text-[11px] flex items-center gap-1" style={{ color: 'var(--muted-foreground)' }}>
-                      用例预期（最终页面应是什么样）
+                      {t('cases:expectedOutcome')}
                       <Icon name="info" size={10} style={{ opacity: 0.5 }} />
                     </span>
                     <textarea
                       className="input-base"
                       style={{ minHeight: 64, resize: 'vertical', fontSize: 12 }}
-                      placeholder="例:空字段提交后,登录框出现红色提示『请输入用户名和密码』。"
+                      placeholder={t('cases:expectedOutcomePlaceholder')}
                       value={expectedOutcome}
                       onChange={(e) => setExpectedOutcome(e.target.value)}
                     />
                     <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
-                      留空则跳过用例级 vision 判定,用例成败只看所有步骤是否全部执行成功。
-                      {datasetId && '支持 '}
+                      {t('cases:expectedOutcomeHint')}
+                      {datasetId && t('cases:expectedOutcomeVarPrefix')}
                       {datasetId && <code className="font-mono">{'{{列名}}'}</code>}
-                      {datasetId && ' 引用数据集列（与前置 extract 变量）,每行按行值替换后再判定;预期列不要标敏感。'}
+                      {datasetId && t('cases:expectedOutcomeVarSuffix')}
                     </span>
                   </label>
                   <div className="flex justify-end">
-                    <Button onClick={() => saveRuntime.mutate()} disabled={saveRuntime.isPending}>保存</Button>
+                    <Button onClick={() => saveRuntime.mutate()} disabled={saveRuntime.isPending}>{t('common:save')}</Button>
                   </div>
                 </div>
                 <div className="bg-card border rounded-[var(--radius-md)] p-5">
                 <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
-                  {caseDetail.description ? '描述' : '（无描述）'}
+                  {caseDetail.description ? t('cases:description') : t('cases:noDescription')}
                 </div>
                 {caseDetail.description && (
                   <p className="text-[13px] mb-4" style={{ color: 'var(--muted-foreground)', lineHeight: 1.7 }}>
@@ -818,7 +818,7 @@ export default function CaseDetail() {
                 )}
                 {caseDetail.createdBy && (
                   <div className="text-[11px] mb-2" style={{ color: 'var(--muted-foreground)' }}>
-                    创建人 {creatorName(caseDetail.createdBy)}
+                    {t('cases:createdBy')} {creatorName(caseDetail.createdBy)}
                   </div>
                 )}
                 <div
@@ -830,15 +830,15 @@ export default function CaseDetail() {
                   }}
                 >
                   <Icon name="link" size={11} style={{ opacity: 0.6 }} />
-                  <span className="font-medium shrink-0" style={{ color: 'var(--muted-foreground)' }}>初始化导航 URL</span>
+                  <span className="font-medium shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('cases:initNavUrl')}</span>
                   <span className="min-w-0 flex-1 truncate font-mono" title={caseDetail.url ?? undefined}>
                     {caseDetail.url
-                      ? (caseDetail.url.startsWith('/') ? `相对 ${caseDetail.url}` : caseDetail.url)
-                      : '未配置'}
+                      ? (caseDetail.url.startsWith('/') ? t('cases:urlRelative', { url: caseDetail.url }) : caseDetail.url)
+                      : t('cases:urlNotConfigured')}
                   </span>
                   {caseDetail.resolvedUrl && (
                     <span className="max-w-[40%] truncate font-mono text-[10px]" style={{ color: 'var(--muted-foreground)', opacity: 0.8 }} title={caseDetail.resolvedUrl}>
-                      解析为 {caseDetail.resolvedUrl}
+                      {t('cases:resolvedAs', { url: caseDetail.resolvedUrl })}
                     </span>
                   )}
                   <Button
@@ -850,12 +850,12 @@ export default function CaseDetail() {
                       setUrlDialogOpen(true);
                     }}
                   >
-                    编辑
+                    {t('cases:edit')}
                   </Button>
                 </div>
                 <div className="flex items-center gap-2 mb-3">
                   <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
-                    步骤 ({caseDetail.steps.length})
+                    {t('cases:steps', { count: caseDetail.steps.length })}
                   </div>
                   <div className="flex-1" />
                   <Button
@@ -874,10 +874,10 @@ export default function CaseDetail() {
                       });
                       setEditingMode('create');
                     }}
-                    title="手动新增一个步骤（未编译需先 AI 编译才能执行）"
+                    title={t('cases:addStepTitle')}
                   >
                     <Icon name="plus" size={12} />
-                    新增步骤
+                    {t('cases:addStep')}
                   </Button>
                   <Button
                     variant="ghost"
@@ -885,15 +885,15 @@ export default function CaseDetail() {
                     onClick={() => {
                       const clips = caseDetail.steps.filter((s) => selected.has(s.id)).map(toClip);
                       if (clips.length === 0) {
-                        toast('先勾选要复制的步骤', 'info');
+                        toast(t('cases:selectStepsToCopy'), 'info');
                         return;
                       }
                       clipboard.setSteps(clips);
-                      toast(`已复制 ${clips.length} 个步骤`, 'success');
+                      toast(t('cases:stepsCopied', { count: clips.length }), 'success');
                     }}
                     disabled={selected.size === 0}
                   >
-                    复制选中 ({selected.size})
+                    {t('cases:copySelected', { count: selected.size })}
                   </Button>
                   <Button
                     variant="ghost"
@@ -910,9 +910,9 @@ export default function CaseDetail() {
                       })
                     }
                     disabled={clipboard.steps.length === 0}
-                    title={selected.size > 0 ? '插入到最后一个选中步骤之后' : '追加到末尾'}
+                    title={selected.size > 0 ? t('cases:pasteAfterSelected') : t('cases:pasteAppend')}
                   >
-                    粘贴 ({clipboard.steps.length})
+                    {t('cases:pasteCount', { count: clipboard.steps.length })}
                   </Button>
                   <Button
                     variant="ghost"
@@ -920,7 +920,7 @@ export default function CaseDetail() {
                     onClick={undo}
                     disabled={historyRef.current.length === 0}
                   >
-                    撤销
+                    {t('cases:undo')}
                   </Button>
                 </div>
                 {varReport &&
@@ -932,26 +932,26 @@ export default function CaseDetail() {
                     className="rounded-[var(--radius-sm)] px-3 py-2 mb-3 text-[11px]"
                     style={{ border: '1px solid var(--warning-soft-border)', color: 'var(--warning)', background: 'var(--warning-soft)' }}
                   >
-                    <div className="font-semibold mb-1">变量体检提示（不阻断保存，回放时未定义变量会报错）</div>
+                    <div className="font-semibold mb-1">{t('cases:varCheckTitle')}</div>
                     <ul className="list-disc pl-4 flex flex-col gap-0.5">
                       {varReport.undefined.map((i, k) => (
                         <li key={`u${k}`}>
-                          步骤 {i.stepOrder + 1} 引用了未定义变量 {`{{${i.name}}}`}（{i.field}）
+                          {t('cases:varUndefined', { order: i.stepOrder + 1, name: `{{${i.name}}}`, field: i.field })}
                         </li>
                       ))}
                       {varReport.forwardRefs.map((i, k) => (
                         <li key={`f${k}`}>
-                          步骤 {i.stepOrder + 1} 前向引用 {`{{${i.name}}}`}（定义在后面的步骤）
+                          {t('cases:varForwardRef', { order: i.stepOrder + 1, name: `{{${i.name}}}` })}
                         </li>
                       ))}
                       {varReport.duplicates.map((i, k) => (
                         <li key={`d${k}`}>
-                          变量 {i.name} 在步骤 {i.definedAt.map((n) => n + 1).join('、')} 重复定义，回放取最后一次赋值
+                          {t('cases:varDuplicate', { name: i.name, orders: i.definedAt.map((n) => n + 1).join('、') })}
                         </li>
                       ))}
                       {varReport.invalidNames.map((i, k) => (
                         <li key={`n${k}`}>
-                          步骤 {i.stepOrder + 1} 变量名 {i.name} 不合法：{i.reason}
+                          {t('cases:varInvalidName', { order: i.stepOrder + 1, name: i.name, reason: i.reason })}
                         </li>
                       ))}
                     </ul>
@@ -960,8 +960,8 @@ export default function CaseDetail() {
                 {caseDetail.steps.length === 0 ? (
                   <EmptyState
                     icon="listChecks"
-                    title="暂无步骤"
-                    description="点击右侧「AI 补充步骤」让 Agent 起草，或用 Chrome 扩展录制。"
+                    title={t('cases:noStepsYet')}
+                    description={t('cases:noStepsHint')}
                   />
                 ) : (
                   <DndContext
@@ -1019,9 +1019,9 @@ export default function CaseDetail() {
                               <span
                                 className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-mono"
                                 style={{ border: '1px solid var(--border)', color: 'var(--muted-foreground)', background: 'var(--popover)' }}
-                                title={`compiled 含 ${s.compiled.length} 个动作，回放依序执行；悬停步骤文本看完整链`}
+                                title={t('cases:compiledActionsTooltip', { count: s.compiled.length })}
                               >
-                                ⚙ 共 {s.compiled.length} 个动作
+                                ⚙ {t('cases:actionsCount', { count: s.compiled.length })}
                               </span>
                             )}
                             {(() => {
@@ -1032,7 +1032,7 @@ export default function CaseDetail() {
                                 <span
                                   className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-mono"
                                   style={{ border: '1px solid var(--primary)', color: 'var(--primary)', background: 'var(--popover)' }}
-                                  title="抽取变量，供后续步骤 {{引用}}"
+                                  title={t('cases:extractVarTooltip', { col: '{{引用}}' })}
                                 >
                                   → {`{{${head.varName ?? ''}}}`}
                                 </span>
@@ -1043,23 +1043,23 @@ export default function CaseDetail() {
                                 onClick={() => askAssistantToRecompile(s.id)}
                                 className="text-[10px] px-2 py-0.5 rounded-full shrink-0 press"
                                 style={{ border: '1px solid var(--warning-soft-border)', color: 'var(--warning)', background: 'var(--warning-soft)' }}
-                                title="该步骤缺少 compiled DSL，回放将被 dispatcher 阻塞。点此跳到 AI 助手走 stage_case_op 重新编译。"
+                                title={t('cases:uncompiledTooltip')}
                               >
-                                未编译 · 跳助手回填
+                                {t('cases:uncompiledBadge')}
                               </button>
                             )}
                             <div className="flex items-center gap-1 shrink-0">
                               {Array.isArray(s.compiled) && s.compiled.length > 1 && (
                                 <IconButton
                                   icon="split"
-                                  title={`拆分为 ${s.compiled.length} 个单动作步骤（各自可独立编辑）`}
+                                  title={t('cases:splitTooltip', { count: s.compiled.length })}
                                   disabled={recorder.status === 'recording'}
                                   onClick={() => splitStep(idx)}
                                 />
                               )}
                               <IconButton
                                 icon="copy"
-                                title="复制此步骤到下一行"
+                                title={t('cases:copyStepTooltip')}
                                 disabled={recorder.status === 'recording'}
                                 onClick={() => {
                                   mutateSteps((cur) => {
@@ -1071,19 +1071,19 @@ export default function CaseDetail() {
                               />
                               <IconButton
                                 icon="chevronUp"
-                                title="上移"
+                                title={t('cases:moveUp')}
                                 disabled={idx === 0 || moveStep.isPending}
                                 onClick={() => moveStep.mutate({ stepId: s.id, dir: -1 })}
                               />
                               <IconButton
                                 icon="chevronDown"
-                                title="下移"
+                                title={t('cases:moveDown')}
                                 disabled={idx === caseDetail.steps.length - 1 || moveStep.isPending}
                                 onClick={() => moveStep.mutate({ stepId: s.id, dir: 1 })}
                               />
                               <IconButton
                                 icon="chevronRight"
-                                title="从这里开始录制"
+                                title={t('cases:recordFromHere')}
                                 disabled={recorder.status === 'recording'}
                                 onClick={() => {
                                   setConfirmResume({ stepId: s.id, order: idx });
@@ -1091,7 +1091,7 @@ export default function CaseDetail() {
                               />
                               <IconButton
                                 icon="pencil"
-                                title="编辑"
+                                title={t('cases:edit')}
                                 onClick={() => {
                                   editingIdxRef.current = idx;
                                   setEditingIdx(idx);
@@ -1102,10 +1102,10 @@ export default function CaseDetail() {
                               />
                               <IconButton
                                 icon="trash"
-                                title="删除"
+                                title={t('common:delete')}
                                 tone="destructive"
                                 disabled={deleteStep.isPending}
-                                onClick={() => setConfirmDeleteStep({ stepId: s.id, order: s.order, instruction: s.instruction ?? `第 ${s.order} 步` })}
+                                onClick={() => setConfirmDeleteStep({ stepId: s.id, order: s.order, instruction: s.instruction ?? t('cases:stepOrderN', { order: s.order }) })}
                               />
                             </div>
                           </SortableStepRow>
@@ -1117,7 +1117,7 @@ export default function CaseDetail() {
                 {recorder.status === 'recording' && (
                   <p className="text-[12px] mt-3 flex items-center gap-2" style={{ color: 'var(--info)' }}>
                     <span className="status-pulse" style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor' }} />
-                    录制中... 在 Chrome 扩展打开的页面操作即可。
+                    {t('cases:recordingInProgress')}
                   </p>
                 )}
                 {recorder.status === 'error' && (
@@ -1131,8 +1131,8 @@ export default function CaseDetail() {
 
             {tab === 'reports' && (
               <div className="bg-card border rounded-[var(--radius-md)] p-5">
-                <EmptyState icon="flag" title="前往报告列表查看" description="该用例所有执行报告已汇总到报告页。" action={
-                  <Button size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports`)}>打开报告页</Button>
+                <EmptyState icon="flag" title={t('cases:goToReportsTitle')} description={t('cases:goToReportsDesc')} action={
+                  <Button size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports`)}>{t('cases:openReportsPage')}</Button>
                 } />
               </div>
             )}
@@ -1140,7 +1140,7 @@ export default function CaseDetail() {
             {tab === 'recording' && (
               <div className="bg-card border rounded-[var(--radius-md)] p-5">
                 <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-                  录制历史（占位，未来按时间序列展示每次录制会话）。
+                  {t('cases:recordingHistory')}
                 </p>
               </div>
             )}
@@ -1155,12 +1155,12 @@ export default function CaseDetail() {
                 style={{ color: 'var(--muted-foreground)' }}
                 onClick={() => setTagPickerOpen((v) => !v)}
               >
-                标签
+                {t('cases:tags')}
                 <Icon name="chevronDown" size={10} style={{ opacity: 0.4 }} />
               </div>
               <div className="flex flex-wrap gap-1.5 min-h-[24px]">
                 {(caseDetail.tags ?? []).length === 0 ? (
-                  <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>无</span>
+                  <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:none')}</span>
                 ) : (
                   (caseDetail.tags ?? []).map((t) => (
                     <TagChip
@@ -1189,7 +1189,7 @@ export default function CaseDetail() {
                   <div className="px-2 py-1.5 border-b" style={{ borderColor: 'var(--border)' }}>
                     <input
                       type="text"
-                      placeholder="搜索标签"
+                      placeholder={t('cases:searchTags')}
                       value={tagSearch}
                       onChange={(e) => setTagSearch(e.target.value)}
                       className="input-base input-sm"
@@ -1199,7 +1199,7 @@ export default function CaseDetail() {
                   <div className="max-h-56 overflow-y-auto py-1">
                     {filteredTags.length === 0 ? (
                       <div className="px-3 py-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-                        {(projectTags ?? []).length === 0 ? '项目内还没有标签' : '没有匹配'}
+                        {(projectTags ?? []).length === 0 ? t('cases:noTagsInProject') : t('cases:noTagMatches')}
                       </div>
                     ) : (
                       filteredTags.map((t) => (
@@ -1227,7 +1227,7 @@ export default function CaseDetail() {
                     style={{ borderTop: '1px solid var(--border)' }}
                     onClick={() => { setTagPickerOpen(false); setLabelsManagerOpen(true); }}
                   >
-                    管理标签 →
+                    {t('cases:manageTags')}
                   </Button>
                 </div>,
                 document.body
@@ -1236,7 +1236,7 @@ export default function CaseDetail() {
 
             <div className="bg-card border rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-2" style={{ color: 'var(--muted-foreground)' }}>
-                所属分组
+                {t('cases:belongsGroup')}
               </div>
               <select
                 className="input-base input-sm"
@@ -1249,13 +1249,13 @@ export default function CaseDetail() {
                 ))}
               </select>
               <p className="text-[11px] mt-2" style={{ color: 'var(--muted-foreground)' }}>
-                录制目标 URL 解析方式：用例相对路径 + 环境 web 服务（默认或指定具名服务）。
+                {t('cases:urlResolveHint')}
               </p>
             </div>
 
             <div className="bg-card border rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-2" style={{ color: 'var(--muted-foreground)' }}>
-                所属场景
+                {t('cases:belongsScenario')}
               </div>
               <select
                 className="input-base input-sm"
@@ -1263,32 +1263,32 @@ export default function CaseDetail() {
                 disabled={moveScenario.isPending || !caseDetail.requirementId}
                 onChange={(e) => moveScenario.mutate(e.target.value || null)}
               >
-                <option value="">（无）</option>
+                <option value="">{t('cases:noScenarioOption')}</option>
                 {(scenarios ?? []).map((s) => (
                   <option key={s.id} value={s.id}>{s.title}</option>
                 ))}
               </select>
               {!caseDetail.requirementId && (
                 <p className="text-[11px] mt-2" style={{ color: 'var(--muted-foreground)' }}>
-                  该用例未绑定需求，无法关联场景。
+                  {t('cases:noRequirementHint')}
                 </p>
               )}
             </div>
 
             <div className="bg-card border rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
-                AI 补充
+                {t('cases:aiAdd')}
               </div>
               <Button onClick={() => setGenStepsDialogOpen(true)} className="w-full">
                 <Icon name="bolt" size={12} />
-                AI 补充步骤
+                {t('cases:aiAddSteps')}
               </Button>
             </div>
 
             {caseDetail.platform === 'mobile' && (
               <div className="bg-card border rounded-[var(--radius-md)] p-4">
                 <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
-                  移动录制
+                  {t('cases:mobileRecording')}
                 </div>
                 <Button
                   onClick={() => setMobileRecorderOpen(true)}
@@ -1296,17 +1296,17 @@ export default function CaseDetail() {
                   className="w-full"
                 >
                   <Icon name="tablet" size={12} />
-                  录制 Mobile
+                  {t('cases:recordMobile')}
                 </Button>
                 <p className="text-[11px] mt-2" style={{ color: 'var(--muted-foreground)' }}>
-                  后端 mobile daemon 启动后,点选右侧 Accessibility Tree 即可生成步骤。
+                  {t('cases:mobileRecordingHint')}
                 </p>
               </div>
             )}
 
             <div className="bg-card border rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
-                浏览器录制
+                {t('cases:browserRecording')}
               </div>
               <select
                 className="input-base input-sm mb-2"
@@ -1314,19 +1314,19 @@ export default function CaseDetail() {
                 onChange={(e) => setMode(e.target.value as typeof mode)}
                 disabled={recorder.status === 'recording'}
               >
-                <option value="fresh">全新录制（覆盖旧步骤）</option>
-                <option value="append">追加录制（保留旧步骤）</option>
-                <option value="resume">从这里开始</option>
-                <option value="incognito">无痕录制</option>
+                <option value="fresh">{t('cases:recordingFresh')}</option>
+                <option value="append">{t('cases:recordingAppend')}</option>
+                <option value="resume">{t('cases:recordingResume')}</option>
+                <option value="incognito">{t('cases:recordingIncognito')}</option>
               </select>
               {mode === 'resume' && (
                 <p className="text-[11px] mb-2" style={{ color: 'var(--info)' }}>
-                  请在步骤列表中点「从这里开始」选择目标步骤。
+                  {t('cases:resumeModeHint')}
                 </p>
               )}
               <div className="flex items-end gap-2 mb-3">
                 <Input
-                  label="录制目标 URL"
+                  label={t('cases:recordingTargetUrl')}
                   placeholder="https://example.com"
                   value={targetUrl}
                   onChange={(e) => {
@@ -1338,7 +1338,7 @@ export default function CaseDetail() {
                 />
                 <IconButton
                   icon="refresh"
-                  title="用初始化导航 URL 覆盖"
+                  title={t('cases:useInitUrl')}
                   disabled={!caseDetail?.resolvedUrl || targetUrl === caseDetail.resolvedUrl}
                   onClick={() => {
                     targetUrlDirtyRef.current = false;
@@ -1349,13 +1349,13 @@ export default function CaseDetail() {
               {recorder.status === 'recording' ? (
                 <Button variant="ghost" onClick={() => stopRecording.mutate()} className="w-full">
                   <Icon name="pause" size={12} />
-                  停止录制
+                  {t('cases:stopRecording')}
                 </Button>
               ) : (
                 <Button
                   onClick={() => {
                     if (mode === 'resume' && !resumeTarget) {
-                      toast('请先在步骤列表里选「从这里开始」指定步骤', 'info');
+                      toast(t('cases:selectStartStepFirst'), 'info');
                       return;
                     }
                     startRecording.mutate();
@@ -1363,11 +1363,11 @@ export default function CaseDetail() {
                   className="w-full"
                 >
                   <Icon name="play" size={12} />
-                  录制补充
+                  {t('cases:recordMore')}
                 </Button>
               )}
               <p className="text-[11px] mt-2" style={{ color: 'var(--muted-foreground)' }}>
-                需先加载 Chrome 录制扩展（apps/recorder/）。
+                {t('cases:recorderExtHint')}
               </p>
             </div>
           </div>
@@ -1405,7 +1405,7 @@ export default function CaseDetail() {
                 return newCur;
               });
             }
-            if (!applied) toast('步骤已被修改，请关闭抽屉重试', 'error');
+            if (!applied) toast(t('cases:stepModifiedReload'), 'error');
             setEditing(null);
             setEditingIdx(-1);
             editingSnapshotRef.current = null;
@@ -1425,35 +1425,35 @@ export default function CaseDetail() {
       {/* 编辑初始化导航 URL */}
       <Dialog open={urlDialogOpen} onOpenChange={setUrlDialogOpen}>
         <DialogContent style={{ maxWidth: 420 }}>
-          <DialogHeader><DialogTitle>初始化导航 URL</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('cases:initNavUrl')}</DialogTitle></DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
             <Input
-              label="相对路径 URL（可空）"
-              placeholder="/admin/login（相对路径，执行时拼接环境 web 服务）"
+              label={t('cases:relativeUrlLabel')}
+              placeholder={t('cases:relativeUrlPlaceholder')}
               value={urlDraft}
               onChange={(e) => setUrlDraft(e.target.value)}
               autoFocus
             />
             <div className="flex flex-col gap-1">
-              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>web 服务</label>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>{t('cases:webService')}</label>
               <select
                 className="input-base"
                 value={webRefDraft}
                 onChange={(e) => setWebRefDraft(e.target.value)}
                 disabled={webOptions.length === 0 && !webRefDraft}
               >
-                <option value="">默认 web 服务</option>
+                <option value="">{t('cases:defaultWebService')}</option>
                 {webOptions.map((w) => (
                   <option key={w} value={w}>{w}</option>
                 ))}
               </select>
             </div>
             <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              留空清除覆盖，回放 URL 回到环境 web 服务解析。旧数据的绝对 URL 仍可直接执行，但新用例建议改存相对路径（以 / 开头）。
+              {t('cases:urlHelp')}
             </p>
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setUrlDialogOpen(false)}>取消</Button>
+            <Button variant="ghost" onClick={() => setUrlDialogOpen(false)}>{t('common:cancel')}</Button>
             <Button
               disabled={urlSaving}
               onClick={() => {
@@ -1465,14 +1465,14 @@ export default function CaseDetail() {
                   })
                   .then(() => {
                     qc.invalidateQueries({ queryKey: ['case', id] });
-                    toast('已保存', 'success');
+                    toast(t('cases:saved'), 'success');
                     setUrlDialogOpen(false);
                   })
                   .catch((e: Error) => toast(e.message, 'error'))
                   .finally(() => setUrlSaving(false));
               }}
             >
-              {urlSaving ? '保存中...' : '保存'}
+              {urlSaving ? t('cases:saving') : t('common:save')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1481,10 +1481,10 @@ export default function CaseDetail() {
       {/* 录制前确认：是否先回放前置步骤 */}
       <Dialog open={!!confirmResume} onOpenChange={(o) => !o && setConfirmResume(null)}>
         <DialogContent style={{ maxWidth: 420 }}>
-          <DialogHeader><DialogTitle>录制前先回放前置步骤？</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('cases:replayPrecedingTitle')}</DialogTitle></DialogHeader>
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            选「先回放」时，录制器会先把当前步骤之前的步骤全部跑一遍（便于基于已有登录态继续）。
-            选「不预览」则直接从该步骤开始录制，前置步骤不会回放。
+            {t('cases:replayPrecedingHint')}
+            {t('cases:noPreviewHint')}
           </div>
           <DialogFooter>
             <Button
@@ -1494,10 +1494,10 @@ export default function CaseDetail() {
                 setResumeTarget(confirmResume);
                 setMode('resume');
                 setConfirmResume(null);
-                toast('已选中从此处开始，前置步骤不会回放', 'info');
+                toast(t('cases:resumeNoPreview'), 'info');
               }}
             >
-              不预览
+              {t('cases:noPreview')}
             </Button>
             <Button
               onClick={() => {
@@ -1505,10 +1505,10 @@ export default function CaseDetail() {
                 setResumeTarget(confirmResume);
                 setMode('resume');
                 setConfirmResume(null);
-                toast('已选中，录制时会先回放前置步骤', 'info');
+                toast(t('cases:resumeReplayPreview'), 'info');
               }}
             >
-              先回放
+              {t('cases:replayFirst')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1517,37 +1517,37 @@ export default function CaseDetail() {
       {/* 删除步骤确认:误删需重新录制或编辑回填,前端一律先弹再发请求 */}
       <Dialog open={!!confirmDeleteStep} onOpenChange={(o) => !o && setConfirmDeleteStep(null)}>
         <DialogContent style={{ maxWidth: 420 }}>
-          <DialogHeader><DialogTitle>删除步骤</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('cases:deleteStep')}</DialogTitle></DialogHeader>
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            确认删除第 {confirmDeleteStep?.order} 步「{confirmDeleteStep?.instruction}」？删除后需重新录制或编辑回填,不可恢复。
+            {t('cases:deleteStepConfirm', { order: confirmDeleteStep?.order, instruction: confirmDeleteStep?.instruction })}
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirmDeleteStep(null)}>取消</Button>
+            <Button variant="ghost" onClick={() => setConfirmDeleteStep(null)}>{t('common:cancel')}</Button>
             <Button
               variant="danger"
               disabled={deleteStep.isPending}
               onClick={() => confirmDeleteStep && deleteStep.mutate(confirmDeleteStep.stepId)}
             >
-              {deleteStep.isPending ? '删除中...' : '确认删除'}
+              {deleteStep.isPending ? t('cases:deleting') : t('cases:confirmDelete')}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
       <Dialog open={genStepsDialogOpen} onOpenChange={setGenStepsDialogOpen}>
         <DialogContent style={{ maxWidth: 480 }}>
-          <DialogHeader><DialogTitle>AI 补充步骤</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('cases:aiAddSteps')}</DialogTitle></DialogHeader>
           <p className="text-[12px] mb-2" style={{ color: 'var(--muted-foreground)' }}>
-            告诉 AI 想补充哪些步骤（留空则由 AI 自行判断用例缺什么）。跳转后会先看真实页面快照,生成结果会在右侧 StagePanel 预览,你勾选后才落库。
+            {t('cases:aiAddStepsHint')}
           </p>
           <textarea
             className="input-base input-sm w-full"
             rows={4}
-            placeholder="例如：补充到首页点击『新建订单』,填写订单号、客户名,提交后断言列表出现新行"
+            placeholder={t('cases:aiAddStepsPlaceholder')}
             value={genStepsIntent}
             onChange={(e) => setGenStepsIntent(e.target.value)}
           />
           <DialogFooter>
-            <Button variant="ghost" size="sm" onClick={() => setGenStepsDialogOpen(false)}>取消</Button>
+            <Button variant="ghost" size="sm" onClick={() => setGenStepsDialogOpen(false)}>{t('common:cancel')}</Button>
             <Button
               size="sm"
               onClick={() => {
@@ -1558,7 +1558,7 @@ export default function CaseDetail() {
               }}
             >
               <Icon name="bolt" size={12} />
-              让 AI 补充
+              {t('cases:letAiAdd')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1569,7 +1569,7 @@ export default function CaseDetail() {
         <Dialog open={mobileRecorderOpen} onOpenChange={(o) => !o && setMobileRecorderOpen(false)}>
           <DialogContent style={{ maxWidth: 960, height: '70vh', padding: 0 }}>
             <DialogHeader className="px-5 pt-4 pb-2">
-              <DialogTitle>移动录制</DialogTitle>
+              <DialogTitle>{t('cases:mobileRecording')}</DialogTitle>
             </DialogHeader>
             <div className="flex-1 min-h-0" style={{ height: 'calc(70vh - 56px)' }}>
               <MobileRecorder
