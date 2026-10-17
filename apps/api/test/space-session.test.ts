@@ -102,6 +102,15 @@ describe('space session supervisor', () => {
     expect(out).toContain('版本空间上下文');
   });
 
+  it('buildSpaceSystemPrompt(…,en-US):英文风格段,不含简体中文约束', async () => {
+    const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
+    const en = buildSpaceSystemPrompt(null, 'en-US');
+    expect(en).toContain('Output style');
+    expect(en).not.toContain('简体中文');
+    const enSummary = buildSpaceSystemPrompt('X', 'en-US');
+    expect(enSummary).toContain('版本空间上下文');
+  });
+
   it('requirement 线程不能走空间 supervisor', async () => {
     const { projectId } = await seedProject(pool);
     const req = (await pool.query(`INSERT INTO requirements(project_id, title, content) VALUES ($1,'r','c') RETURNING id`, [projectId])).rows[0]!.id as string;

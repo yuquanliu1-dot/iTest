@@ -17,6 +17,7 @@
  */
 import type { LLMClient } from '../../../agent/llm-client.js';
 import { tryParseJson } from '../../../agent/llm-client.js';
+import { aiLangFrom, type AiLang } from '../../../agent/langDirective.js';
 
 export interface AssertionJudgeResult {
   /** true = 真实 UI 文案，可作断言；false = 描述性短语，应丢弃。 */
@@ -52,11 +53,13 @@ export async function judgeAssertionText(
   assertion: string,
   pageText: string,
   client: LLMClient,
+  lang?: AiLang,
 ): Promise<AssertionJudgeResult> {
   try {
     const r = await client.complete({
       systemPrompt: ASSERTION_JUDGE_PROMPT,
       userMessage: buildUserMessage(assertion, pageText),
+      lang: aiLangFrom(lang ?? null),
     });
     const raw = r.kind === 'json' ? JSON.stringify(r.value) : r.value;
     const parsed = tryParseJson(raw);

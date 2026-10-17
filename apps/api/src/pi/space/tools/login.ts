@@ -94,6 +94,7 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
             const cred = envCtx.login;
             const summary = await runAiTask(page, buildLoginInstruction(targetUrl), client, false, {
               maxTurns: 10,
+              lang: ctx.lang,
               valueSub: (v) =>
                 v === USER_PH ? cred?.user ?? '' : v === PASSWORD_PH ? cred?.password ?? '' : v,
             });

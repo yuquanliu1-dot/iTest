@@ -1,6 +1,7 @@
 import type { Page } from 'playwright-core';
 import type { LLMClient, LLMMessage } from '../agent/llm-client.js';
 import { tryParseJson } from '../agent/llm-client.js';
+import { aiLangFrom, type AiLang } from '../agent/langDirective.js';
 import type { AiUsageAddend } from './aiUsage.js';
 import { logger } from '../logger.js';
 import { annotateAction, clearAnnotation } from './liveView.js';
@@ -335,6 +336,8 @@ export interface RunAiTaskOpts {
   onAction?: (action: AiAction, ok: boolean) => void;
   /** 每轮 LLM complete 后回调（usage/durationMs/model 透传，供 aiUsage 累加）。 */
   onUsage?: (r: AiUsageAddend) => void;
+  /** 界面语言：缺省 zh-CN（执行路径无用户上下文时确定性回落）。 */
+  lang?: AiLang;
 }
 
 /**
@@ -351,6 +354,7 @@ export async function runAiTask(
   opts?: RunAiTaskOpts,
 ): Promise<string> {
   const maxTurns = opts?.maxTurns ?? MAX_TURNS;
+  const lang = opts?.lang ?? aiLangFrom(null);
   const systemPrompt = mobile ? MOBILE_SYSTEM_PROMPT : SYSTEM_PROMPT;
   let lastResults: string[] = [];
   let pendingShot: string | null = null;
@@ -403,6 +407,7 @@ export async function runAiTask(
     const r = await client.complete({
       systemPrompt,
       messages: history,
+      lang,
       // 单轮字段仍给：无 messages 支持的实现按它们走；回退路径共用。
       userMessage,
       ...(buffer ? { image: { base64: buffer.toString('base64'), mime: 'image/png' as const } } : {}),

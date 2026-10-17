@@ -4,10 +4,12 @@ import { judgeAssertionText } from '../src/pi/space/tools/assertionJudge.js';
 
 function makeMockLlm(script: Array<Record<string, unknown> | string>) {
   const requests: string[] = [];
+  const langs: Array<string | undefined> = [];
   const llm: LLMClient = {
     provider: 'anthropic',
     async complete(req): Promise<LLMResult> {
       requests.push(req.userMessage);
+      langs.push(req.lang);
       const raw = script.shift();
       if (raw === undefined) throw new Error('mock script exhausted');
       return typeof raw === 'string'
@@ -15,7 +17,7 @@ function makeMockLlm(script: Array<Record<string, unknown> | string>) {
         : { kind: 'json', value: raw, provider: 'anthropic', vision: true };
     },
   };
-  return { llm, requests };
+  return { llm, requests, langs };
 }
 
 describe('judgeAssertionText', () => {
@@ -64,5 +66,17 @@ describe('judgeAssertionText', () => {
     await judgeAssertionText('保存', 'x'.repeat(9000), llm);
     const msg = requests[0]!;
     expect(msg).not.toContain('x'.repeat(3001));
+  });
+
+  it('4 参调用 lang 透传给 LLM 请求', async () => {
+    const { llm, langs } = makeMockLlm([{ real: true, reason: '' }]);
+    await judgeAssertionText('登录', 'x', llm, 'en-US');
+    expect(langs[0]).toBe('en-US');
+  });
+
+  it('3 参调用缺省回落 zh-CN（确定性 AI 输出语言）', async () => {
+    const { llm, langs } = makeMockLlm([{ real: true, reason: '' }]);
+    await judgeAssertionText('登录', 'x', llm);
+    expect(langs[0]).toBe('zh-CN');
   });
 });

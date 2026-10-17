@@ -36,10 +36,12 @@ function makeStubPage() {
 /** 按轮次脚本化回复的 mock LLM；每轮收到完整 userMessage。 */
 function makeMockLlm(script: Array<Record<string, unknown> | string>) {
   const requests: string[] = [];
+  const langs: Array<string | undefined> = [];
   const llm: LLMClient = {
     provider: 'anthropic',
     async complete(req): Promise<LLMResult> {
       requests.push(req.userMessage);
+      langs.push(req.lang);
       const raw = script.shift();
       if (raw === undefined) throw new Error('mock script exhausted');
       return typeof raw === 'string'
@@ -47,7 +49,7 @@ function makeMockLlm(script: Array<Record<string, unknown> | string>) {
         : { kind: 'json', value: raw, provider: 'anthropic', vision: true };
     },
   };
-  return { llm, requests };
+  return { llm, requests, langs };
 }
 
 describe('solveCaptchaOnce / detectCaptchaFailure（多轮验证）', () => {
@@ -258,5 +260,19 @@ describe('runAiTask', () => {
     const { page } = makeStubPage();
     const { llm } = makeMockLlm(Array.from({ length: 3 }, () => ({ actions: [{ type: 'wait', ms: 1 }] })));
     await expect(runAiTask(page, '完不成', llm, false, { maxTurns: 2 })).rejects.toThrow(/超过 2 轮未完成/);
+  });
+
+  it('lang 缺省回落 zh-CN（无用户上下文确定性输出语言）', async () => {
+    const { page } = makeStubPage();
+    const { llm, langs } = makeMockLlm([{ done: true, summary: 'ok' }]);
+    await runAiTask(page, '一步完成', llm);
+    expect(langs[0]).toBe('zh-CN');
+  });
+
+  it('opts.lang=en-US 透传给 LLM 请求', async () => {
+    const { page } = makeStubPage();
+    const { llm, langs } = makeMockLlm([{ done: true, summary: 'ok' }]);
+    await runAiTask(page, '一步完成', llm, false, { lang: 'en-US' });
+    expect(langs[0]).toBe('en-US');
   });
 });

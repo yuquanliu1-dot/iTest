@@ -56,6 +56,18 @@ describe('rewriteSpacePreamble', () => {
   });
 });
 
+describe('buildSpacePreamble 语言化', () => {
+  it('缺省 zh-CN：产品身份原文', () => {
+    expect(buildSpacePreamble()).toContain('iTest 平台的测试助手');
+  });
+
+  it('en-US：英文产品身份（不混入中文定位）', () => {
+    const out = buildSpacePreamble('en-US');
+    expect(out).toContain('iTest platform');
+    expect(out).not.toContain('iTest 平台的测试助手');
+  });
+});
+
 /** 起一个真实 session 抓「真正发到 provider 的 system prompt」，验证改写只动身份、不伤工具规范。 */
 describe('空间助手 session 的 system prompt（端到端）', () => {
   /** 命中网络请求即抛，作用是截断在 prompt 构造之后。 */

@@ -2,6 +2,7 @@ import { resolveLlmClient } from './llmSettings.js';
 import type { LLMClient, LLMMessage } from './llm-client.js';
 import { completeJson } from './llm-client.js';
 import { CASE_OUTCOME_VISION_PROMPT } from './prompts/case-outcome-vision.js';
+import { aiLangFrom, type AiLang } from './langDirective.js';
 import { newAiUsage, type AiUsageStat } from '../execute/aiUsage.js';
 import { logger } from '../logger.js';
 
@@ -23,6 +24,8 @@ export interface JudgeCaseOutcomeOpts {
   fullScreenshot?: { base64: string; mime: 'image/png' | 'image/jpeg' } | null;
   /** LLM 注入；缺省时按需 resolveLlmClient。 */
   llmClient?: LLMClient;
+  /** 界面语言：缺省 zh-CN 回落（执行路径无用户上下文时确定性回落）。 */
+  lang?: AiLang;
 }
 
 /** 用 vision LLM 判定用例最终截图是否符合 expectedOutcome。
@@ -66,6 +69,7 @@ export async function judgeCaseOutcome(opts: JudgeCaseOutcomeOpts): Promise<Visi
     r = await completeJson(client, {
       systemPrompt: CASE_OUTCOME_VISION_PROMPT,
       userMessage,
+      lang: aiLangFrom(opts.lang ?? null),
       ...(twoImages
         ? { messages: twoImages }
         : { image: opts.screenshot }),
