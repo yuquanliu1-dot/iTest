@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -34,6 +35,7 @@ export default function PlanDetail() {
   const { id, projectId, versionId: vidParam } = useParams<{ id: string; projectId: string; versionId?: string }>();
   const versionId = vidParam ?? null;
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
 
@@ -508,7 +510,7 @@ export default function PlanDetail() {
                 />
                 <FilterSubmenu
                   label="状态"
-                  options={(['draft', 'review', 'ready', 'deprecated'] as const).map((s) => ({ value: s, label: caseStatusLabel(s) }))}
+                  options={(['draft', 'review', 'ready', 'deprecated'] as const).map((s) => ({ value: s, label: t(caseStatusLabel(s)) }))}
                   selected={addFilters.statuses}
                   onChange={(v) => setAddFilters({ ...addFilters, statuses: v })}
                 />
@@ -550,7 +552,7 @@ export default function PlanDetail() {
                     <input type="checkbox" readOnly checked={checked} />
                     <span className="text-[12px] flex-1 truncate" style={{ color: 'var(--foreground)' }}>{c.title}</span>
                     {c.status === 'deprecated' && (
-                      <StatusPill status={c.status}>{caseStatusLabel(c.status)}</StatusPill>
+                      <StatusPill status={c.status}>{t(caseStatusLabel(c.status))}</StatusPill>
                     )}
                     <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>{c.priority}</span>
                   </div>

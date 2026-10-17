@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type VariableReport } from '../api/client';
@@ -40,6 +41,7 @@ function sameStep(a: StepClip, b: StepClip): boolean {
 export default function CaseDetail() {
   const { id, projectId, versionId } = useParams<{ id: string; projectId: string; versionId?: string }>();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
   const recorder = useRecorderStore();
@@ -996,7 +998,7 @@ export default function CaseDetail() {
                                     style={{ color: 'var(--foreground)', fontSize: 12 }}
                                   >
                                     <span className="shrink-0 font-semibold" style={{ color: 'var(--primary)', fontSize: 10 }}>
-                                      {stepKindLabel(getStepKind(s))}
+                                      {t(stepKindLabel(getStepKind(s)))}
                                     </span>
                                     <span className="min-w-0 flex-1 truncate">
                                       {s.instruction?.trim() || stepSummary(s)}

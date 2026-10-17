@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { Locator, QueryDbAction, ObserveLogAction } from '@itest/shared';
 import type { StepAction } from '@itest/shared';
@@ -38,6 +39,7 @@ function FieldError({ msg }: { msg?: string }) {
 /** 步骤编辑抽屉：外壳管类型切换 + 通用字段；DrawerForm 按 kind 重挂载管差异字段。 */
 export default function StepEditDrawer({ initial, mode = 'edit', availableVars = [], datasetVars = [], caseId, platform = 'web', onSave, onClose }: Props) {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { projectId: routeProjectId, versionId: routeVersionId } = useParams<{ projectId: string; versionId: string }>();
   // 移动端可见 kind = 移动 9 + 跨平台可用 6（click/fill/assertVisible/assertText/screenshot/aiTask）
   const MOBILE_ALLOWED_KINDS: ReadonlySet<string> = new Set([
@@ -75,7 +77,7 @@ export default function StepEditDrawer({ initial, mode = 'edit', availableVars =
             className="input-base input-xs input-inline"
             title="切换操作类型（兼容字段自动保留）"
           >
-            {availableKinds.map((k) => <option key={k} value={k}>{stepKindLabel(k)}</option>)}
+            {availableKinds.map((k) => <option key={k} value={k}>{t(stepKindLabel(k))}</option>)}
           </select>
           <div className="flex-1" />
           <SheetClose asChild>
