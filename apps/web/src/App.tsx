@@ -8,6 +8,7 @@ import { useThemeStore } from './stores/theme';
 import { useAuthStore } from './stores/auth';
 import { applyLang, langFromPref } from './stores/lang';
 import LoginPage from './pages/LoginPage';
+import LandingPage from './pages/LandingPage';
 import ProjectsHome from './pages/ProjectsHome';
 import EnvironmentsPage from './pages/EnvironmentsPage';
 import DatasetsPage from './pages/DatasetsPage';
@@ -40,6 +41,8 @@ export default function App() {
       <Routes>
       {/* 公开路由：登录（含首登强制改密） */}
       <Route path="/login" element={<LoginPage />} />
+      {/* 公开路由：产品对外介绍页 */}
+      <Route path="/landing" element={<LandingPage />} />
       {/* 受保护路由：AuthGuard 探测会话后经 AppShell 渲染 */}
       <Route element={<AppShell><AuthGuard /></AppShell>}>
         <Route path="/" element={<ProjectsHome />} />

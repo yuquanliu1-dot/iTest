@@ -19,6 +19,8 @@ packages/shared/src/*.js
 *.jpg
 *.jpeg
 verify-*.jpeg
+# landing 页产品截图（页面引用的静态资源，需随仓库分发）
+!apps/web/public/landing/*.png
 
 # local worktrees
 .worktrees/

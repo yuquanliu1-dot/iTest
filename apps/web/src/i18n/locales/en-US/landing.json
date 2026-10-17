@@ -1,0 +1,62 @@
+{
+  "nav": {
+    "signIn": "Sign in",
+    "openApp": "Open app",
+    "features": "Features",
+    "workflow": "Workflow",
+    "screenshots": "Preview"
+  },
+  "hero": {
+    "badge": "AI-powered test automation platform",
+    "titleLead": "Hand your regression testing to an",
+    "titleAccent": "agent you control",
+    "titleTail": ".",
+    "subtitle": "An AI-native testing platform: generate cases from requirements in one click, replay in dual mode — AI-driven and mechanical DSL, self-healing cases that evolve with every release, and change coverage auto-selected from source diffs.",
+    "primaryCta": "Get started",
+    "secondaryCta": "Learn more"
+  },
+  "showcase": {
+    "eyebrow": "Preview",
+    "title": "One platform across the testing lifecycle",
+    "subtitle": "Real iTest UI captured from everyday usage in production.",
+    "shots": [
+      { "title": "AI assistant workspace", "desc": "Generate and debug cases conversationally — natural language straight to execution" },
+      { "title": "Case editing & replay", "desc": "Browser recordings become editable steps with assertions, parameters and AI steps" },
+      { "title": "Reports & root-cause", "desc": "Per-step screenshots, failure attribution and historical trends at a glance" }
+    ]
+  },
+  "features": {
+    "eyebrow": "Features",
+    "title": "Built for QA teams",
+    "subtitle": "Not another record-and-replay tool — an AI-native testing productivity platform.",
+    "items": [
+      { "title": "Dual-mode replay", "desc": "Two engines in one case: AI-driven replay generalizes across page changes, while mechanical DSL replays run fast and precise — coverage and efficiency, no trade-off." },
+      { "title": "AI-native workspace", "desc": "An AI assistant carries you through case authoring, debugging, execution and root-cause analysis — plain language, end to end." },
+      { "title": "Data-driven testing", "desc": "Bind datasets to case parameters — one row, one scenario. Supports multi-turn interaction data such as agent conversations." },
+      { "title": "Self-healing cases", "desc": "Cases evolve with the version: mechanical DSL updates itself as the page structure changes. No more manual upkeep." },
+      { "title": "Change coverage plans", "desc": "Diff the source, assess the blast radius of each version change, and auto-select cases to cover what changed — no blind regression on new builds." },
+      { "title": "PC & mobile coverage", "desc": "Web and iOS/Android in one platform: mobile cases run on simulators, emulators and real devices." }
+    ]
+  },
+  "workflow": {
+    "eyebrow": "Workflow",
+    "title": "Regression in four steps",
+    "subtitle": "Requirements in, reports out — iTest handles everything in between.",
+    "steps": [
+      { "title": "Bring requirements", "desc": "Paste a doc or link a repo to define scope" },
+      { "title": "Generate cases", "desc": "AI breaks scenarios down into editable cases" },
+      { "title": "Execute", "desc": "Run on schedule in real browsers or emulators" },
+      { "title": "Read reports", "desc": "Per-step screenshots and attribution, fully traceable" }
+    ]
+  },
+  "cta": {
+    "title": "Let regression testing run itself",
+    "subtitle": "Sign in to iTest and grow your test assets from the first requirement.",
+    "button": "Sign in now"
+  },
+  "footer": {
+    "tagline": "AI-powered test automation platform",
+    "backToTop": "Back to top",
+    "copyright": "iTest · All rights reserved"
+  }
+}
