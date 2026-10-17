@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -28,6 +29,7 @@ interface AssistantInitialMessageState {
  * 不在本页面持有 aui(aui 必须在 AssistantRuntimeProvider 内使用)。
  */
 export default function AssistantPage() {
+  const { t } = useTranslation();
   const { versionId } = useParams<{ projectId: string; versionId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -85,11 +87,11 @@ export default function AssistantPage() {
   return (
     <PageShell contained>
       <PageShellHeader>
-        <PageShellTitle>AI 助手</PageShellTitle>
+        <PageShellTitle>{t('common:navAssistant')}</PageShellTitle>
         <PageShellActions>
           {/* select 定宽：input-base 的 width:100% 会把按钮挤换行 */}
           <Button size="sm" disabled={create.isPending} onClick={() => create.mutate()}>
-            {create.isPending ? '创建中…' : '新对话'}
+            {create.isPending ? t('assistant:createInProgress') : t('assistant:newChat')}
           </Button>
           <select
             className="input-base input-sm"
@@ -100,18 +102,18 @@ export default function AssistantPage() {
               setWarning(null);
               setThreadId(e.target.value || null);
             }}
-            aria-label="历史对话"
+            aria-label={t('assistant:historyAria')}
           >
-            {!threadId && <option value="">开始新对话</option>}
-            {threadId && !threads.some((t) => t.id === threadId) && (
-              <option value={threadId}>新对话</option>
+            {!threadId && <option value="">{t('assistant:startNewChat')}</option>}
+            {threadId && !threads.some((thread) => thread.id === threadId) && (
+              <option value={threadId}>{t('assistant:newChat')}</option>
             )}
-            {threads.map((t) => (
-              <option key={t.id} value={t.id}>{t.title || '新对话'}</option>
+            {threads.map((thread) => (
+              <option key={thread.id} value={thread.id}>{thread.title || t('assistant:newChat')}</option>
             ))}
           </select>
         </PageShellActions>
-        <PageShellDescription>用一句话管理用例、环境与计划;意图不明时 AI 会主动追问</PageShellDescription>
+        <PageShellDescription>{t('assistant:subtitle')}</PageShellDescription>
       </PageShellHeader>
 
       <PageShellContent className="min-h-0">
@@ -122,8 +124,8 @@ export default function AssistantPage() {
           >
             {initError}
             <div className="flex gap-2 mt-2">
-              {llmMissing && <Button size="sm" onClick={() => navigate('/settings')}>去设置模型</Button>}
-              <Button size="sm" variant="ghost" disabled={create.isPending} onClick={() => create.mutate()}>重试</Button>
+              {llmMissing && <Button size="sm" onClick={() => navigate('/settings')}>{t('assistant:goConfigureModel')}</Button>}
+              <Button size="sm" variant="ghost" disabled={create.isPending} onClick={() => create.mutate()}>{t('assistant:retry')}</Button>
             </div>
           </div>
         ) : (
@@ -141,8 +143,8 @@ export default function AssistantPage() {
             ) : (
               <EmptyState
                 icon="message"
-                title="开始与 AI 的第一次对话"
-                description="试试「看看现在有哪些环境」或「帮我建三条登录用例」。"
+                title={t('assistant:emptyTitle')}
+                description={t('assistant:emptyDesc')}
               />
             )}
           </>

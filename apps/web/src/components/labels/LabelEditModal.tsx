@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 import Input from '../ui/Input';
 import Button from '../ui/Button';
@@ -17,6 +18,7 @@ interface LabelEditModalProps {
 }
 
 export default function LabelEditModal({ open, label, onClose, onSave }: LabelEditModalProps) {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [color, setColor] = useState('#34c759');
   const [description, setDescription] = useState('');
@@ -50,7 +52,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{label ? '编辑标签' : '新建标签'}</DialogTitle>
+          <DialogTitle>{label ? t('cases:labelEdit.titleEdit') : t('cases:labelEdit.titleCreate')}</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-4 px-5 py-4">
           <div className="flex flex-col gap-1.5">
@@ -58,12 +60,12 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
               className="text-[11px] font-semibold uppercase tracking-[0.06em]"
               style={{ color: 'var(--muted-foreground)' }}
             >
-              名称
+              {t('cases:labelEdit.name')}
             </label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="如：冒烟、回归"
+              placeholder={t('cases:labelEdit.namePlaceholder')}
               autoFocus
             />
           </div>
@@ -73,7 +75,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
               className="text-[11px] font-semibold uppercase tracking-[0.06em]"
               style={{ color: 'var(--muted-foreground)' }}
             >
-              颜色
+              {t('cases:labelEdit.color')}
             </label>
             <div className="flex flex-wrap gap-1.5" data-stagger>
               {PRESET_COLORS.map((c) => {
@@ -118,7 +120,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
                   background: 'var(--popover)',
                   cursor: 'pointer',
                 }}
-                aria-label="自定义颜色"
+                aria-label={t('cases:labelEdit.customColor')}
               />
               <Input
                 value={color}
@@ -132,14 +134,14 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
                 type="button"
                 onClick={() => setColor(PRESET_COLORS[Math.floor(Math.random() * PRESET_COLORS.length)]!)}
               >
-                随机
+                {t('cases:labelEdit.random')}
               </Button>
             </div>
             <div className="flex items-center gap-2 mt-1">
               {/* 预览直接复用 TagChip，保证与列表渲染所见即所得 */}
-              <TagChip tag={{ id: 'preview', name: name.trim() || '标签预览', color: color.replace('#', '') }} size="md" />
+              <TagChip tag={{ id: 'preview', name: name.trim() || t('cases:labelEdit.previewTagName'), color: color.replace('#', '') }} size="md" />
               <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                预览
+                {t('cases:labelEdit.preview')}
               </span>
             </div>
           </div>
@@ -149,14 +151,14 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
               className="text-[11px] font-semibold uppercase tracking-[0.06em]"
               style={{ color: 'var(--muted-foreground)' }}
             >
-              描述（可选）
+              {t('cases:labelEdit.description')}
             </label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
               className="input-base"
-              placeholder="如：上线前必跑、阻塞性回归等"
+              placeholder={t('cases:labelEdit.descriptionPlaceholder')}
             />
           </div>
         </div>
@@ -164,9 +166,9 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
           className="flex justify-end gap-2 px-5 py-4 hairline-top"
           style={{ borderColor: 'var(--border)' }}
         >
-          <Button variant="ghost" onClick={onClose}>取消</Button>
+          <Button variant="ghost" onClick={onClose}>{t('common:cancel')}</Button>
           <Button disabled={!name.trim() || saving} onClick={handleSave}>
-            {saving ? '保存中...' : '保存'}
+            {saving ? t('cases:saving') : t('common:save')}
           </Button>
         </div>
       </DialogContent>

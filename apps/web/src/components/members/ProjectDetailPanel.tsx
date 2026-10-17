@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../stores/ui';
 import { api, type Project, type AssignedUser, type UserSummary, type OrgManagedNode } from '../../api/client';
 import { useProjectStore } from '../../stores/project';
@@ -11,6 +12,7 @@ interface Props { projectId: string; currentOrgId: string; onBack: () => void }
 const PAGE_SIZE = 10;
 
 export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: Props) {
+  const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const organizations = useAuthStore((s) => s.organizations);
   const [project, setProject] = useState<Project | null>(null);
@@ -79,13 +81,13 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
     setSubmitting(true);
     try {
       await api.projects.assignUsers(projectId, [...picked]);
-      toast(`已分配 ${picked.size} 人`, 'success');
+      toast(t('members:assigned', { count: picked.size }), 'success');
       closeAdd();
       api.projects.assignments(projectId, { page, limit: PAGE_SIZE })
         .then((res) => { setAssigned(res.items); setTotal(res.total); })
         .catch(() => {});
     } catch (e) {
-      toast(e instanceof Error ? e.message : '操作失败', 'error');
+      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
     } finally {
       setSubmitting(false);
     }
@@ -98,7 +100,7 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
         .then((res) => { setAssigned(res.items); setTotal(res.total); })
         .catch(() => {});
     } catch (e) {
-      toast(e instanceof Error ? e.message : '操作失败', 'error');
+      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
     }
   };
 
@@ -128,7 +130,7 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
   return (
     <div className="flex flex-col h-full">
       <div className="shrink-0 flex items-center gap-2" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-        <button onClick={onBack} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 13 }}>‹ 返回</button>
+        <button onClick={onBack} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 13 }}>{t('members:back')}</button>
         <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--foreground)' }}>{project?.name ?? ''}</span>
       </div>
 
@@ -136,14 +138,14 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
         <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', marginBottom: 12, padding: 12 }}>
           <div className="flex items-center gap-2">
             <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--foreground)' }}>{project?.name ?? ''}</span>
-            <span style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>已分配 {total}</span>
+            <span style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>{t('members:assignedCount', { count: total })}</span>
             {project && (
               <button
                 className="text-[11px]"
                 style={{ marginLeft: 'auto', padding: '3px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: 'pointer' }}
                 onClick={() => setMoving(true)}
               >
-                移动组织
+                {t('members:moveOrg')}
               </button>
             )}
           </div>
@@ -151,26 +153,26 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
 
         <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           <div className="flex items-center gap-2" style={{ padding: '6px 10px', background: 'var(--background)' }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted-foreground)', flex: 1 }}>已分配用户（{total}）</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted-foreground)', flex: 1 }}>{t('members:assignedUsersTitle', { count: total })}</span>
             <button
               className="text-[11px]"
               style={{ padding: '3px 10px', borderRadius: 6, border: '1px solid var(--primary)', background: 'var(--popover)', color: 'var(--primary)', cursor: 'pointer' }}
               onClick={openAdd}
             >
-              + 批量添加
+              {t('members:batchAdd')}
             </button>
           </div>
 
           <div style={{ padding: '4px 8px' }}>
             {assigned.length === 0 ? (
-              <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>暂无已分配用户</div>
+              <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>{t('members:noAssignedUsers')}</div>
             ) : assigned.map((a) => (
               <div key={a.userId} className="flex items-center gap-2" style={{ padding: '6px 4px', fontSize: 13 }}>
                 <span className="truncate" style={{ flex: 1, color: 'var(--foreground)' }}>
                   {a.displayName ?? a.username} <span style={{ color: 'var(--muted-foreground)' }}>@{a.username}</span>
                 </span>
                 <button className="text-[11px]" style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: 'pointer' }} onClick={() => void removeOne(a.userId)}>
-                  移出
+                  {t('members:remove')}
                 </button>
               </div>
             ))}
@@ -189,13 +191,13 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
       {adding && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { if (e.target === e.currentTarget) closeAdd(); }}>
           <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16, width: 480, maxWidth: 'calc(100vw - 32px)' }}>
-            <h2 style={{ margin: 0, marginBottom: 12, fontSize: 15, fontWeight: 600 }}>批量添加用户</h2>
-            <input value={candidateQ} onChange={(e) => setCandidateQ(e.target.value)} placeholder="搜索用户…" className="input-base input-sm" />
+            <h2 style={{ margin: 0, marginBottom: 12, fontSize: 15, fontWeight: 600 }}>{t('members:batchAddUserTitle')}</h2>
+            <input value={candidateQ} onChange={(e) => setCandidateQ(e.target.value)} placeholder={t('members:searchUserPlaceholder')} className="input-base input-sm" />
             <div style={{ maxHeight: 300, overflowY: 'auto', marginTop: 8, minHeight: 120 }}>
               {candidateLoading ? (
-                <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>搜索中…</div>
+                <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>{t('members:searching')}</div>
               ) : candidates.length === 0 ? (
-                <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>无可添加的用户</div>
+                <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--muted-foreground)' }}>{t('members:noCandidates')}</div>
               ) : candidates.map((u) => (
                 <label key={u.id} className="flex items-center gap-2" style={{ padding: '6px 2px', fontSize: 13, color: 'var(--foreground)', cursor: 'pointer' }}>
                   <input type="checkbox" checked={picked.has(u.id)} onChange={() => togglePick(u.id)} />
@@ -204,12 +206,12 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
               ))}
             </div>
             <div className="flex justify-end gap-2" style={{ marginTop: 12 }}>
-              <button onClick={closeAdd} disabled={submitting} style={{ padding: '6px 14px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>取消</button>
+              <button onClick={closeAdd} disabled={submitting} style={{ padding: '6px 14px', background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--muted-foreground)', borderRadius: 6, cursor: 'pointer' }}>{t('common:cancel')}</button>
               <button onClick={() => void submitBatch()} disabled={picked.size === 0 || submitting} style={{
                 padding: '6px 14px', border: 'none', background: 'var(--primary)', color: 'var(--primary-foreground)', borderRadius: 6,
                 cursor: picked.size === 0 || submitting ? 'default' : 'pointer',
                 opacity: picked.size === 0 || submitting ? 0.6 : 1,
-              }}>{submitting ? '提交中…' : `分配选中 (${picked.size})`}</button>
+              }}>{submitting ? t('members:submitting') : t('members:assignSelected', { count: picked.size })}</button>
             </div>
           </div>
         </div>
@@ -227,7 +229,7 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
           setMoving(false);
           const store = useProjectStore.getState();
           if (store.current?.id === projectId) store.exit();
-          toast('已移动', 'success');
+          toast(t('members:moved'), 'success');
         }}
       />
     </div>

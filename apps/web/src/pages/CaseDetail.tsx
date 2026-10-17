@@ -163,7 +163,7 @@ export default function CaseDetail() {
         ...clip,
         action: c,
         compiled: [c],
-        instruction: i === 0 ? clip.instruction : stepSummary({ compiled: [c] }),
+        instruction: i === 0 ? clip.instruction : stepSummary({ compiled: [c] }, t),
         delayMs: i === 0 ? clip.delayMs : undefined,
       }));
       const next = [...cur];
@@ -1001,7 +1001,7 @@ export default function CaseDetail() {
                                       {t(stepKindLabel(getStepKind(s)))}
                                     </span>
                                     <span className="min-w-0 flex-1 truncate">
-                                      {s.instruction?.trim() || stepSummary(s)}
+                                      {s.instruction?.trim() || stepSummary(s, t)}
                                     </span>
                                   </span>
                                 </TooltipTrigger>
@@ -1011,7 +1011,7 @@ export default function CaseDetail() {
                                   sideOffset={6}
                                   className="block w-fit max-w-[420px] whitespace-pre-wrap break-words text-left font-mono leading-relaxed"
                                 >
-                                  {fullStepDescription(s)}
+                                  {fullStepDescription(s, t)}
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>

@@ -1,6 +1,7 @@
 // apps/web/src/lib/stepSummary.ts
 import type { StepAction } from '@itest/shared';
-/** 步骤一览（列表/抽屉预览/悬浮卡）—— 人读摘要，纯函数，不依赖任何组件。 */
+import type { TFunction } from 'i18next';
+/** 步骤一览（列表/抽屉预览/悬浮卡）—— 人读摘要，纯函数，文案走 i18n key。 */
 
 interface KnownAction {
   kind?: string;
@@ -67,72 +68,94 @@ function targetText(action: KnownAction): string {
   return '';
 }
 
+/** 生成器值/匹配方式/字段标签统一走 i18n key（由 t() 渲染）。 */
 const GEN_LABELS: Record<string, string> = {
-  randomString: '随机字符串',
-  randomNumber: '随机数字',
-  timestamp: '时间戳',
-  prefixTimestamp: '前缀+时间戳',
-  composite: '组合值',
+  randomString: 'cases:stepSummary.gen.randomString',
+  randomNumber: 'cases:stepSummary.gen.randomNumber',
+  timestamp: 'cases:stepSummary.gen.timestamp',
+  prefixTimestamp: 'cases:stepSummary.gen.prefixTimestamp',
+  composite: 'cases:stepSummary.gen.composite',
 };
 
-function valueText(action: KnownAction): string {
+const GEN_FALLBACK = 'cases:stepSummary.gen.generated';
+
+function valueText(action: KnownAction, t: TFunction): string {
   if (action.sensitive || action.value === '__sensitive__') return '***';
   const v = action.value;
   if (typeof v === 'string') return v;
   if (v && typeof v === 'object' && 'mode' in (v as Record<string, unknown>)) {
-    return `(${GEN_LABELS[str((v as { mode?: string }).mode)] ?? '生成值'})`;
+    return `(${t(GEN_LABELS[str((v as { mode?: string }).mode)] ?? GEN_FALLBACK)})`;
   }
   return '';
 }
 
-const MATCH_LABELS: Record<string, string> = { equals: '等于', contains: '包含', notContains: '不包含', regex: '正则' };
+/** 匹配方式展示 key（未知 match 返回 ''）。 */
+const MATCH_LABELS: Record<string, string> = {
+  equals: 'cases:equalsOp',
+  contains: 'cases:matchContains',
+  notContains: 'cases:matchNotContains',
+  regex: 'cases:stepSummary.matchRegex',
+};
+
+function matchLabelKey(action: KnownAction): string {
+  return MATCH_LABELS[str(action.match)] ?? '';
+}
 
 /** 单个动作的简短摘要（已 clip），不带未编译前缀。 */
-function actionSummary(a: KnownAction): string {
-  const t = targetText(a);
+function actionSummary(a: KnownAction, t: TFunction): string {
+  const target = targetText(a);
   switch (a.kind) {
     case 'navigate':
-      return `打开 ${clip(str(a.url), 40)}`;
+      return t('cases:stepSummary.act.navigate', { url: clip(str(a.url), 40) });
     case 'click':
-      return `点击 ${clip(t, 20)}`;
+      return t('cases:stepSummary.act.click', { target: clip(target, 20) });
     case 'hover':
-      return `悬停 ${clip(t, 20)}`;
+      return t('cases:stepSummary.act.hover', { target: clip(target, 20) });
     case 'check':
-      return a.checked === false ? '取消勾选' : '勾选';
+      return a.checked === false ? t('cases:stepSummary.act.uncheck') : t('cases:stepSummary.act.check');
     case 'waitFor':
       // 空定位 = 固定时长等待；有定位 = 等待元素出现
-      if (!t) return `固定等待 ${typeof a.timeoutMs === 'number' ? a.timeoutMs : 5000} ms`;
-      return `等待元素 ${clip(t, 20)}`;
+      if (!target) return t('cases:stepSummary.act.waitFixed', { ms: typeof a.timeoutMs === 'number' ? a.timeoutMs : 5000 });
+      return t('cases:stepSummary.act.waitElement', { target: clip(target, 20) });
     case 'assertVisible':
-      return `断言可见 ${clip(t, 20)}`;
+      return t('cases:stepSummary.act.assertVisible', { target: clip(target, 20) });
     case 'fill':
-      return `输入 ${clip(valueText(a), 40)}`;
+      return t('cases:stepSummary.act.fill', { value: clip(valueText(a, t), 40) });
     case 'select':
-      return `选择 ${clip(str(a.value), 20)}`;
+      return t('cases:stepSummary.act.select', { value: clip(str(a.value), 20) });
     case 'assertText':
-      return `断言文本 ${MATCH_LABELS[str(a.match)] ?? '等于'}「${clip(str(a.equals), 20)}」`;
+      return t('cases:stepSummary.act.assertText', {
+        match: t(matchLabelKey(a) || 'cases:equalsOp'),
+        text: clip(str(a.equals), 20),
+      });
     case 'assertJson':
-      return '断言 JSON';
+      return t('cases:stepSummary.act.assertJson');
     case 'screenshot':
-      return `截图 ${clip(str(a.name), 20)}`;
+      return t('cases:stepSummary.act.screenshot', { name: clip(str(a.name), 20) });
     case 'upload':
-      return '上传文件';
+      return t('cases:stepSummary.act.upload');
     case 'switchTab':
-      return `切换标签页 ${clip(str(a.tabRef), 20)}`;
+      return t('cases:stepSummary.act.switchTab', { tab: clip(str(a.tabRef), 20) });
     case 'extract':
-      return `提取 → {{${clip(str(a.varName), 30)}}}`;
+      return t('cases:stepSummary.act.extract', { name: `{{${clip(str(a.varName), 30)}}}` });
     case 'aiTask':
-      return `智能：${clip(str(a.instruction), 40)}`;
+      return t('cases:stepSummary.act.aiTask', { instruction: clip(str(a.instruction), 40) });
     case 'queryDb':
-      return `查 ${str(a.table)}`;
+      return t('cases:stepSummary.act.queryDb', { table: str(a.table) });
     case 'observeLog': {
       const kw = Array.isArray(a.keywords) ? (a.keywords as unknown[]).map((v) => str(v)).filter(Boolean) : [];
-      return `观察日志${kw.length ? ' · ' + kw.join('/') : ''}`;
+      return kw.length
+        ? t('cases:stepSummary.act.observeLogWithKw', { keywords: kw.join('/') })
+        : t('cases:stepSummary.act.observeLog');
     }
     case 'httpRequest': {
       const saveAs = a.saveAs as { varName?: unknown } | undefined;
       const arrow = saveAs && typeof saveAs.varName === 'string' && saveAs.varName ? ` → {{${saveAs.varName}}}` : '';
-      return `${str(a.method) || 'GET'} ${clip(str(a.url), 40)}${arrow}`;
+      return t('cases:stepSummary.act.httpRequest', {
+        method: str(a.method) || 'GET',
+        url: clip(str(a.url), 40),
+        arrow,
+      });
     }
     default:
       return clip(JSON.stringify(a) ?? String(a), 40);
@@ -142,53 +165,57 @@ function actionSummary(a: KnownAction): string {
 /** 列表/悬浮卡片用的简短摘要（已 clip）。
  *  接收整 step 行（instruction + compiled）。多动作行（AI 一次产出一串 DSL）枚举整条链：
  *  「共 N 步：a → b → …」；单动作行保持历史输出不变。 */
-export function stepSummary(row: StepRowLike | unknown): string {
+export function stepSummary(row: StepRowLike | unknown, t: TFunction): string {
   const r = (row ?? {}) as StepRowLike;
   const actions = pickAllActions(r);
   if (actions.length > 1) {
-    return `共 ${actions.length} 步：${actions.map(actionSummary).join(' → ')}`;
+    return t('cases:stepSummary.multi', {
+      count: actions.length,
+      chain: actions.map((a) => actionSummary(a, t)).join(' → '),
+    });
   }
   // 未编译（compiled 是 []）时 UI 前缀「⚠ 未编译 · 」
-  const uncompiledPrefix = isUncompiled(r) ? '⚠ 未编译 · ' : '';
-  return uncompiledPrefix + actionSummary(actions[0] ?? {});
+  const uncompiledPrefix = isUncompiled(r) ? t('cases:stepSummary.uncompiledPrefix') : '';
+  return uncompiledPrefix + actionSummary(actions[0] ?? {}, t);
 }
 
 /** 单个动作的完整字段行（fullStepDescription 复用；多动作行按块枚举）。 */
-function describeAction(a: KnownAction): string[] {
+function describeAction(a: KnownAction, t: TFunction): string[] {
   const lines: string[] = [];
-  const push = (k: string, v: string) => { if (v) lines.push(`${k}：${v}`); };
+  const push = (labelKey: string, v: string) => { if (v) lines.push(`${t(labelKey)}${v}`); };
 
-  push('类型', str(a.kind));
-  push('定位', targetText(a));
+  push('cases:stepSummary.fieldKind', str(a.kind));
+  push('cases:stepSummary.fieldLocator', targetText(a));
   if (Array.isArray(a.locator) && a.locator.length > 1) {
     const extra = a.locator
       .slice(1)
       .map((l) => `${str(l.strategy) || 'css'}=${str(l.value ?? '')}`)
       .join('\n  ');
-    if (extra) lines.push(`备用定位：\n  ${extra}`);
+    if (extra) lines.push(`${t('cases:stepSummary.fieldBackupLocator')}${extra}`);
   }
-  push('URL', str(a.url));
-  if (a.value !== undefined) push('值', valueText(a));
-  push('断言匹配', MATCH_LABELS[str(a.match)] ?? '');
-  push('断言等于', str(a.equals));
-  push('标签页', str(a.tabRef));
-  push('抽取变量', str(a.varName));
-  push('指令', str(a.instruction));
-  push('表名', str(a.table));
-  if (Array.isArray(a.keywords)) push('日志关键字', (a.keywords as unknown[]).map((v) => str(v)).filter(Boolean).join(' / '));
+  push('cases:stepSummary.fieldUrl', str(a.url));
+  if (a.value !== undefined) push('cases:stepSummary.fieldValue', valueText(a, t));
+  const matchKey = matchLabelKey(a);
+  if (matchKey) push('cases:stepSummary.fieldAssertMatch', t(matchKey));
+  push('cases:stepSummary.fieldAssertEquals', str(a.equals));
+  push('cases:stepSummary.fieldTab', str(a.tabRef));
+  push('cases:stepSummary.fieldExtractVar', str(a.varName));
+  push('cases:stepSummary.fieldInstruction', str(a.instruction));
+  push('cases:stepSummary.fieldTable', str(a.table));
+  if (Array.isArray(a.keywords)) push('cases:stepSummary.fieldLogKeywords', (a.keywords as unknown[]).map((v) => str(v)).filter(Boolean).join(' / '));
   if (a.kind === 'httpRequest') {
-    push('请求方式', str(a.method));
-    push('请求体', typeof a.body === 'string' ? clip(a.body, 200) : '');
-    if (a.carryLoginState) lines.push('携带登录态：是');
+    push('cases:stepSummary.fieldHttpMethod', str(a.method));
+    push('cases:stepSummary.fieldHttpBody', typeof a.body === 'string' ? clip(a.body, 200) : '');
+    if (a.carryLoginState) lines.push(t('cases:stepSummary.httpCarryLogin'));
     const saveAs = a.saveAs as { varName?: unknown; from?: unknown; path?: unknown } | undefined;
     if (saveAs) {
-      const from = saveAs.from === 'status' ? '状态码' : '响应体';
-      push('提取变量', `{{${str(saveAs.varName)}}} ← ${from}${saveAs.path ? `.${str(saveAs.path)}` : ''}`);
+      const from = saveAs.from === 'status' ? t('cases:saveVarFromStatus') : t('cases:saveVarFromBody');
+      push('cases:stepSummary.fieldExtractVar', `{{${str(saveAs.varName)}}} ← ${from}${saveAs.path ? `.${str(saveAs.path)}` : ''}`);
     }
     const assertion = a.assertion as { status?: unknown; match?: unknown; expected?: unknown } | undefined;
     if (assertion) {
-      if (assertion.status !== undefined) push('断言状态码', String(assertion.status));
-      if (assertion.expected !== undefined) push('断言响应', `${MATCH_LABELS[str(assertion.match)] ?? '包含'}「${clip(str(assertion.expected), 60)}」`);
+      if (assertion.status !== undefined) push('cases:stepSummary.fieldAssertStatus', String(assertion.status));
+      if (assertion.expected !== undefined) push('cases:stepSummary.fieldAssertBody', `${t(matchLabelKey(assertion as KnownAction) || 'cases:matchContains')}「${clip(str(assertion.expected), 60)}」`);
     }
   }
   return lines;
@@ -196,25 +223,25 @@ function describeAction(a: KnownAction): string[] {
 
 /** tooltip/抽屉预览用的完整描述：所有关键字段，不截断。带换行。
  *  多动作行按「【动作 i/N】」分块枚举整条 compiled 链，行级 instruction 附在末尾。 */
-export function fullStepDescription(row: StepRowLike | unknown): string {
+export function fullStepDescription(row: StepRowLike | unknown, t: TFunction): string {
   const r = (row ?? {}) as StepRowLike;
   const actions = pickAllActions(r);
 
   const footer: string[] = [];
-  const pushFooter = (k: string, v: string) => { if (v) footer.push(`${k}：${v}`); };
-  pushFooter('自然语言', str(r.instruction));
-  if (isUncompiled(r)) footer.push('编译状态：未编译 · 点右侧「AI 编译」补');
+  const pushFooter = (labelKey: string, v: string) => { if (v) footer.push(`${t(labelKey)}${v}`); };
+  pushFooter('cases:stepSummary.fieldNaturalLang', str(r.instruction));
+  if (isUncompiled(r)) footer.push(t('cases:stepSummary.compileStateUncompiled'));
 
   if (actions.length > 1) {
-    const blocks = actions.map((a, i) => `【动作 ${i + 1}/${actions.length}】\n${describeAction(a).join('\n')}`);
+    const blocks = actions.map((a, i) => `${t('cases:stepSummary.actionBlock', { i: i + 1, n: actions.length })}\n${describeAction(a, t).join('\n')}`);
     if (footer.length) blocks.push(footer.join('\n'));
     return blocks.join('\n\n');
   }
 
-  const lines = describeAction(actions[0] ?? {});
+  const lines = describeAction(actions[0] ?? {}, t);
   lines.push(...footer);
 
-  if (lines.length === 0 || (lines.length === 1 && lines[0]?.startsWith('类型：'))) {
+  if (lines.length === 0 || (lines.length === 1 && lines[0]?.startsWith(t('cases:stepSummary.fieldKind')))) {
     // 兜底：JSON 序列化所有字段，便于调试未识别 kind
     try { return JSON.stringify(row, null, 2); } catch { return String(row); }
   }

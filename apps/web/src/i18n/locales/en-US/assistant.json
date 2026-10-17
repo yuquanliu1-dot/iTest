@@ -95,5 +95,14 @@
   },
   "liveView": {
     "title": "Live view"
-  }
+  },
+  "subtitle": "Manage cases, environments and plans in one sentence; when the intent is unclear the AI will ask for clarification",
+  "createInProgress": "Creating…",
+  "newChat": "New chat",
+  "historyAria": "Chat history",
+  "startNewChat": "Start a new chat",
+  "goConfigureModel": "Go to model settings",
+  "retry": "Retry",
+  "emptyTitle": "Start your first chat with AI",
+  "emptyDesc": "Try \"see what environments are available\" or \"create three login cases for me\"."
 }

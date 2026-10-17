@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, type OrgProjectSummary } from '../../api/client';
 import Badge from './Badge';
 
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export default function ProjectListTab({ orgId, includeSubtree, q, page, pageSize, onTotal, onOpen }: Props) {
+  const { t } = useTranslation();
   const [items, setItems] = useState<OrgProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -31,10 +33,10 @@ export default function ProjectListTab({ orgId, includeSubtree, q, page, pageSiz
   }, [orgId, includeSubtree, q, page, pageSize, onTotal]);
 
   if (loading && items.length === 0) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>加载中…</div>;
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>{t('common:loading')}</div>;
   }
   if (items.length === 0) {
-    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>暂无项目</div>;
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted-foreground)', fontSize: 13 }}>{t('members:noProjects')}</div>;
   }
   return (
     <>
@@ -51,7 +53,7 @@ export default function ProjectListTab({ orgId, includeSubtree, q, page, pageSiz
               <div className="truncate" style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{p.description}</div>
             )}
           </div>
-          <Badge label={`已分配 ${p.assignedCount}`} />
+          <Badge label={t('members:assignedCount', { count: p.assignedCount })} />
         </div>
       ))}
     </>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 
 interface Props {
@@ -16,6 +17,7 @@ interface Props {
  * - Edit：name/description 可改；parentId 只读（避免误操作把子树搬成环）。
  */
 export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose, onSaved }: Props) {
+  const { t } = useTranslation();
   const [form, setForm] = useState({ name: '', description: '' });
   const [editParentId, setEditParentId] = useState('');
   const [saving, setSaving] = useState(false);
@@ -57,7 +59,7 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
         });
       } else {
         if (!editParentId) {
-          setError('请选择上级组织');
+          setError(t('members:needParentOrg'));
           setSaving(false);
           return;
         }
@@ -65,7 +67,7 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
       }
       onSaved();
     } catch (e) {
-      setError(e instanceof Error ? e.message : '操作失败');
+      setError(e instanceof Error ? e.message : t('members:opFailed'));
     } finally {
       setSaving(false);
     }
@@ -90,7 +92,7 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
         }}
       >
         <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--foreground)' }}>
-          {isEdit ? '编辑组织' : '新建组织'}
+          {isEdit ? t('members:editOrg') : t('members:newOrg')}
         </h2>
 
         {error && (
@@ -104,7 +106,7 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
           type="text"
           value={form.name}
           onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          placeholder="组织名称"
+          placeholder={t('members:orgNamePlaceholder')}
           onKeyDown={(e) => { if (e.key === 'Enter') void handleSubmit(); }}
           className="input-base"
         />
@@ -115,12 +117,12 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
               type="text"
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              placeholder="组织描述（可选）"
+              placeholder={t('members:orgDescPlaceholder')}
               onKeyDown={(e) => { if (e.key === 'Enter') void handleSubmit(); }}
               className="input-base"
             />
             <div style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
-              上级组织：{allOrgs.find((o) => o.id === editParentId)?.name ?? '（无）'}
+              {t('members:parentOrgLine', { name: allOrgs.find((o) => o.id === editParentId)?.name ?? t('members:noParent') })}
             </div>
           </>
         ) : (
@@ -141,7 +143,7 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
             disabled={saving}
             style={{ fontSize: 13, padding: '6px 14px', color: 'var(--muted-foreground)', background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' }}
           >
-            取消
+            {t('common:cancel')}
           </button>
           <button
             onClick={() => void handleSubmit()}
@@ -153,7 +155,7 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
               opacity: saving || !form.name.trim() ? 0.6 : 1,
             }}
           >
-            {isEdit ? '保存' : '创建'}
+            {isEdit ? t('common:save') : t('members:create')}
           </button>
         </div>
       </div>

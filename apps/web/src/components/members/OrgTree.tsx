@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { orgTreeApi } from '../../api/orgTree';
 
 export interface OrgTreeNode {
@@ -20,6 +21,7 @@ interface Props {
 }
 
 export default function OrgTree({ selectedOrgId, onSelect, canManage, onCreate, reloadToken }: Props) {
+  const { t } = useTranslation();
   const [nodes, setNodes] = useState<OrgTreeNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -53,29 +55,29 @@ export default function OrgTree({ selectedOrgId, onSelect, canManage, onCreate, 
     <div className="flex flex-col h-full">
       <div className="shrink-0 flex items-center justify-between" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
         <h2 className="text-[14px] font-semibold" style={{ color: 'var(--foreground)' }}>
-          组织
+          {t('members:orgTreeTitle')}
         </h2>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 6px' }}>
         {loading ? (
           <div style={{ textAlign: 'center', padding: 32, color: 'var(--muted-foreground)', fontSize: 13 }}>
-            加载中…
+            {t('common:loading')}
           </div>
         ) : failed ? (
           <div style={{ textAlign: 'center', padding: 32, color: 'var(--destructive)', fontSize: 13 }}>
-            <div>加载失败</div>
+            <div>{t('members:loadFailed')}</div>
             <button
               onClick={() => setAttempt((a) => a + 1)}
               className="rounded text-[12px]"
               style={{ marginTop: 8, padding: '4px 12px', border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--primary)', cursor: 'pointer' }}
             >
-              重试
+              {t('members:retry')}
             </button>
           </div>
         ) : nodes.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 32, color: 'var(--muted-foreground)', fontSize: 13 }}>
-            暂无组织
+            {t('members:noOrgs')}
           </div>
         ) : (
           nodes.map((n) => {
@@ -114,7 +116,7 @@ export default function OrgTree({ selectedOrgId, onSelect, canManage, onCreate, 
             className="w-full rounded text-[12px]"
             style={{ padding: '6px 0', border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--primary)', cursor: 'pointer' }}
           >
-            + 新建组织
+            {t('members:newOrgBtn')}
           </button>
         </div>
       )}
