@@ -11,7 +11,7 @@ import { aiThreads } from '../../db/schema.js';
 import { logger } from '../../logger.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import { assertVersionVisible } from '../../services/projectAccess.js';
-import { sseHeaders, sseSend } from '../../sse/pi.js';
+import { sseHeaders, sseSend, startSseHeartbeat } from '../../sse/pi.js';
 import { handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf } from '../../execute/liveView.js';
 import type { AuthUser } from '../../services/auth.service.js';
 import { readLlmConfig } from '../modelBridge.js';
@@ -141,20 +141,32 @@ spaceRoute.get('/threads/:id/events', async (req, res) => {
   // close 事件已触发过、之后再注册的 unsub 永远不会执行 → 监听器泄漏。
   let closed = false;
   let unsub: (() => void) | null = null;
-  req.on('close', () => { closed = true; unsub?.(); });
+  // 心跳:长任务(verify_case 单步 AI 相可静默 240s)期间保证字节流不中断,否则 nginx
+  // proxy_read_timeout(300s)会在读侧静默时段掐掉连接,react-pi 永不重连 = 前端永久冻结。
+  // 注释帧 `: ping` 被 EventSource 丢弃,只保活不产生事件。写失败/断连即清定时器收尾。
+  const stopHeartbeat = startSseHeartbeat(res);
+  const cleanup = (): void => {
+    stopHeartbeat();
+    unsub?.();
+  };
+  res.on('error', cleanup);
+  req.on('close', () => { closed = true; cleanup(); });
   // 订阅前先确保 session 已构建:SSE 早于首条消息时若无 record,listener 会注册到
   // noop 上,后续 confirm_request/stage 全丢;ensure 幂等单飞,已有缓存直接返回。
   // 失败(LLM 未配置等)保留空快照语义,不中断连接。
   try { await ensureSpaceRecord(req.params.id!); } catch { /* 线程无法活跃,仍可接收快照 */ }
-  if (closed) return;
+  if (closed) { cleanup(); return; }
   try {
     const send = (e: unknown) => sseSend(res, e as unknown as Parameters<typeof sseSend>[1]);
-    // subscribeThread 自带 snapshot(无活跃 session 时发合法空快照);
-    // confirm_request / 舞台事件经 emitThreadEvent 走同一 listeners 通道。
+    // subscribeThread 自带 snapshot(无活跃 session 时发合法空快照),并在快照后按原序重放
+    // 断线期间缓冲的会话内自定义事件(verify_progress/announce/stage/…)与仍挂起的确认卡,
+    // 前端 store 按 seq 去重——重连不丢实时状态;confirm_request / 舞台事件经 emitThreadEvent
+    // 走同一 listeners 通道。
     // subscribeThread 同步返回 unsub:自上方的 closed 检查到赋值之间无 await,无竞态窗口。
     unsub = subscribeThread(req.params.id!, send, { includeSnapshot: true });
   } catch {
-    res.end();
+    cleanup();
+    if (res.writable && !res.writableEnded) res.end();
   }
 });
 

@@ -25,6 +25,9 @@ type Resolver = (approved: boolean) => void;
 interface PendingEntry {
   resolve: Resolver;
   timer: NodeJS.Timeout;
+  /** confirm_request 事件体快照:SSE 断线重连时只重放仍挂起的确认卡(session.ts 的
+   *  subscribeThread 读取),已处理/已超时的卡随 pending 删除自动从重放源消失,不会复活。 */
+  payload: Record<string, unknown>;
 }
 
 export const CONFIRM_TIMEOUT_MS = 5 * 60_000;
@@ -39,6 +42,8 @@ const pending = new Map<string, PendingEntry>();
  */
 export function requestConfirmation(req: ConfirmRequestInput, emit: (e: Record<string, unknown>) => void): Promise<boolean> {
   const confirmId = randomUUID();
+  // 事件体一次构造:emit(直播)与 pending.payload(重连重放)共用同一份,保证两路一致
+  const payload = { type: 'confirm_request', confirmId, ...req } as Record<string, unknown>;
   return new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(confirmId);
@@ -50,8 +55,9 @@ export function requestConfirmation(req: ConfirmRequestInput, emit: (e: Record<s
         resolve(approved);
       },
       timer,
+      payload,
     });
-    emit({ type: 'confirm_request', confirmId, ...req });
+    emit(payload);
   });
 }
 
@@ -62,6 +68,11 @@ export function resolveConfirmation(confirmId: string, approved: boolean): boole
   pending.delete(confirmId);
   entry.resolve(approved);
   return true;
+}
+
+/** 挂起中的确认卡事件体列表(供 SSE 重连重放);只含仍挂起的卡,超时/已处理自动不在列。 */
+export function pendingConfirmPayloads(): Array<Record<string, unknown>> {
+  return [...pending.values()].map((e) => e.payload);
 }
 
 export function pendingCountForTesting(): number {
