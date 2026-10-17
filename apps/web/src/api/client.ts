@@ -3,10 +3,13 @@ const BASE = '/api';
 /** 带 HTTP 状态码的请求错误；调用方可据此区分 404（不存在/不可见）等确定性失败。 */
 export class ApiError extends Error {
   status: number;
+  /** 后端稳定错误码(errorHandler 里 HttpError.code / 校验与冲突兜底码)。无码时为 undefined。 */
+  code?: string;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -37,7 +40,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       window.location.assign('/login');
     }
     const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, body.message ?? `HTTP ${res.status}`);
+    throw new ApiError(res.status, body.message ?? `HTTP ${res.status}`, typeof body?.error === 'string' ? body.error : undefined);
   }
   // 204 No Content：DELETE 等空响应直接返回 undefined，不尝试解析 JSON。
   if (res.status === 204) return undefined as T;
