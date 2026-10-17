@@ -125,5 +125,14 @@ UserMenu 下拉内置语言切换项(theme 切换同类入口)。用户点击 �
 
 ## 11. 开放项(实施计划阶段定)
 
-- recorder 用 Chrome `_locales` 还是轻量 JS dict
+- ~~recorder 用 Chrome `_locales` 还是轻量 JS dict~~ → **已定**:`_locales`(Task 21,default_locale zh_CN,48 键 ×2 全量对等)
 - 「仓库不可用」类零散非结构化返回的最终处理方式
+
+### Task 23 冒烟残差(双语运行时验证)
+
+- **en 浏览器全链路未做运行时走查**。chrome-devtools MCP 浏览器反复回收标签页,zh 巡检 + 关键页(登录/项目/版本/进入工作区)零变化已实测,en 的「UI 全英文 / 403 toast 英文 / 计划运行状态徽标英文」仅由静态闸锁定(i18n:check en⊇zh + typecheck + 61 web 测试),未逐屏断言。
+- **AI 输出英文运行时验证依赖 worktree api**。冒烟时 54321 上是主树 api(迁移前,AI 输出恒 zh);langDirective→LLM 的英文路径只在 worktree api 里,未起服务。单元级已锁定:i18n-st 26 测试(en 断言)+ 工具 summary 双语。
+- **recorder 扩展真机语言切换未验**。`_locales` 双语为静态对等验证(48×2,default_locale zh_CN 保今天行为),popup/panel/Shadow HUD 运行时语言需手工加载 unpacked 确认。
+- **api 全量测试并行 testcontainers flake(既存,非 i18n)**。recorder-relativize/cases-versions 全量并行会争 postgres:16-alpine 容器偶发失败,单文件跑全过。
+- **web lint react-hooks/exhaustive-deps error(既存,非 i18n)**。6e11b81 起的配置问题,branch 未动 eslint 配置;本计划闸 = typecheck + i18n:check + test,不含 lint。
+- **recorder typecheck selector-core TS2367 ×3(既存,非 i18n)**。b37dbc0 起,'xpath' 与 'text'|'role'|'testId'|'css' 无重叠;Task 21 闸 = vitest run + build。
