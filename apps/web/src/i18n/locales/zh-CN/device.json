@@ -1,0 +1,21 @@
+{
+  "title": "设备目标",
+  "back": "返回",
+  "addTitle": "新增设备目标",
+  "editTitle": "编辑设备目标",
+  "saved": "已保存",
+  "deleted": "已删除",
+  "saving": "保存中...",
+  "deleting": "删除中...",
+  "confirmDelete": "确认删除",
+  "emptyTitle": "暂无设备目标",
+  "emptyDescription": "为移动端用例指定 iOS Simulator / Android Emulator 设备。",
+  "edit": "编辑",
+  "nameLabel": "名称",
+  "platform": "平台",
+  "deviceRefLabel": "设备标识（simulator name / Android emulator 名）",
+  "bundleIdLabel": "默认 bundleId（可选）",
+  "appPathLabel": "默认 .app / .apk 路径（可选）",
+  "deleteTitle": "删除设备目标",
+  "deleteConfirm": "确认删除「{{name}}」？绑定的 mobile 用例将自动解绑（mobileDeviceTargetId 置 null）。"
+}

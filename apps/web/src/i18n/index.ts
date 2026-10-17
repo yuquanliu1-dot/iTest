@@ -23,14 +23,22 @@ import zhOverview from './locales/zh-CN/overview.json';
 import enOverview from './locales/en-US/overview.json';
 import zhAssistant from './locales/zh-CN/assistant.json';
 import enAssistant from './locales/en-US/assistant.json';
+import zhEnvironments from './locales/zh-CN/environments.json';
+import enEnvironments from './locales/en-US/environments.json';
+import zhDatasets from './locales/zh-CN/datasets.json';
+import enDatasets from './locales/en-US/datasets.json';
+import zhDevice from './locales/zh-CN/device.json';
+import enDevice from './locales/en-US/device.json';
+import zhMobile from './locales/zh-CN/mobile.json';
+import enMobile from './locales/en-US/mobile.json';
 
 export type Lang = 'zh-CN' | 'en-US';
 
 export const LANG_STORAGE_KEY = 'itest-lang';
 
 const resources = {
-  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, members: zhMembers, cases: zhCases, groups: zhGroups, plans: zhPlans, reports: zhReports, overview: zhOverview, assistant: zhAssistant },
-  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, members: enMembers, cases: enCases, groups: enGroups, plans: enPlans, reports: enReports, overview: enOverview, assistant: enAssistant },
+  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, members: zhMembers, cases: zhCases, groups: zhGroups, plans: zhPlans, reports: zhReports, overview: zhOverview, assistant: zhAssistant, environments: zhEnvironments, datasets: zhDatasets, device: zhDevice, mobile: zhMobile },
+  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, members: enMembers, cases: enCases, groups: enGroups, plans: enPlans, reports: enReports, overview: enOverview, assistant: enAssistant, environments: enEnvironments, datasets: enDatasets, device: enDevice, mobile: enMobile },
 };
 
 void i18n.use(initReactI18next).init({

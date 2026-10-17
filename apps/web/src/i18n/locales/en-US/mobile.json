@@ -1,0 +1,19 @@
+{
+  "title": "Mobile Recorder",
+  "selectTarget": "Select device target",
+  "pleaseSelectTarget": "Please select a device target first",
+  "start": "Start",
+  "finish": "Finish",
+  "startFailed": "Failed to start",
+  "wroteSteps": "Written {{count}} steps",
+  "wroteSteps_one": "Written {{count}} step",
+  "wroteSteps_other": "Written {{count}} steps",
+  "startSessionFirst": "Please start a session first",
+  "noStepsRecorded": "No steps recorded yet",
+  "previewHint": "Embedded preview after starting the daemon",
+  "noNodes": "No nodes",
+  "recordedCount": "{{count}} steps recorded this session",
+  "recordedCount_one": "{{count}} step recorded this session",
+  "recordedCount_other": "{{count}} steps recorded this session",
+  "writeToCase": "Write to case"
+}

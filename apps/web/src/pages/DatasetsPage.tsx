@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Creator, type DatasetMaskedCell, type DatasetSaveBody, type DatasetSummary } from '../api/client';
@@ -33,6 +34,7 @@ export default function DatasetsPage() {
   const navigate = useNavigate();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
+  const { t } = useTranslation();
   const { data: list, isLoading } = useQuery({
     queryKey: ['datasets', projectId],
     queryFn: () => api.datasets.list(projectId!),
@@ -76,7 +78,7 @@ export default function DatasetsPage() {
       return d.id ? api.datasets.update(projectId!, d.id, body) : api.datasets.create(projectId!, body);
     },
     onSuccess: () => {
-      toast('已保存', 'success');
+      toast(t('datasets:saved'), 'success');
       setDraft(null);
       qc.invalidateQueries({ queryKey: ['datasets', projectId] });
     },
@@ -86,7 +88,7 @@ export default function DatasetsPage() {
   const remove = useMutation({
     mutationFn: async (target: DatasetSummary) => api.datasets.remove(projectId!, target.id, { confirm: true }),
     onSuccess: (_r, target) => {
-      toast(`已删除数据集（${target.name}）`, 'success');
+      toast(t('datasets:deletedWithName', { name: target.name }), 'success');
       setConfirmDelete(null);
       qc.invalidateQueries({ queryKey: ['datasets', projectId] });
     },
@@ -159,7 +161,7 @@ export default function DatasetsPage() {
   const applyTsv = () => {
     const lines = tsvText.replace(/\r/g, '').split('\n').filter((l) => l.trim() !== '');
     if (lines.length < 2) {
-      toast('至少需要表头 + 1 行数据', 'error');
+      toast(t('datasets:tsvNeedAtLeast'), 'error');
       return;
     }
     const headers = lines[0]!.split('\t').map((h) => h.trim());
@@ -180,7 +182,7 @@ export default function DatasetsPage() {
     });
     setTsvOpen(false);
     setTsvText('');
-    toast(`已导入 ${lines.length - 1} 行`, 'success');
+    toast(t('datasets:importedRows', { count: lines.length - 1 }), 'success');
   };
 
   const saveBlocked = useMemo(() => {
@@ -199,14 +201,14 @@ export default function DatasetsPage() {
         <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
           <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
             <Icon name="chevronLeft" size={12} />
-            项目列表
+            {t('datasets:backToProjects')}
           </Button>
           <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
-          <h1 className="text-[16px] font-semibold" style={{ color: 'var(--foreground)' }}>数据集</h1>
+          <h1 className="text-[16px] font-semibold" style={{ color: 'var(--foreground)' }}>{t('datasets:title')}</h1>
           <div className="flex-1" />
           <Button onClick={() => setDraft({ ...emptyDraft, rows: [{ disabled: false, cells: {} }] })}>
             <Icon name="plus" size={12} />
-            新建数据集
+            {t('datasets:createDataset')}
           </Button>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto p-6">
@@ -218,18 +220,18 @@ export default function DatasetsPage() {
             ) : (list ?? []).length === 0 ? (
               <EmptyState
                 icon="table"
-                title="暂无数据集"
-                description="新建数据集后，在用例执行设置里绑定即可实现数据驱动回放（N 行 = N 次回放）。"
+                title={t('datasets:emptyTitle')}
+                description={t('datasets:emptyDescription')}
               />
             ) : (
               <table className="w-full text-[12px]">
                 <thead>
                   <tr className="hairline-bottom" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>
-                    <th className="text-left font-medium px-4 py-2">名称</th>
-                    <th className="text-left font-medium px-4 py-2">创建人</th>
-                    <th className="text-left font-medium px-4 py-2">列</th>
-                    <th className="text-left font-medium px-4 py-2">行（启用/总数）</th>
-                    <th className="text-left font-medium px-4 py-2">更新时间</th>
+                    <th className="text-left font-medium px-4 py-2">{t('datasets:colName')}</th>
+                    <th className="text-left font-medium px-4 py-2">{t('datasets:colCreator')}</th>
+                    <th className="text-left font-medium px-4 py-2">{t('datasets:colColumns')}</th>
+                    <th className="text-left font-medium px-4 py-2">{t('datasets:colRows')}</th>
+                    <th className="text-left font-medium px-4 py-2">{t('datasets:colUpdatedAt')}</th>
                     <th className="px-4 py-2" />
                   </tr>
                 </thead>
@@ -263,15 +265,15 @@ export default function DatasetsPage() {
         </div>
         <Dialog open={!!confirmDelete} onOpenChange={(o) => !o && setConfirmDelete(null)}>
           <DialogContent style={{ maxWidth: 420 }}>
-            <DialogHeader><DialogTitle>删除数据集</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>{t('datasets:delete.title')}</DialogTitle></DialogHeader>
             <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-              确认删除「{confirmDelete?.name}」？{confirmDelete ? `${confirmDelete.enabledRowCount} 个启用行将一并删除` : ''}
-              ，绑定该数据集的用例将自动解绑（回放退回单次执行）。
+              {t('datasets:delete.confirmPrefix', { name: confirmDelete?.name })}{confirmDelete ? t('datasets:delete.rowsAlsoDeleted', { count: confirmDelete.enabledRowCount }) : ''}
+              {t('datasets:delete.unbindSuffix')}
             </div>
             <DialogFooter>
-              <Button variant="ghost" onClick={() => setConfirmDelete(null)}>取消</Button>
+              <Button variant="ghost" onClick={() => setConfirmDelete(null)}>{t('common:cancel')}</Button>
               <Button variant="danger" disabled={remove.isPending} onClick={() => confirmDelete && remove.mutate(confirmDelete)}>
-                {remove.isPending ? '删除中...' : '确认删除'}
+                {remove.isPending ? t('datasets:deleting') : t('datasets:confirmDelete')}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -286,35 +288,35 @@ export default function DatasetsPage() {
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
         <Button variant="ghost" size="sm" onClick={() => setDraft(null)}>
           <Icon name="chevronLeft" size={12} />
-          返回列表
+          {t('datasets:backToList')}
         </Button>
         <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
         <h1 className="text-[16px] font-semibold" style={{ color: 'var(--foreground)' }}>
-          {draft.id ? '编辑数据集' : '新建数据集'}
+          {draft.id ? t('datasets:editDataset') : t('datasets:createDataset')}
         </h1>
         <div className="flex-1" />
         <Button variant="ghost" size="sm" onClick={() => setTsvOpen(true)}>
           <Icon name="upload" size={12} />
-          从 Excel 粘贴
+          {t('datasets:pasteFromExcel')}
         </Button>
         <Button onClick={() => save.mutate(draft)} disabled={saveBlocked || save.isPending}>
-          {save.isPending ? '保存中...' : '保存'}
+          {save.isPending ? t('datasets:saving') : t('common:save')}
         </Button>
       </div>
 
       <div className="flex-1 min-h-0 overflow-auto p-6">
         <div className="flex flex-col gap-4 max-w-[960px]">
           <div className="flex gap-3">
-            <Input label="名称" value={draft.name} onChange={(e) => mutate((d) => ({ ...d, name: e.target.value }))} className="flex-1" />
-            <Input label="描述（可选）" value={draft.description} onChange={(e) => mutate((d) => ({ ...d, description: e.target.value }))} className="flex-1" />
+            <Input label={t('datasets:nameLabel')} value={draft.name} onChange={(e) => mutate((d) => ({ ...d, name: e.target.value }))} className="flex-1" />
+            <Input label={t('datasets:descLabel')} value={draft.description} onChange={(e) => mutate((d) => ({ ...d, description: e.target.value }))} className="flex-1" />
           </div>
           {draft.createdBy && (
             <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              创建人 {creatorName(draft.createdBy)}
+              {t('datasets:createdByWithName', { name: creatorName(draft.createdBy) })}
             </p>
           )}
           <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-            列名即回放变量名（{'{{列名}}'}），须字母/下划线开头。敏感列加密存储，报告与详情中显示为掩码。禁用行回放时跳过。
+            {t('datasets:editorHint', { col: '{{列名}}' })}
           </p>
 
           <div className="bg-card border rounded-[var(--radius-md)] overflow-auto">
@@ -322,7 +324,7 @@ export default function DatasetsPage() {
               <thead>
                 <tr style={{ background: 'var(--muted)' }}>
                   <th className="px-3 py-2 w-[70px]">
-                    <span className="text-[10px] font-medium" style={{ color: 'var(--muted-foreground)' }}>禁用</span>
+                    <span className="text-[10px] font-medium" style={{ color: 'var(--muted-foreground)' }}>{t('datasets:colDisabled')}</span>
                   </th>
                   <th className="px-2 py-2 w-[36px]">
                     <span className="text-[10px] font-medium" style={{ color: 'var(--muted-foreground)' }}>#</span>
@@ -335,18 +337,18 @@ export default function DatasetsPage() {
                           value={c.name}
                           onChange={(e) => renameColumn(ci, e.target.value)}
                         />
-                        <label className="flex items-center gap-0.5 text-[10px] cursor-pointer shrink-0" style={{ color: 'var(--muted-foreground)' }} title="敏感列加密存储">
+                        <label className="flex items-center gap-0.5 text-[10px] cursor-pointer shrink-0" style={{ color: 'var(--muted-foreground)' }} title={t('datasets:sensitiveColTitle')}>
                           <input
                             type="checkbox"
                             checked={c.sensitive}
                             onChange={() => toggleSensitive(ci)}
                             style={{ accentColor: 'var(--primary)' }}
                           />
-                          敏感
+                          {t('datasets:sensitive')}
                         </label>
                         <button
                           className="press shrink-0"
-                          title="删除该列"
+                          title={t('datasets:deleteColumnTitle')}
                           onClick={() => removeColumn(ci)}
                           disabled={draft.columns.length <= 1}
                           style={{ color: 'var(--destructive)' }}
@@ -357,7 +359,7 @@ export default function DatasetsPage() {
                     </th>
                   ))}
                   <th className="px-2 py-2 w-[40px]">
-                    <button className="press" title="加列" onClick={addColumn} style={{ color: 'var(--primary)' }}>
+                    <button className="press" title={t('datasets:addColumnTitle')} onClick={addColumn} style={{ color: 'var(--primary)' }}>
                       <Icon name="plus" size={12} />
                     </button>
                   </th>
@@ -376,7 +378,7 @@ export default function DatasetsPage() {
                           rows[ri] = { ...rows[ri]!, disabled: e.target.checked };
                           return { ...d, rows };
                         })}
-                        title="禁用后回放跳过该行"
+                        title={t('datasets:disabledRowTitle')}
                         style={{ accentColor: 'var(--warning)' }}
                       />
                     </td>
@@ -390,7 +392,7 @@ export default function DatasetsPage() {
                               type="password"
                               className="input-base input-sm w-full font-mono"
                               value={isMasked(cell) ? '' : (cell ?? '')}
-                              placeholder={isMasked(cell) ? '••••••（未修改）' : ''}
+                              placeholder={isMasked(cell) ? t('datasets:maskedPlaceholder') : ''}
                               onChange={(e) => setCell(ri, c.name, e.target.value)}
                               autoComplete="new-password"
                             />
@@ -407,7 +409,7 @@ export default function DatasetsPage() {
                     })}
                     <td />
                     <td className="px-2 py-1.5 text-center">
-                      <button className="press" title="删除该行" onClick={() => removeRow(ri)} style={{ color: 'var(--destructive)' }}>
+                      <button className="press" title={t('datasets:deleteRowTitle')} onClick={() => removeRow(ri)} style={{ color: 'var(--destructive)' }}>
                         <Icon name="close" size={10} />
                       </button>
                     </td>
@@ -418,7 +420,7 @@ export default function DatasetsPage() {
             <div className="px-4 py-2">
               <Button variant="ghost" size="sm" onClick={addRow}>
                 <Icon name="plus" size={12} />
-                加行
+                {t('datasets:addRow')}
               </Button>
             </div>
           </div>
@@ -427,9 +429,9 @@ export default function DatasetsPage() {
 
       <Dialog open={tsvOpen} onOpenChange={setTsvOpen}>
         <DialogContent style={{ maxWidth: 560 }}>
-          <DialogHeader><DialogTitle>从 Excel 粘贴（TSV）</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('datasets:tsvTitle')}</DialogTitle></DialogHeader>
           <p className="text-[12px] mb-2" style={{ color: 'var(--muted-foreground)' }}>
-            在 Excel/表格里复制区域后粘贴到这里：首行是列名，其余每行一条数据。同名列自动复用，新列默认非敏感。
+            {t('datasets:tsvDescription')}
           </p>
           <textarea
             className="input-base input-sm w-full"
@@ -441,8 +443,8 @@ export default function DatasetsPage() {
             autoFocus
           />
           <DialogFooter>
-            <Button variant="ghost" size="sm" onClick={() => setTsvOpen(false)}>取消</Button>
-            <Button size="sm" onClick={applyTsv}>导入</Button>
+            <Button variant="ghost" size="sm" onClick={() => setTsvOpen(false)}>{t('common:cancel')}</Button>
+            <Button size="sm" onClick={applyTsv}>{t('datasets:import')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
