@@ -828,6 +828,12 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           }
           if (visionFailure) {
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
+            const visionErr = visionFailure.error ?? '最终页面与用例预期不符';
+            // 弹窗遮挡信号:终态判定 reason 含「弹窗/遮挡/对话框/确认框」等,说明有阻断性 UI 挡住关键区域。
+            // 典型如草稿恢复弹窗、权限确认框——条件性出现(依赖数据状态),机械步骤无法处理,需补 aiTask 兜底步骤。
+            const popupHint = /弹窗|遮挡|对话框|确认框|弹框|遮挡|覆盖/.test(visionErr)
+              ? ' ⚠ 检测到阻断性弹窗遮挡:页面弹出了对话框挡住关键区域,这是条件性 UI(依赖数据状态才弹,如「有未提交草稿才弹草稿恢复弹窗」)。机械步骤无法处理「可能弹、可能不弹」的分支——正确做法:在进该页的步骤之后补一条 aiTask 兜底步骤,compiled 写 [{"kind":"aiTask","instruction":"若页面弹出『<弹窗文案>』对话框,点击『<确认/继续按钮文案>』;若没有弹窗则跳过本步"}]。不要弱化 expectedOutcome(如删掉被挡住的元素断言),那会让用例测不出东西;也不要反复改选择器——弹窗不关,改多少选择器都没用。'
+              : '';
             const rdata = JSON.stringify({
               result: 'failed',
               caseId,
@@ -847,7 +853,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 humanMessage: visionFailure.humanMessage ?? '最终页面与用例预期不符',
                 screenshot: visionFailure.screenshot ?? null,
                 page: failurePage,
-                note: `vision 终态判定失败：全部步骤执行通过后，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。${emptyDataHint ? ` ⚠ 失败页检出空数据信号「${emptyDataHint}」：被测环境当前没有可供断言的数据，这通常是环境前置数据缺失，而非选择器/步骤写错。正确做法是让用例先创建出满足 expectedOutcome 的数据（例如造一条会自动触发处置的事件），或如实向用户汇报环境缺数据——严禁通过弱化 expectedOutcome（如把"自动启动处置成功"改成"页面正常加载"）把失败蒙成通过。` : ''}`,
+                note: `vision 终态判定失败：全部步骤执行通过后，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。${emptyDataHint ? ` ⚠ 失败页检出空数据信号「${emptyDataHint}」：被测环境当前没有可供断言的数据，这通常是环境前置数据缺失，而非选择器/步骤写错。正确做法是让用例先创建出满足 expectedOutcome 的数据（例如造一条会自动触发处置的事件），或如实向用户汇报环境缺数据——严禁通过弱化 expectedOutcome（如把"自动启动处置成功"改成"页面正常加载"）把失败蒙成通过。` : ''}${popupHint}`,
               },
             });
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
