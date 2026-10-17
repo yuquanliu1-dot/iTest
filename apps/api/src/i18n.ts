@@ -26,7 +26,7 @@ const dict = {
   'step.solidified': { 'zh-CN': '固化步骤 #{order}（aiTask → {count} 个机械动作）', 'en-US': 'Solidified step #{order} (aiTask → {count} mechanical actions)' },
 } as const;
 
-type StKey = keyof typeof dict;
+export type StKey = keyof typeof dict;
 
 export function st(lang: StLang, key: StKey, vars?: Record<string, string | number | boolean>): string {
   let s: string = (dict[key] as Record<StLang, string>)[lang];
