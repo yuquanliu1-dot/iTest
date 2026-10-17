@@ -2,6 +2,12 @@ const t = (k, s) => chrome.i18n.getMessage(k, s);
 
 document.documentElement.lang = chrome.i18n.getUILanguage();
 
+// HTML 静态 __MSG_*__ 字面量不被 _locales 机制替换，DOM 加载后替换 submit/close
+// 两个按钮的文本（title 已在下方被 TITLES[mode] 覆盖，无需处理）。
+for (const el of [document.getElementById('submit'), document.getElementById('close')]) {
+  if (el) el.textContent = el.textContent.replace(/__MSG_(\w+)__/, (_, key) => t(key) || `__MSG_${key}__`);
+}
+
 const mode = new URLSearchParams(location.search).get('mode') ?? 'ai';
 const statusEl = document.getElementById('status');
 const form = document.getElementById('form');
