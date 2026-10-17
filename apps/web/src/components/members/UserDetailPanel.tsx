@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../../i18n';
 import { useUIStore } from '../../stores/ui';
 import { api, type UserOrgMembership, type UserDetail, type UserProjectSummary } from '../../api/client';
 import { useAuthStore } from '../../stores/auth';
@@ -51,7 +52,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
       await api.orgs.updateMember(orgId, userId, { [field]: next });
       api.users.get(userId).then((d) => setDetail(d)).catch(() => {});
     } catch (e) {
-      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
+      toast(e instanceof Error ? localizeApiError(e) : t('members:opFailed'), 'error');
     }
   };
 
@@ -63,7 +64,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
       setPendingRemove(null);
       api.users.get(userId).then((d) => setDetail(d)).catch(() => {});
     } catch (e) {
-      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
+      toast(e instanceof Error ? localizeApiError(e) : t('members:opFailed'), 'error');
       setPendingRemove(null);
     }
   };
@@ -75,7 +76,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
       setDeleteAccountOpen(false);
       onBack();
     } catch (e) {
-      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
+      toast(e instanceof Error ? localizeApiError(e) : t('members:opFailed'), 'error');
       setDeleteAccountOpen(false);
     }
   };
@@ -87,7 +88,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
         .then((res) => { setProjects(res.items); setProjectTotal(res.total); })
         .catch(() => {});
     } catch (e) {
-      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
+      toast(e instanceof Error ? localizeApiError(e) : t('members:opFailed'), 'error');
     }
   };
 
@@ -230,7 +231,7 @@ export default function UserDetailPanel({ userId, onBack }: Props) {
               setEditOpen(false);
               api.users.get(userId).then((d) => setDetail(d)).catch(() => {});
             } catch (e) {
-              toast(e instanceof Error ? e.message : t('members:saveFailed'), 'error');
+              toast(e instanceof Error ? localizeApiError(e) : t('members:saveFailed'), 'error');
             }
           }}
         />

@@ -1,5 +1,6 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useUIStore } from '../stores/ui';
@@ -32,7 +33,7 @@ export default function PlanRunDetail() {
       qc.invalidateQueries({ queryKey: ['planRun', runId] });
       qc.invalidateQueries({ queryKey: ['executions'] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   if (isError) {

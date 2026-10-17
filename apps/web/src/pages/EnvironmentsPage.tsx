@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Environment, type EnvironmentObject } from '../api/client';
@@ -160,7 +161,7 @@ export default function EnvironmentsPage() {
       setEnvForm(EMPTY_ENV_FORM);
       invalidate();
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const setDefault = useMutation({
@@ -169,7 +170,7 @@ export default function EnvironmentsPage() {
       toast(t('environments:defaultUpdated'), 'success');
       invalidate();
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const removeEnv = useMutation({
@@ -187,7 +188,7 @@ export default function EnvironmentsPage() {
       invalidate();
     },
     onError: (e: Error) => {
-      toast(e.message, 'error');
+      toast(localizeApiError(e), 'error');
       setConfirmEnv(null);
     },
   });
@@ -209,7 +210,7 @@ export default function EnvironmentsPage() {
       setObjForm(EMPTY_OBJ_FORM);
       invalidate();
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const removeObj = useMutation({
@@ -218,7 +219,7 @@ export default function EnvironmentsPage() {
       toast(t('environments:objDeleted'), 'success');
       invalidate();
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   // 连接测试：用表单当前值（未保存也可）；编辑态凭据留空由后端回退已存密文

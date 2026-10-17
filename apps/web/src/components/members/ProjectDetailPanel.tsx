@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../../i18n';
 import { useUIStore } from '../../stores/ui';
 import { api, type Project, type AssignedUser, type UserSummary, type OrgManagedNode } from '../../api/client';
 import { useProjectStore } from '../../stores/project';
@@ -87,7 +88,7 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
         .then((res) => { setAssigned(res.items); setTotal(res.total); })
         .catch(() => {});
     } catch (e) {
-      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
+      toast(e instanceof Error ? localizeApiError(e) : t('members:opFailed'), 'error');
     } finally {
       setSubmitting(false);
     }
@@ -100,7 +101,7 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
         .then((res) => { setAssigned(res.items); setTotal(res.total); })
         .catch(() => {});
     } catch (e) {
-      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
+      toast(e instanceof Error ? localizeApiError(e) : t('members:opFailed'), 'error');
     }
   };
 

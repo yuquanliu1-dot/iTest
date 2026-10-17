@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -126,7 +127,7 @@ export default function PlanDetail() {
       qc.invalidateQueries({ queryKey: ['plan', id] });
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const setCases = useMutation({
@@ -138,7 +139,7 @@ export default function PlanDetail() {
       setShowAdd(false);
       setSelectedAdd(new Set());
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const reorder = useMutation({
@@ -146,7 +147,7 @@ export default function PlanDetail() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['plan', id] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const removeCases = useMutation({
@@ -157,7 +158,7 @@ export default function PlanDetail() {
       qc.invalidateQueries({ queryKey: ['plan', id] });
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const remove = useMutation({
@@ -167,7 +168,7 @@ export default function PlanDetail() {
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
       navigate(versionId ? `/p/${projectId}/v/${versionId}/plans` : `/`);
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const run = useMutation({
@@ -177,7 +178,7 @@ export default function PlanDetail() {
       qc.invalidateQueries({ queryKey: ['executions'] });
       navigate(versionId ? `/p/${projectId}/v/${versionId}/plans/${id}/runs/${r.runId}` : `/`);
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   useEffect(() => {

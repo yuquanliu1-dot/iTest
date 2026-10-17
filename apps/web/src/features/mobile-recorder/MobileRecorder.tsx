@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../../i18n';
 import { useQuery } from '@tanstack/react-query';
 import { api, type DeviceTarget } from '../../api/client';
 import { useUIStore } from '../../stores/ui';
@@ -68,7 +69,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
         { accessibilityId: 'username_field', label: '用户名', role: 'TextField', bounds: { x: 50, y: 100, width: 300, height: 40 } },
       ]);
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), 'error');
+      toast(e instanceof Error ? localizeApiError(e) : String(e), 'error');
     }
   };
 
@@ -81,7 +82,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
       toast(t('mobile:wroteSteps', { count: data.inserted }), 'success');
       onClose();
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), 'error');
+      toast(e instanceof Error ? localizeApiError(e) : String(e), 'error');
     }
   };
 
@@ -129,7 +130,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
       toast(t('mobile:wroteSteps', { count: recordedSteps.length }), 'success');
       onClose();
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), 'error');
+      toast(e instanceof Error ? localizeApiError(e) : String(e), 'error');
     }
   };
 

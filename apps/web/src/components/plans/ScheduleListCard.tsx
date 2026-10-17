@@ -4,6 +4,7 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../../i18n';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -40,7 +41,7 @@ export default function ScheduleListCard({ planId }: Props) {
       toast(t('plans:scheduleAdded'), 'success');
       qc.invalidateQueries({ queryKey: ['plan', planId, 'schedules'] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const patch = useMutation({
@@ -50,7 +51,7 @@ export default function ScheduleListCard({ planId }: Props) {
       toast(t('plans:scheduleUpdated'), 'success');
       qc.invalidateQueries({ queryKey: ['plan', planId, 'schedules'] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const remove = useMutation({
@@ -59,7 +60,7 @@ export default function ScheduleListCard({ planId }: Props) {
       toast(t('plans:scheduleRemoved'), 'success');
       qc.invalidateQueries({ queryKey: ['plan', planId, 'schedules'] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const schedules = list.data ?? [];

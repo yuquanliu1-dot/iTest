@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type CaseStatus } from '../api/client';
 import { useUIStore } from '../stores/ui';
@@ -38,7 +39,7 @@ export default function CaseStatusMenu({
       setOpen(false);
       onChanged?.(next);
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   useEffect(() => {

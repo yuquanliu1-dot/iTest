@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../../i18n';
 import { api } from '../../api/client';
 import { useAuthStore } from '../../stores/auth';
 import { useUIStore } from '../../stores/ui';
@@ -128,7 +129,7 @@ export default function RecorderExtensionBadge() {
       // 给浏览器一点时间触发下载再回收
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), 'error');
+      toast(e instanceof Error ? localizeApiError(e) : String(e), 'error');
     } finally {
       setDownloading(false);
     }

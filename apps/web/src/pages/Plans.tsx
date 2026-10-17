@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type PlanWithCount } from '../api/client';
 import { useProjectStore } from '../stores/project';
@@ -78,7 +79,7 @@ export default function Plans() {
       toast(t('plans:createdToast'), 'success');
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const runPlan = useMutation({
@@ -88,7 +89,7 @@ export default function Plans() {
       qc.invalidateQueries({ queryKey: ['executions'] });
       navigate(versionId ? `/p/${projectId}/v/${versionId}/plans/${planId}/runs/${r.runId}` : `/`);
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const deletePlan = useMutation({
@@ -99,7 +100,7 @@ export default function Plans() {
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
       qc.invalidateQueries({ queryKey: ['executions'] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const goPlanDetail = (p: PlanWithCount) =>

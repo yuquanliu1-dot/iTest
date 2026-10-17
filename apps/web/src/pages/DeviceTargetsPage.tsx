@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type DeviceTarget } from '../api/client';
@@ -59,7 +60,7 @@ export default function DeviceTargetsPage() {
       setEditingId(null);
       qc.invalidateQueries({ queryKey: ['deviceTargets', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const remove = useMutation({
@@ -69,7 +70,7 @@ export default function DeviceTargetsPage() {
       setConfirmDelete(null);
       qc.invalidateQueries({ queryKey: ['deviceTargets', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const onEdit = (t: DeviceTarget) => {

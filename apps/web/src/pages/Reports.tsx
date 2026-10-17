@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { useNavigate, useParams } from 'react-router-dom';
 import { parseAsArrayOf, parseAsString, parseAsStringEnum, useQueryStates } from 'nuqs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -128,7 +129,7 @@ export default function Executions() {
 			qc.invalidateQueries({ queryKey: ['reports'] });
 			qc.invalidateQueries({ queryKey: ['stats', projectId] });
 		},
-		onError: (e: Error) => toast(e.message, 'error'),
+		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
 	const tabs: DataTableTabs = {

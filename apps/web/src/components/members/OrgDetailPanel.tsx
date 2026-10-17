@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../../i18n';
 import { useUIStore } from '../../stores/ui';
 import { api } from '../../api/client';
 import { useAuthStore } from '../../stores/auth';
@@ -80,7 +81,7 @@ export default function OrgDetailPanel({
         }
       }
     } catch (e) {
-      toast(e instanceof Error ? e.message : t('members:opFailed'), 'error');
+      toast(e instanceof Error ? localizeApiError(e) : t('members:opFailed'), 'error');
       setConfirmDelete(false);
     }
   };

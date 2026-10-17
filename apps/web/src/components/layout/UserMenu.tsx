@@ -19,6 +19,7 @@ import { useUIStore } from '../../stores/ui';
 import { applyLang, langFromPref } from '../../stores/lang';
 import { api } from '../../api/client';
 import type { Lang } from '../../i18n';
+import { localizeApiError } from '../../i18n';
 import ChangeMyPasswordModal from '../auth/ChangeMyPasswordModal';
 import Icon from '../Icon';
 
@@ -54,7 +55,7 @@ export default function UserMenu() {
       toast(t('common:orgSwitched'), 'success');
       navigate('/');
     } catch (e) {
-      toast((e as Error).message, 'error');
+      toast(localizeApiError(e as Error), 'error');
     }
   };
 

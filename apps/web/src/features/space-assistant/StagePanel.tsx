@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../../i18n';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type StageDoc, type StageSaveBody } from '../../api/client';
 import Button from '../../components/ui/Button';
@@ -196,7 +197,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
       // 数据集管理页/绑定下拉需要新鲜数据
       qc.invalidateQueries({ queryKey: ['datasets'] });
     },
-    onError: (e: Error) => toast(e.message || t('assistant:stage.saveFailed'), 'error'),
+    onError: (e: Error) => toast(localizeApiError(e) || t('assistant:stage.saveFailed'), 'error'),
   });
 
   const renderCaseRow = (it: StagedItem) => {

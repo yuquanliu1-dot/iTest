@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../../i18n';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { useUIStore } from '../../stores/ui';
@@ -65,7 +66,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
       toast(t('cases:labelDialog.created'), 'success');
       qc.invalidateQueries({ queryKey: ['tags', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const updateMut = useMutation({
@@ -76,7 +77,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
       qc.invalidateQueries({ queryKey: ['tags', projectId] });
       qc.invalidateQueries({ queryKey: ['cases', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const removeMut = useMutation({
@@ -87,7 +88,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
       qc.invalidateQueries({ queryKey: ['tags', projectId] });
       qc.invalidateQueries({ queryKey: ['cases', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const openCreate = () => {

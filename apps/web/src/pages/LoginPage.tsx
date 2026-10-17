@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { api } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { useUIStore } from '../stores/ui';
@@ -43,7 +44,7 @@ export default function LoginPage() {
       await applyLogin(r);
       navigate('/', { replace: true });
     } catch (err) {
-      toast((err as Error).message, 'error');
+      toast(localizeApiError(err as Error), 'error');
     } finally {
       setSubmitting(false);
     }
@@ -64,7 +65,7 @@ export default function LoginPage() {
       toast(t('auth:passwordUpdated'), 'success');
       navigate('/', { replace: true });
     } catch (err) {
-      toast((err as Error).message, 'error');
+      toast(localizeApiError(err as Error), 'error');
     } finally {
       setSubmitting(false);
     }
