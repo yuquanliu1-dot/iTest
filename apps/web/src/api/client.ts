@@ -1046,6 +1046,8 @@ export interface SafeUser {
   displayName: string;
   createdAt: string;
   updatedAt: string;
+  /** UI 语言偏好;PATCH /users/:id 可写,当前 /auth/me 尚未返回时为 undefined。 */
+  languagePreference?: 'zh-CN' | 'en-US' | null;
 }
 
 /** 登录成功 → 自动已登录；否则进入首登强制改密流程（passwordChangeToken 一次性、5 分钟有效）。 */
