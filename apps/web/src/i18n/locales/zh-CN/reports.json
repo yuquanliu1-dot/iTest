@@ -10,6 +10,7 @@
   "truncated": "（截断）",
   "list": {
     "status": "状态",
+    "statusRunning": "运行中",
     "version": "版本",
     "columnKind": "类型",
     "columnTitle": "标识",
