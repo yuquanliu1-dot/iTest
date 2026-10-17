@@ -89,6 +89,11 @@ describe('POST /api/auth/login', () => {
     expect(c).toContain('HttpOnly');
     expect(c).toContain('SameSite=Strict');
   });
+
+  it('登录成功 → user 带 languagePreference(DB 默认 zh-CN)', async () => {
+    const r = await request(app).post('/api/auth/login').send({ username: 'manager1', password: SEED_USER_PASSWORD });
+    expect(r.body.user.languagePreference).toBe('zh-CN');
+  });
 });
 
 describe('强制改密流程', () => {
