@@ -18,4 +18,14 @@ describe('st 服务端最小 t', () => {
     expect(st('zh-CN', 'step.reordered', { count: 2 })).toBe('重排 2 个步骤');
     expect(st('zh-CN', 'step.reordered', { count: 2, extra: 'ignored' })).toBe('重排 2 个步骤');
   });
+
+  it('计划调度确认卡 summary 双语 + 布尔插值', () => {
+    expect(
+      st('zh-CN', 'plan.scheduleCreated', { name: '冒烟', cron: '0 9 * * *', tz: 'Asia/Shanghai', enabled: true }),
+    ).toBe('为计划「冒烟」新建调度(cron=0 9 * * *, tz=Asia/Shanghai, enabled=true)');
+    expect(
+      st('en-US', 'plan.scheduleCreated', { name: 'Smoke', cron: '0 9 * * *', tz: 'Asia/Shanghai', enabled: false }),
+    ).toBe('Created schedule for plan "Smoke" (cron=0 9 * * *, tz=Asia/Shanghai, enabled=false)');
+    expect(st('zh-CN', 'plan.scheduleDeleted', { name: '冒烟', cron: '0 9 * * *' })).toBe('删除计划「冒烟」的调度(cron=0 9 * * *)');
+  });
 });

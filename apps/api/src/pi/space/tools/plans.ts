@@ -200,7 +200,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const detail = await svc.getPlanDetail(v.planId);
               const planName = detail?.name ?? v.planId;
               const tz = v.timezone ?? 'Asia/Shanghai';
-              const summary = `为计划「${planName}」新建调度(cron=${v.cronExpr}, tz=${tz}, enabled=${v.enabled ?? true})`;
+              const summary = st(lang, 'plan.scheduleCreated', { name: planName, cron: v.cronExpr, tz, enabled: v.enabled ?? true });
               const approved = await requestConfirmation(
                 { threadId: ctx.threadId, toolName: 'manage_plans', action: 'create_schedule', summary, risk: 'update' },
                 ctx.emit,
@@ -230,7 +230,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const diff = scheduleDiff(existing0, { cronExpr: v.cronExpr, timezone: v.timezone, enabled: v.enabled });
               if (diff === undefined) return { ok: true, data: '调度无需更新' };
               const planName = (await svc.getPlanDetail(existing0.planId))?.name ?? existing0.planId;
-              const summary = `更新计划「${planName}」的调度`;
+              const summary = st(lang, 'plan.scheduleUpdated', { name: planName });
               const approved = await requestConfirmation(
                 { threadId: ctx.threadId, toolName: 'manage_plans', action: 'update_schedule', summary, risk: 'update', diff },
                 ctx.emit,
@@ -251,7 +251,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const pid = await svc.planProjectId(existing.planId);
               if (pid !== ctx.projectId) return { ok: false, error: '计划不存在或不属于当前项目' };
               const planName = (await svc.getPlanDetail(existing.planId))?.name ?? existing.planId;
-              const summary = `删除计划「${planName}」的调度(cron=${existing.cronExpr})`;
+              const summary = st(lang, 'plan.scheduleDeleted', { name: planName, cron: existing.cronExpr });
               const approved = await requestConfirmation(
                 { threadId: ctx.threadId, toolName: 'manage_plans', action: 'delete_schedule', summary, risk: 'delete' },
                 ctx.emit,

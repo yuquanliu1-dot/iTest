@@ -13,6 +13,9 @@ const dict = {
   'plan.updated': { 'zh-CN': '更新计划「{name}」', 'en-US': 'Updated plan "{name}"' },
   'plan.casesAdded': { 'zh-CN': '向计划「{name}」添加 {count} 个用例', 'en-US': 'Added {count} cases to plan "{name}"' },
   'plan.casesRemoved': { 'zh-CN': '从计划「{name}」移除 {count} 个用例', 'en-US': 'Removed {count} cases from plan "{name}"' },
+  'plan.scheduleCreated': { 'zh-CN': '为计划「{name}」新建调度(cron={cron}, tz={tz}, enabled={enabled})', 'en-US': 'Created schedule for plan "{name}" (cron={cron}, tz={tz}, enabled={enabled})' },
+  'plan.scheduleUpdated': { 'zh-CN': '更新计划「{name}」的调度', 'en-US': 'Updated schedule of plan "{name}"' },
+  'plan.scheduleDeleted': { 'zh-CN': '删除计划「{name}」的调度(cron={cron})', 'en-US': 'Deleted schedule of plan "{name}" (cron={cron})' },
   'env.updated': { 'zh-CN': '更新环境「{name}」', 'en-US': 'Updated environment "{name}"' },
   'env.credentialsSet': { 'zh-CN': '设置环境「{name}」的 {type} 对象「{label}」访问凭据(值不回显)', 'en-US': 'Set access credentials for {type} object "{label}" of environment "{name}" (value not echoed)' },
   'env.deleted': { 'zh-CN': '删除环境「{name}」{usage}', 'en-US': 'Deleted environment "{name}" {usage}' },
@@ -25,7 +28,7 @@ const dict = {
 
 type StKey = keyof typeof dict;
 
-export function st(lang: StLang, key: StKey, vars?: Record<string, string | number>): string {
+export function st(lang: StLang, key: StKey, vars?: Record<string, string | number | boolean>): string {
   let s: string = (dict[key] as Record<StLang, string>)[lang];
   for (const [k, v] of Object.entries(vars ?? {})) s = s.split(`{${k}}`).join(String(v));
   return s;
