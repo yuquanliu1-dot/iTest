@@ -204,7 +204,7 @@ export default function Executions() {
 			width: 'w-[120px]',
 			cell: (r) => (
 				<span className="inline-flex items-center gap-1.5">
-					<StatusPill status={r.status}>{r.status}</StatusPill>
+					<StatusPill status={r.status}>{t(`cases:status.${r.status}`, { defaultValue: r.status })}</StatusPill>
 					{r.kind === 'case' && r.status === 'passed' && (r as { healed?: boolean }).healed && (
 						<span
 							className="px-1.5 py-px text-[10px] rounded-full"

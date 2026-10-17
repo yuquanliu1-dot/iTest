@@ -390,7 +390,7 @@ export default function ReportDetail() {
         <h1 className="text-[16px] font-semibold" style={{ color: 'var(--foreground)' }}>
           {t('reports:reportTitle')}
         </h1>
-        <StatusPill status={data.status}>{data.status.toUpperCase()}</StatusPill>
+        <StatusPill status={data.status}>{t(`cases:status.${data.status}`, { defaultValue: data.status })}</StatusPill>
         {data.datasetSnapshot && data.datasetSnapshot.totalRows > 1 && (
           <Button
             variant="ghost"
