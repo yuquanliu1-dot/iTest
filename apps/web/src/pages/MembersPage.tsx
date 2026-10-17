@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '../stores/auth';
 import { isEffectiveManagerOf, sortByPath } from '../utils/orgTree';
 import OrgTree, { type OrgTreeNode } from '../components/members/OrgTree';
@@ -12,6 +13,7 @@ import OrgFormModal from '../components/members/OrgFormModal';
 const PAGE_SIZE = 12;
 
 export default function MembersPage() {
+  const { t } = useTranslation();
   const params = useParams<{ '*': string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -102,7 +104,7 @@ export default function MembersPage() {
           ) : (
             <div className="flex flex-col items-center justify-center h-full gap-3">
               <p className="text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-                请选择左侧组织
+                {t('members:selectOrgPrompt')}
               </p>
             </div>
           )}

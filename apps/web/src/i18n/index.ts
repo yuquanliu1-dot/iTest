@@ -7,14 +7,18 @@ import zhAuth from './locales/zh-CN/auth.json';
 import enAuth from './locales/en-US/auth.json';
 import zhSettings from './locales/zh-CN/settings.json';
 import enSettings from './locales/en-US/settings.json';
+import zhProjects from './locales/zh-CN/projects.json';
+import enProjects from './locales/en-US/projects.json';
+import zhMembers from './locales/zh-CN/members.json';
+import enMembers from './locales/en-US/members.json';
 
 export type Lang = 'zh-CN' | 'en-US';
 
 export const LANG_STORAGE_KEY = 'itest-lang';
 
 const resources = {
-  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings },
-  'en-US': { common: enCommon, auth: enAuth, settings: enSettings },
+  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, members: zhMembers },
+  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, members: enMembers },
 };
 
 void i18n.use(initReactI18next).init({
