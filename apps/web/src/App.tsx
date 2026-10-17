@@ -5,6 +5,8 @@ import { Toaster } from './components/ui/shadcn/sonner';
 import AuthGuard from './components/auth/AuthGuard';
 import ProjectGuard from './components/layout/ProjectGuard';
 import { useThemeStore } from './stores/theme';
+import { useAuthStore } from './stores/auth';
+import { applyLang, langFromPref } from './stores/lang';
 import LoginPage from './pages/LoginPage';
 import ProjectsHome from './pages/ProjectsHome';
 import EnvironmentsPage from './pages/EnvironmentsPage';
@@ -25,6 +27,11 @@ import Settings from './pages/Settings';
 export default function App() {
   const initTheme = useThemeStore((s) => s.init);
   useEffect(() => { initTheme(); }, [initTheme]);
+
+  const user = useAuthStore((s) => s.user);
+  useEffect(() => {
+    applyLang(langFromPref(user?.languagePreference));
+  }, [user?.languagePreference]);
 
   return (
     <>
