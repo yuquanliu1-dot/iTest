@@ -4,6 +4,8 @@ import { st } from '../src/i18n.js';
 describe('st 服务端最小 t', () => {
   it('zh-CN 输出与既有中文文案字节一致', () => {
     expect(st('zh-CN', 'case.updated', { title: '登录', keys: 'instruction' })).toBe('更新「登录」(instruction)');
+    expect(st('zh-CN', 'step.insertAfter', { order: 1 })).toBe('在#1 后 插入新步骤');
+    expect(st('zh-CN', 'step.insertEnd')).toBe('在末尾 插入新步骤');
   });
 
   it('en-US 输出英文文案', () => {
