@@ -1,4 +1,5 @@
 import type { Locator } from '@itest/shared';
+import { useTranslation } from 'react-i18next';
 import IconButton from '../ui/IconButton';
 
 interface Props {
@@ -15,6 +16,7 @@ const STRATEGIES_MOBILE_EXTRA: Locator['strategy'][] = ['accessibilityId', 'labe
 
 /** locator 有序候选数组编辑器：录制会产生多个候选，顺序即回放优先级。 */
 export default function LocatorArrayEditor({ locators, onChange, errors = {}, mobile }: Props) {
+  const { t } = useTranslation();
   const strategies = mobile ? [...STRATEGIES_WEB, ...STRATEGIES_MOBILE_EXTRA] : STRATEGIES_WEB;
   const update = (i: number, patch: Partial<Locator>) =>
     onChange(locators.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
@@ -50,11 +52,11 @@ export default function LocatorArrayEditor({ locators, onChange, errors = {}, mo
                 style={{ flex: 1, minWidth: 0, ...(err ? { border: '1px solid var(--destructive)' } : {}) }}
                 value={l.value}
                 onChange={(e) => update(i, { value: e.target.value })}
-                placeholder="定位值"
+                placeholder={t('cases:locatorValuePlaceholder')}
               />
-              <IconButton icon="arrowUp" title="上移" disabled={i === 0} onClick={() => move(i, -1)} />
-              <IconButton icon="arrowDown" title="下移" disabled={i === locators.length - 1} onClick={() => move(i, 1)} />
-              <IconButton icon="x" title="删除候选" tone="destructive" onClick={() => remove(i)} />
+              <IconButton icon="arrowUp" title={t('cases:moveUp')} disabled={i === 0} onClick={() => move(i, -1)} />
+              <IconButton icon="arrowDown" title={t('cases:moveDown')} disabled={i === locators.length - 1} onClick={() => move(i, 1)} />
+              <IconButton icon="x" title={t('cases:deleteCandidate')} tone="destructive" onClick={() => remove(i)} />
             </div>
             {err && <span className="text-[11px] pl-5" style={{ color: 'var(--destructive)' }}>{err}</span>}
           </div>
@@ -66,7 +68,7 @@ export default function LocatorArrayEditor({ locators, onChange, errors = {}, mo
         className="press text-[11px] px-2 py-1 rounded-[var(--radius-sm)] self-start"
         style={{ border: '1px dashed var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: 'pointer' }}
       >
-        + 添加候选
+        {t('cases:addCandidate')}
       </button>
       {errors['action.locator'] && (
         <span className="text-[11px]" style={{ color: 'var(--destructive)' }}>{errors['action.locator']}</span>

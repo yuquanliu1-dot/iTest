@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { useTranslation } from 'react-i18next';
 import Icon from '../Icon';
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
 
 /** 可排序行容器：仅左侧手柄可发起拖拽（listeners 只绑在手柄上），行内容仍由父级渲染。 */
 export default function SortableStepRow({ id, disabled, isEditing, children }: Props) {
+  const { t } = useTranslation();
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
     useSortable({ id, disabled });
 
@@ -33,8 +35,8 @@ export default function SortableStepRow({ id, disabled, isEditing, children }: P
         {...listeners}
         disabled={disabled}
         type="button"
-        title="拖拽排序"
-        aria-label="拖拽排序"
+        title={t('cases:dragSort')}
+        aria-label={t('cases:dragSort')}
         className="press inline-flex items-center justify-center"
         style={{
           background: 'transparent',

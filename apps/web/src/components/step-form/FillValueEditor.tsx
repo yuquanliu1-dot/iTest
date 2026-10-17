@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import Segmented from '../ui/Segmented';
 import Button from '../ui/Button';
 import IconButton from '../ui/IconButton';
@@ -22,13 +23,13 @@ interface Props {
   datasetVars?: string[];
 }
 
-const MODE_OPTIONS: Array<{ value: ValueMode; label: string }> = [
-  { value: 'fixed', label: '固定值' },
-  { value: 'randomString', label: '随机字符串' },
-  { value: 'randomNumber', label: '随机数字' },
-  { value: 'timestamp', label: '时间戳' },
-  { value: 'prefixTimestamp', label: '前缀+时间戳' },
-  { value: 'composite', label: '组合值' },
+const MODE_OPTIONS: Array<{ value: ValueMode; key: string }> = [
+  { value: 'fixed', key: 'cases:fillModeFixed' },
+  { value: 'randomString', key: 'cases:fillModeRandomString' },
+  { value: 'randomNumber', key: 'cases:fillModeRandomNumber' },
+  { value: 'timestamp', key: 'cases:fillModeTimestamp' },
+  { value: 'prefixTimestamp', key: 'cases:fillModePrefixTimestamp' },
+  { value: 'composite', key: 'cases:fillModeComposite' },
 ];
 
 function draftFromValue(v: unknown): FragmentDraft[] {
@@ -52,6 +53,7 @@ function draftFromValue(v: unknown): FragmentDraft[] {
  * 当 value 身份变化（切换步骤/类型）时父组件必须通过 key 重挂载本组件。
  */
 export default function FillValueEditor({ value, onChange, availableVars = [], datasetVars = [] }: Props) {
+  const { t } = useTranslation();
   const extractOnly = availableVars.filter((v) => !datasetVars.includes(v));
   const isObj = typeof value === 'object' && value !== null;
   const objMode = isObj ? ((value as { mode?: string }).mode as ValueMode | undefined) : undefined;
@@ -105,7 +107,7 @@ export default function FillValueEditor({ value, onChange, availableVars = [], d
   return (
     <div className="flex flex-col gap-2">
       <Segmented<ValueMode>
-        options={MODE_OPTIONS}
+        options={MODE_OPTIONS.map((o) => ({ value: o.value, label: t(o.key) }))}
         value={mode}
         onChange={commitMode}
       />
@@ -116,7 +118,7 @@ export default function FillValueEditor({ value, onChange, availableVars = [], d
             className="input-base input-sm"
             value={fixed}
             onChange={(e) => { setFixed(e.target.value); onChange(e.target.value); }}
-            placeholder="支持 {{变量名}} 引用"
+            placeholder={t('cases:fillVarPlaceholder', { col: '{{变量名}}' })}
             list="drawer-available-vars"
           />
           <datalist id="drawer-available-vars">
@@ -124,9 +126,9 @@ export default function FillValueEditor({ value, onChange, availableVars = [], d
           </datalist>
           {availableVars.length > 0 && (
             <div className="text-[10px] mt-1 flex gap-3" style={{ color: 'var(--muted-foreground)' }}>
-              {datasetVars.length > 0 && <span>数据集列：{datasetVars.map((v) => `{{${v}}}`).join('、')}</span>}
+              {datasetVars.length > 0 && <span>{t('cases:datasetColumns')}{datasetVars.map((v) => `{{${v}}}`).join('、')}</span>}
               {extractOnly.length > 0 && (
-                <span>前置 extract：{extractOnly.map((v) => `{{${v}}}`).join('、')}</span>
+                <span>{t('cases:extractVars')}{extractOnly.map((v) => `{{${v}}}`).join('、')}</span>
               )}
             </div>
           )}
@@ -134,25 +136,25 @@ export default function FillValueEditor({ value, onChange, availableVars = [], d
       )}
       {mode === 'randomString' && (
         <label className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-          长度
+          {t('cases:lengthLabel')}
           <input className="input-base input-sm" value={genLength} inputMode="numeric"
             onChange={(e) => { setGenLength(e.target.value); onChange({ mode: 'randomString', length: Number(e.target.value) || 12 }); }} />
         </label>
       )}
       {mode === 'randomNumber' && (
         <div className="flex gap-2">
-          <label className="text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>最小
+          <label className="text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>{t('cases:minLabel')}
             <input className="input-base input-sm" value={genMin} inputMode="numeric"
               onChange={(e) => { setGenMin(e.target.value); onChange({ mode: 'randomNumber', min: Number(e.target.value) || 0, max: Number(genMax) || 999999 }); }} />
           </label>
-          <label className="text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>最大
+          <label className="text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>{t('cases:maxLabel')}
             <input className="input-base input-sm" value={genMax} inputMode="numeric"
               onChange={(e) => { setGenMax(e.target.value); onChange({ mode: 'randomNumber', min: Number(genMin) || 0, max: Number(e.target.value) || 999999 }); }} />
           </label>
         </div>
       )}
       {mode === 'prefixTimestamp' && (
-        <input className="input-base input-sm" value={genPrefix} placeholder="前缀，如 测试-"
+        <input className="input-base input-sm" value={genPrefix} placeholder={t('cases:prefixPlaceholder')}
           onChange={(e) => { setGenPrefix(e.target.value); onChange({ mode: 'prefixTimestamp', prefix: e.target.value }); }} />
       )}
       {mode === 'composite' && (
@@ -174,11 +176,11 @@ export default function FillValueEditor({ value, onChange, availableVars = [], d
                   patchFragment(i, patch);
                 }}
               >
-                <option value="fixed">固定值</option>
-                <option value="date">日期</option>
-                <option value="randomNumber">随机数字</option>
-                <option value="randomString">随机字符串</option>
-                <option value="timestamp">时间戳</option>
+                <option value="fixed">{t('cases:fillModeFixed')}</option>
+                <option value="date">{t('cases:fillModeDate')}</option>
+                <option value="randomNumber">{t('cases:fillModeRandomNumber')}</option>
+                <option value="randomString">{t('cases:fillModeRandomString')}</option>
+                <option value="timestamp">{t('cases:fillModeTimestamp')}</option>
               </select>
               {f.mode === 'fixed' && (
                 <input className="input-base input-sm" style={{ flex: 1, minWidth: 0 }} value={f.value ?? ''}
@@ -198,18 +200,18 @@ export default function FillValueEditor({ value, onChange, availableVars = [], d
                     onChange={(e) => patchFragment(i, { min: e.target.value })} />
                   <input className="input-base input-sm" style={{ width: 70 }} placeholder="max" inputMode="numeric" value={f.max ?? ''}
                     onChange={(e) => patchFragment(i, { max: e.target.value })} />
-                  <input className="input-base input-sm" style={{ width: 70 }} placeholder="位数" inputMode="numeric" value={f.length ?? ''}
+                  <input className="input-base input-sm" style={{ width: 70 }} placeholder={t('cases:digitsPlaceholder')} inputMode="numeric" value={f.length ?? ''}
                     onChange={(e) => patchFragment(i, { length: e.target.value })} />
                 </>
               )}
               {f.mode === 'randomString' && (
-                <input className="input-base input-sm" style={{ width: 100 }} placeholder="长度" inputMode="numeric" value={f.length ?? ''}
+                <input className="input-base input-sm" style={{ width: 100 }} placeholder={t('cases:lengthLabel')} inputMode="numeric" value={f.length ?? ''}
                   onChange={(e) => patchFragment(i, { length: e.target.value })} />
               )}
-              {f.mode === 'timestamp' && <span className="text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>当前 ms 时间戳</span>}
+              {f.mode === 'timestamp' && <span className="text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>{t('cases:currentMsTimestamp')}</span>}
               <IconButton
                 icon="x"
-                title="删除片段"
+                title={t('cases:deleteFragment')}
                 tone="destructive"
                 size="sm"
                 onClick={() => {
@@ -230,10 +232,10 @@ export default function FillValueEditor({ value, onChange, availableVars = [], d
               onChange({ mode: 'composite', fragments: next.map(buildFragment) });
             }}
           >
-            + 添加片段
+            {t('cases:addFragment')}
           </Button>
           <p className="text-[11px]" style={{ color: over ? 'var(--destructive)' : 'var(--muted-foreground)' }}>
-            当前长度估算：{estLen} / 1024{over ? ' · 超过上限' : ''}
+            {t('cases:estLength', { len: estLen })}{over ? t('cases:overLimit') : ''}
           </p>
         </div>
       )}

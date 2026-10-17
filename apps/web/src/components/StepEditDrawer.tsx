@@ -66,7 +66,7 @@ export default function StepEditDrawer({ initial, mode = 'edit', availableVars =
         aria-describedby={undefined}
       >
         <div className="flex items-center gap-3 px-5 py-4 shrink-0 border-b">
-          <SheetTitle className="text-sm font-semibold">{mode === 'create' ? '新增步骤' : '编辑步骤'}</SheetTitle>
+          <SheetTitle className="text-sm font-semibold">{mode === 'create' ? t('cases:addStep') : t('cases:editStep')}</SheetTitle>
           <select
             value={kind}
             onChange={(e) => {
@@ -75,13 +75,13 @@ export default function StepEditDrawer({ initial, mode = 'edit', availableVars =
               setDraft(switchAction({ ...draft, action: current }, e.target.value as StepKind));
             }}
             className="input-base input-xs input-inline"
-            title="切换操作类型（兼容字段自动保留）"
+            title={t('cases:switchAction')}
           >
             {availableKinds.map((k) => <option key={k} value={k}>{t(stepKindLabel(k))}</option>)}
           </select>
           <div className="flex-1" />
           <SheetClose asChild>
-            <IconButton icon="close" title="关闭" />
+            <IconButton icon="close" title={t('common:close')} />
           </SheetClose>
         </div>
 
@@ -97,7 +97,7 @@ export default function StepEditDrawer({ initial, mode = 'edit', availableVars =
           platform={platform}
           buildActionRef={buildActionRef}
           onCancel={onClose}
-          saveLabel={mode === 'create' ? '添加步骤' : '保存'}
+          saveLabel={mode === 'create' ? t('cases:addStepAction') : t('common:save')}
           saveMode={mode}
           onSave={(built) => onSave({
             ...built,
@@ -130,6 +130,7 @@ interface FormProps {
 
 function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars = [], caseId, platform = 'web', buildActionRef, onCancel, onSave, saveLabel, saveMode }: FormProps) {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { projectId: routeProjectId, versionId: routeVersionId } = useParams<{ projectId: string; versionId: string }>();
   const action = clip.action as Record<string, unknown>;
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -426,15 +427,15 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
    *    顶部"执行"按 dispatcher compile-missing 抛错阻塞,行级「AI 智能任务」按钮一键回填。 */
   const handleSave = () => {
     if (kind === 'fill' && sensitive && !pwdDraft) {
-      setFieldErrors({ sensitive: '已加密 — 修改时请输入新密码' });
+      setFieldErrors({ sensitive: t('cases:sensitiveNeeded') });
       return;
     }
     if (kind === 'extract' && extractMode === 'smartExtract' && !extractDescription.trim() && !extractPattern.trim()) {
-      setFieldErrors({ 'action.description': '智能抽取需要填写描述并生成正则' });
+      setFieldErrors({ 'action.description': t('cases:smartExtractNeedsDesc') });
       return;
     }
     if (kind === 'aiTask' && !aiInstruction.trim()) {
-      setFieldErrors({ 'action.instruction': '指令不能为空' });
+      setFieldErrors({ 'action.instruction': t('cases:instructionRequired') });
       return;
     }
     // 自然语言描述里填 DSL JSON 是常见误操作（参数应填下方表单字段）——拦截并指路，
@@ -444,7 +445,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       if (/^[[{]/.test(inst)) {
         try {
           JSON.parse(inst);
-          setFieldErrors({ instruction: '描述不应填 DSL JSON——动作参数请填下方表单字段，此处用自然语言（例：等待查询结果出现）' });
+          setFieldErrors({ instruction: t('cases:dslJsonNotAllowed') });
           return;
         } catch { /* 不是合法 JSON，按普通文本放行 */ }
       }
@@ -462,7 +463,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
     }
     const next = buildAction();
     if (!next) {
-      setFieldErrors({ 'action.equals': '期望值不是合法 JSON' });
+      setFieldErrors({ 'action.equals': t('cases:invalidJsonExpected') });
       return;
     }
     const v = validateStepEdit({ action: next, delayMs: delayMs ? Number(delayMs) : undefined });
@@ -476,7 +477,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
     const compiledTail = Array.isArray(compiled) ? compiled.slice(1) : [];
     const compiledOut: unknown[] = kind === 'aiTask' ? (compiled ?? []) : [next, ...compiledTail];
     if (kind === 'aiTask' && compiledOut.length === 0) {
-      setFieldErrors({ 'action.instruction': '未编译：请先点击「AI 编译」生成 DSL' });
+      setFieldErrors({ 'action.instruction': t('cases:aiTaskNotCompiled') });
       return;
     }
     onSave({
@@ -497,19 +498,19 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3">
         {/* 2026-10-07：移除「步骤名称」input —— name 列已退役,自然语言完整说明统一存到行级 instruction。 */}
         <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-          <span>自然语言描述（行级 instruction,人看 / 给 LLM 起手;回放不读）</span>
+          <span>{t('cases:naturalLanguageDesc')}</span>
           <textarea
             className="input-base input-xs"
             aria-invalid={!!fieldErrors.instruction}
             value={rowInstruction}
             onChange={(e) => setRowInstruction(e.target.value)}
-            placeholder="必填。例:在用户名框输入管理员账号"
+            placeholder={t('cases:instructionRequiredPlaceholder')}
             rows={2}
           />
           <FieldError msg={fieldErrors.instruction} />
         </label>
         <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-          <span>执行前等待 (ms)</span>
+          <span>{t('cases:delayMsLabel')}</span>
           <input
             className="input-base input-xs"
             aria-invalid={!!fieldErrors.delayMs}
@@ -523,7 +524,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
 
         {showLocator && (
           <div className="flex flex-col gap-1.5">
-            <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>定位候选（按顺序尝试，录制产生的语义定位优先）</span>
+            <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:locatorCandidates')}</span>
             <LocatorArrayEditor locators={locators} onChange={setLocators} errors={fieldErrors} mobile={isMobileForm} />
           </div>
         )}
@@ -533,7 +534,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
             {kind === 'fill' && (
               <label className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                 <input type="checkbox" checked={sensitive} onChange={(e) => setSensitive(e.target.checked)} />
-                敏感值（密码，加密保存，明文不显示）
+                {t('cases:sensitiveValue')}
               </label>
             )}
             {kind === 'fill' && sensitive ? (
@@ -542,7 +543,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
                   type="password"
                   className="input-base input-xs"
                   aria-invalid={!!fieldErrors.sensitive}
-                  placeholder="输入新密码（已加密值不回显）"
+                  placeholder={t('cases:pwdDraftPlaceholder')}
                   value={pwdDraft}
                   onChange={(e) => setPwdDraft(e.target.value)}
                 />
@@ -557,7 +558,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
                   aria-invalid={!!fieldErrors['action.value']}
                   value={selectValue}
                   onChange={(e) => setSelectValue(e.target.value)}
-                  placeholder="下拉选项值"
+                  placeholder={t('cases:selectValuePlaceholder')}
                 />
                 <FieldError msg={fieldErrors['action.value']} />
               </div>
@@ -581,8 +582,8 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
 
         {kind === 'waitFor' && (
           <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-            <span>超时 (ms，留空默认 5000)</span>
-            <span className="text-[10px]">不填定位候选 = 固定等待该时长（空等待），不等待任何元素</span>
+            <span>{t('cases:waitTimeoutLabel')}</span>
+            <span className="text-[10px]">{t('cases:waitNoLocatorHint')}</span>
             <input
               className="input-base input-xs"
               aria-invalid={!!fieldErrors['action.timeoutMs']}
@@ -597,7 +598,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
         {kind === 'check' && (
           <label className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
-            勾选（取消勾选则为取消勾选操作）
+            {t('cases:checkLabel')}
           </label>
         )}
 
@@ -605,26 +606,26 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
           <>
             <div className="flex gap-2">
               <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
-                <span>断言目标</span>
+                <span>{t('cases:assertTargetLabel')}</span>
                 <select className="input-base input-xs" value={assertTarget} onChange={(e) => setAssertTarget(e.target.value as typeof assertTarget)}>
-                  <option value="specifiedElement">指定元素（需定位候选）</option>
-                  <option value="page">整页文本</option>
-                  <option value="errorMessage">错误提示区</option>
-                  <option value="url">当前 URL</option>
+                  <option value="specifiedElement">{t('cases:assertTargetElement')}</option>
+                  <option value="page">{t('cases:assertTargetPage')}</option>
+                  <option value="errorMessage">{t('cases:assertTargetErrorArea')}</option>
+                  <option value="url">{t('cases:assertTargetCurrentUrl')}</option>
                 </select>
               </label>
               <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
-                <span>匹配方式</span>
+                <span>{t('cases:matchMode')}</span>
                 <select className="input-base input-xs" value={assertMatch} onChange={(e) => setAssertMatch(e.target.value as typeof assertMatch)}>
-                  <option value="equals">等于（trim）</option>
-                  <option value="contains">包含</option>
-                  <option value="notContains">不包含</option>
-                  <option value="regex">正则匹配</option>
+                  <option value="equals">{t('cases:matchEqualsTrim')}</option>
+                  <option value="contains">{t('cases:matchContains')}</option>
+                  <option value="notContains">{t('cases:matchNotContains')}</option>
+                  <option value="regex">{t('cases:matchRegex')}</option>
                 </select>
               </label>
             </div>
             <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>期望文本</span>
+              <span>{t('cases:expectedText')}</span>
               <textarea className="input-base input-xs" rows={3} value={equalsText} onChange={(e) => setEqualsText(e.target.value)} />
             </label>
           </>
@@ -632,7 +633,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
 
         {kind === 'assertJson' && (
           <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-            <span>期望 JSON（整段深比较）</span>
+            <span>{t('cases:expectedJson')}</span>
             <textarea
               className="input-base input-xs font-mono"
               aria-invalid={!!fieldErrors['action.equals']}
@@ -647,39 +648,39 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
         {kind === 'extract' && (
           <div className="flex flex-col gap-2">
             <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>变量名</span>
+              <span>{t('cases:varNameLabel')}</span>
               <input
                 className="input-base input-xs"
                 aria-invalid={!!fieldErrors['action.varName']}
                 value={varName}
                 onChange={(e) => setVarName(e.target.value)}
-                placeholder="后续步骤用 {{变量名}} 引用"
+                placeholder={t('cases:varNamePlaceholder', { col: '{{变量名}}' })}
               />
               <FieldError msg={fieldErrors['action.varName']} />
             </label>
             <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>抽取方式</span>
+              <span>{t('cases:extractModeLabel')}</span>
               <select className="input-base input-xs" value={extractMode} onChange={(e) => setExtractMode(e.target.value as typeof extractMode)}>
-                <option value="completeValue">完整值（元素文本/input 值）</option>
-                <option value="smartExtract">智能抽取（按描述生成正则）</option>
-                <option value="regex">正则匹配</option>
+                <option value="completeValue">{t('cases:extractCompleteValue')}</option>
+                <option value="smartExtract">{t('cases:extractSmart')}</option>
+                <option value="regex">{t('cases:matchRegex')}</option>
               </select>
             </label>
             {extractMode === 'regex' && (
               <div className="flex gap-2">
                 <label className="flex flex-col gap-1 text-[11px] flex-[3]" style={{ color: 'var(--muted-foreground)' }}>
-                  <span>正则</span>
+                  <span>{t('cases:regexLabel')}</span>
                   <input
                     className="input-base input-xs font-mono"
                     aria-invalid={!!fieldErrors['action.pattern']}
                     value={extractPattern}
                     onChange={(e) => setExtractPattern(e.target.value)}
-                    placeholder="如 ORD-\d+"
+                    placeholder={t('cases:regexValuePlaceholder')}
                   />
                   <FieldError msg={fieldErrors['action.pattern']} />
                 </label>
                 <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
-                  <span>捕获组</span>
+                  <span>{t('cases:captureGroup')}</span>
                   <input
                     className="input-base input-xs"
                     value={extractGroup}
@@ -693,22 +694,22 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
             {extractMode === 'smartExtract' && (
               <div className="flex flex-col gap-2">
                 <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                  <span>抽取描述（自然语言）</span>
+                  <span>{t('cases:extractDescLabel')}</span>
                   <textarea
                     className="input-base input-xs"
                     aria-invalid={!!fieldErrors['action.description']}
                     rows={2}
                     value={extractDescription}
                     onChange={(e) => setExtractDescription(e.target.value)}
-                    placeholder="如：提取订单号"
+                    placeholder={t('cases:extractDescPlaceholder')}
                   />
                   <FieldError msg={fieldErrors['action.description']} />
                 </label>
                 <button
                   type="button"
                   onClick={async () => {
-                    if (!caseId) { setCompileErr('缺少 caseId，无法编译'); return; }
-                    const sampleText = window.prompt('请粘贴一段包含目标片段的样本文本', '');
+                    if (!caseId) { setCompileErr(t('cases:missingCaseId')); return; }
+                    const sampleText = window.prompt(t('cases:samplePrompt'), '');
                     if (!sampleText) return;
                     setCompiling(true);
                     setCompileErr('');
@@ -718,7 +719,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
                         setExtractPattern(r.pattern);
                         setExtractGroup(String(r.group ?? 0));
                       } else {
-                        setCompileErr(r.error ?? '编译失败');
+                        setCompileErr(r.error ?? t('cases:compileFailed'));
                       }
                     } catch (err) {
                       setCompileErr((err as Error).message);
@@ -730,12 +731,12 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
                   className="press self-start text-[11px] px-2 py-1 rounded-[var(--radius-sm)] border border-dashed"
                   style={{ borderColor: 'var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: compiling ? 'wait' : 'pointer' }}
                 >
-                  {compiling ? '编译中…' : '生成正则'}
+                  {compiling ? t('cases:compilingInProgress') : t('cases:generateRegex')}
                 </button>
                 {compileErr && <p className="text-[11px]" style={{ color: 'var(--destructive)' }}>{compileErr}</p>}
                 {extractPattern && (
                   <p className="text-[11px] font-mono" style={{ color: 'var(--muted-foreground)' }}>
-                    已生成正则：{extractPattern}（捕获组 {extractGroup}，保存后回放按正则执行）
+                    {t('cases:regexGenerated', { pattern: extractPattern, group: extractGroup })}
                   </p>
                 )}
               </div>
@@ -746,14 +747,14 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
         {kind === 'aiTask' && (
           <div className="flex flex-col gap-2">
             <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>AI 子步指令（编译后落到 compiled[0].instruction，回放时由 LLM 多轮读）</span>
+              <span>{t('cases:aiSubInstruction')}</span>
               <textarea
                 className="input-base input-xs"
                 aria-invalid={!!fieldErrors['action.instruction']}
                 rows={3}
                 value={aiInstruction}
                 onChange={(e) => setAiInstruction(e.target.value)}
-                placeholder="例：识别验证码图片中的字符并填入验证码输入框"
+                placeholder={t('cases:aiSubPlaceholder')}
               />
               <FieldError msg={fieldErrors['action.instruction']} />
             </label>
@@ -781,20 +782,20 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
                 color: 'var(--muted-foreground)',
                 background: 'var(--popover)',
               }}
-              title="把自然语言指令交给 AI 助手，助手会跳到 StagePanel 预览 → 勾选保存。"
+              title={t('cases:aiCompileTooltip')}
             >
-              AI 助手编译
+              {t('cases:aiCompileButton')}
             </button>
             <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--muted-foreground)' }}>
-              <p>• 智能步骤由 AI 在回放时看截图逐步执行，适合验证码识别、动态弹窗等难以固化为 DSL 的交互。</p>
-              <p>• 确定性高的常规操作请用 click / fill / waitFor 等具体步骤，更稳更快。</p>
+              <p>{t('cases:aiStepBullet1')}</p>
+              <p>{t('cases:aiStepBullet2')}</p>
             </div>
           </div>
         )}
 
         {kind === 'upload' && (
           <div className="flex flex-col gap-2">
-            <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>绑定回放文件（按 project 隔离，≤ 10 MB）</span>
+            <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:uploadHint')}</span>
             <input
               type="file"
               aria-invalid={!!fieldErrors['action.fileId']}
@@ -805,7 +806,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
                 const f = e.target.files?.[0];
                 if (!f) return;
                 if (f.size > 10 * 1024 * 1024) {
-                  setFieldErrors((cur) => ({ ...cur, 'action.fileId': '文件超过 10MB 上限' }));
+                  setFieldErrors((cur) => ({ ...cur, 'action.fileId': t('cases:fileTooLarge') }));
                   return;
                 }
                 try {
@@ -821,7 +822,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
             <FieldError msg={fieldErrors['action.fileId']} />
             {attachments.length > 0 && (
               <>
-                <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>—— 或从本 project 已上传文件选择 ——</span>
+                <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:orPickUploaded')}</span>
                 <ul style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 0, margin: 0, listStyle: 'none' }}>
                   {attachments.map((a) => (
                     <li
@@ -846,14 +847,14 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
             )}
             {fileId && (
               <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                已绑定 fileId: <code>{fileId.slice(0, 8)}…</code>
+                {t('cases:boundFileId')} <code>{fileId.slice(0, 8)}…</code>
                 <button
                   type="button"
                   onClick={() => setFileId(undefined)}
                   className="press ml-2 text-[11px] underline-offset-2 hover:underline"
                   style={{ background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--primary)', cursor: 'pointer', borderRadius: 4 }}
                 >
-                  更换
+                  {t('cases:replaceFile')}
                 </button>
               </p>
             )}
@@ -862,13 +863,13 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
 
         {kind === 'switchTab' && (
           <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-            <span>标签引用（tabRef）</span>
+            <span>{t('cases:tabRefLabel')}</span>
             <input
               className="input-base input-xs"
               aria-invalid={!!fieldErrors['action.tabRef']}
               value={tabRef}
               onChange={(e) => setTabRef(e.target.value)}
-              placeholder="录制产生的标签标识"
+              placeholder={t('cases:tabRefPlaceholder')}
             />
             <FieldError msg={fieldErrors['action.tabRef']} />
           </label>
@@ -876,8 +877,8 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
 
         {kind === 'screenshot' && (
           <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-            <span>截图名称</span>
-            <input className="input-base input-xs" value={shotName} onChange={(e) => setShotName(e.target.value)} placeholder="可选" />
+            <span>{t('cases:screenshotName')}</span>
+            <input className="input-base input-xs" value={shotName} onChange={(e) => setShotName(e.target.value)} placeholder={t('cases:optional')} />
           </label>
         )}
 
@@ -885,11 +886,11 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
         {kind === 'swipe' && (
           <div className="flex flex-col gap-2">
             <div className="flex flex-col gap-1.5">
-              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>起点定位</span>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:swipeFromLabel')}</span>
               <LocatorArrayEditor locators={swipeFrom} onChange={setSwipeFrom} errors={fieldErrors} mobile />
             </div>
             <div className="flex flex-col gap-1.5">
-              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>终点定位</span>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:swipeToLabel')}</span>
               <LocatorArrayEditor locators={swipeTo} onChange={setSwipeTo} errors={fieldErrors} mobile />
             </div>
           </div>
@@ -897,21 +898,21 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
 
         {kind === 'setAppearance' && (
           <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-            <span>外观模式</span>
+            <span>{t('cases:appearanceMode')}</span>
             <select className="input-base input-xs" value={appearanceMode} onChange={(e) => setAppearanceMode(e.target.value as 'light' | 'dark')}>
-              <option value="light">浅色</option>
-              <option value="dark">深色</option>
+              <option value="light">{t('cases:light')}</option>
+              <option value="dark">{t('cases:dark')}</option>
             </select>
           </label>
         )}
 
         {kind === 'setNetwork' && (
           <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-            <span>网络状态</span>
+            <span>{t('cases:networkState')}</span>
             <select className="input-base input-xs" value={networkState} onChange={(e) => setNetworkState(e.target.value as 'online' | 'offline' | 'airplane')}>
-              <option value="online">在线</option>
-              <option value="offline">离线</option>
-              <option value="airplane">飞行模式</option>
+              <option value="online">{t('cases:online')}</option>
+              <option value="offline">{t('cases:offline')}</option>
+              <option value="airplane">{t('cases:airplane')}</option>
             </select>
           </label>
         )}
@@ -919,7 +920,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
         {kind === 'setLocation' && (
           <div className="flex gap-2">
             <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
-              <span>纬度 (-90 ~ 90)</span>
+              <span>{t('cases:latitude')}</span>
               <input
                 className="input-base input-xs"
                 aria-invalid={!!fieldErrors['action.latitude']}
@@ -931,7 +932,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
               <FieldError msg={fieldErrors['action.latitude']} />
             </label>
             <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
-              <span>经度 (-180 ~ 180)</span>
+              <span>{t('cases:longitude')}</span>
               <input
                 className="input-base input-xs"
                 aria-invalid={!!fieldErrors['action.longitude']}
@@ -947,7 +948,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
 
         {kind === 'appOpen' && (
           <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-            <span>bundleId（留空则启动默认应用）</span>
+            <span>{t('cases:bundleIdLabel')}</span>
             <input
               className="input-base input-xs"
               aria-invalid={!!fieldErrors['action.bundleId']}
@@ -961,35 +962,35 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
 
         {(kind === 'appBack' || kind === 'appRestart' || kind === 'home') && (
           <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-            该步骤无需额外字段,保存即可。
+            {t('cases:noExtraFieldsHint')}
           </p>
         )}
 
         {kind === 'queryDb' && (
           <div className="flex flex-col gap-2">
             <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>表名（白名单）</span>
+              <span>{t('cases:queryTableLabel')}</span>
               <select className="input-base input-xs" value={queryTable} onChange={(e) => setQueryTable(e.target.value)}>
                 {(allowedTablesData ? Object.keys(allowedTablesData) : ['test_cases']).map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             </label>
             <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>返回列（按住 Ctrl/Cmd 多选；留空表示 *）</span>
+              <span>{t('cases:queryColumnsLabel')}</span>
               <select multiple className="input-base input-xs" style={{ minHeight: 80 }} value={queryColumns} onChange={(e) => setQueryColumns(Array.from(e.target.selectedOptions).map((o) => o.value))}>
                 {queryTableCols.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </label>
             <div className="flex flex-col gap-1">
-              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>WHERE 条件（最多 10 条）</span>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:whereConditions')}</span>
               {queryWhere.map((w, i) => (
                 <div key={i} className="flex gap-1 items-center">
                   <select className="input-base input-xs flex-1" value={w.column} onChange={(e) => {
                     const next = [...queryWhere]; next[i] = { ...w, column: e.target.value }; setQueryWhere(next);
                   }}>
-                    <option value="">— 列 —</option>
+                    <option value="">{t('cases:columnDash')}</option>
                     {queryTableCols.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
-                  <input className="input-base input-xs flex-1" value={w.equals} placeholder="等于" onChange={(e) => {
+                  <input className="input-base input-xs flex-1" value={w.equals} placeholder={t('cases:equalsOp')} onChange={(e) => {
                     const next = [...queryWhere]; next[i] = { ...w, equals: e.target.value }; setQueryWhere(next);
                   }} />
                   <button type="button" className="text-[11px] press" style={{ background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4 }} onClick={() => setQueryWhere(queryWhere.filter((_, j) => j !== i))}>✕</button>
@@ -997,12 +998,12 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
               ))}
               {queryWhere.length < 10 && (
                 <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px dashed var(--border)', color: 'var(--primary)', cursor: 'pointer', borderRadius: 4, padding: '4px 8px' }} onClick={() => setQueryWhere([...queryWhere, { column: queryTableCols[0] ?? '', equals: '' }])}>
-                  + 增加条件
+                  {t('cases:addCondition')}
                 </button>
               )}
             </div>
             <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>limit（1-200）</span>
+              <span>{t('cases:queryLimitLabel')}</span>
               <input className="input-base input-xs" type="number" min={1} max={200} value={queryLimit} onChange={(e) => setQueryLimit(e.target.value)} />
             </label>
             <DbAssertionEditor value={queryAssertion} onChange={setQueryAssertion} columns={queryTableCols} />
@@ -1012,15 +1013,15 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
         {kind === 'observeLog' && (
           <div className="flex flex-col gap-2">
             <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>时间窗 (ms, 1000-600000)</span>
+              <span>{t('cases:observeWindowLabel')}</span>
               <input className="input-base input-xs" type="number" min={1000} max={600000} value={observeWindowMs} onChange={(e) => setObserveWindowMs(e.target.value)} />
             </label>
             <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>关键字（逗号分隔，最多 10 个）</span>
+              <span>{t('cases:observeKeywordsLabel')}</span>
               <input className="input-base input-xs" value={observeKeywords} onChange={(e) => setObserveKeywords(e.target.value)} />
             </label>
             <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>起始行数（1-10000）</span>
+              <span>{t('cases:observeFromLineLabel')}</span>
               <input className="input-base input-xs" type="number" min={1} max={10000} value={observeFromLine} onChange={(e) => setObserveFromLine(e.target.value)} />
             </label>
             <DbAssertionEditor value={logAssertion} onChange={setLogAssertion} />
@@ -1038,18 +1039,18 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
                 aria-invalid={!!fieldErrors['action.url']}
                 value={httpUrl}
                 onChange={(e) => setHttpUrl(e.target.value)}
-                placeholder="https://host/api/path（支持 {{var}}）"
+                placeholder={t('cases:httpUrlPlaceholder', { col: '{{var}}' })}
               />
             </div>
             <FieldError msg={fieldErrors['action.url']} />
             <div className="flex flex-col gap-1">
-              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>请求头（最多 20 个，值支持 {'{{var}}'}）</span>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:httpHeadersLabel', { col: '{{var}}' })}</span>
               {httpHeaders.map((h, i) => (
                 <div key={i} className="flex gap-1 items-center">
                   <input className="input-base input-xs" style={{ width: 140 }} value={h.key} placeholder="Header" onChange={(e) => {
                     const nextH = [...httpHeaders]; nextH[i] = { ...h, key: e.target.value }; setHttpHeaders(nextH);
                   }} />
-                  <input className="input-base input-xs flex-1" value={h.value} placeholder="值" onChange={(e) => {
+                  <input className="input-base input-xs flex-1" value={h.value} placeholder={t('cases:headerValuePlaceholder')} onChange={(e) => {
                     const nextH = [...httpHeaders]; nextH[i] = { ...h, value: e.target.value }; setHttpHeaders(nextH);
                   }} />
                   <button type="button" className="text-[11px] press" style={{ background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4 }} onClick={() => setHttpHeaders(httpHeaders.filter((_, j) => j !== i))}>✕</button>
@@ -1057,13 +1058,13 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
               ))}
               {httpHeaders.length < 20 && (
                 <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px dashed var(--border)', color: 'var(--primary)', cursor: 'pointer', borderRadius: 4, padding: '4px 8px' }} onClick={() => setHttpHeaders([...httpHeaders, { key: '', value: '' }])}>
-                  + 增加请求头
+                  {t('cases:addHeader')}
                 </button>
               )}
             </div>
             {httpMethod !== 'GET' && httpMethod !== 'HEAD' && (
               <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                <span>请求体（原文，支持 {'{{var}}'}）</span>
+                <span>{t('cases:httpBodyLabel', { col: '{{var}}' })}</span>
                 <textarea
                   className="input-base input-xs font-mono"
                   style={{ minHeight: 72 }}
@@ -1075,24 +1076,24 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
             )}
             <div className="flex gap-2 items-center">
               <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
-                <span>超时 (ms, 1000-30000)</span>
+                <span>{t('cases:httpTimeoutLabel')}</span>
                 <input className="input-base input-xs" type="number" min={1000} max={30000} value={httpTimeout} onChange={(e) => setHttpTimeout(e.target.value)} />
               </label>
               <label className="flex gap-1.5 items-center text-[11px] self-end pb-1 cursor-pointer" style={{ color: 'var(--muted-foreground)' }}>
                 <input type="checkbox" checked={httpCarryLogin} onChange={(e) => setHttpCarryLogin(e.target.checked)} />
-                <span>携带浏览器登录态 Cookie</span>
+                <span>{t('cases:carryLoginCookie')}</span>
               </label>
             </div>
             <div className="flex flex-col gap-1.5 p-2 rounded-[var(--radius-sm)]" style={{ border: '1px solid var(--border)', background: 'var(--muted)' }}>
-              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>提取变量（响应值 → {'{{var}}'}，供后续步骤使用）</span>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:saveVarLabel', { col: '{{var}}' })}</span>
               <div className="flex gap-1.5">
-                <input className="input-base input-xs" style={{ width: 130 }} value={httpSaveAs.varName} placeholder="变量名" onChange={(e) => setHttpSaveAs({ ...httpSaveAs, varName: e.target.value })} />
+                <input className="input-base input-xs" style={{ width: 130 }} value={httpSaveAs.varName} placeholder={t('cases:saveVarNamePlaceholder')} onChange={(e) => setHttpSaveAs({ ...httpSaveAs, varName: e.target.value })} />
                 <select className="input-base input-xs" style={{ width: 96 }} value={httpSaveAs.from} onChange={(e) => setHttpSaveAs({ ...httpSaveAs, from: e.target.value as 'body' | 'status' })}>
-                  <option value="body">响应体</option>
-                  <option value="status">状态码</option>
+                  <option value="body">{t('cases:saveVarFromBody')}</option>
+                  <option value="status">{t('cases:saveVarFromStatus')}</option>
                 </select>
                 {httpSaveAs.from === 'body' && (
-                  <input className="input-base input-xs flex-1 font-mono" value={httpSaveAs.path} placeholder="data.items[0].id（留空取全文）" onChange={(e) => setHttpSaveAs({ ...httpSaveAs, path: e.target.value })} />
+                  <input className="input-base input-xs flex-1 font-mono" value={httpSaveAs.path} placeholder={t('cases:saveVarPathPlaceholder')} onChange={(e) => setHttpSaveAs({ ...httpSaveAs, path: e.target.value })} />
                 )}
               </div>
             </div>
@@ -1105,7 +1106,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
         {Array.isArray(compiled) && compiled.length > 1 && (
           <div className="flex flex-col gap-1.5 rounded-[var(--radius-sm)] border border-dashed p-2" style={{ borderColor: 'var(--border)' }}>
             <span className="text-[11px] font-semibold" style={{ color: 'var(--muted-foreground)' }}>
-              compiled 动作链（共 {compiled.length} 个，回放依序执行）
+              {t('cases:compiledChainTitle', { count: compiled.length })}
             </span>
             <ol className="flex flex-col gap-0.5 m-0 p-0 list-none">
               {compiled.map((c, i) => (
@@ -1115,17 +1116,17 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
               ))}
             </ol>
             <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
-              本表单只编辑第 1 个动作；保存时其余动作原样保留。要改整条链：回列表点行内「拆分」逐动作编辑，或用 AI 助手重编。
+              {t('cases:compiledChainHint')}
             </span>
           </div>
         )}
       </div>
 
       <div className="flex items-center gap-2 justify-end px-5 py-4 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
-        <Button variant="ghost" size="sm" onClick={onCancel}>取消</Button>
+        <Button variant="ghost" size="sm" onClick={onCancel}>{t('common:cancel')}</Button>
         {saveAsPlaceholder && (
           <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
-            将存为未编译占位 — 执行会被阻塞,点行级「AI 智能任务」回填
+            {t('cases:saveAsPlaceholderHint')}
           </span>
         )}
         <Button size="sm" onClick={handleSave}>{saveLabel}</Button>
@@ -1135,56 +1136,58 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
 }
 
 function DbAssertionEditor({ value, onChange, columns }: { value: { match: 'equals' | 'contains' | 'regex'; expected: string; column?: string } | undefined; onChange: (v: typeof value) => void; columns?: string[] }) {
+  const { t } = useTranslation();
   if (!value) {
     return (
       <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px dashed var(--border)', color: 'var(--muted-foreground)', cursor: 'pointer', padding: '4px 8px', borderRadius: 5 }} onClick={() => onChange({ match: 'contains', expected: '' })}>
-        + 附加断言
+        {t('cases:addAssertion')}
       </button>
     );
   }
   return (
     <div className="flex flex-col gap-1.5 p-2 rounded-[var(--radius-sm)]" style={{ border: '1px solid var(--border)', background: 'var(--muted)' }}>
-      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>断言（不命中则步骤失败）</span>
+      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:assertMismatch')}</span>
       <div className="flex gap-1.5">
         <select className="input-base input-xs" value={value.match} onChange={(e) => onChange({ ...value, match: e.target.value as 'equals' | 'contains' | 'regex' })}>
-          <option value="equals">等于</option>
-          <option value="contains">包含</option>
-          <option value="regex">正则</option>
+          <option value="equals">{t('cases:equalsOp')}</option>
+          <option value="contains">{t('cases:matchContains')}</option>
+          <option value="regex">{t('cases:regexLabel')}</option>
         </select>
-        <input className="input-base input-xs flex-1" value={value.expected} placeholder="期望文本" onChange={(e) => onChange({ ...value, expected: e.target.value })} />
+        <input className="input-base input-xs flex-1" value={value.expected} placeholder={t('cases:expectedText')} onChange={(e) => onChange({ ...value, expected: e.target.value })} />
       </div>
       {columns && columns.length > 0 && (
         <select className="input-base input-xs" value={value.column ?? ''} onChange={(e) => onChange({ ...value, column: e.target.value || undefined })}>
-          <option value="">任意列</option>
+          <option value="">{t('cases:anyColumn')}</option>
           {columns.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       )}
-      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px solid var(--destructive)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4, padding: '2px 8px' }} onClick={() => onChange(undefined)}>移除断言</button>
+      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px solid var(--destructive)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4, padding: '2px 8px' }} onClick={() => onChange(undefined)}>{t('cases:removeAssertion')}</button>
     </div>
   );
 }
 
 function HttpAssertionEditor({ value, onChange }: { value: { status: string; match: 'equals' | 'contains' | 'regex'; expected: string } | undefined; onChange: (v: typeof value) => void }) {
+  const { t } = useTranslation();
   if (!value) {
     return (
       <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px dashed var(--border)', color: 'var(--muted-foreground)', cursor: 'pointer', padding: '4px 8px', borderRadius: 5 }} onClick={() => onChange({ status: '', match: 'contains', expected: '' })}>
-        + 附加断言
+        {t('cases:addAssertion')}
       </button>
     );
   }
   return (
     <div className="flex flex-col gap-1.5 p-2 rounded-[var(--radius-sm)]" style={{ border: '1px solid var(--border)', background: 'var(--muted)' }}>
-      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>断言（状态码 / 响应体；不命中则步骤失败）</span>
+      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:httpAssertMismatch')}</span>
       <div className="flex gap-1.5">
-        <input className="input-base input-xs" style={{ width: 130 }} type="number" min={100} max={599} value={value.status ?? ''} placeholder="状态码（可选）" onChange={(e) => onChange({ ...value, status: e.target.value })} />
+        <input className="input-base input-xs" style={{ width: 130 }} type="number" min={100} max={599} value={value.status ?? ''} placeholder={t('cases:statusCodePlaceholder')} onChange={(e) => onChange({ ...value, status: e.target.value })} />
         <select className="input-base input-xs" style={{ width: 84 }} value={value.match} onChange={(e) => onChange({ ...value, match: e.target.value as 'equals' | 'contains' | 'regex' })}>
-          <option value="equals">等于</option>
-          <option value="contains">包含</option>
-          <option value="regex">正则</option>
+          <option value="equals">{t('cases:equalsOp')}</option>
+          <option value="contains">{t('cases:matchContains')}</option>
+          <option value="regex">{t('cases:regexLabel')}</option>
         </select>
-        <input className="input-base input-xs flex-1" value={value.expected} placeholder="响应体期望（可选）" onChange={(e) => onChange({ ...value, expected: e.target.value })} />
+        <input className="input-base input-xs flex-1" value={value.expected} placeholder={t('cases:bodyExpectPlaceholder')} onChange={(e) => onChange({ ...value, expected: e.target.value })} />
       </div>
-      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px solid var(--destructive)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4, padding: '2px 8px' }} onClick={() => onChange(undefined)}>移除断言</button>
+      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px solid var(--destructive)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4, padding: '2px 8px' }} onClick={() => onChange(undefined)}>{t('cases:removeAssertion')}</button>
     </div>
   );
 }
