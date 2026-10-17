@@ -9,7 +9,6 @@ import PriorityBadge from '../../components/ui/PriorityBadge';
 import { useUIStore } from '../../stores/ui';
 import { stepKindLabel } from '../../lib/format';
 import { stepSummary } from '../../lib/stepSummary';
-import { COVERAGE_LABELS } from '@itest/shared';
 import SaveDialog from './SaveDialog';
 import {
   useSpaceEventsStore,
@@ -230,7 +229,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
           {p.coverageTypes?.length ? (
             <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               {t('assistant:stage.coverage', {
-                items: p.coverageTypes.map((k) => COVERAGE_LABELS.get(k) ?? k).join(t('assistant:stage.coverageJoin')),
+                items: p.coverageTypes.map((k) => t(`groups:coverage.${k}`)).join(t('assistant:stage.coverageJoin')),
               })}
             </div>
           ) : null}
