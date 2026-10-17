@@ -20,21 +20,21 @@ import {
 type Tab = Exclude<StageKind, 'group'>;
 
 const TABS: Array<{ key: Tab; label: string }> = [
-  { key: 'case', label: '用例' },
-  { key: 'case_op', label: '修改' },
-  { key: 'scenario', label: '场景' },
-  { key: 'environment', label: '环境' },
-  { key: 'plan', label: '计划' },
-  { key: 'dataset', label: '数据集' },
+  { key: 'case', label: 'assistant:kind.case' },
+  { key: 'case_op', label: 'assistant:kind.caseOp' },
+  { key: 'scenario', label: 'assistant:kind.scenario' },
+  { key: 'environment', label: 'assistant:kind.environment' },
+  { key: 'plan', label: 'assistant:kind.plan' },
+  { key: 'dataset', label: 'assistant:kind.dataset' },
 ];
 
 const KIND_LABEL: Record<Tab, string> = {
-  case: '用例',
-  case_op: '修改',
-  scenario: '场景',
-  environment: '环境',
-  plan: '计划',
-  dataset: '数据集',
+  case: 'assistant:kind.case',
+  case_op: 'assistant:kind.caseOp',
+  scenario: 'assistant:kind.scenario',
+  environment: 'assistant:kind.environment',
+  plan: 'assistant:kind.plan',
+  dataset: 'assistant:kind.dataset',
 };
 
 interface Props {
@@ -60,7 +60,7 @@ function CaseSteps({ steps }: { steps: StageDoc['cases'][number]['steps'] }) {
         className="cursor-pointer select-none"
         style={{ color: 'var(--muted-foreground)', fontSize: 11 }}
       >
-        步骤（{steps.length}）
+        {t('assistant:stage.stepsCount', { count: steps.length })}
       </summary>
       <ol className="mt-1 ml-4 list-decimal">
         {steps.map((s, i) => (
@@ -68,13 +68,13 @@ function CaseSteps({ steps }: { steps: StageDoc['cases'][number]['steps'] }) {
             <div>{s.action}</div>
             {s.assertion && (
               <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                断言：{s.assertion}
+                {t('assistant:stage.assertion', { text: s.assertion })}
               </div>
             )}
             <div className="text-[11px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
-              编译：
+              {t('assistant:stage.compiledLabel')}
               {s.compiled == null ? (
-                <span style={{ color: '#92400e' }}>未编译：落库后该步骤不会执行，请用 [{'{"kind":"aiTask","instruction":"..."}'}] 表达「由 AI 临场执行」</span>
+                <span style={{ color: '#92400e' }}>{t('assistant:stage.uncompiledWarning')}</span>
               ) : (
                 <ol className="ml-4 list-decimal">
                   {s.compiled.map((sub, j) => (
@@ -129,6 +129,7 @@ function useStageDoc(threadId: string): { refetch: () => void } {
 
 /** 暂存面板：Tabs + 每行复选框 + 「保存选中」按钮。SSE 即时更新 + mount 时拉一次 list 兜底。 */
 export default function StagePanel({ projectId, versionId }: Props) {
+  const { t } = useTranslation();
   void versionId; // 暂未用；保留为未来「在用例库打开」等跳转入参
   const qc = useQueryClient();
   // threadId 存 spaceEventsStore,由 SpaceWorkspace mount 时写入;订阅同一 state 规避 window 全局的时序竞态
@@ -181,7 +182,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
         (res.savedEnvironments ?? 0) +
         (res.savedPlans ?? 0) +
         (res.savedDatasets ?? 0);
-      toast(`已保存 ${totalSaved} 项`, 'success');
+      toast(t('assistant:stage.savedCount', { count: totalSaved }), 'success');
       // 同步清空本地视图（SSE remove 事件会再刷一次兜底）
       removeStaged(activeThreadId, 'case', partitioned.case.map((x) => x.localId));
       removeStaged(activeThreadId, 'case_op', partitioned.case_op.map((x) => x.localId));
@@ -196,7 +197,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
       // 数据集管理页/绑定下拉需要新鲜数据
       qc.invalidateQueries({ queryKey: ['datasets'] });
     },
-    onError: (e: Error) => toast(e.message || '保存失败', 'error'),
+    onError: (e: Error) => toast(e.message || t('assistant:stage.saveFailed'), 'error'),
   });
 
   const renderCaseRow = (it: StagedItem) => {
@@ -228,12 +229,14 @@ export default function StagePanel({ projectId, versionId }: Props) {
           )}
           {p.coverageTypes?.length ? (
             <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              覆盖：{p.coverageTypes.map((k) => COVERAGE_LABELS.get(k) ?? k).join('、')}
+              {t('assistant:stage.coverage', {
+                items: p.coverageTypes.map((k) => COVERAGE_LABELS.get(k) ?? k).join(t('assistant:stage.coverageJoin')),
+              })}
             </div>
           ) : null}
           {p.datasetLocalId && (
             <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              配套数据集：{boundDataset ? `「${boundDataset.name}」（同批保存时自动绑定）` : '草稿已不在暂存区，保存时不绑定'}
+              {boundDataset ? t('assistant:stage.datasetBound', { name: boundDataset.name }) : t('assistant:stage.datasetMissing')}
             </div>
           )}
           <CaseSteps steps={p.steps} />
@@ -281,7 +284,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
           </div>
           {p.objects.length > 0 && (
             <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              凭据对象 {p.objects.length} 个
+              {t('assistant:stage.envObjects', { count: p.objects.length })}
             </div>
           )}
         </div>
@@ -303,7 +306,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
         <div className="flex-1">
           <div className="font-semibold">{p.name}</div>
           <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-            关联 {p.caseLocalIds.length} 个用例
+            {t('assistant:stage.planCases', { count: p.caseLocalIds.length })}
           </div>
         </div>
       </label>
@@ -337,7 +340,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
                   border: '1px solid var(--border)',
                   background: 'var(--popover)',
                 }}
-                title={c.sensitive ? '敏感列，落库时加密存储' : undefined}
+                title={c.sensitive ? t('assistant:stage.sensitiveTitle') : undefined}
               >
                 {`{{${c.name}}}`}
                 {c.sensitive ? ' 🔒' : ''}
@@ -350,8 +353,10 @@ export default function StagePanel({ projectId, versionId }: Props) {
                 className="cursor-pointer select-none"
                 style={{ color: 'var(--muted-foreground)', fontSize: 11 }}
               >
-                行数据（{p.rows.length}
-                {disabledCount > 0 ? `，${disabledCount} 行禁用` : ''}；敏感列为明文草稿，落库时加密）
+                {t('assistant:stage.rows', {
+                  count: p.rows.length,
+                  disabledSuffix: disabledCount > 0 ? t('assistant:stage.rowsDisabled', { count: disabledCount }) : '',
+                })}
               </summary>
               <div className="mt-1 overflow-x-auto">
                 <table className="text-[11px] whitespace-nowrap" style={{ borderCollapse: 'collapse' }}>
@@ -433,7 +438,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
     if (tabItems.length === 0) {
       return (
         <div className="text-[12px] text-center py-6" style={{ color: 'var(--muted-foreground)' }}>
-          暂存表为空，AI 创建对象后会出现在这里
+          {t('assistant:stage.emptyList')}
         </div>
       );
     }
@@ -452,22 +457,22 @@ export default function StagePanel({ projectId, versionId }: Props) {
   const selectedTotal = selection?.size ?? 0;
 
   return (
-    <CollapsiblePanel title={`暂存对象（${total}）`} defaultOpen divider={false}>
+    <CollapsiblePanel title={t('assistant:stage.panelTitle', { count: total })} defaultOpen divider={false}>
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex items-center gap-1 px-3 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        {TABS.map((t) => (
+        {TABS.map((tabItem) => (
           <button
-            key={t.key}
+            key={tabItem.key}
             type="button"
-            onClick={() => setTab(t.key)}
+            onClick={() => setTab(tabItem.key)}
             className="rounded px-2 py-1 text-[12px]"
             style={{
-              background: tab === t.key ? 'var(--primary-soft)' : 'transparent',
-              color: tab === t.key ? 'var(--primary)' : 'var(--muted-foreground)',
-              fontWeight: tab === t.key ? 600 : 400,
+              background: tab === tabItem.key ? 'var(--primary-soft)' : 'transparent',
+              color: tab === tabItem.key ? 'var(--primary)' : 'var(--muted-foreground)',
+              fontWeight: tab === tabItem.key ? 600 : 400,
             }}
           >
-            {t.label} ({partitioned[t.key].length})
+            {t(tabItem.label)} ({partitioned[tabItem.key].length})
           </button>
         ))}
         {tabItems.length > 0 && (
@@ -477,7 +482,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
             style={{ color: 'var(--muted-foreground)' }}
             onClick={() => selectAll(activeThreadId, tab, !tabAllSelected)}
           >
-            {tabAllSelected ? '取消全选' : '全选'}
+            {tabAllSelected ? t('assistant:stage.deselectAll') : t('assistant:stage.selectAll')}
           </button>
         )}
       </div>
@@ -485,7 +490,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
         {total === 0 ? (
           <div className="flex-1 flex items-center justify-center min-h-[120px]">
             <p className="text-[12px] text-center" style={{ color: 'var(--muted-foreground)' }}>
-              AI 暂存的对象会展示在这里
+              {t('assistant:stage.emptyHint')}
             </p>
           </div>
         ) : (
@@ -498,7 +503,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
           style={{ borderTop: '1px solid var(--border)' }}
         >
           <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-            已选 {selectedTotal}
+            {t('plans:selectedCount', { count: selectedTotal })}
           </span>
           <div className="flex-1" />
           <Button
@@ -507,7 +512,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
             onClick={() => setSaveOpen(true)}
           >
             <Icon name="save" size={12} />
-            {saveMut.isPending ? '保存中…' : '保存选中'}
+            {saveMut.isPending ? t('common:saving') : t('assistant:stage.saveSelected')}
           </Button>
         </div>
       )}
@@ -541,7 +546,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
           };
           saveMut.mutate(body);
         }}
-        kindLabel={KIND_LABEL[tab]}
+        kindLabel={t(KIND_LABEL[tab])}
       />
       </div>
     </CollapsiblePanel>

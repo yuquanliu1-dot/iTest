@@ -1,0 +1,99 @@
+{
+  "composer": {
+    "placeholder": "让 AI 查环境、建用例、排计划…",
+    "send": "发送",
+    "stop": "停止"
+  },
+  "runningIndicator": "正在运行",
+  "thinking": "思考中",
+  "tool": {
+    "inspectPage": "抓取页面",
+    "announcePlan": "生成计划",
+    "manageCases": "用例管理",
+    "manageScenarios": "场景管理",
+    "manageEnvironments": "环境管理",
+    "managePlans": "计划管理",
+    "verifyCase": "实测验证",
+    "solidifyCase": "固化用例",
+    "readRepo": "读取仓库"
+  },
+  "verify": {
+    "cardTitle": "实测验证（{{done}}/{{total}} 步{{targetSuffix}}）",
+    "targetUrlSuffix": " · {{url}}",
+    "loginCacheHit": "登录缓存命中{{userSuffix}}",
+    "userSuffix": "（{{user}}）",
+    "loginCacheMissUser": "登录缓存未命中（{{user}}）",
+    "loginCacheMissNoUser": "未配置登录凭据",
+    "stagedOps": "基于暂存（{{count}} 项修改）",
+    "cacheWritten": " · 已回写登录缓存",
+    "stepBriefSuffix": "：{{brief}}",
+    "stepLoggedIn": " · 已登录",
+    "stepDuration": "（{{sec}}s）",
+    "compiledReplay": "Compiled 机械回放校验"
+  },
+  "solidify": {
+    "cardTitle": "固化用例（{{solidifiable}}/{{total}} 步可固化）{{statusSuffix}}",
+    "statusSuffix": " · {{status}}",
+    "done": "已固化 {{count}} 步{{keptSuffix}}",
+    "keptSuffix": "，保持视觉 {{count}} 步",
+    "nothingWithKept": "无可固化步骤，{{count}} 步保持视觉模式",
+    "nothing": "无可固化步骤"
+  },
+  "kind": {
+    "case": "用例",
+    "caseOp": "修改",
+    "scenario": "场景",
+    "environment": "环境",
+    "plan": "计划",
+    "dataset": "数据集"
+  },
+  "stage": {
+    "stepsCount": "步骤（{{count}}）",
+    "assertion": "断言：{{text}}",
+    "compiledLabel": "编译：",
+    "uncompiledWarning": "未编译：落库后该步骤不会执行，请用 [{\"kind\":\"aiTask\",\"instruction\":\"...\"}] 表达「由 AI 临场执行」",
+    "savedCount": "已保存 {{count}} 项",
+    "saveFailed": "保存失败",
+    "coverage": "覆盖：{{items}}",
+    "coverageJoin": "、",
+    "datasetBound": "配套数据集：「{{name}}」（同批保存时自动绑定）",
+    "datasetMissing": "草稿已不在暂存区，保存时不绑定",
+    "envObjects": "凭据对象 {{count}} 个",
+    "planCases": "关联 {{count}} 个用例",
+    "sensitiveTitle": "敏感列，落库时加密存储",
+    "rows": "行数据（{{count}}{{disabledSuffix}}；敏感列为明文草稿，落库时加密）",
+    "rowsDisabled": "，{{count}} 行禁用",
+    "emptyList": "暂存表为空，AI 创建对象后会出现在这里",
+    "panelTitle": "暂存对象（{{count}}）",
+    "selectAll": "全选",
+    "deselectAll": "取消全选",
+    "emptyHint": "AI 暂存的对象会展示在这里",
+    "saveSelected": "保存选中"
+  },
+  "saveDialog": {
+    "title": "保存暂存对象",
+    "currentTab": "当前 Tab：{{kind}}。选中 {{count}} 项",
+    "countCase": " · 用例 {{count}}",
+    "countCaseOp": " · 修改 {{count}}",
+    "countScenario": " · 场景 {{count}}",
+    "countEnvironment": " · 环境 {{count}}",
+    "countPlan": " · 计划 {{count}}",
+    "countDataset": " · 数据集 {{count}}",
+    "needGroup": "目标分组（用例 / 计划必选）",
+    "chooseGroup": "选择分组…",
+    "noGroupHint": "仅保存环境/场景/数据集，落库时按项目默认位置放置，无需选分组。",
+    "save": "保存所选"
+  },
+  "confirm": {
+    "risk": {
+      "update": "更新",
+      "secret": "密钥"
+    },
+    "viewDiff": "查看变更明细",
+    "processing": "处理中…",
+    "confirmExecute": "确认执行"
+  },
+  "liveView": {
+    "title": "实时画面"
+  }
+}

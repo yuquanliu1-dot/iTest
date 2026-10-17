@@ -1,18 +1,20 @@
 import { useMutation } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { ApiError, api } from '../../api/client';
 import { useUIStore } from '../../stores/ui';
 import { useSpaceEventsStore, type SpaceConfirmRequest } from './spaceEventsStore';
 
 const RISK_META: Record<SpaceConfirmRequest['risk'], { label: string; color: string; bg: string }> = {
-  update: { label: '更新', color: 'var(--primary)', bg: 'var(--primary-soft)' },
+  update: { label: 'assistant:confirm.risk.update', color: 'var(--primary)', bg: 'var(--primary-soft)' },
   // 删除:用主题 destructive token(10% 淡出色,与 update/secret 的 10% 对齐)
-  delete: { label: '删除', color: 'var(--destructive)', bg: 'var(--destructive-soft-strong)' },
+  delete: { label: 'common:delete', color: 'var(--destructive)', bg: 'var(--destructive-soft-strong)' },
   // 密钥:用主题 warning tokens(暗色模式自适配;硬编码琥珀色是 Task 2 评审否决的模式)
-  secret: { label: '密钥', color: 'var(--warning)', bg: 'var(--warning-soft)' },
+  secret: { label: 'assistant:confirm.risk.secret', color: 'var(--warning)', bg: 'var(--warning-soft)' },
 };
 
 /** 确认卡:钉在 composer 上方;确认/取消 → POST /confirm;仅 404(确已过期)收卡,其余错误保留卡片供重试。 */
 export default function ConfirmCard({ threadId }: { threadId: string }) {
+  const { t } = useTranslation();
   const confirms = useSpaceEventsStore((s) => s.confirms);
   const removeConfirm = useSpaceEventsStore((s) => s.removeConfirm);
   const toast = useUIStore((s) => s.showToast);
@@ -43,7 +45,7 @@ export default function ConfirmCard({ threadId }: { threadId: string }) {
                 className="text-[10px] px-1.5 py-[1px] rounded font-medium shrink-0"
                 style={{ color: meta.color, background: meta.bg }}
               >
-                {meta.label}
+                {t(meta.label)}
               </span>
               <span className="text-[13px] font-medium truncate" style={{ color: 'var(--foreground)' }}>
                 {c.summary}
@@ -52,7 +54,7 @@ export default function ConfirmCard({ threadId }: { threadId: string }) {
             {c.diff && (
               <details className="mt-1.5">
                 <summary className="text-[12px] cursor-pointer" style={{ color: 'var(--muted-foreground)' }}>
-                  查看变更明细
+                  {t('assistant:confirm.viewDiff')}
                 </summary>
                 <pre
                   className="mt-1 text-[11px] whitespace-pre-wrap max-h-40 overflow-y-auto"
@@ -70,7 +72,7 @@ export default function ConfirmCard({ threadId }: { threadId: string }) {
                 disabled={pending}
                 onClick={() => decide.mutate({ confirmId: c.confirmId, approved: false })}
               >
-                取消
+                {t('common:cancel')}
               </button>
               <button
                 type="button"
@@ -79,7 +81,7 @@ export default function ConfirmCard({ threadId }: { threadId: string }) {
                 disabled={pending}
                 onClick={() => decide.mutate({ confirmId: c.confirmId, approved: true })}
               >
-                {pending ? '处理中…' : '确认执行'}
+                {pending ? t('assistant:confirm.processing') : t('assistant:confirm.confirmExecute')}
               </button>
             </div>
           </div>
