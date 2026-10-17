@@ -131,6 +131,11 @@ interface FormProps {
 function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars = [], caseId, platform = 'web', buildActionRef, onCancel, onSave, saveLabel, saveMode }: FormProps) {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  // validateStepEdit 返回 i18n token → 当前语言文案；定位候选序号从字段路径推得。
+  const errText = (token: string, path: string): string =>
+    token === 'stepLocatorValueEmpty'
+      ? t('cases:stepLocatorValueEmpty', { n: Number(/^action\.locator\.(\d+)\.value$/.exec(path)?.[1] ?? 0) + 1 })
+      : token.startsWith('step') ? t(`cases:${token}`) : token;
   const { projectId: routeProjectId, versionId: routeVersionId } = useParams<{ projectId: string; versionId: string }>();
   const action = clip.action as Record<string, unknown>;
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -468,7 +473,9 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
     }
     const v = validateStepEdit({ action: next, delayMs: delayMs ? Number(delayMs) : undefined });
     if (!v.ok) {
-      setFieldErrors(v.errors);
+      const translated: Record<string, string> = {};
+      for (const [path, token] of Object.entries(v.errors)) translated[path] = errText(token, path);
+      setFieldErrors(translated);
       return;
     }
     // aiTask 必须先 AI 编译出 compiled：空数组 = dispatcher 抛 compile-missing。
