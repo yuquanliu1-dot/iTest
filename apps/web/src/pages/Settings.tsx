@@ -88,7 +88,7 @@ export default function Settings() {
   // 回放降级开关即时保存
   const saveFallback = useMutation({
     mutationFn: ({ key, value }: { key: string; value: boolean }) => api.settings.put(key, value),
-    onError: (e: Error) => toast((e as Error).message || t('settings:saveFailed'), 'error'),
+    onError: (e: Error) => toast(localizeApiError(e as { code?: string; message?: string }) || t('settings:saveFailed'), 'error'),
   });
 
   if (isLoading) {
@@ -223,7 +223,7 @@ export default function Settings() {
                 )}
                 {test.isError && (
                   <span className="text-[12px]" style={{ color: 'var(--destructive)' }}>
-                    {t('settings:testFail', { error: (test.error as Error).message })}
+                    {t('settings:testFail', { error: localizeApiError(test.error as { code?: string; message?: string }) })}
                   </span>
                 )}
               </div>
