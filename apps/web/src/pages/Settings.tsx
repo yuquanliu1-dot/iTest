@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { api } from '../api/client';
 import { useUIStore } from '../stores/ui';
 import { useThemeStore } from '../stores/theme';
@@ -77,7 +78,7 @@ export default function Settings() {
       await api.settings.put('llm_base_url', baseUrl);
     },
     onSuccess: () => toast(t('settings:saved'), 'success'),
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const test = useMutation({

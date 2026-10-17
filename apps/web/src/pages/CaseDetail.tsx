@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type VariableReport } from '../api/client';
@@ -141,7 +142,7 @@ export default function CaseDetail() {
       setVarReport(r.variableReport ?? null);
       qc.invalidateQueries({ queryKey: ['case', id] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   /** 所有步骤变更统一入口：先记撤销快照，再全量替换。 */
@@ -334,7 +335,7 @@ export default function CaseDetail() {
       qc.invalidateQueries({ queryKey: ['case', id] });
       qc.invalidateQueries({ queryKey: ['cases', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   // 用例名称行内编辑：改用例本身（PATCH /cases/:id { title }），用例库/助手/历史报告同步生效。
@@ -347,7 +348,7 @@ export default function CaseDetail() {
       qc.invalidateQueries({ queryKey: ['reports'] });
       toast(t('cases:renamed'), 'success');
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const toggleTag = (tagId: string) => {
@@ -400,7 +401,7 @@ export default function CaseDetail() {
     },
     onError: (e: Error) => {
       recorder.setError(e.message);
-      toast(e.message, 'error');
+      toast(localizeApiError(e), 'error');
     },
   });
 
@@ -449,7 +450,7 @@ export default function CaseDetail() {
           toast(t('cases:stepsWritten', { count: r.inserted }), 'success');
           qc.invalidateQueries({ queryKey: ['case', id] });
         })
-        .catch((err: Error) => toast(err.message, 'error'));
+        .catch((err: Error) => toast(localizeApiError(err), 'error'));
     };
     window.addEventListener('message', onStopped);
     return () => window.removeEventListener('message', onStopped);
@@ -475,7 +476,7 @@ export default function CaseDetail() {
       );
       return Promise.resolve();
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const moveGroup = useMutation({
@@ -486,7 +487,7 @@ export default function CaseDetail() {
       qc.invalidateQueries({ queryKey: ['cases', projectId] });
       qc.invalidateQueries({ queryKey: ['groups', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const moveScenario = useMutation({
@@ -496,7 +497,7 @@ export default function CaseDetail() {
       qc.invalidateQueries({ queryKey: ['case', id] });
       qc.invalidateQueries({ queryKey: ['cases', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const execute = useMutation({
@@ -507,7 +508,7 @@ export default function CaseDetail() {
       qc.invalidateQueries({ queryKey: ['reports'] });
       navigate(`/p/${projectId}/v/${versionId}/reports/${r.reportId}`);
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const deleteStep = useMutation({
@@ -517,7 +518,7 @@ export default function CaseDetail() {
       qc.invalidateQueries({ queryKey: ['case', id] });
     },
     onError: (e: Error) => {
-      toast(e.message, 'error');
+      toast(localizeApiError(e), 'error');
       setConfirmDeleteStep(null);
     },
   });
@@ -533,7 +534,7 @@ export default function CaseDetail() {
       return api.cases.reorderSteps(id!, ids);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }),
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
@@ -552,7 +553,7 @@ export default function CaseDetail() {
         if (i >= 0) historyRef.current.splice(i, 1);
       }
       pendingDragSnapshotsRef.current = null;
-      toast(e.message, 'error');
+      toast(localizeApiError(e), 'error');
       qc.invalidateQueries({ queryKey: ['case', id] });
     },
   });
@@ -589,7 +590,7 @@ export default function CaseDetail() {
       qc.invalidateQueries({ queryKey: ['case', id] });
       toast(t('cases:saved'), 'success');
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   useEffect(() => {
@@ -1468,7 +1469,7 @@ export default function CaseDetail() {
                     toast(t('cases:saved'), 'success');
                     setUrlDialogOpen(false);
                   })
-                  .catch((e: Error) => toast(e.message, 'error'))
+                  .catch((e: Error) => toast(localizeApiError(e), 'error'))
                   .finally(() => setUrlSaving(false));
               }}
             >

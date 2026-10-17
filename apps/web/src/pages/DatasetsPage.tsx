@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Creator, type DatasetMaskedCell, type DatasetSaveBody, type DatasetSummary } from '../api/client';
@@ -58,7 +59,7 @@ export default function DatasetsPage() {
         createdBy: d.createdBy ?? null,
       });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const save = useMutation({
@@ -82,7 +83,7 @@ export default function DatasetsPage() {
       setDraft(null);
       qc.invalidateQueries({ queryKey: ['datasets', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const remove = useMutation({
@@ -92,7 +93,7 @@ export default function DatasetsPage() {
       setConfirmDelete(null);
       qc.invalidateQueries({ queryKey: ['datasets', projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   // ---- 编辑器操作（全部是本地 draft 变更，保存时一次性 PUT） ----

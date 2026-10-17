@@ -31,14 +31,16 @@ import zhDevice from './locales/zh-CN/device.json';
 import enDevice from './locales/en-US/device.json';
 import zhMobile from './locales/zh-CN/mobile.json';
 import enMobile from './locales/en-US/mobile.json';
+import zhErrors from './locales/zh-CN/errors.json';
+import enErrors from './locales/en-US/errors.json';
 
 export type Lang = 'zh-CN' | 'en-US';
 
 export const LANG_STORAGE_KEY = 'itest-lang';
 
 const resources = {
-  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, members: zhMembers, cases: zhCases, groups: zhGroups, plans: zhPlans, reports: zhReports, overview: zhOverview, assistant: zhAssistant, environments: zhEnvironments, datasets: zhDatasets, device: zhDevice, mobile: zhMobile },
-  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, members: enMembers, cases: enCases, groups: enGroups, plans: enPlans, reports: enReports, overview: enOverview, assistant: enAssistant, environments: enEnvironments, datasets: enDatasets, device: enDevice, mobile: enMobile },
+  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, members: zhMembers, cases: zhCases, groups: zhGroups, plans: zhPlans, reports: zhReports, overview: zhOverview, assistant: zhAssistant, environments: zhEnvironments, datasets: zhDatasets, device: zhDevice, mobile: zhMobile, errors: zhErrors },
+  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, members: enMembers, cases: enCases, groups: enGroups, plans: enPlans, reports: enReports, overview: enOverview, assistant: enAssistant, environments: enEnvironments, datasets: enDatasets, device: enDevice, mobile: enMobile, errors: enErrors },
 };
 
 void i18n.use(initReactI18next).init({
@@ -60,6 +62,14 @@ export function readStoredLang(): Lang {
 
 export function applyHtmlLang(lang: Lang): void {
   document.documentElement.lang = lang === 'en-US' ? 'en' : 'zh-CN';
+}
+
+/** API 错误 → 本地化文案。命中错误码目录用目录；未知 code 回落原始 message。 */
+export function localizeApiError(err: { code?: string; message?: string } | null | undefined): string {
+  if (err?.code && i18n.exists(`errors:${err.code}`)) {
+    return i18n.t(`errors:${err.code}`);
+  }
+  return err?.message ?? '';
 }
 
 export default i18n;

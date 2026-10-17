@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -105,7 +106,7 @@ export default function ReportDetail() {
       qc.invalidateQueries({ queryKey: ['stats', projectId] });
       navigate(`/p/${projectId}/v/${versionId}/reports`);
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   if (isError) {

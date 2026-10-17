@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import { api, type Creator, type ProjectVersion } from '../api/client';
 import { useProjectStore } from '../stores/project';
 import { useUIStore } from '../stores/ui';
@@ -135,7 +136,7 @@ export default function ProjectsHome() {
       setForm(EMPTY_FORM);
       qc.invalidateQueries({ queryKey: ['projects'] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const remove = useMutation({
@@ -169,7 +170,7 @@ export default function ProjectsHome() {
       setVersionForm(EMPTY_VERSION_FORM);
       qc.invalidateQueries({ queryKey: ['versions', versionForm.projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const editVersion = useMutation({
@@ -184,7 +185,7 @@ export default function ProjectsHome() {
       setVersionForm(EMPTY_VERSION_FORM);
       qc.invalidateQueries({ queryKey: ['versions', versionForm.projectId] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const removeVersion = useMutation({
@@ -196,7 +197,7 @@ export default function ProjectsHome() {
       qc.invalidateQueries({ queryKey: ['versions'] });
     },
     onError: (e: Error) => {
-      toast(e.message, 'error');
+      toast(localizeApiError(e), 'error');
       setConfirmDeleteVersion(null);
     },
   });
@@ -209,7 +210,7 @@ export default function ProjectsHome() {
       setRefForm(EMPTY_REF_FORM);
       qc.invalidateQueries({ queryKey: ['versions'] });
     },
-    onError: (e: Error) => toast(e.message, 'error'),
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const enterVersion = (projectId: string, projectName: string, v: ProjectVersion) => {

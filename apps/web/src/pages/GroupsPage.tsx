@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../i18n';
 import {
 	parseAsArrayOf,
 	parseAsString,
@@ -189,7 +190,7 @@ export default function GroupsPage() {
 			setGroupForm(EMPTY_GROUP_FORM);
 			qc.invalidateQueries({ queryKey: ['groups', projectId] });
 		},
-		onError: (e: Error) => toast(e.message, 'error'),
+		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
 	const deleteGroup = useMutation({
@@ -218,7 +219,7 @@ export default function GroupsPage() {
 			setCopyTarget('');
 			invalidate();
 		},
-		onError: (e: Error) => toast(e.message, 'error'),
+		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
 	const addToPlan = useMutation({
@@ -234,7 +235,7 @@ export default function GroupsPage() {
 			setPlanTarget('');
 			qc.invalidateQueries({ queryKey: ['plans', projectId] });
 		},
-		onError: (e: Error) => toast(e.message, 'error'),
+		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
 	const deleteCase = useMutation({
@@ -244,7 +245,7 @@ export default function GroupsPage() {
 			setConfirmDeleteCase(null);
 			invalidate();
 		},
-		onError: (e: Error) => toast(e.message, 'error'),
+		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
 	// 行内执行：成功后跳到报告详情，与 CaseDetail 行为一致
@@ -255,7 +256,7 @@ export default function GroupsPage() {
 			qc.invalidateQueries({ queryKey: ['reports'] });
 			navigate(versionId ? `/p/${projectId}/v/${versionId}/reports/${r.reportId}` : `/`);
 		},
-		onError: (e: Error) => toast(e.message, 'error'),
+		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
 	const batchDeleteCases = useMutation({
@@ -267,7 +268,7 @@ export default function GroupsPage() {
 			invalidate();
 		},
 		onError: (e: Error) => {
-			toast(e.message, 'error');
+			toast(localizeApiError(e), 'error');
 			setConfirmBatchDelete(false);
 		},
 	});
@@ -279,7 +280,7 @@ export default function GroupsPage() {
 			selection.clear();
 			invalidate();
 		},
-		onError: (e: Error) => toast(e.message, 'error'),
+		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
 	// status / tag 在前端做本地筛（cases API 不接）；tab 与 status 等价语义，所以两者去重后取并集。
@@ -498,7 +499,7 @@ export default function GroupsPage() {
 				state: { initialMessage },
 			});
 		},
-		onError: (e: Error) => toast(e.message, 'error'),
+		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
 	// 手动新建用例：成功后跳到详情页继续编辑步骤
@@ -517,7 +518,7 @@ export default function GroupsPage() {
 			invalidate();
 			navigate(versionId ? `/p/${projectId}/v/${versionId}/cases/${r.id}` : `/`);
 		},
-		onError: (e: Error) => toast(e.message, 'error'),
+		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
 	return (

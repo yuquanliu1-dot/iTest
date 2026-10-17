@@ -1,5 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../../i18n';
 import { ApiError, api } from '../../api/client';
 import { useUIStore } from '../../stores/ui';
 import { useSpaceEventsStore, type SpaceConfirmRequest } from './spaceEventsStore';
@@ -25,7 +26,7 @@ export default function ConfirmCard({ threadId }: { threadId: string }) {
     onError: (e: Error, v) => {
       // 仅确认确已过期(404)才收卡;网络瞬断等保留卡片供重试(点了确认不该因挂起项超时被记为取消)
       if (e instanceof ApiError && e.status === 404) removeConfirm(v.confirmId);
-      toast(e.message, 'error');
+      toast(localizeApiError(e), 'error');
     },
   });
   if (confirms.length === 0) return null;

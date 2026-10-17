@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../../i18n';
 import { api } from '../../api/client';
 import { useAuthStore } from '../../stores/auth';
 import { useUIStore } from '../../stores/ui';
@@ -58,7 +59,7 @@ export default function ChangeMyPasswordModal({ open, onOpenChange }: Props) {
       handleClose(false);
       navigate('/login', { replace: true });
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), 'error');
+      toast(e instanceof Error ? localizeApiError(e) : String(e), 'error');
     } finally {
       setSubmitting(false);
     }
