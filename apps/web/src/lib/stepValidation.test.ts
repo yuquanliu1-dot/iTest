@@ -1,6 +1,7 @@
 // apps/web/src/lib/stepValidation.test.ts
 import { describe, it, expect } from 'vitest';
 import { validateStepEdit } from './stepValidation';
+import zh from '../i18n/locales/zh-CN/cases.json';
 
 const click = { kind: 'click', locator: [{ strategy: 'css', value: '#btn' }] };
 
@@ -9,10 +10,13 @@ describe('validateStepEdit', () => {
     expect(validateStepEdit({ action: click }).ok).toBe(true);
   });
 
-  it('locator 候选值为空', () => {
+  it('locator 候选值为空 → 返回 i18n token；zh 文案字节一致（{{n}} 渲染 = 迁移前「定位候选 N 的值不能为空」）', () => {
     const r = validateStepEdit({ action: { kind: 'click', locator: [{ strategy: 'css', value: '' }] } });
     expect(r.ok).toBe(false);
-    expect(r.errors['action.locator.0.value']).toContain('候选 1');
+    expect(r.errors['action.locator.0.value']).toBe('stepLocatorValueEmpty');
+    const tpl = zh.stepLocatorValueEmpty;
+    expect(tpl).toBe('定位候选 {{n}} 的值不能为空');
+    expect(tpl.replace('{{n}}', '1')).toBe('定位候选 1 的值不能为空');
   });
 
   it('locator 数组为空（click 要求 min(1)）', () => {

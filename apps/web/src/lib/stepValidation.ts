@@ -12,26 +12,25 @@ export interface StepValidationResult {
   errors: Record<string, string>;
 }
 
-/** zod 报错路径 → 中文文案。 */
+/** zod 报错路径 → i18n token（渲染层经 `t('cases:' + token)` 翻译；未知路径回落 zod 原文）。 */
 function messageFor(path: string, raw: string): string {
-  if (path === 'delayMs') return '延迟必须是不超过 60000 的非负整数';
-  if (path === 'action' || path === 'action.kind') return '操作内容不合法';
-  if (path === 'action.locator') return '至少需要一个定位候选';
-  const locMatch = /^action\.locator\.(\d+)\.value$/.exec(path);
-  if (locMatch) return `定位候选 ${Number(locMatch[1]) + 1} 的值不能为空`;
-  if (/^action\.locator\.\d+\.strategy$/.test(path)) return `定位候选的 strategy 不合法`;
-  if (path === 'action.url') return 'URL 不合法（需完整 http(s) 地址）';
-  if (path === 'action.fileId') return '请绑定上传文件';
-  if (path === 'action.varName') return '变量名不能为空';
-  if (path === 'action.pattern') return '正则表达式不能为空';
-  if (path === 'action.tabRef') return '标签引用不能为空';
-  if (path === 'action.instruction') return '指令不能为空';
-  if (path === 'action.value') return '填写值不合法';
-  if (path === 'action.value.fragments') return '组合值不合法（至少 1 段，总长 ≤ 1024）';
-  if (path === 'action.timeoutMs') return '超时必须是正整数（毫秒）';
-  if (path.startsWith('action.headers.')) return '请求头键不能为空且数量 ≤ 20';
-  if (path === 'action.saveAs.varName') return '提取变量名不能为空';
-  if (path === 'action.saveAs.path') return '提取路径不合法';
+  if (path === 'delayMs') return 'stepDelayRange';
+  if (path === 'action' || path === 'action.kind') return 'stepActionInvalid';
+  if (path === 'action.locator') return 'stepLocatorEmpty';
+  if (/^action\.locator\.\d+\.value$/.test(path)) return 'stepLocatorValueEmpty';
+  if (/^action\.locator\.\d+\.strategy$/.test(path)) return 'stepLocatorStrategyInvalid';
+  if (path === 'action.url') return 'stepUrlInvalid';
+  if (path === 'action.fileId') return 'stepFileRequired';
+  if (path === 'action.varName') return 'stepVarNameEmpty';
+  if (path === 'action.pattern') return 'stepPatternEmpty';
+  if (path === 'action.tabRef') return 'stepTabRefEmpty';
+  if (path === 'action.instruction') return 'stepInstructionEmpty';
+  if (path === 'action.value') return 'stepValueInvalid';
+  if (path === 'action.value.fragments') return 'stepCompositeInvalid';
+  if (path === 'action.timeoutMs') return 'stepTimeoutPositive';
+  if (path.startsWith('action.headers.')) return 'stepHeadersInvalid';
+  if (path === 'action.saveAs.varName') return 'stepSaveVarNameEmpty';
+  if (path === 'action.saveAs.path') return 'stepSavePathInvalid';
   return `${path || 'action'}: ${raw}`.slice(0, 120);
 }
 
