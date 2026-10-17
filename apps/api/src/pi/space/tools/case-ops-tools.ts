@@ -489,8 +489,13 @@ export function computeCaseOverlay(
           secretIv: null,
           secretTag: null,
         };
-        // 与 insertCaseStep 对齐：afterOrder 之后插入,越界落末尾
-        list.splice(Math.min(v.afterOrder ?? list.length, list.length), 0, st);
+        // 与 insertCaseStep 对齐：afterOrder 是落库 0-based order 值,新步排在「当前 list 中
+        // 数组 index==afterOrder 的步」之后。move/delete 后 list 顺序 == 落库当前 DB 顺序,
+        // 故 afterOrder 直接对应 list 的 0-based 数组 index,+1 落该步之后。
+        // (insertCaseStep:targetOrder = afterOrder+1,原 order>=targetOrder 的步后移;
+        //  list 的数组 index 即当前 0-based order,等价。)
+        const at = v.afterOrder !== undefined ? Math.min(v.afterOrder + 1, list.length) : list.length;
+        list.splice(at, 0, st);
         normalize();
         overlay.steps = steps;
         overlay.opsApplied++;
