@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { useOverviewQuery, overviewQueryKey, type Range } from '../features/overview/api';
 import OverviewHeader from '../features/overview/components/OverviewHeader';
@@ -16,6 +17,7 @@ import AiActivityChart from '../features/overview/components/AiActivityChart';
 import { PageShell, PageShellContent } from '../components/layout/PageShell';
 
 export default function Dashboard() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const { projectId, versionId: vidParam } = useParams<{ projectId: string; versionId?: string }>();
   const versionId = vidParam ?? null;
@@ -28,7 +30,7 @@ export default function Dashboard() {
     return (
       <PageShell>
         <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
-          概览暂时不可用,请稍后重试
+          {t('overview:loadFailed')}
         </div>
       </PageShell>
     );
@@ -69,21 +71,21 @@ export default function Dashboard() {
       {/* KPI strip — 5 cards */}
       <div className="grid grid-cols-5 gap-4 fade-up" data-stagger>
         <KpiStripCard
-          label="用例总数"
+          label={t('overview:kpiTotalCases')}
           value={data.kpi.totalCases}
           iconName="beaker"
           tone="var(--info)"
           to={link('/groups')}
         />
         <KpiStripCard
-          label="计划数"
+          label={t('overview:kpiTotalPlans')}
           value={data.kpi.totalPlans}
           iconName="flag"
           tone="var(--primary)"
           to={link('/plans')}
         />
         <KpiStripCard
-          label="通过率"
+          label={t('overview:kpiPassRate')}
           value={Math.round(data.kpi.passRate * 100)}
           suffix="%"
           iconName="checkCircle"
@@ -91,14 +93,14 @@ export default function Dashboard() {
           to={link('/reports?filter=passed-7d')}
         />
         <KpiStripCard
-          label="近 7d 运行"
+          label={t('overview:kpiRuns7d')}
           value={data.kpi.totalRuns7d}
           iconName="activity"
           tone="var(--warning)"
           to={link('/reports?range=7d')}
         />
         <KpiStripCard
-          label="AI 调用"
+          label={t('reports:summary.aiCalls')}
           value={data.kpi.aiCalls7d}
           iconName="sparkles"
           tone="var(--chart-5)"

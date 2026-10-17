@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import Segmented from '../../../components/ui/Segmented';
 import IconButton from '../../../components/ui/IconButton';
 import {
@@ -17,21 +18,22 @@ export default function OverviewHeader({
   onRangeChange: (r: Range) => void;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <PageShellHeader>
-      <PageShellTitle>总览</PageShellTitle>
+      <PageShellTitle>{t('overview:title')}</PageShellTitle>
       <PageShellActions>
         <Segmented<Range>
           options={[
-            { value: '7d', label: '7 天' },
-            { value: '30d', label: '30 天' },
+            { value: '7d', label: t('overview:range7d') },
+            { value: '30d', label: t('overview:range30d') },
           ]}
           value={range}
           onChange={onRangeChange}
         />
-        <IconButton icon="refresh" title="刷新" size="md" onClick={onRefresh} />
+        <IconButton icon="refresh" title={t('overview:refresh')} size="md" onClick={onRefresh} />
       </PageShellActions>
-      <PageShellDescription>用例 → 执行 → 计划 全链路概览</PageShellDescription>
+      <PageShellDescription>{t('overview:description')}</PageShellDescription>
     </PageShellHeader>
   );
 }
