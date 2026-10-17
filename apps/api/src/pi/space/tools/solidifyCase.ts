@@ -24,14 +24,15 @@ import { resolveCaseUrl } from '../../../lib/resolve-url.js';
 import { decrypt } from '../../../lib/secret-crypto.js';
 import { resolveLlmClient } from '../../../agent/llmSettings.js';
 import { tryParseJson } from '../../../agent/llm-client.js';
-import { extractPageElements } from '../../inspectPage.js';
+import { extractPageElements, extractPageEvidence } from '../../inspectPage.js';
+import { probeLocatorHits, diagnoseFailure } from './failureDiagnosis.js';
 import { computeCaseOverlay, stageCaseOp, type EffectiveStep } from './case-ops-tools.js';
 import { stageCase } from './stage-tools.js';
 import { emitStage } from './stage.js';
 import { diffText } from './diff.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
 import { registerLiveView } from '../../../execute/liveView.js';
-import { buildStepInstruction, USER_PH, PASSWORD_PH, SECRET_PH } from './verifyCase.js';
+import { buildStepInstruction, collectStepLocators, USER_PH, PASSWORD_PH, SECRET_PH } from './verifyCase.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
@@ -293,8 +294,18 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // 执行失败：不暂存任何修改（原子语义），失败页元素清单供 agent 修正 instruction 后重跑
           if (failedIndex >= 0) {
             const failurePage = await extractPageElements(page).catch(() => null);
-            ctx.emit({ type: 'solidify_progress', phase: 'end', result: 'failed', reason: failedError.slice(0, 120) });
             const failedStep = effectiveSteps[failedIndex]!;
+            // 失败归因（与 verify_case 同一判别）：形态无关探针（每条 locator 实时命中数）+ 浮层清单 + 元素清单交 LLM 归因。
+            const probes = await probeLocatorHits(page, collectStepLocators(failedStep.compiled));
+            const evidence = await extractPageEvidence(page).catch(() => ({ overlays: [] as Array<{ tag: string; selector: string; text: string }> }));
+            const diag = failurePage
+              ? await diagnoseFailure({ client, step: failedStep, assertion: failedStep.assertion, probes, overlays: evidence.overlays, elements: failurePage })
+              : null;
+            const evidenceField =
+              probes.length > 0 || evidence.overlays.length > 0
+                ? { evidence: { overlays: evidence.overlays, probes } }
+                : {};
+            ctx.emit({ type: 'solidify_progress', phase: 'end', result: 'failed', reason: failedError.slice(0, 120) });
             return {
               ok: true,
               data: JSON.stringify({
@@ -308,7 +319,8 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   error: failedError,
                   screenshot: failedScreenshot ?? null,
                   page: failurePage,
-                  note: '固化要求全部步骤 AI 执行通过（与 verify_case 同标准），失败步及后续步骤保持视觉模式，未暂存任何修改。可用 failure.page.elements 里的真实选择器修正该步（stage_case_op / 重发 stage_case）后重新固化。',
+                  ...evidenceField,
+                  note: `固化要求全部步骤 AI 执行通过（与 verify_case 同标准），失败步及后续步骤保持视觉模式，未暂存任何修改。可用 failure.page.elements 里的真实选择器修正该步（stage_case_op / 重发 stage_case）后重新固化。${diag ? ` ⚠ 归因:${diag.note}` : ''}`,
                 },
               }),
             };
@@ -403,7 +415,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               stagedOpsApplied: opsApplied,
               steps: stepReports,
               note: solidifiedCount > 0
-                ? `已暂存 ${solidifiedCount} 个步骤的固化修改（草稿区可见）${keptCount > 0 ? `，${keptCount} 个步骤保持视觉模式（见各步 reason）` : ''}。下一步必须调用 verify_case 验收：机械干跑通过后引导用户在右侧暂存区勾选保存，固化才算完成。`
+                ? `已暂存 ${solidifiedCount} 个步骤的固化修改（草稿区可见）${keptCount > 0 ? `，${keptCount} 个步骤保持视觉模式（见各步 reason）` : ''}。下一步必须调用 verify_case 验收：机械干跑通过后引导用户在右侧暂存区勾选保存，固化才算完成。注意:固化产出的 compiled 是 AI 当轮实际动作的单候选映射——verify_case 若报 AmbiguousLocator/LocatorMismatch,用 failure.page.elements 里该元素的真实选择器把对应步骤补成多候选链(属性候选如 [placeholder=...] 优先、纯 #id 其次,规则同 stage_case 的 locator 规范),不要依赖单候选碰运气。`
                 : '没有步骤被固化（各步保持视觉模式，原因见 steps[].reason）。多为登录/验证码/键盘时序类步骤——属预期保守行为，无需修正。',
             }),
           };

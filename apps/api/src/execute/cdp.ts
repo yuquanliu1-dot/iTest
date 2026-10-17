@@ -121,6 +121,10 @@ export interface ExecContext {
   sensitiveVarKeys?: string[];
   /** playground 实时画面源：每页新开时 setPage，让画面跟随执行（计划运行/单用例执行）。 */
   liveView?: LiveViewHandle;
+  /** 页面创建就绪回调（本实例新建页完成后触发一次）：verify_case 恢复续跑需要拿到
+   *  机械回放创建的 page 继续 AI 相——runStepsInContext 内部 newPage，不显式返回 page，
+   *  而 onFailurePage 只在失败断点触发，成功路径拿不到。加此可选字段，实现在 setPage 之后调用。 */
+  onPageReady?: (page: Page) => void;
   /** 回放 AI 降级开关（全局设置，runCase 层读入注入；缺省全关 = 保持既有失败语义）。 */
   aiFallback?: AiFallbackSettings;
 }
@@ -870,6 +874,8 @@ async function runStepsInContext(
   const page = await context.newPage();
   // playground 实时画面跟随：切换到本页（切换页 switchTab / 逐用例新 page 都会经过这里）。
   ctx.liveView?.setPage(page);
+  // 页面就绪通知（verify_case 恢复续跑场景用它拿回机械回放创建的这个 page）。
+  ctx.onPageReady?.(page);
   // 初始导航：用例级 init URL（targetUrl）始终先 goto 一次。
   // 若首条 step 也是 navigate 且 URL 与 init 相同，让 step 来做这一步，避免重复加载。
   const firstCompiled = steps[0]?.compiled;

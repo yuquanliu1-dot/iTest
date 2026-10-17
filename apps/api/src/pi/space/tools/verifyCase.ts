@@ -7,7 +7,7 @@
  * 登录/验证码/改密弹窗等场景由 LLM 按页面实际状态自主判断处理；凭据经占位符注入、执行时刻替换，
  * 不进 LLM 上下文/返回值/日志。验证不落 report（结果只回对话上下文）；副作用与正式执行一致（spec 已确认接受）。
  */
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { Type } from '@earendil-works/pi-ai';
 import { chromium } from 'playwright-core';
 import type { Browser, Page } from 'playwright-core';
@@ -26,7 +26,8 @@ import { decrypt } from '../../../lib/secret-crypto.js';
 import { analyzeLocatorCandidatesBatch, summarizeStaticReports, type StaticLocatorReport } from '../../../execute/staticLocator.js';
 import { resolveLlmClient } from '../../../agent/llmSettings.js';
 import { tryParseJson } from '../../../agent/llm-client.js';
-import { extractPageElements } from '../../inspectPage.js';
+import { extractPageElements, extractPageEvidence } from '../../inspectPage.js';
+import { probeLocatorHits, diagnoseFailure } from './failureDiagnosis.js';
 import { countRepoGrepBatch } from '../../repo.js';
 import { computeCaseOverlay, type EffectiveStep } from './case-ops-tools.js';
 import { judgeAssertionText } from './assertionJudge.js';
@@ -59,7 +60,9 @@ interface AiStepResult {
 }
 
 /** 按 thread×case 维度跟踪连续同因失败轮次（防空转硬约束用）。
- *  失败签名 = `${failureReason}:${failedOrder}:${firstLine(error)}`——签名相同视为无进展。
+ *  失败签名 = `${failureReason}:${stepOrder}`——签名相同视为无进展。
+ *  只取两段（原因 + 失败步序）是刻意为之：错误首行会随 AI 每轮改选择器/改文案而变，
+ *  把首行进签名会让「同因无进展」判定永不触发（每轮都像新原因），停滞护栏就失效了。
  *  线程/用例结束（passed 或强制停止）即清掉该条记录。 */
 interface RoundState {
   lastSignature: string;
@@ -77,9 +80,7 @@ function failureSignatureFromData(data: string): string | null {
     if (j.result === 'passed') return null;
     if (!j.failure) return 'unknown';
     const f = j.failure;
-    const raw = typeof f.error === 'string' && f.error ? f.error : typeof f.humanMessage === 'string' ? f.humanMessage : '';
-    const errLine = raw.replace(/\n[\s\S]*/, '').slice(0, 80);
-    return `${f.failureReason ?? 'Unknown'}:${f.stepOrder}:${errLine}`;
+    return `${f.failureReason ?? 'Unknown'}:${f.stepOrder}`;
   } catch {
     return 'unparseable';
   }
@@ -128,8 +129,8 @@ async function detectEmptyDataState(page: Page): Promise<string | null> {
   }
 }
 
-/** 收集 compiled 步骤里的全部 locator 候选（供静态定位预检复用；与 checkCompiledLocators 同源解析）。 */
-function collectStepLocators(compiled: unknown): Locator[] {
+/** 收集 compiled 步骤里的全部 locator 候选（供静态定位预检 / 失败归因的形态无关探针复用）。 */
+export function collectStepLocators(compiled: unknown): Locator[] {
   const actions = (Array.isArray(compiled) ? compiled : []) as Array<{ kind?: string; locator?: Locator[] }>;
   const out: Locator[] = [];
   for (const a of actions) {
@@ -140,6 +141,64 @@ function collectStepLocators(compiled: unknown): Locator[] {
     }
   }
   return out;
+}
+
+/** 前缀确认状态：AI 相跨轮续跑的依据（Problem 1）。
+ *  key = threadId::caseId（与停滞护栏同 key、同进程内内存生命周期）。
+ *  stepsHash 按步存：某步的 instruction/compiled/assertion/sensitive/delayMs 任一变化即使
+ *  firstDiff 落在该步、前缀截断到它之前——判定缓存随步哈希自动失效。
+ *  metaHash 刻意排除 expectedOutcome/title：最常改的 vision 修正不该让整个 AI 相白跑。
+ */
+interface VerifyConfirmState {
+  stepsHash: string[];
+  metaHash: string;
+  /** 已确认条数 k：步骤 1..k 的 AI 相全过且未被后续改动击穿。 */
+  confirmedThrough: number;
+  /** stepId → 断言判定缓存（judgeAssertionText 的单轮 LLM 判定；跳过 judge 的前缀步据此复用）。 */
+  assertionVerdicts: Map<string, { real: boolean; dropped?: string }>;
+  /** 已确认前缀步骤的 AI 相通过结果（响应 steps 合并复用；截图路径跨轮仍可访问，无 TTL）。 */
+  confirmedStepResults: AiStepResult[];
+}
+const verifyConfirmCache = new Map<string, VerifyConfirmState>();
+
+/** 逐步骤语义哈希：覆盖该步 AI 相的全部输入，其一变化即前缀失效。 */
+function hashEffectiveSteps(steps: EffectiveStep[]): string[] {
+  return steps.map((s) =>
+    createHash('sha1')
+      .update(
+        JSON.stringify({
+          inst: s.instruction,
+          compiled: s.compiled,
+          assertion: s.assertion,
+          sensitive: s.sensitive,
+          delayMs: s.delayMs,
+        }),
+      )
+      .digest('hex'),
+  );
+}
+
+/** 环境绑定哈希：URL/默认环境/版本任一变化＝换被测对象，前缀全部失效。 */
+function hashVerifyMeta(m: { url: string | null; defaultEnvId: string | null; versionId: string | null }): string {
+  return createHash('sha1').update(JSON.stringify([m.url, m.defaultEnvId, m.versionId])).digest('hex');
+}
+
+/** 机械回放敏感字段解密表：恢复续跑（restore）与结尾完整回放共用。 */
+function buildReplaySecrets(steps: EffectiveStep[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const s of steps) {
+    if (s.sensitive && s.secretCiphertext && s.secretIv && s.secretTag) {
+      m.set(
+        s.id,
+        decrypt({
+          ciphertext: Buffer.from(s.secretCiphertext, 'base64'),
+          iv: Buffer.from(s.secretIv, 'base64'),
+          tag: Buffer.from(s.secretTag, 'base64'),
+        }),
+      );
+    }
+  }
+  return m;
 }
 
 /** compiled 保真校验：verify_case 的 AI 可以临场绕开坏 locator，但正式回放是逐字执行 compiled 的——
@@ -276,7 +335,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'verify_case',
     description:
-      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性（全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理），失败即停并返回失败步骤详情与失败页可交互元素清单。AI 步骤与终态判定全过后，还会用与正式回放同引擎的机械干跑逐字执行 compiled（failureReason=ReplayDivergence 表示 AI 能过但逐字回放分叉）。caseId 支持两种形态：落库用例 id，或本线程 stage_case 生成的 localId（纯草稿验证，全程不落库，save 时才正式建用例）。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。验证会产生真实副作用（与正式执行一致，机械干跑会再执行一遍）。',
+      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性（全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理），失败即停并返回失败步骤详情与失败页可交互元素清单。AI 步骤与终态判定全过后，还会用与正式回放同引擎的机械干跑逐字执行 compiled（failureReason=ReplayDivergence 表示 AI 能过但逐字回放分叉）。caseId 支持两种形态：落库用例 id，或本线程 stage_case 生成的 localId（纯草稿验证，全程不落库，save 时才正式建用例）。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。再次调用会复用上一轮已确认的前缀：以机械回放重建前缀 DOM 状态（代替重跑 AI 相，已确认步骤不再烧 LLM 轮次），AI 相从首个改动/失败步续跑，结尾仍保留与正式回放同引擎的完整机械干跑。验证会产生真实副作用（与正式执行一致，机械干跑会再执行一遍）。',
     parameters: Type.Object({
       caseId: Type.String({ minLength: 1 }),
     }),
@@ -289,6 +348,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       '终态判定失败(failureReason=VisionAssertionFailed)且 failure.note 含"空数据信号"时,说明被测环境里根本没有可供断言的数据——这是用例缺前置造数步骤,不是选择器写错。正确做法:给用例补上"先造出满足预期的数据"的步骤(如创建一条会触发自动处置的事件),或如实告诉用户环境缺数据。严禁弱化 expectedOutcome 把失败蒙成通过(例:把"自动启动处置成功"改成"页面正常加载"、删掉断言步骤)——那是把用例改得测不出东西,比失败更糟。',
       'result.staticAnalysis 与 failure.note 里的"源码无字面命中"只是排序参考,不是"这个选择器是假的"。选择器是否存在一律以 failure.page.elements 和运行时实测为准:框架运行时拼接的 id(如 Element-UI tab 的 #tab-autodo)源码里本就没有字面量,但运行时真实命中。sourceAnalysis 与运行时命中冲突时,信运行时。',
       'verify_case 最后一道关卡是与正式回放同引擎的 compiled 机械干跑(failureReason=ReplayDivergence):AI 临场能跑通但逐字派发 compiled 失败,典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突导致二次执行必挂。修正方式:用 failure.page.elements 里的真实选择器把失败步 compiled 改成更精确的可操作目标(点组件内部真实接收点击的元素),或修正测试数据策略(时间戳命名)后重验。',
+      'verify_case 失败反馈带 failure.evidence(可见浮层清单 overlays + 各 locator 候选实时命中数 probes)与 failure.note 里的「⚠ 归因:」段——归因由 LLM 依据形态无关证据判断,先按归因再动手,不要一律当选择器错:(1) 归因=「条件性浮层」:失败页有可见弹窗/抽屉/遮罩,属数据状态才弹的对话框(草稿恢复/权限确认),机械步骤处理不了「可能弹、可能不弹」的分支:在进该页步骤之后补 aiTask 条件兜底步骤(若页面出现浮层则按页面提示关闭或点『确定/继续』,没有则跳过),不要反复改选择器也不要弱化预期;(2) 归因=「位置/流程断裂」:该步全部候选命中 0 且失败页元素清单里也没有同类目标,说明界面根本没挂载,选择器无法命中不存在的元素:去核对导航/入口/向导步骤流程(草稿恢复把向导恢复到中间态即一例),修步骤顺序或补导航,不要改 locator;(3) 归因=「选择器/行为错」:页面状态到位仅该 locator 未命中,才用 failure.page.elements 里真实存在的选择器修正(可组多候选链);(4) 归因=「环境缺数据」:先让用例造出满足预期的数据,或如实汇报,严禁弱化 expectedOutcome。归因未产出(failure.note 无「⚠ 归因:」段)时按既有通用文案结合 failure.evidence 判断,必要时用 repo_grep 翻目标页面源码确认弹窗/向导条件,不要臆测固定文案。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。',
       '环境未配置 login 凭据而验证卡在登录页时，引导用户到项目环境页配置 login 凭据，不要伪造登录步骤。',
     ],
@@ -396,6 +456,31 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         if (effectiveSteps.length === 0) return { ok: false, error: '用例没有可验证的步骤' };
         const effectiveCase = { ...caseMeta, ...overlayPatches };
 
+        // ── 前缀确认决策（Problem 1：跨轮砍 AI 相前缀重跑，保留结尾完整机械回放）──
+        // validPrefixLen>0 表示上轮已确认、且本步骤未变/环境未换的前缀条数。本轮用机械回放重建
+        // 前缀 DOM 状态后，AI 相从该处续跑；restore 失败则收敛到失败步由 AI 接管。
+        const ckey = roundKey(ctx.threadId, caseId);
+        const curStepsHash = hashEffectiveSteps(effectiveSteps);
+        const curMetaHash = hashVerifyMeta({
+          url: effectiveCase.url,
+          defaultEnvId: effectiveCase.defaultEnvId,
+          versionId: effectiveCase.versionId,
+        });
+        const prevConfirm = verifyConfirmCache.get(ckey) ?? null;
+        let validPrefixLen = 0;
+        if (prevConfirm) {
+          if (prevConfirm.metaHash !== curMetaHash) {
+            validPrefixLen = 0; // 换被测对象(SUT/环境/版本)，前缀全部失效
+          } else {
+            let d = -1;
+            for (let i = 0; i < effectiveSteps.length; i++) {
+              if (prevConfirm.stepsHash[i] !== curStepsHash[i]) { d = i; break; }
+            }
+            validPrefixLen = Math.min(prevConfirm.confirmedThrough, d === -1 ? effectiveSteps.length : d);
+          }
+        }
+        const prefixConfirmedResults: AiStepResult[] = prevConfirm?.confirmedStepResults.slice(0, validPrefixLen) ?? [];
+
         // ── LLM 前置检查（全 AI 驱动的硬前提；未配置直接失败，用户去设置页配置）──
         let client: Awaited<ReturnType<typeof resolveLlmClient>>['client'];
         try {
@@ -485,13 +570,72 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             viewport: { width: 1280, height: 800 },
             ...(cachedState ? { storageState: cachedState } : {}),
           });
-          const page = await context.newPage();
+          let page = await context.newPage();
           // playground 实时画面：注册页面源，start 事件把流地址带给前端进度卡；finally close 结束流
           live = registerLiveView();
           live.setPage(page);
 
-          // 初始导航（与 cdp.ts runStepsInContext 同判定：首条 compiled 为同 URL navigate 则跳过，避免重复加载）
-          if (targetUrl) {
+          const reportId = `verify-${randomUUID()}`;
+          // 断言判定缓存重建：resume 轮前缀步跳过 judge，但 restore/结尾完整回放都要用
+          // droppedAssertions 把描述性短语断言排除在机械判定之外——从上一轮判定缓存恢复。
+          const droppedAssertions = new Map<string, string>();
+          if (prevConfirm) {
+            for (const [stepId, v] of prevConfirm.assertionVerdicts) {
+              if (!v.real && v.dropped) droppedAssertions.set(stepId, v.dropped);
+            }
+          }
+          /** 机械回放步映射（restore 与结尾完整回放共用）：dropped 断言在回放里不参与判定。 */
+          const mapForReplay = (s: EffectiveStep) => ({
+            order: s.order,
+            assertion: droppedAssertions.has(s.id) ? null : s.assertion,
+            delayMs: s.delayMs,
+            id: s.id,
+            sensitive: s.sensitive,
+            compiled: Array.isArray(s.compiled) ? s.compiled : null,
+          });
+          // 敏感字段解密表：restore 与结尾完整回放共用（解密失败会抛，与原有最终回放语义一致）
+          const replaySecrets = buildReplaySecrets(effectiveSteps);
+
+          // ── 前缀状态重建（resume）：机械回放已确认前缀，把浏览器恢复到第 validPrefixLen 步的 DOM 状态 ──
+          // executeCaseInBrowser 内部自建 page 并 goto(targetUrl)，成功/失败都把它交还（onPageReady /
+          // onFailurePage），后续 AI 相与证据采集继续用该 page。restore 失败 → 收敛到失败步由 AI 接管
+          // （机械回放失败不判死：AI 临场可能自适应绕过）。
+          let resumeIndex = validPrefixLen;
+          if (validPrefixLen > 0) {
+            let restoredPage: Page | null = null;
+            const restoreSlice = effectiveSteps.slice(0, validPrefixLen);
+            const restoreRes = await executeCaseInBrowser(
+              caseId,
+              restoreSlice.map(mapForReplay),
+              {
+                reportId: `${reportId}-restore`,
+                envCtx,
+                llmClient: client,
+                liveView: live,
+                // 不传 expectedOutcome：restore 只做前缀状态重建，vision 终态判定留给主流程
+                ...(replaySecrets.size > 0
+                  ? { secretResolver: async (stepId: string) => replaySecrets.get(stepId) ?? null }
+                  : {}),
+                onPageReady: (p) => { restoredPage = p; },
+              },
+              browser,
+              context,
+              targetUrl,
+              undefined,
+              undefined,
+              undefined,
+              // restore 失败现场即 AI 续跑起点（切片步下标 == 全局下标：切片自 0 起）
+              async (p, j) => { restoredPage = p; resumeIndex = j; },
+            );
+            if (restoreRes.some((r) => r.status === 'failed')) {
+              const j = restoreRes.findIndex((r) => r.status === 'failed');
+              resumeIndex = j < 0 ? validPrefixLen : j;
+            }
+            if (restoredPage) page = restoredPage;
+          }
+
+          // 初始导航（仅非 resume：resume 时 restore 已完成导航与前缀状态重建）
+          if (validPrefixLen === 0 && targetUrl) {
             const firstCompiled = effectiveSteps[0]?.compiled;
             const firstAction = (Array.isArray(firstCompiled) && firstCompiled.length > 0
               ? firstCompiled[0]
@@ -513,23 +657,23 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             return v;
           };
 
-          const reportId = `verify-${randomUUID()}`;
           const stepResults: AiStepResult[] = [];
-          /** 断言文本体检结论：step id → 判定为描述性短语而本轮不参与执行的断言原文。 */
-          const droppedAssertions = new Map<string, string>();
+          /** 本轮 AI 相产生的断言判定（写回上一轮缓存，续跑前逐步复用）。 */
+          const verdictsThisRound = new Map<string, { real: boolean; dropped?: string }>();
           let failedIndex = -1;
           let login: 'logged-in' | 'not-needed' = 'not-needed';
           // SSE 实时进度：验证全程可达数分钟，前端凭这些事件渲染逐步进度卡（spaceEventsStore.verify_progress）。
           // loginCache/loginUser：登录态缓存命中与凭据用户直显对话框，无需翻服务端日志即可确认复用生效。
           ctx.emit({
             type: 'verify_progress', phase: 'start', caseId, total: effectiveSteps.length, targetUrl: targetUrl ?? null,
+            resumeFrom: validPrefixLen,
             loginCache: cachedState ? ('hit' as const) : ('miss' as const),
             loginUser: envCtx.login?.user ?? null,
             stagedOps: opsApplied,
             ...(staticNote ? { staticNote } : {}),
             liveUrl: `/api/assistant/threads/${ctx.threadId}/live/${live.key}`,
           });
-          for (let i = 0; i < effectiveSteps.length; i++) {
+          for (let i = resumeIndex; i < effectiveSteps.length; i++) {
             const s = effectiveSteps[i]!;
             const started = Date.now();
 
@@ -572,7 +716,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 .evaluate(() => document.body?.innerText ?? '')
                 .catch(() => '');
               const verdict = await judgeAssertionText(s.assertion, pageText, client);
-              if (!verdict.real) {
+              // 判定写回本轮缓存：续跑轮的前缀步按上一轮判定复用（mechanical restore 不再逐轮 judge）
+              verdictsThisRound.set(s.id, { real: verdict.real, ...(verdict.real ? {} : { dropped: s.assertion }) });
+              if (verdict.real) {
+                // 上一轮判定为描述性短语、本轮改判为真实页面文案：清除老旧 dropped 记录，
+                // 否则机械回放会沿用 null 掉该断言（本轮 AI 相照常带它，回放却跳过——不一致）。
+                droppedAssertions.delete(s.id);
+              } else {
                 assertionForRun = null;
                 droppedAssertion = s.assertion;
                 droppedAssertions.set(s.id, s.assertion);
@@ -662,6 +812,23 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
           }
 
+          // ── 前缀确认写回（D2）──
+          // confirmedThrough = 本轮 AI 相真正确认过的连续条数：restore 失败时 resumeIndex 已在
+          // onFailurePage 收敛到全局失败点 j，AI 从 j 续跑——只有 j 之前的步是确认过的（restore 机
+          // 械回放重建），因此 recordedThrough 取 failedIndex（AI 循环首个失败下标）即可覆盖两种路径：
+          // 全过 → len；restore 失败后 AI 又在 k 失败 → k（= 前缀确认条数）。confirmedStepResults 对齐
+          // 全局下标：before-resume 段直接沿用上一轮的确认结果，resume 段取本轮 stepResults，
+          // 二者在 restore 失败（j<validPrefixLen）时恰好无缝衔接、不重复。
+          const mergedVerdicts = new Map<string, { real: boolean; dropped?: string }>(prevConfirm?.assertionVerdicts ?? []);
+          for (const [id, v] of verdictsThisRound) mergedVerdicts.set(id, v);
+          verifyConfirmCache.set(ckey, {
+            stepsHash: curStepsHash,
+            metaHash: curMetaHash,
+            confirmedThrough: failedIndex < 0 ? effectiveSteps.length : failedIndex,
+            assertionVerdicts: mergedVerdicts,
+            confirmedStepResults: [...prefixConfirmedResults.slice(0, resumeIndex), ...stepResults],
+          });
+
           // 用例级终态判定：与正式回放同一 vision 断言（cdp.ts runCaseVisionAssert），
           // 全部步骤通过后再判 expectedOutcome——verify_case 不能只保证"步骤能执行"，还得保证"终态符合预期"。
           let visionFailure: { error?: string | null; humanMessage?: string | null; screenshot?: string | null; failureReason?: string | null } | null = null;
@@ -705,37 +872,17 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ctx.emit({ type: 'verify_progress', phase: 'replay_start' });
             replayStartedAt = Date.now();
             try {
-              // 敏感字段：暂存草稿 step id 非 UUID，cdp 默认 secretResolver 查库必失败 → 注入本线程解密结果
-              const secretMap = new Map<string, string>();
-              for (const s of effectiveSteps) {
-                if (s.sensitive && s.secretCiphertext && s.secretIv && s.secretTag) {
-                  secretMap.set(
-                    s.id,
-                    decrypt({
-                      ciphertext: Buffer.from(s.secretCiphertext, 'base64'),
-                      iv: Buffer.from(s.secretIv, 'base64'),
-                      tag: Buffer.from(s.secretTag, 'base64'),
-                    }),
-                  );
-                }
-              }
+              // 敏感字段注入复用顶部 buildReplaySecrets（restore 与结尾完整回放共用一套解密表）
               replaySteps = await executeCaseInBrowser(
                 caseId,
-                effectiveSteps.map((s) => ({
-                  order: s.order,
-                  assertion: droppedAssertions.has(s.id) ? null : s.assertion,
-                  delayMs: s.delayMs,
-                  id: s.id,
-                  sensitive: s.sensitive,
-                  compiled: Array.isArray(s.compiled) ? s.compiled : null,
-                })),
+                effectiveSteps.map(mapForReplay),
                 {
                   reportId: `${reportId}-replay`,
                   envCtx,
                   llmClient: client,
                   liveView: live,
-                  ...(secretMap.size > 0
-                    ? { secretResolver: async (stepId: string) => secretMap.get(stepId) ?? null }
+                  ...(replaySecrets.size > 0
+                    ? { secretResolver: async (stepId: string) => replaySecrets.get(stepId) ?? null }
                     : {}),
                   caseTitle: effectiveCase.title,
                   caseUrl: targetUrl ?? null,
@@ -782,7 +929,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           const emptyDataHint = visionFailure ? await detectEmptyDataState(page) : null;
 
           // ── 结果组装（成功精简、失败信息密集）──
-          const stepsSummary = stepResults.map((r) => ({
+          // 响应的 steps 按全局步序合并：resume 前缀步沿用上一轮的确认结果（截图路径跨轮可访问），
+          // 本轮 AI 相实际执行的步取 stepResults；restore 失败截断到 j 时两段恰好无缝衔接。
+          const stepsSummary = [...prefixConfirmedResults.slice(0, resumeIndex), ...stepResults].map((r) => ({
             order: r.order,
             status: r.status,
             durationMs: r.durationMs,
@@ -816,6 +965,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
               login,
+              resumeFrom: validPrefixLen,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
@@ -828,18 +978,33 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           }
           if (visionFailure) {
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
-            const visionErr = visionFailure.error ?? '最终页面与用例预期不符';
-            // 弹窗遮挡信号:终态判定 reason 含「弹窗/遮挡/对话框/确认框」等,说明有阻断性 UI 挡住关键区域。
-            // 典型如草稿恢复弹窗、权限确认框——条件性出现(依赖数据状态),机械步骤无法处理,需补 aiTask 兜底步骤。
-            const popupHint = /弹窗|遮挡|对话框|确认框|弹框|遮挡|覆盖/.test(visionErr)
-              ? ' ⚠ 检测到阻断性弹窗遮挡:页面弹出了对话框挡住关键区域,这是条件性 UI(依赖数据状态才弹,如「有未提交草稿才弹草稿恢复弹窗」)。机械步骤无法处理「可能弹、可能不弹」的分支——正确做法:在进该页的步骤之后补一条 aiTask 兜底步骤,compiled 写 [{"kind":"aiTask","instruction":"若页面弹出『<弹窗文案>』对话框,点击『<确认/继续按钮文案>』;若没有弹窗则跳过本步"}]。不要弱化 expectedOutcome(如删掉被挡住的元素断言),那会让用例测不出东西;也不要反复改选择器——弹窗不关,改多少选择器都没用。'
-              : '';
+            // 归因全交 LLM（failureDiagnosis）：形态无关证据 = 最后一步各 locator 候选实时命中数
+            // + 可见浮层清单 + 失败页可交互元素清单，外加空数据信号作 extraHint。
+            const visionStep = effectiveSteps[effectiveSteps.length - 1] ?? null;
+            const visionProbes = await probeLocatorHits(page, collectStepLocators(visionStep?.compiled));
+            const visionOverlays = (await extractPageEvidence(page)).overlays;
+            const visionEvidenceField =
+              visionProbes.length > 0 || visionOverlays.length > 0
+                ? { evidence: { overlays: visionOverlays, probes: visionProbes } }
+                : {};
+            const visionDiag = failurePage
+              ? await diagnoseFailure({
+                  client,
+                  step: visionStep,
+                  assertion: visionStep?.assertion ?? null,
+                  probes: visionProbes,
+                  overlays: visionOverlays,
+                  elements: failurePage,
+                  ...(emptyDataHint ? { extraHint: `失败页检出空数据信号「${emptyDataHint}」` } : {}),
+                })
+              : null;
             const rdata = JSON.stringify({
               result: 'failed',
               caseId,
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
               login,
+              resumeFrom: validPrefixLen,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
@@ -853,7 +1018,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 humanMessage: visionFailure.humanMessage ?? '最终页面与用例预期不符',
                 screenshot: visionFailure.screenshot ?? null,
                 page: failurePage,
-                note: `vision 终态判定失败：全部步骤执行通过后，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。${emptyDataHint ? ` ⚠ 失败页检出空数据信号「${emptyDataHint}」：被测环境当前没有可供断言的数据，这通常是环境前置数据缺失，而非选择器/步骤写错。正确做法是让用例先创建出满足 expectedOutcome 的数据（例如造一条会自动触发处置的事件），或如实向用户汇报环境缺数据——严禁通过弱化 expectedOutcome（如把"自动启动处置成功"改成"页面正常加载"）把失败蒙成通过。` : ''}${popupHint}`,
+                ...visionEvidenceField,
+                note: `vision 终态判定失败：全部步骤执行通过后，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。${emptyDataHint ? ` ⚠ 失败页检出空数据信号「${emptyDataHint}」：被测环境当前没有可供断言的数据，这通常是环境前置数据缺失，而非选择器/步骤写错。正确做法是让用例先创建出满足 expectedOutcome 的数据（例如造一条会自动触发处置的事件），或如实向用户汇报环境缺数据——严禁通过弱化 expectedOutcome（如把"自动启动处置成功"改成"页面正常加载"）把失败蒙成通过。` : ''}${visionDiag ? ` ⚠ 归因:${visionDiag.note}` : ''}`,
               },
             });
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
@@ -863,6 +1029,24 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             const failedReplayStep = effectiveSteps.find((s) => s.order === replayFailure!.order) ?? null;
             const replayIdx = failedReplayStep ? effectiveSteps.indexOf(failedReplayStep) : -1;
             const replayHint = replayIdx >= 0 ? summarizeStaticReports(staticByStep[replayIdx] ?? []) : null;
+            // 归因全交 LLM：分叉现场页（回放自己的 page）的候选命中 + 浮层 + 元素清单
+            const replayPageForDiag = replayPage ?? page;
+            const replayProbes = await probeLocatorHits(replayPageForDiag, collectStepLocators(failedReplayStep?.compiled));
+            const replayOverlays = (await extractPageEvidence(replayPageForDiag)).overlays;
+            const replayEvidenceField =
+              replayProbes.length > 0 || replayOverlays.length > 0
+                ? { evidence: { overlays: replayOverlays, probes: replayProbes } }
+                : {};
+            const replayDiag = failurePage
+              ? await diagnoseFailure({
+                  client,
+                  step: failedReplayStep,
+                  assertion: failedReplayStep?.assertion ?? null,
+                  probes: replayProbes,
+                  overlays: replayOverlays,
+                  elements: failurePage,
+                })
+              : null;
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
             const rdata = JSON.stringify({
               result: 'failed',
@@ -870,6 +1054,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
               login,
+              resumeFrom: validPrefixLen,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
@@ -884,7 +1069,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 humanMessage: replayFailure.humanMessage ?? replayFailure.error ?? null,
                 screenshot: replayFailure.screenshot ?? null,
                 page: failurePage,
-                note: `AI 临场执行能通过，但与正式回放同引擎的 compiled 机械逐字执行失败（回放分叉）——典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突二次执行必挂。请用 failure.page.elements 中真实存在的选择器把该步 compiled 改成更精确的可操作目标（组件内部真实接收点击/输入的元素），或修正测试数据策略（时间戳命名）后重验。${replayHint ? ` 源码静态提示:${replayHint}` : ''}`,
+                ...replayEvidenceField,
+                note: `AI 临场执行能通过，但与正式回放同引擎的 compiled 机械逐字执行失败（回放分叉）——典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突二次执行必挂。请用 failure.page.elements 中真实存在的选择器把该步 compiled 改成更精确的可操作目标（组件内部真实接收点击/输入的元素），或修正测试数据策略（时间戳命名）后重验。${replayDiag ? ` ⚠ 归因:${replayDiag.note}` : ''}${replayHint ? ` 源码静态提示:${replayHint}` : ''}`,
               },
             });
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
@@ -893,6 +1079,23 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           const failed = stepResults[failedIndex]!;
           const failedStep = effectiveSteps[failedIndex]!;
           const failedHint = summarizeStaticReports(staticByStep[failedIndex] ?? []);
+          // 归因全交 LLM：失败页候选命中 + 浮层 + 元素清单
+          const stepProbes = await probeLocatorHits(page, collectStepLocators(failedStep.compiled));
+          const stepOverlays = (await extractPageEvidence(page)).overlays;
+          const stepEvidenceField =
+            stepProbes.length > 0 || stepOverlays.length > 0
+              ? { evidence: { overlays: stepOverlays, probes: stepProbes } }
+              : {};
+          const stepDiag = failurePage
+            ? await diagnoseFailure({
+                client,
+                step: failedStep,
+                assertion: failedStep.assertion,
+                probes: stepProbes,
+                overlays: stepOverlays,
+                elements: failurePage,
+              })
+            : null;
           ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
           const rdata = JSON.stringify({
             result: 'failed',
@@ -900,6 +1103,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             envId: envCtx.envId,
             targetUrl: targetUrl ?? null,
             login,
+            resumeFrom: validPrefixLen,
             basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
             stagedOpsApplied: opsApplied,
             ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
@@ -912,7 +1116,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               humanMessage: failed.error ?? null,
               screenshot: failed.screenshot ?? null,
               page: failurePage,
-              note: `page.elements 为失败页当前可见的可交互元素；修正 locator 只能使用其中真实存在的选择器。快照不含操作后才出现的元素。${failedHint ? ` 源码静态提示:${failedHint}` : ''}`,
+              ...stepEvidenceField,
+              note: `page.elements 为失败页当前可见的可交互元素；修正 locator 只能使用其中真实存在的选择器。快照不含操作后才出现的元素。${failedHint ? ` 源码静态提示:${failedHint}` : ''}${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`,
             },
           });
           updateRoundState(roundKey(ctx.threadId, caseId), rdata);

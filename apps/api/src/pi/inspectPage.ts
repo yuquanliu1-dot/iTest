@@ -94,6 +94,60 @@ export async function extractPageElements(page: Page, url?: string): Promise<Pag
   return { url: url ?? page.url(), title: extracted.title, bodyLen: extracted.bodyLen, elements: extracted.elements, truncated: extracted.truncated };
 }
 
+/** 失败页结构证据：阻断性浮层清单。
+ *
+ *  2026-10-17 归因重构后，missingIds（期望容器缺失判定）退役：它靠解析 css strategy 的
+ *  #id/[id=] 形态提取期望容器，换 text=/role/xpath/testId 就失效（打地鼠路线）。容器是否缺席
+ *  改为由 failureDiagnosis.probeLocatorHits 对每条 locator 候选做实时命中探测（形态无关）+ 元素清单
+ *  联合交给 LLM 归因。此处只保留浮层清单：只凭角色/类名特征（role=dialog、class 含
+ *  dialog/drawer/message-box/modal/popup/mask/overlay），不绑定任何具体系统的文案——
+ *  「可能弹、可能不弹」的条件性浮层（草稿恢复、权限确认）在任何系统都表现为这类 DOM 特征。
+ */
+export interface PageEvidence {
+  /** 覆盖页面上、可能遮挡交互的浮层（弹窗/抽屉/遮罩）。每条：标签 + 可定位选择器 + 文本片段 */
+  overlays: Array<{ tag: string; selector: string; text: string }>;
+}
+
+/** 浮层候选选择器：覆盖常见的模态/抽屉/消息框/遮罩实现。只用 DOM 特征，不写具体文案。 */
+const EVIDENCE_OVERLAY_SELECTOR =
+  '[role="dialog"], [role="alertdialog"], [class*="dialog"], [class*="drawer"], [class*="message-box"], ' +
+  '[class*="modal"], [class*="popup"], [class*="mask"], [class*="overlay"]';
+
+/** keepNames 约束（同 EXTRACT_JS）：返回字符串表达式原样送浏览器求值，避免 __name 辅助函数注入。 */
+const EVIDENCE_JS = `(() => {
+  const nodes = document.querySelectorAll('${EVIDENCE_OVERLAY_SELECTOR}');
+  const seen = new Set();
+  const overlays = [];
+  for (const el of Array.from(nodes)) {
+    if (overlays.length >= 5) break;
+    const rects = el.getClientRects();
+    if (rects.length === 0) continue;
+    const r = rects[0];
+    if (r.width < 20 || r.height < 20) continue;
+    const style = window.getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.display === 'none') continue;
+    const tag = el.tagName.toLowerCase();
+    const cls = (typeof el.className === 'string' ? el.className : '')
+      .split(/\\s+/).filter(Boolean).slice(0, 3).map((c) => '.' + CSS.escape(c)).join('');
+    const sel = tag + (el.id ? '#' + CSS.escape(el.id) : cls);
+    const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+    const key = sel + '|' + text.slice(0, 20);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    overlays.push({ tag, selector: sel, text });
+  }
+  return { overlays };
+})()`;
+
+/** 在已打开的页面上采集结构证据（verify_case / solidify_case 失败页复用）。异常一律静默降级为空证据。 */
+export async function extractPageEvidence(page: Page): Promise<PageEvidence> {
+  try {
+    return (await page.evaluate(EVIDENCE_JS)) as PageEvidence;
+  } catch {
+    return { overlays: [] };
+  }
+}
+
 export async function inspectPage(rawUrl: string, opts?: { storageState?: unknown }): Promise<string> {
   let url: URL;
   try {
