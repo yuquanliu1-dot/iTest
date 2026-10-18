@@ -9,7 +9,7 @@ import { testCases, testSteps, testAttachments, testSessions, groups } from '../
 import { eq } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { StepAction } from '@itest/shared';
-import { createSession, getSession } from '../recorder/ws.js';
+import { createSession, getSession, persistSession } from '../recorder/ws.js';
 import { resolveCaseUrl, projectWebOrigins, relativizeUrl } from '../lib/resolve-url.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
 import { encrypt } from '../lib/secret-crypto.js';
@@ -115,7 +115,7 @@ function mergeConsecutiveFills(steps: unknown[]): unknown[] {
 }
 
 recorderRoute.post('/sessions/:id/finish', async (req, res) => {
-  const session = getSession(req.params.id);
+  const session = await getSession(req.params.id);
   if (!session) throw new HttpError(404, 'not_found', 'session not found');
   await assertCaseVisible(session.caseId, req.user!);
   session.ws?.close(1000, 'finished');
@@ -195,7 +195,7 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
 });
 
 recorderRoute.post('/sessions/:id/tab-events', async (req, res) => {
-  const session = getSession(req.params.id);
+  const session = await getSession(req.params.id);
   if (!session) throw new HttpError(404, 'not_found', 'session not found');
   const body = z.object({
     events: z.array(z.object({
@@ -207,6 +207,7 @@ recorderRoute.post('/sessions/:id/tab-events', async (req, res) => {
   }).parse(req.body);
   if (!session.tabs) session.tabs = [];
   session.tabs.push(...body.events);
+  void persistSession(session);
   res.json({ count: session.tabs.length });
 });
 

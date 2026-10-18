@@ -77,7 +77,7 @@ const openCaseSession = async (opts: { targetUrl?: string; title?: string } = {}
   expect(c.status).toBe(200);
   const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh', ...(opts.targetUrl ? { targetUrl: opts.targetUrl } : {}) });
   expect(s.status).toBe(200);
-  return { caseId: c.body.id as string, session: getSession(s.body.sessionId)! };
+  return { caseId: c.body.id as string, session: (await getSession(s.body.sessionId))! };
 };
 
 const finish = (sessionId: string) => request(app).post(`/api/recorder/sessions/${sessionId}/finish`);
@@ -186,7 +186,7 @@ describe('recorder finish 落库尽力相对化', () => {
     await insertWebEnv('frontend', { scheme: 'http', host: 'a.com', port: 8080 });
     const c = await request(app).post('/api/cases').send({ title: 'REL-PINNED', url: 'http://a.com:8080/pinned', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'append', targetUrl: 'http://a.com:8080/should-not-win' });
-    const session = getSession(s.body.sessionId)!;
+    const session = (await getSession(s.body.sessionId))!;
     session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'http://a.com:8080/pinned' });
     expect((await finish(session.sessionId)).status).toBe(200);
     expect(await getCase(c.body.id)).toEqual({ url: 'http://a.com:8080/pinned', web_service_ref: null });

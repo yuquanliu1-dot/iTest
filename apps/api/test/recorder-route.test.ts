@@ -118,7 +118,7 @@ describe('recorder routes', () => {
     const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'NV', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
-    const session = getSession(s.body.sessionId)!;
+    const session = (await getSession(s.body.sessionId))!;
     session.steps.push(
       { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'https://app.example.com/home' },
       { action: { kind: 'fill', locator: [{ strategy: 'css', value: '#b' }], value: 'x' }, url: 'https://app.example.com/home' },
@@ -140,7 +140,7 @@ describe('recorder routes', () => {
     const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'MF', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
-    const session = getSession(s.body.sessionId)!;
+    const session = (await getSession(s.body.sessionId))!;
     const locator = [{ strategy: 'css', value: '#auth-password' }];
     session.steps.push(
       { action: { kind: 'click', locator: [{ strategy: 'css', value: '#auth-username' }] }, url: 'https://app.example.com/' },
@@ -178,7 +178,7 @@ describe('recorder routes', () => {
     await pool.query(`INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1,'web','默认 Web','{"name":"web","scheme":"https","host":"prod.example.com"}',true)`, [e.rows[0]!.id]);
     const c = await request(app).post('/api/cases').send({ title: 'NVD', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'incognito' });
-    const session = getSession(s.body.sessionId)!;
+    const session = (await getSession(s.body.sessionId))!;
     session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] } });
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
@@ -200,7 +200,7 @@ describe('recorder routes', () => {
       steps: [{ compiled: [{ kind: 'navigate', url: 'https://app.example.com' }], source: 'manual' }],
     });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'append' });
-    const session = getSession(s.body.sessionId)!;
+    const session = (await getSession(s.body.sessionId))!;
     session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'https://app.example.com/home' });
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
@@ -223,7 +223,7 @@ describe('recorder routes', () => {
       mode: 'fresh',
       targetUrl: 'https://web-passed.example.com',
     });
-    const session = getSession(s.body.sessionId)!;
+    const session = (await getSession(s.body.sessionId))!;
     session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] } });
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
