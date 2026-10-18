@@ -13,6 +13,7 @@ import { logger } from '../../logger.js';
 import { buildSpaceTools } from './tools/index.js';
 import { buildSpaceSummary } from './summary.js';
 import { REQ_DESIGN_METHOD } from './reqDesign.js';
+import { buildMcpExtensionFactory, getMcpServersForThread } from './mcp.js';
 import { readLlmConfig, synthesizeModel, ENV_BY_PROVIDER } from '../modelBridge.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import { defineTool } from '@earendil-works/pi-coding-agent';
@@ -384,7 +385,7 @@ export function buildSpaceSystemPrompt(summaryText: string | null, lang?: AiLang
   return `${style}\n\n${REQ_DESIGN_METHOD}\n\n${flow}\n\n${workspace}\n\n## 版本空间上下文\n${summaryText}`;
 }
 
-async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<SpaceSessionLike> {
+export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<SpaceSessionLike> {
   const cfg = await readLlmConfig();
   if (!cfg) {
     throw new HttpError(502, 'llm_not_configured', 'LLM 未配置:请先到设置页配置模型');
@@ -428,6 +429,10 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
     }),
   );
 
+  // MCP servers：会话创建时读取（DB 驱动/测试桩）。无 server 时 register 为 no-op、connect 挂空配置。
+  const mcpServers = await getMcpServersForThread({ threadId: ctx.threadId, projectId: ctx.projectId, versionId: ctx.versionId });
+  const mcpExtensions = buildMcpExtensionFactory(mcpServers);
+
   const base = (getBuiltinModel as unknown as (p: string, m: string) => Record<string, unknown> | undefined)(cfg.provider, cfg.model)
     ?? synthesizeModel(cfg.provider, cfg.model, cfg.baseUrl);
   const envKey = ENV_BY_PROVIDER[cfg.provider];
@@ -451,17 +456,24 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
     // 每轮开跑前把 preamble 换成产品身份。见 buildSpacePreamble 的注释：不能走
     // loader.systemPrompt，也不能直接改 systemPromptOptions.customPrompt，那两条路都会
     // 丢掉 rules 段里的工具 promptGuidelines。
-    extensionFactories: [{
-      name: 'itest-space-identity',
-      hidden: true,
-      factory: (pi) => {
-        pi.on('before_agent_start', (event) => {
-          const rewritten = rewriteSpacePreamble(event.systemPrompt, aiLangFrom(ctx.lang));
-          if (rewritten !== undefined) return { systemPrompt: rewritten };
-          return undefined;
-        });
+    extensionFactories: [
+      // Task 4 的 skills 自渲染扩展将插在这里（在 MCP 之前）。
+      // MCP：注册 + hermetic 建连装载。必须在 identity 前——identity 的 before_agent_start
+      // 渲染 event.systemPrompt（含 mcp_servers 段）并返回 {systemPrompt}，会冻结后续 section 变更。
+      mcpExtensions.register,
+      mcpExtensions.connect,
+      {
+        name: 'itest-space-identity',
+        hidden: true,
+        factory: (pi) => {
+          pi.on('before_agent_start', (event) => {
+            const rewritten = rewriteSpacePreamble(event.systemPrompt, aiLangFrom(ctx.lang));
+            if (rewritten !== undefined) return { systemPrompt: rewritten };
+            return undefined;
+          });
+        },
       },
-    }],
+    ],
   });
   await loader.reload();
 
@@ -473,6 +485,15 @@ async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<Space
     model,
     sessionManager,
     resourceLoader: loader,
+  });
+
+  // bindExtensions 必需：pi 的 session_start 只在 bindExtensions 时触发（agent-session.js:2536）。
+  // createMcpExtension 在 session_start 读 pi.getMcpServers() 并后台建连——不 bind 则 MCP 工具永不注册。
+  // （Task 1 spike 的核心验证点。若实测 mode:'print' 在 headless 嵌入下行为异常，改传 {} 即可——
+  //   ExtensionBindings 全字段可选，mode 只影响 setUIContext。）
+  await session.bindExtensions({
+    mode: 'print',
+    onError: (e) => { logger.warn({ err: e }, 'assistant extension error'); },
   });
 
   await db.update(aiThreads).set({ piThreadId: session.sessionFile ?? '', updatedAt: new Date() }).where(eq(aiThreads.id, ctx.threadId));
