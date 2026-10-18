@@ -70,6 +70,7 @@ export const testCases = pgTable('test_cases', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
   versionIdIdx: index('test_cases_version_idx').on(t.versionId),
+  groupIdIdx: index('idx_test_cases_group').on(t.groupId),
 }));
 
 export const scenarios = pgTable('scenarios', {
@@ -259,7 +260,9 @@ export const testSteps = pgTable('test_steps', {
   // 缺省 = 跟随用例 platform（web 用例的 steps 永远 null）。
   mobileOs: varchar('mobile_os', { length: 16 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-});
+}, (t) => ({
+  caseIdIdx: index('idx_test_steps_case').on(t.caseId),
+}));
 
 /** aiTask 视觉步骤的运行时动作缓存（"自动挡固化"）：首次回放成功后把 AI 实际执行
  *  的动作序列缓存，后续回放先机械执行缓存，失败静默回退 AI 并覆写（自愈协议）。
@@ -296,7 +299,9 @@ export const reports = pgTable('reports', {
   /** 创建人 = 触发执行的人（单用例=请求用户；计划运行沿用 plan_runs.triggered_by_user_id） */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-});
+}, (t) => ({
+  caseCreatedIdx: index('idx_reports_case_created').on(t.caseId, t.createdAt),
+}));
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -441,7 +446,9 @@ export const planCases = pgTable('plan_cases', {
   // 计划级覆盖：用例默认 device_target / 浏览器上下文可在「加进计划」时改写，
   // 不动用例本体，仅本次计划执行时按覆盖解析。null = 沿用例自带值。
   targetOverride: jsonb('target_override').$type<{ deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null>(),
-});
+}, (t) => ({
+  planOrderIdx: index('idx_plan_cases_plan_order').on(t.planId, t.order),
+}));
 
 export const planRuns = pgTable('plan_runs', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -469,7 +476,10 @@ export const planRuns = pgTable('plan_runs', {
   triggeredByUserId: uuid('triggered_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   /** 关联调度记录；manual 为 null */
   scheduleId: uuid('schedule_id'),
-});
+}, (t) => ({
+  projectStartedIdx: index('idx_plan_runs_project_started').on(t.projectId, t.startedAt),
+  planStartedIdx: index('idx_plan_runs_plan_started').on(t.planId, t.startedAt),
+}));
 
 export const planRunCases = pgTable('plan_run_cases', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -485,7 +495,11 @@ export const planRunCases = pgTable('plan_run_cases', {
   finishedAt: timestamp('finished_at'),
   durationMs: integer('duration_ms'),
   error: text('error'),
-});
+}, (t) => ({
+  runOrderIdx: index('idx_plan_run_cases_run_order').on(t.planRunId, t.order),
+  caseIdx: index('idx_plan_run_cases_case').on(t.caseId),
+  reportIdx: index('idx_plan_run_cases_report').on(t.reportId),
+}));
 
 /**
  * 执行计划调度：cron 表达式按固定时刻重复执行。
