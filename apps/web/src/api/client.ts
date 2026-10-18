@@ -555,6 +555,26 @@ export const api = {
           body: JSON.stringify(body),
         }),
     },
+    /** 系统设置：全局共享 MCP server（scope 固定 global）。 */
+    mcpServers: {
+      list: () => request<AssistantMcpServer[]>('/assistant/mcp-servers'),
+      create: (body: { name: string; kind: 'stdio' | 'http'; command?: string; args?: string[]; url?: string; exposure?: string; enabled?: boolean }) =>
+        request<AssistantMcpServer>('/assistant/mcp-servers', { method: 'POST', body: JSON.stringify(body) }),
+      patch: (id: string, body: Partial<{ name: string; command: string; args: string[]; url: string; exposure: string; enabled: boolean }>) =>
+        request<AssistantMcpServer>(`/assistant/mcp-servers/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+      remove: (id: string) =>
+        request<void>(`/assistant/mcp-servers/${id}`, { method: 'DELETE' }),
+    },
+    /** 系统设置：全局共享 AI 技能（slug 名称唯一；scripts 支持文件上传）。 */
+    skills: {
+      list: () => request<AssistantSkill[]>('/assistant/skills'),
+      create: (body: { name: string; description: string; body: string; scripts?: AssistantSkillScript[]; enabled?: boolean }) =>
+        request<AssistantSkill>('/assistant/skills', { method: 'POST', body: JSON.stringify(body) }),
+      patch: (id: string, body: Partial<{ name: string; description: string; body: string; scripts: AssistantSkillScript[]; enabled: boolean }>) =>
+        request<AssistantSkill>(`/assistant/skills/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+      remove: (id: string) =>
+        request<void>(`/assistant/skills/${id}`, { method: 'DELETE' }),
+    },
   },
   registerAdmin: (body: { username: string; displayName: string; email?: string; organizationId: string }) =>
     request<{ temporaryPassword: string; user: SafeUser }>('/auth/register-admin', {
@@ -851,6 +871,36 @@ export interface AssistantThread {
   status: 'running' | 'idle';
   createdAt?: string;
   updatedAt?: string;
+}
+/** 系统设置里管理的全局共享 MCP server（平台级，scope=global）。 */
+export interface AssistantMcpServer {
+  id: string;
+  name: string;
+  kind: 'stdio' | 'http';
+  command: string | null;
+  args: string[] | null;
+  url: string | null;
+  env: Record<string, string> | null;
+  exposure: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+/** 系统设置里管理的全局共享 AI 技能（assistant_skills 表；scripts 冗余落 DB，多副本无共享文件系统）。 */
+export interface AssistantSkillScript {
+  filename: string;
+  runtime: 'node' | 'python3' | 'bash' | 'sh';
+  content: string;
+}
+export interface AssistantSkill {
+  id: string;
+  name: string;
+  description: string;
+  body: string;
+  scripts: AssistantSkillScript[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 // 版本空间助手暂存表（thread-scoped）单对象形态
 export interface StagedStageCase {
