@@ -353,7 +353,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       caseId: Type.String({ minLength: 1 }),
     }),
     promptGuidelines: [
-      '含 compiled 步骤的用例创建/修改后，环境可用时调用 verify_case 实测验证，不要只凭源码分析就声称用例可运行。',
+      'verify_case 有两种使用场景，按需选择：(a) 讨论期实测——草稿讨论中用户要求「跑一下看看」时，对 stage_case 暂存的自然语言草稿调用，AI 相执行 + live view 视频流给用户看，失败据 failure 修正步骤后重发 stage_case 再验；(b) 编译后验收——solidify_case 把自然语言编译为机械 DSL 后，对固化结果调用，机械干跑逐字执行 compiled 做验收，失败由你按归因修复 compiled 后重跑，直到通过。',
       'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
       'stage_case 新建的纯草稿用例（未落库）也可直接 verify_case：caseId 传 stage_case 时声明的 localId；修正循环 = 同 localId 重发 stage_case（幂等覆盖）后再次 verify_case，全程不落库，通过后引导用户在暂存区勾选保存。注意：暂存草稿的 defaultEnvId 只能绑定已落库环境或留空走默认链（暂存环境不支持）。',

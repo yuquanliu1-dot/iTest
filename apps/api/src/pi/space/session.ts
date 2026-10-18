@@ -337,14 +337,35 @@ export function rewriteSpacePreamble(rendered: string, lang?: AiLang): string | 
   return rendered.replace(PI_DEFAULT_PREAMBLE, buildSpacePreamble(lang));
 }
 
-/** 空间助手 system prompt:风格约束 + 需求设计方法 + 工作空间 + 版本上下文摘要;无摘要时省略上下文段。 */
+/** 用例创建流程指引：先讨论 → 暂存 → 保存 → 询问编译 → 固化 → 验收。 */
+const CASE_AUTHORING_FLOW_ZH = `## 用例创建流程
+1. 拿到需求后先生成**自然语言步骤**的用例草稿（含断言），把步骤贴在对话里与用户讨论确认,不要立刻 stage_case。
+2. 讨论过程中用户可要求实测：调 verify_case(caseId=草稿 localId) 在真实浏览器跑自然语言步骤（AI 相执行）,前端有 live view 视频流给用户观看。
+3. 用户确认步骤后调 stage_case 暂存：步骤保持自然语言形态,**不要急着生成 compiled 机械 DSL**。
+4. 引导用户在右侧暂存区勾选保存。
+5. 保存后主动询问：「用例已保存,是否需要 solidify 固化为机械步骤？」
+6. 用户同意后调 solidify_case 把自然语言步骤编译为机械 DSL（产出仍走暂存勾选落库）。
+7. 编译完成后调 verify_case 实际跑 DSL 验收；出错由你根据失败归因修复 compiled 后重跑,直到通过。`;
+
+const CASE_AUTHORING_FLOW_EN = `## Case authoring workflow
+1. On receiving a requirement, draft the case with **natural-language steps** (plus assertions) and discuss with the user first — do NOT call stage_case immediately.
+2. During discussion the user may ask to actually run it: call verify_case(caseId=<draft localId>) to execute NL steps in a real browser (AI-driven), with a live video stream shown to the user.
+3. After the user confirms the steps, call stage_case to stage the draft: keep steps in natural language, do NOT generate compiled mechanical DSL yet.
+4. Guide the user to check and save from the staging panel on the right.
+5. After save, proactively ask: "Case saved — solidify into mechanical steps now?"
+6. If the user agrees, call solidify_case to compile NL steps into mechanical DSL (output still goes through staging + save).
+7. Then call verify_case to actually run the DSL for acceptance; on failure, fix the compiled output per failure attribution and re-run until it passes.`;
+
+/** 空间助手 system prompt:风格约束 + 需求设计方法 + 建用例流程 + 工作空间 + 版本上下文摘要;无摘要时省略上下文段。 */
 export function buildSpaceSystemPrompt(summaryText: string | null, lang?: AiLang): string {
-  const style = aiLangFrom(lang ?? null) === 'en-US'
+  const isEn = aiLangFrom(lang ?? null) === 'en-US';
+  const style = isEn
     ? '## Output style\n- The user writes in English. All replies MUST be in English (code, commands, and English terms may stay). This constraint covers every piece of user-visible text, including final replies, process explanations before tool calls, and reasoning monologues — do not write Chinese sentences like 「让我检查一下」, if you need to check something just call a tool.\n- Do not use emoji; emphasize with markdown bold, and enumerate with lists/tables.'
     : '## 输出风格\n- 用户使用简体中文提问,全部回复一律用简体中文(代码、命令、英文术语可保留原文)。这条约束覆盖**每一条**用户可见文本,包括最终答复、调用工具前的过程说明、以及思考/推理独白——不要出现「Let me check」「I found that」「I should」这类英文句子,想查什么直接调工具即可。\n- 不要使用 emoji;强调用 markdown 加粗,列举用列表/表格。';
   const workspace = '## 工作空间\n- 当前目录是版本专属工作空间，项目仓库已检出到 ./repo 子目录；读取代码请优先使用 repo_ls / repo_read / repo_grep 工具。';
-  if (!summaryText) return `${style}\n\n${REQ_DESIGN_METHOD}\n\n${workspace}`;
-  return `${style}\n\n${REQ_DESIGN_METHOD}\n\n${workspace}\n\n## 版本空间上下文\n${summaryText}`;
+  const flow = isEn ? CASE_AUTHORING_FLOW_EN : CASE_AUTHORING_FLOW_ZH;
+  if (!summaryText) return `${style}\n\n${REQ_DESIGN_METHOD}\n\n${flow}\n\n${workspace}`;
+  return `${style}\n\n${REQ_DESIGN_METHOD}\n\n${flow}\n\n${workspace}\n\n## 版本空间上下文\n${summaryText}`;
 }
 
 async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promise<SpaceSessionLike> {
