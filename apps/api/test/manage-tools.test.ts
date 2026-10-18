@@ -9,9 +9,17 @@
  *    list 仅 global、scoped 行 update/delete 拒绝、kind 切换清列、renameTo、不存在。
  *
  * 与 route 测试共用 SCHEMA_SQL（assistant_skills + assistant_mcp_servers 均带 name UQ）。
+ *
+ * 隔离要点：PI_DATA_DIR 必须在任何动态 import 之前指到临时目录并 resetModules——
+ * skillsStore 的 SKILLS_ROOT 是模块级常量，且 listSkills() 会把磁盘上未登记的目录
+ * 当孤儿行返回。不隔离就会读到开发者真实的技能库（且用例之间互相污染）。
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { SCHEMA_SQL } from './helpers/db.js';
@@ -20,6 +28,8 @@ import type { SpaceToolsContext } from '../src/pi/space/tools/context.js';
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let dbPool: { end: () => Promise<void> };
+let dataDir: string;
+let skillsRoot: string;
 let buildSpaceTools: (ctx: SpaceToolsContext) => ReturnType<typeof import('../src/pi/space/tools/index.js')['buildSpaceTools']>;
 let buildManageSkillTool: (ctx: SpaceToolsContext) => ReturnType<typeof import('../src/pi/space/tools/manageSkill.js')['buildManageSkillTool']>;
 let buildManageMcpTool: (ctx: SpaceToolsContext) => ReturnType<typeof import('../src/pi/space/tools/manageMcp.js')['buildManageMcpTool']>;
@@ -49,6 +59,12 @@ beforeAll(async () => {
   process.env.DATABASE_URL = container.getConnectionUri();
   pool = new Pool({ connectionString: container.getConnectionUri() });
   await pool.query(SCHEMA_SQL);
+  // 必须在动态 import 之前：SKILLS_ROOT 在模块加载时就从 PI_DATA_DIR 解析。
+  dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'itest-mgrtools-'));
+  process.env.PI_DATA_DIR = dataDir;
+  vi.resetModules();
+  const store = await import('../src/pi/space/skillsStore.js');
+  skillsRoot = store.SKILLS_ROOT;
   const tools = await import('../src/pi/space/tools/index.js');
   const skill = await import('../src/pi/space/tools/manageSkill.js');
   const mcp = await import('../src/pi/space/tools/manageMcp.js');
@@ -61,11 +77,15 @@ beforeAll(async () => {
 afterAll(async () => {
   await dbPool.end();
   await pool.end();
+  await fsp.rm(dataDir, { recursive: true, force: true });
   await container.stop();
 });
 
 beforeEach(async () => {
   await pool.query(`TRUNCATE assistant_skills, assistant_mcp_servers`);
+  // 目录也清：create/update/delete 都真实动磁盘，留着会让下一例的 list 看到孤儿行。
+  fs.rmSync(skillsRoot, { recursive: true, force: true });
+  fs.mkdirSync(skillsRoot, { recursive: true });
 });
 
 describe('register 闸门 + 防御 guard', () => {
@@ -96,70 +116,85 @@ describe('register 闸门 + 防御 guard', () => {
 });
 
 describe('manage_skill', () => {
-  const SKILL_BODY = '# 技能\n\n正文.';
   const c = () => makeCtx({ manager: true });
 
   it('create/list/update(renameTo)/delete 闭环', async () => {
-    const created = await runSkill(c(), { action: 'create', name: 'smoke-check', description: '冒烟', body: SKILL_BODY });
+    const created = await runSkill(c(), { action: 'create', name: 'smoke-check', description: '冒烟' });
     expect(created.ok).toBe(true);
     expect(JSON.parse((created as { data: string }).data)).toMatchObject({ created: 'smoke-check' });
 
     const list = await runSkill(c(), { action: 'list' });
-    const rows = JSON.parse((list as { data: string }).data) as Array<{ name: string; scriptCount: number }>;
+    const rows = JSON.parse((list as { data: string }).data) as Array<{ name: string; fileCount: number }>;
     expect(rows.map((r) => r.name)).toEqual(['smoke-check']);
-    expect(rows[0]!.scriptCount).toBe(0);
+    expect(rows[0]!.fileCount).toBe(1); // create 产出的是 SKILL.md 骨架
 
-    // 改名
+    // 改名：目录跟着搬
     const renamed = await runSkill(c(), { action: 'update', name: 'smoke-check', renameTo: 'smoke-renamed' });
     expect(renamed.ok).toBe(true);
     expect(JSON.parse((renamed as { data: string }).data)).toMatchObject({ updated: 'smoke-renamed' });
+    expect(fs.existsSync(path.join(skillsRoot, 'smoke-renamed', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(skillsRoot, 'smoke-check'))).toBe(false);
 
-    // 删除
+    // 删除：连目录一起没
     const del = await runSkill(c(), { action: 'delete', name: 'smoke-renamed' });
     expect(del.ok).toBe(true);
     expect(JSON.parse((del as { data: string }).data)).toMatchObject({ deleted: 'smoke-renamed' });
+    expect(fs.existsSync(path.join(skillsRoot, 'smoke-renamed'))).toBe(false);
     // 不存在 → 报错
     const missing = await runSkill(c(), { action: 'delete', name: 'smoke-renamed' });
     expect(missing.ok).toBe(false);
     expect((missing as { error: string }).error).toBe('技能不存在: smoke-renamed');
   });
 
-  it('create 缺 name/description/body → 报错', async () => {
-    expect((await runSkill(c(), { action: 'create', description: 'x', body: SKILL_BODY })).ok).toBe(false);
+  it('create 缺 name/description → 报错', async () => {
+    expect((await runSkill(c(), { action: 'create', description: 'x' })).ok).toBe(false);
     const r = await runSkill(c(), { action: 'create', name: 'a' });
     expect(r.ok).toBe(false);
-    expect((r as { error: string }).error).toBe('create 需要 name、description、body');
+    expect((r as { error: string }).error).toBe('create 需要 name、description');
   });
 
   it('slug 非法 → 报错', async () => {
-    const r = await runSkill(c(), { action: 'create', name: 'Bad_Name', description: 'x', body: SKILL_BODY });
+    const r = await runSkill(c(), { action: 'create', name: 'Bad_Name', description: 'x' });
     expect(r.ok).toBe(false);
     expect((r as { error: string }).error).toContain('name 必须是小写 slug');
   });
 
   it('重名 create / renameTo → 409 报错', async () => {
-    await runSkill(c(), { action: 'create', name: 's1', description: 'x', body: SKILL_BODY });
-    const dup = await runSkill(c(), { action: 'create', name: 's1', description: 'x', body: SKILL_BODY });
+    await runSkill(c(), { action: 'create', name: 's1', description: 'x' });
+    const dup = await runSkill(c(), { action: 'create', name: 's1', description: 'x' });
     expect(dup.ok).toBe(false);
     expect((dup as { error: string }).error).toBe('skill 名称已存在');
-    await runSkill(c(), { action: 'create', name: 's2', description: 'x', body: SKILL_BODY });
+    await runSkill(c(), { action: 'create', name: 's2', description: 'x' });
     const clash = await runSkill(c(), { action: 'update', name: 's2', renameTo: 's1' });
     expect(clash.ok).toBe(false);
     expect((clash as { error: string }).error).toBe('skill 名称已存在');
   });
 
-  it('create 带 scripts 落库计数；update 改 body/enabled', async () => {
-    await runSkill(c(), {
-      action: 'create', name: 'with-script', description: 'x', body: SKILL_BODY,
-      scripts: [{ filename: 'a.js', runtime: 'node', content: 'console.log(1)' }],
-    });
-    const list = JSON.parse((await runSkill(c(), { action: 'list' }) as { data: string }).data) as Array<{ name: string; scriptCount: number }>;
-    expect(list[0]!.scriptCount).toBe(1);
-
-    const upd = await runSkill(c(), { action: 'update', name: 'with-script', body: '# 新 bodyn', enabled: false });
+  it('update 只改元数据（description/enabled），不提供文件写入面', async () => {
+    await runSkill(c(), { action: 'create', name: 'with-script', description: 'x' });
+    // body/scripts 不再是入参——传了也不生效（zod 非严格对象会丢弃未知键）。
+    const upd = await runSkill(c(), { action: 'update', name: 'with-script', description: '新描述', enabled: false, body: '# 偷偷改正文' });
     expect(upd.ok).toBe(true);
-    const rows = JSON.parse((await runSkill(c(), { action: 'list' }) as { data: string }).data) as Array<{ enabled: boolean }>;
-    expect(rows[0]!.enabled).toBe(false);
+    const rows = JSON.parse((await runSkill(c(), { action: 'list' }) as { data: string }).data) as Array<{ name: string; description: string; enabled: boolean }>;
+    expect(rows[0]).toMatchObject({ name: 'with-script', description: '新描述', enabled: false });
+    // 正文没被动：SKILL.md 仍是骨架
+    expect(fs.readFileSync(path.join(skillsRoot, 'with-script', 'SKILL.md'), 'utf8')).toContain('name: "with-script"');
+    expect(fs.readFileSync(path.join(skillsRoot, 'with-script', 'SKILL.md'), 'utf8')).not.toContain('偷偷改正文');
+  });
+
+  it('update 无任何可改字段 → 报错', async () => {
+    await runSkill(c(), { action: 'create', name: 'nochange', description: 'x' });
+    const r = await runSkill(c(), { action: 'update', name: 'nochange' });
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain('update 至少给一项要改的字段');
+  });
+
+  it('list 带出磁盘上未登记的孤儿目录', async () => {
+    fs.mkdirSync(path.join(skillsRoot, 'orphan-dir'), { recursive: true });
+    fs.writeFileSync(path.join(skillsRoot, 'orphan-dir', 'SKILL.md'), 'x');
+    const rows = JSON.parse((await runSkill(c(), { action: 'list' }) as { data: string }).data) as Array<{ name: string; unregistered: boolean; id: string | null }>;
+    const orphan = rows.find((r) => r.name === 'orphan-dir');
+    expect(orphan).toMatchObject({ unregistered: true, id: null });
   });
 });
 
