@@ -8,7 +8,8 @@
  *  - scope=global 的 server 实例级共享（LoadAll 全局加载 + 管理全局可见）；
  *  - scope=project/version 的 server 归属于具体组织，仅该组织（子树）用户可见/可管理，
  *    跨组织访问一律 404（不区分「不存在」与「不可见」，防存在性探测）。
- *    注意：scope 只约束 CRUD 控制面；LOADING（loadEnabledMcpServers）刻意全局加载全部启用行。
+ *    注意：CRUD 控制面与 LOADING（loadEnabledMcpServers）同一套 scope 规则——
+ *    global 全量，project/version 跟随线程归属（见 mcp.ts），不做全局全量加载。
  */
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
