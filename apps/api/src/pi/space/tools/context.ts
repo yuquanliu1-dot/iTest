@@ -36,4 +36,6 @@ export interface SpaceToolsContext {
   createdByUserId: string | null;
   /** 界面语言：线程创建人语言，历史线程缺省 zh-CN。 */
   lang?: AiLang;
+  /** 版本独立工作空间目录（.data/workspaces/v-<versionId>）；read_skill 的 .pi/skills 根。 */
+  workspaceDir?: string;
 }
