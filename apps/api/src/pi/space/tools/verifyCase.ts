@@ -924,11 +924,21 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // 同 context（登录态随 cookie 携带）新开 page、不写 DB 报告；截图落 -replay
           // 目录，避免与 AI 相同名 step-N.png 互相覆盖。副作用与正式执行一致（二次执行
           // 恰好暴露唯一名冲突等回放脆弱性，属有意语义）。
+          //
+          // 讨论期实测场景：草稿步骤是纯自然语言（无 compiled）或纯 aiTask（视觉模式）时
+          // 跳过机械干跑——没有可逐字派发的 compiled,跑了也只会以 compile-missing 报"未知错误",
+          // 反而误导用户以为用例有问题。solidify 固化后再跑 verify 时 compiled 已就位,
+          // 机械干跑自然恢复生效。
+          const allVisual = effectiveSteps.every((s) => {
+            const c = (s as { compiled?: unknown }).compiled;
+            if (!Array.isArray(c) || c.length === 0) return true;
+            return (c as Array<{ kind?: string }>).every((a) => a?.kind === 'aiTask');
+          });
           let replayFailure: ExecStepResult | null = null;
           let replaySteps: ExecStepResult[] = [];
           let replayPage: Page | null = null;
           let replayStartedAt = 0;
-          if (failedIndex < 0 && !visionFailure) {
+          if (failedIndex < 0 && !visionFailure && !allVisual) {
             ctx.emit({ type: 'verify_progress', phase: 'replay_start' });
             replayStartedAt = Date.now();
             try {
