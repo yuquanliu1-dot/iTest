@@ -130,11 +130,15 @@ mcpServersRoute.patch('/:id', async (req, res) => {
     const kind = p.kind as string;
     if (!KIND.includes(kind as never)) throw new HttpError(400, 'bad_request', 'kind 必须是 stdio|http');
     patch.kind = kind;
-    if (kind === 'stdio' && (typeof p.command !== 'string' || !p.command.trim())) {
-      throw new HttpError(400, 'bad_request', 'kind=stdio 需要 command');
+    if (kind === 'stdio') {
+      if (typeof p.command !== 'string' || !p.command.trim()) throw new HttpError(400, 'bad_request', 'kind=stdio 需要 command');
+      patch.command = p.command.trim();
+      patch.url = null; // 切到 stdio，清掉 http 列，避免改 kind 后旧列残留
     }
-    if (kind === 'http' && (typeof p.url !== 'string' || !/^https?:\/\//.test(p.url))) {
-      throw new HttpError(400, 'bad_request', 'kind=http 需要 http(s):// url');
+    if (kind === 'http') {
+      if (typeof p.url !== 'string' || !/^https?:\/\//.test(p.url)) throw new HttpError(400, 'bad_request', 'kind=http 需要 http(s):// url');
+      patch.url = p.url;
+      patch.command = null; // 切到 http，清掉 command 列
     }
   } else {
     if ('command' in p) {

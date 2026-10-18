@@ -14,7 +14,7 @@ import { createMcpExtension } from '@earendil-works/pi-coding-agent';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import type { McpExposure, McpServerConfig } from '@earendil-works/pi-coding-agent';
 import { eq } from 'drizzle-orm';
-import { existsSync, accessSync, constants } from 'node:fs';
+import { accessSync, constants } from 'node:fs';
 import path from 'node:path';
 import { db } from '../../db/client.js';
 import { assistantMcpServers } from '../../db/schema.js';
@@ -45,9 +45,11 @@ export function resolveMcpEnv(env?: Record<string, string> | null): Record<strin
   return out;
 }
 
-/** stdio command 可执行性探测：含路径分隔符 → 按绝对/相对路径 exists；否则按 PATH 逐个 scan X_OK。 */
+/** stdio command 可执行性探测：含路径分隔符 → 按绝对/相对路径 X_OK；否则按 PATH 逐个 scan X_OK。 */
 export function findExecutable(cmd: string): boolean {
-  if (cmd.includes('/')) return existsSync(cmd);
+  if (cmd.includes('/')) {
+    try { accessSync(cmd, constants.X_OK); return true; } catch { return false; }
+  }
   for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
     if (!dir) continue;
     try { accessSync(path.join(dir, cmd), constants.X_OK); return true; } catch { /* continue */ }
@@ -83,12 +85,15 @@ export function mcpServerToEntry(row: AssistantMcpServerRow): AssistantMcpServer
   return null;
 }
 
-/** 从 assistant_mcp_servers 表加载启用 server（坏配置跳过）。scope 本期全部按 global 加载：
- *  /api/assistant 已被 nginx 钉单副本，所有线程加载全部启用 server；project/version 过滤留作后续。 */
-export async function loadEnabledMcpServers(): Promise<AssistantMcpServer[]> {
+/** 从 assistant_mcp_servers 表加载启用 server（坏配置跳过）。scope 过滤跟随线程归属：
+ *  global 全量；project/version 只加载与线程 projectId/versionId 匹配的行（跨组织不泄漏）。
+ *  ctx 缺省时只加载 global（测试/无归属场景安全默认，绝不全量抓 scoped 行）。 */
+export async function loadEnabledMcpServers(ctx?: { projectId?: string | null; versionId?: string | null }): Promise<AssistantMcpServer[]> {
   const rows = await db.select().from(assistantMcpServers).where(eq(assistantMcpServers.enabled, true));
   const out: AssistantMcpServer[] = [];
   for (const row of rows) {
+    if (row.scope === 'project' && row.projectId !== ctx?.projectId) continue;
+    if (row.scope === 'version' && row.versionId !== ctx?.versionId) continue;
     const entry = mcpServerToEntry(row);
     if (entry) out.push(entry);
   }
@@ -110,9 +115,10 @@ export function setMcpServersLoader(fn: McpServersLoader | null): void {
   serversLoader = fn;
 }
 
-/** 线程创建时取 MCP servers。默认 = DB 加载；测试用 setMcpServersLoader 注入桩。 */
+/** 线程创建时取 MCP servers。默认 = DB 加载（带 scope 过滤）；测试用 setMcpServersLoader 注入桩。 */
 export async function getMcpServersForThread(ctx: McpThreadCtx): Promise<AssistantMcpServer[]> {
-  const loader: McpServersLoader = serversLoader ?? (async () => loadEnabledMcpServers());
+  const loader: McpServersLoader =
+    serversLoader ?? (async (c) => loadEnabledMcpServers({ projectId: c.projectId, versionId: c.versionId }));
   try {
     return await loader(ctx);
   } catch (e) {
