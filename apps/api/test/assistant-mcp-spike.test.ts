@@ -54,15 +54,21 @@ describe('MCP spike: registerMcpServer + createMcpExtension 真实链路', () =>
       lang: 'zh-CN',
     });
     try {
-      // 轮询：MCP 连接是后台的，直至 initialize 已执行（marker 文件落盘）
+      // 轮询以「工具真正注册」为准：MCP 连接是后台异步链（initialize → tools/list → registerTools），
+      // marker 文件只在 initialize 落盘，早于工具注册，用它当就绪信号会在窗口内误炸核心断言。
+      // marker 留作失败诊断：区分「session_start 未触发（bindExtensions 缺失）」与「tools/list 未跟上」。
+      let tools: string[] = [];
       let markerSeen = false;
       for (let i = 0; i < 60; i++) {
-        try { await fs.access(marker); markerSeen = true; break; } catch { await new Promise((r) => setTimeout(r, 250)); }
+        try { await fs.access(marker); markerSeen = true; } catch { /* 未落盘，继续等 */ }
+        tools = (session as unknown as { getAllTools(): { name: string }[] }).getAllTools().map((t) => t.name);
+        if (tools.includes('mcp__echo__echo')) break;
+        await new Promise((r) => setTimeout(r, 250));
       }
-      expect(markerSeen, 'echo server 未在 15s 内完成 initialize（session_start 可能未触发 / bindExtensions 缺失）').toBe(true);
-      // 工具注册断言（零 LLM 调用）：AgentSession.getAllTools()
-      const tools = (session as unknown as { getAllTools(): { name: string }[] }).getAllTools().map((t) => t.name);
-      expect(tools).toContain('mcp__echo__echo');
+      expect(
+        tools,
+        `mcp__echo__echo 未在 15s 内注册（initialize marker=${markerSeen}：session_start 或 tools/list 链路未走通）`,
+      ).toContain('mcp__echo__echo');
     } finally {
       // pi v0.99.2 的 AgentSession.dispose 是同步 void（agent-session.d.ts:362），非 Promise。
       (session as unknown as { dispose(): void }).dispose();
