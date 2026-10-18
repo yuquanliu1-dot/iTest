@@ -107,6 +107,40 @@ describe('MCP DB 加载 + 守卫（getMcpServersForThread 默认翻 DB）', () =
     }
   });
 
+  it('loadEnabledMcpServers：scope 过滤跟随线程归属——project/version 行不跨组织泄漏，无 ctx 只加载 global', async () => {
+    const { loadEnabledMcpServers } = await import('../src/pi/space/mcp.js');
+    try {
+      // FK 父行：organizations → projects → project_versions（scope 过滤测试引用真实归属）
+      await pool.query(`INSERT INTO organizations(id, name, path) VALUES
+        ('00000000-0000-0000-0000-0000000000aa', 'spike-org', '/spike-org/')`);
+      await pool.query(`INSERT INTO projects(id, organization_id, name) VALUES
+        ('00000000-0000-0000-0000-0000000000aa', '00000000-0000-0000-0000-0000000000aa', 'P-A'),
+        ('00000000-0000-0000-0000-0000000000cc', '00000000-0000-0000-0000-0000000000aa', 'P-B')`);
+      await pool.query(`INSERT INTO project_versions(id, project_id, name) VALUES
+        ('00000000-0000-0000-0000-0000000000bb', '00000000-0000-0000-0000-0000000000aa', 'v0')`);
+      await pool.query(`INSERT INTO assistant_mcp_servers (id, name, kind, command, scope, project_id, version_id) VALUES
+        ($1, 'g', 'stdio', $2, 'global', NULL, NULL),
+        ($3, 'p-a', 'stdio', $2, 'project', $4, NULL),
+        ($5, 'v-a', 'stdio', $2, 'version', NULL, $6),
+        ($7, 'p-b', 'stdio', $2, 'project', $8, NULL)`,
+        ['00000000-0000-0000-0000-0000000000e1', process.execPath,
+         '00000000-0000-0000-0000-0000000000e2', '00000000-0000-0000-0000-0000000000aa',
+         '00000000-0000-0000-0000-0000000000e3', '00000000-0000-0000-0000-0000000000bb',
+         '00000000-0000-0000-0000-0000000000e4', '00000000-0000-0000-0000-0000000000cc']);
+      // 无 ctx：只加载 global（安全默认，绝不全量抓 scoped 行）
+      expect((await loadEnabledMcpServers()).map((s) => s.name)).toEqual(['g']);
+      // 线程归属 = 项目 A + 版本 a：global + 匹配的 project/version 行
+      const scoped = (await loadEnabledMcpServers({ projectId: '00000000-0000-0000-0000-0000000000aa', versionId: '00000000-0000-0000-0000-0000000000bb' }))
+        .map((s) => s.name).sort();
+      expect(scoped).toEqual(['g', 'p-a', 'v-a']);
+    } finally {
+      await pool.query(`DELETE FROM assistant_mcp_servers`);
+      await pool.query(`DELETE FROM project_versions`);
+      await pool.query(`DELETE FROM projects`);
+      await pool.query(`DELETE FROM organizations`);
+    }
+  });
+
   it('resolveMcpEnv：env:KEY 从 process.env 取真实值；未定义跳过', async () => {
     const { resolveMcpEnv } = await import('../src/pi/space/mcp.js');
     process.env.ITEST_MCP_SPIKE_KEY = 'supersecret';
