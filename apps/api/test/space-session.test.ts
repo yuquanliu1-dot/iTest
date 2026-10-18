@@ -94,10 +94,16 @@ describe('space session supervisor', () => {
 
   it('buildSpaceSystemPrompt:始终含风格段与需求设计方法;有摘要追加版本空间上下文标题', async () => {
     const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
-    const base = buildSpaceSystemPrompt(null);
+    const { REQ_DESIGN_METHOD, CASE_AUTHORING_FLOW_ZH } = await import('../src/pi/space/reqDesign.js');
+    const guides = [
+      { kind: 'flow' as const, body: REQ_DESIGN_METHOD },
+      { kind: 'flow' as const, body: CASE_AUTHORING_FLOW_ZH },
+    ];
+    const base = buildSpaceSystemPrompt(null, undefined, guides);
     expect(base).toContain('输出风格');
     expect(base).toContain('需求→用例设计方法');
-    const out = buildSpaceSystemPrompt('X');
+    expect(base).toContain('流程指令');
+    const out = buildSpaceSystemPrompt('X', undefined, guides);
     expect(out).toContain('X');
     expect(out).toContain('版本空间上下文');
   });

@@ -17,6 +17,8 @@ import type { AuthUser } from '../../services/auth.service.js';
 import { readLlmConfig } from '../modelBridge.js';
 import { resolveConfirmation } from './confirm.js';
 import { stageRoute } from './stageRoute.js';
+import { requireManager } from '../../middleware/auth.js';
+import { guidesRoute } from './guidesRoute.js';
 import {
   cancelThread, ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, spaceRepoIssue, subscribeThread, threadStatus,
 } from './session.js';
@@ -186,3 +188,7 @@ spaceRoute.get('/threads/:id/live/:key', async (req, res) => {
 });
 
 spaceRoute.use(stageRoute);
+
+// 管理端 CRUD：requireManager 保护（member → 403）。挂在 /api/assistant 之下，
+// 全局 requireAuth 由更外层 index.ts 统一承担（router.ts 自身不重复鉴权）。
+spaceRoute.use('/guides', requireManager, guidesRoute);
