@@ -22,6 +22,7 @@ import { deviceTargetsRoute } from './routes/deviceTargets.js';
 import { projectVersionsRoute } from './routes/projectVersions.js';
 import { secretsRoute } from './routes/secrets.js';
 import { attachRecorderWs } from './recorder/ws.js';
+import { startExecutionWorker } from './scheduler/execWorker.js';
 import { authRoute } from './routes/auth.js';
 import { organizationsRoute } from './routes/organizations.js';
 import { scenariosRoute } from './routes/scenarios.js';
@@ -73,5 +74,6 @@ const port = Number(process.env.API_PORT ?? 54321);
 const host = process.env.API_HOST ?? '127.0.0.1';
 const server = app.listen(port, host, () => {
   logger.info({ port, host }, 'api listening');
+  void startExecutionWorker();
 });
 attachRecorderWs(server);

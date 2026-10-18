@@ -13,6 +13,7 @@ import { assertProjectVisible } from '../services/projectAccess.js';
 import type { AuthUser } from '../services/auth.service.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { logger } from '../logger.js';
+import { getExecutionQueue, isExecutionQueueReady, EXEC_QUEUE_NAME, type ExecJob } from '../scheduler/execQueue.js';
 
 export type PlanRunTriggerSource = 'manual' | 'schedule';
 
@@ -81,9 +82,17 @@ export async function enqueuePlanRun(opts: EnqueuePlanRunOpts): Promise<EnqueueP
   }).returning();
   const runId = ins[0]!.id;
 
-  // fire-and-forget；worker 也走这里，行为一致
-  void runPlanAsync({ planRunId: runId }).catch((e) => {
-    logger.error({ err: e, planRunId: runId, trigger: opts.trigger.source }, 'runPlanAsync crashed');
-  });
+  const job: ExecJob = { kind: 'plan', planRunId: runId };
+  if (isExecutionQueueReady()) {
+    try {
+      await getExecutionQueue().add(EXEC_QUEUE_NAME, job);
+    } catch (e) {
+      logger.warn({ err: e, planRunId: runId }, 'exec queue add failed; running inline');
+      void runPlanAsync({ planRunId: runId }).catch((err) => logger.error({ err, planRunId: runId, trigger: opts.trigger.source }, 'runPlanAsync crashed'));
+    }
+  } else {
+    // 无 redis：回落同步启动（调度 worker 启动失败不影响手动执行）
+    void runPlanAsync({ planRunId: runId }).catch((err) => logger.error({ err, planRunId: runId, trigger: opts.trigger.source }, 'runPlanAsync crashed'));
+  }
   return { runId };
 }

@@ -2,13 +2,15 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
-import { runCase, insertRunningReportRow, type PreseedReport } from '../execute/runCase.js';
+import { insertRunningReportRow, type PreseedReport } from '../execute/runCase.js';
 import { DatasetConfigError } from '../services/datasets.service.js';
 import { loadDatasetForRun } from '../services/datasets.service.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
-import { registerLiveView, handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf } from '../execute/liveView.js';
+import { handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf } from '../execute/liveView.js';
 import { db } from '../db/client.js';
-import { testCases, reports } from '../db/schema.js';
+import { testCases } from '../db/schema.js';
+import { runCaseJob } from '../scheduler/execWorker.js';
+import { getExecutionQueue, isExecutionQueueReady, EXEC_QUEUE_NAME } from '../scheduler/execQueue.js';
 import { logger } from '../logger.js';
 
 export const executeRoute = Router();
@@ -46,26 +48,23 @@ executeRoute.post('/cases/:caseId/execute', async (req, res) => {
     preseed.push({ reportId: await insertRunningReportRow(caseRow, undefined, req.user!.userId), rowIndex: null });
   }
 
-  // 后台执行；live 源的生命周期绑定到整段 run（含数据集全部行）。
-  const live = registerLiveView(`case:${caseId}`);
-  void runCase(caseId, { liveView: live, preseed })
-    .catch(async (e) => {
-      // 预检通过后 runCase 理论上不再外抛（内部错误已兜底为 failed report）；万一抛了把预置报告改 failed 防僵尸。
-      const msg = e instanceof Error ? e.message : String(e);
-      logger.warn({ err: e, caseId }, 'background case execute failed; writing failed reports');
-      for (const p of preseed) {
-        await db
-          .update(reports)
-          .set({
-            status: 'failed',
-            stepResults: [{ order: 1, status: 'failed', durationMs: 0, error: msg, failureReason: 'InternalError' }] as object,
-            summary: msg,
-          })
-          .where(eq(reports.id, p.reportId))
-          .catch(() => undefined);
-      }
-    })
-    .finally(() => live.close());
+  // 后台执行：优先入队（多副本经 redis 由任一 exec worker 消费）；无 redis 回落 inline（行为与旧一致）。
+  if (isExecutionQueueReady()) {
+    try {
+      await getExecutionQueue().add(EXEC_QUEUE_NAME, {
+        kind: 'case',
+        caseId,
+        preseed,
+        createdByUserId: req.user!.userId,
+      });
+    } catch (e) {
+      // redis 假成功(配置了但连不上):add reject → 回落 inline,避免预置 running 报告行变僵尸。
+      logger.warn({ err: e, caseId }, 'exec queue add failed; running inline');
+      void runCaseJob({ caseId, preseed, createdByUserId: req.user!.userId });
+    }
+  } else {
+    void runCaseJob({ caseId, preseed, createdByUserId: req.user!.userId });
+  }
 
   res.json({ reportId: preseed[0]!.reportId, ...(preseed.length > 1 ? { reportIds: preseed.map((p) => p.reportId) } : {}) });
 });
