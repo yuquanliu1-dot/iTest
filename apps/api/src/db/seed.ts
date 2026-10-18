@@ -13,7 +13,9 @@ const GUIDE_SEED = [
   { id: '00000000-0000-0000-0000-000000000003', kind: 'flow', lang: 'en', body: CASE_AUTHORING_FLOW_EN },
 ] as const;
 
-/** 幂等 seed；失败时向上抛 → migrate 入口 catch → process.exit(1)（不让容器带着残缺 seed 起）。 */
+/** 幂等 seed；失败时向上抛 → migrate 入口 catch → process.exit(1)（不让容器带着残缺 seed 起）。
+ *  注意：这 3 行固定 UUID 每次 migrate 都会重 seed（ON CONFLICT DO NOTHING）。若运营想停用某条内置指令，
+ *  应 PATCH enabled=false（或改 body），不要 DELETE——删掉的行会在下次容器启动被重新插回。 */
 export async function seedAssistantGuides(client: Pick<import('pg').Client, 'query'>): Promise<void> {
   for (const g of GUIDE_SEED) {
     await client.query(
