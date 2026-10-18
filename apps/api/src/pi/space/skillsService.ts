@@ -1,45 +1,42 @@
 /**
  * assistant_skills 全局共享 CRUD（校验 + 落库共用层）。
  * 由 skillsRoute.ts（REST /api/assistant/skills，router.ts requireManager 保护）与
- * 空间助手 manage_skill 工具共同调用——两类写入面必须是同一套规则
- * （name slug 校验 / name 唯一 / scripts normalize / enabled 语义），不再各写一遍。
+ * 空间助手 manage_skill 工具共同调用——两类写入面必须是同一套规则。
+ *
+ * 2026-10-19 存储翻转：**本层只管元数据**。正文与目录树在 SKILLS_ROOT/<name>/，
+ * 由 import_skill / 设置页文件树编辑器写入；create 建骨架目录，delete 连目录一起删。
  *
  * 无 scope：skills 是平台级全局共享（所有项目同一个技能库），DB 无归属列。
- * scripts 每条含 filename/runtime/content（runtime ∈ node|python3|bash|sh）。
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { asc, and, eq, ne } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import { assistantSkills } from '../../db/schema.js';
 import { HttpError } from '../../middleware/errorHandler.js';
-import { isSafeScriptFilename, isSafeSkillName, isScriptRuntime, SCRIPT_RUNTIMES } from './skillsStore.js';
-
-export type SkillScriptInput = { filename?: unknown; runtime?: unknown; content?: unknown };
-
-/** 校验并归一化 scripts 数组；脏项 → 400。空数组合法（纯知识 skill）。 */
-export function normalizeScripts(raw: unknown): Array<{ filename: string; runtime: string; content: string }> {
-  const arr = Array.isArray(raw) ? raw : undefined;
-  if (arr === undefined) throw new HttpError(400, 'bad_request', 'scripts 必须是数组');
-  const out: Array<{ filename: string; runtime: string; content: string }> = [];
-  for (const item of arr) {
-    const s = item as SkillScriptInput | null;
-    if (!s || typeof s !== 'object') throw new HttpError(400, 'bad_request', 'scripts 元素必须是对象');
-    const filename = typeof s.filename === 'string' ? s.filename : '';
-    const runtime = typeof s.runtime === 'string' ? s.runtime : '';
-    const content = typeof s.content === 'string' ? s.content : '';
-    if (!isSafeScriptFilename(filename)) throw new HttpError(400, 'bad_request', `scripts 文件名非法: ${filename}`);
-    if (!isScriptRuntime(runtime)) throw new HttpError(400, 'bad_request', `scripts runtime 必须是 ${SCRIPT_RUNTIMES.join('|')}: ${runtime}`);
-    out.push({ filename, runtime, content });
-  }
-  return out;
-}
+import { removeSkillDir, writeSkillFileAtomic } from './skillPaths.js';
+import {
+  SKILLS_ROOT,
+  countSkillFiles,
+  isSafeSkillName,
+  listOrphanSkillDirs,
+  skillDirOf,
+} from './skillsStore.js';
 
 export function assertSkillName(name: unknown): string {
   if (typeof name !== 'string') throw new HttpError(400, 'bad_request', 'name 必填');
   const n = name.trim();
   if (!isSafeSkillName(n)) throw new HttpError(400, 'bad_request', 'name 必须是小写 slug（仅字母/数字/-，不以 - 开头/结尾且无连续 --；skills loader 兼容）');
   return n;
+}
+
+function assertDescription(v: unknown): string {
+  const d = typeof v === 'string' ? v.trim() : '';
+  if (!d) throw new HttpError(400, 'bad_request', 'description 必填');
+  if (d.length > 500) throw new HttpError(400, 'bad_request', 'description 最长 500 字符');
+  return d;
 }
 
 /** name 唯一性检查（跨全库，全局共享无归属）；冲突 → 409。 */
@@ -50,72 +47,112 @@ export async function assertSkillNameUnique(name: string, excludeId?: string): P
   if (dup) throw new HttpError(409, 'conflict', 'skill 名称已存在');
 }
 
-/** 列表（可选 enabled 过滤），按 name 排序。GET / 与工具 list 共用。 */
-export function listSkills(enabled?: boolean) {
-  const conds: SQL[] = [];
-  if (enabled !== undefined) conds.push(eq(assistantSkills.enabled, enabled));
-  return db.select().from(assistantSkills).where(and(...conds)).orderBy(asc(assistantSkills.name));
+/** 写 SKILL.md 骨架：frontmatter 的 name/description 由 DB 值回填（磁盘正文是真身，前言是索引）。 */
+function writeSkillMd(dir: string, name: string, description: string, body = ''): void {
+  writeSkillFileAtomic(
+    path.join(dir, 'SKILL.md'),
+    `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}`,
+  );
 }
 
-/** POST 语义：全量校验 + 插入；冲突 → 409。 */
-export async function createSkill(raw: Record<string, unknown>) {
-  const name = assertSkillName(raw.name);
+/** 只插 DB 行不建目录（import_skill 复用：目录树已由导入流程写好）。 */
+export async function registerSkill(name: string, description: string, enabled = true) {
   await assertSkillNameUnique(name);
-  const description = typeof raw.description === 'string' && raw.description.trim() ? raw.description.trim() : '';
-  if (!description) throw new HttpError(400, 'bad_request', 'description 必填');
-  if (description.length > 500) throw new HttpError(400, 'bad_request', 'description 最长 500 字符');
-  const body = typeof raw.body === 'string' && raw.body.trim() ? raw.body.trim() : '';
-  if (!body) throw new HttpError(400, 'bad_request', 'body(SKILL.md) 必填');
-  const scripts = normalizeScripts(raw.scripts ?? []);
-  const rows = await db.insert(assistantSkills).values({
-    id: randomUUID(),
-    name,
-    description,
-    body,
-    scripts,
-    enabled: raw.enabled === false ? false : true,
-  }).returning();
+  const rows = await db.insert(assistantSkills)
+    .values({ id: randomUUID(), name, description, enabled })
+    .returning();
   return rows[0]!;
 }
 
-/** PATCH 语义：载旧行（404）→ 逐字段 diff 校验 → 更新。 */
-export async function updateSkill(id: string, raw: Record<string, unknown>) {
+export type SkillRow = Awaited<ReturnType<typeof registerSkill>>;
+export type SkillWithDisk = SkillRow & {
+  fileCount: number;
+  totalBytes: number;
+  onDisk: boolean;
+  unregistered: boolean;
+};
+
+function withDisk(row: SkillRow): SkillWithDisk {
+  const dir = skillDirOf(row.name);
+  return { ...row, ...countSkillFiles(dir), onDisk: fs.existsSync(dir), unregistered: false };
+}
+
+/** POST 语义：建目录 + SKILL.md 骨架 + 插行。磁盘上已有同名目录也判冲突——否则会静默接管孤儿目录。 */
+export async function createSkill(raw: Record<string, unknown>): Promise<SkillWithDisk> {
+  const name = assertSkillName(raw.name);
+  const description = assertDescription(raw.description);
+  await assertSkillNameUnique(name);
+  const dir = skillDirOf(name);
+  if (fs.existsSync(dir)) throw new HttpError(409, 'conflict', `磁盘上已存在同名目录: ${name}`);
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    writeSkillMd(dir, name, description);
+    const row = await registerSkill(name, description, raw.enabled === false ? false : true);
+    return withDisk(row);
+  } catch (e) {
+    // DB 失败不留空目录在盘上。
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw e;
+  }
+}
+
+/** PATCH：description/enabled 只动 DB；改名要搬目录（目标已存在 → 409；DB 写失败 → 搬回去）。 */
+export async function updateSkill(id: string, raw: Record<string, unknown>): Promise<SkillWithDisk> {
   const existing = (await db.select().from(assistantSkills).where(eq(assistantSkills.id, id)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'skill 不存在');
   const patch: Partial<typeof assistantSkills.$inferInsert> = {};
-  const p = raw;
-  if ('name' in p) {
-    const name = assertSkillName(p.name);
+  if ('description' in raw) patch.description = assertDescription(raw.description);
+  if ('enabled' in raw) patch.enabled = raw.enabled === false ? false : true;
+
+  let renamedFrom: string | null = null;
+  if ('name' in raw && raw.name !== existing.name) {
+    const name = assertSkillName(raw.name);
     await assertSkillNameUnique(name, existing.id);
+    const from = skillDirOf(existing.name);
+    const to = skillDirOf(name);
+    if (fs.existsSync(to)) throw new HttpError(409, 'conflict', `磁盘上已存在同名目录: ${name}`);
+    if (fs.existsSync(from)) { fs.renameSync(from, to); renamedFrom = existing.name; }
     patch.name = name;
   }
-  if ('description' in p) {
-    const description = typeof p.description === 'string' && p.description.trim() ? p.description.trim() : '';
-    if (!description) throw new HttpError(400, 'bad_request', 'description 必填');
-    if (description.length > 500) throw new HttpError(400, 'bad_request', 'description 最长 500 字符');
-    patch.description = description;
-  }
-  if ('body' in p) {
-    const body = typeof p.body === 'string' && p.body.trim() ? p.body.trim() : '';
-    if (!body) throw new HttpError(400, 'bad_request', 'body(SKILL.md) 必填');
-    patch.body = body;
-  }
-  if ('scripts' in p) patch.scripts = normalizeScripts(p.scripts ?? []);
-  if ('enabled' in p) patch.enabled = p.enabled === false ? false : true;
   const updated = await db.update(assistantSkills)
     .set({ ...patch, updatedAt: new Date() })
     .where(eq(assistantSkills.id, id))
     .returning();
-  if (updated.length === 0) throw new HttpError(404, 'not_found', 'skill 不存在');
-  return updated[0]!;
+  if (updated.length === 0) {
+    if (renamedFrom) {
+      try { fs.renameSync(skillDirOf(patch.name as string), skillDirOf(renamedFrom)); } catch { /* 回滚失败只能靠人工 */ }
+    }
+    throw new HttpError(404, 'not_found', 'skill 不存在');
+  }
+  return withDisk(updated[0]!);
 }
 
-/** DELETE 语义：载旧行（404）→ 删除。 */
+/** DELETE：删行 + 删目录（目录删除走 removeSkillDir，校验父目录恰为 SKILLS_ROOT）。 */
 export async function deleteSkill(id: string): Promise<void> {
   const existing = (await db.select().from(assistantSkills).where(eq(assistantSkills.id, id)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'skill 不存在');
-  const deleted = await db.delete(assistantSkills)
-    .where(eq(assistantSkills.id, id))
-    .returning();
+  const deleted = await db.delete(assistantSkills).where(eq(assistantSkills.id, id)).returning();
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'skill 不存在');
+  removeSkillDir(SKILLS_ROOT, existing.name);
+}
+
+/** 列表 = DB 行（拼磁盘统计）+ 孤儿目录合成行。enabled 过滤时不含孤儿（孤儿没有 enabled 语义）。 */
+export async function listSkills(enabled?: boolean): Promise<SkillWithDisk[]> {
+  const rows = enabled === undefined
+    ? await db.select().from(assistantSkills).orderBy(asc(assistantSkills.name))
+    : await db.select().from(assistantSkills).where(eq(assistantSkills.enabled, enabled)).orderBy(asc(assistantSkills.name));
+  const withDisks = rows.map(withDisk);
+  if (enabled !== undefined) return withDisks;
+  const orphans: SkillWithDisk[] = listOrphanSkillDirs(rows.map((r) => r.name)).map((name) => ({
+    id: null as unknown as SkillRow['id'],
+    name,
+    description: '',
+    enabled: false,
+    createdAt: null as unknown as SkillRow['createdAt'],
+    updatedAt: null as unknown as SkillRow['updatedAt'],
+    ...countSkillFiles(skillDirOf(name)),
+    onDisk: true,
+    unregistered: true,
+  }));
+  return [...withDisks, ...orphans];
 }
