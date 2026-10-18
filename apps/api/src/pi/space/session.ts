@@ -345,7 +345,9 @@ const CASE_AUTHORING_FLOW_ZH = `## 用例创建流程
 4. 引导用户在右侧暂存区勾选保存。
 5. 保存后主动询问：「用例已保存,是否需要 solidify 固化为机械步骤？」
 6. 用户同意后调 solidify_case 把自然语言步骤编译为机械 DSL（产出仍走暂存勾选落库）。
-7. 编译完成后调 verify_case 实际跑 DSL 验收；出错由你根据失败归因修复 compiled 后重跑,直到通过。`;
+7. 编译完成后调 verify_case 实际跑 DSL 验收；出错由你根据失败归因修复 compiled 后重跑,直到通过。
+
+**批量场景**：一次需求产出多条用例时，按「逐条讨论 → 逐条暂存」串行推进,不要一次性铺开所有草稿——用户需要逐条审,铺开等于把确认门稀释掉。每条讨论确认后再 stage_case,下一条再开始讨论。实测环节用户确认要多条一起跑时可以接力：一条 AI 相跑完出结论再开下一条,不要并发。`;
 
 const CASE_AUTHORING_FLOW_EN = `## Case authoring workflow
 1. On receiving a requirement, draft the case with **natural-language steps** (plus assertions) and discuss with the user first — do NOT call stage_case immediately.
@@ -354,7 +356,9 @@ const CASE_AUTHORING_FLOW_EN = `## Case authoring workflow
 4. Guide the user to check and save from the staging panel on the right.
 5. After save, proactively ask: "Case saved — solidify into mechanical steps now?"
 6. If the user agrees, call solidify_case to compile NL steps into mechanical DSL (output still goes through staging + save).
-7. Then call verify_case to actually run the DSL for acceptance; on failure, fix the compiled output per failure attribution and re-run until it passes.`;
+7. Then call verify_case to actually run the DSL for acceptance; on failure, fix the compiled output per failure attribution and re-run until it passes.
+
+**Batch mode**: when one requirement yields multiple cases, drive them serially as "discuss one → stage one". Do NOT dump all drafts at once — the user reviews one at a time, and bulk-dumping dilutes the confirmation gate. Start the next discussion only after the current one is confirmed and staged. For live-test runs the user may approve several at once: chain them serially, starting the next only after the current AI phase finishes; never run them concurrently.`;
 
 /** 空间助手 system prompt:风格约束 + 需求设计方法 + 建用例流程 + 工作空间 + 版本上下文摘要;无摘要时省略上下文段。 */
 export function buildSpaceSystemPrompt(summaryText: string | null, lang?: AiLang): string {
