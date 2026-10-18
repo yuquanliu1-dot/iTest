@@ -128,7 +128,10 @@ guidesRoute.patch('/:id', async (req, res) => {
     if ('projectId' in p) patch.projectId = p.projectId as string | null;
     if ('versionId' in p) patch.versionId = p.versionId as string | null;
   }
-  if ('body' in p) patch.body = typeof p.body === 'string' ? p.body.trim() : (p.body as string);
+  if ('body' in p) {
+    if (typeof p.body !== 'string' || !p.body.trim()) throw new HttpError(400, 'bad_request', 'body 必填');
+    patch.body = p.body.trim();
+  }
   if ('lang' in p) {
     if (!LANG.includes(p.lang as never)) throw new HttpError(400, 'bad_request', 'lang 必须是 zh|en|any');
     patch.lang = p.lang as string;

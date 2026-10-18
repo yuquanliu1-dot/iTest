@@ -27,7 +27,8 @@ export interface SpaceSessionLike {
   subscribe(fn: (e: unknown) => void): () => void;
   prompt(text: string): Promise<void>;
   abort(): void;
-  dispose(): Promise<void>;
+  // pi v0.99.2 的 AgentSession.dispose 是同步 void（agent-session.d.ts:362）；不要 await。
+  dispose(): void;
   readonly isStreaming: boolean;
   messages: unknown[];
 }
@@ -81,7 +82,9 @@ export function setSpaceSessionFactory(f: SpaceSessionFactory): void { factory =
 
 export function resetSpaceSessions(): void {
   for (const r of records.values()) {
-    r.session.dispose().catch(() => { /* ignore */ });
+    // dispose 是同步 void；会话内的 MCP 子进程/thread 生命周期随本进程，reset 不杀它们
+    // （进程生命周期内线程常驻，teardown 支撑留给后续需求。见 mcp.ts child-leak deferral）。
+    try { r.session.dispose(); } catch { /* ignore */ }
     try { r.unsub(); } catch { /* ignore */ }
   }
   records.clear();
@@ -436,7 +439,13 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
     logger.warn({ err: e, versionId: ctx.versionId }, 'space summary build failed; continuing without context');
   }
   // S1 常驻指令：按 (lang, projectId, versionId) 查启用 guides（scope 覆盖 version>project>global）。
-  const guides = await loadActiveGuides({ projectId: ctx.projectId, versionId: ctx.versionId, lang: ctx.lang });
+  // 与 buildSpaceSummary/loadSkills 同款容错：guides 装载失败不能拖垮整个会话工厂。
+  let guides: Array<Pick<AssistantGuideRow, 'kind' | 'body'>> = [];
+  try {
+    guides = await loadActiveGuides({ projectId: ctx.projectId, versionId: ctx.versionId, lang: ctx.lang });
+  } catch (e) {
+    logger.warn({ err: e, versionId: ctx.versionId }, 'guides 加载失败;继续无 guides 段');
+  }
   // S2 catalog：与 loader.additionalSkillPaths 同源目录（loadSkills 同步）。Skill.location 取 filePath
   // （Skill = { name, description, filePath, baseDir, sourceInfo, disableModelInvocation }）。
   // 与 buildSpaceSummary 同款容错：单条 skill 目录异常（权限/ELOOP）不能拖垮整个会话工厂。
