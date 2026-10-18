@@ -9,13 +9,12 @@
  *  - clone 到 mkdtemp 临时目录，finally 清理；超时 60s SIGKILL 进程组。
  *  - 解耦：parseSkillRepo 是纯函数（本地可单测，不碰网络）；fetch 层做薄。
  *
- * 仓库布局（与物化目录同源）：
- *  - 根目录 SKILL.md（必需）→ body（frontmatter 被剥掉；name/description 走列）
- *  - scripts/ 子目录内文件，或（无 scripts/ 时）根目录脚本文件 → scripts[]
- *  - 脚本 runtime 推断：shebang 命中（node|python3|bash|sh）优先，回退扩展名；
- *    两者都判不出（未知 runtime / 无扩展名无 shebang）→ skip（不默认 node，外部不可信输入从严）。
- *  - 非法文件名 / 未知 runtime / 超大（脚本 >1MB）→ skip 并记录原因，不影响其余可装项；
- *    preview 会把 skipped 呈现给用户，install 前人工可见。
+ * 仓库布局（2026-10-19 起为**整棵目录树原样落盘**）：
+ *  - 根目录 SKILL.md（必需）→ 目录里的第一份文件；frontmatter 的 name/description 仍走 DB 元数据列
+ *  - 其余文件递归全收：agents/ references/ assets/ eval-viewer/ scripts/ …（官方 skill-creator
+ *    的 19 个文件正是这个形态，旧实现只收 scripts/ 下的平级文件，另外 4 个目录 9 个文件全丢）
+ *  - 剔除 .git / node_modules / 隐藏文件 / 软链；单文件 >1MB 或总文件数 >200 → 记 skipped 后继续
+ *  - runtime 不再存储也不再作为准入条件（执行时按 shebang 推断），故 .md/.html 一律能装
  *
  * name 取值次序：frontmatter name（须为合法 slug）→ 仓库短名 sanitize → 仍无效则报错请用户给 name= 覆盖。
  */
@@ -23,25 +22,27 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { createSkill } from './skillsService.js';
-import { isSafeScriptFilename, type ScriptRuntime } from './skillsStore.js';
+import { registerSkill } from './skillsService.js';
+import { skillDirOf } from './skillsStore.js';
+import { resolveInSkill, writeSkillFileAtomic } from './skillPaths.js';
 
 const SKILL_MD_MAX_BYTES = 200_000;
-const SCRIPT_MAX_BYTES = 1_000_000;
-const MAX_SCRIPTS = 50;
+const FILE_MAX_BYTES = 1_000_000;
+const MAX_FILES = 200;
+const MAX_TOTAL_BYTES = 8_000_000;
+const MAX_DEPTH = 8;
 const MAX_DESCRIPTION_CHARS = 500;
 const CLONE_TIMEOUT_MS = 60_000;
 
-const RUNTIME_RE = /\b(?:env )?(node|python3|bash|sh)\b/;
-
-export interface SkillImportScript { filename: string; runtime: ScriptRuntime; content: string; size: number }
-export interface SkillImportSkipped { filename: string; reason: string }
+export interface SkillImportFile { path: string; content: string; size: number }
+export interface SkillImportSkipped { path: string; reason: string }
 
 export interface ParsedSkillImport {
   name: string;
   description: string;
   body: string;
-  scripts: SkillImportScript[];
+  /** 相对技能根的完整文件树（posix 分隔），含 SKILL.md 本身。 */
+  files: SkillImportFile[];
   skipped: SkillImportSkipped[];
   /** name 来源：frontmatter 命中 / 仓库名 sanitize / 用户 name 覆盖（install 侧）。 */
   nameKind: 'frontmatter' | 'sanitized';
@@ -102,31 +103,9 @@ function parseFrontmatter(content: string): { name?: string; description?: strin
   return { ...out, bodyStart, hasFrontmatter: true };
 }
 
-/** 逐文件解析脚本：返回 (runtime | null, content)。shebang 优先生效；无 shebang 回退扩展名；
- *  两者皆不可判（未知 runtime / 无扩展名无 shebang）→ null（外部不可信输入，不默认 node）。 */
-async function inspectScriptFile(fp: string): Promise<{ runtime: ScriptRuntime | null; content: string }> {
-  const head = Buffer.alloc(512);
-  const fh = await fs.open(fp, 'r');
-  try { await fh.read(head, 0, 512, 0); } finally { await fh.close(); }
-  const headStr = head.toString('utf8');
-  const firstLine = headStr.split('\n')[0] ?? '';
-  let runtime: ScriptRuntime | null = null;
-  const m = RUNTIME_RE.exec(firstLine);
-  if (m) {
-    runtime = m[1] as ScriptRuntime;
-  } else if (!firstLine.trimStart().startsWith('#!')) {
-    const lower = fp.toLowerCase();
-    if (/\.py$/i.test(lower)) runtime = 'python3';
-    else if (/\.sh$/i.test(lower)) runtime = 'bash';
-    else if (/\.(js|mjs|cjs)$/i.test(lower)) runtime = 'node';
-  }
-  const content = (await fs.readFile(fp, 'utf8')).slice(0, SCRIPT_MAX_BYTES);
-  return { runtime, content };
-}
-
 /**
  * 纯解析：只读 repoDir 目录，不碰网络。返回解析结果；SKILL.md 缺失/过大抛 Error。
- *  scripts 布局：优先 <dir>/scripts/，缺失时取根目录脚本文件（跳过 SKILL.md 与隐藏文件）。
+ *  递归收整棵树：剔除 .git/node_modules/隐藏文件/软链，文件数或总字节触顶即停并记 skipped。
  */
 export async function parseSkillRepo(repoDir: string, repoDisplayName: string): Promise<ParsedSkillImport> {
   const mdPath = path.join(repoDir, 'SKILL.md');
@@ -152,34 +131,39 @@ export async function parseSkillRepo(repoDir: string, repoDisplayName: string): 
   }
   const description = (fm.description ?? `从 GitHub 导入：${repoDisplayName}`).trim().slice(0, MAX_DESCRIPTION_CHARS);
 
-  const scriptsDir = path.join(repoDir, 'scripts');
-  let scriptFiles: string[];
-  let dirKind: 'scripts-dir' | 'root';
-  try {
-    const st = await fs.stat(scriptsDir);
-    if (!st.isDirectory()) throw new Error();
-    scriptFiles = (await fs.readdir(scriptsDir)).filter((f) => !f.startsWith('.')).slice(0, MAX_SCRIPTS);
-    dirKind = 'scripts-dir';
-  } catch {
-    scriptFiles = (await fs.readdir(repoDir)).filter((f) => !f.startsWith('.') && f !== 'SKILL.md').slice(0, MAX_SCRIPTS);
-    dirKind = 'root';
-  }
-
-  const scripts: SkillImportScript[] = [];
+  const files: SkillImportFile[] = [];
   const skipped: SkillImportSkipped[] = [];
-  for (const f of scriptFiles.sort((a, b) => a.localeCompare(b))) {
-    const fp = path.join(dirKind === 'scripts-dir' ? scriptsDir : repoDir, f);
-    let st;
-    try { st = await fs.stat(fp); } catch { continue; }
-    if (!st.isFile()) { skipped.push({ filename: f, reason: '非文件' }); continue; }
-    if (st.size > SCRIPT_MAX_BYTES) { skipped.push({ filename: f, reason: `超过 1MB` }); continue; }
-    if (!isSafeScriptFilename(f)) { skipped.push({ filename: f, reason: '文件名非法' }); continue; }
-    const { runtime, content } = await inspectScriptFile(fp);
-    if (!runtime) { skipped.push({ filename: f, reason: 'runtime 未知（shebang/扩展名无法识别）' }); continue; }
-    scripts.push({ filename: f, runtime, content, size: st.size });
-  }
+  let totalBytes = 0;
+  const walk = async (absDir: string, relDir: string, depth: number): Promise<void> => {
+    if (files.length >= MAX_FILES || totalBytes >= MAX_TOTAL_BYTES) return;
+    if (depth > MAX_DEPTH) { skipped.push({ path: relDir || '.', reason: `目录层级超过 ${MAX_DEPTH}` }); return; }
+    let entries;
+    try { entries = await fs.readdir(absDir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+      const childAbs = path.join(absDir, e.name);
+      const childRel = relDir ? `${relDir}/${e.name}` : e.name;
+      // 软链不进树：指向树外即逃逸面，指向树内也会让文件树与实际读取产生两套视图。
+      if (e.isSymbolicLink()) continue;
+      if (e.isDirectory()) {
+        await walk(childAbs, childRel, depth + 1);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      // 路径先过守卫再读：仓库是 GitHub 白名单来源，但仍逐段验一遍，杜绝 .. 段/隐藏段。
+      if (!resolveInSkill(repoDir, childRel)) { skipped.push({ path: childRel, reason: '路径非法' }); continue; }
+      let st;
+      try { st = await fs.stat(childAbs); } catch { continue; }
+      if (st.size > FILE_MAX_BYTES) { skipped.push({ path: childRel, reason: `超过 ${FILE_MAX_BYTES / 1_000_000}MB 单文件上限` }); continue; }
+      if (files.length >= MAX_FILES) { skipped.push({ path: childRel, reason: `文件数超过 ${MAX_FILES} 上限` }); return; }
+      if (totalBytes + st.size > MAX_TOTAL_BYTES) { skipped.push({ path: childRel, reason: `总体积超过 ${MAX_TOTAL_BYTES / 1_000_000}MB 上限` }); return; }
+      files.push({ path: childRel, content: await fs.readFile(childAbs, 'utf8'), size: st.size });
+      totalBytes += st.size;
+    }
+  };
+  await walk(repoDir, '', 0);
 
-  return { name, description, body, scripts, skipped, nameKind };
+  return { name, description, body, files, skipped, nameKind };
 }
 
 /** git clone --depth 1 到临时目录；返回 tmp 目录路径（调用方负责 finally 清理）。超时/失败抛 Error。 */
@@ -209,15 +193,18 @@ export async function cloneSkillRepo(cloneUrl: string, branch: string | null): P
 export interface ImportResult {
   name: string;
   description: string;
-  bodySize: number;
-  scripts: Array<{ filename: string; runtime: string; size: number }>;
+  fileCount: number;
+  totalBytes: number;
+  /** 前若干个文件路径，给 preview 用（不吐正文，免得撑爆模型上下文）。 */
+  files: Array<{ path: string; size: number }>;
   skipped: SkillImportSkipped[];
   nameKind: ParsedSkillImport['nameKind'];
   created?: boolean;
 }
 
-/** 编排：validate → clone → parse → （预览 | 落库）。install=false 或缺省 = 预览（不写库）。
- *  install=true 时 name 为空则用解析名；nameKind 覆盖安装名（仍走 assertSkillName 校验）。 */
+const PREVIEW_FILE_LIMIT = 30;
+
+/** 编排：validate → clone → parse → （预览 | 落盘）。install=false 或缺省 = 预览（不写盘）。 */
 export async function importSkillFromGithub(
   url: string,
   opts: { install?: boolean; name?: string; repoDisplayName?: string } = {},
@@ -231,22 +218,35 @@ export async function importSkillFromGithub(
   try {
     const parsedSkill = await parseSkillRepo(tmp, display);
     const finalName = opts.name !== undefined ? opts.name.trim() : parsedSkill.name;
-    const scripts = parsedSkill.scripts.map((s) => ({ filename: s.filename, runtime: s.runtime, size: s.size }));
     const result: ImportResult = {
       name: finalName,
       description: parsedSkill.description,
-      bodySize: parsedSkill.body.length,
-      scripts,
+      fileCount: parsedSkill.files.length,
+      totalBytes: parsedSkill.files.reduce((n, f) => n + f.size, 0),
+      files: parsedSkill.files.slice(0, PREVIEW_FILE_LIMIT).map(({ path: p, size }) => ({ path: p, size })),
       skipped: parsedSkill.skipped,
       nameKind: opts.name !== undefined ? 'sanitized' : parsedSkill.nameKind,
     };
     if (opts.install) {
-      await createSkill({
-        name: finalName,
-        description: parsedSkill.description,
-        body: parsedSkill.body,
-        scripts: parsedSkill.scripts.map(({ filename, runtime, content }) => ({ filename, runtime, content })),
-      });
+      const dir = skillDirOf(finalName);
+      await fs.mkdir(dir, { recursive: true });
+      try {
+        // 先建全部子目录再逐文件写：resolveInSkill 的 requireParentExisting 会拒新建父目录，
+        // 而导入是唯一允许建目录的地方（来源是 GitHub 白名单，不是人在设置页敲的路径）。
+        for (const f of parsedSkill.files) {
+          const i = f.path.lastIndexOf('/');
+          if (i > 0) await fs.mkdir(path.join(dir, f.path.slice(0, i)), { recursive: true });
+        }
+        for (const f of parsedSkill.files) {
+          const abs = resolveInSkill(dir, f.path);
+          if (!abs) throw new Error(`导入路径非法: ${f.path}`);
+          writeSkillFileAtomic(abs, f.content);
+        }
+        await registerSkill(finalName, parsedSkill.description);
+      } catch (e) {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+        throw e;
+      }
       result.created = true;
     }
     return result;

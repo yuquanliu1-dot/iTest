@@ -90,7 +90,7 @@ describe('parseSkillRepo（本地目录，不碰网络）', () => {
     const p = await parseSkillRepo(dir, 'repo-name-wrong');
     expect(p).toMatchObject({ name: 'my-skill', description: '冒烟 技能:demo', nameKind: 'frontmatter' });
     expect(p.body).toContain('# 我的技能');
-    expect(p.scripts.map((s) => [s.filename, s.runtime])).toEqual([['gen.py', 'python3'], ['run.sh', 'bash']]);
+    expect(p.files.map((f) => f.path).sort()).toEqual(['SKILL.md', 'scripts/gen.py', 'scripts/run.sh']);
     expect(p.skipped).toEqual([]);
     await cleanup();
   });
@@ -112,35 +112,96 @@ describe('parseSkillRepo（本地目录，不碰网络）', () => {
     await cleanup();
   });
 
-  it('无 scripts/ 目录 → 取根目录脚本（排除 SKILL.md/隐藏）', async () => {
+  it('无 scripts/ 目录 → 根目录其他文件一并纳入', async () => {
     await make();
     await fs.writeFile(path.join(dir, 'SKILL.md'), '---\nname: root-skill\n---\n\n正文');
     await fs.writeFile(path.join(dir, 'tool.sh'), '#!/bin/sh\necho x\n');
-    await fs.writeFile(path.join(dir, '.hidden.js'), 'console.log(1)');
     await fs.writeFile(path.join(dir, 'README.md'), 'readme');
     const p = await parseSkillRepo(dir, 'root-skill');
-    expect(p.scripts.map((s) => s.filename)).toEqual(['tool.sh']);
+    expect(p.files.map((s) => s.path).sort()).toEqual(['README.md', 'SKILL.md', 'tool.sh']);
     await cleanup();
   });
 
-  it('非法项 skip：perl shebang / 非法文件名 / 超大 / 未知扩展', async () => {
+  it('非法项 skip：软链 / 隐藏文件 / 超大文件', async () => {
     await make();
     await fs.writeFile(path.join(dir, 'SKILL.md'), '---\nname: sk\n---\n\n正文');
     await fs.mkdir(path.join(dir, 'scripts'));
-    await fs.writeFile(path.join(dir, 'scripts', 'go.pl'), '#!/usr/bin/perl\nprint 1;\n');
-    await fs.writeFile(path.join(dir, 'scripts', 'a&b.sh'), '#!/bin/bash\necho x\n');
     await fs.writeFile(path.join(dir, 'scripts', 'big.js'), '// x'.padEnd(1_100_000, 'x'));
-    await fs.writeFile(path.join(dir, 'scripts', 'noext'), 'hello');
+    await fs.symlink('/tmp', path.join(dir, 'scripts', 'link'));
     const p = await parseSkillRepo(dir, 'sk');
-    expect(p.scripts).toEqual([]);
-    expect(p.skipped.map((s) => s.filename).sort()).toEqual(['a&b.sh', 'big.js', 'go.pl', 'noext']);
-    expect(p.skipped.every((s) => s.reason)).toBe(true);
+    expect(p.files.map((f) => f.path)).toEqual(['SKILL.md']);
+    // 软链与超限文件都不进 files（软链直接丢弃不记 skipped，超限记原因）
+    expect(p.skipped.map((s) => s.path)).toEqual(['scripts/big.js']);
     await cleanup();
   });
 
   it('SKILL.md 缺失 → 抛错', async () => {
     await make();
     await expect(parseSkillRepo(dir, 'empty')).rejects.toThrow('没有 SKILL.md');
+    await cleanup();
+  });
+
+  it('递归导入整棵目录树（agents/ references/ eval-viewer/ 都要能装）', async () => {
+    await make();
+    await fs.writeFile(path.join(dir, 'SKILL.md'), '---\nname: full-skill\n---\n\n正文');
+    await fs.mkdir(path.join(dir, 'agents'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'agents', 'grader.md'), 'x');
+    await fs.mkdir(path.join(dir, 'eval-viewer'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'eval-viewer', 'generate_review.py'), 'print(1)');
+    await fs.mkdir(path.join(dir, 'assets'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'assets', 'tpl.html'), '<p>');
+    await fs.mkdir(path.join(dir, 'scripts'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'scripts', '__init__.py'), '');
+    await fs.writeFile(path.join(dir, 'scripts', 'utils.py'), 'Y = 1\n');
+    await fs.writeFile(path.join(dir, 'scripts', 'run_loop.py'), 'from scripts.utils import Y\nprint(Y)\n');
+
+    const p = await parseSkillRepo(dir, 'full-skill');
+    expect(p.files.map((f) => f.path).sort()).toEqual([
+      'SKILL.md', 'agents/grader.md', 'assets/tpl.html',
+      'eval-viewer/generate_review.py',
+      'scripts/__init__.py', 'scripts/run_loop.py', 'scripts/utils.py',
+    ]);
+    expect(p.skipped).toEqual([]);
+    await cleanup();
+  });
+
+  it('递归导入剔除 .git/node_modules/隐藏文件/软链', async () => {
+    await make();
+    await fs.writeFile(path.join(dir, 'SKILL.md'), '---\nname: clean\n---\n\n正文');
+    await fs.mkdir(path.join(dir, '.git'), { recursive: true });
+    await fs.writeFile(path.join(dir, '.git', 'config'), 'z');
+    await fs.mkdir(path.join(dir, 'node_modules'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'node_modules', 'x.js'), 'x');
+    await fs.writeFile(path.join(dir, '.env'), 'SECRET=1');
+    await fs.symlink('/tmp', path.join(dir, 'evil'));
+
+    const p = await parseSkillRepo(dir, 'clean');
+    expect(p.files.map((f) => f.path)).toEqual(['SKILL.md']);
+    expect(p.skipped).toEqual([]);
+    await cleanup();
+  });
+
+  it('超出 200 文件上限 → 截断且 skipped 记录原因', async () => {
+    await make();
+    await fs.writeFile(path.join(dir, 'SKILL.md'), '---\nname: big\n---\n\n正文');
+    await fs.mkdir(path.join(dir, 'scripts'), { recursive: true });
+    for (let i = 0; i < 260; i++) await fs.writeFile(path.join(dir, 'scripts', `f${i}.py`), 'x');
+    const p = await parseSkillRepo(dir, 'big');
+    expect(p.files.length).toBeLessThanOrEqual(200);
+    expect(p.skipped.length).toBeGreaterThan(0);
+    expect(p.skipped[0]?.path).toBeDefined();
+    await cleanup();
+  });
+
+  it('单文件超 1MB → skipped 记录原因，其余照装', async () => {
+    await make();
+    await fs.writeFile(path.join(dir, 'SKILL.md'), '---\nname: bigfile\n---\n\n正文');
+    await fs.mkdir(path.join(dir, 'scripts'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'scripts', 'ok.py'), 'print(1)');
+    await fs.writeFile(path.join(dir, 'scripts', 'huge.py'), 'x'.repeat(1_000_001));
+    const p = await parseSkillRepo(dir, 'bigfile');
+    expect(p.files.map((f) => f.path).sort()).toEqual(['SKILL.md', 'scripts/ok.py']);
+    expect(p.skipped).toEqual([{ path: 'scripts/huge.py', reason: expect.stringContaining('1MB') }]);
     await cleanup();
   });
 });
