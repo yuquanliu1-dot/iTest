@@ -2,7 +2,7 @@
  * 执行队列：计划运行 / 单用例执行统一入队,跨 api 副本经 redis 被任一 exec worker 消费。
  * 与 plan-schedule 队列同款守卫:REDIS_URL 缺失 → isExecutionQueueReady()=false,
  * 调用方回落同步(fire-and-forget)执行,单容器/dev 行为不变。 */
-import { Queue, type Worker } from 'bullmq';
+import { Queue, Worker } from 'bullmq';
 import { getRedis } from './queue.js';
 
 export const EXEC_QUEUE_NAME = 'exec';
@@ -29,7 +29,6 @@ export function getExecutionQueue(): Queue<ExecJob> {
 export function buildExecutionWorker(
   processor: (job: ExecJob) => Promise<void>,
 ): Worker<ExecJob> {
-  const { Worker } = require('bullmq') as typeof import('bullmq');
   const raw = Number(process.env.EXEC_CONCURRENCY);
   const concurrency = Number.isInteger(raw) && raw > 0 ? raw : 3;
   return new Worker<ExecJob>(EXEC_QUEUE_NAME, async (job) => processor(job.data), {
