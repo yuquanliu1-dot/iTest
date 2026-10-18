@@ -9,6 +9,7 @@ import Icon from '../components/Icon';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Toggle from '../components/ui/Toggle';
+import AssistantPanel from '../components/settings/AssistantPanel';
 import {
   PageShell,
   PageShellDescription,
@@ -33,12 +34,13 @@ const DEFAULT_MODELS: Record<string, string> = {
 const AI_FALLBACK_COMPILE_MISSING_KEY = 'ai_fallback_compile_missing';
 const AI_FALLBACK_LOCATOR_FAILED_KEY = 'ai_fallback_locator_failed';
 
-type Panel = 'llm' | 'appearance' | 'replay';
+type Panel = 'llm' | 'appearance' | 'replay' | 'assistant';
 
-const PANELS: Array<{ key: Panel; labelKey: string; icon: 'beaker' | 'sparkles' | 'layers' }> = [
+const PANELS: Array<{ key: Panel; labelKey: string; icon: 'beaker' | 'sparkles' | 'layers' | 'plug' }> = [
   { key: 'llm', labelKey: 'settings:llmProvider', icon: 'beaker' },
   { key: 'appearance', labelKey: 'settings:panelAppearance', icon: 'sparkles' },
   { key: 'replay', labelKey: 'settings:panelReplay', icon: 'layers' },
+  { key: 'assistant', labelKey: 'settings:panelAssistant', icon: 'plug' },
 ];
 
 export default function Settings() {
@@ -298,6 +300,7 @@ export default function Settings() {
               </div>
             </div>
           )}
+        {panel === 'assistant' && <AssistantPanel />}
         </div>
       </div>
     </PageShell>
