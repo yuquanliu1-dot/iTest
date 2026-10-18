@@ -136,7 +136,7 @@ function McpServersSection() {
             {t('common:loading')}
           </div>
         ) : rows.length === 0 ? (
-          <EmptyState icon="plug" title={t('settings:mcpNone')} />
+          <EmptyState icon="plug" title={t('settings:mcpNone')} compact />
         ) : (
           rows.map((s) => (
             <div key={s.id} className="flex items-center gap-3 px-2 py-2">
@@ -360,7 +360,7 @@ function SkillsSection() {
             {t('common:loading')}
           </div>
         ) : rows.length === 0 ? (
-          <EmptyState icon="terminal" title={t('settings:skillNone')} />
+          <EmptyState icon="terminal" title={t('settings:skillNone')} compact />
         ) : (
           rows.map((s) => (
             <div key={s.id} className="flex items-center gap-3 px-2 py-2">
