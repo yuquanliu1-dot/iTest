@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { spawnSync } from 'node:child_process';
 import { logger } from '../logger.js';
+import { seedAssistantGuides } from './seed.js';
 
 const LOCK_ID = 0x4954455354; // 'ITEST'
 const LOCK_TIMEOUT_MS = 600_000; // 10min
@@ -30,6 +31,8 @@ export async function runPushWithLock(): Promise<void> {
     });
     if (r.error) throw r.error;
     if (r.status !== 0) process.exit(r.status ?? 1);
+    // seed：S1 常驻指令（REQ_DESIGN_METHOD / CASE_AUTHORING_FLOW）。幂等（ON CONFLICT DO NOTHING）。
+    await seedAssistantGuides(client);
   } finally {
     await client.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]);
     await client.end();

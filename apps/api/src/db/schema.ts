@@ -656,3 +656,42 @@ export const environmentObjects = pgTable('environment_objects', {
 }, (t) => ({
   envIdx: index('environment_objects_env_idx').on(t.environmentId),
 }));
+
+// ── AI 助手 Skills S1：常驻流程/知识指令（DB 驱动，热生效于新线程）──
+// scope 覆盖：version > project > global（加载期排序，见 pi/space/guides.ts loadActiveGuides）。
+export const assistantGuides = pgTable('assistant_guides', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  scope: varchar('scope', { length: 16 }).notNull(),
+  projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+  versionId: uuid('version_id').references(() => projectVersions.id, { onDelete: 'cascade' }),
+  kind: varchar('kind', { length: 16 }).notNull(),
+  body: text('body').notNull(),
+  lang: varchar('lang', { length: 8 }).notNull().default('any'),
+  sort: integer('sort').notNull().default(0),
+  enabled: boolean('enabled').notNull().default(true),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  enabledIdx: index('assistant_guides_enabled_idx').on(t.scope, t.enabled),
+}));
+
+// ── AI 助手 MCP 通用通道（DB 配置；会话创建时 registerMcpServer 加载）──
+export const assistantMcpServers = pgTable('assistant_mcp_servers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: varchar('name', { length: 120 }).notNull(),
+  kind: varchar('kind', { length: 8 }).notNull().default('stdio'),
+  command: text('command'),
+  args: jsonb('args').$type<string[]>(),
+  url: text('url'),
+  env: jsonb('env').$type<Record<string, string>>(),
+  exposure: varchar('exposure', { length: 12 }).notNull().default('codemode'),
+  scope: varchar('scope', { length: 16 }).notNull().default('global'),
+  projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+  versionId: uuid('version_id').references(() => projectVersions.id, { onDelete: 'cascade' }),
+  enabled: boolean('enabled').notNull().default(true),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  nameUq: unique('assistant_mcp_servers_name_uq').on(t.name),
+  enabledIdx: index('assistant_mcp_servers_enabled_idx').on(t.enabled),
+}));

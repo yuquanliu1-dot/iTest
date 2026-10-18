@@ -148,6 +148,10 @@ EXCEPTION WHEN duplicate_column THEN null;
 END $$;
 -- 暂存表（部分测试文件自建，此处补齐共用的 ai_stage_cases 以免各文件重复）
 CREATE TABLE ai_stage_cases (thread_id text NOT NULL, local_id text NOT NULL, version_id uuid NOT NULL, title varchar(200) NOT NULL, description text, priority varchar(20), url text, steps jsonb NOT NULL DEFAULT '[]', default_env_id uuid, expected_outcome text, dataset_local_id text, coverage_types jsonb DEFAULT '[]', staged_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_stage_cases_pk PRIMARY KEY(thread_id, local_id));
+CREATE TABLE assistant_guides (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), scope varchar(16) NOT NULL, project_id uuid REFERENCES projects(id) ON DELETE CASCADE, version_id uuid REFERENCES project_versions(id) ON DELETE CASCADE, kind varchar(16) NOT NULL, body text NOT NULL, lang varchar(8) NOT NULL DEFAULT 'any', sort integer NOT NULL DEFAULT 0, enabled boolean NOT NULL DEFAULT true, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
+CREATE INDEX assistant_guides_enabled_idx ON assistant_guides(scope, enabled);
+CREATE TABLE assistant_mcp_servers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(120) NOT NULL, kind varchar(8) NOT NULL DEFAULT 'stdio', command text, args jsonb, url text, env jsonb, exposure varchar(12) NOT NULL DEFAULT 'codemode', scope varchar(16) NOT NULL DEFAULT 'global', project_id uuid REFERENCES projects(id) ON DELETE CASCADE, version_id uuid REFERENCES project_versions(id) ON DELETE CASCADE, enabled boolean NOT NULL DEFAULT true, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT assistant_mcp_servers_name_uq UNIQUE(name));
+CREATE INDEX assistant_mcp_servers_enabled_idx ON assistant_mcp_servers(enabled);
 `;
 
 export interface SeedOrg {
