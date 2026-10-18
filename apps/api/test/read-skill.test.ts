@@ -47,4 +47,13 @@ describe('read_skill（S2）', () => {
     expect(s).toContain('read_skill');
     expect(s).not.toContain('正文EchoBody'); // catalog-only，正文靠 read_skill 取
   });
+
+  it('buildSkillsSectionContent：name/description 中的 XML 特殊字符被转义（防提示词注入）', () => {
+    const s = buildSkillsSectionContent([
+      { name: 'a"b<c>&d', description: 'say "hi" & <bye>', location: '/x' },
+    ]);
+    expect(s).toContain('name="a&quot;b&lt;c&gt;&amp;d"');
+    expect(s).toContain('description="say &quot;hi&quot; &amp; &lt;bye&gt;"');
+    expect(s).not.toContain('a"b<c>'); // 原始尖括号/引号不得原样出现
+  });
 });

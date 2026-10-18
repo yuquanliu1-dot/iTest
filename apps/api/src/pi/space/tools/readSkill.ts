@@ -21,7 +21,9 @@ export function skillsRootOf(workspaceDir: string): string {
   return path.join(workspaceDir, SKILL_DIR_NAME);
 }
 
-/** 读 skill 目录 SKILL.md + scripts 清单；目录/文件缺失或越界 → null。 */
+/** 读 skill 目录 SKILL.md + scripts 清单；目录/文件缺失或越界 → null。
+ *  边界是「词法」的：normalize+startsWith 只挡 ../ 与绝对路径逃逸。skill 目录若为指到 root 外的
+ *  符号链接，readFileSync/readdirSync 会跟随——但 .pi/skills 由宿主/项目挂载（非不可信用户），可接受。 */
 export function readSkillDir(root: string, skillName: string): { body: string; scripts: string[] } | null {
   if (path.isAbsolute(skillName)) return null;
   const normalizedRoot = path.normalize(root);

@@ -439,12 +439,22 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   const guides = await loadActiveGuides({ projectId: ctx.projectId, versionId: ctx.versionId, lang: ctx.lang });
   // S2 catalog：与 loader.additionalSkillPaths 同源目录（loadSkills 同步）。Skill.location 取 filePath
   // （Skill = { name, description, filePath, baseDir, sourceInfo, disableModelInvocation }）。
-  const skillsFiles = loadSkills({
-    cwd: workspaceDir,
-    agentDir: getAgentDir(),
-    skillPaths: [skillsRoot],
-    includeDefaults: false,
-  }).skills.map((s) => ({ name: s.name, description: s.description, location: s.filePath }));
+  // 与 buildSpaceSummary 同款容错：单条 skill 目录异常（权限/ELOOP）不能拖垮整个会话工厂。
+  let skillsFiles: Array<{ name: string; description: string; location: string }> = [];
+  try {
+    const res = loadSkills({
+      cwd: workspaceDir,
+      agentDir: getAgentDir(),
+      skillPaths: [skillsRoot],
+      includeDefaults: false,
+    });
+    if (res.diagnostics.length > 0) {
+      logger.warn({ versionId: ctx.versionId, diagnostics: res.diagnostics.map((d) => d.message) }, 'skills 加载有诊断（部分 skill 未装载）');
+    }
+    skillsFiles = res.skills.map((s) => ({ name: s.name, description: s.description, location: s.filePath }));
+  } catch (e) {
+    logger.warn({ err: e, versionId: ctx.versionId }, 'skills 加载失败;继续无 skills 段');
+  }
   // loader 的 cwd 与 session 工作目录都指向版本独立工作空间（仓库在 ./repo 子目录），
   // 让 AI 对自身所在位置有正确认知，同时避免写入污染仓库检出。
   const loader = new DefaultResourceLoader({
