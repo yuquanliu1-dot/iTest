@@ -5,7 +5,7 @@
  * callerUser: 用于 projectVisibility 校验。null = 调度器调用，跳过用户级校验（计划本身
  * 已存在并被启用即可）。req.user 路径下传 { userId }，由 plansRoute / middleware 校验。
  */
-import { and, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { environmentObjects, executionPlans, planRuns } from '../db/schema.js';
 import { findIncognitoCaseIds, runPlanAsync } from './runPlan.js';
@@ -39,7 +39,7 @@ async function findIncognitoConflicts(planId: string): Promise<void> {
   }
 }
 
-/** 登录准备已开启但未指定登录用例 → 检查环境是否有登录凭据;两者都没有才报错。 */
+/** 登录准备已开启但未指定登录用例 → 检查环境默认 web 服务对象是否有内嵌登录凭据(0041 起 login 并入 web)。 */
 async function assertLoginPrepareHasSource(plan: {
   loginPrepareEnabled: boolean;
   loginCaseId: string | null;
@@ -50,11 +50,16 @@ async function assertLoginPrepareHasSource(plan: {
   if (!plan.environmentId) {
     throw new HttpError(422, 'login_case_required', '登录准备已开启:需选择登录用例,或在计划环境中配置登录凭据');
   }
-  const objs = await db.select({ id: environmentObjects.id }).from(environmentObjects)
-    .where(and(eq(environmentObjects.environmentId, plan.environmentId), eq(environmentObjects.objectType, 'login')))
+  // 与 resolveEnv 的 loginCfg 判据逐字段对齐:有效默认 web(isDefault→最早)payload 需 user 非空 + secret 三元组齐全。
+  const objs = await db.select({ payload: environmentObjects.payload }).from(environmentObjects)
+    .where(and(eq(environmentObjects.environmentId, plan.environmentId), eq(environmentObjects.objectType, 'web')))
+    .orderBy(desc(environmentObjects.isDefault), asc(environmentObjects.createdAt), asc(environmentObjects.id))
     .limit(1);
-  if (objs.length === 0) {
-    throw new HttpError(422, 'login_case_required', '登录准备已开启:需选择登录用例,或在计划环境中配置登录凭据');
+  const p = (objs[0]?.payload ?? {}) as { user?: unknown; secret?: { c?: unknown; i?: unknown; t?: unknown } };
+  const hasCred = typeof p.user === 'string' && p.user.length > 0
+    && typeof p.secret?.c === 'string' && typeof p.secret?.i === 'string' && typeof p.secret?.t === 'string';
+  if (!hasCred) {
+    throw new HttpError(422, 'login_case_required', '登录准备已开启:需选择登录用例,或在计划环境的默认 web 服务对象中配置登录凭据(用户名+密码)');
   }
 }
 

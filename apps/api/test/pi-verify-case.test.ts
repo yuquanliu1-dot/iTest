@@ -247,18 +247,18 @@ async function seedLoginObject(): Promise<void> {
     `INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '登录环境', true) RETURNING id`,
     [projectId],
   );
+  // 0041 起登录凭据并入默认 web 服务对象:user/loginUrl/secret 内嵌 payload
   const payload = {
+    name: 'web',
+    scheme: 'http',
+    host: 'env.example',
     user: 'qa01',
-    loginUrl: 'http://env.example/login',
+    loginUrl: '/login',
     secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') },
   };
   await pool.query(
-    `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'login', '默认', $2::jsonb, true)`,
+    `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', '默认', $2::jsonb, true)`,
     [env.rows[0]!.id, JSON.stringify(payload)],
-  );
-  await pool.query(
-    `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', '默认', '{"name":"web","scheme":"http","host":"env.example"}', true)`,
-    [env.rows[0]!.id],
   );
 }
 

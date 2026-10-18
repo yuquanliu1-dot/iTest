@@ -149,10 +149,13 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     if (!row) throw new HttpError(404, 'not_found', `stage environment ${sel.localId} 已不存在`);
     const insertedEnv = await environmentsSvc.createEnvironment(pid, {
       name: row.name,
-      objects: ((row.objects as unknown[]) ?? []).map((o) => {
-        const x = o as { objectType: 'db' | 'syslog' | 'login' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean };
-        return { objectType: x.objectType, label: x.label, payload: x.payload, isDefault: x.isDefault };
-      }),
+      objects: ((row.objects as unknown[]) ?? [])
+        // 0041 起 login 已并入 web;残留的暂存 login 草稿跳过(否则落成新代码永不读取的孤儿对象)
+        .filter((o) => (o as { objectType?: string }).objectType !== 'login')
+        .map((o) => {
+          const x = o as { objectType: 'db' | 'syslog' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean };
+          return { objectType: x.objectType, label: x.label, payload: x.payload, isDefault: x.isDefault };
+        }),
     }, creatorId);
     // staged.baseUrl 绝对地址 → 派生默认 web 服务对象(尽力而为:解析失败跳过,不阻塞 save)。
     // 用例 url 相对化后靠 web 对象 origin 拼接,老数据仍在 baseUrl 的暂存环境需要这个兜底。

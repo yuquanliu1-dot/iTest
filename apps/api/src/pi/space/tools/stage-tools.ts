@@ -56,7 +56,7 @@ export interface StagedEnvironment {
   localId: string;
   name: string;
   baseUrl?: string | null;
-  objects: Array<{ objectType: 'db' | 'syslog' | 'login' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean }>;
+  objects: Array<{ objectType: 'db' | 'syslog' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean }>;
 }
 export interface StagedPlan {
   localId: string;
@@ -397,7 +397,7 @@ const StageEnvironmentInput = z.object({
   name: z.string().min(1).max(120),
   baseUrl: z.string().max(2000).nullable().optional(),
   objects: z.array(z.object({
-    objectType: z.enum(['db', 'syslog', 'login', 'web']),
+    objectType: z.enum(['db', 'syslog', 'web']),
     label: z.string().max(120).optional(),
     payload: z.record(z.unknown()),
     isDefault: z.boolean().optional(),
@@ -455,7 +455,7 @@ export const STAGE_PROMPT_GUIDELINES = [
   '数据驱动回放（同一流程跑多组数据）用 stage_dataset 生成数据集：列名即回放变量 {{列名}},行间差异（输入值/断言文案/预期提示）写成列值;配套的用例用 stage_case 的 datasetLocalId 绑定（同一批保存时数据集先落库并自动绑定）。用例步骤里 fill 的 value / 断言文案直接写 {{列名}}。',
   '步骤里的 {{变量名}} 必须与数据集列名逐字一致（列名只能字母/下划线开头,中文列名非法）——stage_case 响应附「变量体检」,引用未定义/不一致变量时请立即修正后重发。',
   '每条用例都要用 coverageTypes 声明它实际覆盖的测试类型（用户勾选的覆盖要求只是上下文的一句话,勾了不等于你覆盖了）——照实标,不要把一条「登录成功」同时标成 functional+security。响应附「覆盖回执」点名当前暂存区各类分布,分布为 ×0 说明该类确实没人切,确有遗漏就继续补。',
-  '登录步骤的凭据不要写明文：用户名输入框 fill 的 value 写字面量 __ITEST_USERNAME__、密码输入框写字面量 __ITEST_PASSWORD__,回放时平台自动替换为「项目设置→测试环境」里配的 login 凭据真实值（环境未配 login 则该步报 env-missing 失败,不会静默填字面量）。这与数据集变量 {{列名}} 的分工：数据集管同流程多组数据的差异,__ITEST_*__ 只指向环境的单一登录凭据。verify_case / solidify_case 的 AI 相也认同一套占位符,两相行为一致。除这三个字面量外不要臆造别的 __ITEST_xxx__。',
+  '登录步骤的凭据不要写明文：用户名输入框 fill 的 value 写字面量 __ITEST_USERNAME__、密码输入框写字面量 __ITEST_PASSWORD__,回放时平台自动替换为测试环境默认 web 服务里配置的应用登录凭据真实值(环境未配置则报 env-missing 失败,不会静默填字面量)。这与数据集变量 {{列名}} 的分工:数据集管同流程多组数据的差异,__ITEST_*__ 只指向环境的单一登录凭据。verify_case / solidify_case 的 AI 相也认同一套占位符,两相行为一致。除这三个字面量外不要臆造别的 __ITEST_xxx__。',
   '数据集敏感列（密码/密钥等）标 sensitive:true,单元格值仍以明文给出（落库时自动加密,预览对用户可见）;已有数据集的行值/敏感值对你永不可见（list_datasets 仅结构）。修改已有数据集暂不支持;给已有用例绑定已落库数据集走 stage_case_op update_case(patch.datasetId)。',
   '用例创建走「先讨论、再暂存、后编译」三段式（强约束）：(1) 拿到需求先把自然语言步骤草稿直接贴在对话里与用户讨论，不要立刻 stage_case；(2) 讨论中用户要求实测时，直接调 verify_case(caseId=草稿 localId)——草稿步骤是自然语言时它走 AI 相执行（看截图临场操作），全程 live view 视频流给用户看；(3) 用户确认步骤后才调 stage_case 暂存，步骤保持自然语言形态，不要急着编机械 DSL；(4) 用户勾选保存后，你主动问「是否需要 solidify 固化为机械步骤」，用户同意再调 solidify_case → verify_case 验收。',
   'stage_case 的 step 默认不输出 compiled 字段（省略即可）——草稿期步骤就是自然语言 instruction，回放/实测时由 AI 看截图临场执行（视觉模式）。仅当用户明确要求「直接给我可机械执行的 DSL」、或用例已稳定且你判断可一次到位时，才在 stage 阶段直接给 compiled。需要表达「整条交给 AI 临场做」时也可显式写 [{"kind":"aiTask","instruction":"..."}]（不是 null）。',
@@ -620,7 +620,7 @@ export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
         name: Type.String({ minLength: 1, maxLength: 120 }),
         baseUrl: Type.Optional(Type.Union([Type.String({ maxLength: 2000 }), Type.Null()])),
         objects: Type.Optional(Type.Array(Type.Object({
-          objectType: Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('login'), Type.Literal('web')]),
+          objectType: Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('web')]),
           label: Type.Optional(Type.String({ maxLength: 120 })),
           payload: Type.Record(Type.String(), Type.Unknown()),
           isDefault: Type.Optional(Type.Boolean()),

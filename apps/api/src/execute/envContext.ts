@@ -78,7 +78,7 @@ export interface SyslogCtx {
   password?: string;
 }
 
-/** 被测系统的登录凭据（environment_objects objectType=login）。 */
+/** 被测系统的登录凭据(0041 起由默认 web 服务对象 payload 派生)。 */
 export interface LoginCtx {
   user: string;
   password: string;
@@ -132,16 +132,15 @@ interface SyslogPayload {
   authType?: 'key' | 'password';
   secret?: { c?: string | null; i?: string | null; t?: string | null } | null;
 }
-interface LoginPayload {
-  user?: string | null;
-  loginUrl?: string | null;
-  secret?: { c?: string | null; i?: string | null; t?: string | null } | null;
-}
+/** web 服务 payload(0041 起内嵌应用登录凭据:user / loginUrl / secret)。secret 为 AES-256-GCM 三元组。 */
 interface WebPayload {
   name?: string | null;
   scheme?: string | null;
   host?: string | null;
   port?: number | null;
+  user?: string | null;
+  loginUrl?: string | null;
+  secret?: { c?: string | null; i?: string | null; t?: string | null } | null;
 }
 
 export function safeDecrypt(secret: { c?: string | null; i?: string | null; t?: string | null }): string {
@@ -232,10 +231,12 @@ export async function resolveEnv(
     }
   }
 
+  // 环境级登录凭据 = 默认 web 服务内嵌的凭证(pick('web') 与 resolveWebOrigin() 空 ref 同选择逻辑)。
+  // 凭证宿主即默认 web,baseUrl === 其自身 origin,相对 loginUrl 拼接(loginPrepare)天然正确。
   let loginCfg: EnvCtx['login'];
-  const loginObj = pick('login');
-  if (loginObj) {
-    const p = (loginObj.payload ?? {}) as LoginPayload;
+  const webObj = pick('web');
+  if (webObj) {
+    const p = (webObj.payload ?? {}) as WebPayload;
     if (p.user && p.secret?.c && p.secret?.i && p.secret?.t) {
       loginCfg = { user: p.user, password: safeDecrypt(p.secret), loginUrl: p.loginUrl ?? null };
     }

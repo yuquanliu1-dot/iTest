@@ -156,6 +156,50 @@ describe('plan execution extras', () => {
     expect(r.status).toBe(422);
   });
 
+  // 0041 起登录凭据并入 web 对象:enqueue 的自登录源判定查「计划环境的默认 web 服务对象」内嵌凭证。
+  it('login prepare no caseId:环境默认 web 对象带内嵌凭据 → run 通过 enqueue（200）', async () => {
+    const { projectId, versionId } = await seedProject(pool);
+    const { encrypt } = await import('../src/lib/secret-crypto.js');
+    process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
+    const enc = encrypt('p@ss');
+    const env = await pool.query(
+      `INSERT INTO test_environments(project_id, name) VALUES ($1, 'E') RETURNING id`, [projectId],
+    );
+    await pool.query(
+      `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', '默认', $2::jsonb, true)`,
+      [env.rows[0]!.id, JSON.stringify({
+        name: 'web', scheme: 'http', host: 'env.example', user: 'u',
+        secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') },
+      })],
+    );
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    await request(app).patch(`/api/plans/${plan.body.id}`).send({
+      environmentId: env.rows[0]!.id as string,
+      loginPrepare: { enabled: true },
+    });
+    const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
+    expect(r.status).toBe(200);
+  }, 30_000);
+
+  it('login prepare no caseId:环境默认 web 对象无内嵌凭据 → run 422', async () => {
+    const { projectId, versionId } = await seedProject(pool);
+    const env = await pool.query(
+      `INSERT INTO test_environments(project_id, name) VALUES ($1, 'E') RETURNING id`, [projectId],
+    );
+    await pool.query(
+      `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', '默认', '{"name":"web","scheme":"http","host":"env.example"}', true)`,
+      [env.rows[0]!.id],
+    );
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    await request(app).patch(`/api/plans/${plan.body.id}`).send({
+      environmentId: env.rows[0]!.id as string,
+      loginPrepare: { enabled: true },
+    });
+    const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
+    expect(r.status).toBe(422);
+    expect(r.body.error).toBe('login_case_required');
+  }, 30_000);
+
   it('GET /executions returns mixed entries with kind=case or kind=plan', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });

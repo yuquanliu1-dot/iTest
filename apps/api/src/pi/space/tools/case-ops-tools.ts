@@ -104,7 +104,7 @@ export const STAGE_CASE_OP_GUIDELINES = [
   'stage_case_op 的 action 与字段一一对应：update_case {caseId, patch={...UpdateCasePatch 形状字段}}、delete_case {caseId}、move_case {caseId, targetGroupId}、update_step {stepId, caseId, instruction?, compiled?}、insert_step {caseId, instruction, afterOrder?, compiled?}、delete_step {stepId, caseId}、move_step {caseId, stepIds}。move_step 的 stepIds 必须恰好覆盖该 case 全部步骤并按目标顺序排列。',
   'localId 由你（LLM）用 UUID v4 自生成；同 localId 重复 stage 是幂等 UPSERT，可放心重发。',
   '用例绑定/解绑数据集走 update_case(patch.datasetId)（跨项目数据集会被拒绝）；数据集列名即回放初始变量 {{列名}}，insert_step/update_step 响应会附「变量体检」反馈，引用未定义变量时请修正 compiled 或先确认数据集列名（manage_cases list_datasets / get）。',
-  '登录步骤的凭据不要写明文：用户名输入框 fill 的 value 写字面量 __ITEST_USERNAME__、密码输入框写字面量 __ITEST_PASSWORD__，回放与 AI 相（verify_case/solidify_case）都会自动替换为环境配置的 login 凭据；环境未配 login 则该步报 env-missing 失败。除这两个字面量外不要臆造别的 __ITEST_xxx__。',
+  '登录步骤的凭据不要写明文：用户名输入框 fill 的 value 写字面量 __ITEST_USERNAME__、密码输入框写字面量 __ITEST_PASSWORD__，回放与 AI 相（verify_case/solidify_case）都会自动替换为环境默认 web 服务配置的登录凭据；环境未配置则该步报 env-missing 失败。除这两个字面量外不要臆造别的 __ITEST_xxx__。',
   '改 expectedOutcome 前先分清本用例是「观察型」还是「变更型」:观察型(进页面查看列表状态)只配「页面可达/数据可见」断言,把 expectedOutcome 改成业务结果(如"自动启动处置成功")会让 verify_case 终态判定必然失败,而你唯一的过关手段就成了弱化预期——把用例改成什么都测不出来。响应里的「预期体检」点名了这种不自洽,修正步骤(补造数步骤)或如实改预期,两者都要真改。',
 ];
 

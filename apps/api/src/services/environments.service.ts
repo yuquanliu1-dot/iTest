@@ -12,7 +12,7 @@ import { encrypt } from '../lib/secret-crypto.js';
 import { attachCreators, attachCreator } from '../lib/creator.js';
 
 export const OBJECT_MASK = '••••••••';
-const OBJECT_TYPES = ['db', 'syslog', 'login', 'web'] as const;
+const OBJECT_TYPES = ['db', 'syslog', 'web'] as const;
 export type ObjectType = (typeof OBJECT_TYPES)[number];
 
 /** 出参掩码:payload.secret(AES 三元组)→ OBJECT_MASK,同时输出 hasSecret 标志位
@@ -29,7 +29,8 @@ export function maskObjectPayload(row: typeof environmentObjects.$inferSelect) {
  * 入参归一:payload.password / payload.privateKey 明文 → 加密写入 payload.secret;
  * 未提供(留空)→ 沿用 prev 旧密文(不覆盖语义)。入参中的 secret 字段一律丢弃
  * (含 OBJECT_MASK 占位串——这是脱敏值,绝不能当作真值写回)。
- * syslog 按 authType 决定加密哪个明文字段(password / privateKey);db / login 用 password。
+ * syslog 按 authType 决定加密哪个明文字段(password / privateKey);db / web 用 password。
+ * 0041 起 web 携带应用登录凭据:user / loginUrl 原样透传,password 加密落 payload.secret。
  */
 export function normalizeObjectPayload(
   objectType: ObjectType,
@@ -78,6 +79,14 @@ async function assertWebPayload(
   }
   if (payload.port !== undefined && payload.port !== null && !Number.isInteger(payload.port)) {
     throw new HttpError(400, 'invalid_web_port', 'web 服务 port 必须是整数');
+  }
+  // 0041 起 web 可携带应用登录凭据(一一对应):user/loginUrl/password 可选,password 为瞬时明文,
+  // 交由 normalizeObjectPayload 加密落 payload.secret,这里只做类型轻校验。
+  for (const k of ['user', 'loginUrl', 'password'] as const) {
+    const v = payload[k];
+    if (v !== undefined && v !== null && typeof v !== 'string') {
+      throw new HttpError(400, 'invalid_web_credentials', `web 服务 ${k} 必须是字符串`);
+    }
   }
   if (name !== null) {
     const rows = await tx.select({ id: environmentObjects.id, payload: environmentObjects.payload }).from(environmentObjects)

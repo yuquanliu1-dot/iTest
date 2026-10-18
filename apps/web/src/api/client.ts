@@ -202,7 +202,7 @@ export const api = {
       projectId: string,
       body: {
         name: string;
-        objects?: Array<{ objectType: 'db' | 'syslog' | 'login' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean }>;
+        objects?: Array<{ objectType: 'db' | 'syslog' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean }>;
       },
     ) =>
       request<Environment>(`/projects/${projectId}/environments`, {
@@ -218,7 +218,7 @@ export const api = {
       ),
     createObject: (
       envId: string,
-      body: { objectType: 'db' | 'syslog' | 'login' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean },
+      body: { objectType: 'db' | 'syslog' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean },
     ) =>
       request<EnvironmentObject>(`/environments/${envId}/objects`, {
         method: 'POST',
@@ -614,10 +614,10 @@ export interface Creator {
 export interface EnvironmentObject {
   id: string;
   environmentId: string;
-  objectType: 'db' | 'syslog' | 'login' | 'web';
+  objectType: 'db' | 'syslog' | 'web';
   label: string;
   /** db: { host, port, dbName, user, password?, secret? }；syslog: { host, user, sshPort, filePath, privateKey?, secret? }；
-   *  login: { user, loginUrl?, password?, secret? }；web: { name?, scheme, host, port? }。
+   *  web: { name?, scheme, host, port?, user?, loginUrl?, password?, secret? }（0041 起 web 内嵌应用登录凭据）。
    *  出参里 secret 为 '••••••••' 掩码；入参传明文 password/privateKey，留空不覆盖旧密文。 */
   payload: Record<string, unknown>;
   /** 后端基于 DB 行加上的标志：原 payload.secret 是否存在；前端用此判定"已配置凭据"，不依赖反向解析被 mask 的 secret。 */
@@ -877,7 +877,7 @@ export interface StagedStageScenario {
   stagedAt: string;
 }
 export interface StagedEnvironmentObject {
-  objectType: 'db' | 'syslog' | 'login';
+  objectType: 'db' | 'syslog' | 'web';
   label?: string;
   payload: Record<string, unknown>;
   isDefault?: boolean;
