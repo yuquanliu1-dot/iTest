@@ -22,12 +22,12 @@ const Actions = z.object({
   name: z.string().min(1).max(120).optional(),
   isDefault: z.boolean().optional(),
   objects: z.array(z.object({
-    objectType: z.enum(['db', 'syslog', 'login', 'web']),
+    objectType: z.enum(['db', 'syslog', 'web']),
     label: z.string().max(120).optional(),
     payload: z.record(z.unknown()),
     isDefault: z.boolean().optional(),
   })).max(10).optional(),
-  objectType: z.enum(['db', 'syslog', 'login', 'web']).optional(), // set_secret 用
+  objectType: z.enum(['db', 'syslog', 'web']).optional(), // set_secret 用
   label: z.string().max(120).optional(), // set_secret 用(缺省「默认」)
   value: z.string().min(1).max(8000).optional(), // set_secret 明文(仅进加密,不进任何输出)
 });
@@ -37,25 +37,25 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
     {
       name: 'manage_environments',
       description:
-        '测试环境管理。action=list(项目环境全集,对象凭据已掩码)| get(environmentId)| upsert(新建或更新环境与对象字段:environmentId 缺省=新建需 name;objects 按 objectType+label 合并;payload 禁带 password/privateKey)| set_secret(environmentId+objectType+value,需用户确认,值不回显)| delete(environmentId,需用户确认)。 web 对象 payload:{"name":"backend"(可选,英文标识,用例可绑定),"scheme":"http|https","host":"1.2.3.4","port":8080(可选)}。一个环境可有多个 web 服务(如前端+后端在不同主机),其中至多一个 isDefault。',
+        '测试环境管理。action=list(项目环境全集,对象凭据已掩码)| get(environmentId)| upsert(新建或更新环境与对象字段:environmentId 缺省=新建需 name;objects 按 objectType+label 合并;payload 禁带 password/privateKey)| set_secret(environmentId+objectType+value,需用户确认,值不回显)| delete(environmentId,需用户确认)。 web 对象 payload:{"name":"backend"(可选,英文标识,用例可绑定),"scheme":"http|https","host":"1.2.3.4","port":8080(可选),"user":"admin"(可选,应用登录凭据用户名),"loginUrl":"/login"(可选,登录页相对或绝对路径,可空=计划检测页直接填表)}。一个环境可有多个 web 服务(如前端+后端在不同主机),其中至多一个 isDefault;每个 web 服务可携带自己的应用登录凭据。',
       parameters: Type.Object({
         action: Type.Union([Type.Literal('list'), Type.Literal('get'), Type.Literal('upsert'), Type.Literal('set_secret'), Type.Literal('delete')]),
         environmentId: Type.Optional(Type.String()),
         name: Type.Optional(Type.String()),
         isDefault: Type.Optional(Type.Boolean()),
         objects: Type.Optional(Type.Array(Type.Object({
-          objectType: Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('login'), Type.Literal('web')]),
+          objectType: Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('web')]),
           label: Type.Optional(Type.String()),
           payload: Type.Record(Type.String(), Type.Unknown()),
           isDefault: Type.Optional(Type.Boolean()),
         }), { maxItems: 10 })),
-        objectType: Type.Optional(Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('login'), Type.Literal('web')])),
+        objectType: Type.Optional(Type.Union([Type.Literal('db'), Type.Literal('syslog'), Type.Literal('web')])),
         label: Type.Optional(Type.String()),
         value: Type.Optional(Type.String()),
       }),
       promptGuidelines: [
-        'db 对象 payload 常用字段:host/port/dbName/user;syslog 对象:host/sshPort/user/filePath/authType("key"|"password");login 对象(应用登录凭据):user/loginUrl(登录页地址,可空=计划检测页),密码用 set_secret 设置。',
-        '凭据(db/syslog 的 password/privateKey、login 的 password)严禁放进 upsert 的 payload:先 upsert 其它字段,再单独调 set_secret(会请用户确认)。',
+        'db 对象 payload 常用字段:host/port/dbName/user;syslog 对象:host/sshPort/user/filePath/authType("key"|"password");web 对象可携带应用登录凭据:user/loginUrl(登录页地址,可空=计划检测页),密码用 set_secret 设置。',
+        '凭据(db/syslog 的 password/privateKey、web 的 password)严禁放进 upsert 的 payload:先 upsert 其它字段,再单独调 set_secret(会请用户确认)。',
         'set_secret 的 value 是明文凭据,只会被加密保存,不会出现在任何输出里;用户拒绝即放弃。',
       ],
       execute: async (input) => {

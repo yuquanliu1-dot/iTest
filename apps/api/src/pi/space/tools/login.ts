@@ -42,7 +42,7 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
         try {
           envCtx = await resolveEnv({ versionId: ctx.versionId }, { expectedProjectId: ctx.projectId });
           if (!envCtx.login) {
-            return { ok: false, error: '当前默认环境未配置 login 凭据' };
+            return { ok: false, error: '当前默认环境未配置登录凭据(默认 web 服务未填用户名/密码)' };
           }
           return {
             ok: true,
@@ -63,7 +63,7 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
     {
       name: 'perform_login',
       description:
-        '使用当前版本/项目默认环境的 login 凭据在被测系统执行登录（AI 驱动浏览器：登录页判断、验证码识别、弹窗处理均由模型自主完成），返回 storageState（JSON 字符串）。后续可将 storageState 传给 inspect_page 以抓取登录态页面；凭据在服务端以占位符注入，不会出现在输出中。',
+        '使用当前版本/项目默认环境(该环境默认 web 服务)的应用登录凭据在被测系统执行登录（AI 驱动浏览器：登录页判断、验证码识别、弹窗处理均由模型自主完成），返回 storageState（JSON 字符串）。后续可将 storageState 传给 inspect_page 以抓取登录态页面；凭据在服务端以占位符注入，不会出现在输出中。',
       parameters: Type.Object({
         url: Type.Optional(Type.String({ minLength: 8, maxLength: 2000 })),
       }),
@@ -76,7 +76,7 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
         try {
           envCtx = await resolveEnv({ versionId: ctx.versionId }, { expectedProjectId: ctx.projectId });
           if (!envCtx.login) {
-            return { ok: false, error: '当前默认环境未配置 login 凭据' };
+            return { ok: false, error: '当前默认环境未配置登录凭据(默认 web 服务未填用户名/密码)' };
           }
           const targetUrl = url || (envCtx.login?.loginUrl?.startsWith('/') ? `${envCtx.baseUrl ?? ''}${envCtx.login.loginUrl}` : envCtx.login?.loginUrl ?? '') || envCtx.baseUrl || '';
           if (!targetUrl) {

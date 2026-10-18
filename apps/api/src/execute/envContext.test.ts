@@ -253,13 +253,14 @@ describe('resolveEnv', () => {
     await env.close();
   });
 
-  it('builds login ctx from default login object payload', async () => {
+  it('builds login ctx from default web object embedded credential', async () => {
     const enc = encrypt('p@ss');
     mockTables({
       test_environments: [ENV_ROW],
       environment_objects: [{
-        id: 'obj-login', environmentId: 'env-1', objectType: 'login', label: '默认', isDefault: true,
+        id: 'obj-web', environmentId: 'env-1', objectType: 'web', label: '默认', isDefault: true,
         payload: {
+          name: 'frontend', scheme: 'https', host: 'staging.example.com',
           user: 'tom', loginUrl: 'https://staging.example.com/login',
           secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') },
         },
@@ -271,12 +272,12 @@ describe('resolveEnv', () => {
     await env.close();
   });
 
-  it('login object without secret → login undefined', async () => {
+  it('web object without secret → login undefined', async () => {
     mockTables({
       test_environments: [ENV_ROW],
       environment_objects: [{
-        id: 'obj-login', environmentId: 'env-1', objectType: 'login', label: '默认', isDefault: true,
-        payload: { user: 'tom' },
+        id: 'obj-web', environmentId: 'env-1', objectType: 'web', label: '默认', isDefault: true,
+        payload: { name: 'frontend', scheme: 'https', host: 'staging.example.com', user: 'tom' },
       }],
       project_versions: [],
     });
@@ -284,18 +285,37 @@ describe('resolveEnv', () => {
     expect(env.login).toBeUndefined();
   });
 
-  it('login without loginUrl → loginUrl null', async () => {
+  it('web credential without loginUrl → loginUrl null', async () => {
     const enc = encrypt('p@ss');
     mockTables({
       test_environments: [ENV_ROW],
       environment_objects: [{
-        id: 'obj-login', environmentId: 'env-1', objectType: 'login', label: '默认', isDefault: true,
-        payload: { user: 'tom', secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') } },
+        id: 'obj-web', environmentId: 'env-1', objectType: 'web', label: '默认', isDefault: true,
+        payload: {
+          name: 'frontend', scheme: 'https', host: 'staging.example.com', user: 'tom',
+          secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') },
+        },
       }],
       project_versions: [],
     });
     const env = await resolveEnv({ caseEnvId: 'env-1' });
     expect(env.login).toEqual({ user: 'tom', password: 'p@ss', loginUrl: null });
+    await env.close();
+  });
+
+  it('multiple web objects → login 取默认 web 的内嵌凭据', async () => {
+    const encA = encrypt('admin-pass');
+    const encB = encrypt('backend-pass');
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [
+        { id: 'obj-web-fe', environmentId: 'env-1', objectType: 'web', label: '前端', isDefault: true, payload: { name: 'frontend', scheme: 'https', host: 'fe.example.com', user: 'fe-admin', secret: { c: encA.ciphertext.toString('base64'), i: encA.iv.toString('base64'), t: encA.tag.toString('base64') } } },
+        { id: 'obj-web-be', environmentId: 'env-1', objectType: 'web', label: '后端', isDefault: false, payload: { name: 'backend', scheme: 'https', host: 'be.example.com', user: 'be-admin', secret: { c: encB.ciphertext.toString('base64'), i: encB.iv.toString('base64'), t: encB.tag.toString('base64') } } },
+      ],
+      project_versions: [],
+    });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.login).toEqual({ user: 'fe-admin', password: 'admin-pass', loginUrl: null });
     await env.close();
   });
 });

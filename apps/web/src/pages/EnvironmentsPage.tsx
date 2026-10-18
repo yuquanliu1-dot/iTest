@@ -29,7 +29,7 @@ interface EnvFormState {
 }
 const EMPTY_ENV_FORM: EnvFormState = { open: false, mode: 'create', id: null, name: '' };
 
-type ObjType = 'db' | 'syslog' | 'login' | 'web';
+type ObjType = 'db' | 'syslog' | 'web';
 interface ObjFormState {
   open: boolean;
   envId: string;
@@ -91,19 +91,16 @@ function buildObjectPayload(f: ObjFormState): Record<string, unknown> {
   if (f.objectType === 'db') {
     return dbFormConn(f);
   }
-  if (f.objectType === 'login') {
-    return {
-      user: f.user.trim(),
-      ...(f.loginUrl.trim() ? { loginUrl: f.loginUrl.trim() } : {}),
-      ...(f.password ? { password: f.password } : {}),
-    };
-  }
   if (f.objectType === 'web') {
+    // 0041 起 web 内嵌应用登录凭据(user/loginUrl/password 留空由后端保留旧密文)
     return {
       ...(f.webName.trim() ? { name: f.webName.trim() } : {}),
       scheme: f.webScheme,
       host: f.host.trim(),
       ...(f.port.trim() ? { port: Number(f.port) } : {}),
+      ...(f.user.trim() ? { user: f.user.trim() } : {}),
+      ...(f.loginUrl.trim() ? { loginUrl: f.loginUrl.trim() } : {}),
+      ...(f.password ? { password: f.password } : {}),
     };
   }
   return syslogFormConn(f);
@@ -114,11 +111,8 @@ function objectSummary(o: EnvironmentObject): string {
   if (o.objectType === 'db') {
     return [p.host, p.port != null ? String(p.port) : null, p.dbName].filter(Boolean).join(':');
   }
-  if (o.objectType === 'login') {
-    return String(p.user ?? '');
-  }
   if (o.objectType === 'web') {
-    return [`${p.scheme}://${p.host}`, p.port != null ? String(p.port) : null].filter(Boolean).join(':');
+    return [p.user ? `${p.user}@` : null, `${p.scheme}://${p.host}`, p.port != null ? String(p.port) : null].filter(Boolean).join(':');
   }
   return [p.host, p.filePath].filter(Boolean).join(' · ');
 }
@@ -349,12 +343,12 @@ export default function EnvironmentsPage() {
                       style={{ borderColor: 'var(--muted)' }}
                     >
                       <Icon
-                        name={o.objectType === 'db' ? 'database' : o.objectType === 'login' ? 'user' : o.objectType === 'web' ? 'globe' : 'terminal'}
+                        name={o.objectType === 'db' ? 'database' : o.objectType === 'web' ? 'globe' : 'terminal'}
                         size={12}
                         style={{ color: 'var(--muted-foreground)', flexShrink: 0 }}
                       />
                       <span className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)' }}>
-                        {o.objectType === 'db' ? t('environments:objTypes.db') : o.objectType === 'login' ? t('environments:objTypes.login') : o.objectType === 'web' ? t('environments:objTypes.web') : 'syslog'}
+                        {o.objectType === 'db' ? t('environments:objTypes.db') : o.objectType === 'web' ? t('environments:objTypes.web') : 'syslog'}
                         {o.label ? ` · ${o.label}` : ''}
                       </span>
                       {o.isDefault && (
@@ -398,7 +392,7 @@ export default function EnvironmentsPage() {
                           icon="trash"
                           title={t('environments:deleteObj')}
                           tone="destructive"
-                          onClick={() => setConfirmObj({ id: o.id, label: `${o.objectType === 'db' ? t('environments:objTypes.db') : o.objectType === 'login' ? t('environments:objTypes.login') : o.objectType === 'web' ? t('environments:objTypes.web') : 'syslog'}${o.label ? ` · ${o.label}` : ''}` })}
+                          onClick={() => setConfirmObj({ id: o.id, label: `${o.objectType === 'db' ? t('environments:objTypes.db') : o.objectType === 'web' ? t('environments:objTypes.web') : 'syslog'}${o.label ? ` · ${o.label}` : ''}` })}
                         />
                       </div>
                     </div>
@@ -421,15 +415,6 @@ export default function EnvironmentsPage() {
                     >
                       <Icon name="plus" size={12} />
                       syslog
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openObjForm(env, 'login', null)}
-                      className="flex items-center gap-1.5 text-[12px]"
-                      style={{ background: 'transparent', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
-                    >
-                      <Icon name="plus" size={12} />
-                      {t('environments:objTypes.login')}
                     </button>
                     <button
                       type="button"
@@ -476,7 +461,7 @@ export default function EnvironmentsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {t(objForm.object ? 'environments:form.modeEdit' : 'environments:form.modeAdd')}{objForm.objectType === 'db' ? ` ${t('environments:objTypes.db')}` : objForm.objectType === 'login' ? ` ${t('environments:objTypes.login')}` : objForm.objectType === 'web' ? ` ${t('environments:objTypes.web')}` : ' syslog'} · {objForm.envName}
+              {t(objForm.object ? 'environments:form.modeEdit' : 'environments:form.modeAdd')}{objForm.objectType === 'db' ? ` ${t('environments:objTypes.db')}` : objForm.objectType === 'web' ? ` ${t('environments:objTypes.web')}` : ' syslog'} · {objForm.envName}
             </DialogTitle>
           </DialogHeader>
           <div className="flex-1 min-h-0 px-5 py-4 overflow-y-auto flex flex-col gap-3">
@@ -504,26 +489,6 @@ export default function EnvironmentsPage() {
                   onChange={(e) => setObjForm((f) => ({ ...f, password: e.target.value }))}
                   placeholder={objForm.object ? t('environments:form.leaveBlankModify') : t('environments:form.leaveBlankUnset')}
                 />
-              </>
-            ) : objForm.objectType === 'login' ? (
-              <>
-                <Input
-                  label={t('environments:form.loginUrl')}
-                  value={objForm.loginUrl}
-                  onChange={(e) => setObjForm((f) => ({ ...f, loginUrl: e.target.value }))}
-                  placeholder={t('environments:form.loginUrlPlaceholder')}
-                />
-                <Input label={t('environments:form.userName')} value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
-                <Input
-                  label={t('environments:form.password')}
-                  type="password"
-                  value={objForm.password}
-                  onChange={(e) => setObjForm((f) => ({ ...f, password: e.target.value }))}
-                  placeholder={objForm.object ? t('environments:form.leaveBlankModify') : t('environments:form.leaveBlankUnset')}
-                />
-                <p className="text-[11px] m-0" style={{ color: 'var(--muted-foreground)' }}>
-                  {t('environments:form.loginHelp')}
-                </p>
               </>
             ) : objForm.objectType === 'web' ? (
               <>
@@ -558,6 +523,26 @@ export default function EnvironmentsPage() {
                 />
                 <p className="text-[11px] m-0" style={{ color: 'var(--muted-foreground)' }}>
                   {t('environments:form.webHelp')}
+                </p>
+                <p className="text-[11px] font-medium m-0 pt-1" style={{ color: 'var(--muted-foreground)' }}>
+                  {t('environments:form.webCredsTitle')}
+                </p>
+                <Input
+                  label={t('environments:form.loginUrl')}
+                  value={objForm.loginUrl}
+                  onChange={(e) => setObjForm((f) => ({ ...f, loginUrl: e.target.value }))}
+                  placeholder={t('environments:form.loginUrlPlaceholder')}
+                />
+                <Input label={t('environments:form.userName')} value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
+                <Input
+                  label={t('environments:form.password')}
+                  type="password"
+                  value={objForm.password}
+                  onChange={(e) => setObjForm((f) => ({ ...f, password: e.target.value }))}
+                  placeholder={objForm.object ? t('environments:form.leaveBlankModify') : t('environments:form.leaveBlankUnset')}
+                />
+                <p className="text-[11px] m-0" style={{ color: 'var(--muted-foreground)' }}>
+                  {t('environments:form.loginHelp')}
                 </p>
               </>
             ) : (
@@ -601,7 +586,7 @@ export default function EnvironmentsPage() {
             )}
           </div>
           <div className="flex items-center gap-2 px-5 py-3 hairline-top shrink-0" style={{ borderColor: 'var(--border)' }}>
-            {objForm.objectType !== 'login' && objForm.objectType !== 'web' && (
+            {objForm.objectType !== 'web' && (
               <>
                 <Button
                   variant="ghost"

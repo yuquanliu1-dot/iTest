@@ -87,28 +87,28 @@ describe('environments.service', () => {
     expect(raw.rows[0]!.default_env_id).toBeNull(); // FK SET NULL
   }, 30_000);
 
-  it('login 对象:密码加密进 secret,user/loginUrl 明文;留空沿用旧密文;入参 secret 丢弃', async () => {
+  it('web 对象携带登录凭据:密码加密进 secret,user/loginUrl 明文;留空沿用旧密文;入参 secret 丢弃', async () => {
     const { projectId } = await seedProject(pool);
     const svc = await import('../src/services/environments.service.js');
     const env = await svc.createEnvironment(projectId, { name: 'L' });
     const obj = await svc.insertEnvironmentObject(env.id, {
-      objectType: 'login',
-      payload: { user: 'tom', loginUrl: 'https://x.example.com/login', password: 'LOGIN-PASS' },
+      objectType: 'web',
+      payload: { name: 'frontend', scheme: 'https', host: 'x.example.com', user: 'tom', loginUrl: '/login', password: 'LOGIN-PASS' },
       isDefault: true,
     });
     // 出参脱敏,明文字段保留
     expect((obj.payload as { user: string }).user).toBe('tom');
-    expect((obj.payload as { loginUrl: string }).loginUrl).toBe('https://x.example.com/login');
+    expect((obj.payload as { loginUrl: string }).loginUrl).toBe('/login');
     expect((obj.payload as { secret: string }).secret).toBe('••••••••');
     expect(obj.hasSecret).toBe(true);
     const raw = (await pool.query(`SELECT payload FROM environment_objects WHERE id=$1`, [obj.id])).rows[0]!.payload as { secret?: { c?: string } };
     expect(JSON.stringify(raw)).not.toContain('LOGIN-PASS');
     expect(raw.secret?.c).toBeTruthy();
 
-    // 更新不带密码 → 旧密文沿用;入参 secret 一律丢弃
+    // 更新不带密码 → 旧密文沿用;入参 secret 一律丢弃(update 为整体替换语义,须带全量 web 字段)
     const before = raw.secret!.c;
     const up = await svc.updateEnvironmentObject(obj.id, {
-      payload: { user: 'jerry', loginUrl: 'https://x.example.com/login', secret: 'evil-plain' } as Record<string, unknown>,
+      payload: { name: 'frontend', scheme: 'https', host: 'x.example.com', user: 'jerry', loginUrl: '/login', secret: 'evil-plain' } as Record<string, unknown>,
     });
     expect((up.payload as { user: string }).user).toBe('jerry');
     const raw2 = (await pool.query(`SELECT payload FROM environment_objects WHERE id=$1`, [obj.id])).rows[0]!.payload as { secret?: { c?: string } };
@@ -195,6 +195,18 @@ describe('environments.service', () => {
           { objectType: 'web', payload: { name: 'web', scheme: 'http' } },
         ],
       })).rejects.toThrow(/host/);
+    }, 30_000);
+
+    it('web 登录凭据字段(user/loginUrl/password)类型非法被拒', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, { name: 'W' });
+      await expect(svc.insertEnvironmentObject(env.id, {
+        objectType: 'web', payload: { scheme: 'http', host: 'a.com', user: 123 },
+      })).rejects.toMatchObject({ status: 400, code: 'invalid_web_credentials' });
+      await expect(svc.insertEnvironmentObject(env.id, {
+        objectType: 'web', payload: { scheme: 'http', host: 'a.com', password: ['x'] },
+      })).rejects.toMatchObject({ status: 400, code: 'invalid_web_credentials' });
     }, 30_000);
   });
 });
