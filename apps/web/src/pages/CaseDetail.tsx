@@ -132,6 +132,31 @@ export default function CaseDetail() {
     );
   };
 
+  /** 行级未固化检测：与后端 solidifyCase.isVisualStep 对齐 —— 未固化的两种形态都算：
+   *   1) compiled 全为 aiTask = 回放时由 AI 临场执行（视觉步骤）；
+   *   2) compiled 为空但带自然语言 instruction = stage_case 产出的纯指令步骤。
+   *  两者都可由 solidify_case 固化为机械 compiled DSL。 */
+  const isUnsolidifiedStep = (s: { instruction?: string | null; compiled?: unknown[] | null }): boolean => {
+    if (!Array.isArray(s.compiled) || s.compiled.length === 0) {
+      return typeof s.instruction === 'string' && s.instruction.trim().length > 0;
+    }
+    return s.compiled.every((a) => (a as { kind?: string }).kind === 'aiTask');
+  };
+
+  /** 跳 AI 助手固化：未固化步骤 → solidify_case 机械化为 compiled。首条 prompt 点名用例与未固化步骤清单。 */
+  const askAssistantToSolidify = () => {
+    if (!caseDetail) return;
+    const visuals = caseDetail.steps
+      .filter(isUnsolidifiedStep)
+      .map((s) => `${s.order}. ${(s.instruction ?? '').trim().slice(0, 80)}`);
+    if (visuals.length === 0) return;
+    openAssistantWithMessage(
+      `对用例「${caseDetail.title}」(caseId=${id}, versionId=${versionId}) 执行机械固化。\n` +
+        `该用例有 ${visuals.length} 个未固化步骤（仅有自然语言指令或由 AI 临场执行的视觉步骤,尚未固化为机械 compiled）,如下:\n${visuals.join('\n')}\n` +
+        `请调用 solidify_case 真实执行一遍并收集动作,机械映射为 compiled 后暂存 update_step,再用 verify_case 验收（机械干跑通过）后引导我在暂存区勾选保存。`,
+    );
+  };
+
   const replaceSteps = useMutation({
     mutationFn: (steps: StepClip[]) =>
       api.cases.replaceSteps(
@@ -628,6 +653,9 @@ export default function CaseDetail() {
     })
     .filter((v): v is string => !!v);
 
+  /** 未固化（无机械 compiled：纯 AI 视觉执行 / 仅自然语言指令）步骤数,顶部横幅用。 */
+  const unsolidifiedStepCount = caseDetail.steps.filter(isUnsolidifiedStep).length;
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header bar */}
@@ -958,6 +986,20 @@ export default function CaseDetail() {
                     </ul>
                   </div>
                 )}
+                {unsolidifiedStepCount > 0 && (
+                  <div
+                    className="rounded-[var(--radius-sm)] px-3 py-2 mb-3 flex items-center gap-2 text-[11px]"
+                    style={{ border: '1px solid var(--warning-soft-border)', color: 'var(--warning)', background: 'var(--warning-soft)' }}
+                  >
+                    <Icon name="sparkles" size={11} />
+                    <span className="flex-1">
+                      {t('cases:unsolidifiedStepsBanner', { count: unsolidifiedStepCount })}
+                    </span>
+                    <Button variant="ghost" size="sm" onClick={askAssistantToSolidify} title={t('cases:solidifyTooltip')}>
+                      {t('cases:solidifyAction')}
+                    </Button>
+                  </div>
+                )}
                 {caseDetail.steps.length === 0 ? (
                   <EmptyState
                     icon="listChecks"
@@ -1047,6 +1089,16 @@ export default function CaseDetail() {
                                 title={t('cases:uncompiledTooltip')}
                               >
                                 {t('cases:uncompiledBadge')}
+                              </button>
+                            )}
+                            {isUnsolidifiedStep(s) && (
+                              <button
+                                onClick={askAssistantToSolidify}
+                                className="text-[10px] px-2 py-0.5 rounded-full shrink-0 press"
+                                style={{ border: '1px solid var(--primary)', color: 'var(--primary)', background: 'var(--popover)' }}
+                                title={t('cases:unsolidifiedTooltip')}
+                              >
+                                {t('cases:unsolidifiedBadge')}
                               </button>
                             )}
                             <div className="flex items-center gap-1 shrink-0">
