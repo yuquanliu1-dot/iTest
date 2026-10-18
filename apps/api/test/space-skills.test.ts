@@ -144,6 +144,29 @@ describe('skills 元数据 CRUD（文件系统为真源）', () => {
     expect((await request(memberApp).get('/api/assistant/skills')).status).toBe(403);
     expect((await request(memberApp).patch('/api/assistant/skills/x').send({ enabled: true })).status).toBe(403);
     expect((await request(memberApp).delete('/api/assistant/skills/x')).status).toBe(403);
+    expect((await request(memberApp).delete('/api/assistant/skills/orphan/x')).status).toBe(403);
+  });
+
+  it('DELETE /orphan/:name 删未登记目录；已登记的走常规删除（409）', async () => {
+    fs.mkdirSync(skillDir('orphan-del'), { recursive: true });
+    fs.writeFileSync(path.join(skillDir('orphan-del'), 'SKILL.md'), 'x');
+    const r = await request(managerApp).delete('/api/assistant/skills/orphan/orphan-del');
+    expect(r.status).toBe(204);
+    expect(fs.existsSync(skillDir('orphan-del'))).toBe(false);
+    // 目录已不在 → 404
+    expect((await request(managerApp).delete('/api/assistant/skills/orphan/orphan-del')).status).toBe(404);
+
+    // 已登记的技能不允许走 orphan 路由（否则 DB 行会变成指向空目录的死行）
+    await request(managerApp).post('/api/assistant/skills').send({ name: 'registered', description: 'd' });
+    const clash = await request(managerApp).delete('/api/assistant/skills/orphan/registered');
+    expect(clash.status).toBe(409);
+    expect(fs.existsSync(skillDir('registered'))).toBe(true);
+  });
+
+  it('DELETE /orphan/:name 名称非法 → 400（守卫 name 段）', async () => {
+    for (const bad of ['Bad_Name', '..', 'a%2Fb']) {
+      expect((await request(managerApp).delete(`/api/assistant/skills/orphan/${bad}`)).status).toBe(400);
+    }
   });
 });
 

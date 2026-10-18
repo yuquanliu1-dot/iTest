@@ -565,15 +565,36 @@ export const api = {
       remove: (id: string) =>
         request<void>(`/assistant/mcp-servers/${id}`, { method: 'DELETE' }),
     },
-    /** 系统设置：全局共享 AI 技能（slug 名称唯一；scripts 支持文件上传）。 */
+    /** 系统设置：全局共享 AI 技能。DB 存 name/description/enabled；内容在服务端目录树。
+     *  所有文件接口都以 skill id 定位（顶层路径段由服务端从 DB 行解析），且一律走服务端
+     *  resolveInSkill 守卫——客户端不传目录名，越界/软链在服务端拒。 */
     skills: {
       list: () => request<AssistantSkill[]>('/assistant/skills'),
-      create: (body: { name: string; description: string; body: string; scripts?: AssistantSkillScript[]; enabled?: boolean }) =>
+      create: (body: { name: string; description: string; enabled?: boolean }) =>
         request<AssistantSkill>('/assistant/skills', { method: 'POST', body: JSON.stringify(body) }),
-      patch: (id: string, body: Partial<{ name: string; description: string; body: string; scripts: AssistantSkillScript[]; enabled: boolean }>) =>
+      patch: (id: string, body: Partial<{ name: string; description: string; enabled: boolean }>) =>
         request<AssistantSkill>(`/assistant/skills/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
       remove: (id: string) =>
         request<void>(`/assistant/skills/${id}`, { method: 'DELETE' }),
+      /** 删磁盘孤儿目录（id=null 的行够不着 :id 系列接口，只能按 name 删）。
+       *  已登记的技能走这条会 409——要删它们请用 remove(id)。 */
+      removeOrphan: (name: string) =>
+        request<void>(`/assistant/skills/orphan/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+      tree: (id: string) => request<AssistantSkillFileNode[]>(`/assistant/skills/${id}/tree`),
+      readFile: (id: string, path: string) =>
+        request<{ path: string; content: string; truncated: boolean }>(
+          `/assistant/skills/${id}/file?path=${encodeURIComponent(path)}`),
+      writeFile: (id: string, path: string, content: string) =>
+        request<{ ok: boolean; path: string }>(`/assistant/skills/${id}/file`, {
+          method: 'PUT', body: JSON.stringify({ path, content }),
+        }),
+      deleteFile: (id: string, path: string) =>
+        request<void>(`/assistant/skills/${id}/file?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+      /** 上传到【已存在】的目录 dir（传 '' 即技能根）。服务端不递归建目录。 */
+      uploadFiles: (id: string, dir: string, files: Array<{ path: string; content: string }>) =>
+        request<{ ok: boolean; written: string[] }>(`/assistant/skills/${id}/files`, {
+          method: 'POST', body: JSON.stringify({ dir, files }),
+        }),
     },
   },
   registerAdmin: (body: { username: string; displayName: string; email?: string; organizationId: string }) =>
@@ -886,21 +907,30 @@ export interface AssistantMcpServer {
   createdAt: string;
   updatedAt: string;
 }
-/** 系统设置里管理的全局共享 AI 技能（assistant_skills 表；scripts 冗余落 DB，多副本无共享文件系统）。 */
-export interface AssistantSkillScript {
-  filename: string;
-  runtime: 'node' | 'python3' | 'bash' | 'sh';
-  content: string;
-}
+/** 系统设置里管理的全局共享 AI 技能（assistant_skills 表）。
+ *  2026-10-19 存储翻转：DB 只留元数据，内容在服务端目录树 SKILLS_ROOT/<name>/，
+ *  由下方 tree/readFile/writeFile/deleteFile/uploadFiles 操作。 */
 export interface AssistantSkill {
-  id: string;
+  /** 孤儿目录（磁盘有目录但 DB 无行）没有 id，仅供展示/删除，不允许改元数据。 */
+  id: string | null;
   name: string;
   description: string;
-  body: string;
-  scripts: AssistantSkillScript[];
   enabled: boolean;
-  createdAt: string;
-  updatedAt: string;
+  /** 磁盘统计（递归树数出来的文件数与字节数）。 */
+  fileCount: number;
+  totalBytes: number;
+  onDisk: boolean;
+  /** true = 磁盘孤儿目录：未登记、无 description，入不了 catalog。 */
+  unregistered: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+/** 文件树节点（相对技能根，posix 分隔）。 */
+export interface AssistantSkillFileNode {
+  path: string;
+  kind: 'file' | 'dir';
+  size: number;
+  runtime?: string;
 }
 // 版本空间助手暂存表（thread-scoped）单对象形态
 export interface StagedStageCase {
