@@ -20,6 +20,10 @@ import { buildVerifyCaseTool } from './verifyCase.js';
 import { buildSolidifyCaseTool } from './solidifyCase.js';
 import { buildCaseOpsTools } from './case-ops-tools.js';
 import { buildReadSkillTool } from './readSkill.js';
+import { buildRunSkillScriptTool } from './runSkillScript.js';
+import { buildManageSkillTool } from './manageSkill.js';
+import { buildManageMcpTool } from './manageMcp.js';
+import { buildImportSkillTool } from './importSkill.js';
 
 export type { SpaceToolsContext } from './context.js';
 export { emitStage, type StageKind } from './stage.js';
@@ -59,7 +63,15 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   //   - stage_case_op  → 暂存「对已有用例/步骤的修改」，同上
   //   - manage_cases   → 仅负责 search/get/create_group（实时读 + 仅分组创建仍保留实时写）
   tools.push(...buildLoginTools(ctx));
-  tools.push(buildReadSkillTool(ctx));
+  tools.push(buildReadSkillTool());
+  tools.push(buildRunSkillScriptTool());
+  // 管理类工具（manage_skill / manage_mcp / import_skill）只对「有效管理员」线程注册：改动全局共享配置
+  // （skill 脚本 / MCP command 会在 API 容器上执行），非管理员会话无此面，防模型幻觉调用。
+  if (ctx.manager) {
+    tools.push(buildManageSkillTool(ctx));
+    tools.push(buildManageMcpTool(ctx));
+    tools.push(buildImportSkillTool(ctx));
+  }
   tools.push(buildVerifyCaseTool(ctx));
   tools.push(buildSolidifyCaseTool(ctx));
   tools.push(...buildStageTools(ctx));

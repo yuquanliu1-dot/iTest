@@ -41,9 +41,10 @@ ENV NODE_ENV=production \
     PI_DATA_DIR=/repo/apps/api/.data
 # 运行时系统依赖:repo checkout 需要 git + ca-certificates;repo_grep 需要 ripgrep;
 # chromium 需要一组图形/字体库(playwright-core 自带 CLI 装浏览器,--with-deps 装系统 so)。
+# python3:AI 助手 run_skill_script 的 python3 runtime(另有默认自带 node/bash/sh)。
 # bookworm-slim 不带任何系统二进制,apt-get 必须。详见 infra/docker/certs/README.md。
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates ripgrep unzip \
+      git ca-certificates ripgrep unzip python3 \
       libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
       libxkbcommon0 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
       libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 \

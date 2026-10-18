@@ -695,3 +695,21 @@ export const assistantMcpServers = pgTable('assistant_mcp_servers', {
   nameUq: unique('assistant_mcp_servers_name_uq').on(t.name),
   enabledIdx: index('assistant_mcp_servers_enabled_idx').on(t.enabled),
 }));
+
+// ── AI 助手 Skills 全局共享存储（所有空间线程加载全量启用 skills；在系统设置页管理）──
+// name 即技能 slug，用作物化目录名与 read_skill/run_skill_script 入参（全小写标识符）。
+// scripts 为 JSONB：`[{ filename, runtime, content }]`，runtime ∈ node|python3|bash|sh，
+// 内容随行存 DB（多副本下无共享文件系统，脚本正文必须落库而非文件）。
+export const assistantSkills = pgTable('assistant_skills', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: varchar('name', { length: 120 }).notNull(),
+  description: varchar('description', { length: 500 }).notNull(),
+  body: text('body').notNull(),
+  scripts: jsonb('scripts').$type<Array<{ filename: string; runtime: string; content: string }>>().notNull().default([]),
+  enabled: boolean('enabled').notNull().default(true),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  nameUq: unique('assistant_skills_name_uq').on(t.name),
+  enabledIdx: index('assistant_skills_enabled_idx').on(t.enabled),
+}));

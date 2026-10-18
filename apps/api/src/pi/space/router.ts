@@ -20,6 +20,7 @@ import { stageRoute } from './stageRoute.js';
 import { requireManager } from '../../middleware/auth.js';
 import { guidesRoute } from './guidesRoute.js';
 import { mcpServersRoute } from './mcpServersRoute.js';
+import { skillsRoute } from './skillsRoute.js';
 import {
   cancelThread, ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, spaceRepoIssue, subscribeThread, threadStatus,
 } from './session.js';
@@ -194,3 +195,4 @@ spaceRoute.use(stageRoute);
 // 全局 requireAuth 由更外层 index.ts 统一承担（router.ts 自身不重复鉴权）。
 spaceRoute.use('/guides', requireManager, guidesRoute);
 spaceRoute.use('/mcp-servers', requireManager, mcpServersRoute);
+spaceRoute.use('/skills', requireManager, skillsRoute);

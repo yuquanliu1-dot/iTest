@@ -152,6 +152,8 @@ CREATE TABLE assistant_guides (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), sc
 CREATE INDEX assistant_guides_enabled_idx ON assistant_guides(scope, enabled);
 CREATE TABLE assistant_mcp_servers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(120) NOT NULL, kind varchar(8) NOT NULL DEFAULT 'stdio', command text, args jsonb, url text, env jsonb, exposure varchar(12) NOT NULL DEFAULT 'codemode', scope varchar(16) NOT NULL DEFAULT 'global', project_id uuid REFERENCES projects(id) ON DELETE CASCADE, version_id uuid REFERENCES project_versions(id) ON DELETE CASCADE, enabled boolean NOT NULL DEFAULT true, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT assistant_mcp_servers_name_uq UNIQUE(name));
 CREATE INDEX assistant_mcp_servers_enabled_idx ON assistant_mcp_servers(enabled);
+CREATE TABLE assistant_skills (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(120) NOT NULL, description varchar(500) NOT NULL, body text NOT NULL, scripts jsonb NOT NULL DEFAULT '[]'::jsonb, enabled boolean NOT NULL DEFAULT true, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT assistant_skills_name_uq UNIQUE(name));
+CREATE INDEX assistant_skills_enabled_idx ON assistant_skills(enabled);
 `;
 
 export interface SeedOrg {

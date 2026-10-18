@@ -10,10 +10,12 @@ import { db } from '../../db/client.js';
 import { aiThreads, projectVersions, users } from '../../db/schema.js';
 import { aiLangFrom, type AiLang } from '../../agent/langDirective.js';
 import { logger } from '../../logger.js';
+import { isEffectiveManagerOf } from '../../services/auth.service.js';
 import { buildSpaceTools } from './tools/index.js';
 import { buildSkillsSectionContent } from './tools/readSkill.js';
 import { buildSpaceSummary } from './summary.js';
 import { type AssistantGuideRow, buildGuidesSection, loadActiveGuides } from './guides.js';
+import { SKILLS_ROOT, loadEnabledSkills, materializeSkills } from './skillsStore.js';
 import { buildMcpExtensionFactory, getMcpServersForThread } from './mcp.js';
 import { readLlmConfig, synthesizeModel, ENV_BY_PROVIDER } from '../modelBridge.js';
 import { HttpError } from '../../middleware/errorHandler.js';
@@ -41,6 +43,8 @@ export interface SpaceThreadContext {
   repo: RepoState;
   /** 线程创建人：AI 代建对象(env/plan/...)以它为归属；历史线程为 null。 */
   createdByUserId: string | null;
+  /** 线程创建人是否为有效管理员（管理类工具注册闸门）；历史线程为 false。 */
+  manager: boolean;
   /** 线程创建人界面语言，历史线程缺省 zh-CN。 */
   lang?: AiLang;
 }
@@ -110,16 +114,19 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
 
   // 线程创建人界面语言解析：session 的 AI 输出语言跟随创建人偏好；历史线程（创建人 null）缺省 zh-CN。
   let lang: AiLang = 'zh-CN';
+  let manager = false;
   if (row.createdByUserId) {
     const u = (await db.select({ languagePreference: users.languagePreference }).from(users).where(eq(users.id, row.createdByUserId)).limit(1))[0];
     lang = aiLangFrom(u?.languagePreference ?? null);
+    // 管理类工具（manage_skill / manage_mcp）只对「有效管理员」线程开放；历史线程（创建人 null）一律 false。
+    manager = await isEffectiveManagerOf(row.createdByUserId);
   }
 
   // repo 后台异步检出:session 立即构建(新会话秒开,不等 git fetch 的网络往返),
   // repo 工具经共享 RepoState 每次调用动态解析 cwd;no_repo 静默(仅影响工具错误语态),
   // 其它失败记 repo.issue 供诊断,均不阻断会话。
   const repo = emptyRepoState();
-  const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo, createdByUserId: row.createdByUserId, lang });
+  const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo, createdByUserId: row.createdByUserId, lang, manager });
   const rec: ThreadRecord = {
     threadId,
     versionId: row.versionId,
@@ -386,9 +393,9 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   const repoDir = path.join(workspaceDir, 'repo');
   await fs.mkdir(workspaceDir, { recursive: true });
   await fs.mkdir(repoDir, { recursive: true });
-  // S2 按需技能目录：版本工作空间下 .pi/skills（发版时宿主挂载；本设计不负责其生命周期，只 mkdir 兜底）。
-  const skillsRoot = path.join(workspaceDir, '.pi', 'skills');
-  await fs.mkdir(skillsRoot, { recursive: true });
+  // Skills 物化为全局共享目录（.data/skills），由系统设置页管理；会话建立时物化 DB 快照。
+  // 不再维护逐版本 .pi/skills 挂载目录——loadSkills/read_skill 全部改走 SKILLS_ROOT。
+  // 物化失败不能拖垮会话工厂（无 skills 段，会话照常可用）。
   // 兼容旧目录布局：若旧 .data/repos/v-<versionId> 存在而新 repo/ 尚未初始化，直接迁移避免重复克隆。
   const legacyRepoDir = path.join(REPOS_ROOT, `v-${ctx.versionId}`);
   const gitDir = path.join(repoDir, '.git');
@@ -446,15 +453,18 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   } catch (e) {
     logger.warn({ err: e, versionId: ctx.versionId }, 'guides 加载失败;继续无 guides 段');
   }
-  // S2 catalog：与 loader.additionalSkillPaths 同源目录（loadSkills 同步）。Skill.location 取 filePath
-  // （Skill = { name, description, filePath, baseDir, sourceInfo, disableModelInvocation }）。
-  // 与 buildSpaceSummary 同款容错：单条 skill 目录异常（权限/ELOOP）不能拖垮整个会话工厂。
+  // S2 catalog：全局 skills 共享库（assistant_skills → .data/skills 物化）。loadSkills 与
+  // loader.additionalSkillPaths 同源，会话建立时物化 DB 快照（会话级快照：删改/停用对新线程生效）。
+  // Skill.location 取 filePath（Skill = { name, description, filePath, baseDir, sourceInfo, ... }）。
+  // 与 buildSpaceSummary 同款容错：物化/单条 skill 目录异常（权限/ELOOP）不能拖垮整个会话工厂。
   let skillsFiles: Array<{ name: string; description: string; location: string }> = [];
   try {
+    const stored = await loadEnabledSkills();
+    await materializeSkills(stored);
     const res = loadSkills({
       cwd: workspaceDir,
       agentDir: getAgentDir(),
-      skillPaths: [skillsRoot],
+      skillPaths: [SKILLS_ROOT],
       includeDefaults: false,
     });
     if (res.diagnostics.length > 0) {
@@ -469,7 +479,7 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   const loader = new DefaultResourceLoader({
     cwd: workspaceDir,
     agentDir: getAgentDir(),
-    additionalSkillPaths: [skillsRoot],
+    additionalSkillPaths: [SKILLS_ROOT],
     appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText, ctx.lang, guides)],
     // 每轮开跑前把 preamble 换成产品身份。见 buildSpacePreamble 的注释：不能走
     // loader.systemPrompt，也不能直接改 systemPromptOptions.customPrompt，那两条路都会
