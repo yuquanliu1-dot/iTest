@@ -15,7 +15,7 @@ import { buildSpaceTools } from './tools/index.js';
 import { buildSkillsSectionContent } from './tools/readSkill.js';
 import { buildSpaceSummary } from './summary.js';
 import { type AssistantGuideRow, buildGuidesSection, loadActiveGuides } from './guides.js';
-import { SKILLS_ROOT, loadEnabledSkills, materializeSkills } from './skillsStore.js';
+import { loadEnabledSkillDirs } from './skillsStore.js';
 import { buildMcpExtensionFactory, getMcpServersForThread } from './mcp.js';
 import { readLlmConfig, synthesizeModel, ENV_BY_PROVIDER } from '../modelBridge.js';
 import { HttpError } from '../../middleware/errorHandler.js';
@@ -453,18 +453,19 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   } catch (e) {
     logger.warn({ err: e, versionId: ctx.versionId }, 'guides 加载失败;继续无 guides 段');
   }
-  // S2 catalog：全局 skills 共享库（assistant_skills → .data/skills 物化）。loadSkills 与
-  // loader.additionalSkillPaths 同源，会话建立时物化 DB 快照（会话级快照：删改/停用对新线程生效）。
+  // S2 catalog：全局 skills 共享库。文件系统即真源——会话建立不做任何写入，只把
+  // 「DB enabled 的技能各自的目录绝对路径」交给 loader。传逐技能目录而非 SKILLS_ROOT，
+  // pi 的 loadSkills 见到 SKILL.md 即停不再下钻，故停用技能与孤儿目录天然不可见。
   // Skill.location 取 filePath（Skill = { name, description, filePath, baseDir, sourceInfo, ... }）。
-  // 与 buildSpaceSummary 同款容错：物化/单条 skill 目录异常（权限/ELOOP）不能拖垮整个会话工厂。
+  // 与 buildSpaceSummary 同款容错：单条 skill 目录异常（权限/ELOOP）不能拖垮整个会话工厂。
   let skillsFiles: Array<{ name: string; description: string; location: string }> = [];
+  let skillPaths: string[] = [];
   try {
-    const stored = await loadEnabledSkills();
-    await materializeSkills(stored);
+    skillPaths = await loadEnabledSkillDirs();
     const res = loadSkills({
       cwd: workspaceDir,
       agentDir: getAgentDir(),
-      skillPaths: [SKILLS_ROOT],
+      skillPaths,
       includeDefaults: false,
     });
     if (res.diagnostics.length > 0) {
@@ -479,7 +480,7 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   const loader = new DefaultResourceLoader({
     cwd: workspaceDir,
     agentDir: getAgentDir(),
-    additionalSkillPaths: [SKILLS_ROOT],
+    additionalSkillPaths: skillPaths,
     appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText, ctx.lang, guides)],
     // 每轮开跑前把 preamble 换成产品身份。见 buildSpacePreamble 的注释：不能走
     // loader.systemPrompt，也不能直接改 systemPromptOptions.customPrompt，那两条路都会

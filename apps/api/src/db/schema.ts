@@ -697,15 +697,13 @@ export const assistantMcpServers = pgTable('assistant_mcp_servers', {
 }));
 
 // ── AI 助手 Skills 全局共享存储（所有空间线程加载全量启用 skills；在系统设置页管理）──
-// name 即技能 slug，用作物化目录名与 read_skill/run_skill_script 入参（全小写标识符）。
-// scripts 为 JSONB：`[{ filename, runtime, content }]`，runtime ∈ node|python3|bash|sh，
-// 内容随行存 DB（多副本下无共享文件系统，脚本正文必须落库而非文件）。
+// name 即技能 slug，用作 .data/skills/<name>/ 目录名与 read_skill/run_skill_script 入参。
+// 本表只存元数据：技能正文与全部目录树在磁盘 SKILLS_ROOT/<name>/ 下（.data 卷跨 api 副本共享），
+// 故没有 body/scripts 列——2026-10-19 存储翻转时已随 drizzle-kit push 落地删除。
 export const assistantSkills = pgTable('assistant_skills', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: varchar('name', { length: 120 }).notNull(),
   description: varchar('description', { length: 500 }).notNull(),
-  body: text('body').notNull(),
-  scripts: jsonb('scripts').$type<Array<{ filename: string; runtime: string; content: string }>>().notNull().default([]),
   enabled: boolean('enabled').notNull().default(true),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
