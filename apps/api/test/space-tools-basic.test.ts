@@ -11,6 +11,7 @@ function makeCtx(over: Partial<SpaceToolsContext> = {}): { ctx: SpaceToolsContex
     projectId: randomUUID(),
     repo: { cwd: null, issue: null, noRepo: false },
     emit: (e) => events.push(e),
+    manager: false,
     ...over,
   };
   return { ctx, events };

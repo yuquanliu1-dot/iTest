@@ -12,7 +12,6 @@
  *    global 全量，project/version 跟随线程归属（见 mcp.ts），不做全局全量加载。
  */
 import { Router } from 'express';
-import { randomUUID } from 'node:crypto';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { db } from '../../db/client.js';
@@ -21,10 +20,10 @@ import { HttpError } from '../../middleware/errorHandler.js';
 import type { AuthUser } from '../../services/auth.service.js';
 import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../../services/projectAccess.js';
 import { MCP_EXPOSURES } from './mcp.js';
+import { MCP_KINDS, normalizeMcpFields } from './mcpServersService.js';
 
 export const mcpServersRoute = Router();
 
-const KIND = ['stdio', 'http'] as const;
 const SCOPE = ['global', 'project', 'version'] as const;
 
 /** server 行可见性断言：global 共享；project/version 归属组织，跨组织 404。 */
@@ -73,14 +72,8 @@ mcpServersRoute.get('/', async (req, res) => {
 mcpServersRoute.post('/', async (req, res) => {
   const user = req.user as AuthUser;
   const b = req.body as Record<string, unknown>;
-  const kind = (b.kind as string) ?? 'stdio';
-  if (!KIND.includes(kind as never)) throw new HttpError(400, 'bad_request', 'kind 必须是 stdio|http');
-  const exposure = (b.exposure as string) ?? 'codemode';
-  if (!MCP_EXPOSURES.has(exposure)) {
-    throw new HttpError(400, 'bad_request', `exposure 必须是 ${[...MCP_EXPOSURES].join('|')}（oauth 不支持——服务端无 loopback 回调）`);
-  }
-  const name = typeof b.name === 'string' && b.name.trim() ? b.name.trim() : null;
-  if (!name) throw new HttpError(400, 'bad_request', 'name 必填');
+  // 无 scope 字段（name/kind/exposure/command|url/args/env）全校验 + 归一化；与 manage_mcp create 同一套规则。
+  const f = normalizeMcpFields(b);
   // scope=project/version 归属组织：跨组织 404 且必须在插入前断言（与 guidesRoute 同语义）
   const scope = (b.scope as string) ?? 'global';
   if (!SCOPE.includes(scope as never)) throw new HttpError(400, 'bad_request', 'scope 必须是 global|project|version');
@@ -92,21 +85,8 @@ mcpServersRoute.post('/', async (req, res) => {
     if (typeof b.versionId !== 'string') throw new HttpError(400, 'bad_request', 'scope=version 需要 versionId');
     await assertVersionVisible(b.versionId, user);
   }
-  if (kind === 'stdio' && (typeof b.command !== 'string' || !b.command.trim())) {
-    throw new HttpError(400, 'bad_request', 'kind=stdio 需要 command');
-  }
-  if (kind === 'http' && (typeof b.url !== 'string' || !/^https?:\/\//.test(b.url))) {
-    throw new HttpError(400, 'bad_request', 'kind=http 需要 http(s):// url');
-  }
   const rows = await db.insert(assistantMcpServers).values({
-    id: randomUUID(),
-    name,
-    kind,
-    command: kind === 'stdio' ? (b.command as string).trim() : null,
-    args: kind === 'stdio' ? (Array.isArray(b.args) ? (b.args as string[]) : []) : null,
-    url: kind === 'http' ? (b.url as string) : null,
-    env: b.env && typeof b.env === 'object' ? (b.env as Record<string, string>) : null,
-    exposure,
+    ...f,
     scope,
     projectId: scope === 'project' ? (b.projectId as string) : null,
     versionId: scope === 'version' ? (b.versionId as string) : null,
@@ -129,7 +109,7 @@ mcpServersRoute.patch('/:id', async (req, res) => {
   }
   if ('kind' in p) {
     const kind = p.kind as string;
-    if (!KIND.includes(kind as never)) throw new HttpError(400, 'bad_request', 'kind 必须是 stdio|http');
+    if (!MCP_KINDS.includes(kind as never)) throw new HttpError(400, 'bad_request', 'kind 必须是 stdio|http');
     patch.kind = kind;
     if (kind === 'stdio') {
       if (typeof p.command !== 'string' || !p.command.trim()) throw new HttpError(400, 'bad_request', 'kind=stdio 需要 command');

@@ -234,6 +234,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
       repo: emptyRepoState(),
       emit: (e: unknown) => emitThreadEvent(threadId, e as Record<string, unknown>),
       createdByUserId: creatorId,
+      manager: false, // stage 落库不涉及管理类工具
     };
     await applyCaseOp(row.op, row.payload, ctx);
   }

@@ -1,7 +1,7 @@
 /**
- * S2 按需技能（workspace/.pi/skills 目录）：
+ * Skills 按需阅读（全局共享库 .data/skills 物化目录）：
  *  - readSkillDir：SKILL.md 正文 + scripts 清单（路径双守卫）
- *  - buildReadSkillTool：read_skill 工具（补 catalog-only 缺的「取正文」能力）
+ *  - buildReadSkillTool：read_skill 工具（补 catalog-only 缺的「取正文」能力；附脚本清单供 run_skill_script）
  *  - buildSkillsSectionContent：skills 段自渲染 XML（identity 的 forceSystemPrompt 之前必须就位）
  *
  * 双守卫（关键事实 §6）：path.join(root, '/abs/x') 会把第二参当绝对路径丢弃 root →
@@ -10,57 +10,77 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Type } from '@earendil-works/pi-ai';
-import type { SpaceToolsContext } from './context.js';
 import type { ToolExecutor } from '../../tools.js';
+import { SKILLS_ROOT } from '../skillsStore.js';
 
-const SKILL_DIR_NAME = '.pi/skills';
 const MAX_BODY_CHARS = 60_000;
 const MAX_SCRIPT_LIST = 50;
 
-export function skillsRootOf(workspaceDir: string): string {
-  return path.join(workspaceDir, SKILL_DIR_NAME);
+/** 脚本 runtime 推断：优先 shebang（#!/usr/bin/env python3 等），回退扩展名，缺省 node。 */
+export function runtimeOfFirstLine(filename: string): string {
+  if (/\.py/i.test(filename)) return 'python3';
+  if (/\.sh/i.test(filename)) return 'bash';
+  if (/\.(js|mjs|cjs)$/i.test(filename)) return 'node';
+  return 'node';
 }
 
-/** 读 skill 目录 SKILL.md + scripts 清单；目录/文件缺失或越界 → null。
- *  边界是「词法」的：normalize+startsWith 只挡 ../ 与绝对路径逃逸。skill 目录若为指到 root 外的
- *  符号链接，readFileSync/readdirSync 会跟随——但 .pi/skills 由宿主/项目挂载（非不可信用户），可接受。 */
-export function readSkillDir(root: string, skillName: string): { body: string; scripts: string[] } | null {
+/** 去 SKILL.md 前置 YAML 前言（materializeSkills 写入的 name/description）；无/残缺直接原样返回。
+ *  读出的 body 不含前言——catalog 已有 name/description，把 YAML 塞给模型是噪音。 */
+function stripFrontmatter(content: string): string {
+  if (!content.startsWith('---')) return content;
+  const end = content.indexOf('\n---');
+  if (end === -1) return content;
+  return content.slice(end + 4).replace(/^\n+/, '');
+}
+
+/** 读 skill 目录 SKILL.md + scripts 清单（含 runtime/字节数/首行）；目录/文件缺失或越界 → null。
+ *  边界是「词法」的：normalize+startsWith 只挡 ../ 与绝对路径逃逸。skills 由设置页管理（非不可信用户），可接受。 */
+export function readSkillDir(root: string, skillName: string): { body: string; scripts: Array<{ filename: string; runtime: string; size: number; firstLine: string }> } | null {
   if (path.isAbsolute(skillName)) return null;
   const normalizedRoot = path.normalize(root);
   const skillRoot = path.normalize(path.join(normalizedRoot, skillName));
   if (!skillRoot.startsWith(normalizedRoot + path.sep)) return null;
   const mdPath = path.join(skillRoot, 'SKILL.md');
   if (!fs.existsSync(mdPath)) return null;
-  const body = fs.readFileSync(mdPath, 'utf8').slice(0, MAX_BODY_CHARS);
+  const body = stripFrontmatter(fs.readFileSync(mdPath, 'utf8')).slice(0, MAX_BODY_CHARS);
   const scriptsDir = path.join(skillRoot, 'scripts');
-  let scripts: string[] = [];
+  let scripts: Array<{ filename: string; runtime: string; size: number; firstLine: string }> = [];
   if (fs.existsSync(scriptsDir)) {
     scripts = fs.readdirSync(scriptsDir, { withFileTypes: true })
       .filter((d) => d.isFile())
-      .map((d) => d.name)
-      .slice(0, MAX_SCRIPT_LIST);
+      .slice(0, MAX_SCRIPT_LIST)
+      .map((d) => {
+        const fp = path.join(scriptsDir, d.name);
+        const first = fs.readFileSync(fp, 'utf8').split('\n')[0] ?? '';
+        const firstLine = first.trim().slice(0, 120);
+        const runtime = /^#!.*\b(?:env )?(node|python3|bash|sh)\b/.test(firstLine)
+          ? (firstLine.match(/\b(?:env )?(node|python3|bash|sh)\b/)?.[1] ?? runtimeOfFirstLine(d.name))
+          : runtimeOfFirstLine(d.name);
+        return { filename: d.name, runtime, size: fs.statSync(fp).size, firstLine };
+      })
+      .sort((a, b) => a.filename.localeCompare(b.filename));
   }
   return { body, scripts };
 }
 
-export function buildReadSkillTool(ctx: SpaceToolsContext): ToolExecutor {
-  const root = skillsRootOf(ctx.workspaceDir ?? process.cwd());
+export function buildReadSkillTool(): ToolExecutor {
+  const root = SKILLS_ROOT;
   return {
     name: 'read_skill',
-    description: '读取 .pi/skills 目录下某个 skill 的 SKILL.md 正文与 scripts 清单（按需查阅；只能读当前版本工作空间内 .pi/skills 下的 skill，禁止越界）。',
+    description: '读取全局 skills 库中某个 skill 的 SKILL.md 正文与 scripts 脚本清单（含 runtime）。skill 正文按需查阅，不会自动进入提示词；需要执行脚本时用 run_skill_script（cwd 锁定 scripts 目录）。',
     parameters: Type.Object({
       skillName: Type.String({ minLength: 1 }),
     }),
     execute: async (input) => {
       const { skillName } = input as { skillName: string };
       const hit = readSkillDir(root, skillName);
-      if (!hit) return { ok: false, error: `skill 不存在: ${skillName}（.pi/skills 下没有该目录或越界）` };
+      if (!hit) return { ok: false, error: `skill 不存在: ${skillName}（skills 库下没有该目录或越界）` };
       return { ok: true, data: JSON.stringify({ name: skillName, ...hit }) };
     },
   };
 }
 
-/** skills 段自渲染（agentskills.io 风格 XML）：name/description/location + read_skill 用法。
+/** skills 段自渲染（agentskills.io 风格 XML）：name/description/location + 使用方法。
  *  只列 catalog 与一句使用说明，不含正文——正文由模型需要时调 read_skill 取（pi 原语义）。 */
 export function buildSkillsSectionContent(
   skills: Array<{ name: string; description: string; location: string }>,
@@ -69,5 +89,5 @@ export function buildSkillsSectionContent(
   const lines = skills.map((s) =>
     `  <skill name="${esc(s.name)}" description="${esc(s.description)}" location="${esc(s.location)}" />`,
   );
-  return `<available_skills>\n${lines.join('\n')}\n</available_skills>\n\n按需查阅技能内容时调用 read_skill 工具（入参 skillName）；skill 正文不会自动进入本提示词，要靠 read_skill 取。`;
+  return `<available_skills>\n${lines.join('\n')}\n</available_skills>\n\n按需查阅技能内容时调用 read_skill 工具（入参 skillName），返回正文与 scripts 脚本清单；需要执行附带脚本时用 run_skill_script 工具。skill 正文不会自动进入本提示词，要靠 read_skill 取。`;
 }

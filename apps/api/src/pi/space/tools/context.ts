@@ -34,6 +34,8 @@ export interface SpaceToolsContext {
   emit: (e: Record<string, unknown>) => void;
   /** 线程创建人：AI 直建/暂存落库对象以此为归属；历史线程为 null。 */
   createdByUserId: string | null;
+  /** 线程创建人是否为有效管理员（buildSpaceRecord 构建时解析）。false → 管理类工具不注册。 */
+  manager: boolean;
   /** 界面语言：线程创建人语言，历史线程缺省 zh-CN。 */
   lang?: AiLang;
   /** 版本独立工作空间目录（.data/workspaces/v-<versionId>）；read_skill 的 .pi/skills 根。 */

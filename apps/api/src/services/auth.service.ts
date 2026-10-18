@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { users } from '../db/schema.js';
 import { membershipsOf } from './orgTree.js';
+import { isPathInSubtree } from './org-path.js';
 import { wrap } from '../lib/cache.js';
 import { meKey } from '../lib/cache-keys.js';
 
@@ -143,6 +144,18 @@ export class PasswordValidationError extends Error {
 /** 从成员资格列表计算 managerOrgPaths（管理的组织的 path 列表）。 */
 function managerOrgPathsOf(memberships: Array<{ path: string; isManager: boolean }>): string[] {
   return memberships.filter((m) => m.isManager).map((m) => m.path);
+}
+
+/**
+ * 某用户是否为「有效管理员」——算法与 login/switchOrganization 派生 AuthUser 完全同源：
+ * path 最短的成员资格为激活组织；任一(激活其或祖先)成员资格 isManager → 有效管理员。
+ * 供空间助手工具在无 JWT 上下文时，从 createdByUserId 惰性解析管理权限（membershipsOf 已缓存）。
+ */
+export async function isEffectiveManagerOf(userId: string): Promise<boolean> {
+  const memberships = await membershipsOf(userId);
+  if (memberships.length === 0) return false;
+  const active = [...memberships].sort((a, b) => a.path.length - b.path.length || a.path.localeCompare(b.path))[0]!;
+  return memberships.some((m) => m.isManager && isPathInSubtree(active.path, m.path));
 }
 
 async function findById(userId: string) {
