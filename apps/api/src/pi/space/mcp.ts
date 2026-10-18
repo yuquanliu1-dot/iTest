@@ -27,7 +27,9 @@ export interface AssistantMcpServer {
 
 type AssistantMcpServerRow = typeof assistantMcpServers.$inferSelect;
 
-const MCP_EXPOSURES = new Set(['codemode', 'deferred', 'direct', 'hidden']);
+/** 合法的 MCP exposure 集合（不含 oauth——服务端无 loopback 回调能力）。CRUD 路由与装载共用，
+ *  避免两个 allow-list 各自漂移（对齐 spec §MCP）。 */
+export const MCP_EXPOSURES = new Set(['codemode', 'deferred', 'direct', 'hidden']);
 
 /** env 值解引用：`env:KEY` 语法从 process.env 取（容器 secrets 统一走宿主机注入，明文不落 DB）。
  *  未定义 key 直接丢弃（不注入空占位）。 */

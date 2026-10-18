@@ -20,11 +20,11 @@ import { assistantMcpServers, projectVersions } from '../../db/schema.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import type { AuthUser } from '../../services/auth.service.js';
 import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../../services/projectAccess.js';
+import { MCP_EXPOSURES } from './mcp.js';
 
 export const mcpServersRoute = Router();
 
 const KIND = ['stdio', 'http'] as const;
-const EXPOSURE = ['codemode', 'deferred', 'direct', 'hidden'] as const;
 const SCOPE = ['global', 'project', 'version'] as const;
 
 /** server 行可见性断言：global 共享；project/version 归属组织，跨组织 404。 */
@@ -76,8 +76,8 @@ mcpServersRoute.post('/', async (req, res) => {
   const kind = (b.kind as string) ?? 'stdio';
   if (!KIND.includes(kind as never)) throw new HttpError(400, 'bad_request', 'kind 必须是 stdio|http');
   const exposure = (b.exposure as string) ?? 'codemode';
-  if (!EXPOSURE.includes(exposure as never)) {
-    throw new HttpError(400, 'bad_request', `exposure 必须是 ${EXPOSURE.join('|')}（oauth 不支持——服务端无 loopback 回调）`);
+  if (!MCP_EXPOSURES.has(exposure)) {
+    throw new HttpError(400, 'bad_request', `exposure 必须是 ${[...MCP_EXPOSURES].join('|')}（oauth 不支持——服务端无 loopback 回调）`);
   }
   const name = typeof b.name === 'string' && b.name.trim() ? b.name.trim() : null;
   if (!name) throw new HttpError(400, 'bad_request', 'name 必填');
@@ -155,7 +155,7 @@ mcpServersRoute.patch('/:id', async (req, res) => {
   if ('env' in p) patch.env = p.env && typeof p.env === 'object' ? (p.env as Record<string, string>) : undefined;
   if ('exposure' in p) {
     const exp = p.exposure as string;
-    if (!EXPOSURE.includes(exp as never)) throw new HttpError(400, 'bad_request', `exposure 必须是 ${EXPOSURE.join('|')}（oauth 不支持）`);
+    if (!MCP_EXPOSURES.has(exp)) throw new HttpError(400, 'bad_request', `exposure 必须是 ${[...MCP_EXPOSURES].join('|')}（oauth 不支持）`);
     patch.exposure = exp;
   }
   // 改 scope 到 project/version 必须在同一次 PATCH 里给对应 id，否则落入陈旧 id（POST 语义一致）
