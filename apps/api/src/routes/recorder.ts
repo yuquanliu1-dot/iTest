@@ -82,6 +82,8 @@ recorderRoute.post('/sessions', async (req, res) => {
     })
     .returning({ id: testSessions.id });
   session.dbSessionId = dbRow[0]!.id;
+  // createSession 已 write-through 一次,但那时 dbSessionId 还没赋值;补一次让跨副本能读到审计 id。
+  void persistSession(session);
   res.json({
     sessionId: session.sessionId,
     wsToken: process.env.RECORDER_TOKEN_SECRET ?? 'dev-secret-change-me',
