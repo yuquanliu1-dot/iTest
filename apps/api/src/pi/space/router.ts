@@ -105,7 +105,11 @@ spaceRoute.post('/threads/:id/messages', async (req, res) => {
     try {
       await ensureSpaceRecord(req.params.id!);
       await sendSpaceUserMessage(req.params.id!, content);
-    } catch { /* ignore */ }
+    } catch (err) {
+      // 不能静默:sendSpaceUserMessage 内部已推 assistant_error 事件,这里兜底错误日志
+      // (ensure 失败/prompt 抛错统一归因)。无此行时用户消息入库但 AI 零响应,前端零反馈。
+      logger.error({ threadId: req.params.id, err }, 'space message dispatch failed');
+    }
   })();
   res.status(204).end();
 });

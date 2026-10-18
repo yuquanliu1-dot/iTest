@@ -282,7 +282,19 @@ export async function sendSpaceUserMessage(threadId: string, content: string): P
   if (row && !row.title) {
     await db.update(aiThreads).set({ title: Array.from(content.trim()).slice(0, 40).join(''), updatedAt: new Date() }).where(eq(aiThreads.id, threadId));
   }
-  await rec.session.prompt(content);
+  try {
+    await rec.session.prompt(content);
+  } catch (err) {
+    // prompt 失败不能静默:用户消息已入库渲染,若无 AI 气泡也无错误提示就是"零反馈"假死。
+    // 经 emitThreadEvent 推一条 assistant_error,SSE 订阅者(含 devtools/未来 UI 钩子)可见;
+    // 然后 rethrow 让 router 层兜底日志,双层归因。
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ threadId, err }, 'space prompt failed');
+    try {
+      emitThreadEvent(threadId, { type: 'assistant_error', message });
+    } catch { /* emit 失败不再遮蔽原始错误 */ }
+    throw err;
+  }
 }
 
 export function cancelThread(threadId: string): void {
