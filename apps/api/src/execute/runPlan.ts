@@ -24,8 +24,11 @@ export function requestCancel(planRunId: string): void {
   if (s) s.cancelRequested = true;
 }
 
-export function isCancelRequested(planRunId: string): boolean {
-  return runState.get(planRunId)?.cancelRequested ?? false;
+export async function isCancelRequested(planRunId: string): Promise<boolean> {
+  // 同进程内存快速路径（cancel 路由先置内存再写 DB）；跨容器以 DB 为准。
+  if (runState.get(planRunId)?.cancelRequested) return true;
+  const row = (await db.select({ c: planRuns.cancelRequested }).from(planRuns).where(eq(planRuns.id, planRunId)).limit(1))[0];
+  return row?.c ?? false;
 }
 
 interface RunPlanInput {
@@ -228,7 +231,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
     (process.env.FORCE_FAIL_CASE_IDS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
   );
   for (let i = 0; i < cases.length; i++) {
-    if (isCancelRequested(planRunId)) {
+    if (await isCancelRequested(planRunId)) {
       const remaining = cases.length - i;
       for (let j = i; j < cases.length; j++) {
         await db.insert(planRunCases).values({
@@ -325,7 +328,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
     }
   }
 
-  const finalStatus = isCancelRequested(planRunId) ? 'cancelled' : failed > 0 ? 'failed' : 'passed';
+  const finalStatus = (await isCancelRequested(planRunId)) ? 'cancelled' : failed > 0 ? 'failed' : 'passed';
   const finalSummary = st(lang, 'planRun.summary', { passed, failed, skipped });
   await finalizeRun(planRunId, finalStatus, { passed, failed, skipped, summary: finalSummary });
   publish(planRunId, { type: 'plan_run_complete', status: finalStatus, summary: finalSummary });
