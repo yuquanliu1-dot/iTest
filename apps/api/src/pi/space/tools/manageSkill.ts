@@ -1,17 +1,20 @@
 /**
- * manage_skill：空间助手对话式管理全局技能（assistant_skills）。
- * 与系统设置页走同一 `skillsService`（校验/落库共用层），故规则完全一致
- * （name slug 校验 / 唯一 / scripts normalize / enabled 语义）。
+ * manage_skill：空间助手对话式管理全局技能（元数据）。
+ * 与系统设置页走同一 `skillsService`（校验/落库共用层），故规则完全一致。
+ *
+ * 2026-10-19 存储翻转后**只管元数据**：技能正文与目录树在 SKILLS_ROOT/<name>/，
+ * 内容写入面是 import_skill 与设置页文件树编辑器，本工具不提供 files[]。
+ * create 只产出 SKILL.md 骨架目录（一个空壳），真实内容用 import_skill 装。
  *
  * 仅对「有效管理员」线程注册（index.ts 按 ctx.manager 装配）；历史/非管理员线程无此工具。
  * action 语义：
- *   - list   ：全局技能清单（name/description/enabled/scripts 计数；含 id 供核对）
- *   - create ：新建（name/description/body/scripts?/enabled?）
- *   - update ：按唯一 name 定位，改 description/body/scripts/enabled/（renameTo=改名）
- *   - delete ：按唯一 name 删除
+ *   - list   ：全局技能清单（name/description/enabled/fileCount；含 id 供核对）
+ *   - create ：新建骨架（name/description/enabled?）
+ *   - update ：按唯一 name 定位，改 description/enabled（renameTo=改名，目录跟着搬）
+ *   - delete ：按唯一 name 删除（连目录）
  *
- * 生效口径：skill 目录在会话构建时从 DB 物化，改动对【新会话】生效；
- * 当前会话内 read_skill / run_skill_script 仍按构建时的快照（新技能不可见，旧技能未下架）。
+ * 生效口径：改动对【新会话】生效；已停用的技能在新会话里既不进 catalog，
+ * read_skill / run_skill_script 也会直接拒绝。
  */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
@@ -27,8 +30,6 @@ const Actions = z.object({
   /** create 的 slug；update/delete 用它定位目标技能。 */
   name: z.string().min(1).max(120).optional(),
   description: z.string().max(500).optional(),
-  body: z.string().optional(),
-  scripts: z.array(z.object({ filename: z.string(), runtime: z.string(), content: z.string() })).optional(),
   enabled: z.boolean().optional(),
   /** update：改名后的新 slug（原 name 仍作定位键）。 */
   renameTo: z.string().min(1).max(120).optional(),
@@ -43,7 +44,7 @@ export function buildManageSkillTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'manage_skill',
     description:
-      '对话式管理全局技能库（assistant_skills）。action=list(清单:name/description/enabled/scripts 数)| create(name,description,body,可选 scripts 数组[{filename,runtime,content}],可选 enabled)| update(name + 可选 description/body/scripts/enabled/renameTo 改名)| delete(name)。name 须为小写 slug(字母/数字/连字符,不以-开头结尾、无连续--);scripts 的 runtime ∈ node|python3|bash|sh。改动对【新会话】生效(技能目录在会话构建时从 DB 物化)——本会话内 read_skill/run_skill_script 仍按构建时快照,新建的技能要新会话才可见、删掉的仍可读到旧目录。',
+      '对话式管理全局技能库的【元数据】。action=list(清单:name/description/enabled/fileCount)| create(name,description,可选 enabled)| update(name + 可选 description/enabled/renameTo 改名)| delete(name)。name 须为小写 slug(字母/数字/连字符,不以-开头结尾、无连续--)。本工具不写技能正文——create 只建空骨架目录，真实内容用 import_skill 从 GitHub 装，或让用户在设置页的文件树编辑器里编辑。改动对【新会话】生效；停用的技能在新会话里不进 catalog，read_skill/run_skill_script 也会拒绝。',
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal('list'),
@@ -53,20 +54,14 @@ export function buildManageSkillTool(ctx: SpaceToolsContext): ToolExecutor {
       ]),
       name: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
       description: Type.Optional(Type.String({ maxLength: 500 })),
-      body: Type.Optional(Type.String()),
-      scripts: Type.Optional(Type.Array(Type.Object({
-        filename: Type.String(),
-        runtime: Type.String(),
-        content: Type.String(),
-      }))),
       enabled: Type.Optional(Type.Boolean()),
       renameTo: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
     }),
     promptGuidelines: [
-      '本工具仅对管理员线程开放；每个 action 都会点名当前生效口径。',
-      'create 必须给 name/description/body；name 是唯一键(slug),改名用 update 的 renameTo 而非重建。',
-      '改动对新会话生效：创建/改名后本会话 read_skill 仍可能读不到,告知用户需新开会话加载。',
-      'delete 不可逆,确认用户意图后再执行,并复述被删技能名。',
+      '本工具仅对管理员线程开放。',
+      'create 只建空骨架：要让技能真正可用，用 import_skill 从 GitHub 导入完整目录树，别在本工具里试图写正文。',
+      '改动对新会话生效：创建/改名后本会话 read_skill 仍可能读不到，告知用户需新开会话加载。',
+      'delete 不可逆（连磁盘目录一起删），确认用户意图后再执行，并复述被删技能名。',
     ],
     execute: async (input) => {
       let v: z.infer<typeof Actions>;
@@ -84,14 +79,17 @@ export function buildManageSkillTool(ctx: SpaceToolsContext): ToolExecutor {
         switch (v.action) {
           case 'list': {
             const rows = await listSkills();
-            return { ok: true, data: JSON.stringify(rows.map((r) => ({ ...r, scriptCount: r.scripts.length })), null, 2) };
+            return { ok: true, data: JSON.stringify(rows.map((r) => ({
+              id: r.id, name: r.name, description: r.description, enabled: r.enabled,
+              fileCount: r.fileCount, onDisk: r.onDisk, unregistered: r.unregistered,
+            })), null, 2) };
           }
           case 'create': {
-            if (!v.name || !v.description || v.body === undefined) {
-              return { ok: false, error: 'create 需要 name、description、body' };
+            if (!v.name || !v.description) {
+              return { ok: false, error: 'create 需要 name、description' };
             }
-            const created = await createSkill({ name: v.name, description: v.description, body: v.body, scripts: v.scripts ?? [], enabled: v.enabled });
-            return { ok: true, data: JSON.stringify({ created: created.name, scriptCount: created.scripts.length }, null, 2) };
+            const created = await createSkill({ name: v.name, description: v.description, enabled: v.enabled });
+            return { ok: true, data: JSON.stringify({ created: created.name, note: '仅创建了 SKILL.md 骨架，内容请用 import_skill 或设置页文件树编辑器补齐' }, null, 2) };
           }
           case 'update': {
             if (!v.name) return { ok: false, error: 'update 需要 name(目标技能)' };
@@ -100,12 +98,10 @@ export function buildManageSkillTool(ctx: SpaceToolsContext): ToolExecutor {
             const patch: Record<string, unknown> = {};
             if (v.renameTo) patch.name = v.renameTo;
             if (v.description !== undefined) patch.description = v.description;
-            if (v.body !== undefined) patch.body = v.body;
-            if (v.scripts !== undefined) patch.scripts = v.scripts;
             if (v.enabled !== undefined) patch.enabled = v.enabled;
-            if (Object.keys(patch).length === 0) return { ok: false, error: 'update 至少给一项要改的字段(description/body/scripts/enabled/renameTo)' };
+            if (Object.keys(patch).length === 0) return { ok: false, error: 'update 至少给一项要改的字段(description/enabled/renameTo)' };
             const updated = await updateSkill(id, patch);
-            return { ok: true, data: JSON.stringify({ updated: updated.name, scriptCount: updated.scripts.length }, null, 2) };
+            return { ok: true, data: JSON.stringify({ updated: updated.name }, null, 2) };
           }
           case 'delete': {
             if (!v.name) return { ok: false, error: 'delete 需要 name' };
