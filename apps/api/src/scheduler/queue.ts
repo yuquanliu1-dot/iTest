@@ -23,7 +23,9 @@ export function isSchedulerReady(): boolean {
 export function getRedis(): Redis {
   if (!_redis) {
     const url = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
-    _redis = new IORedis(url, { maxRetriesPerRequest: null });
+    // enableOfflineQueue:false → redis 断开时 add() 立即 reject,让调用方走 inline 回落
+    //（而非把任务无限缓冲在 offline 队列,留下永远 running 的 plan_run/report）。
+    _redis = new IORedis(url, { maxRetriesPerRequest: null, enableOfflineQueue: false });
     _redis.on('error', (err) => logger.debug({ err: err.message }, 'scheduler redis error'));
   }
   return _redis;
