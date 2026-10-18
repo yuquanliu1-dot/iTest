@@ -89,5 +89,6 @@ RUN mkdir -p /root/.cache/ms-playwright \
     fi \
  && rm -rf /tmp/itest-pw
 EXPOSE 54321
-# fresh DB schema 用 drizzle-kit push 同步（migrations 历史不完整，migrate 路径会失败）；后续启动才用 migrate 增量。
-CMD ["sh", "-c", "pnpm exec drizzle-kit push --force && node dist/index.js"]
+# schema 同步用 drizzle-kit push（schema.ts 是真相源，migrations 历史不完整不可回放）；
+# migrate.js 先取 PG advisory lock 再 push，串行化多容器并发启动，防互相冲突。
+CMD ["sh", "-c", "node dist/db/migrate.js && node dist/index.js"]
