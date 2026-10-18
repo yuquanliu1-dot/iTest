@@ -9,6 +9,9 @@ set -euo pipefail
 ROOT="${1:-/home/wangb/itest}"
 BACKUP_DIR="${ROOT}-backups"
 BACKUP_KEEP="${BACKUP_KEEP:-10}"
+# API 副本数(执行水平扩展):docker compose up -d --scale api=$API_REPLICAS;
+# 默认 1(单副本,行为与旧版 fire-and-forget 一致),部署到多副本机器再调大。
+API_REPLICAS="${API_REPLICAS:-1}"
 
 if [ ! -d "$ROOT" ]; then
   echo "找不到 $ROOT"
@@ -20,6 +23,11 @@ if [ ! -f "$ROOT/infra/docker/.env.production" ]; then
 fi
 
 cd "$ROOT"
+
+# 多副本后容器名是 itest-api-1/2/3;镜像相同、健康即全部健康,smoke/迁移取任意一个即可。
+api_replica() {
+  docker ps --filter name=itest-api --format '{{.Names}}' | head -1
+}
 
 # --- preflight ---
 command -v docker >/dev/null || { echo "docker 不可用"; exit 1; }
@@ -45,12 +53,17 @@ fi
 if [ "$FIRST_DEPLOY" = "0" ] && ! docker volume inspect itest-data >/dev/null 2>&1; then
   echo "== 创建 itest-data 卷并迁移历史 .data =="
   docker volume create itest-data >/dev/null
-  if docker exec itest-api sh -c "[ -d /repo/apps/api/.data ] && [ \"\$(ls -A /repo/apps/api/.data 2>/dev/null)\" ]" 2>/dev/null; then
-    docker run --rm \
-      -v itest-data:/dst \
-      --volumes-from itest-api \
-      alpine sh -c 'cd /repo/apps/api/.data && tar cf - . | tar xf - -C /dst' \
-      && echo "迁移完成"
+  REP="$(api_replica || true)"
+  if [ -n "$REP" ]; then
+    if docker exec "$REP" sh -c "[ -d /repo/apps/api/.data ] && [ \"\$(ls -A /repo/apps/api/.data 2>/dev/null)\" ]" 2>/dev/null; then
+      docker run --rm \
+        -v itest-data:/dst \
+        --volumes-from "$REP" \
+        alpine sh -c 'cd /repo/apps/api/.data && tar cf - . | tar xf - -C /dst' \
+        && echo "迁移完成"
+    fi
+  else
+    echo "API replica 未运行,跳过历史 .data 迁移(卷已存在则无害)"
   fi
 fi
 
@@ -62,7 +75,7 @@ if [ "$FIRST_DEPLOY" = "0" ]; then
   docker exec itest-pg pg_dump -U itest --clean --if-exists itest | gzip > "$BAK"
   echo "备份完成: $BAK ($(du -h "$BAK" | cut -f1))"
   ls -1t "$BACKUP_DIR"/itest-db-*.sql.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) | xargs -r rm -f
-  echo "回滚参考: docker stop itest-api itest-web && gunzip -c $BAK | docker exec -i itest-pg psql -U itest -d itest && 重启 api"
+  echo "回滚参考: docker compose -p itest stop api web && gunzip -c $BAK | docker exec -i itest-pg psql -U itest -d itest && docker compose -p itest up -d api web"
 else
   echo "== 首次部署：跳过备份（库还是空的）=="
 fi
@@ -74,7 +87,7 @@ docker build -t itest-web:latest -f infra/docker/web.Dockerfile .
 
 echo "== up services =="
 # --wait 用 healthcheck 替代 pg_isready + curl 轮询；超 120s 仍未 healthy 抛错（set -e 触发）。
-docker compose -p itest -f infra/docker/docker-compose.yml up -d --wait --wait-timeout 120
+docker compose -p itest -f infra/docker/docker-compose.yml up -d --scale api="$API_REPLICAS" --wait --wait-timeout 120
 
 if [ "$FIRST_DEPLOY" = "1" ]; then
   echo "== seed admin（仅首次）=="
@@ -89,9 +102,9 @@ SMOKE_FAIL=0
 SMOKE_WARN=""
 
 # (a) api 健康
-if ! docker exec itest-api node -e "fetch('http://127.0.0.1:54321/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
+if ! docker exec "$(api_replica)" node -e "fetch('http://127.0.0.1:54321/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
   SMOKE_WARN="$SMOKE_WARN
-  - api /api/health FAIL（看 docker logs itest-api）"
+  - api /api/health FAIL（看 docker compose logs api）"
   SMOKE_FAIL=1
 fi
 
@@ -102,7 +115,7 @@ fi
 #     注:旧实现用 username=\"admin\" 查,双引号在 SQL 里是标识符而非字符串字面量,
 #     必然抛 "column admin does not exist" → 每次发版都误报 + 触发上面那条重置。
 #     参数化查询绕开嵌套 shell 转义。
-if ! docker exec itest-api node -e "
+if ! docker exec "$(api_replica)" node -e "
   const run = async () => {
     const { default: pg } = await import('pg');
     const c = new pg.Client({ host: 'itest-pg', user: 'itest', password: 'itest', database: 'itest' });
@@ -123,7 +136,7 @@ if ! docker exec itest-api node -e "
 fi
 
 # (c) playwright/chromium 可启动（防镜像构建期 install 静默失败）
-if ! docker exec itest-api node -e "import('playwright-core').then(({chromium}) => chromium.launch({headless:true}).then(async b => { const c = await b.newContext(); const p = await c.newPage(); await p.goto('about:blank'); console.log('chromium OK:', await p.title()); await b.close(); }))" >/dev/null 2>&1; then
+if ! docker exec "$(api_replica)" node -e "import('playwright-core').then(({chromium}) => chromium.launch({headless:true}).then(async b => { const c = await b.newContext(); const p = await c.newPage(); await p.goto('about:blank'); console.log('chromium OK:', await p.title()); await b.close(); }))" >/dev/null 2>&1; then
   SMOKE_WARN="$SMOKE_WARN
   - chromium launch FAIL（重建 api 镜像或检查 PLAYWRIGHT_BROWSERS_PATH）"
   SMOKE_FAIL=1
@@ -131,7 +144,7 @@ fi
 
 # (d) 录制回连地址 sanity：扩展跑在用户浏览器里，wsUrl 指回环=远程用户必挂(2026-10-09 prod228 踩过)；
 #     环境变量缺失时 api 回落 ws://127.0.0.1:54321/recorder，同样是回环，一并告警。
-WS_URL="$(docker exec itest-api printenv RECORDER_PUBLIC_WS_URL 2>/dev/null || true)"
+WS_URL="$(docker exec "$(api_replica)" printenv RECORDER_PUBLIC_WS_URL 2>/dev/null || true)"
 if [ -z "$WS_URL" ] || echo "$WS_URL" | grep -qE '127\.0\.0\.1|localhost|::1'; then
   SMOKE_WARN="$SMOKE_WARN
   - RECORDER_PUBLIC_WS_URL 为空或指向回环(${WS_URL:-<unset>})：扩展在用户浏览器里运行，回连地址必须是浏览器可达的主机地址(如 ws://<服务器IP>:8080/api/recorder)"
@@ -142,7 +155,7 @@ fi
 #     用假 token 探测：链路通时 api 校验失败即断连，nginx 立刻回 502 → PASS；
 #     路径不匹配(踩过：proxy_pass 不带 URI 未把 /api/recorder 改写成 /recorder)时 upgrade 无人处理、
 #     请求挂起到超时 → FAIL；401/404 = nginx 丢了 Upgrade 头或 location 误路由 → FAIL。
-if ! docker exec itest-api node -e "
+if ! docker exec "$(api_replica)" node -e "
 const http = require('node:http');
 const req = http.request({
   host: 'itest-web', port: 80, path: '/api/recorder?sessionId=smoke&token=smoke',
@@ -161,7 +174,7 @@ fi
 
 # (f) 录制 REST 路由：POST /api/recorder/sessions 无凭证应得到 401/400(证明打到 api 的路由层)；
 #     若 /api/recorder 前缀被整体改写(踩过)，api 会回 404 Cannot POST /recorder/sessions。
-if ! docker exec itest-api node -e "
+if ! docker exec "$(api_replica)" node -e "
 fetch('http://itest-web:80/api/recorder/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
   .then((r) => process.exit(r.status === 404 ? 1 : 0))
   .catch(() => process.exit(1));

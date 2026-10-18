@@ -50,6 +50,8 @@ source "$ENV_FILE"
 DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
 DEPLOY_REMOTE_DIR="${DEPLOY_REMOTE_DIR:-/home/wangb/itest}"
 DEPLOY_BACKUP_KEEP="${DEPLOY_BACKUP_KEEP:-10}"
+DEPLOY_API_REPLICAS="${DEPLOY_API_REPLICAS:-1}"
+DEPLOY_EXEC_CONCURRENCY="${DEPLOY_EXEC_CONCURRENCY:-3}"
 
 if [ -n "${DEPLOY_SSH_PASSWORD:-}" ] && ! command -v sshpass >/dev/null 2>&1; then
   echo "deploy.d/$ENV.env 配置了 DEPLOY_SSH_PASSWORD 但本机没有 sshpass（brew install hudochenkov/sshpass/sshpass 或 apt install sshpass）"
@@ -117,5 +119,5 @@ run_ssh "
   set -e
   mkdir -p '$DEPLOY_REMOTE_DIR'
   tar xzf '$DEPLOY_REMOTE_DIR.tar.gz' -C '$DEPLOY_REMOTE_DIR'
-  BACKUP_KEEP='$DEPLOY_BACKUP_KEEP' bash '$DEPLOY_REMOTE_DIR/infra/docker/deploy.sh' '$DEPLOY_REMOTE_DIR'
+  BACKUP_KEEP='$DEPLOY_BACKUP_KEEP' API_REPLICAS='$DEPLOY_API_REPLICAS' EXEC_CONCURRENCY='$DEPLOY_EXEC_CONCURRENCY' bash '$DEPLOY_REMOTE_DIR/infra/docker/deploy.sh' '$DEPLOY_REMOTE_DIR'
 "
