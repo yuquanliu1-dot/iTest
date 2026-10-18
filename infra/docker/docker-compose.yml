@@ -27,7 +27,7 @@ services:
 
   api:
     image: itest-api:latest
-    container_name: itest-api
+    mem_limit: 4g
     restart: unless-stopped
     depends_on:
       postgres:
@@ -38,14 +38,14 @@ services:
       - .env.production
     environment:
       - PI_DATA_DIR=/repo/apps/api/.data
+      - EXEC_CONCURRENCY=${EXEC_CONCURRENCY:-3}
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:54321/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 30s
-    ports:
-      - "54321:54321"
+    # api 不映射宿主端口:入口只有 nginx 反代(http://api:54321 内部 DNS 轮询),多副本时固定端口必然冲突
     volumes:
       - itest-data:/repo/apps/api/.data
       - itest-screenshots:/repo/apps/api/screenshots
