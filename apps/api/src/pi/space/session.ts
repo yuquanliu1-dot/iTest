@@ -11,6 +11,7 @@ import { aiThreads, projectVersions, users } from '../../db/schema.js';
 import { aiLangFrom, type AiLang } from '../../agent/langDirective.js';
 import { logger } from '../../logger.js';
 import { buildSpaceTools } from './tools/index.js';
+import { buildSkillsSectionContent } from './tools/readSkill.js';
 import { buildSpaceSummary } from './summary.js';
 import { type AssistantGuideRow, buildGuidesSection, loadActiveGuides } from './guides.js';
 import { buildMcpExtensionFactory, getMcpServersForThread } from './mcp.js';
@@ -374,7 +375,7 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   if (!cfg) {
     throw new HttpError(502, 'llm_not_configured', 'LLM 未配置:请先到设置页配置模型');
   }
-  const { createAgentSession, SessionManager, DefaultResourceLoader, getAgentDir } = await import('@earendil-works/pi-coding-agent');
+  const { createAgentSession, SessionManager, DefaultResourceLoader, getAgentDir, loadSkills } = await import('@earendil-works/pi-coding-agent');
   const { getBuiltinModel } = await import('@earendil-works/pi-ai/providers/all');
   // 每个版本会话拥有独立工作空间：.data/workspaces/v-<versionId>，项目仓库检出在该空间下的 repo/ 子目录。
   // Agent 的 cwd 指向工作空间（避免写入污染仓库），repo 工具仍操作 repo/ 子目录。
@@ -382,6 +383,9 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   const repoDir = path.join(workspaceDir, 'repo');
   await fs.mkdir(workspaceDir, { recursive: true });
   await fs.mkdir(repoDir, { recursive: true });
+  // S2 按需技能目录：版本工作空间下 .pi/skills（发版时宿主挂载；本设计不负责其生命周期，只 mkdir 兜底）。
+  const skillsRoot = path.join(workspaceDir, '.pi', 'skills');
+  await fs.mkdir(skillsRoot, { recursive: true });
   // 兼容旧目录布局：若旧 .data/repos/v-<versionId> 存在而新 repo/ 尚未初始化，直接迁移避免重复克隆。
   const legacyRepoDir = path.join(REPOS_ROOT, `v-${ctx.versionId}`);
   const gitDir = path.join(repoDir, '.git');
@@ -396,7 +400,7 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
     execute: (input: unknown) => Promise<{ ok: true; data?: string } | { ok: false; error: string }>;
     promptGuidelines?: string[];
   };
-  const rawTools: ToolRaw[] = buildSpaceTools({ ...ctx, emit: (e) => emitThreadEvent(ctx.threadId, e) }) as ToolRaw[];
+  const rawTools: ToolRaw[] = buildSpaceTools({ ...ctx, workspaceDir, emit: (e) => emitThreadEvent(ctx.threadId, e) }) as ToolRaw[];
   const tools = rawTools.map((t) =>
     defineTool({
       name: t.name,
@@ -433,17 +437,37 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   }
   // S1 常驻指令：按 (lang, projectId, versionId) 查启用 guides（scope 覆盖 version>project>global）。
   const guides = await loadActiveGuides({ projectId: ctx.projectId, versionId: ctx.versionId, lang: ctx.lang });
+  // S2 catalog：与 loader.additionalSkillPaths 同源目录（loadSkills 同步）。Skill.location 取 filePath
+  // （Skill = { name, description, filePath, baseDir, sourceInfo, disableModelInvocation }）。
+  const skillsFiles = loadSkills({
+    cwd: workspaceDir,
+    agentDir: getAgentDir(),
+    skillPaths: [skillsRoot],
+    includeDefaults: false,
+  }).skills.map((s) => ({ name: s.name, description: s.description, location: s.filePath }));
   // loader 的 cwd 与 session 工作目录都指向版本独立工作空间（仓库在 ./repo 子目录），
   // 让 AI 对自身所在位置有正确认知，同时避免写入污染仓库检出。
   const loader = new DefaultResourceLoader({
     cwd: workspaceDir,
     agentDir: getAgentDir(),
+    additionalSkillPaths: [skillsRoot],
     appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText, ctx.lang, guides)],
     // 每轮开跑前把 preamble 换成产品身份。见 buildSpacePreamble 的注释：不能走
     // loader.systemPrompt，也不能直接改 systemPromptOptions.customPrompt，那两条路都会
     // 丢掉 rules 段里的工具 promptGuidelines。
     extensionFactories: [
-      // Task 4 的 skills 自渲染扩展将插在这里（在 MCP 之前）。
+      // S2 skills 段自渲染：必须在 MCP 与 identity 之前——identity 渲染 event.systemPrompt（getter，
+      // 从共享 currentOptions 重算）并返回 {systemPrompt}，会冻结后续 section 变更；而 skills 段
+      // 因 noTools:'builtin' 永远不会被 pi 自己渲染（system-prompt.js:99 门在 read/bash），只能自渲染。
+      {
+        name: 'itest-space-skills',
+        hidden: true,
+        factory: (pi) => {
+          pi.on('before_agent_start', (event) => {
+            event.systemPromptOptions.sections.skills = buildSkillsSectionContent(skillsFiles);
+          });
+        },
+      },
       // MCP：注册 + hermetic 建连装载。必须在 identity 前——identity 的 before_agent_start
       // 渲染 event.systemPrompt（含 mcp_servers 段）并返回 {systemPrompt}，会冻结后续 section 变更。
       mcpExtensions.register,
