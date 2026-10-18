@@ -103,4 +103,34 @@ describe('S1 guides：seed 幂等 + loadActiveGuides 语义 + CRUD/鉴权', () =
     expect((await request(managerApp).post('/api/assistant/guides')
       .send({ scope: 'global', kind: 'flow', body: '' })).status).toBe(400);
   });
+
+  it('跨组织隔离：project/version 归属组织，manager A 看不到/改不了 B 组织的 scoped guides，global 仍共享', async () => {
+    // 造第二个组织（不走 seedOrg 缓存）：组织 B + 项目 B + 版本 B
+    const orgB = randomUUID();
+    await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1, '组织B', $2)`, [orgB, `/${orgB}/`]);
+    const projB = (await pool.query(`INSERT INTO projects(organization_id, name) VALUES ($1, 'P-B') RETURNING id`, [orgB])).rows[0]!.id as string;
+    const verB = (await pool.query(`INSERT INTO project_versions(project_id, name) VALUES ($1, 'v0') RETURNING id`, [projB])).rows[0]!.id as string;
+    const gProjId = randomUUID();
+    const gVerId = randomUUID();
+    await pool.query(`INSERT INTO assistant_guides (id, scope, kind, body, lang, project_id, version_id) VALUES
+      ($1,'project','flow','B-PROJ','zh',$2,NULL),
+      ($3,'version','flow','B-VER','zh',NULL,$4)`,
+      [gProjId, projB, gVerId, verB]);
+    await pool.query(`INSERT INTO assistant_guides (id, scope, kind, body, lang) VALUES
+      ($1,'global','flow','SHARED','zh')`, [randomUUID()]);
+    // GET：B 组织 scoped 行不可见，global 仍返回
+    const listed = await request(managerApp).get('/api/assistant/guides');
+    expect(listed.status).toBe(200);
+    const bodies = listed.body.map((g: { body: string }) => g.body);
+    expect(bodies).toContain('SHARED');
+    expect(bodies).not.toContain('B-PROJ');
+    expect(bodies).not.toContain('B-VER');
+    // PATCH/DELETE：跨组织 scoped 行一律 404；POST 引用 B 组织项目/版本同样 404
+    expect((await request(managerApp).patch(`/api/assistant/guides/${gProjId}`).send({ body: 'X' })).status).toBe(404);
+    expect((await request(managerApp).delete(`/api/assistant/guides/${gVerId}`)).status).toBe(404);
+    expect((await request(managerApp).post('/api/assistant/guides')
+      .send({ scope: 'project', projectId: projB, kind: 'flow', body: 'X' })).status).toBe(404);
+    expect((await request(managerApp).post('/api/assistant/guides')
+      .send({ scope: 'version', versionId: verB, kind: 'flow', body: 'X' })).status).toBe(404);
+  });
 });
