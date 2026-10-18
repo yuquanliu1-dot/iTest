@@ -21,8 +21,8 @@ import {
   listSkills,
   updateSkill,
 } from './skillsService.js';
-import { listSkillTree, skillDirOf } from './skillsStore.js';
-import { resolveInSkill, writeSkillFileAtomic } from './skillPaths.js';
+import { isSafeSkillName, listSkillTree, SKILLS_ROOT, skillDirOf } from './skillsStore.js';
+import { removeSkillDir, resolveInSkill, writeSkillFileAtomic } from './skillPaths.js';
 
 export const skillsRoute = Router();
 
@@ -54,6 +54,21 @@ skillsRoute.patch('/:id', async (req, res) => {
 
 skillsRoute.delete('/:id', async (req, res) => {
   await deleteSkill(req.params.id);
+  res.status(204).end();
+});
+
+/** 删孤儿目录：磁盘上有目录但 DB 无行（id=null，故 :id 系列接口一律够不着）。
+ *  这类目录没法被任何会话加载（catalog 只认 DB 行），留着只会让设置页列表永远挂一条。
+ *  name 走 isSafeSkillName + removeSkillDir 双重守卫，删的必定是 SKILLS_ROOT 的直接子目录。 */
+skillsRoute.delete('/orphan/:name', async (req, res) => {
+  const name = String(req.params.name ?? '');
+  if (!isSafeSkillName(name)) throw new HttpError(400, 'bad_request', `skill 名称非法: ${name}`);
+  const row = (await db.select({ id: assistantSkills.id }).from(assistantSkills)
+    .where(eq(assistantSkills.name, name)).limit(1))[0];
+  // 已登记的走 DELETE /:id（连 DB 行一起删），这条路由只处理未登记的孤儿。
+  if (row) throw new HttpError(409, 'conflict', `「${name}」已登记，请用常规删除`);
+  if (!fs.existsSync(skillDirOf(name))) throw new HttpError(404, 'not_found', `skill 目录不存在: ${name}`);
+  removeSkillDir(SKILLS_ROOT, name);
   res.status(204).end();
 });
 
