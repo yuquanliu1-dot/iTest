@@ -76,6 +76,32 @@ if [ "$FIRST_DEPLOY" = "0" ]; then
   echo "备份完成: $BAK ($(du -h "$BAK" | cut -f1))"
   ls -1t "$BACKUP_DIR"/itest-db-*.sql.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) | xargs -r rm -f
   echo "回滚参考: docker compose -p itest stop api web && gunzip -c $BAK | docker exec -i itest-pg psql -U itest -d itest && docker compose -p itest up -d api web"
+
+  # --- 技能目录备份 ---
+  # 2026-10-19 起技能内容以文件系统为真源（DB 只存 name/description/enabled），
+  # skills/ 是内容【唯一副本】——卷损坏即全丢，且没有 pg_dump 那种 DB 兜底。
+  #
+  # 卷名不能写死:compose 会加项目名前缀(项目名取 docker-compose.yml 所在目录名,
+  # 实测为 infra_itest-data,见 deploy.sh:57 的 docker volume create 也在建带前缀的名字)。
+  # 故从任一 api 副本的实际挂载反查。:ro 挂载保证不可能误改线上目录树。
+  SKILL_VOLUME="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/repo/apps/api/.data"}}{{.Name}}{{end}}{{end}}' "$(api_replica)" 2>/dev/null)"
+  SKILL_BAK="$BACKUP_DIR/itest-skills-$STAMP.tar.gz"
+  if [ -n "$SKILL_VOLUME" ]; then
+    # 失败时 tar 仍会留下一个 4KB 的空壳归档（gzip 头 + 补零），du 看着像"备份很小"——
+    # 实测 skills/ 不存在时 tar exit 1 却产出 4KB。所以必须判退出码并删掉残骸，
+    # 否则「技能备份成功但内容为空」会静默过几周才被发现。
+    if docker run --rm -v "$SKILL_VOLUME:/src:ro" -v "$BACKUP_DIR:/dst" alpine \
+      sh -c "cd /src && tar czf /dst/itest-skills-$STAMP.tar.gz skills" 2>/dev/null; then
+      echo "技能目录备份: $SKILL_BAK ($(du -h "$SKILL_BAK" | cut -f1))"
+      ls -1t "$BACKUP_DIR"/itest-skills-*.tar.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) | xargs -r rm -f
+      echo "回滚参考: docker run --rm -v $SKILL_VOLUME:/dst -v \"\$BACKUP_DIR:/src:ro\" alpine sh -c 'rm -rf /dst/skills && tar xzf /src/itest-skills-$STAMP.tar.gz -C /dst'"
+    else
+      rm -f "$SKILL_BAK"
+      echo "WARN: 技能目录备份失败（卷上没有 skills/？），已删除空壳归档——技能内容此时只有这一份副本"
+    fi
+  else
+    echo "WARN: 未找到 api 的 .data 卷挂载，跳过技能目录备份（技能内容此时只有这一份副本）"
+  fi
 else
   echo "== 首次部署：跳过备份（库还是空的）=="
 fi
