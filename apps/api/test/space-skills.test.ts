@@ -34,7 +34,8 @@ beforeAll(async () => {
   const { managerUserOf, memberUserOf } = await import('./helpers/auth.js');
   const mount = (user: ReturnType<typeof managerUserOf>) => {
     const a = exp();
-    a.use(exp.json());
+    // 与 src/index.ts 一致的 body 上限；默认 100kb 会让「单文件 1MB」用例在解析层就失败。
+    a.use(exp.json({ limit: '2mb' }));
     a.use((req, _res, next) => { req.user = user; next(); });
     a.use('/api/assistant', spaceRoute);
     a.use(errorHandler);
@@ -143,5 +144,103 @@ describe('skills 元数据 CRUD（文件系统为真源）', () => {
     expect((await request(memberApp).get('/api/assistant/skills')).status).toBe(403);
     expect((await request(memberApp).patch('/api/assistant/skills/x').send({ enabled: true })).status).toBe(403);
     expect((await request(memberApp).delete('/api/assistant/skills/x')).status).toBe(403);
+  });
+});
+
+describe('skill 文件树接口', () => {
+  const newSkill = async (name: string): Promise<string> => {
+    const r = await request(managerApp).post('/api/assistant/skills').send({ name, description: 'd' });
+    expect(r.status).toBe(201);
+    return r.body.id as string;
+  };
+
+  it('PUT/GET/DELETE 文件往返', async () => {
+    const id = await newSkill('tree-skill');
+    fs.mkdirSync(path.join(skillDir('tree-skill'), 'scripts'), { recursive: true });
+    const put = await request(managerApp).put(`/api/assistant/skills/${id}/file`)
+      .send({ path: 'scripts/a.py', content: 'print(1)' });
+    expect(put.status).toBe(200);
+    const got = await request(managerApp).get(`/api/assistant/skills/${id}/file?path=scripts%2Fa.py`);
+    expect(got.status).toBe(200);
+    expect(got.body).toMatchObject({ path: 'scripts/a.py', content: 'print(1)', truncated: false });
+    expect((await request(managerApp).delete(`/api/assistant/skills/${id}/file?path=scripts%2Fa.py`)).status).toBe(204);
+    expect(fs.existsSync(path.join(skillDir('tree-skill'), 'scripts', 'a.py'))).toBe(false);
+  });
+
+  it('越界路径全部 400（绝对/.. /盘符/隐藏文件/.git/node_modules/空字节）', async () => {
+    const id = await newSkill('guard-skill');
+    for (const bad of ['../../etc/passwd', '/etc/passwd', 'C:\\Windows\\x', '.env', '.git/config', 'node_modules/x', 'scripts\\a.py']) {
+      const r = await request(managerApp).put(`/api/assistant/skills/${id}/file`).send({ path: bad, content: 'x' });
+      expect(r.status, `path=${bad}`).toBe(400);
+    }
+  });
+
+  it('软链逃逸 → 400（词法守卫挡不住的那类）', async () => {
+    const id = await newSkill('sym-skill');
+    fs.symlinkSync('/tmp', path.join(skillDir('sym-skill'), 'evil'));
+    const r = await request(managerApp).put(`/api/assistant/skills/${id}/file`).send({ path: 'evil/x', content: 'x' });
+    expect(r.status).toBe(400);
+  });
+
+  it('父目录不存在 → 400（不递归 mkdir，目录结构只来自 import）', async () => {
+    const id = await newSkill('nomkdir-skill');
+    const r = await request(managerApp).put(`/api/assistant/skills/${id}/file`).send({ path: 'no/such/dir/f.py', content: 'x' });
+    expect(r.status).toBe(400);
+  });
+
+  it('GET /tree 递归列出目录，剔除 .git', async () => {
+    const id = await newSkill('t2');
+    fs.mkdirSync(path.join(skillDir('t2'), 'references'), { recursive: true });
+    fs.mkdirSync(path.join(skillDir('t2'), '.git'), { recursive: true });
+    fs.writeFileSync(path.join(skillDir('t2'), 'references', 'schemas.md'), 'x');
+    fs.writeFileSync(path.join(skillDir('t2'), '.git', 'config'), 'x');
+    const t = await request(managerApp).get(`/api/assistant/skills/${id}/tree`);
+    expect(t.status).toBe(200);
+    const paths = t.body.map((n: { path: string }) => n.path);
+    expect(paths).toContain('references');
+    expect(paths).toContain('references/schemas.md');
+    expect(paths.some((p: string) => p.includes('.git'))).toBe(false);
+  });
+
+  it('POST /files 批量上传到已存在子目录', async () => {
+    const id = await newSkill('bulk-skill');
+    fs.mkdirSync(path.join(skillDir('bulk-skill'), 'agents'), { recursive: true });
+    const r = await request(managerApp).post(`/api/assistant/skills/${id}/files`)
+      .send({ dir: 'agents', files: [{ path: 'grader.md', content: 'g' }, { path: 'analyzer.md', content: 'a' }] });
+    expect(r.status).toBe(200);
+    expect(r.body.written.sort()).toEqual(['agents/analyzer.md', 'agents/grader.md']);
+    expect(fs.existsSync(path.join(skillDir('bulk-skill'), 'agents', 'grader.md'))).toBe(true);
+    // 子目录不存在 → 400（不代建目录）
+    expect((await request(managerApp).post(`/api/assistant/skills/${id}/files`)
+      .send({ dir: 'nope', files: [{ path: 'x.md', content: 'x' }] })).status).toBe(400);
+    // files 空数组 → 400
+    expect((await request(managerApp).post(`/api/assistant/skills/${id}/files`)
+      .send({ dir: 'agents', files: [] })).status).toBe(400);
+  });
+
+  it('DELETE /file 只能删文件，删目录 → 400', async () => {
+    const id = await newSkill('dirdel-skill');
+    fs.mkdirSync(path.join(skillDir('dirdel-skill'), 'scripts'), { recursive: true });
+    expect((await request(managerApp).delete(`/api/assistant/skills/${id}/file?path=scripts`)).status).toBe(400);
+  });
+
+  it('单文件写入超 1MB → 400', async () => {
+    const id = await newSkill('big-skill');
+    const r = await request(managerApp).put(`/api/assistant/skills/${id}/file`)
+      .send({ path: 'SKILL.md', content: 'x'.repeat(1_000_001) });
+    expect(r.status).toBe(400);
+  });
+
+  it('未知 skill id → 404', async () => {
+    expect((await request(managerApp).get('/api/assistant/skills/00000000-0000-0000-0000-000000000000/tree')).status).toBe(404);
+  });
+
+  it('member 对文件树接口一律 403', async () => {
+    const id = await newSkill('member-skill');
+    expect((await request(memberApp).get(`/api/assistant/skills/${id}/tree`)).status).toBe(403);
+    expect((await request(memberApp).get(`/api/assistant/skills/${id}/file?path=SKILL.md`)).status).toBe(403);
+    expect((await request(memberApp).put(`/api/assistant/skills/${id}/file`).send({ path: 'SKILL.md', content: 'x' })).status).toBe(403);
+    expect((await request(memberApp).delete(`/api/assistant/skills/${id}/file?path=SKILL.md`)).status).toBe(403);
+    expect((await request(memberApp).post(`/api/assistant/skills/${id}/files`).send({ dir: '.', files: [{ path: 'a', content: 'a' }] })).status).toBe(403);
   });
 });
