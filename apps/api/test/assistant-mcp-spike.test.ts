@@ -77,3 +77,52 @@ describe('MCP spike: registerMcpServer + createMcpExtension 真实链路', () =>
     }
   }, 60_000);
 });
+
+describe('MCP DB 加载 + 守卫（getMcpServersForThread 默认翻 DB）', () => {
+  it('loadEnabledMcpServers：启用 server 全加载，oauth/缺失二进制/http 非 http(s) 全 skip', async () => {
+    const { loadEnabledMcpServers } = await import('../src/pi/space/mcp.js');
+    try {
+      await pool.query(`INSERT INTO assistant_mcp_servers (id, name, kind, command, exposure, enabled) VALUES
+        ($1, 'echo-db', 'stdio', $2, 'direct', true)`,
+        ['00000000-0000-0000-0000-0000000000d1', process.execPath]);
+      await pool.query(`INSERT INTO assistant_mcp_servers (id, name, kind, command, exposure, enabled) VALUES
+        ($1, 'bad-oauth', 'stdio', 'node', 'oauth', true)`,
+        ['00000000-0000-0000-0000-0000000000d2']);
+      await pool.query(`INSERT INTO assistant_mcp_servers (id, name, kind, command, exposure, enabled) VALUES
+        ($1, 'missing-bin', 'stdio', '/nonexistent/definitely-missing', 'direct', true)`,
+        ['00000000-0000-0000-0000-0000000000d3']);
+      await pool.query(`INSERT INTO assistant_mcp_servers (id, name, kind, url, exposure, enabled) VALUES
+        ($1, 'file-url', 'http', 'file:///etc/passwd', 'direct', true)`,
+        ['00000000-0000-0000-0000-0000000000d4']);
+      const servers = await loadEnabledMcpServers();
+      const names = servers.map((s) => s.name);
+      expect(names).toContain('echo-db');
+      expect(names).not.toContain('bad-oauth');
+      expect(names).not.toContain('missing-bin');
+      expect(names).not.toContain('file-url');
+      const echo = servers.find((s) => s.name === 'echo-db')!;
+      expect(echo.config).toMatchObject({ type: 'stdio', command: process.execPath, exposure: 'direct' });
+    } finally {
+      await pool.query(`DELETE FROM assistant_mcp_servers`);
+    }
+  });
+
+  it('resolveMcpEnv：env:KEY 从 process.env 取真实值；未定义跳过', async () => {
+    const { resolveMcpEnv } = await import('../src/pi/space/mcp.js');
+    process.env.ITEST_MCP_SPIKE_KEY = 'supersecret';
+    try {
+      expect(resolveMcpEnv({ TOKEN: 'env:ITEST_MCP_SPIKE_KEY', PLAIN: 'hello' }))
+        .toEqual({ TOKEN: 'supersecret', PLAIN: 'hello' });
+      expect(resolveMcpEnv({ MISSING: 'env:NOPE_NOT_SET' })).toEqual({});
+    } finally {
+      delete process.env.ITEST_MCP_SPIKE_KEY;
+    }
+  });
+
+  it('findExecutable：绝对/相对路径按存在性，裸名按 PATH 扫描', async () => {
+    const { findExecutable } = await import('../src/pi/space/mcp.js');
+    expect(findExecutable(process.execPath)).toBe(true);
+    expect(findExecutable('/nonexistent/definitely-missing')).toBe(false);
+    expect(findExecutable('node')).toBe(true);
+  });
+});

@@ -12,12 +12,87 @@
  */
 import { createMcpExtension } from '@earendil-works/pi-coding-agent';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import type { McpServerConfig } from '@earendil-works/pi-coding-agent';
+import type { McpExposure, McpServerConfig } from '@earendil-works/pi-coding-agent';
+import { eq } from 'drizzle-orm';
+import { existsSync, accessSync, constants } from 'node:fs';
+import path from 'node:path';
+import { db } from '../../db/client.js';
+import { assistantMcpServers } from '../../db/schema.js';
 import { logger } from '../../logger.js';
 
 export interface AssistantMcpServer {
   name: string;
   config: McpServerConfig;
+}
+
+type AssistantMcpServerRow = typeof assistantMcpServers.$inferSelect;
+
+const MCP_EXPOSURES = new Set(['codemode', 'deferred', 'direct', 'hidden']);
+
+/** env 值解引用：`env:KEY` 语法从 process.env 取（容器 secrets 统一走宿主机注入，明文不落 DB）。
+ *  未定义 key 直接丢弃（不注入空占位）。 */
+export function resolveMcpEnv(env?: Record<string, string> | null): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env ?? {})) {
+    if (typeof v !== 'string') continue; // DB 脏值防御：非字符串直接丢弃
+    if (v.startsWith('env:')) {
+      const real = process.env[v.slice(4)];
+      if (real !== undefined) out[k] = real;
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/** stdio command 可执行性探测：含路径分隔符 → 按绝对/相对路径 exists；否则按 PATH 逐个 scan X_OK。 */
+export function findExecutable(cmd: string): boolean {
+  if (cmd.includes('/')) return existsSync(cmd);
+  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
+    if (!dir) continue;
+    try { accessSync(path.join(dir, cmd), constants.X_OK); return true; } catch { /* continue */ }
+  }
+  return false;
+}
+
+/** 行 → 可挂载 server；每条坏配置 skip+warn（warn-not-fail：一个坏 server 不拖垮整个助手）。
+ *  守卫（spec §MCP）：exposure=oauth/非法 → 拒；kind 未知 → 拒；stdio 缺 command/二进制不可执行 → 拒；
+ *  http url 非 http(s) → 拒。返回 null 表示跳过。 */
+export function mcpServerToEntry(row: AssistantMcpServerRow): AssistantMcpServer | null {
+  if (!MCP_EXPOSURES.has(row.exposure)) {
+    logger.warn({ name: row.name, exposure: row.exposure }, 'mcp server exposure 非法（oauth 等均不支持），跳过');
+    return null;
+  }
+  if (row.kind === 'stdio') {
+    if (!row.command) { logger.warn({ name: row.name }, 'mcp stdio server 缺少 command，跳过'); return null; }
+    if (!findExecutable(row.command)) {
+      logger.warn({ name: row.name, command: row.command }, 'mcp stdio server 二进制不可执行，跳过（warn-not-fail）');
+      return null;
+    }
+    // 上方 MCP_EXPOSURES 已守卫，drizzle varchar 的 exposure 是 string，这里收窄成 McpExposure
+    return { name: row.name, config: { type: 'stdio', command: row.command, args: row.args ?? [], env: resolveMcpEnv(row.env), exposure: row.exposure as McpExposure } };
+  }
+  if (row.kind === 'http') {
+    if (!row.url || !/^https?:\/\//.test(row.url)) {
+      logger.warn({ name: row.name, url: row.url }, 'mcp http server url 非 http(s)，跳过（防 file:// 等本地读取）');
+      return null;
+    }
+    return { name: row.name, config: { type: 'http', url: row.url, headers: resolveMcpEnv(row.env), exposure: row.exposure as McpExposure } };
+  }
+  logger.warn({ name: row.name, kind: row.kind }, 'mcp server kind 未知，跳过');
+  return null;
+}
+
+/** 从 assistant_mcp_servers 表加载启用 server（坏配置跳过）。scope 本期全部按 global 加载：
+ *  /api/assistant 已被 nginx 钉单副本，所有线程加载全部启用 server；project/version 过滤留作后续。 */
+export async function loadEnabledMcpServers(): Promise<AssistantMcpServer[]> {
+  const rows = await db.select().from(assistantMcpServers).where(eq(assistantMcpServers.enabled, true));
+  const out: AssistantMcpServer[] = [];
+  for (const row of rows) {
+    const entry = mcpServerToEntry(row);
+    if (entry) out.push(entry);
+  }
+  return out;
 }
 
 export interface McpThreadCtx {
@@ -35,11 +110,11 @@ export function setMcpServersLoader(fn: McpServersLoader | null): void {
   serversLoader = fn;
 }
 
-/** 线程创建时取 MCP servers。默认（无显式 loader）返回空集——Task 3 改为 DB 加载。 */
+/** 线程创建时取 MCP servers。默认 = DB 加载；测试用 setMcpServersLoader 注入桩。 */
 export async function getMcpServersForThread(ctx: McpThreadCtx): Promise<AssistantMcpServer[]> {
-  if (!serversLoader) return [];
+  const loader: McpServersLoader = serversLoader ?? (async () => loadEnabledMcpServers());
   try {
-    return await serversLoader(ctx);
+    return await loader(ctx);
   } catch (e) {
     logger.warn({ err: e, threadId: ctx.threadId }, 'mcp servers load failed; continuing without');
     return [];
