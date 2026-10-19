@@ -21,9 +21,13 @@ import { readLlmConfig, synthesizeModel, ENV_BY_PROVIDER } from '../modelBridge.
 import { HttpError } from '../../middleware/errorHandler.js';
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
-import { checkoutRepoForVersion, LockTimeoutError, RepoUnavailableError, REPOS_ROOT, WORKSPACES_ROOT } from '../repo.js';
+import { checkoutRepoForVersion, LockTimeoutError, RepoUnavailableError, DATA_DIR, REPOS_ROOT, WORKSPACES_ROOT } from '../repo.js';
 import { emptyRepoState, type RepoState } from './tools/context.js';
 import { pendingConfirmPayloads } from './confirm.js';
+
+/** pi 会话 JSONL 落盘目录。落 .data 共享卷(prod228 三副本共享),不能走 pi 默认的
+ *  ~/.pi/agent/sessions(容器内本地盘,跨副本看不见)。 */
+export const SESSIONS_ROOT = path.join(DATA_DIR, 'pi-sessions');
 
 /** 图片附件（pi-ai 的 ImageContent 形状）：base64 裸串，不带 data: 前缀。 */
 export interface SpacePromptImage {
