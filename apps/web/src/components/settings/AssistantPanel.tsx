@@ -12,6 +12,7 @@ import IconButton from '../ui/IconButton';
 import EmptyState from '../ui/EmptyState';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 import SkillsSection from './skills/SkillsSection';
+import FeedbackSection from './FeedbackSection';
 
 /** MCP_EXPOSURES 与服务端 mcp.js 同源白名单（oauth 服务端不支持）。 */
 const EXPOSURES = ['codemode', 'deferred', 'direct', 'hidden'] as const;
@@ -237,6 +238,7 @@ export default function AssistantPanel() {
       </div>
       <McpServersSection />
       <SkillsSection />
+      <FeedbackSection />
     </div>
   );
 }

@@ -104,5 +104,17 @@
   "goConfigureModel": "Go to model settings",
   "retry": "Retry",
   "emptyTitle": "Start your first chat with AI",
-  "emptyDesc": "Try \"see what environments are available\" or \"create three login cases for me\"."
+  "emptyDesc": "Try \"see what environments are available\" or \"create three login cases for me\".",
+  "feedback": {
+    "positive": "Helpful",
+    "negative": "Not helpful",
+    "actionsAria": "Feedback on this reply",
+    "commentPlaceholder": "What was wrong? Describe the problem (optional)",
+    "submit": "Send feedback",
+    "cancel": "Cancel",
+    "submitted": "Feedback submitted",
+    "submittedPositive": "Marked as helpful",
+    "submittedNegative": "Improvement noted",
+    "submitFailed": "Failed to submit feedback"
+  }
 }

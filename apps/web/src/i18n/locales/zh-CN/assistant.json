@@ -104,5 +104,17 @@
   "goConfigureModel": "去设置模型",
   "retry": "重试",
   "emptyTitle": "开始与 AI 的第一次对话",
-  "emptyDesc": "试试「看看现在有哪些环境」或「帮我建三条登录用例」。"
+  "emptyDesc": "试试「看看现在有哪些环境」或「帮我建三条登录用例」。",
+  "feedback": {
+    "positive": "有帮助",
+    "negative": "没帮助",
+    "actionsAria": "对这条回复反馈",
+    "commentPlaceholder": "哪里不对？说说具体问题（可留空）",
+    "submit": "提交反馈",
+    "cancel": "取消",
+    "submitted": "已提交反馈",
+    "submittedPositive": "已标记为有帮助",
+    "submittedNegative": "已提交改进意见",
+    "submitFailed": "反馈提交失败"
+  }
 }

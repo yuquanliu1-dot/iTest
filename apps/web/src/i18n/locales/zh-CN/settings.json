@@ -76,5 +76,21 @@
   "skillUploadHint": "上传落到当前选中项：选中目录则进入该目录，选中文件则进入其所在目录；不新建目录。",
   "skillUploadFail": "读取失败",
   "skillDeleteConfirm": "确定删除技能「{{name}}」？",
-  "skillDeleteAlsoDir": "技能内容在服务端磁盘上，删除会连同整个目录一起移除，不可恢复。"
+  "skillDeleteAlsoDir": "技能内容在服务端磁盘上，删除会连同整个目录一起移除，不可恢复。",
+  "feedbackTitle": "用户反馈",
+  "feedbackIntro": "用户在助手对话中提交的 👍/👎 与文字意见，仅收集不自动生效（AI 助手优化建议的人工输入来源）。",
+  "feedbackNone": "还没有收到反馈",
+  "feedbackAll": "全部",
+  "feedbackPositive": "有帮助",
+  "feedbackNegative": "需改进",
+  "feedbackAllProjects": "全部项目",
+  "feedbackUser": "提交人",
+  "feedbackAnonymous": "（用户已删除）",
+  "feedbackOpinion": "用户意见",
+  "feedbackOnReply": "针对回复",
+  "feedbackNoComment": "（未填写文字）",
+  "feedbackLoadFailed": "反馈加载失败",
+  "feedbackTotal": "共 {{count}} 条",
+  "feedbackPrev": "上一页",
+  "feedbackNext": "下一页"
 }

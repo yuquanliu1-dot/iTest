@@ -17,6 +17,7 @@ import type { AuthUser } from '../../services/auth.service.js';
 import { readLlmConfig } from '../modelBridge.js';
 import { resolveConfirmation } from './confirm.js';
 import { stageRoute } from './stageRoute.js';
+import { feedbackRoute } from './feedbackRoute.js';
 import { requireManager } from '../../middleware/auth.js';
 import { guidesRoute } from './guidesRoute.js';
 import { mcpServersRoute } from './mcpServersRoute.js';
@@ -190,6 +191,10 @@ spaceRoute.get('/threads/:id/live/:key', async (req, res) => {
 });
 
 spaceRoute.use(stageRoute);
+
+// 用户反馈（只收集不消费）。与 stage 同档：不挂 requireManager——提交反馈是普通用户
+// 行为，线程可见性由 feedbackRoute 内的 assertSpaceThreadVisible 兜底。
+spaceRoute.use(feedbackRoute);
 
 // 管理端 CRUD：requireManager 保护（member → 403）。挂在 /api/assistant 之下，
 // 全局 requireAuth 由更外层 index.ts 统一承担（router.ts 自身不重复鉴权）。

@@ -711,3 +711,34 @@ export const assistantSkills = pgTable('assistant_skills', {
   nameUq: unique('assistant_skills_name_uq').on(t.name),
   enabledIdx: index('assistant_skills_enabled_idx').on(t.enabled),
 }));
+
+// ── AI 助手用户反馈（Phase 1：只收集，不消费）──
+// 用户在对话中对 AI 回复提出的建议/质疑/诉求，落库供后续沉淀为优化依据。
+// 刻意不存指向消息的外键：消息全内存（SessionManager.inMemory），没有可外键的表，
+// 且 pi 投影层的消息 id 只是位置索引（pi-msg:<index>），进程重启后无法复现。
+// 因此本表自带内容快照——messageExcerpt 才是回溯的真正依据，messageAnchor 仅作线索。
+// threadId/versionId/projectId 同样是裸 uuid 无 FK：反馈是审计数据，不应随 version
+// 删除而 cascade 消失（对比 aiStageCases.threadId 无 FK，那是暂存数据，语义不同）。
+export const aiAssistantFeedback = pgTable('ai_assistant_feedback', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  threadId: uuid('thread_id').notNull(),
+  versionId: uuid('version_id').notNull(),
+  projectId: uuid('project_id').notNull(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  /** 反馈挂载的消息角色。2026-10 起前端只给 AI 回复挂按钮，恒为 'assistant'；保留列以备将来挂用户消息。 */
+  role: varchar('role', { length: 16 }).notNull().default('assistant'),
+  /** 前端投影层消息 id（如 'pi-msg:7'）。位置索引会随流式漂移，仅作线索，不是主键。 */
+  messageAnchor: varchar('message_anchor', { length: 64 }),
+  messageIndex: integer('message_index'),
+  /** 消息正文前 500 字符快照——thread 从 UI 消失后，管理员靠这段仍能读懂语境。 */
+  messageExcerpt: text('message_excerpt'),
+  messageAt: timestamp('message_at'),
+  sentiment: varchar('sentiment', { length: 16 }).notNull(),
+  /** 用户补充说明，可空（点 👎 不填文字也算一条有效反馈）。 */
+  comment: text('comment'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  threadIdx: index('ai_assistant_feedback_thread_idx').on(t.threadId),
+  versionIdx: index('ai_assistant_feedback_version_idx').on(t.versionId),
+  userIdx: index('ai_assistant_feedback_user_idx').on(t.userId),
+}));

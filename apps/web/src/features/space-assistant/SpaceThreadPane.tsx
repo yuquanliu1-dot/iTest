@@ -10,6 +10,7 @@ import {
 } from '@assistant-ui/react';
 import { useTranslation } from 'react-i18next';
 import ConfirmCard from './ConfirmCard';
+import FeedbackActions from './FeedbackActions';
 import Icon, { type IconName } from '../../components/Icon';
 import Markdown from '../../components/ui/Markdown';
 import { useSpaceEventsStore } from './spaceEventsStore';
@@ -25,7 +26,13 @@ export default function SpaceThreadPane({ threadId }: { threadId: string }) {
     <div className="flex flex-col h-full">
       <ThreadPrimitive.Root className="flex flex-col h-full">
         <ThreadPrimitive.Viewport className="flex-1 min-h-0 overflow-y-auto px-4 py-5">
-          <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
+          <ThreadPrimitive.Messages components={{
+            UserMessage,
+            // 反馈入口要拿到 threadId 才能提交，而 components 只能收组件类型（无 props 通道）
+            // —— 这里用闭包包一层把 threadId 注入进去。不接任何 props：消息正文由
+            // MessagePrimitive 通过 context 拿，wrapper 只负责注入 threadId。
+            AssistantMessage: () => <AssistantMessage threadId={threadId} />,
+          }} />
           {/* 运行期常驻指示:工具间隙/模型静默期没有任何可见输出,靠底部三点动效提示会话仍在跑,避免"卡死"错觉 */}
           <ThreadPrimitive.If running>
             <RunningIndicator />
@@ -79,25 +86,28 @@ function UserMessage() {
   );
 }
 
-function AssistantMessage() {
+function AssistantMessage({ threadId }: { threadId: string }) {
   return (
-    <div className="fade-up mb-4 text-[13px]" style={{ color: 'var(--foreground)' }}>
-      <MessagePrimitive.Parts
-        components={{
-          Text: TextPart,
-          Reasoning: ThinkingPart,
-          tools: { Fallback: ToolActivity },
-        }}
-      />
-      {/* LLM 失败(stopReason=error):错误原文必须可见,否则用户看到的是零反馈 */}
-      <ErrorPrimitive.Message
-        className="mt-1.5 block w-fit max-w-full break-all rounded-[var(--radius-md)] px-2.5 py-1.5 text-[12px]"
-        style={{
-          background: 'var(--destructive-soft)',
-          border: '1px solid var(--destructive-soft-border)',
-          color: 'var(--destructive)',
-        }}
-      />
+    <div className="fade-up mb-4 group" style={{ color: 'var(--foreground)' }}>
+      <div className="text-[13px]">
+        <MessagePrimitive.Parts
+          components={{
+            Text: TextPart,
+            Reasoning: ThinkingPart,
+            tools: { Fallback: ToolActivity },
+          }}
+        />
+        {/* LLM 失败(stopReason=error):错误原文必须可见,否则用户看到的是零反馈 */}
+        <ErrorPrimitive.Message
+          className="mt-1.5 block w-fit max-w-full break-all rounded-[var(--radius-md)] px-2.5 py-1.5 text-[12px]"
+          style={{
+            background: 'var(--destructive-soft)',
+            border: '1px solid var(--destructive-soft-border)',
+            color: 'var(--destructive)',
+          }}
+        />
+      </div>
+      <FeedbackActions threadId={threadId} />
     </div>
   );
 }
