@@ -11,7 +11,7 @@ import { analyzeLocatorCandidatesBatch, type SourceCount } from '../execute/stat
 import type { Locator } from '@itest/shared';
 import type { ToolExecutor } from './tools.js';
 
-const DATA_DIR = process.env.PI_DATA_DIR ?? path.resolve(process.cwd(), '.data');
+export const DATA_DIR = process.env.PI_DATA_DIR ?? path.resolve(process.cwd(), '.data');
 export const REPOS_ROOT = path.join(DATA_DIR, 'repos');
 export const WORKSPACES_ROOT = path.join(DATA_DIR, 'workspaces');
 export const REPO_LOCK_TIMEOUT_MS = 5_000;
