@@ -2,6 +2,7 @@
   "nav": {
     "signIn": "Sign in",
     "openApp": "Open app",
+    "pains": "Pain points",
     "features": "Features",
     "workflow": "Workflow",
     "screenshots": "Preview"
@@ -14,6 +15,16 @@
     "subtitle": "An AI-native testing platform: generate cases from requirements in one click, replay in dual mode — AI-driven and mechanical DSL, self-healing cases that evolve with every release, and change coverage auto-selected from source diffs.",
     "primaryCta": "Get started",
     "secondaryCta": "Learn more"
+  },
+  "pains": {
+    "eyebrow": "Pain points",
+    "title": "Regression automation hits three walls",
+    "subtitle": "Automation matters — it's the two available paths that don't work.",
+    "items": [
+      { "title": "Recorded scripts break on every change", "desc": "Traditional recordings bind to page structure and locators, so a single version change invalidates whole batches of cases. Repairing them often takes longer than re-recording." },
+      { "title": "Intent-driven testing: slow and unpredictable", "desc": "Having an agent reason through every step is slow and token-heavy — and the same case can behave differently under a different model or context." },
+      { "title": "AI coding accelerates; coverage lags behind", "desc": "Commit frequency is multiplying, but test assets still update by hand — impact never assessed, changes never covered, so regression stays a blind run." }
+    ]
   },
   "showcase": {
     "eyebrow": "Preview",
