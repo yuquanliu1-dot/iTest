@@ -127,7 +127,10 @@ projectVersionsRoute.get('/projects/:projectId/refs', requireManager, async (req
     });
     res.json({ kind, refs });
   } catch (err) {
-    res.status(400).json({ kind, refs: [], error: (err as Error).message });
+    // 前端 request() 只认 body.message，缺省会兜底成「HTTP 400」——列举失败的原因
+    // （如 gitlab 不支持列 refs）必须放进 message 才能直达 UI 的手动输入分支。
+    const message = (err as Error).message;
+    res.status(400).json({ kind, refs: [], error: 'refs_list_failed', message });
   }
 });
 
