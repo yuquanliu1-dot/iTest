@@ -465,12 +465,12 @@ export default function StagePanel({ projectId, versionId }: Props) {
             key={tabItem.key}
             type="button"
             onClick={() => setTab(tabItem.key)}
-            className="rounded px-2 py-1 text-[12px]"
+            className={`btn-tint rounded px-2 py-1 text-[12px] ${tab === tabItem.key ? 'btn-sel' : ''}`}
             style={{
-              background: tab === tabItem.key ? 'var(--primary-soft)' : 'transparent',
               color: tab === tabItem.key ? 'var(--primary)' : 'var(--muted-foreground)',
               fontWeight: tab === tabItem.key ? 600 : 400,
             }}
+            aria-current={tab === tabItem.key}
           >
             {t(tabItem.label)} ({partitioned[tabItem.key].length})
           </button>
@@ -478,7 +478,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
         {tabItems.length > 0 && (
           <button
             type="button"
-            className="ml-auto text-[11px]"
+            className="btn-tint ml-auto text-[11px] rounded px-1 hover:underline underline-offset-2"
             style={{ color: 'var(--muted-foreground)' }}
             onClick={() => selectAll(activeThreadId, tab, !tabAllSelected)}
           >

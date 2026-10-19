@@ -149,6 +149,39 @@ select:focus-visible {
 }
 .press:active { transform: scale(0.97); }
 
+/* ── 按钮悬浮/按下反馈 ───────────────────────────────────────────────────────
+   两类按钮需要两种反馈方式：
+   - .btn-feedback   实心底按钮（发送/停止/确认执行）。背景是设计指定的实色，悬浮时
+     用 filter 提亮——filter 只作用于已渲染像素，不动元素自己的 background，
+     所以选中态/危险色都不会被冲掉。
+   - .btn-tint       透明底按钮（图标、Tab、链接式操作）。悬浮垫一层 muted 底 +
+     前景色转深。这类按钮的背景必须走 class，不能写在 inline style 上——行内样式
+     优先级高于任何 Tailwind hover:bg-*，写了就等于没有悬浮反馈。
+   .btn-sel 是配套的选中态修饰类（bg-[var(--muted)] 之类写在行内或 class 都行，
+   但它必须在 DOM 里作为独立 class 出现，不能只靠 Tailwind 动态拼接生成）。 */
+.btn-feedback,
+.btn-tint {
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.12s ease, background-color 0.15s ease, color 0.15s ease,
+    border-color 0.15s ease;
+}
+.btn-feedback:hover:not(:disabled) { filter: brightness(1.08); }
+.btn-feedback:active:not(:disabled) { filter: brightness(0.92); transform: scale(0.97); }
+.btn-feedback:disabled,
+.btn-tint:disabled { cursor: default; filter: none; }
+
+.btn-tint:hover:not(:disabled) { background-color: var(--muted); color: var(--foreground); }
+.btn-tint:active:not(:disabled) { background-color: var(--accent); transform: scale(0.97); }
+
+/* 选中态底色。声明成普通类而非 Tailwind 任意值 bg-[…]：后者依赖 JIT 扫描到源码里的
+   完整字面量，动态拼接的 class 扫不到就会静默失效（选中态底色消失且无任何报错）。
+   .btn-sel 必须压过 .btn-tint:hover（悬浮态），否则鼠标扫过已选中的 Tab/线程
+   会把它的高亮冲成普通灰——两条规则同权重，靠源码里 .btn-sel 写在后面定序。 */
+.btn-sel { background-color: var(--primary-soft); color: var(--primary); }
+.btn-sel.btn-tint:hover:not(:disabled) { background-color: var(--primary-soft); }
+/* 新对话按钮的选中态用 muted（与 StagePanel 的 primary-soft tab 区分开） */
+.btn-sel-muted { background-color: var(--muted); }
+
 /* ── Hairline dividers ───────────────────────────────────────────────────── */
 .hairline-bottom {
   border-bottom: 1px solid var(--border);

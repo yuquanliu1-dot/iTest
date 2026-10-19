@@ -101,7 +101,7 @@ export default function FeedbackActions({ threadId }: { threadId: string }) {
           title={t('assistant:feedback.positive')}
           disabled={submit.isPending}
           onClick={() => submit.mutate({ sentiment: 'positive' })}
-          className="rounded p-1 disabled:opacity-50"
+          className="btn-tint rounded p-1 disabled:opacity-50"
           style={{ color: 'var(--muted-foreground)' }}
         >
           <ThumbUp filled={false} />
@@ -112,7 +112,7 @@ export default function FeedbackActions({ threadId }: { threadId: string }) {
           title={t('assistant:feedback.negative')}
           disabled={submit.isPending}
           onClick={() => setOpen((v) => !v)}
-          className="rounded p-1 disabled:opacity-50"
+          className="btn-tint rounded p-1 disabled:opacity-50"
           style={{ color: 'var(--muted-foreground)' }}
         >
           <ThumbDown filled={false} />
@@ -142,15 +142,15 @@ export default function FeedbackActions({ threadId }: { threadId: string }) {
           <div className="flex justify-end gap-2">
             <button
               type="button"
-              className="rounded-md px-2.5 py-1 text-[12px]"
-              style={{ border: '1px solid var(--border)', color: 'var(--muted-foreground)', background: 'transparent' }}
+              className="btn-tint rounded-md px-2.5 py-1 text-[12px]"
+              style={{ border: '1px solid var(--border)', color: 'var(--muted-foreground)' }}
               onClick={() => { setOpen(false); setComment(''); }}
             >
               {t('assistant:feedback.cancel')}
             </button>
             <button
               type="button"
-              className="rounded-md px-2.5 py-1 text-[12px] text-white disabled:opacity-50"
+              className="btn-feedback rounded-md px-2.5 py-1 text-[12px] text-white disabled:opacity-50"
               style={{ background: 'var(--primary)' }}
               disabled={submit.isPending}
               onClick={() => submit.mutate({ sentiment: 'negative', comment: comment.trim() || undefined })}
