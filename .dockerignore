@@ -1,0 +1,13 @@
+# Docker build context 排除规则。
+#
+# 只收窄「不该进镜像的东西」，不改 Dockerfile 的 COPY 语义——
+# 所有 Dockerfile 需要的路径（apps/*/src、packages/*/src、apps/api/drizzle、
+# apps/api/scripts、apps/recorder/{popup,content,modules,manifest.json,background.js}、
+# infra/docker/certs、infra/docker/*.zip、web.nginx.conf）都不在排除列表里。
+#
+# ._* 是 AppleDouble 残骸：macOS 扩展属性经 tar pax 头在 Linux 侧还原成
+# ._xxx 文件。它们不是技能/源码内容，却会被 COPY 进镜像——实测 skill-creator
+# 18 个文件在远端变 41 个，且 read_skill 会把它们当真实文件列给模型。
+# release.sh 已在解包前清服务器 checkout，这里是镜像侧的兜底。
+._*
+.DS_Store

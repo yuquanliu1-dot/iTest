@@ -58,6 +58,36 @@ async function countFiles(dir) {
   return n;
 }
 
+/**
+ * 递归删除 AppleDouble 残骸（`._xxx`）。
+ *
+ * macOS 会把扩展属性（com.apple.provenance 等）写进 tar 的 pax 头，服务器侧
+ * GNU tar 虽忽略这些头，资源叉内容仍会落成 `._xxx` 文件——实测 skill-creator
+ * 18 个文件在远端变成 41 个。这些文件对技能内容毫无意义，却会：
+ *   1) 被 read_skill 的文件树当成真实文件列出来（模型看到 ._SKILL.md 这种噪声）；
+ *   2) 让 run_skill_script 的脚本清单出现幽灵条目。
+ * 故铺目录前先清干净，铺完再清一次（防旧目录已被污染）。
+ */
+async function pruneAppleDouble(dir) {
+  let removed = 0;
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const e of entries) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) {
+      removed += await pruneAppleDouble(p);
+    } else if (e.name.startsWith('._')) {
+      await rm(p, { force: true });
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
 async function main() {
   const md = await readFile(join(CONTENT_DIR, 'SKILL.md'), 'utf8');
   const fm = parseFrontmatter(md);
@@ -76,8 +106,17 @@ async function main() {
   } catch {
     await rm(target, { recursive: true, force: true });
     await mkdir(root, { recursive: true });
+    // 源目录也可能是被污染的（镜像由更早的 tarball 构建），铺之前先清。
+    await pruneAppleDouble(CONTENT_DIR);
     await cp(CONTENT_DIR, target, { recursive: true });
     seeded = true;
+  }
+
+  // 已有目录同样要清：AppleDouble 是历史 tarball 留下的，不属于用户编辑，
+  // 清掉不丢任何真实内容（真实文件一律不动）。
+  const pruned = await pruneAppleDouble(target);
+  if (pruned > 0) {
+    console.log(`已清理 ${pruned} 个 AppleDouble 残骸文件（${target}）`);
   }
 
   const client = process.env.DATABASE_URL

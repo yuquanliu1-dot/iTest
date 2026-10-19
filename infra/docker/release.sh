@@ -121,10 +121,18 @@ echo "== 上传 =="
 put_file "$TARBALL" "$DEPLOY_REMOTE_DIR.tar.gz"
 
 echo "== 远程部署 =="
-# 先解包（含最新的 deploy.sh），再执行——绝不让脚本执行中自我覆盖
+# 先解包（含最新的 deploy.sh），再执行——绝不让脚本执行中自我覆盖。
+#
+# 解包前先清掉 AppleDouble 残骸。tar 解包是「覆盖」语义，不删旧文件：早于
+# --no-xattrs 的 tarball 会把 macOS 扩展属性还原成 ._xxx 文件，这些文件一旦落到
+# 服务器上就永久留在 checkout 里，后续每次发版都被 COPY 进镜像 build context——
+# 实测 skill-creator 18 文件在远端变 41 个，且这 23 个垃圾文件会污染技能目录树。
+# 本地 tarball 干净（已验证 24 条目 / 0 个 ._），所以源头只需清服务器这一份残留。
+# 用 find -delete 而不是 rm：路径含中文/空格也安全，且不依赖 shell glob 展开。
 run_ssh "
   set -e
   mkdir -p '$DEPLOY_REMOTE_DIR'
+  find '$DEPLOY_REMOTE_DIR' -name '._*' -type f -delete 2>/dev/null || true
   tar xzf '$DEPLOY_REMOTE_DIR.tar.gz' -C '$DEPLOY_REMOTE_DIR'
   BACKUP_KEEP='$DEPLOY_BACKUP_KEEP' API_REPLICAS='$DEPLOY_API_REPLICAS' EXEC_CONCURRENCY='$DEPLOY_EXEC_CONCURRENCY' bash '$DEPLOY_REMOTE_DIR/infra/docker/deploy.sh' '$DEPLOY_REMOTE_DIR'
 "
