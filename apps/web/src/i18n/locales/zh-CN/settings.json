@@ -59,7 +59,7 @@
   "skillDescription": "描述",
   "skillDescriptionPlaceholder": "一句话说明用途",
   "skillEnabled": "启用",
-  "skillCreateIsSkeleton": "新建只生成 SKILL.md 骨架（空壳）。真实内容请让助手用 import_skill 从 GitHub 导入，或建好后点「管理文件」上传。",
+  "skillCreateIsSkeleton": "此处只存元数据，新建生成 SKILL.md 骨架；正文可在「管理文件」里编辑/上传，也可让助手用 manage_skill 带 files[] 一次创建完整技能，或用 import_skill 从 GitHub 导入。",
   "skillFileCount": "{{count}} 个文件",
   "skillNoDescription": "（无描述）",
   "skillUnregistered": "未登记",

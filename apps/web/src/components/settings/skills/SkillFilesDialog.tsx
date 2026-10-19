@@ -160,16 +160,20 @@ export default function SkillFilesDialog({
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-3xl">
+      {/* DialogContent 基础样式带 sm:max-w-lg，只写 max-w-3xl 会被 sm 变体盖掉（512px），
+          必须显式覆盖 sm: 断点。文件树编辑器要左树+右文并排，按视口比例给宽；
+          高度锁 85vh 并用 grid 行把内容区压进剩余空间——否则固定 minHeight 会把底部
+          关闭栏挤出视口（弹窗自身滚动，用户看不到保存/关闭）。 */}
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] sm:max-w-[min(1200px,calc(100vw-2rem))] sm:h-[85vh] sm:grid-rows-[auto_minmax(0,1fr)_auto] sm:overflow-hidden">
         <DialogHeader>
           <DialogTitle>{t('settings:skillFiles', { name: skill.name })}</DialogTitle>
         </DialogHeader>
 
-        <div className="flex gap-3 px-5 py-3" style={{ minHeight: 380 }}>
-          {/* 左：文件树 */}
+        <div className="flex gap-3 px-5 py-1 min-h-0">
+          {/* 左：文件树（高度跟随弹窗内容行，自身滚动） */}
           <div
-            className="w-56 shrink-0 overflow-auto border rounded p-1 flex flex-col"
-            style={{ borderColor: 'var(--border)', maxHeight: 460 }}
+            className="w-56 shrink-0 overflow-auto border rounded p-1 flex flex-col min-h-0"
+            style={{ borderColor: 'var(--border)' }}
           >
             <div className="flex items-center gap-1 mb-1 px-1">
               <span className="text-[11px] font-semibold flex-1" style={{ color: 'var(--muted-foreground)' }}>
@@ -255,7 +259,7 @@ export default function SkillFilesDialog({
                 </div>
                 <textarea
                   className="input-base flex-1 min-h-[280px]"
-                  style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 11 }}
+                  style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}
                   value={draft !== '' ? draft : (fileQ.data?.content ?? '')}
                   disabled={fileQ.isLoading}
                   onChange={(e) => setDraft(e.target.value)}
