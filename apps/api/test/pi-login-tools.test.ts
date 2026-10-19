@@ -68,7 +68,7 @@ describe('get_login_credentials', () => {
     const [credTool] = buildLoginTools(toolCtx());
     const r = await credTool.execute({});
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain('未配置 login 凭据');
+    if (!r.ok) expect(r.error).toContain('未配置登录凭据');
   });
 });
 
