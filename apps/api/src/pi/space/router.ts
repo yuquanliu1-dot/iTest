@@ -150,8 +150,11 @@ spaceRoute.delete('/threads/:id', async (req, res) => {
     await tx.delete(aiThreads).where(eq(aiThreads.id, threadId));
   });
   dropSpaceRecord(threadId);
-  // 事务外删会话文件:删除失败不该让 DB 回滚成「线程还在但文件没了」;文件不存在静默忽略。
-  if (row?.piThreadId) await fs.unlink(row.piThreadId).catch(() => {});
+  // 事务外删会话文件:删除失败不该让 DB 回滚成「线程还在但文件没了」;
+  // 文件不存在(ENOENT)静默忽略,其余故障记 warn——否则孤儿文件不留任何痕迹。
+  if (row?.piThreadId) await fs.unlink(row.piThreadId).catch((e: NodeJS.ErrnoException) => {
+    if (e.code !== 'ENOENT') logger.warn({ err: e, sessionFile: row.piThreadId }, 'session file delete failed; orphaned');
+  });
   res.status(204).end();
 });
 
