@@ -18,6 +18,10 @@ COPY packages/shared/src ./packages/shared/src
 COPY packages/ui/src ./packages/ui/src
 
 RUN pnpm --filter @itest/web build
+# 发版链路是 macOS bsdtar 打包 → Linux GNU tar 解包，解包新建文件的模式 = 归档模式 & ~umask；
+# 服务器 umask 027 会把 644 削成 640，镜像继承后 nginx 非 root worker 读不到 → 静态资源 403
+# （2026-10-19 landing/*.png 实测）。构建期统一补权限：a+rX = 所有文件补可读、目录补可进入。
+RUN chmod -R a+rX /repo/apps/web/dist
 
 # ----- runtime -----
 FROM nginx:1.27-alpine AS web
