@@ -6,8 +6,6 @@ COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/share
 COPY packages/ui/package.json packages/ui/tsconfig.json ./packages/ui/
 
 ENV CI=true
-# 同 api.Dockerfile:prod228 的 IPv6 出口不通,corepack 直连 registry.npmjs.org 会挂。
-ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
 RUN corepack enable && corepack prepare pnpm@9.12.0 --activate \
  && pnpm install --frozen-lockfile --filter @itest/web... --filter @itest/shared --filter @itest/ui
 
