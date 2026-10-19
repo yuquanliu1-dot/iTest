@@ -134,10 +134,12 @@ spaceRoute.patch('/threads/:id', async (req, res) => {
 
 /** react-pi delete 契约:DELETE → 204(已不存在也 204,客户端对 404 同样容忍)。
  *  同事务清六张 ai_stage_* 暂存行(按 threadId,无 FK 级联)与线程行;内存会话
- *  经 dropSpaceRecord 释放(dispose + 退订),SSE 订阅者随后收到断连。 */
+ *  经 dropSpaceRecord 释放(dispose + 退订),落盘的 session 文件另删,SSE 订阅者随后收到断连。 */
 spaceRoute.delete('/threads/:id', async (req, res) => {
   const threadId = req.params.id!;
   await assertSpaceThreadVisible(threadId, req.user as AuthUser);
+  // 会话文件路径必须在事务前读出:事务删掉 aiThreads 行后无从恢复。
+  const row = (await db.select({ piThreadId: aiThreads.piThreadId }).from(aiThreads).where(eq(aiThreads.id, threadId)).limit(1))[0];
   await db.transaction(async (tx) => {
     await tx.delete(aiStageCases).where(eq(aiStageCases.threadId, threadId));
     await tx.delete(aiStageCaseOps).where(eq(aiStageCaseOps.threadId, threadId));
@@ -148,6 +150,8 @@ spaceRoute.delete('/threads/:id', async (req, res) => {
     await tx.delete(aiThreads).where(eq(aiThreads.id, threadId));
   });
   dropSpaceRecord(threadId);
+  // 事务外删会话文件:删除失败不该让 DB 回滚成「线程还在但文件没了」;文件不存在静默忽略。
+  if (row?.piThreadId) await fs.unlink(row.piThreadId).catch(() => {});
   res.status(204).end();
 });
 
