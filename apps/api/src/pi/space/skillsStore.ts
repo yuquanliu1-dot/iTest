@@ -82,6 +82,17 @@ export interface SkillTreeNode {
 const MAX_TREE_ENTRIES = 200;
 const MAX_TREE_DEPTH = 8;
 
+/**
+ * 列树时跳过的目录名。
+ *
+ * node_modules：依赖目录，不是技能内容。
+ * __pycache__：Python 跑一次脚本就自动生成的字节码缓存。技能脚本被
+ *   run_skill_script 执行时，Python 会在脚本所在目录写 .pyc——这让「文件树」
+ *   在跑过一次之后凭空多出几个二进制条目（实测 skill-creator 18 文件 → 24），
+ *   模型看到的是一堆与技能语义无关的噪声。内容是真源，字节码不是。
+ */
+const SKIP_DIR_NAMES = new Set(['node_modules', '__pycache__']);
+
 /** 递归列树。.git/node_modules/隐藏文件/软链一律跳过；超量或超深则截断。
  *  列表页每轮都要调，故必须只 readdir/stat、不读内容。 */
 export function listSkillTree(skillDir: string): SkillTreeNode[] {
@@ -96,7 +107,7 @@ export function listSkillTree(skillDir: string): SkillTreeNode[] {
     let entries: fs.Dirent[];
     try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch { return; }
     for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+      if (e.name.startsWith('.') || SKIP_DIR_NAMES.has(e.name)) continue;
       const childAbs = path.join(abs, e.name);
       const childRel = rel ? `${rel}/${e.name}` : e.name;
       let isDir = e.isDirectory();

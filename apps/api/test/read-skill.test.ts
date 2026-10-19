@@ -107,6 +107,22 @@ describe('listSkillTree / countSkillFiles', () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
+  it('剔除 __pycache__——Python 跑一次脚本就生成的字节码不该出现在技能文件树里', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-pycache-'));
+    await fs.mkdir(path.join(dir, 'scripts', '__pycache__'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'SKILL.md'), 'x');
+    await fs.writeFile(path.join(dir, 'scripts', 'run.py'), 'print(1)');
+    await fs.writeFile(path.join(dir, 'scripts', '__pycache__', 'run.cpython-311.pyc'), 'BIN');
+
+    const paths = listSkillTree(dir).map((n) => n.path);
+    expect(paths.sort()).toEqual(['SKILL.md', 'scripts', 'scripts/run.py']);
+    expect(paths.some((p) => p.includes('__pycache__'))).toBe(false);
+    // 字节码不是内容，不计入文件数
+    expect(countSkillFiles(dir).fileCount).toBe(2);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
   it('超 200 文件截断，不无限膨胀', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-big-'));
     await fs.mkdir(path.join(dir, 'scripts'), { recursive: true });

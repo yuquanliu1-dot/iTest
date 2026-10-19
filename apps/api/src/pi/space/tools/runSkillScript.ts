@@ -137,10 +137,13 @@ export function buildRunSkillScriptTool(): ToolExecutor {
       logger.info({ skillName, script: path.relative(base, scriptPath), argv }, 'run_skill_script');
       // cwd = 技能根（不是 scripts/）且 PYTHONPATH 指向技能根——这两条合起来才能让
       // `from scripts.xxx import` 成立（实测：只给 cwd=scripts 必失败）。
+      // PYTHONDONTWRITEBYTECODE=1：否则 Python 会在技能目录里生成 __pycache__/*.pyc，
+      // 技能目录是内容真源，跑一次脚本就往里写字节码会让文件树凭空多出二进制条目
+      // （实测 18 文件 → 24），也会让「技能目录 = 用户编辑的内容」这个前提变脏。
       const r = await runProcess(engine, scriptPath, argv, {
         cwd: skillDir,
         timeoutMs: DEFAULT_TIMEOUT_MS,
-        env: { ...process.env, PYTHONPATH: skillDir },
+        env: { ...process.env, PYTHONPATH: skillDir, PYTHONDONTWRITEBYTECODE: '1' },
       });
       const merged = `${r.stdout}${r.stderr}`.trim();
       if (r.spawnError) return { ok: false, error: `脚本启动失败（${engine}）: ${r.spawnError}` };
