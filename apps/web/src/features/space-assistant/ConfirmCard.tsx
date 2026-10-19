@@ -68,8 +68,8 @@ export default function ConfirmCard({ threadId }: { threadId: string }) {
             <div className="flex justify-end gap-2 mt-2">
               <button
                 type="button"
-                className="rounded-md px-2.5 py-1 text-[12px]"
-                style={{ border: '1px solid var(--border)', color: 'var(--muted-foreground)', background: 'transparent' }}
+                className="btn-tint rounded-md px-2.5 py-1 text-[12px]"
+                style={{ border: '1px solid var(--border)', color: 'var(--muted-foreground)' }}
                 disabled={pending}
                 onClick={() => decide.mutate({ confirmId: c.confirmId, approved: false })}
               >
@@ -77,7 +77,7 @@ export default function ConfirmCard({ threadId }: { threadId: string }) {
               </button>
               <button
                 type="button"
-                className="rounded-md px-2.5 py-1 text-[12px] text-white"
+                className="btn-feedback rounded-md px-2.5 py-1 text-[12px] text-white disabled:opacity-50"
                 style={{ background: meta.color }}
                 disabled={pending}
                 onClick={() => decide.mutate({ confirmId: c.confirmId, approved: true })}

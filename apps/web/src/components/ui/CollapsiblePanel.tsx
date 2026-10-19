@@ -25,7 +25,7 @@ export default function CollapsiblePanel({
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full shrink-0 items-center gap-1.5 px-4 py-2.5 text-left text-[12px] font-medium"
+        className="btn-tint flex w-full shrink-0 items-center gap-1.5 px-4 py-2.5 text-left text-[12px] font-medium hover:text-[var(--foreground)]"
         style={{ color: 'var(--muted-foreground)' }}
       >
         <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} style={{ flexShrink: 0 }} />
