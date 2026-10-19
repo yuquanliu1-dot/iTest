@@ -84,8 +84,14 @@ echo "来源: $ROOT @ $GIT_SHA"
 TMP_LOCAL="$(mktemp -d)"
 trap 'rm -rf "$TMP_LOCAL"' EXIT
 TARBALL="$TMP_LOCAL/itest.tar.gz"
+# --no-xattrs 是关键那条，不是 --exclude='._*'。
+# macOS 会把 com.apple.provenance 等扩展属性写进 tar 的 pax 头(解包时 tar 会警告
+# "Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.*'")，服务器侧 GNU tar
+# 虽忽略这些头，但资源叉内容仍会落成 AppleDouble ._xxx 文件——实测 skill-creator
+# 18 个文件在远端变成 41 个。文件名排除只在源目录已有 ._ 文件时有用，挡不住「由扩展
+# 属性凭空生成」。--no-xattrs 从源头不打这些头，两者一起留着兜底。
 # 不带 ./ 前缀的模式同时被 GNU/bsdtar 理解为按路径段匹配；dist/modules/*.js 在镜像内重建，无需随包携带
-tar -C "$ROOT" -czf "$TARBALL" \
+tar -C "$ROOT" --no-xattrs -czf "$TARBALL" \
   --exclude='node_modules' \
   --exclude='.git' \
   --exclude='.worktrees' \
