@@ -59,7 +59,7 @@
   "skillDescription": "Description",
   "skillDescriptionPlaceholder": "One sentence about what it does",
   "skillEnabled": "Enabled",
-  "skillCreateIsSkeleton": "Creating only writes a SKILL.md skeleton (an empty shell). For real content, have the assistant import it from GitHub with import_skill, or use “Manage files” afterwards.",
+  "skillCreateIsSkeleton": "This form saves metadata only; creating writes a SKILL.md skeleton. Edit/upload content under “Manage files”, or have the assistant create a full skill in one call via manage_skill with files[], or import from GitHub with import_skill.",
   "skillFileCount": "{{count}} files",
   "skillFileCount_one": "{{count}} file",
   "skillNoDescription": "(no description)",
