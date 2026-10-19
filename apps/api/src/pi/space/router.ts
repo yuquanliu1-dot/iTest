@@ -5,6 +5,7 @@
  */
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import {
@@ -84,14 +85,19 @@ spaceRoute.get('/threads', async (req, res) => {
   if (!versionId) { res.json([]); return; }
   await assertVersionVisible(versionId, req.user as AuthUser);
   const rows = await db
-    .select({ id: aiThreads.id, title: aiThreads.title, createdAt: aiThreads.createdAt, updatedAt: aiThreads.updatedAt })
+    .select({
+      id: aiThreads.id, title: aiThreads.title, createdAt: aiThreads.createdAt,
+      updatedAt: aiThreads.updatedAt, piThreadId: aiThreads.piThreadId,
+    })
     .from(aiThreads)
     .where(and(eq(aiThreads.kind, 'version'), eq(aiThreads.versionId, versionId)))
     .orderBy(desc(aiThreads.updatedAt))
     .limit(20);
-  // 只列出确有会话记录的线程:消息全内存(SessionManager.inMemory),从未发过消息
-  // 或记录已随进程重启丢失的线程不进下拉框(前端对当前不在列表的 threadId 有占位选项)。
-  const withRecords = rows.filter((row) => (snapshotOfThread(row.id)?.metadata.messageCount ?? 0) > 0);
+  // 「有会话」判据 = session 文件真实存在。不能用 piThreadId !== '':pi 在 persist=true 时
+  // 立即分配 sessionFile 路径(仅落盘延迟),草稿线程也有非空 piThreadId,会把没发过消息的
+  // 空会话全放进历史列表——正是本过滤原本要防的。
+  const exists = await Promise.all(rows.map((r) => fs.access(r.piThreadId).then(() => true).catch(() => false)));
+  const withRecords = rows.filter((_, i) => exists[i]);
   res.json(withRecords.map((row) => ({
     id: row.id,
     title: row.title,
