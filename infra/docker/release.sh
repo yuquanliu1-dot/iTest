@@ -97,6 +97,7 @@ tar -C "$ROOT" -czf "$TARBALL" \
   --exclude='coverage' \
   --exclude='screenshots' \
   --exclude='.DS_Store' \
+  --exclude='._*' \
   --exclude='*.log' \
   --exclude='.env' \
   --exclude='deploy.env' \
