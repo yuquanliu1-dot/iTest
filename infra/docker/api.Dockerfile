@@ -71,6 +71,10 @@ RUN if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then \
 # 拷贝构建好的源码 + 依赖
 COPY --from=api-build /repo /repo
 WORKDIR /repo/apps/api
+# NODE_OPTIONS=--dns-result-order=ipv4first:prod228 只解析到 registry.npmjs.org 的 IPv6 地址且 IPv6
+#   出口不通,corepack 拉 pnpm 会挂在 fetch(实测 curl 默认超时、curl -4 秒回 200)。pin IPv4 优先后
+#   构建不再取决于宿主机的 IPv6 状态——同样的坑也会让 pnpm install 随机失败。
+ENV NODE_OPTIONS=--dns-result-order=ipv4first
 RUN corepack enable && corepack prepare pnpm@9.12.0 --activate \
  && pnpm install --prod --frozen-lockfile --filter @itest/api... --filter @itest/shared --filter @itest/recorder --filter @itest/ui
 # chromium 离线优先:国内直连 playwright CDN 极慢(实测 11min+/browser),预下载 zip 放服务器
