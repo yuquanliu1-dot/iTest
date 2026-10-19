@@ -61,8 +61,8 @@ export interface SpaceThreadContext {
   manager: boolean;
   /** 线程创建人界面语言，历史线程缺省 zh-CN。 */
   lang?: AiLang;
-  /** 已有会话的 JSONL 绝对路径(ai_threads.pi_thread_id)。非空且文件在 → 走 open 恢复;
-   *  空串或文件缺失 → create 新会话。 */
+  /** 已有会话的 JSONL 绝对路径(ai_threads.pi_thread_id)。为空串 → create 新建;
+   *  有值 → 一律 open:文件在则恢复历史,文件缺失 pi 内部 newSession 并复用同一路径(不抛错)。 */
   piThreadId?: string;
 }
 
@@ -573,8 +573,9 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   });
   await loader.reload();
 
-  // 恢复优先:piThreadId 指向的 JSONL 存在 → open 回历史消息(重启后续聊);
-  // 缺失/损坏/为空 → 退新建。降级只记 warn——一条坏文件不该让整个列表接口失败。
+  // 恢复优先:piThreadId 非空 → open(文件在则回历史消息,重启后续聊;文件缺失不抛错,
+  // pi 内部 newSession 并复用同一路径)。仅 piThreadId 为空或 open 抛错(文件损坏)才 create,
+  // 后者降级只记 warn——一条坏文件不该让整个列表接口失败。
   let sessionManager: ReturnType<typeof SessionManager.create>;
   if (ctx.piThreadId) {
     try {
