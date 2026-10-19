@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  ArrowRight, ArrowUp, Bot, Database, FileCheck, FileText, GitBranch, MonitorSmartphone, Play, Repeat, Sparkles, Wrench,
+  ArrowRight, ArrowUp, Bot, BrainCircuit, Coins, Database, FileCheck, FileText, GitBranch, GitPullRequest,
+  MonitorSmartphone, Play, Repeat, Sparkles, Wrench,
 } from 'lucide-react';
 import BrandGlyph from '../components/BrandGlyph';
 import Button from '../components/ui/Button';
@@ -12,6 +13,7 @@ import { LANG_STORAGE_KEY, readStoredLang, type Lang } from '../i18n';
 
 const FEATURE_ICONS = [Repeat, Bot, Database, Wrench, GitBranch, MonitorSmartphone];
 const STEP_ICONS = [FileText, Sparkles, Play, FileCheck];
+const PAIN_ICONS = [GitPullRequest, BrainCircuit, Coins];
 
 /** 产品对外介绍页（公开路由，无 AuthGuard）。截图区为占位框，后续替换真实素材。 */
 export default function LandingPage() {
@@ -37,6 +39,7 @@ export default function LandingPage() {
     <div className="min-h-full w-full" style={{ background: 'var(--background)', color: 'var(--foreground)' }}>
       <Nav lang={lang} onSwitchLang={switchLang} ctaTarget={ctaTarget} ctaLabel={ctaLabel} />
       <Hero t={t} ctaTarget={ctaTarget} />
+      <PainPoints t={t} />
       <Showcase t={t} />
       <Features t={t} />
       <Workflow t={t} />
@@ -71,6 +74,7 @@ function Nav({ lang, onSwitchLang, ctaTarget, ctaLabel }: {
           <span className="text-[15px] font-semibold tracking-tight">iTest</span>
         </a>
         <nav className="hidden items-center gap-6 text-[13px] md:flex" style={{ color: 'var(--muted-foreground)' }}>
+          <a href="#pains" className="transition-colors hover:text-[var(--foreground)]">{t('nav.pains')}</a>
           <a href="#features" className="transition-colors hover:text-[var(--foreground)]">{t('nav.features')}</a>
           <a href="#workflow" className="transition-colors hover:text-[var(--foreground)]">{t('nav.workflow')}</a>
           <a href="#showcase" className="transition-colors hover:text-[var(--foreground)]">{t('nav.screenshots')}</a>
@@ -160,6 +164,42 @@ function Hero({ t, ctaTarget }: { t: T; ctaTarget: string }) {
           <a href="#features">
             <Button size="lg" variant="ghost">{t('hero.secondaryCta')}</Button>
           </a>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ---------- 痛点 ---------- */
+
+function PainPoints({ t }: { t: T }) {
+  const items = t('pains.items', { returnObjects: true }) as { title: string; desc: string }[];
+  return (
+    <section id="pains" className="border-y" style={{ borderColor: 'var(--border)', background: 'var(--muted)' }}>
+      <div className="mx-auto max-w-6xl px-6 py-20">
+        <SectionHeading eyebrow={t('pains.eyebrow')} title={t('pains.title')} subtitle={t('pains.subtitle')} />
+        <div className="mt-12 grid gap-5 md:grid-cols-3">
+          {items.map((p, i) => {
+            const Icon = PAIN_ICONS[i % PAIN_ICONS.length]!;
+            return (
+              <div
+                key={p.title}
+                className="fade-up rounded-xl border p-6"
+                style={{ borderColor: 'var(--border)', background: 'var(--card)', animationDelay: `${i * 0.06}s` }}
+              >
+                <div
+                  className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-lg"
+                  style={{ background: 'color-mix(in srgb, var(--destructive) 10%, transparent)', color: 'var(--destructive)' }}
+                >
+                  <Icon size={19} />
+                </div>
+                <h3 className="text-[14.5px] font-semibold">{p.title}</h3>
+                <p className="mt-2 text-[13px] leading-relaxed" style={{ color: 'var(--muted-foreground)' }}>
+                  {p.desc}
+                </p>
+              </div>
+            );
+          })}
         </div>
       </div>
     </section>
