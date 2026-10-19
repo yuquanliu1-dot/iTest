@@ -61,6 +61,9 @@ export interface SpaceThreadContext {
   manager: boolean;
   /** 线程创建人界面语言，历史线程缺省 zh-CN。 */
   lang?: AiLang;
+  /** 已有会话的 JSONL 绝对路径(ai_threads.pi_thread_id)。非空且文件在 → 走 open 恢复;
+   *  空串或文件缺失 → create 新会话。 */
+  piThreadId?: string;
 }
 
 export type SpaceSessionFactory = (ctx: SpaceThreadContext) => Promise<SpaceSessionLike>;
@@ -152,7 +155,7 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
   // repo 工具经共享 RepoState 每次调用动态解析 cwd;no_repo 静默(仅影响工具错误语态),
   // 其它失败记 repo.issue 供诊断,均不阻断会话。
   const repo = emptyRepoState();
-  const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo, createdByUserId: row.createdByUserId, lang, manager });
+  const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo, createdByUserId: row.createdByUserId, lang, manager, piThreadId: row.piThreadId });
   const rec: ThreadRecord = {
     threadId,
     versionId: row.versionId,
@@ -570,7 +573,19 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   });
   await loader.reload();
 
-  const sessionManager = SessionManager.inMemory();
+  // 恢复优先:piThreadId 指向的 JSONL 存在 → open 回历史消息(重启后续聊);
+  // 缺失/损坏/为空 → 退新建。降级只记 warn——一条坏文件不该让整个列表接口失败。
+  let sessionManager: ReturnType<typeof SessionManager.create>;
+  if (ctx.piThreadId) {
+    try {
+      sessionManager = SessionManager.open(ctx.piThreadId, SESSIONS_ROOT, workspaceDir);
+    } catch (err) {
+      logger.warn({ err, sessionFile: ctx.piThreadId, threadId: ctx.threadId }, 'pi session open failed; recreating');
+      sessionManager = SessionManager.create(workspaceDir, SESSIONS_ROOT);
+    }
+  } else {
+    sessionManager = SessionManager.create(workspaceDir, SESSIONS_ROOT);
+  }
   const { session } = await createAgentSession({
     cwd: workspaceDir,
     noTools: 'builtin',
