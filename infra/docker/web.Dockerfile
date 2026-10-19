@@ -11,6 +11,9 @@ RUN corepack enable && corepack prepare pnpm@9.12.0 --activate \
 
 COPY apps/web/src ./apps/web/src
 COPY apps/web/index.html ./apps/web/index.html
+# vite 会把 public/ 原样拷进 dist——漏掉它则 /landing/*.png 全部 404 回落到 index.html，
+# 浏览器拿到 text/html 当图片渲染 → landing 截图全裂（2026-10-19 prod228 实测）。
+COPY apps/web/public ./apps/web/public
 COPY packages/shared/src ./packages/shared/src
 COPY packages/ui/src ./packages/ui/src
 
