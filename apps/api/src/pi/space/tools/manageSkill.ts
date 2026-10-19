@@ -2,9 +2,9 @@
  * manage_skill：空间助手对话式管理全局技能（元数据）。
  * 与系统设置页走同一 `skillsService`（校验/落库共用层），故规则完全一致。
  *
- * 2026-10-19 存储翻转后**只管元数据**：技能正文与目录树在 SKILLS_ROOT/<name>/，
- * 内容写入面是 import_skill 与设置页文件树编辑器，本工具不提供 files[]。
- * create 只产出 SKILL.md 骨架目录（一个空壳），真实内容用 import_skill 装。
+ * 2026-10-19 存储翻转后内容真源在 SKILLS_ROOT/<name>/。create 支持 files[] 一次写入
+ * 完整目录树（模型按用户需求撰写 SKILL.md 正文）；不带 files 仍是空骨架。
+ * 其余写入面：import_skill（GitHub 整棵树）与设置页文件树编辑器。
  *
  * 仅对「有效管理员」线程注册（index.ts 按 ctx.manager 装配）；历史/非管理员线程无此工具。
  * action 语义：
@@ -33,6 +33,8 @@ const Actions = z.object({
   enabled: z.boolean().optional(),
   /** update：改名后的新 slug（原 name 仍作定位键）。 */
   renameTo: z.string().min(1).max(120).optional(),
+  /** create：技能完整内容（相对路径 + 正文），至少含 SKILL.md；不传则只建骨架。 */
+  files: z.array(z.object({ path: z.string().min(1), content: z.string() })).max(20).optional(),
 });
 
 async function skillIdByName(name: string): Promise<string> {
@@ -44,7 +46,7 @@ export function buildManageSkillTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'manage_skill',
     description:
-      '对话式管理全局技能库的【元数据】。action=list(清单:name/description/enabled/fileCount)| create(name,description,可选 enabled)| update(name + 可选 description/enabled/renameTo 改名)| delete(name)。name 须为小写 slug(字母/数字/连字符,不以-开头结尾、无连续--)。本工具不写技能正文——create 只建空骨架目录，真实内容用 import_skill 从 GitHub 装，或让用户在设置页的文件树编辑器里编辑。改动对【新会话】生效；停用的技能在新会话里不进 catalog，read_skill/run_skill_script 也会拒绝。',
+      '对话式管理全局技能库。action=list(清单:name/description/enabled/fileCount)| create(name,description,可选 enabled,可选 files[] 一次写入完整内容)| update(name + 可选 description/enabled/renameTo 改名)| delete(name)。name 须为小写 slug(字母/数字/连字符,不以-开头结尾、无连续--)。create 建议带 files[]：[{path:"SKILL.md",content:"正文"},{path:"scripts/x.py",content:"…"}]，最多 20 个文件、单文件 ≤1MB、必须含 SKILL.md（缺 frontmatter 会自动按 name/description 补）；不带 files 只建空骨架。改正文的其余途径：import_skill 从 GitHub 装整棵树，或让用户在设置页文件树编辑器里改。改动对【新会话】生效；停用的技能在新会话里不进 catalog，read_skill/run_skill_script 也会拒绝。',
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal('list'),
@@ -56,10 +58,15 @@ export function buildManageSkillTool(ctx: SpaceToolsContext): ToolExecutor {
       description: Type.Optional(Type.String({ maxLength: 500 })),
       enabled: Type.Optional(Type.Boolean()),
       renameTo: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+      files: Type.Optional(Type.Array(
+        Type.Object({ path: Type.String({ minLength: 1 }), content: Type.String() }),
+        { minItems: 1, maxItems: 20 },
+      )),
     }),
     promptGuidelines: [
       '本工具仅对管理员线程开放。',
-      'create 只建空骨架：要让技能真正可用，用 import_skill 从 GitHub 导入完整目录树，别在本工具里试图写正文。',
+      'create 带 files[] 才算真正创建：SKILL.md 正文由你按用户需求撰写（写清楚何时触发、步骤、示例）；附属文件（scripts/、references/）用相对路径放同一次调用里，别拆成多次。',
+      '不带 files 的 create 只产出空骨架，用户会得到一个不可用的技能——除非用户明确只要骨架，否则必须带 files[]。',
       '改动对新会话生效：创建/改名后本会话 read_skill 仍可能读不到，告知用户需新开会话加载。',
       'delete 不可逆（连磁盘目录一起删），确认用户意图后再执行，并复述被删技能名。',
     ],
@@ -88,8 +95,19 @@ export function buildManageSkillTool(ctx: SpaceToolsContext): ToolExecutor {
             if (!v.name || !v.description) {
               return { ok: false, error: 'create 需要 name、description' };
             }
-            const created = await createSkill({ name: v.name, description: v.description, enabled: v.enabled });
-            return { ok: true, data: JSON.stringify({ created: created.name, note: '仅创建了 SKILL.md 骨架，内容请用 import_skill 或设置页文件树编辑器补齐' }, null, 2) };
+            const created = await createSkill({
+              name: v.name, description: v.description, enabled: v.enabled, files: v.files,
+            });
+            return {
+              ok: true,
+              data: JSON.stringify({
+                created: created.name,
+                fileCount: created.fileCount,
+                note: created.fileCount > 1 || v.files
+                  ? '内容已落盘，新开会话后 read_skill 可读、进 catalog'
+                  : '仅创建了 SKILL.md 骨架（未传 files[]），需补正文才可用',
+              }, null, 2),
+            };
           }
           case 'update': {
             if (!v.name) return { ok: false, error: 'update 需要 name(目标技能)' };

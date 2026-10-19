@@ -121,6 +121,14 @@ if [ "$FIRST_DEPLOY" = "1" ]; then
   echo "默认账号 admin/admin123，首登强制改密"
 fi
 
+# --- seed skill-creator 目录树 ---
+# 技能内容以文件系统为真源（DB 只留 name/description/enabled），故技能目录必须随发版保证存在。
+# 放在 up --wait 之后：api 容器启动时已跑完 drizzle-kit push，schema 才是新的。
+# 脚本自愈：目录缺失才铺（用户改过的内容不覆盖），旧 schema 下告警 exit 0 不阻断发版。
+echo "== seed skill-creator =="
+docker exec "$(api_replica)" node /repo/apps/api/scripts/seed-skill-creator.mjs \
+  || echo "WARN: skill-creator seed 失败，助手将看不到该技能（不影响其余功能）"
+
 # --- post-deploy smoke ---
 # Warning 策略:任一 FAIL 输出原因但 exit 0;运维根据警告决定是否回滚。
 echo "== post-deploy smoke =="

@@ -70,6 +70,45 @@ describe('skills 元数据 CRUD（文件系统为真源）', () => {
     expect(ok.body.fileCount).toBe(1); // 只有 SKILL.md
   });
 
+  it('POST 带 files[] 一次落完整内容：SKILL.md 自动补 frontmatter，子目录建齐', async () => {
+    const ok = await request(managerApp).post('/api/assistant/skills').send({
+      name: 'full-skill',
+      description: '带正文的技能',
+      files: [
+        { path: 'SKILL.md', content: '# 正文\n步骤……' },
+        { path: 'scripts/run.py', content: 'print(1)' },
+      ],
+    });
+    expect(ok.status).toBe(201);
+    expect(ok.body).toMatchObject({ name: 'full-skill', onDisk: true, fileCount: 2 });
+    const md = fs.readFileSync(path.join(skillDir('full-skill'), 'SKILL.md'), 'utf8');
+    expect(md).toContain('name: "full-skill"');
+    expect(md).toContain('# 正文');
+    expect(fs.readFileSync(path.join(skillDir('full-skill'), 'scripts', 'run.py'), 'utf8')).toBe('print(1)');
+  });
+
+  it('POST files[] 校验：缺 SKILL.md / 路径穿越 / 重复路径均 400，且不留半截目录', async () => {
+    const bad = [
+      { name: 'no-md', description: 'x', files: [{ path: 'a.txt', content: 'x' }] },
+      { name: 'traversal', description: 'x', files: [{ path: 'SKILL.md', content: 'x' }, { path: '../escape', content: 'x' }] },
+      { name: 'dupe', description: 'x', files: [{ path: 'SKILL.md', content: 'a' }, { path: 'SKILL.md', content: 'b' }] },
+    ];
+    for (const body of bad) {
+      const r = await request(managerApp).post('/api/assistant/skills').send(body);
+      expect(r.status).toBe(400);
+      expect(fs.existsSync(skillDir(body.name))).toBe(false);
+    }
+    // 穿越路径必须在校验阶段就拒——不能在 skillsRoot 外留下 mkdir 的残骸。
+    expect(fs.existsSync(path.join(skillsRoot(), 'escape'))).toBe(false);
+  });
+
+  it('POST files[] 里已带 frontmatter 的 SKILL.md 原样保留', async () => {
+    const raw = '---\nname: "mine"\ndescription: "custom"\n---\n\nbody';
+    await request(managerApp).post('/api/assistant/skills')
+      .send({ name: 'has-fm', description: 'x', files: [{ path: 'SKILL.md', content: raw }] });
+    expect(fs.readFileSync(path.join(skillDir('has-fm'), 'SKILL.md'), 'utf8')).toBe(raw);
+  });
+
   it('name slug 校验 + 重名 409 + 缺 description 400', async () => {
     await request(managerApp).post('/api/assistant/skills').send({ name: 'dup', description: 'd' });
     expect((await request(managerApp).post('/api/assistant/skills').send({ name: 'dup', description: 'd2' })).status).toBe(409);

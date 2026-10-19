@@ -3,8 +3,9 @@
  * 由 skillsRoute.ts（REST /api/assistant/skills，router.ts requireManager 保护）与
  * 空间助手 manage_skill 工具共同调用——两类写入面必须是同一套规则。
  *
- * 2026-10-19 存储翻转：**本层只管元数据**。正文与目录树在 SKILLS_ROOT/<name>/，
- * 由 import_skill / 设置页文件树编辑器写入；create 建骨架目录，delete 连目录一起删。
+ * 2026-10-19 存储翻转：**本层只管元数据 + create 落盘**。正文与目录树在 SKILLS_ROOT/<name>/，
+ * create 带 files[] 一次写完整内容、不带则写骨架；import_skill / 设置页文件树编辑器写其余内容；
+ * delete 连目录一起删。
  *
  * 无 scope：skills 是平台级全局共享（所有项目同一个技能库），DB 无归属列。
  */
@@ -16,7 +17,7 @@ import type { SQL } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import { assistantSkills } from '../../db/schema.js';
 import { HttpError } from '../../middleware/errorHandler.js';
-import { removeSkillDir, writeSkillFileAtomic } from './skillPaths.js';
+import { removeSkillDir, resolveInSkill, writeSkillFileAtomic } from './skillPaths.js';
 import {
   SKILLS_ROOT,
   countSkillFiles,
@@ -55,6 +56,53 @@ function writeSkillMd(dir: string, name: string, description: string, body = '')
   );
 }
 
+export interface SkillFileInput { path: string; content: string }
+
+const MAX_CREATE_FILES = 20;
+const MAX_CREATE_FILE_BYTES = 1_000_000; // 与 skillsRoute 的 MAX_FILE_WRITE_BYTES 同额。
+
+/** 校验 files[]（形状层面）；路径级守卫在落盘循环里走 resolveInSkill。 */
+function assertSkillFiles(raw: unknown): SkillFileInput[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new HttpError(400, 'bad_request', `files 须为非空数组（每项 {path, content}）`);
+  }
+  if (raw.length > MAX_CREATE_FILES) throw new HttpError(400, 'bad_request', `files 最多 ${MAX_CREATE_FILES} 个`);
+  if (!raw.some((f) => (f as SkillFileInput)?.path === 'SKILL.md')) {
+    throw new HttpError(400, 'bad_request', 'files 必须包含 SKILL.md（技能正文入口）');
+  }
+  const seen = new Set<string>();
+  return raw.map((f, i) => {
+    const p = typeof (f as SkillFileInput)?.path === 'string' ? (f as SkillFileInput).path.trim() : '';
+    const c = typeof (f as SkillFileInput)?.content === 'string' ? (f as SkillFileInput).content : '';
+    if (!p) throw new HttpError(400, 'bad_request', `files[${i}].path 必填`);
+    if (seen.has(p)) throw new HttpError(400, 'bad_request', `files 路径重复: ${p}`);
+    seen.add(p);
+    if (Buffer.byteLength(c, 'utf8') > MAX_CREATE_FILE_BYTES) {
+      throw new HttpError(400, 'bad_request', `单文件上限 1MB: ${p}`);
+    }
+    return { path: p, content: c };
+  });
+}
+
+/** 落 files[] 到技能目录。SKILL.md 缺 frontmatter 时自动补（catalog/loader 依赖 name/description 前言）。
+ *  两段式：先对全部路径跑 resolveInSkill，全绿才 mkdirSync 建父目录——
+ *  否则 '../x' 这类路径会在校验拒绝【之前】把目录建到技能目录外面。 */
+function writeSkillFiles(dir: string, name: string, description: string, files: SkillFileInput[]): void {
+  const absOf = files.map((f) => {
+    const abs = resolveInSkill(dir, f.path);
+    if (!abs) throw new HttpError(400, 'bad_request', `路径非法: ${f.path}`);
+    return abs;
+  });
+  absOf.forEach((abs, i) => {
+    if (path.dirname(abs) !== dir) fs.mkdirSync(path.dirname(abs), { recursive: true });
+    let content = files[i]!.content;
+    if (files[i]!.path === 'SKILL.md' && !content.startsWith('---\n')) {
+      content = `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n\n${content}`;
+    }
+    writeSkillFileAtomic(abs, content);
+  });
+}
+
 /** 只插 DB 行不建目录（import_skill 复用：目录树已由导入流程写好）。 */
 export async function registerSkill(name: string, description: string, enabled = true) {
   await assertSkillNameUnique(name);
@@ -77,20 +125,23 @@ function withDisk(row: SkillRow): SkillWithDisk {
   return { ...row, ...countSkillFiles(dir), onDisk: fs.existsSync(dir), unregistered: false };
 }
 
-/** POST 语义：建目录 + SKILL.md 骨架 + 插行。磁盘上已有同名目录也判冲突——否则会静默接管孤儿目录。 */
+/** POST 语义：建目录 + 插行。传 files[] 则一次落完整内容（至少含 SKILL.md）；不传只写骨架。
+ *  磁盘上已有同名目录也判冲突——否则会静默接管孤儿目录。 */
 export async function createSkill(raw: Record<string, unknown>): Promise<SkillWithDisk> {
   const name = assertSkillName(raw.name);
   const description = assertDescription(raw.description);
   await assertSkillNameUnique(name);
   const dir = skillDirOf(name);
   if (fs.existsSync(dir)) throw new HttpError(409, 'conflict', `磁盘上已存在同名目录: ${name}`);
+  const files = raw.files === undefined ? null : assertSkillFiles(raw.files);
   fs.mkdirSync(dir, { recursive: true });
   try {
-    writeSkillMd(dir, name, description);
+    if (files) writeSkillFiles(dir, name, description, files);
+    else writeSkillMd(dir, name, description);
     const row = await registerSkill(name, description, raw.enabled === false ? false : true);
     return withDisk(row);
   } catch (e) {
-    // DB 失败不留空目录在盘上。
+    // DB/写盘失败不留半截目录在盘上。
     fs.rmSync(dir, { recursive: true, force: true });
     throw e;
   }
