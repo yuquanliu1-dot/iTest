@@ -29,11 +29,16 @@ import { scenariosRoute } from './routes/scenarios.js';
 import { tagsRoute } from './routes/tags.js';
 import usersRoute from './routes/users.js';
 import assignmentsRoute from './routes/assignments.js';
-import { spaceRoute } from './pi/space/router.js';
+import { spaceRoute, ASSISTANT_JSON_BODY_LIMIT } from './pi/space/router.js';
 import { requireAuth } from './middleware/auth.js';
 
 const app = express();
 app.use(express.raw({ type: 'application/octet-stream', limit: '60mb' }));
+// 助手消息体带 base64 图片附件(react-pi 把 composer 附件内联进 input.attachments),
+// 全局 2mb 会让一张正常截图直接 413。挂在 /api/assistant 前即可覆盖——body-parser
+// 以 'body' in req 为已解析标记,后到的全局解析器对同一请求跳过,其余路由不受影响。
+// 上限由 ASSISTANT_JSON_BODY_LIMIT 从图片上限与张数算得,不是拍脑袋的常数。
+app.use('/api/assistant', express.json({ limit: ASSISTANT_JSON_BODY_LIMIT }));
 app.use(express.json({ limit: '2mb' }));
 app.use('/screenshots', express.static(join(process.cwd(), 'screenshots')));
 app.get('/api/health', (_req, res) => res.json({ ok: true }));

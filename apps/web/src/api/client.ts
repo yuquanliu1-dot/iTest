@@ -523,19 +523,14 @@ export const api = {
       }),
   },
   assistant: {
-    listThreads: (versionId: string) =>
-      request<AssistantThread[]>(`/assistant/threads${qs({ versionId })}`),
-    /** 返回 Pi 快照;lastError=建线程时的非阻断警告(repo 不可用等)。 */
-    createThread: (versionId: string) =>
-      request<{ metadata: { id: string }; lastError?: string }>('/assistant/threads', {
-        method: 'POST',
-        body: JSON.stringify({ metadata: { versionId } }),
-      }),
     confirm: (threadId: string, confirmId: string, approved: boolean) =>
       request<void>(`/assistant/threads/${threadId}/confirm`, {
         method: 'POST',
         body: JSON.stringify({ confirmId, approved }),
       }),
+    /** 推荐追问:AI 回答落定后按需拉取(POST 触发一次轻量 LLM 调用,返回提示词字符串数组)。 */
+    suggestions: (threadId: string) =>
+      request<string[]>(`/assistant/threads/${threadId}/suggestions`, { method: 'POST' }),
     /** 版本空间助手「暂存 → 落库」 */
     stage: {
       list: (threadId: string) =>
@@ -927,13 +922,6 @@ export interface Scenario {
   description: string | null;
   order: number;
   createdAt: string;
-}
-export interface AssistantThread {
-  id: string;
-  title: string | null;
-  status: 'running' | 'idle';
-  createdAt?: string;
-  updatedAt?: string;
 }
 /** 系统设置里管理的全局共享 MCP server（平台级，scope=global）。 */
 export interface AssistantMcpServer {

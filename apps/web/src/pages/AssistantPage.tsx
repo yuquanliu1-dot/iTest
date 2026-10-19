@@ -1,13 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { api } from '../api/client';
 import Button from '../components/ui/Button';
-import EmptyState from '../components/ui/EmptyState';
 import {
   PageShell,
-  PageShellActions,
   PageShellContent,
   PageShellDescription,
   PageShellHeader,
@@ -21,47 +17,25 @@ interface AssistantInitialMessageState {
 
 /**
  * 版本空间 AI 助手(AI-First 主入口):进入版本空间落地即对话。
- * 页面层只负责线程管理(最近线程下拉 + 新建 + 初始化错误引导);
- * 对话与舞台由 SpaceWorkspace 渲染(Task 3 接入)。
+ * 线程管理(列表/切换/改名/删除)全部下沉到 SpaceWorkspace 内的 ThreadList 原语,
+ * 页面层只剩横幅:创建/发送失败(initError,阻断引导)与按线程的 lastError 警告。
  *
  * 首条消息支持:从用例管理「AI 创建用例」/其他入口带 location.state.initialMessage 跳来时,
- * 新建线程后自动注入首条 prompt。消息注入走 SpaceWorkspace 内 appendInitialMessage 子组件,
- * 不在本页面持有 aui(aui 必须在 AssistantRuntimeProvider 内使用)。
+ * 在初始草稿上自动注入首条 prompt(注入器在 SpaceWorkspace 内,aui 必须在
+ * AssistantRuntimeProvider 内使用,页面不持有 runtime)。
  */
 export default function AssistantPage() {
   const { t } = useTranslation();
   const { versionId } = useParams<{ projectId: string; versionId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const threadsQ = useQuery({
-    queryKey: ['assistant-threads', versionId],
-    queryFn: () => api.assistant.listThreads(versionId!),
-    enabled: !!versionId,
-  });
-  const [threadId, setThreadId] = useState<string | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
-  // 非阻断警告(repo 不可用等,后端经快照 lastError 透出):对话仍可用
-  const [warning, setWarning] = useState<string | null>(null);
+  // 非阻断警告(repo 不可用等,建线程时后端经快照 lastError 透出):按线程 id 记,对话仍可用
+  const [warnings, setWarnings] = useState<Record<string, string>>({});
+  const [activeThreadId, setActiveThreadId] = useState('');
   // 上一跳 location.state 携带的首条 prompt:捕获进组件 state,
-  // 因为 SpaceWorkspace 在 threadId 到位后才挂载,届时 location.state 已被 effect 清空。
+  // 因为 SpaceWorkspace 挂载后 location.state 会被 effect 清空。
   const [initialMessage] = useState(((location.state ?? {}) as AssistantInitialMessageState).initialMessage);
-
-  // 首次进入自动选中最近一条线程;无线程时保持空态
-  useEffect(() => {
-    if (threadId) return;
-    const first = threadsQ.data?.[0];
-    if (first) setThreadId(first.id);
-  }, [threadsQ.data, threadId]);
-
-  // 上一跳带过来的首条 prompt:无论当前是否已有线程,都开一条新会话承载它。
-  // 助手是多会话并存的设计(用户可并行多个任务/多人各自独立),
-  // 把首条 prompt 注入到「最近一条历史线程」会污染原会话;新建独立线程最稳。
-  useEffect(() => {
-    if (!initialMessage || threadId) return;
-    if (create.isPending || create.isSuccess || create.isError) return;
-    create.mutate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMessage, threadId]);
 
   // mount 时清掉 location.state,避免用户再次进入同名路径又带回 stale initialMessage
   useEffect(() => {
@@ -70,85 +44,46 @@ export default function AssistantPage() {
     // 仅在 mount 时清 stale state,不依赖 navigate/location(否则每次导航都会触发)
   }, []);
 
-  const create = useMutation({
-    mutationFn: () => api.assistant.createThread(versionId!),
-    onSuccess: (snap) => {
-      setInitError(null);
-      setWarning(snap.lastError ?? null);
-      setThreadId(snap.metadata.id);
-      void threadsQ.refetch();
-    },
-    onError: (e: Error) => setInitError(e.message),
-  });
-
   const llmMissing = initError?.includes('LLM 未配置') ?? false;
-  const threads = threadsQ.data ?? [];
+  const warning = activeThreadId ? warnings[activeThreadId] : undefined;
 
   return (
     <PageShell contained>
       <PageShellHeader>
         <PageShellTitle>{t('common:navAssistant')}</PageShellTitle>
-        <PageShellActions>
-          {/* select 定宽：input-base 的 width:100% 会把按钮挤换行 */}
-          <Button size="sm" disabled={create.isPending} onClick={() => create.mutate()}>
-            {create.isPending ? t('assistant:createInProgress') : t('assistant:newChat')}
-          </Button>
-          <select
-            className="input-base input-sm"
-            style={{ width: 260 }}
-            value={threadId ?? ''}
-            onChange={(e) => {
-              setInitError(null);
-              setWarning(null);
-              setThreadId(e.target.value || null);
-            }}
-            aria-label={t('assistant:historyAria')}
-          >
-            {!threadId && <option value="">{t('assistant:startNewChat')}</option>}
-            {threadId && !threads.some((thread) => thread.id === threadId) && (
-              <option value={threadId}>{t('assistant:newChat')}</option>
-            )}
-            {threads.map((thread) => (
-              <option key={thread.id} value={thread.id}>{thread.title || t('assistant:newChat')}</option>
-            ))}
-          </select>
-        </PageShellActions>
         <PageShellDescription>{t('assistant:subtitle')}</PageShellDescription>
       </PageShellHeader>
 
       <PageShellContent className="min-h-0">
-        {initError ? (
+        {initError && (
           <div
-            className="rounded-[var(--radius-sm)] px-4 py-3 text-[13px]"
+            className="rounded-[var(--radius-sm)] px-4 py-3 text-[13px] shrink-0"
             style={{ border: '1px solid var(--destructive)', color: 'var(--destructive)' }}
           >
             {initError}
             <div className="flex gap-2 mt-2">
               {llmMissing && <Button size="sm" onClick={() => navigate('/settings')}>{t('assistant:goConfigureModel')}</Button>}
-              <Button size="sm" variant="ghost" disabled={create.isPending} onClick={() => create.mutate()}>{t('assistant:retry')}</Button>
+              {/* 阻断错误只影响当次发送:收掉横幅即可重发,无需整页重试 */}
+              <Button size="sm" variant="ghost" onClick={() => setInitError(null)}>{t('common:close')}</Button>
             </div>
           </div>
-        ) : (
-          <>
-            {warning && (
-              <div
-                className="rounded-[var(--radius-sm)] px-4 py-2.5 text-[12px] shrink-0"
-                style={{ border: '1px solid var(--warning-soft-border)', color: 'var(--warning)', background: 'var(--warning-soft)' }}
-              >
-                {warning}
-              </div>
-            )}
-            {threadId ? (
-              <SpaceWorkspace key={threadId} threadId={threadId} initialMessage={initialMessage} />
-            ) : (
-              <EmptyState
-                icon="message"
-                title={t('assistant:emptyTitle')}
-                description={t('assistant:emptyDesc')}
-              />
-            )}
-          </>
         )}
+        {warning && (
+          <div
+            className="rounded-[var(--radius-sm)] px-4 py-2.5 text-[12px] shrink-0"
+            style={{ border: '1px solid var(--warning-soft-border)', color: 'var(--warning)', background: 'var(--warning-soft)' }}
+          >
+            {warning}
+          </div>
+        )}
+        <SpaceWorkspace
+          key={versionId}
+          versionId={versionId!}
+          initialMessage={initialMessage}
+          onError={(e) => setInitError(e instanceof Error ? e.message : String(e))}
+          onWarning={(threadId, msg) => setWarnings((m) => ({ ...m, [threadId]: msg }))}
+          onActiveThreadIdChange={setActiveThreadId}
+        />
       </PageShellContent>
     </PageShell>
   );
