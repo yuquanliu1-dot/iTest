@@ -1,6 +1,27 @@
 # iTest
 
+**把回归测试，交给一个可控的 Agent。**
+
 AI-first 测试管理平台：用一句话管理用例、环境与计划。基于 [pi](https://github.com/badlogic/pi-mono) agent 框架的空间助手把「需求 → 用例 → 实测验证 → 固化 → 计划执行 → 归因」串成对话式工作流；同时保留传统页面（用例/计划/报告）供人工精修。
+
+## 为什么是 iTest
+
+回归自动化通常卡在这三道坎，iTest 对每个坎都给出了工程上的解：
+
+| 行业痛点 | iTest 的回答 |
+|---|---|
+| 录制脚本，一改就废——脚本绑定页面结构与定位符，一次版本变更大批用例集体失效 | 用例先由 AI 在真实浏览器实测跑通，再 `solidify_case` 固化成机械 DSL 步骤；页面结构变化时用例随版本自愈重编，不必人工逐条修 |
+| 意图驱动测试，慢且不可控——每一步都靠模型推理，速度与 token 成本双高，换个上下文行为就变 | 双模式回放：AI 只负责探索与验证，可机械回放的步骤固化后走 playwright-core 高速精准执行；机械步骤失败才按分类器降级 AI 临场兜底 |
+| AI Coding 提速，覆盖却跟不上——提交频率成倍增长，测试资产更新仍靠人肉 | 需求 → 用例设计方法论内置在助手 system prompt（`reqDesign.ts`：正常流/边界/非法输入/状态流转/权限等维度逐一表态），repo 沙箱工具（`repo_read`/`repo_grep`/`static_locator`）让用例锚定真实源码，变更点不再靠人肉评估 |
+
+## 产品特性
+
+- **双模式回放**：AI 驱动（`aiTask`）与机械脚本（compiled DSL）双引擎，兼顾覆盖能力与运行效率
+- **AI Native 工作台**：AI 助手贯穿用例生成、调试、执行与归因全流程，自然语言直达执行
+- **数据驱动测试**：数据集（`/p/:projectId/datasets`）与用例参数绑定，一行数据一条场景
+- **用例随版本自愈**：`verify_case` 真实浏览器逐步实测 + `solidify_case` 重编固化，机械 DSL 随页面结构变化自更新
+- **覆盖设计内建**：需求进来先做覆盖设计（功能/异常/边界/安全/UIUX 逐维度表态，`reqDesign.ts` + `packages/shared/coverage.ts`），不臆造预期值
+- **PC 与移动端全覆盖**：Web 走 playwright-core，iOS/Android 走 agent-device SDK，同一套平台管理
 
 ## 架构
 
@@ -37,6 +58,8 @@ pnpm dev   # docker compose 起 PG/Redis → drizzle migrate → turbo 并行起
 
 ## 核心流程
 
+四步跑通回归：**接入需求 → 生成用例 → 执行验证 → 查看报告**。需求进来，报告出去，中间交给 iTest。
+
 1. `/settings` 配置 LLM provider（mock / openai / anthropic / google，model 留空用 provider 默认）
 2. `/` 项目 → 版本空间（`/p/:projectId/v/:versionId/…`）：AI 助手 / 用例 / 执行计划 / 执行历史 / 工作台
 3. **AI 助手**：一句话建用例 → AI 把对象暂存（StagePanel）→ 人工勾选保存；`verify_case` 真实浏览器逐步实测（带实时画面），`solidify_case` 把可机械回放的步骤固化成 compiled 步骤；意图不明会先弹确认卡（confirm_request）再执行
@@ -46,7 +69,7 @@ pnpm dev   # docker compose 起 PG/Redis → drizzle migrate → turbo 并行起
 ## 空间助手（pi）
 
 - **作用域**：线程按版本空间隔离（`workspacePath ≡ versionId`），左栏 ThreadList 支持切换/改名/删除/收缩。
-- **工具集**（`apps/api/src/pi/space/tools/`）：inspect_page / announce_plan / manage_cases / manage_scenarios / manage_environments / manage_plans / verify_case / solidify_case / read_repo / manage_skill / manage_mcp / query_history 等。
+- **工具集**（`apps/api/src/pi/space/tools/`）：inspect_page / announce_plan / manage_cases / manage_scenarios / manage_environments / manage_plans / verify_case / solidify_case / manage_skill / manage_mcp / query_history 等；另有 repo 沙箱工具 `repo_ls` / `repo_read` / `repo_grep` / `static_locator` / `repo_run`（`apps/api/src/pi/repo.ts`）。
 - **技能（skills）**：内容存磁盘目录树（容器 `skills/` 卷，DB 只留元数据），支持导入/编辑/脚本执行；发布前跑 `export-skills-to-disk.mjs` 导出。
 - **推荐追问**：每轮回答落定后按线程转写生成 3 条追问建议。
 - **图片附件**：composer 截图直接进对话（模型 `input` 须声明 `image`，网关别名模型漏声明会静默剥图）。
