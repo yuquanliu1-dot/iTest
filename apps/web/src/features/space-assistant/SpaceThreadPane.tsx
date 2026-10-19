@@ -117,9 +117,13 @@ function AssistantMessage({ threadId }: { threadId: string }) {
  *  二者语义互补——思考中=模型在推理(跟着消息走),正在运行=工具调用间隙/模型静默期(线程整体存活)。 */
 function RunningIndicator() {
   const { t } = useTranslation();
+  // 必须读 s.thread.messages[].parts（core 派生过 status 的 PartState），不能读
+  // message.content——那是 react-pi messageProjection 的原始投影，reasoning part 根本
+  // 没有 status 字段，p.status?.type==='running' 恒为 false，守卫形同虚设。
+  // ThinkingPart 显示的「思考中」正是同一份派生 status，两边口径一致才互斥。
   const thinkingActive = useAuiState((s) =>
     s.thread.messages.some((m) =>
-      m.content.some((p) => p.type === 'reasoning' && p.status?.type === 'running'),
+      m.parts.some((p) => p.type === 'reasoning' && p.status.type === 'running'),
     ),
   );
   if (thinkingActive) return null;
