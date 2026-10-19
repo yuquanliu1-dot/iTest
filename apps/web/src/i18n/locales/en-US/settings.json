@@ -77,5 +77,21 @@
   "skillUploadHint": "Uploads go to the current selection: a selected directory receives them, a selected file means its own directory; directories are never created.",
   "skillUploadFail": "failed to read",
   "skillDeleteConfirm": "Delete skill “{{name}}”?",
-  "skillDeleteAlsoDir": "Skill content lives in a directory on the server; deleting removes that whole directory and cannot be undone."
+  "skillDeleteAlsoDir": "Skill content lives in a directory on the server; deleting removes that whole directory and cannot be undone.",
+  "feedbackTitle": "User feedback",
+  "feedbackIntro": "Thumbs up/down and written comments users submit in assistant conversations. Collected only — nothing is applied automatically.",
+  "feedbackNone": "No feedback yet",
+  "feedbackAll": "All",
+  "feedbackPositive": "Helpful",
+  "feedbackNegative": "Needs work",
+  "feedbackAllProjects": "All projects",
+  "feedbackUser": "Author",
+  "feedbackAnonymous": "(user removed)",
+  "feedbackOpinion": "Comment",
+  "feedbackOnReply": "On reply",
+  "feedbackNoComment": "(no comment)",
+  "feedbackLoadFailed": "Failed to load feedback",
+  "feedbackTotal": "{{count}} total",
+  "feedbackPrev": "Previous",
+  "feedbackNext": "Next"
 }

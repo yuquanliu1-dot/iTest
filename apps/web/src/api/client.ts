@@ -555,6 +555,48 @@ export const api = {
           body: JSON.stringify(body),
         }),
     },
+    /** 用户对 AI 回复的反馈（Phase 1 只收集）。messageExcerpt 是回溯的唯一可靠依据，
+     *  messageAnchor 只是位置索引线索、会随流式漂移——消费反馈时别把 anchor 当主键。 */
+    feedback: {
+      create: (body: {
+        threadId: string;
+        sentiment: 'positive' | 'negative';
+        comment?: string;
+        messageAnchor?: string;
+        messageIndex?: number;
+        messageExcerpt?: string;
+        messageAt?: string;
+      }) =>
+        request<void>('/assistant/feedback', { method: 'POST', body: JSON.stringify(body) }),
+      /** 当前用户在该线程下已提交的反馈，用于气泡「已提交」标记。 */
+      mine: (threadId: string) =>
+        request<Array<{
+          id: string;
+          messageAnchor: string | null;
+          messageIndex: number | null;
+          sentiment: 'positive' | 'negative';
+          createdAt?: string;
+        }>>(`/assistant/feedback${qs({ threadId })}`),
+      /** 管理端全量列表（requireManager）。messageExcerpt 是回溯的唯一可靠依据。 */
+      listAll: (params: { sentiment?: string; projectId?: string; limit?: number; offset?: number }) =>
+        request<{
+          total: number;
+          rows: Array<{
+            id: string;
+            threadId: string;
+            versionId: string;
+            projectId: string;
+            sentiment: 'positive' | 'negative';
+            messageExcerpt: string | null;
+            comment: string | null;
+            authorName: string | null;
+            createdAt?: string;
+          }>;
+        }>(`/assistant/feedback/all${qs(params)}`),
+      /** 筛选用的候选项目（与列表同可见性口径）。 */
+      listProjects: () =>
+        request<Array<{ id: string; name: string }>>('/assistant/feedback/projects'),
+    },
     /** 系统设置：全局共享 MCP server（scope 固定 global）。 */
     mcpServers: {
       list: () => request<AssistantMcpServer[]>('/assistant/mcp-servers'),
