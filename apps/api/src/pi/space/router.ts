@@ -6,7 +6,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import {
   aiThreads, aiStageCases, aiStageCaseOps, aiStageScenarios, aiStageEnvironments, aiStagePlans, aiStageDatasets,
@@ -90,13 +90,22 @@ spaceRoute.get('/threads', async (req, res) => {
       updatedAt: aiThreads.updatedAt, piThreadId: aiThreads.piThreadId,
     })
     .from(aiThreads)
-    .where(and(eq(aiThreads.kind, 'version'), eq(aiThreads.versionId, versionId)))
+    // 草稿行(piThreadId='')过不了下面的文件判据(fs.access('')必拒),下推进 SQL 让
+    // LIMIT 窗口只留给可能有会话的线程,否则空行吃掉配额、挤掉够格的旧线程。
+    .where(and(eq(aiThreads.kind, 'version'), eq(aiThreads.versionId, versionId), sql`${aiThreads.piThreadId} <> ''`))
     .orderBy(desc(aiThreads.updatedAt))
     .limit(20);
   // 「有会话」判据 = session 文件真实存在。不能用 piThreadId !== '':pi 在 persist=true 时
   // 立即分配 sessionFile 路径(仅落盘延迟),草稿线程也有非空 piThreadId,会把没发过消息的
   // 空会话全放进历史列表——正是本过滤原本要防的。
-  const exists = await Promise.all(rows.map((r) => fs.access(r.piThreadId).then(() => true).catch(() => false)));
+  const exists = await Promise.all(rows.map((r) =>
+    fs.access(r.piThreadId)
+      .then(() => true)
+      .catch((e: NodeJS.ErrnoException) => {
+        // ENOENT 是常态(线程还没落盘);其余(EACCES/EIO/卷挂死)是环境故障,别静默吞掉。
+        if (e.code !== 'ENOENT') logger.warn({ err: e, sessionFile: r.piThreadId }, 'session file probe failed');
+        return false;
+      })));
   const withRecords = rows.filter((_, i) => exists[i]);
   res.json(withRecords.map((row) => ({
     id: row.id,
