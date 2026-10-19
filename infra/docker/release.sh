@@ -85,13 +85,28 @@ TMP_LOCAL="$(mktemp -d)"
 trap 'rm -rf "$TMP_LOCAL"' EXIT
 TARBALL="$TMP_LOCAL/itest.tar.gz"
 # --no-xattrs 是关键那条，不是 --exclude='._*'。
-# macOS 会把 com.apple.provenance 等扩展属性写进 tar 的 pax 头(解包时 tar 会警告
-# "Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.*'")，服务器侧 GNU tar
-# 虽忽略这些头，但资源叉内容仍会落成 AppleDouble ._xxx 文件——实测 skill-creator
-# 18 个文件在远端变成 41 个。文件名排除只在源目录已有 ._ 文件时有用，挡不住「由扩展
-# 属性凭空生成」。--no-xattrs 从源头不打这些头，两者一起留着兜底。
+# 关键那条是 COPYFILE_DISABLE=1，不是 --exclude='._*'，也不是 --no-xattrs。
+#
+# macOS 的 tar 是 bsdtar(libarchive)，打包时会为每个文件【自动合成】一个
+# AppleDouble 伴随条目 ._xxx，把扩展属性/资源叉内容装进去（COPYFILE 特性）。
+# 这不是「源目录里已有的文件」，所以 --exclude='._*' 根本匹配不到（排除发生在
+# 读取前，而此时那些条目还不存在）；--no-xattrs 同样无效——它只影响 pax 头，
+# 不阻止 libarchive 合成伴随条目。实测：同一份目录，tar 条目 8 → 加
+# COPYFILE_DISABLE=1 后 4，._ 条目 0。
+#
+# 危害：这些 ._xxx 落到服务器 checkout 后，tar 解包会原样写出（tar 解包是覆盖
+# 语义、不删旧文件，于是它们永久滞留），随后被 COPY 进镜像 build context——
+# 实测 skill-creator 18 个文件在远端变成 41 个，且 read_skill 会把 ._SKILL.md
+# 这类噪声当真实文件列给模型。
+#
+# 三个保险都留着：COPYFILE_DISABLE 从源头断（主），.dockerignore 挡镜像侧
+# （兜底），解包前 find -delete 清历史残留（治已污染的服务器）。
+#
+# 注意：macOS 的 `tar tzf` 自己会【隐藏】这些条目，用它自查会误判为 0——
+# 必须用 GNU tar 或 python tarfile 读。用 python tarfile 验：条目数、._ 计数。
+#
 # 不带 ./ 前缀的模式同时被 GNU/bsdtar 理解为按路径段匹配；dist/modules/*.js 在镜像内重建，无需随包携带
-tar -C "$ROOT" --no-xattrs -czf "$TARBALL" \
+COPYFILE_DISABLE=1 tar -C "$ROOT" -czf "$TARBALL" \
   --exclude='node_modules' \
   --exclude='.git' \
   --exclude='.worktrees' \
@@ -111,6 +126,20 @@ tar -C "$ROOT" --no-xattrs -czf "$TARBALL" \
   .
 ls -lh "$TARBALL"
 
+# 自检：用 python tarfile 读（macOS 自带 tar 会隐藏 ._ 条目，查不出来）。
+# 打包完立刻验，别等远端才发现——远端每个 ._ 都会随 build context 进镜像。
+AD_COUNT="$(python3 - "$TARBALL" <<'PY'
+import os, sys, tarfile
+names = tarfile.open(sys.argv[1]).getnames()
+print(sum(1 for n in names if os.path.basename(n).startswith('._')))
+PY
+)"
+if [ "$AD_COUNT" != "0" ]; then
+  echo "❌ tarball 里仍有 $AD_COUNT 个 AppleDouble 条目（._*），会污染远端镜像——中止上传"
+  exit 1
+fi
+echo "✓ tarball 无 AppleDouble 条目"
+
 if [ "$DRY_RUN" = "1" ]; then
   echo "--dry-run: 跳过上传与部署（tarball 保留在 ${TARBALL}）"
   trap - EXIT
@@ -124,10 +153,10 @@ echo "== 远程部署 =="
 # 先解包（含最新的 deploy.sh），再执行——绝不让脚本执行中自我覆盖。
 #
 # 解包前先清掉 AppleDouble 残骸。tar 解包是「覆盖」语义，不删旧文件：早于
-# --no-xattrs 的 tarball 会把 macOS 扩展属性还原成 ._xxx 文件，这些文件一旦落到
-# 服务器上就永久留在 checkout 里，后续每次发版都被 COPY 进镜像 build context——
+# COPYFILE_DISABLE=1 的 tarball 会带上一批 ._xxx 条目，这些文件一旦落到服务器
+# 上就永久留在 checkout 里，后续每次发版都被 COPY 进镜像 build context——
 # 实测 skill-creator 18 文件在远端变 41 个，且这 23 个垃圾文件会污染技能目录树。
-# 本地 tarball 干净（已验证 24 条目 / 0 个 ._），所以源头只需清服务器这一份残留。
+# 本地 tarball 干净（打包后用 python tarfile 自检），所以根因只需清服务器这份残留。
 # 用 find -delete 而不是 rm：路径含中文/空格也安全，且不依赖 shell glob 展开。
 run_ssh "
   set -e
