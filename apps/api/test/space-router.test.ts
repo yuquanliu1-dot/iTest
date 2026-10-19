@@ -9,13 +9,19 @@ let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
 
+/** 捕获 prompt 的入参与 options，供图片透传断言用（每个用例在 beforeEach 清空）。 */
+const capturedPrompts: { text: string; options?: { streamingBehavior?: string; images?: { data: string; mimeType: string }[] } }[] = [];
+
 function makeFakeSession() {
   const listeners = new Set<(e: unknown) => void>();
   return {
     messages: [] as unknown[],
     listeners,
     subscribe(fn: (e: unknown) => void) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
-    async prompt() { this.messages.push({ role: 'user' }); },
+    async prompt(text: string, options?: { streamingBehavior?: 'steer' | 'followUp'; images?: { data: string; mimeType: string }[] }) {
+      capturedPrompts.push({ text, options });
+      this.messages.push({ role: 'user' });
+    },
     abort() {},
     async dispose() {},
     get isStreaming() { return false; },
@@ -27,6 +33,15 @@ beforeAll(async () => {
   process.env.DATABASE_URL = container.getConnectionUri();
   pool = new Pool({ connectionString: container.getConnectionUri() });
   await pool.query(SCHEMA_SQL);
+  // DELETE /threads 清暂存会触及全部 6 张 ai_stage_* 表;SCHEMA_SQL 只建了 ai_stage_cases,
+  // 其余 5 张在此补齐(IF NOT EXISTS,列定义照 src/db/schema.ts)。
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ai_stage_case_ops (thread_id text NOT NULL, local_id text NOT NULL, version_id uuid NOT NULL, case_id uuid NOT NULL, op varchar(30) NOT NULL, payload jsonb NOT NULL DEFAULT '{}', summary text NOT NULL, diff text, staged_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_stage_case_ops_pk PRIMARY KEY(thread_id, local_id));
+    CREATE TABLE IF NOT EXISTS ai_stage_scenarios (thread_id text NOT NULL, local_id text NOT NULL, version_id uuid NOT NULL, requirement_id uuid NOT NULL, title varchar(200) NOT NULL, description text, case_local_ids text[] NOT NULL DEFAULT '{}', staged_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_stage_scenarios_pk PRIMARY KEY(thread_id, local_id));
+    CREATE TABLE IF NOT EXISTS ai_stage_environments (thread_id text NOT NULL, local_id text NOT NULL, version_id uuid NOT NULL, name varchar(120) NOT NULL, base_url text, objects jsonb NOT NULL DEFAULT '[]', staged_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_stage_environments_pk PRIMARY KEY(thread_id, local_id));
+    CREATE TABLE IF NOT EXISTS ai_stage_plans (thread_id text NOT NULL, local_id text NOT NULL, version_id uuid NOT NULL, name varchar(200) NOT NULL, environment_id uuid, case_local_ids text[] NOT NULL DEFAULT '{}', staged_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_stage_plans_pk PRIMARY KEY(thread_id, local_id));
+    CREATE TABLE IF NOT EXISTS ai_stage_datasets (thread_id text NOT NULL, local_id text NOT NULL, version_id uuid NOT NULL, name varchar(120) NOT NULL, description text, columns jsonb NOT NULL DEFAULT '[]', rows jsonb NOT NULL DEFAULT '[]', staged_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_stage_datasets_pk PRIMARY KEY(thread_id, local_id));
+  `);
   const { default: exp } = await import('express');
   app = exp();
   app.use(exp.json());
@@ -51,6 +66,7 @@ afterAll(async () => {
 beforeEach(async () => {
   const { resetSpaceSessions } = await import('../src/pi/space/session.js');
   resetSpaceSessions();
+  capturedPrompts.length = 0;
   await pool.query(`TRUNCATE ai_threads RESTART IDENTITY CASCADE`);
 });
 
@@ -248,5 +264,213 @@ describe('space wire contract', () => {
 
   it('GET /models 未配置时返回 []', async () => {
     expect((await request(app).get('/api/assistant/models')).body).toEqual([]);
+  });
+});
+
+describe('线程列表作用域与改名/删除(react-pi ThreadList 契约)', () => {
+  /** 建线程并发一条消息(让它进列表——列表过滤 messageCount>0)。 */
+  async function activeThread(versionId: string): Promise<string> {
+    const created = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    const id = created.body.metadata.id as string;
+    await request(app).post(`/api/assistant/threads/${id}/messages`).send({ input: { content: 'hi' } });
+    for (let i = 0; i < 40; i++) {
+      const list = await request(app).get(`/api/assistant/threads?versionId=${versionId}`);
+      if (list.body.length > 0) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return id;
+  }
+
+  it('POST /threads 接受 react-pi 的 {workspacePath} 形状(versionId ≡ workspacePath)', async () => {
+    const { versionId } = await seedProject(pool);
+    const r = await request(app).post('/api/assistant/threads').send({ workspacePath: versionId });
+    expect(r.status).toBe(200);
+    const row = await pool.query(`SELECT version_id FROM ai_threads WHERE id=$1`, [r.body.metadata.id]);
+    expect(row.rows[0]!.version_id).toBe(versionId);
+  });
+
+  it('GET /threads?workspacePath= 与 ?versionId= 等价', async () => {
+    const { versionId } = await seedProject(pool);
+    await activeThread(versionId);
+    const a = await request(app).get(`/api/assistant/threads?workspacePath=${versionId}`);
+    expect(a.status).toBe(200);
+    expect(a.body).toHaveLength(1);
+    expect(a.body[0]!.status).toBe('idle');
+    // Pi 契约:status 必须是非空字符串;列表条目不带 archived
+    expect(typeof a.body[0]!.status).toBe('string');
+    expect(a.body[0]!.archived).toBeUndefined();
+  });
+
+  it('PATCH /threads/:id 改名;非字符串 title 400;未知线程 404', async () => {
+    const { versionId } = await seedProject(pool);
+    const id = await activeThread(versionId);
+    const r = await request(app).patch(`/api/assistant/threads/${id}`).send({ title: '  新标题  ' });
+    expect(r.status).toBe(204);
+    const row = await pool.query(`SELECT title FROM ai_threads WHERE id=$1`, [id]);
+    expect(row.rows[0]!.title).toBe('新标题');
+    expect((await request(app).patch(`/api/assistant/threads/${id}`).send({ title: 42 })).status).toBe(400);
+    expect((await request(app).patch(`/api/assistant/threads/${crypto.randomUUID()}`).send({ title: 'x' })).status).toBe(404);
+  });
+
+  it('PATCH 改名后首条消息不再覆盖标题(sendSpaceUserMessage 只在无标题时落题)', async () => {
+    const { versionId } = await seedProject(pool);
+    const created = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    const id = created.body.metadata.id as string;
+    await request(app).patch(`/api/assistant/threads/${id}`).send({ title: '手动标题' });
+    await request(app).post(`/api/assistant/threads/${id}/messages`).send({ input: { content: '第一问' } });
+    for (let i = 0; i < 20; i++) {
+      const row = await pool.query(`SELECT title FROM ai_threads WHERE id=$1`, [id]);
+      if (row.rows[0]!.title) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const row = await pool.query(`SELECT title FROM ai_threads WHERE id=$1`, [id]);
+    expect(row.rows[0]!.title).toBe('手动标题');
+  });
+
+  it('DELETE /threads/:id 删线程行并清六张暂存表;内存 record 释放', async () => {
+    const { versionId } = await seedProject(pool);
+    const id = await activeThread(versionId);
+    await pool.query(`INSERT INTO ai_stage_cases(thread_id, local_id, version_id, title) VALUES ($1,'c1',$2,'t')`, [id, versionId]);
+    await pool.query(`INSERT INTO ai_stage_case_ops(thread_id, local_id, version_id, case_id, op, payload, summary) VALUES ($1,'o1',$2,$3,'update_case','{}','s')`, [id, versionId, crypto.randomUUID()]);
+    await pool.query(`INSERT INTO ai_stage_scenarios(thread_id, local_id, version_id, requirement_id, title) VALUES ($1,'s1',$2,$3,'t')`, [id, versionId, crypto.randomUUID()]);
+    await pool.query(`INSERT INTO ai_stage_environments(thread_id, local_id, version_id, name) VALUES ($1,'e1',$2,'n')`, [id, versionId]);
+    await pool.query(`INSERT INTO ai_stage_plans(thread_id, local_id, version_id, name) VALUES ($1,'p1',$2,'n')`, [id, versionId]);
+    await pool.query(`INSERT INTO ai_stage_datasets(thread_id, local_id, version_id, name) VALUES ($1,'d1',$2,'n')`, [id, versionId]);
+
+    const del = await request(app).delete(`/api/assistant/threads/${id}`);
+    expect(del.status).toBe(204);
+    expect((await pool.query(`SELECT count(*)::int AS n FROM ai_threads WHERE id=$1`, [id])).rows[0]!.n).toBe(0);
+    for (const t of ['ai_stage_cases', 'ai_stage_case_ops', 'ai_stage_scenarios', 'ai_stage_environments', 'ai_stage_plans', 'ai_stage_datasets']) {
+      expect((await pool.query(`SELECT count(*)::int AS n FROM ${t} WHERE thread_id=$1`, [id])).rows[0]!.n).toBe(0);
+    }
+    // 内存 record 已 drop:快照接口 404(行没了),且旧会话不再被 status 查询命中
+    expect((await request(app).get(`/api/assistant/threads/${id}`)).status).toBe(404);
+    const { snapshotOfThread } = await import('../src/pi/space/session.js');
+    expect(snapshotOfThread(id)).toBeNull();
+    // 再删一次:行不存在 → 404(可见性校验先拦截;客户端 deleteThread 对 404 同样容忍)
+    expect((await request(app).delete(`/api/assistant/threads/${id}`)).status).toBe(404);
+  });
+});
+
+describe('推荐追问(suggestions)', () => {
+  it('未知线程 404(可见性校验);孤儿线程(有行无会话)404 session not found', async () => {
+    expect((await request(app).post(`/api/assistant/threads/${crypto.randomUUID()}/suggestions`)).status).toBe(404);
+    const { versionId } = await seedProject(pool);
+    const orphanId = crypto.randomUUID();
+    await pool.query(`INSERT INTO ai_threads(id, kind, version_id, pi_thread_id) VALUES ($1,'version',$2,'')`, [orphanId, versionId]);
+    const r = await request(app).post(`/api/assistant/threads/${orphanId}/suggestions`);
+    expect(r.status).toBe(404);
+  });
+
+  it('活跃线程但转写为空(没发过消息)→ 200 [](不调 LLM、不报错)', async () => {
+    const { versionId } = await seedProject(pool);
+    const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    const r = await request(app).post(`/api/assistant/threads/${t.body.metadata.id}/suggestions`);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([]);
+  });
+
+  it('有转写但 LLM 未配置 → 502 llm_not_configured', async () => {
+    const { versionId } = await seedProject(pool);
+    const { setSpaceSessionFactory } = await import('../src/pi/space/session.js');
+    setSpaceSessionFactory(async () => {
+      const s = makeFakeSession();
+      s.messages.push({ role: 'user', content: [{ type: 'text', text: '查一下环境' }] });
+      s.messages.push({ role: 'assistant', content: [{ type: 'text', text: '共有 2 个环境' }] });
+      return s as never;
+    });
+    const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    const r = await request(app).post(`/api/assistant/threads/${t.body.metadata.id}/suggestions`);
+    expect(r.status).toBe(502);
+    expect(r.body.error).toBe('llm_not_configured');
+  });
+});
+
+describe('suggestions 纯函数', () => {
+  it('buildTranscript:取 user/assistant 文本、跳过工具与空消息、末轮 assistant 收尾', async () => {
+    const { buildTranscript } = await import('../src/pi/space/suggestions.js');
+    const out = buildTranscript([
+      { role: 'user', content: '第一问' },
+      { role: 'assistant', content: [{ type: 'toolCall' }, { type: 'text', text: '中途' }] },
+      { role: 'toolResult', content: '忽略' },
+      { role: 'user', content: [] },
+      { role: 'assistant', content: [{ type: 'text', text: '最终答' }] },
+    ]);
+    // assistant 段只取最后一轮的正文(中途思考被末轮覆盖),空 user 被跳过
+    expect(out).toBe('用户: 第一问\n助手: 最终答');
+  });
+
+  it('buildTranscript:超预算时从最旧整行丢弃,保留最新行', async () => {
+    const { buildTranscript } = await import('../src/pi/space/suggestions.js');
+    const big = 'x'.repeat(6_000); // 单行超预算(TRANSCRIPT_CHAR_BUDGET=6000)
+    const msgs = [
+      { role: 'user', content: big },
+      { role: 'assistant', content: big },
+      { role: 'user', content: '最后一问' },
+    ];
+    const out = buildTranscript(msgs);
+    expect(out).toBe('用户: 最后一问');
+  });
+
+  it('parseSuggestionLines:去序号/项目符/引号,取前 3 条', async () => {
+    const { parseSuggestionLines } = await import('../src/pi/space/suggestions.js');
+    expect(parseSuggestionLines('1. 查环境\n- 「建三条用例」\n\n2) 跑一遍\n第四行不要\n第五行也不要')).toEqual([
+      '查环境',
+      '建三条用例',
+      '跑一遍',
+    ]);
+  });
+});
+
+describe('图片附件透传', () => {
+  /** 建线程并发一条消息,返回 threadId;prompt 是 fire-and-forget,这里轮询等它落地。 */
+  async function sendWithAttachments(input: Record<string, unknown>): Promise<void> {
+    const { versionId } = await seedProject(pool);
+    const created = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    const id = created.body.metadata.id as string;
+    await request(app).post(`/api/assistant/threads/${id}/messages`).send({ input });
+    // 路由是 204 后台派发,等 prompt 被调到为止(最多 ~2s)
+    for (let i = 0; i < 40 && capturedPrompts.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  it('合法 image 附件原样透进 prompt.images,文本不受影响', async () => {
+    await sendWithAttachments({
+      content: '看这张图',
+      attachments: [{ type: 'image', mimeType: 'image/png', data: 'aGVsbG8=' }],
+    });
+    expect(capturedPrompts[0]!.text).toBe('看这张图');
+    expect(capturedPrompts[0]!.options?.images).toEqual([{ data: 'aGVsbG8=', mimeType: 'image/png' }]);
+  });
+
+  it('无附件时不下发 images 字段(不给 SDK 传空数组)', async () => {
+    await sendWithAttachments({ content: '纯文本' });
+    expect(capturedPrompts[0]!.options?.images).toBeUndefined();
+  });
+
+  it('非 image 的 mimeType / 非 base64 的 data 一律丢弃,但消息照发', async () => {
+    await sendWithAttachments({
+      content: '混合附件',
+      attachments: [
+        { type: 'image', mimeType: 'application/pdf', data: 'aGVsbG8=' },
+        { type: 'image', mimeType: 'image/png', data: 'not base64!!' },
+        null,
+        'garbage',
+        { type: 'image', mimeType: 'image/jpeg', data: 'd29ybGQ=' },
+      ],
+    });
+    expect(capturedPrompts[0]!.text).toBe('混合附件');
+    expect(capturedPrompts[0]!.options?.images).toEqual([{ data: 'd29ybGQ=', mimeType: 'image/jpeg' }]);
+  });
+
+  it('张数超上限时截断(取前 4 张),不报错', async () => {
+    await sendWithAttachments({
+      content: '很多图',
+      attachments: Array.from({ length: 6 }, (_v, i) => ({
+        type: 'image', mimeType: 'image/png', data: Buffer.from(`img${i}`).toString('base64'),
+      })),
+    });
+    expect(capturedPrompts[0]!.options?.images).toHaveLength(4);
   });
 });

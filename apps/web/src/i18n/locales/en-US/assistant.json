@@ -4,8 +4,30 @@
     "send": "Send",
     "stop": "Stop"
   },
+  "attachment": {
+    "add": "Add image",
+    "remove": "Remove image"
+  },
   "runningIndicator": "Running",
+  "suggestion": {
+    "title": "Follow up:"
+  },
   "thinking": "Thinking",
+  "notice": {
+    "compacting": "Compacting context ({{reason}})…",
+    "compactReason": {
+      "manual": "manual",
+      "threshold": "context full",
+      "overflow": "overflow"
+    },
+    "retrying": "Request failed, retrying (attempt {{attempt}})…"
+  },
+  "queue": {
+    "title": "Queued ({{count}}) — will run in order after the current task",
+    "withdraw": "Withdraw",
+    "withdrawing": "Withdrawing…"
+  },
+  "thinkingDone": "Thought through",
   "tool": {
     "inspectPage": "Inspect page",
     "announcePlan": "Generate plan",
@@ -97,14 +119,17 @@
     "title": "Live view"
   },
   "subtitle": "Manage cases, environments and plans in one sentence; when the intent is unclear the AI will ask for clarification",
-  "createInProgress": "Creating…",
   "newChat": "New chat",
-  "historyAria": "Chat history",
-  "startNewChat": "Start a new chat",
   "goConfigureModel": "Go to model settings",
-  "retry": "Retry",
-  "emptyTitle": "Start your first chat with AI",
-  "emptyDesc": "Try \"see what environments are available\" or \"create three login cases for me\".",
+  "threadList": {
+    "noHistory": "No conversations yet",
+    "untitled": "New chat",
+    "rename": "Rename",
+    "delete": "Delete chat",
+    "confirmDelete": "Delete \"{{title}}\"? This cannot be undone.",
+    "collapse": "Collapse thread list",
+    "expand": "Expand thread list"
+  },
   "feedback": {
     "positive": "Helpful",
     "negative": "Not helpful",

@@ -56,7 +56,11 @@ export function synthesizeModel(provider: LlmProvider, modelId: string, baseUrl:
     provider,
     baseUrl: baseUrl ?? d.baseUrl,
     reasoning: false,
-    input: ['text'],
+    // 'image' 必须声明:pi-ai transformMessages 按 model.input 过滤消息图片块
+    // (downgradeUnsupportedImages → 占位文本)。['text'] 会让用户附件在发往网关前被
+    // 静默剥掉——整条链路"全绿但模型看不见图"。网关路由到无视觉能力的模型时,
+    // 由对端 API 报错兜底,宁可显式失败也不静默丢图。
+    input: ['text', 'image'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200000,
     maxTokens: 8192,

@@ -4,8 +4,30 @@
     "send": "发送",
     "stop": "停止"
   },
+  "attachment": {
+    "add": "添加图片",
+    "remove": "移除图片"
+  },
   "runningIndicator": "正在运行",
+  "suggestion": {
+    "title": "继续追问："
+  },
   "thinking": "思考中",
+  "notice": {
+    "compacting": "正在压缩上下文（{{reason}}）…",
+    "compactReason": {
+      "manual": "手动",
+      "threshold": "上下文已满",
+      "overflow": "溢出"
+    },
+    "retrying": "请求失败，正在重试（第 {{attempt}} 次）…"
+  },
+  "queue": {
+    "title": "已排队 {{count}} 条（当前任务结束后按序执行）",
+    "withdraw": "撤回",
+    "withdrawing": "撤回中…"
+  },
+  "thinkingDone": "已思考",
   "tool": {
     "inspectPage": "抓取页面",
     "announcePlan": "生成计划",
@@ -97,14 +119,17 @@
     "title": "实时画面"
   },
   "subtitle": "用一句话管理用例、环境与计划;意图不明时 AI 会主动追问",
-  "createInProgress": "创建中…",
   "newChat": "新对话",
-  "historyAria": "历史对话",
-  "startNewChat": "开始新对话",
   "goConfigureModel": "去设置模型",
-  "retry": "重试",
-  "emptyTitle": "开始与 AI 的第一次对话",
-  "emptyDesc": "试试「看看现在有哪些环境」或「帮我建三条登录用例」。",
+  "threadList": {
+    "noHistory": "暂无历史对话",
+    "untitled": "新对话",
+    "rename": "改名",
+    "delete": "删除对话",
+    "confirmDelete": "删除「{{title}}」?删除后不可恢复。",
+    "collapse": "收起会话列表",
+    "expand": "展开会话列表"
+  },
   "feedback": {
     "positive": "有帮助",
     "negative": "没帮助",

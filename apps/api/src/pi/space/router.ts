@@ -7,7 +7,9 @@ import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../../db/client.js';
-import { aiThreads } from '../../db/schema.js';
+import {
+  aiThreads, aiStageCases, aiStageCaseOps, aiStageScenarios, aiStageEnvironments, aiStagePlans, aiStageDatasets,
+} from '../../db/schema.js';
 import { logger } from '../../logger.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import { assertVersionVisible } from '../../services/projectAccess.js';
@@ -16,6 +18,7 @@ import { handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf }
 import type { AuthUser } from '../../services/auth.service.js';
 import { readLlmConfig } from '../modelBridge.js';
 import { resolveConfirmation } from './confirm.js';
+import { generateSpaceSuggestionsOnce } from './suggestions.js';
 import { stageRoute } from './stageRoute.js';
 import { feedbackRoute } from './feedbackRoute.js';
 import { requireManager } from '../../middleware/auth.js';
@@ -23,9 +26,9 @@ import { guidesRoute } from './guidesRoute.js';
 import { mcpServersRoute } from './mcpServersRoute.js';
 import { skillsRoute } from './skillsRoute.js';
 import {
-  cancelThread, ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, spaceRepoIssue, subscribeThread, threadStatus,
+  cancelThread, clearThreadQueue, dropSpaceRecord, ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, spaceRepoIssue, subscribeThread, threadStatus,
 } from './session.js';
-import type { ThreadSnapshot } from './session.js';
+import type { ThreadSnapshot, SpacePromptImage } from './session.js';
 
 export const spaceRoute = Router();
 
@@ -48,8 +51,10 @@ function threadSnapshotResponse(threadId: string): ThreadSnapshot {
 }
 
 spaceRoute.post('/threads', async (req, res) => {
-  const body = req.body as { metadata?: { versionId?: string } };
-  const versionId = body.metadata?.versionId;
+  const body = req.body as { metadata?: { versionId?: string }; workspacePath?: string };
+  // react-pi 的 initialize 发 {workspacePath}(Pi 官方作用域通道),页面级旧调用发
+  // {metadata:{versionId}};两条都认,versionId ≡ workspacePath(UUID 串)。
+  const versionId = body.metadata?.versionId ?? body.workspacePath;
   if (!versionId) throw new HttpError(400, 'bad_request', 'metadata.versionId required');
   await assertVersionVisible(versionId, req.user as AuthUser);
   // 每次调用新建一线程(一版本多线程)。初始化失败(LLM 未配置等)→ 删行并透出错误,
@@ -72,9 +77,10 @@ spaceRoute.post('/threads', async (req, res) => {
 
 spaceRoute.get('/threads', async (req, res) => {
   const raw = req.query.versionId;
-  const versionId = typeof raw === 'string' ? raw : '';
-  // 无 versionId → 空列表(react-pi 运行时的线程列表机制按 Pi 契约不带参调用;
-  // 页面级列表始终带 versionId)。不越权返回跨版本数据。
+  // react-pi 的 list 走 ?workspacePath=(官方作用域通道,值即 versionId);页面级旧调用走 ?versionId=。
+  const rawWs = req.query.workspacePath;
+  const versionId = (typeof raw === 'string' ? raw : '') || (typeof rawWs === 'string' ? rawWs : '');
+  // 两个参都没有 → 空列表(不越权返回跨版本数据)。
   if (!versionId) { res.json([]); return; }
   await assertVersionVisible(versionId, req.user as AuthUser);
   const rows = await db
@@ -101,15 +107,55 @@ spaceRoute.get('/threads/:id', async (req, res) => {
   res.json(threadSnapshotResponse(req.params.id!));
 });
 
+/** react-pi rename 契约:PATCH {title} → 204。空/非字符串 400;trim 后入库。 */
+spaceRoute.patch('/threads/:id', async (req, res) => {
+  await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
+  const body = req.body as { title?: unknown };
+  if (typeof body.title !== 'string') throw new HttpError(400, 'bad_request', 'title required');
+  const title = body.title.trim().slice(0, 200);
+  await db.update(aiThreads).set({ title, updatedAt: new Date() }).where(eq(aiThreads.id, req.params.id!));
+  res.status(204).end();
+});
+
+/** react-pi delete 契约:DELETE → 204(已不存在也 204,客户端对 404 同样容忍)。
+ *  同事务清六张 ai_stage_* 暂存行(按 threadId,无 FK 级联)与线程行;内存会话
+ *  经 dropSpaceRecord 释放(dispose + 退订),SSE 订阅者随后收到断连。 */
+spaceRoute.delete('/threads/:id', async (req, res) => {
+  const threadId = req.params.id!;
+  await assertSpaceThreadVisible(threadId, req.user as AuthUser);
+  await db.transaction(async (tx) => {
+    await tx.delete(aiStageCases).where(eq(aiStageCases.threadId, threadId));
+    await tx.delete(aiStageCaseOps).where(eq(aiStageCaseOps.threadId, threadId));
+    await tx.delete(aiStageScenarios).where(eq(aiStageScenarios.threadId, threadId));
+    await tx.delete(aiStageEnvironments).where(eq(aiStageEnvironments.threadId, threadId));
+    await tx.delete(aiStagePlans).where(eq(aiStagePlans.threadId, threadId));
+    await tx.delete(aiStageDatasets).where(eq(aiStageDatasets.threadId, threadId));
+    await tx.delete(aiThreads).where(eq(aiThreads.id, threadId));
+  });
+  dropSpaceRecord(threadId);
+  res.status(204).end();
+});
+
 spaceRoute.post('/threads/:id/messages', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
-  const body = req.body as { input?: { content?: string } };
+  const body = req.body as { input?: { content?: string; streamingBehavior?: string; attachments?: unknown } };
   const content = body.input?.content ?? '';
+  // react-pi 的 ThreadController 按运行态派生出 streamingBehavior 并随 input 发来
+  // (ThreadController.js:265)。必须透传给 session,否则运行中发消息会被 Pi 拒收:
+  // 无参 prompt 在 isStreaming 时抛「Agent is already processing」。只认两个枚举值,
+  // 未知值按缺省处理,不把任意字符串透进 SDK。
+  const streamingBehavior = body.input?.streamingBehavior === 'steer' || body.input?.streamingBehavior === 'followUp'
+    ? body.input.streamingBehavior
+    : undefined;
+  // images: react-pi 把 composer 附件转成 pi 的 ImageContent（{type,mimeType,data 裸 base64}），
+  // 原样透进 prompt.images。不做校验直接透,会把 raw body 里的任意结构送进 SDK,
+  // 故只认三个字段齐全、mimeType 为 image/*、data 为纯 base64 的项。
+  const images = parsePromptImages(body.input?.attachments);
   // 不阻塞响应:先回 204,后台 ensure + 派发(与 requirement 流一致;LLM 未配置时静默,前端经快照感知)
   void (async () => {
     try {
       await ensureSpaceRecord(req.params.id!);
-      await sendSpaceUserMessage(req.params.id!, content);
+      await sendSpaceUserMessage(req.params.id!, content, streamingBehavior, images);
     } catch (err) {
       // 不能静默:sendSpaceUserMessage 内部已推 assistant_error 事件,这里兜底错误日志
       // (ensure 失败/prompt 抛错统一归因)。无此行时用户消息入库但 AI 零响应,前端零反馈。
@@ -119,10 +165,54 @@ spaceRoute.post('/threads/:id/messages', async (req, res) => {
   res.status(204).end();
 });
 
+/** 单张图片的字节上限。base64 编码膨胀约 4/3,单条消息最坏体积由这两个常量
+ *  与 ASSISTANT_JSON_BODY_LIMIT 共同决定(见 index.ts 的挂载顺序说明)。 */
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+/** 单条消息的图片张数上限:对齐 Pi 侧能吃下的量,再多只是徒增 token 与延迟。 */
+const MAX_IMAGES = 4;
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+/** base64 长度 → 原字节数的上界。取整除会漏掉恰好等于上限的合法图,故向上取整。 */
+const maxBase64Length = (bytes: number): number => Math.ceil(bytes / 3) * 4;
+
+/** 从 input.attachments 里挑出合法的图片项。非法项静默丢弃（不报错）——
+ *  附件是增强项,一张坏图不该让整条消息发不出去。 */
+function parsePromptImages(raw: unknown): SpacePromptImage[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: SpacePromptImage[] = [];
+  for (const item of raw) {
+    if (out.length >= MAX_IMAGES) break;
+    if (!item || typeof item !== 'object') continue;
+    const a = item as { mimeType?: unknown; data?: unknown };
+    if (typeof a.mimeType !== 'string' || !a.mimeType.startsWith('image/')) continue;
+    if (typeof a.data !== 'string' || a.data.length === 0) continue;
+    if (a.data.length > maxBase64Length(MAX_IMAGE_BYTES)) continue;
+    if (!BASE64_RE.test(a.data)) continue;
+    out.push({ data: a.data, mimeType: a.mimeType });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** 供 index.ts 计算该路由的 json body 上限:最坏图片体积 + 余量。 */
+export const ASSISTANT_JSON_BODY_LIMIT = `${Math.ceil(maxBase64Length(MAX_IMAGE_BYTES) * MAX_IMAGES / 1024 / 1024) + 4}mb`;
+
 spaceRoute.post('/threads/:id/cancel', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
   cancelThread(req.params.id!);
   res.status(204).end();
+});
+
+/** react-pi 契约的清排队路由(见 httpClient 的 wire contract)。返回被清内容,
+ *  前端可把文字还原回输入框——用户取消排队时不该丢字。 */
+spaceRoute.post('/threads/:id/queue/clear', async (req, res) => {
+  await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
+  res.json(clearThreadQueue(req.params.id!));
+});
+
+/** 推荐追问:AI 回答落定后由前端按需拉取(POST 而非 GET:触发了 LLM 调用,不该被缓存/预取)。
+ *  转写取服务端 session.messages 全文;失败语义见 suggestions.ts(HttpError 透出/其余兜底 [])。 */
+spaceRoute.post('/threads/:id/suggestions', async (req, res) => {
+  await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
+  res.json(await generateSpaceSuggestionsOnce(req.params.id!));
 });
 
 spaceRoute.post('/threads/:id/confirm', async (req, res) => {

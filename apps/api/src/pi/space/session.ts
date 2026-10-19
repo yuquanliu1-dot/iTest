@@ -25,12 +25,22 @@ import { checkoutRepoForVersion, LockTimeoutError, RepoUnavailableError, REPOS_R
 import { emptyRepoState, type RepoState } from './tools/context.js';
 import { pendingConfirmPayloads } from './confirm.js';
 
+/** 图片附件（pi-ai 的 ImageContent 形状）：base64 裸串，不带 data: 前缀。 */
+export interface SpacePromptImage {
+  data: string;
+  mimeType: string;
+}
+
 export interface SpaceSessionLike {
   subscribe(fn: (e: unknown) => void): () => void;
-  prompt(text: string): Promise<void>;
+  /** streamingBehavior 见 sendSpaceUserMessage:运行中不传会被 Pi 拒收。
+   *  images 见 sendSpaceUserMessage:与 pi PromptOptions.images 同形。 */
+  prompt(text: string, options?: { streamingBehavior?: 'steer' | 'followUp'; images?: SpacePromptImage[] }): Promise<void>;
   abort(): void;
   // pi v0.99.2 的 AgentSession.dispose 是同步 void（agent-session.d.ts:362）；不要 await。
   dispose(): void;
+  /** 清空 Pi 服务端排队消息并返回被清内容（供 UI 还原到输入框）。 */
+  clearQueue(): { steering: string[]; followUp: string[] };
   readonly isStreaming: boolean;
   messages: unknown[];
 }
@@ -61,6 +71,8 @@ interface ThreadRecord {
   turnIndex: number;
   /** 仓库后台检出状态(与工厂/工具共享同一可变引用)。 */
   repo: RepoState;
+  /** 线程创建人界面语言(buildSpaceRecord 解析;推荐追问生成用它选提示词语言)。 */
+  lang: AiLang;
   /** 断线重连重放缓冲:emitThreadEvent 追加的会话内自定义事件(条数有界 + TTL 双重上限)。 */
   customEvents: CustomEventRecord[];
 }
@@ -93,6 +105,16 @@ export function resetSpaceSessions(): void {
   }
   records.clear();
   inflight.clear();
+}
+
+/** 线程被删除时释放其内存会话(dispose session + 退订 + 清 record)。无记录时静默。 */
+export function dropSpaceRecord(threadId: string): void {
+  const r = records.get(threadId);
+  if (!r) return;
+  try { r.session.dispose(); } catch { /* ignore */ }
+  try { r.unsub(); } catch { /* ignore */ }
+  records.delete(threadId);
+  inflight.delete(threadId);
 }
 
 /** 幂等加载 version 级线程的 session(已缓存直接返回;并发首调共享同一构建;requirement 线程拒绝)。 */
@@ -136,6 +158,7 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
     seq: 0,
     turnIndex: -1,
     repo,
+    lang,
     customEvents: [],
   };
   const unsub = session.subscribe((event) => fanOut(rec, event));
@@ -286,7 +309,19 @@ export function spaceRepoIssue(threadId: string): string | null {
   return records.get(threadId)?.repo.issue ?? null;
 }
 
-export async function sendSpaceUserMessage(threadId: string, content: string): Promise<void> {
+/** 旁路只读视图(推荐追问等非 session 生命周期消费者用):会话消息全文 + 创建人语言。
+ *  不暴露 ThreadRecord 本体——listeners/seq/customEvents 属订阅机制,外部改动会破坏 SSE 契约。 */
+export function getSpaceThreadView(threadId: string): { session: SpaceSessionLike; lang: AiLang } | null {
+  const rec = records.get(threadId);
+  return rec ? { session: rec.session, lang: rec.lang } : null;
+}
+
+export async function sendSpaceUserMessage(
+  threadId: string,
+  content: string,
+  streamingBehavior?: 'steer' | 'followUp',
+  images?: SpacePromptImage[],
+): Promise<void> {
   const rec = records.get(threadId);
   if (!rec) throw new Error('thread not found');
   // 首条消息落线程标题(取用户原文截断)
@@ -295,7 +330,14 @@ export async function sendSpaceUserMessage(threadId: string, content: string): P
     await db.update(aiThreads).set({ title: Array.from(content.trim()).slice(0, 40).join(''), updatedAt: new Date() }).where(eq(aiThreads.id, threadId));
   }
   try {
-    await rec.session.prompt(content);
+    // streamingBehavior 必须透传:Pi 在 isStreaming 时对无参 prompt 直接抛
+    // 「Agent is already processing」(agent-session.js:1490)。前端 react-pi 的
+    // ThreadController 已按运行态派生出 steer/followUp 并随 input 发来,这里只做转发。
+    // images 同理:Pi 会逐张做 processImage(解码失败只降级为提示文本,不丢整条消息)。
+    await rec.session.prompt(content, {
+      ...(streamingBehavior ? { streamingBehavior } : {}),
+      ...(images && images.length > 0 ? { images } : {}),
+    });
   } catch (err) {
     // prompt 失败不能静默:用户消息已入库渲染,若无 AI 气泡也无错误提示就是"零反馈"假死。
     // 经 emitThreadEvent 推一条 assistant_error,SSE 订阅者(含 devtools/未来 UI 钩子)可见;
@@ -313,6 +355,13 @@ export function cancelThread(threadId: string): void {
   const rec = records.get(threadId);
   if (!rec) return;
   rec.session.abort();
+}
+
+/** 清空 Pi 服务端排队消息,返回被清内容供前端还原到输入框。无会话/线程时返空。 */
+export function clearThreadQueue(threadId: string): { steering: string[]; followUp: string[] } {
+  const rec = records.get(threadId);
+  if (!rec) return { steering: [], followUp: [] };
+  return rec.session.clearQueue();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
