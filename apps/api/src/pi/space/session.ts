@@ -345,6 +345,9 @@ export async function sendSpaceUserMessage(
       ...(streamingBehavior ? { streamingBehavior } : {}),
       ...(images && images.length > 0 ? { images } : {}),
     });
+    // 刷最后活跃时间:列表按 updatedAt 分桶(今天/昨天/7天内/…),
+    // 不刷则分桶落到建会话那天,刚聊过的会话会留在旧桶里。
+    await db.update(aiThreads).set({ updatedAt: new Date() }).where(eq(aiThreads.id, threadId));
   } catch (err) {
     // prompt 失败不能静默:用户消息已入库渲染,若无 AI 气泡也无错误提示就是"零反馈"假死。
     // 经 emitThreadEvent 推一条 assistant_error,SSE 订阅者(含 devtools/未来 UI 钩子)可见;
