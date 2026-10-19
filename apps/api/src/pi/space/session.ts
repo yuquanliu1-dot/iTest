@@ -345,9 +345,6 @@ export async function sendSpaceUserMessage(
       ...(streamingBehavior ? { streamingBehavior } : {}),
       ...(images && images.length > 0 ? { images } : {}),
     });
-    // 刷最后活跃时间:列表按 updatedAt 分桶(今天/昨天/7天内/…),
-    // 不刷则分桶落到建会话那天,刚聊过的会话会留在旧桶里。
-    await db.update(aiThreads).set({ updatedAt: new Date() }).where(eq(aiThreads.id, threadId));
   } catch (err) {
     // prompt 失败不能静默:用户消息已入库渲染,若无 AI 气泡也无错误提示就是"零反馈"假死。
     // 经 emitThreadEvent 推一条 assistant_error,SSE 订阅者(含 devtools/未来 UI 钩子)可见;
@@ -359,6 +356,13 @@ export async function sendSpaceUserMessage(
     } catch { /* emit 失败不再遮蔽原始错误 */ }
     throw err;
   }
+  // 刷最后活跃时间:列表按 updatedAt 分桶(今天/昨天/7天内/…),不刷则分桶落到建会话那天,
+  // 刚聊过的会话会留在旧桶里。放在 prompt 的 try 之外:prompt 失败已由 catch rethrow 返回,
+  // 不会走到这里(失败的回合不刷时间);而这里是成功之后才执行的收尾,一次 UPDATE 失败
+  // (长回合后连接池已排空是最常见诱因)只影响列表分桶,不该把成功的对话标成 assistant_error——
+  // 那个事件会进 customEvents 并在重连时重放,等于给已成功的回合留一个持久化错误气泡。
+  await db.update(aiThreads).set({ updatedAt: new Date() }).where(eq(aiThreads.id, threadId))
+    .catch((e) => logger.warn({ threadId, err: e }, 'refresh ai_threads.updatedAt failed'));
 }
 
 export function cancelThread(threadId: string): void {
