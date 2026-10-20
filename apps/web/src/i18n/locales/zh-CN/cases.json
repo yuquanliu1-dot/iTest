@@ -33,7 +33,8 @@
     "screenshot": "截图",
     "queryDb": "数据库查询",
     "observeLog": "日志观察",
-    "httpRequest": "HTTP 请求"
+    "httpRequest": "HTTP 请求",
+    "sendSyslog": "发送 syslog 日志"
   },
   "statusChanged": "状态已改为 {{status}}",
   "changeStatus": "点击修改状态",
@@ -285,6 +286,9 @@
   "httpAssertMismatch": "断言（状态码 / 响应体；不命中则步骤失败）",
   "statusCodePlaceholder": "状态码（可选）",
   "bodyExpectPlaceholder": "响应体期望（可选）",
+  "syslogHostPlaceholder": "syslog 服务器地址（支持 {{col}}）",
+  "syslogMessageLabel": "日志内容",
+  "syslogTimeoutLabel": "超时 (ms, 1000-30000)",
   "sensitiveNeeded": "已加密 — 修改时请输入新密码",
   "smartExtractNeedsDesc": "智能抽取需要填写描述并生成正则",
   "instructionRequired": "指令不能为空",
@@ -397,7 +401,8 @@
       "queryDb": "查 {{table}}",
       "observeLog": "观察日志",
       "observeLogWithKw": "观察日志 · {{keywords}}",
-      "httpRequest": "{{method}} {{url}}{{arrow}}"
+      "httpRequest": "{{method}} {{url}}{{arrow}}",
+      "sendSyslog": "发 syslog {{protocol}} {{host}}:{{port}}「{{message}}」"
     },
     "fieldKind": "类型：",
     "fieldLocator": "定位：",
@@ -416,6 +421,9 @@
     "httpCarryLogin": "携带登录态：是",
     "fieldAssertStatus": "断言状态码：",
     "fieldAssertBody": "断言响应：",
+    "fieldSyslogTarget": "syslog 目标：",
+    "fieldSyslogPri": "facility.severity：",
+    "fieldSyslogMessage": "日志内容：",
     "fieldNaturalLang": "自然语言：",
     "compileStateUncompiled": "编译状态：未编译 · 点右侧「AI 编译」补",
     "actionBlock": "【动作 {{i}}/{{n}}】"

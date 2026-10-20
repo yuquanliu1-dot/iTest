@@ -14,7 +14,7 @@ import { useUIStore } from '../stores/ui';
 import { fullDateTime, stepKindLabel } from '../lib/format';
 import { getKind, stepSummary, fullStepDescription } from '../lib/stepSummary';
 import { creatorName } from '../lib/creatorName';
-import type { DbQueryRowResult, ObserveLogLineResult, HttpStepResult } from '@itest/shared';
+import type { DbQueryRowResult, ObserveLogLineResult, HttpStepResult, SyslogStepResult } from '@itest/shared';
 
 /** 步骤级 LLM 用量（aiTask / 验证码 / vision 判定累加）；与 apps/api execute/aiUsage.ts 对齐。 */
 interface AiUsage {
@@ -49,6 +49,8 @@ interface StepResult {
   log?: ObserveLogLineResult;
   /** httpRequest 步骤的结果（仅 httpRequest 步携带） */
   http?: HttpStepResult;
+  /** sendSyslog 步骤的结果（仅 sendSyslog 步携带） */
+  syslog?: SyslogStepResult;
   /** aiTask 步骤本轮回放走了动作缓存（机械执行，零 LLM） */
   cached?: boolean;
   /** 缓存条目存在但重放分叉、AI 自愈通过（仅 passed 步携带） */
@@ -308,6 +310,7 @@ export default function ReportDetail() {
           {s.db && <DbResultCell db={s.db} />}
           {s.log && <LogResultCell log={s.log} />}
           {s.http && <HttpResultCell http={s.http} />}
+          {s.syslog && <SyslogResultCell syslog={s.syslog} />}
         </div>
         {s.screenshot && (
           <button
@@ -776,6 +779,49 @@ function HttpResultCell({ http }: { http: HttpStepResult }) {
             <pre style={PRE_STYLE}>{`{{${http.saved.varName}}} = ${http.saved.value}`}</pre>
           </div>
         )}
+      </div>
+    </details>
+  );
+}
+
+function SyslogResultCell({ syslog }: { syslog: SyslogStepResult }) {
+  const { t } = useTranslation();
+  return (
+    <details className="text-[11px]">
+      <summary
+        className="cursor-pointer"
+        style={{ color: 'var(--muted-foreground)' }}
+      >
+        {t('reports:syslog.summary', {
+          protocol: syslog.protocol.toUpperCase(),
+          host: syslog.host,
+          port: syslog.port,
+          ms: syslog.durationMs,
+        })}
+      </summary>
+      <div style={{ margin: '4px 0', display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div>
+          <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>
+            {t('reports:syslog.meta', { facility: syslog.facility, severity: syslog.severity, bytes: syslog.bytes })}
+          </div>
+          <pre
+            style={{
+              maxHeight: 240,
+              overflow: 'auto',
+              fontSize: 11,
+              margin: '4px 0',
+              padding: 8,
+              borderRadius: 4,
+              background: 'var(--muted)',
+              color: 'var(--muted-foreground)',
+              border: '1px solid var(--border)',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+            }}
+          >
+            {syslog.packet}
+          </pre>
+        </div>
       </div>
     </details>
   );

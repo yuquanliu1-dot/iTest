@@ -105,6 +105,10 @@
     "extract": "提取 {{name}}",
     "extractVar": "提取变量"
   },
+  "syslog": {
+    "summary": "syslog：{{protocol}} {{host}}:{{port}} 已发送（{{ms}}ms）",
+    "meta": "facility.severity：{{facility}}.{{severity}} · {{bytes}} 字节"
+  },
   "assertion": {
     "hit": "✓ 命中",
     "miss": "✕ 未命中",

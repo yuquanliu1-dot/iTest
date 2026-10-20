@@ -121,6 +121,10 @@
     "extract": "Extracted {{name}}",
     "extractVar": "Extracted variables"
   },
+  "syslog": {
+    "summary": "syslog: {{protocol}} {{host}}:{{port}} sent ({{ms}}ms)",
+    "meta": "facility.severity: {{facility}}.{{severity}} · {{bytes}} bytes"
+  },
   "assertion": {
     "hit": "✓ matched",
     "miss": "✕ not matched",

@@ -152,6 +152,13 @@ function actionSummary(a: KnownAction, t: TFunction): string {
         arrow,
       });
     }
+    case 'sendSyslog':
+      return t('cases:stepSummary.act.sendSyslog', {
+        protocol: str(a.protocol) === 'tcp' ? 'TCP' : 'UDP',
+        host: clip(str(a.host), 30),
+        port: a.port == null ? '514' : String(a.port),
+        message: clip(str(a.message), 30),
+      });
     default:
       return clip(JSON.stringify(a) ?? String(a), 40);
   }
@@ -212,6 +219,11 @@ function describeAction(a: KnownAction, t: TFunction): string[] {
       if (assertion.status !== undefined) push('cases:stepSummary.fieldAssertStatus', String(assertion.status));
       if (assertion.expected !== undefined) push('cases:stepSummary.fieldAssertBody', `${t(matchLabelKey(assertion as KnownAction) || 'cases:matchContains')}「${clip(str(assertion.expected), 60)}」`);
     }
+  }
+  if (a.kind === 'sendSyslog') {
+    push('cases:stepSummary.fieldSyslogTarget', `${str(a.protocol) === 'tcp' ? 'TCP' : 'UDP'} ${str(a.host)}:${a.port == null ? '514' : String(a.port)}`);
+    push('cases:stepSummary.fieldSyslogPri', `${str(a.facility) || 'user'}.${str(a.severity) || 'info'}`);
+    push('cases:stepSummary.fieldSyslogMessage', clip(str(a.message), 200));
   }
   return lines;
 }
