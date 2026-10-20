@@ -523,6 +523,12 @@ export const api = {
       }),
   },
   assistant: {
+    /** 线程列表:react-pi 的 mapThreadMetadata 会丢弃 updatedAt,左栏分组自持这份时间表。
+     *  workspacePath ≡ versionId(见 SpaceWorkspace 的 Props 注释)。 */
+    listThreads: (versionId: string) =>
+      request<{ id: string; title: string | null; status: string; createdAt?: string; updatedAt?: string }[]>(
+        `/assistant/threads${qs({ workspacePath: versionId })}`,
+      ),
     confirm: (threadId: string, confirmId: string, approved: boolean) =>
       request<void>(`/assistant/threads/${threadId}/confirm`, {
         method: 'POST',
