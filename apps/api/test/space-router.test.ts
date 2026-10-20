@@ -1,5 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -8,18 +11,32 @@ import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
+/** 隔离的 .data 根:fake 会话的落盘文件写这里,不污染开发者真实的 apps/api/.data(须先于任何动态 import 设好)。 */
+let tmpDataDir: string;
 
 /** 捕获 prompt 的入参与 options，供图片透传断言用（每个用例在 beforeEach 清空）。 */
 const capturedPrompts: { text: string; options?: { streamingBehavior?: string; images?: { data: string; mimeType: string }[] } }[] = [];
+/** threadId → fake 会话的落盘路径，供 DELETE 清文件断言用（beforeEach 清空）。 */
+const fakeSessionFiles = new Map<string, string>();
 
-function makeFakeSession() {
+/**
+ * 模拟 pi 持久化的可观测面：persist=true 时建会话即分配 sessionFile 路径（eager），
+ * 但只有首条消息 prompt() 才真正写盘。列表判据=文件存在性，草稿线程=有路径无文件。
+ * 不重造 pi 的 JSONL 结构——列表接口只 fs.access，从不解析内容。
+ */
+function makeFakeSession(threadId?: string) {
   const listeners = new Set<(e: unknown) => void>();
+  const sessionFile = path.join(tmpDataDir, 'pi-sessions', `${crypto.randomUUID()}.jsonl`);
+  if (threadId) fakeSessionFiles.set(threadId, sessionFile);
   return {
+    sessionFile,
     messages: [] as unknown[],
     listeners,
     subscribe(fn: (e: unknown) => void) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
     async prompt(text: string, options?: { streamingBehavior?: 'steer' | 'followUp'; images?: { data: string; mimeType: string }[] }) {
       capturedPrompts.push({ text, options });
+      await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+      await fs.appendFile(sessionFile, JSON.stringify({ role: 'user' }) + '\n');
       this.messages.push({ role: 'user' });
     },
     abort() {},
@@ -28,9 +45,23 @@ function makeFakeSession() {
   };
 }
 
+/**
+ * 默认 stub 工厂:复刻真工厂的完整契约——建 fake 会话并把它的 sessionFile 落库
+ * (真工厂 createSpaceSessionFactory 末尾 db.update(piThreadId=session.sessionFile) 同一步)。
+ * 少了这步,DB 里 pi_thread_id 永远是空串,列表判据(文件存在性)永远进不了列表。
+ */
+async function stubFactory(ctx: { threadId: string }) {
+  const s = makeFakeSession(ctx.threadId);
+  await pool.query(`UPDATE ai_threads SET pi_thread_id=$2 WHERE id=$1`, [ctx.threadId, s.sessionFile]);
+  return s;
+}
+
 beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   process.env.DATABASE_URL = container.getConnectionUri();
+  tmpDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-spacedata-'));
+  process.env.PI_DATA_DIR = tmpDataDir;
+  vi.resetModules();
   pool = new Pool({ connectionString: container.getConnectionUri() });
   await pool.query(SCHEMA_SQL);
   // DELETE /threads 清暂存会触及全部 6 张 ai_stage_* 表;SCHEMA_SQL 只建了 ai_stage_cases,
@@ -47,7 +78,7 @@ beforeAll(async () => {
   app.use(exp.json());
   const { spaceRoute } = await import('../src/pi/space/router.js');
   const { setSpaceSessionFactory } = await import('../src/pi/space/session.js');
-  setSpaceSessionFactory(async () => makeFakeSession() as never);
+  setSpaceSessionFactory(stubFactory as never);
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
   const { userId, username, orgId, orgPath } = await seedOrg(pool);
   const { managerUserOf } = await import('./helpers/auth.js');
@@ -61,12 +92,14 @@ afterAll(async () => {
   await dbPool.end();
   await pool.end();
   await container.stop();
+  await fs.rm(tmpDataDir, { recursive: true, force: true });
 });
 
 beforeEach(async () => {
   const { resetSpaceSessions } = await import('../src/pi/space/session.js');
   resetSpaceSessions();
   capturedPrompts.length = 0;
+  fakeSessionFiles.clear();
   await pool.query(`TRUNCATE ai_threads RESTART IDENTITY CASCADE`);
 });
 
@@ -106,13 +139,13 @@ describe('space wire contract', () => {
     const r2 = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
     expect(r2.status).toBe(500);
     expect(r2.body.error).toBe('session_init_failed');
-    setSpaceSessionFactory(async () => makeFakeSession() as never);
+    setSpaceSessionFactory(stubFactory as never);
   });
 
   it('POST /threads:无 repo issue 时响应不带 lastError 字段污染', async () => {
     const { versionId } = await seedProject(pool);
     const { setSpaceSessionFactory } = await import('../src/pi/space/session.js');
-    setSpaceSessionFactory(async () => makeFakeSession() as never);
+    setSpaceSessionFactory(stubFactory as never);
     const r = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
     expect(r.status).toBe(200);
     expect(r.body.lastError).toBeUndefined();
@@ -142,18 +175,24 @@ describe('space wire contract', () => {
     expect(r.body).toEqual([]);
   });
 
-  it('GET /threads?versionId= 无会话记录的线程不进列表(未发过消息/record 已失)', async () => {
+  it('GET /threads?versionId= 会话文件不存在的线程不进列表(草稿/未落盘)', async () => {
     const { versionId } = await seedProject(pool);
-    // 建了线程但从未发消息:内存 messages 为空
-    await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
-    // 已落库且带标题、但内存无 record(模拟进程重启丢记录):同样不进列表
+    // fake 会话建会话即分配 sessionFile 路径(pi 同款 eager 语义),但没 prompt 过 → 磁盘无文件
+    const draft = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    // pi_thread_id 为空串的老行:被 SQL 下推条件先挡掉
     await pool.query(
       `INSERT INTO ai_threads(id, kind, version_id, pi_thread_id, title) VALUES ($1,'version',$2,'','旧会话')`,
       [crypto.randomUUID(), versionId],
     );
+    // 有路径但文件不存在(草稿线程的真实形态)——判据必须是文件存在性,不能是路径非空
+    await pool.query(
+      `INSERT INTO ai_threads(id, kind, version_id, pi_thread_id, title) VALUES ($1,'version',$2,$3,'路径已分配')`,
+      [crypto.randomUUID(), versionId, path.join(tmpDataDir, 'pi-sessions', 'never-flushed.jsonl')],
+    );
     const list = await request(app).get(`/api/assistant/threads?versionId=${versionId}`);
     expect(list.status).toBe(200);
     expect(list.body).toEqual([]);
+    expect(draft.body.metadata.id).toBeTruthy(); // 草稿线程本身创建成功,只是不进列表
   });
 
   it('GET /threads/:id 返回快照;requirement 线程 404(本契约只管 version 线程)', async () => {
@@ -208,7 +247,7 @@ describe('space wire contract', () => {
     expect((await request(app).post(`/api/assistant/threads/${orphanId}/cancel`)).status).toBe(204);
     expect(aborted).toBe(1);
     // 恢复默认 stub
-    setSpaceSessionFactory(async () => makeFakeSession() as never);
+    setSpaceSessionFactory(stubFactory as never);
   });
 
   it('GET /threads/:id/events 是 SSE:先 snapshot,confirm_request 可扇出', async () => {
@@ -339,6 +378,10 @@ describe('线程列表作用域与改名/删除(react-pi ThreadList 契约)', ()
 
     const del = await request(app).delete(`/api/assistant/threads/${id}`);
     expect(del.status).toBe(204);
+    // 落盘的会话文件一并删除(Task 5 行为;activeThread 发过消息 → fake 已 flush 文件)
+    const file = fakeSessionFiles.get(id);
+    expect(file).toBeTruthy();
+    await expect(fs.access(file!)).rejects.toThrow();
     expect((await pool.query(`SELECT count(*)::int AS n FROM ai_threads WHERE id=$1`, [id])).rows[0]!.n).toBe(0);
     for (const t of ['ai_stage_cases', 'ai_stage_case_ops', 'ai_stage_scenarios', 'ai_stage_environments', 'ai_stage_plans', 'ai_stage_datasets']) {
       expect((await pool.query(`SELECT count(*)::int AS n FROM ${t} WHERE thread_id=$1`, [id])).rows[0]!.n).toBe(0);
