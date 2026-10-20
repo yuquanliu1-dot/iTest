@@ -10,6 +10,12 @@ import {
 import { api } from '../../api/client';
 import { groupByBucket, type BucketKey } from './threadBuckets';
 
+/** 线程时间表:后端 uuid → updatedAt。react-pi store 里拿不到时间(mapThreadMetadata 丢弃),自持一份。 */
+async function fetchUpdatedAtById(versionId: string): Promise<Record<string, string | undefined>> {
+  const rows = await api.assistant.listThreads(versionId);
+  return Object.fromEntries(rows.map((r) => [r.id, r.updatedAt]));
+}
+
 /**
  * 助手左侧线程列表(ThreadList 原语):「新对话」按钮 + 历史线程(切换/改名/删除)。
  * 非受控:当前线程由 runtime 持有,这里只读 main item 的 remoteId 做高亮——
@@ -33,12 +39,9 @@ export default function SpaceThreadList({ versionId, collapsed, onToggleCollapse
   const wasRunningRef = useRef(false);
   useEffect(() => {
     let alive = true;
-    void api.assistant.listThreads(versionId)
-      .then((rows) => {
-        if (!alive) return;
-        setUpdatedAtById(Object.fromEntries(rows.map((r) => [r.id, r.updatedAt])));
-      })
-      .catch(() => {}); // 列表拉不到就退回无分组,不打断对话
+    void fetchUpdatedAtById(versionId)
+      .then((m) => { if (alive) setUpdatedAtById(m); })
+      .catch(() => {}); // 列表拉不到就全落「更早」,不打断对话
     return () => { alive = false; };
   }, [versionId]);
 
@@ -48,9 +51,7 @@ export default function SpaceThreadList({ versionId, collapsed, onToggleCollapse
     const settled = wasRunningRef.current;
     wasRunningRef.current = false;
     if (!settled) return;
-    void api.assistant.listThreads(versionId)
-      .then((rows) => setUpdatedAtById(Object.fromEntries(rows.map((r) => [r.id, r.updatedAt]))))
-      .catch(() => {});
+    void fetchUpdatedAtById(versionId).then(setUpdatedAtById).catch(() => {});
   }, [isRunning, versionId]);
   if (collapsed) {
     return (
@@ -104,7 +105,7 @@ export default function SpaceThreadList({ versionId, collapsed, onToggleCollapse
             {t('assistant:threadList.noHistory')}
           </div>
         )}
-        <GroupedItems updatedAtById={updatedAtById} activeRemoteId={activeRemoteId} />
+        <GroupedItems updatedAtById={updatedAtById} />
       </div>
     </div>
   );
@@ -199,24 +200,33 @@ function bucketLabelKey(k: BucketKey): string {
 }
 
 /** ItemByIndex 作用域内的条目。必须是独立组件——components.ThreadListItem 里
- *  不能内联调 useAuiState（违反 Hooks 规则，且组件身份不稳定会反复重挂载）。 */
-function IndexedRailItem({ active }: { active: boolean }) {
+ *  不能内联调 useAuiState（违反 Hooks 规则，且组件身份不稳定会反复重挂载）。
+ *  active 在组件内部订阅:store 侧对 store 侧比较,且引用稳定才能过 ItemByIndex 的 memo。 */
+function IndexedRailItem() {
   const item = useAuiState((s) => s.optional.threadListItem);
+  // store 侧对 store 侧:mainThreadId 与 threadListItem.id 同域,不受本地 __LOCALID_ 与后端 uuid 混用影响
+  const active = useAuiState((s) => s.threads.mainThreadId === s.optional.threadListItem?.id);
   if (!item) return null;
   return <RailItem item={item as unknown as RailItemData} active={active} />;
 }
 
 /** 按五段分组渲染。Items 原语内部是 threadIds.map 死平铺、插不进段标题,
  *  故用 ItemByIndex 按 index 自行排版,保留 item scope 的 switchTo/rename/delete。 */
-function GroupedItems({ updatedAtById, activeRemoteId }: {
+function GroupedItems({ updatedAtById }: {
   updatedAtById: Record<string, string | undefined>;
-  activeRemoteId: string | undefined;
 }) {
   const { t } = useTranslation();
   const threadIds = useAuiState((s) => s.threads.threadIds);
+  const threadItems = useAuiState((s) => s.threads.threadItems);
+  // 本地新建的会话在 store 里永久保留 __LOCALID_ 前缀的 store id(reconcile 后 survivor=本地槽位),
+  // 时间表按后端 uuid 键入 → 须经 threadItems 把 store id 解析成 remoteId 再查。
+  const remoteIdById = useMemo(
+    () => new Map(threadItems.map((i) => [i.id, i.remoteId])),
+    [threadItems],
+  );
   const rows = useMemo(
-    () => groupByBucket(threadIds.map((id) => ({ id, updatedAt: updatedAtById[id] }))),
-    [threadIds, updatedAtById],
+    () => groupByBucket(threadIds.map((id) => ({ id, updatedAt: updatedAtById[remoteIdById.get(id) ?? id] }))),
+    [threadIds, updatedAtById, remoteIdById],
   );
   // ItemByIndex 的 index 必须是 threadIds 里的原始下标,不能用分组后的序号
   const indexById = useMemo(() => new Map(threadIds.map((id, i) => [id, i])), [threadIds]);
@@ -231,9 +241,7 @@ function GroupedItems({ updatedAtById, activeRemoteId }: {
             <ThreadListPrimitive.ItemByIndex
               key={row.id}
               index={indexById.get(row.id)!}
-              components={{
-                ThreadListItem: () => <IndexedRailItem active={row.id === activeRemoteId} />,
-              }}
+              components={{ ThreadListItem: IndexedRailItem }}
             />
           ))}
         </div>
