@@ -24,6 +24,10 @@ COPY apps/recorder/popup ./apps/recorder/popup
 COPY apps/recorder/content ./apps/recorder/content
 COPY apps/recorder/background.js ./apps/recorder/background.js
 COPY apps/recorder/modules ./apps/recorder/modules
+# _locales：manifest 声明了 default_locale:"zh_CN"，Chrome 装载扩展时校验 _locales 子树，
+# 缺失即报 "Default locale was specified, but _locales subtree is missing" 并拒绝安装
+# （2026-10-20 prod228 实测：镜像漏拷该目录 → 用户装不上扩展）。必须与 manifest 一起拷。
+COPY apps/recorder/_locales ./apps/recorder/_locales
 
 RUN pnpm --filter @itest/shared build || true \
  && pnpm --filter @itest/recorder build \

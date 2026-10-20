@@ -2,7 +2,7 @@
 #
 # 只收窄「不该进镜像的东西」，不改 Dockerfile 的 COPY 语义——
 # 所有 Dockerfile 需要的路径（apps/*/src、packages/*/src、apps/api/drizzle、
-# apps/api/scripts、apps/recorder/{popup,content,modules,manifest.json,background.js}、
+# apps/api/scripts、apps/recorder/{popup,content,modules,_locales,manifest.json,background.js}、
 # infra/docker/certs、infra/docker/*.zip、web.nginx.conf）都不在排除列表里。
 #
 # ._* 是 AppleDouble 残骸：macOS 扩展属性经 tar pax 头在 Linux 侧还原成

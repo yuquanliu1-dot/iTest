@@ -218,6 +218,28 @@ fetch('http://itest-web:80/api/recorder/sessions', { method: 'POST', headers: { 
   SMOKE_FAIL=1
 fi
 
+# (g) 录制扩展包完整性：manifest 声明 default_locale 时 _locales 子树必须随包存在，
+#     否则 Chrome 拒绝安装扩展（"Default locale was specified, but _locales subtree is missing"）。
+#     2026-10-20 prod228 实测踩过：api 镜像的 COPY 清单漏了 _locales → 用户装不上扩展。
+#     这里直接查容器内扩展根目录，缺 _locales/<default_locale>/messages.json 即 FAIL。
+if ! docker exec "$(api_replica)" node -e "
+const fs = require('node:fs');
+const path = require('node:path');
+const { createRequire } = require('node:module');
+const req = createRequire('/repo/apps/api/package.json');
+const root = path.join(req.resolve('@itest/recorder/package.json'), '..');
+const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+const locale = manifest.default_locale;
+if (!locale) { console.log('no default_locale declared'); process.exit(0); }
+const msg = path.join(root, '_locales', locale, 'messages.json');
+if (!fs.existsSync(msg)) { console.error('missing', msg); process.exit(1); }
+console.log('locales ok:', locale);
+" >/dev/null 2>&1; then
+  SMOKE_WARN="$SMOKE_WARN
+  - 录制扩展 _locales 缺失 FAIL（manifest 声明了 default_locale，但镜像内无 _locales/<locale>/messages.json：Chrome 会拒绝安装扩展，报 Default locale was specified, but _locales subtree is missing。检查 api.Dockerfile 是否 COPY apps/recorder/_locales）"
+  SMOKE_FAIL=1
+fi
+
 if [ "$SMOKE_FAIL" = "1" ]; then
   echo "⚠️  smoke 未全过:$SMOKE_WARN"
   echo "  容器仍在跑,需手动排错或回滚。"
