@@ -143,7 +143,7 @@ if ! docker exec "$(api_replica)" node -e "fetch('http://127.0.0.1:54321/api/hea
 fi
 
 # (b) admin 账号存在且密码可用:只验证「行存在 + bcrypt 哈希可校验」。
-#     这里刻意不比对 admin123——生产改过密码后(如 prod228 的 REDACTED-PROD-PASSWORD)比对必然失败,
+#     这里刻意不比对 admin123——生产改过密码后比对必然失败,
 #     而旧实现在失败分支会把密码静默重置回 admin123 并置 must_change_password=true,
 #     等于每次发版都可能顶掉运维改过的密码。改密码是正常运维动作,不该被判成 smoke 失败。
 #     注:旧实现用 username=\"admin\" 查,双引号在 SQL 里是标识符而非字符串字面量,

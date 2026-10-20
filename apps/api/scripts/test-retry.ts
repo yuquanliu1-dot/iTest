@@ -2,8 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { StepAction } from '@itest/shared';
 (async () => {
   const client = new Anthropic({
-    apiKey: 'REDACTED-LLM-API-KEY',
-    baseURL: 'http://192.168.2.197:3000',
+    apiKey: process.env.LLM_API_KEY ?? 'sk-replace-me',
+    baseURL: process.env.LLM_BASE_URL ?? 'http://127.0.0.1:3000',
   });
   const resp = await client.messages.create({
     model: 'Auto',
