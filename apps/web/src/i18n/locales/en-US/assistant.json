@@ -128,7 +128,12 @@
     "delete": "Delete chat",
     "confirmDelete": "Delete \"{{title}}\"? This cannot be undone.",
     "collapse": "Collapse thread list",
-    "expand": "Expand thread list"
+    "expand": "Expand thread list",
+    "groupToday": "Today",
+    "groupYesterday": "Yesterday",
+    "groupWeek": "Last 7 days",
+    "groupMonth": "Last 30 days",
+    "groupOlder": "Older"
   },
   "feedback": {
     "positive": "Helpful",

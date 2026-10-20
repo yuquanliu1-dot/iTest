@@ -115,7 +115,7 @@ export default function SpaceWorkspace({ versionId, initialMessage, onError, onW
           className={`${railCollapsed ? 'w-11' : 'w-56'} shrink-0 min-h-0 hidden md:flex flex-col overflow-hidden transition-[width] duration-150`}
           style={{ borderRight: '1px solid var(--border)' }}
         >
-          <SpaceThreadList collapsed={railCollapsed} onToggleCollapsed={() => setRailCollapsed((v) => !v)} />
+          <SpaceThreadList versionId={versionId} collapsed={railCollapsed} onToggleCollapsed={() => setRailCollapsed((v) => !v)} />
         </div>
         <div className="flex-1 min-w-0 min-h-0" style={{ borderRight: '1px solid var(--border)' }}>
           <SpaceThreadPane threadId={activeThreadId} />

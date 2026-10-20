@@ -128,7 +128,12 @@
     "delete": "删除对话",
     "confirmDelete": "删除「{{title}}」?删除后不可恢复。",
     "collapse": "收起会话列表",
-    "expand": "展开会话列表"
+    "expand": "展开会话列表",
+    "groupToday": "今天",
+    "groupYesterday": "昨天",
+    "groupWeek": "7 天内",
+    "groupMonth": "30 天内",
+    "groupOlder": "更早"
   },
   "feedback": {
     "positive": "有帮助",
