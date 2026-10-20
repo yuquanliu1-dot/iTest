@@ -12,6 +12,20 @@ Recorded scripts break on every change, intent-driven testing is slow and drifts
 
 **[开源自动化回归测试，交给一个可靠的 Agent](https://mp.weixin.qq.com/s/kgM6LAq_zphtbBPu956v_w)** (WeChat, 中文) — 2026-10-20
 
+## Screenshots
+
+**AI assistant** — describe what you need; the assistant inspects the environment, stages objects for you to confirm, and explains what it can do.
+
+![AI assistant](docs/screenshots/assistant.png)
+
+**Case editing** — every step carries its kind (`AGENT` / mechanical), and unsolidified steps are flagged in place, so you always know what still needs a real browser run.
+
+![Case editing](docs/screenshots/case-edit.png)
+
+**Plan run, live** — the browser runs in real time with a live view, and the timeline records each case with its verdict and attribution.
+
+![Plan run, live](docs/screenshots/plan-run-live.png)
+
 ## Why iTest
 
 Regression automation usually gets stuck at three barriers. iTest has an engineering answer for each:

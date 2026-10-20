@@ -12,6 +12,20 @@ AI-first 测试管理平台：用一句话管理用例、环境与计划。基�
 
 **[开源自动化回归测试，交给一个可靠的 Agent](https://mp.weixin.qq.com/s/kgM6LAq_zphtbBPu956v_w)**（微信公众号「失控之境」）—— 2026-10-20
 
+## 界面截图
+
+**AI 助手** —— 一句话说清需求，助手自己探查环境、把对象暂存等你确认，并说明它能做什么。
+
+![AI 助手](docs/screenshots/assistant.png)
+
+**用例编辑** —— 每个步骤都标着类型（`AGENT` / 机械），未固化的步骤就地标红，一眼看出哪些还没在真实浏览器里跑通。
+
+![用例编辑](docs/screenshots/case-edit.png)
+
+**计划执行（实时）** —— 浏览器实时执行并带实时画面，timeline 逐条记录用例的结论与失败归因。
+
+![计划执行（实时）](docs/screenshots/plan-run-live.png)
+
 ## 为什么是 iTest
 
 回归自动化通常卡在这三道坎，iTest 对每个坎都给出了工程上的解：
