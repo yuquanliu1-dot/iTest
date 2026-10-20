@@ -109,7 +109,10 @@ spaceRoute.get('/threads', async (req, res) => {
   const withRecords = rows.filter((_, i) => exists[i]);
   res.json(withRecords.map((row) => ({
     id: row.id,
-    title: row.title,
+    // react-pi 的 isThreadMetadata 用 isOptionalString 校验 title:null 会被拒 → 整个列表
+    // load 抛 Invalid Pi HTTP response。DB 无题线程(title NULL,首条消息落题前的窗口)
+    // 必须序列化出 undefined(JSON 里直接缺键)。
+    title: row.title ?? undefined,
     status: threadStatus(row.id) ?? 'idle',
     createdAt: row.createdAt?.toISOString(),
     updatedAt: row.updatedAt?.toISOString(),
