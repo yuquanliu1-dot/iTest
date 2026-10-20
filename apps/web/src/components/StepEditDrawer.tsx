@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { Locator, QueryDbAction, ObserveLogAction } from '@itest/shared';
 import type { StepAction } from '@itest/shared';
+import { SyslogFacility, SyslogSeverity } from '@itest/shared';
 import { useQuery } from '@tanstack/react-query';
 import type { StepClip } from '../stores/stepClipboard';
 import { api } from '../api/client';
@@ -249,6 +250,15 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
     };
   });
 
+  // sendSyslog
+  const [syslogProtocol, setSyslogProtocol] = useState<string>(String(action.protocol ?? 'udp'));
+  const [syslogHost, setSyslogHost] = useState(String(action.host ?? ''));
+  const [syslogPort, setSyslogPort] = useState(String(action.port ?? 514));
+  const [syslogFacility, setSyslogFacility] = useState<string>(String(action.facility ?? 'user'));
+  const [syslogSeverity, setSyslogSeverity] = useState<string>(String(action.severity ?? 'info'));
+  const [syslogMessage, setSyslogMessage] = useState(String(action.message ?? ''));
+  const [syslogTimeout, setSyslogTimeout] = useState(String(action.timeoutMs ?? 5000));
+
   // mobile-only
   const isMobileForm = platform === 'mobile';
   const [swipeFrom, setSwipeFrom] = useState<Locator[]>(() => {
@@ -400,6 +410,15 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       } else {
         delete next.assertion;
       }
+    }
+    if (kind === 'sendSyslog') {
+      next.protocol = syslogProtocol === 'tcp' ? 'tcp' : 'udp';
+      next.host = syslogHost.trim();
+      next.port = Math.max(1, Math.min(65535, Number(syslogPort) || 514));
+      next.facility = syslogFacility;
+      next.severity = syslogSeverity;
+      next.message = syslogMessage;
+      next.timeoutMs = Math.max(1000, Math.min(30000, Number(syslogTimeout) || 5000));
     }
     if (kind === 'swipe') {
       next.from = swipeFrom;
@@ -1105,6 +1124,63 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
               </div>
             </div>
             <HttpAssertionEditor value={httpAssertion} onChange={setHttpAssertion} />
+          </div>
+        )}
+
+        {kind === 'sendSyslog' && (
+          <div className="flex flex-col gap-2">
+            <div className="flex gap-1.5">
+              <select className="input-base input-xs" style={{ width: 88 }} value={syslogProtocol} onChange={(e) => setSyslogProtocol(e.target.value)}>
+                <option value="udp">UDP</option>
+                <option value="tcp">TCP</option>
+              </select>
+              <input
+                className="input-base input-xs flex-1"
+                aria-invalid={!!fieldErrors['action.host']}
+                value={syslogHost}
+                onChange={(e) => setSyslogHost(e.target.value)}
+                placeholder={t('cases:syslogHostPlaceholder', { col: '{{var}}' })}
+              />
+              <input
+                className="input-base input-xs"
+                style={{ width: 84 }}
+                type="number"
+                min={1}
+                max={65535}
+                value={syslogPort}
+                onChange={(e) => setSyslogPort(e.target.value)}
+              />
+            </div>
+            <FieldError msg={fieldErrors['action.host']} />
+            <div className="flex gap-1.5">
+              <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                <span>facility</span>
+                <select className="input-base input-xs" value={syslogFacility} onChange={(e) => setSyslogFacility(e.target.value)}>
+                  {SyslogFacility.options.map((f) => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                <span>severity</span>
+                <select className="input-base input-xs" value={syslogSeverity} onChange={(e) => setSyslogSeverity(e.target.value)}>
+                  {SyslogSeverity.options.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </label>
+            </div>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+              <span>{t('cases:syslogMessageLabel')}</span>
+              <textarea
+                className="input-base input-xs font-mono"
+                style={{ minHeight: 60 }}
+                aria-invalid={!!fieldErrors['action.message']}
+                value={syslogMessage}
+                onChange={(e) => setSyslogMessage(e.target.value)}
+              />
+            </label>
+            <FieldError msg={fieldErrors['action.message']} />
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+              <span>{t('cases:syslogTimeoutLabel')}</span>
+              <input className="input-base input-xs" type="number" min={1000} max={30000} value={syslogTimeout} onChange={(e) => setSyslogTimeout(e.target.value)} />
+            </label>
           </div>
         )}
 

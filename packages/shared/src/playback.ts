@@ -106,3 +106,16 @@ export interface HttpStepResult {
   assertion?: { matched: boolean; statusExpected?: number; match?: 'equals' | 'contains' | 'regex'; expected?: string };
   saved?: { varName: string; value: string };
 }
+
+/** sendSyslog 步骤执行结果：发出的原始 RFC3164 报文与耗时/字节数。 */
+export interface SyslogStepResult {
+  protocol: 'udp' | 'tcp';
+  host: string;
+  port: number;
+  facility: string;
+  severity: string;
+  /** 实际发出的报文（TCP 帧尾 \n 不计入 packet，计入 bytes）。 */
+  packet: string;
+  durationMs: number;
+  bytes: number;
+}

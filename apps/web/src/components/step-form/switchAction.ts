@@ -3,7 +3,7 @@ import type { StepClip } from '../../stores/stepClipboard';
 export const STEP_KINDS = [
   'navigate', 'click', 'fill', 'select', 'check', 'hover', 'waitFor',
   'assertVisible', 'assertText', 'assertJson', 'extract', 'upload',
-  'switchTab', 'screenshot', 'aiTask', 'queryDb', 'observeLog', 'httpRequest',
+  'switchTab', 'screenshot', 'aiTask', 'queryDb', 'observeLog', 'httpRequest', 'sendSyslog',
   'tap', 'swipe', 'setAppearance', 'setNetwork', 'setLocation',
   'appOpen', 'appBack', 'appRestart', 'home',
 ] as const;
@@ -83,6 +83,9 @@ export function switchAction(clip: StepClip, to: StepKind): StepClip {
       break;
     case 'httpRequest':
       action = { kind: 'httpRequest', method: 'GET', url: '', headers: [], timeoutMs: 10000 };
+      break;
+    case 'sendSyslog':
+      action = { kind: 'sendSyslog', protocol: 'udp', host: '', port: 514, facility: 'user', severity: 'info', message: '', timeoutMs: 5000 };
       break;
     case 'tap':
       action = { kind: 'tap', locator: locator!, ...base() };

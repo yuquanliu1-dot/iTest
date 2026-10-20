@@ -208,6 +208,33 @@ export type ObserveLogAction = z.infer<typeof ObserveLogAction>;
 export const HttpMethod = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
 export type HttpMethod = z.infer<typeof HttpMethod>;
 
+/** RFC3164 facility，枚举下标即 facility code（kernel=0 ... local7=23）；12-15 按 RFC5424 命名补齐以免 local* 错位。 */
+export const SyslogFacility = z.enum([
+  'kernel', 'user', 'mail', 'daemon', 'auth', 'syslog', 'lpr', 'news',
+  'uucp', 'cron', 'authpriv', 'ftp', 'ntp', 'audit', 'alert', 'clockDaemon2',
+  'local0', 'local1', 'local2', 'local3', 'local4', 'local5', 'local6', 'local7',
+]);
+export type SyslogFacility = z.infer<typeof SyslogFacility>;
+
+/** RFC3164 severity，枚举下标即 severity code（emerg=0 ... debug=7）。 */
+export const SyslogSeverity = z.enum(['emerg', 'alert', 'crit', 'err', 'warning', 'notice', 'info', 'debug']);
+export type SyslogSeverity = z.infer<typeof SyslogSeverity>;
+
+/** 2026-10-20: sendSyslog 步骤——向 syslog 服务器发送一条 RFC3164 日志。 */
+export const SendSyslogAction = z.object({
+  kind: z.literal('sendSyslog'),
+  protocol: z.enum(['udp', 'tcp']).default('udp'),
+  /** syslog 服务器地址，支持 {{var}} 替换。 */
+  host: z.string().min(1).max(253),
+  port: z.number().int().min(1).max(65535).default(514),
+  facility: SyslogFacility.default('user'),
+  severity: SyslogSeverity.default('info'),
+  /** 日志正文（RFC3164 MSG 部分），不做变量替换。 */
+  message: z.string().min(1).max(2000),
+  timeoutMs: z.number().int().min(1000).max(30000).default(5000),
+});
+export type SendSyslogAction = z.infer<typeof SendSyslogAction>;
+
 export const HttpRequestAction = z.object({
   kind: z.literal('httpRequest'),
   method: HttpMethod.default('GET'),
@@ -294,6 +321,7 @@ export type StepAction =
   | z.infer<typeof QueryDbAction>
   | z.infer<typeof ObserveLogAction>
   | z.infer<typeof HttpRequestAction>
+  | z.infer<typeof SendSyslogAction>
   | z.infer<typeof TapAction>
   | z.infer<typeof SwipeAction>
   | z.infer<typeof SetAppearanceAction>
@@ -323,6 +351,7 @@ export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
   QueryDbAction,
   ObserveLogAction,
   HttpRequestAction,
+  SendSyslogAction,
   TapAction,
   SwipeAction,
   SetAppearanceAction,

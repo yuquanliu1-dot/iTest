@@ -35,6 +35,7 @@ import type { AiFallbackSettings } from './aiFallback.js';
 import { runQueryDb } from './dbQuery.js';
 import { runObserveLog } from './syslogReader.js';
 import { runHttpRequest, type HttpStepResult } from './httpRequest.js';
+import { runSendSyslog, type SyslogStepResult } from './sendSyslog.js';
 import { runCaseVisionAssert } from './visionAssert.js';
 import { newAiUsage, type AiUsageStat, type AiUsageAccumulator, type AiUsageAddend } from './aiUsage.js';
 import { annotateAction, clearAnnotation, type LiveViewHandle } from './liveView.js';
@@ -74,6 +75,8 @@ export interface ExecStepResult {
   log?: ObserveLogLineResult;
   /** httpRequest 步骤的结果（仅 httpRequest 步携带，其它步 undefined） */
   http?: HttpStepResult;
+  /** sendSyslog 步骤的结果（仅 sendSyslog 步携带，其它步 undefined） */
+  syslog?: SyslogStepResult;
   /** Track 1 用例级 vision 判定的回写结果（仅最后一步或追加失败步携带，其它步 undefined）。 */
   visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string; aiUsage?: AiUsageStat };
   /** aiTask 步骤本轮回放走了动作缓存（机械执行，零 LLM）；报告据此展示"缓存命中"。 */
@@ -152,6 +155,8 @@ interface DispatchOpts {
   logSink?: { current: ObserveLogLineResult | null };
   /** 记录本步 httpRequest 结果（由 httpRequest 分支写入） */
   httpSink?: { current: HttpStepResult | null };
+  /** 记录本步 sendSyslog 结果（由 sendSyslog 分支写入） */
+  syslogSink?: { current: SyslogStepResult | null };
   /** 记录本步 aiTask 是否命中动作缓存（由 aiTask 分支写入） */
   cacheSink?: { current: boolean };
   /** 本步 LLM 用量累加器（aiTask / 验证码分支每轮 complete 后 add；stepResult 组装时读） */
@@ -616,6 +621,12 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       if (opts.httpSink) opts.httpSink.current = result;
       return;
     }
+    case 'sendSyslog': {
+      // UDP/TCP 发送（不依赖 page）；失败（连不上/超时）向上抛由统一失败路径处理
+      const result = await runSendSyslog({ action, vars: opts.vars });
+      if (opts.syslogSink) opts.syslogSink.current = result;
+      return;
+    }
   }
 }
 
@@ -917,6 +928,7 @@ async function runStepsInContext(
     opts.dbSink = { current: null };
     opts.logSink = { current: null };
     opts.httpSink = { current: null };
+    opts.syslogSink = { current: null };
     opts.cacheSink = { current: false };
     const aiUsage = newAiUsage();
     opts.aiUsage = aiUsage;
@@ -984,6 +996,7 @@ async function runStepsInContext(
         db: opts.dbSink.current ?? undefined,
         log: opts.logSink.current ?? undefined,
         http: opts.httpSink.current ?? undefined,
+        syslog: opts.syslogSink.current ?? undefined,
         ...(opts.cacheSink.current ? { cached: true } : {}),
         ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
         ...(opts.healedSink.current ? { healed: true } : {}),
@@ -1047,6 +1060,7 @@ async function runStepsInContext(
               db: opts.dbSink.current ?? undefined,
               log: opts.logSink.current ?? undefined,
               http: opts.httpSink.current ?? undefined,
+              syslog: opts.syslogSink.current ?? undefined,
               ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
               degraded: true,
             };
@@ -1071,6 +1085,7 @@ async function runStepsInContext(
         db: opts.dbSink.current ?? undefined,
         log: opts.logSink.current ?? undefined,
         http: opts.httpSink.current ?? undefined,
+        syslog: opts.syslogSink.current ?? undefined,
         // AI 降级跑了但失败（放弃/超轮/异常）：补一条 warning 说明 AI 这一下的结局，
         // 否则报告只留机械报错 + 孤立 aiUsage，看不出 AI 已介入却没救回来。
         ...(aiDegradedErr ? { warning: `AI 降级尝试未成功：${aiDegradedErr}` } : {}),
