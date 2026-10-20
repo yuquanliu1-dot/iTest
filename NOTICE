@@ -1,0 +1,29 @@
+iTest
+Copyright 2026 iTest contributors
+
+This product includes software developed at Anthropic (https://www.anthropic.com/).
+
+--------------------------------------------------------------------------------
+Third-party content redistributed in this repository
+--------------------------------------------------------------------------------
+
+apps/api/scripts/skill-creator-content/
+    A verbatim copy of the `skill-creator` skill from the Anthropic `skills`
+    repository (https://github.com/anthropics/skills), distributed under the
+    Apache License, Version 2.0.
+
+    The upstream `LICENSE.txt` is retained unmodified in that directory and
+    governs the content there. Modifications made in this repository to that
+    content are distributed under the same Apache License, Version 2.0.
+
+    skill-creator
+    Copyright Anthropic PBC
+    Licensed under the Apache License, Version 2.0
+
+--------------------------------------------------------------------------------
+Dependencies
+--------------------------------------------------------------------------------
+
+This project depends on third-party packages distributed under their own
+licenses (including MIT, Apache-2.0, and MPL-2.0). Those licenses apply to
+those packages, not to this project's own source code.

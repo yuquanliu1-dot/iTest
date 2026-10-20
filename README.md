@@ -124,3 +124,17 @@ pnpm verify  # lint + typecheck + test（web + api）
 - 密码加密：AES-256-GCM，密钥来自 `ENCRYPTION_KEY`（base64 32 字节），丢失即不可恢复
 - 组件识别仅覆盖 AntD / Element / iView；多标签页录制只接管派生 tab
 - 生产环境必须更换 `AUTH_JWT_SECRET` / `RECORDER_TOKEN_SECRET`，并配置 `ENCRYPTION_KEY`
+
+## 贡献
+
+欢迎通过 PR 贡献。`main` 分支受保护：合并前需要 **至少 1 个 approving review**，且所有对话需被解决。请先开 issue 讨论较大改动，避免白做。
+
+- 提交前跑 `pnpm verify`（lint + typecheck + test）——后端测试需要 Docker（testcontainers 起临时 PG）
+- 不要提交任何密钥/凭据：本地配置走 `.env`（参考 `.env.example`），`infra/docker/deploy.d/` 与 `infra/docker/.env.production` 已被 gitignore
+
+## 许可证
+
+本项目采用 [Apache License 2.0](LICENSE)。
+
+`apps/api/scripts/skill-creator-content/` 是 Anthropic 官方 `skill-creator` 技能的逐字节拷贝，遵循其自带的 Apache-2.0 `LICENSE.txt`（该文件保留未改动），详情见 [NOTICE](NOTICE)。
+
