@@ -6,6 +6,12 @@ AI-first test management platform: manage cases, environments, and plans in one 
 
 > 中文文档见 [README.zh-CN.md](README.zh-CN.md) · [Chinese documentation](README.zh-CN.md)
 
+## Read the story first
+
+Recorded scripts break on every change, intent-driven testing is slow and drifts, and with AI coding raising commit frequency, regression ends up being run blind. The article below walks through the design: dual engines for intent-driven and mechanical instructions, cases that self-heal across versions, and automatic case selection based on the blast radius of a change.
+
+**[开源自动化回归测试，交给一个可靠的 Agent](https://mp.weixin.qq.com/s/kgM6LAq_zphtbBPu956v_w)** (WeChat, 中文) — 2026-10-20
+
 ## Why iTest
 
 Regression automation usually gets stuck at three barriers. iTest has an engineering answer for each:
