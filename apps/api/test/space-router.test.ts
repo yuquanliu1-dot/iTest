@@ -366,6 +366,18 @@ describe('线程列表作用域与改名/删除(react-pi ThreadList 契约)', ()
     expect(row.rows[0]!.title).toBe('手动标题');
   });
 
+  it('列表含 title=null 线程时,title 缺省而非 null(react-pi isOptionalString 拒 null,整列表会挂)', async () => {
+    const { versionId } = await seedProject(pool);
+    const id = await activeThread(versionId);
+    // 真实竞态:首条消息 flush 落盘先于后台落题 → 列表读到 null 标题
+    await pool.query(`UPDATE ai_threads SET title=NULL WHERE id=$1`, [id]);
+    const list = await request(app).get(`/api/assistant/threads?versionId=${versionId}`);
+    expect(list.status).toBe(200);
+    const row = list.body.find((x: { id: string }) => x.id === id);
+    expect(row).toBeTruthy();
+    expect(row.title).toBeUndefined();
+  });
+
   it('DELETE /threads/:id 删线程行并清六张暂存表;内存 record 释放', async () => {
     const { versionId } = await seedProject(pool);
     const id = await activeThread(versionId);
