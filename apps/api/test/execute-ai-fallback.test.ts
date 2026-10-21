@@ -474,4 +474,34 @@ describe('回放 AI 降级 — 凭据占位符替换（2026-10-21 prod228 登录
     expect(results[0]!.failureReason).toBe('EnvMissing');
     expect(mocked.__typed.join('|')).not.toContain('__ITEST_');
   });
+
+  it('无 @ref 的占位符落到用例绑定的 web 服务上（不同用例测不同 web）', async () => {
+    mocked.__typed.length = 0;
+    const { llm } = makeMockLlm([]);
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve([]));
+    const envCtx = {
+      ...makeEnvCtx({ user: 'front_u', password: 'front_p' }),
+      logins: new Map<string, { user: string; password: string; loginUrl: null }>([
+        ['backend', { user: 'be_u', password: 'be_p', loginUrl: null }],
+      ]),
+      resolveLogin: (ref?: string | null) => {
+        if (ref === 'backend') return { user: 'be_u', password: 'be_p', loginUrl: null };
+        if (ref) return null;
+        return { user: 'front_u', password: 'front_p', loginUrl: null };
+      },
+      hasCredentials: () => true,
+    };
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000142',
+      [{
+        order: 1, id: 's-bind-1', instruction: '登录并提交',
+        compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#u' }], value: '__ITEST_USERNAME__' }],
+      }],
+      { reportId: 'r-cred-bind', aiFallback: OFF, llmClient: llm, envCtx, caseWebServiceRef: 'backend' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(mocked.__typed).toContain('be_u');
+    expect(mocked.__typed).not.toContain('front_u');
+  });
 });

@@ -334,6 +334,7 @@ async function runCaseOnceInner(
         : {}),
       ...(initialVars ? { initialVars } : {}),
       ...(caseWebOrigin ? { caseWebOrigin } : {}),
+      ...(caseRow.webServiceRef ? { caseWebServiceRef: caseRow.webServiceRef } : {}),
       ...(opts?.liveView ? { liveView: opts.liveView } : {}),
       ...(aiFallback.compileMissing || aiFallback.locatorFailed ? { aiFallback } : {}),
     };
@@ -428,6 +429,7 @@ async function runCaseOnceInner(
         ...(rowPlan ? { sensitiveVarKeys: rowPlan.sensitiveVarKeys } : {}),
         ...(initialVars ? { initialVars } : {}),
         ...(caseWebOrigin ? { caseWebOrigin } : {}),
+        ...(caseRow.webServiceRef ? { caseWebServiceRef: caseRow.webServiceRef } : {}),
         ...(aiFallback.compileMissing || aiFallback.locatorFailed ? { aiFallback } : {}),
       };
       try {

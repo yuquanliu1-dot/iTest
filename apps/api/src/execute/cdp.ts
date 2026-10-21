@@ -118,6 +118,8 @@ export interface ExecContext {
   caseUrl?: string | null;
   /** 用例绑定 web 服务的 origin：中途 navigate 相对 url 拼接用；无环境 web 服务时缺省。 */
   caseWebOrigin?: string | null;
+  /** 用例绑定的 web 服务名（environment_objects payload.name）：无 @ref 占位符的第二级解析目标。 */
+  caseWebServiceRef?: string | null;
   /** 数据集行初始变量（解密后明文，仅存在于执行期内存，不落库）。 */
   initialVars?: Record<string, string>;
   /** 数据集敏感列名集合：错误信息落报告前对相关变量值打码（与 recorder 敏感处理对齐）。 */
