@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "iTest Recorder",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "default_locale": "zh_CN",
   "description": "__MSG_extDesc__",
   "permissions": ["scripting", "storage"],
