@@ -54,23 +54,21 @@ export const REQ_DESIGN_METHOD = `## 需求→用例设计方法
 /** 用例创建流程指引（S1 seed 用，zh）。自 session.ts 迁来：改为 DB 常驻 → 热生效 + 可运营。 */
 export const CASE_AUTHORING_FLOW_ZH = `## 用例创建流程
 1. 拿到需求后先生成**自然语言步骤**的用例草稿（含断言），把步骤贴在对话里与用户讨论确认,不要立刻 stage_case。
-2. 讨论过程中用户可要求实测：调 verify_case(caseId=草稿 localId) 在真实浏览器跑自然语言步骤（AI 相执行）,前端有 live view 视频流给用户观看。
+2. 贴出草稿后**主动询问**用户「先用 AI 相实测跑一遍,还是需要调整步骤？」,不要贴完就只引导保存：选实测就先 stage_case 暂存草稿拿 localId（纯草稿验证,全程不落库）,再调 verify_case(caseId=草稿 localId) 在真实浏览器跑自然语言步骤（AI 相执行）,前端有 live view 视频流给用户观看；失败据 failure 修正后同 localId 重发 stage_case 再验。选调整就按用户意见改草稿后再问一次；两个都不要才进入下一步（同一草稿被拒绝过实测后不再重复追问）。
 3. 用户确认步骤后调 stage_case 暂存：步骤保持自然语言形态,**不要急着生成 compiled 机械 DSL**。
-4. 引导用户在右侧暂存区勾选保存。
-5. 保存后主动询问：「用例已保存,是否需要 solidify 固化为机械步骤？」
-6. 用户同意后调 solidify_case 把自然语言步骤编译为机械 DSL（产出仍走暂存勾选落库）。
-7. 编译完成后调 verify_case 实际跑 DSL 验收；出错由你根据失败归因修复 compiled 后重跑,直到通过。
+4. 暂存后主动询问「是否固化为机械步骤？」：用户同意才调 solidify_case（真实执行一遍收集 AI 动作→机械映射为 compiled,暂存草稿整例更新）；拒绝则直接进入下一步。
+5. 固化完成后**自动**调 verify_case 验收（AI 相执行+终态判定,再用与正式回放同引擎的机械干跑逐字执行 compiled）：失败按失败归因修复 compiled 后重跑,直到通过（同一用例最多 3 轮）。
+6. **全程不落库**：实测/固化/验收都作用于暂存草稿,全部通过后引导用户在右侧暂存区勾选**一次性统一保存（落库）**。
 
 **批量场景**：一次需求产出多条用例时，按「逐条讨论 → 逐条暂存」串行推进,不要一次性铺开所有草稿——用户需要逐条审,铺开等于把确认门稀释掉。每条讨论确认后再 stage_case,下一条再开始讨论。实测环节用户确认要多条一起跑时可以接力：一条 AI 相跑完出结论再开下一条,不要并发。`;
 
 /** 用例创建流程指引（S1 seed 用，en）。 */
 export const CASE_AUTHORING_FLOW_EN = `## Case authoring workflow
 1. On receiving a requirement, draft the case with **natural-language steps** (plus assertions) and discuss with the user first — do NOT call stage_case immediately.
-2. During discussion the user may ask to actually run it: call verify_case(caseId=<draft localId>) to execute NL steps in a real browser (AI-driven), with a live video stream shown to the user.
+2. After presenting the draft, **proactively ask** the user: "Run an AI-phase live test first, or adjust the steps?" — do NOT jump straight to save guidance. If a live test is chosen: stage_case the draft to get its localId (pure-draft verification, nothing lands in the DB), then call verify_case(caseId=<draft localId>) to execute the NL steps in a real browser (AI-driven), with a live video stream shown to the user; on failure fix per the failure feedback and re-send stage_case with the same localId, then re-verify. If the user wants changes, revise the draft accordingly and ask again. Only when the user wants neither proceed to the next step (do not re-ask the live-test question once declined for the same draft).
 3. After the user confirms the steps, call stage_case to stage the draft: keep steps in natural language, do NOT generate compiled mechanical DSL yet.
-4. Guide the user to check and save from the staging panel on the right.
-5. After save, proactively ask: "Case saved — solidify into mechanical steps now?"
-6. If the user agrees, call solidify_case to compile NL steps into mechanical DSL (output still goes through staging + save).
-7. Then call verify_case to actually run the DSL for acceptance; on failure, fix the compiled output per failure attribution and re-run until it passes.
+4. Then proactively ask: "Solidify into mechanical steps now?" Call solidify_case only if the user agrees (it really executes the case once, collects the AI's actions and maps them to mechanical compiled; staged drafts are updated in place); if declined, skip straight to the final save guidance.
+5. After solidify completes, AUTOMATICALLY call verify_case for acceptance (AI-phase execution + final-state judgment, then a mechanical dry-run of compiled with the same engine as real replay): on failure fix compiled per failure attribution and re-run until it passes (max 3 rounds per case).
+6. **Nothing lands in the DB throughout** — live test / solidify / acceptance all operate on the staged draft. Only after everything passes, guide the user to check and save ONCE from the staging panel on the right.
 
 **Batch mode**: when one requirement yields multiple cases, drive them serially as "discuss one → stage one". Do NOT dump all drafts at once — the user reviews one at a time, and bulk-dumping dilutes the confirmation gate. Start the next discussion only after the current one is confirmed and staged. For live-test runs the user may approve several at once: chain them serially, starting the next only after the current AI phase finishes; never run them concurrently.`;

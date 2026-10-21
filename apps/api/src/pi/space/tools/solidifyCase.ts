@@ -64,8 +64,8 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       caseId: Type.String({ minLength: 1 }),
     }),
     promptGuidelines: [
-      '调用时机（前置条件）：用户已确认/保存自然语言草稿后，你主动询问「是否需要固化为机械步骤」得到肯定答复，或用户明确要求把视觉步骤转为机械步骤时才调用。不要在 stage_case 刚落暂存就自动 solidify——草稿期保持自然语言更利于多轮讨论修改。',
-      'solidify_case 真实执行一遍用例收集 AI 临场动作，机械映射为 compiled 后暂存为 update_step 修改（草稿用例整例更新）。暂存后必须引导 verify_case 验收——机械干跑通过才算固化完成；verify 失败由你根据失败归因修复 compiled 后重跑 verify，直到通过。通过后引导用户在暂存区勾选保存。',
+      '调用时机（前置条件）：用户确认自然语言草稿后（无论草稿是否已落库,固化可直接作用于暂存草稿）,你主动询问「是否需要固化为机械步骤」得到肯定答复，或用户明确要求把视觉步骤转为机械步骤时才调用。不要在 stage_case 刚落暂存就自动 solidify——草稿期保持自然语言更利于多轮讨论修改。',
+      'solidify_case 真实执行一遍用例收集 AI 临场动作，机械映射为 compiled 后暂存为 update_step 修改（草稿用例整例更新）。暂存后必须立即 verify_case 验收（不要等用户再催）——机械干跑通过才算固化完成；verify 失败由你根据失败归因修复 compiled 后重跑 verify，直到通过。通过后引导用户在暂存区勾选保存。',
       'solidify_case 结果里 status=kept-aiTask 的步骤附有 reason（press/wait 无机械对应 / 登录凭据占位 / 选择器不可映射 / 动作收集为空）：这些步骤保持视觉执行是预期行为，不要强行改写；确需机械化的（如选择器含 Playwright 专有语法）可先用 stage_case_op 换成平台可表达的选择器后重新固化。',
       '同一用例反复固化是安全幂等的：暂存 localId 按 stepId 确定（solidify-<stepId>），重复固化覆盖上一轮暂存；执行失败（任一步骤未过）时不会暂存任何修改，修正后重跑即可。',
       '被固化的 fill value 是 AI 当轮填入的原始值：若 instruction 引用了 {{变量}} 而 AI 填了具体值，固化会把该值冻结进 compiled——数据驱动用例（绑定数据集）不建议固化含变量填写的步骤，或固化后把 value 手工改回 {{变量}}。',
