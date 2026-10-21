@@ -235,6 +235,25 @@ export const SendSyslogAction = z.object({
 });
 export type SendSyslogAction = z.infer<typeof SendSyslogAction>;
 
+/** 2026-10-22: sql 步骤——对【被测系统自己的数据库】执行单条只读 SQL。
+ *  与 queryDb 的区别：queryDb 只查平台自己的表（平台自检），sql 查 SUT 的库（关系库 / OLAP）。 */
+export const SqlAction = z.object({
+  kind: z.literal('sql'),
+  /** 环境 db 对象的 label；缺省 = 环境默认 db 对象。 */
+  dbRef: z.string().min(1).max(64).optional(),
+  /** 单条只读 SQL（SELECT / WITH 开头），执行层再做词法守卫。 */
+  sql: z.string().min(1).max(8000),
+  /** 位置参数；方言适配由执行层处理（postgres $n / mysql ?）。 */
+  params: z.array(z.union([z.string().max(2000), z.number(), z.boolean(), z.null()])).max(20).default([]),
+  limit: z.number().int().min(1).max(200).default(50),
+  assertion: z.object({
+    match: DbAssertionMatch.default('contains'),
+    expected: z.string().max(2000),
+    column: z.string().max(64).optional(),
+  }).optional(),
+});
+export type SqlAction = z.infer<typeof SqlAction>;
+
 export const HttpRequestAction = z.object({
   kind: z.literal('httpRequest'),
   method: HttpMethod.default('GET'),
@@ -322,6 +341,7 @@ export type StepAction =
   | z.infer<typeof ObserveLogAction>
   | z.infer<typeof HttpRequestAction>
   | z.infer<typeof SendSyslogAction>
+  | z.infer<typeof SqlAction>
   | z.infer<typeof TapAction>
   | z.infer<typeof SwipeAction>
   | z.infer<typeof SetAppearanceAction>
@@ -352,6 +372,7 @@ export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
   ObserveLogAction,
   HttpRequestAction,
   SendSyslogAction,
+  SqlAction,
   TapAction,
   SwipeAction,
   SetAppearanceAction,

@@ -29,6 +29,9 @@ const HUMAN: Record<FailureReason, string> = {
   QueryDbTableNotAllowed: '该表不在允许查询的列表中',
   QueryDbColumnNotAllowed: '该列不在允许查询的列表中',
   QueryDbAssertionFailed: '数据库断言未命中',
+  SqlError: '只读 SQL 执行失败（连接或语句错误）',
+  SqlReadOnlyViolation: 'SQL 非只读语句（仅允许单条 SELECT / WITH），已拒绝执行',
+  SqlAssertionFailed: 'SQL 结果断言未命中',
   EnvMissing: '缺少环境配置，请到项目设置配置测试环境',
   EnvProjectMismatch: '环境所属项目与当前用例不匹配',
   /** 2026-10-16: 相对 url 执行——环境无可拼 origin 的 web 服务，或 web_service_ref 非法 */
@@ -90,8 +93,17 @@ export function classify(err: unknown, ctx: ClassifyCtx = {}): ClassifiedFailure
   if (e?.name === 'QueryDbTableNotAllowed') return { reason: 'QueryDbTableNotAllowed', humanMessage: HUMAN.QueryDbTableNotAllowed };
   if (e?.name === 'QueryDbColumnNotAllowed') return { reason: 'QueryDbColumnNotAllowed', humanMessage: HUMAN.QueryDbColumnNotAllowed };
   if (e?.name === 'QueryDbAssertionFailed') return { reason: 'QueryDbAssertionFailed', humanMessage: HUMAN.QueryDbAssertionFailed };
+  if (e?.name === 'SqlReadOnlyViolation') return { reason: 'SqlReadOnlyViolation', humanMessage: HUMAN.SqlReadOnlyViolation };
+  if (e?.name === 'SqlAssertionFailed') return { reason: 'SqlAssertionFailed', humanMessage: HUMAN.SqlAssertionFailed };
+  if (e?.name === 'SqlError') return { reason: 'SqlError', humanMessage: HUMAN.SqlError };
   if (e?.name === 'EnvMissing') return { reason: 'EnvMissing', humanMessage: HUMAN.EnvMissing };
-  if (e?.name === 'EnvDbMissing') return { reason: 'EnvDbMissing', humanMessage: HUMAN.EnvDbMissing };
+  if (e?.name === 'EnvDbMissing') {
+    const res = (e as { resource?: string | null }).resource;
+    return {
+      reason: 'EnvDbMissing',
+      humanMessage: res ? `当前环境未配置名为「${res}」的数据库连接` : HUMAN.EnvDbMissing,
+    };
+  }
   if (e?.name === 'EnvSyslogMissing') return { reason: 'EnvSyslogMissing', humanMessage: HUMAN.EnvSyslogMissing };
   if (e?.name === 'SyslogConnectFailed') return { reason: 'SyslogConnectFailed', humanMessage: HUMAN.SyslogConnectFailed };
   if (e?.name === 'SyslogAuthFailed') return { reason: 'SyslogAuthFailed', humanMessage: HUMAN.SyslogAuthFailed };

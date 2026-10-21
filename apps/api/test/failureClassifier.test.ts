@@ -52,4 +52,16 @@ describe('failureClassifier', () => {
     const ctx = { durationMs: 20000 };
     expect(classify(new Error('not stable'), ctx).reason).toBe('SlowLoad');
   });
+  it('sql 三类失败归类', () => {
+    const mk = (name: string) => Object.assign(new Error('x'), { name });
+    expect(classify(mk('SqlReadOnlyViolation'), { durationMs: 1 }).reason).toBe('SqlReadOnlyViolation');
+    expect(classify(mk('SqlError'), { durationMs: 1 }).reason).toBe('SqlError');
+    expect(classify(mk('SqlAssertionFailed'), { durationMs: 1 }).reason).toBe('SqlAssertionFailed');
+    expect(classify(mk('SqlError'), { durationMs: 1 }).humanMessage).toMatch(/只读 SQL/);
+  });
+  it('EnvDbMissing 带 resource → 人话消息点名该 db', () => {
+    const e = Object.assign(new Error('env-db-missing'), { name: 'EnvDbMissing', resource: 'olap' });
+    expect(classify(e).reason).toBe('EnvDbMissing');
+    expect(classify(e).humanMessage).toContain('olap');
+  });
 });

@@ -24,6 +24,10 @@ export const FailureReason = z.enum([
   'QueryDbTableNotAllowed',
   'QueryDbColumnNotAllowed',
   'QueryDbAssertionFailed',
+  /** 2026-10-22: sql 步骤（查被测系统库）失败 */
+  'SqlError',
+  'SqlReadOnlyViolation',
+  'SqlAssertionFailed',
   'EnvMissing',
   'EnvDbMissing',
   'EnvSyslogMissing',
@@ -84,6 +88,16 @@ export interface ObserveLogLineResult {
   matchedLineCount: number;
   durationMs: number;
   lines: { ts?: string; raw: string }[];
+  truncated?: boolean;
+  assertion?: { matched: boolean; expected: string; match: 'equals' | 'contains' | 'regex' };
+}
+
+/** sql 步骤执行结果：命中的 db 对象 label / 行数 / 行内容（值截断）/ 断言命中。 */
+export interface SqlStepResult {
+  dbRef: string | null;
+  rowCount: number;
+  durationMs: number;
+  rows: Record<string, unknown>[];
   truncated?: boolean;
   assertion?: { matched: boolean; expected: string; match: 'equals' | 'contains' | 'regex' };
 }
