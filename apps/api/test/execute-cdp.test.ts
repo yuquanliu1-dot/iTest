@@ -1099,3 +1099,79 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
     expect(mocked.__page.goto.mock.calls.some((x) => x[0] === 'http://192.168.1.10:8080/login')).toBe(true);
   });
 });
+
+describe('sql 步骤分支（查被测系统自己的库）', () => {
+  /** 假 EnvCtx：一个名为 olap 的 db 对象，池记录调用。 */
+  function makeSqlEnv(rows: Record<string, unknown>[]) {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const pool = {
+      dialect: 'postgres' as const,
+      async query(sql: string, params: unknown[]) {
+        calls.push({ sql, params });
+        return { rows };
+      },
+      async end() {},
+    };
+    const env = {
+      envId: 'e-sql',
+      envName: '默认环境',
+      baseUrl: null,
+      webServices: [],
+      dbs: [{ label: 'olap', isDefault: true }],
+      resolveDb: (ref?: string | null) =>
+        (ref ? env.dbs.find((d) => d.label === ref) ?? null : env.dbs[0] ?? null),
+      resolveDbPool: async (ref?: string | null) => {
+        if (!env.resolveDb(ref)) {
+          const e = new Error('env-db-missing');
+          e.name = 'EnvDbMissing';
+          throw e;
+        }
+        return pool;
+      },
+      close: async () => undefined,
+    };
+    return { env, calls };
+  }
+
+  it('按 dbRef 取池执行，结果落 step.sql', async () => {
+    const { env, calls } = makeSqlEnv([{ id: 1, status: 'ok' }]);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000040',
+      [{ order: 1, compiled: [{ kind: 'sql', dbRef: 'olap', sql: 'SELECT * FROM t' }] }],
+      { reportId: 'r-sql-1', envCtx: env as never },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(calls[0]!.sql).toBe('SELECT * FROM t');
+    expect(results[0]!.sql?.dbRef).toBe('olap');
+    expect(results[0]!.sql?.rows).toEqual([{ id: 1, status: 'ok' }]);
+  });
+
+  it('断言不命中 → SqlAssertionFailed，rows 仍留在结果里', async () => {
+    const { env } = makeSqlEnv([{ status: 'fail' }]);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000041',
+      [{
+        order: 1,
+        compiled: [{
+          kind: 'sql', dbRef: 'olap', sql: 'SELECT * FROM t',
+          assertion: { match: 'contains', expected: 'ok' },
+        }],
+      }],
+      { reportId: 'r-sql-2', envCtx: env as never },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.failureReason).toBe('SqlAssertionFailed');
+    expect(results[0]!.sql?.rows).toEqual([{ status: 'fail' }]);
+  });
+
+  it('dbRef 不存在 → EnvDbMissing', async () => {
+    const { env } = makeSqlEnv([]);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000042',
+      [{ order: 1, compiled: [{ kind: 'sql', dbRef: 'nope', sql: 'SELECT 1' }] }],
+      { reportId: 'r-sql-3', envCtx: env as never },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.failureReason).toBe('EnvDbMissing');
+  });
+});

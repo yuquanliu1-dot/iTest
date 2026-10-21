@@ -9,6 +9,7 @@ import type {
   WindowStrategy,
   DbQueryRowResult,
   ObserveLogLineResult,
+  SqlStepResult,
 } from '@itest/shared';
 import { deepEqual, materializeValue, substituteVars } from '@itest/shared';
 import { eq, and } from 'drizzle-orm';
@@ -33,6 +34,7 @@ import { readAiTaskCache, writeAiTaskCache, bumpAiTaskCacheHit } from './aiTaskC
 import type { EnvCtx } from './envContext.js';
 import type { AiFallbackSettings } from './aiFallback.js';
 import { runQueryDb } from './dbQuery.js';
+import { runSql } from './sqlQuery.js';
 import { runObserveLog } from './syslogReader.js';
 import { runHttpRequest, type HttpStepResult } from './httpRequest.js';
 import { runSendSyslog, type SyslogStepResult } from './sendSyslog.js';
@@ -71,6 +73,8 @@ export interface ExecStepResult {
   tabIndex?: number;
   /** queryDb 步骤的结果（仅 queryDb 步携带，其它步 undefined） */
   db?: DbQueryRowResult;
+  /** sql 步骤的结果（仅 sql 步携带，其它步 undefined） */
+  sql?: SqlStepResult;
   /** observeLog 步骤的结果（仅 observeLog 步携带，其它步 undefined） */
   log?: ObserveLogLineResult;
   /** httpRequest 步骤的结果（仅 httpRequest 步携带，其它步 undefined） */
@@ -153,6 +157,8 @@ interface DispatchOpts {
   hitSink?: { current: HitLocator | null };
   /** 记录本步 queryDb 结果（由 queryDb 分支写入） */
   dbSink?: { current: DbQueryRowResult | null };
+  /** 记录本步 sql 结果（由 sql 分支写入） */
+  sqlSink?: { current: SqlStepResult | null };
   /** 记录本步 observeLog 结果（由 observeLog 分支写入） */
   logSink?: { current: ObserveLogLineResult | null };
   /** 记录本步 httpRequest 结果（由 httpRequest 分支写入） */
@@ -634,6 +640,29 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       if (opts.dbSink) opts.dbSink.current = result;
       return;
     }
+    case 'sql': {
+      // 查被测系统自己的库（与 queryDb 查平台自己的库不同）。dbRef 缺省 = 环境默认 db 对象。
+      const envCtx = opts.ctx.envCtx;
+      if (!envCtx) {
+        const e = new Error('env-db-missing: 当前环境未配置数据库连接');
+        e.name = 'EnvDbMissing';
+        throw e;
+      }
+      const dbRef = action.dbRef ?? null;
+      const pool = await envCtx.resolveDbPool(dbRef);
+      const result = await runSql({
+        pool,
+        action,
+        vars: opts.vars,
+        dbRef: envCtx.resolveDb(dbRef)?.label ?? null,
+      });
+      // 先写 sink 再判断言：断言失败时报告里仍要能看到 rows
+      if (opts.sqlSink) opts.sqlSink.current = result;
+      if (result.assertion && !result.assertion.matched) {
+        const e = new Error('sql assertion failed'); e.name = 'SqlAssertionFailed'; throw e;
+      }
+      return;
+    }
     case 'observeLog': {
       const envCtx = opts.ctx.envCtx;
       if (!envCtx?.syslog) {
@@ -964,6 +993,7 @@ async function runStepsInContext(
     opts.stepId = step.id;
     opts.hitSink = { current: null };
     opts.dbSink = { current: null };
+    opts.sqlSink = { current: null };
     opts.logSink = { current: null };
     opts.httpSink = { current: null };
     opts.syslogSink = { current: null };
@@ -1048,6 +1078,7 @@ async function runStepsInContext(
         hitLocator: opts.hitSink.current ?? undefined,
         tabIndex: tabIndex >= 0 ? tabIndex : 0,
         db: opts.dbSink.current ?? undefined,
+        sql: opts.sqlSink.current ?? undefined,
         log: opts.logSink.current ?? undefined,
         http: opts.httpSink.current ?? undefined,
         syslog: opts.syslogSink.current ?? undefined,
@@ -1123,6 +1154,7 @@ async function runStepsInContext(
                 hitLocator: opts.hitSink.current ?? undefined,
                 tabIndex: tabIndex >= 0 ? tabIndex : 0,
                 db: opts.dbSink.current ?? undefined,
+                sql: opts.sqlSink.current ?? undefined,
                 log: opts.logSink.current ?? undefined,
                 http: opts.httpSink.current ?? undefined,
                 syslog: opts.syslogSink.current ?? undefined,
@@ -1149,6 +1181,7 @@ async function runStepsInContext(
         hitLocator: opts.hitSink.current ?? undefined,
         tabIndex: tabIndex >= 0 ? tabIndex : 0,
         db: opts.dbSink.current ?? undefined,
+        sql: opts.sqlSink.current ?? undefined,
         log: opts.logSink.current ?? undefined,
         http: opts.httpSink.current ?? undefined,
         syslog: opts.syslogSink.current ?? undefined,
