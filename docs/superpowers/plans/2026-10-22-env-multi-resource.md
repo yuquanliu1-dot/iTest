@@ -24,7 +24,7 @@
 
 **背景:** 现状 `credentialPlaceholderKind` 只认 3 个固定字面量，`@ref` 形态全新引入。`CredentialKind` 当前未导出，需导出。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加到 `apps/api/test/ai-task.test.ts` 的 `describe('凭据占位符协议…')` 末尾（记得改 import 行，加上新导出的名字）：
 
@@ -71,12 +71,12 @@ it('referencesCredential：@ref 形态也算引用', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd apps/api && pnpm vitest run test/ai-task.test.ts`
 Expected: FAIL —— `parseCredentialPlaceholder is not a function`（vitest 报 import 失败）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 把 `apps/api/src/execute/aiTask.ts:122-180` 这一段（从 `// ── 凭据占位符识别与替换` 到 `makeCredentialValueSub` 之前）整体替换为：
 
@@ -146,12 +146,12 @@ export function referencesCredential(text: string): boolean {
 
 > 注意：`makeCredentialValueSub` 里的错误文案现在要用渲染后的占位符（含 `@ref`），Task 3 会一并改，本任务先不动它。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd apps/api && pnpm vitest run test/ai-task.test.ts`
 Expected: PASS，既有 19 个用例仍全绿（`credentialPlaceholderKind` 语义对旧形态不变）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add apps/api/src/execute/aiTask.ts apps/api/test/ai-task.test.ts
@@ -166,7 +166,7 @@ git commit -m "feat(api): 凭据占位符支持 @ref 归属——parseCredential
 - Modify: `apps/api/src/execute/envContext.ts`（`LoginCtx` 定义处、`WebServiceEntry`、返回值对象、`resolveEnv` 内 login 派生段）
 - Test: `apps/api/src/execute/envContext.test.ts`（追加）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加到 `apps/api/src/execute/envContext.test.ts` 末尾：
 
@@ -217,12 +217,12 @@ describe('resolveEnv 多 web 凭据', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd apps/api && pnpm vitest run src/execute/envContext.test.ts`
 Expected: FAIL —— `env.logins is undefined`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `apps/api/src/execute/envContext.ts` 三处改动：
 
@@ -279,12 +279,12 @@ export type WebLogins = Map<string, LoginCtx>;
     hasCredentials: (ref: string) => logins.has(ref),
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd apps/api && pnpm vitest run src/execute/envContext.test.ts`
 Expected: PASS，既有 20+ 用例全绿
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add apps/api/src/execute/envContext.ts apps/api/src/execute/envContext.test.ts
@@ -303,7 +303,7 @@ git commit -m "feat(api): EnvCtx 暴露 logins/resolveLogin/hasCredentials——
 
 **这是"铁律 1"的落点**：机械路径不再自己写 `=== USER_PH`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `apps/api/test/ai-task.test.ts` 追加：
 
@@ -387,12 +387,12 @@ it('机械回放：@ref 指向不存在的 web → EnvMissing 判失败，不敲
 
 > `makeEnvCtx` 同步补 `logins: new Map()`, `resolveLogin: () => login ?? null`, `hasCredentials: () => !!login`，否则 Task 3 之后其它既有用例会因 EnvCtx 缺字段而崩。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd apps/api && pnpm vitest run test/ai-task.test.ts test/execute-ai-fallback.test.ts`
 Expected: FAIL —— byRef 未生效、机械路径把 `__ITEST_USERNAME@backend__` 原样敲进表单
 
-- [ ] **Step 3: 实现 `makeCredentialValueSub` 的 byRef**
+- [x] **Step 3: 实现 `makeCredentialValueSub` 的 byRef**
 
 `apps/api/src/execute/aiTask.ts` 中 `CredentialSource` + `makeCredentialValueSub` 整段替换为：
 
@@ -439,7 +439,7 @@ export function makeCredentialValueSub(src: CredentialSource): (v: string) => st
 }
 ```
 
-- [ ] **Step 4: 实现共享 CredentialSource 构造（新建文件）**
+- [x] **Step 4: 实现共享 CredentialSource 构造（新建文件）**
 
 `apps/api/src/execute/credentialSource.ts`：
 
@@ -491,7 +491,7 @@ export function renderWebResourceManifest(ctx: { envCtx?: EnvCtx }): string {
 }
 ```
 
-- [ ] **Step 5: 机械路径改走同一替换器**
+- [x] **Step 5: 机械路径改走同一替换器**
 
 `apps/api/src/execute/cdp.ts`：
 
@@ -568,12 +568,12 @@ export const CREDENTIAL_PLACEHOLDER_SCAN = /__?ITEST_(?:USERNAME|PASSWORD|STEP_S
 
 在 cdp.ts 的 import 里加 `makeCredentialValueSub, parseCredentialPlaceholder, CREDENTIAL_PLACEHOLDER_SCAN`，以及 `import { buildCredentialSource } from './credentialSource.js';`、`import type { CredentialSource } from './aiTask.js';`。
 
-- [ ] **Step 6: 跑测试确认通过**
+- [x] **Step 6: 跑测试确认通过**
 
 Run: `cd apps/api && pnpm vitest run test/ai-task.test.ts test/execute-ai-fallback.test.ts test/ai-action-map.test.ts`
 Expected: PASS。若 `test/ai-action-map.test.ts` 不存在，用 `pnpm vitest run test/ai-task.test.ts test/execute-ai-fallback.test.ts` 代替，并在 Task 6 补该文件。
 
-- [ ] **Step 7: 类型检查 + 提交**
+- [x] **Step 7: 类型检查 + 提交**
 
 Run: `cd apps/api && pnpm tsc --noEmit -p tsconfig.json`
 Expected: 无错（`credentialPlaceholderKind` 的旧导出保留，`aiActionMap.ts` 零改动仍可用）
@@ -592,7 +592,7 @@ git commit -m "refactor(api): 机械路径与 AI 相共用 makeCredentialValueSu
 - Modify: `apps/api/src/execute/runCase.ts`（`execCtx` 注入 `caseWebServiceRef`）
 - Test: `apps/api/test/execute-ai-fallback.test.ts`（追加）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `apps/api/test/execute-ai-fallback.test.ts` 的凭据 describe 内追加：
 
@@ -625,12 +625,12 @@ it('无 @ref 的占位符落到用例绑定的 web 服务上（不同用例测�
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd apps/api && pnpm vitest run test/execute-ai-fallback.test.ts`
 Expected: FAIL —— 无 `caseWebServiceRef` 字段（TS 报字段不存在或填了 front_u）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 **(a)** `apps/api/src/execute/cdp.ts` 的 `ExecContext` 里，`caseWebOrigin?: string | null;` 那行之后插入：
 
@@ -645,12 +645,12 @@ Expected: FAIL —— 无 `caseWebServiceRef` 字段（TS 报字段不存在或�
       ...(caseRow.webServiceRef ? { caseWebServiceRef: caseRow.webServiceRef } : {}),
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd apps/api && pnpm vitest run test/execute-ai-fallback.test.ts test/runCase-mobile.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add apps/api/src/execute/cdp.ts apps/api/src/execute/runCase.ts apps/api/test/execute-ai-fallback.test.ts
@@ -666,7 +666,7 @@ git commit -m "feat(api): 用例 web_service_ref 传进执行上下文——无 
 - Modify: `apps/api/src/execute/cdp.ts`（三处 `runAiTask` 调用传 `resourceManifest`）
 - Test: `apps/api/test/ai-task.test.ts`（追加）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加到 `apps/api/test/ai-task.test.ts` 的 `describe('runAiTask')`：
 
@@ -687,12 +687,12 @@ it('resourceManifest 进系统提示词且不含真实凭据', async () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd apps/api && pnpm vitest run test/ai-task.test.ts`
 Expected: FAIL —— manifest 未进请求
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 **(a)** `SYSTEM_PROMPT` 末尾那一行（现在硬写着 `__ITEST_USERNAME__ / __ITEST_PASSWORD__`）替换为占位符 + 动态段：
 
@@ -719,12 +719,12 @@ Expected: FAIL —— manifest 未进请求
 
 **(c)** `apps/api/src/execute/cdp.ts` 三处 `runAiTask(...)` 调用（aiTask 分支、compileMissing 降级、locatorFailed 降级）各加一项 `resourceManifest: renderWebResourceManifest({ envCtx: opts.ctx.envCtx })`。import 加 `renderWebResourceManifest`（并入 Task 3 加的那行 `buildCredentialSource` import）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd apps/api && pnpm vitest run test/ai-task.test.ts test/execute-ai-fallback.test.ts test/pi-verify-case.test.ts test/pi-solidify-case.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add apps/api/src/execute/aiTask.ts apps/api/src/execute/cdp.ts apps/api/test/ai-task.test.ts
@@ -739,7 +739,7 @@ git commit -m "feat(api): web 资源清单进 AI 提示词——模型知道有�
 - Modify: `apps/api/src/execute/aiActionMap.ts:56-60`
 - Create: `apps/api/test/ai-action-map.test.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `apps/api/test/ai-action-map.test.ts`：
 
@@ -773,12 +773,12 @@ describe('mapAiActionsToCompiled 凭据占位符', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd apps/api && pnpm vitest run test/ai-action-map.test.ts`
 Expected: FAIL —— 原因文案不含「@ref」（功能其实已生效，因为 Task 1 让 `credentialPlaceholderKind` 委托给了 `parseCredentialPlaceholder`；本任务锁的是文案与回归）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `apps/api/src/execute/aiActionMap.ts` 的 fill 分支（56-60 行）替换为：
 
@@ -792,12 +792,12 @@ Expected: FAIL —— 原因文案不含「@ref」（功能其实已生效，因
         }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd apps/api && pnpm vitest run test/ai-action-map.test.ts test/execute-aitask-cache.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add apps/api/src/execute/aiActionMap.ts apps/api/test/ai-action-map.test.ts
@@ -814,7 +814,7 @@ git commit -m "test(api): 固化判定锁定 @ref 凭据占位符不固化"
 
 **注意:** 现状 `resolveEnv` 对默认 db **急切建池**。多 db 下急切建全部会浪费连接，改懒建 + Map 缓存；`EnvCtx.pool` / `EnvCtx.db` 保留为默认 db 的派生 getter（`queryDb` 零改动）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加到 `apps/api/src/execute/envContext.test.ts`：
 
@@ -863,12 +863,12 @@ describe('resolveEnv 命名 db', () => {
 
 > `close()` 那个用例只锁"不抛"。真实 `end()` 的验证留给 Task 9 的 `sqlQuery` 单测（用假 pool）。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd apps/api && pnpm vitest run src/execute/envContext.test.ts`
 Expected: FAIL —— `env.dbs is undefined`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 **(a)** `DbPayload` 定义后追加：
 
@@ -981,12 +981,12 @@ export interface DbEntry {
     },
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd apps/api && pnpm vitest run src/execute/envContext.test.ts test/execute-cdp.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add apps/api/src/execute/envContext.ts apps/api/src/execute/envContext.test.ts
@@ -1003,7 +1003,7 @@ git commit -m "feat(api): EnvCtx 命名 db（label 即 ref）+ 连接池懒建�
 
 纯函数、无依赖，可独立单测。这是 Task 9 的地基。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `apps/api/test/sql-guard.test.ts`：
 
@@ -1055,12 +1055,12 @@ describe('assertReadOnlySql', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd apps/api && pnpm vitest run test/sql-guard.test.ts`
 Expected: FAIL —— `Cannot find module '../src/execute/sqlGuard.js'`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `apps/api/src/execute/sqlGuard.ts`：
 
@@ -1119,12 +1119,12 @@ function sqlGuardError(detail: string): Error {
 
 > `SELECT ... INTO OUTFILE` 已被 `COPY`/`INTO` 语义覆盖不到时不必强求——文档已说明非安全边界，测试用例第 4 组只锁"合法形态别误杀"。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd apps/api && pnpm vitest run test/sql-guard.test.ts`
 Expected: PASS，5 组全过
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add apps/api/src/execute/sqlGuard.ts apps/api/test/sql-guard.test.ts
@@ -1143,7 +1143,7 @@ git commit -m "feat(api): 只读 SQL 守卫 sqlGuard——单语句 + 禁写关�
 
 **注意:** `packages/shared` 的 `.js` 产物编进 `src/` 且被 gitignore，改完 TS 必须在**任何 web 测试前**跑 `cd packages/shared && pnpm build` 重编译，否则用到旧 schema 假失败。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `apps/api/test/sql-action-dsl.test.ts`：
 
@@ -1188,12 +1188,12 @@ it('sql 三类失败归类', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd apps/api && pnpm vitest run test/sql-action-dsl.test.ts test/failureClassifier.test.ts`
 Expected: FAIL —— `sql` 不在 discriminatedUnion 里；`SqlError` 不在 FailureReason 里
 
-- [ ] **Step 3: 实现 schema**
+- [x] **Step 3: 实现 schema**
 
 `packages/shared/src/step-dsl.ts`：`SendSyslogAction` 定义之后（`HttpRequestAction` 之前）插入：
 
@@ -1243,7 +1243,7 @@ export interface SqlStepResult {
   SqlAssertionFailed,
 ```
 
-- [ ] **Step 4: 实现失败归类**
+- [x] **Step 4: 实现失败归类**
 
 `apps/api/src/execute/failureClassifier.ts` 的 `HUMAN` 里 `'QueryDbAssertionFailed': '数据库断言未命中',` 之后插入：
 
@@ -1273,7 +1273,7 @@ export interface SqlStepResult {
   }
 ```
 
-- [ ] **Step 5: 重编译 shared + 跑测试**
+- [x] **Step 5: 重编译 shared + 跑测试**
 
 ```bash
 cd packages/shared && pnpm build && cd ../..
@@ -1281,7 +1281,7 @@ cd apps/api && pnpm vitest run test/sql-action-dsl.test.ts test/failureClassifie
 ```
 Expected: PASS
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add packages/shared/src/step-dsl.ts packages/shared/src/playback.ts apps/api/src/execute/failureClassifier.ts apps/api/test/sql-action-dsl.test.ts apps/api/test/failureClassifier.test.ts
@@ -1297,7 +1297,7 @@ git commit -m "feat(api): sql 只读动作 DSL + SqlStepResult + 三类失败归
 - Create: `apps/api/test/sql-query.test.ts`
 - Modify: `apps/api/src/execute/cdp.ts`（`ExecStepResult.sql` + `DispatchOpts.sqlSink` + `case 'sql'` + 两处 sink 初始化/组装）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `apps/api/test/sql-query.test.ts`：
 
@@ -1374,12 +1374,12 @@ describe('runSql', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd apps/api && pnpm vitest run test/sql-query.test.ts`
 Expected: FAIL —— `Cannot find module '../src/execute/sqlQuery.js'`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `apps/api/src/execute/sqlQuery.ts`：
 
@@ -1464,7 +1464,7 @@ function matchText(haystack: string, expected: string, match: 'equals' | 'contai
 }
 ```
 
-- [ ] **Step 4: 接进 cdp**
+- [x] **Step 4: 接进 cdp**
 
 `apps/api/src/execute/cdp.ts`：
 
@@ -1507,12 +1507,12 @@ function matchText(haystack: string, expected: string, match: 'equals' | 'contai
 
 **(e)** `runStepsInContext` 循环里：`opts.dbSink = { current: null };` 之后插入 `opts.sqlSink = { current: null };`；`passedResult` 与 `failedResult` 两处 `db: opts.dbSink.current ?? undefined,` 之后各插入 `sql: opts.sqlSink.current ?? undefined,`。
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `cd apps/api && pnpm vitest run test/sql-query.test.ts test/execute-cdp.test.ts test/failureClassifier.test.ts`
 Expected: PASS
 
-- [ ] **Step 6: 类型检查 + 提交**
+- [x] **Step 6: 类型检查 + 提交**
 
 Run: `cd apps/api && pnpm tsc --noEmit -p tsconfig.json`
 Expected: 无错
@@ -1536,7 +1536,7 @@ git commit -m "feat(api): sqlQuery 执行器 + cdp sql 分支（按 dbRef 取池
 
 **前置:** 必须先 `cd packages/shared && pnpm build`，否则 web 侧 import 到旧 `.js`。
 
-- [ ] **Step 1: 改 switchAction**
+- [x] **Step 1: 改 switchAction**
 
 `apps/web/src/components/step-form/switchAction.ts`：`STEP_KINDS` 的 `'sendSyslog',` 之后加 `'sql',`；switch 里 `case 'sendSyslog':` 之后加：
 
@@ -1546,7 +1546,7 @@ git commit -m "feat(api): sqlQuery 执行器 + cdp sql 分支（按 dbRef 取池
       break;
 ```
 
-- [ ] **Step 2: 加 i18n 键**
+- [x] **Step 2: 加 i18n 键**
 
 `cases.json`（两个 locale 各加一份）：
 
@@ -1570,7 +1570,7 @@ en-US：
 
 `reports.json`（两 locale 各加）：`"sql.summary": "SQL 返回 {{count}} 行"` / `"sql.summary": "SQL returned {{count}} rows"`。
 
-- [ ] **Step 3: StepEditDrawer 加状态与提交归一**
+- [x] **Step 3: StepEditDrawer 加状态与提交归一**
 
 在既有 `queryLimit` / `queryAssertion` 状态之后（约 218 行附近）加：
 
@@ -1603,7 +1603,7 @@ en-US：
       }
 ```
 
-- [ ] **Step 4: 表单块**
+- [x] **Step 4: 表单块**
 
 在 `{kind === 'sendSyslog' && (` 那块**之后**插入：
 
@@ -1646,7 +1646,7 @@ en-US：
 
 补 i18n 键 `addParam`（zh: `"addParam": "+ 参数"` / en: `"addParam": "+ Param"`）。
 
-- [ ] **Step 5: 摘要 + 报告展示**
+- [x] **Step 5: 摘要 + 报告展示**
 
 `apps/web/src/lib/stepSummary.ts` 的 `case 'sendSyslog':` 之后加：
 
@@ -1690,7 +1690,7 @@ function SqlResultCell({ sql }: { sql: SqlStepResult }) {
 
 并在文件顶部的类型 import 里加 `SqlStepResult`，在结果类型注释处（46 行附近）加 `/** sql 步骤的结果（仅 sql 步携带） */ sql?: SqlStepResult;`。
 
-- [ ] **Step 6: 构建 + 提交**
+- [x] **Step 6: 构建 + 提交**
 
 ```bash
 cd packages/shared && pnpm build
@@ -1715,7 +1715,7 @@ git commit -m "feat(web): sql 步骤表单/摘要/报告结果展示"
 - Modify: `apps/api/src/execute/syslogReader.ts`（`EnvSyslogMissing` 消息带 ref）
 - Test: `apps/api/src/execute/envContext.test.ts`、`apps/api/test/sql-query.test.ts` 之外新建 `apps/api/test/observe-log-ref.test.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `apps/api/test/observe-log-ref.test.ts`（不连真 SSH，只测"取哪个连接"的决策）：
 
@@ -1781,12 +1781,12 @@ describe('resolveEnv 命名 syslog', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd apps/api && pnpm vitest run test/observe-log-ref.test.ts src/execute/envContext.test.ts`
 Expected: FAIL —— `env.syslogs` undefined
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 **(a)** `apps/api/src/execute/envContext.ts`：`SyslogCtx` 定义后追加 `export interface SyslogEntry { label: string; ctx: SyslogCtx; isDefault: boolean }`；`EnvCtx` 的 `syslog?: SyslogCtx;` 之后加：
 
@@ -1857,7 +1857,7 @@ Expected: FAIL —— `env.syslogs` undefined
 
 **(d)** `apps/web/src/components/step-form/switchAction.ts` 的 `case 'observeLog':` 补 `syslogRef: ''`。
 
-- [ ] **Step 4: 重编译 + 跑测试**
+- [x] **Step 4: 重编译 + 跑测试**
 
 ```bash
 cd packages/shared && pnpm build
@@ -1865,7 +1865,7 @@ cd ../../apps/api && pnpm vitest run test/observe-log-ref.test.ts src/execute/en
 ```
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add apps/api/src/execute/envContext.ts apps/api/src/execute/cdp.ts packages/shared/src/step-dsl.ts apps/web/src/components/step-form/switchAction.ts apps/api/src/execute/envContext.test.ts apps/api/test/observe-log-ref.test.ts
@@ -1884,7 +1884,7 @@ git commit -m "feat(api): 命名 syslog（label 即 ref）+ observeLog.syslogRef
 
 **背景:** 这两个测试文件 `vi.mock` 了 `aiTask.js` 的常量导出；若 mock 里缺 Task 1 新增的导出，`credentialSource.ts` 会在测试里炸。
 
-- [ ] **Step 1: 先让测试文件跟上**
+- [x] **Step 1: 先让测试文件跟上**
 
 `apps/api/test/pi-verify-case.test.ts` 与 `apps/api/test/pi-solidify-case.test.ts` 的 `vi.mock('../src/execute/aiTask.js', ...)` 工厂里，在现有 `USER_PH/PASSWORD_PH/SECRET_PH` 三行之后补：
 
@@ -1915,12 +1915,12 @@ git commit -m "feat(api): 命名 syslog（label 即 ref）+ observeLog.syslogRef
 
 > 既有 mock 里已有的 `runAiTask`/`mapAiActionsToCompiled` 等保持不动；`credentialSource.ts` 只 import 上面的两个 + 类型（类型在运行时被擦除）。
 
-- [ ] **Step 2: 跑测试确认通过（此刻应仍绿）**
+- [x] **Step 2: 跑测试确认通过（此刻应仍绿）**
 
 Run: `cd apps/api && pnpm vitest run test/pi-verify-case.test.ts test/pi-solidify-case.test.ts test/pi-login-tools.test.ts`
 Expected: PASS
 
-- [ ] **Step 3: verifyCase / solidifyCase 换共享构造**
+- [x] **Step 3: verifyCase / solidifyCase 换共享构造**
 
 `apps/api/src/pi/space/tools/verifyCase.ts:688-693` 与 `apps/api/src/pi/space/tools/solidifyCase.ts:332-337` 的三行 `if (v === USER_PH) ...` 替换为：
 
@@ -1954,7 +1954,7 @@ import { buildCredentialSource, renderWebResourceManifest } from '../../../execu
 
 并删掉原来那两行 `lines.push` 的用户名/密码说明（避免重复）。`solidifyCase.ts` 若也复用了 `buildStepInstruction`，同理改在 `verifyCase.ts` 的 `buildStepInstruction` 里（`solidifyCase.ts:36` 就是从那里 import 的），故只在 `verifyCase.ts` 改一处。
 
-- [ ] **Step 4: login.ts 支持 webRef**
+- [x] **Step 4: login.ts 支持 webRef**
 
 `apps/api/src/pi/space/tools/login.ts`：
 
@@ -1992,12 +1992,12 @@ import { buildCredentialSource, renderWebResourceManifest } from '../../../execu
 
 `get_login_credentials` 的返回体加一行 `webServices: [...envCtx.logins.keys()]`（供模型知道有哪些可选）。
 
-- [ ] **Step 5: 跑测试 + 类型检查**
+- [x] **Step 5: 跑测试 + 类型检查**
 
 Run: `cd apps/api && pnpm vitest run test/pi-verify-case.test.ts test/pi-solidify-case.test.ts test/pi-login-tools.test.ts && pnpm tsc --noEmit -p tsconfig.json`
 Expected: PASS + 无 TS 错
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add apps/api/src/pi/space/tools/verifyCase.ts apps/api/src/pi/space/tools/solidifyCase.ts apps/api/src/pi/space/tools/login.ts apps/api/test/pi-verify-case.test.ts apps/api/test/pi-solidify-case.test.ts
@@ -2036,6 +2036,20 @@ cd ../../apps/web && pnpm build
 ### 4. 安全自查
 
 - 报告页 / warning / LLM 反馈里搜真实密码：任一处出现即回归（`rg 'be_p|front_p' /tmp/report-*.json` 之类的脱敏抽查）。
+
+### 5. 本地回归实跑结果（2026-10-22）
+
+| 门 | 结果 |
+|---|---|
+| `packages/shared` build | ✅ |
+| `packages/shared` test | ⚠️ 6 fail —— **既有基线，非本轮引入**：`77731b0`（2026-10-06）从 `step-dsl.ts` 删掉 `aiStep` kind，却留下 6 条 `aiStep` 测试；本轮只改 `observeLog.syslogRef` 与 `sql` 相关字段，未触碰 `aiStep`。清理需另开提交。 |
+| `apps/api` tsc | ✅ 0 error |
+| `apps/api` vitest 全量 | ✅ 988 pass / 0 断言失败 |
+| `apps/web` build | ✅ |
+
+**全量跑出现 9 个文件"失败"是 testcontainer 资源耗尽，不是回归**：126 个文件各自起一个 PG 容器并行，容器被停/崩导致 setup 阶段 `container stopped/paused`。把这 9 个文件单独重跑 → **209/209 全过**（含全部 `pi-verify-case` / `pi-solidify-case` 用例）。判定回归时须按文件单跑复核。
+
+**提交卫生**：`4dafa2e` 误把并发会话的 `NON_BROWSER_KINDS`（cdp.ts）hunk 带入本轮提交——代码完整无损（工作树与对方测试均通过），仅归属错位。因对方会话在跑，未做 rebase 拆分；待其空闲时 `git rebase -i 8c05208` 拆开。
 
 ## 风险与回滚
 
