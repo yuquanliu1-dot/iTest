@@ -376,3 +376,55 @@ describe('webServices / resolveWebOrigin', () => {
     expect(ctx.webServices.find((w) => w.name === 'secure')!.origin).toBe('https://b.com');
   });
 });
+
+describe('resolveEnv 多 web 凭据', () => {
+  /** 内嵌凭据的 secret 三元组（与 encrypt 输出一致）。 */
+  const credOf = (user: string, pw: string) => {
+    const enc = encrypt(pw);
+    return {
+      user,
+      secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') },
+    };
+  };
+  const twoWebs = () => [
+    { id: 'w-b', environmentId: 'env-1', objectType: 'web', label: '后端', isDefault: false,
+      payload: { name: 'backend', scheme: 'http', host: '10.0.0.1', port: 90, ...credOf('admin', 'pw9') } },
+    { id: 'w-f', environmentId: 'env-1', objectType: 'web', label: '前端', isDefault: true,
+      payload: { name: 'frontend', scheme: 'http', host: '10.0.0.2', port: 1688, ...credOf('guest', 'pw8') } },
+  ];
+
+  it('logins 收齐每个已配凭据的命名 web 服务', async () => {
+    mockTables({ test_environments: [ENV_ROW], environment_objects: twoWebs(), project_versions: [] });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect([...env.logins.keys()].sort()).toEqual(['backend', 'frontend']);
+    expect(env.resolveLogin('backend')?.user).toBe('admin');
+    expect(env.resolveLogin('frontend')?.password).toBe('pw8');
+  });
+
+  it('resolveLogin 无 ref → 默认 web；未知 ref → null（不静默回落默认）', async () => {
+    mockTables({ test_environments: [ENV_ROW], environment_objects: twoWebs(), project_versions: [] });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.resolveLogin()?.user).toBe('guest');       // isDefault=frontend
+    expect(env.resolveLogin('nope')).toBeNull();
+    // 旧字段 login 仍是默认 web 的（既有消费点零改动）
+    expect(env.login?.user).toBe('guest');
+  });
+
+  it('hasCredentials：只反映有无，不泄漏任何值；无名 web 不可按名引用', async () => {
+    const objs = [
+      ...twoWebs(),
+      { id: 'w-x', environmentId: 'env-1', objectType: 'web', label: '无凭据', isDefault: false,
+        payload: { name: 'staging', scheme: 'https', host: '10.0.0.9' } },
+      { id: 'w-n', environmentId: 'env-1', objectType: 'web', label: '无名', isDefault: false,
+        payload: { scheme: 'https', host: '10.0.0.10', ...credOf('u', 'p') } },
+    ];
+    mockTables({ test_environments: [ENV_ROW], environment_objects: objs, project_versions: [] });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.hasCredentials('backend')).toBe(true);
+    expect(env.hasCredentials('staging')).toBe(false);
+    expect(env.hasCredentials('nope')).toBe(false);
+    // 无 payload.name 的对象不进入 logins（不可被引用，与既有语义一致）
+    expect(env.logins.has('')).toBe(false);
+    expect([...env.logins.values()].some((l) => l.user === 'u')).toBe(false);
+  });
+});

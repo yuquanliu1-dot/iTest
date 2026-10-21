@@ -86,6 +86,9 @@ export interface LoginCtx {
   loginUrl: string | null;
 }
 
+/** 环境内每个"已配凭据"的命名 web 服务：name → 凭据。执行期占位符 `__ITEST_USERNAME@name__` 的解析源。 */
+export type WebLogins = Map<string, LoginCtx>;
+
 export interface WebServiceEntry {
   /** payload.name;null=未命名(仅默认服务,不可被用例引用) */
   name: string | null;
@@ -110,6 +113,12 @@ export interface EnvCtx {
   pool?: QueryPool;
   syslog?: SyslogCtx;
   login?: LoginCtx;
+  /** 每个命名 web 服务各自的登录凭据（仅已配 user+secret 的）；无名对象不进此表。 */
+  logins: WebLogins;
+  /** 按 ref 取 web 凭据；ref 空 → 默认 web；该 ref 无凭据 → null（绝不静默回落默认）。 */
+  resolveLogin(ref?: string | null): LoginCtx | null;
+  /** 某 web 服务是否配了凭据（AI 资源清单渲染用，不返回任何值）。 */
+  hasCredentials(ref: string): boolean;
   close(): Promise<void>;
 }
 
@@ -231,8 +240,16 @@ export async function resolveEnv(
     }
   }
 
-  // 环境级登录凭据 = 默认 web 服务内嵌的凭证(pick('web') 与 resolveWebOrigin() 空 ref 同选择逻辑)。
-  // 凭证宿主即默认 web,baseUrl === 其自身 origin,相对 loginUrl 拼接(loginPrepare)天然正确。
+  // 逐个命名 web 收集各自的内嵌凭据（payload.user + secret）；无名对象不进表（不可被引用）。
+  const logins: WebLogins = new Map();
+  for (const o of objects.filter((x) => x.objectType === 'web')) {
+    const p = (o.payload ?? {}) as WebPayload;
+    if (!p.secret?.c || !p.secret?.i || !p.secret?.t || !p.user) continue;
+    const name = typeof p.name === 'string' && p.name.length > 0 ? p.name : null;
+    if (!name) continue;
+    logins.set(name, { user: p.user, password: safeDecrypt(p.secret), loginUrl: p.loginUrl ?? null });
+  }
+  // 兼容旧字段 login = 默认 web 的凭据（pick('web') 与 resolveWebOrigin() 空 ref 同选择逻辑）。
   let loginCfg: EnvCtx['login'];
   const webObj = pick('web');
   if (webObj) {
@@ -279,6 +296,13 @@ export async function resolveEnv(
     pool,
     syslog: syslogCfg,
     login: loginCfg,
+    logins,
+    resolveLogin: (ref?: string | null) => {
+      if (ref) return logins.get(ref) ?? null;
+      const def = webServices.find((w) => w.isDefault) ?? webServices.find((w) => w.name);
+      return (def?.name ? logins.get(def.name) : undefined) ?? null;
+    },
+    hasCredentials: (ref: string) => logins.has(ref),
     async close() {
       if (pool) await pool.end();
     },
