@@ -273,6 +273,8 @@
   "addCondition": "+ Add condition",
   "queryLimitLabel": "limit (1-200)",
   "observeWindowLabel": "Time window (ms, 1000-600000)",
+  "observeSyslogRefLabel": "Log object (empty = env default)",
+  "observeSyslogRefPlaceholder": "Empty uses the environment's default syslog object",
   "observeKeywordsLabel": "Keywords (comma-separated, max 10)",
   "observeFromLineLabel": "Starting line (1-10000)",
   "httpUrlPlaceholder": "https://host/api/path (supports {{col}})",
@@ -428,7 +430,8 @@
       "httpRequest": "{{method}} {{url}}{{arrow}}",
       "sendSyslog": "Send syslog {{protocol}} {{host}}:{{port}} \"{{message}}\"",
       "sql": "SQL {{sql}}",
-      "sqlWithRef": "{{db}}: SQL {{sql}}"
+      "sqlWithRef": "{{db}}: SQL {{sql}}",
+      "observeLogWithRef": "{{ref}}: {{base}}"
     },
     "fieldKind": "Kind: ",
     "fieldLocator": "Locator: ",

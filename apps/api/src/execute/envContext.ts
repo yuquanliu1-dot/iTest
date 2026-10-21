@@ -78,6 +78,13 @@ export interface SyslogCtx {
   password?: string;
 }
 
+/** 一个配置完整的 syslog 对象（label 即执行期的 ref；`(envId,'syslog',label)` 已在 service 层保证唯一）。 */
+export interface SyslogEntry {
+  label: string;
+  ctx: SyslogCtx;
+  isDefault: boolean;
+}
+
 /** 被测系统的登录凭据(0041 起由默认 web 服务对象 payload 派生)。 */
 export interface LoginCtx {
   user: string;
@@ -118,6 +125,10 @@ export interface EnvCtx {
   resolveDb(ref?: string | null): DbEntry | null;
   /** 惰建 + 缓存连接池；未命中 → EnvDbMissing(消息点名 ref)。同名调用返回同一个池。 */
   resolveDbPool(ref?: string | null): Promise<QueryPool>;
+  /** 全部配置完整的 syslog 对象（label 即 ref）。 */
+  syslogs: SyslogEntry[];
+  /** 按 ref 取；ref 空 → isDefault → 最早；未命中 → null（绝不静默回落默认）。 */
+  resolveSyslog(ref?: string | null): SyslogCtx | null;
   syslog?: SyslogCtx;
   login?: LoginCtx;
   /** 每个命名 web 服务各自的登录凭据（仅已配 user+secret 的）；无名对象不进此表。 */
@@ -271,23 +282,31 @@ export async function resolveEnv(
     return poolFor(entry);
   };
 
-  let syslogCfg: EnvCtx['syslog'];
-  const syslogObj = pick('syslog');
-  if (syslogObj) {
-    const p = (syslogObj.payload ?? {}) as SyslogPayload;
-    if (p.host && p.user && p.filePath && p.secret?.c && p.secret?.i && p.secret?.t) {
-      const authType: SyslogCtx['authType'] = p.authType === 'password' ? 'password' : 'key';
-      const secret = safeDecrypt(p.secret);
-      syslogCfg = {
+  // syslog 对象：以 label 为 ref 收集全部配置完整的条目；默认项额外挂到兼容字段 syslog。
+  const syslogs: SyslogEntry[] = [];
+  for (const o of objects.filter((x) => x.objectType === 'syslog')) {
+    const p = (o.payload ?? {}) as SyslogPayload;
+    if (!p.host || !p.user || !p.filePath || !p.secret?.c || !p.secret?.i || !p.secret?.t) continue;
+    const authType: SyslogCtx['authType'] = p.authType === 'password' ? 'password' : 'key';
+    const secret = safeDecrypt(p.secret);
+    syslogs.push({
+      label: o.label,
+      isDefault: o.isDefault,
+      ctx: {
         host: p.host,
         port: p.sshPort ?? 22,
         user: p.user,
         filePath: p.filePath,
         authType,
         ...(authType === 'password' ? { password: secret } : { privateKey: Buffer.from(secret) }),
-      };
-    }
+      },
+    });
   }
+  const resolveSyslogEntry = (ref?: string | null): SyslogEntry | null => {
+    if (ref) return syslogs.find((s) => s.label === ref) ?? null;
+    return syslogs.find((s) => s.isDefault) ?? syslogs[0] ?? null;
+  };
+  const syslogCfg = resolveSyslogEntry()?.ctx;
 
   // 逐个命名 web 收集各自的内嵌凭据（payload.user + secret）；无名对象不进表（不可被引用）。
   const logins: WebLogins = new Map();
@@ -358,6 +377,8 @@ export async function resolveEnv(
       return poolFor(d);
     },
     syslog: syslogCfg,
+    syslogs,
+    resolveSyslog: (ref?: string | null) => resolveSyslogEntry(ref)?.ctx ?? null,
     login: loginCfg,
     logins,
     resolveLogin: (ref?: string | null) => {

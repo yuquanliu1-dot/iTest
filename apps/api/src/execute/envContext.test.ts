@@ -253,6 +253,65 @@ describe('resolveEnv', () => {
     await env.close();
   });
 
+  it('命名 syslog：syslogs 列全部，resolveSyslog 按 label，未命中返回 null', async () => {
+    const encA = encrypt('pw1');
+    const encB = encrypt('pw2');
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [
+        {
+          id: 's-1', environmentId: 'env-1', objectType: 'syslog', label: '主日志机', isDefault: true,
+          payload: {
+            host: 'h1', user: 'u1', sshPort: 22, filePath: '/var/log/a.log', authType: 'password',
+            secret: { c: encA.ciphertext.toString('base64'), i: encA.iv.toString('base64'), t: encA.tag.toString('base64') },
+          },
+        },
+        {
+          id: 's-2', environmentId: 'env-1', objectType: 'syslog', label: '审计机', isDefault: false,
+          payload: {
+            host: 'h2', user: 'u2', sshPort: 2222, filePath: '/var/log/b.log', authType: 'password',
+            secret: { c: encB.ciphertext.toString('base64'), i: encB.iv.toString('base64'), t: encB.tag.toString('base64') },
+          },
+        },
+      ],
+      project_versions: [],
+    });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.syslogs.map((s) => s.label)).toEqual(['主日志机', '审计机']);
+    expect(env.resolveSyslog('审计机')?.host).toBe('h2');
+    expect(env.resolveSyslog()?.host).toBe('h1');
+    // 显式 ref 落空绝不静默回落默认——宁可硬错误也不要连错机器读到别人的日志。
+    expect(env.resolveSyslog('nope')).toBeNull();
+    // 兼容字段 syslog 仍指向默认项
+    expect(env.syslog?.host).toBe('h1');
+    await env.close();
+  });
+
+  it('syslog 缺 secret 的条目不进 syslogs，但不影响其余条目', async () => {
+    const enc = encrypt('pw1');
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [
+        {
+          id: 's-1', environmentId: 'env-1', objectType: 'syslog', label: '完整的', isDefault: true,
+          payload: {
+            host: 'h1', user: 'u1', filePath: '/var/log/a.log', authType: 'password',
+            secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') },
+          },
+        },
+        {
+          id: 's-bad', environmentId: 'env-1', objectType: 'syslog', label: '缺密钥的', isDefault: false,
+          payload: { host: 'h2', user: 'u2', filePath: '/var/log/b.log' },
+        },
+      ],
+      project_versions: [],
+    });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.syslogs.map((s) => s.label)).toEqual(['完整的']);
+    expect(env.resolveSyslog('缺密钥的')).toBeNull();
+    await env.close();
+  });
+
   it('builds login ctx from default web object embedded credential', async () => {
     const enc = encrypt('p@ss');
     mockTables({

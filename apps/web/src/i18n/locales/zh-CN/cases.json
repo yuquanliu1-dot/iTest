@@ -262,6 +262,8 @@
   "addCondition": "+ 增加条件",
   "queryLimitLabel": "limit（1-200）",
   "observeWindowLabel": "时间窗 (ms, 1000-600000)",
+  "observeSyslogRefLabel": "日志对象（留空=环境默认）",
+  "observeSyslogRefPlaceholder": "留空则用环境默认的 syslog 对象",
   "observeKeywordsLabel": "关键字（逗号分隔，最多 10 个）",
   "observeFromLineLabel": "起始行数（1-10000）",
   "httpUrlPlaceholder": "https://host/api/path（支持 {{col}}）",
@@ -412,7 +414,8 @@
       "httpRequest": "{{method}} {{url}}{{arrow}}",
       "sendSyslog": "发 syslog {{protocol}} {{host}}:{{port}}「{{message}}」",
       "sql": "SQL {{sql}}",
-      "sqlWithRef": "{{db}}：SQL {{sql}}"
+      "sqlWithRef": "{{db}}：SQL {{sql}}",
+      "observeLogWithRef": "{{ref}}：{{base}}"
     },
     "fieldKind": "类型：",
     "fieldLocator": "定位：",

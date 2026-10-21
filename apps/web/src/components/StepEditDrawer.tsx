@@ -220,6 +220,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
   );
 
   // observeLog
+  const [observeSyslogRef, setObserveSyslogRef] = useState(String(action.syslogRef ?? ''));
   const [observeWindowMs, setObserveWindowMs] = useState(String(action.windowMs ?? 60000));
   const [observeKeywords, setObserveKeywords] = useState(Array.isArray(action.keywords) ? (action.keywords as string[]).join(', ') : '');
   const [observeFromLine, setObserveFromLine] = useState(String(action.fromLine ?? 200));
@@ -384,6 +385,8 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       else delete next.assertion;
     }
     if (kind === 'observeLog') {
+      if (observeSyslogRef.trim()) next.syslogRef = observeSyslogRef.trim();
+      else delete next.syslogRef;
       next.windowMs = Math.max(1000, Math.min(600000, Number(observeWindowMs) || 60000));
       next.keywords = observeKeywords.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 10);
       next.fromLine = Math.max(1, Math.min(10000, Number(observeFromLine) || 200));
@@ -1069,6 +1072,15 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
 
         {kind === 'observeLog' && (
           <div className="flex flex-col gap-2">
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+              <span>{t('cases:observeSyslogRefLabel')}</span>
+              <input
+                className="input-base input-xs"
+                value={observeSyslogRef}
+                onChange={(e) => setObserveSyslogRef(e.target.value)}
+                placeholder={t('cases:observeSyslogRefPlaceholder')}
+              />
+            </label>
             <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
               <span>{t('cases:observeWindowLabel')}</span>
               <input className="input-base input-xs" type="number" min={1000} max={600000} value={observeWindowMs} onChange={(e) => setObserveWindowMs(e.target.value)} />

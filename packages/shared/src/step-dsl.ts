@@ -195,6 +195,8 @@ export type QueryDbAction = z.infer<typeof QueryDbAction>;
 
 export const ObserveLogAction = z.object({
   kind: z.literal('observeLog'),
+  /** 环境 syslog 对象的 label；缺省 = 环境默认 syslog 对象。 */
+  syslogRef: z.string().min(1).max(64).optional(),
   windowMs: z.number().int().min(1000).max(600000).default(60000),
   keywords: z.array(z.string().min(1).max(200)).max(10).default([]),
   fromLine: z.number().int().min(1).max(10000).default(200),

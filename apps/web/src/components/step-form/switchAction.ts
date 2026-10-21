@@ -79,7 +79,7 @@ export function switchAction(clip: StepClip, to: StepKind): StepClip {
       action = { kind: 'queryDb', table: 'test_cases', where: [], columns: [], limit: 50 };
       break;
     case 'observeLog':
-      action = { kind: 'observeLog', windowMs: 60000, keywords: [], fromLine: 200 };
+      action = { kind: 'observeLog', syslogRef: '', windowMs: 60000, keywords: [], fromLine: 200 };
       break;
     case 'httpRequest':
       action = { kind: 'httpRequest', method: 'GET', url: '', headers: [], timeoutMs: 10000 };

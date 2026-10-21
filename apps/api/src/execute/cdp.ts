@@ -179,6 +179,9 @@ const INTERACTIVE_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', '
 const CAPTCHA_RETRY_ROUNDS = 2;
 /** 稳定性检查不过时可尝试 DOM 降级的动作 */
 const DOM_FALLBACK_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select'];
+/** 非浏览器步骤：不经 Playwright，直接发协议请求/查数据。AI 降级（浏览器内临场执行）对它们
+ *  结构上无解，故 AI 降级路径跳过，避免白烧 LLM 轮次。 */
+const NON_BROWSER_KINDS: ReadonlySet<string> = new Set(['httpRequest', 'queryDb', 'sql', 'observeLog', 'sendSyslog']);
 
 /** DOM 降级：元素不稳定时绕过 playwright 直接在页面里派发事件。仅支持 click/fill/check/select。 */
 async function tryDomFallback(action: StepAction, opts: DispatchOpts): Promise<{ ok: boolean; error?: string }> {
@@ -664,11 +667,23 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       return;
     }
     case 'observeLog': {
+      const a = action as StepAction & { kind: 'observeLog' };
       const envCtx = opts.ctx.envCtx;
-      if (!envCtx?.syslog) {
-        const e = new Error('env syslog missing'); e.name = 'EnvSyslogMissing'; throw e;
+      // 显式 syslogRef 落空即硬错误，绝不静默回落默认——连错机器会读到别人的日志，
+      // 断言误判比直接失败更难排查。
+      const conn = envCtx?.resolveSyslog(a.syslogRef ?? null);
+      if (!conn) {
+        const ref = a.syslogRef ?? null;
+        const available = envCtx?.syslogs.map((s) => s.label).join('、') || '(无)';
+        const e = new Error(
+          `env-syslog-missing: ${ref
+            ? `环境「${envCtx?.envName ?? ''}」不存在名为 ${ref} 的 syslog 对象，可用:${available}`
+            : '当前环境未配置任何 syslog 对象'}`
+        );
+        e.name = 'EnvSyslogMissing';
+        throw e;
       }
-      const result = await runObserveLog({ env: envCtx.syslog, action, since: new Date() });
+      const result = await runObserveLog({ env: conn, action: a, since: new Date() });
       if (result.assertion && !result.assertion.matched) {
         if (opts.logSink) opts.logSink.current = result;
         const e = new Error('observeLog assertion failed'); e.name = 'LogAssertionFailed'; throw e;
@@ -1118,6 +1133,10 @@ async function runStepsInContext(
         fallback.locatorFailed
         && inst
         && failedAction?.kind !== 'aiTask'
+        // 非浏览器步骤（HTTP / DB / syslog）不降级：AI 只能驱动浏览器，结构上无法完成。
+        // 例：Host 头注入探针的 httpRequest，浏览器禁止脚本设置受保护头，AI 必然放弃
+        // （prod228 报告 15dd42d9 白烧 44.5s / 1 次调用零收益）。
+        && !NON_BROWSER_KINDS.has(failedAction?.kind as string)
         && !aiTriedInCompileFallback
         && !(e instanceof Error && (e.name === 'EnvMissing' || e.name === 'SecretMissing'))
       ) {

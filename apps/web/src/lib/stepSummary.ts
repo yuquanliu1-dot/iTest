@@ -139,9 +139,11 @@ function actionSummary(a: KnownAction, t: TFunction): string {
       return t('cases:stepSummary.act.queryDb', { table: str(a.table) });
     case 'observeLog': {
       const kw = Array.isArray(a.keywords) ? (a.keywords as unknown[]).map((v) => str(v)).filter(Boolean) : [];
-      return kw.length
+      const base = kw.length
         ? t('cases:stepSummary.act.observeLogWithKw', { keywords: kw.join('/') })
         : t('cases:stepSummary.act.observeLog');
+      const ref = str(a.syslogRef);
+      return ref ? t('cases:stepSummary.act.observeLogWithRef', { ref, base }) : base;
     }
     case 'httpRequest': {
       const saveAs = a.saveAs as { varName?: unknown } | undefined;
