@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { Page } from 'playwright-core';
 import type { LLMClient, LLMResult } from '../src/agent/llm-client.js';
 
@@ -322,6 +324,41 @@ describe('回放 AI 降级 — 机械执行失败（任意失败原因）', () =
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.failureReason).toBe('LocatorAllFailed');
     expect(results[0]!.degraded).toBeUndefined();
+  });
+
+  it('非浏览器步骤（httpRequest）失败：不降级，LLM 零调用', async () => {
+    // prod228 报告 15dd42d9：Host 头注入探针的 httpRequest 断言失败（200≠400）触发降级，
+    // 但 AI 只能驱动浏览器、无法设置受保护头 → 结构上不可能完成，白烧 44.5s/1 次调用零收益。
+    // 断言 httpRequest 失败不进降级路径：LLM 零调用，失败原因保持 HttpRequestAssertionFailed。
+    const srv = http.createServer((_req, res) => { res.writeHead(200); res.end('ok'); });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/`;
+    try {
+      const { llm, calls } = makeMockLlm([{ done: true, summary: '不应被调用' }]);
+      const results = await executeCaseReal(
+        '00000000-0000-0000-0000-000000000122',
+        [{
+          order: 1,
+          id: 's-1',
+          instruction: '发送 GET 请求，Host 头注入 SQL 注入探针，断言被 400 拒绝',
+          compiled: [{
+            kind: 'httpRequest',
+            method: 'GET',
+            url,
+            headers: [{ key: 'Host', value: "' OR '1'='1" }],
+            timeoutMs: 5000,
+            assertion: { status: 400, match: 'contains', expected: '' },
+          }],
+        }],
+        { reportId: 'r-lf-http', aiFallback: ON, llmClient: llm },
+      );
+      expect(results[0]!.status).toBe('failed');
+      expect(results[0]!.failureReason).toBe('HttpRequestAssertionFailed');
+      expect(results[0]!.degraded).toBeUndefined();
+      expect(calls).toHaveLength(0);
+    } finally {
+      await new Promise<void>((r) => srv.close(() => r()));
+    }
   });
 });
 

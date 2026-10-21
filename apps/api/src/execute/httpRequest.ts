@@ -1,6 +1,9 @@
 import type { HttpRequestAction, DbAssertionMatch, HttpStepResult } from '@itest/shared';
 import { substituteVars } from '@itest/shared';
 import type { Page } from 'playwright-core';
+import http from 'node:http';
+import https from 'node:https';
+import zlib from 'node:zlib';
 
 export class HttpRequestError extends Error {
   constructor(msg: string) { super(msg); this.name = 'HttpRequestError'; }
@@ -62,6 +65,124 @@ function compareBody(bodyText: string, match: DbAssertionMatch, expected: string
   return false;
 }
 
+/**
+ * undici fetch 默认发送的请求头（实测抓 raw headers 得到）。node:http 只发 Host+Connection，
+ * 直接换客户端会让依赖 Accept / Accept-Encoding 内容协商的被测接口返回 HTML 而非 JSON，
+ * 存量 httpRequest 用例会静默回归。用户在 DSL 里显式写了同名头时不覆盖（显式优先）。
+ * Host/Connection 由 node:http 自行推导且可被用户覆盖，不在此列。
+ */
+const DEFAULT_REQUEST_HEADERS: Readonly<Record<string, string>> = {
+  accept: '*/*',
+  'accept-language': '*',
+  'sec-fetch-mode': 'cors',
+  'user-agent': 'node',
+  'accept-encoding': 'gzip, deflate',
+};
+
+interface RawResponse {
+  status: number;
+  statusText: string;
+  /** node:http 的多值头是数组（set-cookie 等），这里原样保留。 */
+  headers: http.IncomingHttpHeaders;
+  body: string;
+}
+
+/** 解压响应体：node:http 不自动解，fetch 会。保持「断言作用于明文 body」的既有语义。
+ *  deflate 先按 zlib 包装试、失败再按裸 deflate 试（部分服务端发裸流）。 */
+function decompress(buf: Buffer, encoding: string | undefined): string {
+  const enc = (encoding ?? '').toLowerCase();
+  if (enc === '' || enc === 'identity') return buf.toString('utf8');
+  if (enc === 'gzip' || enc === 'x-gzip') return zlib.gunzipSync(buf).toString('utf8');
+  if (enc === 'deflate') {
+    try {
+      return zlib.inflateSync(buf).toString('utf8');
+    } catch {
+      return zlib.inflateRawSync(buf).toString('utf8');
+    }
+  }
+  if (enc === 'br') return zlib.brotliDecompressSync(buf).toString('utf8');
+  // 未知编码（zstd 等）：node:zlib 不支持，原样返回字节的 utf8 视图，交由断言判定不匹配。
+  return buf.toString('utf8');
+}
+
+/**
+ * 底层请求：node:http / node:https 直发。
+ *
+ * 为什么不用 fetch（2026-10-22）：undici 会静默丢弃受保护头——Host 被替换成连接的真实 host，
+ * Connection / Transfer-Encoding / Keep-Alive 直接抛 "invalid xxx header"。安全测试用例靠
+ * `Host: <注入探针>` 触发 SUT 的 4xx，探针根本送不出去 → 断言恒不命中、假失败
+ * （prod228 报告 15dd42d9：期望 400 实际 200 + SPA 外壳页）。node:http 原样透传这些头。
+ *
+ * redirect：node:http 本就不跟随重定向，与 fetch 的 redirect:'manual' 语义一致。
+ */
+function rawRequest(opts: {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+  timeoutMs: number;
+}): Promise<RawResponse> {
+  const u = new URL(opts.url);
+  const lib = u.protocol === 'https:' ? https : http;
+  return new Promise<RawResponse>((resolve, reject) => {
+    // 总时长预算：从建连开始计时，覆盖「建连 + 等响应头 + 读 body」全程。
+    // 不能用 req.setTimeout——那是 socket 空闲超时（每个数据块都会重置计时器），
+    // 服务端持续慢慢吐数据时它永不触发，而原 AbortController 是硬墙。
+    // 与 fetch 的 abort_signal 语义对齐：到点即判超时，不等 body。
+    // 计时器句柄放在 state 上（而非 let 变量）：settle 闭包要读它，
+    // 但定时器在 request 建好之后才创建，用 let 会踩 TDZ。
+    const state: { timer?: NodeJS.Timeout } = {};
+    const settle = <T>(fn: (v: T) => void) => (v: T) => {
+      if (state.timer) clearTimeout(state.timer);
+      fn(v);
+    };
+    const done = settle(resolve);
+    const fail = settle(reject);
+
+    const req = lib.request(
+      {
+        protocol: u.protocol,
+        hostname: u.hostname,
+        port: u.port || (u.protocol === 'https:' ? 443 : 80),
+        // path 只取 pathname+search，避免把 hash 带上；URL 编码已由 URL 规范化。
+        path: `${u.pathname}${u.search}`,
+        method: opts.method,
+        headers: opts.headers,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          try {
+            done({
+              status: res.statusCode ?? 0,
+              statusText: res.statusMessage ?? '',
+              headers: res.headers,
+              body: decompress(Buffer.concat(chunks), res.headers['content-encoding']),
+            });
+          } catch (e) {
+            fail(e instanceof Error ? e : new Error(String(e)));
+          }
+        });
+        res.on('error', (e) => fail(e instanceof Error ? e : new Error(String(e))));
+      },
+    );
+    state.timer = setTimeout(() => {
+      req.destroy();
+      // 已 resolve/reject 过则 fail 无副作用（promise 吞掉第二次 settle）。
+      reject(new RawTimeout());
+    }, opts.timeoutMs);
+    req.on('error', fail);
+    if (opts.body !== undefined) req.write(opts.body);
+    req.end();
+  });
+}
+
+/** 超时哨兵：node 的 socket 超时不带可辨识标记，用独立类让调用方与网络错误区分开。 */
+class RawTimeout extends Error {
+  constructor() { super('timeout'); this.name = 'RawTimeout'; }
+}
+
 export async function runHttpRequest(opts: {
   action: HttpRequestAction;
   page: Page;
@@ -91,40 +212,47 @@ export async function runHttpRequest(opts: {
 
   const body = action.body !== undefined ? sub(action.body) : undefined;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), action.timeoutMs);
+  // 未显式指定的默认头按 undici 原样补齐（见 DEFAULT_REQUEST_HEADERS 注释）。
+  // 用户显式写的头优先：默认头都是小写，故把用户头一律降为小写覆盖默认
+  // （node:http 按 key 名字匹配，小写 host / connection 同样被认并原样透传）。
+  const sendHeaders: Record<string, string> = { ...DEFAULT_REQUEST_HEADERS };
+  for (const [k, v] of Object.entries(headers)) {
+    sendHeaders[k.toLowerCase()] = v;
+  }
+  if (body !== undefined && !Object.keys(sendHeaders).some((k) => k.toLowerCase() === 'content-length')) {
+    sendHeaders['content-length'] = String(Buffer.byteLength(body));
+  }
+
   const t0 = Date.now();
-  let res: Response;
+  let raw: RawResponse;
   try {
-    res = await fetch(url, {
+    raw = await rawRequest({
+      url,
       method: action.method,
-      headers,
-      body: body !== undefined && action.method !== 'GET' && action.method !== 'HEAD' ? body : undefined,
-      signal: controller.signal,
-      redirect: 'manual',
+      headers: sendHeaders,
+      ...(body !== undefined && action.method !== 'GET' && action.method !== 'HEAD' ? { body } : {}),
+      timeoutMs: action.timeoutMs,
     });
   } catch (e) {
     const durationMs = Date.now() - t0;
-    clearTimeout(timer);
-    if (e instanceof Error && e.name === 'AbortError') {
+    if (e instanceof RawTimeout) {
       throw new HttpRequestTimeout(`HTTP ${action.method} ${url} 超时（${action.timeoutMs}ms，实际 ${durationMs}ms）`);
     }
     throw new HttpRequestError(`HTTP ${action.method} ${url} 失败: ${e instanceof Error ? e.message : String(e)}`);
   }
-  clearTimeout(timer);
   const durationMs = Date.now() - t0;
 
-  let bodyText = '';
-  if (action.method !== 'HEAD') {
-    try { bodyText = await res.text(); } catch (e) {
-      throw new HttpRequestError(`HTTP ${action.method} ${url} 读取响应体失败: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
+  const bodyText = action.method === 'HEAD' ? '' : raw.body;
   const bodyTruncated = bodyText.length > BODY_MAX;
   const bodyForReport = bodyTruncated ? bodyText.slice(0, BODY_MAX) : bodyText;
 
+  // node 的多值头（set-cookie 等）是数组；摊平成与 fetch 一致的字符串形态，
+  // 多值以 ", " 连接（与 undici Headers.forEach 行为相同）。
   const responseHeaders: Record<string, string> = {};
-  res.headers.forEach((v, k) => { responseHeaders[k] = v; });
+  for (const [k, v] of Object.entries(raw.headers)) {
+    if (v === undefined) continue;
+    responseHeaders[k] = Array.isArray(v) ? v.join(', ') : v;
+  }
 
   const result: HttpStepResult = {
     request: {
@@ -134,8 +262,8 @@ export async function runHttpRequest(opts: {
       ...(body !== undefined ? { bodyPreview: body.length > BODY_MAX ? body.slice(0, BODY_MAX) : body } : {}),
     },
     response: {
-      status: res.status,
-      statusText: res.statusText,
+      status: raw.status,
+      statusText: raw.statusText,
       headers: responseHeaders,
       bodyText: bodyForReport,
       durationMs,
@@ -145,7 +273,7 @@ export async function runHttpRequest(opts: {
   // 断言：status 精确比对 + body 文本匹配，二者都设置则都须通过
   const a = action.assertion;
   if (a && (a.status !== undefined || a.expected !== undefined)) {
-    const statusOk = a.status === undefined || res.status === a.status;
+    const statusOk = a.status === undefined || raw.status === a.status;
     const bodyOk = a.expected === undefined || compareBody(bodyText, a.match ?? 'contains', a.expected);
     result.assertion = {
       matched: statusOk && bodyOk,
@@ -159,7 +287,7 @@ export async function runHttpRequest(opts: {
     const { varName, from, path } = action.saveAs;
     let value: string;
     if (from === 'status') {
-      value = String(res.status);
+      value = String(raw.status);
     } else if (path) {
       let parsed: unknown;
       try { parsed = JSON.parse(bodyText); } catch {

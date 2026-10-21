@@ -1,5 +1,16 @@
-import { describe, it, expect } from 'vitest';
-import { resolveDotPath, HttpRequestSaveAsFailed } from '../src/execute/httpRequest.js';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import http from 'node:http';
+import zlib from 'node:zlib';
+import type { AddressInfo } from 'node:net';
+import type { Page } from 'playwright-core';
+import type { HttpRequestAction } from '@itest/shared';
+import {
+  runHttpRequest,
+  resolveDotPath,
+  HttpRequestSaveAsFailed,
+  HttpRequestTimeout,
+  HttpRequestError,
+} from '../src/execute/httpRequest.js';
 import { buildVariableReport } from '../src/lib/variable-report.js';
 import type { StepAction } from '@itest/shared';
 
@@ -42,5 +53,192 @@ describe('buildVariableReport × httpRequest', () => {
     ];
     const report = buildVariableReport(steps);
     expect(report.undefined.map((u) => u.name)).toEqual(['apiBase']);
+  });
+});
+
+/**
+ * 传输层行为（loopback 真实 server）。
+ *
+ * 核心回归：undici fetch 会静默丢弃受保护头（Host 被换成连接的真实 host），安全测试用例靠
+ * `Host: <注入探针>` 触发 SUT 的 4xx，探针送不出去 → 断言恒不命中、假失败
+ * （prod228 报告 15dd42d9：期望 400 实际 200）。换 node:http 后受保护头原样送达。
+ */
+describe('runHttpRequest 传输层（node:http）', () => {
+  /** 记录收到的原始头，供断言「头真的发到了服务端」。 */
+  let seen: { raw: string[]; method: string; body: string } | null = null;
+  let server: http.Server;
+  let base: string;
+
+  beforeAll(async () => {
+    server = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        seen = { raw: req.rawHeaders, method: req.method ?? '', body: Buffer.concat(chunks).toString('utf8') };
+        const url = req.url ?? '/';
+        if (url === '/gzip') {
+          res.writeHead(200, { 'content-type': 'text/plain', 'content-encoding': 'gzip' });
+          res.end(zlib.gzipSync(Buffer.from('GZIPPED-BODY')));
+          return;
+        }
+        if (url === '/multi-cookie') {
+          res.setHeader('set-cookie', ['a=1; Path=/', 'b=2; Path=/']);
+          res.writeHead(200, { 'content-type': 'text/plain' });
+          res.end('ok');
+          return;
+        }
+        if (url === '/status400') {
+          res.writeHead(400, { 'content-type': 'text/plain' });
+          res.end('rejected');
+          return;
+        }
+        if (url === '/json') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ data: { id: 'a1' } }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('ok');
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+
+  const stubPage = { context: () => ({ cookies: async () => [] }) } as unknown as Page;
+
+  function action(partial: Partial<HttpRequestAction> & { url: string }): HttpRequestAction {
+    return {
+      kind: 'httpRequest',
+      method: 'GET',
+      headers: [],
+      timeoutMs: 5000,
+      ...partial,
+    } as HttpRequestAction;
+  }
+
+  it('Host 头原样送达服务端（fetch 会被静默丢弃）', async () => {
+    const r = await runHttpRequest({
+      action: action({ url: `${base}/`, headers: [{ key: 'Host', value: "' OR '1'='1" }] }),
+      page: stubPage,
+      vars: {},
+    });
+    // 服务端收到的 host 就是注入值，不是 127.0.0.1
+    const hostIdx = seen!.raw.findIndex((h) => h.toLowerCase() === 'host');
+    expect(seen!.raw[hostIdx + 1]).toBe("' OR '1'='1");
+    expect(r.response.status).toBe(200);
+  });
+
+  it('未显式指定时补齐 undici 默认头（存量用例的内容协商行为不变）', async () => {
+    await runHttpRequest({ action: action({ url: `${base}/` }), page: stubPage, vars: {} });
+    const lower = seen!.raw.map((h) => h.toLowerCase());
+    expect(lower).toContain('accept');
+    expect(lower).toContain('accept-encoding');
+    expect(lower).toContain('user-agent');
+  });
+
+  it('用户显式写的头覆盖同名默认头', async () => {
+    await runHttpRequest({
+      action: action({ url: `${base}/`, headers: [{ key: 'Accept', value: 'application/json' }] }),
+      page: stubPage,
+      vars: {},
+    });
+    const acceptIdx = seen!.raw.findIndex((h) => h.toLowerCase() === 'accept');
+    expect(seen!.raw[acceptIdx + 1]).toBe('application/json');
+  });
+
+  it('gzip 响应体解压为明文（断言作用于明文）', async () => {
+    const r = await runHttpRequest({ action: action({ url: `${base}/gzip` }), page: stubPage, vars: {} });
+    expect(r.response.bodyText).toBe('GZIPPED-BODY');
+  });
+
+  it('多值 set-cookie 摊平成字符串形态', async () => {
+    const r = await runHttpRequest({ action: action({ url: `${base}/multi-cookie` }), page: stubPage, vars: {} });
+    expect(r.response.headers['set-cookie']).toBe('a=1; Path=/, b=2; Path=/');
+  });
+
+  it('status 断言不命中时 assertion.matched=false 且状态码照实返回', async () => {
+    const r = await runHttpRequest({
+      action: action({ url: `${base}/status400`, assertion: { status: 200, match: 'contains', expected: 'ok' } }),
+      page: stubPage,
+      vars: {},
+    });
+    expect(r.response.status).toBe(400);
+    expect(r.assertion?.matched).toBe(false);
+    expect(r.assertion?.statusExpected).toBe(200);
+  });
+
+  it('status 断言命中', async () => {
+    const r = await runHttpRequest({
+      action: action({ url: `${base}/status400`, assertion: { status: 400, match: 'contains', expected: 'rejected' } }),
+      page: stubPage,
+      vars: {},
+    });
+    expect(r.assertion?.matched).toBe(true);
+  });
+
+  it('POST 请求体按 content-length 送达', async () => {
+    await runHttpRequest({
+      action: action({ method: 'POST', url: `${base}/`, body: '{"a":1}' }),
+      page: stubPage,
+      vars: {},
+    });
+    expect(seen!.method).toBe('POST');
+    expect(seen!.body).toBe('{"a":1}');
+  });
+
+  it('saveAs 从 JSON body 按 path 提取', async () => {
+    const r = await runHttpRequest({
+      action: action({ url: `${base}/json`, saveAs: { varName: 'userId', from: 'body', path: 'data.id' } }),
+      page: stubPage,
+      vars: {},
+    });
+    expect(r.saved).toEqual({ varName: 'userId', value: 'a1' });
+  });
+
+  it('连接被拒归为 HttpRequestError', async () => {
+    await expect(
+      runHttpRequest({ action: action({ url: 'http://127.0.0.1:1/' }), page: stubPage, vars: {} }),
+    ).rejects.toBeInstanceOf(HttpRequestError);
+  });
+
+  it('超时归为 HttpRequestTimeout', async () => {
+    const slow = http.createServer(() => {
+      // 不响应：触发 socket 超时
+    });
+    await new Promise<void>((r) => slow.listen(0, '127.0.0.1', r));
+    const slowUrl = `http://127.0.0.1:${(slow.address() as AddressInfo).port}/`;
+    try {
+      await expect(
+        runHttpRequest({ action: action({ url: slowUrl, timeoutMs: 1000 }), page: stubPage, vars: {} }),
+      ).rejects.toBeInstanceOf(HttpRequestTimeout);
+    } finally {
+      slow.closeAllConnections?.();
+      await new Promise<void>((r) => slow.close(() => r()));
+    }
+  });
+
+  it('总时长预算：服务端持续慢速吐 body 也会超时（socket 空闲超时不适用）', async () => {
+    // 回归点：req.setTimeout 是「空闲」超时，每个数据块都会重置计时器——
+    // 服务端每 200ms 吐一点就能永远不触发，而原 AbortController 是硬墙。
+    const dribble = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      const t = setInterval(() => res.write('x'), 200);
+      res.on('close', () => clearInterval(t));
+    });
+    await new Promise<void>((r) => dribble.listen(0, '127.0.0.1', r));
+    const dribbleUrl = `http://127.0.0.1:${(dribble.address() as AddressInfo).port}/`;
+    try {
+      await expect(
+        runHttpRequest({ action: action({ url: dribbleUrl, timeoutMs: 1000 }), page: stubPage, vars: {} }),
+      ).rejects.toBeInstanceOf(HttpRequestTimeout);
+    } finally {
+      dribble.closeAllConnections?.();
+      await new Promise<void>((r) => dribble.close(() => r()));
+    }
   });
 });
