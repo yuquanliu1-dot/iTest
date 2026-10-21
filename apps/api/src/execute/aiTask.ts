@@ -2,6 +2,7 @@ import type { Page } from 'playwright-core';
 import type { LLMClient, LLMMessage } from '../agent/llm-client.js';
 import { tryParseJson } from '../agent/llm-client.js';
 import { aiLangFrom, type AiLang } from '../agent/langDirective.js';
+import { VAR_NAME_RE } from '@itest/shared';
 import type { AiUsageAddend } from './aiUsage.js';
 import { logger } from '../logger.js';
 import { annotateAction, clearAnnotation } from './liveView.js';
@@ -120,30 +121,60 @@ export const PASSWORD_PH = '__ITEST_PASSWORD__';
 export const SECRET_PH = '__ITEST_STEP_SECRET__';
 
 // ── 凭据占位符识别与替换（AI 相 fill 值统一协议）──────────────────────────────
-type CredentialKind = 'user' | 'password' | 'secret';
+export type CredentialKind = 'user' | 'password' | 'secret';
 
-/** 凭据占位符识别（fill 值用）：接受精确哨兵 __ITEST_USERNAME__ 与模型常见的花括号变体
- *  {{ITEST_USERNAME}} / {{__ITEST_USERNAME__}}（2026-10-21 prod228 实测模型会输出后者，
- *  平台此前不认 → 字面量被敲进登录表单 → 登录必败）。裸名（无哨兵/花括号包裹）不认，
- *  避免把普通文本误判成凭据。 */
-export function credentialPlaceholderKind(raw: string): CredentialKind | null {
-  if (typeof raw !== 'string') return null;
-  const t = raw.trim();
-  const byName = (s: string): CredentialKind | null => {
-    const up = s.toUpperCase();
-    if (up === 'ITEST_USERNAME') return 'user';
-    if (up === 'ITEST_PASSWORD') return 'password';
-    if (up === 'ITEST_STEP_SECRET') return 'secret';
-    return null;
-  };
-  if (t.startsWith('{{') && t.endsWith('}}')) return byName(t.slice(2, -2).trim().replace(/^_+|_+$/g, ''));
-  if (t.startsWith('__') && t.endsWith('__')) return byName(t.slice(2, -2));
-  return null;
+/** 解析结果：kind + 归属 web 服务 name（null = 未指定，走三级默认链）。 */
+export interface ParsedCredential { kind: CredentialKind; ref: string | null }
+
+/** @ref 段合法性：与 shared 的 VAR_NAME_RE 同口径（字母/数字/下划线，字母或下划线开头，≤64）。 */
+export function isValidCredentialRef(ref: string): boolean {
+  return typeof ref === 'string' && ref.length > 0 && ref.length <= 64 && VAR_NAME_RE.test(ref);
 }
 
-const CREDENTIAL_REF_RE = /(?:\{\{\s*)?_{0,2}ITEST_(?:USERNAME|PASSWORD|STEP_SECRET)_{0,2}(?:\s*\}\})?/;
+const KIND_BY_NAME: Record<string, CredentialKind> = {
+  ITEST_USERNAME: 'user',
+  ITEST_PASSWORD: 'password',
+  ITEST_STEP_SECRET: 'secret',
+};
 
-/** 自由文本是否引用了凭据占位符（任意形态：哨兵 / 花括号变体 / 裸名）。
+/**
+ * 解析凭据占位符：__ITEST_USERNAME@backend__ / {{ITEST_USERNAME@backend}} /
+ * {{__ITEST_USERNAME@backend__}} / 无 ref 的既有形态。
+ * 裸名（无哨兵/花括号包裹）不认，避免把普通文本误判成凭据；
+ * ref 段非法则整个占位符判否，绝不退化成"无 ref"（那会静默取到默认 web 的账号）。
+ * secret 与 web 无关（步骤级密文），其 @ 段被忽略。
+ */
+export function parseCredentialPlaceholder(raw: string): ParsedCredential | null {
+  if (typeof raw !== 'string') return null;
+  const t = raw.trim();
+  let inner: string;
+  if (t.startsWith('{{') && t.endsWith('}}')) inner = t.slice(2, -2).trim();
+  else if (t.startsWith('__') && t.endsWith('__')) inner = t.slice(2, -2);
+  else return null;
+  const at = inner.indexOf('@');
+  const head = (at >= 0 ? inner.slice(0, at) : inner).replace(/^_+|_+$/g, '');
+  const ref = at >= 0 ? inner.slice(at + 1).replace(/^_+|_+$/g, '') : null;
+  const kind = KIND_BY_NAME[head.toUpperCase()];
+  if (!kind) return null;
+  if (ref === null || kind === 'secret') return { kind, ref: null };
+  return isValidCredentialRef(ref) ? { kind, ref } : null;
+}
+
+/** 只要 kind 的便捷包装（固化判定等只需知道"是不是凭据"）。 */
+export function credentialPlaceholderKind(raw: string): CredentialKind | null {
+  return parseCredentialPlaceholder(raw)?.kind ?? null;
+}
+
+/** 渲染占位符，供提示词拼装（避免各处硬编码字面量拼错）。 */
+export function credentialPlaceholder(kind: CredentialKind, ref?: string | null): string {
+  const base = kind === 'user' ? USER_PH : kind === 'password' ? PASSWORD_PH : SECRET_PH;
+  if (!ref || kind === 'secret') return base;
+  return `${base.slice(0, -2)}@${ref}__`;
+}
+
+const CREDENTIAL_REF_RE = /(?:\{\{\s*)?_{0,2}ITEST_(?:USERNAME|PASSWORD|STEP_SECRET)_{0,2}(?:@[A-Za-z_][A-Za-z0-9_]*)?(?:\s*\}\})?/;
+
+/** 自由文本是否引用了凭据占位符（任意形态：哨兵 / 花括号 / 裸名 / 带 @ref）。
  *  用途：substituteVars 的 missing 过滤（凭据不来自数据集 vars）+ 环境凭据前置检查。 */
 export function referencesCredential(text: string): boolean {
   return CREDENTIAL_REF_RE.test(text);

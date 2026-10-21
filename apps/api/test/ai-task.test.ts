@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Page } from 'playwright-core';
 import type { LLMClient, LLMResult } from '../src/agent/llm-client.js';
-import { runAiTask, solveCaptchaOnce, credentialPlaceholderKind, makeCredentialValueSub, referencesCredential } from '../src/execute/aiTask.js';
+import { runAiTask, solveCaptchaOnce, credentialPlaceholderKind, makeCredentialValueSub, referencesCredential, parseCredentialPlaceholder, credentialPlaceholder, isValidCredentialRef } from '../src/execute/aiTask.js';
 
 /** 记录调用顺序的桩 Page：screenshot/evaluate/url 走默认值，locator 动作全部记录。 */
 function makeStubPage() {
@@ -330,5 +330,48 @@ describe('凭据占位符协议（credentialPlaceholderKind / makeCredentialValu
       runAiTask(page, '登录', llm, false, { valueSub: makeCredentialValueSub({ user: null, password: null, secret: null }) }),
     ).rejects.toThrow(/env-missing/);
     expect(requests).toHaveLength(1);
+  });
+});
+
+describe('凭据占位符 @ref 归属协议', () => {
+  it('parseCredentialPlaceholder：@ref 形态解析出归属服务', () => {
+    expect(parseCredentialPlaceholder('__ITEST_USERNAME@backend__')).toEqual({ kind: 'user', ref: 'backend' });
+    expect(parseCredentialPlaceholder('__ITEST_PASSWORD@front_end1__')).toEqual({ kind: 'password', ref: 'front_end1' });
+    expect(parseCredentialPlaceholder('{{ITEST_USERNAME@backend}}')).toEqual({ kind: 'user', ref: 'backend' });
+    expect(parseCredentialPlaceholder('{{__ITEST_USERNAME@backend__}}')).toEqual({ kind: 'user', ref: 'backend' });
+    // 无 ref 形态仍解析，ref 为 null
+    expect(parseCredentialPlaceholder('__ITEST_USERNAME__')).toEqual({ kind: 'user', ref: null });
+    expect(parseCredentialPlaceholder('{{ITEST_PASSWORD}}')).toEqual({ kind: 'password', ref: null });
+    // ref 非法（数字开头 / 含 @ / 含空格）→ 整个占位符不认，绝不退化成无 ref
+    expect(parseCredentialPlaceholder('__ITEST_USERNAME@1bad__')).toBeNull();
+    expect(parseCredentialPlaceholder('__ITEST_USERNAME@a@b__')).toBeNull();
+    expect(parseCredentialPlaceholder('__ITEST_USERNAME@ bad __')).toBeNull();
+    // secret 不解析 ref（敏感密文是步骤级，与 web 无关）：@段被忽略
+    expect(parseCredentialPlaceholder('__ITEST_STEP_SECRET@x__')).toEqual({ kind: 'secret', ref: null });
+    // 裸名 / 普通文本仍不认
+    expect(parseCredentialPlaceholder('ITEST_USERNAME')).toBeNull();
+    expect(parseCredentialPlaceholder('普通文本')).toBeNull();
+    expect(parseCredentialPlaceholder('')).toBeNull();
+  });
+
+  it('credentialPlaceholder / isValidCredentialRef 往返一致', () => {
+    expect(credentialPlaceholder('user', 'backend')).toBe('__ITEST_USERNAME@backend__');
+    expect(credentialPlaceholder('password', null)).toBe('__ITEST_PASSWORD__');
+    expect(credentialPlaceholder('secret')).toBe('__ITEST_STEP_SECRET__');
+    for (const ref of ['backend', 'front_end1', '_x']) expect(isValidCredentialRef(ref)).toBe(true);
+    for (const ref of ['', '1bad', 'a-b', 'a b', 'a'.repeat(65)]) expect(isValidCredentialRef(ref)).toBe(false);
+    // 渲染出来的占位符一定解析得回同一个 ref
+    for (const kind of ['user', 'password'] as const) {
+      for (const ref of ['backend', 'admin_web']) {
+        expect(parseCredentialPlaceholder(credentialPlaceholder(kind, ref))).toEqual({ kind, ref });
+      }
+    }
+  });
+
+  it('referencesCredential：@ref 形态也算引用', () => {
+    expect(referencesCredential('__ITEST_USERNAME@backend__')).toBe(true);
+    expect(referencesCredential('在 backend 登录页填写 __ITEST_USERNAME@backend__')).toBe(true);
+    expect(referencesCredential('{{ITEST_PASSWORD@front}}')).toBe(true);
+    expect(referencesCredential('点击保存')).toBe(false);
   });
 });
