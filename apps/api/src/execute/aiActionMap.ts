@@ -53,10 +53,11 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
         break;
       }
       case 'fill': {
-        // 任意形态的凭据占位符（哨兵 / 花括号变体 {{ITEST_USERNAME}}）都不固化——
-        // 固化会把字面量冻结进 compiled，回放时 valueSub 又只认 fill 时刻的占位符。
+        // 任意形态的凭据占位符（哨兵 / 花括号变体 {{ITEST_USERNAME}} / @服务名 归属形态）都不固化——
+        // 固化会把字面量冻结进 compiled，回放时 valueSub 认得但字面量里没有凭据，
+        // 且换环境后归属失效。保守整步保持 aiTask。
         if (credentialPlaceholderKind(a.value)) {
-          return { ok: false, reason: 'fill value 为登录/敏感凭据占位符（登录不属于用例步骤，归环境登录），不固化' };
+          return { ok: false, reason: 'fill value 为登录/敏感凭据占位符（含 @服务名 归属形态，登录不属于用例步骤，归环境登录），不固化' };
         }
         const locator = mapSelector(a.selector);
         if (!locator) return { ok: false, reason: `fill 选择器 "${a.selector}" 含 Playwright 专有语法，无法映射为平台 locator` };

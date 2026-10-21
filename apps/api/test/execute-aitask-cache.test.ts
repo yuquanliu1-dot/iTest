@@ -7,16 +7,20 @@ import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 // aiTask 运行时缓存测试：真 cdp.ts（不 mock 整模块）+ playwright-core / aiTask.js /
 // llmSettings.js 打桩 + testcontainer PG。核心断言都在 step_action_cache 表与
 // ExecStepResult.cached 字段上——缓存是"自动挡固化"，对 test_steps.compiled 零侵入。
-vi.mock('../src/execute/aiTask.js', () => ({
-  runAiTask: vi.fn(),
-  // 与真实同款语义（cdp.ts 凭它判定验证码指令走缓存豁免；aiActionMap 凭占位符常量拦截凭据固化）
-  CAPTCHA_TASK_RE: /验证码|captcha/i,
-  USER_PH: '__ITEST_USERNAME__',
-  PASSWORD_PH: '__ITEST_PASSWORD__',
-  SECRET_PH: '__ITEST_STEP_SECRET__',
-  solveCaptchaOnce: vi.fn(async () => null),
-  isCaptchaFailed: vi.fn(async () => false),
-}));
+vi.mock('../src/execute/aiTask.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/execute/aiTask.js')>();
+  return {
+    ...actual,
+    runAiTask: vi.fn(),
+    // 与真实同款语义（cdp.ts 凭它判定验证码指令走缓存豁免；aiActionMap 凭占位符常量拦截凭据固化）
+    CAPTCHA_TASK_RE: /验证码|captcha/i,
+    USER_PH: '__ITEST_USERNAME__',
+    PASSWORD_PH: '__ITEST_PASSWORD__',
+    SECRET_PH: '__ITEST_STEP_SECRET__',
+    solveCaptchaOnce: vi.fn(async () => null),
+    isCaptchaFailed: vi.fn(async () => false),
+  };
+});
 vi.mock('../src/agent/llmSettings.js', () => ({
   resolveLlmClient: vi.fn(async () => ({
     config: { provider: 'anthropic', apiKey: 'fake', model: 'fake' },
