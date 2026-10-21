@@ -9,6 +9,17 @@ import { USER_PH, PASSWORD_PH, SECRET_PH, type AiAction } from './aiTask.js';
 /** Playwright 专有语法（引擎链 / 伪类扩展），平台 css 策略不认识 → 不可映射。 */
 export const PLAYWRIGHT_ONLY_SELECTOR_RE = />>|:has-text|:has\(|:near\(|:above\(|:below\(|engine=|nth=/i;
 
+/** 步骤是否为视觉模式（可固化候选）：未编译（纯 instruction）或 compiled 全部由 aiTask 组成。
+ *  原 solidifyCase.ts 定义；verify_case 轨迹收集也要用，下沉到 execute 中性层避免工具间反向依赖。 */
+export function isVisualStep(step: { instruction: string | null; compiled: unknown; sensitive: boolean }): boolean {
+  if (step.sensitive) return false; // 敏感步骤凭据不进 compiled，保持原样
+  const compiled = Array.isArray(step.compiled) ? step.compiled : [];
+  if (compiled.length === 0) {
+    return typeof step.instruction === 'string' && step.instruction.trim().length > 0;
+  }
+  return compiled.every((a) => (a as { kind?: string }).kind === 'aiTask');
+}
+
 /** AI 动作选择器 → 平台 Locator；不可映射返回 null。 */
 export function mapSelector(selector: string): Locator | null {
   const text = /^text=(.+)$/s.exec(selector);

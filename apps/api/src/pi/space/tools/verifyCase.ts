@@ -7,14 +7,17 @@
  * 登录/验证码/改密弹窗等场景由 LLM 按页面实际状态自主判断处理；凭据经占位符注入、执行时刻替换，
  * 不进 LLM 上下文/返回值/日志。验证不落 report（结果只回对话上下文）；副作用与正式执行一致（spec 已确认接受）。
  */
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Type } from '@earendil-works/pi-ai';
+// 步骤/元哈希已移 verifyTrace.ts（solidify 轨迹新鲜度与 verify 前缀确认共用同一套哈希）
+import { hashEffectiveSteps, hashVerifyMeta, traceKey, saveVerifiedTrace, clearVerifiedTrace } from './verifyTrace.js';
 import { chromium } from 'playwright-core';
 import type { Browser, Page } from 'playwright-core';
 import { asc, eq, and } from 'drizzle-orm';
 import { db } from '../../../db/client.js';
 import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/schema.js';
-import { runAiTask, USER_PH, PASSWORD_PH, SECRET_PH } from '../../../execute/aiTask.js';
+import { runAiTask, USER_PH, PASSWORD_PH, SECRET_PH, type AiAction } from '../../../execute/aiTask.js';
+import { isVisualStep } from '../../../execute/aiActionMap.js';
 import { writeStepScreenshot, executeCaseInBrowser, type ExecStepResult } from '../../../execute/cdp.js';
 import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from '../../../execute/locator-probe.js';
 import { buildCandidates } from '../../../execute/locator-resolver.js';
@@ -156,6 +159,16 @@ export function collectStepLocators(compiled: unknown): Locator[] {
   return out;
 }
 
+/** 全视觉判定：全部步骤无 compiled（或纯 aiTask）→ 机械干跑无意义（无 compiled 可逐字派发）。
+ *  full 模式据此跳过机械干跑；mechanical 模式据此直接拒绝（引导先 full 实测 / solidify 固化）。 */
+function isAllVisualSteps(steps: EffectiveStep[]): boolean {
+  return steps.every((s) => {
+    const c = (s as { compiled?: unknown }).compiled;
+    if (!Array.isArray(c) || c.length === 0) return true;
+    return (c as Array<{ kind?: string }>).every((a) => a?.kind === 'aiTask');
+  });
+}
+
 /** 前缀确认状态：AI 相跨轮续跑的依据（Problem 1）。
  *  key = threadId::caseId（与停滞护栏同 key、同进程内内存生命周期）。
  *  stepsHash 按步存：某步的 instruction/compiled/assertion/sensitive/delayMs 任一变化即使
@@ -173,28 +186,6 @@ interface VerifyConfirmState {
   confirmedStepResults: AiStepResult[];
 }
 const verifyConfirmCache = new Map<string, VerifyConfirmState>();
-
-/** 逐步骤语义哈希：覆盖该步 AI 相的全部输入，其一变化即前缀失效。 */
-function hashEffectiveSteps(steps: EffectiveStep[]): string[] {
-  return steps.map((s) =>
-    createHash('sha1')
-      .update(
-        JSON.stringify({
-          inst: s.instruction,
-          compiled: s.compiled,
-          assertion: s.assertion,
-          sensitive: s.sensitive,
-          delayMs: s.delayMs,
-        }),
-      )
-      .digest('hex'),
-  );
-}
-
-/** 环境绑定哈希：URL/默认环境/版本任一变化＝换被测对象，前缀全部失效。 */
-function hashVerifyMeta(m: { url: string | null; defaultEnvId: string | null; versionId: string | null }): string {
-  return createHash('sha1').update(JSON.stringify([m.url, m.defaultEnvId, m.versionId])).digest('hex');
-}
 
 /** 机械回放敏感字段解密表：恢复续跑（restore）与结尾完整回放共用。 */
 function buildReplaySecrets(steps: EffectiveStep[]): Map<string, string> {
@@ -348,12 +339,16 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'verify_case',
     description:
-      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性（全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理），失败即停并返回失败步骤详情与失败页可交互元素清单。AI 步骤与终态判定全过后，还会用与正式回放同引擎的机械干跑逐字执行 compiled（failureReason=ReplayDivergence 表示 AI 能过但逐字回放分叉）。caseId 支持两种形态：落库用例 id，或本线程 stage_case 生成的 localId（纯草稿验证，全程不落库，save 时才正式建用例）。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。再次调用会复用上一轮已确认的前缀：以机械回放重建前缀 DOM 状态（代替重跑 AI 相，已确认步骤不再烧 LLM 轮次），AI 相从首个改动/失败步续跑，结尾仍保留与正式回放同引擎的完整机械干跑。验证会产生真实副作用（与正式执行一致，机械干跑会再执行一遍）。',
+      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性。全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理，失败即停并返回失败步骤详情与失败页可交互元素清单。AI 步骤与终态判定全过后，还会用与正式回放同引擎的机械干跑逐字执行 compiled（failureReason=ReplayDivergence 表示 AI 能过但逐字回放分叉）。mode 决定验收形态：mode="full"（默认）= 全 AI 实测（AI 相 + 终态判定 + 机械干跑），实测通过时顺带缓存每步的 AI 动作轨迹（供 solidify_case 零执行复用）；mode="mechanical" = 固化后的机械验收（跳过 AI 相，只做机械干跑 + 终态判定，语义验证已由前一轮实测完成）。caseId 支持两种形态：落库用例 id，或本线程 stage_case 生成的 localId（纯草稿验证，全程不落库，save 时才正式建用例）。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。再次调用会复用上一轮已确认的前缀：以机械回放重建前缀 DOM 状态（代替重跑 AI 相，已确认步骤不再烧 LLM 轮次），AI 相从首个改动/失败步续跑，结尾仍保留与正式回放同引擎的完整机械干跑。验证会产生真实副作用（与正式执行一致，机械干跑会再执行一遍）。',
     parameters: Type.Object({
       caseId: Type.String({ minLength: 1 }),
+      // full=全 AI 实测（默认，含机械干跑）；mechanical=固化后机械验收（跳过 AI 相，只干跑+终态判定）
+      mode: Type.Optional(Type.Union([Type.Literal('full'), Type.Literal('mechanical')])),
     }),
     promptGuidelines: [
-      'verify_case 有两种使用场景，按需选择：(a) 讨论期实测——草稿讨论中用户要求「跑一下看看」时，对 stage_case 暂存的自然语言草稿调用，AI 相执行 + live view 视频流给用户看，失败据 failure 修正步骤后重发 stage_case 再验；(b) 编译后验收——solidify_case 把自然语言编译为机械 DSL 后，对固化结果调用，机械干跑逐字执行 compiled 做验收，失败由你按归因修复 compiled 后重跑，直到通过。',
+      'verify_case 有两种使用场景，按需选择：(a) 讨论期实测——草稿讨论中用户要求「跑一下看看」时，对 stage_case 暂存的自然语言草稿调用（mode 省略即 full），AI 相执行 + live view 视频流给用户看，失败据 failure 修正步骤后重发 stage_case 再验；(b) 编译后验收——solidify_case 把自然语言编译为机械 DSL 后，对固化结果调用 verify_case(mode="mechanical")，跳过 AI 相只做机械干跑 + 终态判定，失败由你按归因修复 compiled 后重跑，直到通过。',
+      'verify_case 的 mode 决定验收形态，别乱选：mode="full"（默认）是全 AI 实测，用于语义验证（讨论期实测、或 mechanical 连续两轮同因失败/归因不明时升级到它），实测通过会顺带缓存 AI 动作轨迹；mode="mechanical" 是固化后的机械验收，只跑机械干跑 + 终态判定，不烧 AI 轮次——**固化完成后用 mode="mechanical" 验收，别再跑一遍 full**。',
+      'mode="mechanical" 的两个限制要如实告知用户：(1) 全视觉用例（无 compiled）会被直接拒绝——此时先调 mode="full" 实测；(2) 机械模式没有 AI 相、不会自动登录，靠登录态缓存（30 分钟）注入，副本重启或缓存过期会落到登录页——失败页是登录页就改 mode="full" 重测（顺带刷新登录态与轨迹缓存）。',
       'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
       'stage_case 新建的纯草稿用例（未落库）也可直接 verify_case：caseId 传 stage_case 时声明的 localId；修正循环 = 同 localId 重发 stage_case（幂等覆盖）后再次 verify_case，全程不落库，通过后引导用户在暂存区勾选保存。注意：暂存草稿的 defaultEnvId 只能绑定已落库环境或留空走默认链（暂存环境不支持）。',
@@ -366,7 +361,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       '环境未配置登录凭据(默认 web 服务未填用户名/密码)而验证卡在登录页时，引导用户到项目环境页配置，不要伪造登录步骤。',
     ],
     execute: async (input) => {
-      const { caseId } = input as { caseId: string };
+      const { caseId, mode } = input as { caseId: string; mode?: 'full' | 'mechanical' };
       // ── 空转硬约束：同一用例同因连续失败达上限即强制停止（prompt 指南对 agent 不硬,这里真正拦截）──
       // 失败签名未变即无进展：环境缺前导数据/被测页面持续不稳定这类前置问题重试再多轮也只重复烧 LLM,
       // 直接短路返回把结论交给 agent 如实汇报。触发后将计数回退到上限-1——下一次调用允许正常跑一轮：
@@ -481,9 +476,18 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           defaultEnvId: effectiveCase.defaultEnvId,
           versionId: effectiveCase.versionId,
         });
+        // ── 机械验收模式（mode='mechanical'）：solidify 固化后的验收专用 ──
+        // AI 相的语义验证已在实测轮完成，本模式只做 compiled 机械干跑 + 终态判定；
+        // 无 compiled 的视觉用例无从逐字派发 → 拒绝并引导 full（实测轮顺带收集 solidify 轨迹）。
+        if (mode === 'mechanical' && isAllVisualSteps(effectiveSteps)) {
+          return {
+            ok: false,
+            error: 'mechanical 模式验收的是 compiled 的机械可回放性：当前用例全部步骤都是视觉模式（无 compiled）。请改调 verify_case(mode="full") 做全 AI 实测（通过后会顺带缓存可被 solidify_case 零执行复用的实测轨迹）。',
+          };
+        }
         const prevConfirm = verifyConfirmCache.get(ckey) ?? null;
         let validPrefixLen = 0;
-        if (prevConfirm) {
+        if (prevConfirm && mode !== 'mechanical') {
           if (prevConfirm.metaHash !== curMetaHash) {
             validPrefixLen = 0; // 换被测对象(SUT/环境/版本)，前缀全部失效
           } else {
@@ -595,8 +599,21 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // droppedAssertions 把描述性短语断言排除在机械判定之外——从上一轮判定缓存恢复。
           const droppedAssertions = new Map<string, string>();
           if (prevConfirm) {
-            for (const [stepId, v] of prevConfirm.assertionVerdicts) {
-              if (!v.real && v.dropped) droppedAssertions.set(stepId, v.dropped);
+            if (mode === 'mechanical') {
+              // 机械模式无 AI 相跑不了 judgeAssertionText：仅当环境与该步内容都与判定轮
+              // 完全一致时才复用 dropped 判定；没复用到的断言按字面进机械回放（失败 note
+              // 会提示改 full 复核）。
+              if (prevConfirm.metaHash === curMetaHash) {
+                effectiveSteps.forEach((s, i) => {
+                  if (prevConfirm.stepsHash[i] !== curStepsHash[i]) return;
+                  const v = prevConfirm.assertionVerdicts.get(s.id);
+                  if (v && !v.real && v.dropped) droppedAssertions.set(s.id, v.dropped);
+                });
+              }
+            } else {
+              for (const [stepId, v] of prevConfirm.assertionVerdicts) {
+                if (!v.real && v.dropped) droppedAssertions.set(stepId, v.dropped);
+              }
             }
           }
           /** 机械回放步映射（restore 与结尾完整回放共用）：dropped 断言在回放里不参与判定。 */
@@ -649,8 +666,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             if (restoredPage) page = restoredPage;
           }
 
-          // 初始导航（仅非 resume：resume 时 restore 已完成导航与前缀状态重建）
-          if (validPrefixLen === 0 && targetUrl) {
+          // 初始导航（仅非 resume：resume 时 restore 已完成导航；mechanical 跳过——干跑
+          // executeCaseInBrowser 自带 goto，预导航只是多一次页面加载与副作用）
+          if (mode !== 'mechanical' && validPrefixLen === 0 && targetUrl) {
             const firstCompiled = effectiveSteps[0]?.compiled;
             const firstAction = (Array.isArray(firstCompiled) && firstCompiled.length > 0
               ? firstCompiled[0]
@@ -673,6 +691,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           };
 
           const stepResults: AiStepResult[] = [];
+          /** 本轮 AI 相收集的可固化步骤动作轨迹（solidify_case 零执行复用的数据源）。
+         *  仅整轮全过且无前缀恢复（validPrefixLen===0）时才落缓存——resume 轮的前缀步
+         *  在机械恢复里跑的，没有 AI 动作可收集，半份轨迹对 solidify 无用。 */
+          const collectedTrace = new Map<string, AiAction[]>();
           /** 本轮 AI 相产生的断言判定（写回上一轮缓存，续跑前逐步复用）。 */
           const verdictsThisRound = new Map<string, { real: boolean; dropped?: string }>();
           // 全局看门狗超时收尾（步骤中断 / 机械回放中断共用）：把本地已完成前缀写回缓存——
@@ -680,6 +702,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // 下轮 resume 从中断步续跑而非从第 1 步重来。stepResults 局部下标自 resumeIndex 起，
           // 完成条数 = resumeIndex（沿用上轮确认的前缀） + stepResults.length（本轮实走）。
           const commitTimeoutPrefix = (where: string): { ok: false; error: string } => {
+            // 机械模式没有 AI 相，无可续跑前缀可写（也不覆盖上一轮 full 的判定缓存）
+            if (mode === 'mechanical') {
+              return { ok: false, error: `验证超时（${verifyTimeoutMs / 1000}s）已终止：${where}（mechanical 模式无 AI 相前缀，下轮从头上）` };
+            }
             const merged = new Map<string, { real: boolean; dropped?: string }>(prevConfirm?.assertionVerdicts ?? []);
             for (const [id, v] of verdictsThisRound) merged.set(id, v);
             const completed: AiStepResult[] = [...prefixConfirmedResults.slice(0, resumeIndex), ...stepResults];
@@ -699,15 +725,20 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           ctx.emit({
             type: 'verify_progress', phase: 'start', caseId, total: effectiveSteps.length, targetUrl: targetUrl ?? null,
             resumeFrom: validPrefixLen,
+            ...(mode === 'mechanical' ? { mode: 'mechanical' as const } : {}),
             loginCache: cachedState ? ('hit' as const) : ('miss' as const),
             loginUser: envCtx.login?.user ?? null,
             stagedOps: opsApplied,
             ...(staticNote ? { staticNote } : {}),
             liveUrl: `/api/assistant/threads/${ctx.threadId}/live/${live.key}`,
           });
-          for (let i = resumeIndex; i < effectiveSteps.length; i++) {
+          // mechanical 模式跳过整个 AI 相（循环下标直接置越界，语义验证已由实测轮完成）
+          for (let i = mode === 'mechanical' ? effectiveSteps.length : resumeIndex; i < effectiveSteps.length; i++) {
             const s = effectiveSteps[i]!;
             const started = Date.now();
+            // 轨迹收集目标：视觉模式且非敏感的步骤（与 solidify_case 的固化候选同口径）
+            const solidifiable = isVisualStep(s) && !s.sensitive;
+            let stepActions: AiAction[] = [];
 
             // 敏感步骤先解密：密文缺失/解密失败直接判该步失败，不让 LLM 乱填
             stepSecret = undefined;
@@ -792,6 +823,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 maxTurns: STEP_MAX_TURNS,
                 valueSub,
                 lang: ctx.lang,
+                // 成功动作按执行顺序收集（占位符替换前的原始参数，同 solidify_case 口径）
+                onAction: (action, ok) => {
+                  if (solidifiable && ok) stepActions.push(action);
+                },
               });
               const stepGuard = new Promise<never>((_, reject) => {
                 guardTimer = setTimeout(() => reject(new Error(`STEP_TIMEOUT:${s.order}`)), STEP_AI_TIMEOUT_MS);
@@ -828,6 +863,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 failedIndex = i;
                 break;
               }
+              // 该步全过（含 post-locator 校验）才把轨迹入册：空数组也入（solidify 侧映射为
+              // kept-aiTask「无可映射动作」，与真跑路径结果一致）
+              if (solidifiable) collectedTrace.set(s.id, stepActions);
               stepResults.push({
                 order: s.order, status: 'passed', durationMs: Date.now() - started,
                 screenshot: await writeStepScreenshot(reportId, i + 1, page),
@@ -879,20 +917,40 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // 全过 → len；restore 失败后 AI 又在 k 失败 → k（= 前缀确认条数）。confirmedStepResults 对齐
           // 全局下标：before-resume 段直接沿用上一轮的确认结果，resume 段取本轮 stepResults，
           // 二者在 restore 失败（j<validPrefixLen）时恰好无缝衔接、不重复。
-          const mergedVerdicts = new Map<string, { real: boolean; dropped?: string }>(prevConfirm?.assertionVerdicts ?? []);
-          for (const [id, v] of verdictsThisRound) mergedVerdicts.set(id, v);
-          verifyConfirmCache.set(ckey, {
-            stepsHash: curStepsHash,
-            metaHash: curMetaHash,
-            confirmedThrough: failedIndex < 0 ? effectiveSteps.length : failedIndex,
-            assertionVerdicts: mergedVerdicts,
-            confirmedStepResults: [...prefixConfirmedResults.slice(0, resumeIndex), ...stepResults],
-          });
+          // 机械模式不写回前缀确认：没有 AI 相就没有新确认的步骤（保留上一轮 full 的判定缓存）
+          if (mode !== 'mechanical') {
+            const mergedVerdicts = new Map<string, { real: boolean; dropped?: string }>(prevConfirm?.assertionVerdicts ?? []);
+            for (const [id, v] of verdictsThisRound) mergedVerdicts.set(id, v);
+            verifyConfirmCache.set(ckey, {
+              stepsHash: curStepsHash,
+              metaHash: curMetaHash,
+              confirmedThrough: failedIndex < 0 ? effectiveSteps.length : failedIndex,
+              assertionVerdicts: mergedVerdicts,
+              confirmedStepResults: [...prefixConfirmedResults.slice(0, resumeIndex), ...stepResults],
+            });
+          }
+
+          // ── 轨迹缓存写回（solidify_case 零执行复用）──
+          // 仅「整轮全过 + 无前缀恢复」才保存：resume 轮前缀步是机械恢复跑的，收集不出完整轨迹。
+          // vision 失败不阻断（步骤已过、expectedOutcome 不参与哈希，改预期不需要重跑实测）。
+          // 任一步骤失败 → 清缓存（旧轨迹对应旧步骤内容，留着只会误导新鲜度判定——哈希本可挡，
+          // 主动清是双保险，也让 getVerifiedTrace 的语义干净）。
+          // 机械模式不动轨迹缓存：本轮没有 AI 相，既无可存轨迹，也不能清掉实测轮存的
+          // （清了会让后续 solidify 无谓回退真跑）。
+          const tkey = traceKey(ctx.threadId, caseId);
+          if (mode !== 'mechanical') {
+            if (failedIndex < 0 && validPrefixLen === 0) {
+              saveVerifiedTrace(tkey, curStepsHash, curMetaHash, collectedTrace);
+            } else if (failedIndex >= 0) {
+              clearVerifiedTrace(tkey);
+            }
+          }
 
           // 用例级终态判定：与正式回放同一 vision 断言（cdp.ts runCaseVisionAssert），
           // 全部步骤通过后再判 expectedOutcome——verify_case 不能只保证"步骤能执行"，还得保证"终态符合预期"。
+          // 机械模式的终态判定移到机械干跑之后（在干跑终态页上判，见 replay 段之后）。
           let visionFailure: { error?: string | null; humanMessage?: string | null; screenshot?: string | null; failureReason?: string | null } | null = null;
-          if (failedIndex < 0 && typeof effectiveCase.expectedOutcome === 'string' && effectiveCase.expectedOutcome.trim()) {
+          if (mode !== 'mechanical' && failedIndex < 0 && typeof effectiveCase.expectedOutcome === 'string' && effectiveCase.expectedOutcome.trim()) {
             const va = await runCaseVisionAssert({
               page,
               reportId,
@@ -929,11 +987,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // 跳过机械干跑——没有可逐字派发的 compiled,跑了也只会以 compile-missing 报"未知错误",
           // 反而误导用户以为用例有问题。solidify 固化后再跑 verify 时 compiled 已就位,
           // 机械干跑自然恢复生效。
-          const allVisual = effectiveSteps.every((s) => {
-            const c = (s as { compiled?: unknown }).compiled;
-            if (!Array.isArray(c) || c.length === 0) return true;
-            return (c as Array<{ kind?: string }>).every((a) => a?.kind === 'aiTask');
-          });
+          const allVisual = isAllVisualSteps(effectiveSteps);
           let replayFailure: ExecStepResult | null = null;
           let replaySteps: ExecStepResult[] = [];
           let replayPage: Page | null = null;
@@ -956,6 +1010,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                     : {}),
                   caseTitle: effectiveCase.title,
                   caseUrl: targetUrl ?? null,
+                  // onPageReady 无条件触发（成功也拿得到终态页）：机械模式的终态判定/证据
+                  // 采集落在干跑页上；full 模式下 onFailurePage 触发时会覆盖为分叉现场页。
+                  onPageReady: (p: Page) => { replayPage = p; },
                 },
                 browser,
                 context,
@@ -985,18 +1042,43 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             });
           }
 
+          // ── 机械模式终态判定：干跑成功后在干跑终态页上判 expectedOutcome ──
+          // （full 模式的 vision 已在上方 AI 相之后完成；replayPage 由 onPageReady 无条件交还）
+          if (mode === 'mechanical' && !replayFailure && !visionFailure
+            && typeof effectiveCase.expectedOutcome === 'string' && effectiveCase.expectedOutcome.trim()) {
+            const va = await runCaseVisionAssert({
+              page: replayPage ?? page,
+              reportId,
+              caseTitle: effectiveCase.title,
+              caseUrl: targetUrl ?? null,
+              expectedOutcome: effectiveCase.expectedOutcome,
+              vars: {},
+              sensitiveVarKeys: [],
+              llmClient: client,
+            });
+            if (va?.failureStep) {
+              visionFailure = va.failureStep;
+              ctx.emit({
+                type: 'verify_progress', phase: 'step_done', order: -1, status: 'failed',
+                reason: (va.failureStep.error ?? '终态与用例预期不符').slice(0, 120),
+              });
+            }
+          }
+          // 终态/证据采集页：机械模式在干跑页（AI 相没跑过，初始 page 是 about:blank）；full 模式在 AI 相页面
+          const visionPage = mode === 'mechanical' ? (replayPage ?? page) : page;
+
           // ── 失败收尾：失败页元素清单（供 agent 修正 locator）──
           let failurePage: Awaited<ReturnType<typeof extractPageElements>> | null = null;
           if (replayFailure) {
             // 回放分叉时优先取干跑自己的 page（分叉现场）；AI 旧 page 状态已漂移
             failurePage = await extractPageElements(replayPage ?? page).catch(() => null);
           } else if (failedIndex >= 0 || visionFailure) {
-            failurePage = await extractPageElements(page).catch(() => null);
+            failurePage = await extractPageElements(visionPage).catch(() => null);
           }
 
           // 终态判定失败时补测「环境无前置数据」信号：空表/0 条时 note 直接点名数据缺失，
           // 避免 AI 用稀释 expectedOutcome 的方式把失败蒙成通过
-          const emptyDataHint = visionFailure ? await detectEmptyDataState(page) : null;
+          const emptyDataHint = visionFailure ? await detectEmptyDataState(visionPage) : null;
 
           // ── 结果组装（成功精简、失败信息密集）──
           // 响应的 steps 按全局步序合并：resume 前缀步沿用上一轮的确认结果（截图路径跨轮可访问），
@@ -1034,7 +1116,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               caseId,
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
-              login,
+              // 机械模式无 AI 相：没有 login 自报、也没有新轨迹可存
+              ...(mode === 'mechanical'
+                ? { mode: 'mechanical' as const }
+                : {
+                    login,
+                    // 轨迹已缓存 → 紧接着的 solidify_case 可零执行秒级固化（agent 据此引导用户）
+                    traceSaved: validPrefixLen === 0,
+                  }),
               resumeFrom: validPrefixLen,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
@@ -1051,8 +1140,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             // 归因全交 LLM（failureDiagnosis）：形态无关证据 = 最后一步各 locator 候选实时命中数
             // + 可见浮层清单 + 失败页可交互元素清单，外加空数据信号作 extraHint。
             const visionStep = effectiveSteps[effectiveSteps.length - 1] ?? null;
-            const visionProbes = await probeLocatorHits(page, collectStepLocators(visionStep?.compiled));
-            const visionOverlays = (await extractPageEvidence(page)).overlays;
+            const visionProbes = await probeLocatorHits(visionPage, collectStepLocators(visionStep?.compiled));
+            const visionOverlays = (await extractPageEvidence(visionPage)).overlays;
             const visionEvidenceField =
               visionProbes.length > 0 || visionOverlays.length > 0
                 ? { evidence: { overlays: visionOverlays, probes: visionProbes } }
@@ -1074,7 +1163,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               caseId,
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
-              login,
+              ...(mode === 'mechanical' ? { mode: 'mechanical' as const } : { login }),
               resumeFrom: validPrefixLen,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
@@ -1090,7 +1179,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 screenshot: visionFailure.screenshot ?? null,
                 page: failurePage,
                 ...visionEvidenceField,
-                note: `vision 终态判定失败：全部步骤执行通过后，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。${emptyDataHint ? ` ⚠ 失败页检出空数据信号「${emptyDataHint}」：被测环境当前没有可供断言的数据，这通常是环境前置数据缺失，而非选择器/步骤写错。正确做法是让用例先创建出满足 expectedOutcome 的数据（例如造一条会自动触发处置的事件），或如实向用户汇报环境缺数据——严禁通过弱化 expectedOutcome（如把"自动启动处置成功"改成"页面正常加载"）把失败蒙成通过。` : ''}${visionDiag ? ` ⚠ 归因:${visionDiag.note}` : ''}`,
+                note: `vision 终态判定失败：${mode === 'mechanical' ? '机械步骤全部执行通过后' : '全部步骤执行通过后'}，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。${mode === 'mechanical' ? '（机械验收模式：步骤语义未经 AI 相复核、描述性断言按上一轮判定或字面处理——修正后重跑 mechanical，拿不准改 mode=full 复核。）' : ''}${emptyDataHint ? ` ⚠ 失败页检出空数据信号「${emptyDataHint}」：被测环境当前没有可供断言的数据，这通常是环境前置数据缺失，而非选择器/步骤写错。正确做法是让用例先创建出满足 expectedOutcome 的数据（例如造一条会自动触发处置的事件），或如实向用户汇报环境缺数据——严禁通过弱化 expectedOutcome（如把"自动启动处置成功"改成"页面正常加载"）把失败蒙成通过。` : ''}${visionDiag ? ` ⚠ 归因:${visionDiag.note}` : ''}`,
               },
             });
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
@@ -1125,7 +1214,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               caseId,
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
-              login,
+              ...(mode === 'mechanical' ? { mode: 'mechanical' as const } : { login }),
               resumeFrom: validPrefixLen,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
@@ -1142,7 +1231,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 screenshot: replayFailure.screenshot ?? null,
                 page: failurePage,
                 ...replayEvidenceField,
-                note: `AI 临场执行能通过，但与正式回放同引擎的 compiled 机械逐字执行失败（回放分叉）——典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突二次执行必挂。请用 failure.page.elements 中真实存在的选择器把该步 compiled 改成更精确的可操作目标（组件内部真实接收点击/输入的元素），或修正测试数据策略（时间戳命名）后重验。${replayDiag ? ` ⚠ 归因:${replayDiag.note}` : ''}${replayHint ? ` 源码静态提示:${replayHint}` : ''}`,
+                note: `${mode === 'mechanical' ? '机械验收模式（无 AI 相对照）下 compiled 机械逐字执行失败' : 'AI 临场执行能通过，但与正式回放同引擎的 compiled 机械逐字执行失败（回放分叉）'}——典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突二次执行必挂。请用 failure.page.elements 中真实存在的选择器把该步 compiled 改成更精确的可操作目标（组件内部真实接收点击/输入的元素），或修正测试数据策略（时间戳命名）后重验。${mode === 'mechanical' ? '（机械模式无自动登录：若失败页是登录页，多为登录态缓存失效/副本重启——改 mode=full 重新实测登录即可；同因连续两轮失败或归因不明也建议改 full 复核。）' : ''}${replayDiag ? ` ⚠ 归因:${replayDiag.note}` : ''}${replayHint ? ` 源码静态提示:${replayHint}` : ''}`,
               },
             });
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);

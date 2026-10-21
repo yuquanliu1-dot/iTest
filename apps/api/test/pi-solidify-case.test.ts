@@ -616,6 +616,195 @@ describe('solidify_case 编排', () => {
   });
 });
 
+describe('solidify_case 轨迹缓存零执行路径', () => {
+  /** 与 solidify 内部从 DB/草稿行构造的 effectiveSteps 同字段值（哈希只覆盖这 5 个字段）。 */
+  const hStep = (instruction: string) =>
+    ({ instruction, compiled: null, assertion: null, sensitive: false, delayMs: null }) as never;
+  const META = { url: 'http://env.example/page', defaultEnvId: null, versionId: '' };
+
+  it('DB 用例缓存命中：零执行（无 runAiTask/浏览器/LLM），逐步 update_step 暂存照常', async () => {
+    const caseId = await seedCase({ steps: [{ instruction: '点击删除按钮' }, { instruction: '填写规则名称' }] });
+    const stepRows = await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
+    const [stepId1, stepId2] = stepRows.rows.map((r) => r.id as string);
+    const { saveVerifiedTrace, traceKey, hashEffectiveSteps, hashVerifyMeta } =
+      await import('../src/pi/space/tools/verifyTrace.js');
+    saveVerifiedTrace(
+      traceKey('t1', caseId),
+      hashEffectiveSteps([hStep('点击删除按钮'), hStep('填写规则名称')] as never),
+      hashVerifyMeta({ ...META, versionId }),
+      new Map([
+        [stepId1, [{ type: 'click', selector: '#del' }]],
+        [stepId2, [{ type: 'fill', selector: 'input[name="ruleName"]', value: '规则A' }]],
+      ]) as never,
+    );
+    // 缓存路径必须先于 LLM 前置检查（不需要 client）——直接断言零调用，避免 once 队列跨测试泄漏
+    const { resolveLlmClient } = await import('../src/agent/llmSettings.js');
+    const emitLog: unknown[] = [];
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const r = await buildSolidifyCaseTool(toolCtx(emitLog)).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    const { chromium } = await import('playwright-core');
+    expect(runAiTask).not.toHaveBeenCalled();
+    expect(chromium.launch).not.toHaveBeenCalled();
+    expect(resolveLlmClient).not.toHaveBeenCalled();
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data).toMatchObject({ result: 'solidified', traceReused: true, basedOn: 'db' });
+      expect(data.steps[0]).toMatchObject({ order: 1, status: 'solidified' });
+      expect(data.steps[1]).toMatchObject({ order: 2, status: 'solidified' });
+      expect(data.note).toContain('verify_case');
+    }
+    // 暂存照常落行（确定性 localId + 映射 compiled）
+    const ops = await stageOps();
+    expect(ops).toHaveLength(2);
+    expect(ops[0]).toMatchObject({ op: 'update_step', case_id: caseId, local_id: `solidify-${stepId1}` });
+    expect(ops[0].payload).toEqual({
+      action: 'update_step', caseId, stepId: stepId1,
+      compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#del' }] }],
+    });
+    // SSE：start（无 liveUrl、带 traceReused）→ end
+    const sse = emitLog.filter((e) => (e as { type?: string }).type === 'solidify_progress');
+    expect(sse.map((e) => (e as { phase: string }).phase)).toEqual(['start', 'end']);
+    expect(sse[0]).toMatchObject({ caseId, total: 2, solidifiable: 2, targetUrl: 'http://env.example/page', traceReused: true });
+    expect(sse[1]).toMatchObject({ result: 'solidified', solidified: 2, kept: 0 });
+    // DB 步骤仍不落库
+    const after = await pool.query(`SELECT compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
+    expect(after.rows[0]!.compiled).toBeNull();
+  });
+
+  it('草稿用例缓存命中：整例重暂存带 compiled，零执行', async () => {
+    const localId = randomUUID();
+    const draftSteps = [
+      { action: '点击删除按钮', compiled: null, assertion: null },
+      { action: '填写规则名称', compiled: null, assertion: null },
+    ];
+    await pool.query(
+      `INSERT INTO ai_stage_cases(thread_id, local_id, version_id, title, url, steps, staged_at)
+       VALUES ('t1', $1, $2, '草稿用例', 'http://env.example/page', $3::jsonb, now())`,
+      [localId, versionId, JSON.stringify(draftSteps)],
+    );
+    const { saveVerifiedTrace, traceKey, hashEffectiveSteps, hashVerifyMeta } =
+      await import('../src/pi/space/tools/verifyTrace.js');
+    saveVerifiedTrace(
+      traceKey('t1', localId),
+      hashEffectiveSteps([hStep('点击删除按钮'), hStep('填写规则名称')] as never),
+      hashVerifyMeta({ ...META, versionId }),
+      new Map([
+        ['staged-1', [{ type: 'click', selector: '#del' }]],
+        ['staged-2', [{ type: 'fill', selector: 'input[name="ruleName"]', value: '规则A' }]],
+      ]) as never,
+    );
+    const emitLog: unknown[] = [];
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const r = await buildSolidifyCaseTool(toolCtx(emitLog)).execute({ caseId: localId });
+    expect(r.ok).toBe(true);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    expect(runAiTask).not.toHaveBeenCalled();
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data).toMatchObject({ result: 'solidified', traceReused: true, basedOn: 'staged' });
+    }
+    const row = await pool.query(`SELECT steps FROM ai_stage_cases WHERE local_id = $1`, [localId]);
+    const steps = row.rows[0]!.steps as Array<{ compiled: unknown[] | null }>;
+    expect(steps[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '#del' }] }]);
+    expect(steps[1]!.compiled).toEqual([
+      { kind: 'fill', locator: [{ strategy: 'css', value: 'input[name="ruleName"]' }], value: '规则A' },
+    ]);
+    expect(await stageOps()).toHaveLength(0); // 草稿不产生 case_op
+    const stageEvents = emitLog.filter((e) => (e as { type?: string }).type === 'stage');
+    expect(stageEvents).toHaveLength(1);
+    expect(stageEvents[0]).toMatchObject({ kind: 'case', id: localId, action: 'stage' });
+  });
+
+  it('三种过期（stepsHash 变 / metaHash 变 / 轨迹缺步）→ 删条目回退真跑', async () => {
+    const { saveVerifiedTrace, traceKey, hashEffectiveSteps, hashVerifyMeta, getVerifiedTrace } =
+      await import('../src/pi/space/tools/verifyTrace.js');
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+
+    // 1) stepsHash 不等：用例真实 instruction 与轨迹哈希所依据的不一致
+    const caseId1 = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
+    const stepId1 = (await pool.query(`SELECT id FROM test_steps WHERE case_id = $1`, [caseId1])).rows[0]!.id as string;
+    saveVerifiedTrace(
+      traceKey('t1', caseId1),
+      hashEffectiveSteps([hStep('已被修改的指令')] as never),
+      hashVerifyMeta({ ...META, versionId }),
+      new Map([[stepId1, [{ type: 'click', selector: '#del' }]]]) as never,
+    );
+    stepQueue = [{ actions: [[{ type: 'click', selector: '#del' }, true]] }];
+    const r1 = await buildSolidifyCaseTool(toolCtx()).execute({ caseId: caseId1 });
+    expect(r1.ok).toBe(true);
+    if (r1.ok) expect(JSON.parse(r1.data!).traceReused).toBeUndefined();
+    expect(getVerifiedTrace(traceKey('t1', caseId1))).toBeNull(); // 过期即删
+    expect(runAiTask).toHaveBeenCalledTimes(1);
+
+    // 2) metaHash 不等：换环境 = 换被测对象
+    const caseId2 = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
+    saveVerifiedTrace(
+      traceKey('t1', caseId2),
+      hashEffectiveSteps([hStep('点击删除按钮')] as never),
+      hashVerifyMeta({ url: 'http://other.example/page', defaultEnvId: null, versionId }),
+      new Map([[stepId1, [{ type: 'click', selector: '#del' }]]]) as never, // key 随便：meta 先判不过
+    );
+    stepQueue = [{ actions: [[{ type: 'click', selector: '#del' }, true]] }];
+    const r2 = await buildSolidifyCaseTool(toolCtx()).execute({ caseId: caseId2 });
+    expect(r2.ok).toBe(true);
+    if (r2.ok) expect(JSON.parse(r2.data!).traceReused).toBeUndefined();
+    expect(runAiTask).toHaveBeenCalledTimes(2);
+
+    // 3) 轨迹缺步：两个视觉步只缓存了一步 → required 不全
+    const caseId3 = await seedCase({ steps: [{ instruction: '点击删除按钮' }, { instruction: '填写名称' }] });
+    const ids3 = (await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId3]))
+      .rows.map((r) => r.id as string);
+    saveVerifiedTrace(
+      traceKey('t1', caseId3),
+      hashEffectiveSteps([hStep('点击删除按钮'), hStep('填写名称')] as never),
+      hashVerifyMeta({ ...META, versionId }),
+      new Map([[ids3[0]!, [{ type: 'click', selector: '#del' }]]]) as never,
+    );
+    stepQueue = [
+      { actions: [[{ type: 'click', selector: '#del' }, true]] },
+      { actions: [[{ type: 'fill', selector: 'input[name="ruleName"]', value: '规则A' }, true]] },
+    ];
+    const r3 = await buildSolidifyCaseTool(toolCtx()).execute({ caseId: caseId3 });
+    expect(r3.ok).toBe(true);
+    if (r3.ok) expect(JSON.parse(r3.data!).traceReused).toBeUndefined();
+    expect(runAiTask).toHaveBeenCalledTimes(4); // 真跑逐步执行
+  });
+
+  it('空动作条目（步骤通过但无可映射动作）→ kept-aiTask，与真跑路径同结果', async () => {
+    const caseId = await seedCase({ steps: [{ instruction: '人工核对页面' }, { instruction: '点击删除按钮' }] });
+    const ids = (await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]))
+      .rows.map((r) => r.id as string);
+    const { saveVerifiedTrace, traceKey, hashEffectiveSteps, hashVerifyMeta } =
+      await import('../src/pi/space/tools/verifyTrace.js');
+    saveVerifiedTrace(
+      traceKey('t1', caseId),
+      hashEffectiveSteps([hStep('人工核对页面'), hStep('点击删除按钮')] as never),
+      hashVerifyMeta({ ...META, versionId }),
+      new Map([
+        [ids[0]!, []], // 空数组：步骤通过但没收集到可映射动作
+        [ids[1]!, [{ type: 'click', selector: '#del' }]],
+      ]) as never,
+    );
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const r = await buildSolidifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    expect(runAiTask).not.toHaveBeenCalled();
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('solidified');
+      expect(data.steps[0]).toMatchObject({ status: 'kept-aiTask' });
+      expect(String(data.steps[0].reason)).toContain('无可映射动作');
+      expect(data.steps[1]).toMatchObject({ status: 'solidified' });
+    }
+    const ops = await stageOps();
+    expect(ops).toHaveLength(1); // 仅第 2 步
+  });
+});
+
 describe('solidify_case 注册', () => {
   it('buildSpaceTools 包含 solidify_case', async () => {
     const { buildSpaceTools } = await import('../src/pi/space/tools/index.js');

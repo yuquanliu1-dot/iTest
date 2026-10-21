@@ -1165,10 +1165,355 @@ describe('verify_case 超时预算', () => {
   });
 });
 
+describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', () => {
+  /** 视觉模式用例：instruction-only 步骤（compiled NULL）——轨迹收集的目标形态。返回逐步 step id。 */
+  async function seedVisualCase(stepCount: number, opts?: { sensitiveFirst?: boolean }): Promise<{ caseId: string; stepIds: string[] }> {
+    const id = randomUUID();
+    await pool.query(
+      `INSERT INTO test_cases(id, group_id, version_id, title, url, platform) VALUES ($1, $2, $3, '视觉用例', 'http://env.example/page', 'web')`,
+      [id, groupId, versionId],
+    );
+    for (let i = 0; i < stepCount; i++) {
+      await pool.query(
+        `INSERT INTO test_steps(case_id, "order", source, instruction) VALUES ($1, $2, 'ai', $3)`,
+        [id, i + 1, `第${i + 1}步：完成操作${i + 1}`],
+      );
+    }
+    if (opts?.sensitiveFirst) {
+      const { encrypt } = await import('../src/lib/secret-crypto.js');
+      const enc = encrypt('StepSecret!9');
+      await pool.query(
+        `UPDATE test_steps SET sensitive = true, secret_ciphertext = $2, secret_iv = $3, secret_tag = $4
+         WHERE case_id = $1 AND "order" = 1`,
+        [id, enc.ciphertext.toString('base64'), enc.iv.toString('base64'), enc.tag.toString('base64')],
+      );
+    }
+    const r = await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [id]);
+    return { caseId: id, stepIds: r.rows.map((row) => row.id as string) };
+  }
+
+  it('整轮全过：视觉步轨迹入册（动作原样），traceSaved=true', async () => {
+    const { caseId, stepIds } = await seedVisualCase(2);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask)
+      .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
+        opts?.onAction?.({ type: 'click', selector: '#btn-1' }, true);
+        opts?.onAction?.({ type: 'screenshot', selector: 'body' }, true); // 观察性动作也收集，映射端跳过
+        return '{"status":"passed","reason":"完成","login":"not-needed"}';
+      })
+      .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
+        opts?.onAction?.({ type: 'fill', selector: '#name', value: '任务A' }, true);
+        return '{"status":"passed","reason":"完成","login":"not-needed"}';
+      });
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.result).toBe('passed');
+    expect(data.traceSaved).toBe(true);
+    const { getVerifiedTrace, traceKey } = await import('../src/pi/space/tools/verifyTrace.js');
+    const entry = getVerifiedTrace(traceKey('t1', caseId));
+    expect(entry).not.toBeNull();
+    const t1 = entry!.trace.get(stepIds[0]!)!;
+    expect(t1.map((a) => a.type)).toEqual(['click', 'screenshot']);
+    expect((t1[0] as { selector: string }).selector).toBe('#btn-1');
+    expect(entry!.trace.get(stepIds[1]!)!.length).toBe(1);
+  });
+
+  it('动作 ok=false 不收集；步骤失败 → 清缓存 + traceSaved 缺席', async () => {
+    const { caseId } = await seedVisualCase(2);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask)
+      .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
+        opts?.onAction?.({ type: 'click', selector: '#ok' }, true);
+        opts?.onAction?.({ type: 'click', selector: '#gone' }, false); // 失败动作不入轨迹
+        return '{"status":"passed","reason":"完成","login":"not-needed"}';
+      })
+      .mockResolvedValueOnce('{"status":"failed","reason":"按钮不存在","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.result).toBe('failed');
+    expect(data.traceSaved).toBeUndefined();
+    const { getVerifiedTrace, traceKey } = await import('../src/pi/space/tools/verifyTrace.js');
+    expect(getVerifiedTrace(traceKey('t1', caseId))).toBeNull();
+  });
+
+  it('resume 轮（前缀机械恢复）全过也不保存：traceSaved=false', async () => {
+    const { caseId } = await seedVisualCase(2);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    // 第 1 轮：步 2 失败（confirmCache 记 confirmedThrough=1）
+    vi.mocked(runAiTask)
+      .mockResolvedValueOnce('{"status":"passed","reason":"完成","login":"not-needed"}')
+      .mockResolvedValueOnce('{"status":"failed","reason":"超时","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    // 第 2 轮：前缀机械恢复，AI 只跑步 2 且通过
+    vi.mocked(runAiTask).mockResolvedValueOnce('{"status":"passed","reason":"完成","login":"not-needed"}');
+    const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    const data2 = JSON.parse((r2 as { data: string }).data);
+    expect(data2.result).toBe('passed');
+    expect(data2.resumeFrom).toBe(1);
+    expect(data2.traceSaved).toBe(false);
+    const { getVerifiedTrace, traceKey } = await import('../src/pi/space/tools/verifyTrace.js');
+    expect(getVerifiedTrace(traceKey('t1', caseId))).toBeNull();
+  });
+
+  it('敏感步骤不入轨迹（凭据属于环境）', async () => {
+    const { caseId, stepIds } = await seedVisualCase(2, { sensitiveFirst: true });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"完成","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(JSON.parse((r as { data: string }).data).result).toBe('passed');
+    const { getVerifiedTrace, traceKey } = await import('../src/pi/space/tools/verifyTrace.js');
+    const entry = getVerifiedTrace(traceKey('t1', caseId));
+    expect(entry).not.toBeNull();
+    expect(entry!.trace.has(stepIds[0]!)).toBe(false); // 敏感步不在册
+    expect(entry!.trace.has(stepIds[1]!)).toBe(true);
+  });
+});
+
+describe('verify_case mechanical 机械验收模式', () => {
+  it('通过路径：跳过 AI 相（runAiTask 零调用、初始 goto 不跑），只干跑 + 无终态预期直接 passed', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED, CLICK_COMPILED] });
+    const emitLog: unknown[] = [];
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId, mode: 'mechanical' });
+    expect(r.ok).toBe(true);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    expect(runAiTask).not.toHaveBeenCalled();
+    expect(executeCaseInBrowser).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(executeCaseInBrowser).mock.calls[0]! as unknown as [
+      string,
+      Array<{ compiled: unknown[]; assertion: unknown }>,
+      { reportId: string; expectedOutcome?: string; onPageReady?: unknown },
+      unknown,
+      unknown,
+      string | undefined,
+    ];
+    expect(call[0]).toBe(caseId);
+    expect(call[5]).toBe('http://env.example/page');
+    expect(call[2].reportId).toMatch(/-replay$/);
+    expect(call[2].expectedOutcome).toBeUndefined(); // 干跑 ctx 不带终态判定（verify 自己判）
+    expect(typeof call[2].onPageReady).toBe('function'); // 机械模式靠它拿终态页
+    expect(call[1][0]!.compiled).toEqual(CLICK_COMPILED);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('passed');
+      expect(data.mode).toBe('mechanical');
+      expect(data.steps).toEqual([]); // 无 AI 相步骤结果
+      expect(data.replay.result).toBe('passed');
+      expect(data.login).toBeUndefined(); // 无 AI 自报
+      expect(data.traceSaved).toBeUndefined(); // 机械轮不产轨迹
+    }
+    // SSE：start → replay_start → replay_done → end（无 step 事件）
+    const phases = emitLog.map((e) => (e as { phase: string }).phase);
+    expect(phases).toEqual(['start', 'replay_start', 'replay_done', 'end']);
+    expect(emitLog[0]).toMatchObject({ type: 'verify_progress', caseId, total: 2, mode: 'mechanical', resumeFrom: 0 });
+    // 初始 goto 跳过（干跑引擎自带导航；无 AI 相页面无用途）
+    expect(await fakeGotos()).toEqual([]);
+    // 机械轮不动轨迹缓存（既不存也不清）
+    const { getVerifiedTrace } = await import('../src/pi/space/tools/verifyTrace.js');
+    expect(getVerifiedTrace(`t1::${caseId}`)).toBeNull();
+  });
+
+  it('allVisual 用例 → ok:false 拒绝并引导 full，不启动浏览器', async () => {
+    const caseId = await seedCase({ steps: [null, null] }); // 纯 instruction 视觉步骤（compiled null）
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId, mode: 'mechanical' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('mechanical');
+    const { chromium } = await import('playwright-core');
+    expect(chromium.launch).not.toHaveBeenCalled();
+  });
+
+  it('干跑失败 → ReplayDivergence + note 提示 full 复核/登录态', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED] });
+    const replayPageStub = {
+      url: () => 'http://env.example/page',
+      locator: (sel: string) => ({ count: async () => (sel.includes('#missing') ? 0 : 1) }),
+      getByText: (t: string) => ({ count: async () => 1 }),
+      getByRole: () => ({ count: async () => 1 }),
+      getByTestId: () => ({ count: async () => 1 }),
+    };
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    vi.mocked(executeCaseInBrowser).mockImplementationOnce(
+      async (
+        _cid: string,
+        _steps: Array<{ order: number }>,
+        _ctx: unknown,
+        _browser: unknown,
+        _context: unknown,
+        _targetUrl: string | undefined,
+        _onPreflight: unknown,
+        _caseWindow: unknown,
+        _onStep: unknown,
+        onFailurePage?: (page: unknown, failedIndex: number) => Promise<void>,
+      ) => {
+        await onFailurePage?.(replayPageStub, 0);
+        return [
+          { order: 1, status: 'failed' as const, durationMs: 5, error: 'count=0 (role)', failureReason: 'LocatorAllFailed', humanMessage: '所有定位候选均未命中' },
+        ];
+      },
+    );
+    const emitLog: unknown[] = [];
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId, mode: 'mechanical' });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('failed');
+      expect(data.mode).toBe('mechanical');
+      expect(data.failure.failureReason).toBe('ReplayDivergence');
+      expect(data.failure.stepOrder).toBe(1);
+      expect(data.failure.page.elements[0]).toContain('button#del'); // 分叉现场页
+      expect(data.failure.note).toContain('mode=full'); // 升级提示
+      expect(data.failure.note).toContain('登录态');
+    }
+    const phases = emitLog.map((e) => (e as { phase: string }).phase);
+    expect(phases).toEqual(['start', 'replay_start', 'replay_done', 'end']);
+  });
+
+  it('干跑全过后终态判定在干跑页上跑：vision 不符 → VisionAssertionFailed', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED], expectedOutcome: '最终状态达成' });
+    // onPageReady 交还干跑终态页 → vision 证据采集必须落在它上面（不是初始 about:blank page）
+    const replayPageStub = {
+      url: () => 'http://env.example/page',
+      evaluate: async () => 0,
+      screenshot: async () => Buffer.from('fake-png'),
+      // pageSettle 视觉稳定判定要连拍两帧（evaluate 指纹）+ 间隔等待，缺一不可
+      waitForTimeout: async () => {},
+      waitForLoadState: async () => {},
+      locator: (sel: string) => ({ count: async () => 1 }),
+      getByText: (t: string) => ({ count: async () => 1 }),
+      getByRole: () => ({ count: async () => 1 }),
+      getByTestId: () => ({ count: async () => 1 }),
+    };
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    vi.mocked(executeCaseInBrowser).mockImplementationOnce(
+      async (
+        _cid: string,
+        steps: Array<{ order: number }>,
+        ctx: { onPageReady?: (p: unknown) => void },
+      ) => {
+        ctx.onPageReady?.(replayPageStub);
+        return steps.map((s) => ({ order: s.order, status: 'passed' as const, durationMs: 10 }));
+      },
+    );
+    const { judgeCaseOutcome } = await import('../src/agent/judgeCaseOutcome.js');
+    vi.mocked(judgeCaseOutcome).mockResolvedValue({ passed: false, reason: '最终页面与预期不符' });
+    const emitLog: unknown[] = [];
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId, mode: 'mechanical' });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('failed');
+      expect(data.mode).toBe('mechanical');
+      expect(data.failure.failureReason).toBe('VisionAssertionFailed');
+      expect(data.failure.note).toContain('机械验收模式');
+      expect(data.failure.note).toContain('mode=full');
+    }
+    // vision 失败页 = 干跑终态页（onPageReady 交还的那个）
+    const { extractPageElements } = await import('../src/pi/inspectPage.js');
+    expect(vi.mocked(extractPageElements).mock.calls.at(-1)?.[0]).toBe(replayPageStub);
+    // 终态判定事件：order=-1 的 step_done（前端进度卡渲染）
+    const visionEvent = emitLog.find((e) => (e as { order?: number }).order === -1) as { status: string } | undefined;
+    expect(visionEvent).toMatchObject({ status: 'failed' });
+  });
+
+  it('dropped 断言：环境与步骤哈希都一致才复用上一轮判定；步骤变更后不复用（字面进回放）', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED], assertions: ['登录表单正常展示'] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { judgeAssertionText } = await import('../src/pi/space/tools/assertionJudge.js');
+    vi.mocked(judgeAssertionText).mockResolvedValue({ real: false, reason: '描述性短语' });
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+
+    // 第 1 轮 full：断言被体检判为描述性短语 → dropped 记入前缀确认缓存
+    const r1 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r1.ok).toBe(true);
+    if (r1.ok) expect(JSON.parse(r1.data!).droppedAssertions).toHaveLength(1);
+
+    // 第 2 轮 mechanical（步骤未变）：复用 dropped → 回放里该步 assertion 为 null（不再字面判定）
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId, mode: 'mechanical' });
+    expect(r2.ok).toBe(true);
+    const call2 = vi.mocked(executeCaseInBrowser).mock.calls.at(-1)! as unknown as [
+      string,
+      Array<{ assertion: unknown }>,
+      unknown,
+    ];
+    expect(call2[1][0]!.assertion).toBeNull();
+    if (r2.ok) {
+      const d2 = JSON.parse(r2.data!);
+      expect(d2.droppedAssertions).toHaveLength(1); // 原样回传供改写
+    }
+
+    // 第 3 轮 mechanical（步骤已暂存变更）：哈希不一致 → 不复用，新断言字面进回放
+    // 注意 update_step 暂存 op 只承载 instruction/compiled（断言不在可改字段内），
+    // 因此用「改 instruction」制造步骤哈希变化——这正是"该步内容变了"的真实场景。
+    const stepRows = await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
+    const stepId = stepRows.rows[0]!.id as string;
+    await pool.query(
+      `INSERT INTO ai_stage_case_ops(thread_id, local_id, version_id, case_id, op, payload, summary, staged_at)
+       VALUES ('t1', $1, $2, $3, 'update_step', $4::jsonb, '改指令', now())`,
+      [randomUUID(), versionId, caseId, JSON.stringify({ action: 'update_step', caseId, stepId, instruction: '点击列表里的删除' })],
+    );
+    await buildVerifyCaseTool(toolCtx()).execute({ caseId, mode: 'mechanical' });
+    const call3 = vi.mocked(executeCaseInBrowser).mock.calls.at(-1)! as unknown as [
+      string,
+      Array<{ assertion: unknown }>,
+      unknown,
+    ];
+    // 该步内容变了 → 上一轮 dropped 判定不复用 → 断言按字面进回放
+    expect(call3[1][0]!.assertion).toBe('登录表单正常展示');
+    // 全程无 AI 轮次（第 1 轮 full 恰好 1 次）
+    expect(runAiTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('stagnant 守卫适用：mechanical 同因连续失败达上限 → 强制停止且不启动浏览器', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED] });
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    vi.mocked(executeCaseInBrowser).mockImplementation(
+      async (_cid: string, steps: Array<{ order: number }>) =>
+        steps.map((s) => ({ order: s.order, status: 'failed' as const, durationMs: 5, error: 'count=0', failureReason: 'LocatorAllFailed' })),
+    );
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    for (let i = 0; i < 3; i++) {
+      const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId, mode: 'mechanical' });
+      expect(r.ok).toBe(true);
+      const d = JSON.parse(r!.data!);
+      expect(d.failure.failureReason).toBe('ReplayDivergence');
+    }
+    const { chromium } = await import('playwright-core');
+    vi.mocked(chromium.launch).mockClear();
+    const stopped = await buildVerifyCaseTool(toolCtx()).execute({ caseId, mode: 'mechanical' });
+    expect(stopped.ok).toBe(true);
+    const d = JSON.parse(stopped!.data!);
+    expect(d.failure.failureReason).toBe('StagnantRoundLimit');
+    expect(chromium.launch).not.toHaveBeenCalled();
+  });
+});
+
 describe('verify_case 注册', () => {
   it('buildSpaceTools 包含 verify_case', async () => {
     const { buildSpaceTools } = await import('../src/pi/space/tools/index.js');
     const names = buildSpaceTools(toolCtx()).map((t) => t.name);
     expect(names).toContain('verify_case');
+  });
+
+  it('工具文案声明 mechanical 模式与 traceReused 轨迹复用（agent 依赖文案选路）', async () => {
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const tool = buildVerifyCaseTool(toolCtx());
+    expect(tool.description).toContain('mode="mechanical"');
+    expect(tool.description).toContain('轨迹');
+    expect(tool.promptGuidelines.join('\n')).toContain('mode="mechanical"');
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const st = buildSolidifyCaseTool(toolCtx());
+    expect(st.description).toContain('零执行');
+    expect(st.promptGuidelines.join('\n')).toContain('mode="mechanical"');
   });
 });

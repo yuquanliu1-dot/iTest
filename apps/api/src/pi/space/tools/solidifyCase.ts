@@ -17,7 +17,8 @@ import { asc, eq, and } from 'drizzle-orm';
 import { db } from '../../../db/client.js';
 import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/schema.js';
 import { runAiTask, type AiAction } from '../../../execute/aiTask.js';
-import { mapAiActionsToCompiled } from '../../../execute/aiActionMap.js';
+import { mapAiActionsToCompiled, isVisualStep } from '../../../execute/aiActionMap.js';
+import { hashEffectiveSteps, hashVerifyMeta, traceKey, takeFreshTrace } from './verifyTrace.js';
 import { writeStepScreenshot } from '../../../execute/cdp.js';
 import { resolveEnv } from '../../../execute/envContext.js';
 import { resolveCaseUrl } from '../../../lib/resolve-url.js';
@@ -43,29 +44,110 @@ const SOLIDIFY_TIMEOUT_MS = 300_000;
 const STEP_MAX_TURNS = 5;
 
 // 映射实现已下沉 execute/aiActionMap.ts（aiTask 运行时缓存共用），此处转出口径不变（测试直接 import 本模块）。
-export { mapAiActionsToCompiled, type SolidifyMapResult } from '../../../execute/aiActionMap.js';
+// isVisualStep 同源下沉（verify_case 轨迹收集共用），转出口径不变。
+export { mapAiActionsToCompiled, isVisualStep, type SolidifyMapResult } from '../../../execute/aiActionMap.js';
 
-/** 步骤是否为视觉模式（可固化候选）：未编译（纯 instruction）或 compiled 全部由 aiTask 组成。 */
-export function isVisualStep(step: { instruction: string | null; compiled: unknown; sensitive: boolean }): boolean {
-  if (step.sensitive) return false; // 敏感步骤凭据不进 compiled，保持原样
-  const compiled = Array.isArray(step.compiled) ? step.compiled : [];
-  if (compiled.length === 0) {
-    return typeof step.instruction === 'string' && step.instruction.trim().length > 0;
+/**
+ * 映射 + 暂存：把收集到的 AI 动作轨迹逐视觉步骤映射为 compiled 并暂存（DB 用例逐步骤
+ * update_step 确定性 localId 幂等覆盖；草稿用例整例重暂存）。真跑收集与轨迹缓存两路共用。
+ */
+async function mapAndStageSteps(
+  ctx: SpaceToolsContext,
+  effectiveSteps: EffectiveStep[],
+  collected: Map<string, AiAction[]>,
+  opts: {
+    dbCase: typeof testCases.$inferSelect | null | undefined;
+    stagedCase: typeof aiStageCases.$inferSelect | null;
+    lang: StLang;
+  },
+): Promise<{ stepReports: Array<Record<string, unknown>>; solidifiedCount: number; keptCount: number }> {
+  const { stagedCase, lang } = opts;
+  const dbCase = opts.dbCase ?? null;
+  const caseId = dbCase ? dbCase.id : stagedCase!.localId;
+  const stepReports: Array<Record<string, unknown>> = [];
+  let solidifiedCount = 0;
+  let keptCount = 0;
+  const draftSteps = stagedCase
+    ? (stagedCase.steps as Array<{ action?: unknown; assertion?: unknown; compiled?: unknown }>)
+    : null;
+  for (const s of effectiveSteps) {
+    const base = { order: s.order, instruction: s.instruction };
+    if (!isVisualStep(s)) {
+      stepReports.push({ ...base, status: 'skipped-compiled', reason: s.sensitive ? '敏感步骤（凭据不进 compiled）' : '已编译步骤不动' });
+      continue;
+    }
+    if (s.sensitive) {
+      stepReports.push({ ...base, status: 'skipped-sensitive', reason: '敏感步骤保持原样（凭据走加密协议）' });
+      continue;
+    }
+    const mapped = mapAiActionsToCompiled(collected.get(s.id) ?? []);
+    if (!mapped.ok) {
+      keptCount += 1;
+      stepReports.push({ ...base, status: 'kept-aiTask', reason: mapped.reason });
+      continue;
+    }
+    solidifiedCount += 1;
+    stepReports.push({
+      ...base,
+      status: 'solidified',
+      compiled: mapped.compiled,
+      ...(mapped.skippedCount > 0 ? { warning: `跳过 ${mapped.skippedCount} 个观察性截图动作` } : {}),
+    });
+    // 暂存写：DB 用例逐步骤 update_step（确定性 localId，重复固化幂等覆盖）；草稿整例重暂存
+    if (dbCase) {
+      const localId = `solidify-${s.id}`;
+      const doc = {
+        localId,
+        caseId,
+        op: 'update_step',
+        payload: { action: 'update_step', caseId, stepId: s.id, compiled: mapped.compiled },
+        summary: st(lang, 'step.solidified', { order: s.order, count: mapped.compiled.length }),
+        diff: diffText({ compiled: s.compiled ?? null }, { compiled: mapped.compiled }),
+        stagedAt: new Date().toISOString(),
+      };
+      await stageCaseOp(ctx.threadId, ctx.versionId, doc);
+      emitStage(ctx, { kind: 'case_op' as const, id: localId, action: 'stage', payload: doc });
+    } else if (draftSteps) {
+      const idx = Number(/^staged-(\d+)$/.exec(s.id)?.[1] ?? 0) - 1;
+      if (idx >= 0 && idx < draftSteps.length) {
+        draftSteps[idx] = { ...draftSteps[idx]!, compiled: mapped.compiled };
+      }
+    }
   }
-  return compiled.every((a) => (a as { kind?: string }).kind === 'aiTask');
+  if (!dbCase && draftSteps) {
+    const draftBody = {
+      localId: stagedCase!.localId,
+      title: stagedCase!.title,
+      description: stagedCase!.description,
+      priority: stagedCase!.priority,
+      url: stagedCase!.url ?? null,
+      steps: draftSteps,
+      defaultEnvId: stagedCase!.defaultEnvId ?? null,
+      expectedOutcome: stagedCase!.expectedOutcome ?? null,
+      datasetLocalId: stagedCase!.datasetLocalId ?? null,
+    };
+    await stageCase(ctx.threadId, ctx.versionId, draftBody);
+    emitStage(ctx, {
+      kind: 'case' as const,
+      id: stagedCase!.localId,
+      action: 'stage',
+      payload: { ...draftBody, stagedAt: new Date().toISOString() },
+    });
+  }
+  return { stepReports, solidifiedCount, keptCount };
 }
 
 export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'solidify_case',
       description:
-      '把用例中的视觉模式步骤（aiTask / 纯自然语言 instruction，运行时由 AI 看截图临场执行）固化（solidify）为可机械回放的 compiled DSL，就地改写源用例：真实执行一遍用例并收集 AI 实际执行的动作，机械映射为 click/fill/navigate 后经 stage_case_op 暂存到草稿区（暂存草稿用例则整例更新），用户在 StagePanel 勾选 → verify_case 验收（含机械干跑）→ 落库。功能稳定后的收敛路径：先视觉模式快速跟进需求，稳定后固化沉淀为机械资产。副作用：会真实再执行一遍用例。登录/敏感步骤不固化（归环境登录与敏感字段协议）；含 press/wait 等无 DSL 对应动作的步骤保持 aiTask 并附原因。',
+      '把用例中的视觉模式步骤（aiTask / 纯自然语言 instruction，运行时由 AI 看截图临场执行）固化（solidify）为可机械回放的 compiled DSL，就地改写源用例：收集 AI 实际执行的动作，机械映射为 click/fill/navigate 后经 stage_case_op 暂存到草稿区（暂存草稿用例则整例更新），用户在 StagePanel 勾选 → verify_case 验收（含机械干跑）→ 落库。**若此前 verify_case(mode="full") 实测通过且步骤/环境未变，本工具会复用那份实测轨迹零执行完成固化（秒级，无需浏览器与 LLM）**；轨迹过期或步骤已变才真实执行一遍用例。功能稳定后的收敛路径：先视觉模式快速跟进需求，稳定后固化沉淀为机械资产。副作用：走真实执行路径时会真实再执行一遍用例。登录/敏感步骤不固化（归环境登录与敏感字段协议）；含 press/wait 等无 DSL 对应动作的步骤保持 aiTask 并附原因。',
     parameters: Type.Object({
       caseId: Type.String({ minLength: 1 }),
     }),
     promptGuidelines: [
       '调用时机（前置条件）：用户确认自然语言草稿后（无论草稿是否已落库,固化可直接作用于暂存草稿）,你主动询问「是否需要固化为机械步骤」得到肯定答复，或用户明确要求把视觉步骤转为机械步骤时才调用。不要在 stage_case 刚落暂存就自动 solidify——草稿期保持自然语言更利于多轮讨论修改。',
-      'solidify_case 真实执行一遍用例收集 AI 临场动作，机械映射为 compiled 后暂存为 update_step 修改（草稿用例整例更新）。暂存后必须立即 verify_case 验收（不要等用户再催）——机械干跑通过才算固化完成；verify 失败由你根据失败归因修复 compiled 后重跑 verify，直到通过。通过后引导用户在暂存区勾选保存。',
+      'solidify_case 优先复用 verify_case 实测缓存的轨迹零执行完成固化（结果里 traceReused=true）：只要上一步实测通过、步骤内容与环境未变，就不需要再跑一遍用例。没有轨迹可复用时（如从未实测、轨迹超过 30 分钟、或步骤已改）才真实执行一遍收集 AI 临场动作，机械映射为 compiled 后暂存为 update_step 修改（草稿用例整例更新）。暂存后必须立即 verify_case(mode="mechanical") 验收（跳过 AI 相，只做机械干跑 + 终态判定）——机械干跑通过才算固化完成；verify 失败由你根据失败归因修复 compiled 后重跑 mechanical，同因连续两轮失败或归因不明则改 mode="full" 重测。通过后引导用户在暂存区勾选保存。',
       'solidify_case 结果里 status=kept-aiTask 的步骤附有 reason（press/wait 无机械对应 / 登录凭据占位 / 选择器不可映射 / 动作收集为空）：这些步骤保持视觉执行是预期行为，不要强行改写；确需机械化的（如选择器含 Playwright 专有语法）可先用 stage_case_op 换成平台可表达的选择器后重新固化。',
       '同一用例反复固化是安全幂等的：暂存 localId 按 stepId 确定（solidify-<stepId>），重复固化覆盖上一轮暂存；执行失败（任一步骤未过）时不会暂存任何修改，修正后重跑即可。',
       '被固化的 fill value 是 AI 当轮填入的原始值：若 instruction 引用了 {{变量}} 而 AI 填了具体值，固化会把该值冻结进 compiled——数据驱动用例（绑定数据集）不建议固化含变量填写的步骤，或固化后把 value 手工改回 {{变量}}。',
@@ -145,6 +227,41 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           return { ok: false, error: '用例没有视觉模式步骤（全部已编译或为敏感步骤），无需固化。若要把已编译步骤回退为视觉模式，先用 stage_case_op update_step 把 compiled 置 null。' };
         }
         const effectiveCase = { ...caseMeta, ...overlayPatches };
+
+        // ── 轨迹缓存命中：verify_case 实测整轮通过且步骤/环境未变 → 零执行秒级固化 ──
+        // 不启动浏览器、不需要 LLM/环境解析（哈希输入全部来自 effectiveCase/effectiveSteps）；
+        // 过期命中会删条目并回退真跑（solidify 自产的 solidify-* ops 会改 overlay → 哈希变 → 自然失效）。
+        const cachedTrace = takeFreshTrace(
+          traceKey(ctx.threadId, caseId),
+          hashEffectiveSteps(effectiveSteps),
+          hashVerifyMeta({ url: effectiveCase.url, defaultEnvId: effectiveCase.defaultEnvId, versionId: effectiveCase.versionId }),
+          effectiveSteps.filter((s) => isVisualStep(s) && !s.sensitive).map((s) => s.id),
+        );
+        if (cachedTrace) {
+          ctx.emit({
+            type: 'solidify_progress', phase: 'start', caseId, total: effectiveSteps.length,
+            solidifiable: visualSteps.length, targetUrl: effectiveCase.url ?? null, traceReused: true,
+          });
+          const { stepReports, solidifiedCount, keptCount } = await mapAndStageSteps(
+            ctx, effectiveSteps, cachedTrace, { dbCase, stagedCase, lang },
+          );
+          const result = solidifiedCount > 0 ? 'solidified' : 'nothing-solidified';
+          ctx.emit({ type: 'solidify_progress', phase: 'end', result, solidified: solidifiedCount, kept: keptCount });
+          return {
+            ok: true,
+            data: JSON.stringify({
+              result,
+              caseId,
+              envId: null,
+              targetUrl: effectiveCase.url ?? null,
+              basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
+              stagedOpsApplied: opsApplied,
+              traceReused: true,
+              steps: stepReports,
+              note: `复用 verify_case 实测轨迹零执行完成固化（步骤与环境未变，轨迹缓存 30 分钟内有效）：已暂存 ${solidifiedCount} 个步骤的固化修改${keptCount > 0 ? `，${keptCount} 个步骤保持视觉模式（见各步 reason）` : ''}。下一步调用 verify_case(mode='mechanical') 做机械验收：跳过 AI 相，仅机械干跑 + 终态判定。`,
+            }),
+          };
+        }
 
         // ── LLM 前置检查 ──
         let client: Awaited<ReturnType<typeof resolveLlmClient>>['client'];
@@ -333,76 +450,9 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           if (timedOut) return { ok: false, error: `固化超时（${SOLIDIFY_TIMEOUT_MS / 1000}s）已终止` };
 
           // ── 映射 + 暂存：全部步骤执行通过，逐视觉步骤把收集到的动作映射为 compiled ──
-          const stepReports: Array<Record<string, unknown>> = [];
-          let solidifiedCount = 0;
-          let keptCount = 0;
-          const draftSteps = stagedCase
-            ? (stagedCase.steps as Array<{ action?: unknown; assertion?: unknown; compiled?: unknown }>)
-            : null;
-          for (const s of effectiveSteps) {
-            const base = { order: s.order, instruction: s.instruction };
-            if (!isVisualStep(s)) {
-              stepReports.push({ ...base, status: 'skipped-compiled', reason: s.sensitive ? '敏感步骤（凭据不进 compiled）' : '已编译步骤不动' });
-              continue;
-            }
-            if (s.sensitive) {
-              stepReports.push({ ...base, status: 'skipped-sensitive', reason: '敏感步骤保持原样（凭据走加密协议）' });
-              continue;
-            }
-            const mapped = mapAiActionsToCompiled(collected.get(s.id) ?? []);
-            if (!mapped.ok) {
-              keptCount += 1;
-              stepReports.push({ ...base, status: 'kept-aiTask', reason: mapped.reason });
-              continue;
-            }
-            solidifiedCount += 1;
-            stepReports.push({
-              ...base,
-              status: 'solidified',
-              compiled: mapped.compiled,
-              ...(mapped.skippedCount > 0 ? { warning: `跳过 ${mapped.skippedCount} 个观察性截图动作` } : {}),
-            });
-            // 暂存写：DB 用例逐步骤 update_step（确定性 localId，重复固化幂等覆盖）；草稿整例重暂存
-            if (dbCase) {
-              const localId = `solidify-${s.id}`;
-              const doc = {
-                localId,
-                caseId,
-                op: 'update_step',
-                payload: { action: 'update_step', caseId, stepId: s.id, compiled: mapped.compiled },
-                summary: st(lang, 'step.solidified', { order: s.order, count: mapped.compiled.length }),
-                diff: diffText({ compiled: s.compiled ?? null }, { compiled: mapped.compiled }),
-                stagedAt: new Date().toISOString(),
-              };
-              await stageCaseOp(ctx.threadId, ctx.versionId, doc);
-              emitStage(ctx, { kind: 'case_op' as const, id: localId, action: 'stage', payload: doc });
-            } else if (draftSteps) {
-              const idx = Number(/^staged-(\d+)$/.exec(s.id)?.[1] ?? 0) - 1;
-              if (idx >= 0 && idx < draftSteps.length) {
-                draftSteps[idx] = { ...draftSteps[idx]!, compiled: mapped.compiled };
-              }
-            }
-          }
-          if (!dbCase && draftSteps) {
-            const draftBody = {
-              localId: stagedCase!.localId,
-              title: stagedCase!.title,
-              description: stagedCase!.description,
-              priority: stagedCase!.priority,
-              url: stagedCase!.url ?? null,
-              steps: draftSteps,
-              defaultEnvId: stagedCase!.defaultEnvId ?? null,
-              expectedOutcome: stagedCase!.expectedOutcome ?? null,
-              datasetLocalId: stagedCase!.datasetLocalId ?? null,
-            };
-            await stageCase(ctx.threadId, ctx.versionId, draftBody);
-            emitStage(ctx, {
-              kind: 'case' as const,
-              id: stagedCase!.localId,
-              action: 'stage',
-              payload: { ...draftBody, stagedAt: new Date().toISOString() },
-            });
-          }
+          const { stepReports, solidifiedCount, keptCount } = await mapAndStageSteps(
+            ctx, effectiveSteps, collected, { dbCase, stagedCase, lang },
+          );
 
           const result = solidifiedCount > 0 ? 'solidified' : 'nothing-solidified';
           ctx.emit({

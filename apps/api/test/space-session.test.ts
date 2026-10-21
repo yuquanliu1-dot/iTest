@@ -108,6 +108,15 @@ describe('space session supervisor', () => {
     expect(out).toContain('版本空间上下文');
   });
 
+  it('用例创建流程文案（ZH/EN）含 mechanical 验收与轨迹复用（agent 依此选路）', async () => {
+    const { CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN } = await import('../src/pi/space/reqDesign.js');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('mechanical');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('轨迹');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('零执行');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('mechanical');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('ZERO execution');
+  });
+
   it('buildSpaceSystemPrompt(…,en-US):英文风格段,不含简体中文约束', async () => {
     const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
     const en = buildSpaceSystemPrompt(null, 'en-US');
