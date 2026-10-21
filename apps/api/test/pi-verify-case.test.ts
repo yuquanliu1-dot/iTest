@@ -422,10 +422,13 @@ describe('verify_case 逐步 AI 执行编排', () => {
     expect(r.ok).toBe(true);
     const call = vi.mocked(runAiTask).mock.calls[0]!;
     const instruction = String(call[1]);
-    expect(instruction).toContain('__ITEST_USERNAME__');
-    expect(instruction).toContain('__ITEST_PASSWORD__');
+    expect(instruction).toContain('__ITEST_USERNAME@web__');
+    expect(instruction).toContain('__ITEST_PASSWORD@web__');
     expect(instruction).not.toContain('Passw0rd!');
     const opts = call[4] as { valueSub: (v: string) => string };
+    expect(opts.valueSub('__ITEST_USERNAME@web__')).toBe('qa01');
+    expect(opts.valueSub('__ITEST_PASSWORD@web__')).toBe('Passw0rd!');
+    // 无 @ref 的裸占位符仍按「用例 web_service_ref → 环境默认 web」链解析到同一服务
     expect(opts.valueSub('__ITEST_USERNAME__')).toBe('qa01');
     expect(opts.valueSub('__ITEST_PASSWORD__')).toBe('Passw0rd!');
     expect(opts.valueSub('普通值')).toBe('普通值');

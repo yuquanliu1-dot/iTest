@@ -148,7 +148,13 @@ beforeEach(async () => {
       onAction?: (a: Record<string, unknown>, ok: boolean) => void;
       valueSub?: (v: string) => string;
     };
-    secretProbes.push(opts?.valueSub?.('__ITEST_STEP_SECRET__') ?? '');
+    // 探针只在敏感步骤有值时才有意义：共享 valueSub 对无密文的步骤会抛 SecretMissing
+    // （凭据缺失判死，绝不静默填空串）——探针吃掉这个异常，采样 '' 表示「本步无密文」。
+    try {
+      secretProbes.push(opts?.valueSub?.('__ITEST_STEP_SECRET__') ?? '');
+    } catch {
+      secretProbes.push('');
+    }
     const step = stepQueue.shift() ?? {};
     for (const [a, ok] of step.actions ?? []) opts?.onAction?.(a, ok);
     if (step.reject) throw step.reject;

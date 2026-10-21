@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // perform_login AI 化编排测试：resolveEnv / runAiTask / llmSettings / playwright 打桩。
 vi.mock('../src/execute/envContext.js', () => ({ resolveEnv: vi.fn() }));
-vi.mock('../src/execute/aiTask.js', () => ({ runAiTask: vi.fn() }));
+// 只打桩 runAiTask；占位符相关导出（credentialPlaceholder / makeCredentialValueSub 等）走真实实现——
+// 凭据替换的口径必须与执行层一致，测试里另写一套就会漏掉 @ref 归属这类回归。
+vi.mock('../src/execute/aiTask.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/execute/aiTask.js')>()),
+  runAiTask: vi.fn(),
+}));
 vi.mock('../src/agent/llmSettings.js', () => ({
   resolveLlmClient: vi.fn(async () => ({
     config: { provider: 'anthropic', apiKey: 'fake', model: 'fake' },
@@ -36,11 +41,23 @@ function toolCtx() {
   return { threadId: 't1', versionId: 'v1', projectId: 'p1', repo: { cwd: null, issue: null, noRepo: false }, emit: () => {} };
 }
 
-function mockEnv(login?: { user: string; password: string; loginUrl: string | null }) {
+function mockEnv(login?: { user: string; password: string; loginUrl: string | null }, extra?: { logins?: Map<string, { user: string; password: string; loginUrl: string | null }>; webServices?: Array<{ name: string | null; label: string; origin: string; isDefault: boolean }> }) {
+  const logins = extra?.logins ?? (login ? new Map([['default-web', login]]) : new Map());
+  const webServices = extra?.webServices
+    ?? (login ? [{ name: 'default-web', label: '默认 web', origin: 'http://e', isDefault: true }] : []);
   vi.mocked(resolveEnv).mockResolvedValue({
     envId: 'env1',
+    envName: '测试环境',
     baseUrl: 'http://e',
     login,
+    logins,
+    webServices,
+    hasCredentials: (ref: string) => logins.has(ref),
+    resolveLogin: (ref?: string | null) => {
+      if (ref) return logins.get(ref) ?? null;
+      const def = webServices.find((w) => w.isDefault) ?? webServices.find((w) => w.name);
+      return (def?.name ? logins.get(def.name) : undefined) ?? null;
+    },
     close: async () => {},
   } as never);
 }
@@ -70,6 +87,30 @@ describe('get_login_credentials', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('未配置登录凭据');
   });
+
+  it('返回可用 web 服务名清单（供 perform_login 选 webRef）', async () => {
+    mockEnv(
+      { user: 'qa01', password: 'Passw0rd!', loginUrl: 'http://e/login' },
+      {
+        logins: new Map([
+          ['default-web', { user: 'qa01', password: 'Passw0rd!', loginUrl: 'http://e/login' }],
+          ['backend', { user: 'ops01', password: 'Ops@12345', loginUrl: 'http://be/login' }],
+        ]),
+        webServices: [
+          { name: 'default-web', label: '默认 web', origin: 'http://e', isDefault: true },
+          { name: 'backend', label: '后端管理', origin: 'http://be', isDefault: false },
+        ],
+      },
+    );
+    const [credTool] = buildLoginTools(toolCtx());
+    const r = await credTool.execute({});
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.webServices).toEqual(['default-web', 'backend']);
+      expect(r.data).not.toContain('Ops@12345');
+    }
+  });
 });
 
 describe('perform_login（AI 驱动）', () => {
@@ -95,6 +136,53 @@ describe('perform_login（AI 驱动）', () => {
     const opts = call[4] as { valueSub: (v: string) => string };
     expect(opts.valueSub('__ITEST_USERNAME__')).toBe('qa01');
     expect(opts.valueSub('__ITEST_PASSWORD__')).toBe('Passw0rd!');
+  });
+
+  it('显式 webRef → 用该服务的凭据（占位符带 @ref，值取该服务）', async () => {
+    mockEnv(
+      { user: 'qa01', password: 'Passw0rd!', loginUrl: 'http://e/login' },
+      {
+        logins: new Map([
+          ['default-web', { user: 'qa01', password: 'Passw0rd!', loginUrl: 'http://e/login' }],
+          ['backend', { user: 'ops01', password: 'Ops@12345', loginUrl: 'http://be/login' }],
+        ]),
+        webServices: [
+          { name: 'default-web', label: '默认 web', origin: 'http://e', isDefault: true },
+          { name: 'backend', label: '后端管理', origin: 'http://be', isDefault: false },
+        ],
+      },
+    );
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"登录成功"}');
+    const [, loginTool] = buildLoginTools(toolCtx());
+    const r = await loginTool.execute({ webRef: 'backend' });
+    expect(r.ok).toBe(true);
+    const call = vi.mocked(runAiTask).mock.calls[0]!;
+    const instruction = String(call[1]);
+    expect(instruction).toContain('http://be/login'); // 目标 = 该服务自己的 loginUrl
+    expect(instruction).toContain('__ITEST_USERNAME@backend__');
+    expect(instruction).toContain('__ITEST_PASSWORD@backend__');
+    expect(instruction).not.toContain('Ops@12345');
+    const opts = call[4] as { valueSub: (v: string) => string };
+    expect(opts.valueSub('__ITEST_USERNAME@backend__')).toBe('ops01');
+    expect(opts.valueSub('__ITEST_PASSWORD@backend__')).toBe('Ops@12345');
+    // 清单里同时列出两个服务，模型可自行改用别的 @ref
+    expect(instruction).toContain('backend');
+    expect(instruction).toContain('default-web');
+  });
+
+  it('webRef 指向未配凭据的服务 → ok:false（不静默回落默认服务）', async () => {
+    mockEnv(
+      { user: 'qa01', password: 'Passw0rd!', loginUrl: 'http://e/login' },
+      {
+        logins: new Map([['default-web', { user: 'qa01', password: 'Passw0rd!', loginUrl: 'http://e/login' }]]),
+        webServices: [{ name: 'default-web', label: '默认 web', origin: 'http://e', isDefault: true }],
+      },
+    );
+    const [, loginTool] = buildLoginTools(toolCtx());
+    const r = await loginTool.execute({ webRef: 'nope' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('nope');
+    expect(vi.mocked(runAiTask)).not.toHaveBeenCalled();
   });
 
   it('summary failed → ok:false 登录失败携带 reason', async () => {

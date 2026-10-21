@@ -16,7 +16,8 @@ import type { Browser, Page } from 'playwright-core';
 import { asc, eq, and } from 'drizzle-orm';
 import { db } from '../../../db/client.js';
 import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/schema.js';
-import { runAiTask, USER_PH, PASSWORD_PH, SECRET_PH, type AiAction } from '../../../execute/aiTask.js';
+import { runAiTask, USER_PH, PASSWORD_PH, SECRET_PH, makeCredentialValueSub, credentialPlaceholder, type AiAction } from '../../../execute/aiTask.js';
+import { buildCredentialSource, renderWebResourceManifest } from '../../../execute/credentialSource.js';
 import { isVisualStep } from '../../../execute/aiActionMap.js';
 import { writeStepScreenshot, executeCaseInBrowser, type ExecStepResult } from '../../../execute/cdp.js';
 import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from '../../../execute/locator-probe.js';
@@ -296,12 +297,15 @@ async function checkCompiledLocators(
 }
 
 /** 单步执行指令：自然语言 + compiled 参考 + 占位符凭据段（仅配置了 login 时）+ 输出契约。
- *  solidify_case 复用同一提示词协议（AI 相执行 + 占位符凭据注入）。 */
+ *  solidify_case 复用同一提示词协议（AI 相执行 + 占位符凭据注入）。
+ *  webManifest：环境可用 web 服务清单（renderWebResourceManifest 产出）——有命名 web 时注入，
+ *  让模型知道每个服务各自的凭据占位符形态（@name），而不是只知道一个裸占位符。 */
 export function buildStepInstruction(
   step: { order: number; instruction: string | null; compiled: unknown; assertion: unknown },
   total: number,
   sec: { hasLogin: boolean; hasSecret: boolean },
   droppedAssertion?: string | null,
+  webManifest?: string,
 ): string {
   const lines: string[] = [];
   lines.push('你是网页测试执行器，在当前浏览器页面上完成下面这一步测试操作，完成后按输出契约结束。');
@@ -321,8 +325,17 @@ export function buildStepInstruction(
     lines.push('');
     lines.push('## 登录凭据');
     lines.push('若当前页面是登录页（由你根据页面内容自行判断），先用占位符完成登录再执行本步：');
-    lines.push(`- 用户名输入框 fill 的 value 用字面量 ${USER_PH}`);
-    lines.push(`- 密码输入框 fill 的 value 用字面量 ${PASSWORD_PH}`);
+    // 有命名 web 服务时逐服务点名占位符形态；否则退回裸占位符（走三级默认链）。
+    if (webManifest) {
+      lines.push('## 本次可用的 web 服务');
+      lines.push(webManifest);
+      lines.push(`- 用户名输入框 fill 的 value 用字面量 ${credentialPlaceholder('user', '<服务名>')}`);
+      lines.push(`- 密码输入框 fill 的 value 用字面量 ${credentialPlaceholder('password', '<服务名>')}`);
+      lines.push('- 「未配置凭据」的服务不要尝试登录（必然失败）；需要跨系统时用对应服务名做归属。');
+    } else {
+      lines.push(`- 用户名输入框 fill 的 value 用字面量 ${USER_PH}`);
+      lines.push(`- 密码输入框 fill 的 value 用字面量 ${PASSWORD_PH}`);
+    }
     lines.push('平台会把占位符替换为真实值；你不得猜测、拼接或输出真实凭据。');
     lines.push('登录后若出现强制改密/绑定等弹窗，按页面提示处理（能跳过则跳过）后继续本步。');
   }
@@ -419,6 +432,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               expectedOutcome: dbCase.expectedOutcome,
               defaultEnvId: dbCase.defaultEnvId,
               versionId: dbCase.versionId,
+              // 用例绑定的 web 服务名：无 @ref 占位符的凭据归属（与执行层同一把尺）。
+              webServiceRef: dbCase.webServiceRef ?? null,
             }
           : {
               title: stagedCase!.title,
@@ -426,6 +441,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               expectedOutcome: stagedCase!.expectedOutcome ?? null,
               defaultEnvId: stagedCase!.defaultEnvId ?? null,
               versionId: stagedCase!.versionId,
+              // 暂存表无 web_service_ref 列（stage_case 暂不涉及 web 绑定），草稿恒走默认链。
+              webServiceRef: null,
             };
         const steps: EffectiveStep[] = dbCase
           ? await db.select().from(testSteps).where(eq(testSteps.caseId, caseId)).orderBy(asc(testSteps.order))
@@ -525,6 +542,11 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           if (errName === 'EnvProjectMismatch') return { ok: false, error: '环境所属项目与当前用例不匹配' };
           return { ok: false, error: `环境解析失败: ${(e as Error).message}` };
         }
+        // 提示词里的 web 服务清单（只含 name/origin/有无凭据，绝不含真实值）——环境解析后才有，
+        // 故在这里算一次，逐步骤复用。
+        const webManifest = (() => {
+          try { return renderWebResourceManifest({ envCtx }); } catch { return ''; }
+        })();
 
         // ── L1 源码静态预检（advisory，不判死）──
         // 仓库就绪即自动尝试：全用例候选一次性批量查源码（单次 rg 遍历树），得到
@@ -684,15 +706,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
           }
 
-          // 占位符 → 真实值（无凭据时替换为 ''，提示词相应不注入凭据段）
-          const cred = envCtx.login;
+          // 占位符 → 真实值。凭据替换复用执行层唯一实现（@ref 归属 / 缺凭据 fail-fast
+          // 语义与回放完全一致——两处各写一套字面量精确匹配正是 2026-10-21 prod228 的分叉根因）。
           let stepSecret: string | undefined;
-          const valueSub = (v: string): string => {
-            if (v === USER_PH) return cred?.user ?? '';
-            if (v === PASSWORD_PH) return cred?.password ?? '';
-            if (v === SECRET_PH) return stepSecret ?? '';
-            return v;
-          };
+          // 每次取值都重新构造源：stepSecret 逐步骤解密后才赋值，构造时快照会把敏感值冻在 undefined。
+          const valueSub = (v: string): string =>
+            makeCredentialValueSub(
+              buildCredentialSource({ envCtx, caseWebServiceRef: effectiveCase.webServiceRef }, stepSecret),
+            )(v);
 
           const stepResults: AiStepResult[] = [];
           /** 本轮 AI 相收集的可固化步骤动作轨迹（solidify_case 零执行复用的数据源）。
@@ -809,6 +830,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               effectiveSteps.length,
               { hasLogin: !!envCtx.login, hasSecret: stepSecret !== undefined },
               droppedAssertion,
+              webManifest,
             );
             ctx.emit({
               type: 'verify_progress', phase: 'step_start', order: s.order,

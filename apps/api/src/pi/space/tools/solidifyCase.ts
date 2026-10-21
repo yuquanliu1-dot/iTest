@@ -16,7 +16,8 @@ import type { Browser } from 'playwright-core';
 import { asc, eq, and } from 'drizzle-orm';
 import { db } from '../../../db/client.js';
 import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/schema.js';
-import { runAiTask, type AiAction } from '../../../execute/aiTask.js';
+import { runAiTask, makeCredentialValueSub, type AiAction } from '../../../execute/aiTask.js';
+import { buildCredentialSource, renderWebResourceManifest } from '../../../execute/credentialSource.js';
 import { mapAiActionsToCompiled, isVisualStep } from '../../../execute/aiActionMap.js';
 import { hashEffectiveSteps, hashVerifyMeta, traceKey, takeFreshTrace } from './verifyTrace.js';
 import { writeStepScreenshot } from '../../../execute/cdp.js';
@@ -177,6 +178,8 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               expectedOutcome: dbCase.expectedOutcome,
               defaultEnvId: dbCase.defaultEnvId,
               versionId: dbCase.versionId,
+              // 用例绑定的 web 服务名：无 @ref 占位符的凭据归属（与执行层/verify_case 同一把尺）。
+              webServiceRef: dbCase.webServiceRef ?? null,
             }
           : {
               title: stagedCase!.title,
@@ -184,6 +187,8 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               expectedOutcome: stagedCase!.expectedOutcome ?? null,
               defaultEnvId: stagedCase!.defaultEnvId ?? null,
               versionId: stagedCase!.versionId,
+              // 暂存表无 web_service_ref 列，草稿恒走默认链。
+              webServiceRef: null,
             };
         const steps: EffectiveStep[] = dbCase
           ? await db.select().from(testSteps).where(eq(testSteps.caseId, caseId)).orderBy(asc(testSteps.order))
@@ -284,6 +289,10 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           if (errName === 'EnvProjectMismatch') return { ok: false, error: '环境所属项目与当前用例不匹配' };
           return { ok: false, error: `环境解析失败: ${(e as Error).message}` };
         }
+        // 提示词里的 web 服务清单（只含 name/origin/有无凭据，绝不含真实值）；环境解析后算一次，逐步骤复用。
+        const webManifest = (() => {
+          try { return renderWebResourceManifest({ envCtx }); } catch { return ''; }
+        })();
 
         // ── 浏览器 + watchdog → 逐步骤 AI 驱动执行（与 verify_case AI 相同骨架）+ onAction 收集 ──
         let browser: Browser | undefined;
@@ -329,14 +338,13 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
           }
 
-          const cred = envCtx.login;
+          // 占位符 → 真实值。复用执行层唯一实现（与 verify_case/机械回放同一把尺）。
           let stepSecret: string | undefined;
-          const valueSub = (v: string): string => {
-            if (v === USER_PH) return cred?.user ?? '';
-            if (v === PASSWORD_PH) return cred?.password ?? '';
-            if (v === SECRET_PH) return stepSecret ?? '';
-            return v;
-          };
+          // 每次取值都重新构造源：stepSecret 逐步骤解密后才赋值，构造时快照会把敏感值冻在 undefined。
+          const valueSub = (v: string): string =>
+            makeCredentialValueSub(
+              buildCredentialSource({ envCtx, caseWebServiceRef: effectiveCase.webServiceRef }, stepSecret),
+            )(v);
 
           const reportId = `solidify-${randomUUID()}`;
           // stepId → 该步骤收集到的成功动作（按执行顺序）。AI 相对动作的原始参数（占位符未替换）。
@@ -380,6 +388,8 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               { order: s.order, instruction: s.instruction, compiled: s.compiled, assertion: s.assertion },
               effectiveSteps.length,
               { hasLogin: !!envCtx.login, hasSecret: stepSecret !== undefined },
+              undefined,
+              webManifest,
             );
             let stepActions: AiAction[] = [];
             try {
