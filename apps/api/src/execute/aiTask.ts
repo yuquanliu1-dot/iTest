@@ -31,7 +31,7 @@ actions 元素类型：
 - 验证码/图形文字：先 screenshot 放大验证码图片，下轮逐字符仔细辨认。字符集为字母+数字（绝不出现 0 O o 1 l I），不区分大小写，通常 4 位，有随机旋转和干扰线。识别结果 fill 进对应输入框。
 - 每轮动作要保守，最多 6 个；每个动作的执行结果（ok / 错误信息）下轮反馈给你，出错就换 selector 重试。
 - 页面状态自检：每轮先看「当前 URL + 截图/元素清单」确认自己是否在指令期望的界面上。若目标元素连续 2 个动作都找不到，优先怀疑「页面不在期望界面」（入口/步骤错位、被弹窗或中间态挡住、导航没生效），不要再换 selector 空转——在 summary 里如实写明「当前 URL/可见界面与指令场景的差异」，需要时用 navigate / 点击返回 / 处理弹窗先回到正确界面。只有确认页面就在期望界面、纯粹是元素描述不准时，才换 selector 重试。
-- 需要引用平台变量时用 {{varName}}（平台会替换为实际值）。`;
+- 凭据（用户名/密码）：fill 的 value 用字面量 __ITEST_USERNAME__ / __ITEST_PASSWORD__（平台在填入的瞬间替换为真实值）；不要输出 {{}} 变量模板，平台不替换模板。`;
 
 const MOBILE_SYSTEM_PROMPT = `你是移动端测试执行智能体，在 iOS Simulator / Android Emulator 上执行自然语言测试指令。
 可观测：当前 accessibility tree（节点含 accessibilityId / label / role / bounds）、当前屏幕截图。
@@ -118,6 +118,66 @@ export type AiAction =
 export const USER_PH = '__ITEST_USERNAME__';
 export const PASSWORD_PH = '__ITEST_PASSWORD__';
 export const SECRET_PH = '__ITEST_STEP_SECRET__';
+
+// ── 凭据占位符识别与替换（AI 相 fill 值统一协议）──────────────────────────────
+type CredentialKind = 'user' | 'password' | 'secret';
+
+/** 凭据占位符识别（fill 值用）：接受精确哨兵 __ITEST_USERNAME__ 与模型常见的花括号变体
+ *  {{ITEST_USERNAME}} / {{__ITEST_USERNAME__}}（2026-10-21 prod228 实测模型会输出后者，
+ *  平台此前不认 → 字面量被敲进登录表单 → 登录必败）。裸名（无哨兵/花括号包裹）不认，
+ *  避免把普通文本误判成凭据。 */
+export function credentialPlaceholderKind(raw: string): CredentialKind | null {
+  if (typeof raw !== 'string') return null;
+  const t = raw.trim();
+  const byName = (s: string): CredentialKind | null => {
+    const up = s.toUpperCase();
+    if (up === 'ITEST_USERNAME') return 'user';
+    if (up === 'ITEST_PASSWORD') return 'password';
+    if (up === 'ITEST_STEP_SECRET') return 'secret';
+    return null;
+  };
+  if (t.startsWith('{{') && t.endsWith('}}')) return byName(t.slice(2, -2).trim().replace(/^_+|_+$/g, ''));
+  if (t.startsWith('__') && t.endsWith('__')) return byName(t.slice(2, -2));
+  return null;
+}
+
+const CREDENTIAL_REF_RE = /(?:\{\{\s*)?__?ITEST_(?:USERNAME|PASSWORD|STEP_SECRET)__?(?:\s*\}\})?/;
+
+/** 自由文本是否引用了凭据占位符（任意形态：哨兵 / 花括号变体 / 裸名）。
+ *  用途：substituteVars 的 missing 过滤（凭据不来自数据集 vars）+ 环境凭据前置检查。 */
+export function referencesCredential(text: string): boolean {
+  return CREDENTIAL_REF_RE.test(text);
+}
+
+/** 凭据来源：环境 login 凭据 + 步骤级敏感密文（缺省 null = 未配置）。 */
+export interface CredentialSource {
+  user?: string | null;
+  password?: string | null;
+  secret?: string | null;
+}
+
+/** AI 相 fill 值替换器：把凭据占位符（含花括号变体）换成真实值；非占位符原样返回。
+ *  缺凭据 → 抛 EnvMissing/SecretMissing 命名错误——绝不把占位符原样敲进表单
+ *  （2026-10-21 prod228 实测：AI 降级路径无 valueSub，模型输出的占位符原样进登录表单，
+ *  登录必败且整轮空转烧掉 12+ 次 LLM 调用）。 */
+export function makeCredentialValueSub(src: CredentialSource): (v: string) => string {
+  return (v: string): string => {
+    const kind = credentialPlaceholderKind(v);
+    if (!kind) return v;
+    const real = kind === 'user' ? src.user : kind === 'password' ? src.password : src.secret;
+    if (!real) {
+      const ph = kind === 'user' ? USER_PH : kind === 'password' ? PASSWORD_PH : SECRET_PH;
+      const e = new Error(
+        kind === 'secret'
+          ? `secret-missing: 步骤引用了 ${ph}，但本步没有可用的敏感值（需 sensitive 步骤密文）`
+          : `env-missing: 用例步骤引用了 ${ph}，但当前环境未配置 login 凭据（请到项目设置→测试环境配置）`,
+      );
+      e.name = kind === 'secret' ? 'SecretMissing' : 'EnvMissing';
+      throw e;
+    }
+    return real;
+  };
+}
 
 function parseAction(a: unknown): AiAction | null {
   if (!a || typeof a !== 'object') return null;
