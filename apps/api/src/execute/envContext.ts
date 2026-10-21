@@ -108,9 +108,16 @@ export interface EnvCtx {
   resolveWebOrigin(ref?: string | null): string | null;
   /** 派生:默认 web 服务 origin(兼容旧消费点)。 */
   readonly baseUrl: string | null;
+  /** 派生:默认 db 的连接配置(兼容旧消费点)。未配置 db 时 undefined。 */
   db?: { host: string; port: number; database: string; user: string; password: string };
-  /** 已建立好的查询池；缺省表示该环境未配置 DB。close() 时统一 end()。 */
+  /** 派生:默认 db 的连接池(兼容旧消费点)。惰建且缓存；未配置 db 时 undefined。 */
   pool?: QueryPool;
+  /** 全部配置完整的 db 对象(label 即 ref)。 */
+  dbs: DbEntry[];
+  /** 按 ref 取 db；ref 空 → isDefault → 最早；未命中 → null。 */
+  resolveDb(ref?: string | null): DbEntry | null;
+  /** 惰建 + 缓存连接池；未命中 → EnvDbMissing(消息点名 ref)。同名调用返回同一个池。 */
+  resolveDbPool(ref?: string | null): Promise<QueryPool>;
   syslog?: SyslogCtx;
   login?: LoginCtx;
   /** 每个命名 web 服务各自的登录凭据（仅已配 user+secret 的）；无名对象不进此表。 */
@@ -120,6 +127,18 @@ export interface EnvCtx {
   /** 某 web 服务是否配了凭据（AI 资源清单渲染用，不返回任何值）。 */
   hasCredentials(ref: string): boolean;
   close(): Promise<void>;
+}
+
+/** 一个配置完整的 db 对象（label 即执行期的 ref；`(envId,'db',label)` 已在 service 层保证唯一）。 */
+export interface DbEntry {
+  label: string;
+  dialect: DbDialect;
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+  isDefault: boolean;
 }
 
 /** payload 形状（environment_objects.payload）。secret 为 AES-256-GCM 三元组（base64）。 */
@@ -208,19 +227,49 @@ export async function resolveEnv(
   const pick = (type: string) =>
     objects.find((o) => o.objectType === type && o.isDefault) ?? objects.find((o) => o.objectType === type);
 
-  let pool: QueryPool | undefined;
-  let dbCfg: EnvCtx['db'];
-  const dbObj = pick('db');
-  if (dbObj) {
-    const p = (dbObj.payload ?? {}) as DbPayload;
-    if (p.host && p.dbName && p.user) {
-      const dialect: DbDialect = p.dbType === 'mysql' ? 'mysql' : 'postgres';
-      const port = p.port ?? (dialect === 'mysql' ? 3306 : 5432);
-      const password = p.secret?.c && p.secret?.i && p.secret?.t ? safeDecrypt(p.secret) : '';
-      dbCfg = { host: p.host, port, database: p.dbName, user: p.user, password };
-      pool = createQueryPool({ dialect, host: p.host, port, database: p.dbName, user: p.user, password });
-    }
+  // db 对象：以 label 为 ref 列出全部配置完整的条目。连接池惰建（多 db 场景下急切建全部会浪费连接），
+  // 池缓存进 pools，close() 统一 end()。EnvCtx.db / EnvCtx.pool 是「默认 db 的派生 getter」。
+  const dbs: DbEntry[] = [];
+  for (const o of objects.filter((x) => x.objectType === 'db')) {
+    const p = (o.payload ?? {}) as DbPayload;
+    if (!p.host || !p.dbName || !p.user) continue;
+    const dialect: DbDialect = p.dbType === 'mysql' ? 'mysql' : 'postgres';
+    dbs.push({
+      label: o.label,
+      dialect,
+      host: p.host,
+      port: p.port ?? (dialect === 'mysql' ? 3306 : 5432),
+      database: p.dbName,
+      user: p.user,
+      password: p.secret?.c && p.secret?.i && p.secret?.t ? safeDecrypt(p.secret) : '',
+      isDefault: o.isDefault,
+    });
   }
+  const resolveDb = (ref?: string | null): DbEntry | null => {
+    if (ref) return dbs.find((d) => d.label === ref) ?? null;
+    return dbs.find((d) => d.isDefault) ?? dbs[0] ?? null;
+  };
+  const pools = new Map<string, QueryPool>();
+  const poolFor = (entry: DbEntry): QueryPool => {
+    const hit = pools.get(entry.label);
+    if (hit) return hit;
+    const created = createQueryPool({
+      dialect: entry.dialect, host: entry.host, port: entry.port,
+      database: entry.database, user: entry.user, password: entry.password,
+    });
+    pools.set(entry.label, created);
+    return created;
+  };
+  const resolveDbPool = async (ref?: string | null): Promise<QueryPool> => {
+    const entry = resolveDb(ref);
+    if (!entry) {
+      const e = new Error(`env-db-missing: 环境「${env.name}」${ref ? `不存在名为 ${ref} 的数据库对象` : '未配置任何数据库对象'}，可用:${dbs.map((d) => d.label).join('、') || '(无)'}`);
+      e.name = 'EnvDbMissing';
+      (e as Error & { resource?: string | null }).resource = ref ?? null;
+      throw e;
+    }
+    return poolFor(entry);
+  };
 
   let syslogCfg: EnvCtx['syslog'];
   const syslogObj = pick('syslog');
@@ -292,8 +341,22 @@ export async function resolveEnv(
     webServices,
     resolveWebOrigin,
     get baseUrl() { return resolveWebOrigin(); },
-    db: dbCfg,
-    pool,
+    dbs,
+    resolveDb,
+    resolveDbPool,
+    get db() {
+      // 派生 getter：默认 db 的连接配置。未配置 db → undefined（queryDb 既有判死分支零改动）。
+      const d = resolveDb();
+      if (!d) return undefined;
+      const { label: _l, isDefault: _def, dialect: _dia, ...rest } = d;
+      return rest;
+    },
+    get pool() {
+      // 派生 getter：默认 db 的连接池。惰建并缓存（该调用点本来就要立即用它）。
+      const d = resolveDb();
+      if (!d) return undefined;
+      return poolFor(d);
+    },
     syslog: syslogCfg,
     login: loginCfg,
     logins,
@@ -304,7 +367,8 @@ export async function resolveEnv(
     },
     hasCredentials: (ref: string) => logins.has(ref),
     async close() {
-      if (pool) await pool.end();
+      await Promise.all(Array.from(pools.values()).map((p) => p.end().catch(() => undefined)));
+      pools.clear();
     },
   } satisfies EnvCtx;
 }

@@ -826,10 +826,16 @@ describe('phase3 — composite value at execute', () => {
   });
 });
 describe('机械 fill 的环境凭据占位符（compiled 不再需要明文密码）', () => {
+  // EnvCtx 新形态：凭据按命名 web 服务取（resolveLogin），旧的扁平 login 字段不再是解析源。
   const loginEnv = {
     envId: 'e-1',
+    envName: '默认环境',
     baseUrl: null,
-    login: { user: 'admin', password: 'S3cret!', loginUrl: null },
+    webServices: [{ name: 'frontend', label: '默认', origin: 'http://env.example', isDefault: true }],
+    logins: new Map([['frontend', { user: 'admin', password: 'S3cret!', loginUrl: null }]]),
+    resolveLogin: (ref?: string | null) =>
+      (ref ? loginEnv.logins.get(ref) : loginEnv.logins.get('frontend')) ?? null,
+    hasCredentials: (ref: string) => loginEnv.logins.has(ref),
     close: async () => undefined,
   };
 

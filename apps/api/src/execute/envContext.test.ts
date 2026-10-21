@@ -320,6 +320,74 @@ describe('resolveEnv', () => {
   });
 });
 
+describe('resolveEnv 命名 db', () => {
+  /** 内嵌密文三元组（与 encrypt 输出一致）。 */
+  const secretOf = (pw: string) => {
+    const enc = encrypt(pw);
+    return { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') };
+  };
+  const dbObjs = () => [
+    { id: 'd-m', environmentId: 'env-1', objectType: 'db', label: '主库', isDefault: true,
+      payload: { host: 'pg-main', dbName: 'main', user: 'u1', secret: secretOf('p1') } },
+    { id: 'd-o', environmentId: 'env-1', objectType: 'db', label: 'olap', isDefault: false,
+      payload: { host: 'my-olap', dbName: 'dw', dbType: 'mysql', user: 'u2', secret: secretOf('p2') } },
+    { id: 'd-bad', environmentId: 'env-1', objectType: 'db', label: '缺字段', isDefault: false, payload: {} },
+  ];
+
+  it('dbs 列出全部配置完整的 db（label 即 ref），缺字段的跳过', async () => {
+    mockTables({ test_environments: [ENV_ROW], environment_objects: dbObjs(), project_versions: [] });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.dbs.map((d) => d.label)).toEqual(['主库', 'olap']);
+    expect(env.resolveDb('olap')?.dialect).toBe('mysql');
+    expect(env.resolveDb()?.label).toBe('主库');
+    expect(env.resolveDb('nope')).toBeNull();
+    await env.close();
+  });
+
+  it('db / pool 降为默认 db 的派生 getter；pool 惰建且缓存同一实例', async () => {
+    mockTables({ test_environments: [ENV_ROW], environment_objects: dbObjs(), project_versions: [] });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.db).toEqual({ host: 'pg-main', port: 5432, database: 'main', user: 'u1', password: 'p1' });
+    const p = env.pool;
+    expect(p?.dialect).toBe('postgres');
+    expect(env.pool).toBe(p); // 缓存，不重建
+    await env.close();
+  });
+
+  it('resolveDbPool 按 ref 取池：同 ref 同实例、不同 ref 不同实例', async () => {
+    mockTables({ test_environments: [ENV_ROW], environment_objects: dbObjs(), project_versions: [] });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    const main1 = await env.resolveDbPool('主库');
+    const main2 = await env.resolveDbPool('主库');
+    const olap = await env.resolveDbPool('olap');
+    expect(main2).toBe(main1);
+    expect(olap).not.toBe(main1);
+    expect(olap.dialect).toBe('mysql');
+    await env.close();
+  });
+
+  it('resolveDbPool 未命中 → EnvDbMissing 具名错误（消息点名 ref 与可用清单）', async () => {
+    mockTables({ test_environments: [ENV_ROW], environment_objects: dbObjs(), project_versions: [] });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    const e = await env.resolveDbPool('nope').catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(Error);
+    expect((e as Error).name).toBe('EnvDbMissing');
+    expect((e as Error).message).toContain('nope');
+    expect((e as Error).message).toContain('主库');
+    await env.close();
+  });
+
+  it('close() 结束所有已建池并清空缓存（再次取池得到新实例）', async () => {
+    mockTables({ test_environments: [ENV_ROW], environment_objects: dbObjs(), project_versions: [] });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    const first = await env.resolveDbPool('主库');
+    await env.close();
+    const second = await env.resolveDbPool('主库');
+    expect(second).not.toBe(first);
+    await env.close();
+  });
+});
+
 describe('webServices / resolveWebOrigin', () => {
   it('构建 web 服务列表,resolveWebOrigin 默认取 isDefault', async () => {
     mockTables({
