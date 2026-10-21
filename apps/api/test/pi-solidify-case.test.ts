@@ -245,14 +245,20 @@ describe('mapAiActionsToCompiled 纯函数', () => {
     expect(r).toEqual({ ok: true, skippedCount: 0, compiled: [{ kind: 'click', locator: [{ strategy: 'text', value: '删除' }] }] });
   });
 
-  it('press / wait 无 DSL 对应 → 整步阻断', async () => {
+  it('press 无 DSL 对应 → 整步阻断；wait 映射为固定时长 waitFor', async () => {
     const { mapAiActionsToCompiled } = await import('../src/pi/space/tools/solidifyCase.js');
     const press = mapAiActionsToCompiled([{ type: 'click', selector: '#a' }, { type: 'press', key: 'Enter' }]);
     expect(press.ok).toBe(false);
     if (!press.ok) expect(press.reason).toContain('press');
-    const wait = mapAiActionsToCompiled([{ type: 'wait', ms: 500 }]);
-    expect(wait.ok).toBe(false);
-    if (!wait.ok) expect(wait.reason).toContain('wait');
+    const wait = mapAiActionsToCompiled([{ type: 'click', selector: '#a' }, { type: 'wait', ms: 1500 }]);
+    expect(wait).toEqual({
+      ok: true,
+      skippedCount: 0,
+      compiled: [
+        { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] },
+        { kind: 'waitFor', locator: [], timeoutMs: 1500 },
+      ],
+    });
   });
 
   it('Playwright 专有语法（>> / :has-text）→ 不可映射阻断', async () => {

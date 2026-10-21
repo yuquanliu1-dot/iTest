@@ -1239,24 +1239,35 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     expect(getVerifiedTrace(traceKey('t1', caseId))).toBeNull();
   });
 
-  it('resume 轮（前缀机械恢复）全过也不保存：traceSaved=false', async () => {
-    const { caseId } = await seedVisualCase(2);
+  it('resume 轮全过：前缀轨迹携带 + 本轮 AI 相补齐 → 合并保存 traceSaved=true', async () => {
+    const { caseId, stepIds } = await seedVisualCase(2);
     const { runAiTask } = await import('../src/execute/aiTask.js');
-    // 第 1 轮：步 2 失败（confirmCache 记 confirmedThrough=1）
+    // 第 1 轮：步 1 过（收集 click），步 2 失败（confirmCache 记 confirmedThrough=1，轨迹随确认入册）
     vi.mocked(runAiTask)
-      .mockResolvedValueOnce('{"status":"passed","reason":"完成","login":"not-needed"}')
+      .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
+        opts?.onAction?.({ type: 'click', selector: '#btn-1' }, true);
+        return '{"status":"passed","reason":"完成","login":"not-needed"}';
+      })
       .mockResolvedValueOnce('{"status":"failed","reason":"超时","login":"not-needed"}');
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     await buildVerifyCaseTool(toolCtx()).execute({ caseId });
-    // 第 2 轮：前缀机械恢复，AI 只跑步 2 且通过
-    vi.mocked(runAiTask).mockResolvedValueOnce('{"status":"passed","reason":"完成","login":"not-needed"}');
+    // 第 2 轮：前缀机械恢复（不重跑 AI），步 2 通过并收集 fill
+    vi.mocked(runAiTask).mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
+      opts?.onAction?.({ type: 'fill', selector: '#name', value: 'v2' }, true);
+      return '{"status":"passed","reason":"完成","login":"not-needed"}';
+    });
     const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     const data2 = JSON.parse((r2 as { data: string }).data);
     expect(data2.result).toBe('passed');
     expect(data2.resumeFrom).toBe(1);
-    expect(data2.traceSaved).toBe(false);
+    expect(data2.traceSaved).toBe(true);
     const { getVerifiedTrace, traceKey } = await import('../src/pi/space/tools/verifyTrace.js');
-    expect(getVerifiedTrace(traceKey('t1', caseId))).toBeNull();
+    const entry = getVerifiedTrace(traceKey('t1', caseId));
+    expect(entry).not.toBeNull();
+    // 前缀步：轨迹来自第 1 轮携带（本轮机械恢复无 AI 动作）
+    expect((entry!.trace.get(stepIds[0]!)![0] as { selector: string }).selector).toBe('#btn-1');
+    // 改动步：本轮 AI 相新收集
+    expect((entry!.trace.get(stepIds[1]!)![0] as { value: string }).value).toBe('v2');
   });
 
   it('敏感步骤不入轨迹（凭据属于环境）', async () => {

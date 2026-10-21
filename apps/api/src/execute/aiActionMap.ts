@@ -34,8 +34,11 @@ export type SolidifyMapResult =
 
 /**
  * 把一个 aiTask 步骤收集到的（成功）AI 动作序列机械映射为 compiled DSL。
- * 步骤级全有或全无：press / wait 无对应 DSL kind、选择器含 Playwright 专有语法、
+ * 步骤级全有或全无：press 无对应 DSL kind、选择器含 Playwright 专有语法、
  * fill value 是凭据占位符——任一出现即整步保持 aiTask（保守正确优于部分固化）。
+ * wait 有对应形态：映射为 waitFor 空 locator + timeoutMs（cdp 的 waitFor 空 locator 分支
+ * 即「睡满 timeoutMs」的固定等待），AI 相的页面稳定等待因此可机械保留——prod228 实测里
+ * click 后夹带的 wait(1500ms) 曾让整步（含那个真 click）被丢弃，固化率归零。
  * screenshot 是观察性动作，跳过不映射。
  */
 export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
@@ -67,7 +70,9 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
       case 'press':
         return { ok: false, reason: `含键盘动作 press(${a.key})，DSL 无对应机械动作，整步保持 aiTask` };
       case 'wait':
-        return { ok: false, reason: `含时序动作 wait(${a.ms}ms)，DSL 无对应机械动作，整步保持 aiTask` };
+        // AI 相的页面稳定等待映射为固定时长 waitFor（空 locator = 不等元素，睡满 timeoutMs）
+        compiled.push({ kind: 'waitFor', locator: [], timeoutMs: a.ms });
+        break;
     }
   }
   if (compiled.length === 0) {

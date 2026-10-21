@@ -184,6 +184,10 @@ interface VerifyConfirmState {
   assertionVerdicts: Map<string, { real: boolean; dropped?: string }>;
   /** 已确认前缀步骤的 AI 相通过结果（响应 steps 合并复用；截图路径跨轮仍可访问，无 TTL）。 */
   confirmedStepResults: AiStepResult[];
+  /** 已确认步骤的 AI 动作轨迹（resume 轮合并完整轨迹用）：前缀步沿用上一轮条目，
+   *  本轮 AI 相补齐改动步。没有它，resume 轮存不出完整轨迹 → 紧跟的 solidify 无从零执行
+   *  （prod228 实测：改一步再验，resumeFrom=2 恰好撞上轨迹存不下的轮次）。 */
+  confirmedTraces: Map<string, AiAction[]>;
 }
 const verifyConfirmCache = new Map<string, VerifyConfirmState>();
 
@@ -692,9 +696,17 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
 
           const stepResults: AiStepResult[] = [];
           /** 本轮 AI 相收集的可固化步骤动作轨迹（solidify_case 零执行复用的数据源）。
-         *  仅整轮全过且无前缀恢复（validPrefixLen===0）时才落缓存——resume 轮的前缀步
-         *  在机械恢复里跑的，没有 AI 动作可收集，半份轨迹对 solidify 无用。 */
+           *  前缀步（[0, validPrefixLen)）本轮由机械恢复执行、无 AI 动作，其轨迹从上一轮
+           *  确认缓存携带（validPrefixLen 的判定已保证这些步内容未变，旧轨迹仍有效）；
+           *  本轮 AI 相实际执行的步就地覆盖。合并后整轮全过即得完整轨迹。 */
           const collectedTrace = new Map<string, AiAction[]>();
+          if (prevConfirm && validPrefixLen > 0) {
+            for (let i = 0; i < validPrefixLen; i++) {
+              const id = effectiveSteps[i]!.id;
+              const carried = prevConfirm.confirmedTraces.get(id);
+              if (carried) collectedTrace.set(id, carried);
+            }
+          }
           /** 本轮 AI 相产生的断言判定（写回上一轮缓存，续跑前逐步复用）。 */
           const verdictsThisRound = new Map<string, { real: boolean; dropped?: string }>();
           // 全局看门狗超时收尾（步骤中断 / 机械回放中断共用）：把本地已完成前缀写回缓存——
@@ -715,6 +727,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               confirmedThrough: completed.length,
               assertionVerdicts: merged,
               confirmedStepResults: completed,
+              confirmedTraces: collectedTrace,
             });
             return { ok: false, error: `验证超时（${verifyTimeoutMs / 1000}s）已终止：已完成 ${completed.length}/${effectiveSteps.length} 步（${where}），后续轮次将从中断步 resume 续跑` };
           };
@@ -927,21 +940,30 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               confirmedThrough: failedIndex < 0 ? effectiveSteps.length : failedIndex,
               assertionVerdicts: mergedVerdicts,
               confirmedStepResults: [...prefixConfirmedResults.slice(0, resumeIndex), ...stepResults],
+              confirmedTraces: collectedTrace,
             });
           }
 
           // ── 轨迹缓存写回（solidify_case 零执行复用）──
-          // 仅「整轮全过 + 无前缀恢复」才保存：resume 轮前缀步是机械恢复跑的，收集不出完整轨迹。
+          // 整轮全过且「必需视觉步全部在册」才保存：前缀步的轨迹由确认缓存携带（见
+          // collectedTrace 初始化），本轮 AI 相补齐改动步——resume 轮因此也能存出完整轨迹。
+          // 覆盖不完整（如旧格式缓存无轨迹可携带）宁缺毋滥：takeFreshTrace 的 required
+          // 检查本可挡住部分轨迹，主动不写保持"在册即可用"的语义干净。
           // vision 失败不阻断（步骤已过、expectedOutcome 不参与哈希，改预期不需要重跑实测）。
           // 任一步骤失败 → 清缓存（旧轨迹对应旧步骤内容，留着只会误导新鲜度判定——哈希本可挡，
           // 主动清是双保险，也让 getVerifiedTrace 的语义干净）。
           // 机械模式不动轨迹缓存：本轮没有 AI 相，既无可存轨迹，也不能清掉实测轮存的
           // （清了会让后续 solidify 无谓回退真跑）。
           const tkey = traceKey(ctx.threadId, caseId);
+          let traceSavedNow = false;
           if (mode !== 'mechanical') {
-            if (failedIndex < 0 && validPrefixLen === 0) {
-              saveVerifiedTrace(tkey, curStepsHash, curMetaHash, collectedTrace);
-            } else if (failedIndex >= 0) {
+            if (failedIndex < 0) {
+              const solidifiableIds = effectiveSteps.filter((s) => isVisualStep(s) && !s.sensitive).map((s) => s.id);
+              if (solidifiableIds.every((id) => collectedTrace.has(id))) {
+                saveVerifiedTrace(tkey, curStepsHash, curMetaHash, collectedTrace);
+                traceSavedNow = true;
+              }
+            } else {
               clearVerifiedTrace(tkey);
             }
           }
@@ -1122,7 +1144,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 : {
                     login,
                     // 轨迹已缓存 → 紧接着的 solidify_case 可零执行秒级固化（agent 据此引导用户）
-                    traceSaved: validPrefixLen === 0,
+                    traceSaved: traceSavedNow,
                   }),
               resumeFrom: validPrefixLen,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
