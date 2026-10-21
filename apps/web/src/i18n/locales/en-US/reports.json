@@ -112,6 +112,11 @@
     "logSummary_one": "Log: matched {{count}} line",
     "logSummary_other": "Log: matched {{count}} lines"
   },
+  "sql": {
+    "summary": "SQL: {{count}} rows",
+    "summary_one": "SQL: {{count}} row",
+    "summary_other": "SQL: {{count}} rows"
+  },
   "http": {
     "summary": "HTTP: {{method}} {{path}} → {{status}} ({{ms}}ms)",
     "headers": "Request headers",

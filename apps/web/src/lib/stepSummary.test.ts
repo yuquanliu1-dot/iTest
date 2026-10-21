@@ -97,6 +97,11 @@ describe('stepSummary', () => {
     expect(stepSummary({ compiled: [{ kind: 'httpRequest', method: 'POST', url: '/api/orders', headers: [], timeoutMs: 10000, saveAs: { varName: 'orderId', from: 'body', path: 'data.id' } }] }, t)).toBe('POST /api/orders → {{orderId}}');
   });
 
+  it('sql 显示单行 SQL，有 dbRef 时点名该库', () => {
+    expect(stepSummary({ compiled: [{ kind: 'sql', sql: 'SELECT  id,\n status FROM t' }] }, t)).toBe('SQL SELECT id, status FROM t');
+    expect(stepSummary({ compiled: [{ kind: 'sql', dbRef: 'olap', sql: 'SELECT 1' }] }, t)).toBe('olap：SQL SELECT 1');
+  });
+
   it('未知类型回退 JSON 片段（超长截断）', () => {
     const row = { compiled: [{ kind: 'weird', foo: 'x'.repeat(60) }] };
     expect(stepSummary(row, t)).toBe(JSON.stringify(row.compiled![0]).slice(0, 39) + '…');

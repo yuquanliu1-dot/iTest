@@ -57,6 +57,7 @@ export const STEP_KIND_LABELS: Record<string, string> = {
   observeLog: 'cases:stepKind.observeLog',
   httpRequest: 'cases:stepKind.httpRequest',
   sendSyslog: 'cases:stepKind.sendSyslog',
+  sql: 'cases:stepKind.sql',
 };
 
 export function stepKindLabel(kind: string): string {

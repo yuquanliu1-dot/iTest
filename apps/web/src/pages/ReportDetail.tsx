@@ -14,7 +14,7 @@ import { useUIStore } from '../stores/ui';
 import { fullDateTime, stepKindLabel } from '../lib/format';
 import { getKind, stepSummary, fullStepDescription } from '../lib/stepSummary';
 import { creatorName } from '../lib/creatorName';
-import type { DbQueryRowResult, ObserveLogLineResult, HttpStepResult, SyslogStepResult } from '@itest/shared';
+import type { DbQueryRowResult, ObserveLogLineResult, HttpStepResult, SyslogStepResult, SqlStepResult } from '@itest/shared';
 
 /** 步骤级 LLM 用量（aiTask / 验证码 / vision 判定累加）；与 apps/api execute/aiUsage.ts 对齐。 */
 interface AiUsage {
@@ -45,6 +45,8 @@ interface StepResult {
   visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string; aiUsage?: AiUsage };
   /** queryDb 步骤的结果（仅 queryDb 步携带） */
   db?: DbQueryRowResult;
+  /** sql 步骤的结果（仅 sql 步携带） */
+  sql?: SqlStepResult;
   /** observeLog 步骤的结果（仅 observeLog 步携带） */
   log?: ObserveLogLineResult;
   /** httpRequest 步骤的结果（仅 httpRequest 步携带） */
@@ -308,6 +310,7 @@ export default function ReportDetail() {
             </div>
           )}
           {s.db && <DbResultCell db={s.db} />}
+          {s.sql && <SqlResultCell sql={s.sql} />}
           {s.log && <LogResultCell log={s.log} />}
           {s.http && <HttpResultCell http={s.http} />}
           {s.syslog && <SyslogResultCell syslog={s.syslog} />}
@@ -714,8 +717,48 @@ function DbResultCell({ db }: { db: DbQueryRowResult }) {
   );
 }
 
-function HttpResultCell({ http }: { http: HttpStepResult }) {
+function SqlResultCell({ sql }: { sql: SqlStepResult }) {
   const { t } = useTranslation();
+  return (
+    <details className="text-[11px]">
+      <summary
+        className="cursor-pointer"
+        style={{ color: 'var(--muted-foreground)' }}
+      >
+        {t('reports:sql.summary', { count: sql.rowCount })}
+        {sql.dbRef ? ` @${sql.dbRef}` : ''}
+        {sql.truncated ? t('reports:truncated') : ''}
+        {sql.assertion && (
+          <span
+            style={{
+              color: sql.assertion.matched ? 'var(--success)' : 'var(--destructive)',
+              marginLeft: 8,
+            }}
+          >
+            {t(sql.assertion.matched ? 'reports:assertion.hit' : 'reports:assertion.miss')}{t('reports:assertion.quote', { expected: sql.assertion.expected })}
+          </span>
+        )}
+      </summary>
+      <pre
+        style={{
+          maxHeight: 240,
+          overflow: 'auto',
+          fontSize: 11,
+          margin: '4px 0',
+          padding: 8,
+          borderRadius: 4,
+          background: 'var(--muted)',
+          color: 'var(--muted-foreground)',
+          border: '1px solid var(--border)',
+        }}
+      >
+        {JSON.stringify(sql.rows.slice(0, 5), null, 2)}
+      </pre>
+    </details>
+  );
+}
+
+function HttpResultCell({ http }: { http: HttpStepResult }) {  const { t } = useTranslation();
   const PRE_STYLE: React.CSSProperties = {
     maxHeight: 240,
     overflow: 'auto',

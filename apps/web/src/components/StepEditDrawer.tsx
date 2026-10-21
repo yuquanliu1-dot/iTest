@@ -259,6 +259,17 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
   const [syslogMessage, setSyslogMessage] = useState(String(action.message ?? ''));
   const [syslogTimeout, setSyslogTimeout] = useState(String(action.timeoutMs ?? 5000));
 
+  // sql（查被测系统自己的库）
+  const [sqlText, setSqlText] = useState(typeof action.sql === 'string' ? action.sql : '');
+  const [sqlParams, setSqlParams] = useState<string[]>(
+    Array.isArray(action.params) ? (action.params as unknown[]).map((p) => String(p ?? '')) : [],
+  );
+  const [sqlLimit, setSqlLimit] = useState(String(action.limit ?? 50));
+  const [sqlDbRef, setSqlDbRef] = useState(typeof action.dbRef === 'string' ? action.dbRef : '');
+  const [sqlAssertion, setSqlAssertion] = useState<{ match: 'equals' | 'contains' | 'regex'; expected: string; column?: string } | undefined>(
+    action.assertion as { match: 'equals' | 'contains' | 'regex'; expected: string; column?: string } | undefined,
+  );
+
   // mobile-only
   const isMobileForm = platform === 'mobile';
   const [swipeFrom, setSwipeFrom] = useState<Locator[]>(() => {
@@ -419,6 +430,26 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       next.severity = syslogSeverity;
       next.message = syslogMessage;
       next.timeoutMs = Math.max(1000, Math.min(30000, Number(syslogTimeout) || 5000));
+    }
+    if (kind === 'sql') {
+      next.sql = sqlText;
+      next.limit = Math.max(1, Math.min(200, Number(sqlLimit) || 50));
+      // params 保留原文（"{{var}}" 交给执行期替换）；这里只做类型归一与空串剔除。
+      next.params = sqlParams
+        .map((p) => p.trim())
+        .filter((p) => p !== '')
+        .slice(0, 20)
+        .map((p) => {
+          if (p === 'true') return true;
+          if (p === 'false') return false;
+          if (p === 'null') return null;
+          if (!Number.isNaN(Number(p))) return Number(p);
+          return p;
+        });
+      if (sqlDbRef.trim()) next.dbRef = sqlDbRef.trim();
+      else delete next.dbRef;
+      if (sqlAssertion) next.assertion = sqlAssertion;
+      else delete next.assertion;
     }
     if (kind === 'swipe') {
       next.from = swipeFrom;
@@ -1181,6 +1212,72 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
               <span>{t('cases:syslogTimeoutLabel')}</span>
               <input className="input-base input-xs" type="number" min={1000} max={30000} value={syslogTimeout} onChange={(e) => setSyslogTimeout(e.target.value)} />
             </label>
+          </div>
+        )}
+
+        {kind === 'sql' && (
+          <div className="flex flex-col gap-2">
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+              <span>{t('cases:sqlDbRefLabel')}</span>
+              <input
+                className="input-base input-xs"
+                value={sqlDbRef}
+                onChange={(e) => setSqlDbRef(e.target.value)}
+                placeholder={t('cases:sqlDbRefPlaceholder')}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+              <span>{t('cases:sqlTextLabel')}</span>
+              <textarea
+                className="input-base input-xs font-mono"
+                style={{ minHeight: 96 }}
+                aria-invalid={!!fieldErrors['action.sql']}
+                value={sqlText}
+                onChange={(e) => setSqlText(e.target.value)}
+                placeholder="SELECT id, status FROM orders WHERE user = {{user}}"
+              />
+            </label>
+            <FieldError msg={fieldErrors['action.sql']} />
+            <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:sqlReadOnlyHint')}</p>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:sqlParamsLabel')}</span>
+              {sqlParams.map((p, i) => (
+                <div key={i} className="flex gap-1 items-center">
+                  <input
+                    className="input-base input-xs flex-1"
+                    value={p}
+                    onChange={(e) => {
+                      const next = [...sqlParams];
+                      next[i] = e.target.value;
+                      setSqlParams(next);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="text-[11px] press"
+                    style={{ background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4 }}
+                    onClick={() => setSqlParams(sqlParams.filter((_, j) => j !== i))}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              {sqlParams.length < 20 && (
+                <button
+                  type="button"
+                  className="text-[11px] self-start press"
+                  style={{ background: 'var(--popover)', border: '1px dashed var(--border)', color: 'var(--primary)', cursor: 'pointer', borderRadius: 4, padding: '4px 8px' }}
+                  onClick={() => setSqlParams([...sqlParams, ''])}
+                >
+                  {t('cases:addParam')}
+                </button>
+              )}
+            </div>
+            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+              <span>{t('cases:sqlLimitLabel')}</span>
+              <input className="input-base input-xs" type="number" min={1} max={200} value={sqlLimit} onChange={(e) => setSqlLimit(e.target.value)} />
+            </label>
+            <DbAssertionEditor value={sqlAssertion} onChange={setSqlAssertion} />
           </div>
         )}
 

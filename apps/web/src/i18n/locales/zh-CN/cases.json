@@ -34,7 +34,8 @@
     "queryDb": "数据库查询",
     "observeLog": "日志观察",
     "httpRequest": "HTTP 请求",
-    "sendSyslog": "发送 syslog 日志"
+    "sendSyslog": "发送 syslog 日志",
+    "sql": "SQL 查询"
   },
   "statusChanged": "状态已改为 {{status}}",
   "changeStatus": "点击修改状态",
@@ -289,6 +290,13 @@
   "syslogHostPlaceholder": "syslog 服务器地址（支持 {{col}}）",
   "syslogMessageLabel": "日志内容",
   "syslogTimeoutLabel": "超时 (ms, 1000-30000)",
+  "sqlDbRefLabel": "数据库对象（留空=环境默认）",
+  "sqlDbRefPlaceholder": "留空则用环境默认的数据库对象",
+  "sqlTextLabel": "只读 SQL（SELECT / WITH 开头，单条）",
+  "sqlParamsLabel": "参数（按序，{{var}} 会替换）",
+  "sqlLimitLabel": "limit（1-200）",
+  "sqlReadOnlyHint": "只允许单条 SELECT / WITH；写操作会被拒绝（守卫是词法检查，被测库请配只读账号）",
+  "addParam": "+ 参数",
   "sensitiveNeeded": "已加密 — 修改时请输入新密码",
   "smartExtractNeedsDesc": "智能抽取需要填写描述并生成正则",
   "instructionRequired": "指令不能为空",
@@ -402,7 +410,9 @@
       "observeLog": "观察日志",
       "observeLogWithKw": "观察日志 · {{keywords}}",
       "httpRequest": "{{method}} {{url}}{{arrow}}",
-      "sendSyslog": "发 syslog {{protocol}} {{host}}:{{port}}「{{message}}」"
+      "sendSyslog": "发 syslog {{protocol}} {{host}}:{{port}}「{{message}}」",
+      "sql": "SQL {{sql}}",
+      "sqlWithRef": "{{db}}：SQL {{sql}}"
     },
     "fieldKind": "类型：",
     "fieldLocator": "定位：",

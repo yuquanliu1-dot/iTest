@@ -96,6 +96,9 @@
     "summary": "DB 查询：{{count}} 行",
     "logSummary": "日志：匹配 {{count}} 行"
   },
+  "sql": {
+    "summary": "SQL：{{count}} 行"
+  },
   "http": {
     "summary": "HTTP：{{method}} {{path}} → {{status}}（{{ms}}ms）",
     "headers": "请求头",

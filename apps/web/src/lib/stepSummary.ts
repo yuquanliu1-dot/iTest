@@ -159,6 +159,13 @@ function actionSummary(a: KnownAction, t: TFunction): string {
         port: a.port == null ? '514' : String(a.port),
         message: clip(str(a.message), 30),
       });
+    case 'sql': {
+      const ref = str(a.dbRef);
+      const oneLine = String(a.sql ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      return ref
+        ? t('cases:stepSummary.act.sqlWithRef', { db: ref, sql: oneLine })
+        : t('cases:stepSummary.act.sql', { sql: oneLine });
+    }
     default:
       return clip(JSON.stringify(a) ?? String(a), 40);
   }
