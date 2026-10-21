@@ -141,7 +141,7 @@ export function credentialPlaceholderKind(raw: string): CredentialKind | null {
   return null;
 }
 
-const CREDENTIAL_REF_RE = /(?:\{\{\s*)?__?ITEST_(?:USERNAME|PASSWORD|STEP_SECRET)__?(?:\s*\}\})?/;
+const CREDENTIAL_REF_RE = /(?:\{\{\s*)?_{0,2}ITEST_(?:USERNAME|PASSWORD|STEP_SECRET)_{0,2}(?:\s*\}\})?/;
 
 /** 自由文本是否引用了凭据占位符（任意形态：哨兵 / 花括号变体 / 裸名）。
  *  用途：substituteVars 的 missing 过滤（凭据不来自数据集 vars）+ 环境凭据前置检查。 */
@@ -506,6 +506,9 @@ export async function runAiTask(
         lastResults.push(await execAction(page, a, opts?.valueSub));
         opts?.onAction?.(a, true);
       } catch (e) {
+        // 凭据缺失是环境级硬错误：反馈给 LLM 只会让它换 selector 空转烧调用，直接终止本步
+        // （EnvMissing/SecretMissing 由 valueSub 抛出，携带可行动的配置指引）。
+        if (e instanceof Error && (e.name === 'EnvMissing' || e.name === 'SecretMissing')) throw e;
         opts?.onAction?.(a, false);
         const target = sel ?? ('url' in a ? a.url : '');
         lastResults.push(`${a.type} ${target}: error ${e instanceof Error ? e.message.slice(0, 150) : String(e)}`);

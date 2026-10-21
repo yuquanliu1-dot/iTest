@@ -4,7 +4,7 @@
  * 故从 pi/space/tools/solidifyCase.ts 搬到此处的同名函数为唯一实现。
  */
 import type { Locator, StepAction } from '@itest/shared';
-import { USER_PH, PASSWORD_PH, SECRET_PH, type AiAction } from './aiTask.js';
+import { credentialPlaceholderKind, type AiAction } from './aiTask.js';
 
 /** Playwright 专有语法（引擎链 / 伪类扩展），平台 css 策略不认识 → 不可映射。 */
 export const PLAYWRIGHT_ONLY_SELECTOR_RE = />>|:has-text|:has\(|:near\(|:above\(|:below\(|engine=|nth=/i;
@@ -53,7 +53,9 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
         break;
       }
       case 'fill': {
-        if (a.value === USER_PH || a.value === PASSWORD_PH || a.value === SECRET_PH) {
+        // 任意形态的凭据占位符（哨兵 / 花括号变体 {{ITEST_USERNAME}}）都不固化——
+        // 固化会把字面量冻结进 compiled，回放时 valueSub 又只认 fill 时刻的占位符。
+        if (credentialPlaceholderKind(a.value)) {
           return { ok: false, reason: 'fill value 为登录/敏感凭据占位符（登录不属于用例步骤，归环境登录），不固化' };
         }
         const locator = mapSelector(a.selector);

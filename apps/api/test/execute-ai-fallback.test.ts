@@ -5,9 +5,22 @@ import type { LLMClient, LLMResult } from '../src/agent/llm-client.js';
 // 与 execute-cdp.test.ts 同构：整体 mock playwright-core（假 page + 可改 count 的 locator），
 // 驱动 executeCaseReal → runStepsInContext。llmClient 通过 ctx.llmClient 注入，绕过 resolveLlmClient 读库。
 vi.mock('playwright-core', () => {
+  // pressSequentially 键入轨迹：typedValues 模拟真实输入框（fill('') 清空、inputValue 回读），
+  // typedAll 只追加 —— 断言凭据替换用（连续两次 fill 会清掉前一个值）。
+  const typedValues: string[] = [];
+  const typedAll: string[] = [];
   const makeLocator = () => ({
     click: vi.fn().mockResolvedValue(undefined),
-    fill: vi.fn().mockResolvedValue(undefined),
+    fill: vi.fn((v: string) => {
+      if (v === '') typedValues.length = 0;
+      return Promise.resolve(undefined);
+    }),
+    pressSequentially: vi.fn((v: string) => {
+      typedValues.push(v);
+      typedAll.push(v);
+      return Promise.resolve(undefined);
+    }),
+    inputValue: vi.fn(() => Promise.resolve(typedValues.join(''))),
     hover: vi.fn().mockResolvedValue(undefined),
     waitFor: vi.fn().mockResolvedValue(undefined),
     isVisible: vi.fn().mockResolvedValue(true),
@@ -43,10 +56,12 @@ vi.mock('playwright-core', () => {
     },
     __page: page,
     __locator: locatorFn,
+    __typed: typedAll,
   };
 });
 
 import { executeCaseReal } from '../src/execute/cdp.js';
+import type { EnvCtx } from '../src/execute/envContext.js';
 
 const mocked = await import('playwright-core') as unknown as {
   __page: Page & {
@@ -58,6 +73,7 @@ const mocked = await import('playwright-core') as unknown as {
     keyboard: { press: ReturnType<typeof vi.fn> };
   };
   __locator: ReturnType<typeof vi.fn>;
+  __typed: string[];
 };
 
 /** 脚本化 mock LLM：complete 按顺序回 JSON；脚本耗尽则抛错（模拟 AI 不可用/放弃）。 */
@@ -82,6 +98,19 @@ function missingLocator() {
     first: vi.fn().mockReturnThis(),
     count: vi.fn().mockResolvedValue(0),
   };
+}
+
+/** 环境上下文桩：login 缺省 = 环境未配置凭据（触发 EnvMissing 前置拦截的形态）。 */
+function makeEnvCtx(login?: { user: string; password: string }): EnvCtx {
+  return {
+    envId: 'env-1',
+    envName: '测试环境',
+    webServices: [],
+    resolveWebOrigin: () => null,
+    baseUrl: null,
+    ...(login ? { login: { ...login, loginUrl: null } } : {}),
+    close: async () => undefined,
+  } as EnvCtx;
 }
 
 const ON = { compileMissing: true, locatorFailed: true };
@@ -290,5 +319,108 @@ describe('回放 AI 降级 — 机械执行失败（任意失败原因）', () =
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.failureReason).toBe('LocatorAllFailed');
     expect(results[0]!.degraded).toBeUndefined();
+  });
+});
+
+describe('回放 AI 降级 — 凭据占位符替换（2026-10-21 prod228 登录空转修复）', () => {
+  it('compileMissing 降级：AI fill 哨兵占位符被替换为环境 login 真实凭据', async () => {
+    mocked.__typed.length = 0;
+    const { llm } = makeMockLlm([
+      {
+        actions: [
+          { type: 'fill', selector: '#user', value: '__ITEST_USERNAME__' },
+          { type: 'fill', selector: '#pass', value: '__ITEST_PASSWORD__' },
+        ],
+        done: true,
+        summary: '已填写凭据并登录',
+      },
+    ]);
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve([{ selector: '#user', tag: 'input' }]));
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000130',
+      [{ order: 1, id: 's-cred-1', instruction: '在登录页填写 __ITEST_USERNAME__ / __ITEST_PASSWORD__ 并登录', compiled: [] }],
+      { reportId: 'r-cred-cm', aiFallback: ON, llmClient: llm, envCtx: makeEnvCtx({ user: 'admin', password: 'pw9' }) },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(results[0]!.degraded).toBe(true);
+    // 键入的是真实凭据，不是字面量占位符
+    expect(mocked.__typed).toContain('admin');
+    expect(mocked.__typed).toContain('pw9');
+    expect(mocked.__typed.join('|')).not.toMatch(/__ITEST_/);
+  });
+
+  it('compileMissing 降级：模型输出花括号变体 {{ITEST_USERNAME}} 同样被替换；指令含凭据不算缺变量', async () => {
+    mocked.__typed.length = 0;
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'fill', selector: '#user', value: '{{ITEST_USERNAME}}' }], done: true, summary: '已填写' },
+    ]);
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve([{ selector: '#user', tag: 'input' }]));
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000131',
+      [{ order: 1, id: 's-cred-2', instruction: '在登录页填写 {{ITEST_USERNAME}} 登录', compiled: [] }],
+      { reportId: 'r-cred-brace', aiFallback: ON, llmClient: llm, envCtx: makeEnvCtx({ user: 'admin', password: 'pw9' }) },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(results[0]!.degraded).toBe(true);
+    expect(mocked.__typed).toContain('admin');
+    expect(mocked.__typed.join('|')).not.toContain('{{ITEST_USERNAME}}');
+  });
+
+  it('环境未配置 login + 指令引用凭据：EnvMissing 快速失败，LLM 零调用', async () => {
+    // prod228 实测：占位符原样进登录表单必败，AI 多轮空转烧 12+ 次调用——预检必须在烧轮次前拦截。
+    const { llm, calls } = makeMockLlm([]);
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve([{ selector: '#user', tag: 'input' }]));
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000132',
+      [{ order: 1, id: 's-cred-3', instruction: '在登录页填写 __ITEST_USERNAME__ 登录', compiled: [] }],
+      { reportId: 'r-cred-envmiss', aiFallback: ON, llmClient: llm },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.failureReason).toBe('EnvMissing');
+    expect(results[0]!.error).toMatch(/env-missing/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('locatorFailed 降级：机械失败后 AI 按指令重做，哨兵替换为真实凭据', async () => {
+    mocked.__typed.length = 0;
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'fill', selector: '#user', value: '__ITEST_USERNAME__' }], done: true, summary: '已重做填写' },
+    ]);
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve([{ selector: '#user', tag: 'input' }]));
+    mocked.__locator.mockImplementationOnce(() => missingLocator());
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000133',
+      [{ order: 1, id: 's-cred-4', instruction: '填写 __ITEST_USERNAME__ 后点击登录', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#gone' }] }] }],
+      { reportId: 'r-cred-lf', aiFallback: ON, llmClient: llm, envCtx: makeEnvCtx({ user: 'admin', password: 'pw9' }) },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(results[0]!.degraded).toBe(true);
+    expect(results[0]!.warning).toMatch(/机械执行失败（/);
+    expect(mocked.__typed).toContain('admin');
+    expect(mocked.__typed.join('|')).not.toMatch(/__ITEST_/);
+  });
+
+  it('compiled aiTask 分支：指令含 {{ITEST_USERNAME}} 不再 var-missing 判死，fill 值替换为真实凭据', async () => {
+    // 降级开关全关：走的是 compiled aiTask 正常回放路径（非降级），degraded 不置位。
+    mocked.__typed.length = 0;
+    const { llm, calls } = makeMockLlm([
+      { actions: [{ type: 'fill', selector: '#user', value: '{{ITEST_USERNAME}}' }], done: true, summary: '已填写登录' },
+    ]);
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve([{ selector: '#user', tag: 'input' }]));
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000134',
+      [{ order: 1, id: 's-cred-5', compiled: [{ kind: 'aiTask', instruction: '填写 {{ITEST_USERNAME}} 完成登录' }] }],
+      { reportId: 'r-cred-aitask', aiFallback: OFF, llmClient: llm, envCtx: makeEnvCtx({ user: 'admin', password: 'pw9' }) },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(results[0]!.degraded).toBeUndefined();
+    expect(mocked.__typed).toContain('admin');
+    expect(mocked.__typed.join('|')).not.toContain('{{ITEST_USERNAME}}');
+    expect(calls.length).toBeGreaterThanOrEqual(1);
   });
 });

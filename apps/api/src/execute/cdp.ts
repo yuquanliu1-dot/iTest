@@ -27,7 +27,7 @@ import { classify } from './failureClassifier.js';
 import { preflight } from './preflight.js';
 import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
-import { runAiTask, solveCaptchaOnce, isCaptchaFailed, CAPTCHA_TASK_RE, USER_PH, PASSWORD_PH, SECRET_PH, type AiAction } from './aiTask.js';
+import { runAiTask, solveCaptchaOnce, isCaptchaFailed, CAPTCHA_TASK_RE, USER_PH, PASSWORD_PH, SECRET_PH, makeCredentialValueSub, referencesCredential, type AiAction } from './aiTask.js';
 import { mapAiActionsToCompiled } from './aiActionMap.js';
 import { readAiTaskCache, writeAiTaskCache, bumpAiTaskCacheHit } from './aiTaskCache.js';
 import type { EnvCtx } from './envContext.js';
@@ -272,6 +272,41 @@ function resolveEnvCredential(raw: string, envCtx: EnvCtx | undefined): string {
 /** fill 的最终入值：{{变量}} 物化后替换环境凭据占位符（非字符串 value 只做物化）。 */
 function resolveFillValue(value: FillValue, envCtx: EnvCtx | undefined, vars: Record<string, string>): string {
   return resolveEnvCredential(materializeValue(value, vars), envCtx);
+}
+
+/** 指令引用敏感占位符时解密当步密文供 AI 相 valueSub；引用但没有可用密文 → SecretMissing（fail-fast，
+ *  不烧 LLM 轮次）。不引用则不碰密文。 */
+async function resolveStepSecretForAi(ctx: ExecContext, stepId: string | undefined, inst: string): Promise<string | undefined> {
+  if (!inst.includes(SECRET_PH) || !stepId) return undefined;
+  const secret = ctx.secretResolver ? await ctx.secretResolver(stepId) : await defaultSecretResolver(stepId);
+  if (!secret) {
+    const e = new Error(`secret-missing: 步骤引用了 ${SECRET_PH}，但本步没有可用的敏感值（需 sensitive 步骤密文）`);
+    e.name = 'SecretMissing';
+    throw e;
+  }
+  return secret;
+}
+
+/** AI 相预检：指令引用登录凭据占位符（任意形态）但环境未配置 login → 命名 EnvMissing。
+ *  在烧 LLM 轮次之前拦截——占位符原样进登录表单必败（2026-10-21 prod228 实测整轮空转 12+ 次 LLM 调用）。 */
+function credentialPreflightError(inst: string, ctx: ExecContext): Error | null {
+  if (!ctx.envCtx?.login && /ITEST_(USERNAME|PASSWORD)/i.test(inst)) {
+    const e = new Error(`env-missing: 用例步骤引用了 ${USER_PH}，但当前环境未配置 login 凭据（请到项目设置→测试环境配置）`);
+    e.name = 'EnvMissing';
+    return e;
+  }
+  return null;
+}
+
+/** AI 相（降级 / aiTask 编译动作）的凭据 valueSub：环境 login 凭据 + 当步敏感密文。
+ *  真实值只在 fill 执行瞬间替换、不进 LLM 上下文/反馈/日志——与 verify/solidify 工具同协议。 */
+function aiCredentialSub(ctx: ExecContext, secret: string | undefined): (v: string) => string {
+  const login = ctx.envCtx?.login;
+  return makeCredentialValueSub({
+    user: login?.user ?? null,
+    password: login?.password ?? null,
+    secret: secret ?? null,
+  });
 }
 
 /**
@@ -537,9 +572,14 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
     }
     case 'aiTask': {
       const { value, missing } = substituteVars(action.instruction, vars);
-      if (missing.length > 0) {
-        throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.instruction}")`);
+      // 凭据占位符不来自数据集 vars（substituteVars 对 {{ITEST_USERNAME}} 恒报 missing）：
+      // 只缺凭据不算缺变量——由 valueSub 在动作执行时刻替换真实值；缺真实变量仍按 var-missing 判死。
+      const realMissing = missing.filter((m) => !referencesCredential(m));
+      if (realMissing.length > 0) {
+        throw new Error(`var-missing: {{${realMissing[0]!}}} (template="${action.instruction}")`);
       }
+      const preErr = credentialPreflightError(value, opts.ctx);
+      if (preErr) throw preErr;
       // 运行时动作缓存（自动挡固化）：可缓存 = DB 步骤（UUID stepId）+ 用例回放上下文
       // + 非验证码（每次必须真识别）+ 指令无数据集变量（缓存值含物化数据，跨行复用必错）。
       const cacheable = !!opts.caseId && !!opts.stepId && UUID_RE.test(opts.stepId)
@@ -564,10 +604,13 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       }
       const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
       const collected: AiAction[] = [];
-      const aiOpts: { onAction: (a: AiAction, ok: boolean) => void; onUsage?: (r: AiUsageAddend) => void } = {
+      const aiOpts: { onAction: (a: AiAction, ok: boolean) => void; onUsage?: (r: AiUsageAddend) => void; valueSub?: (v: string) => string } = {
         onAction: (a, ok) => { if (ok) collected.push(a); },
       };
       if (opts.aiUsage) aiOpts.onUsage = (r) => opts.aiUsage!.add(r);
+      // valueSub 无条件挂载：SYSTEM_PROMPT 本就指示模型在登录页用 __ITEST_USERNAME__（与指令是否
+      // 引用无关），不挂则哨兵/花括号变体会被原样敲进表单（2026-10-21 prod228 实测）。
+      aiOpts.valueSub = aiCredentialSub(opts.ctx, await resolveStepSecretForAi(opts.ctx, opts.stepId, value));
       const summary = await runAiTask(opts.page, value, client, undefined, aiOpts);
       // 验证码类指令：登记多轮验证上下文。提交（后续 click 步骤）若被系统判验证码错误/过期，
       // 执行器自动重新识别（失败后验证码通常已被前端换新）并重新提交，而非直接判用例失败。
@@ -933,6 +976,11 @@ async function runStepsInContext(
     const aiUsage = newAiUsage();
     opts.aiUsage = aiUsage;
     opts.healedSink = { current: false };
+    // AI 降级失败原因（compileMissing / locatorFailed 两处共写，失败结果 warning 用）；
+    // compileMissing 已试过 AI 的标记——失败后 locatorFailed 不再重跑同一指令
+    // （2026-10-21 prod228 实测同一指令双重 AI 空转 12+ 次调用）。
+    let aiDegradedErr: string | undefined;
+    let aiTriedInCompileFallback = false;
     const tabIndex =
       ctx.tabMap && step.tabRef ? Array.from(ctx.tabMap.keys()).indexOf(step.tabRef) : 0;
     const assertionAction = normalizeStepAssertion(step.assertion);
@@ -955,14 +1003,24 @@ async function runStepsInContext(
         const inst = step.instruction?.trim();
         if (fallback.compileMissing && inst) {
           const { value: instResolved, missing } = substituteVars(inst, vars);
-          if (missing.length === 0) {
+          // 凭据占位符不来自数据集 vars（substituteVars 恒报 missing）：只缺凭据不算缺变量。
+          if (missing.every((m) => referencesCredential(m))) {
+            aiTriedInCompileFallback = true;
+            const preErr = credentialPreflightError(instResolved, ctx);
+            if (preErr) throw preErr;
             try {
               const client = ctx.llmClient ?? (await resolveLlmClient()).client;
-              const summary = await runAiTask(opts.page, instResolved, client, undefined, { onUsage: (r) => aiUsage.add(r) });
+              const summary = await runAiTask(opts.page, instResolved, client, undefined, {
+                onUsage: (r) => aiUsage.add(r),
+                valueSub: aiCredentialSub(ctx, await resolveStepSecretForAi(ctx, opts.stepId, instResolved)),
+              });
               degraded = true;
               warning = `未编译，AI 按指令临场执行${summary ? `：${summary}` : ''}`;
-            } catch {
-              // AI 不可用/失败 → 维持原 compile-missing 语义（下面 throw）
+            } catch (e) {
+              // 凭据缺失是环境级硬错误：向上抛（分类器归 EnvMissing/SecretMissing），不吞成 compile-missing；
+              // 其余 AI 失败维持原 compile-missing 语义，但记下原因供失败 warning 展示。
+              if (e instanceof Error && (e.name === 'EnvMissing' || e.name === 'SecretMissing')) throw e;
+              aiDegradedErr = e instanceof Error ? e.message : String(e);
             }
           }
         }
@@ -1026,47 +1084,58 @@ async function runStepsInContext(
       // AI 降级（可选）：机械执行失败（任意失败原因）+ 全局开关开 + 有行级指令 → 用指令让 AI 整步重做。
       // 成功 → 步骤 passed + warning 标注（不置 healed，避免污染双通过率口径）；失败维持原 failedResult。
       // aiTask 步骤本就在跑 AI，失败时再“按指令临场执行”毫无增益 → 一律不降级，维持原失败。
+      // compileMissing 已试过同一指令的 AI（aiTriedInCompileFallback）或原失败本就是凭据缺失
+      // （EnvMissing/SecretMissing——再跑 AI 只会撞同一堵墙）→ 同样不降级。
       const inst = step.instruction?.trim();
-      // AI 降级失败时的错误文本（降级跑了 LLM 但抛错：放弃/超轮/异常）；失败结果据此补 warning。
-      let aiDegradedErr: string | undefined;
       if (
         fallback.locatorFailed
         && inst
         && failedAction?.kind !== 'aiTask'
+        && !aiTriedInCompileFallback
+        && !(e instanceof Error && (e.name === 'EnvMissing' || e.name === 'SecretMissing'))
       ) {
         const { value: instResolved, missing } = substituteVars(inst, vars);
-        if (missing.length === 0) {
-          let aiSummary: string | undefined;
-          try {
-            const client = ctx.llmClient ?? (await resolveLlmClient()).client;
-            aiSummary = (await runAiTask(opts.page, instResolved, client, undefined, { onUsage: (r) => aiUsage.add(r) })) || undefined;
-          } catch (err) {
-            // AI 不可用/放弃/超轮 → 维持原失败（走下方 failedResult），但记下原因供 warning 展示
-            aiDegradedErr = err instanceof Error ? err.message : String(err);
-          }
-          if (aiSummary !== undefined) {
-            const aiScreenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
-            const aiPassed: ExecStepResult = {
-              order: step.order,
-              status: 'passed',
-              durationMs: Date.now() - started,
-              instruction: step.instruction ?? undefined,
-              compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
-              // 原机械失败原因（如 count=0 (css #gone)）一并带进 warning，报告页可看到“识别到什么程度失败”。
-              warning: `机械执行失败（${rawMsg}），AI 按指令重做本步${aiSummary ? `：${aiSummary}` : ''}`,
-              screenshot: aiScreenshot,
-              hitLocator: opts.hitSink.current ?? undefined,
-              tabIndex: tabIndex >= 0 ? tabIndex : 0,
-              db: opts.dbSink.current ?? undefined,
-              log: opts.logSink.current ?? undefined,
-              http: opts.httpSink.current ?? undefined,
-              syslog: opts.syslogSink.current ?? undefined,
-              ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
-              degraded: true,
-            };
-            results.push(aiPassed);
-            onStep?.(aiPassed);
-            continue; // 本步降级通过，跳到下一 step（不走 break / onFailurePage）
+        // 凭据占位符不来自数据集 vars：只缺凭据不算缺变量（值由 valueSub 执行时刻替换）。
+        if (missing.every((m) => referencesCredential(m))) {
+          const preErr = credentialPreflightError(instResolved, ctx);
+          if (preErr) {
+            aiDegradedErr = preErr.message;
+          } else {
+            let aiSummary: string | undefined;
+            try {
+              const client = ctx.llmClient ?? (await resolveLlmClient()).client;
+              aiSummary = (await runAiTask(opts.page, instResolved, client, undefined, {
+                onUsage: (r) => aiUsage.add(r),
+                valueSub: aiCredentialSub(ctx, await resolveStepSecretForAi(ctx, opts.stepId, instResolved)),
+              })) || undefined;
+            } catch (err) {
+              // AI 不可用/放弃/超轮 → 维持原失败（走下方 failedResult），但记下原因供 warning 展示
+              aiDegradedErr = err instanceof Error ? err.message : String(err);
+            }
+            if (aiSummary !== undefined) {
+              const aiScreenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
+              const aiPassed: ExecStepResult = {
+                order: step.order,
+                status: 'passed',
+                durationMs: Date.now() - started,
+                instruction: step.instruction ?? undefined,
+                compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
+                // 原机械失败原因（如 count=0 (css #gone)）一并带进 warning，报告页可看到“识别到什么程度失败”。
+                warning: `机械执行失败（${rawMsg}），AI 按指令重做本步${aiSummary ? `：${aiSummary}` : ''}`,
+                screenshot: aiScreenshot,
+                hitLocator: opts.hitSink.current ?? undefined,
+                tabIndex: tabIndex >= 0 ? tabIndex : 0,
+                db: opts.dbSink.current ?? undefined,
+                log: opts.logSink.current ?? undefined,
+                http: opts.httpSink.current ?? undefined,
+                syslog: opts.syslogSink.current ?? undefined,
+                ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
+                degraded: true,
+              };
+              results.push(aiPassed);
+              onStep?.(aiPassed);
+              continue; // 本步降级通过，跳到下一 step（不走 break / onFailurePage）
+            }
           }
         }
       }

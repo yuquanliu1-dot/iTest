@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Page } from 'playwright-core';
 import type { LLMClient, LLMResult } from '../src/agent/llm-client.js';
-import { runAiTask, solveCaptchaOnce } from '../src/execute/aiTask.js';
+import { runAiTask, solveCaptchaOnce, credentialPlaceholderKind, makeCredentialValueSub, referencesCredential } from '../src/execute/aiTask.js';
 
 /** 记录调用顺序的桩 Page：screenshot/evaluate/url 走默认值，locator 动作全部记录。 */
 function makeStubPage() {
@@ -274,5 +274,61 @@ describe('runAiTask', () => {
     const { llm, langs } = makeMockLlm([{ done: true, summary: 'ok' }]);
     await runAiTask(page, '一步完成', llm, false, { lang: 'en-US' });
     expect(langs[0]).toBe('en-US');
+  });
+});
+
+describe('凭据占位符协议（credentialPlaceholderKind / makeCredentialValueSub）', () => {
+  it('识别哨兵与花括号变体，裸名与普通文本不认', () => {
+    // 哨兵精确形态
+    expect(credentialPlaceholderKind('__ITEST_USERNAME__')).toBe('user');
+    expect(credentialPlaceholderKind('__ITEST_PASSWORD__')).toBe('password');
+    expect(credentialPlaceholderKind('__ITEST_STEP_SECRET__')).toBe('secret');
+    // 花括号变体（2026-10-21 prod228 实测模型输出形态）
+    expect(credentialPlaceholderKind('{{ITEST_USERNAME}}')).toBe('user');
+    expect(credentialPlaceholderKind('{{__ITEST_USERNAME__}}')).toBe('user');
+    expect(credentialPlaceholderKind('{{ITEST_PASSWORD}}')).toBe('password');
+    expect(credentialPlaceholderKind('{{ITEST_STEP_SECRET}}')).toBe('secret');
+    // 裸名（无哨兵/花括号包裹）不认——避免把普通文本误判成凭据
+    expect(credentialPlaceholderKind('ITEST_USERNAME')).toBeNull();
+    expect(credentialPlaceholderKind('普通文本')).toBeNull();
+    expect(credentialPlaceholderKind('{{OTHER_VAR}}')).toBeNull();
+    expect(credentialPlaceholderKind('')).toBeNull();
+  });
+
+  it('referencesCredential：任意形态（哨兵/花括号/裸名）都算引用，普通文本不算', () => {
+    expect(referencesCredential('__ITEST_USERNAME__')).toBe(true);
+    expect(referencesCredential('{{ITEST_USERNAME}}')).toBe(true);
+    expect(referencesCredential('{{__ITEST_PASSWORD__}}')).toBe(true);
+    expect(referencesCredential('ITEST_STEP_SECRET')).toBe(true);
+    expect(referencesCredential('在登录页填写 {{ITEST_USERNAME}} 登录')).toBe(true);
+    expect(referencesCredential('点击保存按钮')).toBe(false);
+    expect(referencesCredential('{{OTHER_VAR}}')).toBe(false);
+  });
+
+  it('makeCredentialValueSub：占位符换真实值，缺凭据抛命名错误，非占位符原样', () => {
+    const sub = makeCredentialValueSub({ user: 'admin', password: 'pw9', secret: null });
+    expect(sub('__ITEST_USERNAME__')).toBe('admin');
+    expect(sub('{{ITEST_USERNAME}}')).toBe('admin');
+    expect(sub('{{__ITEST_PASSWORD__}}')).toBe('pw9');
+    expect(sub('plain')).toBe('plain');
+    // 环境未配 login → EnvMissing（绝不静默填空串/字面量）
+    const noLogin = makeCredentialValueSub({ user: null, password: null, secret: null });
+    expect(() => noLogin('__ITEST_USERNAME__')).toThrow(/env-missing/);
+    // 步骤无密文 → SecretMissing
+    expect(() => noLogin('{{ITEST_STEP_SECRET}}')).toThrow(/secret-missing/);
+  });
+
+  it('runAiTask：valueSub 抛 EnvMissing 时动作循环直接终止（不反馈给 LLM 空转）', async () => {
+    // prod228 实测根因之一：凭据缺失被当普通动作错误反馈给 LLM，换 selector 重试烧掉整轮调用。
+    // 现在第一轮 fill 抛 EnvMissing 就终止 —— requests 只有 1 条（第 2 轮从未发生）。
+    const { page } = makeStubPage();
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'fill', selector: '#user', value: '__ITEST_USERNAME__' }], done: true, summary: '填完' },
+      { done: true, summary: '不应到达' },
+    ]);
+    await expect(
+      runAiTask(page, '登录', llm, false, { valueSub: makeCredentialValueSub({ user: null, password: null, secret: null }) }),
+    ).rejects.toThrow(/env-missing/);
+    expect(requests).toHaveLength(1);
   });
 });
