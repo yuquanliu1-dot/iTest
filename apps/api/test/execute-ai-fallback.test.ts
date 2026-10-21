@@ -109,6 +109,9 @@ function makeEnvCtx(login?: { user: string; password: string }): EnvCtx {
     resolveWebOrigin: () => null,
     baseUrl: null,
     ...(login ? { login: { ...login, loginUrl: null } } : {}),
+    logins: new Map(),
+    resolveLogin: (ref?: string | null) => (ref ? null : (login ? { ...login, loginUrl: null } : null)),
+    hasCredentials: () => !!login,
     close: async () => undefined,
   } as EnvCtx;
 }
@@ -422,5 +425,53 @@ describe('回放 AI 降级 — 凭据占位符替换（2026-10-21 prod228 登录
     expect(mocked.__typed).toContain('admin');
     expect(mocked.__typed.join('|')).not.toContain('{{ITEST_USERNAME}}');
     expect(calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('机械回放 compiled fill：@ref 占位符取指定 web 的凭据', async () => {
+    mocked.__typed.length = 0;
+    const { llm } = makeMockLlm([]);
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve([]));
+    const envCtx = {
+      ...makeEnvCtx({ user: 'front_u', password: 'front_p' }),
+      logins: new Map([['backend', { user: 'be_u', password: 'be_p', loginUrl: null }]]),
+      resolveLogin: (ref?: string | null) => (ref === 'backend'
+        ? { user: 'be_u', password: 'be_p', loginUrl: null }
+        : { user: 'front_u', password: 'front_p', loginUrl: null }),
+      hasCredentials: () => true,
+    };
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000140',
+      [{
+        order: 1, id: 's-ref-1', instruction: '登录后端',
+        compiled: [
+          { kind: 'fill', locator: [{ strategy: 'css', value: '#u' }], value: '__ITEST_USERNAME@backend__' },
+          { kind: 'fill', locator: [{ strategy: 'css', value: '#p' }], value: '__ITEST_PASSWORD@backend__' },
+        ],
+      }],
+      { reportId: 'r-cred-ref', aiFallback: OFF, llmClient: llm, envCtx },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(mocked.__typed).toContain('be_u');
+    expect(mocked.__typed).toContain('be_p');
+    expect(mocked.__typed.join('|')).not.toContain('__ITEST_');
+  });
+
+  it('机械回放：@ref 指向不存在的 web → EnvMissing 判失败，不敲字面量', async () => {
+    mocked.__typed.length = 0;
+    const { llm } = makeMockLlm([]);
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve([]));
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000141',
+      [{
+        order: 1, id: 's-ref-2', instruction: '登录不存在的前端',
+        compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#u' }], value: '__ITEST_USERNAME@nope__' }],
+      }],
+      { reportId: 'r-cred-ref-miss', aiFallback: OFF, llmClient: llm, envCtx: makeEnvCtx({ user: 'u', password: 'p' }) },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.failureReason).toBe('EnvMissing');
+    expect(mocked.__typed.join('|')).not.toContain('__ITEST_');
   });
 });

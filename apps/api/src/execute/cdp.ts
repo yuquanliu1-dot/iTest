@@ -9,7 +9,6 @@ import type {
   WindowStrategy,
   DbQueryRowResult,
   ObserveLogLineResult,
-  FillValue,
 } from '@itest/shared';
 import { deepEqual, materializeValue, substituteVars } from '@itest/shared';
 import { eq, and } from 'drizzle-orm';
@@ -27,7 +26,8 @@ import { classify } from './failureClassifier.js';
 import { preflight } from './preflight.js';
 import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
-import { runAiTask, solveCaptchaOnce, isCaptchaFailed, CAPTCHA_TASK_RE, USER_PH, PASSWORD_PH, SECRET_PH, makeCredentialValueSub, referencesCredential, type AiAction } from './aiTask.js';
+import { runAiTask, solveCaptchaOnce, isCaptchaFailed, CAPTCHA_TASK_RE, SECRET_PH, makeCredentialValueSub, parseCredentialPlaceholder, CREDENTIAL_PLACEHOLDER_SCAN, referencesCredential, type AiAction } from './aiTask.js';
+import { buildCredentialSource } from './credentialSource.js';
 import { mapAiActionsToCompiled } from './aiActionMap.js';
 import { readAiTaskCache, writeAiTaskCache, bumpAiTaskCacheHit } from './aiTaskCache.js';
 import type { EnvCtx } from './envContext.js';
@@ -187,7 +187,7 @@ async function tryDomFallback(action: StepAction, opts: DispatchOpts): Promise<{
     case 'click':
       return domClick(page, action.locator);
     case 'fill':
-      return domFill(page, action.locator, resolveFillValue(action.value ?? '', opts.ctx.envCtx, vars));
+      return domFill(page, action.locator, resolveEnvCredential(materializeValue(action.value ?? '', vars), opts.ctx));
     case 'check':
       return domCheck(page, action.locator, action.checked);
     case 'select':
@@ -245,33 +245,19 @@ async function defaultSecretResolver(stepId: string): Promise<string | null> {
   });
 }
 
-/** 机械派发路径的凭据占位符 → 环境 login 凭据真实值。
- *  AI 相（verify/solidify/perform_login）由 valueSub 在动作执行时刻替换（aiTask.ts），
- *  compiled 的机械派发没有那套替换，这里补齐同一语义 —— 否则占位符会被原样敲进表单、
- *  登录必然失败且步骤仍报 passed（2026-10-13 prod228 用例 394bdcb2 实测）。
- *  非占位符原样返回；引用了凭据但环境没配 login → EnvMissing，绝不静默填字面量。 */
-function resolveEnvCredential(raw: string, envCtx: EnvCtx | undefined): string {
-  if (raw === USER_PH || raw === PASSWORD_PH) {
-    const login = envCtx?.login;
-    if (!login) {
-      const e = new Error(`env-missing: 用例步骤引用了 ${raw}，但当前环境未配置 login 凭据（请到项目设置→测试环境配置）`);
-      e.name = 'EnvMissing';
-      throw e;
-    }
-    return raw === USER_PH ? login.user : login.password;
-  }
-  if (raw === SECRET_PH) {
+/** 机械派发路径的 fill 值替换器——与 AI 相共用 makeCredentialValueSub（同一实现，
+ *  避免两处各写一套字面量精确匹配后再次分叉，2026-10-21 prod228 即此根因）。
+ *  机械路径没有 web 归属语义，ref 链固定落在用例绑定的 web 服务上。 */
+function resolveEnvCredential(raw: string, ctx: ExecContext): string {
+  const parsed = parseCredentialPlaceholder(raw);
+  if (!parsed) return raw;
+  if (parsed.kind === 'secret' && !parsed.ref) {
     // 步骤级密文只有 sensitive 分支（secretResolver）能解；compiled 里写占位符无处可解。
     const e = new Error(`secret-missing: 步骤 compiled 含 ${SECRET_PH}，敏感值只能走 sensitive=true + 密文，不能写占位符`);
     e.name = 'SecretMissing';
     throw e;
   }
-  return raw;
-}
-
-/** fill 的最终入值：{{变量}} 物化后替换环境凭据占位符（非字符串 value 只做物化）。 */
-function resolveFillValue(value: FillValue, envCtx: EnvCtx | undefined, vars: Record<string, string>): string {
-  return resolveEnvCredential(materializeValue(value, vars), envCtx);
+  return makeCredentialValueSub(buildCredentialSource(ctx))(raw);
 }
 
 /** 指令引用敏感占位符时解密当步密文供 AI 相 valueSub；引用但没有可用密文 → SecretMissing（fail-fast，
@@ -287,26 +273,31 @@ async function resolveStepSecretForAi(ctx: ExecContext, stepId: string | undefin
   return secret;
 }
 
-/** AI 相预检：指令引用登录凭据占位符（任意形态）但环境未配置 login → 命名 EnvMissing。
- *  在烧 LLM 轮次之前拦截——占位符原样进登录表单必败（2026-10-21 prod228 实测整轮空转 12+ 次 LLM 调用）。 */
+/** AI 相预检：指令引用的凭据占位符（含 @ref）在当前环境不可解析 → 命名 EnvMissing。
+ *  在烧 LLM 轮次之前拦截——占位符原样进登录表单必败（2026-10-21 prod228 实测整轮空转 12+ 次调用）。 */
 function credentialPreflightError(inst: string, ctx: ExecContext): Error | null {
-  if (!ctx.envCtx?.login && /ITEST_(USERNAME|PASSWORD)/i.test(inst)) {
-    const e = new Error(`env-missing: 用例步骤引用了 ${USER_PH}，但当前环境未配置 login 凭据（请到项目设置→测试环境配置）`);
-    e.name = 'EnvMissing';
-    return e;
+  const phs = inst.match(new RegExp(CREDENTIAL_PLACEHOLDER_SCAN.source, 'g')) ?? [];
+  if (phs.length === 0) return null;
+  let sub: (v: string) => string;
+  try {
+    sub = makeCredentialValueSub(buildCredentialSource(ctx));
+  } catch (e) {
+    return e instanceof Error ? e : null;
+  }
+  for (const ph of phs) {
+    try {
+      sub(ph);
+    } catch (e) {
+      return e instanceof Error ? e : null;
+    }
   }
   return null;
 }
 
-/** AI 相（降级 / aiTask 编译动作）的凭据 valueSub：环境 login 凭据 + 当步敏感密文。
- *  真实值只在 fill 执行瞬间替换、不进 LLM 上下文/反馈/日志——与 verify/solidify 工具同协议。 */
+/** AI 相（降级 / aiTask 编译动作）的凭据 valueSub：与机械相共用同一构造点，
+ *  只是多了步骤密文。真实值只在 fill 执行瞬间替换、不进 LLM 上下文/反馈/日志。 */
 function aiCredentialSub(ctx: ExecContext, secret: string | undefined): (v: string) => string {
-  const login = ctx.envCtx?.login;
-  return makeCredentialValueSub({
-    user: login?.user ?? null,
-    password: login?.password ?? null,
-    secret: secret ?? null,
-  });
+  return makeCredentialValueSub(buildCredentialSource(ctx, secret));
 }
 
 /**
@@ -377,7 +368,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
             throw new Error(`var-missing: {{${sub.missing[0]!}}} (template="${action.value}")`);
           }
         }
-        value = resolveFillValue(action.value, opts.ctx.envCtx, vars);
+        value = resolveEnvCredential(materializeValue(action.value, vars), opts.ctx);
       }
       const fillLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
       try {

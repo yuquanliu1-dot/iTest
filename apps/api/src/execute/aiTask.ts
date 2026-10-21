@@ -180,35 +180,84 @@ export function referencesCredential(text: string): boolean {
   return CREDENTIAL_REF_RE.test(text);
 }
 
-/** 凭据来源：环境 login 凭据 + 步骤级敏感密文（缺省 null = 未配置）。 */
+/** 凭据来源：无 ref 的默认值 + 按 web 服务 name 取值的回调（两者皆空即缺失）。 */
 export interface CredentialSource {
+  /** 无 ref 占位符的默认来源（既有调用方零改动）。 */
   user?: string | null;
   password?: string | null;
   secret?: string | null;
+  /**
+   * 按 web 服务 name 取该服务的凭据；返回 null = 该 ref 无凭据 → 回落到上面的默认值。
+   * 注意：由环境派生的实现（buildCredentialSource）在落空时**抛命名错误**而非返回 null——
+   * 显式 @ref 写错服务名时静默用默认服务的凭据，会把测试登到另一个系统上。
+   */
+  byRef?: (ref: string) => { user?: string | null; password?: string | null } | null;
+  /**
+   * 显式 @ref 解析不到时是否判死（不回落默认链）。
+   * 通用实现缺省 false（回落默认）；环境派生的实现置 true——写错服务名却静默用
+   * 默认服务的凭据 = 把测试登到另一个系统上。
+   */
+  strictRef?: boolean;
+  /** 错误消息用：环境显示名（缺失资源要点名，用户靠它排查）。 */
+  envName?: string | null;
+  /** 错误消息用：无 ref 占位符的默认归属 web 服务名。 */
+  defaultRef?: string | null;
 }
 
-/** AI 相 fill 值替换器：把凭据占位符（含花括号变体）换成真实值；非占位符原样返回。
- *  缺凭据 → 抛 EnvMissing/SecretMissing 命名错误——绝不把占位符原样敲进表单
- *  （2026-10-21 prod228 实测：AI 降级路径无 valueSub，模型输出的占位符原样进登录表单，
- *  登录必败且整轮空转烧掉 12+ 次 LLM 调用）。 */
+/**
+ * AI 相 / 机械相共用的 fill 值替换器：把凭据占位符（哨兵 / 花括号 / @ref 任意形态）
+ * 换成真实值；非占位符原样返回。缺凭据 → 抛 EnvMissing/SecretMissing 命名错误，
+ * 错误消息点名缺失的 web 服务，绝不把占位符原样敲进表单（2026-10-21 prod228 实测：
+ * 占位符原样进登录表单必败，AI 换 selector 空转烧掉 12+ 次 LLM 调用）。
+ */
 export function makeCredentialValueSub(src: CredentialSource): (v: string) => string {
   return (v: string): string => {
-    const kind = credentialPlaceholderKind(v);
-    if (!kind) return v;
-    const real = kind === 'user' ? src.user : kind === 'password' ? src.password : src.secret;
-    if (!real) {
-      const ph = kind === 'user' ? USER_PH : kind === 'password' ? PASSWORD_PH : SECRET_PH;
-      const e = new Error(
-        kind === 'secret'
-          ? `secret-missing: 步骤引用了 ${ph}，但本步没有可用的敏感值（需 sensitive 步骤密文）`
-          : `env-missing: 用例步骤引用了 ${ph}，但当前环境未配置 login 凭据（请到项目设置→测试环境配置）`,
-      );
-      e.name = kind === 'secret' ? 'SecretMissing' : 'EnvMissing';
-      throw e;
+    const parsed = parseCredentialPlaceholder(v);
+    if (!parsed) return v;
+    const { kind, ref } = parsed;
+    let real: string | null | undefined;
+    if (ref && src.byRef) {
+      const hit = src.byRef(ref);
+      if (hit === null && src.strictRef) {
+        // 显式点名的 web 服务不存在或未配凭据 → 判死，绝不回落默认链（会登到别的系统）。
+        throw missingCredential(src, kind, ref);
+      }
+      real = kind === 'user' ? hit?.user : hit?.password;
+      if (src.strictRef && (real === undefined || real === null)) {
+        throw missingCredential(src, kind, ref);
+      }
     }
+    if (real === undefined || real === null) real = kind === 'user' ? src.user : kind === 'password' ? src.password : src.secret;
+    if (!real) throw missingCredential(src, kind, ref);
     return real;
   };
 }
+
+/** 命名错误构造：EnvMissing（环境凭据）/ SecretMissing（步骤密文）。 */
+function missingCredential(src: CredentialSource, kind: CredentialKind, ref: string | null): Error {
+  const ph = credentialPlaceholder(kind, ref);
+  const e = new Error(
+    kind === 'secret'
+      ? `secret-missing: 步骤引用了 ${ph}，但本步没有可用的敏感值（需 sensitive 步骤密文）`
+      : `env-missing: 用例步骤引用了 ${ph}，但${envLabel(src)}的${refLabel(src, ref)}未配置用户名/密码（请到项目设置→测试环境配置）`,
+  );
+  e.name = kind === 'secret' ? 'SecretMissing' : 'EnvMissing';
+  return e;
+}
+
+/** 错误消息里的环境标识。 */
+function envLabel(src: CredentialSource): string {
+  return src.envName ? `环境「${src.envName}」` : '当前环境';
+}
+
+/** 错误消息里的归属服务标识：显式 @ref 优先，其次默认归属。 */
+function refLabel(src: CredentialSource, ref: string | null): string {
+  const name = ref ?? src.defaultRef ?? null;
+  return name ? `web 服务 ${name}` : '默认 web 服务';
+}
+
+/** 扫描文本里所有凭据占位符出现（供前置检查逐个解析）。带 @ref 的形态整体匹配。 */
+export const CREDENTIAL_PLACEHOLDER_SCAN = /__?ITEST_(?:USERNAME|PASSWORD|STEP_SECRET)@?[A-Za-z0-9_]*__?|\{\{\s*_*ITEST_(?:USERNAME|PASSWORD|STEP_SECRET)@?[A-Za-z0-9_ ]*_*\s*\}\}/g;
 
 function parseAction(a: unknown): AiAction | null {
   if (!a || typeof a !== 'object') return null;

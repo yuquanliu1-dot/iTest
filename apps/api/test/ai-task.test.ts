@@ -375,3 +375,29 @@ describe('凭据占位符 @ref 归属协议', () => {
     expect(referencesCredential('点击保存')).toBe(false);
   });
 });
+
+describe('makeCredentialValueSub byRef（@ref 归属解析）', () => {
+  it('@ref 命中 byRef，未命中回落默认，再不命中抛点名错误', () => {
+    const sub = makeCredentialValueSub({
+      user: 'def_u', password: 'def_p', secret: null,
+      byRef: (ref) => (ref === 'backend' ? { user: 'be_u', password: 'be_p' } : null),
+    });
+    expect(sub('__ITEST_USERNAME@backend__')).toBe('be_u');
+    expect(sub('__ITEST_PASSWORD@backend__')).toBe('be_p');
+    // @ref 未命中 → 回落默认（同一 web 的不同形态占位符不打架）
+    expect(sub('__ITEST_USERNAME@nope__')).toBe('def_u');
+    expect(sub('__ITEST_USERNAME__')).toBe('def_u');
+    // 双空 → 命名错误，且消息点名缺失的 ref 与可用 ref
+    const none = makeCredentialValueSub({ user: null, password: null, secret: null, byRef: () => null });
+    expect(() => none('__ITEST_USERNAME@backend__')).toThrow(/env-missing/);
+    expect(() => none('__ITEST_USERNAME@backend__')).toThrow(/backend/);
+  });
+
+  it('secret 恒走步骤密文，不看 byRef', () => {
+    const sub = makeCredentialValueSub({
+      user: 'u', password: 'p', secret: 'step-secret',
+      byRef: () => ({ user: 'x', password: 'y' }),
+    });
+    expect(sub('__ITEST_STEP_SECRET@anything__')).toBe('step-secret');
+  });
+});
