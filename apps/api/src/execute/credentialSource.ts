@@ -5,7 +5,7 @@
  * 默认链三级：显式 @ref → 用例绑定的 web_service_ref → 环境的默认 web 服务。
  * 一条链同时覆盖"不同用例测不同 web"（第二级）与"同一用例跨 web"（第一级）。
  */
-import type { CredentialSource } from './aiTask.js';
+import { credentialPlaceholder, type CredentialSource } from './aiTask.js';
 import type { EnvCtx } from './envContext.js';
 
 /** 无 ref 占位符该落到哪个 web 服务上（第二/三级链的结果；null = 环境无可用 web）。 */
@@ -37,7 +37,8 @@ export function buildCredentialSource(
   };
 }
 
-/** AI 提示词的资源清单（只含 name / origin / 有无凭据，绝不出现真实值）。 */
+/** AI 提示词的资源清单（只含 name / origin / 有无凭据，绝不出现真实值）。
+ *  每行直接给出该服务对应的凭据占位符形态——模型照抄即可，不必自己拼 @name。 */
 export function renderWebResourceManifest(ctx: { envCtx?: EnvCtx }): string {
   const env = ctx.envCtx;
   const webs = env?.webServices ?? [];
@@ -45,7 +46,10 @@ export function renderWebResourceManifest(ctx: { envCtx?: EnvCtx }): string {
   const lines = webs.map((w) => {
     if (!w.name) return '';
     const has = env?.hasCredentials(w.name) ?? false;
-    return `- ${w.name}（${w.isDefault ? '默认' : w.label}） ${w.origin} ${has ? '已配置凭据' : '未配置凭据'}`;
+    const ph = has
+      ? `（用户名填 ${credentialPlaceholder('user', w.name)}，密码填 ${credentialPlaceholder('password', w.name)}）`
+      : '（未配置凭据，不要尝试登录）';
+    return `- ${w.name}（${w.isDefault ? '默认' : w.label}） ${w.origin} ${has ? '已配置凭据' : '未配置凭据'}${ph}`;
   }).filter(Boolean);
   if (lines.length === 0) return '';
   return `可用 web 服务（凭据归属用 @name 指定；不写 @name 时用标注「默认」的那个）：\n${lines.join('\n')}`;

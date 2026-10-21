@@ -32,7 +32,7 @@ actions 元素类型：
 - 验证码/图形文字：先 screenshot 放大验证码图片，下轮逐字符仔细辨认。字符集为字母+数字（绝不出现 0 O o 1 l I），不区分大小写，通常 4 位，有随机旋转和干扰线。识别结果 fill 进对应输入框。
 - 每轮动作要保守，最多 6 个；每个动作的执行结果（ok / 错误信息）下轮反馈给你，出错就换 selector 重试。
 - 页面状态自检：每轮先看「当前 URL + 截图/元素清单」确认自己是否在指令期望的界面上。若目标元素连续 2 个动作都找不到，优先怀疑「页面不在期望界面」（入口/步骤错位、被弹窗或中间态挡住、导航没生效），不要再换 selector 空转——在 summary 里如实写明「当前 URL/可见界面与指令场景的差异」，需要时用 navigate / 点击返回 / 处理弹窗先回到正确界面。只有确认页面就在期望界面、纯粹是元素描述不准时，才换 selector 重试。
-- 凭据（用户名/密码）：fill 的 value 用字面量 __ITEST_USERNAME__ / __ITEST_PASSWORD__（平台在填入的瞬间替换为真实值）；不要输出 {{}} 变量模板，平台不替换模板。`;
+- 凭据（用户名/密码）：fill 的 value 用字面量 __ITEST_USERNAME@服务名__ / __ITEST_PASSWORD@服务名__（服务名取自下方资源清单里的 name；平台在填入的瞬间替换为真实值）；不要输出 {{}} 变量模板，平台不替换模板。`;
 
 const MOBILE_SYSTEM_PROMPT = `你是移动端测试执行智能体，在 iOS Simulator / Android Emulator 上执行自然语言测试指令。
 可观测：当前 accessibility tree（节点含 accessibilityId / label / role / bounds）、当前屏幕截图。
@@ -478,6 +478,8 @@ export interface RunAiTaskOpts {
   onUsage?: (r: AiUsageAddend) => void;
   /** 界面语言：缺省 zh-CN（执行路径无用户上下文时确定性回落）。 */
   lang?: AiLang;
+  /** web 资源清单（name / origin / 有无凭据）文本，由调用方用 renderWebResourceManifest 渲染。 */
+  resourceManifest?: string;
 }
 
 /**
@@ -495,7 +497,13 @@ export async function runAiTask(
 ): Promise<string> {
   const maxTurns = opts?.maxTurns ?? MAX_TURNS;
   const lang = aiLangFrom(opts?.lang);
-  const systemPrompt = mobile ? MOBILE_SYSTEM_PROMPT : SYSTEM_PROMPT;
+  // 资源清单进系统提示词：模型据此知道有哪些 web 服务、哪些配了凭据、该用哪个 @name。
+  // 无清单时保留旧的固定文案（调用方无环境上下文，行为不变）。
+  const manifest = opts?.resourceManifest?.trim() ?? '';
+  const credentialHint = manifest
+    ? `${manifest}\n不写 @服务名 时用标注「默认」的那个。清单里「未配置凭据」的服务不要尝试登录（必然失败）。`
+    : '用户名输入框 fill 的 value 用字面量 __ITEST_USERNAME__，密码用 __ITEST_PASSWORD__（平台在填入的瞬间替换为真实值）。';
+  const systemPrompt = mobile ? MOBILE_SYSTEM_PROMPT : `${SYSTEM_PROMPT}\n${credentialHint}`;
   let lastResults: string[] = [];
   let pendingShot: string | null = null;
   // 多轮累积：每轮把「本轮 user（+截图）」与「上轮 LLM 原始输出」追加到 history，

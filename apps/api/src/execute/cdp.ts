@@ -27,7 +27,7 @@ import { preflight } from './preflight.js';
 import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
 import { runAiTask, solveCaptchaOnce, isCaptchaFailed, CAPTCHA_TASK_RE, SECRET_PH, makeCredentialValueSub, parseCredentialPlaceholder, CREDENTIAL_PLACEHOLDER_SCAN, referencesCredential, type AiAction } from './aiTask.js';
-import { buildCredentialSource } from './credentialSource.js';
+import { buildCredentialSource, renderWebResourceManifest } from './credentialSource.js';
 import { mapAiActionsToCompiled } from './aiActionMap.js';
 import { readAiTaskCache, writeAiTaskCache, bumpAiTaskCacheHit } from './aiTaskCache.js';
 import type { EnvCtx } from './envContext.js';
@@ -597,13 +597,15 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       }
       const client = opts.ctx.llmClient ?? (await resolveLlmClient()).client;
       const collected: AiAction[] = [];
-      const aiOpts: { onAction: (a: AiAction, ok: boolean) => void; onUsage?: (r: AiUsageAddend) => void; valueSub?: (v: string) => string } = {
+      const resourceManifest = renderWebResourceManifest({ envCtx: opts.ctx.envCtx });
+      const aiOpts: { onAction: (a: AiAction, ok: boolean) => void; onUsage?: (r: AiUsageAddend) => void; valueSub?: (v: string) => string; resourceManifest?: string } = {
         onAction: (a, ok) => { if (ok) collected.push(a); },
       };
       if (opts.aiUsage) aiOpts.onUsage = (r) => opts.aiUsage!.add(r);
-      // valueSub 无条件挂载：SYSTEM_PROMPT 本就指示模型在登录页用 __ITEST_USERNAME__（与指令是否
+      // valueSub 无条件挂载：SYSTEM_PROMPT 本就指示模型在登录页用 __ITEST_USERNAME@name__（与指令是否
       // 引用无关），不挂则哨兵/花括号变体会被原样敲进表单（2026-10-21 prod228 实测）。
       aiOpts.valueSub = aiCredentialSub(opts.ctx, await resolveStepSecretForAi(opts.ctx, opts.stepId, value));
+      if (resourceManifest) aiOpts.resourceManifest = resourceManifest;
       const summary = await runAiTask(opts.page, value, client, undefined, aiOpts);
       // 验证码类指令：登记多轮验证上下文。提交（后续 click 步骤）若被系统判验证码错误/过期，
       // 执行器自动重新识别（失败后验证码通常已被前端换新）并重新提交，而非直接判用例失败。
@@ -1006,6 +1008,7 @@ async function runStepsInContext(
               const summary = await runAiTask(opts.page, instResolved, client, undefined, {
                 onUsage: (r) => aiUsage.add(r),
                 valueSub: aiCredentialSub(ctx, await resolveStepSecretForAi(ctx, opts.stepId, instResolved)),
+                resourceManifest: renderWebResourceManifest({ envCtx: ctx.envCtx }),
               });
               degraded = true;
               warning = `未编译，AI 按指令临场执行${summary ? `：${summary}` : ''}`;
@@ -1100,6 +1103,7 @@ async function runStepsInContext(
               aiSummary = (await runAiTask(opts.page, instResolved, client, undefined, {
                 onUsage: (r) => aiUsage.add(r),
                 valueSub: aiCredentialSub(ctx, await resolveStepSecretForAi(ctx, opts.stepId, instResolved)),
+                resourceManifest: renderWebResourceManifest({ envCtx: ctx.envCtx }),
               })) || undefined;
             } catch (err) {
               // AI 不可用/放弃/超轮 → 维持原失败（走下方 failedResult），但记下原因供 warning 展示

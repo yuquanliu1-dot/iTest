@@ -7,12 +7,16 @@ import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 // 固化编排测试：runAiTask 打桩并借 opts.onAction 模拟 AI 动作收集（模块级 mock 下收集钩子
 // 由测试手动驱动），writeStepScreenshot / extractPageElements 打桩，聚焦 solidify_case 编排契约。
 // aiActionMap（映射函数）经 aiTask.js 取占位符常量,一并打桩隔绝真实依赖
-vi.mock('../src/execute/aiTask.js', () => ({
-  runAiTask: vi.fn(),
-  USER_PH: '__ITEST_USERNAME__',
-  PASSWORD_PH: '__ITEST_PASSWORD__',
-  SECRET_PH: '__ITEST_STEP_SECRET__',
-}));
+vi.mock('../src/execute/aiTask.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/execute/aiTask.js')>();
+  return {
+    ...actual,
+    runAiTask: vi.fn(),
+    USER_PH: '__ITEST_USERNAME__',
+    PASSWORD_PH: '__ITEST_PASSWORD__',
+    SECRET_PH: '__ITEST_STEP_SECRET__',
+  };
+});
 vi.mock('../src/execute/cdp.js', () => ({
   writeStepScreenshot: vi.fn(async () => '/screenshots/solidify-x/step-1.png'),
   // verifyCase.js（solidifyCase 复用其 buildStepInstruction/占位符）与 visionAssert 的传递依赖

@@ -36,11 +36,13 @@ function makeStubPage() {
 /** 按轮次脚本化回复的 mock LLM；每轮收到完整 userMessage。 */
 function makeMockLlm(script: Array<Record<string, unknown> | string>) {
   const requests: string[] = [];
+  const systems: string[] = [];
   const langs: Array<string | undefined> = [];
   const llm: LLMClient = {
     provider: 'anthropic',
     async complete(req): Promise<LLMResult> {
       requests.push(req.userMessage);
+      systems.push(req.systemPrompt);
       langs.push(req.lang);
       const raw = script.shift();
       if (raw === undefined) throw new Error('mock script exhausted');
@@ -49,7 +51,7 @@ function makeMockLlm(script: Array<Record<string, unknown> | string>) {
         : { kind: 'json', value: raw, provider: 'anthropic', vision: true };
     },
   };
-  return { llm, requests, langs };
+  return { llm, requests, systems, langs };
 }
 
 describe('solveCaptchaOnce / detectCaptchaFailure（多轮验证）', () => {
@@ -274,6 +276,21 @@ describe('runAiTask', () => {
     const { llm, langs } = makeMockLlm([{ done: true, summary: 'ok' }]);
     await runAiTask(page, '一步完成', llm, false, { lang: 'en-US' });
     expect(langs[0]).toBe('en-US');
+  });
+
+  it('resourceManifest 进系统提示词且不含真实凭据', async () => {
+    const { page } = makeStubPage();
+    const { llm, systems } = makeMockLlm([{ done: true, summary: 'ok' }]);
+    await runAiTask(page, '登录', llm, false, {
+      resourceManifest: '可用 web 服务：\n- backend（默认） http://10.0.0.1:90 已配置凭据\n- staging http://10.0.0.9 未配置凭据',
+    });
+    expect(systems[0]).toContain('backend（默认） http://10.0.0.1:90');
+    expect(systems[0]).toContain('未配置凭据');
+    expect(systems[0]).toContain('__ITEST_USERNAME@服务名__');
+    // 缺省不注入（无清单的调用方提示词与既有形态一致）
+    const { llm: l2, systems: s2 } = makeMockLlm([{ done: true, summary: 'ok' }]);
+    await runAiTask(page, '登录', l2);
+    expect(s2[0]).not.toContain('可用 web 服务');
   });
 });
 
