@@ -149,6 +149,7 @@ export const api = {
     replayUrl: (id: string, speed?: number) =>
       speed && speed !== 1 ? `${BASE}/plan-runs/${id}/live?replay=1&speed=${speed}` : `${BASE}/plan-runs/${id}/live?replay=1`,
     replayMetaUrl: (id: string) => `${BASE}/plan-runs/${id}/live?replay=meta`,
+    remove: (id: string) => request<{ ok: boolean }>(`/plan-runs/${id}`, { method: 'DELETE' }),
     removeBatch: (ids: string[]) =>
       request<{ count: number }>('/plan-runs/batch-delete', {
         method: 'POST',

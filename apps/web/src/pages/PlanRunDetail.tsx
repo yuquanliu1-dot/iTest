@@ -1,4 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../i18n';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -9,6 +10,7 @@ import Button from '../components/ui/Button';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import LiveViewCard from '../components/LiveViewCard';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import { fullDateTime } from '../lib/format';
 import { creatorName } from '../lib/creatorName';
 
@@ -18,6 +20,7 @@ export default function PlanRunDetail() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const toast = useUIStore((s) => s.showToast);
+  const [showDelete, setShowDelete] = useState(false);
   const { data: run, isLoading, isError, error } = useQuery({
     queryKey: ['planRun', runId],
     queryFn: () => api.planRuns.get(runId!),
@@ -32,6 +35,19 @@ export default function PlanRunDetail() {
       toast(t('plans:abortRequested'), 'success');
       qc.invalidateQueries({ queryKey: ['planRun', runId] });
       qc.invalidateQueries({ queryKey: ['executions'] });
+    },
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
+  });
+
+  // 删除本次运行：连带成员报告一起删（后端语义），删完回执行历史列表
+  const remove = useMutation({
+    mutationFn: () => api.planRuns.remove(runId!),
+    onSuccess: () => {
+      toast(t('plans:runDeletedToast'), 'success');
+      qc.invalidateQueries({ queryKey: ['executions'] });
+      qc.invalidateQueries({ queryKey: ['reports'] });
+      qc.invalidateQueries({ queryKey: ['stats', projectId] });
+      navigate(`/p/${projectId}/v/${versionId}/reports`);
     },
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
@@ -68,6 +84,18 @@ export default function PlanRunDetail() {
           <Button variant="ghost" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
             <Icon name="pause" size={12} />
             {cancel.isPending ? t('plans:aborting') : t('plans:abort')}
+          </Button>
+        )}
+        {/* 运行中不给删除：执行器还在写成员表与报告表，此时删库会留悬挂数据 */}
+        {run.status !== 'running' && (
+          <Button
+            variant="ghost"
+            onClick={() => setShowDelete(true)}
+            style={{ color: 'var(--destructive)' }}
+            aria-label={t('plans:deleteRunTitle')}
+            title={t('plans:deleteRunTitle')}
+          >
+            <Icon name="trash" size={12} />
           </Button>
         )}
         <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
@@ -158,6 +186,25 @@ export default function PlanRunDetail() {
           )}
         </div>
       </div>
+
+      <Dialog open={showDelete} onOpenChange={setShowDelete}>
+        <DialogContent style={{ maxWidth: 420 }}>
+          <DialogHeader><DialogTitle>{t('plans:deleteRunTitle')}</DialogTitle></DialogHeader>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+            {t('plans:deleteRunConfirm', { id: runId?.slice(0, 8) ?? '' })}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowDelete(false)}>{t('common:cancel')}</Button>
+            <Button
+              variant="destructive"
+              disabled={remove.isPending}
+              onClick={() => { setShowDelete(false); remove.mutate(); }}
+            >
+              {remove.isPending ? t('cases:deleting') : t('cases:confirmDelete')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

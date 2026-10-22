@@ -1,5 +1,7 @@
 import { Router } from 'express';
-import { eq, asc, inArray, sql } from 'drizzle-orm';
+import { eq, and, asc, inArray, sql } from 'drizzle-orm';
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { db } from '../db/client.js';
 import { planRuns, planRunCases, executionPlans, testCases, reports } from '../db/schema.js';
@@ -11,6 +13,63 @@ import { handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf }
 import { resolveUsersByIds } from '../lib/creator.js';
 
 export const planRunsRoute = Router();
+
+const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
+
+/** 清理报告对应的截图目录；目录不存在或权限不足时静默吞掉（不影响删除 API 成功） */
+async function unlinkReportScreenshots(reportId: string): Promise<void> {
+  await rm(join(SCREENSHOTS_DIR, reportId), { recursive: true, force: true }).catch(() => {});
+}
+
+/** 收集一次计划运行产出的全部报告 id：plan_run_cases.report_id 与 report_ids 数组里的每个 id。 */
+async function collectRunReportIds(planRunIds: string[]): Promise<string[]> {
+  const rows = await db
+    .select({ reportId: planRunCases.reportId, reportIds: planRunCases.reportIds })
+    .from(planRunCases)
+    .where(inArray(planRunCases.planRunId, planRunIds));
+  const ids = new Set<string>();
+  for (const r of rows) {
+    if (r.reportId) ids.add(r.reportId);
+    for (const id of Array.isArray(r.reportIds) ? r.reportIds : []) if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+/**
+ * 删除计划运行及其成员报告。
+ *
+ * 成员报告必须一并删：plan_run_cases 才是「这份报告属于某次计划运行」的唯一链接，
+ * 运行删掉后链接消失，报告会以「独立用例执行」的形态重新出现在执行历史的单用例列表里
+ * （executions 的 case 分支靠 not exists 排除 plan 成员报告）——用户看到的等于「删了运行、
+ * 报告却还在」。
+ *
+ * 报告删掉后其 screenshots/<reportId>/ 目录一并清理，避免磁盘堆积。
+ */
+async function deleteRunsWithReports(planRunIds: string[]): Promise<number> {
+  const reportIds = await collectRunReportIds(planRunIds);
+  const deleted = await db
+    .delete(planRuns)
+    .where(inArray(planRuns.id, planRunIds))
+    .returning({ id: planRuns.id });
+  if (reportIds.length) {
+    // report_id 外键是 ON DELETE SET NULL，删报告后 plan_run_cases 的链接被置空；
+    // 此刻 plan_runs 已删，成员行随之级联消失，不留悬挂引用。
+    await db.delete(reports).where(inArray(reports.id, reportIds));
+    await Promise.all(reportIds.map((id) => unlinkReportScreenshots(id).catch(() => {})));
+  }
+  return deleted.length;
+}
+
+/** 运行中的计划运行不允许删除：执行器还会往成员表和报告表继续写，删了库等于删一半。 */
+async function assertNotRunning(planRunIds: string[]): Promise<void> {
+  const running = await db
+    .select({ id: planRuns.id })
+    .from(planRuns)
+    .where(and(inArray(planRuns.id, planRunIds), eq(planRuns.status, 'running')));
+  if (running.length > 0) {
+    throw new HttpError(409, 'plan_run_running', 'plan run is still running');
+  }
+}
 
 planRunsRoute.get('/:id', async (req, res) => {
   const run = (await db.select().from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
@@ -90,15 +149,22 @@ planRunsRoute.post('/:id/cancel', async (req, res) => {
   res.json({ ok: true });
 });
 
+planRunsRoute.delete('/:id', async (req, res) => {
+  const id = req.params.id!;
+  await assertPlanRunVisible(id, req.user!);
+  await assertNotRunning([id]);
+  const count = await deleteRunsWithReports([id]);
+  if (count === 0) throw new HttpError(404, 'not_found', 'plan run not found');
+  res.json({ ok: true });
+});
+
 planRunsRoute.post('/batch-delete', async (req, res) => {
   const body = z.object({ planRunIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
   // 与 reports/batch-delete 一致：按可见性逐个校验，违规直接 404
   for (const id of body.planRunIds) await assertPlanRunVisible(id, req.user!);
-  const deleted = await db
-    .delete(planRuns)
-    .where(inArray(planRuns.id, body.planRunIds))
-    .returning({ id: planRuns.id });
-  res.json({ count: deleted.length });
+  await assertNotRunning(body.planRunIds);
+  const count = await deleteRunsWithReports(body.planRunIds);
+  res.json({ count });
 });
 
 planRunsRoute.get('/:id/events', async (req, res) => {

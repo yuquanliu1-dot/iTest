@@ -39,6 +39,7 @@
   "no_repo": "未找到代码仓库",
   "not_empty": "仍有子项，不能删除",
   "not_sensitive": "该字段不属于敏感字段",
+  "plan_run_running": "计划运行仍在执行中，请先中止再删除",
   "same_org": "需在同一个组织内操作",
   "scenario_mismatch": "场景不匹配",
   "session_init_failed": "会话初始化失败",

@@ -39,6 +39,7 @@
   "no_repo": "Code repository not found",
   "not_empty": "There are still child items and this cannot be deleted",
   "not_sensitive": "This field is not a sensitive field",
+  "plan_run_running": "The plan run is still executing, abort it before deleting",
   "same_org": "Must be in the same organization",
   "scenario_mismatch": "Scenario mismatch",
   "session_init_failed": "Session initialization failed",

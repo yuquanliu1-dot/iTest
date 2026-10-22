@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../i18n';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -11,8 +11,10 @@ import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
+import IconButton from '../components/ui/IconButton';
 import { EmptyCellValue } from '../components/ui/Table';
 import { DataTable, type DataTableColumn, type DataTableFacet, type DataTableTabs } from '../components/ui/DataTable';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import { useTableSelection } from '../hooks/useTableSelection';
 import { fullDateTime, shortDateTime, formatDuration } from '../lib/format';
 import { creatorName } from '../lib/creatorName';
@@ -55,6 +57,8 @@ export default function Executions() {
 	const page = Math.max(1, Number(raw.page) || 1);
 	const pageSizeRaw = Number(raw.pageSize);
 	const pageSize = [10, 20, 50, 100].includes(pageSizeRaw) ? pageSizeRaw : 20;
+	/** 待确认删除的计划运行（行内删除入口）；null = 未打开确认弹窗。 */
+	const [confirmDeleteRun, setConfirmDeleteRun] = useState<{ id: string; label: string } | null>(null);
 
 	const { data, isLoading, isError, error } = useQuery({
 		queryKey: ['executions', projectId, versionId, tab, raw.statuses, raw.versions, raw.q, raw.caseId, raw.planId],
@@ -176,6 +180,19 @@ export default function Executions() {
 				.join(t('reports:list.listSeparator'));
 			toast(t('reports:list.deletedToast', { count: total, parts }), 'success');
 			selection.clear();
+			qc.invalidateQueries({ queryKey: ['executions'] });
+			qc.invalidateQueries({ queryKey: ['reports'] });
+			qc.invalidateQueries({ queryKey: ['stats', projectId] });
+		},
+		onError: (e: Error) => toast(localizeApiError(e), 'error'),
+	});
+
+	// 单条删除计划运行：连带成员报告一起删（后端语义），删完刷新执行历史与统计
+	const deleteRun = useMutation({
+		mutationFn: (id: string) => api.planRuns.remove(id),
+		onSuccess: () => {
+			toast(t('plans:runDeletedToast'), 'success');
+			setConfirmDeleteRun(null);
 			qc.invalidateQueries({ queryKey: ['executions'] });
 			qc.invalidateQueries({ queryKey: ['reports'] });
 			qc.invalidateQueries({ queryKey: ['stats', projectId] });
@@ -314,6 +331,28 @@ export default function Executions() {
 			cellClassName: 'text-xs text-muted-foreground tabular-nums',
 			cell: (r) => <span title={fullDateTime(r.createdAt)}>{shortDateTime(r.createdAt)}</span>,
 		},
+		{
+			id: 'actions',
+			header: '',
+			width: 'w-[44px]',
+			align: 'right',
+			hideable: false,
+			// 计划运行支持单条删除（连带成员报告）；单用例报告走「报告详情页」删除，
+			// 这里不给行内入口，避免同一份数据两套删除语义。
+			cell: (r) =>
+				r.kind !== 'plan' ? null : (
+					<span className="flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
+						<IconButton
+							icon="trash"
+							title={t('plans:deleteRunTitle')}
+							tone="destructive"
+							// 运行中禁止删除：执行器还在写成员表与报告表，删一半会留悬挂数据
+							disabled={r.status === 'running'}
+							onClick={() => setConfirmDeleteRun({ id: r.id, label: r.id.slice(0, 8) })}
+						/>
+					</span>
+				),
+		},
 	];
 
 	const goRunDetail = (r: (typeof rows)[number]) =>
@@ -421,6 +460,25 @@ export default function Executions() {
 					/>
 				)}
 			</PageShellContent>
+
+			<Dialog open={!!confirmDeleteRun} onOpenChange={(o) => { if (!o) setConfirmDeleteRun(null); }}>
+				<DialogContent style={{ maxWidth: 420 }}>
+					<DialogHeader><DialogTitle>{t('plans:deleteRunTitle')}</DialogTitle></DialogHeader>
+					<div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+						{t('plans:deleteRunConfirm', { id: confirmDeleteRun?.label })}
+					</div>
+					<DialogFooter>
+						<Button variant="ghost" onClick={() => setConfirmDeleteRun(null)}>{t('common:cancel')}</Button>
+						<Button
+							variant="destructive"
+							disabled={deleteRun.isPending}
+							onClick={() => confirmDeleteRun && deleteRun.mutate(confirmDeleteRun.id)}
+						>
+							{deleteRun.isPending ? t('cases:deleting') : t('cases:confirmDelete')}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</PageShell>
 	);
 }
