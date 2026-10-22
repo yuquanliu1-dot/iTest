@@ -312,6 +312,31 @@ describe('resolveEnv', () => {
     await env.close();
   });
 
+  // 回归：默认 syslog 不完整时绝不静默回落到另一条完整记录。
+  // 连错机器会读到别人的日志 → 断言误判，比直接失败难排查得多。
+  it('默认 syslog 不完整时判死（不回落其它完整记录）', async () => {
+    const enc = encrypt('pw1');
+    const sec = { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') };
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [
+        // 默认但缺 filePath
+        { id: 's-bad-def', environmentId: 'env-1', objectType: 'syslog', label: '残缺的默认机', isDefault: true,
+          payload: { host: 'h1', user: 'u1', authType: 'password', secret: sec } },
+        // 非默认且完整
+        { id: 's-ok', environmentId: 'env-1', objectType: 'syslog', label: '好机', isDefault: false,
+          payload: { host: 'h2', user: 'u2', filePath: '/var/log/b.log', authType: 'password', secret: sec } },
+      ],
+      project_versions: [],
+    });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    expect(env.syslogs.map((s) => s.label)).toEqual(['好机']);
+    // 默认选择判死——不静默回落到「好机」
+    expect(env.resolveSyslog()).toBeNull();
+    expect(env.syslog).toBeUndefined();
+    await env.close();
+  });
+
   it('builds login ctx from default web object embedded credential', async () => {
     const enc = encrypt('p@ss');
     mockTables({
@@ -443,6 +468,37 @@ describe('resolveEnv 命名 db', () => {
     await env.close();
     const second = await env.resolveDbPool('主库');
     expect(second).not.toBe(first);
+    await env.close();
+  });
+
+  // 回归：默认 db 配置不完整时，绝不静默回落到另一条完整库。
+  // 旧语义（pick('db') 先选后校验）会判死报「未配置数据库对象」；
+  // 4f9a591 把完整性过滤挪到选择之前后，残缺的默认库被跳过 → 静默连到别的库。
+  // 静默连错库比报错难排查得多：查询结果看着正常，实际查的是另一套数据。
+  it('默认 db 不完整时判死（不回落其它完整库）', async () => {
+    const secretOf = (pw: string) => {
+      const enc = encrypt(pw);
+      return { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') };
+    };
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [
+        // 默认但缺 dbName
+        { id: 'd-bad-def', environmentId: 'env-1', objectType: 'db', label: '残缺的默认库', isDefault: true,
+          payload: { host: 'pg-main', user: 'u1', secret: secretOf('p1') } },
+        // 非默认且完整
+        { id: 'd-ok', environmentId: 'env-1', objectType: 'db', label: '好库', isDefault: false,
+          payload: { host: 'h2', dbName: 'd', user: 'u2', secret: secretOf('p2') } },
+      ],
+      project_versions: [],
+    });
+    const env = await resolveEnv({ caseEnvId: 'env-1' });
+    // 完整库仍在列表里（可被显式 ref 引用）
+    expect(env.dbs.map((d) => d.label)).toEqual(['好库']);
+    // 但默认选择判死——不静默回落到「好库」
+    expect(env.resolveDb()).toBeNull();
+    expect(env.db).toBeUndefined();
+    expect(env.pool).toBeUndefined();
     await env.close();
   });
 });

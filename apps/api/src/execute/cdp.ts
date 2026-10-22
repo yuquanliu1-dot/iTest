@@ -675,10 +675,15 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       if (!conn) {
         const ref = a.syslogRef ?? null;
         const available = envCtx?.syslogs.map((s) => s.label).join('、') || '(无)';
+        // 空 ref 且默认 syslog 存在但不完整 → 点名它并说明缺什么，
+        // 不能说「未配置任何 syslog 对象」——那句与同句的可用清单自相矛盾。
+        const defaultIncomplete = !ref && (envCtx?.syslogs.length ?? 0) !== 0 && !envCtx?.syslog;
         const e = new Error(
-          `env-syslog-missing: ${ref
-            ? `环境「${envCtx?.envName ?? ''}」不存在名为 ${ref} 的 syslog 对象，可用:${available}`
-            : '当前环境未配置任何 syslog 对象'}`
+          defaultIncomplete
+            ? `env-syslog-missing: 环境「${envCtx?.envName ?? ''}」默认 syslog 对象配置不完整（需 host/user/filePath/凭据），可用:${available}`
+            : `env-syslog-missing: ${ref
+              ? `环境「${envCtx?.envName ?? ''}」不存在名为 ${ref} 的 syslog 对象，可用:${available}`
+              : '当前环境未配置任何 syslog 对象'}`
         );
         e.name = 'EnvSyslogMissing';
         throw e;

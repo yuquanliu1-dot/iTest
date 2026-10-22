@@ -121,13 +121,13 @@ export interface EnvCtx {
   pool?: QueryPool;
   /** 全部配置完整的 db 对象(label 即 ref)。 */
   dbs: DbEntry[];
-  /** 按 ref 取 db；ref 空 → isDefault → 最早；未命中 → null。 */
+  /** 按 ref 取 db；ref 空 → 完整的默认项（默认项不存在或不完整 → null，绝不回落其它库）；未命中 → null。 */
   resolveDb(ref?: string | null): DbEntry | null;
   /** 惰建 + 缓存连接池；未命中 → EnvDbMissing(消息点名 ref)。同名调用返回同一个池。 */
   resolveDbPool(ref?: string | null): Promise<QueryPool>;
   /** 全部配置完整的 syslog 对象（label 即 ref）。 */
   syslogs: SyslogEntry[];
-  /** 按 ref 取；ref 空 → isDefault → 最早；未命中 → null（绝不静默回落默认）。 */
+  /** 按 ref 取；ref 空 → 完整的默认项（默认项不存在或不完整 → null）；未命中 → null（绝不静默回落默认）。 */
   resolveSyslog(ref?: string | null): SyslogCtx | null;
   syslog?: SyslogCtx;
   login?: LoginCtx;
@@ -241,6 +241,16 @@ export async function resolveEnv(
   // db 对象：以 label 为 ref 列出全部配置完整的条目。连接池惰建（多 db 场景下急切建全部会浪费连接），
   // 池缓存进 pools，close() 统一 end()。EnvCtx.db / EnvCtx.pool 是「默认 db 的派生 getter」。
   const dbs: DbEntry[] = [];
+  // 默认选择只看「被选中的那一条」是否完整：先按 isDefault 选中，再校验完整性，
+  // 不完整就判死（null），绝不静默回落到另一条完整库——连错库比报错难排查得多。
+  // （早期实现把完整性过滤放在选择之前，残缺的默认库会被跳过 → 静默连到别的库。）
+  const defaultDbLabel: string | null = (() => {
+    const obj = pick('db');
+    if (!obj) return null;
+    const p = (obj.payload ?? {}) as DbPayload;
+    if (!p.host || !p.dbName || !p.user) return null;
+    return obj.label;
+  })();
   for (const o of objects.filter((x) => x.objectType === 'db')) {
     const p = (o.payload ?? {}) as DbPayload;
     if (!p.host || !p.dbName || !p.user) continue;
@@ -258,7 +268,9 @@ export async function resolveEnv(
   }
   const resolveDb = (ref?: string | null): DbEntry | null => {
     if (ref) return dbs.find((d) => d.label === ref) ?? null;
-    return dbs.find((d) => d.isDefault) ?? dbs[0] ?? null;
+    // 空 ref：只认「完整的默认项」。默认项不存在或不完整 → null（判死，不回落）。
+    if (defaultDbLabel === null) return null;
+    return dbs.find((d) => d.label === defaultDbLabel) ?? null;
   };
   const pools = new Map<string, QueryPool>();
   const poolFor = (entry: DbEntry): QueryPool => {
@@ -274,7 +286,12 @@ export async function resolveEnv(
   const resolveDbPool = async (ref?: string | null): Promise<QueryPool> => {
     const entry = resolveDb(ref);
     if (!entry) {
-      const e = new Error(`env-db-missing: 环境「${env.name}」${ref ? `不存在名为 ${ref} 的数据库对象` : '未配置任何数据库对象'}，可用:${dbs.map((d) => d.label).join('、') || '(无)'}`);
+      // 空 ref 且默认项存在但不完整 → 报「默认库配置不完整」并点名它，
+      // 不能说「未配置任何数据库对象」——那条清单里明明列着库，自相矛盾。
+      const defaultIncomplete = !ref && defaultDbLabel === null && pick('db') !== null;
+      const e = new Error(defaultIncomplete
+        ? `env-db-missing: 环境「${env.name}」默认数据库对象「${pick('db')!.label}」配置不完整（需 host/dbName/user），可用:${dbs.map((d) => d.label).join('、') || '(无)'}`
+        : `env-db-missing: 环境「${env.name}」${ref ? `不存在名为 ${ref} 的数据库对象` : '未配置任何数据库对象'}，可用:${dbs.map((d) => d.label).join('、') || '(无)'}`);
       e.name = 'EnvDbMissing';
       (e as Error & { resource?: string | null }).resource = ref ?? null;
       throw e;
@@ -284,6 +301,14 @@ export async function resolveEnv(
 
   // syslog 对象：以 label 为 ref 收集全部配置完整的条目；默认项额外挂到兼容字段 syslog。
   const syslogs: SyslogEntry[] = [];
+  // 与 db 同理：默认选择先选中再校验完整性，不完整即判死（不回落）。
+  const defaultSyslogLabel: string | null = (() => {
+    const obj = pick('syslog');
+    if (!obj) return null;
+    const p = (obj.payload ?? {}) as SyslogPayload;
+    if (!p.host || !p.user || !p.filePath || !p.secret?.c || !p.secret?.i || !p.secret?.t) return null;
+    return obj.label;
+  })();
   for (const o of objects.filter((x) => x.objectType === 'syslog')) {
     const p = (o.payload ?? {}) as SyslogPayload;
     if (!p.host || !p.user || !p.filePath || !p.secret?.c || !p.secret?.i || !p.secret?.t) continue;
@@ -304,7 +329,8 @@ export async function resolveEnv(
   }
   const resolveSyslogEntry = (ref?: string | null): SyslogEntry | null => {
     if (ref) return syslogs.find((s) => s.label === ref) ?? null;
-    return syslogs.find((s) => s.isDefault) ?? syslogs[0] ?? null;
+    if (defaultSyslogLabel === null) return null;
+    return syslogs.find((s) => s.label === defaultSyslogLabel) ?? null;
   };
   const syslogCfg = resolveSyslogEntry()?.ctx;
 
