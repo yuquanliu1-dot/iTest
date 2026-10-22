@@ -30,6 +30,7 @@ type AddFilters = {
   statuses: string[];
   priorities: string[];
   tags: string[];
+  projects: string[];
 };
 
 export default function PlanDetail() {
@@ -54,21 +55,39 @@ export default function PlanDetail() {
   const [search, setSearch] = useState('');
   const [environmentId, setEnvironmentId] = useState<string | null>(null);
 
+  /** 计划所属项目的归属信息：决定用例池是否跨产品线取（未归线的项目池子与现状完全一致）。 */
+  const { data: planProject } = useQuery({
+    queryKey: ['project', plan?.projectId],
+    queryFn: () => api.projects.get(plan!.projectId),
+    enabled: !!plan?.projectId,
+  });
+  const productLineId = planProject?.productLineId ?? null;
+
   const { data: allCases } = useQuery({
-    queryKey: ['cases', projectId, versionId],
-    queryFn: () => api.cases.list({ projectId }),
+    queryKey: ['cases', productLineId ? 'line' : 'proj', productLineId ?? projectId],
+    queryFn: () =>
+      productLineId
+        ? api.cases.list({ productLineId })
+        : api.cases.list({ projectId }),
     enabled: !!projectId,
   });
 
-  /** 添加用例弹窗的过滤维度选项：分组名 / 版本名 / 标签名靠三处 GET 提供（值与选中集在前端本地筛）。 */
+  /** 添加用例弹窗的过滤维度选项：分组名 / 版本名 / 标签名靠三处 GET 提供（值与选中集在前端本地筛）。
+   *  产品线项目下改取线内跨项目的分组/版本，否则筛选菜单只有本项目的选项。 */
   const { data: projectGroups } = useQuery({
-    queryKey: ['groups', projectId],
-    queryFn: () => api.projects.groups(projectId!),
+    queryKey: ['groups', productLineId ?? projectId],
+    queryFn: () =>
+      productLineId
+        ? api.projects.groupsByProductLine(productLineId)
+        : api.projects.groups(projectId!),
     enabled: !!projectId,
   });
   const { data: projectVersions } = useQuery({
-    queryKey: ['versions', projectId],
-    queryFn: () => api.versions.list(projectId!),
+    queryKey: ['versions', productLineId ?? projectId],
+    queryFn: () =>
+      productLineId
+        ? api.projects.versionsByProductLine(productLineId)
+        : api.versions.list(projectId!),
     enabled: !!projectId,
   });
   const { data: projectTags } = useQuery({
@@ -78,12 +97,14 @@ export default function PlanDetail() {
   });
 
   /** 添加用例弹窗过滤：每维多选（并集），维度间取交集。弹窗每次打开重置为空。 */
-  const EMPTY_ADD_FILTERS: AddFilters = { groups: [], versions: [], statuses: [], priorities: [], tags: [] };
+  const EMPTY_ADD_FILTERS: AddFilters = { groups: [], versions: [], statuses: [], priorities: [], tags: [], projects: [] };
   const [addFilters, setAddFilters] = useState<AddFilters>(EMPTY_ADD_FILTERS);
   const hasAddFilter = addFilters.groups.length > 0 || addFilters.versions.length > 0
-    || addFilters.statuses.length > 0 || addFilters.priorities.length > 0 || addFilters.tags.length > 0;
+    || addFilters.statuses.length > 0 || addFilters.priorities.length > 0 || addFilters.tags.length > 0
+    || addFilters.projects.length > 0;
   const activeFilterCount = addFilters.groups.length + addFilters.versions.length
-    + addFilters.statuses.length + addFilters.priorities.length + addFilters.tags.length;
+    + addFilters.statuses.length + addFilters.priorities.length + addFilters.tags.length
+    + addFilters.projects.length;
 
   const inPlanIds = useMemo(() => new Set((plan?.cases ?? []).map((c) => c.id)), [plan]);
   const candidates = useMemo(() => {
@@ -91,12 +112,22 @@ export default function PlanDetail() {
     // 状态/标签走前端本地筛（GET /cases 不接这两个参数，与 GroupsPage 一致）
     if (addFilters.groups.length) list = list.filter((c) => addFilters.groups.includes(c.groupId ?? ''));
     if (addFilters.versions.length) list = list.filter((c) => c.versionId != null && addFilters.versions.includes(c.versionId));
+    if (addFilters.projects.length) list = list.filter((c) => addFilters.projects.includes(c.projectId ?? ''));
     if (addFilters.statuses.length) list = list.filter((c) => addFilters.statuses.includes(c.status));
     if (addFilters.priorities.length) list = list.filter((c) => addFilters.priorities.includes(c.priority));
     if (addFilters.tags.length) list = list.filter((c) => (c.tags ?? []).some((t) => addFilters.tags.includes(t.id)));
     if (search.trim()) list = list.filter((c) => c.title.includes(search.trim()));
     return list;
   }, [allCases, inPlanIds, addFilters, search]);
+
+  /** 产品线项目下的「项目」筛选项：从候选池反推，避免多发一次 GET。 */
+  const projectOptions = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of allCases ?? []) {
+      if (c.projectId && c.projectName) m.set(c.projectId, c.projectName);
+    }
+    return [...m.entries()].map(([value, label]) => ({ value, label }));
+  }, [allCases]);
 
   const [loginQ, setLoginQ] = useState('');
   const { data: loginCases } = useQuery({
@@ -414,7 +445,10 @@ export default function PlanDetail() {
           ) : (
             <ol className="flex flex-col gap-2" data-stagger>
               {plan.cases.map((c, idx) => {
-                  const crossVersion = plan.versionId && c.versionId && c.versionId !== plan.versionId;
+                  // 「跨版本 / 跨项目」标签不如直接说清楚「这条用例来自哪个项目哪个版本」——
+                  // 前者只说差异，后者说事实，且产品线合并页面后一行就能定位来源。
+                  const fromOtherProject = c.projectId && c.projectId !== plan.projectId;
+                  const fromOtherVersion = c.versionId && c.versionId !== plan.versionId;
                   return (
                     <li
                       key={c.id}
@@ -435,15 +469,24 @@ export default function PlanDetail() {
                       >
                         {c.title}
                       </span>
-                      {crossVersion ? (
+                      {fromOtherProject && c.projectName && (
                         <span
-                          className="text-[10px] font-semibold uppercase px-1.5 py-[1px] rounded"
-                          style={{ background: 'var(--warning-soft, var(--primary-soft))', color: 'var(--warning, var(--primary))', letterSpacing: '0.04em' }}
-                          title={t('plans:crossVersionTitle')}
+                          className="text-[10px] font-semibold px-1.5 py-[1px] rounded shrink-0"
+                          style={{ background: 'var(--primary-soft, var(--muted))', color: 'var(--primary, var(--foreground))' }}
+                          title={t('plans:caseFromProject', { project: c.projectName })}
                         >
-                          {t('plans:crossVersion')}
+                          {c.projectName}
                         </span>
-                      ) : null}
+                      )}
+                      {fromOtherVersion && c.versionName && (
+                        <span
+                          className="text-[10px] font-semibold px-1.5 py-[1px] rounded shrink-0"
+                          style={{ background: 'var(--warning-soft, var(--primary-soft))', color: 'var(--warning, var(--primary))' }}
+                          title={t('plans:caseFromVersion', { version: c.versionName })}
+                        >
+                          {c.versionName}
+                        </span>
+                      )}
                       <IconButton icon="chevronUp" title={t('cases:moveUp')} onClick={() => moveBy(idx, -1)} />
                       <IconButton icon="chevronDown" title={t('cases:moveDown')} onClick={() => moveBy(idx, 1)} />
                       <IconButton
@@ -509,6 +552,15 @@ export default function PlanDetail() {
                   selected={addFilters.versions}
                   onChange={(v) => setAddFilters({ ...addFilters, versions: v })}
                 />
+                {/* 产品线项目才需要「项目」维度：未归线时池子里只有本项目用例，这一维恒为单值 */}
+                {productLineId && projectOptions.length > 1 && (
+                  <FilterSubmenu
+                    label={t('productLines:project')}
+                    options={projectOptions}
+                    selected={addFilters.projects}
+                    onChange={(v) => setAddFilters({ ...addFilters, projects: v })}
+                  />
+                )}
                 <FilterSubmenu
                   label={t('groups:statusLabel')}
                   options={(['draft', 'review', 'ready', 'deprecated'] as const).map((s) => ({ value: s, label: t(caseStatusLabel(s)) }))}
@@ -552,6 +604,16 @@ export default function PlanDetail() {
                   >
                     <input type="checkbox" readOnly checked={checked} />
                     <span className="text-[12px] flex-1 truncate" style={{ color: 'var(--foreground)' }}>{c.title}</span>
+                    {/* 跨项目候选行标出来源项目，避免用户在计划里混进自己没注意的兄弟项目用例 */}
+                    {productLineId && c.projectId && c.projectId !== projectId && (
+                      <span
+                        className="text-[10px] font-semibold px-1.5 py-[1px] rounded shrink-0"
+                        style={{ background: 'var(--primary-soft, var(--muted))', color: 'var(--primary, var(--foreground))' }}
+                        title={t('plans:caseFromProject', { project: c.projectName ?? '' })}
+                      >
+                        {c.projectName}
+                      </span>
+                    )}
                     {c.status === 'deprecated' && (
                       <StatusPill status={c.status}>{t(caseStatusLabel(c.status))}</StatusPill>
                     )}

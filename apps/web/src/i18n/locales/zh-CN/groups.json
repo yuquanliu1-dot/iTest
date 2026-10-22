@@ -87,5 +87,11 @@
   "saving": "保存中...",
   "name": "名称",
   "namePlaceholder": "如：登录与账号",
-  "noScenario": "（无场景）"
+  "noScenario": "（无场景）",
+  "scopeVersion": "当前版本",
+  "scopeProductLine": "产品线用例库",
+  "projectColumn": "所属项目",
+  "copyToCurrentVersion": "复制到当前版本",
+  "batchCopyToCurrentVersion": "批量复制到当前版本",
+  "copyToCurrentVersionHint": "副本会落到当前版本「{{version}}」下的目标分组；源用例保持不变。"
 }

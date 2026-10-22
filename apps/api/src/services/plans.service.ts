@@ -5,7 +5,7 @@
  */
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { executionPlans, groups, planCases, projectVersions, testCases, testEnvironments } from '../db/schema.js';
+import { executionPlans, groups, planCases, projects, projectVersions, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { attachCreators, attachCreator } from '../lib/creator.js';
 
@@ -142,15 +142,32 @@ export async function updatePlan(planId: string, patch: UpdatePlanPatch) {
   return rows[0]!;
 }
 
-/** 计划详情:cases 按 order 带 title/url/versionId;versionName 一并解析。 */
+/** 计划详情:cases 按 order 带 title/url/versionId;versionName 一并解析。
+ *  每条用例额外回带 projectId/projectName/versionName——跨产品线共享后,同一个计划里可能混着
+ *  基线项目与局点项目的用例,前端要靠它标出「这条用例来自哪个项目哪个版本」。 */
 export async function getPlanDetail(planId: string) {
   const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
   if (!plan) return null;
   const pcs = await db.select().from(planCases).where(eq(planCases.planId, plan.id)).orderBy(asc(planCases.order));
-  const cases = pcs.length
-    ? await db.select().from(testCases).where(inArray(testCases.id, pcs.map((p) => p.caseId)))
+  // 一次 join 取回每个用例的项目/版本归属,避免逐条回查（N+1）
+  const rows = pcs.length
+    ? await db
+        .select({
+          id: testCases.id,
+          title: testCases.title,
+          url: testCases.url,
+          versionId: testCases.versionId,
+          versionName: projectVersions.name,
+          projectId: groups.projectId,
+          projectName: projects.name,
+        })
+        .from(testCases)
+        .innerJoin(groups, eq(groups.id, testCases.groupId))
+        .innerJoin(projects, eq(projects.id, groups.projectId))
+        .leftJoin(projectVersions, eq(projectVersions.id, testCases.versionId))
+        .where(inArray(testCases.id, pcs.map((p) => p.caseId)))
     : [];
-  const byId = new Map(cases.map((c) => [c.id, c]));
+  const byId = new Map(rows.map((c) => [c.id, c]));
   let versionName: string | null = null;
   if (plan.versionId) {
     const v = (await db.select({ name: projectVersions.name }).from(projectVersions).where(eq(projectVersions.id, plan.versionId)).limit(1))[0];
@@ -159,38 +176,73 @@ export async function getPlanDetail(planId: string) {
   return attachCreator({
     ...plan,
     versionName,
-    cases: pcs.map((pc) => ({
-      id: pc.caseId,
-      order: pc.order,
-      title: byId.get(pc.caseId)?.title ?? 'unknown',
-      url: byId.get(pc.caseId)?.url ?? null,
-      versionId: byId.get(pc.caseId)?.versionId ?? null,
-    })),
+    cases: pcs.map((pc) => {
+      const c = byId.get(pc.caseId);
+      return {
+        id: pc.caseId,
+        order: pc.order,
+        title: c?.title ?? 'unknown',
+        url: c?.url ?? null,
+        versionId: c?.versionId ?? null,
+        versionName: c?.versionName ?? null,
+        projectId: c?.projectId ?? null,
+        projectName: c?.projectName ?? null,
+      };
+    }),
   });
 }
 
-/** 所有 caseIds 必须属于计划所属项目(经分组归属);重复 id 去重后校验,避免误报 409。 */
+/**
+ * 计划可容纳的用例所属项目集合。
+ *
+ * 项目未归入产品线（product_line_id 为 null）时只放它自己——保持既有严格语义不变；
+ * 归入产品线后，放行该产品线下所有项目的用例，这是「基线用例被各局点计划共享」的落点。
+ */
+async function allowedCaseProjectIds(planProjectId: string): Promise<string[]> {
+  const row = (await db
+    .select({ productLineId: projects.productLineId })
+    .from(projects)
+    .where(eq(projects.id, planProjectId))
+    .limit(1))[0];
+  if (!row?.productLineId) return [planProjectId];
+  const lineProjects = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(eq(projects.productLineId, row.productLineId));
+  return lineProjects.map((p) => p.id);
+}
+
+/** 返回不属于允许项目集合的 caseId（含不存在者）；空数组即全部通过。 */
+async function caseIdsOutsideAllowedProjects(planProjectId: string, caseIds: string[]): Promise<string[]> {
+  const ids = [...new Set(caseIds)];
+  if (ids.length === 0) return [];
+  const allowed = new Set(await allowedCaseProjectIds(planProjectId));
+  const rows = await db
+    .select({ id: testCases.id, groupId: testCases.groupId })
+    .from(testCases)
+    .where(inArray(testCases.id, ids));
+  const gs = await db.select({ id: groups.id, projectId: groups.projectId }).from(groups)
+    .where(inArray(groups.id, [...new Set(rows.map((r) => r.groupId))]));
+  const projectOfGroup = new Map(gs.map((g) => [g.id, g.projectId]));
+  const found = new Set(rows.map((r) => r.id));
+  const invalid = rows
+    .filter((r) => !allowed.has(projectOfGroup.get(r.groupId) ?? ''))
+    .map((r) => r.id);
+  return [...ids.filter((id) => !found.has(id)), ...new Set(invalid)];
+}
+
+/** 所有 caseIds 必须落在计划所属项目（或其产品线的兄弟项目）内；重复 id 去重后校验，避免误报 409。 */
 async function assertCasesInProject(projectId: string, caseIds: string[]): Promise<void> {
   if (caseIds.length === 0) return;
-  const ids = [...new Set(caseIds)];
-  const gs = await db.select({ id: groups.id }).from(groups).where(eq(groups.projectId, projectId));
-  const validGids = new Set(gs.map((g) => g.id));
-  const rows = await db.select({ groupId: testCases.groupId }).from(testCases).where(inArray(testCases.id, ids));
-  if (rows.length !== ids.length || !rows.every((r) => validGids.has(r.groupId))) {
-    throw new HttpError(409, 'cross_project', 'all cases must belong to the plan project');
+  const outside = await caseIdsOutsideAllowedProjects(projectId, caseIds);
+  if (outside.length > 0) {
+    throw new HttpError(409, 'cross_project', 'all cases must belong to the plan project or its product line');
   }
 }
 
-/** assertCasesInProject 的只读预检版:返回不属于该项目的 caseId(含不存在者),空数组即全部通过。供工具在弹确认卡前校验,避免用户确认必然失败的操作。 */
+/** assertCasesInProject 的只读预检版:返回不被允许的 caseId(含不存在者),空数组即全部通过。供工具在弹确认卡前校验,避免用户确认必然失败的操作。 */
 export async function caseIdsOutsideProject(projectId: string, caseIds: string[]): Promise<string[]> {
-  const ids = [...new Set(caseIds)];
-  if (ids.length === 0) return [];
-  const gs = await db.select({ id: groups.id }).from(groups).where(eq(groups.projectId, projectId));
-  const validGids = new Set(gs.map((g) => g.id));
-  const rows = await db.select({ id: testCases.id, groupId: testCases.groupId }).from(testCases).where(inArray(testCases.id, ids));
-  const found = new Set(rows.map((r) => r.id));
-  const invalid = rows.filter((r) => !validGids.has(r.groupId)).map((r) => r.id);
-  return [...ids.filter((id) => !found.has(id)), ...new Set(invalid)];
+  return caseIdsOutsideAllowedProjects(projectId, caseIds);
 }
 
 /**

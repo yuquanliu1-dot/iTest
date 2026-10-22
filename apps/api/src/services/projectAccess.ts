@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { datasets, deviceTargets, groups, projects, projectVersions, reports, testCases, testEnvironments, planRuns } from '../db/schema.js';
+import { datasets, deviceTargets, groups, productLines, projects, projectVersions, reports, testCases, testEnvironments, planRuns } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import type { AuthUser } from './auth.service.js';
 import { visibleOrgIdsFor } from './orgTree.js';
@@ -144,4 +144,41 @@ export async function assertDeviceTargetVisible(deviceTargetId: string, user: Au
   if (!projectId) throw new HttpError(404, 'not_found', 'device target not found');
   await assertProjectVisible(projectId, user);
   return { projectId };
+}
+
+/**
+ * 产品线可见性断言：产品线挂在组织下，可见性直接走 visibleOrgIdsFor（与 assertProjectVisible 同构），
+ * 不存在与不可见统一 404，不泄露存在性。
+ */
+export async function assertProductLineVisible(productLineId: string, user: AuthUser): Promise<{ organizationId: string }> {
+  const rows = await db
+    .select({ organizationId: productLines.organizationId })
+    .from(productLines)
+    .where(eq(productLines.id, productLineId))
+    .limit(1);
+  const orgId = rows[0]?.organizationId;
+  if (!orgId) throw new HttpError(404, 'not_found', 'product line not found');
+  const visible = await visibleOrgIdsFor(user);
+  if (!visible.has(orgId)) throw new HttpError(404, 'not_found', 'product line not found');
+  return { organizationId: orgId };
+}
+
+/** 用户可见的全部产品线 id（按可见组织过滤）。 */
+export async function visibleProductLineIds(user: AuthUser): Promise<string[]> {
+  const visibleOrgs = await visibleOrgIdsFor(user);
+  if (visibleOrgs.size === 0) return [];
+  const rows = await db
+    .select({ id: productLines.id })
+    .from(productLines)
+    .where(inArray(productLines.organizationId, [...visibleOrgs]));
+  return rows.map((r) => r.id);
+}
+
+/** 产品线下的全部项目 id；产品线不存在返回 null（由调用方决定 404）。 */
+export async function productLineProjectIds(productLineId: string): Promise<string[]> {
+  const rows = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(eq(projects.productLineId, productLineId));
+  return rows.map((r) => r.id);
 }

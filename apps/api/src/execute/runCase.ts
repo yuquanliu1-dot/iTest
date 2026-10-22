@@ -71,6 +71,12 @@ export async function runCase(
     preseed?: PreseedReport[];
     /** 报告创建人 = 触发执行的人；preseed 路径已在路由落库，此处仅覆盖非 preseed 插入。 */
     createdByUserId?: string | null;
+    /**
+     * 计划所属项目 id（执行计划链路传入）。用于判定环境 guard 是否该施加：
+     * 同项目用例维持「环境必须属于本项目」的强校验；跨产品线共享进来的用例不施加，
+     * 否则它会因「环境属于别的项目」而逐条失败。语义见 resolveEnv 调用处注释。
+     */
+    planProjectId?: string | null;
   },
 ): Promise<{ reportId: string; status: string; reportIds?: string[] }> {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
@@ -106,6 +112,7 @@ async function runCaseOnce(
     liveView?: import('./liveView.js').LiveViewHandle;
     preseed?: PreseedReport[];
     createdByUserId?: string | null;
+    planProjectId?: string | null;
   } | undefined,
   rowPlan?: DatasetRowExec,
 ): Promise<{ reportId: string; status: string }> {
@@ -179,6 +186,7 @@ async function runCaseOnceInner(
     ownedBrowser?: Browser;
     ownedContext?: BrowserContext;
     liveView?: import('./liveView.js').LiveViewHandle;
+    planProjectId?: string | null;
   } | undefined,
   projectId: string | undefined,
   steps: (typeof testSteps.$inferSelect)[],
@@ -204,6 +212,12 @@ async function runCaseOnceInner(
 
   // Resolve envCtx before any CDP launch: planEnv > case defaultEnv > version link > project default.
   // EnvMissing/EnvProjectMismatch are surfaced as a single failed stepResult (no 500). DecryptError propagates.
+  //
+  // expectedProjectId 一直传「用例所属项目」——它是解析链最后一步「兜底查该项目默认环境」的依据，
+  // 关掉会让跨项目用例既拿不到计划环境也拿不到自己项目的默认环境。
+  // 真正需要豁免的只是「归属复核」：计划环境挂在计划自己的项目下，跨产品线共享进来的用例拿到它是
+  // 预期行为，照拦就会每条以 EnvProjectMismatch 失败。allowCrossProjectEnv 即该豁免开关。
+  const sameProjectAsPlan = !opts?.planProjectId || opts.planProjectId === projectId;
   const { resolveEnv } = await import('./envContext.js');
   let envCtx: import('./envContext.js').EnvCtx | undefined;
   try {
@@ -213,7 +227,7 @@ async function runCaseOnceInner(
         caseEnvId: caseRow.defaultEnvId ?? null,
         versionId: caseRow.versionId ?? null,
       },
-      projectId ? { expectedProjectId: projectId } : undefined,
+      projectId ? { expectedProjectId: projectId, allowCrossProjectEnv: !sameProjectAsPlan } : undefined,
     );
   } catch (e) {
     const errName = e instanceof Error ? e.name : '';

@@ -49,6 +49,8 @@ const MAX_TAG_CHIPS = 3;
 const STATUS_FILTER_VALUES = ['', 'draft', 'review', 'ready', 'deprecated'] as const;
 const TAB_VALUES = ['all', 'draft', 'review', 'ready', 'deprecated'] as const;
 const PRIORITY_VALUES = ['', 'P0', 'P1', 'P2', 'P3'] as const;
+/** 用例池范围：当前版本 / 整条产品线（跨项目跨版本，作为共享用例库） */
+const SCOPE_VALUES = ['version', 'line'] as const;
 
 const caseParsers = {
 	q: parseAsString.withDefault(''),
@@ -57,9 +59,12 @@ const caseParsers = {
 	priority: parseAsStringEnum([...PRIORITY_VALUES]).withDefault(''),
 	scenario: parseAsString.withDefault(''),
 	status: parseAsArrayOf(parseAsString).withDefault([]),
+	projects: parseAsArrayOf(parseAsString).withDefault([]),
 	tag: parseAsArrayOf(parseAsString).withDefault([]),
 	versions: parseAsArrayOf(parseAsString).withDefault([]),
 	tab: parseAsStringEnum([...TAB_VALUES]).withDefault('all'),
+	// tab 已被状态筛选占用，范围 tab 另起一个 key
+	scope: parseAsStringEnum([...SCOPE_VALUES]).withDefault('version'),
 };
 
 type GroupForm = { open: boolean; mode: 'create' | 'edit'; id: string | null; name: string };
@@ -87,8 +92,11 @@ export default function GroupsPage() {
 	const scenarioId = raw.scenario;
 	const statusSelected = raw.status;
 	const tagSelected = raw.tag;
+	const projectsSelected = raw.projects;
 	const versionsSelected = raw.versions;
 	const tab = raw.tab;
+	const scope = raw.scope;
+	const onLineScope = scope === 'line';
 	const page = Math.max(1, Number(raw.page) || 1);
 	const pageSizeRaw = Number(raw.pageSize);
 	const pageSize = [10, 20, 50, 100].includes(pageSizeRaw) ? pageSizeRaw : 20;
@@ -109,15 +117,33 @@ export default function GroupsPage() {
 		enabled: !!projectId,
 	});
 
+	// 项目归属信息：决定要不要给出「产品线」这条范围 tab（未归线的项目没有共享用例池）。
+	const { data: scopeProject } = useQuery({
+		queryKey: ['project', projectId],
+		queryFn: () => api.projects.get(projectId!),
+		enabled: !!projectId,
+	});
+	const productLineId = scopeProject?.productLineId ?? null;
+
 	const effectiveGroupId = groupId ?? '';
 	// 拉列表时只透传后端支持的过滤（priority/scenarioId/versionIds），status/tags 走前端本地筛（API 暂不接）。
+	// 「当前版本」范围恒定锁死当前版本（含分组下钻，组本身可跨版本，用例仍只看当前版本）；
+	// 「产品线」范围跨项目跨版本拉全，靠 groupId 收窄只对当前项目分组有意义。
 	const { data: cases, isLoading: casesLoading, isError: casesError, error: casesErrorObj } = useQuery({
-		queryKey: ['cases', projectId, effectiveGroupId, priority, scenarioId, versionsSelected],
-		queryFn: () =>
-			api.cases.list(effectiveGroupId
-				? { groupId: effectiveGroupId, priority: priority || undefined, scenarioId: scenarioId || undefined, versionIds: versionsSelected.length ? versionsSelected : undefined }
-				: { projectId: projectId!, priority: priority || undefined, scenarioId: scenarioId || undefined, versionIds: versionsSelected.length ? versionsSelected : undefined }),
-		enabled: !!projectId,
+		queryKey: ['cases', projectId, scope, effectiveGroupId, priority, scenarioId, productLineId, onLineScope ? versionsSelected : []],
+		queryFn: () => {
+			const base = { priority: priority || undefined, scenarioId: scenarioId || undefined };
+			if (onLineScope && productLineId) {
+				return api.cases.list({ ...base, productLineId, versionIds: versionsSelected.length ? versionsSelected : undefined });
+			}
+			return api.cases.list({
+				groupId: effectiveGroupId || undefined,
+				projectId: effectiveGroupId ? undefined : projectId!,
+				...base,
+				versionIds: [versionId!],
+			});
+		},
+		enabled: !!projectId && !!versionId,
 	});
 
 	const { data: plans } = useQuery({
@@ -140,16 +166,21 @@ export default function GroupsPage() {
 		enabled: !!projectId,
 	});
 
-	// 版本过滤 facet 选项 = 项目全量版本（列表本身跨版本混排,过滤按 test_cases.version_id）
-	const { data: projectVersionList } = useQuery({
-		queryKey: ['versions', projectId],
-		queryFn: () => api.versions.list(projectId!),
-		enabled: !!projectId,
+	// 产品线范围下列表跨项目混排，分组名要在线内全部分组里查，否则兄弟项目的行渲染成空。
+	const { data: lineGroups } = useQuery({
+		queryKey: ['groups', 'line', productLineId],
+		queryFn: () => api.projects.groupsByProductLine(productLineId!),
+		enabled: !!productLineId,
+	});
+	const { data: lineVersions } = useQuery({
+		queryKey: ['versions', 'line', productLineId],
+		queryFn: () => api.projects.versionsByProductLine(productLineId!),
+		enabled: !!productLineId,
 	});
 
 	const groupName = useMemo(
-		() => new Map((groups ?? []).map((g) => [g.id, g.name])),
-		[groups],
+		() => new Map((onLineScope ? lineGroups ?? [] : groups ?? []).map((g) => [g.id, g.name])),
+		[groups, lineGroups, onLineScope],
 	);
 
 	// 场景过滤下拉选项 = 项目下全部 scenario 去重 + 「无场景」sentinel。
@@ -290,12 +321,24 @@ export default function GroupsPage() {
 		if (tab !== 'all') list = list.filter((c) => c.status === tab);
 		if (statusSelected.length > 0) list = list.filter((c) => statusSelected.includes(c.status));
 		if (tagSelected.length > 0) list = list.filter((c) => (c.tags ?? []).some((t) => tagSelected.includes(t.id)));
+		if (projectsSelected.length > 0) list = list.filter((c) => projectsSelected.includes(c.projectId ?? ''));
+		// 产品线范围拉的是整条线，分组下钻只能在前端收窄（后端 productLineId 分支不接 groupId）
+		if (onLineScope && effectiveGroupId) list = list.filter((c) => c.groupId === effectiveGroupId);
 		if (q.trim()) {
 			const needle = q.trim().toLowerCase();
 			list = list.filter((c) => c.title.toLowerCase().includes(needle));
 		}
 		return list;
-	}, [cases, tab, statusSelected, tagSelected, q]);
+	}, [cases, tab, statusSelected, tagSelected, projectsSelected, onLineScope, effectiveGroupId, q]);
+
+	// 「项目」筛选项从已加载的用例反推，避免为拿选项名再发一次请求
+	const projectOptions = useMemo(() => {
+		const m = new Map<string, string>();
+		for (const c of cases ?? []) {
+			if (c.projectId && c.projectName) m.set(c.projectId, c.projectName);
+		}
+		return [...m.entries()].map(([value, label]) => ({ value, label }));
+	}, [cases]);
 
 	// DataTable 默认 client-side 切页；每页条数由 URL `?pageSize=` 决定，rows 也用同一变量。
 	const rows = useMemo(
@@ -314,6 +357,8 @@ export default function GroupsPage() {
 	const setScenarioFilter = (next: string) => void setRaw({ scenario: next, page: '1' });
 	const setStatusFilter = (next: string[]) => void setRaw({ status: next, page: '1' });
 	const setTagFilter = (next: string[]) => void setRaw({ tag: next, page: '1' });
+	const setProjectsFilter = (next: string[]) => void setRaw({ projects: next, page: '1' });
+	const setScope = (next: typeof scope) => void setRaw({ scope: next, page: '1' });
 	const setVersionsFilter = (next: string[]) => void setRaw({ versions: next, page: '1' });
 	const setPage = (next: number) => void setRaw({ page: String(next) });
 	const setPageSize = (next: number) => void setRaw({ pageSize: String(next), page: '1' });
@@ -337,11 +382,21 @@ export default function GroupsPage() {
 			label: t('groups:priority'),
 			options: PRIORITY_VALUES.filter((p) => p !== '').map((p) => ({ value: p, label: p })),
 		},
-		{
-			id: 'version',
-			label: t('groups:version'),
-			options: (projectVersionList ?? []).map((v) => ({ value: v.id, label: v.name })),
-		},
+		// 「当前版本」范围恒定锁死版本，这一维无意义；产品线范围才用来跨版本挑基线用例
+		...(onLineScope
+			? [{
+				id: 'version',
+				label: t('groups:version'),
+				options: (lineVersions ?? []).map((v) => ({ value: v.id, label: v.name })),
+			} as DataTableFacet]
+			: []),
+		...(onLineScope
+			? [{
+				id: 'project',
+				label: t('groups:projectColumn'),
+				options: projectOptions.map((p) => ({ value: p.value, label: p.label })),
+			} as DataTableFacet]
+			: []),
 		{
 			id: 'scenario',
 			label: t('groups:scenario'),
@@ -396,6 +451,21 @@ export default function GroupsPage() {
 					</span>
 				),
 			},
+			// 产品线范围下列表跨项目混排，必须标出用例来自哪个项目，否则分不清哪些是兄弟项目的
+			...(onLineScope
+				? [{
+					id: 'project',
+					header: t('groups:projectColumn'),
+					width: 'w-[9%]',
+					hideBelow: 'lg',
+					cellClassName: 'text-muted-foreground',
+					cell: (c) => (
+						<span className="truncate block" title={c.projectName ?? undefined}>
+							{c.projectName ?? <EmptyCellValue />}
+						</span>
+					),
+				} as DataTableColumn<TestCase>]
+				: []),
 			{
 				id: 'scenario',
 				header: t('groups:scenario'),
@@ -473,11 +543,14 @@ export default function GroupsPage() {
 							title={t('groups:viewReport')}
 							onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/reports?caseId=${c.id}&tab=case` : `/`)}
 						/>
-						<IconButton
-							icon="copy"
-							title={t('groups:copy')}
-							onClick={() => { setCopyTarget(''); setCopyModal({ caseIds: [c.id] }); }}
-						/>
+						{/* 产品线范围下已经在当前版本的用例无需再复制一份 */}
+						{(!onLineScope || c.projectId !== projectId || c.versionId !== versionId) && (
+							<IconButton
+								icon="copy"
+								title={onLineScope ? t('groups:copyToCurrentVersion') : t('groups:copy')}
+								onClick={() => { setCopyTarget(''); setCopyModal({ caseIds: [c.id] }); }}
+							/>
+						)}
 						<IconButton
 							icon="trash"
 							title={t('common:delete')}
@@ -529,6 +602,16 @@ export default function GroupsPage() {
 					{effectiveGroupId ? (groupName.get(effectiveGroupId) ?? t('groups:group')) : t('groups:allCases')} · {current?.name}
 				</PageShellDescription>
 				<PageShellActions>
+					{productLineId && (
+						<Segmented
+							options={[
+								{ value: 'version', label: t('groups:scopeVersion'), icon: 'tag' },
+								{ value: 'line', label: t('groups:scopeProductLine'), icon: 'layers' },
+							]}
+							value={scope}
+							onChange={(v) => setScope(v)}
+						/>
+					)}
 					<Button
 						onClick={() => {
 							const gid = effectiveGroupId || groups?.[0]?.id || '';
@@ -643,6 +726,7 @@ export default function GroupsPage() {
 										setFilter: (id, values) => {
 											if (id === 'priority') setPriorityFilter((values[0] ?? '') as typeof priority);
 											else if (id === 'version') setVersionsFilter(values);
+											else if (id === 'project') setProjectsFilter(values);
 											else if (id === 'scenario') setScenarioFilter(values[0] ?? '');
 											else if (id === 'status') setStatusFilter(values);
 											else if (id === 'tag') setTagFilter(values);
@@ -650,6 +734,7 @@ export default function GroupsPage() {
 										filters: {
 											priority: priority ? [priority] : [],
 											version: versionsSelected,
+											project: projectsSelected,
 											scenario: scenarioId ? [scenarioId] : [],
 											status: statusSelected,
 											tag: tagSelected,
@@ -667,7 +752,7 @@ export default function GroupsPage() {
 									<>
 										<Button size="sm" variant="ghost" onClick={() => { setCopyTarget(''); setCopyModal({ caseIds: selection.ids }); }}>
 											<Icon name="copy" size={12} />
-												{t('groups:batchCopy')}
+												{onLineScope ? t('groups:batchCopyToCurrentVersion') : t('groups:batchCopy')}
 										</Button>
 										<Button size="sm" variant="ghost" onClick={() => { setPlanTarget(''); setPlanModal({ caseIds: selection.ids }); }}>
 											<Icon name="play" size={12} />
@@ -803,7 +888,9 @@ export default function GroupsPage() {
 							))}
 						</select>
 						<p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-							{t('groups:copyNamingHint')}
+							{onLineScope
+								? t('groups:copyToCurrentVersionHint', { version: current?.versionName ?? versionId ?? '' })
+								: t('groups:copyNamingHint')}
 						</p>
 					</div>
 					<DialogFooter>

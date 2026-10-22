@@ -14,7 +14,7 @@
   "bad_strategy": "执行策略不受支持",
   "cannot_remove_self": "不能移除自己",
   "cases_required": "至少需要一个用例",
-  "cross_project": "不能跨项目执行此操作",
+  "cross_project": "用例必须属于本项目或同一产品线内的项目",
   "cross_project_move": "不能跨项目移动",
   "dataset_config_error": "数据集配置有误",
   "dataset_project_mismatch": "数据集与项目不匹配",

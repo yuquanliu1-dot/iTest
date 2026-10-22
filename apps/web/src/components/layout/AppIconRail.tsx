@@ -14,7 +14,9 @@ type RailItem = {
 };
 
 /** 顶部：全局入口 */
-const TOP_ITEMS: RailItem[] = [{ titleKey: 'common:navProjects', to: '/', icon: 'layers' }];
+const TOP_ITEMS: RailItem[] = [
+  { titleKey: 'common:navProjects', to: '/', icon: 'layers' },
+];
 
 /** 底部（mt-auto）：管理入口 */
 const BOTTOM_ITEMS: RailItem[] = [

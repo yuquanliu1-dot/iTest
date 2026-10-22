@@ -109,6 +109,27 @@ describe('resolveEnv', () => {
       .rejects.toBeInstanceOf(EnvProjectMismatch);
   });
 
+  // 跨产品线共享进来的用例：兜底查自己项目的默认环境要照常生效，只有归属复核被豁免。
+  it('still falls back to project default env when allowCrossProjectEnv is set', async () => {
+    mockTables({
+      test_environments: [{ ...ENV_ROW, id: 'env-default', isDefault: true, projectId: 'proj-1' }],
+      environment_objects: [],
+      project_versions: [],
+    });
+    const { envId } = await resolveEnv({}, { expectedProjectId: 'proj-1', allowCrossProjectEnv: true });
+    expect(envId).toBe('env-default');
+  });
+
+  it('accepts another project env when allowCrossProjectEnv is set', async () => {
+    mockTables({
+      test_environments: [{ ...ENV_ROW, projectId: 'other' }],
+      environment_objects: [],
+      project_versions: [],
+    });
+    const { envId } = await resolveEnv({ planEnvId: 'env-1' }, { expectedProjectId: 'proj-1', allowCrossProjectEnv: true });
+    expect(envId).toBe('env-1');
+  });
+
   it('builds db pool config from default db object payload', async () => {
     const enc = encrypt('hunter2');
     mockTables({

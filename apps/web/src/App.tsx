@@ -48,6 +48,8 @@ export default function App() {
         <Route path="/" element={<ProjectsHome />} />
         <Route path="/members" element={<MembersPage />} />
         <Route path="/members/*" element={<MembersPage />} />
+        {/* 产品线独立页已并入首页「项目与产品线」；旧链接重定向 */}
+        <Route path="/product-lines" element={<Navigate to="/" replace />} />
         <Route path="/settings" element={<Settings />} />
         {/* 项目级环境维护：不依赖版本上下文，也不要求「进入」过项目（ProjectGuard 校验 store.current） */}
         <Route path="/p/:projectId/environments" element={<EnvironmentsPage />} />

@@ -103,6 +103,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   // Plan-level env override: validate the env exists & belongs to the plan's project (no 500 on mismatch —
   // fall back to per-case defaultEnv). The ctx is closed immediately — per-case runCase will re-resolve
   // the same envId to obtain a fresh pg.Pool when it actually needs one.
+  // guard 保持：plan.environmentId 由 createPlan/updatePlan 校验过属于本项目，这里是兜底复核。
   let planEnv: { envId: string } | undefined;
   let planWebOrigin: string | null | undefined;
   let loginCred: import('./envContext.js').LoginCtx | undefined;
@@ -181,6 +182,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
               ownedContext: ctx,
               liveView: live,
               createdByUserId: run.triggeredByUserId,
+              planProjectId: plan.projectId,
             });
             await db
               .update(planRunCases)
@@ -275,6 +277,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
         ...(planEnv ? { envOverride: { envId: planEnv.envId } } : {}),
         liveView: live,
         createdByUserId: run.triggeredByUserId,
+        planProjectId: plan.projectId,
       });
       await db
         .update(planRunCases)

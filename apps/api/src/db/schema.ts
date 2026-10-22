@@ -359,11 +359,34 @@ export const organizationMembers = pgTable('organization_members', {
   orgUserUq: unique('organization_members_org_user_uq').on(t.organizationId, t.userId),
 }));
 
+/**
+ * 产品线：组织下的一层容器，把「基线项目」与「多个局点项目」圈在一起。
+ * 用途是跨项目共享用例——同产品线内的项目之间，执行计划可以互相引用对方的用例。
+ *
+ * 可见性不另设成员表：产品线挂在组织下，随组织的 visibleOrgIdsFor 口径自动可见。
+ */
+export const productLines = pgTable('product_lines', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id')
+    .notNull()
+    .references(() => organizations.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 200 }).notNull(),
+  description: text('description'),
+  /** 创建人（对齐 projects.created_by_user_id 约定） */
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  orgNameUq: unique('product_lines_org_name_uq').on(t.organizationId, t.name),
+}));
+
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
   organizationId: uuid('organization_id')
     .notNull()
     .references(() => organizations.id, { onDelete: 'cascade' }),
+  // 可空 = 未归入任何产品线。可空时计划仍严格限同项目用例（见 plans.service 的归属校验）。
+  productLineId: uuid('product_line_id').references(() => productLines.id, { onDelete: 'set null' }),
   name: varchar('name', { length: 200 }).notNull(),
   description: text('description'),
   // 仓库元数据：与 iDO 同源（AI 生成用例步骤需要看代码）。当前只存元数据 + 验证可达性，

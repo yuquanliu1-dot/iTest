@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { eq, asc, desc, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { projects, groups, testCases, reports, requirements, projectVersions, testEnvironments } from '../db/schema.js';
+import { projects, groups, productLines, testCases, reports, requirements, projectVersions, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible } from '../services/projectAccess.js';
 import { visibleOrgIdsFor } from '../services/orgTree.js';
@@ -44,6 +44,12 @@ async function caseCountsByGroup(): Promise<Map<string, number>> {
   return new Map(rows.map((r) => [r.groupId, Number(r.count)]));
 }
 
+/** 项目 → 产品线名映射：projectLineId 已是 projects 自带列，这里只补名字供前端展示归属。 */
+async function productLineNames(): Promise<Map<string, string>> {
+  const rows = await db.select({ id: productLines.id, name: productLines.name }).from(productLines);
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+
 projectsRoute.get('/', async (req, res) => {
   // 只列出用户可见组织下的项目
   const visibleOrgs = await visibleOrgIdsFor(req.user!);
@@ -66,6 +72,7 @@ projectsRoute.get('/', async (req, res) => {
     .groupBy(testEnvironments.projectId);
   const vByProject = new Map(vs.map((r) => [r.projectId, Number(r.count)]));
   const eByProject = new Map(es.map((r) => [r.projectId, Number(r.count)]));
+  const lineNames = await productLineNames();
   res.json(
     await attachCreators(
       ps.map((p) => ({
@@ -73,6 +80,7 @@ projectsRoute.get('/', async (req, res) => {
         caseCount: byProject.get(p.id) ?? 0,
         versionCount: vByProject.get(p.id) ?? 0,
         environmentCount: eByProject.get(p.id) ?? 0,
+        productLineName: p.productLineId ? (lineNames.get(p.productLineId) ?? null) : null,
       })),
     ),
   );

@@ -93,5 +93,11 @@
   "saving": "Saving…",
   "name": "Name",
   "namePlaceholder": "e.g. Login & accounts",
-  "noScenario": "(No scenario)"
+  "noScenario": "(No scenario)",
+  "scopeVersion": "Current version",
+  "scopeProductLine": "Product line library",
+  "projectColumn": "Project",
+  "copyToCurrentVersion": "Copy to current version",
+  "batchCopyToCurrentVersion": "Batch copy to current version",
+  "copyToCurrentVersionHint": "Copies land in the target group of the current version \"{{version}}\"; the source case is left untouched."
 }

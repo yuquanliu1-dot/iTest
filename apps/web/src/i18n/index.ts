@@ -9,6 +9,8 @@ import zhSettings from './locales/zh-CN/settings.json';
 import enSettings from './locales/en-US/settings.json';
 import zhProjects from './locales/zh-CN/projects.json';
 import enProjects from './locales/en-US/projects.json';
+import zhProductLines from './locales/zh-CN/productLines.json';
+import enProductLines from './locales/en-US/productLines.json';
 import zhMembers from './locales/zh-CN/members.json';
 import enMembers from './locales/en-US/members.json';
 import zhCases from './locales/zh-CN/cases.json';
@@ -41,8 +43,8 @@ export type Lang = 'zh-CN' | 'en-US';
 export const LANG_STORAGE_KEY = 'itest-lang';
 
 const resources = {
-  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, members: zhMembers, cases: zhCases, groups: zhGroups, plans: zhPlans, reports: zhReports, overview: zhOverview, assistant: zhAssistant, environments: zhEnvironments, datasets: zhDatasets, device: zhDevice, mobile: zhMobile, errors: zhErrors, landing: zhLanding },
-  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, members: enMembers, cases: enCases, groups: enGroups, plans: enPlans, reports: enReports, overview: enOverview, assistant: enAssistant, environments: enEnvironments, datasets: enDatasets, device: enDevice, mobile: enMobile, errors: enErrors, landing: enLanding },
+  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, productLines: zhProductLines, members: zhMembers, cases: zhCases, groups: zhGroups, plans: zhPlans, reports: zhReports, overview: zhOverview, assistant: zhAssistant, environments: zhEnvironments, datasets: zhDatasets, device: zhDevice, mobile: zhMobile, errors: zhErrors, landing: zhLanding },
+  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, productLines: enProductLines, members: enMembers, cases: enCases, groups: enGroups, plans: enPlans, reports: enReports, overview: enOverview, assistant: enAssistant, environments: enEnvironments, datasets: enDatasets, device: enDevice, mobile: enMobile, errors: enErrors, landing: enLanding },
 };
 
 void i18n.use(initReactI18next).init({

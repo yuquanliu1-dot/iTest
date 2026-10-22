@@ -85,6 +85,9 @@ export const api = {
     unassignUser: (id: string, userId: string) =>
       request<void>(`/projects/${id}/assignments/${userId}`, { method: 'DELETE' }),
     groups: (id: string) => request<GroupWithCount[]>(`/projects/${id}/groups`),
+    /** 产品线下的全部分组（跨项目选用例池按分组筛选用；一次请求覆盖线内所有项目）。 */
+    groupsByProductLine: (productLineId: string) => request<GroupWithCount[]>(`/product-lines/${productLineId}/groups`),
+    versionsByProductLine: (productLineId: string) => request<ProjectVersion[]>(`/product-lines/${productLineId}/versions`),
     createGroup: (id: string, body: { name: string }) =>
       request<Group>(`/projects/${id}/groups`, { method: 'POST', body: JSON.stringify(body) }),
     stats: (id: string) => request<ProjectStats>(`/projects/${id}/stats`),
@@ -100,6 +103,25 @@ export const api = {
     patch: (id: string, body: Partial<{ name: string }>) =>
       request<Group>(`/groups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/groups/${id}`, { method: 'DELETE' }),
+  },
+  productLines: {
+    list: () => request<ProductLine[]>('/product-lines'),
+    create: (body: { name: string; description?: string }) =>
+      request<ProductLine>('/product-lines', { method: 'POST', body: JSON.stringify(body) }),
+    get: (id: string) => request<ProductLineDetail>(`/product-lines/${id}`),
+    patch: (id: string, body: Partial<{ name: string; description: string }>) =>
+      request<ProductLine>(`/product-lines/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    remove: (id: string) => request<{ ok: boolean }>(`/product-lines/${id}`, { method: 'DELETE' }),
+    projects: (id: string) => request<{ id: string; name: string; description: string | null }[]>(
+      `/product-lines/${id}/projects`,
+    ),
+    attachProjects: (id: string, projectIds: string[]) =>
+      request<{ ok: boolean; count: number }>(`/product-lines/${id}/projects`, {
+        method: 'POST',
+        body: JSON.stringify({ projectIds }),
+      }),
+    detachProject: (id: string, projectId: string) =>
+      request<{ ok: boolean }>(`/product-lines/${id}/projects/${projectId}`, { method: 'DELETE' }),
   },
   plans: {
     get: (id: string) => request<PlanDetail>(`/plans/${id}`),
@@ -279,12 +301,13 @@ export const api = {
     },
   },
   cases: {
-    list: (params?: string | { priority?: string; groupId?: string; projectId?: string; scenarioId?: string; versionIds?: string[] }) => {
+    list: (params?: string | { priority?: string; groupId?: string; projectId?: string; productLineId?: string; scenarioId?: string; versionIds?: string[] }) => {
       const p = typeof params === 'string' ? { priority: params } : params;
       const qs = new URLSearchParams();
       if (p?.priority) qs.set('priority', p.priority);
       if (p?.groupId) qs.set('groupId', p.groupId);
       if (p?.projectId) qs.set('projectId', p.projectId);
+      if (p?.productLineId) qs.set('productLineId', p.productLineId);
       if (p?.scenarioId) qs.set('scenarioId', p.scenarioId);
       if (p?.versionIds?.length) qs.set('versionIds', p.versionIds.join(','));
       const s = qs.toString();
@@ -728,6 +751,9 @@ export interface Project {
   name: string;
   description: string | null;
   organizationId: string;
+  /** 归属产品线（可空 = 未归线）。产品线内项目之间可跨项目共享用例。 */
+  productLineId?: string | null;
+  productLineName?: string | null;
   repoUrl: string | null;
   defaultBranch: string;
   provider: string;
@@ -757,6 +783,17 @@ export interface ProjectWithCount extends Project {
   versionCount: number;
   environmentCount: number;
 }
+export interface ProductLine {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface ProductLineDetail extends ProductLine {
+  projects: { id: string; name: string }[];
+}
 export interface Group {
   id: string;
   projectId: string;
@@ -783,7 +820,7 @@ export interface PlanWithCount extends ExecutionPlan {
   caseCount: number;
 }
 export interface PlanDetail extends ExecutionPlan {
-  cases: Array<{ id: string; order: number; title: string; url: string | null; versionId: string | null }>;
+  cases: Array<{ id: string; order: number; title: string; url: string | null; versionId: string | null; versionName: string | null; projectId: string | null; projectName: string | null }>;
   strategy: 'run_all' | 'fail_fast';
   loginPrepareEnabled: boolean;
   loginCaseId: string | null;
@@ -904,6 +941,9 @@ export interface TestCase {
   tags?: Tag[];
   versionId?: string;
   versionName?: string;
+  /** 所属项目（列表接口按产品线跨项目拉齐时回带，供「跨项目」徽标与按项目筛选）。 */
+  projectId?: string | null;
+  projectName?: string | null;
   createdAt?: string;
   updatedAt?: string;
   windowStrategy?: string;

@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testCases, groups, scenarios, projectVersions } from '../db/schema.js';
+import { testCases, groups, scenarios, projectVersions, projects } from '../db/schema.js';
 import { eq, inArray } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
-import { assertCaseVisible, assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
+import { assertCaseVisible, assertProductLineVisible, assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { copyCaseCore, createCase, deleteCase, getCaseDetail, groupProjectId, tagsForCases, updateCase } from '../services/cases.service.js';
 import { attachCreators } from '../lib/creator.js';
 
@@ -68,14 +68,29 @@ const PatchBody = CaseBodyBase.partial()
   .superRefine(checkWindowStrategy);
 
 casesRoute.get('/', async (req, res) => {
-  const { priority, groupId, projectId, scenarioId } = req.query as Record<string, string | undefined>;
+  const { priority, groupId, projectId, scenarioId, productLineId } = req.query as Record<string, string | undefined>;
   // versionIds 过滤：逗号分隔或重复参数均可；只在可见项目范围内收窄,无需额外可见性断言
   const rawVersionIds = (req.query as Record<string, string | string[] | undefined>).versionIds;
   const versionIds = (Array.isArray(rawVersionIds) ? rawVersionIds : rawVersionIds != null ? [rawVersionIds] : [])
     .flatMap((v) => v.split(','))
     .filter((v) => v.length > 0);
   let rows;
-  if (projectId) {
+  if (productLineId) {
+    // 产品线维度：一次拉齐线内所有项目的用例，供执行计划「添加用例」池使用
+    // （跨项目共享用例的读取口。可见性经产品线→组织→visibleOrgIdsFor 继承，见 assertProductLineVisible）。
+    await assertProductLineVisible(productLineId, req.user!);
+    const pids = (await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(eq(projects.productLineId, productLineId))).map((p) => p.id);
+    const gs = pids.length
+      ? await db.select().from(groups).where(inArray(groups.projectId, pids))
+      : [];
+    const gids = gs.map((g) => g.id);
+    rows = gids.length
+      ? await db.select().from(testCases).where(inArray(testCases.groupId, gids))
+      : [];
+  } else if (projectId) {
     await assertProjectVisible(projectId, req.user!);
     const gs = await db.select().from(groups).where(eq(groups.projectId, projectId));
     const gids = gs.map((g) => g.id);
@@ -132,14 +147,30 @@ casesRoute.get('/', async (req, res) => {
       .where(inArray(projectVersions.id, vids));
     for (const v of vRows) vById.set(v.id, v.name);
   }
+  // 批量回填所属项目（产品线维度下列表会跨项目混排，前端要靠它标「跨项目」并按项目筛选）
+  const gidsAll = [...new Set(rows.map((r) => r.groupId).filter((v): v is string => !!v))];
+  const projectByGroup = new Map<string, { id: string; name: string }>();
+  if (gidsAll.length > 0) {
+    const gs = await db
+      .select({ id: groups.id, projectId: groups.projectId, projectName: projects.name })
+      .from(groups)
+      .innerJoin(projects, eq(projects.id, groups.projectId))
+      .where(inArray(groups.id, gidsAll));
+    for (const g of gs) projectByGroup.set(g.id, { id: g.projectId, name: g.projectName });
+  }
   res.json(
     await attachCreators(
-      rows.map((r) => ({
-        ...r,
-        scenarioTitle: r.scenarioId ? (sById.get(r.scenarioId)?.title ?? null) : null,
-        versionName: vById.get(r.versionId) ?? null,
-        tags: tagsByCase.get(r.id) ?? [],
-      })),
+      rows.map((r) => {
+        const p = projectByGroup.get(r.groupId);
+        return {
+          ...r,
+          scenarioTitle: r.scenarioId ? (sById.get(r.scenarioId)?.title ?? null) : null,
+          versionName: vById.get(r.versionId) ?? null,
+          tags: tagsByCase.get(r.id) ?? [],
+          projectId: p?.id ?? null,
+          projectName: p?.name ?? null,
+        };
+      }),
     ),
   );
 });

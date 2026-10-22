@@ -218,10 +218,15 @@ async function versionEnvironmentId(versionId: string): Promise<string | null> {
 /**
  * 环境解析链：plan.environmentId → case.defaultEnvId → version.environmentId → 项目默认环境。
  * 命中环境后取 (environmentId, object_type) 的 is_default 对象（缺默认取最早一条）构建连接上下文。
+ *
+ * guard.expectedProjectId 是「用例所属项目」，负责两件互相独立的事，故拆成开关而非一起关：
+ * 1. 兜底查该项目默认环境——跨产品线共享进来的用例也该用自己项目的默认环境，必须一直生效；
+ * 2. 命中环境的归属复核——计划环境挂在计划自己的项目下，跨项目用例拿到它是正常的，
+ *    由 allowCrossProjectEnv 豁免，否则每条跨项目用例都会以 EnvProjectMismatch 失败。
  */
 export async function resolveEnv(
   opts: { planEnvId?: string | null; caseEnvId?: string | null; versionId?: string | null },
-  guard?: { expectedProjectId?: string },
+  guard?: { expectedProjectId?: string; allowCrossProjectEnv?: boolean },
 ): Promise<EnvCtx> {
   let envId = opts.planEnvId ?? opts.caseEnvId ?? null;
   if (!envId && opts.versionId) envId = await versionEnvironmentId(opts.versionId);
@@ -230,7 +235,7 @@ export async function resolveEnv(
 
   const env = (await db.select().from(testEnvironments).where(eq(testEnvironments.id, envId)).limit(1))[0];
   if (!env) throw new EnvMissing();
-  if (guard?.expectedProjectId && env.projectId !== guard.expectedProjectId) {
+  if (guard?.expectedProjectId && !guard.allowCrossProjectEnv && env.projectId !== guard.expectedProjectId) {
     throw new EnvProjectMismatch();
   }
 
