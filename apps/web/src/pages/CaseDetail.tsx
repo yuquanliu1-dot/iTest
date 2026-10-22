@@ -1183,7 +1183,7 @@ export default function CaseDetail() {
             {tab === 'reports' && (
               <div className="bg-card border rounded-[var(--radius-md)] p-5">
                 <EmptyState icon="flag" title={t('cases:goToReportsTitle')} description={t('cases:goToReportsDesc')} action={
-                  <Button size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports`)}>{t('cases:openReportsPage')}</Button>
+                  <Button size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports?caseId=${caseDetail.id}&tab=case`)}>{t('cases:openReportsPage')}</Button>
                 } />
               </div>
             )}
