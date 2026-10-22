@@ -206,6 +206,38 @@ describe('runObserveLog', () => {
     }
   });
 
+  // 回归：真实 ssh2 的 channel 是可读流，`close` 只在 stdout 被消费后才发。
+  // 旧实现没挂 stdout 的 data 监听（探测本就不关心内容），流被反压住 → close 永不触发
+  // → 每次探测都等满 15s 超时。prod228 实测：2026-10-22 ssh2 exec + tail 正常，
+  // 但 POST /environments/test-syslog 恒返回 "syslog command timeout"。
+  it('probeSyslog：channel 只在 stdout 被消费后才 close 时也能正常返回（挂 data 监听解除反压）', async () => {
+    const { Client } = await import('ssh2');
+    const Orig = (Client as unknown as { new (): EventEmitter });
+    const originalExec = Orig.prototype.exec;
+    (Orig.prototype as unknown as { exec: (cmd: string, cb: (err: null, ch: unknown) => void) => void }).exec = function (
+      _cmd: string,
+      cb: (err: null, ch: unknown) => void,
+    ) {
+      const stream = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
+      (stream as unknown as { stderr: EventEmitter }).stderr = new EventEmitter();
+      cb(null, stream);
+      // 复刻真流：只有挂了 data 监听（流进入 flowing 模式）才吐 data 并随后 close
+      queueMicrotask(() => {
+        if (stream.listenerCount('data') === 0) return; // 反压：没人读 → 永不 close
+        stream.emit('data', Buffer.from("2026-10-22T01:46:34+00:00 itest-syslog-verify probe line 2\n"));
+        stream.emit('close', 0);
+      });
+    };
+
+    try {
+      const ms = await probeSyslog({ host: 'h', port: 22, user: 'u', authType: 'password', password: 'p', filePath: '/var/log/verify.log' });
+      expect(ms).toBeGreaterThanOrEqual(0);
+      expect(endMock).toHaveBeenCalledTimes(1);
+    } finally {
+      (Orig.prototype as unknown as { exec: typeof originalExec }).exec = originalExec;
+    }
+  });
+
   it('exports SyslogFileMissing error class', () => {
     expect(SyslogFileMissing).toBeDefined();
     const e = new SyslogFileMissing('/var/log/missing.log');

@@ -80,6 +80,10 @@ export async function probeSyslog(env: SyslogCtx): Promise<number> {
           return;
         }
         ch.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
+        // 探测不关心 stdout 内容，但必须挂 data 监听把流切到 flowing 模式：
+        // ssh2 的 channel 是可读流，无人消费时 stdout 反压住 → close 永不触发 →
+        // 每次探测都等满 15s 超时（prod228 实测，2026-10-22）。
+        ch.on('data', () => { /* 丢弃：探测只校验文件可读 */ });
         ch.on('close', (code: number | null) => {
           clearTimeout(timer);
           if (code !== 0) reject(new SyslogFileMissing(stderr.trim() || env.filePath));
