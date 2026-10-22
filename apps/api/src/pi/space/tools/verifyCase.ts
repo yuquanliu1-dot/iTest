@@ -356,7 +356,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'verify_case',
     description:
-      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性。全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理，失败即停并返回失败步骤详情与失败页可交互元素清单。AI 步骤与终态判定全过后，还会用与正式回放同引擎的机械干跑逐字执行 compiled（failureReason=ReplayDivergence 表示 AI 能过但逐字回放分叉）。mode 决定验收形态：mode="full"（默认）= 全 AI 实测（AI 相 + 终态判定 + 机械干跑），实测通过时顺带缓存每步的 AI 动作轨迹（供 solidify_case 零执行复用）；mode="mechanical" = 固化后的机械验收（跳过 AI 相，只做机械干跑 + 终态判定，语义验证已由前一轮实测完成）。caseId 支持两种形态：落库用例 id，或本线程 stage_case 生成的 localId（纯草稿验证，全程不落库，save 时才正式建用例）。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。再次调用会复用上一轮已确认的前缀：以机械回放重建前缀 DOM 状态（代替重跑 AI 相，已确认步骤不再烧 LLM 轮次），AI 相从首个改动/失败步续跑，结尾仍保留与正式回放同引擎的完整机械干跑。验证会产生真实副作用（与正式执行一致，机械干跑会再执行一遍）。',
+      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性。全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理，失败即停并返回失败步骤详情与失败页可交互元素清单。AI 步骤与终态判定全过后，还会用与正式回放同引擎的机械干跑逐字执行 compiled（failureReason=ReplayDivergence 表示 AI 能过但逐字回放分叉）。mode 决定验收形态：mode="full"（默认）= 全 AI 实测（AI 相 + 终态判定 + 机械干跑），实测通过时顺带缓存每步的 AI 动作轨迹（供 solidify_case 零执行复用）；mode="mechanical" = 固化后的机械验收（跳过 AI 相，只做机械干跑 + 终态判定，语义验证已由前一轮实测完成）。**不要对同一用例重复跑 full**：full 的 AI 相每步 1~2 分钟，步骤未变时重复跑纯浪费。caseId 支持两种形态：落库用例 id，或本线程 stage_case 生成的 localId（纯草稿验证，全程不落库，save 时才正式建用例）。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。再次调用会复用上一轮已确认的前缀：以机械回放重建前缀 DOM 状态（代替重跑 AI 相，已确认步骤不再烧 LLM 轮次），AI 相从首个改动/失败步续跑，结尾仍保留与正式回放同引擎的完整机械干跑。验证会产生真实副作用（与正式执行一致，机械干跑会再执行一遍）。',
     parameters: Type.Object({
       caseId: Type.String({ minLength: 1 }),
       // full=全 AI 实测（默认，含机械干跑）；mechanical=固化后机械验收（跳过 AI 相，只干跑+终态判定）
@@ -365,6 +365,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
     promptGuidelines: [
       'verify_case 有两种使用场景，按需选择：(a) 讨论期实测——草稿讨论中用户要求「跑一下看看」时，对 stage_case 暂存的自然语言草稿调用（mode 省略即 full），AI 相执行 + live view 视频流给用户看，失败据 failure 修正步骤后重发 stage_case 再验；(b) 编译后验收——solidify_case 把自然语言编译为机械 DSL 后，对固化结果调用 verify_case(mode="mechanical")，跳过 AI 相只做机械干跑 + 终态判定，失败由你按归因修复 compiled 后重跑，直到通过。',
       'verify_case 的 mode 决定验收形态，别乱选：mode="full"（默认）是全 AI 实测，用于语义验证（讨论期实测、或 mechanical 连续两轮同因失败/归因不明时升级到它），实测通过会顺带缓存 AI 动作轨迹；mode="mechanical" 是固化后的机械验收，只跑机械干跑 + 终态判定，不烧 AI 轮次——**固化完成后用 mode="mechanical" 验收，别再跑一遍 full**。',
+      '**不要重复跑 full**：full 的 AI 相每步要 1~2 分钟（prod228 实测 30 次 full 调用占 105 分钟）。同一用例 full 已经通过、且步骤/环境未变时，再跑一次 full 是纯浪费——重复验证只允许发生在：步骤或 expectedOutcome 改了、环境换了、mechanical 连续两轮同因失败或归因不明（此时才升级 full）、或用户明确要求重测。全 AI 实测通过时响应里的 traceSaved=true 说明轨迹已缓存，紧接着的 solidify_case 可零执行秒级完成。',
       'mode="mechanical" 的两个限制要如实告知用户：(1) 全视觉用例（无 compiled）会被直接拒绝——此时先调 mode="full" 实测；(2) 机械模式没有 AI 相、不会自动登录，靠登录态缓存（30 分钟）注入，副本重启或缓存过期会落到登录页——失败页是登录页就改 mode="full" 重测（顺带刷新登录态与轨迹缓存）。',
       'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
@@ -1174,7 +1175,11 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
               steps: stepsSummary,
               ...droppedField,
-              replay: { result: 'passed' as const, durationMs: Date.now() - replayStartedAt },
+              // replay 只在机械干跑真的跑了时才有意义：全视觉用例（无 compiled）跳过干跑，
+              // 此时若照发 durationMs 会是 Date.now()-0 的 epoch 垃圾值（prod228 出现 6 次）。
+              ...(replayStartedAt > 0
+                ? { replay: { result: 'passed' as const, durationMs: Date.now() - replayStartedAt } }
+                : {}),
             });
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
             return { ok: true, data: rdata };

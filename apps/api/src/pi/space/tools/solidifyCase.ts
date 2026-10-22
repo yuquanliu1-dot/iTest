@@ -148,7 +148,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
     }),
     promptGuidelines: [
       '调用时机（前置条件）：用户确认自然语言草稿后（无论草稿是否已落库,固化可直接作用于暂存草稿）,你主动询问「是否需要固化为机械步骤」得到肯定答复，或用户明确要求把视觉步骤转为机械步骤时才调用。不要在 stage_case 刚落暂存就自动 solidify——草稿期保持自然语言更利于多轮讨论修改。',
-      'solidify_case 优先复用 verify_case 实测缓存的轨迹零执行完成固化（结果里 traceReused=true）：只要上一步实测通过、步骤内容与环境未变，就不需要再跑一遍用例。没有轨迹可复用时（如从未实测、轨迹超过 30 分钟、或步骤已改）才真实执行一遍收集 AI 临场动作，机械映射为 compiled 后暂存为 update_step 修改（草稿用例整例更新）。暂存后必须立即 verify_case(mode="mechanical") 验收（跳过 AI 相，只做机械干跑 + 终态判定）——机械干跑通过才算固化完成；verify 失败由你根据失败归因修复 compiled 后重跑 mechanical，同因连续两轮失败或归因不明则改 mode="full" 重测。通过后引导用户在暂存区勾选保存。',
+      'solidify_case 优先复用 verify_case 实测缓存的轨迹零执行完成固化（结果里 traceReused=true）：只要上一步实测通过、步骤内容与环境未变，就不需要再跑一遍用例。没有轨迹可复用时（如从未实测、轨迹超过 30 分钟、或步骤已改）才真实执行一遍收集 AI 临场动作，机械映射为 compiled 后暂存为 update_step 修改（草稿用例整例更新）。暂存后必须立即 verify_case(mode="mechanical") 验收（跳过 AI 相，只做机械干跑 + 终态判定）——机械干跑通过才算固化完成；verify 失败由你根据失败归因修复 compiled 后重跑 mechanical，同因连续两轮失败或归因不明则改 mode="full" 重测。通过后引导用户在暂存区勾选保存。固化前后**不要重复跑 full 实测**（每步 AI 相 1~2 分钟，重复跑纯浪费）。',
       'solidify_case 结果里 status=kept-aiTask 的步骤附有 reason（press 无机械对应 / 登录凭据占位 / 选择器不可映射 / 动作收集为空）：这些步骤保持视觉执行是预期行为，不要强行改写；确需机械化的（如选择器含 Playwright 专有语法）可先用 stage_case_op 换成平台可表达的选择器后重新固化。wait 动作会映射为固定时长的 waitFor 一并固化，不构成 kept-aiTask 原因。',
       '同一用例反复固化是安全幂等的：暂存 localId 按 stepId 确定（solidify-<stepId>），重复固化覆盖上一轮暂存；执行失败（任一步骤未过）时不会暂存任何修改，修正后重跑即可。',
       '被固化的 fill value 是 AI 当轮填入的原始值：若 instruction 引用了 {{变量}} 而 AI 填了具体值，固化会把该值冻结进 compiled——数据驱动用例（绑定数据集）不建议固化含变量填写的步骤，或固化后把 value 手工改回 {{变量}}。',

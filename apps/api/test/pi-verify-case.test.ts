@@ -1067,6 +1067,22 @@ describe('verify_case compiled 机械回放干跑', () => {
     expect(end.result).toBe('failed');
   });
 
+  it('全视觉用例（无 compiled）跳过机械干跑 → 响应不带 replay 摘要（不报 epoch 假时长）', async () => {
+    // 回归点：干跑被跳过时 replayStartedAt 恒为 0，此前无条件发出的
+    // replay.durationMs = Date.now()-0 是 epoch 级垃圾值（prod228 出现 6 次）。
+    const caseId = await seedCase({ steps: [null, null] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    expect(executeCaseInBrowser).not.toHaveBeenCalled(); // 无 compiled 可逐字派发 → 跳过干跑
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.result).toBe('passed');
+    expect(data.replay).toBeUndefined();
+  });
+
   it('敏感步骤：干跑注入 secretResolver（stepId → 解密明文）；非敏感用例不注入', async () => {
     const sensitiveId = await seedCase({ steps: [CLICK_COMPILED], sensitiveStep1: true });
     const plainId = await seedCase({ steps: [CLICK_COMPILED] });
