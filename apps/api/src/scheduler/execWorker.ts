@@ -31,7 +31,7 @@ export async function runCaseJob(data: { caseId: string; preseed?: PreseedReport
         .set({
           status: 'failed',
           finishedAt: new Date(),
-          stepResults: [{ order: 1, status: 'failed', durationMs: 0, error: msg, failureReason: 'InternalError' }] as object,
+          stepResults: [{ order: 1, status: 'failed', durationMs: 0, startedAt: new Date().toISOString(), error: msg, failureReason: 'InternalError' }] as object,
           summary: msg,
         })
         .where(eq(reports.id, p.reportId))

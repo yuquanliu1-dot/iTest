@@ -154,6 +154,7 @@ async function runCaseOnce(
             order: 1,
             status: 'failed',
             durationMs: 0,
+            startedAt: new Date().toISOString(),
             error: msg,
             failureReason: 'InternalError',
             humanMessage: '执行器内部错误，该行已记为失败',
@@ -226,6 +227,7 @@ async function runCaseOnceInner(
         order: 1,
         status: 'failed',
         durationMs: 0,
+        startedAt: new Date().toISOString(),
         error: e instanceof Error ? e.message : String(e),
         failureReason,
         humanMessage,
@@ -257,6 +259,7 @@ async function runCaseOnceInner(
     if (e instanceof WebServiceMissing) {
       const stepResults: ExecStepResult[] = [{
         order: 1, status: 'failed', durationMs: 0,
+        startedAt: new Date().toISOString(),
         error: e.message, failureReason: 'WebServiceMissing', humanMessage: e.message,
       }];
       await db.update(reports)
@@ -378,6 +381,7 @@ async function runCaseOnceInner(
         if (e instanceof EngineUnavailable) {
           stepResults = [{
             order: 1, status: 'failed', durationMs: 0,
+            startedAt: new Date().toISOString(),
             error: e.message, failureReason: 'EngineUnavailable',
             humanMessage: '移动端引擎不可用：' + e.message,
           }];
@@ -386,6 +390,7 @@ async function runCaseOnceInner(
           logger.warn({ err: e, caseId, reportId }, 'mobile engine execution failed; writing CDPUnavailable failed report');
           stepResults = [{
             order: 1, status: 'failed', durationMs: 0,
+            startedAt: new Date().toISOString(),
             error: e instanceof Error ? e.message : String(e),
             failureReason: 'CDPUnavailable',
             humanMessage: '执行失败',
@@ -451,6 +456,7 @@ async function runCaseOnceInner(
             order: 1,
             status: 'failed',
             durationMs: 0,
+            startedAt: new Date().toISOString(),
             error: msg,
             failureReason: 'CDPUnavailable',
             humanMessage: '真实浏览器不可用，已尝试 DOM 降级仍失败',

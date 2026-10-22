@@ -172,8 +172,27 @@ describe('runCase platform routing', () => {
     expect(rep.body.stepResults).toHaveLength(1);
     expect(rep.body.stepResults[0].failureReason).toBe('EngineUnavailable');
     expect(rep.body.stepResults[0].humanMessage).toContain('移动端引擎不可用');
+    // 合成失败步也带开始时刻——报告页统一展示「开始 HH:MM:SS」，不留空洞
+    expect(rep.body.stepResults[0].startedAt).toBeTruthy();
+    expect(Number.isNaN(new Date(rep.body.stepResults[0].startedAt).getTime())).toBe(false);
     // mobileExec must NOT have been called when prepare failed
     expect(mobileExec).not.toHaveBeenCalled();
+  });
+
+  it('web engine 执行抛错 → 合成 CDPUnavailable 失败步也带 startedAt', async () => {
+    webExec.mockRejectedValue(new Error('page.goto: net::ERR_CONNECTION_REFUSED'));
+    const r = await request(app).post(`/api/cases/${webCaseId}/execute`);
+    expect(r.status).toBe(200);
+    await waitReportDone(r.body.reportId);
+    const rep = await request(app).get(`/api/reports/${r.body.reportId}`);
+    expect(rep.body.status).toBe('failed');
+    expect(rep.body.stepResults).toHaveLength(1);
+    expect(rep.body.stepResults[0].failureReason).toBe('CDPUnavailable');
+    // 合成失败步也带开始时刻（prod228 实测：浏览器起不来时该步原本无时间戳，报告页留空洞）
+    expect(rep.body.stepResults[0].startedAt).toBeTruthy();
+    // 用例级起止也要落——引擎挂掉不等于报告没跑
+    expect(rep.body.startedAt).toBeTruthy();
+    expect(rep.body.finishedAt).toBeTruthy();
   });
 
   it('web case → WebEngine.execute called; mobile not called', async () => {
