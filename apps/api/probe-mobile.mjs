@@ -116,9 +116,13 @@ async function main() {
   const stamp = Date.now();
   const projectName = `mobile-probe-${stamp}`;
 
-  step(`create project ${projectName}`);
-  const project = await request('POST', '/api/projects', { name: projectName, organizationId: orgId });
-  ok(`project ${project.id}`);
+  step('create project');
+  // 项目归属产品线（组织由产品线推导）；ORG_ID 仅用于确认调用者能在该组织下建项目。
+  const lines = await request('GET', '/api/product-lines');
+  const line = (lines ?? [])[0];
+  if (!line) throw new Error('没有可用产品线，请先在「产品线」页建一条');
+  const project = await request('POST', '/api/projects', { name: projectName, productLineId: line.id });
+  ok(`project ${project.id}（产品线 ${line.name}，组织 ${line.organizationId}，本次激活组织 ${orgId}）`);
 
   step('create version');
   const version = await request('POST', `/api/projects/${project.id}/versions`, { name: `v-${stamp}` });

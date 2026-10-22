@@ -85,7 +85,7 @@ export default function MembersPage() {
           {detailKind === 'user' && detailId ? (
             <UserDetailPanel userId={detailId} onBack={backToList} />
           ) : detailKind === 'project' && detailId ? (
-            <ProjectDetailPanel projectId={detailId} currentOrgId={orgId ?? ''} onBack={backToList} />
+            <ProjectDetailPanel projectId={detailId} onBack={backToList} />
           ) : orgId ? (
             <OrgDetailPanel
               key={orgId}

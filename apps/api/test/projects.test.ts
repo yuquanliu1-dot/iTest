@@ -2,11 +2,13 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
+import { SCHEMA_SQL, seedOrg, seedProject, seedProductLine } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
+/** 新建项目必填 productLineId：全程复用同一条种子线。 */
+let lineId: string;
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
@@ -20,6 +22,7 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   const { userId, username, orgId, orgPath } = await seedOrg(pool);
+  lineId = (await seedProductLine(pool)).productLineId;
   // 注入种子组织管理员身份（跳过真实登录；可见性判定依赖 managerOrgPaths 子树）。
   // helpers/auth 依赖 src 服务链（连带加载 db client），须等 DATABASE_URL 指向测试容器后再动态加载。
   const { managerUserOf } = await import('./helpers/auth.js');
@@ -41,7 +44,7 @@ afterAll(async () => {
 
 describe('projects', () => {
   it('POST creates, GET lists with case/version/env counts', async () => {
-    const created = await request(app).post('/api/projects').send({ name: 'iTest 官网', description: '官网回归' });
+    const created = await request(app).post('/api/projects').send({ name: 'iTest 官网', description: '官网回归', productLineId: lineId });
     expect(created.status).toBe(201);
     expect(created.body.name).toBe('iTest 官网');
     expect(created.body.description).toBe('官网回归');
@@ -63,7 +66,7 @@ describe('projects', () => {
   });
 
   it('PATCH renames and updates description', async () => {
-    const created = await request(app).post('/api/projects').send({ name: 'P' });
+    const created = await request(app).post('/api/projects').send({ name: 'P', productLineId: lineId });
     const r = await request(app).patch(`/api/projects/${created.body.id}`).send({ name: 'P2', description: '新描述' });
     expect(r.body.name).toBe('P2');
     expect(r.body.description).toBe('新描述');
@@ -83,15 +86,53 @@ describe('projects', () => {
   });
 
   it('DELETE removes empty project', async () => {
-    const created = await request(app).post('/api/projects').send({ name: 'empty' });
+    const created = await request(app).post('/api/projects').send({ name: 'empty', productLineId: lineId });
     const r = await request(app).delete(`/api/projects/${created.body.id}`);
     expect(r.status).toBe(200);
+  });
+
+  it('缺 productLineId 被拒（400）', async () => {
+    const r = await request(app).post('/api/projects').send({ name: '无线' });
+    expect(r.status).toBe(400);
+  });
+
+  it('项目组织由产品线推导（不是调用者激活组织）', async () => {
+    // 造一条「兄弟组织」下的线：path 挂在种子组织下 → 可见；再让项目挂到它名下
+    const { orgPath } = await seedOrg(pool);
+    const sub = await pool.query(
+      `INSERT INTO organizations(name, path) VALUES ($1, $2) RETURNING id`,
+      [`线归属组织-${Date.now()}`, `${orgPath}sub-${Date.now()}/`],
+    );
+    const subOrgId = sub.rows[0]!.id as string;
+    const line = await pool.query(`INSERT INTO product_lines(organization_id, name) VALUES ($1, $2) RETURNING id`, [
+      subOrgId,
+      `子组织线-${Date.now()}`,
+    ]);
+    const created = await request(app)
+      .post('/api/projects')
+      .send({ name: '跨组织线项目', productLineId: line.rows[0]!.id });
+    expect(created.status).toBe(201);
+    const row = await pool.query(`SELECT organization_id FROM projects WHERE id = $1`, [created.body.id]);
+    expect(row.rows[0]!.organization_id).toBe(subOrgId);
+  });
+
+  it('挂到他组织不可见的产品线被拒（404）', async () => {
+    const foreign = await pool.query(
+      `INSERT INTO organizations(name, path) VALUES ($1, $2) RETURNING id`,
+      [`外部-${Date.now()}`, `/ext-${Date.now()}/`],
+    );
+    const line = await pool.query(`INSERT INTO product_lines(organization_id, name) VALUES ($1, $2) RETURNING id`, [
+      foreign.rows[0]!.id,
+      `外部线-${Date.now()}`,
+    ]);
+    const r = await request(app).post('/api/projects').send({ name: 'x', productLineId: line.rows[0]!.id });
+    expect(r.status).toBe(404);
   });
 });
 
 describe('groups', () => {
   it('POST/GET groups under project with caseCount', async () => {
-    const p = await request(app).post('/api/projects').send({ name: 'GP' });
+    const p = await request(app).post('/api/projects').send({ name: 'GP', productLineId: lineId });
     const g = await request(app).post(`/api/projects/${p.body.id}/groups`).send({ name: '登录与账号' });
     expect(g.status).toBe(200);
     await pool.query(`INSERT INTO test_cases(title, group_id) VALUES ('c', $1)`, [g.body.id]);
@@ -110,7 +151,7 @@ describe('groups', () => {
 
 describe('project stats', () => {
   it('returns counts and per-group breakdown', async () => {
-    const p = await request(app).post('/api/projects').send({ name: 'S' });
+    const p = await request(app).post('/api/projects').send({ name: 'S', productLineId: lineId });
     const g = await request(app).post(`/api/projects/${p.body.id}/groups`).send({ name: 'g' });
     await pool.query(`INSERT INTO test_cases(title, group_id) VALUES ('a', $1), ('b', $1)`, [g.body.id]);
     const r = await request(app).get(`/api/projects/${p.body.id}/stats`);

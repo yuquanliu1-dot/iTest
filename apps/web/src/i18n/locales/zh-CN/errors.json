@@ -38,6 +38,7 @@
   "name_conflict": "同名项已存在",
   "no_repo": "未找到代码仓库",
   "not_empty": "仍有子项，不能删除",
+  "line_not_empty": "产品线内仍有项目，不能删除——请先把项目移走或变更到别的产品线",
   "not_sensitive": "该字段不属于敏感字段",
   "plan_run_running": "计划运行仍在执行中，请先中止再删除",
   "same_org": "需在同一个组织内操作",

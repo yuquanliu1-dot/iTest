@@ -11,6 +11,7 @@ import {
 } from '../services/projectAccess.js';
 import { requireManager } from '../middleware/auth.js';
 import type { AuthUser } from '../services/auth.service.js';
+import { rehomeProjectToProductLine, resolveProjectProductLineId } from '../services/projectRehome.js';
 
 export const productLinesRoute = Router({ mergeParams: true });
 
@@ -28,20 +29,12 @@ const CreateBody = z.object({
 const PatchBody = CreateBody.partial();
 
 /**
- * 挂项目：项目本身须可见，且须与产品线同组织——跨组织挂载会让「同产品线共享用例」
- * 跨出租户边界，等于绕过组织可见性。逐条校验，不存在与不可见都报 404。
+ * 挂项目：项目本身须可见。不存在与不可见都报 404。
+ * 跨组织不再拦——挂载即搬家（见 rehomeProjectToProductLine），项目会迁到产品线所属组织。
  */
-async function assertProjectsAssignable(projectIds: string[], user: AuthUser, organizationId: string): Promise<void> {
+async function assertProjectsAssignable(projectIds: string[], user: AuthUser): Promise<void> {
   for (const projectId of projectIds) {
     await assertProjectVisible(projectId, user);
-    const row = (await db
-      .select({ organizationId: projects.organizationId })
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1))[0];
-    if (row && row.organizationId !== organizationId) {
-      throw new HttpError(400, 'cross_project', 'project does not belong to the product line organization');
-    }
   }
 }
 
@@ -101,10 +94,14 @@ productLinesRoute.patch('/:id', requireManager, async (req, res) => {
   res.json(rows[0]!);
 });
 
-/** 删产品线；projects.product_line_id 是 on delete set null，项目保留并退回「未归线」。 */
+/** 删产品线：线内仍有项目时拒绝（line_not_empty），不级联删项目/用例/计划/报告。 */
 productLinesRoute.delete('/:id', requireManager, async (req, res) => {
   const id = param(req, 'id');
   await assertProductLineVisible(id, req.user!);
+  const remaining = await db.select({ id: projects.id }).from(projects).where(eq(projects.productLineId, id)).limit(1);
+  if (remaining.length > 0) {
+    throw new HttpError(409, 'line_not_empty', 'product line still contains projects');
+  }
   await db.delete(productLines).where(eq(productLines.id, id));
   res.json({ ok: true });
 });
@@ -156,16 +153,22 @@ productLinesRoute.get('/:id/versions', async (req, res) => {
   );
 });
 
-/** 把项目挂进产品线（从别的产品线移入会自动改归属：一个项目至多属于一条产品线）。 */
+/**
+ * 把项目挂进产品线（挂载即搬家：项目迁到该产品线所属组织，标签一并迁移）。
+ * 从别的产品线移入会自动改归属——一个项目至多属于一条产品线；已在本线的项目幂等跳过。
+ */
 productLinesRoute.post('/:id/projects', requireManager, async (req, res) => {
   const id = param(req, 'id');
   const { organizationId } = await assertProductLineVisible(id, req.user!);
   const body = z.object({ projectIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
-  await assertProjectsAssignable(body.projectIds, req.user!, organizationId);
+  await assertProjectsAssignable(body.projectIds, req.user!);
+  let moved = 0;
   for (const projectId of body.projectIds) {
-    await db.update(projects).set({ productLineId: id, updatedAt: new Date() }).where(eq(projects.id, projectId));
+    if ((await resolveProjectProductLineId(projectId)) === id) continue;
+    await rehomeProjectToProductLine(projectId, id, organizationId);
+    moved += 1;
   }
-  res.json({ ok: true, count: body.projectIds.length });
+  res.json({ ok: true, count: body.projectIds.length, moved });
 });
 
 /** 解绑单个项目：product_line_id 置空，退回「未归线」（计划重新严格限同项目用例）。 */

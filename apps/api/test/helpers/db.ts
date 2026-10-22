@@ -217,6 +217,16 @@ export async function seedOrg(pool: Pool): Promise<SeedOrg> {
   return p;
 }
 
+/** 在 pool 级种子组织下建一条产品线（默认复用同一条，幂等）；返回 id。 */
+export async function seedProductLine(pool: Pool, name?: string): Promise<{ productLineId: string } & SeedOrg> {
+  const org = await seedOrg(pool);
+  const lineName = name ?? `种子线-${org.orgId.slice(0, 8)}`;
+  const existing = await pool.query(`SELECT id FROM product_lines WHERE organization_id = $1 AND name = $2`, [org.orgId, lineName]);
+  if (existing.rows.length > 0) return { productLineId: existing.rows[0]!.id as string, ...org };
+  const p = await pool.query(`INSERT INTO product_lines(organization_id, name) VALUES ($1, $2) RETURNING id`, [org.orgId, lineName]);
+  return { productLineId: p.rows[0]!.id as string, ...org };
+}
+
 /** 造一个项目+默认分组+默认版本（挂在 pool 级种子组织下），返回 id 对。所有需要 group_id/project_id/version_id 的测试都用它。 */
 export async function seedProject(pool: Pool): Promise<{ projectId: string; groupId: string; versionId: string } & SeedOrg> {
   const org = await seedOrg(pool);

@@ -38,6 +38,7 @@
   "name_conflict": "An item with the same name already exists",
   "no_repo": "Code repository not found",
   "not_empty": "There are still child items and this cannot be deleted",
+  "line_not_empty": "This product line still contains projects and cannot be deleted — move them out or change their product line first",
   "not_sensitive": "This field is not a sensitive field",
   "plan_run_running": "The plan run is still executing, abort it before deleting",
   "same_org": "Must be in the same organization",

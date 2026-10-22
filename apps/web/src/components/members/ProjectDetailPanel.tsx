@@ -2,17 +2,17 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../../i18n';
 import { useUIStore } from '../../stores/ui';
-import { api, type Project, type AssignedUser, type UserSummary, type OrgManagedNode } from '../../api/client';
+import { api, type Project, type AssignedUser, type UserSummary, type ProductLine } from '../../api/client';
 import { useProjectStore } from '../../stores/project';
 import { useAuthStore } from '../../stores/auth';
 import { isManagerOfOrgPath } from '../../utils/orgTree';
-import MoveProjectModal from './MoveProjectModal';
+import ChangeProductLineModal from './ChangeProductLineModal';
 
-interface Props { projectId: string; currentOrgId: string; onBack: () => void }
+interface Props { projectId: string; onBack: () => void }
 
 const PAGE_SIZE = 10;
 
-export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: Props) {
+export default function ProjectDetailPanel({ projectId, onBack }: Props) {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const organizations = useAuthStore((s) => s.organizations);
@@ -21,8 +21,8 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
 
-  const [moving, setMoving] = useState(false);
-  const [moveTargets, setMoveTargets] = useState<OrgManagedNode[]>([]);
+  const [changing, setChanging] = useState(false);
+  const [lineTargets, setLineTargets] = useState<ProductLine[]>([]);
   const [adding, setAdding] = useState(false);
   const [candidateQ, setCandidateQ] = useState('');
   const [candidates, setCandidates] = useState<UserSummary[]>([]);
@@ -107,26 +107,29 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
 
   const assignedPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  // 移动目标候选 = managed-subtree 里我能管理的组织。
-  // 不能用 authStore.organizations（它只含 /auth/me 的直接 membership，不含后代组织），
-  // 否则上级管理员的候选列表为空，下拉框无从选择。后端 move 用 isManagerOfOrg（祖先链
-  // managerOrgPaths）判定，这里用 isManagerOfOrgPath 与之对齐。
+  // 变更产品线的候选 = 可见产品线里、其所属组织我确实是 manager 的那些。
+  // 产品线只有 organizationId 没有 path，而 authStore.organizations 只含 /auth/me 的直接
+  // membership（不含后代组织），所以目标组织 path 从 managed-subtree 取——否则上级管理员
+  // 的候选列表为空。后端 POST /product-lines/:id/projects 同样要求「目标产品线所属组织的管理员」，
+  // 这里用 isManagerOfOrgPath 与后端 isManagerOfOrg 对齐，避免列出必然 403 的选项。
   useEffect(() => {
-    if (!moving) return;
+    if (!changing) return;
     let stale = false;
-    api.orgs
-      .managedSubtree()
-      .then((rows) => {
+    Promise.all([api.productLines.list(), api.orgs.managedSubtree()])
+      .then(([lines, orgs]) => {
         if (stale) return;
-        setMoveTargets(rows.filter((o) => isManagerOfOrgPath(organizations, o.path)));
+        setLineTargets(lines.filter((l) => {
+          const org = orgs.find((o) => o.id === l.organizationId);
+          return !!org && isManagerOfOrgPath(organizations, org.path);
+        }));
       })
       .catch(() => {
-        if (!stale) setMoveTargets([]);
+        if (!stale) setLineTargets([]);
       });
     return () => {
       stale = true;
     };
-  }, [moving, organizations]);
+  }, [changing, organizations]);
 
   return (
     <div className="flex flex-col h-full">
@@ -144,9 +147,9 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
               <button
                 className="text-[11px]"
                 style={{ marginLeft: 'auto', padding: '3px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: 'pointer' }}
-                onClick={() => setMoving(true)}
+                onClick={() => setChanging(true)}
               >
-                {t('members:moveOrg')}
+                {t('members:changeLine')}
               </button>
             )}
           </div>
@@ -218,19 +221,23 @@ export default function ProjectDetailPanel({ projectId, currentOrgId, onBack }: 
         </div>
       )}
 
-      <MoveProjectModal
-        visible={moving}
+      <ChangeProductLineModal
+        visible={changing}
         projectId={projectId}
         projectName={project?.name ?? ''}
-        currentOrgId={project?.organizationId ?? currentOrgId}
-        choices={moveTargets}
-        onClose={() => setMoving(false)}
-        onMoved={(updated) => {
-          setProject(updated);
-          setMoving(false);
+        currentProductLineId={project?.productLineId ?? null}
+        choices={lineTargets}
+        onClose={() => setChanging(false)}
+        onChanged={() => {
+          setChanging(false);
+          // 项目已迁到新产品线所属组织，可能离开当前可见范围——与原「移动到组织」行为一致。
           const store = useProjectStore.getState();
           if (store.current?.id === projectId) store.exit();
-          toast(t('members:moved'), 'success');
+          setProject(null);
+          api.projects.get(projectId)
+            .then((p) => setProject(p))
+            .catch(() => setProject(null));
+          toast(t('members:changed'), 'success');
         }}
       />
     </div>

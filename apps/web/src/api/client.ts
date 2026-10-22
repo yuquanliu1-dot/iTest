@@ -61,14 +61,12 @@ export const api = {
   },
   projects: {
     list: () => request<ProjectWithCount[]>('/projects'),
-    create: (body: { name: string }) =>
+    create: (body: { name: string; productLineId: string }) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify(body) }),
     patch: (id: string, body: Partial<{ name: string }>) =>
       request<Project>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/projects/${id}`, { method: 'DELETE' }),
     get: (id: string) => request<Project>(`/projects/${id}`),
-    move: (id: string, organizationId: string) =>
-      request<Project>(`/projects/${id}/move`, { method: 'POST', body: JSON.stringify({ organizationId }) }),
     verifyRepo: (body: {
       repoUrl: string;
       provider?: 'github' | 'gitee' | 'gitlab';

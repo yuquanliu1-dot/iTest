@@ -4,7 +4,7 @@ import { eq, asc, desc, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { projects, groups, productLines, testCases, reports, requirements, projectVersions, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
-import { assertProjectVisible } from '../services/projectAccess.js';
+import { assertProductLineVisible, assertProjectVisible } from '../services/projectAccess.js';
 import { visibleOrgIdsFor } from '../services/orgTree.js';
 import { isManagerOfOrg, requireManager } from '../middleware/auth.js';
 import { getOrgPath } from '../services/orgTree.js';
@@ -18,6 +18,8 @@ const ProviderEnum = z.enum(['github', 'gitee', 'gitlab']);
 
 const CreateBody = z.object({
   name: z.string().min(1).max(200),
+  /** 必填：项目归属产品线，项目的组织由产品线推导。 */
+  productLineId: z.string().uuid(),
   description: z.string().optional(),
   repoUrl: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   defaultBranch: z.string().max(200).optional(),
@@ -26,7 +28,8 @@ const CreateBody = z.object({
   patOverride: z.string().optional(),
 });
 
-const PatchBody = CreateBody.partial();
+/** PATCH 不含 productLineId：改线是独立动作（走 POST /product-lines/:id/projects，挂载即搬家）。 */
+const PatchBody = CreateBody.omit({ productLineId: true }).partial();
 
 /** mask PAT：所有返回路径必须走此函数，避免泄露。 */
 function maskProject<T extends { patOverride?: string | null; provider?: string | null }>(p: T): Omit<T, 'patOverride'> & { hasPat: boolean } {
@@ -88,6 +91,11 @@ projectsRoute.get('/', async (req, res) => {
 
 projectsRoute.post('/', requireManager, async (req, res) => {
   const body = CreateBody.parse(req.body);
+  // 项目的组织由产品线推导：产品线须可见，且调用者须是该产品线所属组织的管理员。
+  const line = await assertProductLineVisible(body.productLineId, req.user!);
+  const lineOrgPath = await getOrgPath(line.organizationId);
+  if (!lineOrgPath) throw new HttpError(404, 'not_found', 'product line organization not found');
+  if (!isManagerOfOrg(req.user!, lineOrgPath)) throw new HttpError(403, 'forbidden', '无权在该产品线所属组织下建项目');
   const rows = await db
     .insert(projects)
     .values({
@@ -98,7 +106,8 @@ projectsRoute.post('/', requireManager, async (req, res) => {
       provider: body.provider ?? 'github',
       gitlabUrlOverride: body.gitlabUrlOverride,
       patOverride: body.patOverride,
-      organizationId: req.user!.orgId,
+      productLineId: body.productLineId,
+      organizationId: line.organizationId,
       createdByUserId: req.user!.userId,
     })
     .returning();
@@ -130,33 +139,6 @@ projectsRoute.patch('/:id', requireManager, async (req, res) => {
   res.json(maskProject(rows[0]!));
 });
 
-/** POST /:id/move — 移动项目到目标组织。仅 manager；双闸：源子树 + 目标子树。 */
-projectsRoute.post('/:id/move', requireManager, async (req, res) => {
-  const projectId = String(req.params.id);
-  const targetOrgId = z.string().uuid().parse(req.body.organizationId);
-  const targetPath = await getOrgPath(targetOrgId);
-  if (!targetPath) throw new HttpError(404, 'not_found', 'target organization not found');
-  if (!isManagerOfOrg(req.user!, targetPath)) throw new HttpError(403, 'forbidden', '无权管理目标组织');
-
-  await assertProjectVisible(projectId, req.user!);
-  const sourceOrgRow = await db
-    .select({ organizationId: projects.organizationId })
-    .from(projects)
-    .where(eq(projects.id, projectId))
-    .limit(1);
-  const sourceOrgId = sourceOrgRow[0]?.organizationId;
-  if (!sourceOrgId) throw new HttpError(404, 'not_found', 'project not found');
-  if (sourceOrgId === targetOrgId) throw new HttpError(400, 'same_org', 'project already in target organization');
-
-  const updated = await db
-    .update(projects)
-    .set({ organizationId: targetOrgId, updatedAt: new Date() })
-    .where(eq(projects.id, projectId))
-    .returning();
-  if (!updated.length) throw new HttpError(404, 'not_found', 'project not found');
-  res.json(maskProject(updated[0]!));
-});
-
 projectsRoute.delete('/:id', requireManager, async (req, res) => {
   const projectId = String(req.params.id);
   await assertProjectVisible(projectId, req.user!);
@@ -182,7 +164,8 @@ projectsRoute.get('/:id/groups', async (req, res) => {
 projectsRoute.post('/:id/groups', async (req, res) => {
   const projectId = String(req.params.id);
   await assertProjectVisible(projectId, req.user!);
-  const body = CreateBody.parse(req.body);
+  // 只取 name：分组创建不涉及项目创建的那些字段（CreateBody 现含必填 productLineId）。
+  const body = z.object({ name: z.string().min(1).max(200) }).parse(req.body);
   res.json(await createGroup(projectId, { name: body.name }));
 });
 

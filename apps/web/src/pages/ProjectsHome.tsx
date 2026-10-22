@@ -29,6 +29,8 @@ interface FormState {
   mode: 'create-project' | 'edit-project';
   id: string | null;
   name: string;
+  /** 归属产品线（仅新建时提交；改线走产品线的挂载接口）。 */
+  productLineId: string;
   description: string;
   repo: RepoFieldsValue;
 }
@@ -72,6 +74,7 @@ const EMPTY_FORM: FormState = {
   mode: 'create-project',
   id: null,
   name: '',
+  productLineId: '',
   description: '',
   repo: EMPTY_REPO,
 };
@@ -170,7 +173,7 @@ export default function ProjectsHome() {
         gitlabUrlOverride: r.provider === 'gitlab' && r.gitlabUrlOverride.trim() ? r.gitlabUrlOverride.trim() : undefined,
         patOverride: r.patOverride.trim() ? r.patOverride.trim() : undefined,
       };
-      if (form.mode === 'create-project') return api.projects.create(baseBody);
+      if (form.mode === 'create-project') return api.projects.create({ ...baseBody, productLineId: form.productLineId });
       return api.projects.patch(form.id!, baseBody);
     },
     onSuccess: () => {
@@ -313,8 +316,10 @@ export default function ProjectsHome() {
 
   /** 某条线内的项目（从 allProjects 的 productLineId 反查，避免为每条线发一次详情请求）。 */
   const projectsOf = (lineId: string) => (data ?? []).filter((p) => p.productLineId === lineId);
-  /** 可挂载候选：仅未归线的项目——一个项目至多属于一条产品线，已归线的挂进来等于静默改归属。 */
-  const attachable = (data ?? []).filter((p) => !p.productLineId);
+  /** 可挂载候选：本线之外的全部项目——挂载即搬家（项目迁到本线所属组织，标签一并迁移），
+   *  所以「在别的线下」不再是障碍，只有「已在本线下」需要排除。 */
+  const attachable = (lineId: string) => (data ?? []).filter((p) => p.productLineId !== lineId);
+  const attachableProjects = manageLine ? attachable(manageLine.id) : [];
   const manageLineMembers = manageLine ? projectsOf(manageLine.id) : [];
 
   const enterVersion = (projectId: string, projectName: string, v: ProjectVersion) => {
@@ -455,12 +460,10 @@ export default function ProjectsHome() {
                   <Button
                     onClick={() =>
                       setForm({
+                        ...EMPTY_FORM,
                         open: true,
-                        mode: 'create-project',
-                        id: null,
-                        name: '',
-                        description: '',
-                        repo: EMPTY_REPO,
+                        // 默认归属当前选中的产品线；没选线时用第一条，保证「必选」有初值。
+                        productLineId: filterLineId ?? (lines ?? [])[0]?.id ?? '',
                       })
                     }
                   >
@@ -489,6 +492,7 @@ export default function ProjectsHome() {
                         onToggle={() => toggleExpanded(p.id)}
                         onEdit={() =>
                           setForm({
+                            ...EMPTY_FORM,
                             open: true,
                             mode: 'edit-project',
                             id: p.id,
@@ -554,6 +558,25 @@ export default function ProjectsHome() {
           </DialogHeader>
           <div className="flex-1 min-h-0 flex flex-col gap-3 px-5 py-4 overflow-y-auto">
             <Input label={t('projects:name')} placeholder={t('projects:namePlaceholder')} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+            {form.mode === 'create-project' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>
+                  {t('projects:productLineLabel')}
+                </label>
+                <select
+                  className="input-base"
+                  value={form.productLineId}
+                  onChange={(e) => setForm((f) => ({ ...f, productLineId: e.target.value }))}
+                  disabled={(lines ?? []).length === 0}
+                >
+                  {(lines ?? []).length === 0 && <option value="">{t('projects:productLineRequired')}</option>}
+                  {(lines ?? []).map((l) => (
+                    <option key={l.id} value={l.id}>{l.name}</option>
+                  ))}
+                </select>
+                <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('projects:productLineHint')}</p>
+              </div>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>{t('projects:description')}</label>
               <textarea
@@ -574,7 +597,10 @@ export default function ProjectsHome() {
             style={{ borderColor: 'var(--border)' }}
           >
             <Button variant="ghost" onClick={() => setForm(EMPTY_FORM)}>{t('common:cancel')}</Button>
-            <Button disabled={!form.name.trim() || save.isPending} onClick={() => save.mutate()}>
+            <Button
+              disabled={!form.name.trim() || (form.mode === 'create-project' && !form.productLineId) || save.isPending}
+              onClick={() => save.mutate()}
+            >
               {save.isPending ? t('common:saving') : t('common:save')}
             </Button>
           </div>
@@ -722,7 +748,7 @@ export default function ProjectsHome() {
         </DialogContent>
       </Dialog>
 
-      {/* 产品线成员管理：线内项目可摘除，未归线项目可勾选挂载 */}
+      {/* 产品线成员管理：线内项目可摘除，本线之外的项目可勾选移入（挂载即搬家） */}
       <Dialog open={!!manageLine} onOpenChange={(o) => !o && setManageLine(null)}>
         <DialogContent style={{ maxWidth: 520 }}>
           <DialogHeader>
@@ -754,12 +780,13 @@ export default function ProjectsHome() {
                 ))
               )}
             </div>
-            {attachable.length > 0 && (
+            {attachableProjects.length > 0 && (
               <div>
                 <div className="text-[11px] font-medium uppercase tracking-[0.04em] mb-1" style={{ color: 'var(--muted-foreground)' }}>
                   {t('productLines:candidatesTitle')}
                 </div>
-                {attachable.map((p) => {
+                <p className="text-[11px] mb-1" style={{ color: 'var(--muted-foreground)' }}>{t('productLines:attachMoveHint')}</p>
+                {attachableProjects.map((p) => {
                   const checked = picked.has(p.id);
                   return (
                     <label
@@ -790,7 +817,7 @@ export default function ProjectsHome() {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setManageLine(null)}>{t('productLines:cancel')}</Button>
-            {canManage && attachable.length > 0 && (
+            {canManage && attachableProjects.length > 0 && (
               <Button
                 disabled={picked.size === 0 || attach.isPending}
                 onClick={() => manageLine && attach.mutate({ lineId: manageLine.id, ids: [...picked] })}
@@ -802,7 +829,7 @@ export default function ProjectsHome() {
         </DialogContent>
       </Dialog>
 
-      {/* 删除产品线确认：项目退回「未归线」，跨项目用例随之失效 */}
+      {/* 删除产品线确认：线内仍有项目时后端会 409 拒绝 */}
       <Dialog open={!!confirmDeleteLine} onOpenChange={(o) => !o && setConfirmDeleteLine(null)}>
         <DialogContent style={{ maxWidth: 420 }}>
           <DialogHeader><DialogTitle>{t('productLines:deleteTitle')}</DialogTitle></DialogHeader>
