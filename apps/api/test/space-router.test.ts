@@ -208,6 +208,36 @@ describe('space wire contract', () => {
     expect((await request(app).get(`/api/assistant/threads/${rid}`)).status).toBe(404);
   });
 
+  it('GET /threads/:id 冷线程(内存无 record)也回历史快照:ensure 重建会话,不等第二次点击', async () => {
+    const { versionId } = await seedProject(pool);
+    const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    const threadId = t.body.metadata.id as string;
+    // 冷内存判定用「零消息」:发版重启后 ensure 重建出来的会话本来就该是空的,
+    // 关键在于它被建起来了(record 不再是 null)——修复前 GET 不 ensure,record 永远 null。
+    const { resetSpaceSessions, snapshotOfThread } = await import('../src/pi/space/session.js');
+    resetSpaceSessions();
+    expect(snapshotOfThread(threadId)).toBeNull();
+
+    const g = await request(app).get(`/api/assistant/threads/${threadId}`);
+    expect(g.status).toBe(200);
+    expect(g.body.metadata.messageCount).toBe(0);
+    // 修复的核心断言:GET 之后 record 已建成(下一次 GET 命中内存,不再依赖 SSE 顺带建)
+    expect(snapshotOfThread(threadId)).not.toBeNull();
+  });
+
+  it('GET /threads/:id 冷线程但会话构建失败:仍 200 + 兜底空快照(不 500)', async () => {
+    const { versionId } = await seedProject(pool);
+    const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    const threadId = t.body.metadata.id as string;
+    const { resetSpaceSessions, setSpaceSessionFactory } = await import('../src/pi/space/session.js');
+    resetSpaceSessions();
+    setSpaceSessionFactory(async () => { throw new Error('boom'); });
+    const g = await request(app).get(`/api/assistant/threads/${threadId}`);
+    expect(g.status).toBe(200);
+    expect(g.body.messages).toEqual([]);
+    setSpaceSessionFactory(stubFactory as never);
+  });
+
   it('POST /threads/:id/confirm 未知 confirmId 404;有效 confirmId 落地 resolve', async () => {
     const { versionId } = await seedProject(pool);
     const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });

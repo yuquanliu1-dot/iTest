@@ -122,6 +122,11 @@ spaceRoute.get('/threads', async (req, res) => {
 spaceRoute.get('/threads/:id', async (req, res) => {
   // assertSpaceThreadVisible 已保证 kind='version' 且行存在(否则 404)
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
+  // 必须先 ensure(与下方 SSE 路由同款):snapshotOfThread 只读内存 records,发版重启后
+  // 历史线程在内存里是冷的 → 直接返回空快照,前端点开历史会话一片空白,必须再点一次
+  // (第二次 SSE 已把会话从 JSONL 重建好)。这里从磁盘重建会话(冷路径实测 ~20ms,
+  // 远小于用户感知阈值)让首击即出历史;ensure 幂等单飞,热线程零成本。
+  try { await ensureSpaceRecord(req.params.id!); } catch { /* 构建失败仍返回兜底快照,不 500 */ }
   res.json(threadSnapshotResponse(req.params.id!));
 });
 
