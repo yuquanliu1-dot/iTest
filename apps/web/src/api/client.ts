@@ -104,7 +104,7 @@ export const api = {
   },
   productLines: {
     list: () => request<ProductLine[]>('/product-lines'),
-    create: (body: { name: string; description?: string }) =>
+    create: (body: { name: string; description?: string; organizationId?: string }) =>
       request<ProductLine>('/product-lines', { method: 'POST', body: JSON.stringify(body) }),
     get: (id: string) => request<ProductLineDetail>(`/product-lines/${id}`),
     patch: (id: string, body: Partial<{ name: string; description: string }>) =>
@@ -505,10 +505,10 @@ export const api = {
       orgId: string,
       params?: { q?: string; includeSubtree?: boolean; page?: number; limit?: number },
     ) => request<Paged<OrgMemberRow>>(`/organizations/${orgId}/members${qs(params ?? {})}`),
-    projects: (
+    productLines: (
       orgId: string,
       params?: { q?: string; includeSubtree?: boolean; page?: number; limit?: number },
-    ) => request<Paged<OrgProjectSummary>>(`/organizations/${orgId}/projects${qs(params ?? {})}`),
+    ) => request<Paged<OrgProductLineSummary>>(`/organizations/${orgId}/product-lines${qs(params ?? {})}`),
     addMember: (orgId: string, body: { username: string; isManager?: boolean; isUser?: boolean }) =>
       request<{ ok: boolean }>(`/organizations/${orgId}/members`, { method: 'POST', body: JSON.stringify(body) }),
     updateMember: (orgId: string, userId: string, body: { isManager?: boolean; isUser?: boolean }) =>
@@ -1315,13 +1315,13 @@ export interface OrgMemberRow {
   joinedAt: string;
 }
 
-export interface OrgProjectSummary {
+/** 组织视图下的产品线：产品线已完全替代「组织下的项目」这个位置。 */
+export interface OrgProductLineSummary {
   id: string;
   name: string;
   description: string | null;
   organizationId: string;
-  repoUrl: string | null;
-  assignedCount: number;
+  projectCount: number;
 }
 
 export interface VerifyRepoResult {

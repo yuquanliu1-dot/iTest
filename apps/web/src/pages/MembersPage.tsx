@@ -7,6 +7,7 @@ import OrgTree, { type OrgTreeNode } from '../components/members/OrgTree';
 import OrgDetailPanel from '../components/members/OrgDetailPanel';
 import UserDetailPanel from '../components/members/UserDetailPanel';
 import ProjectDetailPanel from '../components/members/ProjectDetailPanel';
+import ProductLineDetailPanel from '../components/members/ProductLineDetailPanel';
 import GlobalUserSearch from '../components/members/GlobalUserSearch';
 import OrgFormModal from '../components/members/OrgFormModal';
 
@@ -28,13 +29,16 @@ export default function MembersPage() {
   const [orgForm, setOrgForm] = useState<{ org: { id: string; name: string; description?: string; parentId: string | null } | null; parentId: string | null } | null>(null);
 
   const orgId = searchParams.get('org');
-  const tab = (searchParams.get('tab') === 'projects' ? 'projects' : 'users') as 'users' | 'projects';
+  const tab = (searchParams.get('tab') === 'lines' ? 'lines' : 'users') as 'users' | 'lines';
   const includeSubtree = searchParams.get('subtree') !== '0';
   const q = searchParams.get('q') ?? '';
   const page = Math.max(1, parseInt(searchParams.get('page') ?? '1') || 1);
 
   const segments = (params['*'] ?? '').split('/').filter(Boolean);
-  const detailKind = segments[0] === 'user' || segments[0] === 'project' ? segments[0] : null;
+  const detailKind =
+    segments[0] === 'user' || segments[0] === 'project' || segments[0] === 'productline'
+      ? segments[0]
+      : null;
   const detailId = detailKind ? segments[1] ?? null : null;
 
   const patchParams = useCallback((patch: Record<string, string | null>, replace = true) => {
@@ -58,7 +62,7 @@ export default function MembersPage() {
     }, { replace: true });
   }, [setSearchParams]);
 
-  const openDetail = useCallback((kind: 'user' | 'project', id: string) => {
+  const openDetail = useCallback((kind: 'user' | 'project' | 'productline', id: string) => {
     navigate(`/members/${kind}/${id}`);
   }, [navigate]);
 
@@ -84,6 +88,12 @@ export default function MembersPage() {
         <div style={{ flex: 1, minHeight: 0 }}>
           {detailKind === 'user' && detailId ? (
             <UserDetailPanel userId={detailId} onBack={backToList} />
+          ) : detailKind === 'productline' && detailId ? (
+            <ProductLineDetailPanel
+              productLineId={detailId}
+              onBack={backToList}
+              onOpenProject={(id) => openDetail('project', id)}
+            />
           ) : detailKind === 'project' && detailId ? (
             <ProjectDetailPanel projectId={detailId} onBack={backToList} />
           ) : orgId ? (
@@ -97,7 +107,7 @@ export default function MembersPage() {
               pageSize={PAGE_SIZE}
               onPatchParams={patchParams}
               onOpenUser={(id) => openDetail('user', id)}
-              onOpenProject={(id) => openDetail('project', id)}
+              onOpenProductLine={(id) => openDetail('productline', id)}
               onOrgChanged={() => setReloadToken((v) => v + 1)}
               onEditOrg={(o) => setOrgForm({ org: o, parentId: o.parentId })}
             />

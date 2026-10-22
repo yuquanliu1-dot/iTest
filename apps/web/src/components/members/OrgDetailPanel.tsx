@@ -7,20 +7,21 @@ import { useAuthStore } from '../../stores/auth';
 import { pickFallbackOrg, isPathInSubtree, sortByPath } from '../../utils/orgTree';
 import OrgFormModal from './OrgFormModal';
 import MemberListTab from './MemberListTab';
-import ProjectListTab from './ProjectListTab';
+import ProductLineListTab from './ProductLineListTab';
+import ProductLineFormModal from './ProductLineFormModal';
 import AddMemberModal from './AddMemberModal';
 import CreateUserModal from './CreateUserModal';
 
 interface Props {
   orgId: string;
-  tab: 'users' | 'projects';
+  tab: 'users' | 'lines';
   includeSubtree: boolean;
   q: string;
   page: number;
   pageSize: number;
   onPatchParams: (patch: Record<string, string | null>, replace?: boolean) => void;
   onOpenUser: (id: string) => void;
-  onOpenProject: (id: string) => void;
+  onOpenProductLine: (id: string) => void;
   onOrgChanged: () => void;
   onEditOrg: (org: { id: string; name: string; description?: string; parentId: string | null }) => void;
 }
@@ -34,7 +35,7 @@ interface OrgDetails {
 }
 
 export default function OrgDetailPanel({
-  orgId, tab, includeSubtree, q, page, pageSize, onPatchParams, onOpenUser, onOpenProject, onOrgChanged, onEditOrg,
+  orgId, tab, includeSubtree, q, page, pageSize, onPatchParams, onOpenUser, onOpenProductLine, onOrgChanged, onEditOrg,
 }: Props) {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
@@ -42,13 +43,15 @@ export default function OrgDetailPanel({
   const activeOrgId = useAuthStore((s) => s.activeOrgId);
   const switchOrg = useAuthStore((s) => s.switchOrg);
   const [memberTotal, setMemberTotal] = useState(0);
-  const [projectTotal, setProjectTotal] = useState(0);
+  const [lineTotal, setLineTotal] = useState(0);
   const [orgDetails, setOrgDetails] = useState<OrgDetails | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [createUserOpen, setCreateUserOpen] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [newLineOpen, setNewLineOpen] = useState(false);
   const [memberReloadToken, setMemberReloadToken] = useState(0);
+  const [lineReloadToken, setLineReloadToken] = useState(0);
 
   useEffect(() => {
     let stale = false;
@@ -86,7 +89,7 @@ export default function OrgDetailPanel({
     }
   };
 
-  const total = tab === 'users' ? memberTotal : projectTotal;
+  const total = tab === 'users' ? memberTotal : lineTotal;
   const totalPages = Math.max(1, Math.ceil(total / Math.max(1, pageSize)));
 
   return (
@@ -127,8 +130,8 @@ export default function OrgDetailPanel({
         <TabButton active={tab === 'users'} onClick={() => onPatchParams({ tab: 'users', page: '1' })}>
           {t('members:memberCount', { count: memberTotal })}
         </TabButton>
-        <TabButton active={tab === 'projects'} onClick={() => onPatchParams({ tab: 'projects', page: '1' })}>
-          {t('members:projectCount', { count: projectTotal })}
+        <TabButton active={tab === 'lines'} onClick={() => onPatchParams({ tab: 'lines', page: '1' })}>
+          {t('members:lineCount', { count: lineTotal })}
         </TabButton>
       </div>
 
@@ -136,7 +139,7 @@ export default function OrgDetailPanel({
         <input
           value={q}
           onChange={(e) => onPatchParams({ q: e.target.value || null, page: '1' })}
-          placeholder={tab === 'users' ? t('members:searchMembers') : t('members:searchProjects')}
+          placeholder={tab === 'users' ? t('members:searchMembers') : t('members:searchLines')}
           className="flex-1 input-base input-sm"
         />
         <label className="flex items-center gap-1.5 text-[12px]" style={{ color: 'var(--muted-foreground)', whiteSpace: 'nowrap', cursor: 'pointer' }}>
@@ -165,6 +168,15 @@ export default function OrgDetailPanel({
             </button>
           </>
         )}
+        {tab === 'lines' && canManageMembers && (
+          <button
+            onClick={() => setNewLineOpen(true)}
+            className="rounded text-[12px]"
+            style={{ padding: '4px 10px', whiteSpace: 'nowrap', border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--primary)', cursor: 'pointer' }}
+          >
+            {t('members:newProductLineBtn')}
+          </button>
+        )}
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px' }}>
@@ -172,9 +184,9 @@ export default function OrgDetailPanel({
           <MemberListTab orgId={orgId} includeSubtree={includeSubtree} q={q} page={page} pageSize={pageSize}
             reloadToken={memberReloadToken} onTotal={setMemberTotal} onOpen={onOpenUser} />
         </div>
-        <div style={{ display: tab === 'projects' ? 'block' : 'none' }}>
-          <ProjectListTab orgId={orgId} includeSubtree={includeSubtree} q={q} page={page} pageSize={pageSize}
-            onTotal={setProjectTotal} onOpen={onOpenProject} />
+        <div style={{ display: tab === 'lines' ? 'block' : 'none' }}>
+          <ProductLineListTab orgId={orgId} includeSubtree={includeSubtree} q={q} page={page} pageSize={pageSize}
+            reloadToken={lineReloadToken} onTotal={setLineTotal} onOpen={onOpenProductLine} />
         </div>
       </div>
 
@@ -200,6 +212,17 @@ export default function OrgDetailPanel({
         orgName={orgDetails?.name ?? ''}
         onClose={() => setCreateUserOpen(false)}
         onCreated={() => setMemberReloadToken((v) => v + 1)}
+      />
+
+      <ProductLineFormModal
+        visible={newLineOpen}
+        line={null}
+        organizationId={orgId}
+        onClose={() => setNewLineOpen(false)}
+        onSaved={() => {
+          setNewLineOpen(false);
+          setLineReloadToken((v) => v + 1);
+        }}
       />
 
       <OrgFormModal

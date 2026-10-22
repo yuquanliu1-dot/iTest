@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { and, count, eq, inArray, or, ilike } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { organizationMembers, organizations, projects, users, projectAssignments as projectAssignmentsTable } from '../db/schema.js';
+import { organizationMembers, organizations, productLines, projects, users, projectAssignments as projectAssignmentsTable } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { isManagerOfOrg, requireAuth, requireManager } from '../middleware/auth.js';
 import { getOrgPath, invalidateMemberships, invalidateOrgTree, membershipsOf, visibleOrgIdsFor } from '../services/orgTree.js';
@@ -247,6 +247,68 @@ organizationsRoute.get('/:orgId/projects', async (req, res) => {
   const countByProject = new Map(assignmentCounts.map((c) => [c.projectId, Number(c.count)]));
   res.json({
     items: rows.map((r) => ({ ...r, assignedCount: countByProject.get(r.id) ?? 0 })),
+    total: Number(totalRows[0]?.count ?? 0),
+    page,
+    limit,
+  });
+});
+
+/**
+ * GET /:orgId/product-lines?q=&includeSubtree=&page=&limit= — 组织下的产品线分页 + 线内项目数。
+ *
+ * 成员管理界面里产品线完全替代项目（项目不再直接挂组织），所以组织视图要给的是「这个组织下
+ * 有哪些产品线」，而不是「这个组织下有哪些项目」。项目数取线内项目数，供列表直接展示归属规模。
+ */
+organizationsRoute.get('/:orgId/product-lines', async (req, res) => {
+  const user = req.user!;
+  const orgId = req.params.orgId!;
+  const orgPath = await getOrgPath(orgId);
+  if (!orgPath) throw new HttpError(404, 'not_found', 'organization not found');
+  const isMember = (await membershipsOf(user.userId)).some((m) => m.organizationId === orgId);
+  if (!isMember && !isManagerOfOrg(user, orgPath)) throw new HttpError(404, 'not_found', 'organization not found');
+
+  const includeSubtree = req.query.includeSubtree === 'true';
+  const q = (req.query.q as string | undefined)?.trim();
+  const page = Math.min(parseInt(req.query.page as string) || 1, 1_000_000);
+  const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+  const orgIds = includeSubtree ? await subtreeOrgIds(orgPath) : [orgId];
+
+  if (orgIds.length === 0) {
+    res.json({ items: [], total: 0, page, limit });
+    return;
+  }
+  const qPattern = q ? `%${q}%` : null;
+  const filter = qPattern
+    ? and(inArray(productLines.organizationId, orgIds), ilike(productLines.name, qPattern))!
+    : inArray(productLines.organizationId, orgIds);
+
+  const [rows, totalRows] = await Promise.all([
+    db
+      .select({
+        id: productLines.id,
+        name: productLines.name,
+        description: productLines.description,
+        organizationId: productLines.organizationId,
+      })
+      .from(productLines)
+      .where(filter)
+      .orderBy(productLines.name)
+      .limit(limit)
+      .offset((page - 1) * limit),
+    db.select({ count: count() }).from(productLines).where(filter),
+  ]);
+  // 线内项目数：按当前页的线 id 集合单查，避免 N+1。
+  const pageIds = rows.map((r) => r.id);
+  const projectCounts = pageIds.length
+    ? await db
+        .select({ productLineId: projects.productLineId, count: count() })
+        .from(projects)
+        .where(inArray(projects.productLineId, pageIds))
+        .groupBy(projects.productLineId)
+    : [];
+  const countByLine = new Map(projectCounts.map((c) => [c.productLineId, Number(c.count)]));
+  res.json({
+    items: rows.map((r) => ({ ...r, projectCount: countByLine.get(r.id) ?? 0 })),
     total: Number(totalRows[0]?.count ?? 0),
     page,
     limit,

@@ -221,3 +221,63 @@ describe('产品线可见性与跨组织边界', () => {
     expect(again.body.moved).toBe(0);
   });
 });
+
+describe('产品线写操作按所属组织鉴权', () => {
+  it('建线可指定归属组织，缺省落在当前激活组织', async () => {
+    const { orgId: seedOrgId } = await seedOrg(pool);
+    const explicit = await request(app).post('/api/product-lines').send({ name: `指定组织-${Date.now()}`, organizationId: seedOrgId });
+    expect(explicit.status).toBe(201);
+    expect(explicit.body.organizationId).toBe(seedOrgId);
+
+    const implicit = await request(app).post('/api/product-lines').send({ name: `默认组织-${Date.now()}` });
+    expect(implicit.status).toBe(201);
+    expect(implicit.body.organizationId).toBe(seedOrgId);
+  });
+
+  it('目标组织不是调用者管理的 → 403', async () => {
+    const other = await pool.query(
+      `INSERT INTO organizations(name, path) VALUES ($1, $2) RETURNING id`,
+      [`非管理组织-${Date.now()}`, `/nonmanaged-${Date.now()}/`],
+    );
+    const r = await request(app)
+      .post('/api/product-lines')
+      .send({ name: `越权建线-${Date.now()}`, organizationId: other.rows[0]!.id });
+    expect(r.status).toBe(403);
+  });
+
+  it('目标组织不存在 → 404', async () => {
+    const r = await request(app)
+      .post('/api/product-lines')
+      .send({ name: `幽灵组织-${Date.now()}`, organizationId: '00000000-0000-4000-8000-000000000000' });
+    expect(r.status).toBe(404);
+  });
+
+  it('可见但非管理的组织下的线 → 改/删/挂载均 403', async () => {
+    // 造一个「看得见但管不了」的组织：调用者是它的**普通成员**（可见），但不是管理员
+    // （managerOrgPaths 只含种子组织，isManagerOfOrg 判 false）。
+    const { userId, orgPath: seedOrgPath } = await seedOrg(pool);
+    const other = await pool.query(
+      `INSERT INTO organizations(name, path) VALUES ($1, $2) RETURNING id`,
+      [`只读组织-${Date.now()}`, `/readonly-${Date.now()}/`],
+    );
+    const otherOrgId = other.rows[0]!.id as string;
+    await pool.query(
+      `INSERT INTO organization_members(organization_id, user_id, is_manager, is_user) VALUES ($1, $2, false, true)`,
+      [otherOrgId, userId],
+    );
+    const line = await pool.query(
+      `INSERT INTO product_lines(organization_id, name) VALUES ($1, $2) RETURNING id`,
+      [otherOrgId, `只读线-${Date.now()}`],
+    );
+    const lineId = line.rows[0]!.id as string;
+
+    // 读是允许的（可见）
+    expect((await request(app).get(`/api/product-lines/${lineId}`)).status).toBe(200);
+    // 写一律 403
+    expect((await request(app).patch(`/api/product-lines/${lineId}`).send({ name: '改名' })).status).toBe(403);
+    expect((await request(app).delete(`/api/product-lines/${lineId}`)).status).toBe(403);
+    const p = await seedProject(pool);
+    expect((await request(app).post(`/api/product-lines/${lineId}/projects`).send({ projectIds: [p.projectId] })).status).toBe(403);
+    expect(seedOrgPath).toBeTruthy();
+  });
+});

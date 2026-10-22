@@ -56,11 +56,16 @@ beforeAll(async () => {
   const { default: express } = await import('express');
   const { authRoute } = await import('../src/routes/auth.js');
   const { organizationsRoute } = await import('../src/routes/organizations.js');
+  const { productLinesRoute } = await import('../src/routes/productLines.js');
+  const { requireAuth } = await import('../src/middleware/auth.js');
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
   app = express();
   app.use(express.json());
   app.use('/api/auth', authRoute);
+  // 毯子守卫：与 src/index.ts 同序（auth 在前，其余 /api 全在守卫之后）
+  app.use('/api', requireAuth);
   app.use('/api/organizations', organizationsRoute);
+  app.use('/api/product-lines', productLinesRoute);
   app.use(errorHandler);
 });
 
@@ -200,6 +205,54 @@ describe('组织成员管理', () => {
   it('移除非成员 → 404', async () => {
     const ghost = await createUser('ghost-remove', SEED_USER_PASSWORD);
     const r = await request(app).delete(`/api/organizations/${subOrgId}/members/${ghost}`).set('Cookie', adminCookie);
+    expect(r.status).toBe(404);
+  });
+});
+
+describe('GET /api/organizations/:orgId/product-lines 组织下的产品线', () => {
+  let adminCookie: string;
+  let lineId: string;
+  let subOrgId: string;
+
+  beforeAll(async () => {
+    adminCookie = await loginAndGetCookie('org-admin', SEED_USER_PASSWORD);
+    const sub = await request(app).post('/api/organizations').set('Cookie', adminCookie).send({ name: '产品线子组织', parentId: orgId });
+    subOrgId = sub.body.id;
+    const line = await request(app).post('/api/product-lines').set('Cookie', adminCookie).send({ name: '组织下测试线', organizationId: subOrgId });
+    lineId = line.body.id;
+    // 线内放一个项目 → projectCount 应为 1
+    const proj = await pool.query(`INSERT INTO projects(organization_id, name, product_line_id) VALUES ($1, '线内项目', $2) RETURNING id`, [subOrgId, lineId]);
+    await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, 'g')`, [proj.rows[0]!.id]);
+  });
+
+  it('列出组织下的产品线并带线内项目数', async () => {
+    const r = await request(app).get(`/api/organizations/${subOrgId}/product-lines`).set('Cookie', adminCookie);
+    expect(r.status).toBe(200);
+    const item = r.body.items.find((l: { id: string }) => l.id === lineId);
+    expect(item).toBeTruthy();
+    expect(item.name).toBe('组织下测试线');
+    expect(item.organizationId).toBe(subOrgId);
+    expect(item.projectCount).toBe(1);
+  });
+
+  it('按名称模糊搜索命中', async () => {
+    const r = await request(app).get(`/api/organizations/${subOrgId}/product-lines?q=${encodeURIComponent('测试线')}`).set('Cookie', adminCookie);
+    expect(r.status).toBe(200);
+    expect(r.body.items.map((l: { id: string }) => l.id)).toContain(lineId);
+  });
+
+  it('includeSubtree=true 时包含子组织的线', async () => {
+    const child = await request(app).post('/api/organizations').set('Cookie', adminCookie).send({ name: '线的孙组织', parentId: subOrgId });
+    const childLine = await request(app).post('/api/product-lines').set('Cookie', adminCookie).send({ name: '孙组织线', organizationId: child.body.id });
+    const withSub = await request(app).get(`/api/organizations/${subOrgId}/product-lines?includeSubtree=true`).set('Cookie', adminCookie);
+    expect(withSub.body.items.map((l: { id: string }) => l.id)).toContain(childLine.body.id);
+    const without = await request(app).get(`/api/organizations/${subOrgId}/product-lines`).set('Cookie', adminCookie);
+    expect(without.body.items.map((l: { id: string }) => l.id)).not.toContain(childLine.body.id);
+  });
+
+  it('组织外的普通成员 → 404（不泄露存在性）', async () => {
+    const plainCookie = authCookie(memberUserOf(plainId, 'plain-member', orgId, orgPath));
+    const r = await request(app).get(`/api/organizations/${subOrgId}/product-lines`).set('Cookie', plainCookie);
     expect(r.status).toBe(404);
   });
 });

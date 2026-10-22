@@ -9,7 +9,8 @@ import {
   assertProjectVisible,
   visibleProductLineIds,
 } from '../services/projectAccess.js';
-import { requireManager } from '../middleware/auth.js';
+import { isManagerOfOrg } from '../middleware/auth.js';
+import { getOrgPath } from '../services/orgTree.js';
 import type { AuthUser } from '../services/auth.service.js';
 import { rehomeProjectToProductLine, resolveProjectProductLineId } from '../services/projectRehome.js';
 
@@ -24,9 +25,35 @@ function param(req: { params: unknown }, key: string): string {
 const CreateBody = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
+  /** 归属组织；缺省为当前激活组织。成员管理界面按组织建线时显式传。 */
+  organizationId: z.string().uuid().optional(),
 });
 
-const PatchBody = CreateBody.partial();
+const PatchBody = CreateBody.omit({ organizationId: true }).partial();
+
+/**
+ * 产品线写操作守卫：调用者须是该产品线**所属组织**（或其祖先）的管理员。
+ * 不用全局 requireManager——那是「是不是某处管理员」的口径，会让 A 组织的管理员
+ * 改到 B 组织下的线；而产品线随组织走，权限就该随组织走。
+ */
+async function requireLineManager(productLineId: string, user: AuthUser): Promise<string> {
+  const { organizationId } = await assertProductLineVisible(productLineId, user);
+  const orgPath = await getOrgPath(organizationId);
+  if (!orgPath) throw new HttpError(404, 'not_found', 'product line not found');
+  if (!isManagerOfOrg(user, orgPath)) {
+    throw new HttpError(403, 'forbidden', '需要该产品线所属组织的管理员角色');
+  }
+  return organizationId;
+}
+
+/** 建线守卫：目标组织须存在，且调用者是该组织（或其祖先）的管理员。 */
+async function requireTargetOrgManager(organizationId: string, user: AuthUser): Promise<void> {
+  const orgPath = await getOrgPath(organizationId);
+  if (!orgPath) throw new HttpError(404, 'not_found', 'organization not found');
+  if (!isManagerOfOrg(user, orgPath)) {
+    throw new HttpError(403, 'forbidden', '需要该组织的管理员角色');
+  }
+}
 
 /**
  * 挂项目：项目本身须可见。不存在与不可见都报 404。
@@ -51,12 +78,14 @@ productLinesRoute.get('/', async (req, res) => {
   );
 });
 
-productLinesRoute.post('/', requireManager, async (req, res) => {
+productLinesRoute.post('/', async (req, res) => {
   const body = CreateBody.parse(req.body);
+  const organizationId = body.organizationId ?? req.user!.orgId;
+  await requireTargetOrgManager(organizationId, req.user!);
   const rows = await db
     .insert(productLines)
     .values({
-      organizationId: req.user!.orgId,
+      organizationId,
       name: body.name,
       description: body.description ?? null,
       createdByUserId: req.user!.userId,
@@ -78,9 +107,9 @@ productLinesRoute.get('/:id', async (req, res) => {
   res.json({ ...row, projects: ps });
 });
 
-productLinesRoute.patch('/:id', requireManager, async (req, res) => {
+productLinesRoute.patch('/:id', async (req, res) => {
   const id = param(req, 'id');
-  await assertProductLineVisible(id, req.user!);
+  await requireLineManager(id, req.user!);
   const body = PatchBody.parse(req.body);
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (body.name !== undefined) set.name = body.name;
@@ -95,9 +124,9 @@ productLinesRoute.patch('/:id', requireManager, async (req, res) => {
 });
 
 /** 删产品线：线内仍有项目时拒绝（line_not_empty），不级联删项目/用例/计划/报告。 */
-productLinesRoute.delete('/:id', requireManager, async (req, res) => {
+productLinesRoute.delete('/:id', async (req, res) => {
   const id = param(req, 'id');
-  await assertProductLineVisible(id, req.user!);
+  await requireLineManager(id, req.user!);
   const remaining = await db.select({ id: projects.id }).from(projects).where(eq(projects.productLineId, id)).limit(1);
   if (remaining.length > 0) {
     throw new HttpError(409, 'line_not_empty', 'product line still contains projects');
@@ -157,9 +186,9 @@ productLinesRoute.get('/:id/versions', async (req, res) => {
  * 把项目挂进产品线（挂载即搬家：项目迁到该产品线所属组织，标签一并迁移）。
  * 从别的产品线移入会自动改归属——一个项目至多属于一条产品线；已在本线的项目幂等跳过。
  */
-productLinesRoute.post('/:id/projects', requireManager, async (req, res) => {
+productLinesRoute.post('/:id/projects', async (req, res) => {
   const id = param(req, 'id');
-  const { organizationId } = await assertProductLineVisible(id, req.user!);
+  const organizationId = await requireLineManager(id, req.user!);
   const body = z.object({ projectIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
   await assertProjectsAssignable(body.projectIds, req.user!);
   let moved = 0;
@@ -172,8 +201,8 @@ productLinesRoute.post('/:id/projects', requireManager, async (req, res) => {
 });
 
 /** 解绑单个项目：product_line_id 置空，退回「未归线」（计划重新严格限同项目用例）。 */
-productLinesRoute.delete('/:id/projects/:projectId', requireManager, async (req, res) => {
-  await assertProductLineVisible(param(req, 'id'), req.user!);
+productLinesRoute.delete('/:id/projects/:projectId', async (req, res) => {
+  await requireLineManager(param(req, 'id'), req.user!);
   const projectId = param(req, 'projectId');
   await assertProjectVisible(projectId, req.user!);
   await db
