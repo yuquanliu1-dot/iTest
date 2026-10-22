@@ -5,6 +5,6 @@
     "outDir": ".",
     "rootDir": "."
   },
-  "exclude": ["node_modules"],
+  "exclude": ["node_modules", "modules/recorder-manager.ts", "modules/picker.ts"],
   "include": ["modules/**/*"]
 }

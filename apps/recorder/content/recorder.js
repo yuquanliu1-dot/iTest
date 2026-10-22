@@ -5,12 +5,23 @@
   // （2026-10-15 病例：同一用例出现 2/2/5/4 的连续重复）。与 bridge.js 的 __itaBridge 同模式；
   // 真实导航会销毁文档与副本，守卫随 isolated world 一起重置，不会误挡合法的重注入。
   if (globalThis.__itaRecorder) return;
-  globalThis.__itaRecorder = true;
-  const src = chrome.runtime.getURL('modules/recorder-manager.js');
-  const mod = await import(src);
+  // 守卫值三态：同步置 'loading'，装好监听后置 'ok'。
+  // 同步置位是必须的——模块 import 是异步的，若只在 await 之后再置位，两次紧邻的注入会双双通过
+  // 上面的检查，重复捕获的 bug 立刻复发。
+  // 但 import 失败时必须把守卫删掉而不是留 'loading'：产物损坏（例如裸说明符在 isolated world
+  // 里无法解析）会让本文档永久被挡在门外，即使产物已修好也只能等真实导航。
+  globalThis.__itaRecorder = 'loading';
+  let mod;
+  let pickerMod;
+  try {
+    mod = await import(chrome.runtime.getURL('modules/recorder-manager.js'));
+    pickerMod = await import(chrome.runtime.getURL('modules/picker.js'));
+  } catch (e) {
+    delete globalThis.__itaRecorder;
+    throw e;
+  }
+  globalThis.__itaRecorder = 'ok';
   const manager = new mod.RecorderManager();
-
-  const pickerMod = await import(chrome.runtime.getURL('modules/picker.js'));
   const picker = new pickerMod.ElementPicker();
 
   let currentTabRef = 'tab#0';
