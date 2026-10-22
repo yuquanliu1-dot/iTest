@@ -1,4 +1,4 @@
-import type { HttpRequestAction, DbAssertionMatch, HttpStepResult } from '@itest/shared';
+import type { HttpRequestAction, HttpBodyMatch, HttpStepResult } from '@itest/shared';
 import { substituteVars } from '@itest/shared';
 import type { Page } from 'playwright-core';
 import http from 'node:http';
@@ -56,9 +56,10 @@ export function resolveDotPath(data: unknown, path: string): unknown {
   return cur;
 }
 
-function compareBody(bodyText: string, match: DbAssertionMatch, expected: string): boolean {
+function compareBody(bodyText: string, match: HttpBodyMatch, expected: string): boolean {
   if (match === 'equals') return bodyText === expected;
   if (match === 'contains') return bodyText.includes(expected);
+  if (match === 'notContains') return !bodyText.includes(expected);
   if (match === 'regex') {
     try { return new RegExp(expected).test(bodyText); } catch { return false; }
   }
@@ -224,6 +225,13 @@ export async function runHttpRequest(opts: {
   }
 
   const t0 = Date.now();
+  const requestInfo: HttpStepResult['request'] = {
+    method: action.method,
+    url,
+    headers: masked(headers),
+    ...(body !== undefined ? { bodyPreview: body.length > BODY_MAX ? body.slice(0, BODY_MAX) : body } : {}),
+  };
+
   let raw: RawResponse;
   try {
     raw = await rawRequest({
@@ -235,10 +243,23 @@ export async function runHttpRequest(opts: {
     });
   } catch (e) {
     const durationMs = Date.now() - t0;
-    if (e instanceof RawTimeout) {
-      throw new HttpRequestTimeout(`HTTP ${action.method} ${url} 超时（${action.timeoutMs}ms，实际 ${durationMs}ms）`);
+    const reason = e instanceof RawTimeout
+      ? `HTTP ${action.method} ${url} 超时（${action.timeoutMs}ms，实际 ${durationMs}ms）`
+      : `HTTP ${action.method} ${url} 失败: ${e instanceof Error ? e.message : String(e)}`;
+
+    // 传输层失败（连接被拒/被重置/超时）通常没有 HTTP 响应可断言。
+    // 安全类用例的期望恰恰是「SUT 在传输层拒绝伪造 Host」——此时判步骤失败是假失败
+    // （prod228 用例 4608e4f4：SUT 直接 RST，curl (52) Empty reply from server）。
+    // 断言显式允许传输失败时：记录失败原因 + 断言命中，步骤通过（无响应，saveAs 无从提取）。
+    if (action.assertion?.allowTransportFailure) {
+      return {
+        request: requestInfo,
+        transportFailure: reason,
+        assertion: { matched: true },
+      };
     }
-    throw new HttpRequestError(`HTTP ${action.method} ${url} 失败: ${e instanceof Error ? e.message : String(e)}`);
+    if (e instanceof RawTimeout) throw new HttpRequestTimeout(reason);
+    throw new HttpRequestError(reason);
   }
   const durationMs = Date.now() - t0;
 
@@ -255,12 +276,7 @@ export async function runHttpRequest(opts: {
   }
 
   const result: HttpStepResult = {
-    request: {
-      method: action.method,
-      url,
-      headers: masked(headers),
-      ...(body !== undefined ? { bodyPreview: body.length > BODY_MAX ? body.slice(0, BODY_MAX) : body } : {}),
-    },
+    request: requestInfo,
     response: {
       status: raw.status,
       statusText: raw.statusText,

@@ -112,6 +112,8 @@
   },
   "http": {
     "summary": "HTTP：{{method}} {{path}} → {{status}}（{{ms}}ms）",
+    "summaryTransportFailure": "HTTP：{{method}} {{path}} → 传输层失败（无响应）",
+    "transportFailure": "传输层失败",
     "headers": "请求头",
     "body": "请求体",
     "response": "响应 {{status}} {{statusText}}",

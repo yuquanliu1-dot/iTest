@@ -223,10 +223,11 @@ function describeAction(a: KnownAction, t: TFunction): string[] {
       const from = saveAs.from === 'status' ? t('cases:saveVarFromStatus') : t('cases:saveVarFromBody');
       push('cases:stepSummary.fieldExtractVar', `{{${str(saveAs.varName)}}} ← ${from}${saveAs.path ? `.${str(saveAs.path)}` : ''}`);
     }
-    const assertion = a.assertion as { status?: unknown; match?: unknown; expected?: unknown } | undefined;
+    const assertion = a.assertion as { status?: unknown; match?: unknown; expected?: unknown; allowTransportFailure?: unknown } | undefined;
     if (assertion) {
       if (assertion.status !== undefined) push('cases:stepSummary.fieldAssertStatus', String(assertion.status));
       if (assertion.expected !== undefined) push('cases:stepSummary.fieldAssertBody', `${t(matchLabelKey(assertion as KnownAction) || 'cases:matchContains')}「${clip(str(assertion.expected), 60)}」`);
+      if (assertion.allowTransportFailure === true) push('cases:stepSummary.fieldAssertTransportFailure', t('cases:httpAssertAllowTransportFailure'));
     }
   }
   if (a.kind === 'sendSyslog') {

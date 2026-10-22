@@ -256,6 +256,11 @@ export const SqlAction = z.object({
 });
 export type SqlAction = z.infer<typeof SqlAction>;
 
+/** httpRequest 的 body 匹配方式。独立于 DbAssertionMatch（那是被 queryDb/sql/observeLog 共用的，
+ *  加枚举会波及三处的执行与 UI），此处多一个 notContains —— 安全类断言常要判「响应体不含注入串」。 */
+export const HttpBodyMatch = z.enum(['equals', 'contains', 'notContains', 'regex']);
+export type HttpBodyMatch = z.infer<typeof HttpBodyMatch>;
+
 export const HttpRequestAction = z.object({
   kind: z.literal('httpRequest'),
   method: HttpMethod.default('GET'),
@@ -281,9 +286,18 @@ export const HttpRequestAction = z.object({
   /** status 与 body 二者可选，都设置则都须通过。 */
   assertion: z.object({
     status: z.number().int().min(100).max(599).optional(),
-    match: DbAssertionMatch.default('contains'),
+    match: HttpBodyMatch.default('contains'),
     /** 作用于响应 body 文本的匹配期望值。 */
     expected: z.string().max(2000).optional(),
+    /**
+     * true 时把「传输层失败」（连接被拒 / 被重置 / 超时）判为断言命中。
+     *
+     * 2026-10-22：安全类用例的期望常是「服务在传输层拒绝伪造 Host」——SUT 直接 RST 断连，
+     * 没有任何 HTTP 响应可断言（prod228 用例 4608e4f4：curl (52) Empty reply from server）。
+     * 缺省（false）时传输失败直接抛错判步骤失败，绕过了 assertion —— 假失败。
+     * 开启后：传输失败 → 断言命中、步骤通过并记录失败原因；有响应时照常按 status/expected 判定。
+     */
+    allowTransportFailure: z.boolean().optional(),
   }).optional(),
 });
 export type HttpRequestAction = z.infer<typeof HttpRequestAction>;

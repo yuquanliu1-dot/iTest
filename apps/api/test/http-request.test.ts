@@ -241,4 +241,55 @@ describe('runHttpRequest 传输层（node:http）', () => {
       await new Promise<void>((r) => dribble.close(() => r()));
     }
   });
+
+  it('notContains 匹配：响应体不含期望串时命中', async () => {
+    const r = await runHttpRequest({
+      action: action({ url: `${base}/`, assertion: { match: 'notContains', expected: '<script>' } }),
+      page: stubPage,
+      vars: {},
+    });
+    expect(r.assertion?.matched).toBe(true);
+  });
+
+  it('notContains 匹配：响应体含期望串时不命中', async () => {
+    const r = await runHttpRequest({
+      action: action({ url: `${base}/`, assertion: { match: 'notContains', expected: 'ok' } }),
+      page: stubPage,
+      vars: {},
+    });
+    expect(r.assertion?.matched).toBe(false);
+  });
+
+  /**
+   * 传输层失败（无 HTTP 响应）+ allowTransportFailure:true → 断言命中、步骤通过。
+   *
+   * 场景：SUT 在传输层拒绝伪造 Host（直接 RST 断连，curl 报 "Empty reply from server"），
+   * 没有任何 HTTP 响应可断言 —— 缺省时传输失败直接抛错，绕过 assertion 判假失败。
+   */
+  it('allowTransportFailure：传输层失败时断言命中、不抛错、记录失败原因', async () => {
+    const rst = http.createServer((_req, res) => {
+      res.socket?.destroy();
+    });
+    await new Promise<void>((r) => rst.listen(0, '127.0.0.1', r));
+    const rstUrl = `http://127.0.0.1:${(rst.address() as AddressInfo).port}/`;
+    try {
+      const r = await runHttpRequest({
+        action: action({ url: rstUrl, assertion: { allowTransportFailure: true } }),
+        page: stubPage,
+        vars: {},
+      });
+      expect(r.assertion?.matched).toBe(true);
+      expect(r.response).toBeUndefined();
+      expect(r.transportFailure).toBeTruthy();
+    } finally {
+      rst.closeAllConnections?.();
+      await new Promise<void>((r) => rst.close(() => r()));
+    }
+  });
+
+  it('allowTransportFailure：未开启时传输层失败仍抛 HttpRequestError', async () => {
+    await expect(
+      runHttpRequest({ action: action({ url: 'http://127.0.0.1:1/' }), page: stubPage, vars: {} }),
+    ).rejects.toBeInstanceOf(HttpRequestError);
+  });
 });

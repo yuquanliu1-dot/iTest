@@ -130,6 +130,8 @@
   },
   "http": {
     "summary": "HTTP: {{method}} {{path}} → {{status}} ({{ms}}ms)",
+    "summaryTransportFailure": "HTTP: {{method}} {{path}} → transport failure (no response)",
+    "transportFailure": "Transport failure",
     "headers": "Request headers",
     "body": "Request body",
     "response": "Response {{status}} {{statusText}}",

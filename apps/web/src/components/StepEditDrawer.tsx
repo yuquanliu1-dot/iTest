@@ -241,13 +241,14 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
     const s = action.saveAs as { varName?: unknown; from?: unknown; path?: unknown } | undefined;
     return { varName: String(s?.varName ?? ''), from: s?.from === 'status' ? 'status' : 'body', path: String(s?.path ?? '') };
   });
-  const [httpAssertion, setHttpAssertion] = useState<{ status: string; match: 'equals' | 'contains' | 'regex'; expected: string } | undefined>(() => {
-    const a = action.assertion as { status?: unknown; match?: unknown; expected?: unknown } | undefined;
+  const [httpAssertion, setHttpAssertion] = useState<{ status: string; match: 'equals' | 'contains' | 'notContains' | 'regex'; expected: string; allowTransportFailure: boolean } | undefined>(() => {
+    const a = action.assertion as { status?: unknown; match?: unknown; expected?: unknown; allowTransportFailure?: unknown } | undefined;
     if (!a) return undefined;
     return {
       status: a.status !== undefined ? String(a.status) : '',
-      match: a.match === 'equals' || a.match === 'regex' ? a.match : 'contains',
+      match: a.match === 'equals' || a.match === 'regex' || a.match === 'notContains' ? a.match : 'contains',
       expected: String(a.expected ?? ''),
+      allowTransportFailure: a.allowTransportFailure === true,
     };
   });
 
@@ -414,12 +415,14 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       } else {
         delete next.saveAs;
       }
-      if (httpAssertion && (httpAssertion.status.trim() !== '' || httpAssertion.expected !== '')) {
+      // allowTransportFailure 单独成立也算一条断言（传输层失败即通过，无需 status/expected）。
+      if (httpAssertion && (httpAssertion.status.trim() !== '' || httpAssertion.expected !== '' || httpAssertion.allowTransportFailure)) {
         const statusNum = Number(httpAssertion.status);
         next.assertion = {
           ...(httpAssertion.status.trim() !== '' && Number.isInteger(statusNum) ? { status: statusNum } : {}),
           match: httpAssertion.match,
           ...(httpAssertion.expected !== '' ? { expected: httpAssertion.expected } : {}),
+          ...(httpAssertion.allowTransportFailure ? { allowTransportFailure: true } : {}),
         };
       } else {
         delete next.assertion;
@@ -1358,11 +1361,11 @@ function DbAssertionEditor({ value, onChange, columns }: { value: { match: 'equa
   );
 }
 
-function HttpAssertionEditor({ value, onChange }: { value: { status: string; match: 'equals' | 'contains' | 'regex'; expected: string } | undefined; onChange: (v: typeof value) => void }) {
+function HttpAssertionEditor({ value, onChange }: { value: { status: string; match: 'equals' | 'contains' | 'notContains' | 'regex'; expected: string; allowTransportFailure: boolean } | undefined; onChange: (v: typeof value) => void }) {
   const { t } = useTranslation();
   if (!value) {
     return (
-      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px dashed var(--border)', color: 'var(--muted-foreground)', cursor: 'pointer', padding: '4px 8px', borderRadius: 5 }} onClick={() => onChange({ status: '', match: 'contains', expected: '' })}>
+      <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px dashed var(--border)', color: 'var(--muted-foreground)', cursor: 'pointer', padding: '4px 8px', borderRadius: 5 }} onClick={() => onChange({ status: '', match: 'contains', expected: '', allowTransportFailure: false })}>
         {t('cases:addAssertion')}
       </button>
     );
@@ -1372,13 +1375,24 @@ function HttpAssertionEditor({ value, onChange }: { value: { status: string; mat
       <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:httpAssertMismatch')}</span>
       <div className="flex gap-1.5">
         <input className="input-base input-xs" style={{ width: 130 }} type="number" min={100} max={599} value={value.status ?? ''} placeholder={t('cases:statusCodePlaceholder')} onChange={(e) => onChange({ ...value, status: e.target.value })} />
-        <select className="input-base input-xs" style={{ width: 84 }} value={value.match} onChange={(e) => onChange({ ...value, match: e.target.value as 'equals' | 'contains' | 'regex' })}>
+        <select className="input-base input-xs" style={{ width: 84 }} value={value.match} onChange={(e) => onChange({ ...value, match: e.target.value as 'equals' | 'contains' | 'notContains' | 'regex' })}>
           <option value="equals">{t('cases:equalsOp')}</option>
           <option value="contains">{t('cases:matchContains')}</option>
+          <option value="notContains">{t('cases:matchNotContains')}</option>
           <option value="regex">{t('cases:regexLabel')}</option>
         </select>
         <input className="input-base input-xs flex-1" value={value.expected} placeholder={t('cases:bodyExpectPlaceholder')} onChange={(e) => onChange({ ...value, expected: e.target.value })} />
       </div>
+      <label className="flex items-start gap-1.5 text-[11px] cursor-pointer" style={{ color: 'var(--muted-foreground)' }}>
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          style={{ accentColor: 'var(--primary)' }}
+          checked={value.allowTransportFailure}
+          onChange={(e) => onChange({ ...value, allowTransportFailure: e.target.checked })}
+        />
+        <span>{t('cases:httpAssertAllowTransportFailure')}</span>
+      </label>
       <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px solid var(--destructive)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4, padding: '2px 8px' }} onClick={() => onChange(undefined)}>{t('cases:removeAssertion')}</button>
     </div>
   );

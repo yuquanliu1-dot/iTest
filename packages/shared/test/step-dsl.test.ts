@@ -446,3 +446,40 @@ describe('NavigateAction.url 相对/变量形态', () => {
     expect(NavigateAction.safeParse({ kind: 'navigate', url: '' }).success).toBe(false);
   });
 });
+describe('httpRequest 断言扩展', () => {
+  it('allowTransportFailure 可独立成立（无需 status/expected）', () => {
+    const r = StepAction.safeParse({
+      kind: 'httpRequest',
+      method: 'GET',
+      url: 'http://a.test/',
+      headers: [],
+      timeoutMs: 5000,
+      assertion: { allowTransportFailure: true },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('match 可取 notContains', () => {
+    const r = StepAction.safeParse({
+      kind: 'httpRequest',
+      method: 'GET',
+      url: 'http://a.test/',
+      headers: [],
+      timeoutMs: 5000,
+      assertion: { match: 'notContains', expected: '<script>' },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('match 非法值被拒', () => {
+    const r = StepAction.safeParse({
+      kind: 'httpRequest',
+      method: 'GET',
+      url: 'http://a.test/',
+      headers: [],
+      timeoutMs: 5000,
+      assertion: { match: 'startsWith', expected: 'x' },
+    });
+    expect(r.success).toBe(false);
+  });
+});

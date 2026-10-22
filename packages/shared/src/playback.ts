@@ -102,7 +102,8 @@ export interface SqlStepResult {
   assertion?: { matched: boolean; expected: string; match: 'equals' | 'contains' | 'regex' };
 }
 
-/** httpRequest 步骤执行结果：请求/响应（敏感头打码、body 截断 64KB）/断言命中/变量提取。 */
+/** httpRequest 步骤执行结果：请求/响应（敏感头打码、body 截断 64KB）/断言命中/变量提取。
+ *  response 在传输层失败（连接被拒/重置/超时）且断言允许传输失败时缺省——那时没有任何 HTTP 响应。 */
 export interface HttpStepResult {
   request: {
     method: string;
@@ -110,14 +111,16 @@ export interface HttpStepResult {
     headers: Record<string, string>;
     bodyPreview?: string;
   };
-  response: {
+  response?: {
     status: number;
     statusText: string;
     headers: Record<string, string>;
     bodyText: string;
     durationMs: number;
   };
-  assertion?: { matched: boolean; statusExpected?: number; match?: 'equals' | 'contains' | 'regex'; expected?: string };
+  /** 传输层失败原因（连接被拒/被重置/超时等）。仅在传输失败且断言允许时记录。 */
+  transportFailure?: string;
+  assertion?: { matched: boolean; statusExpected?: number; match?: 'equals' | 'contains' | 'notContains' | 'regex'; expected?: string };
   saved?: { varName: string; value: string };
 }
 

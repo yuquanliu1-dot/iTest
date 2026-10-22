@@ -803,7 +803,9 @@ function HttpResultCell({ http }: { http: HttpStepResult }) {  const { t } = use
         className="cursor-pointer"
         style={{ color: 'var(--muted-foreground)' }}
       >
-        {t('reports:http.summary', { method: http.request.method, path, status: http.response.status, ms: http.response.durationMs })}
+        {http.response
+          ? t('reports:http.summary', { method: http.request.method, path, status: http.response.status, ms: http.response.durationMs })
+          : t('reports:http.summaryTransportFailure', { method: http.request.method, path })}
         {http.assertion && (
           <span
             style={{
@@ -833,12 +835,19 @@ function HttpResultCell({ http }: { http: HttpStepResult }) {  const { t } = use
             <pre style={PRE_STYLE}>{http.request.bodyPreview}</pre>
           </div>
         )}
-        <div>
-          <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>
-            {t('reports:http.response', { status: http.response.status, statusText: http.response.statusText })}
+        {http.transportFailure ? (
+          <div>
+            <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:http.transportFailure')}</div>
+            <pre style={PRE_STYLE}>{http.transportFailure}</pre>
           </div>
-          <pre style={PRE_STYLE}>{http.response.bodyText || t('reports:http.emptyBody')}</pre>
-        </div>
+        ) : (
+          <div>
+            <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>
+              {t('reports:http.response', { status: http.response!.status, statusText: http.response!.statusText })}
+            </div>
+            <pre style={PRE_STYLE}>{http.response!.bodyText || t('reports:http.emptyBody')}</pre>
+          </div>
+        )}
         {http.saved && (
           <div>
             <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:http.extractVar')}</div>
