@@ -685,9 +685,7 @@ export default function CaseDetail() {
         <Button
           variant="ghost"
           onClick={() =>
-            navigate(
-              `/p/${projectId}/v/${versionId}/reports?caseId=${caseDetail.id}&q=${encodeURIComponent(caseDetail.title)}&tab=case`,
-            )
+            navigate(`/p/${projectId}/v/${versionId}/reports?caseId=${caseDetail.id}&tab=case`)
           }
           title={t('cases:viewAllReports')}
         >

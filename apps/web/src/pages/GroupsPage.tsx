@@ -471,7 +471,7 @@ export default function GroupsPage() {
 						<IconButton
 							icon="reportView"
 							title={t('groups:viewReport')}
-							onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/reports?caseId=${c.id}&q=${encodeURIComponent(c.title)}&tab=case` : `/`)}
+							onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/reports?caseId=${c.id}&tab=case` : `/`)}
 						/>
 						<IconButton
 							icon="copy"

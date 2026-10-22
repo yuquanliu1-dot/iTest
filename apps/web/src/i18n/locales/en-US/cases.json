@@ -152,7 +152,7 @@
   "uncompiledBlocking_other": "There are {{count}} uncompiled steps; click \"AI compile\" to fill them first",
   "deprecatedExecuteConfirm": "This case is deprecated; still execute?",
   "goToReportsTitle": "Go to the reports list",
-  "goToReportsDesc": "All execution reports for this case are aggregated on the reports page.",
+  "goToReportsDesc": "This case's reports are aggregated on the reports page; runs where it was a plan member are grouped under the corresponding plan run.",
   "openReportsPage": "Open reports page",
   "recordingHistory": "Recording history (placeholder; will list each recording session chronologically).",
   "tags": "Tags",

@@ -141,7 +141,7 @@
   "uncompiledBlocking_other": "存在 {{count}} 个未编译步骤，请先点击「AI 编译」补齐",
   "deprecatedExecuteConfirm": "用例已废弃，仍要执行？",
   "goToReportsTitle": "前往报告列表查看",
-  "goToReportsDesc": "该用例所有执行报告已汇总到报告页。",
+  "goToReportsDesc": "该用例的执行报告在报告页汇总；作为计划成员执行的会归到对应的计划运行下。",
   "openReportsPage": "打开报告页",
   "recordingHistory": "录制历史（占位，未来按时间序列展示每次录制会话）。",
   "tags": "标签",

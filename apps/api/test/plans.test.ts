@@ -261,6 +261,51 @@ describe('plan execution extras', () => {
     expect(ids2).toContain(manualRep.rows[0].id);
   });
 
+  it('caseId 深链在 plan tab 上继续过滤：只列出把该用例作为成员跑过的计划运行', async () => {
+    // 回归：用例详情页「查看报告」深链带 caseId 进入报告页（默认 tab=case）。用户切到「计划运行」
+    // tab 时 caseId 必须继续生效，否则 URL 里的过滤器静默失效、页面退化成全项目计划列表，
+    // 用户会误以为看到的就是该用例参与过的运行。
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const member = await makeCase(groupId, versionId, 'deep-linked-member');
+    const other = await makeCase(groupId, versionId, 'unrelated-case');
+    const planA = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'PA', versionId });
+    const planB = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'PB', versionId });
+    const runA = await pool.query(
+      `INSERT INTO plan_runs(plan_id, project_id, status, strategy) VALUES ($1, $2, 'passed', 'run_all') RETURNING id`,
+      [planA.body.id, projectId],
+    );
+    const runB = await pool.query(
+      `INSERT INTO plan_runs(plan_id, project_id, status, strategy) VALUES ($1, $2, 'passed', 'run_all') RETURNING id`,
+      [planB.body.id, projectId],
+    );
+    await pool.query(
+      `INSERT INTO plan_run_cases(plan_run_id, case_id, "order", status, step_kind) VALUES ($1, $2, 1, 'passed', 'business')`,
+      [runA.rows[0].id, member],
+    );
+    await pool.query(
+      `INSERT INTO plan_run_cases(plan_run_id, case_id, "order", status, step_kind) VALUES ($1, $2, 1, 'passed', 'business')`,
+      [runB.rows[0].id, other],
+    );
+
+    const filtered = await request(app).get(`/api/executions?projectId=${projectId}&kind=plan&caseId=${member}`);
+    expect(filtered.status).toBe(200);
+    const ids = filtered.body.map((e: { id: string }) => e.id);
+    expect(ids).toContain(runA.rows[0].id);
+    expect(ids).not.toContain(runB.rows[0].id);
+
+    // 不带 caseId 时两个计划运行都在——证明上面确实是过滤而非"只返回一条"
+    const unfiltered = await request(app).get(`/api/executions?projectId=${projectId}&kind=plan`);
+    const allIds = unfiltered.body.map((e: { id: string }) => e.id);
+    expect(allIds).toContain(runA.rows[0].id);
+    expect(allIds).toContain(runB.rows[0].id);
+
+    // 该用例从未作为成员跑过时，过滤结果为空而非回退到全量
+    const never = await makeCase(groupId, versionId, 'never-in-plan');
+    const none = await request(app).get(`/api/executions?projectId=${projectId}&kind=plan&caseId=${never}`);
+    expect(none.status).toBe(200);
+    expect(none.body).toHaveLength(0);
+  });
+
   it('fail_fast: first case fails → remaining cases skipped, plan_run.status=failed', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     const c1 = await makeCase(groupId, versionId, 'c1');

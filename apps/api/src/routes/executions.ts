@@ -152,6 +152,17 @@ executionsRoute.get('/', async (req, res) => {
     // plan 行的 versionId 来自 executionPlans.versionId
     if (versionArr.length) conds.push(inArray(executionPlans.versionId, versionArr));
     if (planIdFilter) conds.push(eq(planRuns.planId, planIdFilter));
+    // caseId 深链在 plan tab 上继续生效（否则 URL 里的 caseId 静默失效、切 tab 后退化成全项目计划列表）：
+    // 取「把该用例作为成员跑过」的计划运行。这样切到 plan tab 恰好能定位到 case 分支里被
+    // not exists 排除掉的那批报告——用例详情页深链最常见的落点就是它们。
+    if (caseIdFilter) {
+      conds.push(
+        inArray(
+          planRuns.id,
+          db.select({ planRunId: planRunCases.planRunId }).from(planRunCases).where(eq(planRunCases.caseId, caseIdFilter)),
+        ),
+      );
+    }
     const where = conds.length ? and(...conds) : undefined;
     const rows = where
       ? await db

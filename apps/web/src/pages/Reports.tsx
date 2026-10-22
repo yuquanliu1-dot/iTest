@@ -78,6 +78,15 @@ export default function Executions() {
 		enabled: !!projectId,
 	});
 
+	// caseId 深链的标题：chip 上要显示用例名（否则用户只看到一个裸 UUID，
+	// 无从确认"正在看的是哪个用例"）。取不到就退回短 id，不阻塞列表渲染。
+	const { data: deepLinkedCase } = useQuery({
+		queryKey: ['case', raw.caseId],
+		queryFn: () => api.cases.get(raw.caseId!),
+		enabled: !!raw.caseId,
+		retry: false,
+	});
+
 	// case / plan 行均参与勾选；提交时按行类型分流到不同接口
 	const allRows = useMemo(() => data ?? [], [data]);
 	// 服务端一次返回所有行；这里在客户端按 page/pageSize 切片（与 GroupsPage 一致）。
@@ -93,6 +102,48 @@ export default function Executions() {
 	const setStatusFilter = (next: string[]) => void setRaw({ statuses: next, page: '1' });
 	const setVersionsFilter = (next: string[]) => void setRaw({ versions: next, page: '1' });
 	const setSearch = (next: string) => void setRaw({ q: next, page: '1' });
+	// 清除用例深链时连带清掉 q —— 旧深链会把标题塞进 q，两者与 caseId 是 AND 关系，
+	// 留着 q 会让"取消筛选"看起来没生效（搜索词仍在悄悄收窄结果）。
+	const clearCaseFilter = () => void setRaw({ caseId: null, q: null, page: '1' });
+	const clearPlanFilter = () => void setRaw({ planId: null, page: '1' });
+
+	// 深链 chip：URL 里带了 caseId / planId 但页面上看不见的过滤器是最难查的一类问题——
+	// 用户改搜索词命中 0 条，却不知道有个看不见的条件在夹着。
+	const activeDeepLinkChip = raw.caseId ? (
+		<span
+			className="inline-flex max-w-[280px] items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
+			style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}
+		>
+			<span className="shrink-0 opacity-80">{t('reports:list.filterCase')}</span>
+			<span className="truncate" title={deepLinkedCase?.title ?? raw.caseId}>
+				{deepLinkedCase?.title ?? raw.caseId.slice(0, 8)}
+			</span>
+			<button
+				type="button"
+				aria-label={t('reports:list.clearCaseFilter')}
+				onClick={clearCaseFilter}
+				className="shrink-0 opacity-70 hover:opacity-100"
+			>
+				<Icon name="close" size={10} />
+			</button>
+		</span>
+	) : raw.planId ? (
+		<span
+			className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
+			style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}
+		>
+			<span className="opacity-80">{t('reports:list.filterPlan')}</span>
+			<span className="font-mono opacity-90">{raw.planId.slice(0, 8)}</span>
+			<button
+				type="button"
+				aria-label={t('reports:list.clearPlanFilter')}
+				onClick={clearPlanFilter}
+				className="shrink-0 opacity-70 hover:opacity-100"
+			>
+				<Icon name="close" size={10} />
+			</button>
+		</span>
+	) : null;
 
 	// 按行 kind 分桶后并行提交：case → /reports/batch-delete，plan → /plan-runs/batch-delete
 	const batchDeleteReports = useMutation({
@@ -317,6 +368,7 @@ export default function Executions() {
 						loading={isLoading}
 						facets={facets}
 						tabs={tabs}
+						leadingActions={activeDeepLinkChip}
 						onRowClick={goRunDetail}
 						selection={{
 							state: selection,
@@ -346,7 +398,25 @@ export default function Executions() {
 							</div>
 						)}
 						empty={
-							<EmptyState icon="flag" title={t('reports:list.emptyTitle')} description={t('reports:list.emptyDesc')} />
+							// 空态要说清"为什么空"。带 caseId 深链且停在单用例 tab 时，空列表最常见的
+							// 原因是：该用例只作为计划成员跑过（这批报告被 case 分支的 not exists 排除，
+							// 改从计划 tab 展示），而不是"这个用例从没执行过"。
+							// 只在 case tab 上引导——「所有」tab 本就含计划运行，为空说明真的什么都没有，
+							// 给一个跳去计划 tab 的按钮反而是死路。
+							raw.caseId && tab === 'case' ? (
+								<EmptyState
+									icon="flag"
+									title={t('reports:list.emptyFilteredTitle')}
+									description={t('reports:list.emptyFilteredDesc')}
+									action={
+										<Button size="sm" onClick={() => void setRaw({ tab: 'plan', page: '1' })}>
+											{t('reports:list.viewInPlanRuns')}
+										</Button>
+									}
+								/>
+							) : (
+								<EmptyState icon="flag" title={t('reports:list.emptyTitle')} description={t('reports:list.emptyDesc')} />
+							)
 						}
 					/>
 				)}
