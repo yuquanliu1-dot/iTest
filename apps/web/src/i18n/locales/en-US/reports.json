@@ -59,6 +59,10 @@
   },
   "meta": {
     "duration": "Duration",
+    "startTime": "Start",
+    "caseStartedAt": "Exec started",
+    "caseFinishedAt": "Exec finished",
+    "queuedAt": "Queued at",
     "locator": "Locator",
     "tabIndex": "Tab",
     "exec": "Exec",

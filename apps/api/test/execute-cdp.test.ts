@@ -80,6 +80,9 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(mocked.__page.goto).toHaveBeenCalledWith('https://example.com', expect.objectContaining({ timeout: 30000 }));
     expect(results).toHaveLength(1);
     expect(results[0]!.status).toBe('passed');
+    // 步骤级开始时刻：报告页据此显示「开始 HH:MM:SS」
+    expect(results[0]!.startedAt).toBeTruthy();
+    expect(Number.isNaN(new Date(results[0]!.startedAt!).getTime())).toBe(false);
   });
 
   it('click action picks first locator candidate and invokes click()', async () => {
@@ -116,6 +119,8 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(results).toHaveLength(1);
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.error).toMatch(/boom/);
+    // 失败步同样带开始时刻（报告页统一展示）
+    expect(results[0]!.startedAt).toBeTruthy();
   });
 
   it('check action performs check only when state differs', async () => {

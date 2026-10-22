@@ -11,7 +11,7 @@ import EmptyState from '../components/ui/EmptyState';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import Button from '../components/ui/Button';
 import { useUIStore } from '../stores/ui';
-import { fullDateTime, stepKindLabel } from '../lib/format';
+import { clockTime, fullDateTime, stepKindLabel } from '../lib/format';
 import { getKind, stepSummary, fullStepDescription } from '../lib/stepSummary';
 import { creatorName } from '../lib/creatorName';
 import type { DbQueryRowResult, ObserveLogLineResult, HttpStepResult, SyslogStepResult, SqlStepResult } from '@itest/shared';
@@ -30,6 +30,8 @@ interface StepResult {
   order: number;
   status: string;
   durationMs: number;
+  /** 本步开始时刻（ISO）；老报告缺失，此时不展示「开始」标签 */
+  startedAt?: string;
   /** 行级自然语言说明快照（执行时步骤的 instruction；历史报告/录制用例可能缺省） */
   instruction?: string;
   /** compiled DSL 快照；无 instruction 时报告页据此生成动作摘要（与用例页同一套 stepSummary） */
@@ -136,6 +138,17 @@ export default function ReportDetail() {
   const isRunning = data.status === 'running';
   const keepLiveForDataset = data.datasetRowIndex === 0 && (data.datasetSnapshot?.totalRows ?? 1) > 1;
 
+  // 用例级「执行开始」三态：
+  //   有 startedAt → 正常展示（真实执行阶段起点，与 durationMs 同基线）
+  //   running 但无 startedAt → 还在排队/准备（worker 未接手或已挂），用 createdAt 兜底，标签换成「请求于」
+  //   非 running 且无 startedAt → 老报告（该字段后加），整行不显示
+  const caseStartLabel = data.startedAt
+    ? t('reports:meta.caseStartedAt')
+    : isRunning ? t('reports:meta.queuedAt') : null;
+  const caseStartValue = data.startedAt
+    ? fullDateTime(data.startedAt)
+    : isRunning ? fullDateTime(data.createdAt) : null;
+
   const stepResults = (data.stepResults as StepResult[]) ?? [];
   const passed = stepResults.filter((s) => s.status === 'passed').length;
   const failed = stepResults.filter((s) => s.status === 'failed').length;
@@ -212,6 +225,9 @@ export default function ReportDetail() {
           {/* 元信息：耗时 / 定位策略 / 标签页 —— 标签在前、值在后，分项独立，可读 */}
           <div className="flex items-center gap-2 flex-wrap text-[11px]">
             <Meta label={t('reports:meta.duration')} value={`${s.durationMs} ms`} mono />
+            {s.startedAt && (
+              <Meta label={t('reports:meta.startTime')} value={clockTime(s.startedAt)} mono title={fullDateTime(s.startedAt)} />
+            )}
             {s.hitLocator && (
               <Meta
                 label={t('reports:meta.locator')}
@@ -540,6 +556,13 @@ export default function ReportDetail() {
               />
               <MetaRow label={t('reports:meta.caseId')} value={<span className="font-mono text-[11px]">{data.caseId.slice(0, 8)}</span>} />
               <MetaRow label={t('reports:meta.reportId')} value={<span className="font-mono text-[11px]">{data.id.slice(0, 8)}</span>} />
+              {/* 执行起止：真实执行阶段时刻（不含排队/环境解析）。老报告无此数据则整行不显示。 */}
+              {caseStartValue && caseStartLabel && (
+                <MetaRow label={caseStartLabel} value={<span className="font-mono text-[11px]">{caseStartValue}</span>} />
+              )}
+              {data.finishedAt && (
+                <MetaRow label={t('reports:meta.caseFinishedAt')} value={<span className="font-mono text-[11px]">{fullDateTime(data.finishedAt)}</span>} />
+              )}
               {data.createdBy && <MetaRow label={t('cases:createdBy')} value={<span>{creatorName(data.createdBy)}</span>} />}
               {data.platform && (
                 <MetaRow label={t('reports:meta.platform')} value={data.platform} />

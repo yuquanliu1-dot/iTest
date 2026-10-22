@@ -148,6 +148,7 @@ async function runCaseOnce(
       .update(reports)
       .set({
         status: 'failed',
+        finishedAt: new Date(),
         stepResults: [
           {
             order: 1,
@@ -188,7 +189,7 @@ async function runCaseOnceInner(
     const stepResults: ExecStepResult[] = [];
     await db
       .update(reports)
-      .set({ status: 'failed', durationMs: 0, stepResults: stepResults as object, summary: 'forced fail (test hook)' })
+      .set({ status: 'failed', durationMs: 0, finishedAt: new Date(), stepResults: stepResults as object, summary: 'forced fail (test hook)' })
       .where(eq(reports.id, reportId));
     return { reportId, status: 'failed' };
   }
@@ -234,6 +235,7 @@ async function runCaseOnceInner(
         .set({
           status: 'failed',
           durationMs: 0,
+          finishedAt: new Date(),
           stepResults: stepResults as object,
           summary: e instanceof Error ? e.message : String(e),
         })
@@ -258,7 +260,7 @@ async function runCaseOnceInner(
         error: e.message, failureReason: 'WebServiceMissing', humanMessage: e.message,
       }];
       await db.update(reports)
-        .set({ status: 'failed', durationMs: 0, stepResults: stepResults as object, summary: e.message })
+        .set({ status: 'failed', durationMs: 0, finishedAt: new Date(), stepResults: stepResults as object, summary: e.message })
         .where(eq(reports.id, reportId));
       if (envCtx) envCtx.close().catch(() => undefined);
       return { reportId, status: 'failed' };
@@ -277,6 +279,10 @@ async function runCaseOnceInner(
   const targetUrl = resolved && /^https?:\/\//.test(resolved) ? resolved : undefined;
 
   const startedAt = Date.now();
+  // 落 started_at：真正开始跑步骤的时刻（环境/URL 解析之后，与 duration_ms 同基线）。
+  // 立即落库而非等终态——running 期间报告页就能看到「执行开始」；worker 挂掉留僵尸行时
+  // 也有据可查（前端用 createdAt 兜底展示「请求于」）。
+  await db.update(reports).set({ startedAt: new Date(startedAt) }).where(eq(reports.id, reportId));
   let stepResults: ExecStepResult[];
   let preflightReport: PreflightReport | undefined;
   let status: 'passed' | 'failed';
@@ -482,6 +488,8 @@ async function runCaseOnceInner(
     .set({
       status,
       durationMs,
+      startedAt: new Date(startedAt),
+      finishedAt: new Date(),
       stepResults: stepResults as object,
       summary: buildSummary(stepResults, preflightReport),
       preflight: preflightReport ?? null,

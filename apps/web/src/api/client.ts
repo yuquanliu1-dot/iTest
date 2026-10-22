@@ -1097,6 +1097,9 @@ export interface TestCaseDetail extends TestCase {
   deviceTargetId?: string | null;
   /** 自愈通过标记：passed 且 aiTask 缓存分叉后 AI 自愈成功；failed 恒 false。 */
   healed?: boolean;
+  /** 真实执行阶段起止时刻（老报告为 null）。startedAt = 开始跑步骤的时刻，与 durationMs 同基线。 */
+  startedAt?: string | null;
+  finishedAt?: string | null;
   createdAt: string;
   /** 计划运行成员报告：附带来源（后端从 plan_run_cases 查得）。返回按钮据此切到「返回计划运行」 */
   planRunId?: string | null;

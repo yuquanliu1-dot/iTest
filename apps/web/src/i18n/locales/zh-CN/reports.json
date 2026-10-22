@@ -53,6 +53,10 @@
   },
   "meta": {
     "duration": "耗时",
+    "startTime": "开始",
+    "caseStartedAt": "执行开始",
+    "caseFinishedAt": "执行结束",
+    "queuedAt": "请求于",
     "locator": "定位",
     "tabIndex": "标签页",
     "exec": "执行",

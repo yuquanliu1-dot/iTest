@@ -140,6 +140,13 @@ describe('runCase dataset iteration', () => {
     // 解密值绝不落库：report 行里搜不到明文
     const raw = await pool.query(`SELECT dataset_snapshot::text AS s FROM reports WHERE id = $1`, [r.body.reportIds[1]]);
     expect(raw.rows[0].s).not.toContain('pw-2');
+
+    // 用例级执行起止时刻：每行各落自己的（数据集模式下两行独立）
+    expect(rep.body.startedAt).toBeTruthy();
+    expect(rep.body.finishedAt).toBeTruthy();
+    const rep0 = await request(app).get(`/api/reports/${r.body.reportIds[0]}`);
+    expect(rep0.body.startedAt).toBeTruthy();
+    expect(rep0.body.finishedAt).toBeTruthy();
   });
 
   it('单行失败不中断：第 1 行抛错记 failed，第 2 行继续；两条 report 齐全', async () => {

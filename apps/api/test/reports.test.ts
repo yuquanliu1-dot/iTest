@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { SCHEMA_SQL, seedOrg } from './helpers/db.js';
+import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -47,5 +47,31 @@ describe('reports', () => {
   it('GET /:id 404 for missing', async () => {
     const r = await request(app).get('/api/reports/00000000-0000-0000-0000-000000000000');
     expect(r.status).toBe(404);
+  });
+
+  it('GET /:id 出参含执行起止时刻；老报告（无该两列）为 null', async () => {
+    const { groupId } = await seedProject(pool);
+    const c = await pool.query(`INSERT INTO test_cases(group_id, title) VALUES ($1,'t') RETURNING id`, [groupId]);
+    const caseId = c.rows[0]!.id as string;
+    const withTiming = await pool.query(
+      `INSERT INTO reports(case_id, status, step_results, started_at, finished_at)
+       VALUES ($1,'passed','[]'::jsonb, now(), now()) RETURNING id`,
+      [caseId],
+    );
+    const old = await pool.query(
+      `INSERT INTO reports(case_id, status, step_results) VALUES ($1,'passed','[]'::jsonb) RETURNING id`,
+      [caseId],
+    );
+
+    const r = await request(app).get(`/api/reports/${withTiming.rows[0]!.id}`);
+    expect(r.status).toBe(200);
+    expect(r.body.startedAt).toBeTruthy();
+    expect(r.body.finishedAt).toBeTruthy();
+
+    // 老报告：字段存在但为 null（前端据此隐藏对应行，不报错）
+    const r2 = await request(app).get(`/api/reports/${old.rows[0]!.id}`);
+    expect(r2.status).toBe(200);
+    expect(r2.body.startedAt).toBeNull();
+    expect(r2.body.finishedAt).toBeNull();
   });
 });

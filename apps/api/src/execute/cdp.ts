@@ -60,6 +60,8 @@ export interface ExecStepResult {
   order: number;
   status: 'passed' | 'failed';
   durationMs: number;
+  /** 本步开始时刻（ISO 字符串）；老报告缺失，报告页据此隐藏「开始」标签。 */
+  startedAt?: string;
   error?: string;
   screenshot?: string;
   warning?: string;
@@ -1091,6 +1093,7 @@ async function runStepsInContext(
         order: step.order,
         status: 'passed',
         durationMs: Date.now() - started,
+        startedAt: new Date(started).toISOString(),
         instruction: step.instruction ?? undefined,
         compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
         warning,
@@ -1170,6 +1173,7 @@ async function runStepsInContext(
                 order: step.order,
                 status: 'passed',
                 durationMs: Date.now() - started,
+                startedAt: new Date(started).toISOString(),
                 instruction: step.instruction ?? undefined,
                 compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
                 // 原机械失败原因（如 count=0 (css #gone)）一并带进 warning，报告页可看到“识别到什么程度失败”。
@@ -1196,6 +1200,7 @@ async function runStepsInContext(
         order: step.order,
         status: 'failed',
         durationMs,
+        startedAt: new Date(started).toISOString(),
         instruction: step.instruction ?? undefined,
         compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
         error: rawMsg,

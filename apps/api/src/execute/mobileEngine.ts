@@ -68,6 +68,7 @@ export class MobileEngine implements Engine {
       if (!Array.isArray(compiled) || compiled.length === 0) {
         const missing: ExecStepResult = {
           order: step.order, status: 'failed', durationMs: 0,
+          startedAt: new Date(started).toISOString(),
           instruction: step.instruction ?? undefined,
           compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
           error: `compile-missing: 第 ${step.order} 步未编译`,
@@ -85,6 +86,7 @@ export class MobileEngine implements Engine {
         const screenshot = await this.captureStepScreenshot(input.reportId, step.order);
         const passedResult: ExecStepResult = {
           order: step.order, status: 'passed', durationMs: Date.now() - started, screenshot,
+          startedAt: new Date(started).toISOString(),
           instruction: step.instruction ?? undefined,
           compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
         };
@@ -98,6 +100,7 @@ export class MobileEngine implements Engine {
           e instanceof Error && e.name === 'MobileUnsupportedCapability' ? 'MobileUnsupportedCapability' : 'MobileStepFailed';
         const failedResult: ExecStepResult = {
           order: step.order, status: 'failed', durationMs: Date.now() - started,
+          startedAt: new Date(started).toISOString(),
           instruction: step.instruction ?? undefined,
           compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
           error: msg, screenshot, failureReason: reason,

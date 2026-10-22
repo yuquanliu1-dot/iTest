@@ -298,6 +298,11 @@ export const reports = pgTable('reports', {
   healed: boolean('healed').notNull().default(false),
   /** 创建人 = 触发执行的人（单用例=请求用户；计划运行沿用 plan_runs.triggered_by_user_id） */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  // 真实执行阶段起止时刻：started_at = 开始跑步骤的时刻（环境/URL 解析之后，与 duration_ms 同基线）；
+  // finished_at = 终态落库时刻。老报告两列均为 null（可空，不回填）。
+  // 注意与 created_at 区分：created_at 是报告行插入时刻，含排队 + 环境解析 + 数据集解密耗时。
+  startedAt: timestamp('started_at'),
+  finishedAt: timestamp('finished_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({
   caseCreatedIdx: index('idx_reports_case_created').on(t.caseId, t.createdAt),

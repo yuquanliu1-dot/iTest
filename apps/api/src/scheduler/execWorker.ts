@@ -30,6 +30,7 @@ export async function runCaseJob(data: { caseId: string; preseed?: PreseedReport
         .update(reports)
         .set({
           status: 'failed',
+          finishedAt: new Date(),
           stepResults: [{ order: 1, status: 'failed', durationMs: 0, error: msg, failureReason: 'InternalError' }] as object,
           summary: msg,
         })

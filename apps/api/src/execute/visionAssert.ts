@@ -89,6 +89,7 @@ export async function runCaseVisionAssert(input: VisionAssertInput): Promise<Vis
           order: -1,
           status: 'failed',
           durationMs: 0,
+          startedAt: new Date().toISOString(),
           error: `case-level vision assert failed: ${maskForReport(verdict.reason)}`,
           screenshot: visionScreenshotPath,
           failureReason: 'VisionAssertionFailed',

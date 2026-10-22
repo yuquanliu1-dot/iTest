@@ -9,6 +9,15 @@ export function fullDateTime(iso: string): string {
   return new Date(iso).toLocaleString('zh-CN');
 }
 
+/** 时刻（HH:MM:SS）——步骤「开始时间」用；完整日期时间放 title。
+ *  与 fullDateTime 同为本机时区口径，不做 UTC 偏移换算。非法日期回退 '—'。 */
+export function clockTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 /** 毫秒 → 人类可读时长（1.2s / 1m 23s / 1h 05m）。null/undefined → '—'。 */
 export function formatDuration(ms: number | null | undefined): string {
   if (ms == null) return '—';
