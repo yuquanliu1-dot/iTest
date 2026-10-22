@@ -372,20 +372,37 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
   if (!src) throw new HttpError(404, 'not_found', 'case not found');
   const siblings = await db.select({ title: testCases.title }).from(testCases).where(eq(testCases.groupId, targetGroupId));
   const title = nextCopyTitle(src.title, siblings.map((s) => s.title));
+  // 目标分组所属项目：项目内绑定的对象（数据集/设备/环境）只有落在目标项目里才随拷贝携带。
+  const targetGroupRow = (await db
+    .select({ projectId: groups.projectId })
+    .from(groups)
+    .where(eq(groups.id, targetGroupId))
+    .limit(1))[0];
+  const targetProjectId = targetGroupRow?.projectId ?? null;
+  /** 源对象是否属于目标项目；跨项目复制时这些绑定一律置空，避免副本指向别的项目的资源。 */
+  const ownedByTarget = async (ownerProjectId: string | null | undefined): Promise<boolean> =>
+    !!targetProjectId && !!ownerProjectId && ownerProjectId === targetProjectId;
   // 数据集绑定随拷贝：仅当源数据集与目标分组同项目时携带（跨项目不外带，置空回退单次执行）。
   let datasetId: string | null = null;
   if (src.datasetId) {
-    const targetGroup = (await db
-      .select({ projectId: groups.projectId })
-      .from(groups)
-      .where(eq(groups.id, targetGroupId))
-      .limit(1))[0];
     const srcDs = (await db
       .select({ projectId: datasets.projectId })
       .from(datasets)
       .where(eq(datasets.id, src.datasetId))
       .limit(1))[0];
-    if (targetGroup && srcDs && srcDs.projectId === targetGroup.projectId) datasetId = src.datasetId;
+    if (await ownedByTarget(srcDs?.projectId)) datasetId = src.datasetId;
+  }
+  // 默认环境同理：环境属项目内资源，跨项目引用会被执行期「环境与项目不匹配」拦下。
+  let defaultEnvId: string | null = null;
+  if (src.defaultEnvId) {
+    const envPid = await resolveEnvironmentProjectId(src.defaultEnvId);
+    if (await ownedByTarget(envPid)) defaultEnvId = src.defaultEnvId;
+  }
+  // 设备目标同理（移动端）。
+  let mobileDeviceTargetId: string | null = null;
+  if (src.mobileDeviceTargetId) {
+    const dtPid = await resolveDeviceTargetProjectId(src.mobileDeviceTargetId);
+    if (await ownedByTarget(dtPid)) mobileDeviceTargetId = src.mobileDeviceTargetId;
   }
   const inserted = await db
     .insert(testCases)
@@ -397,6 +414,24 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
       versionId: targetVersionId ?? src.versionId,
       url: src.url,
       datasetId,
+      // 用例级语义随拷贝携带：预期结果与覆盖类型是本条用例自身的描述。
+      expectedOutcome: src.expectedOutcome,
+      coverageTypes: src.coverageTypes,
+      // 窗口/隐私模式：执行参数，跨项目同样适用。
+      windowStrategy: src.windowStrategy,
+      windowWidth: src.windowWidth,
+      windowHeight: src.windowHeight,
+      incognito: src.incognito,
+      // 移动端配置：device target 属项目内资源,只有落在目标项目才携带(否则置空);
+      // appRef/bundleId 是应用自身标识,跨项目仍可用。
+      platform: src.platform,
+      mobileOs: src.mobileOs,
+      mobileDeviceTargetId,
+      appRef: src.appRef,
+      // 环境侧绑定（default env / 命名 web 服务）指向项目内的环境对象：
+      // 跨项目复制时置空——否则副本会指向别的项目的环境，执行时报「环境与项目不匹配」。
+      defaultEnvId,
+      webServiceRef: defaultEnvId ? src.webServiceRef : null,
       ...(createdByUserId ? { createdByUserId } : {}),
     })
     .returning();
@@ -411,6 +446,15 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
         instruction: s.instruction,
         compiled: s.compiled,
         assertion: s.assertion,
+        // 敏感步骤的密文三元组一并克隆：否则副本的敏感字段变成「敏感但没值」,录制器取不到密文。
+        sensitive: s.sensitive,
+        secretCiphertext: s.secretCiphertext,
+        secretIv: s.secretIv,
+        secretTag: s.secretTag,
+        mobileOs: s.mobileOs,
+        tabRef: s.tabRef,
+        delayMs: s.delayMs,
+        componentKind: s.componentKind,
       })),
     );
   }

@@ -99,6 +99,34 @@ describe('case copy', () => {
     expect(crossProject.body.datasetId).toBeNull();
   });
 
+  it('copy carries case-level semantics (expectedOutcome / window / mobile) and drops cross-project env bindings', async () => {
+    const a = await seedProject(pool);
+    const b = await seedProject(pool);
+    const src = await makeCaseWithSteps(a.groupId, a.versionId, '语义副本');
+    const patch = await request(app).patch(`/api/cases/${src.id}`).send({
+      expectedOutcome: '登录后看到欢迎语',
+      windowStrategy: 'custom',
+      windowWidth: 1280,
+      windowHeight: 720,
+      incognito: true,
+    });
+    expect(patch.status).toBe(200);
+
+    // 同项目复制：语义字段随拷贝携带
+    const same = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: a.groupId });
+    expect(same.status).toBe(200);
+    expect(same.body.expectedOutcome).toBe('登录后看到欢迎语');
+    expect(same.body.windowStrategy).toBe('custom');
+    expect(same.body.windowWidth).toBe(1280);
+    expect(same.body.windowHeight).toBe(720);
+    expect(same.body.incognito).toBe(true);
+
+    // 跨项目复制：环境类绑定不外带（否则副本指向别的项目的环境，执行期报「环境与项目不匹配」）
+    const cross = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: b.groupId });
+    expect(cross.status).toBe(200);
+    expect(cross.body.defaultEnvId).toBeNull();
+  });
+
   it('batch copy to another group', async () => {
     const a = await seedProject(pool);
     const b = await seedProject(pool);
