@@ -19,6 +19,7 @@
   "recorderExt": {
     "installedVer": "Recorder extension v{{version}}",
     "updatableVer": "Extension can be upgraded to v{{version}}",
+    "aheadVer": "Recorder extension v{{version}} (newer)",
     "labelStale": "Recorder extension (connection lost)",
     "labelMissing": "Recorder extension (not installed)",
     "statusTitle": "Recorder extension status",
@@ -44,6 +45,9 @@
     "statusReady": "Ready",
     "statusUpdate": "Upgrade available",
     "statusVersions": "Installed v{{installed}} → v{{latest}}",
+    "statusAhead": "Extension is newer",
+    "statusAheadVersions": "Installed v{{installed}} → server v{{latest}}",
+    "aheadTip": "The installed extension is newer than the version deployed on the server. Downloading would overwrite it with the older one, so no download entry is offered here.",
     "statusStale": "Connection lost",
     "statusMissing": "No extension detected",
     "currentOk1a": "You have the latest version installed; no upgrade needed. If the extension misbehaves, click \"Refresh\" at ",

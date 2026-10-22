@@ -62,6 +62,7 @@ import Upload from '@carbon/icons-react/es/Upload';
 import User from '@carbon/icons-react/es/User';
 import Close from '@carbon/icons-react/es/Close';
 import Globe from '@carbon/icons-react/es/Globe';
+import Information from '@carbon/icons-react/es/Information';
 
 import type { CarbonIconType } from '@carbon/icons-react/es/CarbonIcon';
 
@@ -134,6 +135,7 @@ const iconMap: Record<string, CarbonIconType> = {
   trash: TrashCan,
   upload: Upload,
   user: User,
+  information: Information,
   warning: WarningAltFilled,
   x: Close,
   close: Close,

@@ -7,35 +7,25 @@ import { useUIStore } from '../../stores/ui';
 import { Button } from '../ui/shadcn/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 import Icon from '../Icon';
-
-type RecorderState = 'unknown' | 'ready' | 'update' | 'stale' | 'missing';
+import { deriveExtState, offersDownload, type RecorderExtState } from './recorderExtVersion';
 
 const PING_TIMEOUT_MS = 800;
 const PING_SOURCE = 'ita-web';
 const PONG_SOURCE = 'ita-ext';
 
-/** 简单 semver 比较：0.0.1 < 0.0.2。manifest version 恒为 x.y.z，够用。 */
-function versionLt(a: string, b: string): boolean {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (d !== 0) return d < 0;
-  }
-  return false;
-}
-
 /** 顶栏常驻徽标 + 弹层：探测 Chrome 录制扩展、下载 zip、安装说明。
  *  探测机制：ping/pong。扩展的 content/bridge.js 在收到 ping 时回 {source:'ita-ext',type:'pong',id,version}。
  *  详见 apps/recorder/content/bridge.js。
- *  升级感知：pong 回报的已装版本与 /api/recorder/extension/version 的当前版本对比，
- *  已装较旧时进入 'update' 琥珀态并开放下载按钮——老用户无需留意版本号也能感知有新扩展可装。 */
+ *  升级感知：pong 回报的已装版本与 /api/recorder/extension/version 的当前版本做**三方**比较
+ *  （见 recorderExtVersion.ts）：已装较旧→'update' 琥珀态 + 下载按钮；已装更新→'ahead' 蓝态且
+ *  **不给下载入口**（下载会把新版本覆盖成旧版本，是降级）；相等→'ready'。
+ *  老用户无需留意版本号也能感知有新扩展可装。 */
 export default function RecorderExtensionBadge() {
   const { t } = useTranslation();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const toast = useUIStore((s) => s.showToast);
 
-  const [state, setState] = useState<RecorderState>('unknown');
+  const [state, setState] = useState<'unknown' | 'ready' | 'stale' | 'missing'>('unknown');
   const [version, setVersion] = useState<string | null>(null);
   const [current, setCurrent] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -106,13 +96,12 @@ export default function RecorderExtensionBadge() {
     return () => window.removeEventListener('message', onMessage);
   }, []);
 
-  // 派生状态：pong 有版本 + 拉到了当前版本 → 比较出 ready 还是 update。
-  // state 只存探测阶段的结果（unknown/missing/stale），ready 与 update 由版本比较推算。
-  const effectiveState: RecorderState = useMemo(() => {
-    if (state === 'missing' || state === 'stale' || state === 'unknown') return state;
-    if (version && current) return versionLt(version, current) ? 'update' : 'ready';
-    return 'ready'; // current 未拉到时不误报升级
-  }, [state, version, current]);
+  // 派生状态：pong 有版本 + 拉到了当前版本 → 比较出 ready / update / ahead。
+  // state 只存探测阶段的结果（unknown/missing/stale），版本相关的三态由比较推算。
+  const effectiveState: RecorderExtState = useMemo(
+    () => deriveExtState(state, version, current),
+    [state, version, current],
+  );
 
   const handleDownload = useCallback(async () => {
     setDownloading(true);
@@ -142,17 +131,21 @@ export default function RecorderExtensionBadge() {
       ? 'var(--success)'
       : effectiveState === 'update'
         ? 'var(--warning)'
-        : effectiveState === 'stale'
-          ? 'var(--warning)'
-          : 'var(--destructive)';
+        : effectiveState === 'ahead'
+          ? 'var(--info)'
+          : effectiveState === 'stale'
+            ? 'var(--warning)'
+            : 'var(--destructive)';
   const label =
     effectiveState === 'ready'
       ? t('mobile:recorderExt.installedVer', { version: version ?? '' })
       : effectiveState === 'update'
         ? t('mobile:recorderExt.updatableVer', { version: current ?? '' })
-        : effectiveState === 'stale'
-          ? t('mobile:recorderExt.labelStale')
-          : t('mobile:recorderExt.labelMissing');
+        : effectiveState === 'ahead'
+          ? t('mobile:recorderExt.aheadVer', { version: version ?? '' })
+          : effectiveState === 'stale'
+            ? t('mobile:recorderExt.labelStale')
+            : t('mobile:recorderExt.labelMissing');
 
   return (
     <>
@@ -192,6 +185,10 @@ export default function RecorderExtensionBadge() {
                   <li>{t('mobile:recorderExt.goGreenVer', { version: current ?? '' })}</li>
                 </ol>
               </>
+            ) : effectiveState === 'ahead' ? (
+              <p className="text-[11px]" style={{ background: 'var(--info-soft)', color: 'var(--info)' }}>
+                {t('mobile:recorderExt.aheadTip')}
+              </p>
             ) : (
               <>
                 <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
@@ -222,7 +219,7 @@ export default function RecorderExtensionBadge() {
                 <Icon name="refresh" size={12} />
                 {t('mobile:recorderExt.recheck')}
               </Button>
-              {effectiveState !== 'ready' && (
+              {offersDownload(effectiveState) && (
                 <Button size="sm" onClick={handleDownload} disabled={downloading}>
                   <Icon name="download" size={12} />
                   {downloading ? t('mobile:recorderExt.packing') : t('mobile:recorderExt.downloadZip')}
@@ -242,7 +239,7 @@ function StatusRow({
   current,
   onRecheck,
 }: {
-  state: RecorderState;
+  state: RecorderExtState;
   version: string | null;
   current: string | null;
   onRecheck: () => void;
@@ -269,6 +266,25 @@ function StatusRow({
         <Icon name="download" size={14} />
         <span className="font-medium">{t('mobile:recorderExt.statusUpdate')}</span>
         <span className="text-[11px]">{t('mobile:recorderExt.statusVersions', { installed: version ?? '?', latest: current ?? '?' })}</span>
+        <button
+          type="button"
+          className="ml-auto text-[11px] underline"
+          onClick={onRecheck}
+        >
+          {t('mobile:recorderExt.recheck')}
+        </button>
+      </div>
+    );
+  }
+  if (state === 'ahead') {
+    return (
+      <div
+        className="flex items-center gap-2 rounded-md px-2 py-1.5"
+        style={{ background: 'var(--info-soft)', color: 'var(--info)' }}
+      >
+        <Icon name="information" size={14} />
+        <span className="font-medium">{t('mobile:recorderExt.statusAhead')}</span>
+        <span className="text-[11px]">{t('mobile:recorderExt.statusAheadVersions', { installed: version ?? '?', latest: current ?? '?' })}</span>
         <button
           type="button"
           className="ml-auto text-[11px] underline"

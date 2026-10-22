@@ -15,6 +15,7 @@
   "recorderExt": {
     "installedVer": "录制扩展 v{{version}}",
     "updatableVer": "扩展可升级 v{{version}}",
+    "aheadVer": "录制扩展 v{{version}}（更新）",
     "labelStale": "录制扩展（连接失效）",
     "labelMissing": "录制扩展（未安装）",
     "statusTitle": "录制扩展状态",
@@ -40,6 +41,9 @@
     "statusReady": "已就绪",
     "statusUpdate": "有新版本",
     "statusVersions": "已装 v{{installed}} → v{{latest}}",
+    "statusAhead": "扩展版本较新",
+    "statusAheadVersions": "已装 v{{installed}} → 服务器 v{{latest}}",
+    "aheadTip": "已安装的扩展比服务器上的部署版本更新。下载会覆盖成旧版本，因此此处不提供下载入口。",
     "statusStale": "连接已失效",
     "statusMissing": "未检测到扩展",
     "currentOk1a": "已安装的是当前最新版本，无需升级。若扩展行为异常，可在 ",
