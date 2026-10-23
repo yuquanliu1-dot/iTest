@@ -271,6 +271,18 @@ describe('mapAiActionsToCompiled 纯函数', () => {
     });
   });
 
+  it('纯等待 / 纯截图序列 → 无可映射动作（盲等 waitFor 不再独苗「固化」，prod228 缺口 3）', async () => {
+    const { mapAiActionsToCompiled } = await import('../src/pi/space/tools/solidifyCase.js');
+    const onlyWait = mapAiActionsToCompiled([{ type: 'wait', ms: 1000 }, { type: 'wait', ms: 500 }]);
+    expect(onlyWait.ok).toBe(false);
+    if (!onlyWait.ok) expect(onlyWait.reason).toContain('无可映射动作');
+    const waitAndShot = mapAiActionsToCompiled([{ type: 'wait', ms: 1000 }, { type: 'screenshot', selector: 'body' }]);
+    expect(waitAndShot.ok).toBe(false);
+    // 对照：wait 夹在真实交互之间仍照常映射（click+wait 混合是既有修复 #1，不得回归）
+    const mixed = mapAiActionsToCompiled([{ type: 'click', selector: '#a' }, { type: 'wait', ms: 1500 }]);
+    expect(mixed.ok).toBe(true);
+  });
+
   it('Playwright 专有语法（>> / :has-text）→ 不可映射阻断', async () => {
     const { mapAiActionsToCompiled } = await import('../src/pi/space/tools/solidifyCase.js');
     const chord = mapAiActionsToCompiled([{ type: 'click', selector: '.row >> text=删除' }]);
@@ -470,7 +482,7 @@ describe('solidify_case 编排', () => {
     expect(end).toMatchObject({ result: 'failed', reason: '保存按钮不可点击' });
   });
 
-  it('失败动作（onAction ok=false）不收集 → 该步 kept-aiTask（无可映射动作）', async () => {
+  it('失败动作（onAction ok=false）不收集：有成功动作照常固化；全失败 → aiTask 化不再留 null', async () => {
     const caseId = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
     stepQueue = [{ actions: [[{ type: 'click', selector: '#wrong' }, false], [{ type: 'click', selector: '#del' }, true]] }];
     const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
@@ -481,21 +493,22 @@ describe('solidify_case 编排', () => {
       expect(data.result).toBe('solidified'); // 成功的那个 click 仍被收集
       expect(data.steps[0]).toMatchObject({ order: 1, status: 'solidified' });
     }
-    // 再验：全部动作失败 → kept-aiTask + nothing-solidified
+    // 再验：全部动作失败 → 有 instruction → 固化为 AI 执行步（aiTask），机械验收/回放不再 compile-missing
     const caseId2 = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
     stepQueue = [{ actions: [[{ type: 'click', selector: '#wrong' }, false]] }];
     const r2 = await buildSolidifyCaseTool(toolCtx()).execute({ caseId: caseId2 });
     expect(r2.ok).toBe(true);
     if (r2.ok) {
       const data2 = JSON.parse(r2.data!);
-      expect(data2.result).toBe('nothing-solidified');
-      expect(data2.steps[0]).toMatchObject({ status: 'kept-aiTask' });
+      expect(data2.result).toBe('solidified'); // aiTask 化计入固化
+      expect(data2.steps[0]).toMatchObject({ status: 'aiTask-fallback' });
       expect(String(data2.steps[0].reason)).toContain('无可映射动作');
+      expect(data2.steps[0].compiled).toEqual([{ kind: 'aiTask', instruction: '点击删除按钮' }]);
     }
-    expect(await stageOps()).toHaveLength(1); // 仅第一轮的 1 条
+    expect(await stageOps()).toHaveLength(2); // 两轮各 1 条（机械映射 + aiTask 化）
   });
 
-  it('含 press 动作的步骤 → kept-aiTask 附原因，其余步骤正常固化', async () => {
+  it('含 press 动作的步骤 → aiTask 化附原因，其余步骤正常固化', async () => {
     const caseId = await seedCase({ steps: [{ instruction: '键盘操作' }, { instruction: '点击删除按钮' }] });
     stepQueue = [
       { actions: [[{ type: 'fill', selector: '#q', value: 'x' }, true], [{ type: 'press', key: 'Enter' }, true]] },
@@ -507,12 +520,48 @@ describe('solidify_case 编排', () => {
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('solidified');
-      expect(data.steps[0]).toMatchObject({ status: 'kept-aiTask' });
+      expect(data.steps[0]).toMatchObject({ status: 'aiTask-fallback' });
       expect(String(data.steps[0].reason)).toContain('press');
+      expect(data.steps[0].compiled).toEqual([{ kind: 'aiTask', instruction: '键盘操作' }]);
       expect(data.steps[1]).toMatchObject({ status: 'solidified' });
     }
     const ops = await stageOps();
-    expect(ops).toHaveLength(1); // 仅第 2 步产生暂存
+    expect(ops).toHaveLength(2); // 第 1 步 aiTask 化 + 第 2 步机械映射
+  });
+
+  it('凭据填充被拒步 → aiTask 化且 instruction 带自助登录提示（prod228 缺口 1）；重复固化幂等覆盖', async () => {
+    const caseId = await seedCase({ steps: [{ instruction: '输入账号密码并登录' }] });
+    stepQueue = [{ actions: [
+      [{ type: 'fill', selector: '#user', value: '__ITEST_USERNAME__' }, true],
+      [{ type: 'fill', selector: '#pwd', value: '__ITEST_PASSWORD__' }, true],
+      [{ type: 'click', selector: '#loginBtn' }, true],
+    ] }];
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const r = await buildSolidifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const stepId = (await pool.query(`SELECT id FROM test_steps WHERE case_id = $1`, [caseId])).rows[0]!.id as string;
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.steps[0]).toMatchObject({ status: 'aiTask-fallback' });
+      const staged = data.steps[0].compiled as Array<{ kind: string; instruction: string }>;
+      expect(staged[0]!.kind).toBe('aiTask');
+      expect(staged[0]!.instruction.startsWith('输入账号密码并登录')).toBe(true); // 原 instruction 保留在前
+      expect(staged[0]!.instruction).toContain('__ITEST_USERNAME__');
+      expect(staged[0]!.instruction).toContain('__ITEST_PASSWORD__');
+      expect(staged[0]!.instruction).toContain('登录后状态');
+    }
+    expect(await stageOps()).toHaveLength(1);
+    // 重复固化（确定性 localId solidify-<stepId>）：upsert 覆盖，不产生第二条暂存
+    stepQueue = [{ actions: [[{ type: 'click', selector: '#loginBtn' }, true]] }];
+    const r2 = await buildSolidifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r2.ok).toBe(true);
+    const ops2 = await stageOps();
+    expect(ops2).toHaveLength(1);
+    expect(ops2[0]!.local_id).toBe(`solidify-${stepId}`);
+    expect(ops2[0]!.payload).toEqual({
+      action: 'update_step', caseId, stepId,
+      compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#loginBtn' }] }],
+    });
   });
 
   it('纯草稿用例（stage_case localId）：固化后整例重暂存（compiled 填充），不落 DB', async () => {
@@ -789,7 +838,7 @@ describe('solidify_case 轨迹缓存零执行路径', () => {
     expect(runAiTask).toHaveBeenCalledTimes(4); // 真跑逐步执行
   });
 
-  it('空动作条目（步骤通过但无可映射动作）→ kept-aiTask，与真跑路径同结果', async () => {
+  it('空动作条目（步骤通过但无可映射动作）→ aiTask 化暂存，与真跑路径同结果', async () => {
     const caseId = await seedCase({ steps: [{ instruction: '人工核对页面' }, { instruction: '点击删除按钮' }] });
     const ids = (await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]))
       .rows.map((r) => r.id as string);
@@ -812,12 +861,13 @@ describe('solidify_case 轨迹缓存零执行路径', () => {
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('solidified');
-      expect(data.steps[0]).toMatchObject({ status: 'kept-aiTask' });
+      expect(data.steps[0]).toMatchObject({ status: 'aiTask-fallback' });
       expect(String(data.steps[0].reason)).toContain('无可映射动作');
+      expect(data.steps[0].compiled).toEqual([{ kind: 'aiTask', instruction: '人工核对页面' }]);
       expect(data.steps[1]).toMatchObject({ status: 'solidified' });
     }
     const ops = await stageOps();
-    expect(ops).toHaveLength(1); // 仅第 2 步
+    expect(ops).toHaveLength(2); // 第 1 步 aiTask 化 + 第 2 步机械映射
   });
 });
 

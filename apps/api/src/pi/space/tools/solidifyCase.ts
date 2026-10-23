@@ -7,10 +7,13 @@
  * （含 compiled 机械干跑）后才落库。副作用与执行一致（会真实再跑一遍用例）。
  *
  * 安全：登录/敏感 fill 在 AI 相走占位符协议（valueSub 执行时刻替换），onAction 收到的是替换前的
- * 原始动作参数——占位符字面量出现在收集值里时该步不固化（凭据属于环境，不属于用例）。
+ * 原始动作参数——占位符字面量出现在收集值里时该步不机械固化（凭据属于环境，不属于用例），
+ * 但会固化为带凭据占位提示的 aiTask 执行步：回放 aiTask 分支经 valueSub/preflight 替换与把关，
+ * 字面量本身无真实凭据，aiTaskCache 也不会缓存凭据填充（cdp 只在映射成功时写缓存）。
  */
 import { randomUUID } from 'node:crypto';
 import { Type } from '@earendil-works/pi-ai';
+import type { StepAction } from '@itest/shared';
 import { chromium } from 'playwright-core';
 import type { Browser } from 'playwright-core';
 import { asc, eq, and } from 'drizzle-orm';
@@ -51,6 +54,8 @@ export { mapAiActionsToCompiled, isVisualStep, type SolidifyMapResult } from '..
 /**
  * 映射 + 暂存：把收集到的 AI 动作轨迹逐视觉步骤映射为 compiled 并暂存（DB 用例逐步骤
  * update_step 确定性 localId 幂等覆盖；草稿用例整例重暂存）。真跑收集与轨迹缓存两路共用。
+ * 映射失败（凭据占位/press/选择器不可映射/纯观察动作）但有 instruction 的步骤固化为显式
+ * aiTask 执行步——留 null 会让机械验收与正式回放在该步 compile-missing 卡死（prod228 实测）。
  */
 async function mapAndStageSteps(
   ctx: SpaceToolsContext,
@@ -82,18 +87,37 @@ async function mapAndStageSteps(
       continue;
     }
     const mapped = mapAiActionsToCompiled(collected.get(s.id) ?? []);
-    if (!mapped.ok) {
+    const inst = typeof s.instruction === 'string' ? s.instruction.trim() : '';
+    if (!mapped.ok && !inst) {
+      // 连 instruction 都没有的步骤无法固化为 aiTask（无执行语义），只能保持 null
       keptCount += 1;
       stepReports.push({ ...base, status: 'kept-aiTask', reason: mapped.reason });
       continue;
     }
+    // 映射失败但有 instruction：固化为显式 AI 执行步（平台约定 AI 执行步必须显式 aiTask，不能留
+    // null——留 null 机械验收/正式回放会在该步 compile-missing 卡死）。机械回放的 aiTask 分支
+    // 真实执行该步（含凭据自助登录），映射原因附在 reason 供人工审查。
+    const fallback = !mapped.ok;
+    const credentialBlock = fallback && /凭据占位符/.test(mapped.reason);
+    // 凭据被拒的步骤在 instruction 里教回放 AI 自助登录：裸占位符非 {{}} 形态不被 substituteVars
+    // 碰，valueSub/credentialPreflight 在填入瞬间替换/把关（与环境无凭据时 fail-fast）。
+    const aiInstruction = credentialBlock
+      ? `${inst}（若页面已处于登录后状态则直接完成；用户名输入框填 ${USER_PH}、密码填 ${PASSWORD_PH}，平台在填入瞬间替换为环境真实凭据）`.slice(0, 2000)
+      : inst;
+    const finalCompiled: StepAction[] = fallback
+      ? [{ kind: 'aiTask', instruction: aiInstruction }]
+      : mapped.compiled;
     solidifiedCount += 1;
-    stepReports.push({
-      ...base,
-      status: 'solidified',
-      compiled: mapped.compiled,
-      ...(mapped.skippedCount > 0 ? { warning: `跳过 ${mapped.skippedCount} 个观察性截图动作` } : {}),
-    });
+    stepReports.push(
+      fallback
+        ? { ...base, status: 'aiTask-fallback', compiled: finalCompiled, reason: `${mapped.reason}——已固化为 AI 执行步（aiTask），机械验收时由 AI 真实执行` }
+        : {
+            ...base,
+            status: 'solidified',
+            compiled: mapped.compiled,
+            ...(mapped.skippedCount > 0 ? { warning: `跳过 ${mapped.skippedCount} 个观察性截图动作` } : {}),
+          },
+    );
     // 暂存写：DB 用例逐步骤 update_step（确定性 localId，重复固化幂等覆盖）；草稿整例重暂存
     if (dbCase) {
       const localId = `solidify-${s.id}`;
@@ -101,9 +125,9 @@ async function mapAndStageSteps(
         localId,
         caseId,
         op: 'update_step',
-        payload: { action: 'update_step', caseId, stepId: s.id, compiled: mapped.compiled },
-        summary: st(lang, 'step.solidified', { order: s.order, count: mapped.compiled.length }),
-        diff: diffText({ compiled: s.compiled ?? null }, { compiled: mapped.compiled }),
+        payload: { action: 'update_step', caseId, stepId: s.id, compiled: finalCompiled },
+        summary: st(lang, 'step.solidified', { order: s.order, count: finalCompiled.length }),
+        diff: diffText({ compiled: s.compiled ?? null }, { compiled: finalCompiled }),
         stagedAt: new Date().toISOString(),
       };
       await stageCaseOp(ctx.threadId, ctx.versionId, doc);
@@ -111,7 +135,7 @@ async function mapAndStageSteps(
     } else if (draftSteps) {
       const idx = Number(/^staged-(\d+)$/.exec(s.id)?.[1] ?? 0) - 1;
       if (idx >= 0 && idx < draftSteps.length) {
-        draftSteps[idx] = { ...draftSteps[idx]!, compiled: mapped.compiled };
+        draftSteps[idx] = { ...draftSteps[idx]!, compiled: finalCompiled };
       }
     }
   }
@@ -142,14 +166,14 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'solidify_case',
       description:
-      '把用例中的视觉模式步骤（aiTask / 纯自然语言 instruction，运行时由 AI 看截图临场执行）固化（solidify）为可机械回放的 compiled DSL，就地改写源用例：收集 AI 实际执行的动作，机械映射为 click/fill/navigate 后经 stage_case_op 暂存到草稿区（暂存草稿用例则整例更新），用户在 StagePanel 勾选 → verify_case 验收（含机械干跑）→ 落库。**若此前 verify_case(mode="full") 实测通过且步骤/环境未变，本工具会复用那份实测轨迹零执行完成固化（秒级，无需浏览器与 LLM）**；轨迹过期或步骤已变才真实执行一遍用例。功能稳定后的收敛路径：先视觉模式快速跟进需求，稳定后固化沉淀为机械资产。副作用：走真实执行路径时会真实再执行一遍用例。登录/敏感步骤不固化（归环境登录与敏感字段协议）；含 press 等无 DSL 对应动作的步骤保持 aiTask 并附原因（wait 会映射为固定时长 waitFor 正常固化）。',
+      '把用例中的视觉模式步骤（aiTask / 纯自然语言 instruction，运行时由 AI 看截图临场执行）固化（solidify）为可机械回放的 compiled DSL，就地改写源用例：收集 AI 实际执行的动作，机械映射为 click/fill/navigate 后经 stage_case_op 暂存到草稿区（暂存草稿用例则整例更新），用户在 StagePanel 勾选 → verify_case 验收（含机械干跑）→ 落库。**若此前 verify_case(mode="full") 实测通过且步骤/环境未变，本工具会复用那份实测轨迹零执行完成固化（秒级，无需浏览器与 LLM）**；轨迹过期或步骤已变才真实执行一遍用例。功能稳定后的收敛路径：先视觉模式快速跟进需求，稳定后固化沉淀为机械资产。副作用：走真实执行路径时会真实再执行一遍用例。无法机械映射的步骤（登录凭据填充 / press / 选择器不可映射 / 纯等待截图观察动作）固化为显式 AI 执行步（aiTask）并附原因，机械验收与正式回放时由 AI 真实执行——不再留 compiled=null 卡死回放（wait 与真实动作混合时映射为固定时长 waitFor 正常固化）。',
     parameters: Type.Object({
       caseId: Type.String({ minLength: 1 }),
     }),
     promptGuidelines: [
       '调用时机（前置条件）：用户确认自然语言草稿后（无论草稿是否已落库,固化可直接作用于暂存草稿）,你主动询问「是否需要固化为机械步骤」得到肯定答复，或用户明确要求把视觉步骤转为机械步骤时才调用。不要在 stage_case 刚落暂存就自动 solidify——草稿期保持自然语言更利于多轮讨论修改。',
       'solidify_case 优先复用 verify_case 实测缓存的轨迹零执行完成固化（结果里 traceReused=true）：只要上一步实测通过、步骤内容与环境未变，就不需要再跑一遍用例。没有轨迹可复用时（如从未实测、轨迹超过 30 分钟、或步骤已改）才真实执行一遍收集 AI 临场动作，机械映射为 compiled 后暂存为 update_step 修改（草稿用例整例更新）。暂存后必须立即 verify_case(mode="mechanical") 验收（跳过 AI 相，只做机械干跑 + 终态判定）——机械干跑通过才算固化完成；verify 失败由你根据失败归因修复 compiled 后重跑 mechanical，同因连续两轮失败或归因不明则改 mode="full" 重测。通过后引导用户在暂存区勾选保存。固化前后**不要重复跑 full 实测**（每步 AI 相 1~2 分钟，重复跑纯浪费）。',
-      'solidify_case 结果里 status=kept-aiTask 的步骤附有 reason（press 无机械对应 / 登录凭据占位 / 选择器不可映射 / 动作收集为空）：这些步骤保持视觉执行是预期行为，不要强行改写；确需机械化的（如选择器含 Playwright 专有语法）可先用 stage_case_op 换成平台可表达的选择器后重新固化。wait 动作会映射为固定时长的 waitFor 一并固化，不构成 kept-aiTask 原因。',
+      'solidify_case 结果里 status=aiTask-fallback 的步骤是「无法机械映射但已固化为 AI 执行步（aiTask）」（原因见 reason：登录凭据占位 / press 无机械对应 / 选择器不可映射 / 纯等待截图观察动作）：机械验收与正式回放时这些步由 AI 真实执行（凭据步的 instruction 已带自助登录提示），不要强行改写；确需机械化的（如选择器含 Playwright 专有语法）可先用 stage_case_op 换成平台可表达的选择器后重新固化。status=kept-aiTask（连 instruction 都没有）才保持视觉模式。wait 与真实动作混合时映射为固定时长 waitFor 一并固化，纯等待步不再产出盲等 waitFor（视为观察动作走 aiTask 化）。',
       '同一用例反复固化是安全幂等的：暂存 localId 按 stepId 确定（solidify-<stepId>），重复固化覆盖上一轮暂存；执行失败（任一步骤未过）时不会暂存任何修改，修正后重跑即可。',
       '被固化的 fill value 是 AI 当轮填入的原始值：若 instruction 引用了 {{变量}} 而 AI 填了具体值，固化会把该值冻结进 compiled——数据驱动用例（绑定数据集）不建议固化含变量填写的步骤，或固化后把 value 手工改回 {{变量}}。',
     ],
@@ -263,7 +287,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               stagedOpsApplied: opsApplied,
               traceReused: true,
               steps: stepReports,
-              note: `复用 verify_case 实测轨迹零执行完成固化（步骤与环境未变，轨迹缓存 30 分钟内有效）：已暂存 ${solidifiedCount} 个步骤的固化修改${keptCount > 0 ? `，${keptCount} 个步骤保持视觉模式（见各步 reason）` : ''}。下一步调用 verify_case(mode='mechanical') 做机械验收：跳过 AI 相，仅机械干跑 + 终态判定。`,
+              note: `复用 verify_case 实测轨迹零执行完成固化（步骤与环境未变，轨迹缓存 30 分钟内有效）：已暂存 ${solidifiedCount} 个步骤的固化修改（status=aiTask-fallback 的步是 AI 执行步固化，机械验收时由 AI 真实执行）${keptCount > 0 ? `，${keptCount} 个步骤保持视觉模式（见各步 reason）` : ''}。下一步调用 verify_case(mode='mechanical') 做机械验收：跳过 AI 相，仅机械干跑 + 终态判定。`,
             }),
           };
         }
@@ -480,8 +504,8 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               stagedOpsApplied: opsApplied,
               steps: stepReports,
               note: solidifiedCount > 0
-                ? `已暂存 ${solidifiedCount} 个步骤的固化修改（草稿区可见）${keptCount > 0 ? `，${keptCount} 个步骤保持视觉模式（见各步 reason）` : ''}。下一步必须调用 verify_case 验收：机械干跑通过后引导用户在右侧暂存区勾选保存，固化才算完成。注意:固化产出的 compiled 是 AI 当轮实际动作的单候选映射——verify_case 若报 AmbiguousLocator/LocatorMismatch,用 failure.page.elements 里该元素的真实选择器把对应步骤补成多候选链(属性候选如 [placeholder=...] 优先、纯 #id 其次,规则同 stage_case 的 locator 规范),不要依赖单候选碰运气。`
-                : '没有步骤被固化（各步保持视觉模式，原因见 steps[].reason）。多为登录/验证码/键盘时序类步骤——属预期保守行为，无需修正。',
+                ? `已暂存 ${solidifiedCount} 个步骤的固化修改（草稿区可见；status=aiTask-fallback 的步是 AI 执行步固化，机械验收时由 AI 真实执行）${keptCount > 0 ? `，${keptCount} 个步骤保持视觉模式（见各步 reason）` : ''}。下一步必须调用 verify_case 验收：机械干跑通过后引导用户在右侧暂存区勾选保存，固化才算完成。注意:固化产出的 compiled 是 AI 当轮实际动作的单候选映射——verify_case 若报 AmbiguousLocator/LocatorMismatch,用 failure.page.elements 里该元素的真实选择器把对应步骤补成多候选链(属性候选如 [placeholder=...] 优先、纯 #id 其次,规则同 stage_case 的 locator 规范),不要依赖单候选碰运气。`
+                : '没有步骤被固化（各步保持视觉模式，原因见 steps[].reason）。仅当步骤连 instruction 都没有时才会出现——属预期保守行为，无需修正。',
             }),
           };
         } finally {

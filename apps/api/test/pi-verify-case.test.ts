@@ -410,6 +410,14 @@ describe('verify_case 逐步 AI 执行编排', () => {
     }
     // 前缀不重跑 AI：两轮合计只有第 1 轮步 1 调过 runAiTask 一次
     expect(vi.mocked(runAiTask)).toHaveBeenCalledTimes(1);
+    // restore 干跑 ctx 同样携带 web origin（resume 前缀重建也会派发相对 URL navigate）
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    const restoreCall = vi.mocked(executeCaseInBrowser).mock.calls[0]! as unknown as [
+      string,
+      unknown,
+      { caseWebOrigin?: string | null },
+    ];
+    expect(restoreCall[2].caseWebOrigin).toBe('http://env.example');
   });
 
   it('配置 login 凭据：instruction 含占位符不含明文，valueSub 还原真实值 → login logged-in', async () => {
@@ -988,6 +996,9 @@ describe('verify_case compiled 机械回放干跑', () => {
     ];
     expect(caseIdArg).toBe(caseId);
     expect(targetUrlArg).toBe('http://env.example/page');
+    // 相对 URL navigate 的拼接来源（prod228 缺口 2：此前干跑 ctx 缺这两字段一律 invalid-navigate-url）
+    expect(ctxArg.caseWebOrigin).toBe('http://env.example');
+    expect(ctxArg.caseWebServiceRef).toBeNull();
     // 截图目录隔离（-replay 后缀），避免覆盖 AI 相同名 step-N.png；终态判定不重复跑
     expect(ctxArg.reportId).toMatch(/-replay$/);
     expect(ctxArg.expectedOutcome).toBeUndefined();
@@ -1331,6 +1342,9 @@ describe('verify_case mechanical 机械验收模式', () => {
     expect(call[5]).toBe('http://env.example/page');
     expect(call[2].reportId).toMatch(/-replay$/);
     expect(call[2].expectedOutcome).toBeUndefined(); // 干跑 ctx 不带终态判定（verify 自己判）
+    // 干跑 ctx 携带 web 服务 origin（相对 URL navigate 拼接用）与用例绑定服务名
+    expect(call[2].caseWebOrigin).toBe('http://env.example');
+    expect(call[2].caseWebServiceRef).toBeNull();
     expect(typeof call[2].onPageReady).toBe('function'); // 机械模式靠它拿终态页
     expect(call[1][0]!.compiled).toEqual(CLICK_COMPILED);
     if (r.ok) {

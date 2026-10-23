@@ -40,16 +40,20 @@ export type SolidifyMapResult =
  * 即「睡满 timeoutMs」的固定等待），AI 相的页面稳定等待因此可机械保留——prod228 实测里
  * click 后夹带的 wait(1500ms) 曾让整步（含那个真 click）被丢弃，固化率归零。
  * screenshot 是观察性动作，跳过不映射。
+ * 纯观察步（只有 wait/screenshot，无任何 click/fill/navigate）整体拒绝：waitFor([]) 独苗
+ * 是「盲等伪装成固化」（prod228 2026-10-23 实测），语义价值为零还挤掉真步骤的 aiTask 化。
  */
 export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
   const compiled: StepAction[] = [];
   let skippedCount = 0;
+  let realCount = 0; // click/fill/navigate 计数：真实交互动作，区别于 wait/screenshot 观察性动作
   for (const a of actions) {
     switch (a.type) {
       case 'click': {
         const locator = mapSelector(a.selector);
         if (!locator) return { ok: false, reason: `click 选择器 "${a.selector}" 含 Playwright 专有语法，无法映射为平台 locator` };
         compiled.push({ kind: 'click', locator: [locator] });
+        realCount += 1;
         break;
       }
       case 'fill': {
@@ -62,10 +66,12 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
         const locator = mapSelector(a.selector);
         if (!locator) return { ok: false, reason: `fill 选择器 "${a.selector}" 含 Playwright 专有语法，无法映射为平台 locator` };
         compiled.push({ kind: 'fill', locator: [locator], value: a.value });
+        realCount += 1;
         break;
       }
       case 'navigate':
         compiled.push({ kind: 'navigate', url: a.url });
+        realCount += 1;
         break;
       case 'screenshot':
         skippedCount += 1; // 观察性动作（AI 自己看页面用），无副作用，不进 compiled
@@ -78,8 +84,8 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
         break;
     }
   }
-  if (compiled.length === 0) {
-    return { ok: false, reason: '无可映射动作（成功动作为空或全为观察性截图）' };
+  if (realCount === 0) {
+    return { ok: false, reason: '无可映射动作（成功动作为空，或仅等待/截图类观察性动作，无真实交互）' };
   }
   return { ok: true, compiled, skippedCount };
 }

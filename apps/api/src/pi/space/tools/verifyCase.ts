@@ -366,7 +366,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       'verify_case 有两种使用场景，按需选择：(a) 讨论期实测——草稿讨论中用户要求「跑一下看看」时，对 stage_case 暂存的自然语言草稿调用（mode 省略即 full），AI 相执行 + live view 视频流给用户看，失败据 failure 修正步骤后重发 stage_case 再验；(b) 编译后验收——solidify_case 把自然语言编译为机械 DSL 后，对固化结果调用 verify_case(mode="mechanical")，跳过 AI 相只做机械干跑 + 终态判定，失败由你按归因修复 compiled 后重跑，直到通过。',
       'verify_case 的 mode 决定验收形态，别乱选：mode="full"（默认）是全 AI 实测，用于语义验证（讨论期实测、或 mechanical 连续两轮同因失败/归因不明时升级到它），实测通过会顺带缓存 AI 动作轨迹；mode="mechanical" 是固化后的机械验收，只跑机械干跑 + 终态判定，不烧 AI 轮次——**固化完成后用 mode="mechanical" 验收，别再跑一遍 full**。',
       '**不要重复跑 full**：full 的 AI 相每步要 1~2 分钟（prod228 实测 30 次 full 调用占 105 分钟）。同一用例 full 已经通过、且步骤/环境未变时，再跑一次 full 是纯浪费——重复验证只允许发生在：步骤或 expectedOutcome 改了、环境换了、mechanical 连续两轮同因失败或归因不明（此时才升级 full）、或用户明确要求重测。全 AI 实测通过时响应里的 traceSaved=true 说明轨迹已缓存，紧接着的 solidify_case 可零执行秒级完成。',
-      'mode="mechanical" 的两个限制要如实告知用户：(1) 全视觉用例（无 compiled）会被直接拒绝——此时先调 mode="full" 实测；(2) 机械模式没有 AI 相、不会自动登录，靠登录态缓存（30 分钟）注入，副本重启或缓存过期会落到登录页——失败页是登录页就改 mode="full" 重测（顺带刷新登录态与轨迹缓存）。',
+      'mode="mechanical" 的两个限制要如实告知用户：(1) 全视觉用例（无 compiled）会被直接拒绝——此时先调 mode="full" 实测；(2) 机械模式没有 AI 相，整体登录不自动做，靠登录态缓存（30 分钟）注入——但 solidify 固化出的 aiTask 执行步（status=aiTask-fallback，含凭据步）会在干跑里由 AI 真实执行并按 instruction 自助登录，需要 LLM。副本重启或缓存过期落到登录页时，失败页是登录页就改 mode="full" 重测（顺带刷新登录态与轨迹缓存）。',
       'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
       'stage_case 新建的纯草稿用例（未落库）也可直接 verify_case：caseId 传 stage_case 时声明的 localId；修正循环 = 同 localId 重发 stage_case（幂等覆盖）后再次 verify_case，全程不落库，通过后引导用户在暂存区勾选保存。注意：暂存草稿的 defaultEnvId 只能绑定已落库环境或留空走默认链（暂存环境不支持）。',
@@ -607,6 +607,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             { envCtx },
           );
           const targetUrl = resolvedUrl && /^https?:\/\//.test(resolvedUrl) ? resolvedUrl : undefined;
+          // 干跑 ExecContext 的相对 URL navigate 靠 caseWebOrigin 拼绝对地址（与 runCase 同源解析）——
+          // 此前两处 ctx 都没带，机械干跑遇 /开头 navigate 一律 invalid-navigate-url（prod228 实测）。
+          let caseWebOrigin: string | null = null;
+          try { caseWebOrigin = envCtx.resolveWebOrigin(effectiveCase.webServiceRef ?? null); } catch { caseWebOrigin = null; }
           browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
           // 命中登录态缓存则注入 context:同环境重试轮/后续用例免登录（过期自愈,见 loginStateCache）
           const loginKey = loginStateKey(envCtx.envId, envCtx.login?.user);
@@ -675,6 +679,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 ...(replaySecrets.size > 0
                   ? { secretResolver: async (stepId: string) => replaySecrets.get(stepId) ?? null }
                   : {}),
+                ...(caseWebOrigin ? { caseWebOrigin } : {}),
+                caseWebServiceRef: effectiveCase.webServiceRef ?? null,
                 onPageReady: (p) => { restoredPage = p; },
               },
               browser,
@@ -1053,6 +1059,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   ...(replaySecrets.size > 0
                     ? { secretResolver: async (stepId: string) => replaySecrets.get(stepId) ?? null }
                     : {}),
+                  ...(caseWebOrigin ? { caseWebOrigin } : {}),
+                  caseWebServiceRef: effectiveCase.webServiceRef ?? null,
                   caseTitle: effectiveCase.title,
                   caseUrl: targetUrl ?? null,
                   // onPageReady 无条件触发（成功也拿得到终态页）：机械模式的终态判定/证据
