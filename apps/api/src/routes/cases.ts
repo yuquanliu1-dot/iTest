@@ -5,8 +5,10 @@ import { testCases, groups, scenarios, projectVersions, projects, testSteps, sol
 import { eq, inArray, sql } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertCaseVisible, assertProductLineVisible, assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
-import { copyCaseCore, createCase, deleteCase, getCaseDetail, groupProjectId, tagsForCases, updateCase } from '../services/cases.service.js';
+import { copyCaseCore, createCase, deleteCase, getCaseDetail, groupProjectId, invalidateCasesCache, tagsForCases, updateCase } from '../services/cases.service.js';
 import { attachCreators } from '../lib/creator.js';
+import { cache } from '../lib/cache.js';
+import { casesForProjectKey } from '../lib/cache-keys.js';
 import { checkBatchEligibility, RUNNING_BATCH_STATUSES, runSolidifyBatchCaseJob } from '../execute/batchSolidify.js';
 import { getExecutionQueue, isExecutionQueueReady, EXEC_QUEUE_NAME } from '../scheduler/execQueue.js';
 import { logger } from '../logger.js';
@@ -70,63 +72,15 @@ const PatchBody = CaseBodyBase.partial()
   })
   .superRefine(checkWindowStrategy);
 
-casesRoute.get('/', async (req, res) => {
-  const { priority, groupId, projectId, scenarioId, productLineId, solidified } = req.query as Record<string, string | undefined>;
-  // versionIds 过滤：逗号分隔或重复参数均可；只在可见项目范围内收窄,无需额外可见性断言
-  const rawVersionIds = (req.query as Record<string, string | string[] | undefined>).versionIds;
-  const versionIds = (Array.isArray(rawVersionIds) ? rawVersionIds : rawVersionIds != null ? [rawVersionIds] : [])
-    .flatMap((v) => v.split(','))
-    .filter((v) => v.length > 0);
-  let rows;
-  if (productLineId) {
-    // 产品线维度：一次拉齐线内所有项目的用例，供执行计划「添加用例」池使用
-    // （跨项目共享用例的读取口。可见性经产品线→组织→visibleOrgIdsFor 继承，见 assertProductLineVisible）。
-    await assertProductLineVisible(productLineId, req.user!);
-    const pids = (await db
-      .select({ id: projects.id })
-      .from(projects)
-      .where(eq(projects.productLineId, productLineId))).map((p) => p.id);
-    const gs = pids.length
-      ? await db.select().from(groups).where(inArray(groups.projectId, pids))
-      : [];
-    const gids = gs.map((g) => g.id);
-    rows = gids.length
-      ? await db.select().from(testCases).where(inArray(testCases.groupId, gids))
-      : [];
-  } else if (projectId) {
-    await assertProjectVisible(projectId, req.user!);
-    const gs = await db.select().from(groups).where(eq(groups.projectId, projectId));
-    const gids = gs.map((g) => g.id);
-    rows = gids.length
-      ? await db.select().from(testCases).where(inArray(testCases.groupId, gids))
-      : [];
-  } else if (groupId) {
-    const g = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
-    if (!g[0]) throw new HttpError(404, 'not_found', 'group not found');
-    await assertProjectVisible(g[0].projectId, req.user!);
-    rows = await db.select().from(testCases).where(eq(testCases.groupId, groupId));
-  } else {
-    // 无参分支：按可见项目过滤
-    const visiblePids = await visibleProjectIds(req.user!);
-    const gs = visiblePids.length
-      ? await db.select().from(groups).where(inArray(groups.projectId, visiblePids))
-      : [];
-    const gids = gs.map((g) => g.id);
-    rows = gids.length
-      ? await db.select().from(testCases).where(inArray(testCases.groupId, gids))
-      : [];
-  }
-  if (priority) rows = rows.filter((r) => r.priority === priority);
-  // scenarioId 过滤：'none' 命中 scenarioId IS NULL；UUID 命中具体场景
-  if (scenarioId) {
-    rows = scenarioId === 'none'
-      ? rows.filter((r) => r.scenarioId == null)
-      : rows.filter((r) => r.scenarioId === scenarioId);
-  }
-  if (versionIds.length > 0) {
-    const vset = new Set(versionIds);
-    rows = rows.filter((r) => r.versionId != null && vset.has(r.versionId));
-  }
+/** 用例列表缓存 TTL:写路径显式失效 + 30s 兜底(标题/版本名/组名等次要漂移源不过期即旧)。 */
+const CASES_LIST_TTL_MS = 30_000;
+
+type RawCaseRow = typeof testCases.$inferSelect;
+
+/** 富化 + 映射:scenarioTitle/versionName/tags/步骤固化进度/项目归属/createdBy。
+ *  项目分支的输出整体进缓存(priority/scenarioId/versionIds/solidified 过滤在缓存之后应用,
+ *  四者所需字段都保留在映射行上)。 */
+async function mapCaseRows(rows: RawCaseRow[]) {
   // 把 scenario title 一起带回去，避免前端为每个 case 再发一次 detail 请求
   const sids = [...new Set(rows.map((r) => r.scenarioId).filter((v): v is string => !!v))];
   const sById = new Map<string, { id: string; title: string }>();
@@ -154,13 +108,6 @@ casesRoute.get('/', async (req, res) => {
       .groupBy(testSteps.caseId);
     for (const a of agg) stepsByCase.set(a.caseId, { total: a.total, compiled: a.compiled });
   }
-  // 仅看未固化：有步骤且全部未固化（批量固化入口的口径；无步骤用例不算「未固化」）
-  if (solidified === 'none') {
-    rows = rows.filter((r) => {
-      const s = stepsByCase.get(r.id);
-      return (s?.total ?? 0) > 0 && (s?.compiled ?? 0) === 0;
-    });
-  }
   // 批量解析版本名：列表按项目拉取会跨版本混排，前端展示需要名字
   const vids = [...new Set(rows.map((r) => r.versionId).filter((v): v is string => !!v))];
   const vById = new Map<string, string>();
@@ -182,23 +129,91 @@ casesRoute.get('/', async (req, res) => {
       .where(inArray(groups.id, gidsAll));
     for (const g of gs) projectByGroup.set(g.id, { id: g.projectId, name: g.projectName });
   }
-  res.json(
-    await attachCreators(
-      rows.map((r) => {
-        const p = projectByGroup.get(r.groupId);
-        return {
-          ...r,
-          scenarioTitle: r.scenarioId ? (sById.get(r.scenarioId)?.title ?? null) : null,
-          versionName: vById.get(r.versionId) ?? null,
-          tags: tagsByCase.get(r.id) ?? [],
-          stepsTotal: stepsByCase.get(r.id)?.total ?? 0,
-          stepsCompiled: stepsByCase.get(r.id)?.compiled ?? 0,
-          projectId: p?.id ?? null,
-          projectName: p?.name ?? null,
-        };
-      }),
-    ),
+  return attachCreators(
+    rows.map((r) => {
+      const p = projectByGroup.get(r.groupId);
+      return {
+        ...r,
+        scenarioTitle: r.scenarioId ? (sById.get(r.scenarioId)?.title ?? null) : null,
+        versionName: vById.get(r.versionId) ?? null,
+        tags: tagsByCase.get(r.id) ?? [],
+        stepsTotal: stepsByCase.get(r.id)?.total ?? 0,
+        stepsCompiled: stepsByCase.get(r.id)?.compiled ?? 0,
+        projectId: p?.id ?? null,
+        projectName: p?.name ?? null,
+      };
+    }),
   );
+}
+
+/** 项目内全量原始用例行(groups → cases 两段查询)。 */
+async function loadProjectCaseRows(projectId: string): Promise<RawCaseRow[]> {
+  const gs = await db.select().from(groups).where(eq(groups.projectId, projectId));
+  const gids = gs.map((g) => g.id);
+  return gids.length ? await db.select().from(testCases).where(inArray(testCases.groupId, gids)) : [];
+}
+
+casesRoute.get('/', async (req, res) => {
+  const { priority, groupId, projectId, scenarioId, productLineId, solidified } = req.query as Record<string, string | undefined>;
+  // versionIds 过滤：逗号分隔或重复参数均可；只在可见项目范围内收窄,无需额外可见性断言
+  const rawVersionIds = (req.query as Record<string, string | string[] | undefined>).versionIds;
+  const versionIds = (Array.isArray(rawVersionIds) ? rawVersionIds : rawVersionIds != null ? [rawVersionIds] : [])
+    .flatMap((v) => v.split(','))
+    .filter((v) => v.length > 0);
+  let rows;
+  if (productLineId) {
+    // 产品线维度：一次拉齐线内所有项目的用例，供执行计划「添加用例」池使用
+    // （跨项目共享用例的读取口。可见性经产品线→组织→visibleOrgIdsFor 继承，见 assertProductLineVisible）。
+    await assertProductLineVisible(productLineId, req.user!);
+    const pids = (await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(eq(projects.productLineId, productLineId))).map((p) => p.id);
+    const gs = pids.length
+      ? await db.select().from(groups).where(inArray(groups.projectId, pids))
+      : [];
+    const gids = gs.map((g) => g.id);
+    rows = await mapCaseRows(gids.length
+      ? (await db.select().from(testCases).where(inArray(testCases.groupId, gids)))
+      : []);
+  } else if (projectId) {
+    await assertProjectVisible(projectId, req.user!);
+    // 读穿透缓存整个富化列表;可见性断言在缓存之外(缓存的是数据不是鉴权结果)
+    rows = await cache.wrap(casesForProjectKey(projectId), CASES_LIST_TTL_MS, async () =>
+      mapCaseRows(await loadProjectCaseRows(projectId)),
+    );
+  } else if (groupId) {
+    const g = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+    if (!g[0]) throw new HttpError(404, 'not_found', 'group not found');
+    await assertProjectVisible(g[0].projectId, req.user!);
+    rows = await mapCaseRows(await db.select().from(testCases).where(eq(testCases.groupId, groupId)));
+  } else {
+    // 无参分支：按可见项目过滤
+    const visiblePids = await visibleProjectIds(req.user!);
+    const gs = visiblePids.length
+      ? await db.select().from(groups).where(inArray(groups.projectId, visiblePids))
+      : [];
+    const gids = gs.map((g) => g.id);
+    rows = await mapCaseRows(gids.length
+      ? (await db.select().from(testCases).where(inArray(testCases.groupId, gids)))
+      : []);
+  }
+  if (priority) rows = rows.filter((r) => r.priority === priority);
+  // scenarioId 过滤：'none' 命中 scenarioId IS NULL；UUID 命中具体场景
+  if (scenarioId) {
+    rows = scenarioId === 'none'
+      ? rows.filter((r) => r.scenarioId == null)
+      : rows.filter((r) => r.scenarioId === scenarioId);
+  }
+  if (versionIds.length > 0) {
+    const vset = new Set(versionIds);
+    rows = rows.filter((r) => r.versionId != null && vset.has(r.versionId));
+  }
+  // 仅看未固化：有步骤且全部未固化（批量固化入口的口径；无步骤用例不算「未固化」）
+  if (solidified === 'none') {
+    rows = rows.filter((r) => r.stepsTotal > 0 && r.stepsCompiled === 0);
+  }
+  res.json(rows);
 });
 
 casesRoute.post('/', async (req, res) => {
@@ -314,10 +329,14 @@ casesRoute.post('/batch-delete', async (req, res) => {
   for (const id of body.caseIds) {
     await assertCaseVisible(id, req.user!);
   }
+  // 项目归属在删除前解析(行删后 group 链路断)
+  const owners = await db.select({ groupId: testCases.groupId }).from(testCases).where(inArray(testCases.id, body.caseIds));
   const deleted = await db
     .delete(testCases)
     .where(inArray(testCases.id, body.caseIds))
     .returning({ id: testCases.id });
+  const pids = new Set(await Promise.all(owners.map((o) => groupProjectId(o.groupId))));
+  await Promise.all([...pids].map((pid) => invalidateCasesCache(pid)));
   res.json({ count: deleted.length });
 });
 
@@ -336,7 +355,9 @@ casesRoute.post('/batch-status', async (req, res) => {
     .update(testCases)
     .set({ status: body.status, updatedAt: new Date() })
     .where(inArray(testCases.id, body.caseIds))
-    .returning({ id: testCases.id });
+    .returning({ id: testCases.id, groupId: testCases.groupId });
+  const pids = new Set(await Promise.all(updated.map((u) => groupProjectId(u.groupId))));
+  await Promise.all([...pids].map((pid) => invalidateCasesCache(pid)));
   res.json({ count: updated.length });
 });
 

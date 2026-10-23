@@ -396,6 +396,8 @@ export async function applyCaseOp(op: string, payload: unknown, ctx: SpaceToolsC
           await tx.update(testSteps).set({ order: i + 1 }).where(eq(testSteps.id, remaining[i]!.id));
         }
       });
+      // 直写 db 不经 cases.service,列表缓存(固化进度列)需手动失效
+      await svc.invalidateCasesCache(ctx.projectId);
       return;
     }
     case 'move_step': {
@@ -410,6 +412,7 @@ export async function applyCaseOp(op: string, payload: unknown, ctx: SpaceToolsC
           await tx.update(testSteps).set({ order: i + 1 }).where(eq(testSteps.id, v.stepIds[i]!));
         }
       });
+      await svc.invalidateCasesCache(ctx.projectId);
       return;
     }
   }

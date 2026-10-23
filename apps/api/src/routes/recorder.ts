@@ -12,6 +12,7 @@ import { StepAction } from '@itest/shared';
 import { createSession, getSession, persistSession } from '../recorder/ws.js';
 import { resolveCaseUrl, projectWebOrigins, relativizeUrl } from '../lib/resolve-url.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
+import { invalidateCasesCache } from '../services/cases.service.js';
 import { encrypt } from '../lib/secret-crypto.js';
 import { migrateAction } from '../lib/step-migration.js';
 import { logger } from '../logger.js';
@@ -131,9 +132,10 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
   // 尽力相对化（spec 2026-10-16）：origin 命中项目任一环境 web 服务 → 存相对路径 + 绑定服务；
   // 未命中（外站）保留绝对。
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, session.caseId)))[0];
-  const origins = caseRow
-    ? await projectWebOrigins((await db.select({ projectId: groups.projectId }).from(groups).where(eq(groups.id, caseRow.groupId)))[0]!.projectId)
-    : new Map<string, string | null>();
+  const caseProjectId = caseRow
+    ? (await db.select({ projectId: groups.projectId }).from(groups).where(eq(groups.id, caseRow.groupId)))[0]!.projectId
+    : null;
+  const origins = caseRow ? await projectWebOrigins(caseProjectId!) : new Map<string, string | null>();
   if (caseRow && !caseRow.url) {
     const firstStepUrl = (session.steps[0] as { url?: string | null } | undefined)?.url ?? null;
     const candidate = session.targetUrl ?? firstStepUrl ?? (await resolveCaseUrl(caseRow, { defaultEnvFallback: true }));
@@ -193,6 +195,8 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
   if (session.tabs && session.tabs.length > 0 && session.dbSessionId) {
     await db.update(testSessions).set({ tabs: session.tabs }).where(eq(testSessions.id, session.dbSessionId));
   }
+  // 录制产物改了用例 url + 追加步骤,列表缓存(固化进度列)必须失效
+  await invalidateCasesCache(caseProjectId);
   res.json({ inserted });
 });
 

@@ -49,3 +49,8 @@ export function scenariosForRequirementKey(requirementId: string): string {
 export function planRunDetailKey(runId: string): string {
   return `planrun:detail:${runId}`;
 }
+
+/** 用例列表按项目粒度(GET /cases?projectId= 分支)。用例/步骤写路径须显式失效。 */
+export function casesForProjectKey(projectId: string): string {
+  return `cases:project:${projectId}`;
+}

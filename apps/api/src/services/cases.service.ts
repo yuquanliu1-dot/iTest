@@ -12,6 +12,8 @@ import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { resolveDatasetProjectId, resolveDeviceTargetProjectId, resolveEnvironmentProjectId, resolveVersionProjectId } from './projectAccess.js';
 import { migrateAssertion, sanitizeAssertion } from '../lib/step-migration.js';
 import { attachCreator } from '../lib/creator.js';
+import { cache } from '../lib/cache.js';
+import { casesForProjectKey } from '../lib/cache-keys.js';
 
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 const STATUSES = ['draft', 'review', 'ready', 'deprecated'];
@@ -19,6 +21,19 @@ const STATUSES = ['draft', 'review', 'ready', 'deprecated'];
 export async function groupProjectId(groupId: string): Promise<string | null> {
   const row = (await db.select({ projectId: groups.projectId }).from(groups).where(eq(groups.id, groupId)).limit(1))[0];
   return row?.projectId ?? null;
+}
+
+/** 用例列表缓存(GET /cases?projectId=)失效入口。projectId 为空静默跳过(实体已不存在)。 */
+export async function invalidateCasesCache(projectId: string | null | undefined): Promise<void> {
+  if (!projectId) return;
+  await cache.del(casesForProjectKey(projectId));
+}
+
+/** 按 caseId 解析所属项目后失效列表缓存;case 不存在静默跳过。 */
+export async function invalidateCasesCacheForCase(caseId: string): Promise<void> {
+  const row = (await db.select({ groupId: testCases.groupId }).from(testCases).where(eq(testCases.id, caseId)).limit(1))[0];
+  if (!row) return;
+  await invalidateCasesCache(await groupProjectId(row.groupId));
 }
 
 /** 校验 tagIds 都属于 projectId 所属组织;缺失 404,跨组织 400。 */
@@ -111,6 +126,7 @@ export async function createCase(input: CreateCaseInput) {
   if (tagIds?.length) {
     await db.insert(caseTags).values(tagIds.map((tagId) => ({ caseId: created.id, tagId })));
   }
+  await invalidateCasesCache(pid);
   const tagsByCase = await tagsForCases([created.id]);
   return { ...created, tags: tagsByCase.get(created.id) ?? [] };
 }
@@ -237,12 +253,16 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
     }
   }
   const tagsByCase = await tagsForCases([caseId]);
+  await invalidateCasesCache(targetPid);
   return { ...updated, tags: tagsByCase.get(caseId) ?? [] };
 }
 
 export async function deleteCase(caseId: string): Promise<void> {
+  // 项目归属必须在删除前解析:行没了之后 group 链路断,失效无从谈起
+  const existing = (await db.select({ groupId: testCases.groupId }).from(testCases).where(eq(testCases.id, caseId)).limit(1))[0];
   const deleted = await db.delete(testCases).where(eq(testCases.id, caseId)).returning({ id: testCases.id });
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'case not found');
+  await invalidateCasesCache(existing ? await groupProjectId(existing.groupId) : null);
 }
 
 /** 单步骤补丁:AI 编译助手回流落库通道。
@@ -257,6 +277,7 @@ export async function updateCaseStep(stepId: string, patch: { compiled?: unknown
   if (patch.instruction !== undefined) set.instruction = patch.instruction;
   if (Object.keys(set).length === 0) return row;
   const [updated] = await db.update(testSteps).set(set).where(eq(testSteps.id, stepId)).returning();
+  await invalidateCasesCacheForCase(row.caseId);
   return updated ?? row;
 }
 
@@ -288,6 +309,7 @@ export async function insertCaseStep(
   for (let i = 0; i < after.length; i++) {
     await db.update(testSteps).set({ order: targetOrder + 1 + i }).where(eq(testSteps.id, after[i]!.id));
   }
+  await invalidateCasesCacheForCase(caseId);
   return inserted!;
 }
 
@@ -464,5 +486,7 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
   if (srcTagRows.length > 0) {
     await db.insert(caseTags).values(srcTagRows.map((r) => ({ caseId: newCase.id, tagId: r.tagId })));
   }
+  // 跨项目复制时源项目列表不变,只需失效目标项目
+  await invalidateCasesCache(targetProjectId);
   return newCase;
 }

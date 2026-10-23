@@ -15,6 +15,7 @@ import { isVisualStep } from './aiActionMap.js';
 import { buildSolidifyCaseTool } from '../pi/space/tools/solidifyCase.js';
 import { buildVerifyCaseTool } from '../pi/space/tools/verifyCase.js';
 import type { SpaceToolsContext } from '../pi/space/tools/context.js';
+import { invalidateCasesCacheForCase } from '../services/cases.service.js';
 import { logger } from '../logger.js';
 
 /** 进行中的行状态（重复触发防抖与批量进度派生共用）。 */
@@ -62,7 +63,7 @@ export async function checkBatchEligibility(
  * 自写事务而非 applyCaseOp：后者带 ctx.versionId 严格校验，合成 ctx 语义不符。
  */
 export async function materializeStagedOps(batchThreadId: string, caseId: string): Promise<number> {
-  return db.transaction(async (tx) => {
+  const n = await db.transaction(async (tx) => {
     const scope = and(
       eq(aiStageCaseOps.threadId, batchThreadId),
       eq(aiStageCaseOps.caseId, caseId),
@@ -83,6 +84,9 @@ export async function materializeStagedOps(batchThreadId: string, caseId: string
     await tx.delete(aiStageCaseOps).where(scope);
     return ops.length;
   });
+  // compiled 落库改变列表「固化」列,缓存必须失效
+  await invalidateCasesCacheForCase(caseId);
+  return n;
 }
 
 /**

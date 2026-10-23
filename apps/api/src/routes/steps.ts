@@ -9,6 +9,7 @@ import { encrypt, ensureKeyLoaded } from '../lib/secret-crypto.js';
 import { migrateAction, sanitizeAssertion } from '../lib/step-migration.js';
 import { buildVariableReport } from '../lib/variable-report.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
+import { invalidateCasesCacheForCase } from '../services/cases.service.js';
 
 export const stepsRoute = Router();
 
@@ -105,6 +106,7 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
     .from(testSteps)
     .where(eq(testSteps.caseId, req.params.caseId))
     .orderBy(asc(testSteps.order));
+  await invalidateCasesCacheForCase(req.params.caseId!);
   res.json({ count: rows.length, steps: sorted, variableReport });
 });
 
@@ -131,6 +133,7 @@ stepsRoute.put('/:caseId/steps/reorder', async (req, res) => {
     .from(testSteps)
     .where(eq(testSteps.caseId, req.params.caseId))
     .orderBy(asc(testSteps.order));
+  await invalidateCasesCacheForCase(req.params.caseId!);
   res.json({ steps: sorted });
 });
 
@@ -149,6 +152,7 @@ stepsRoute.delete('/:caseId/steps/:stepId', async (req, res) => {
   for (let i = 0; i < remaining.length; i++) {
     await db.update(testSteps).set({ order: i + 1 }).where(eq(testSteps.id, remaining[i]!));
   }
+  await invalidateCasesCacheForCase(req.params.caseId!);
   res.json({ ok: true });
 });
 
@@ -320,6 +324,7 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
       )
       .returning();
   });
+  await invalidateCasesCacheForCase(req.params.caseId!);
   res.json({ steps: rows.sort((a, b) => a.order - b.order), variableReport });
 });
 
