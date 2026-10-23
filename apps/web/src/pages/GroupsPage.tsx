@@ -289,6 +289,8 @@ export default function GroupsPage() {
 		onSuccess: () => {
 			toast(t('groups:caseDeleted'), 'success');
 			setConfirmDeleteCase(null);
+			// 行勾选后单删：不清会把已删 id 留在 selection 里，工具栏一直显示「已选 1 项」
+			selection.clear();
 			invalidate();
 		},
 		onError: (e: Error) => toast(localizeApiError(e), 'error'),
