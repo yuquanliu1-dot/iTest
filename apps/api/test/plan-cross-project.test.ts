@@ -104,24 +104,25 @@ describe('计划跨项目用例（产品线）', () => {
     expect(r.body.error).toBe('cross_project');
   });
 
-  it('未归入产品线的项目仍严格限同项目用例（回归保护）', async () => {
+  it('同一条线内的两个项目可互相引用用例', async () => {
     const a = await seedProject(pool);
     const b = await seedProject(pool);
-    // 故意不建产品线
+    // seedProject 默认把两个项目挂到同一条种子线（同线才允许跨项目引用），无需另建线。
     const bCase = await seedCase(b.projectId, b.groupId, b.versionId, '别项目用例');
-    const planId = await seedPlan(a.projectId, a.versionId, '无产品线计划');
+    const planId = await seedPlan(a.projectId, a.versionId, '同线计划');
 
     const r = await request(app)
       .put(`/api/plans/${planId}/cases`)
       .send({ caseIds: [bCase] });
-    expect(r.status).toBe(409);
-    expect(r.body.error).toBe('cross_project');
+    expect(r.status).toBe(200);
   });
 
   it('项目移出产品线后，跨项目用例重新被拒', async () => {
     const baseline = await seedProject(pool);
     const site = await seedProject(pool);
-    const lineId = await seedProductLine('待解绑', [baseline.projectId, site.projectId]);
+    await seedProductLine('待解绑', [baseline.projectId, site.projectId]);
+    // 换一个同组织的新线，把基线项目挪进去 —— 两者从此不同线。
+    const otherLineId = await seedProductLine('另一条线', []);
 
     const baselineCase = await seedCase(baseline.projectId, baseline.groupId, baseline.versionId, '基线用例');
     const planId = await seedPlan(site.projectId, site.versionId, '解绑前计划');
@@ -129,13 +130,13 @@ describe('计划跨项目用例（产品线）', () => {
     const before = await request(app).put(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
     expect(before.status).toBe(200);
 
-    // 基线项目解绑 → 退回「未归线」
-    await pool.query(`UPDATE projects SET product_line_id = NULL WHERE id = $1`, [baseline.projectId]);
+    // R2：product_line_id 必填，不存在「未归线」——脱离当前线的唯一方式是换到另一条线。
+    // 测试意图（同线才可跨项目引用）不变：换线后两者不同线，跨项目用例重新被拒。
+    await pool.query(`UPDATE projects SET product_line_id = $1 WHERE id = $2`, [otherLineId, baseline.projectId]);
 
     const after = await request(app).put(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
     expect(after.status).toBe(409);
     expect(after.body.error).toBe('cross_project');
-    void lineId;
   });
 
   it('getPlanDetail 为跨项目用例回带 projectId/projectName', async () => {

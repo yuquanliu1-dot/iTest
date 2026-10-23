@@ -3,7 +3,7 @@ import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
+import { SCHEMA_SQL, seedOrg, seedProject, seedProjectInOrg } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -138,7 +138,7 @@ describe('S3 mcp-servers：CRUD + 配置期守卫 + 鉴权 + 跨组织隔离', (
   it('跨组织隔离：project/version 归属组织，manager A 看不到/改不了 B 组织 scoped servers，global 仍共享', async () => {
     const orgB = randomUUID();
     await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1, '组织B-mcp', $2)`, [orgB, `/${orgB}/`]);
-    const projB = (await pool.query(`INSERT INTO projects(organization_id, name) VALUES ($1, 'P-B-MCP') RETURNING id`, [orgB])).rows[0]!.id as string;
+    const projB = await seedProjectInOrg(pool, orgB, 'P-B-MCP');
     const verB = (await pool.query(`INSERT INTO project_versions(project_id, name) VALUES ($1, 'v0') RETURNING id`, [projB])).rows[0]!.id as string;
     const rowProj = randomUUID();
     const rowVer = randomUUID();

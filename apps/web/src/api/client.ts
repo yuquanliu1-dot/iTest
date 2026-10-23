@@ -118,8 +118,12 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ projectIds }),
       }),
-    detachProject: (id: string, projectId: string) =>
-      request<{ ok: boolean }>(`/product-lines/${id}/projects/${projectId}`, { method: 'DELETE' }),
+    /** 移动产品线到另一个组织：线内全部项目跟着换组织，标签一并迁移。 */
+    move: (id: string, organizationId: string) =>
+      request<{ ok: boolean; projectCount: number }>(`/product-lines/${id}/move`, {
+        method: 'POST',
+        body: JSON.stringify({ organizationId }),
+      }),
   },
   plans: {
     get: (id: string) => request<PlanDetail>(`/plans/${id}`),

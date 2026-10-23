@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { SCHEMA_SQL, seedProject } from './helpers/db.js';
+import { SCHEMA_SQL, seedProject, seedOtherProductLine } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -45,9 +45,11 @@ describe('plans.service', () => {
     expect(await svc.planProjectId(plan.id)).toBe(a.projectId);
   }, 30_000);
 
-  it('replacePlanCases 跨项目 → 409;addCases 幂等追加;removeCases 后重排 1..m', async () => {
+  it('replacePlanCases 跨产品线 → 409;addCases 幂等追加;removeCases 后重排 1..m', async () => {
     const { groupId, versionId, projectId } = await seedProject(pool);
-    const other = await seedProject(pool);
+    // R2 起成员范围按产品线判定：外案必须落在**另一条**产品线上才会被 409。
+    const otherLineId = await seedOtherProductLine(pool);
+    const other = await seedProject(pool, { productLineId: otherLineId });
     const svc = await import('../src/services/plans.service.js');
     const c1 = await makeCase(groupId, versionId, 'c1');
     const c2 = await makeCase(groupId, versionId, 'c2');

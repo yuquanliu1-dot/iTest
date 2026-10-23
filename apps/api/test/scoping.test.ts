@@ -41,7 +41,10 @@ function insertOrg(name: string, parentId: string | null, parentPath: string | n
 
 async function insertProject(orgId: string, name: string): Promise<string> {
   const id = randomUUID();
-  await pool.query(`INSERT INTO projects(id, organization_id, name) VALUES ($1, $2, $3)`, [id, orgId, name]);
+  // R2：项目无 organization_id——先在该组织下建一条线，再把项目挂上去。
+  const lineId = randomUUID();
+  await pool.query(`INSERT INTO product_lines(id, organization_id, name) VALUES ($1, $2, $3)`, [lineId, orgId, `线-${name}`]);
+  await pool.query(`INSERT INTO projects(id, product_line_id, name) VALUES ($1, $2, $3)`, [id, lineId, name]);
   return id;
 }
 

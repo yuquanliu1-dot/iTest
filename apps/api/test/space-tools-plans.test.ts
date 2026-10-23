@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { randomUUID } from 'node:crypto';
-import { SCHEMA_SQL, seedProject } from './helpers/db.js';
+import { SCHEMA_SQL, seedProject, seedOtherProductLine } from './helpers/db.js';
 import type { SpaceToolsContext } from '../src/pi/space/tools/context.js';
 import { resolveConfirmation } from '../src/pi/space/confirm.js';
 
@@ -74,9 +74,11 @@ describe('manage_plans 工具', () => {
     expect(list.find((p) => p.name === '冒烟')!.caseCount).toBe(2);
   }, 30_000);
 
-  it('add_cases 跨项目 → 门控前报错不出确认卡;remove_cases/update 需确认,stage 带确认时同一 diff', async () => {
+  it('add_cases 跨产品线 → 门控前报错不出确认卡;remove_cases/update 需确认,stage 带确认时同一 diff', async () => {
     const seed = await seedProject(pool);
-    const other = await seedProject(pool);
+    // R2 起越界判定按产品线（不是项目）做，外案必须挂在**另一条**线上。
+    const otherLineId = await seedOtherProductLine(pool);
+    const other = await seedProject(pool, { productLineId: otherLineId });
     const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await toolOf(ctx);
     const c1 = await makeCase(seed.groupId, seed.versionId, 'c1');
@@ -131,7 +133,9 @@ describe('manage_plans 工具', () => {
 
   it('create 部分失败:计划已建不回滚,错误含 planId 且不重复建;add_cases 确认后可补齐', async () => {
     const seed = await seedProject(pool);
-    const other = await seedProject(pool);
+    // 越界用例要挂在**另一条**产品线上才会被拒（同线内引用合法）。
+    const otherLineId = await seedOtherProductLine(pool);
+    const other = await seedProject(pool, { productLineId: otherLineId });
     const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await toolOf(ctx);
     const foreign = await makeCase(other.groupId, other.versionId, '外来的');

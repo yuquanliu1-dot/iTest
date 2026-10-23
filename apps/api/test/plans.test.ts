@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
+import { SCHEMA_SQL, seedOrg, seedProject, seedOtherProductLine } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -73,10 +73,13 @@ describe('execution plans', () => {
     expect(detail.body.cases.map((c: { id: string }) => c.id)).toEqual([c2, c1]);
   });
 
-  it('PUT cases rejects cross-project case with 409', async () => {
+  it('PUT cases rejects cross-product-line case with 409', async () => {
+    // R2 起项目无组织列，计划的成员范围是「计划所在项目 + 同产品线的兄弟项目」。
+    // 所以要 409 必须让那条外案落在**另一条**产品线上（同线内引用是合法的）。
     const a = await seedProject(pool);
     const plan = await request(app).post(`/api/projects/${a.projectId}/plans`).send({ name: 'P', versionId: a.versionId });
-    const b = await seedProject(pool);
+    const otherLineId = await seedOtherProductLine(pool);
+    const b = await seedProject(pool, { productLineId: otherLineId });
     const foreign = await makeCase(b.groupId, b.versionId, 'foreign');
     const r = await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [foreign] });
     expect(r.status).toBe(409);

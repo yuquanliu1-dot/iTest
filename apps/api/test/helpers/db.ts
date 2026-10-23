@@ -8,13 +8,10 @@ CREATE TABLE users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), username varc
 CREATE UNIQUE INDEX users_email_uq ON users(email) WHERE email IS NOT NULL;
 CREATE TABLE organizations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(200) NOT NULL UNIQUE, parent_id uuid REFERENCES organizations(id) ON DELETE SET NULL, path text NOT NULL UNIQUE, description text, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 CREATE TABLE organization_members (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid REFERENCES organizations(id) ON DELETE CASCADE NOT NULL, user_id uuid REFERENCES users(id) ON DELETE CASCADE NOT NULL, is_manager boolean NOT NULL DEFAULT false, is_user boolean NOT NULL DEFAULT true, joined_at timestamp NOT NULL DEFAULT now(), CONSTRAINT organization_members_org_user_uq UNIQUE(organization_id, user_id));
-CREATE TABLE projects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid REFERENCES organizations(id) ON DELETE CASCADE NOT NULL, name varchar(200) NOT NULL, description text, repo_url text, default_branch varchar(200) NOT NULL DEFAULT 'main', provider varchar(16) NOT NULL DEFAULT 'github', gitlab_url_override text, pat_override text, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 CREATE TABLE product_lines (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid REFERENCES organizations(id) ON DELETE CASCADE NOT NULL, name varchar(200) NOT NULL, description text, created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT product_lines_org_name_uq UNIQUE(organization_id, name));
 CREATE INDEX idx_product_lines_org ON product_lines(organization_id);
-DO $$ BEGIN
-  ALTER TABLE projects ADD COLUMN product_line_id uuid REFERENCES product_lines(id) ON DELETE SET NULL;
-EXCEPTION WHEN duplicate_column THEN null;
-END $$;
+-- R2：项目无 organization_id，必属一条产品线；组织由产品线推导。
+CREATE TABLE projects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), product_line_id uuid REFERENCES product_lines(id) ON DELETE RESTRICT NOT NULL, name varchar(200) NOT NULL, description text, repo_url text, default_branch varchar(200) NOT NULL DEFAULT 'main', provider varchar(16) NOT NULL DEFAULT 'github', gitlab_url_override text, pat_override text, created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 CREATE INDEX idx_projects_product_line ON projects(product_line_id);
 CREATE TABLE project_assignments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid REFERENCES projects(id) ON DELETE CASCADE NOT NULL, user_id uuid REFERENCES users(id) ON DELETE CASCADE NOT NULL, organization_id uuid REFERENCES organizations(id) NOT NULL, assigned_at timestamp NOT NULL DEFAULT now(), CONSTRAINT project_assignments_project_user_uq UNIQUE(project_id, user_id));
 CREATE INDEX project_assignments_user_idx ON project_assignments(user_id);
@@ -227,10 +224,38 @@ export async function seedProductLine(pool: Pool, name?: string): Promise<{ prod
   return { productLineId: p.rows[0]!.id as string, ...org };
 }
 
-/** 造一个项目+默认分组+默认版本（挂在 pool 级种子组织下），返回 id 对。所有需要 group_id/project_id/version_id 的测试都用它。 */
-export async function seedProject(pool: Pool): Promise<{ projectId: string; groupId: string; versionId: string } & SeedOrg> {
+/** 在指定组织下建一条产品线；返回 id。 */
+export async function seedProductLineInOrg(pool: Pool, organizationId: string, name: string): Promise<string> {
+  const p = await pool.query(`INSERT INTO product_lines(organization_id, name) VALUES ($1, $2) RETURNING id`, [organizationId, name]);
+  return p.rows[0]!.id as string;
+}
+
+/**
+ * 在种子组织下再建一条**与种子线不同**的产品线（名字唯一），返回 id。
+ * 用于造「跨产品线」场景：R2 起跨项目用例被拒的前提是两条线不同。
+ */
+export async function seedOtherProductLine(pool: Pool): Promise<string> {
   const org = await seedOrg(pool);
-  const p = await pool.query(`INSERT INTO projects(organization_id, name) VALUES ($1, '测试项目') RETURNING id`, [org.orgId]);
+  const name = `另一条线-${Math.random().toString(36).slice(2, 10)}`;
+  return seedProductLineInOrg(pool, org.orgId, name);
+}
+
+/**
+ * 造一个项目+默认分组+默认版本（挂在 pool 级种子组织下），返回 id 对。
+ * 所有需要 group_id/project_id/version_id 的测试都用它。签名不变，所以 R2 删列后
+ * 其余测试文件一行都不用改——项目自动挂到种子组织的默认产品线。
+ *
+ * opts.productLineId：把项目挂到别的产品线上。R2 起「跨项目」不再等于「跨产品线」，
+ * 需要验证 409 cross_project 的用例必须让两项目落在**不同**产品线上（默认两项目
+ * 共用种子线，同线内互相引用是合法的）。
+ */
+export async function seedProject(
+  pool: Pool,
+  opts: { productLineId?: string } = {},
+): Promise<{ projectId: string; groupId: string; versionId: string } & SeedOrg> {
+  const line = await seedProductLine(pool);
+  const productLineId = opts.productLineId ?? line.productLineId;
+  const p = await pool.query(`INSERT INTO projects(product_line_id, name) VALUES ($1, '测试项目') RETURNING id`, [productLineId]);
   const projectId = p.rows[0]!.id as string;
   const g = await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, '默认分组') RETURNING id`, [projectId]);
   const v = await pool.query(
@@ -241,8 +266,15 @@ export async function seedProject(pool: Pool): Promise<{ projectId: string; grou
     projectId,
     groupId: g.rows[0]!.id as string,
     versionId: v.rows[0]!.id as string,
-    ...org,
+    ...line,
   };
+}
+
+/** 在指定组织下造项目：先建该组织的默认线再挂上去（组织由产品线决定）。 */
+export async function seedProjectInOrg(pool: Pool, organizationId: string, name: string): Promise<string> {
+  const lineId = await seedProductLineInOrg(pool, organizationId, `线-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const p = await pool.query(`INSERT INTO projects(product_line_id, name) VALUES ($1, $2) RETURNING id`, [lineId, name]);
+  return p.rows[0]!.id as string;
 }
 
 import jwt from 'jsonwebtoken';

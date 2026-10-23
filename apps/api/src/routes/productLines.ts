@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { groups, productLines, projects, projectVersions } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
@@ -12,7 +12,8 @@ import {
 import { isManagerOfOrg } from '../middleware/auth.js';
 import { getOrgPath } from '../services/orgTree.js';
 import type { AuthUser } from '../services/auth.service.js';
-import { rehomeProjectToProductLine, resolveProjectProductLineId } from '../services/projectRehome.js';
+import { moveProductLineToOrg } from '../services/productLineMove.js';
+import { attachProjectToProductLine, resolveProjectProductLineId } from '../services/projectRehome.js';
 
 export const productLinesRoute = Router({ mergeParams: true });
 
@@ -183,31 +184,49 @@ productLinesRoute.get('/:id/versions', async (req, res) => {
 });
 
 /**
- * 把项目挂进产品线（挂载即搬家：项目迁到该产品线所属组织，标签一并迁移）。
- * 从别的产品线移入会自动改归属——一个项目至多属于一条产品线；已在本线的项目幂等跳过。
+ * 把项目挂进产品线。项目已无自己的组织列——归属只由 product_line_id 决定，
+ * 从别的线移入即自动换组织（结构保证，无需同步代码），标签按同名迁到目标组织。
+ * 一个项目至多属于一条产品线；已在本线的项目幂等跳过。
  */
 productLinesRoute.post('/:id/projects', async (req, res) => {
   const id = param(req, 'id');
-  const organizationId = await requireLineManager(id, req.user!);
+  await requireLineManager(id, req.user!);
   const body = z.object({ projectIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
   await assertProjectsAssignable(body.projectIds, req.user!);
   let moved = 0;
   for (const projectId of body.projectIds) {
     if ((await resolveProjectProductLineId(projectId)) === id) continue;
-    await rehomeProjectToProductLine(projectId, id, organizationId);
+    await attachProjectToProductLine(projectId, id);
     moved += 1;
   }
   res.json({ ok: true, count: body.projectIds.length, moved });
 });
 
-/** 解绑单个项目：product_line_id 置空，退回「未归线」（计划重新严格限同项目用例）。 */
-productLinesRoute.delete('/:id/projects/:projectId', async (req, res) => {
-  await requireLineManager(param(req, 'id'), req.user!);
-  const projectId = param(req, 'projectId');
-  await assertProjectVisible(projectId, req.user!);
-  await db
-    .update(projects)
-    .set({ productLineId: null, updatedAt: new Date() })
-    .where(eq(projects.id, projectId));
-  res.json({ ok: true });
+const MoveBody = z.object({ organizationId: z.string().uuid() });
+
+/**
+ * 移动产品线到另一个组织。线内全部项目跟着换组织，标签一并迁移。
+ * 双闸门：源组织的管理员（线的归属权）+ 目标组织的管理员（把别人的家搬进自己家得有权限）。
+ * 同名线冲突必须预检：product_lines 有 UNIQUE(organization_id, name)，漏出去就是裸 23505。
+ */
+productLinesRoute.post('/:id/move', async (req, res) => {
+  const id = param(req, 'id');
+  const sourceOrgId = await requireLineManager(id, req.user!);
+  const body = MoveBody.parse(req.body);
+  if (body.organizationId === sourceOrgId) throw new HttpError(409, 'same_org', 'target organization is the current one');
+  await requireTargetOrgManager(body.organizationId, req.user!);
+
+  const line = (await db.select({ name: productLines.name }).from(productLines).where(eq(productLines.id, id)).limit(1))[0];
+  if (!line) throw new HttpError(404, 'not_found', 'product line not found');
+  const clash = await db
+    .select({ id: productLines.id })
+    .from(productLines)
+    .where(and(eq(productLines.organizationId, body.organizationId), eq(productLines.name, line.name)))
+    .limit(1);
+  if (clash.length > 0) {
+    throw new HttpError(409, 'line_name_conflict', 'target organization already has a product line with this name');
+  }
+
+  const projectCount = await moveProductLineToOrg(id, sourceOrgId, body.organizationId);
+  res.json({ ok: true, projectCount });
 });

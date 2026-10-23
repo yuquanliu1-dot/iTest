@@ -5,6 +5,8 @@ import { useUIStore } from '../../stores/ui';
 import { api, type ProductLine, type ProjectWithCount } from '../../api/client';
 import { useAuthStore } from '../../stores/auth';
 import { isManagerOfOrgPath } from '../../utils/orgTree';
+import MoveProductLineModal from './MoveProductLineModal';
+import ChangeProductLineModal from './ChangeProductLineModal';
 import ProductLineFormModal from './ProductLineFormModal';
 
 interface Props {
@@ -23,8 +25,8 @@ interface LineProject {
 /**
  * 产品线详情。成员管理界面里产品线完全替代项目，所以这一层承接原「项目详情」的位置：
  * - 线内项目列表：点进去仍是项目详情（分配用户、变更产品线）
- * - 可挂载项目：挂载即搬家（项目迁到本线所属组织，标签一并迁移）
- * - 编辑 / 删除产品线
+ * - 可挂载项目：项目必属一条线，挂到本线即换组织（标签一并迁移）
+ * - 编辑 / 删除 / 移动产品线
  */
 export default function ProductLineDetailPanel({ productLineId, onBack, onOpenProject }: Props) {
   const { t } = useTranslation();
@@ -37,10 +39,18 @@ export default function ProductLineDetailPanel({ productLineId, onBack, onOpenPr
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  // 产品线所属组织的管理员才可写（挂载/移出/改/删）。产品线只有 organizationId 没有
+  const [moveOpen, setMoveOpen] = useState(false);
+  // 「变更产品线」的目标候选：调用者可见的全部线。project_line_id 必填后不存在「移出线」，
+  // 换线只有一个方向——挂到另一条线（项目随之换组织）。
+  const [visibleLines, setVisibleLines] = useState<ProductLine[]>([]);
+  const [changeTarget, setChangeTarget] = useState<LineProject | null>(null);
+  // 产品线所属组织的管理员才可写（挂载/改/删/移动/换线）。产品线只有 organizationId 没有
   // path，而 authStore.organizations 只含直接 membership → 目标组织 path 从 managed-subtree
   // 取，与后端 isManagerOfOrg 对齐，避免展示必然 403 的按钮。
   const [orgPaths, setOrgPaths] = useState<Map<string, string>>(new Map());
+  // 「移动组织」的候选：调用者对其有管理员权限的子树节点。移动要双闸门（源 + 目标都管），
+  // 目标一侧的候选同样按 isManagerOfOrgPath 过滤，否则点下去必然 403。
+  const [managedOrgs, setManagedOrgs] = useState<Array<{ id: string; name: string; path: string }>>([]);
 
   // 切换产品线时旧的异步响应可能后到 → 用 ref 里的当前 id 判一次，避免写脏上一条线。
   const currentIdRef = useRef(productLineId);
@@ -71,16 +81,25 @@ export default function ProductLineDetailPanel({ productLineId, onBack, onOpenPr
 
   useEffect(() => {
     let stale = false;
+    api.productLines.list()
+      .then((ls) => { if (!stale) setVisibleLines(ls); })
+      .catch(() => { if (!stale) setVisibleLines([]); });
     api.orgs.managedSubtree()
       .then((orgs) => {
         if (stale) return;
         setOrgPaths(new Map(orgs.map((o) => [o.id, o.path])));
+        setManagedOrgs(orgs.map((o) => ({ id: o.id, name: o.name, path: o.path })));
       })
-      .catch(() => { if (!stale) setOrgPaths(new Map()); });
+      .catch(() => {
+        if (stale) return;
+        setOrgPaths(new Map());
+        setManagedOrgs([]);
+      });
     return () => { stale = true; };
   }, []);
 
   const canManageLine = !!line && isManagerOfOrgPath(organizations, orgPaths.get(line.organizationId));
+  const moveOrgChoices = managedOrgs.filter((o) => isManagerOfOrgPath(organizations, o.path));
 
   const inLineIds = new Set(lineProjects.map((p) => p.id));
   // 可挂载候选：本线之外的全部项目——挂载即搬家，所以「在别的线下」不再是障碍。
@@ -101,19 +120,6 @@ export default function ProductLineDetailPanel({ productLineId, onBack, onOpenPr
       await api.productLines.attachProjects(productLineId, [...picked]);
       toast(t('members:linesAttached', { count: picked.size }), 'success');
       setPicked(new Set());
-      loadLine();
-    } catch (e) {
-      toast(e instanceof Error ? localizeApiError(e) : t('members:opFailed'), 'error');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleDetach = async (projectId: string, projectName: string) => {
-    setBusy(true);
-    try {
-      await api.productLines.detachProject(productLineId, projectId);
-      toast(t('members:lineDetached', { name: projectName }), 'success');
       loadLine();
     } catch (e) {
       toast(e instanceof Error ? localizeApiError(e) : t('members:opFailed'), 'error');
@@ -145,6 +151,13 @@ export default function ProductLineDetailPanel({ productLineId, onBack, onOpenPr
         <div className="ml-auto flex gap-2">
           {canManageLine && (
             <>
+              <button
+                className="text-[12px]"
+                style={{ color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer' }}
+                onClick={() => setMoveOpen(true)}
+              >
+                {t('members:moveLineOrg')}
+              </button>
               <button
                 className="text-[12px]"
                 style={{ color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer' }}
@@ -195,9 +208,9 @@ export default function ProductLineDetailPanel({ productLineId, onBack, onOpenPr
                   className="text-[11px]"
                   style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)', cursor: 'pointer' }}
                   disabled={busy || !canManageLine}
-                  onClick={() => void handleDetach(p.id, p.name)}
+                  onClick={() => setChangeTarget(p)}
                 >
-                  {t('members:lineDetachBtn')}
+                  {t('members:lineChangeBtn')}
                 </button>
               </div>
             ))}
@@ -237,6 +250,34 @@ export default function ProductLineDetailPanel({ productLineId, onBack, onOpenPr
         onClose={() => setEditOpen(false)}
         onSaved={() => {
           setEditOpen(false);
+          loadLine();
+        }}
+      />
+
+      <MoveProductLineModal
+        visible={moveOpen}
+        productLineId={productLineId}
+        productLineName={line?.name ?? ''}
+        currentOrganizationId={line?.organizationId ?? ''}
+        choices={moveOrgChoices}
+        onClose={() => setMoveOpen(false)}
+        onMoved={() => {
+          setMoveOpen(false);
+          toast(t('members:lineMoved'), 'success');
+          loadLine();
+        }}
+      />
+
+      <ChangeProductLineModal
+        visible={!!changeTarget}
+        projectId={changeTarget?.id ?? ''}
+        projectName={changeTarget?.name ?? ''}
+        currentProductLineId={productLineId}
+        choices={visibleLines}
+        onClose={() => setChangeTarget(null)}
+        onChanged={() => {
+          setChangeTarget(null);
+          toast(t('members:lineChanged'), 'success');
           loadLine();
         }}
       />

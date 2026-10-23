@@ -30,8 +30,6 @@
   "attachProjects": "挂载项目",
   "detachProject": "移出产品线",
   "attachMoveHint": "移入会把项目迁到本产品线所属组织，项目的标签会一并迁移。",
-  "detachConfirm": "确定把「{{name}}」移出该产品线？移出后它的用例将不能再被同线计划引用。",
-  "detached": "已移出产品线",
   "attached": "已挂载 {{count}} 个项目",
   "pickProjects": "选择项目",
   "noCandidates": "没有可挂载的项目",

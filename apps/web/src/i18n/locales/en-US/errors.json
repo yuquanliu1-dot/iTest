@@ -39,6 +39,7 @@
   "no_repo": "Code repository not found",
   "not_empty": "There are still child items and this cannot be deleted",
   "line_not_empty": "This product line still contains projects and cannot be deleted — move them out or change their product line first",
+  "line_name_conflict": "The target organization already has a product line with this name — rename this one or pick another organization",
   "not_sensitive": "This field is not a sensitive field",
   "plan_run_running": "The plan run is still executing, abort it before deleting",
   "same_org": "Must be in the same organization",

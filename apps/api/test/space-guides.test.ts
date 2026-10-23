@@ -3,7 +3,7 @@ import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
+import { SCHEMA_SQL, seedOrg, seedProject, seedProjectInOrg } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -108,7 +108,7 @@ describe('S1 guides：seed 幂等 + loadActiveGuides 语义 + CRUD/鉴权', () =
     // 造第二个组织（不走 seedOrg 缓存）：组织 B + 项目 B + 版本 B
     const orgB = randomUUID();
     await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1, '组织B', $2)`, [orgB, `/${orgB}/`]);
-    const projB = (await pool.query(`INSERT INTO projects(organization_id, name) VALUES ($1, 'P-B') RETURNING id`, [orgB])).rows[0]!.id as string;
+    const projB = await seedProjectInOrg(pool, orgB, 'P-B');
     const verB = (await pool.query(`INSERT INTO project_versions(project_id, name) VALUES ($1, 'v0') RETURNING id`, [projB])).rows[0]!.id as string;
     const gProjId = randomUUID();
     const gVerId = randomUUID();

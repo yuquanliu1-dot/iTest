@@ -6,7 +6,7 @@ interface Props {
   visible: boolean;
   /** null = 新建。 */
   line: ProductLine | null;
-  /** 新建时的归属组织；编辑时忽略（产品线不可换组织）。 */
+  /** 新建时的归属组织；编辑时忽略——换组织走线详情页的「移动组织」，是另一个动作（会带着整条线搬家）。 */
   organizationId: string;
   onClose: () => void;
   onSaved: () => void;
@@ -14,7 +14,8 @@ interface Props {
 
 /**
  * 产品线的创建/编辑弹窗（成员管理界面用）。
- * 产品线必属组织——组织不可改，所以编辑时只开放名称与描述。
+ * 产品线必属组织，但**这里只管名称与描述**——换组织走产品线详情页的「移动组织」，
+ * 那是会带着线内全部项目一起搬家的动作，不能和改名混在一个表单里。
  */
 export default function ProductLineFormModal({ visible, line, organizationId, onClose, onSaved }: Props) {
   const { t } = useTranslation();

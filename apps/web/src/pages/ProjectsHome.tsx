@@ -303,17 +303,6 @@ export default function ProjectsHome() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  const detach = useMutation({
-    mutationFn: ({ lineId, projectId }: { lineId: string; projectId: string }) =>
-      api.productLines.detachProject(lineId, projectId),
-    onSuccess: () => {
-      toast(t('productLines:detached'), 'success');
-      qc.invalidateQueries({ queryKey: ['productLines'] });
-      qc.invalidateQueries({ queryKey: ['projects'] });
-    },
-    onError: (e: Error) => toast(localizeApiError(e), 'error'),
-  });
-
   /** 某条线内的项目（从 allProjects 的 productLineId 反查，避免为每条线发一次详情请求）。 */
   const projectsOf = (lineId: string) => (data ?? []).filter((p) => p.productLineId === lineId);
   /** 可挂载候选：本线之外的全部项目——挂载即搬家（项目迁到本线所属组织，标签一并迁移），
@@ -748,7 +737,7 @@ export default function ProjectsHome() {
         </DialogContent>
       </Dialog>
 
-      {/* 产品线成员管理：线内项目可摘除，本线之外的项目可勾选移入（挂载即搬家） */}
+      {/* 产品线成员管理：project_line_id 必填，项目必属一条线，所以只有「移入」没有「摘除」 */}
       <Dialog open={!!manageLine} onOpenChange={(o) => !o && setManageLine(null)}>
         <DialogContent style={{ maxWidth: 520 }}>
           <DialogHeader>
@@ -768,14 +757,6 @@ export default function ProjectsHome() {
                   <div key={p.id} className="flex items-center gap-2 px-2 py-1.5">
                     <Icon name="folder" size={12} style={{ color: 'var(--muted-foreground)' }} />
                     <span className="text-[12px] flex-1 truncate">{p.name}</span>
-                    {canManage && (
-                      <IconButton
-                        icon="close"
-                        title={t('productLines:detachProject')}
-                        disabled={detach.isPending}
-                        onClick={() => manageLine && detach.mutate({ lineId: manageLine.id, projectId: p.id })}
-                      />
-                    )}
                   </div>
                 ))
               )}

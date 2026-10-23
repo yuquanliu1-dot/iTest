@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { eq, and, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { tags, projects, organizations } from '../db/schema.js';
+import { tags, projects, productLines, organizations } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible } from '../services/projectAccess.js';
 import { visibleOrgIdsFor } from '../services/orgTree.js';
@@ -28,11 +28,12 @@ function normalizeColor(raw: string): string {
   return raw.replace(/^#/, '').toLowerCase();
 }
 
-/** 解析 project → 所属 org id；找不到抛 404。 */
+/** 解析 project → 所属 org id（经 product_lines）；找不到抛 404。 */
 async function resolveOrgIdForProject(projectId: string): Promise<string> {
   const rows = await db
-    .select({ organizationId: projects.organizationId })
+    .select({ organizationId: productLines.organizationId })
     .from(projects)
+    .innerJoin(productLines, eq(productLines.id, projects.productLineId))
     .where(eq(projects.id, projectId))
     .limit(1);
   const orgId = rows[0]?.organizationId;

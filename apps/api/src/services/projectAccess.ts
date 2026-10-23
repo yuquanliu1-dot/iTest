@@ -6,12 +6,25 @@ import type { AuthUser } from './auth.service.js';
 import { visibleOrgIdsFor } from './orgTree.js';
 
 /**
+ * 解析 project → 所属 org id（经 product_lines）；项目不存在或无产品线返回 null。
+ * 项目已无自己的组织列，「项目属于哪个组织」恒等于「它的产品线属于哪个组织」。
+ */
+async function projectOrgId(projectId: string): Promise<string | null> {
+  const rows = await db
+    .select({ organizationId: productLines.organizationId })
+    .from(projects)
+    .innerJoin(productLines, eq(productLines.id, projects.productLineId))
+    .where(eq(projects.id, projectId))
+    .limit(1);
+  return rows[0]?.organizationId ?? null;
+}
+
+/**
  * 项目可见性断言：不存在与不可见统一 404，不泄露存在性。
  * 所有按 id 访问项目及其子资源的入口都必须先过这道检查。
  */
 export async function assertProjectVisible(projectId: string, user: AuthUser): Promise<void> {
-  const rows = await db.select({ organizationId: projects.organizationId }).from(projects).where(eq(projects.id, projectId)).limit(1);
-  const orgId = rows[0]?.organizationId;
+  const orgId = await projectOrgId(projectId);
   if (!orgId) throw new HttpError(404, 'not_found', 'project not found');
   const visible = await visibleOrgIdsFor(user);
   if (!visible.has(orgId)) throw new HttpError(404, 'not_found', 'project not found');
@@ -32,11 +45,8 @@ export async function resolveCaseProjectId(caseId: string): Promise<string | nul
 export async function assertCaseVisible(caseId: string, user: AuthUser): Promise<void> {
   const projectId = await resolveCaseProjectId(caseId);
   if (!projectId) throw new HttpError(404, 'not_found', 'case not found');
-  const rows = await db.select({ organizationId: projects.organizationId }).from(projects).where(eq(projects.id, projectId)).limit(1);
-  const orgId = rows[0]?.organizationId;
-  if (!orgId) throw new HttpError(404, 'not_found', 'case not found');
-  const visible = await visibleOrgIdsFor(user);
-  if (!visible.has(orgId)) throw new HttpError(404, 'not_found', 'case not found');
+  // 组织判定已内聚在 assertProjectVisible 里，不必再自己查一遍 org。
+  await assertProjectVisible(projectId, user);
 }
 
 /** report 可见性断言：经 case → group → project 链路判定，404 文案不区分「不存在」与「不可见」。 */
@@ -65,7 +75,11 @@ export async function assertPlanRunVisible(planRunId: string, user: AuthUser): P
 export async function visibleProjectIds(user: AuthUser): Promise<string[]> {
   const visibleOrgs = await visibleOrgIdsFor(user);
   if (visibleOrgs.size === 0) return [];
-  const rows = await db.select({ id: projects.id }).from(projects).where(inArray(projects.organizationId, [...visibleOrgs]));
+  const rows = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .innerJoin(productLines, eq(productLines.id, projects.productLineId))
+    .where(inArray(productLines.organizationId, [...visibleOrgs]));
   return rows.map((r) => r.id);
 }
 

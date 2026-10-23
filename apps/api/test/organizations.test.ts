@@ -221,7 +221,7 @@ describe('GET /api/organizations/:orgId/product-lines 组织下的产品线', ()
     const line = await request(app).post('/api/product-lines').set('Cookie', adminCookie).send({ name: '组织下测试线', organizationId: subOrgId });
     lineId = line.body.id;
     // 线内放一个项目 → projectCount 应为 1
-    const proj = await pool.query(`INSERT INTO projects(organization_id, name, product_line_id) VALUES ($1, '线内项目', $2) RETURNING id`, [subOrgId, lineId]);
+    const proj = await pool.query(`INSERT INTO projects(product_line_id, name) VALUES ($1, '线内项目') RETURNING id`, [lineId]);
     await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, 'g')`, [proj.rows[0]!.id]);
   });
 

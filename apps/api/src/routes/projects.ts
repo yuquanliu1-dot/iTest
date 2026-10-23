@@ -54,10 +54,15 @@ async function productLineNames(): Promise<Map<string, string>> {
 }
 
 projectsRoute.get('/', async (req, res) => {
-  // 只列出用户可见组织下的项目
+  // 只列出用户可见组织下的项目（项目组织 = 其产品线的组织）
   const visibleOrgs = await visibleOrgIdsFor(req.user!);
   const ps = visibleOrgs.size
-    ? await db.select().from(projects).where(inArray(projects.organizationId, [...visibleOrgs])).orderBy(asc(projects.createdAt))
+    ? await db
+        .select({ project: projects, organizationId: productLines.organizationId })
+        .from(projects)
+        .innerJoin(productLines, eq(productLines.id, projects.productLineId))
+        .where(inArray(productLines.organizationId, [...visibleOrgs]))
+        .orderBy(asc(projects.createdAt))
     : [];
   const gs = await db.select().from(groups);
   const counts = await caseCountsByGroup();
@@ -78,12 +83,14 @@ projectsRoute.get('/', async (req, res) => {
   const lineNames = await productLineNames();
   res.json(
     await attachCreators(
-      ps.map((p) => ({
+      ps.map(({ project: p, organizationId }) => ({
         ...maskProject(p),
+        // 组织由产品线推导；响应仍带 organizationId，前端类型零改动。
+        organizationId,
         caseCount: byProject.get(p.id) ?? 0,
         versionCount: vByProject.get(p.id) ?? 0,
         environmentCount: eByProject.get(p.id) ?? 0,
-        productLineName: p.productLineId ? (lineNames.get(p.productLineId) ?? null) : null,
+        productLineName: lineNames.get(p.productLineId) ?? null,
       })),
     ),
   );
@@ -92,6 +99,7 @@ projectsRoute.get('/', async (req, res) => {
 projectsRoute.post('/', requireManager, async (req, res) => {
   const body = CreateBody.parse(req.body);
   // 项目的组织由产品线推导：产品线须可见，且调用者须是该产品线所属组织的管理员。
+  // projects 已无 organization_id 列，归属只由 product_line_id 决定。
   const line = await assertProductLineVisible(body.productLineId, req.user!);
   const lineOrgPath = await getOrgPath(line.organizationId);
   if (!lineOrgPath) throw new HttpError(404, 'not_found', 'product line organization not found');
@@ -107,11 +115,10 @@ projectsRoute.post('/', requireManager, async (req, res) => {
       gitlabUrlOverride: body.gitlabUrlOverride,
       patOverride: body.patOverride,
       productLineId: body.productLineId,
-      organizationId: line.organizationId,
       createdByUserId: req.user!.userId,
     })
     .returning();
-  res.status(201).json(maskProject(rows[0]!));
+  res.status(201).json({ ...maskProject(rows[0]!), organizationId: line.organizationId });
 });
 
 projectsRoute.get('/:id', async (req, res) => {

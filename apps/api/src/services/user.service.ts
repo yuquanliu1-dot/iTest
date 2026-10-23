@@ -14,6 +14,7 @@ import { db } from '../db/client.js';
 import {
   organizationMembers,
   organizations,
+  productLines,
   projectAssignments,
   projects,
   users,
@@ -228,8 +229,13 @@ export const userService = {
     const ids = await projectAssignmentsByUserInOrgs(userId, visible);
     if (ids.length === 0) return { items: [], total: 0, page: opts.page, limit: opts.limit };
 
+    // 项目组织由产品线推导（projects 已无 organization_id 列），响应里仍回传派生值。
     const rows = ids.length
-      ? await db.select({ id: projects.id, name: projects.name, description: projects.description, organizationId: projects.organizationId }).from(projects).where(inArray(projects.id, ids))
+      ? await db
+          .select({ id: projects.id, name: projects.name, description: projects.description, organizationId: productLines.organizationId })
+          .from(projects)
+          .innerJoin(productLines, eq(productLines.id, projects.productLineId))
+          .where(inArray(projects.id, ids))
       : [];
     const visibleSet = new Set(visible);
     const sorted = rows

@@ -382,11 +382,11 @@ export const productLines = pgTable('product_lines', {
 
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
-  organizationId: uuid('organization_id')
-    .notNull()
-    .references(() => organizations.id, { onDelete: 'cascade' }),
-  // 可空 = 未归入任何产品线。可空时计划仍严格限同项目用例（见 plans.service 的归属校验）。
-  productLineId: uuid('product_line_id').references(() => productLines.id, { onDelete: 'set null' }),
+  // 项目没有自己的组织列：所属组织恒等于其产品线的组织（结构不变式，不靠应用层同步）。
+  // 所以移动一条产品线只需 UPDATE product_lines.organization_id，线下项目自动跟着换组织。
+  // notNull + onDelete restrict：删线时若仍有项目，D1 语义由应用层的 409 line_not_empty 先拦，
+  // FK 是兜底——不允许删线把线内项目悄悄打成「无组织无产品线」的孤儿。
+  productLineId: uuid('product_line_id').notNull().references(() => productLines.id, { onDelete: 'restrict' }),
   name: varchar('name', { length: 200 }).notNull(),
   description: text('description'),
   // 仓库元数据：与 iDO 同源（AI 生成用例步骤需要看代码）。当前只存元数据 + 验证可达性，
@@ -405,8 +405,9 @@ export const projects = pgTable('projects', {
 });
 
 // 项目分配：user ⇄ project 多对多。
-// organizationId 是冗余快照，固定在「分配发生时项目所属的组织」——
-// 后续即便项目被 moveProject 改到别的组织，assignment 仍指认当时分配到的组织身份，便于跨组织追溯。
+// organizationId 是「分配发生时」的组织快照，纯审计用途：项目本身已无组织列，
+// 可见性一律经 project → product_lines.organization_id 推导，不再读这一列做闸门。
+// （R2 前它是可见性闸门之一，故移动/挂载时会被同步改写；R2 后该同步已无必要。）
 export const projectAssignments = pgTable('project_assignments', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),

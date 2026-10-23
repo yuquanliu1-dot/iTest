@@ -112,8 +112,16 @@ describe('projects', () => {
       .post('/api/projects')
       .send({ name: '跨组织线项目', productLineId: line.rows[0]!.id });
     expect(created.status).toBe(201);
-    const row = await pool.query(`SELECT organization_id FROM projects WHERE id = $1`, [created.body.id]);
+    // R2：projects 已无 organization_id —— 组织只能经产品线推导。
+    // 断言两件事：项目挂在了那条线上，且响应里的 organizationId 是该线所属的子组织。
+    const row = await pool.query(
+      `SELECT p.product_line_id, l.organization_id FROM projects p
+         JOIN product_lines l ON l.id = p.product_line_id WHERE p.id = $1`,
+      [created.body.id],
+    );
+    expect(row.rows[0]!.product_line_id).toBe(line.rows[0]!.id);
     expect(row.rows[0]!.organization_id).toBe(subOrgId);
+    expect(created.body.organizationId).toBe(subOrgId);
   });
 
   it('挂到他组织不可见的产品线被拒（404）', async () => {

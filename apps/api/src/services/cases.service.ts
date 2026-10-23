@@ -5,7 +5,7 @@
  */
 import { asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { caseTags, datasets, groups, projects, projectVersions, scenarios, tags, testCases, testSteps } from '../db/schema.js';
+import { caseTags, datasets, groups, productLines, projects, projectVersions, scenarios, tags, testCases, testSteps } from '../db/schema.js';
 import type { AppRef } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
@@ -24,9 +24,11 @@ export async function groupProjectId(groupId: string): Promise<string | null> {
 /** 校验 tagIds 都属于 projectId 所属组织;缺失 404,跨组织 400。 */
 export async function assertTagsBelongToOrg(tagIds: string[], projectId: string): Promise<void> {
   if (tagIds.length === 0) return;
+  // 项目的组织由产品线推导（projects 已无 organization_id 列）。
   const [proj] = await db
-    .select({ organizationId: projects.organizationId })
+    .select({ organizationId: productLines.organizationId })
     .from(projects)
+    .innerJoin(productLines, eq(productLines.id, projects.productLineId))
     .where(eq(projects.id, projectId))
     .limit(1);
   if (!proj) throw new HttpError(404, 'not_found', 'project not found');

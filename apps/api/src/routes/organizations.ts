@@ -98,11 +98,13 @@ organizationsRoute.get('/managed-subtree', requireManager, async (_req, res) => 
         .from(organizationMembers)
         .where(inArray(organizationMembers.organizationId, orgIds))
         .groupBy(organizationMembers.organizationId),
+      // 项目数按「项目所属产品线的组织」归集——项目已无自己的 organization_id 列。
       db
-        .select({ organizationId: projects.organizationId, count: count() })
+        .select({ organizationId: productLines.organizationId, count: count() })
         .from(projects)
-        .where(inArray(projects.organizationId, orgIds))
-        .groupBy(projects.organizationId),
+        .innerJoin(productLines, eq(productLines.id, projects.productLineId))
+        .where(inArray(productLines.organizationId, orgIds))
+        .groupBy(productLines.organizationId),
     ]);
     const memberMap = new Map(memberCounts.map((c) => [c.organizationId, Number(c.count)]));
     const projectMap = new Map(projectCounts.map((c) => [c.organizationId, Number(c.count)]));
@@ -185,10 +187,12 @@ organizationsRoute.delete('/:orgId', async (req, res) => {
     .from(organizations)
     .where(eq(organizations.parentId, orgId));
   if (Number(childCount[0]?.c ?? 0) > 0) throw new HttpError(409, 'not_empty', 'organization has child organizations');
+  // 「有项目」守卫：项目经产品线挂在组织下。
   const projectCount = await db
     .select({ c: count() })
     .from(projects)
-    .where(eq(projects.organizationId, orgId));
+    .innerJoin(productLines, eq(productLines.id, projects.productLineId))
+    .where(eq(productLines.organizationId, orgId));
   if (Number(projectCount[0]?.c ?? 0) > 0) throw new HttpError(409, 'not_empty', 'organization has projects');
   const deleted = await db.delete(organizations).where(eq(organizations.id, orgId)).returning({ id: organizations.id });
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'organization not found');
@@ -216,8 +220,8 @@ organizationsRoute.get('/:orgId/projects', async (req, res) => {
   }
   const qPattern = q ? `%${q}%` : null;
   const filter = qPattern
-    ? and(inArray(projects.organizationId, orgIds), ilike(projects.name, qPattern))!
-    : inArray(projects.organizationId, orgIds);
+    ? and(inArray(productLines.organizationId, orgIds), ilike(projects.name, qPattern))!
+    : inArray(productLines.organizationId, orgIds);
 
   const [rows, totalRows] = await Promise.all([
     db
@@ -225,15 +229,21 @@ organizationsRoute.get('/:orgId/projects', async (req, res) => {
         id: projects.id,
         name: projects.name,
         description: projects.description,
-        organizationId: projects.organizationId,
+        // 派生组织：响应仍带 organizationId，前端类型零改动。
+        organizationId: productLines.organizationId,
         repoUrl: projects.repoUrl,
       })
       .from(projects)
+      .innerJoin(productLines, eq(productLines.id, projects.productLineId))
       .where(filter)
       .orderBy(projects.name)
       .limit(limit)
       .offset((page - 1) * limit),
-    db.select({ count: count() }).from(projects).where(filter),
+    db
+      .select({ count: count() })
+      .from(projects)
+      .innerJoin(productLines, eq(productLines.id, projects.productLineId))
+      .where(filter),
   ]);
   // 单查 assignment 计数（按当前页 id 集合）
   const pageIds = rows.map((r) => r.id);

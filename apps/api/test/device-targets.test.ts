@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { SCHEMA_SQL, seedProject } from './helpers/db.js';
+import { SCHEMA_SQL, seedProject, seedProjectInOrg } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -225,14 +225,11 @@ describe('deviceTargets routes', () => {
   });
 
   it('cross-project isolation: GET via foreign project URL → 404', async () => {
-    const other = await pool.query(
-      `INSERT INTO projects(organization_id, name) VALUES ($1, '别家-DT') RETURNING id`,
-      [orgId],
-    );
+    const otherId = await seedProjectInOrg(pool, orgId, '别家-DT');
     const created = await request(app)
       .post(`/api/projects/${projectId}/device-targets`)
       .send({ name: 'iso-target', mobileOs: 'ios', deviceRef: 'iPhone 17 Pro' });
-    const r = await request(app).get(`/api/projects/${other.rows[0]!.id}/device-targets/${created.body.id}`);
+    const r = await request(app).get(`/api/projects/${otherId}/device-targets/${created.body.id}`);
     expect(r.status).toBe(404);
   });
 
@@ -309,13 +306,10 @@ describe('case mobile target binding', () => {
   });
 
   it('PATCH mobileDeviceTargetId from another project → 400 device_target_project_mismatch', async () => {
-    const other = await pool.query(
-      `INSERT INTO projects(organization_id, name) VALUES ($1, '别家-BIND') RETURNING id`,
-      [orgId],
-    );
+    const otherId = await seedProjectInOrg(pool, orgId, '别家-BIND');
     const otherTarget = await pool.query(
       `INSERT INTO device_targets(project_id, name, mobile_os, device_ref) VALUES ($1, '外案', 'ios', 'iPhone 17 Pro') RETURNING id`,
-      [other.rows[0]!.id],
+      [otherId],
     );
     const caseId = await newCase('cross-project-bind');
     const r = await request(app)

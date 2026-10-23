@@ -30,8 +30,6 @@
   "attachProjects": "Attach projects",
   "detachProject": "Remove from line",
   "attachMoveHint": "Moving a project in also moves it into this line's organization; its labels are migrated along with it.",
-  "detachConfirm": "Remove \"{{name}}\" from this product line? Its cases will no longer be referenceable by plans in the line.",
-  "detached": "Removed from product line",
   "attached": "Attached {{count}} projects",
   "pickProjects": "Select projects",
   "noCandidates": "No projects available to attach",

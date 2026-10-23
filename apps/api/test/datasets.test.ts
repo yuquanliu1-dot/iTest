@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { SCHEMA_SQL, seedProject } from './helpers/db.js';
+import { SCHEMA_SQL, seedProject, seedProjectInOrg } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -324,9 +324,9 @@ describe('datasets routes', () => {
   });
 
   it('跨项目访问 404（不泄露存在性）', async () => {
-    const other = await pool.query(`INSERT INTO projects(organization_id, name) VALUES ($1, '别家项目') RETURNING id`, [orgId]);
+    const otherId = await seedProjectInOrg(pool, orgId, '别家项目');
     const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...body, name: '隔离' });
-    const r = await request(app).get(`/api/projects/${other.rows[0].id}/datasets/${created.body.id}`);
+    const r = await request(app).get(`/api/projects/${otherId}/datasets/${created.body.id}`);
     expect(r.status).toBe(404);
   });
 });
@@ -354,9 +354,9 @@ describe('case dataset binding', () => {
   });
 
   it('绑定别的项目的数据集报 400', async () => {
-    const other = await pool.query(`INSERT INTO projects(organization_id, name) VALUES ($1, '别家2') RETURNING id`, [orgId]);
-    await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, 'G')`, [other.rows[0].id]);
-    const g = await pool.query(`SELECT id FROM "groups" WHERE project_id = $1`, [other.rows[0].id]);
+    const otherId2 = await seedProjectInOrg(pool, orgId, '别家2');
+    await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, 'G')`, [otherId2]);
+    const g = await pool.query(`SELECT id FROM "groups" WHERE project_id = $1`, [otherId2]);
     const svc = await import('../src/services/datasets.service.js');
     const created = await svc.createDataset(projectId, { ...body, name: '本项目的' });
     const foreign = await pool.query(

@@ -110,12 +110,14 @@ describe('MCP DB 加载 + 守卫（getMcpServersForThread 默认翻 DB）', () =
   it('loadEnabledMcpServers：scope 过滤跟随线程归属——project/version 行不跨组织泄漏，无 ctx 只加载 global', async () => {
     const { loadEnabledMcpServers } = await import('../src/pi/space/mcp.js');
     try {
-      // FK 父行：organizations → projects → project_versions（scope 过滤测试引用真实归属）
+      // FK 父行：organizations → product_lines → projects → project_versions（scope 过滤测试引用真实归属）
       await pool.query(`INSERT INTO organizations(id, name, path) VALUES
         ('00000000-0000-0000-0000-0000000000aa', 'spike-org', '/spike-org/')`);
-      await pool.query(`INSERT INTO projects(id, organization_id, name) VALUES
-        ('00000000-0000-0000-0000-0000000000aa', '00000000-0000-0000-0000-0000000000aa', 'P-A'),
-        ('00000000-0000-0000-0000-0000000000cc', '00000000-0000-0000-0000-0000000000aa', 'P-B')`);
+      await pool.query(`INSERT INTO product_lines(id, organization_id, name) VALUES
+        ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-0000000000aa', 'spike-line')`);
+      await pool.query(`INSERT INTO projects(id, product_line_id, name) VALUES
+        ('00000000-0000-0000-0000-0000000000aa', '00000000-0000-0000-0000-0000000000d1', 'P-A'),
+        ('00000000-0000-0000-0000-0000000000cc', '00000000-0000-0000-0000-0000000000d1', 'P-B')`);
       await pool.query(`INSERT INTO project_versions(id, project_id, name) VALUES
         ('00000000-0000-0000-0000-0000000000bb', '00000000-0000-0000-0000-0000000000aa', 'v0')`);
       await pool.query(`INSERT INTO assistant_mcp_servers (id, name, kind, command, scope, project_id, version_id) VALUES

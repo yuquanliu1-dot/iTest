@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { SCHEMA_SQL, seedOrg } from './helpers/db.js';
+import { SCHEMA_SQL, seedOrg, seedProductLine } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -42,10 +42,10 @@ describe('overview', () => {
   });
 
   it('GET 200 with empty structure for valid project', async () => {
-    const org = await seedOrg(pool);
+    const { productLineId } = await seedProductLine(pool);
     const p = await pool.query(
-      `INSERT INTO projects(organization_id, name) VALUES ($1, 'p1') RETURNING id`,
-      [org.orgId],
+      `INSERT INTO projects(product_line_id, name) VALUES ($1, 'p1') RETURNING id`,
+      [productLineId],
     );
     const projectId = p.rows[0]!.id;
     const r = await request(app).get(`/api/projects/${projectId}/overview`);
@@ -71,20 +71,20 @@ describe('overview', () => {
   });
 
   it('GET 400 for invalid range', async () => {
-    const org = await seedOrg(pool);
+    const { productLineId } = await seedProductLine(pool);
     const p = await pool.query(
-      `INSERT INTO projects(organization_id, name) VALUES ($1, 'p2') RETURNING id`,
-      [org.orgId],
+      `INSERT INTO projects(product_line_id, name) VALUES ($1, 'p2') RETURNING id`,
+      [productLineId],
     );
     const r = await request(app).get(`/api/projects/${p.rows[0]!.id}/overview?range=xx`);
     expect(r.status).toBe(400);
   });
 
   it('priorityDistribution maps P0..P3 to urgent..low', async () => {
-    const org = await seedOrg(pool);
+    const { productLineId } = await seedProductLine(pool);
     const p = await pool.query(
-      `INSERT INTO projects(organization_id, name) VALUES ($1, 'p3') RETURNING id`,
-      [org.orgId],
+      `INSERT INTO projects(product_line_id, name) VALUES ($1, 'p3') RETURNING id`,
+      [productLineId],
     );
     const projectId = p.rows[0]!.id;
     const g = await pool.query(
@@ -108,10 +108,10 @@ describe('overview', () => {
   });
 
   it('recordingActivity aggregates compiled step kinds per project', async () => {
-    const org = await seedOrg(pool);
+    const { productLineId } = await seedProductLine(pool);
     const p = await pool.query(
-      `INSERT INTO projects(organization_id, name) VALUES ($1, 'p4') RETURNING id`,
-      [org.orgId],
+      `INSERT INTO projects(product_line_id, name) VALUES ($1, 'p4') RETURNING id`,
+      [productLineId],
     );
     const projectId = p.rows[0]!.id;
     const g = await pool.query(

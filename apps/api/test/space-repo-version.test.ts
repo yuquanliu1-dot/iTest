@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { SCHEMA_SQL, seedOrg } from './helpers/db.js';
+import { SCHEMA_SQL, seedProductLine } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -45,10 +45,10 @@ async function makeFixtureRepo(): Promise<string> {
 describe('checkoutRepoForVersion', () => {
   it('version.ref 优先于项目默认分支;meta 记录实际 ref', async () => {
     const repoUrl = await makeFixtureRepo();
-    const { orgId } = await seedOrg(pool);
+    const { productLineId } = await seedProductLine(pool);
     const projectId = (await pool.query(
-      `INSERT INTO projects(organization_id, name, repo_url, provider, default_branch) VALUES ($1,'p',$2,'github','main') RETURNING id`,
-      [orgId, `file://${repoUrl}`],
+      `INSERT INTO projects(product_line_id, name, repo_url, provider, default_branch) VALUES ($1,'p',$2,'github','main') RETURNING id`,
+      [productLineId, `file://${repoUrl}`],
     )).rows[0]!.id as string;
     const versionId = (await pool.query(
       `INSERT INTO project_versions(project_id, name, ref, ref_kind) VALUES ($1,'v1','feature','branch') RETURNING id`,
@@ -76,18 +76,18 @@ describe('checkoutRepoForVersion', () => {
 
   it('version.ref 为空 → 回落项目默认分支;项目无 repoUrl → no_repo', async () => {
     const repoUrl = await makeFixtureRepo();
-    const { orgId } = await seedOrg(pool);
+    const { productLineId } = await seedProductLine(pool);
     const p1 = (await pool.query(
-      `INSERT INTO projects(organization_id, name, repo_url, provider, default_branch) VALUES ($1,'p1',$2,'github','main') RETURNING id`,
-      [orgId, `file://${repoUrl}`],
+      `INSERT INTO projects(product_line_id, name, repo_url, provider, default_branch) VALUES ($1,'p1',$2,'github','main') RETURNING id`,
+      [productLineId, `file://${repoUrl}`],
     )).rows[0]!.id as string;
     const v1 = (await pool.query(
       `INSERT INTO project_versions(project_id, name) VALUES ($1,'v-default') RETURNING id`,
       [p1],
     )).rows[0]!.id as string;
     const p2 = (await pool.query(
-      `INSERT INTO projects(organization_id, name) VALUES ($1,'p2') RETURNING id`,
-      [orgId],
+      `INSERT INTO projects(product_line_id, name) VALUES ($1,'p2') RETURNING id`,
+      [productLineId],
     )).rows[0]!.id as string;
     const v2 = (await pool.query(
       `INSERT INTO project_versions(project_id, name) VALUES ($1,'v-norepo') RETURNING id`,
@@ -102,10 +102,10 @@ describe('checkoutRepoForVersion', () => {
 
   it('version.ref_kind=tag 时按 tag checkout', async () => {
     const repoUrl = await makeFixtureRepo();
-    const { orgId } = await seedOrg(pool);
+    const { productLineId } = await seedProductLine(pool);
     const projectId = (await pool.query(
-      `INSERT INTO projects(organization_id, name, repo_url, provider, default_branch) VALUES ($1,'pt',$2,'github','main') RETURNING id`,
-      [orgId, `file://${repoUrl}`],
+      `INSERT INTO projects(product_line_id, name, repo_url, provider, default_branch) VALUES ($1,'pt',$2,'github','main') RETURNING id`,
+      [productLineId, `file://${repoUrl}`],
     )).rows[0]!.id as string;
     // ref_kind 仅是展示语义;checkout 只认 ref 值 —— 用 tag 名验证 fetch FETCH_HEAD 对 tag 生效
     const versionId = (await pool.query(
