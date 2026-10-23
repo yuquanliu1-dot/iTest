@@ -5,6 +5,8 @@ import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { db } from '../../../db/client.js';
 import { planRunCases } from '../../../db/schema.js';
+import { cache } from '../../../lib/cache.js';
+import { planRunDetailKey } from '../../../lib/cache-keys.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
@@ -55,13 +57,15 @@ export function buildSaveRcaResultTool(ctx: SpaceToolsContext): ToolExecutor {
         }
         throw e;
       }
-      const row = (await db.select({ id: planRunCases.id }).from(planRunCases).where(eq(planRunCases.id, v.planRunCaseId)).limit(1))[0];
+      const row = (await db.select({ id: planRunCases.id, planRunId: planRunCases.planRunId }).from(planRunCases).where(eq(planRunCases.id, v.planRunCaseId)).limit(1))[0];
       if (!row) return { ok: false, error: `planRunCaseId 不存在: ${v.planRunCaseId}` };
       const { planRunCaseId, ...rca } = v;
       void planRunCaseId;
       await db.update(planRunCases).set({
         rca: { ...rca, analyzedAt: new Date().toISOString(), threadId: ctx.threadId },
       }).where(eq(planRunCases.id, v.planRunCaseId));
+      // 终态 run 详情缓存里有 cases[].rca,结论落库后失效让前端立即可见
+      await cache.del(planRunDetailKey(row.planRunId));
       return { ok: true, data: `已保存 ${v.planRunCaseId.slice(0, 8)} 的分析结论(${v.status}/${v.category})` };
     },
   };

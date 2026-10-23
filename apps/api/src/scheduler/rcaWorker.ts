@@ -12,6 +12,8 @@ import { db } from '../db/client.js';
 import { aiThreads, executionPlans, planRunCases, planRuns, reports, testCases } from '../db/schema.js';
 import { cancelThread, ensureSpaceRecord, sendSpaceUserMessage } from '../pi/space/session.js';
 import { buildRcaWorker, type RcaJob } from './rcaQueue.js';
+import { cache } from '../lib/cache.js';
+import { planRunDetailKey } from '../lib/cache-keys.js';
 
 interface FailedCaseItem {
   planRunCaseId: string;
@@ -139,6 +141,10 @@ async function fillTimeoutRows(
     eq(planRunCases.stepKind, 'business'),
     isNull(planRunCases.rca),
   )).returning({ id: planRunCases.id });
+  if (rows.length > 0) {
+    // 终态 run 详情缓存里有 cases[].rca,rca 落库后必须失效,否则前端最长 5min 看不到结论
+    await cache.del(planRunDetailKey(planRunId));
+  }
   return rows.length;
 }
 

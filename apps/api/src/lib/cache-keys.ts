@@ -44,3 +44,8 @@ export function scenariosForProjectKey(projectId: string): string {
 export function scenariosForRequirementKey(requirementId: string): string {
   return `scenarios:requirement:${requirementId}`;
 }
+
+/** 计划运行详情(仅终态缓存;running 实时组装)。rca 落库/运行删除时须显式失效。 */
+export function planRunDetailKey(runId: string): string {
+  return `planrun:detail:${runId}`;
+}

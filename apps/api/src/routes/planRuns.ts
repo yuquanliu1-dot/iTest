@@ -11,6 +11,8 @@ import { sseHeaders } from '../sse/pi.js';
 import { assertPlanRunVisible, assertProjectVisible } from '../services/projectAccess.js';
 import { handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf } from '../execute/liveView.js';
 import { resolveUsersByIds } from '../lib/creator.js';
+import { cache } from '../lib/cache.js';
+import { planRunDetailKey } from '../lib/cache-keys.js';
 
 export const planRunsRoute = Router();
 
@@ -57,6 +59,8 @@ async function deleteRunsWithReports(planRunIds: string[]): Promise<number> {
     await db.delete(reports).where(inArray(reports.id, reportIds));
     await Promise.all(reportIds.map((id) => unlinkReportScreenshots(id).catch(() => {})));
   }
+  // 终态详情缓存失效:删除后重访必须立即可 404,不能返回幽灵快照
+  await Promise.all(deleted.map((d) => cache.del(planRunDetailKey(d.id))));
   return deleted.length;
 }
 
@@ -71,10 +75,17 @@ async function assertNotRunning(planRunIds: string[]): Promise<void> {
   }
 }
 
-planRunsRoute.get('/:id', async (req, res) => {
-  const run = (await db.select().from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
-  if (!run) throw new HttpError(404, 'not_found', 'plan run not found');
-  await assertProjectVisible(run.projectId, req.user!);
+const PLAN_RUN_TERMINAL_STATUSES = ['passed', 'failed', 'cancelled'];
+const PLAN_RUN_DETAIL_TTL_MS = 5 * 60_000;
+
+/**
+ * 组装运行详情 payload;运行不存在返回 null(wrap 不缓存 null,删除后立即可 404)。
+ * 终态快照仍可能因 rca 落库/成员报告删除而变化——前者由 rcaWorker/saveRcaResult 显式失效,
+ * 后者靠 TTL 兜底(已知取舍,见 planRunDetailKey)。
+ */
+async function buildPlanRunDetail(runId: string) {
+  const run = (await db.select().from(planRuns).where(eq(planRuns.id, runId)))[0];
+  if (!run) return null;
   const caseRows = await db
     .select()
     .from(planRunCases)
@@ -132,12 +143,25 @@ planRunsRoute.get('/:id', async (req, res) => {
       lastAssertion,
     };
   });
-  res.json({
+  return {
     ...run,
     planName: plan?.name ?? null,
     cases,
     triggeredBy: run.triggeredByUserId ? (await resolveUsersByIds([run.triggeredByUserId])).get(run.triggeredByUserId) ?? null : null,
-  });
+  };
+}
+
+planRunsRoute.get('/:id', async (req, res) => {
+  const run = (await db.select({ id: planRuns.id, projectId: planRuns.projectId, status: planRuns.status }).from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
+  if (!run) throw new HttpError(404, 'not_found', 'plan run not found');
+  // 可见性必须在缓存之外:缓存的是数据不是鉴权结果,跨组织用户不得命中他人 payload
+  await assertProjectVisible(run.projectId, req.user!);
+  // 运行中(轮询期)实时组装不缓存;终态快照缓存 5min,前端 2s 轮询/重访共享同一份
+  const payload = PLAN_RUN_TERMINAL_STATUSES.includes(run.status)
+    ? await cache.wrap(planRunDetailKey(run.id), PLAN_RUN_DETAIL_TTL_MS, () => buildPlanRunDetail(run.id))
+    : await buildPlanRunDetail(run.id);
+  if (!payload) throw new HttpError(404, 'not_found', 'plan run not found');
+  res.json(payload);
 });
 
 planRunsRoute.post('/:id/cancel', async (req, res) => {
