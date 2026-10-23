@@ -335,6 +335,11 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   const finalSummary = st(lang, 'planRun.summary', { passed, failed, skipped });
   await finalizeRun(planRunId, finalStatus, { passed, failed, skipped, summary: finalSummary });
   publish(planRunId, { type: 'plan_run_complete', status: finalStatus, summary: finalSummary });
+  // RCA:开关打开且有业务失败 → 入队根因分析(异步,不阻塞运行收尾;动态 import 防环)
+  try {
+    const { enqueueRcaForPlanRun } = await import('../scheduler/rcaQueue.js');
+    void enqueueRcaForPlanRun(planRunId).catch((e) => logger.warn({ err: e, planRunId }, 'rca enqueue failed'));
+  } catch { /* 队列模块加载失败不影响运行收尾 */ }
   runState.delete(planRunId);
   } finally {
     // 登录准备 take ownership 后由本函数负责关浏览器+context；异常路径（登录 prepare 失败早返回）
