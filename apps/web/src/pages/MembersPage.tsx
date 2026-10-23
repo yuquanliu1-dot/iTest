@@ -52,23 +52,33 @@ export default function MembersPage() {
   }, [setSearchParams]);
 
   const handleSelectOrg = useCallback((org: OrgTreeNode) => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.set('org', org.id);
-      next.set('tab', 'users');
-      next.delete('page');
-      next.delete('q');
-      return next;
-    }, { replace: true });
-  }, [setSearchParams]);
+    // 必须走 navigate 而不是只改 searchParams：详情页（/members/:kind/:id）会一直占着路径，
+    // 而渲染分支里 detailKind 优先于 orgId——只改 query 的话点了左树没反应，右边仍停在详情页。
+    const next = new URLSearchParams();
+    next.set('org', org.id);
+    next.set('tab', 'users');
+    if (includeSubtree) next.set('subtree', '1');
+    navigate(`/members?${next.toString()}`);
+  }, [navigate, includeSubtree]);
 
+  /** 当前组织上下文的查询串（org/tab/subtree），无组织时为空串。 */
+  const orgContext = useCallback(() => {
+    if (!orgId) return '';
+    const next = new URLSearchParams();
+    next.set('org', orgId);
+    if (tab !== 'users') next.set('tab', tab);
+    if (!includeSubtree) next.set('subtree', '0');
+    return `?${next.toString()}`;
+  }, [orgId, tab, includeSubtree]);
+
+  // 进详情时把当前组织带在 query 里，否则「返回」无从知道该回到哪个组织。
   const openDetail = useCallback((kind: 'user' | 'project' | 'productline', id: string) => {
-    navigate(`/members/${kind}/${id}`);
-  }, [navigate]);
+    navigate(`/members/${kind}/${id}${orgContext()}`);
+  }, [navigate, orgContext]);
 
   const backToList = useCallback(() => {
-    navigate('/members');
-  }, [navigate]);
+    navigate(`/members${orgContext()}`);
+  }, [navigate, orgContext]);
 
   return (
     <div className="flex h-full gap-3 p-3">
