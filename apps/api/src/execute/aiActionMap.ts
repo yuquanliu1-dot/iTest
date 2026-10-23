@@ -24,6 +24,11 @@ export function isVisualStep(step: { instruction: string | null; compiled: unkno
 export function mapSelector(selector: string): Locator | null {
   const text = /^text=(.+)$/s.exec(selector);
   if (text) return { strategy: 'text', value: text[1]! };
+  // 尾缀 :has-text("Y")（伪类修饰目标元素本身，如 button:has-text("查询")）→ 文本定位。
+  // 丢掉 css 前缀收窄，多命中风险由验收静态分析「源码命中多处」告警兜底；
+  // :has-text 出现在选择器中段（div:has-text("x") input，目标是 input）语义不保真，仍按专有语法拒绝。
+  const hasText = /^(.*):has-text\(\s*(['"])(.+?)\2\s*\)\s*$/.exec(selector);
+  if (hasText) return { strategy: 'text', value: hasText[3]! };
   if (PLAYWRIGHT_ONLY_SELECTOR_RE.test(selector)) return null;
   return { strategy: 'css', value: selector };
 }

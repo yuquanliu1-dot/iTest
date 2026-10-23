@@ -27,3 +27,16 @@ describe('mapAiActionsToCompiled 凭据占位符', () => {
     expect(r.ok && r.skippedCount).toBe(1);
   });
 });
+
+describe('mapAiActionsToCompiled :has-text 选择器', () => {
+  it('尾缀 :has-text("Y")（伪类修饰目标元素本身）→ text 定位（prod228 查询按钮整步 aiTask 的映射缺口）', () => {
+    const r = mapAiActionsToCompiled([{ type: 'click', selector: 'button:has-text("查询")' }]);
+    expect(r).toEqual({ ok: true, skippedCount: 0, compiled: [{ kind: 'click', locator: [{ strategy: 'text', value: '查询' }] }] });
+  });
+
+  it('中段 :has-text（目标是伪类之后的元素）语义不保真 → 仍按专有语法拒绝', () => {
+    const r = mapAiActionsToCompiled([{ type: 'fill', selector: 'div:has-text("x") input', value: 'v' }]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('Playwright 专有语法');
+  });
+});
