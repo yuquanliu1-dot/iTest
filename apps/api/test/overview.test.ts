@@ -138,4 +138,41 @@ describe('overview', () => {
       { kind: 'fill', count: 1 },
     ]);
   });
+
+  it('窗口外报告不进 trend/KPI/topFailures，但进 recentRuns（窗口拆分语义锁）', async () => {
+    const { productLineId } = await seedProductLine(pool);
+    const p = await pool.query(
+      `INSERT INTO projects(product_line_id, name) VALUES ($1, 'p5') RETURNING id`,
+      [productLineId],
+    );
+    const projectId = p.rows[0]!.id;
+    const g = await pool.query(
+      `INSERT INTO "groups"(project_id, name) VALUES ($1, 'g') RETURNING id`,
+      [projectId],
+    );
+    const groupId = g.rows[0]!.id;
+    const c = await pool.query(
+      `INSERT INTO test_cases(group_id, title) VALUES ($1, 'case1') RETURNING id`,
+      [groupId],
+    );
+    const caseId = c.rows[0]!.id;
+    await pool.query(
+      `INSERT INTO reports(case_id, status, step_results, created_at) VALUES
+        ($1, 'passed', '[]'::jsonb, now()),
+        ($1, 'failed', '[]'::jsonb, now() - interval '30 days')`,
+      [caseId],
+    );
+    const r = await request(app).get(`/api/projects/${projectId}/overview`);
+    expect(r.status).toBe(200);
+    // KPI/trend 只算 7d 窗口内
+    expect(r.body.kpi.totalRuns7d).toBe(1);
+    expect(r.body.kpi.passRate).toBe(1);
+    expect(r.body.trend[6].total).toBe(1);
+    expect(r.body.trend[6].passed).toBe(1);
+    // topFailures 窗口与 trend 对齐：30 天前的失败不计入
+    expect(r.body.topFailures).toEqual([]);
+    // recent 全时段：窗口外报告仍在最新列表（时间倒序，最新在前）
+    expect(r.body.recentRuns).toHaveLength(2);
+    expect((r.body.recentRuns as Array<{ status: string }>).map((x) => x.status)).toEqual(['passed', 'failed']);
+  });
 });

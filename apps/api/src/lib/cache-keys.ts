@@ -54,3 +54,8 @@ export function planRunDetailKey(runId: string): string {
 export function casesForProjectKey(projectId: string): string {
   return `cases:project:${projectId}`;
 }
+
+/** 仪表盘聚合(窗口 range=7d|30d)。TTL-only,无写失效,dashboard 容忍 60s 陈旧。 */
+export function overviewKey(projectId: string, range: string): string {
+  return `overview:${projectId}:${range}`;
+}

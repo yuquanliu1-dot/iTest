@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { eq, desc, inArray, sql } from 'drizzle-orm';
+import { eq, desc, and, gte, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   testCases,
@@ -12,6 +12,8 @@ import {
 } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible } from '../services/projectAccess.js';
+import { cache } from '../lib/cache.js';
+import { overviewKey } from '../lib/cache-keys.js';
 
 export const overviewRoute = Router();
 
@@ -42,7 +44,9 @@ async function loadBase(projectId: string, days: number) {
         .where(inArray(testCases.groupId, gids))
     : [];
   const since = new Date(Date.now() - days * 86_400_000);
-  const caseRows = cs.length
+  const caseFilter = cs.length ? inArray(reports.caseId, cs.map((c) => c.id)) : null;
+  // 趋势/KPI 只需时间窗内报告(旧实现全量拉所有历史在 JS 里过滤,报告表涨了这里先爆)
+  const rsWindow = caseFilter
     ? await db
         .select({
           id: reports.id,
@@ -54,8 +58,25 @@ async function loadBase(projectId: string, days: number) {
         })
         .from(reports)
         .leftJoin(testCases, eq(testCases.id, reports.caseId))
-        .where(inArray(reports.caseId, cs.map((c) => c.id)))
+        .where(and(caseFilter, gte(reports.createdAt, since)))
         .orderBy(desc(reports.createdAt))
+    : [];
+  // recent 需要全时段最新 10 条(union 性质:两端各取 top10 再归并,合并 top10 不变)
+  const recentRows = caseFilter
+    ? await db
+        .select({
+          id: reports.id,
+          caseId: reports.caseId,
+          caseTitle: testCases.title,
+          status: reports.status,
+          durationMs: reports.durationMs,
+          createdAt: reports.createdAt,
+        })
+        .from(reports)
+        .leftJoin(testCases, eq(testCases.id, reports.caseId))
+        .where(caseFilter)
+        .orderBy(desc(reports.createdAt))
+        .limit(10)
     : [];
   const planRecentRows = await db
     .select({
@@ -69,8 +90,9 @@ async function loadBase(projectId: string, days: number) {
     .from(planRuns)
     .innerJoin(executionPlans, eq(executionPlans.id, planRuns.planId))
     .where(eq(planRuns.projectId, projectId))
-    .orderBy(desc(planRuns.startedAt));
-  const caseRecent = caseRows.slice(0, 10).map((r) => ({
+    .orderBy(desc(planRuns.startedAt))
+    .limit(10);
+  const caseRecent = recentRows.map((r) => ({
     id: r.id,
     caseId: r.caseId,
     caseTitle: r.caseTitle ?? '',
@@ -79,7 +101,7 @@ async function loadBase(projectId: string, days: number) {
     createdAt: r.createdAt.toISOString(),
     kind: 'case' as const,
   }));
-  const planRecent = planRecentRows.slice(0, 10).map((r) => ({
+  const planRecent = planRecentRows.map((r) => ({
     id: r.id,
     caseId: r.planId,
     caseTitle: r.planName,
@@ -93,8 +115,7 @@ async function loadBase(projectId: string, days: number) {
     .slice(0, 10);
   return {
     cs,
-    caseIds: cs.map((c) => c.id),
-    rs7d: caseRows.filter((r) => r.createdAt >= since),
+    rsWindow,
     recent,
   };
 }
@@ -120,23 +141,13 @@ function buildTrend(
   return [...map.entries()].map(([date, v]) => ({ date, ...v }));
 }
 
-overviewRoute.get('/:projectId/overview', async (req, res) => {
-  const { projectId } = req.params;
-  if (!projectId) throw new HttpError(400, 'bad_request', 'projectId required');
-  const parsed = RangeSchema.safeParse(req.query.range);
-  if (!parsed.success) throw new HttpError(400, 'bad_request', 'range must be 7d or 30d');
-  await assertProjectVisible(projectId, req.user!);
-  // ?versionId= 透传：当前 dashboard 不做范围过滤（保持 KPI 与图表语义稳定），
-  // 仅允许前端带上来证明 URL 与上下文一致。
-  void (typeof req.query.versionId === 'string' ? req.query.versionId : null);
-
-  const days = rangeDays(parsed.data);
-  const today = new Date();
-  const { cs, rs7d, recent } = await loadBase(projectId, days);
+async function buildOverview(projectId: string, days: number, today: Date) {
+  const since = new Date(Date.now() - days * 86_400_000);
+  const { cs, rsWindow, recent } = await loadBase(projectId, days);
 
   const totalCases = cs.length;
-  const passed = rs7d.filter((r) => r.status === 'passed').length;
-  const totalRuns7d = rs7d.length;
+  const passed = rsWindow.filter((r) => r.status === 'passed').length;
+  const totalRuns7d = rsWindow.length;
   const passRate = totalRuns7d === 0 ? 0 : passed / totalRuns7d;
 
   const planRows = await db
@@ -155,29 +166,37 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
         .groupBy(planCases.planId)
     : [];
   const caseCountMap = new Map(caseCountRows.map((r) => [r.planId, r.count]));
-  const plans = await Promise.all(
-    planRows.map(async (p) => {
-      const allRuns = await db
-        .select({ status: planRuns.status, startedAt: planRuns.startedAt })
+  // 每 plan 全量 runs 的 N+1 合并为一次查询,按 plan 分组后各算 last 与 30d 通过率
+  const allRuns = planIds.length
+    ? await db
+        .select({ planId: planRuns.planId, status: planRuns.status, startedAt: planRuns.startedAt })
         .from(planRuns)
-        .where(eq(planRuns.planId, p.id))
-        .orderBy(desc(planRuns.startedAt));
-      const last = allRuns[0];
-      const last30 = allRuns.filter(
-        (r) => r.startedAt >= new Date(Date.now() - 30 * 86_400_000),
-      );
-      const passed30 = last30.filter((r) => r.status === 'passed').length;
-      const pr = last30.length === 0 ? 0 : passed30 / last30.length;
-      return {
-        id: p.id,
-        name: p.name,
-        lastStatus: (last?.status as 'passed' | 'failed' | 'running' | 'queued') ?? null,
-        lastRunAt: last?.startedAt.toISOString() ?? null,
-        passRate: pr,
-        totalCases: caseCountMap.get(p.id) ?? 0,
-      };
-    }),
-  );
+        .where(inArray(planRuns.planId, planIds))
+        .orderBy(desc(planRuns.startedAt))
+    : [];
+  const runsByPlan = new Map<string, Array<{ status: string; startedAt: Date }>>();
+  for (const r of allRuns) {
+    const arr = runsByPlan.get(r.planId) ?? [];
+    arr.push({ status: r.status, startedAt: r.startedAt });
+    runsByPlan.set(r.planId, arr);
+  }
+  const plans = planRows.map((p) => {
+    const allRunsOfPlan = runsByPlan.get(p.id) ?? [];
+    const last = allRunsOfPlan[0];
+    const last30 = allRunsOfPlan.filter(
+      (r) => r.startedAt >= new Date(Date.now() - 30 * 86_400_000),
+    );
+    const passed30 = last30.filter((r) => r.status === 'passed').length;
+    const pr = last30.length === 0 ? 0 : passed30 / last30.length;
+    return {
+      id: p.id,
+      name: p.name,
+      lastStatus: (last?.status as 'passed' | 'failed' | 'running' | 'queued') ?? null,
+      lastRunAt: last?.startedAt.toISOString() ?? null,
+      passRate: pr,
+      totalCases: caseCountMap.get(p.id) ?? 0,
+    };
+  });
 
   const aiCalls7d = 0;
 
@@ -196,14 +215,14 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
     (r) => ({ kind: r.kind, count: Number(r.count) }),
   );
 
-  const trend = buildTrend(rs7d, today, days);
+  const trend = buildTrend(rsWindow, today, days);
   const failMap = new Map<
     string,
     { caseId: string; caseTitle: string; failureCount: number; lastFailureAt: string }
   >();
   // Align topFailures window with the trend window (range-driven) for consistency.
-  const sinceFailures = new Date(Date.now() - days * 86_400_000);
-  for (const r of rs7d) {
+  const sinceFailures = since;
+  for (const r of rsWindow) {
     if (r.status !== 'failed' || r.createdAt < sinceFailures) continue;
     const cur = failMap.get(r.caseId);
     if (cur) {
@@ -232,7 +251,7 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
     return { date: dateKey(d), casesGenerated: 0, stepsGenerated: 0 };
   });
 
-  res.json({
+  return {
     kpi: { totalCases, totalPlans: planRows.length, passRate, totalRuns7d, aiCalls7d },
     trend,
     topFailures,
@@ -241,5 +260,25 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
     recordingActivity,
     aiActivity,
     recentRuns: recent,
-  });
+  };
+}
+
+overviewRoute.get('/:projectId/overview', async (req, res) => {
+  const { projectId } = req.params;
+  if (!projectId) throw new HttpError(400, 'bad_request', 'projectId required');
+  const parsed = RangeSchema.safeParse(req.query.range);
+  if (!parsed.success) throw new HttpError(400, 'bad_request', 'range must be 7d or 30d');
+  await assertProjectVisible(projectId, req.user!);
+  // ?versionId= 透传：当前 dashboard 不做范围过滤（保持 KPI 与图表语义稳定），
+  // 仅允许前端带上来证明 URL 与上下文一致。
+  void (typeof req.query.versionId === 'string' ? req.query.versionId : null);
+
+  // dashboard 语义容忍 1min 陈旧:60s TTL-only,无写失效网(执行完 KPI 最多滞后 60s);
+  // 换取不碰任何写路径。可见性断言在缓存之外。
+  const payload = await cache.wrap(
+    overviewKey(projectId, parsed.data),
+    60_000,
+    () => buildOverview(projectId, rangeDays(parsed.data), new Date()),
+  );
+  res.json(payload);
 });

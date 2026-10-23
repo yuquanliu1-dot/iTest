@@ -20,6 +20,8 @@ async function unlinkReportScreenshots(reportId: string): Promise<void> {
 
 reportsRoute.get('/', async (req, res) => {
   const { projectId } = req.query as { projectId?: string };
+  // 列表瘦身:stepResults/datasetSnapshot/preflight 重列只在详情接口(GET /:id)消费,
+  // 前端列表页(实走 /executions)零引用——列表带这些 JSONB 列等于每次全量拖step明细。
   if (projectId) {
     await assertProjectVisible(projectId, req.user!);
     const gs = await db.select().from(groups).where(eq(groups.projectId, projectId));
@@ -28,7 +30,7 @@ reportsRoute.get('/', async (req, res) => {
       : [];
     const rows = caseRows.length
       ? await db
-        .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt, datasetRowIndex: reports.datasetRowIndex, datasetSnapshot: reports.datasetSnapshot, platform: reports.platform, mobileOs: reports.mobileOs, deviceName: reports.deviceName, deviceTargetId: reports.deviceTargetId, healed: reports.healed, createdByUserId: reports.createdByUserId })
+        .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, summary: reports.summary, createdAt: reports.createdAt, datasetRowIndex: reports.datasetRowIndex, platform: reports.platform, mobileOs: reports.mobileOs, deviceName: reports.deviceName, deviceTargetId: reports.deviceTargetId, healed: reports.healed, createdByUserId: reports.createdByUserId })
         .from(reports)
         .leftJoin(testCases, eq(testCases.id, reports.caseId))
         .where(inArray(reports.caseId, caseRows.map((c) => c.id)))
@@ -47,7 +49,7 @@ reportsRoute.get('/', async (req, res) => {
     : [];
   const rows = caseRows.length
     ? await db
-      .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt, datasetRowIndex: reports.datasetRowIndex, datasetSnapshot: reports.datasetSnapshot, platform: reports.platform, mobileOs: reports.mobileOs, deviceName: reports.deviceName, deviceTargetId: reports.deviceTargetId, healed: reports.healed, createdByUserId: reports.createdByUserId })
+      .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, summary: reports.summary, createdAt: reports.createdAt, datasetRowIndex: reports.datasetRowIndex, platform: reports.platform, mobileOs: reports.mobileOs, deviceName: reports.deviceName, deviceTargetId: reports.deviceTargetId, healed: reports.healed, createdByUserId: reports.createdByUserId })
       .from(reports)
       .leftJoin(testCases, eq(testCases.id, reports.caseId))
       .where(inArray(reports.caseId, caseRows.map((c) => c.id)))
