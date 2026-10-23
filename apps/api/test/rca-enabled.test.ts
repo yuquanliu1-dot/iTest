@@ -69,4 +69,61 @@ describe('rcaEnabled 透传', () => {
     const row = await pool.query('SELECT rca_enabled, status FROM plan_runs WHERE id = $1', [run.body.runId]);
     expect(row.rows[0]!.rca_enabled).toBe(true);
   });
+
+  it('create 不带 rcaEnabled → 默认 false', async () => {
+    const { projectId, versionId } = await seedProject(pool);
+    const created = await request(app)
+      .post(`/api/projects/${projectId}/plans`)
+      .send({ name: '默认 RCA 计划', versionId });
+    expect(created.status).toBe(200);
+    expect(created.body.rcaEnabled).toBe(false);
+  });
+});
+
+describe('报告详情回带 rca', () => {
+  it('属于 planRunCase 的报告带出 rca;独立报告无 rca 字段', async () => {
+    const { reportsRoute } = await import('../src/routes/reports.js');
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const p = await pool.query(
+      `INSERT INTO execution_plans(project_id, name, version_id) VALUES ($1, 'RCA 计划', $2) RETURNING id`,
+      [projectId, versionId],
+    );
+    const planId = p.rows[0]!.id as string;
+    const r = await pool.query(
+      `INSERT INTO plan_runs(plan_id, project_id, status, strategy) VALUES ($1, $2, 'failed', 'run_all') RETURNING id`,
+      [planId, projectId],
+    );
+    const runId = r.rows[0]!.id as string;
+    const c = await pool.query(
+      `INSERT INTO test_cases(group_id, title, version_id) VALUES ($1, '带RCA用例', $2) RETURNING id`,
+      [groupId, versionId],
+    );
+    const caseId = c.rows[0]!.id as string;
+    const rep = await pool.query(
+      `INSERT INTO reports(case_id, status, step_results) VALUES ($1, 'failed', '[]'::jsonb) RETURNING id`,
+      [caseId],
+    );
+    const reportId = rep.rows[0]!.id as string;
+    await pool.query(
+      `INSERT INTO plan_run_cases(plan_run_id, case_id, "order", status, step_kind, report_id, rca) VALUES ($1, $2, 1, 'failed', 'business', $3, $4::jsonb)`,
+      [runId, caseId, reportId, JSON.stringify({ status: 'analyzed', category: 'system_defect', confidence: 'high', summary: '根因X' })],
+    );
+    // 挂路由（本文件 app 未挂 reports，动态建一个）
+    const { default: express } = await import('express');
+    const { errorHandler } = await import('../src/middleware/errorHandler.js');
+    const { userId, username, orgId, orgPath } = await seedOrg(pool);
+    const { managerUserOf } = await import('./helpers/auth.js');
+    const app2 = express();
+    app2.use(express.json());
+    app2.use('/api', (req: import('express').Request & { user?: unknown }, _res, next) => {
+      req.user = managerUserOf(userId, username, orgId, orgPath);
+      next();
+    });
+    app2.use('/api/reports', reportsRoute);
+    app2.use(errorHandler);
+    const linked = await request(app2).get(`/api/reports/${reportId}`);
+    expect(linked.status).toBe(200);
+    expect(linked.body.planRunId).toBe(runId);
+    expect(linked.body.rca.summary).toBe('根因X');
+  });
 });

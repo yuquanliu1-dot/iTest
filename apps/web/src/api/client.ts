@@ -145,6 +145,7 @@ export const api = {
           successSelector: string | null;
           unauthorizedKeywords: string[] | null;
         };
+        rcaEnabled: boolean;
       }>,
     ) => request<ExecutionPlan>(`/plans/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/plans/${id}`, { method: 'DELETE' }),
@@ -810,6 +811,17 @@ export interface Group {
 export interface GroupWithCount extends Group {
   caseCount: number;
 }
+export interface RcaEvidence { file: string; lines?: string; note?: string }
+export interface RcaResult {
+  status: 'analyzed' | 'skipped' | 'timeout' | 'error';
+  category: 'system_defect' | 'case_issue' | 'environment' | 'other';
+  confidence?: 'high' | 'medium' | 'low';
+  summary: string;
+  evidence?: RcaEvidence[];
+  suggestion?: string;
+  analyzedAt?: string;
+  threadId?: string;
+}
 export interface ExecutionPlan {
   id: string;
   projectId: string;
@@ -818,6 +830,8 @@ export interface ExecutionPlan {
   name: string;
   environment: string | null;
   environmentId?: string | null;
+  /** 运行结束后对失败用例自动做 AI 根因分析 */
+  rcaEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
   createdBy?: Creator | null;
@@ -863,6 +877,8 @@ export interface PlanRunDetail {
     finishedAt: string | null;
     durationMs: number | null;
     error: string | null;
+    /** AI 根因分析结果（仅失败行有值） */
+    rca?: RcaResult | null;
     /** 最后断言结论：vision 判定 reason 或失败步 error；无报告/未断言为 null。 */
     lastAssertion?: string | null;
   }>;
@@ -1151,6 +1167,8 @@ export interface TestCaseDetail extends TestCase {
   /** 计划运行成员报告：附带来源（后端从 plan_run_cases 查得）。返回按钮据此切到「返回计划运行」 */
   planRunId?: string | null;
   planId?: string | null;
+  /** AI 根因分析结果（属于 plan_run_cases 且已分析时有值） */
+  rca?: RcaResult | null;
   /** 执行人 = 报告创建人（触发执行者）。 */
   createdBy?: Creator | null;
 }

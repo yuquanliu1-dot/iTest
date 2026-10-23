@@ -76,7 +76,7 @@ reportsRoute.get('/:id', async (req, res) => {
   }
   // 计划运行成员报告：在响应里附带 planRunId + planId，前端从计划运行详情进来时显示「返回计划运行」按钮
   const prcRows = await db
-    .select({ planRunId: planRunCases.planRunId, reportId: planRunCases.reportId, reportIds: planRunCases.reportIds, caseId: planRunCases.caseId })
+    .select({ planRunId: planRunCases.planRunId, reportId: planRunCases.reportId, reportIds: planRunCases.reportIds, caseId: planRunCases.caseId, rca: planRunCases.rca })
     .from(planRunCases)
     .where(eq(planRunCases.caseId, report.caseId))
     .limit(50);
@@ -90,7 +90,7 @@ reportsRoute.get('/:id', async (req, res) => {
   // planId 来自 planRuns.planId，多查一次避免 join 整张表
   const { planRuns } = await import('../db/schema.js');
   const planRun = (await db.select({ planId: planRuns.planId }).from(planRuns).where(eq(planRuns.id, link.planRunId)))[0];
-  res.json(await attachCreator({ ...report, planRunId: link.planRunId, planId: planRun?.planId ?? null }));
+  res.json(await attachCreator({ ...report, planRunId: link.planRunId, planId: planRun?.planId ?? null, rca: link.rca ?? null }));
 });
 
 reportsRoute.delete('/:id', async (req, res) => {
