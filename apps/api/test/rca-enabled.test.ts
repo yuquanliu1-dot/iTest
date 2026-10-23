@@ -125,5 +125,15 @@ describe('报告详情回带 rca', () => {
     expect(linked.status).toBe(200);
     expect(linked.body.planRunId).toBe(runId);
     expect(linked.body.rca.summary).toBe('根因X');
+
+    // 同用例的独立报告（无 plan_run_cases 关联）→ 无 rca/planRunId 字段
+    const solo = await pool.query(
+      `INSERT INTO reports(case_id, status, step_results) VALUES ($1, 'passed', '[]'::jsonb) RETURNING id`,
+      [caseId],
+    );
+    const soloRes = await request(app2).get(`/api/reports/${solo.rows[0]!.id as string}`);
+    expect(soloRes.status).toBe(200);
+    expect('rca' in soloRes.body).toBe(false);
+    expect('planRunId' in soloRes.body).toBe(false);
   });
 });

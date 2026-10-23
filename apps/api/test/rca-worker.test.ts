@@ -92,7 +92,7 @@ async function seedFailedReport(caseId: string): Promise<string> {
  *  但失败行照插——验证 versionId 守卫先于失败清单检查。 */
 async function seedFailedRun(
   opts: { rcaEnabled?: boolean; failedCases?: number; withVersion?: boolean } = {},
-): Promise<{ runId: string; planRunCaseId: string | null }> {
+): Promise<{ runId: string; planRunCaseId: string | null; versionId: string }> {
   const withVersion = opts.withVersion ?? true;
   const { projectId, groupId, versionId } = await seedProject(pool);
   const p = await pool.query(
@@ -105,7 +105,7 @@ async function seedFailedRun(
     [p.rows[0]!.id as string, projectId, opts.rcaEnabled ?? true, opts.failedCases ?? 1],
   );
   const runId = r.rows[0]!.id as string;
-  if (opts.rcaEnabled === false || (opts.failedCases ?? 1) <= 0) return { runId, planRunCaseId: null };
+  if (opts.rcaEnabled === false || (opts.failedCases ?? 1) <= 0) return { runId, planRunCaseId: null, versionId };
   const c = await pool.query(
     `INSERT INTO test_cases(group_id, title, version_id) VALUES ($1, '登录后看不到订单', $2) RETURNING id`,
     [groupId, withVersion ? versionId : null],
@@ -116,7 +116,7 @@ async function seedFailedRun(
      VALUES ($1, $2, 1, 'failed', 'business', 'case failed', $3) RETURNING id`,
     [runId, caseId, await seedFailedReport(caseId)],
   );
-  return { runId, planRunCaseId: prc.rows[0]!.id as string };
+  return { runId, planRunCaseId: prc.rows[0]!.id as string, versionId };
 }
 
 describe('RCA worker 编排', () => {
@@ -178,5 +178,78 @@ describe('RCA worker 编排', () => {
     await expect(processRcaJob({ kind: 'rca', planRunId: runId })).resolves.toBeUndefined();
     const t = await pool.query(`SELECT count(*)::int AS n FROM ai_threads WHERE purpose='rca' AND plan_run_id=$1`, [runId]);
     expect(t.rows[0]!.n).toBe(1);
+  });
+
+  it('崩溃扫补：早于 cutoff 的 rca 线程补标 timeout，年轻线程不动', async () => {
+    // 直接 SQL 插线程模拟崩溃现场：线程已建、进程死亡、rca 从未落库
+    const old = await seedFailedRun();
+    const young = await seedFailedRun();
+    const insertThread = (runId: string, versionId: string, age: string) =>
+      pool.query(
+        `INSERT INTO ai_threads(id, kind, version_id, purpose, plan_run_id, title, pi_thread_id, created_at)
+         VALUES (gen_random_uuid(), 'version', $1, 'rca', $2, '根因分析 · 崩溃扫补', '', now() - $3::interval)`,
+        [versionId, runId, age],
+      );
+    await insertThread(old.runId, old.versionId, '1 hour'); // 远超 30+3+5min cutoff
+    await insertThread(young.runId, young.versionId, '2 minutes'); // 可能是别副本的活分析
+
+    const { sweepStaleRcaRuns } = await import('../src/scheduler/rcaWorker.js');
+    const filled = await sweepStaleRcaRuns();
+    expect(filled).toBe(1);
+
+    const oldRow = await pool.query(
+      `SELECT prc.rca, t.id AS thread_id FROM plan_run_cases prc
+       JOIN ai_threads t ON t.plan_run_id = prc.plan_run_id
+       WHERE prc.plan_run_id = $1 AND prc.status='failed'`,
+      [old.runId],
+    );
+    const oldRca = oldRow.rows[0]!.rca as Record<string, unknown>;
+    expect(oldRca.status).toBe('timeout');
+    expect(oldRca.summary).toBe('分析超时未完成');
+    expect(oldRca.threadId).toBe(oldRow.rows[0]!.thread_id);
+
+    const youngRow = await pool.query(`SELECT rca FROM plan_run_cases WHERE plan_run_id=$1`, [young.runId]);
+    expect(youngRow.rows[0]!.rca).toBeNull();
+  });
+
+  it('兜底不覆盖已落结论、只碰 business 失败行', async () => {
+    // stub 落 skipped 模拟 AI 已落结论
+    await stubFactory();
+    const analyzed = await seedFailedRun();
+    const { processRcaJob, sweepStaleRcaRuns } = await import('../src/scheduler/rcaWorker.js');
+    await processRcaJob({ kind: 'rca', planRunId: analyzed.runId });
+    const analyzedRow = await pool.query(`SELECT rca FROM plan_run_cases WHERE id=$1`, [analyzed.planRunCaseId]);
+    expect((analyzedRow.rows[0]!.rca as Record<string, unknown>).status).toBe('skipped');
+
+    // 同一 run 再造一条未分析的失败 business 行 + 一条 login_prepare 失败行，
+    // 线程回拨过 cutoff 后扫补：只补未落库的 business 行，已落结论行与 login_prepare 行不动
+    const c1 = (await pool.query(`SELECT case_id FROM plan_run_cases WHERE id=$1`, [analyzed.planRunCaseId])).rows[0]!.case_id as string;
+    const groupId = (await pool.query(`SELECT group_id FROM test_cases WHERE id=$1`, [c1])).rows[0]!.group_id as string;
+    const c2 = await pool.query(
+      `INSERT INTO test_cases(group_id, title, version_id) VALUES ($1, '第二条失败', $2) RETURNING id`,
+      [groupId, analyzed.versionId],
+    );
+    const caseId2 = c2.rows[0]!.id as string;
+    await pool.query(
+      `INSERT INTO plan_run_cases(plan_run_id, case_id, "order", status, step_kind) VALUES ($1, $2, 2, 'failed', 'business')`,
+      [analyzed.runId, caseId2],
+    );
+    await pool.query(
+      `INSERT INTO plan_run_cases(plan_run_id, case_id, "order", status, step_kind) VALUES ($1, $2, 3, 'failed', 'login_prepare')`,
+      [analyzed.runId, caseId2],
+    );
+    await pool.query(
+      `UPDATE ai_threads SET created_at = now() - interval '1 hour' WHERE purpose='rca' AND plan_run_id=$1`,
+      [analyzed.runId],
+    );
+    await sweepStaleRcaRuns();
+
+    const rows = await pool.query(
+      `SELECT step_kind, rca FROM plan_run_cases WHERE plan_run_id=$1 ORDER BY "order"`,
+      [analyzed.runId],
+    );
+    expect((rows.rows[0]!.rca as Record<string, unknown>).status).toBe('skipped'); // 已落结论不动
+    expect((rows.rows[1]!.rca as Record<string, unknown>).status).toBe('timeout'); // business 补标
+    expect(rows.rows[2]!.rca).toBeNull(); // login_prepare 不碰
   });
 });
