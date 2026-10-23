@@ -93,5 +93,18 @@
   "projectColumn": "所属项目",
   "copyToCurrentVersion": "复制到当前版本",
   "batchCopyToCurrentVersion": "批量复制到当前版本",
-  "copyToCurrentVersionHint": "副本会落到当前版本「{{version}}」下的目标分组；源用例保持不变。"
+  "copyToCurrentVersionHint": "副本会落到当前版本「{{version}}」下的目标分组；源用例保持不变。",
+  "batchSolidify": "批量固化",
+  "batchSolidifyTitle": "批量固化（AI 实测 NL→DSL + 机械验收）",
+  "batchSolidifyConfirm": "将对已选的",
+  "batchSolidifySuffix": "个用例后台执行批量固化：AI 逐用例实测并把自然语言步骤固化为机械 DSL，随后机械验收；失败用例保留已生成的 DSL。仅支持全部步骤均未固化的 web 用例。",
+  "batchSolidifyButton": "开始固化 {{count}} 个用例",
+  "batchSolidifyStarting": "提交中...",
+  "batchSolidifyStarted": "已提交 {{count}} 个用例进入批量固化，后台执行中",
+  "batchSolidifyRejected": "{{count}} 个用例未纳入本次固化：{{reason}}",
+  "batchSolidifyDone": "批量固化完成：{{passed}} 过 / {{failed}} 败",
+  "solidifyColumn": "固化",
+  "solidifyLabel": "固化状态",
+  "unsolidified": "未固化",
+  "unsolidifiedOnly": "仅看未固化"
 }

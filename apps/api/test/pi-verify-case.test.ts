@@ -46,6 +46,11 @@ vi.mock('../src/pi/inspectPage.js', () => ({
   })),
   extractPageEvidence: vi.fn(async () => ({ overlays: [] })),
 }));
+// liveView 包一层 spy：既有真实行为不变（登记进内存表），供 ctx.liveView=false 用例断言零调用
+vi.mock('../src/execute/liveView.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/execute/liveView.js')>();
+  return { ...actual, registerLiveView: vi.fn(actual.registerLiveView) };
+});
 // LLM 模块桩：resolveLlmClient 缺省走 settings 表（测试库无 provider 配置会抛），先注入假 client。
 vi.mock('../src/agent/llmSettings.js', () => ({
   resolveLlmClient: vi.fn(async () => ({
@@ -365,6 +370,29 @@ describe('verify_case 逐步 AI 执行编排', () => {
     const end = emitLog[7] as { result: string; cacheSaved: boolean };
     expect(end.result).toBe('passed');
     expect(end.cacheSaved).toBe(true);
+  });
+
+  it('ctx.liveView=false：不注册实时画面且 start 无 liveUrl（批量后台链路）；缺省会话行为不变', async () => {
+    const { registerLiveView } = await import('../src/execute/liveView.js');
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    // 关闭路径：liveView=false → 零注册、start 事件无 liveUrl
+    const caseOff = await seedCase({ steps: [CLICK_COMPILED] });
+    const emitOff: unknown[] = [];
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const rOff = await buildVerifyCaseTool({ ...toolCtx(emitOff), liveView: false }).execute({ caseId: caseOff });
+    expect(rOff.ok).toBe(true);
+    expect(registerLiveView).not.toHaveBeenCalled();
+    const startOff = emitOff[0] as { liveUrl?: string };
+    expect(startOff.liveUrl).toBeUndefined();
+    // 缺省（undefined）：会话链路照旧注册并带流地址
+    const caseOn = await seedCase({ steps: [CLICK_COMPILED] });
+    const emitOn: unknown[] = [];
+    const rOn = await buildVerifyCaseTool(toolCtx(emitOn)).execute({ caseId: caseOn });
+    expect(rOn.ok).toBe(true);
+    expect(registerLiveView).toHaveBeenCalledTimes(1);
+    const startOn = emitOn[0] as { liveUrl?: string };
+    expect(startOn.liveUrl).toContain('/live/');
   });
 
   it('resume 轮后缀步失败 → 响应仍 ok:true（回归：stepResults 局部下标 vs failedIndex 全局下标）', async () => {

@@ -30,9 +30,10 @@ beforeAll(async () => {
       staged_at timestamp NOT NULL DEFAULT now(),
       CONSTRAINT ai_stage_datasets_pk PRIMARY KEY(thread_id, local_id)
     )`);
-  // listStage 并行查全部 6 张 stage 表,其余 4 张补空表(列定义照 src/db/schema.ts)
+  // listStage 并行查全部 6 张 stage 表,其余 4 张补空表(列定义照 src/db/schema.ts);
+  // ai_stage_case_ops 已收录进 SCHEMA_SQL,此处幂等兜底
   await pool.query(`
-    CREATE TABLE ai_stage_case_ops (
+    CREATE TABLE IF NOT EXISTS ai_stage_case_ops (
       thread_id text NOT NULL,
       local_id text NOT NULL,
       version_id uuid NOT NULL,

@@ -99,5 +99,18 @@
   "projectColumn": "Project",
   "copyToCurrentVersion": "Copy to current version",
   "batchCopyToCurrentVersion": "Batch copy to current version",
-  "copyToCurrentVersionHint": "Copies land in the target group of the current version \"{{version}}\"; the source case is left untouched."
+  "copyToCurrentVersionHint": "Copies land in the target group of the current version \"{{version}}\"; the source case is left untouched.",
+  "batchSolidify": "Batch solidify",
+  "batchSolidifyTitle": "Batch solidify (AI exploration NL→DSL + mechanical verify)",
+  "batchSolidifyConfirm": "This will run batch solidify on the selected",
+  "batchSolidifySuffix": "cases in the background: AI explores each case and converts natural-language steps into mechanical DSL, followed by mechanical verification; failed cases keep their generated DSL. Only web cases with all steps unsolidified are eligible.",
+  "batchSolidifyButton": "Solidify {{count}} cases",
+  "batchSolidifyStarting": "Submitting…",
+  "batchSolidifyStarted": "Submitted {{count}} cases for batch solidify, running in background",
+  "batchSolidifyRejected": "{{count}} cases not included: {{reason}}",
+  "batchSolidifyDone": "Batch solidify finished: {{passed}} passed / {{failed}} failed",
+  "solidifyColumn": "Solidified",
+  "solidifyLabel": "Solidify status",
+  "unsolidified": "Unsolidified",
+  "unsolidifiedOnly": "Unsolidified only"
 }

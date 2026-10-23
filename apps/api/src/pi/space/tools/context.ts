@@ -42,4 +42,6 @@ export interface SpaceToolsContext {
   workspaceDir?: string;
   /** 线程用途：'rca' 才注册 save_rca_result；缺省等同 'chat'（历史线程/测试桩不带此字段）。 */
   purpose?: string;
+  /** 是否注册 playground 实时画面。缺省/true = 开（会话链路现行为）；显式 false = 批量后台链路关闭（省 0.5fps 截图轮询开销）。 */
+  liveView?: boolean;
 }

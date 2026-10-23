@@ -308,7 +308,7 @@ export const api = {
     },
   },
   cases: {
-    list: (params?: string | { priority?: string; groupId?: string; projectId?: string; productLineId?: string; scenarioId?: string; versionIds?: string[] }) => {
+    list: (params?: string | { priority?: string; groupId?: string; projectId?: string; productLineId?: string; scenarioId?: string; versionIds?: string[]; solidified?: string }) => {
       const p = typeof params === 'string' ? { priority: params } : params;
       const qs = new URLSearchParams();
       if (p?.priority) qs.set('priority', p.priority);
@@ -317,6 +317,7 @@ export const api = {
       if (p?.productLineId) qs.set('productLineId', p.productLineId);
       if (p?.scenarioId) qs.set('scenarioId', p.scenarioId);
       if (p?.versionIds?.length) qs.set('versionIds', p.versionIds.join(','));
+      if (p?.solidified) qs.set('solidified', p.solidified);
       const s = qs.toString();
       return request<TestCase[]>(`/cases${s ? `?${s}` : ''}`);
     },
@@ -358,6 +359,15 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ caseIds }),
       }),
+    /** 批量后端固化（全未固化用例 NL→DSL + 机械验收）。全部被拒 → 422 {batchId:null, rejected}；
+     *  部分被拒 → 200 + rejected 清单（前端 toast）。 */
+    batchSolidify: (caseIds: string[]) =>
+      request<{ batchId: string | null; accepted: string[]; rejected: Array<{ caseId: string; reason: string }> }>(
+        '/cases/batch-solidify',
+        { method: 'POST', body: JSON.stringify({ caseIds }) },
+      ),
+    /** 批量固化进度轮询（行状态 + 读时派生的批量汇总）。 */
+    solidifyBatch: (id: string) => request<SolidifyBatchStatus>(`/cases/solidify-batches/${id}`),
     updateStatusBatch: (caseIds: string[], status: CaseStatus) =>
       request<{ count: number }>('/cases/batch-status', {
         method: 'POST',
@@ -983,6 +993,20 @@ export interface TestCase {
   mobileDeviceTargetId?: string | null;
   appRef?: { bundleId: string; appPath?: string; launchArgs?: string[] } | null;
   createdBy?: Creator | null;
+  /** 步骤固化进度（列表接口回填）：total=步骤数，compiled=已固化步骤数。 */
+  stepsTotal?: number;
+  stepsCompiled?: number;
+}
+/** 批量固化批次进度（GET /cases/solidify-batches/:id）。status 读时派生：
+ *  有 running 行 = running；否则全过 = passed、全败 = failed、混合 = partial。 */
+export interface SolidifyBatchStatus {
+  batchId: string;
+  status: 'running' | 'passed' | 'failed' | 'partial';
+  total: number;
+  passed: number;
+  failed: number;
+  running: number;
+  cases: Array<{ caseId: string; title: string; status: string; error: string | null }>;
 }
 export interface Scenario {
   id: string;

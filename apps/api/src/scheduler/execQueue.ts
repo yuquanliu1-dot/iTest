@@ -9,7 +9,8 @@ export const EXEC_QUEUE_NAME = 'exec';
 
 export type ExecJob =
   | { kind: 'plan'; planRunId: string }
-  | { kind: 'case'; caseId: string; preseed: Array<{ reportId: string; rowIndex: number | null }>; createdByUserId?: string | null };
+  | { kind: 'case'; caseId: string; preseed: Array<{ reportId: string; rowIndex: number | null }>; createdByUserId?: string | null }
+  | { kind: 'solidify'; batchId: string; caseId: string };
 
 let _queue: Queue<ExecJob> | null = null;
 

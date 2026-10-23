@@ -17,6 +17,11 @@ vi.mock('../src/execute/aiTask.js', async (importOriginal) => {
     SECRET_PH: '__ITEST_STEP_SECRET__',
   };
 });
+// liveView 包一层 spy：既有真实行为不变（登记进内存表），供 ctx.liveView=false 用例断言零调用
+vi.mock('../src/execute/liveView.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/execute/liveView.js')>();
+  return { ...actual, registerLiveView: vi.fn(actual.registerLiveView) };
+});
 vi.mock('../src/execute/cdp.js', () => ({
   writeStepScreenshot: vi.fn(async () => '/screenshots/solidify-x/step-1.png'),
   // verifyCase.js（solidifyCase 复用其 buildStepInstruction/占位符）与 visionAssert 的传递依赖
@@ -661,8 +666,30 @@ describe('solidify_case 编排', () => {
     expect(ops.map((o) => o.local_id)).toContain(`solidify-${stepId}`);
   });
 
-  it('登录态缓存：命中注入 storageState，执行后无条件回写', async () => {
-    const caseId = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
+  it('ctx.liveView=false：不注册实时画面且 start 无 liveUrl（批量后台链路）；缺省会话行为不变', async () => {
+    const { registerLiveView } = await import('../src/execute/liveView.js');
+    // 关闭路径：liveView=false → 零注册、start 事件无 liveUrl
+    const caseOff = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
+    stepQueue = [{ actions: [[{ type: 'click', selector: '#del' }, true]] }];
+    const emitOff: unknown[] = [];
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const rOff = await buildSolidifyCaseTool({ ...toolCtx(emitOff), liveView: false }).execute({ caseId: caseOff });
+    expect(rOff.ok).toBe(true);
+    expect(registerLiveView).not.toHaveBeenCalled();
+    const startOff = emitOff.find((e) => (e as { phase?: string }).phase === 'start') as { liveUrl?: string };
+    expect(startOff.liveUrl).toBeUndefined();
+    // 缺省（undefined）：会话链路照旧注册并带流地址
+    const caseOn = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
+    stepQueue = [{ actions: [[{ type: 'click', selector: '#del' }, true]] }];
+    const emitOn: unknown[] = [];
+    const rOn = await buildSolidifyCaseTool(toolCtx(emitOn)).execute({ caseId: caseOn });
+    expect(rOn.ok).toBe(true);
+    expect(registerLiveView).toHaveBeenCalledTimes(1);
+    const startOn = emitOn.find((e) => (e as { phase?: string }).phase === 'start') as { liveUrl?: string };
+    expect(startOn.liveUrl).toContain('/live/');
+  });
+
+  it('登录态缓存：命中注入 storageState，执行后无条件回写', async () => {    const caseId = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
     stepQueue = [{ actions: [[{ type: 'click', selector: '#del' }, true]] }];
     const envIdRow = await pool.query(`SELECT id FROM test_environments WHERE project_id = $1 AND is_default = true`, [projectId]);
     const { saveLoginState, getLoginState } = await import('../src/pi/space/tools/loginStateCache.js');

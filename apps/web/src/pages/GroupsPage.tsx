@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../i18n';
@@ -62,6 +62,7 @@ const caseParsers = {
 	projects: parseAsArrayOf(parseAsString).withDefault([]),
 	tag: parseAsArrayOf(parseAsString).withDefault([]),
 	versions: parseAsArrayOf(parseAsString).withDefault([]),
+	solidified: parseAsArrayOf(parseAsString).withDefault([]),
 	tab: parseAsStringEnum([...TAB_VALUES]).withDefault('all'),
 	// tab 已被状态筛选占用，范围 tab 另起一个 key
 	scope: parseAsStringEnum([...SCOPE_VALUES]).withDefault('version'),
@@ -94,6 +95,7 @@ export default function GroupsPage() {
 	const tagSelected = raw.tag;
 	const projectsSelected = raw.projects;
 	const versionsSelected = raw.versions;
+	const solidifiedSelected = raw.solidified;
 	const tab = raw.tab;
 	const scope = raw.scope;
 	const onLineScope = scope === 'line';
@@ -108,6 +110,7 @@ export default function GroupsPage() {
 	const [planTarget, setPlanTarget] = useState('');
 	const [confirmDeleteCase, setConfirmDeleteCase] = useState<{ id: string; title: string } | null>(null);
 	const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
+	const [confirmBatchSolidify, setConfirmBatchSolidify] = useState(false);
 	const [aiForm, setAiForm] = useState<AiForm>(EMPTY_AI_FORM);
 	const [caseForm, setCaseForm] = useState<CaseForm>(EMPTY_CASE_FORM);
 
@@ -137,9 +140,14 @@ export default function GroupsPage() {
 	// 「当前版本」范围恒定锁死当前版本（含分组下钻，组本身可跨版本，用例仍只看当前版本）；
 	// 「产品线」范围跨项目跨版本拉全，靠 groupId 收窄只对当前项目分组有意义。
 	const { data: cases, isLoading: casesLoading, isError: casesError, error: casesErrorObj } = useQuery({
-		queryKey: ['cases', projectId, scope, effectiveGroupId, priority, scenarioId, productLineId, onLineScope ? versionsSelected : []],
+		queryKey: ['cases', projectId, scope, effectiveGroupId, priority, scenarioId, productLineId, onLineScope ? versionsSelected : [], solidifiedSelected],
 		queryFn: () => {
-			const base = { priority: priority || undefined, scenarioId: scenarioId || undefined };
+			const base = {
+				priority: priority || undefined,
+				scenarioId: scenarioId || undefined,
+				// 仅看未固化（批量固化入口口径）：有步骤且全部 compiled 为空，由后端聚合过滤
+				solidified: solidifiedSelected.length > 0 ? 'none' : undefined,
+			};
 			if (onLineScope && productLineId) {
 				return api.cases.list({ ...base, productLineId, versionIds: versionsSelected.length ? versionsSelected : undefined });
 			}
@@ -321,6 +329,50 @@ export default function GroupsPage() {
 		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
+	// 批量后端固化：触发后轮询批次进度（2s），完成时汇总提示并刷列表。
+	const [solidifyBatchId, setSolidifyBatchId] = useState<string | null>(null);
+	const reportedSolidifyRef = useRef<string | null>(null);
+	const batchSolidifyCases = useMutation({
+		mutationFn: (caseIds: string[]) => api.cases.batchSolidify(caseIds),
+		onSuccess: (r) => {
+			setConfirmBatchSolidify(false);
+			if (r.rejected.length > 0) {
+				// 部分被拒/全部被拒：给第一条人读原因（数量多时前端逐条提示会刷屏）
+				toast(t('groups:batchSolidifyRejected', { count: r.rejected.length, reason: r.rejected[0]!.reason }), 'error');
+			}
+			if (r.batchId) {
+				toast(t('groups:batchSolidifyStarted', { count: r.accepted.length }), 'success');
+				reportedSolidifyRef.current = null;
+				setSolidifyBatchId(r.batchId);
+				selection.clear();
+			}
+		},
+		onError: (e: Error) => {
+			toast(localizeApiError(e), 'error');
+			setConfirmBatchSolidify(false);
+		},
+	});
+	const { data: solidifyProgress } = useQuery({
+		queryKey: ['solidify-batch', solidifyBatchId],
+		queryFn: () => api.cases.solidifyBatch(solidifyBatchId!),
+		enabled: !!solidifyBatchId,
+		refetchInterval: (q) => (q.state.data?.status === 'running' ? 2000 : false),
+	});
+	// 批次到终态：汇总 toast（失败带第一条原因）+ 刷用例列表（固化列/stepsCompiled 已变化）
+	useEffect(() => {
+		const b = solidifyProgress;
+		if (!b || b.status === 'running' || reportedSolidifyRef.current === b.batchId) return;
+		reportedSolidifyRef.current = b.batchId;
+		const firstFail = b.cases.find((x) => x.status.endsWith('_failed'));
+		toast(
+			t('groups:batchSolidifyDone', { passed: b.passed, failed: b.failed }) +
+				(firstFail?.error ? ` · ${firstFail.title}: ${firstFail.error}` : ''),
+			b.status === 'passed' ? 'success' : 'error',
+		);
+		qc.invalidateQueries({ queryKey: ['cases', projectId] });
+		setSolidifyBatchId(null);
+	}, [solidifyProgress]);
+
 	// status / tag 在前端做本地筛（cases API 不接）；tab 与 status 等价语义，所以两者去重后取并集。
 	const filteredCases = useMemo(() => {
 		let list = cases ?? [];
@@ -367,6 +419,7 @@ export default function GroupsPage() {
 	const setProjectsFilter = (next: string[]) => void setRaw({ projects: next, page: '1' });
 	const setScope = (next: typeof scope) => void setRaw({ scope: next, page: '1' });
 	const setVersionsFilter = (next: string[]) => void setRaw({ versions: next, page: '1' });
+	const setSolidifiedFilter = (next: string[]) => void setRaw({ solidified: next, page: '1' });
 	const setPage = (next: number) => void setRaw({ page: String(next) });
 	const setPageSize = (next: number) => void setRaw({ pageSize: String(next), page: '1' });
 	const setTabFilter = (next: typeof tab) => void setRaw({ tab: next, page: '1' });
@@ -419,6 +472,11 @@ export default function GroupsPage() {
 			label: t('groups:tagLabel'),
 			options: (projectTags ?? []).map((t) => ({ value: t.id, label: t.name })),
 		},
+		{
+			id: 'solidified',
+			label: t('groups:solidifyLabel'),
+			options: [{ value: 'none', label: t('groups:unsolidifiedOnly') }],
+		},
 	];
 
 	const columnsDef: DataTableColumn<TestCase>[] = [
@@ -457,6 +515,31 @@ export default function GroupsPage() {
 						{c.versionName ?? <EmptyCellValue />}
 					</span>
 				),
+			},
+			// 固化进度列：n/n = 已固化/总步骤；0/N 高亮「未固化」（批量固化入口口径）
+			{
+				id: 'solidify',
+				header: t('groups:solidifyColumn'),
+				width: 'w-[7%]',
+				hideBelow: 'md',
+				cellClassName: 'text-xs text-muted-foreground',
+				cell: (c) => {
+					const total = c.stepsTotal ?? 0;
+					const compiled = c.stepsCompiled ?? 0;
+					if (total === 0) return <EmptyCellValue />;
+					if (compiled === 0) {
+						return (
+							<span
+								className="inline-flex items-center rounded font-medium leading-none"
+								style={{ background: 'var(--priority-medium-bg)', color: 'var(--priority-medium-text)', fontSize: 10, padding: '2px 6px' }}
+								title={t('groups:unsolidified')}
+							>
+								{t('groups:unsolidified')}
+							</span>
+						);
+					}
+					return <span className="tabular-nums">{compiled}/{total}</span>;
+				},
 			},
 			// 产品线范围下列表跨项目混排，必须标出用例来自哪个项目，否则分不清哪些是兄弟项目的
 			...(onLineScope
@@ -737,6 +820,7 @@ export default function GroupsPage() {
 											else if (id === 'scenario') setScenarioFilter(values[0] ?? '');
 											else if (id === 'status') setStatusFilter(values);
 											else if (id === 'tag') setTagFilter(values);
+											else if (id === 'solidified') setSolidifiedFilter(values);
 										},
 										filters: {
 											priority: priority ? [priority] : [],
@@ -745,6 +829,7 @@ export default function GroupsPage() {
 											scenario: scenarioId ? [scenarioId] : [],
 											status: statusSelected,
 											tag: tagSelected,
+											solidified: solidifiedSelected,
 										},
 									}}
 								columns={columnsDef}
@@ -764,6 +849,10 @@ export default function GroupsPage() {
 										<Button size="sm" variant="ghost" onClick={() => { setPlanTarget(''); setPlanModal({ caseIds: selection.ids }); }}>
 											<Icon name="play" size={12} />
 												{t('groups:addToPlan')}
+										</Button>
+										<Button size="sm" variant="ghost" onClick={() => setConfirmBatchSolidify(true)}>
+											<Icon name="sparkles" size={12} />
+												{t('groups:batchSolidify')}
 										</Button>
 										<select
 											aria-label={t('groups:batchStatusAria')}
@@ -877,6 +966,25 @@ export default function GroupsPage() {
 							onClick={() => batchDeleteCases.mutate(selection.ids)}
 						>
 							{batchDeleteCases.isPending ? t('groups:deleting') : t('groups:batchDeleteButton', { count: selection.count })}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			{/* 批量固化确认：AI 逐用例实测固化 + 机械验收，后台执行 */}
+			<Dialog open={confirmBatchSolidify} onOpenChange={(open) => { if (!open) setConfirmBatchSolidify(false); }}>
+				<DialogContent>
+					<DialogHeader><DialogTitle>{t('groups:batchSolidifyTitle')}</DialogTitle></DialogHeader>
+					<div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+						{t('groups:batchSolidifyConfirm')} <span style={{ fontWeight: 600, color: 'var(--foreground)' }}>{selection.count}</span> {t('groups:batchSolidifySuffix')}
+					</div>
+					<DialogFooter>
+						<Button variant="ghost" onClick={() => setConfirmBatchSolidify(false)}>{t('common:cancel')}</Button>
+						<Button
+							disabled={batchSolidifyCases.isPending || selection.count === 0}
+							onClick={() => batchSolidifyCases.mutate(selection.ids)}
+						>
+							{batchSolidifyCases.isPending ? t('groups:batchSolidifyStarting') : t('groups:batchSolidifyButton', { count: selection.count })}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

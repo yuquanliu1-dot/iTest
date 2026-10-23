@@ -42,11 +42,15 @@ export async function runCaseJob(data: { caseId: string; preseed?: PreseedReport
   }
 }
 
-/** 队列 job 处理器。错误已在 runPlan 内部各阶段兜底/runCaseJob 写 failed 报告,这里再吞一层只记日志,防止意外重跑半成品。 */
+/** 队列 job 处理器。错误已在 runPlan 内部各阶段兜底/runCaseJob 写 failed 报告/runSolidifyBatchCaseJob
+ *  落 failed_* 行状态,这里再吞一层只记日志,防止意外重跑半成品。 */
 async function processExecJob(data: ExecJob): Promise<void> {
   try {
     if (data.kind === 'plan') {
       await runPlanAsync({ planRunId: data.planRunId });
+    } else if (data.kind === 'solidify') {
+      const { runSolidifyBatchCaseJob } = await import('../execute/batchSolidify.js');
+      await runSolidifyBatchCaseJob({ batchId: data.batchId, caseId: data.caseId });
     } else {
       await runCaseJob({ caseId: data.caseId, preseed: data.preseed, createdByUserId: data.createdByUserId });
     }

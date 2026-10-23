@@ -22,9 +22,9 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
   pool = new Pool({ connectionString: container.getConnectionUri() });
   await pool.query(SCHEMA_SQL);
-  // SCHEMA_SQL 尚未收录 ai_stage_case_ops(暂存表),本文件自建(与 src/db/schema.ts:155-173 对齐)
+  // ai_stage_case_ops 已收录进 SCHEMA_SQL；保留幂等自建兜底（与 src/db/schema.ts 对齐）
   await pool.query(`
-    CREATE TABLE ai_stage_case_ops (
+    CREATE TABLE IF NOT EXISTS ai_stage_case_ops (
       thread_id text NOT NULL,
       local_id text NOT NULL,
       version_id uuid NOT NULL,

@@ -161,6 +161,9 @@ EXCEPTION WHEN duplicate_column THEN null;
 END $$;
 -- 暂存表（部分测试文件自建，此处补齐共用的 ai_stage_cases 以免各文件重复）
 CREATE TABLE ai_stage_cases (thread_id text NOT NULL, local_id text NOT NULL, version_id uuid NOT NULL, title varchar(200) NOT NULL, description text, priority varchar(20), url text, steps jsonb NOT NULL DEFAULT '[]', default_env_id uuid, expected_outcome text, dataset_local_id text, coverage_types jsonb DEFAULT '[]', staged_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_stage_cases_pk PRIMARY KEY(thread_id, local_id));
+CREATE TABLE ai_stage_case_ops (thread_id text NOT NULL, local_id text NOT NULL, version_id uuid NOT NULL, case_id uuid NOT NULL, op varchar(30) NOT NULL, payload jsonb NOT NULL, summary text NOT NULL, diff text, staged_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_stage_case_ops_pk PRIMARY KEY(thread_id, local_id));
+CREATE INDEX ai_stage_case_ops_version_idx ON ai_stage_case_ops(version_id);
+CREATE INDEX ai_stage_case_ops_case_idx ON ai_stage_case_ops(case_id);
 CREATE TABLE assistant_guides (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), scope varchar(16) NOT NULL, project_id uuid REFERENCES projects(id) ON DELETE CASCADE, version_id uuid REFERENCES project_versions(id) ON DELETE CASCADE, kind varchar(16) NOT NULL, body text NOT NULL, lang varchar(8) NOT NULL DEFAULT 'any', sort integer NOT NULL DEFAULT 0, enabled boolean NOT NULL DEFAULT true, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 CREATE INDEX assistant_guides_enabled_idx ON assistant_guides(scope, enabled);
 CREATE TABLE assistant_mcp_servers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(120) NOT NULL, kind varchar(8) NOT NULL DEFAULT 'stdio', command text, args jsonb, url text, env jsonb, exposure varchar(12) NOT NULL DEFAULT 'codemode', scope varchar(16) NOT NULL DEFAULT 'global', project_id uuid REFERENCES projects(id) ON DELETE CASCADE, version_id uuid REFERENCES project_versions(id) ON DELETE CASCADE, enabled boolean NOT NULL DEFAULT true, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT assistant_mcp_servers_name_uq UNIQUE(name));
@@ -173,6 +176,12 @@ DO $$ BEGIN ALTER TABLE plan_runs      ADD COLUMN rca_enabled boolean NOT NULL D
 DO $$ BEGIN ALTER TABLE plan_run_cases ADD COLUMN rca jsonb; EXCEPTION WHEN duplicate_column THEN null; END $$;
 DO $$ BEGIN ALTER TABLE ai_threads     ADD COLUMN purpose varchar(20) NOT NULL DEFAULT 'chat'; EXCEPTION WHEN duplicate_column THEN null; END $$;
 DO $$ BEGIN ALTER TABLE ai_threads     ADD COLUMN plan_run_id uuid; EXCEPTION WHEN duplicate_column THEN null; END $$;
+-- 批量固化（全未固化用例 NL→DSL 后台任务）
+CREATE TABLE solidify_batches (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid REFERENCES projects(id) ON DELETE CASCADE NOT NULL, created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL, created_at timestamp NOT NULL DEFAULT now());
+CREATE INDEX solidify_batches_project_idx ON solidify_batches(project_id);
+CREATE TABLE solidify_batch_cases (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), batch_id uuid REFERENCES solidify_batches(id) ON DELETE CASCADE NOT NULL, case_id uuid REFERENCES test_cases(id) ON DELETE CASCADE NOT NULL, status varchar(30) NOT NULL DEFAULT 'queued', solidify_result jsonb, verify_result jsonb, error text, started_at timestamp, finished_at timestamp);
+CREATE INDEX solidify_batch_cases_batch_idx ON solidify_batch_cases(batch_id);
+CREATE INDEX solidify_batch_cases_case_idx ON solidify_batch_cases(case_id);
 `;
 
 export interface SeedOrg {

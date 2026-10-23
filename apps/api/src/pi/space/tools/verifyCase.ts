@@ -622,8 +622,11 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           });
           let page = await context.newPage();
           // playground 实时画面：注册页面源，start 事件把流地址带给前端进度卡；finally close 结束流
-          live = registerLiveView();
-          live.setPage(page);
+          // （ctx.liveView === false 为批量后台链路：不注册画面源，省 0.5fps 截图轮询开销）
+          if (ctx.liveView !== false) {
+            live = registerLiveView();
+            live.setPage(page);
+          }
 
           const reportId = `verify-${randomUUID()}`;
           // 断言判定缓存重建：resume 轮前缀步跳过 judge，但 restore/结尾完整回放都要用
@@ -771,7 +774,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             loginUser: envCtx.login?.user ?? null,
             stagedOps: opsApplied,
             ...(staticNote ? { staticNote } : {}),
-            liveUrl: `/api/assistant/threads/${ctx.threadId}/live/${live.key}`,
+            liveUrl: live ? `/api/assistant/threads/${ctx.threadId}/live/${live.key}` : undefined,
           });
           // mechanical 模式跳过整个 AI 相（循环下标直接置越界，语义验证已由实测轮完成）
           for (let i = mode === 'mechanical' ? effectiveSteps.length : resumeIndex; i < effectiveSteps.length; i++) {

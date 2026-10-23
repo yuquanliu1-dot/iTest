@@ -347,9 +347,12 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(cachedState ? { storageState: cachedState } : {}),
           });
           const page = await context.newPage();
-          // playground 实时画面：与 verify_case 同模式（注册页面源 → start 事件带流地址 → finally close）
-          live = registerLiveView();
-          live.setPage(page);
+          // playground 实时画面：与 verify_case 同模式（注册页面源 → start 事件带流地址 → finally close）。
+          // ctx.liveView === false 为批量后台链路：不注册画面源，省 0.5fps 截图轮询开销。
+          if (ctx.liveView !== false) {
+            live = registerLiveView();
+            live.setPage(page);
+          }
           if (targetUrl) {
             const firstCompiled = effectiveSteps[0]?.compiled;
             const firstAction = (Array.isArray(firstCompiled) && firstCompiled.length > 0
@@ -381,7 +384,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             solidifiable: visualSteps.length,
             targetUrl: targetUrl ?? null,
             loginCache: cachedState ? ('hit' as const) : ('miss' as const),
-            liveUrl: `/api/assistant/threads/${ctx.threadId}/live/${live.key}`,
+            liveUrl: live ? `/api/assistant/threads/${ctx.threadId}/live/${live.key}` : undefined,
           });
           for (let i = 0; i < effectiveSteps.length; i++) {
             const s = effectiveSteps[i]!;

@@ -780,3 +780,33 @@ export const aiAssistantFeedback = pgTable('ai_assistant_feedback', {
   versionIdx: index('ai_assistant_feedback_version_idx').on(t.versionId),
   userIdx: index('ai_assistant_feedback_user_idx').on(t.userId),
 }));
+
+// ── 批量固化（全未固化用例 NL→DSL 后台任务）──
+// 一次触发一批：批次行只做归属/审计；逐用例行由 worker 独占更新（BullMQ 每 job 只碰自己那行，
+// 批次进度读时按行 status 派生，天然免并发写冲突）。失败语义 = 保留已落库 DSL + 标记失败原因。
+export const solidifyBatches = pgTable('solidify_batches', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  projectIdx: index('solidify_batches_project_idx').on(t.projectId),
+}));
+
+export const solidifyBatchCases = pgTable('solidify_batch_cases', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  batchId: uuid('batch_id').notNull().references(() => solidifyBatches.id, { onDelete: 'cascade' }),
+  caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
+  /** queued → solidifying → solidify_failed | materialize_failed | verifying → passed | verify_failed */
+  status: varchar('status', { length: 30 }).notNull().default('queued'),
+  /** solidify 工具返回的 steps 摘要（status/reason/compiled），报告展示用 */
+  solidifyResult: jsonb('solidify_result'),
+  /** verify(mode=mechanical) 完整返回 JSON（失败诊断证据保留） */
+  verifyResult: jsonb('verify_result'),
+  error: text('error'),
+  startedAt: timestamp('started_at'),
+  finishedAt: timestamp('finished_at'),
+}, (t) => ({
+  batchIdx: index('solidify_batch_cases_batch_idx').on(t.batchId),
+  caseIdx: index('solidify_batch_cases_case_idx').on(t.caseId),
+}));

@@ -1,12 +1,15 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
-import { testCases, groups, scenarios, projectVersions, projects } from '../db/schema.js';
-import { eq, inArray } from 'drizzle-orm';
+import { testCases, groups, scenarios, projectVersions, projects, testSteps, solidifyBatches, solidifyBatchCases } from '../db/schema.js';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertCaseVisible, assertProductLineVisible, assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { copyCaseCore, createCase, deleteCase, getCaseDetail, groupProjectId, tagsForCases, updateCase } from '../services/cases.service.js';
 import { attachCreators } from '../lib/creator.js';
+import { checkBatchEligibility, RUNNING_BATCH_STATUSES, runSolidifyBatchCaseJob } from '../execute/batchSolidify.js';
+import { getExecutionQueue, isExecutionQueueReady, EXEC_QUEUE_NAME } from '../scheduler/execQueue.js';
+import { logger } from '../logger.js';
 
 export const casesRoute = Router();
 
@@ -68,7 +71,7 @@ const PatchBody = CaseBodyBase.partial()
   .superRefine(checkWindowStrategy);
 
 casesRoute.get('/', async (req, res) => {
-  const { priority, groupId, projectId, scenarioId, productLineId } = req.query as Record<string, string | undefined>;
+  const { priority, groupId, projectId, scenarioId, productLineId, solidified } = req.query as Record<string, string | undefined>;
   // versionIds 过滤：逗号分隔或重复参数均可；只在可见项目范围内收窄,无需额外可见性断言
   const rawVersionIds = (req.query as Record<string, string | string[] | undefined>).versionIds;
   const versionIds = (Array.isArray(rawVersionIds) ? rawVersionIds : rawVersionIds != null ? [rawVersionIds] : [])
@@ -137,6 +140,27 @@ casesRoute.get('/', async (req, res) => {
   // 同手法：批量回填 tags（避免 N+1）
   const caseIds = rows.map((r) => r.id);
   const tagsByCase = await tagsForCases(caseIds);
+  // 批量回填步骤固化进度（total / compiled 非空数）：列表「固化」列与 ?solidified=none 筛选共用
+  const stepsByCase = new Map<string, { total: number; compiled: number }>();
+  if (caseIds.length > 0) {
+    const agg = await db
+      .select({
+        caseId: testSteps.caseId,
+        total: sql<number>`count(*)::int`,
+        compiled: sql<number>`count(${testSteps.compiled})::int`,
+      })
+      .from(testSteps)
+      .where(inArray(testSteps.caseId, caseIds))
+      .groupBy(testSteps.caseId);
+    for (const a of agg) stepsByCase.set(a.caseId, { total: a.total, compiled: a.compiled });
+  }
+  // 仅看未固化：有步骤且全部未固化（批量固化入口的口径；无步骤用例不算「未固化」）
+  if (solidified === 'none') {
+    rows = rows.filter((r) => {
+      const s = stepsByCase.get(r.id);
+      return (s?.total ?? 0) > 0 && (s?.compiled ?? 0) === 0;
+    });
+  }
   // 批量解析版本名：列表按项目拉取会跨版本混排，前端展示需要名字
   const vids = [...new Set(rows.map((r) => r.versionId).filter((v): v is string => !!v))];
   const vById = new Map<string, string>();
@@ -167,6 +191,8 @@ casesRoute.get('/', async (req, res) => {
           scenarioTitle: r.scenarioId ? (sById.get(r.scenarioId)?.title ?? null) : null,
           versionName: vById.get(r.versionId) ?? null,
           tags: tagsByCase.get(r.id) ?? [],
+          stepsTotal: stepsByCase.get(r.id)?.total ?? 0,
+          stepsCompiled: stepsByCase.get(r.id)?.compiled ?? 0,
           projectId: p?.id ?? null,
           projectName: p?.name ?? null,
         };
@@ -312,4 +338,83 @@ casesRoute.post('/batch-status', async (req, res) => {
     .where(inArray(testCases.id, body.caseIds))
     .returning({ id: testCases.id });
   res.json({ count: updated.length });
+});
+
+/**
+ * 批量后端固化：全未固化 web 用例 NL→DSL + 机械验收，后台逐用例执行（job 粒度=单用例
+ * solidify+materialize+verify 同 job：loginStateCache 进程内存缓存，跨副本拆分会退化成每步重新登录）。
+ * 逐用例资格校验给人读原因；全部被拒 → 422 不建批次；部分被拒 → 200 + rejected 清单由前端提示。
+ */
+casesRoute.post('/batch-solidify', async (req, res) => {
+  const body = z.object({ caseIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
+  // 与 batch-delete 一致：先按可见性逐个校验，违规直接 404
+  for (const id of body.caseIds) {
+    await assertCaseVisible(id, req.user!);
+  }
+  const rejected: Array<{ caseId: string; reason: string }> = [];
+  let batchProjectId: string | null = null;
+  const accepted: string[] = [];
+  for (const id of [...new Set(body.caseIds)]) {
+    const c = await checkBatchEligibility(id);
+    if (!c.ok) {
+      rejected.push({ caseId: id, reason: c.reason });
+      continue;
+    }
+    // 批次挂单一项目（触发入口为分组页，实际恒同项目）；跨项目混选把异项目用例归入 rejected
+    if (batchProjectId === null) batchProjectId = c.projectId;
+    else if (batchProjectId !== c.projectId) {
+      rejected.push({ caseId: id, reason: '与其它用例不在同一项目，请分项目触发' });
+      continue;
+    }
+    accepted.push(id);
+  }
+  // 全部被拒也回 200（batchId=null）：api client 对非 2xx 抛 ApiError 会丢掉 rejected 明细，
+  // 前端靠 batchId 判空决定是否轮询（与部分被拒 200 同一契约）
+  if (accepted.length === 0 || batchProjectId === null) {
+    res.json({ batchId: null, accepted: [], rejected });
+    return;
+  }
+  const batch = (
+    await db.insert(solidifyBatches).values({ projectId: batchProjectId, createdByUserId: req.user!.userId }).returning({ id: solidifyBatches.id })
+  )[0]!;
+  await db.insert(solidifyBatchCases).values(accepted.map((caseId) => ({ batchId: batch.id, caseId })));
+  // 逐用例入队；无 redis（或 add reject）回落 inline，同 execute.ts 模式
+  for (const caseId of accepted) {
+    if (isExecutionQueueReady()) {
+      try {
+        await getExecutionQueue().add(EXEC_QUEUE_NAME, { kind: 'solidify', batchId: batch.id, caseId });
+      } catch (e) {
+        logger.warn({ err: e, batchId: batch.id, caseId }, 'exec queue add failed; running solidify inline');
+        void runSolidifyBatchCaseJob({ batchId: batch.id, caseId });
+      }
+    } else {
+      void runSolidifyBatchCaseJob({ batchId: batch.id, caseId });
+    }
+  }
+  res.json({ batchId: batch.id, accepted, rejected });
+});
+
+/**
+ * 批量固化进度查询（前端 2s 轮询口）。批量状态读时派生：
+ * 有 running 行 = running；否则全过 = passed、全败 = failed、混合 = partial。
+ */
+casesRoute.get('/solidify-batches/:id', async (req, res) => {
+  const batch = (await db.select().from(solidifyBatches).where(eq(solidifyBatches.id, req.params.id!)).limit(1))[0];
+  if (!batch) throw new HttpError(404, 'not_found', 'batch not found');
+  await assertProjectVisible(batch.projectId, req.user!);
+  const rows = await db
+    .select({
+      caseId: solidifyBatchCases.caseId,
+      status: solidifyBatchCases.status,
+      error: solidifyBatchCases.error,
+      title: testCases.title,
+    })
+    .from(solidifyBatchCases)
+    .innerJoin(testCases, eq(testCases.id, solidifyBatchCases.caseId))
+    .where(eq(solidifyBatchCases.batchId, batch.id));
+  const passed = rows.filter((r) => r.status === 'passed').length;
+  const failed = rows.filter((r) => r.status.endsWith('_failed')).length;
+  const running = rows.filter((r) => (RUNNING_BATCH_STATUSES as readonly string[]).includes(r.status)).length;
+  const status = running > 0 ? 'running' : failed === 0 ? 'passed' : passed === 0 ? 'failed' : 'partial';
+  res.json({ batchId: batch.id, status, total: rows.length, passed, failed, running, cases: rows });
 });
