@@ -67,7 +67,7 @@ async function pruneAppleDouble(dir) {
 async function main() {
   const md = await readFile(join(CONTENT_DIR, 'SKILL.md'), 'utf8');
   const fm = parseFrontmatter(md);
-  const description = (fm.description ?? '从 GitHub 导入：skill-creator').trim().slice(0, 500);
+  const description = (fm.description ?? 'defect-rca skill').trim().slice(0, 500);
 
   const root = process.env.PI_DATA_DIR
     ? join(process.env.PI_DATA_DIR, 'skills')
