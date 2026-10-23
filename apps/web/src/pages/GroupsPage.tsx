@@ -493,6 +493,9 @@ export default function GroupsPage() {
 				id: 'title',
 				header: t('groups:title'),
 				sortable: false,
+				// table-fixed 下其余列都是百分比/固定宽，title 不给宽度就只吃残余（~10%）被压扁；
+				// 显式给份额 + min-w 下限（table-fixed 下 min-width 生效），窄屏时挤压其他 truncate 列
+				width: 'w-[30%] min-w-[240px]',
 				cell: (c) => (
 					<span className="font-semibold truncate" title={c.title}>{c.title}</span>
 				),
