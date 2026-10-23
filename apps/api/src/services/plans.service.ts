@@ -69,6 +69,7 @@ export interface CreatePlanInput {
   environmentId?: string;
   strategy?: string;
   loginPrepare?: LoginPrepareInput;
+  rcaEnabled?: boolean;
 }
 
 async function assertVersionInProject(versionId: string, projectId: string): Promise<void> {
@@ -102,6 +103,7 @@ export async function createPlan(projectId: string, input: CreatePlanInput, crea
       detectionUrl: input.loginPrepare?.detectionUrl ?? null,
       loginSuccessSelector: input.loginPrepare?.successSelector ?? null,
       loginUnauthorizedKeywords: input.loginPrepare?.unauthorizedKeywords ?? null,
+      rcaEnabled: input.rcaEnabled ?? false,
       ...(createdByUserId ? { createdByUserId } : {}),
     }).returning()
   )[0]!;
@@ -114,6 +116,7 @@ export interface UpdatePlanPatch {
   versionId?: string | null;
   strategy?: string;
   loginPrepare?: LoginPrepareInput;
+  rcaEnabled?: boolean;
 }
 
 export async function updatePlan(planId: string, patch: UpdatePlanPatch) {
@@ -130,6 +133,7 @@ export async function updatePlan(planId: string, patch: UpdatePlanPatch) {
   if (patch.environmentId !== undefined) update.environmentId = patch.environmentId;
   if (patch.versionId !== undefined) update.versionId = patch.versionId;
   if (patch.strategy !== undefined) update.strategy = patch.strategy;
+  if (patch.rcaEnabled !== undefined) update.rcaEnabled = patch.rcaEnabled;
   if (patch.loginPrepare !== undefined) {
     update.loginPrepareEnabled = patch.loginPrepare.enabled;
     update.loginCaseId = patch.loginPrepare.caseId ?? null;

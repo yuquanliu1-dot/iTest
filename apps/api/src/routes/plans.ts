@@ -46,6 +46,7 @@ const CreateBody = z.object({
   strategy: StrategyEnum.default('run_all'),
   loginPrepare: LoginPrepareBody,
   targetOverride: TargetOverrideBody,
+  rcaEnabled: z.boolean().optional(),
 });
 
 const PatchBody = z.object({
@@ -56,6 +57,7 @@ const PatchBody = z.object({
   strategy: StrategyEnum.optional(),
   loginPrepare: LoginPrepareBody,
   targetOverride: TargetOverrideBody,
+  rcaEnabled: z.boolean().optional(),
 });
 
 plansRoute.get('/', async (req, res) => {

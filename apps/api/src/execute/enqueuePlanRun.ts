@@ -80,6 +80,7 @@ export async function enqueuePlanRun(opts: EnqueuePlanRunOpts): Promise<EnqueueP
     detectionUrl: plan.detectionUrl,
     loginSuccessSelector: plan.loginSuccessSelector,
     loginUnauthorizedKeywords: plan.loginUnauthorizedKeywords,
+    rcaEnabled: plan.rcaEnabled,
     totalCases: 0,
     triggeredBy: opts.trigger.source,
     triggeredByUserId: opts.trigger.userId ?? null,
