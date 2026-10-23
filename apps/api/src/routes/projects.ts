@@ -39,11 +39,12 @@ function maskProject<T extends { patOverride?: string | null; provider?: string 
   return { ...(rest as Omit<T, 'patOverride'>), hasPat };
 }
 
-async function caseCountsByGroup(): Promise<Map<string, number>> {
-  const rows = await db
-    .select({ groupId: testCases.groupId, count: sql<number>`count(*)` })
-    .from(testCases)
-    .groupBy(testCases.groupId);
+async function caseCountsByGroup(versionIds?: string[]): Promise<Map<string, number>> {
+  const base = db.select({ groupId: testCases.groupId, count: sql<number>`count(*)` }).from(testCases);
+  // 版本收窄：分组计数必须跟用例列表同一口径，否则左侧数字与右侧表格对不上
+  const rows = versionIds && versionIds.length > 0
+    ? await base.where(inArray(testCases.versionId, versionIds)).groupBy(testCases.groupId)
+    : await base.groupBy(testCases.groupId);
   return new Map(rows.map((r) => [r.groupId, Number(r.count)]));
 }
 
@@ -163,8 +164,14 @@ projectsRoute.delete('/:id', requireManager, async (req, res) => {
 projectsRoute.get('/:id/groups', async (req, res) => {
   const projectId = String(req.params.id);
   await assertProjectVisible(projectId, req.user!);
+  // versionIds 逗号分隔或重复参数均可，与 GET /cases 同一解析口径。
+  // 前端切「产品线用例库」范围时传线内选中版本，不传则计全线。
+  const rawVersionIds = (req.query as Record<string, string | string[] | undefined>).versionIds;
+  const versionIds = (Array.isArray(rawVersionIds) ? rawVersionIds : rawVersionIds != null ? [rawVersionIds] : [])
+    .flatMap((v) => v.split(','))
+    .filter((v) => v.length > 0);
   const gs = await db.select().from(groups).where(eq(groups.projectId, projectId)).orderBy(asc(groups.createdAt));
-  const counts = await caseCountsByGroup();
+  const counts = await caseCountsByGroup(versionIds);
   res.json(gs.map((g) => ({ ...g, caseCount: counts.get(g.id) ?? 0 })));
 });
 

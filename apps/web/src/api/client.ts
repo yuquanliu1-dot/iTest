@@ -82,7 +82,11 @@ export const api = {
       }),
     unassignUser: (id: string, userId: string) =>
       request<void>(`/projects/${id}/assignments/${userId}`, { method: 'DELETE' }),
-    groups: (id: string) => request<GroupWithCount[]>(`/projects/${id}/groups`),
+    /** versionIds = 当前范围内的版本集合（当前版本范围传 [versionId]，产品线范围传选中的版本），分组计数随之收窄。 */
+    groups: (id: string, versionIds: string[] = []) =>
+      request<GroupWithCount[]>(
+        `/projects/${id}/groups${versionIds.length ? `?versionIds=${versionIds.join(',')}` : ''}`,
+      ),
     /** 产品线下的全部分组（跨项目选用例池按分组筛选用；一次请求覆盖线内所有项目）。 */
     groupsByProductLine: (productLineId: string) => request<GroupWithCount[]>(`/product-lines/${productLineId}/groups`),
     versionsByProductLine: (productLineId: string) => request<ProjectVersion[]>(`/product-lines/${productLineId}/versions`),

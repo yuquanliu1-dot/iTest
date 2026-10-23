@@ -111,19 +111,26 @@ export default function GroupsPage() {
 	const [aiForm, setAiForm] = useState<AiForm>(EMPTY_AI_FORM);
 	const [caseForm, setCaseForm] = useState<CaseForm>(EMPTY_CASE_FORM);
 
-	const { data: groups, isLoading: groupsLoading } = useQuery({
-		queryKey: ['groups', projectId],
-		queryFn: () => api.projects.groups(projectId!),
-		enabled: !!projectId,
-	});
-
-	// 项目归属信息：决定要不要给出「产品线」这条范围 tab（未归线的项目没有共享用例池）。
 	const { data: scopeProject } = useQuery({
 		queryKey: ['project', projectId],
 		queryFn: () => api.projects.get(projectId!),
 		enabled: !!projectId,
 	});
 	const productLineId = scopeProject?.productLineId ?? null;
+
+	// 分组计数随范围与版本筛选走：当前版本锁死当前版本，产品线范围计选中的版本集合（未选=全线）。
+	// 否则左栏数字跨范围不变，与右侧表格对不上。
+	const groupCountVersionIds = onLineScope
+		? versionsSelected
+		: versionId
+			? [versionId]
+			: [];
+	const groupCountKey = groupCountVersionIds.join(',');
+	const { data: groups, isLoading: groupsLoading } = useQuery({
+		queryKey: ['groups', projectId, groupCountKey],
+		queryFn: () => api.projects.groups(projectId!, groupCountVersionIds),
+		enabled: !!projectId,
+	});
 
 	const effectiveGroupId = groupId ?? '';
 	// 拉列表时只透传后端支持的过滤（priority/scenarioId/versionIds），status/tags 走前端本地筛（API 暂不接）。
