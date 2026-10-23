@@ -64,6 +64,8 @@ export interface SpaceThreadContext {
   /** 已有会话的 JSONL 绝对路径(ai_threads.pi_thread_id)。为空串 → create 新建;
    *  有值 → 一律 open:文件在则恢复历史,文件缺失 pi 内部 newSession 并复用同一路径(不抛错)。 */
   piThreadId?: string;
+  /** 线程用途：'rca' 根因分析线程（save_rca_result 注册闸门）；缺省 'chat'。 */
+  purpose?: string;
 }
 
 export type SpaceSessionFactory = (ctx: SpaceThreadContext) => Promise<SpaceSessionLike>;
@@ -155,7 +157,7 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
   // repo 工具经共享 RepoState 每次调用动态解析 cwd;no_repo 静默(仅影响工具错误语态),
   // 其它失败记 repo.issue 供诊断,均不阻断会话。
   const repo = emptyRepoState();
-  const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo, createdByUserId: row.createdByUserId, lang, manager, piThreadId: row.piThreadId });
+  const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo, createdByUserId: row.createdByUserId, lang, manager, piThreadId: row.piThreadId, purpose: row.purpose ?? 'chat' });
   const rec: ThreadRecord = {
     threadId,
     versionId: row.versionId,

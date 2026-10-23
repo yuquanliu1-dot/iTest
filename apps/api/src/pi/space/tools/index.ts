@@ -24,6 +24,7 @@ import { buildRunSkillScriptTool } from './runSkillScript.js';
 import { buildManageSkillTool } from './manageSkill.js';
 import { buildManageMcpTool } from './manageMcp.js';
 import { buildImportSkillTool } from './importSkill.js';
+import { buildSaveRcaResultTool } from './saveRcaResult.js';
 
 export type { SpaceToolsContext } from './context.js';
 export { emitStage, type StageKind } from './stage.js';
@@ -81,5 +82,9 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   tools.push(...buildEnvironmentsTools(ctx));
   tools.push(...buildPlansTools(ctx));
   tools.push(...buildHistoryTools(ctx));
+  // RCA 专用落库工具：仅根因分析后台线程可见，普通对话线程不出现该工具面。
+  if (ctx.purpose === 'rca') {
+    tools.push(buildSaveRcaResultTool(ctx));
+  }
   return tools;
 }

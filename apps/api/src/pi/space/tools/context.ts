@@ -40,4 +40,6 @@ export interface SpaceToolsContext {
   lang?: AiLang;
   /** 版本独立工作空间目录（.data/workspaces/v-<versionId>）；read_skill 的 .pi/skills 根。 */
   workspaceDir?: string;
+  /** 线程用途：'rca' 才注册 save_rca_result；缺省等同 'chat'（历史线程/测试桩不带此字段）。 */
+  purpose?: string;
 }
