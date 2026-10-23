@@ -95,6 +95,10 @@ export const aiThreads = pgTable('ai_threads', {
   versionId: uuid('version_id').references(() => projectVersions.id, { onDelete: 'cascade' }),
   title: text('title'),
   piThreadId: text('pi_thread_id').notNull(),
+  /** 线程用途：'chat' 用户对话（默认）；'rca' 计划运行失败根因分析后台线程 */
+  purpose: varchar('purpose', { length: 20 }).notNull().default('chat'),
+  /** purpose='rca' 时关联的 plan_run；chat 线程为 NULL（无 FK，同 schedule_id 先例） */
+  planRunId: uuid('plan_run_id'),
   /** 线程创建人：AI 代建对象（env/plan/...）以它为归属 */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -459,6 +463,8 @@ export const executionPlans = pgTable('execution_plans', {
   detectionUrl: text('detection_url'),
   loginSuccessSelector: text('login_success_selector'),
   loginUnauthorizedKeywords: jsonb('login_unauthorized_keywords'),
+  /** 运行结束后对失败用例自动做 AI 根因分析（快照进 planRuns） */
+  rcaEnabled: boolean('rca_enabled').notNull().default(false),
   /** 创建人（对齐 plan_schedules.created_by_user_id 约定） */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -490,6 +496,7 @@ export const planRuns = pgTable('plan_runs', {
   detectionUrl: text('detection_url'),
   loginSuccessSelector: text('login_success_selector'),
   loginUnauthorizedKeywords: jsonb('login_unauthorized_keywords'),
+  rcaEnabled: boolean('rca_enabled').notNull().default(false),
   startedAt: timestamp('started_at').defaultNow().notNull(),
   finishedAt: timestamp('finished_at'),
   durationMs: integer('duration_ms'),
@@ -524,6 +531,8 @@ export const planRunCases = pgTable('plan_run_cases', {
   finishedAt: timestamp('finished_at'),
   durationMs: integer('duration_ms'),
   error: text('error'),
+  /** AI 根因分析结果（save_rca_result 工具写入；worker 超时兜底写 timeout） */
+  rca: jsonb('rca'),
 }, (t) => ({
   runOrderIdx: index('idx_plan_run_cases_run_order').on(t.planRunId, t.order),
   caseIdx: index('idx_plan_run_cases_case').on(t.caseId),

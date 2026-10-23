@@ -167,6 +167,12 @@ CREATE TABLE assistant_mcp_servers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(
 CREATE INDEX assistant_mcp_servers_enabled_idx ON assistant_mcp_servers(enabled);
 CREATE TABLE assistant_skills (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(120) NOT NULL, description varchar(500) NOT NULL, enabled boolean NOT NULL DEFAULT true, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT assistant_skills_name_uq UNIQUE(name));
 CREATE INDEX assistant_skills_enabled_idx ON assistant_skills(enabled);
+-- RCA：计划开关快照 + 每失败用例分析结果 + 线程用途标记
+DO $$ BEGIN ALTER TABLE execution_plans ADD COLUMN rca_enabled boolean NOT NULL DEFAULT false; EXCEPTION WHEN duplicate_column THEN null; END $$;
+DO $$ BEGIN ALTER TABLE plan_runs      ADD COLUMN rca_enabled boolean NOT NULL DEFAULT false; EXCEPTION WHEN duplicate_column THEN null; END $$;
+DO $$ BEGIN ALTER TABLE plan_run_cases ADD COLUMN rca jsonb; EXCEPTION WHEN duplicate_column THEN null; END $$;
+DO $$ BEGIN ALTER TABLE ai_threads     ADD COLUMN purpose varchar(20) NOT NULL DEFAULT 'chat'; EXCEPTION WHEN duplicate_column THEN null; END $$;
+DO $$ BEGIN ALTER TABLE ai_threads     ADD COLUMN plan_run_id uuid; EXCEPTION WHEN duplicate_column THEN null; END $$;
 `;
 
 export interface SeedOrg {
