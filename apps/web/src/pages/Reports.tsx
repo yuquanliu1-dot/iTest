@@ -193,6 +193,8 @@ export default function Executions() {
 		onSuccess: () => {
 			toast(t('plans:runDeletedToast'), 'success');
 			setConfirmDeleteRun(null);
+			// 行勾选后单删：不清会把已删 id 留在 selection 里，批量栏一直显示残留勾选
+			selection.clear();
 			qc.invalidateQueries({ queryKey: ['executions'] });
 			qc.invalidateQueries({ queryKey: ['reports'] });
 			qc.invalidateQueries({ queryKey: ['stats', projectId] });

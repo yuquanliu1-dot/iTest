@@ -538,8 +538,15 @@ export default function CaseDetail() {
 
   const deleteStep = useMutation({
     mutationFn: (stepId: string) => api.cases.deleteStep(id!, stepId),
-    onSuccess: () => {
+    onSuccess: (_r, stepId) => {
       setConfirmDeleteStep(null);
+      // 勾选后单删：不清会把已删 stepId 留在 selected，复制所选计数虚高、点了复制不到东西
+      setSelected((prev) => {
+        if (!prev.has(stepId)) return prev;
+        const next = new Set(prev);
+        next.delete(stepId);
+        return next;
+      });
       qc.invalidateQueries({ queryKey: ['case', id] });
     },
     onError: (e: Error) => {
