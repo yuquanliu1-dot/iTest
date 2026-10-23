@@ -428,6 +428,18 @@ export default function PlanDetail() {
                 </details>
               </div>
             )}
+            <div className="mt-4 hairline-top pt-3">
+              <label className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+                <input
+                  type="checkbox"
+                  checked={plan.rcaEnabled ?? false}
+                  disabled={patchPlan.isPending}
+                  onChange={(e) => patchPlan.mutate({ rcaEnabled: e.target.checked })}
+                />
+                {t('plans:enableRca')}
+              </label>
+              <div className="mt-1 pl-6 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('plans:enableRcaHint')}</div>
+            </div>
           </div>
           <div className="mt-4 hairline-top pt-3 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             {t('groups:createdBy')} {creatorName(plan.createdBy)}

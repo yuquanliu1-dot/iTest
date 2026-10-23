@@ -148,5 +148,15 @@
     "miss": "✕ not matched",
     "quote": " \"{{expected}}\"",
     "statusCode": " status {{code}}"
+  },
+  "rca": {
+    "title": "Root Cause Analysis",
+    "statusTimeout": "Analysis timed out",
+    "statusError": "Analysis failed",
+    "openThread": "View analysis thread",
+    "evidence": "Code evidence",
+    "suggestion": "Suggested fix",
+    "category": { "system_defect": "System defect", "case_issue": "Case issue", "environment": "Environment", "other": "Other" },
+    "confidence": { "high": "High confidence", "medium": "Medium confidence", "low": "Low confidence" }
   }
 }

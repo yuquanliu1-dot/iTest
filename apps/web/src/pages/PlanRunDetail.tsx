@@ -10,6 +10,7 @@ import Button from '../components/ui/Button';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import LiveViewCard from '../components/LiveViewCard';
+import RcaBlock from '../components/RcaBlock';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import { fullDateTime } from '../lib/format';
 import { creatorName } from '../lib/creatorName';
@@ -149,6 +150,7 @@ export default function PlanRunDetail() {
                       )}
                     </div>
                     {c.error && <div className="text-[12px] mt-1" style={{ color: 'var(--destructive)' }}>{c.error}</div>}
+                    {c.status === 'failed' && c.rca && <RcaBlock rca={c.rca} threadJump assistantPath={`/p/${projectId}/v/${versionId}/assistant`} />}
                     {/* 通过行展示最后断言结论（vision reason）；失败行 error 已含结论，不重复展示 */}
                     {!c.error && c.lastAssertion && (
                       <div className="text-[12px] mt-1 truncate" style={{ color: 'var(--muted-foreground)' }} title={c.lastAssertion}>

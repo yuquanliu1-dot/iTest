@@ -130,5 +130,15 @@
     "miss": "✕ 未命中",
     "quote": "「{{expected}}」",
     "statusCode": " 状态码 {{code}}"
+  },
+  "rca": {
+    "title": "根因分析",
+    "statusTimeout": "分析超时，未完成",
+    "statusError": "分析失败",
+    "openThread": "查看分析线程",
+    "evidence": "代码证据",
+    "suggestion": "修复建议",
+    "category": { "system_defect": "系统缺陷", "case_issue": "用例问题", "environment": "环境问题", "other": "其他" },
+    "confidence": { "high": "高置信", "medium": "中置信", "low": "低置信" }
   }
 }

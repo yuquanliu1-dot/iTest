@@ -152,5 +152,7 @@
     "weekdays": "Weekdays {{time}}",
     "weeklyPerDay": "Every {{day}} {{time}}",
     "monthly": "Monthly on day {{day}} at {{time}}"
-  }
+  },
+  "enableRca": "Failure root cause analysis (AI)",
+  "enableRcaHint": "After a plan run finishes, the AI assistant analyzes failed cases automatically: system defects get root cause and fix suggestions from the code repo; case/environment issues get a one-line conclusion only."
 }

@@ -147,5 +147,7 @@
     "weekdays": "工作日 {{time}}",
     "weeklyPerDay": "每{{day}} {{time}}",
     "monthly": "每月 {{day}} 日 {{time}}"
-  }
+  },
+  "enableRca": "失败根因分析（AI）",
+  "enableRcaHint": "计划运行结束后，AI 助手自动分析失败用例：判定为系统缺陷的结合代码仓给出根因与修复建议；用例自身/环境问题只记录一句结论。"
 }

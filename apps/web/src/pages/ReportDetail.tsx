@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
 import LiveViewCard from '../components/LiveViewCard';
+import RcaBlock from '../components/RcaBlock';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
@@ -137,6 +138,8 @@ export default function ReportDetail() {
   // 行 0 页面保持画面直到整个 run 结束。结束后面面定格最后一帧 + 「回放」按钮（录制回放）。
   const isRunning = data.status === 'running';
   const keepLiveForDataset = data.datasetRowIndex === 0 && (data.datasetSnapshot?.totalRows ?? 1) > 1;
+  // 失败根因分析结果（计划开启 rcaEnabled 时由 AI 异步产出；未分析/老报告为 null）
+  const rca = data.rca ?? null;
 
   // 用例级「执行开始」三态：
   //   有 startedAt → 正常展示（真实执行阶段起点，与 durationMs 同基线）
@@ -470,6 +473,12 @@ export default function ReportDetail() {
             {data.summary && (
               <div className="bg-card border rounded-[var(--radius-md)] p-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
                 {data.summary}
+              </div>
+            )}
+            {rca && (
+              <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4">
+                <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-2" style={{ color: 'var(--muted-foreground)' }}>{t('reports:rca.title')}</div>
+                <RcaBlock rca={rca} threadJump assistantPath={`/p/${projectId}/v/${versionId}/assistant`} />
               </div>
             )}
             <div className="bg-card border rounded-[var(--radius-md)] overflow-hidden">
