@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 import Input from '../ui/Input';
@@ -40,12 +40,17 @@ export default function RefEditDialog({
 
   // useState 初值只在首挂载取一次（那时 state.version 还是 null）——每次打开都从当前版本
   // 回填，否则已保存的 ref 在重开的弹窗里显示为空，看着像没持久化。
+  // loadGenRef 是请求代数：关闭/重开（或切 kind 发起新请求）时自增，让在途请求的回填作废——
+  // ls-remote 最长 20s，关窗不终止 fetch，不守卫则「加载中…」挂死且旧响应污染新版本弹窗。
+  const loadGenRef = useRef(0);
   useEffect(() => {
+    loadGenRef.current++;
     if (!state.open) return;
     setRefKind(state.version?.refKind ?? 'branch');
     setRefValue(state.version?.ref ?? '');
     setRefs([]);
     setRefsError(null);
+    setLoadingRefs(false);
     setTestState({ kind: 'idle' });
   }, [state.open, state.version?.id]);
 
@@ -67,17 +72,20 @@ export default function RefEditDialog({
 
   const loadRefs = async (kind: 'branch' | 'tag') => {
     if (!state.projectId) return;
+    const gen = ++loadGenRef.current;
     setLoadingRefs(true);
     setRefsError(null);
     setTestState({ kind: 'idle' });
     try {
       const r = await api.versions.listRefs(state.projectId, kind);
+      if (gen !== loadGenRef.current) return;
       setRefs(r.refs);
       if (r.error) setRefsError(r.error);
     } catch (e) {
+      if (gen !== loadGenRef.current) return;
       setRefsError((e as Error).message);
     } finally {
-      setLoadingRefs(false);
+      if (gen === loadGenRef.current) setLoadingRefs(false);
     }
   };
 
