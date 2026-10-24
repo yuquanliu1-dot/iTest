@@ -274,7 +274,10 @@ export async function verifyRef(
   const noun = input.kind === 'tag' ? '标签' : '分支';
 
   if (input.provider === 'gitlab') {
-    const r = await runGitProbe(['ls-remote', withPat(input.repoUrl, input.pat), `refs/${input.kind}s/${ref}`], 20_000);
+    // branch→refs/heads/<ref>：git 前缀是 heads 不是 branchs（拼成 refs/branchs/ 会精确匹配落空,
+    // exit 0 空输出 → 分支恒误报「远端不存在」；tag 的 refs/tags/ 恰好拼对所以只有分支坏）。
+    const pattern = input.kind === 'tag' ? `refs/tags/${ref}` : `refs/heads/${ref}`;
+    const r = await runGitProbe(['ls-remote', withPat(input.repoUrl, input.pat), pattern], 20_000);
     if (!r.ok) return r.result;
     return r.stdout.trim().length > 0 ? { valid: true } : { valid: false, error: `远端不存在${noun} ${ref}` };
   }
