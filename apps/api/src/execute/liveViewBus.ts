@@ -24,6 +24,7 @@ export const EV_END = 0x02;
 const CH_PREFIX = 'itest:live:';
 const ACTIVE_PREFIX = 'itest:live-active:';
 const REC_PREFIX = 'itest:live-rec:';
+const VIEWERS_PREFIX = 'itest:live-viewers:';
 
 export interface LiveEvent {
   type: number;
@@ -131,6 +132,41 @@ export function expireRecording(key: string): void {
 /** 同 key 重注册：清掉上一轮录制，避免新旧混流。 */
 export function clearRecording(key: string): void {
   void getPub()?.del(`${REC_PREFIX}${key}`).catch(() => undefined);
+}
+
+// ── 观看者回写（跨副本降档治理）───────────────────────────────────────────────
+
+/** 观看者计数 TTL：镜像流断开方 DECR；崩溃残留靠 TTL 自清（期间源多出几档帧率，无害）。 */
+export const VIEWERS_TTL_MS = 15_000;
+
+/** 镜像流建立：计数 +1 并起 TTL。 */
+export function viewersIncr(key: string): void {
+  const r = getPub();
+  if (!r) return;
+  const vk = `${VIEWERS_PREFIX}${key}`;
+  void r.pipeline().incr(vk).pexpire(vk, VIEWERS_TTL_MS).exec().catch(() => undefined);
+}
+
+/** 镜像流断开：计数 -1（崩溃残留可能已过期 → 可为负，读取端钳 0）。 */
+export function viewersDecr(key: string): void {
+  void getPub()?.decr(`${VIEWERS_PREFIX}${key}`).catch(() => undefined);
+}
+
+/** 镜像流保活：长静默（无帧转发）时续 TTL，防计数先行过期、源端误判无人观看。 */
+export function viewersTouch(key: string): void {
+  void getPub()?.pexpire(`${VIEWERS_PREFIX}${key}`, VIEWERS_TTL_MS).catch(() => undefined);
+}
+
+/** 源侧读取（tick 每拍一次）：无 Redis/无键/错误 → 0。 */
+export async function viewersGet(key: string): Promise<number> {
+  const r = getPub();
+  if (!r) return 0;
+  try {
+    const n = await r.get(`${VIEWERS_PREFIX}${key}`);
+    return Math.max(0, Number(n ?? 0));
+  } catch {
+    return 0;
+  }
 }
 
 // ── 镜像侧（非执行副本读取/订阅）─────────────────────────────────────────────

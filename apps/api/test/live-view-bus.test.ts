@@ -20,6 +20,11 @@ import {
   readRemoteRecording,
   remoteRecordingInfo,
   subscribeMirror,
+  viewersIncr,
+  viewersDecr,
+  viewersTouch,
+  viewersGet,
+  VIEWERS_TTL_MS,
   EV_FRAME,
   EV_END,
   MAX_REC_FRAMES,
@@ -68,7 +73,7 @@ describe('REDIS_URL 缺失 → 全部 no-op', () => {
     vi.restoreAllMocks();
   });
 
-  it('发布/心跳/录制系列不抛、不建连接', () => {
+  it('发布/心跳/录制/观看者回写系列不抛、不建连接', () => {
     expect(() => {
       heartbeatSet('k');
       heartbeatClear('k');
@@ -77,13 +82,17 @@ describe('REDIS_URL 缺失 → 全部 no-op', () => {
       appendRecording('k', Date.now(), JPEG);
       expireRecording('k');
       clearRecording('k');
+      viewersIncr('k');
+      viewersDecr('k');
+      viewersTouch('k');
     }).not.toThrow();
   });
 
-  it('读取系列返回空值：remoteSourceAlive=false / readRemoteRecording=[] / remoteRecordingInfo=null', async () => {
+  it('读取系列返回空值：remoteSourceAlive=false / readRemoteRecording=[] / remoteRecordingInfo=null / viewersGet=0', async () => {
     await expect(remoteSourceAlive('k')).resolves.toBe(false);
     await expect(readRemoteRecording('k')).resolves.toEqual([]);
     await expect(remoteRecordingInfo('k')).resolves.toBeNull();
+    await expect(viewersGet('k')).resolves.toBe(0);
   });
 
   it('subscribeMirror 退订函数可调（无连接、无异常）', () => {
@@ -126,6 +135,9 @@ class FakeRedis {
   del(...args: unknown[]) { return this.exec('del', ...args); }
   exists(...args: unknown[]) { return this.exec('exists', ...args); }
   publish(...args: unknown[]) { return this.exec('publish', ...args); }
+  incr(...args: unknown[]) { return this.exec('incr', ...args); }
+  decr(...args: unknown[]) { return this.exec('decr', ...args); }
+  get(...args: unknown[]) { return this.exec('get', ...args); }
   llen(...args: unknown[]) { return this.exec('llen', ...args); }
   pexpire(...args: unknown[]) { return this.exec('pexpire', ...args); }
   pttl(...args: unknown[]) { return this.exec('pttl', ...args); }
@@ -138,6 +150,7 @@ class FakeRedis {
       rpush: (...args: unknown[]) => { ops.push({ cmd: 'rpush', args }); return api; },
       ltrim: (...args: unknown[]) => { ops.push({ cmd: 'ltrim', args }); return api; },
       pexpire: (...args: unknown[]) => { ops.push({ cmd: 'pexpire', args }); return api; },
+      incr: (...args: unknown[]) => { ops.push({ cmd: 'incr', args }); return api; },
       exec: async () => {
         this.calls.push({ cmd: 'pipeline.exec', args: [...ops] });
         return [] as unknown[];
@@ -204,6 +217,30 @@ describe('源侧发布（mock ioredis）', () => {
     bus.clearRecording('case:2');
     expect(pub.callsOf('pexpire')[0]!.args).toEqual(['itest:live-rec:case:2', REC_TTL_MS]);
     expect(pub.callsOf('del')[0]!.args).toEqual(['itest:live-rec:case:2']);
+  });
+
+  it('观看者回写：INCR+PEXPIRE 走 pipeline、DECR/Touch 键与 TTL 正确、GET 钳负/报错→0', async () => {
+    const bus = await freshBusWithFakeRedis();
+    bus.viewersIncr('k');
+    const pub = FakeRedis.all[0]!;
+    const pipe = pub.callsOf('pipeline.exec')[0]!.args as unknown as FakeCall[];
+    expect(pipe.map((o) => o.cmd)).toEqual(['incr', 'pexpire']);
+    expect(pipe[0]!.args).toEqual(['itest:live-viewers:k']);
+    expect(pipe[1]!.args).toEqual(['itest:live-viewers:k', VIEWERS_TTL_MS]);
+
+    bus.viewersDecr('k');
+    expect(pub.callsOf('decr')[0]!.args).toEqual(['itest:live-viewers:k']);
+    bus.viewersTouch('k');
+    expect(pub.callsOf('pexpire')[0]!.args).toEqual(['itest:live-viewers:k', VIEWERS_TTL_MS]);
+
+    pub.results.get = '3';
+    await expect(bus.viewersGet('k')).resolves.toBe(3);
+    pub.results.get = '-2'; // 崩溃残留：decr 越过 0 → 读取端钳 0
+    await expect(bus.viewersGet('k')).resolves.toBe(0);
+    pub.results.get = null;
+    await expect(bus.viewersGet('k')).resolves.toBe(0);
+    pub.results.get = new Error('down');
+    await expect(bus.viewersGet('k')).resolves.toBe(0);
   });
 });
 
@@ -376,7 +413,12 @@ async function freshLiveViewWithBus() {
     remoteRecordingInfo: vi.fn(async () => null),
     readRemoteRecording: vi.fn(async () => [] as Array<{ ts: number; data: Buffer }>),
     subscribeMirror: vi.fn(() => () => {}),
+    viewersIncr: vi.fn(),
+    viewersDecr: vi.fn(),
+    viewersTouch: vi.fn(),
+    viewersGet: vi.fn(async () => 0),
   };
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   vi.doMock('../src/execute/liveViewBus.js', () => ({
     MAX_REC_FRAMES: 1200,
     REC_TTL_MS: 30 * 60_000,
@@ -386,8 +428,9 @@ async function freshLiveViewWithBus() {
     decodeEvent: vi.fn(),
     ...bus,
   }));
+  vi.doMock('../src/logger.js', () => ({ logger }));
   const mod = await import('../src/execute/liveView.js');
-  return { mod, bus };
+  return { mod, bus, logger };
 }
 
 describe('liveView × bus 集成', () => {
@@ -397,6 +440,7 @@ describe('liveView × bus 集成', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.doUnmock('../src/execute/liveViewBus.js');
+    vi.doUnmock('../src/logger.js');
     vi.restoreAllMocks();
   });
 
@@ -459,6 +503,58 @@ describe('liveView × bus 集成', () => {
     expect(conn.res.writableEnded).toBe(true);
     conn.close();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('镜像观看者回写：连接即 INCR；touch ≥5s 节流；onEnd+close 只 DECR 一次并落断流日志', async () => {
+    const { mod, bus, logger } = await freshLiveViewWithBus();
+    bus.remoteSourceAlive.mockResolvedValue(true);
+    let handlers: { onFrame: (ts: number, jpeg: Buffer) => void; onEnd: () => void } | null = null;
+    bus.subscribeMirror.mockImplementation((_key: string, h: typeof handlers) => {
+      handlers = h;
+      return () => {};
+    });
+    const conn = fakeConn();
+    await mod.handleLiveView(conn.req, conn.res, 'planrun:tw');
+    expect(bus.viewersIncr).toHaveBeenCalledWith('planrun:tw');
+
+    handlers!.onFrame(1, JPEG); // 首帧即 touch（lastTouchAt=0 → 立即续期一次）
+    handlers!.onFrame(2, JPEG); // 紧随次帧 → 节流窗内，不再 touch
+    expect(bus.viewersTouch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    handlers!.onFrame(3, JPEG); // 过窗 → 第二次 touch（长静默流计数不先行过期）
+    expect(bus.viewersTouch).toHaveBeenCalledTimes(2);
+
+    handlers!.onEnd(); // 源收尾 → finish：退订 + DECR + 日志
+    conn.close(); // 正常 end 后 Node 仍触发 close → done 守卫，不得重复 DECR
+    expect(bus.viewersDecr).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(
+      { key: 'planrun:tw', path: 'mirror', durationMs: expect.any(Number), bytes: JPEG.length * 3 },
+      'live stream ended',
+    );
+  });
+
+  it('跨副本降档治理：viewersGet→1（本地零订阅）→ 轮询切 500ms 档 + 尝试起 screencast；→0 回落 2000ms', async () => {
+    const { mod, bus } = await freshLiveViewWithBus();
+    let viewers = 1;
+    bus.viewersGet.mockImplementation(async () => viewers);
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const pollDelays = (): number[] =>
+      // 轮询档只有 500/2000 两档；截图软超时的 2500ms 定时器排除在外
+      setTimeoutSpy.mock.calls.map((c) => c[1] as number).filter((d) => d === 500 || d === 2000);
+    const screenshot = vi.fn(async () => JPEG);
+    const newCDPSession = vi.fn(async () => { throw new Error('no cdp'); });
+    const live = mod.registerLiveView('it-cross');
+    live.setPage({ screenshot, context: () => ({ newCDPSession }) } as never);
+    await vi.advanceTimersByTimeAsync(4000); // 首 tick（2000ms 旧档）+ 若干拍：remoteViewers 已刷成 1
+    expect(pollDelays()).toContain(500); // 桥上有人看 → 观看档
+    expect(newCDPSession).toHaveBeenCalled(); // → screencast 尝试启动（fake 失败静默走轮询兜底）
+
+    viewers = 0;
+    await vi.advanceTimersByTimeAsync(2500); // 等 remoteViewers 刷新为 0 并完成切档
+    setTimeoutSpy.mockClear();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(pollDelays()).not.toContain(500); // 归零后回落无人档
+    expect(pollDelays()).toContain(2000);
   });
 
   it('本地无源 + 桥上心跳已死（remoteSourceAlive=false）→ 404', async () => {

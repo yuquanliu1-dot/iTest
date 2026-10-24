@@ -19,6 +19,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { CDPSession, Page } from 'playwright-core';
+import { logger } from '../logger.js';
 import {
   MAX_REC_FRAMES,
   REC_TTL_MS,
@@ -34,6 +35,10 @@ import {
   remoteRecordingInfo,
   readRemoteRecording,
   subscribeMirror,
+  viewersIncr,
+  viewersDecr,
+  viewersTouch,
+  viewersGet,
 } from './liveViewBus.js';
 
 const BOUNDARY = 'frame';
@@ -62,6 +67,8 @@ const REPLAY_MIN_GAP_MS = 250;
 const REPLAY_MAX_GAP_MS = 2000;
 /** 加速后的最小帧间隔：低于此浏览器来不及解码，纯闪。 */
 const REPLAY_FAST_MIN_GAP_MS = 40;
+/** 镜像观看者计数续期节流：出帧时 viewersTouch 至少隔这么久（TTL 15s 的一半）。 */
+const MIRROR_TOUCH_INTERVAL_MS = 5000;
 
 interface LiveResponse {
   writeHead: (status: number, headers: Record<string, string>) => void;
@@ -89,6 +96,9 @@ interface LiveEntry {
    *  回放要求 dead 且 recording 非空——dead 后 record() 不再追加，录制数组不可变。 */
   dead: boolean;
   subscribers: Set<Subscriber>;
+  /** 桥上镜像观看者数（其他副本上的浏览器连接）：经观看者回写计数，tick 每拍刷新。
+   *  档位/screencast/高亮决策一律用 viewers() = 本地订阅 + 此值——这是「跨副本观看降档」的治本点。 */
+  remoteViewers: number;
   /** 最近一帧（新订阅者连接即回放，避免 <img> 空白到下一次 repaint）。 */
   lastFrame: Buffer | null;
   cdp: CDPSession | null;
@@ -127,6 +137,7 @@ export function registerLiveView(key?: string): LiveViewHandle {
   const entry: LiveEntry = {
     key: k,
     page: null, dead: false, subscribers: new Set(), lastFrame: null,
+    remoteViewers: 0,
     cdp: null, pollTimer: null, lastFrameAt: 0, lastRecordAt: 0, pumping: false, inFlight: false,
     recording: [], expiresAt: null,
   };
@@ -180,12 +191,18 @@ function teardown(entry: LiveEntry, key: string): void {
 
 // ── 帧泵 ─────────────────────────────────────────────────────────────────────
 
+/** 有效观看者 = 本地 HTTP 订阅者 + 桥上镜像观看者。泵节流、screencast 开关、高亮注入
+ *  都按它决策；只看本地订阅数会让跨副本观看者拿到「无人观看」档（~0.5fps + 无高亮）。 */
+function viewers(entry: LiveEntry): number {
+  return entry.subscribers.size + entry.remoteViewers;
+}
+
 /** 追加到录制（有界）。dead 后不追加——回放期间数组不可变。录制节流与泵节流一致：
  *  观看 500ms 一帧（screencast 洪泛被压到 ~2fps），无人 2000ms 一帧。 */
 function record(entry: LiveEntry, buf: Buffer): void {
   if (entry.dead) return;
   const now = Date.now();
-  const cadence = entry.subscribers.size > 0 ? POLL_INTERVAL_MS : POLL_INTERVAL_UNVIEWED_MS;
+  const cadence = viewers(entry) > 0 ? POLL_INTERVAL_MS : POLL_INTERVAL_UNVIEWED_MS;
   if (now - entry.lastRecordAt < cadence) return;
   entry.lastRecordAt = now;
   entry.recording.push({ ts: now, data: buf });
@@ -214,14 +231,14 @@ function startPump(entry: LiveEntry): void {
   if (entry.pollTimer) { clearTimeout(entry.pollTimer); entry.pollTimer = null; }
   entry.pollTimer = setTimeout(
     () => tick(entry),
-    entry.subscribers.size > 0 ? POLL_INTERVAL_MS : POLL_INTERVAL_UNVIEWED_MS,
+    viewers(entry) > 0 ? POLL_INTERVAL_MS : POLL_INTERVAL_UNVIEWED_MS,
   );
 }
 
 /** 泵状态与观看者同步：有人看 → 确保 CDP 提帧；没人看 → 停 CDP（录制仍由慢节流轮询兜底）。 */
 function syncViewers(entry: LiveEntry): void {
   if (entry.dead || !entry.page) return;
-  if (entry.subscribers.size === 0) {
+  if (viewers(entry) === 0) {
     stopScreencast(entry);
   } else if (!entry.cdp) {
     void tryStartScreencast(entry).catch(() => undefined);
@@ -234,6 +251,8 @@ function tick(entry: LiveEntry): void {
     return;
   }
   heartbeatSet(entry.key); // 桥上心跳：证明源副本仍活着（页面挂起无帧时也不过期）
+  // 跨副本观看者回写：镜像观看者不计入本地 subscribers，靠 Redis 计数补齐档位决策
+  void viewersGet(entry.key).then((n) => { entry.remoteViewers = n; }).catch(() => undefined);
   syncViewers(entry);
   if (!entry.inFlight && Date.now() - entry.lastFrameAt >= KEEPALIVE_MS) {
     entry.inFlight = true;
@@ -251,7 +270,7 @@ function tick(entry: LiveEntry): void {
   }
   entry.pollTimer = setTimeout(
     () => tick(entry),
-    entry.subscribers.size > 0 ? POLL_INTERVAL_MS : POLL_INTERVAL_UNVIEWED_MS,
+    viewers(entry) > 0 ? POLL_INTERVAL_MS : POLL_INTERVAL_UNVIEWED_MS,
   );
 }
 
@@ -290,7 +309,7 @@ async function tryStartScreencast(entry: LiveEntry): Promise<void> {
     if (entry.cdp !== session) return; // 泵已停/已切换：不再消费
     void cdpSend('Page.screencastFrameAck', { sessionId: ev.sessionId }).catch(() => undefined);
     if (Date.now() - entry.lastFrameAt < MIN_FRAME_GAP_MS) return; // 节流：丢帧（ack 已发）
-    if (entry.dead || entry.subscribers.size === 0) return;
+    if (entry.dead || viewers(entry) === 0) return;
     fanout(entry, Buffer.from(ev.data, 'base64'));
   });
   try {
@@ -305,7 +324,7 @@ async function tryStartScreencast(entry: LiveEntry): Promise<void> {
     void session.detach().catch(() => undefined);
     return;
   }
-  if (entry.dead || entry.subscribers.size === 0) {
+  if (entry.dead || viewers(entry) === 0) {
     void cdpSend('Page.stopScreencast').catch(() => undefined);
     void session.detach().catch(() => undefined);
     return;
@@ -331,17 +350,24 @@ const LIVE_HEADERS: Record<string, string> = {
   'X-Accel-Buffering': 'no',
 };
 
-/** 把 MJPEG 帧写进 HTTP 响应的订阅者（本地源与镜像共用）。 */
-function resSubscriber(res: LiveResponse): Subscriber {
+/** 把 MJPEG 帧写进 HTTP 响应的订阅者（本地源与镜像共用）。onBytes 可选：累计转发字节（断流观测）。 */
+function resSubscriber(res: LiveResponse, onBytes?: (n: number) => void): Subscriber {
   return {
     writePart: (buf) => {
       if (res.writableEnded) return;
       res.write(`--${BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${buf.length}\r\n\r\n`);
       res.write(buf);
       res.write('\r\n');
+      onBytes?.(buf.length);
     },
     end: () => { if (!res.writableEnded) res.end(); },
   };
+}
+
+/** 单连接流收尾观测：durationMs 突短 = 连接被掐（ip_hash 漂移/代理超时）；bytes=0 = 整条
+ *  连接从未出帧（源未就绪/桥断）。「跑着跑着没画面」类问题先看这两列。 */
+function logStreamEnd(path: 'local' | 'mirror', key: string, startedAt: number, bytes: number): void {
+  logger.info({ key, path, durationMs: Date.now() - startedAt, bytes }, 'live stream ended');
 }
 
 /** GET .../live/:key —— 鉴权在路由层完成，这里只管流。无活跃源 404；源存在但 page 未就绪则挂起等待首帧。
@@ -356,19 +382,43 @@ export async function handleLiveView(req: { on: (event: 'close', fn: () => void)
       res.end();
       return;
     }
-    // 镜像路径：订阅桥上频道，帧/end 帧分别转发/收尾（不二次录制——录制在源副本上完）
+    // 镜像路径：订阅桥上频道，帧/end 帧分别转发/收尾（不二次录制——录制在源副本上完）。
+    // 观看者回写：连接即 INCR；onEnd 与 close（正常 end 后 Node 仍会触发 close）只 DECR 一次；
+    // 出帧时 ≥5s 节流 touch 续计数 TTL，防长连接被源端误判无人观看而降档。
     res.writeHead(200, LIVE_HEADERS);
-    const sub = resSubscriber(res);
-    const unsubscribe = subscribeMirror(key, {
-      onFrame: (_ts, jpeg) => sub.writePart(jpeg),
-      onEnd: () => sub.end(),
+    viewersIncr(key);
+    const startedAt = Date.now();
+    let bytes = 0;
+    let lastTouchAt = 0;
+    let done = false;
+    let unsubscribe: () => void = () => {};
+    const finish = () => {
+      if (done) return;
+      done = true;
+      unsubscribe();
+      sub.end(); // 源副本 end 帧/断连 → 结束镜像 HTTP 响应（否则浏览器 <img> 与 nginx 连接挂死）
+      viewersDecr(key);
+      logStreamEnd('mirror', key, startedAt, bytes);
+    };
+    const sub = resSubscriber(res, (n) => {
+      bytes += n;
+      if (Date.now() - lastTouchAt >= MIRROR_TOUCH_INTERVAL_MS) {
+        lastTouchAt = Date.now();
+        viewersTouch(key);
+      }
     });
-    req.on('close', unsubscribe);
+    unsubscribe = subscribeMirror(key, {
+      onFrame: (_ts, jpeg) => sub.writePart(jpeg),
+      onEnd: finish,
+    });
+    req.on('close', finish);
     return;
   }
   res.writeHead(200, LIVE_HEADERS);
 
-  const sub = resSubscriber(res);
+  const startedAt = Date.now();
+  let bytes = 0;
+  const sub = resSubscriber(res, (n) => { bytes += n; });
   entry.subscribers.add(sub);
   // 连接即回放最近一帧（静默页 <img> 不空白；首观看者启动泵）
   if (entry.lastFrame) sub.writePart(entry.lastFrame);
@@ -377,7 +427,9 @@ export async function handleLiveView(req: { on: (event: 'close', fn: () => void)
   req.on('close', () => {
     entry.subscribers.delete(sub);
     // 最后一位观看者离开：停 CDP 保活，但泵继续以慢节流录制（无人值守执行留回放）。
-    if (entry.subscribers.size === 0) stopScreencast(entry);
+    // viewers() 计入桥上镜像观看者——跨副本仍有人看就不降档（观看者回写治本点）。
+    if (viewers(entry) === 0) stopScreencast(entry);
+    logStreamEnd('local', key, startedAt, bytes);
   });
 }
 
@@ -506,7 +558,7 @@ export async function annotateAction(
 ): Promise<void> {
   if (!box) return;
   const entry = pageMap.get(page);
-  if (!entry || entry.dead || entry.subscribers.size === 0) return;
+  if (!entry || entry.dead || viewers(entry) === 0) return;
   if (typeof box === 'function') box = await box().catch(() => null);
   if (!box) return;
   await page.evaluate(
