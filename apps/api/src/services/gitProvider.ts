@@ -1,11 +1,13 @@
 /**
  * Git provider 抽象。当前只支持「仓库元数据 + 可达性验证」，不接 clone / file read。
  * 引入背景：iTest 的 AI 生成用例步骤会需要看代码；现在先确认 URL 形式合法、目标 host
- * 可达、PAT 有效（GitHub）；Gitee / GitLab 仅做 URL 形式校验。
+ * 可达、PAT 有效（GitHub 走 REST API；GitLab 走 git ls-remote 真实探测；Gitee 仅 URL 形式校验）。
  *
  * 接口契约：verifyRepoAccess 返回 { valid: boolean, error?: string }，失败原因要可读，
  * 让前端表单在保存前提示。
  */
+import { spawn } from 'node:child_process';
+
 export type GitProviderName = 'github' | 'gitee' | 'gitlab';
 
 export interface VerifyRepoInput {
@@ -78,14 +80,89 @@ export function validateRepoName(name: string): { valid: boolean; error?: string
  *  - URL 形式校验总是先做
  *  - GitHub：HEAD /repos/{owner}/{repo}（带 PAT）；无 PAT 则 GET /repos/.../branches/{branch}
  *    （unauthenticated 60/hr；超时即「提示需 PAT」）
- *  - Gitee / GitLab：URL 形式校验 + 可选 HEAD；未配置 token 时只校验 URL
+ *  - GitLab：git ls-remote --symref 真实探测（与 clone 同传输层），一次拿默认分支 + 分支存在性
+ *  - Gitee：URL 形式校验；未配置 token 时只校验 URL
  */
+
+/** GitLab 真实可达性探测。用 git ls-remote 而非 HTTP HEAD：与 cloneFirst 走完全相同的传输层，
+ *  clone 会失败的这里必失败——JW/code.srdcloud.cn 这类网络不通在保存前即暴露，而不是等
+ *  AI 工作台 checkout 报「仓库不可用」。PAT 注入规则与 repo.ts injectPat 的 gitlab 分支对齐
+ *  （oauth2:<pat>），无 PAT 原样带用户名探测，私有仓库会归为认证失败提示补 PAT。 */
+async function probeGitLab(input: VerifyRepoInput): Promise<VerifyRepoResult> {
+  const u = new URL(input.repoUrl);
+  if (input.pat) {
+    u.username = 'oauth2';
+    u.password = input.pat;
+  }
+  // --symref HEAD 顺带吐出远端默认分支（ref: refs/heads/<x>\tHEAD），前端据此自动纠正 main/master 写错
+  const args = ['ls-remote', '--symref', u.toString(), 'HEAD'];
+  if (input.branch) args.push(`refs/heads/${input.branch}`);
+  const r = await runGitProbe(args, 20_000);
+  if (!r.ok) return r.result;
+  let defaultBranch: string | undefined;
+  let branchExists: boolean | undefined;
+  for (const line of r.stdout.split('\n')) {
+    const m = line.match(/^ref: refs\/heads\/(\S+)\tHEAD$/);
+    if (m) defaultBranch = m[1]!;
+    if (input.branch && line.endsWith(`refs/heads/${input.branch}`)) branchExists = true;
+  }
+  if (input.branch && !branchExists) {
+    return { valid: false, error: `分支 ${input.branch} 不存在`, defaultBranch, branchExists: false };
+  }
+  return { valid: true, defaultBranch, branchExists };
+}
+
+/** 带硬超时的 git ls-remote。禁交互（GIT_TERMINAL_PROMPT=0 + GIT_ASKPASS=echo），
+ *  网络挂起时 10s 强杀并归为「连接超时」；stderr 按认证特征分类，其余原样透出 git 关键行。 */
+function runGitProbe(
+  args: string[],
+  timeoutMs: number,
+): Promise<{ ok: true; stdout: string } | { ok: false; result: VerifyRepoResult }> {
+  return new Promise((resolve) => {
+    const child = spawn('git', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' },
+    });
+    let out = '';
+    let err = '';
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeoutMs);
+    child.stdout.on('data', (d) => { out += d.toString(); });
+    child.stderr.on('data', (d) => { err += d.toString(); });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      resolve({ ok: false, result: { valid: false, error: `git 探测失败：${e.message}` } });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ ok: true, stdout: out });
+        return;
+      }
+      if (timedOut) {
+        resolve({ ok: false, result: { valid: false, error: `连接超时：GitLab 服务 ${timeoutMs / 1000}s 内无响应（网络不可达或防火墙拦截）` } });
+        return;
+      }
+      const lastLine = err.trim().split('\n').pop() ?? '';
+      if (/401|403|authentication|could not read username|terminal prompts disabled/i.test(err)) {
+        resolve({ ok: false, result: { valid: false, error: '认证失败：私有仓库须配置有效 PAT（或 PAT 权限不足）' } });
+        return;
+      }
+      resolve({ ok: false, result: { valid: false, error: `仓库探测失败：${lastLine || `git exit ${code}`}` } });
+    });
+  });
+}
+
 export async function verifyRepoAccess(input: VerifyRepoInput): Promise<VerifyRepoResult> {
   const urlCheck = validateRepoUrl(input.repoUrl, input.provider);
   if (!urlCheck.valid) return { valid: false, error: urlCheck.error };
 
+  if (input.provider === 'gitlab') return probeGitLab(input);
   if (input.provider !== 'github') {
-    // Gitee / GitLab 当前只做 URL 形式校验；不假装可达
+    // Gitee 当前只做 URL 形式校验；不假装可达
     return { valid: true };
   }
   // GitHub：调用 REST API HEAD /repos/{owner}/{repo}；带 PAT 可放宽限速
