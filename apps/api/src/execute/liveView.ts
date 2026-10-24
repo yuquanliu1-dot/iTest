@@ -19,6 +19,22 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { CDPSession, Page } from 'playwright-core';
+import {
+  MAX_REC_FRAMES,
+  REC_TTL_MS,
+  redisReady,
+  heartbeatSet,
+  heartbeatClear,
+  publishFrame,
+  publishEnd,
+  appendRecording,
+  expireRecording,
+  clearRecording,
+  remoteSourceAlive,
+  remoteRecordingInfo,
+  readRemoteRecording,
+  subscribeMirror,
+} from './liveViewBus.js';
 
 const BOUNDARY = 'frame';
 /** 轮询兜底/保活间隔：screencast 帧停滞超过 KEEPALIVE_MS 时每 tick 补一帧截图。 */
@@ -34,19 +50,16 @@ const MIN_FRAME_GAP_MS = 200;
 const SCREENCAST_QUALITY = 55;
 /** 高亮描边框 DOM id（documentElement 直挂，避开 body 子序选择器）。 */
 const MARKER_ID = '__itest_live_marker__';
-/** 录制保留时长：执行结束（teardown）后录音在内存保留 30 分钟，期间可回放。 */
-const RECORD_TTL_MS = 30 * 60_000;
+// 录制保留时长（REC_TTL_MS）与帧数上限（MAX_REC_FRAMES）定义在 liveViewBus（Redis 侧共用同一契约）。
 /** 死保留的最大录制份数：超限按最早过期者淘汰（LRU）。 */
 const MAX_RETAINED_RECORDINGS = 6;
-/** 每份录制帧数上限（观看 10min / 无人 40min 的窗口）；每帧约 60-120KB。 */
-const MAX_FRAMES = 1200;
+/** 回放倍速上限（?speed=）：8x 已足够看清每帧动作，再快只是糊。 */
+const REPLAY_MAX_SPEED = 8;
 /** 过期录制清扫周期（60s，配合 handler 内的懒检查）。 */
 const SWEEP_INTERVAL_MS = 60_000;
 /** 回放帧间隔钳制：太快连发伤 HDMI 且无必要，太慢失真实节奏。 */
 const REPLAY_MIN_GAP_MS = 250;
 const REPLAY_MAX_GAP_MS = 2000;
-/** 回放倍速上限（?speed=）：8x 已足够看清每帧动作，再快只是糊。 */
-const REPLAY_MAX_SPEED = 8;
 /** 加速后的最小帧间隔：低于此浏览器来不及解码，纯闪。 */
 const REPLAY_FAST_MIN_GAP_MS = 40;
 
@@ -69,6 +82,8 @@ interface RecordedFrame {
 }
 
 interface LiveEntry {
+  /** liveKey（fanout/record/tick 发布到 Redis 桥时用）。 */
+  key: string;
   page: Page | null;
   /** 工具/执行器收尾置位：live 帧泵据此结束流（浏览器即将关闭，继续截图只会报错）；
    *  回放要求 dead 且 recording 非空——dead 后 record() 不再追加，录制数组不可变。 */
@@ -85,13 +100,13 @@ interface LiveEntry {
   pumping: boolean;
   /** 截图在途：慢/挂起页面防重叠（每 tick 一行跳帧，不并发叠截图）。 */
   inFlight: boolean;
-  /** 录制帧（追加、超 MAX_FRAMES 掉最旧）。teardown 后冻结为回放素材。 */
+  /** 录制帧（追加、超 MAX_REC_FRAMES 掉最旧）。teardown 后冻结为回放素材。 */
   recording: RecordedFrame[];
   /** teardown 时置 now+TTL；live 期为 null；过期由懒检查 + 清扫定时器删除。 */
   expiresAt: number | null;
 }
 
-/** liveKey → 画面源（进程内存，同 loginStateCache 模式；api 单进程承载 HTTP 与全部执行，无跨实例问题）。 */
+/** liveKey → 画面源（本进程承接的那份执行；跨副本观看/回放由 liveViewBus 的 Redis 桥补齐）。 */
 const registry = new Map<string, LiveEntry>();
 /** page → 画面源：执行器 annotateAction 凭 page 反查（无观看者直接短路）。 */
 const pageMap = new WeakMap<Page, LiveEntry>();
@@ -110,11 +125,15 @@ export function registerLiveView(key?: string): LiveViewHandle {
   const old = getEntry(k);
   if (old) teardown(old, k);
   const entry: LiveEntry = {
+    key: k,
     page: null, dead: false, subscribers: new Set(), lastFrame: null,
     cdp: null, pollTimer: null, lastFrameAt: 0, lastRecordAt: 0, pumping: false, inFlight: false,
     recording: [], expiresAt: null,
   };
   registry.set(k, entry);
+  // 桥上声明源就位（心跳）并清掉上一轮同 key 录制；无 REDIS_URL 时两者均 no-op
+  clearRecording(k);
+  heartbeatSet(k);
   return {
     key: k,
     setPage: (p) => {
@@ -150,7 +169,11 @@ function teardown(entry: LiveEntry, key: string): void {
   if (entry.page) pageMap.delete(entry.page);
   entry.page = null;
   entry.lastFrame = null;
-  entry.expiresAt = Date.now() + RECORD_TTL_MS;
+  entry.expiresAt = Date.now() + REC_TTL_MS;
+  // 桥上收尾：镜像订阅者收到 end 帧后结束响应；录制 TTL 自此刻起算；心跳撤除。
+  publishEnd(key);
+  heartbeatClear(key);
+  expireRecording(key);
   evictRetained();
   ensureSweep();
 }
@@ -166,7 +189,8 @@ function record(entry: LiveEntry, buf: Buffer): void {
   if (now - entry.lastRecordAt < cadence) return;
   entry.lastRecordAt = now;
   entry.recording.push({ ts: now, data: buf });
-  if (entry.recording.length > MAX_FRAMES) entry.recording.shift();
+  if (entry.recording.length > MAX_REC_FRAMES) entry.recording.shift();
+  appendRecording(entry.key, now, buf);
 }
 
 function fanout(entry: LiveEntry, buf: Buffer): void {
@@ -174,6 +198,7 @@ function fanout(entry: LiveEntry, buf: Buffer): void {
   entry.lastFrameAt = Date.now();
   record(entry, buf);
   for (const s of entry.subscribers) s.writePart(buf);
+  publishFrame(entry.key, Date.now(), buf);
 }
 
 /** 起泵：有 page 即跑（无人观看也录制），tick 自适应节流。 */
@@ -208,6 +233,7 @@ function tick(entry: LiveEntry): void {
     stopPump(entry);
     return;
   }
+  heartbeatSet(entry.key); // 桥上心跳：证明源副本仍活着（页面挂起无帧时也不过期）
   syncViewers(entry);
   if (!entry.inFlight && Date.now() - entry.lastFrameAt >= KEEPALIVE_MS) {
     entry.inFlight = true;
@@ -296,24 +322,18 @@ function withTimeout<T>(p: Promise<T>): Promise<T> {
 
 // ── HTTP handlers ────────────────────────────────────────────────────────────────
 
-/** GET .../live/:key —— 鉴权在路由层完成，这里只管流。无活跃源 404；源存在但 page 未就绪则挂起等待首帧。
- *  仅限 live（运行中）；执行结束后请走 handleLiveReplay（?replay=1）。 */
-export function handleLiveView(req: { on: (event: 'close', fn: () => void) => void }, res: LiveResponse, key: string): void {
-  const entry = getEntry(key);
-  if (!entry || entry.dead) {
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end();
-    return;
-  }
-  res.writeHead(200, {
-    'Content-Type': `multipart/x-mixed-replace; boundary=${BOUNDARY}`,
-    'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-    Pragma: 'no-cache',
-    // 生产 nginx 反代禁缓冲，否则帧被攒批、画面卡成幻灯片（SSE 同理）
-    'X-Accel-Buffering': 'no',
-  });
+/** MJPEG 流响应头（本地源与 Redis 镜像共用；X-Accel-Buffering：生产 nginx 反代禁缓冲，
+ *  否则帧被攒批、画面卡成幻灯片，SSE 同理）。 */
+const LIVE_HEADERS: Record<string, string> = {
+  'Content-Type': `multipart/x-mixed-replace; boundary=${BOUNDARY}`,
+  'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+  Pragma: 'no-cache',
+  'X-Accel-Buffering': 'no',
+};
 
-  const sub: Subscriber = {
+/** 把 MJPEG 帧写进 HTTP 响应的订阅者（本地源与镜像共用）。 */
+function resSubscriber(res: LiveResponse): Subscriber {
+  return {
     writePart: (buf) => {
       if (res.writableEnded) return;
       res.write(`--${BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${buf.length}\r\n\r\n`);
@@ -322,6 +342,33 @@ export function handleLiveView(req: { on: (event: 'close', fn: () => void) => vo
     },
     end: () => { if (!res.writableEnded) res.end(); },
   };
+}
+
+/** GET .../live/:key —— 鉴权在路由层完成，这里只管流。无活跃源 404；源存在但 page 未就绪则挂起等待首帧。
+ *  仅限 live（运行中）；执行结束后请走 handleLiveReplay（?replay=1）。
+ *  本地无源但 Redis 桥上有活跃心跳（执行 job 落在别的副本）→ 转成镜像：订阅桥上帧流转发。
+ *  无 REDIS_URL 时 fallback 全同步（行为与单进程版一致）；有 Redis 时仅在本地无源分支多一个 await。 */
+export async function handleLiveView(req: { on: (event: 'close', fn: () => void) => void }, res: LiveResponse, key: string): Promise<void> {
+  const entry = getEntry(key);
+  if (!entry || entry.dead) {
+    if (!redisReady() || !(await remoteSourceAlive(key))) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end();
+      return;
+    }
+    // 镜像路径：订阅桥上频道，帧/end 帧分别转发/收尾（不二次录制——录制在源副本上完）
+    res.writeHead(200, LIVE_HEADERS);
+    const sub = resSubscriber(res);
+    const unsubscribe = subscribeMirror(key, {
+      onFrame: (_ts, jpeg) => sub.writePart(jpeg),
+      onEnd: () => sub.end(),
+    });
+    req.on('close', unsubscribe);
+    return;
+  }
+  res.writeHead(200, LIVE_HEADERS);
+
+  const sub = resSubscriber(res);
   entry.subscribers.add(sub);
   // 连接即回放最近一帧（静默页 <img> 不空白；首观看者启动泵）
   if (entry.lastFrame) sub.writePart(entry.lastFrame);
@@ -341,49 +388,57 @@ export function replaySpeedOf(query: unknown): number {
   return Number.isFinite(n) && n > 0 ? Math.min(n, REPLAY_MAX_SPEED) : 1;
 }
 
-/** GET .../live/:key?replay=meta —— 探测本轮录制是否仍可回放（内存录制：TTL 过期 / LRU 淘汰 /
- *  进程重启后就没了）。前端据此决定是否显示「回放」按钮，避免点下去撞 404。
- *  可回放返回 { available:true, frames, durationMs, expiresAt }；否则 { available:false }（仍 200）。 */
-export function handleLiveReplayMeta(res: LiveResponse, key: string): void {
+/** GET .../live/:key?replay=meta —— 探测本轮录制是否仍可回放（本进程内存录制，或 Redis 桥上
+ *  源副本的录制：TTL 过期 / LRU 淘汰 / 进程重启后就没了）。前端据此决定是否显示「回放」按钮，
+ *  避免点下去撞 404。可回放返回 { available:true, frames, durationMs, expiresAt }；否则
+ *  { available:false }（仍 200）。 */
+export async function handleLiveReplayMeta(res: LiveResponse, key: string): Promise<void> {
   const entry = getEntry(key); // 懒 TTL 检查：过期条目在此之前已被删出注册表
   const frames = entry && entry.dead ? entry.recording : [];
-  const body =
-    frames.length > 0
+  let body: Record<string, unknown>;
+  if (frames.length > 0) {
+    body = {
+      available: true,
+      frames: frames.length,
+      durationMs: frames[frames.length - 1]!.ts - frames[0]!.ts,
+      expiresAt: entry!.expiresAt,
+    };
+  } else {
+    const info = redisReady() ? await remoteRecordingInfo(key) : null;
+    body = info
       ? {
           available: true,
-          frames: frames.length,
-          durationMs: frames[frames.length - 1]!.ts - frames[0]!.ts,
-          expiresAt: entry!.expiresAt,
+          frames: info.frames,
+          durationMs: Math.max(info.lastTs - info.firstTs, 0),
+          expiresAt: Date.now() + info.ttlMs,
         }
       : { available: false };
+  }
   res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(body));
 }
 
 /** GET .../live/:key?replay=1[&speed=N] —— 执行结束后的录制回放：按录制帧时间戳间隔把整段重播一遍，
  *  末帧后 end。`speed` 为倍速（1=原速，默认；上限 8），帧间隔按倍率压缩、下限 REPLAY_FAST_MIN_GAP_MS。
- *  每连接独立游标，天然支持并发回放。录制不存在/未结束/已过期 → 404。 */
-export function handleLiveReplay(
+ *  每连接独立游标，天然支持并发回放。录制不存在/未结束/已过期 → 404。
+ *  本地无录制时从 Redis 桥读源副本的录制（无 REDIS_URL → 同步 404，行为不变）。 */
+export async function handleLiveReplay(
   req: { on: (event: 'close', fn: () => void) => void },
   res: LiveResponse,
   key: string,
   opts?: { speed?: number },
-): void {
+): Promise<void> {
   const entry = getEntry(key);
-  if (!entry || !entry.dead || entry.recording.length === 0) {
+  let frames: RecordedFrame[] = entry && entry.dead ? entry.recording : [];
+  if (frames.length === 0 && redisReady()) frames = await readRemoteRecording(key);
+  if (frames.length === 0) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end();
     return;
   }
   const speed = Math.min(Math.max(opts?.speed ?? 1, 0.25), REPLAY_MAX_SPEED);
-  res.writeHead(200, {
-    'Content-Type': `multipart/x-mixed-replace; boundary=${BOUNDARY}`,
-    'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-    Pragma: 'no-cache',
-    'X-Accel-Buffering': 'no',
-  });
+  res.writeHead(200, LIVE_HEADERS);
 
-  const frames = entry.recording; // dead 后不可变：record() 不再追加
   let i = 0;
   let timer: NodeJS.Timeout | null = null;
   const step = (): void => {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import Icon from './Icon';
 import { Dialog, DialogContent } from './ui/Modal';
@@ -29,13 +29,33 @@ function ModeBadge({ mode }: { mode: LiveViewMode }) {
 /** 浏览器实时画面（playground）：MJPEG multipart 流，<img> 原生解码逐帧渲染。
  *  流随执行结束由服务端收尾——浏览器保留最后帧（定格），新一轮/新执行开始时一并消失。
  *  replay 模式为录制回放（?replay=1），播完同定格。onError（流异常断开等）隐藏画面，周围进度文字不受影响。
+ *  retry=true（运行中）时断流不永久隐藏：2s 后重挂 <img> 重连（跨副本排队延迟期的 404 只是暂时）。
  *  点画面（或右上角放大按钮）弹窗全屏查看：弹窗内另开一路同源流——实时模式是多订阅 hub，
  *  回放模式则从录制头部重新播一遍。 */
-export default function LiveViewImg({ url, mode = 'live' }: { url: string; mode?: LiveViewMode }) {
+export default function LiveViewImg({
+  url,
+  mode = 'live',
+  retry = false,
+}: {
+  url: string;
+  mode?: LiveViewMode;
+  retry?: boolean;
+}) {
   const { t } = useTranslation();
   const [broken, setBroken] = useState(false);
   const [zoomed, setZoomed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!broken || !retry) return;
+    const timer = setTimeout(() => {
+      setAttempt((a) => a + 1);
+      setBroken(false);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [broken, retry]);
   if (broken) return null;
+  // 重试后重挂 <img>：URL 加 r= 参数绕开缓存，保证真的重新发起流请求
+  const src = attempt === 0 ? url : `${url}${url.includes('?') ? '&' : '?'}r=${attempt}`;
   return (
     <>
       <div
@@ -48,7 +68,8 @@ export default function LiveViewImg({ url, mode = 'live' }: { url: string; mode?
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setZoomed(true); } }}
       >
         <img
-          src={url}
+          key={attempt}
+          src={src}
           onError={() => setBroken(true)}
           alt={t(BADGE[mode].text)}
           className="block w-full object-contain"

@@ -70,7 +70,7 @@ export default function LiveViewCard({
 
   return (
     <div className="mb-1.5">
-      {showImg && <LiveViewImg key={session} url={src} mode={mode} />}
+      {showImg && <LiveViewImg key={session} url={src} mode={mode} retry={running} />}
       {!running && replayable && (
         <div className="flex items-center justify-end gap-1.5">
           {replaying && (
