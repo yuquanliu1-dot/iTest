@@ -8,7 +8,7 @@
  *   （手动一键执行路径仍然能用）。与 cache.ts 的 fail-open 行为一致。
  */
 import IORedis, { type Redis } from 'ioredis';
-import { Queue, type Worker } from 'bullmq';
+import { Queue, Worker } from 'bullmq';
 import { logger } from '../logger.js';
 
 export const PLAN_SCHEDULE_QUEUE_NAME = 'plan-schedule';
@@ -42,7 +42,8 @@ export function getQueue(): Queue<{ scheduleId: string }> {
 export function buildWorker(
   processor: (scheduleId: string) => Promise<void>,
 ): Worker<{ scheduleId: string }> {
-  const { Worker } = require('bullmq') as typeof import('bullmq');
+  // Worker 走顶部静态 import。此处曾是 require('bullmq')——api 是纯 ESM,require 未定义,
+  // startScheduler 首次上 3 副本即崩(exec worker 的 require 崩溃同款坑,勿再走 require)。
   return new Worker<{ scheduleId: string }>(
     PLAN_SCHEDULE_QUEUE_NAME,
     async (job) => processor(job.data.scheduleId),
