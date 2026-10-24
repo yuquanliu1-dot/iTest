@@ -91,6 +91,14 @@ export default function Executions() {
 		retry: false,
 	});
 
+	// planId 深链同理：chip 显示计划名而非裸 UUID（计划被删时 404，退回短 id）。
+	const { data: deepLinkedPlan } = useQuery({
+		queryKey: ['plan', raw.planId],
+		queryFn: () => api.plans.get(raw.planId!),
+		enabled: !!raw.planId,
+		retry: false,
+	});
+
 	// case / plan 行均参与勾选；提交时按行类型分流到不同接口
 	const allRows = useMemo(() => data ?? [], [data]);
 	// 服务端一次返回所有行；这里在客户端按 page/pageSize 切片（与 GroupsPage 一致）。
@@ -137,7 +145,7 @@ export default function Executions() {
 			style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}
 		>
 			<span className="opacity-80">{t('reports:list.filterPlan')}</span>
-			<span className="font-mono opacity-90">{raw.planId.slice(0, 8)}</span>
+			<span className="truncate opacity-90" title={deepLinkedPlan?.name ?? undefined}>{deepLinkedPlan?.name ?? raw.planId.slice(0, 8)}</span>
 			<button
 				type="button"
 				aria-label={t('reports:list.clearPlanFilter')}
@@ -243,7 +251,7 @@ export default function Executions() {
 				if (r.kind === 'plan') {
 					return (
 						<span className="flex items-center gap-2 min-w-0">
-							<span className="font-mono text-muted-foreground">run {r.id.slice(0, 8)}</span>
+							<span className="truncate">{(r as { planName?: string | null }).planName ?? `run ${r.id.slice(0, 8)}`}</span>
 						</span>
 					);
 				}

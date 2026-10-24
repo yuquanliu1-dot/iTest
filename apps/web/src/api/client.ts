@@ -951,6 +951,8 @@ export type ExecutionEntry =
       kind: 'plan';
       id: string;
       planId: string;
+      /** 所属计划名（计划被删后 innerJoin 落空不会出现该行，理论非空）。 */
+      planName: string | null;
       versionId: string | null;
       versionName: string | null;
       status: string;

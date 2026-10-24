@@ -78,7 +78,8 @@ export default function PlanRunDetail() {
           {t('plans:backToHistory')}
         </Button>
         <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
-        <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>{t('plans:planRunTitle')}</h1>
+        {/* 计划被删时 planName 为 null，兜底通用「计划运行」 */}
+        <h1 className="text-[16px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>{run.planName ?? t('plans:planRunTitle')}</h1>
         <StatusPill status={run.status}>{t(`cases:status.${run.status}`)}</StatusPill>
         <div className="flex-1" />
         {run.status === 'running' && (

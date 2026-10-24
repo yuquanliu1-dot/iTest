@@ -43,6 +43,8 @@ interface PlanEntry {
   /** 执行人 = 计划运行触发者；列表统一返回 createdBy。 */
   createdById: string | null;
   createdBy: ResolvedUser | null;
+  /** 所属计划名（来自 innerJoin executionPlans；理论非空，保 null 兜底） */
+  planName: string | null;
 }
 type Entry = CaseEntry | PlanEntry;
 
@@ -166,7 +168,7 @@ executionsRoute.get('/', async (req, res) => {
     const where = conds.length ? and(...conds) : undefined;
     const rows = where
       ? await db
-          .select({ id: planRuns.id, planId: planRuns.planId, status: planRuns.status, summary: planRuns.summary, totalCases: planRuns.totalCases, passedCases: planRuns.passedCases, failedCases: planRuns.failedCases, skippedCases: planRuns.skippedCases, durationMs: planRuns.durationMs, startedAt: planRuns.startedAt, versionId: executionPlans.versionId, createdById: planRuns.triggeredByUserId })
+          .select({ id: planRuns.id, planId: planRuns.planId, planName: executionPlans.name, status: planRuns.status, summary: planRuns.summary, totalCases: planRuns.totalCases, passedCases: planRuns.passedCases, failedCases: planRuns.failedCases, skippedCases: planRuns.skippedCases, durationMs: planRuns.durationMs, startedAt: planRuns.startedAt, versionId: executionPlans.versionId, createdById: planRuns.triggeredByUserId })
           .from(planRuns)
           .innerJoin(executionPlans, eq(executionPlans.id, planRuns.planId))
           .where(where)
@@ -176,6 +178,7 @@ executionsRoute.get('/', async (req, res) => {
       kind: 'plan' as const,
       id: r.id,
       planId: r.planId,
+      planName: r.planName ?? null,
       versionId: r.versionId ?? null,
       versionName: null,
       status: r.status,
