@@ -905,3 +905,17 @@ describe('solidify_case 注册', () => {
     expect(names).toContain('solidify_case');
   });
 });
+
+describe('solidify_case 超时预算', () => {
+  it('全局看门狗随步数缩放（与 verify_case 同公式）：1-2 步保底 300s，3 步起线性 130s/步', async () => {
+    // 回归动机：固定 300s 装不下多步用例——AI 相 85~107s/步，第 4 步中途被强杀
+    // 「固化超时（300s）已终止」。预算必须随步数增长才谈得上多步用例可固化。
+    const { computeSolidifyTimeoutMs } = await import('../src/pi/space/tools/solidifyCase.js');
+    expect(computeSolidifyTimeoutMs(0)).toBe(300_000); // 兜底（无步骤前置已拦截，绝不至于 0）
+    expect(computeSolidifyTimeoutMs(1)).toBe(300_000);
+    expect(computeSolidifyTimeoutMs(2)).toBe(300_000); // 2×130k=260k < 保底 → 仍 300k
+    expect(computeSolidifyTimeoutMs(3)).toBe(3 * 130_000); // 3×130k=390k 起越保底，线性爬升
+    expect(computeSolidifyTimeoutMs(10)).toBe(10 * 130_000); // 10 步 ≈ 21.7min
+    expect(computeSolidifyTimeoutMs(10)).toBeGreaterThan(300_000);
+  });
+});

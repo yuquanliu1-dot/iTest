@@ -43,9 +43,17 @@ import type { SpaceToolsContext } from './context.js';
 import { st, type StLang } from '../../../i18n.js';
 import { aiLangFrom } from '../../../agent/langDirective.js';
 
-// 与 verify_case 同量级：AI 逐步骤临场执行是慢路径。
-const SOLIDIFY_TIMEOUT_MS = 300_000;
+// 与 verify_case 同款伸缩预算：AI 逐步骤临场执行是慢路径（prod228 实测 85~107s/步），
+// 固定 300s 只装得下 2~3 步用例——多步用例 solidify 必超时（批量固化报告实测）。
+// 预算 = max(保底 300s, 步数 × 130s/步)，公式与 verify_case 的 computeVerifyTimeoutMs 一致。
+const SOLIDIFY_TIMEOUT_BASE_MS = 300_000;
+const SOLIDIFY_TIME_PER_STEP_MS = 130_000;
 const STEP_MAX_TURNS = 5;
+
+/** 全局看门狗预算 = max(基础 300s, 步数 × 每步 130s)。 */
+export function computeSolidifyTimeoutMs(stepCount: number): number {
+  return Math.max(SOLIDIFY_TIMEOUT_BASE_MS, stepCount * SOLIDIFY_TIME_PER_STEP_MS);
+}
 
 // 映射实现已下沉 execute/aiActionMap.ts（aiTask 运行时缓存共用），此处转出口径不变（测试直接 import 本模块）。
 // isVisualStep 同源下沉（verify_case 轨迹收集共用），转出口径不变。
@@ -322,10 +330,11 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         let browser: Browser | undefined;
         let live: ReturnType<typeof registerLiveView> | undefined;
         let timedOut = false;
+        const solidifyTimeoutMs = computeSolidifyTimeoutMs(effectiveSteps.length);
         const timer = setTimeout(() => {
           timedOut = true;
           if (browser) void browser.close().catch(() => undefined);
-        }, SOLIDIFY_TIMEOUT_MS);
+        }, solidifyTimeoutMs);
         try {
           const resolvedUrl = await resolveCaseUrl(
             {
@@ -438,7 +447,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               }
               if (solidifiable && stepActions.length > 0) collected.set(s.id, stepActions);
             } catch (e) {
-              if (timedOut) return { ok: false, error: `固化超时（${SOLIDIFY_TIMEOUT_MS / 1000}s）已终止` };
+              if (timedOut) return { ok: false, error: `固化超时（${solidifyTimeoutMs / 1000}s）已终止` };
               failedIndex = i;
               failedError = (e as Error).message.slice(0, 300);
               failedScreenshot = await writeStepScreenshot(reportId, i + 1, page);
@@ -484,7 +493,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               }),
             };
           }
-          if (timedOut) return { ok: false, error: `固化超时（${SOLIDIFY_TIMEOUT_MS / 1000}s）已终止` };
+          if (timedOut) return { ok: false, error: `固化超时（${solidifyTimeoutMs / 1000}s）已终止` };
 
           // ── 映射 + 暂存：全部步骤执行通过，逐视觉步骤把收集到的动作映射为 compiled ──
           const { stepReports, solidifiedCount, keptCount } = await mapAndStageSteps(
