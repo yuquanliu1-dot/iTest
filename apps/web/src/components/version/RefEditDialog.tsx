@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 import Input from '../ui/Input';
@@ -37,6 +37,17 @@ export default function RefEditDialog({
   const [testState, setTestState] = useState<
     { kind: 'idle' } | { kind: 'checking' } | { kind: 'ok' } | { kind: 'fail'; error: string }
   >({ kind: 'idle' });
+
+  // useState 初值只在首挂载取一次（那时 state.version 还是 null）——每次打开都从当前版本
+  // 回填，否则已保存的 ref 在重开的弹窗里显示为空，看着像没持久化。
+  useEffect(() => {
+    if (!state.open) return;
+    setRefKind(state.version?.refKind ?? 'branch');
+    setRefValue(state.version?.ref ?? '');
+    setRefs([]);
+    setRefsError(null);
+    setTestState({ kind: 'idle' });
+  }, [state.open, state.version?.id]);
 
   const updateRef = (val: string) => {
     setRefValue(val);
