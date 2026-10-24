@@ -132,15 +132,11 @@ export default function CaseDetail() {
     );
   };
 
-  /** 行级未固化检测：与后端 solidifyCase.isVisualStep 对齐 —— 未固化的两种形态都算：
-   *   1) compiled 全为 aiTask = 回放时由 AI 临场执行（视觉步骤）；
-   *   2) compiled 为空但带自然语言 instruction = stage_case 产出的纯指令步骤。
-   *  两者都可由 solidify_case 固化为机械 compiled DSL。 */
+  /** 行级未固化检测：与用例列表「固化」列/批量固化筛选同口径 —— 只有 compiled 为 NULL
+   *  （纯自然语言指令步骤）才算未固化；aiTask 视觉步骤 compiled 非空，列表计为已固化，
+   *  这里不再重复计数，避免列表 n/n 全绿而详情横幅仍报「存在未固化步骤」的口径打架。 */
   const isUnsolidifiedStep = (s: { instruction?: string | null; compiled?: unknown[] | null }): boolean => {
-    if (!Array.isArray(s.compiled) || s.compiled.length === 0) {
-      return typeof s.instruction === 'string' && s.instruction.trim().length > 0;
-    }
-    return s.compiled.every((a) => (a as { kind?: string }).kind === 'aiTask');
+    return s.compiled == null && typeof s.instruction === 'string' && s.instruction.trim().length > 0;
   };
 
   /** 跳 AI 助手固化：未固化步骤 → solidify_case 机械化为 compiled。首条 prompt 点名用例与未固化步骤清单。 */
@@ -152,7 +148,7 @@ export default function CaseDetail() {
     if (visuals.length === 0) return;
     openAssistantWithMessage(
       `对用例「${caseDetail.title}」(caseId=${id}, versionId=${versionId}) 执行机械固化。\n` +
-        `该用例有 ${visuals.length} 个未固化步骤（仅有自然语言指令或由 AI 临场执行的视觉步骤,尚未固化为机械 compiled）,如下:\n${visuals.join('\n')}\n` +
+        `该用例有 ${visuals.length} 个未固化步骤（仅有自然语言指令,尚未固化为机械 compiled）,如下:\n${visuals.join('\n')}\n` +
         `请调用 solidify_case 真实执行一遍并收集动作,机械映射为 compiled 后暂存 update_step,再用 verify_case 验收（机械干跑通过）后引导我在暂存区勾选保存。`,
     );
   };
