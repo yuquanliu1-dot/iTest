@@ -15,6 +15,7 @@ import LiveViewRail, { useActiveLiveView } from './LiveViewRail';
 import VerticalSplit from '../../components/ui/VerticalSplit';
 import { api } from '../../api/client';
 import { useSpaceEventsStore } from './spaceEventsStore';
+import { ThreadListPager, ThreadPagerContext } from './threadListPager';
 
 /** 左栏线程列表收缩态的 localStorage key('1'=收缩)。 */
 const RAIL_COLLAPSED_KEY = 'itest.assistant.railCollapsed';
@@ -49,11 +50,18 @@ export default function SpaceWorkspace({ versionId, initialMessage, onError, onW
   onWarningRef.current = onWarning;
   const onActiveRef = useRef(onActiveThreadIdChange);
   onActiveRef.current = onActiveThreadIdChange;
+  // 历史会话分页器:react-pi 适配层封死了内建分页,列表分页(首屏 50 + 无限滚动)走它,
+  // 实例随组件挂载存活(父级按 key=versionId 重挂载,实例随版本走)。
+  const pager = useMemo(() => new ThreadListPager(versionId), [versionId]);
   const client = useMemo(() => {
     const base = createPiHttpClient({ baseUrl: '/api/assistant' });
     const ingest = useSpaceEventsStore.getState().ingest;
     return {
       ...base,
+      // runtime 的 list() 走分页器:新鲜第 1 页 + 缓存旧页按 id 合并(见 ThreadListPager)。
+      // 行结构与 PiThreadMetadata 运行时兼容(同一后端序列化,旧路径本来就过 react-pi 校验),
+      // 仅 status 的 TS 联合类型更宽,需断言。
+      listThreads: (() => pager.refreshForRuntime()) as typeof base.listThreads,
       subscribe: (tid: string, listener: (e: PiClientEvent) => void, options?: { includeSnapshot?: boolean }) =>
         base.subscribe(
           tid,
@@ -71,7 +79,7 @@ export default function SpaceWorkspace({ versionId, initialMessage, onError, onW
         return snap;
       },
     };
-  }, []);
+  }, [pager]);
   // 当前线程镜像(''=草稿):驱动 store 重置/归属,并同步给页面(按线程显警告)
   const [activeThreadId, setActiveThreadId] = useState('');
   // 左栏线程列表收缩态:记忆在 localStorage,跨会话保留用户偏好
@@ -109,32 +117,34 @@ export default function SpaceWorkspace({ versionId, initialMessage, onError, onW
     onError: (e) => onErrorRef.current?.(e),
   });
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <div className="flex flex-1 min-h-0">
-        <div
-          className={`${railCollapsed ? 'w-11' : 'w-56'} shrink-0 min-h-0 hidden md:flex flex-col overflow-hidden transition-[width] duration-150`}
-          style={{ borderRight: '1px solid var(--border)' }}
-        >
-          <SpaceThreadList versionId={versionId} collapsed={railCollapsed} onToggleCollapsed={() => setRailCollapsed((v) => !v)} />
+    <ThreadPagerContext.Provider value={pager}>
+      <AssistantRuntimeProvider runtime={runtime}>
+        <div className="flex flex-1 min-h-0">
+          <div
+            className={`${railCollapsed ? 'w-11' : 'w-56'} shrink-0 min-h-0 hidden md:flex flex-col overflow-hidden transition-[width] duration-150`}
+            style={{ borderRight: '1px solid var(--border)' }}
+          >
+            <SpaceThreadList pager={pager} collapsed={railCollapsed} onToggleCollapsed={() => setRailCollapsed((v) => !v)} />
+          </div>
+          <div className="flex-1 min-w-0 min-h-0" style={{ borderRight: '1px solid var(--border)' }}>
+            <SpaceThreadPane threadId={activeThreadId} />
+          </div>
+          <div className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
+            {/* 有实时画面时上下分栏（可拖拽调整各自高度）；无画面时暂存面板占满。 */}
+            {hasLiveView ? (
+              <VerticalSplit top={<LiveViewRail />} bottom={<StagePanel projectId={projectId!} versionId={versionId} />} />
+            ) : (
+              <div className="flex-1 min-w-0 min-h-0">
+                <StagePanel projectId={projectId!} versionId={versionId} />
+              </div>
+            )}
+          </div>
         </div>
-        <div className="flex-1 min-w-0 min-h-0" style={{ borderRight: '1px solid var(--border)' }}>
-          <SpaceThreadPane threadId={activeThreadId} />
-        </div>
-        <div className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
-          {/* 有实时画面时上下分栏（可拖拽调整各自高度）；无画面时暂存面板占满。 */}
-          {hasLiveView ? (
-            <VerticalSplit top={<LiveViewRail />} bottom={<StagePanel projectId={projectId!} versionId={versionId} />} />
-          ) : (
-            <div className="flex-1 min-w-0 min-h-0">
-              <StagePanel projectId={projectId!} versionId={versionId} />
-            </div>
-          )}
-        </div>
-      </div>
-      {/* aui 必须在 AssistantRuntimeProvider 内使用;首条 prompt 在此层挂载后注入。 */}
-      {initialMessage && <InitialMessageInjector text={initialMessage} />}
-      <SuggestionWatcher threadId={activeThreadId} onSuggestions={setSuggestions} />
-    </AssistantRuntimeProvider>
+        {/* aui 必须在 AssistantRuntimeProvider 内使用;首条 prompt 在此层挂载后注入。 */}
+        {initialMessage && <InitialMessageInjector text={initialMessage} />}
+        <SuggestionWatcher threadId={activeThreadId} onSuggestions={setSuggestions} />
+      </AssistantRuntimeProvider>
+    </ThreadPagerContext.Provider>
   );
 }
 

@@ -1,20 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PanelLeftClose, PanelLeftOpen, Pencil, Plus, Trash2 } from 'lucide-react';
+import Button from '../../components/ui/Button';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/Modal';
 import {
   ThreadListItemPrimitive,
   ThreadListPrimitive,
   useAui,
   useAuiState,
 } from '@assistant-ui/react';
-import { api } from '../../api/client';
 import { groupByBucket, type BucketKey } from './threadBuckets';
-
-/** 线程时间表:后端 uuid → updatedAt。react-pi store 里拿不到时间(mapThreadMetadata 丢弃),自持一份。 */
-async function fetchUpdatedAtById(versionId: string): Promise<Record<string, string | undefined>> {
-  const rows = await api.assistant.listThreads(versionId);
-  return Object.fromEntries(rows.map((r) => [r.id, r.updatedAt]));
-}
+import { useThreadPager, type ThreadListPager } from './threadListPager';
 
 /**
  * 助手左侧线程列表(ThreadList 原语):「新对话」按钮 + 历史线程(切换/改名/删除)。
@@ -22,9 +18,12 @@ async function fetchUpdatedAtById(versionId: string): Promise<Record<string, str
  * undefined 即草稿(新线程首条消息发出前),高亮落到「新对话」上。
  * 草稿不进 Items(底层 threadIds 只收 regular/archived),后端也只返回有消息的线程。
  * 可收缩:collapsed 时只剩窄条(展开按钮 + 新对话图标),宽度切换由父级容器驱动。
+ * 分页:列表数据由 ThreadListPager 供给(react-pi 适配层封死内建分页),滚动近底部
+ * 经哨兵自动翻页 + aui.threads.reload() 把缓存灌回 runtime store;时间表直接读
+ * pager 行(react-pi 的 mapThreadMetadata 丢弃 updatedAt,store 里拿不到时间)。
  */
-export default function SpaceThreadList({ versionId, collapsed, onToggleCollapsed }: {
-  versionId: string;
+export default function SpaceThreadList({ pager, collapsed, onToggleCollapsed }: {
+  pager: ThreadListPager;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }) {
@@ -32,27 +31,15 @@ export default function SpaceThreadList({ versionId, collapsed, onToggleCollapse
   const activeRemoteId = useAuiState((s) => s.optional.threadListItem?.remoteId);
   const isLoading = useAuiState((s) => s.threads.isLoading);
   const threadIds = useAuiState((s) => s.threads.threadIds);
-  // react-pi 的 mapThreadMetadata 丢弃 updatedAt(只透传 status/title/custom 且 custom 是重建的),
-  // store 里拿不到时间 → 自持一份。挂载/对话 settle 时刷新,否则刚聊过的会话留在旧桶。
-  const [updatedAtById, setUpdatedAtById] = useState<Record<string, string | undefined>>({});
-  const isRunning = useAuiState((s) => s.thread.isRunning);
-  const wasRunningRef = useRef(false);
-  useEffect(() => {
-    let alive = true;
-    void fetchUpdatedAtById(versionId)
-      .then((m) => { if (alive) setUpdatedAtById(m); })
-      .catch(() => {}); // 列表拉不到就全落「更早」,不打断对话
-    return () => { alive = false; };
-  }, [versionId]);
-
-  // 一轮对话 settle(与 SuggestionWatcher 同一 true→false 边沿)→ 重拉时间表
-  useEffect(() => {
-    if (isRunning) { wasRunningRef.current = true; return; }
-    const settled = wasRunningRef.current;
-    wasRunningRef.current = false;
-    if (!settled) return;
-    void fetchUpdatedAtById(versionId).then(setUpdatedAtById).catch(() => {});
-  }, [isRunning, versionId]);
+  // 分页快照(store 侧不可变对象,commit 时换新):行数据即时间表,对话 settle 时
+  // SuggestionWatcher 的 aui.threads.reload() → runtime list() → pager.refreshForRuntime()
+  // → commit 通知,时间表随之刷新,无需这里自拉。
+  const snap = useSyncExternalStore(pager.subscribe, pager.getSnapshot);
+  const updatedAtById = useMemo(
+    () => Object.fromEntries(snap.rows.map((r) => [r.id, r.updatedAt])),
+    [snap.rows],
+  );
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   if (collapsed) {
     return (
       <div className="flex flex-col items-center gap-1 p-2">
@@ -99,13 +86,13 @@ export default function SpaceThreadList({ versionId, collapsed, onToggleCollapse
           <PanelLeftClose size={15} />
         </button>
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto p-2 flex flex-col gap-0.5">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-2 flex flex-col gap-0.5">
         {!isLoading && threadIds.length === 0 && (
           <div className="text-[12px] px-2 py-1" style={{ color: 'var(--muted-foreground)' }}>
             {t('assistant:threadList.noHistory')}
           </div>
         )}
-        <GroupedItems updatedAtById={updatedAtById} />
+        <GroupedItems updatedAtById={updatedAtById} pager={pager} scrollRef={scrollRef} />
       </div>
     </div>
   );
@@ -125,7 +112,9 @@ interface RailItemData {
 function RailItem({ item, active }: { item: RailItemData; active: boolean }) {
   const { t } = useTranslation();
   const aui = useAui();
+  const pager = useThreadPager();
   const [editing, setEditing] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   if (editing) {
     return (
       <input
@@ -136,7 +125,11 @@ function RailItem({ item, active }: { item: RailItemData; active: boolean }) {
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             const v = e.currentTarget.value.trim();
-            if (v) aui.threadListItem.rename(v);
+            if (v) {
+              aui.threadListItem.rename(v);
+              // 分页缓存同步改名:深页行不必等下一次新鲜第 1 页才见到新标题
+              if (item.remoteId) pager.renameLocal(item.remoteId, v);
+            }
             setEditing(false);
           } else if (e.key === 'Escape') {
             setEditing(false);
@@ -182,14 +175,36 @@ function RailItem({ item, active }: { item: RailItemData; active: boolean }) {
           className="btn-tint rounded p-1"
           style={{ color: 'var(--muted-foreground)' }}
           title={t('assistant:threadList.delete')}
-          onClick={() => {
-            if (window.confirm(t('assistant:threadList.confirmDelete', { title: item.title || t('assistant:threadList.untitled') })))
-              aui.threadListItem.delete();
-          }}
+          onClick={() => setConfirmOpen(true)}
         >
           <Trash2 size={13} />
         </button>
       </div>
+      {/* 删除确认:与用例/数据集等删除同款 Dialog(shadcn),替代原生 window.confirm。
+          挂在 RailItem 内是为让确认按钮的 aui.threadListItem.delete() 仍命中本行 item 作用域。 */}
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{t('assistant:threadList.delete')}</DialogTitle></DialogHeader>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+            {t('assistant:threadList.confirmDelete', { title: item.title || t('assistant:threadList.untitled') })}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmOpen(false)}>{t('common:cancel')}</Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setConfirmOpen(false);
+                // 分页缓存同步清行(与 store 的乐观删除同拍):不清则下次 reload 从缓存复活。
+                // 删除失败属网络边角,行仍在库,下次新鲜第 1 页自愈。
+                if (item.remoteId) pager.removeLocal(item.remoteId);
+                aui.threadListItem.delete();
+              }}
+            >
+              {t('assistant:threadList.confirmDeleteAction')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -211,9 +226,12 @@ function IndexedRailItem() {
 }
 
 /** 按五段分组渲染。Items 原语内部是 threadIds.map 死平铺、插不进段标题,
- *  故用 ItemByIndex 按 index 自行排版,保留 item scope 的 switchTo/rename/delete。 */
-function GroupedItems({ updatedAtById }: {
+ *  故用 ItemByIndex 按 index 自行排版,保留 item scope 的 switchTo/rename/delete。
+ *  末尾挂无限滚动哨兵:hasMore 时滚动近底部自动翻页。 */
+function GroupedItems({ updatedAtById, pager, scrollRef }: {
   updatedAtById: Record<string, string | undefined>;
+  pager: ThreadListPager;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const { t } = useTranslation();
   const threadIds = useAuiState((s) => s.threads.threadIds);
@@ -246,6 +264,45 @@ function GroupedItems({ updatedAtById }: {
           ))}
         </div>
       ))}
+      <LoadMoreSentinel pager={pager} scrollRef={scrollRef} />
     </>
+  );
+}
+
+/** 无限滚动哨兵:IntersectionObserver 盯滚动容器底部(rootMargin 提前 200px 预取),
+ *  命中即 pager.loadMore() 翻页 + aui.threads.reload() 把缓存灌回 runtime store
+ *  (分页器只是数据源,store 才是渲染真相)。busyRef 防重入(翻页+reload 在途时
+ *  布局变化会再次触发 observer)。hasMore=false 时不渲染,停止观察。 */
+function LoadMoreSentinel({ pager, scrollRef }: {
+  pager: ThreadListPager;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const { t } = useTranslation();
+  const aui = useAui();
+  const snap = useSyncExternalStore(pager.subscribe, pager.getSnapshot);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const busyRef = useRef(false);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !snap.hasMore) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting) || busyRef.current) return;
+        busyRef.current = true;
+        void pager
+          .loadMore()
+          .then(() => aui.threads.reload())
+          .finally(() => { busyRef.current = false; });
+      },
+      { root: scrollRef.current, rootMargin: '200px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [pager, aui, snap.hasMore, scrollRef]);
+  if (!snap.hasMore) return null;
+  return (
+    <div ref={sentinelRef} className="px-2 py-1.5 text-[12px] text-center" style={{ color: 'var(--muted-foreground)' }}>
+      {snap.loadingMore ? t('assistant:threadList.loadingMore') : ''}
+    </div>
   );
 }

@@ -123,10 +123,12 @@
   "goConfigureModel": "去设置模型",
   "threadList": {
     "noHistory": "暂无历史对话",
+    "loadingMore": "加载中…",
     "untitled": "新对话",
     "rename": "改名",
     "delete": "删除对话",
     "confirmDelete": "删除「{{title}}」?删除后不可恢复。",
+    "confirmDeleteAction": "删除",
     "collapse": "收起会话列表",
     "expand": "展开会话列表",
     "groupToday": "今天",

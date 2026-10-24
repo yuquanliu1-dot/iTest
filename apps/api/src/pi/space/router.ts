@@ -76,29 +76,20 @@ spaceRoute.post('/threads', async (req, res) => {
   res.json(snap);
 });
 
-spaceRoute.get('/threads', async (req, res) => {
-  const raw = req.query.versionId;
-  // react-pi 的 list 走 ?workspacePath=(官方作用域通道,值即 versionId);页面级旧调用走 ?versionId=。
-  const rawWs = req.query.workspacePath;
-  const versionId = (typeof raw === 'string' ? raw : '') || (typeof rawWs === 'string' ? rawWs : '');
-  // 两个参都没有 → 空列表(不越权返回跨版本数据)。
-  if (!versionId) { res.json([]); return; }
-  await assertVersionVisible(versionId, req.user as AuthUser);
-  const rows = await db
-    .select({
-      id: aiThreads.id, title: aiThreads.title, createdAt: aiThreads.createdAt,
-      updatedAt: aiThreads.updatedAt, piThreadId: aiThreads.piThreadId,
-    })
-    .from(aiThreads)
-    // 草稿行(piThreadId='')过不了下面的文件判据(fs.access('')必拒),下推进 SQL 让
-    // LIMIT 窗口只留给可能有会话的线程,否则空行吃掉配额、挤掉够格的旧线程。
-    .where(and(eq(aiThreads.kind, 'version'), eq(aiThreads.versionId, versionId), sql`${aiThreads.piThreadId} <> ''`))
-    .orderBy(desc(aiThreads.updatedAt))
-    .limit(20);
-  // 「有会话」判据 = session 文件真实存在。不能用 piThreadId !== '':pi 在 persist=true 时
-  // 立即分配 sessionFile 路径(仅落盘延迟),草稿线程也有非空 piThreadId,会把没发过消息的
-  // 空会话全放进历史列表——正是本过滤原本要防的。
-  const exists = await Promise.all(rows.map((r) =>
+/** GET /threads 的行选取列(piThreadId 供 fs 探测)。 */
+const threadListColumns = {
+  id: aiThreads.id, title: aiThreads.title, createdAt: aiThreads.createdAt,
+  updatedAt: aiThreads.updatedAt, piThreadId: aiThreads.piThreadId,
+};
+type ThreadListRow = {
+  id: string; title: string | null; createdAt: Date | null; updatedAt: Date | null; piThreadId: string;
+};
+
+/** 「有会话」判据 = session 文件真实存在。不能用 piThreadId !== '':pi 在 persist=true 时
+ *  立即分配 sessionFile 路径(仅落盘延迟),草稿线程也有非空 piThreadId,会把没发过消息的
+ *  空会话全放进历史列表——正是本过滤原本要防的。 */
+async function probeSessionFiles(rows: ThreadListRow[]): Promise<boolean[]> {
+  return Promise.all(rows.map((r) =>
     fs.access(r.piThreadId)
       .then(() => true)
       .catch((e: NodeJS.ErrnoException) => {
@@ -106,8 +97,11 @@ spaceRoute.get('/threads', async (req, res) => {
         if (e.code !== 'ENOENT') logger.warn({ err: e, sessionFile: r.piThreadId }, 'session file probe failed');
         return false;
       })));
-  const withRecords = rows.filter((_, i) => exists[i]);
-  res.json(withRecords.map((row) => ({
+}
+
+/** 序列化线程行(react-pi 校验兼容:title null 必须缺键;时间出 ISO)。 */
+function serializeThreadRows(rows: ThreadListRow[]) {
+  return rows.map((row) => ({
     id: row.id,
     // react-pi 的 isThreadMetadata 用 isOptionalString 校验 title:null 会被拒 → 整个列表
     // load 抛 Invalid Pi HTTP response。DB 无题线程(title NULL,首条消息落题前的窗口)
@@ -116,7 +110,75 @@ spaceRoute.get('/threads', async (req, res) => {
     status: threadStatus(row.id) ?? 'idle',
     createdAt: row.createdAt?.toISOString(),
     updatedAt: row.updatedAt?.toISOString(),
-  })));
+  }));
+}
+
+/** 列表查询的公共 where:草稿行(piThreadId='')过不了文件判据(fs.access('')必拒),
+ *  下推进 SQL 让 LIMIT 窗口只留给可能有会话的线程,否则空行吃掉配额、挤掉够格的旧线程。 */
+function threadListWhere(versionId: string) {
+  return and(eq(aiThreads.kind, 'version'), eq(aiThreads.versionId, versionId), sql`${aiThreads.piThreadId} <> ''`);
+}
+
+spaceRoute.get('/threads', async (req, res) => {
+  const raw = req.query.versionId;
+  // react-pi 的 list 走 ?workspacePath=(官方作用域通道,值即 versionId);页面级旧调用走 ?versionId=。
+  const rawWs = req.query.workspacePath;
+  const versionId = (typeof raw === 'string' ? raw : '') || (typeof rawWs === 'string' ? rawWs : '');
+  // 两个参都没有 → 空列表(不越权返回跨版本数据)。
+  if (!versionId) { res.json([]); return; }
+  await assertVersionVisible(versionId, req.user as AuthUser);
+
+  // 带 ?limit= 走分页契约({threads, hasMore});不带保持旧契约(20 硬顶 + 裸数组),遗留消费方零感知。
+  const limitRaw = Number(req.query.limit);
+  if (!Number.isFinite(limitRaw) || limitRaw < 1) {
+    const rows = (await db
+      .select(threadListColumns)
+      .from(aiThreads)
+      .where(threadListWhere(versionId))
+      // id 决胜给出全序:keyset 分页的前提;同刻 tie 的展示顺序原本未定义,无行为差异。
+      .orderBy(desc(aiThreads.updatedAt), desc(aiThreads.id))
+      .limit(20)) as ThreadListRow[];
+    const exists = await probeSessionFiles(rows);
+    res.json(serializeThreadRows(rows.filter((_, i) => exists[i])));
+    return;
+  }
+
+  const limit = Math.min(Math.floor(limitRaw), 200);
+  // 文件存在性只能逐行探测、无法下推进 SQL,过滤后可能不足页 ⇒ keyset 循环取数:
+  // 每轮按 (updatedAt,id) 全序取一批原始行,凑满 limit 或原始行耗尽为止(20 轮封顶,
+  // 防全库草稿行把探测拖成全表扫)。游标 = 上一批最后一行的线程 id;比较值(updatedAt,id)
+  // 经行值子查询让 DB 自己解析——timestamp 是微秒精度,经 ISO 字符串往返会毫秒截断,
+  // 同毫秒 tie 行会被跳过;子查询无此损耗。游标行被删 → 子查询 NULL → 整页空,接受
+  // (仅另一端恰好删掉游标行时发生)。
+  // 每轮多取 1 行作存在性判据 ⇒ hasMore 是精确值而非乐观猜测。乐观语义有实际害处:
+  // 客户端每次 reload 都新鲜拉第 1 页并回写 hasMore,乐观 true 会在「已滚到底 + 库已
+  // 耗尽」时把哨兵复活,触发一次注定为空的翻页请求;精确 false 让哨兵保持熄灭。
+  const kept: ThreadListRow[] = [];
+  let cursorId: string | undefined =
+    typeof req.query.cursor === 'string' && req.query.cursor !== '' ? req.query.cursor : undefined;
+  let hasMore = false;
+  for (let round = 0; round < 20; round++) {
+    const want = limit - kept.length;
+    const batch = (await db
+      .select(threadListColumns)
+      .from(aiThreads)
+      .where(and(
+        threadListWhere(versionId),
+        cursorId
+          ? sql`(${aiThreads.updatedAt}, ${aiThreads.id}) < (SELECT ${aiThreads.updatedAt}, ${aiThreads.id} FROM ${aiThreads} WHERE ${aiThreads.id} = ${cursorId})`
+          : undefined,
+      ))
+      .orderBy(desc(aiThreads.updatedAt), desc(aiThreads.id))
+      .limit(want + 1)) as ThreadListRow[];
+    hasMore = batch.length > want;
+    const page = hasMore ? batch.slice(0, want) : batch;
+    const exists = await probeSessionFiles(page);
+    for (let i = 0; i < page.length; i++) if (exists[i]) kept.push(page[i]!);
+    if (kept.length >= limit) break; // 只能 ==:page ≤ want ⇒ kept ≤ limit;此时 hasMore 必为 true
+    if (!hasMore) break; // 原始行耗尽(本批不足 want+1)
+    cursorId = page[page.length - 1]!.id; // 被截掉的第 want+1 行下轮经 keyset 自然重取
+  }
+  res.json({ threads: serializeThreadRows(kept), hasMore });
 });
 
 spaceRoute.get('/threads/:id', async (req, res) => {

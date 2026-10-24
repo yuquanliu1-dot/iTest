@@ -123,10 +123,12 @@
   "goConfigureModel": "Go to model settings",
   "threadList": {
     "noHistory": "No conversations yet",
+    "loadingMore": "Loading…",
     "untitled": "New chat",
     "rename": "Rename",
     "delete": "Delete chat",
     "confirmDelete": "Delete \"{{title}}\"? This cannot be undone.",
+    "confirmDeleteAction": "Delete",
     "collapse": "Collapse thread list",
     "expand": "Expand thread list",
     "groupToday": "Today",
