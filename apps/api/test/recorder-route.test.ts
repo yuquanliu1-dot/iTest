@@ -89,8 +89,7 @@ describe('recorder routes', () => {
     expect(r.status).toBe(409);
   });
 
-  it('resume boundary step itself is not validated', async () => {
-    const { groupId, versionId } = await seedProject(pool);
+  it('resume boundary step itself is not validated', async () => {    const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'RB', groupId, versionId });
     await request(app).put(`/api/cases/${c.body.id}/steps`).send({
       steps: [
@@ -230,5 +229,42 @@ describe('recorder routes', () => {
     expect(f.body.inserted).toBe(1);
     const tcRows = await pool.query(`SELECT url FROM test_cases WHERE id = $1`, [c.body.id]);
     expect(tcRows.rows[0]!.url).toBe('https://web-passed.example.com');
+  });
+
+  it('relative url + no default env → 422 with actionable message（不再静默 null 让扩展打开 file 错误页）', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    // 环境与 web 服务都在,但环境没设默认 → displayWebEnv 返回 null → resolveCaseUrl 只回 null
+    const e = await pool.query(
+      `INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '测试环境', false) RETURNING id`,
+      [projectId],
+    );
+    await pool.query(
+      `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default)
+       VALUES ($1,'web','默认 Web','{"name":"web","scheme":"http","host":"110.example.com","port":9400}',true)`,
+      [e.rows[0]!.id],
+    );
+    const c = await request(app).post('/api/cases').send({ title: 'RU', url: '/index', groupId, versionId });
+    const r = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
+    expect(r.status).toBe(422);
+    expect(r.body.error).toBe('url_unresolved');
+    expect(r.body.message).toContain('/index');
+    expect(r.body.message).toContain('默认环境');
+  });
+
+  it('relative url + default env without web service → 422 web_service_missing（WebServiceMissing 不再 500）', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    await pool.query(`INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认', true)`, [projectId]);
+    const c = await request(app).post('/api/cases').send({ title: 'RU2', url: '/x', groupId, versionId });
+    const r = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
+    expect(r.status).toBe(422);
+    expect(r.body.error).toBe('web_service_missing');
+  });
+
+  it('empty url + no env 仍 200 resolvedUrl=null（about:blank 起录现状保留）', async () => {
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'RU3', groupId, versionId });
+    const r = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
+    expect(r.status).toBe(200);
+    expect(r.body.resolvedUrl).toBeNull();
   });
 });

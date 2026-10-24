@@ -11,6 +11,7 @@ import { HttpError } from '../middleware/errorHandler.js';
 import { StepAction } from '@itest/shared';
 import { createSession, getSession, persistSession } from '../recorder/ws.js';
 import { resolveCaseUrl, projectWebOrigins, relativizeUrl } from '../lib/resolve-url.js';
+import { WebServiceMissing } from '../execute/envContext.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
 import { invalidateCasesCache } from '../services/cases.service.js';
 import { encrypt } from '../lib/secret-crypto.js';
@@ -65,7 +66,24 @@ recorderRoute.post('/sessions', async (req, res) => {
       }
     }
   }
-  const resolvedUrl = await resolveCaseUrl(exists[0]!, { defaultEnvFallback: true });
+  // 相对 url 解析失败必须在建会话前拦下：否则 resolvedUrl=null 传到扩展,chrome.tabs.create
+  // 会把空/相对串当扩展内相对路径打开 → "Your file couldn't be accessed"。
+  // WebServiceMissing(环境无 web 服务 / url 形态非法)转 422 用户可见;无默认环境这条 resolveCaseUrl
+  // 只回 null 的路也补 422,给出可操作指引。
+  let resolvedUrl: string | null;
+  try {
+    resolvedUrl = await resolveCaseUrl(exists[0]!, { defaultEnvFallback: true });
+  } catch (e) {
+    if (e instanceof WebServiceMissing) throw new HttpError(422, 'web_service_missing', e.message);
+    throw e;
+  }
+  if (!resolvedUrl && exists[0]!.url) {
+    throw new HttpError(
+      422,
+      'url_unresolved',
+      `用例 URL「${exists[0]!.url}」为相对路径，但项目没有默认环境可拼接 origin：请到环境管理把目标环境设为默认，或给用例选择默认环境，或在录制面板手填完整目标 URL`,
+    );
+  }
   const session = createSession(body.caseId, {
     mode: body.mode,
     incognito: body.incognito ?? body.mode === 'incognito',
