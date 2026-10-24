@@ -1,8 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { SCHEMA_SQL, seedOrg, seedProject, seedProductLine } from './helpers/db.js';
+
+// mock 真实 git 探测（不连外网）；记录入参以断言 PAT 回落。
+const { verifyRepoAccessMock } = vi.hoisted(() => ({ verifyRepoAccessMock: vi.fn() }));
+vi.mock('../src/services/gitProvider.js', () => ({ verifyRepoAccess: verifyRepoAccessMock }));
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -167,5 +171,44 @@ describe('project stats', () => {
     expect(r.body.cases).toBe(2);
     expect(r.body.groups).toHaveLength(1);
     expect(r.body.groups[0].caseCount).toBe(2);
+  });
+});
+
+describe('verify-repo PAT 回落（2026-10-24 base-all 假报认证失败）', () => {
+  it('表单 PAT 为空 + projectId：回落库中已存 PAT 探测', async () => {
+    const p = await request(app)
+      .post('/api/projects')
+      .send({ name: 'PR-1', productLineId: lineId, repoUrl: 'https://gitlab.example.com/g/x.git', provider: 'gitlab', patOverride: 'stored-pat-123' });
+    expect(p.status).toBe(201);
+    verifyRepoAccessMock.mockResolvedValueOnce({ valid: true, defaultBranch: 'master' });
+    const r = await request(app)
+      .post('/api/projects/verify-repo')
+      .send({ repoUrl: 'https://gitlab.example.com/g/x.git', provider: 'gitlab', projectId: p.body.id });
+    expect(r.status).toBe(200);
+    expect(r.body.valid).toBe(true);
+    expect(verifyRepoAccessMock).toHaveBeenCalledWith(
+      expect.objectContaining({ repoUrl: 'https://gitlab.example.com/g/x.git', provider: 'gitlab', pat: 'stored-pat-123' }),
+    );
+  });
+
+  it('表单带 PAT：用表单值，不查库', async () => {
+    verifyRepoAccessMock.mockClear();
+    verifyRepoAccessMock.mockResolvedValueOnce({ valid: true });
+    const r = await request(app)
+      .post('/api/projects/verify-repo')
+      .send({ repoUrl: 'https://gitlab.example.com/g/y.git', provider: 'gitlab', patOverride: 'form-pat', projectId: '00000000-0000-0000-0000-00000000d001' });
+    expect(r.status).toBe(200);
+    expect(verifyRepoAccessMock).toHaveBeenCalledWith(expect.objectContaining({ pat: 'form-pat' }));
+    expect(verifyRepoAccessMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('无 projectId 且无 PAT：pat undefined（新建场景旧行为）', async () => {
+    verifyRepoAccessMock.mockResolvedValueOnce({ valid: false, error: '认证失败' });
+    const r = await request(app)
+      .post('/api/projects/verify-repo')
+      .send({ repoUrl: 'https://gitlab.example.com/g/z.git', provider: 'gitlab' });
+    expect(r.status).toBe(200);
+    expect(r.body.valid).toBe(false);
+    expect(verifyRepoAccessMock).toHaveBeenCalledWith(expect.objectContaining({ pat: undefined }));
   });
 });

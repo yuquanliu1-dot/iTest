@@ -72,6 +72,7 @@ export const api = {
       provider?: 'github' | 'gitee' | 'gitlab';
       patOverride?: string;
       branch?: string;
+      projectId?: string;
     }) => request<VerifyRepoResult>(`/projects/verify-repo`, { method: 'POST', body: JSON.stringify(body) }),
     assignments: (id: string, params?: { q?: string; page?: number; limit?: number }) =>
       request<Paged<AssignedUser>>(`/projects/${id}/assignments${qs(params ?? {})}`),
@@ -564,12 +565,17 @@ export const api = {
       }),
   },
   assistant: {
-    /** 线程列表:react-pi 的 mapThreadMetadata 会丢弃 updatedAt,左栏分组自持这份时间表。
+    /** 线程列表(分页):后端按 (updatedAt,id) 全序 keyset 取数并过滤无 session 文件的草稿行,
+     *  cursor 回传上一页最后一行的线程 id。左栏分组与 react-pi runtime 的列表都走这份。
      *  workspacePath ≡ versionId(见 SpaceWorkspace 的 Props 注释)。 */
-    listThreads: (versionId: string) =>
-      request<{ id: string; title: string | null; status: string; createdAt?: string; updatedAt?: string }[]>(
-        `/assistant/threads${qs({ workspacePath: versionId })}`,
-      ),
+    listThreadsPaged: (
+      versionId: string,
+      opts: { limit: number; cursor?: string },
+    ): Promise<{
+      threads: { id: string; title: string | null; status: string; createdAt?: string; updatedAt?: string }[];
+      hasMore: boolean;
+    }> =>
+      request(`/assistant/threads${qs({ workspacePath: versionId, limit: opts.limit, cursor: opts.cursor })}`),
     confirm: (threadId: string, confirmId: string, approved: boolean) =>
       request<void>(`/assistant/threads/${threadId}/confirm`, {
         method: 'POST',

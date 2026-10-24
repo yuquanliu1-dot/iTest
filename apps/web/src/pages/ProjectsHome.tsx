@@ -579,6 +579,7 @@ export default function ProjectsHome() {
             <RepoFields
               value={form.repo}
               onChange={(repo) => setForm((f) => ({ ...f, repo }))}
+              projectId={form.mode === 'edit-project' && form.id ? form.id : undefined}
             />
           </div>
           <div

@@ -189,8 +189,18 @@ projectsRoute.post('/verify-repo', requireManager, async (req, res) => {
   const branch = req.body.branch as string | undefined;
   const provider = (req.body.provider as 'github' | 'gitee' | 'gitlab' | undefined) ?? 'github';
   const pat = req.body.patOverride as string | undefined;
+  // 表单 PAT 为空且带 projectId（编辑已有项目的场景）→ 回落库中已存 PAT。
+  // GET 从不回传 PAT（maskProject），不回落则存量项目点「测试连接」必以无凭据探测私库，
+  // 假报「认证失败」（2026-10-24 prod228 base-all；9f99a39 起 GitLab 走真实 ls-remote 才暴露）。
+  let effectivePat = pat;
+  if (!effectivePat && req.body.projectId) {
+    const projectId = z.string().uuid().parse(req.body.projectId);
+    await assertProjectVisible(projectId, req.user!);
+    const row = (await db.select({ patOverride: projects.patOverride }).from(projects).where(eq(projects.id, projectId)))[0];
+    effectivePat = row?.patOverride ?? undefined;
+  }
   try {
-    const result = await verifyRepoAccess({ repoUrl, provider, pat, branch });
+    const result = await verifyRepoAccess({ repoUrl, provider, pat: effectivePat, branch });
     res.json(result);
   } catch (err) {
     res.status(400).json({ valid: false, error: (err as Error).message });

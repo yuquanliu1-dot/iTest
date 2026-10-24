@@ -29,9 +29,11 @@ export const EMPTY_REPO: RepoFieldsValue = {
 interface Props {
   value: RepoFieldsValue;
   onChange: (v: RepoFieldsValue) => void;
+  /** 编辑已有项目时传入：表单 PAT 留空时后端回落库中已存 PAT 做真实探测（GET 从不回传 PAT）。 */
+  projectId?: string;
 }
 
-export default function RepoFields({ value, onChange }: Props) {
+export default function RepoFields({ value, onChange, projectId }: Props) {
   const { t } = useTranslation();
   const [open, setOpen] = useState<boolean>(!!value.repoUrl);
   const [verifyState, setVerifyState] = useState<
@@ -48,6 +50,7 @@ export default function RepoFields({ value, onChange }: Props) {
         provider: value.provider,
         patOverride: value.patOverride.trim() || undefined,
         branch: value.defaultBranch.trim() || undefined,
+        projectId,
       }),
     onMutate: () => setVerifyState({ kind: 'checking' }),
     onSuccess: (r) => {
