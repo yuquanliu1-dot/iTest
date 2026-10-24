@@ -182,6 +182,12 @@ export async function getDataset(datasetId: string) {
   return attachCreator({ ...d, rows: maskDatasetRows(d.columns, d.rows) });
 }
 
+/** 归属解析(AI 工具闸门用):数据集所属项目 id,不存在为 null。 */
+export async function datasetProjectId(datasetId: string): Promise<string | null> {
+  const row = (await db.select({ projectId: datasets.projectId }).from(datasets).where(eq(datasets.id, datasetId)).limit(1))[0];
+  return row?.projectId ?? null;
+}
+
 export async function createDataset(projectId: string, input: DatasetSaveBody, createdByUserId?: string | null) {
   const normalized = normalizeDataset(input);
   try {

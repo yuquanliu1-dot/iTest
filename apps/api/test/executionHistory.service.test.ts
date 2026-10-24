@@ -141,7 +141,7 @@ describe('executionHistory.service overview + failures', () => {
 });
 
 describe('executionHistory.service reportDetail + planRunList', () => {
-  it('reportDetail:步骤时间线映射 visionAssertReason/healed/degraded;跨项目/不存在 → null', async () => {
+  it('reportDetail:步骤时间线映射 visionAssert/healed/degraded;跨项目/不存在 → null', async () => {
     const a = await seedProject(pool);
     const b = await seedProject(pool);
     const c1 = await makeCase(a.groupId, a.versionId, '导出-报表');
@@ -161,7 +161,7 @@ describe('executionHistory.service reportDetail + planRunList', () => {
     expect(d!.steps).toHaveLength(3);
     expect(d!.steps[0]).toMatchObject({ order: 1, status: 'passed', instruction: '打开报表页' });
     expect(d!.steps[1]).toMatchObject({ status: 'failed', error: 'timeout 30000ms exceeded', humanMessage: '导出按钮未响应', failureReason: 'LocatorMismatch', degraded: true });
-    expect(d!.steps[2]!.visionAssertReason).toBe('页面未出现下载提示');
+    expect(d!.steps[2]!.visionAssert).toMatchObject({ passed: false, reason: '页面未出现下载提示' });
     expect(await svc.reportDetail(a.projectId, ridB)).toBeNull(); // 跨项目不可见
     expect(await svc.reportDetail(a.projectId, '00000000-0000-0000-0000-000000000000')).toBeNull();
   }, 30_000);

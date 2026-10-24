@@ -4,7 +4,7 @@
  */
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../../db/client.js';
-import { environmentObjects, executionPlans, groups, projectVersions, projects, requirements, testCases, testEnvironments } from '../../db/schema.js';
+import { datasets, deviceTargets, environmentObjects, executionPlans, groups, productLines, projectVersions, projects, requirements, testCases, testEnvironments } from '../../db/schema.js';
 import { webEntriesOf } from '../../lib/resolve-url.js';
 
 export interface SpaceSummary {
@@ -15,6 +15,13 @@ export interface SpaceSummary {
 const MAX_ENVS = 20;
 const MAX_GROUPS = 40;
 const MAX_REQS = 20;
+const MAX_DEVICES = 10;
+const MAX_DATASETS = 20;
+
+/** 摘要单字段预算:项目描述超 100 字截断。 */
+function clip100(s: string): string {
+  return s.length > 100 ? `${s.slice(0, 100)}…` : s;
+}
 
 export async function buildSpaceSummary(versionId: string): Promise<SpaceSummary> {
   const v = (await db
@@ -24,16 +31,20 @@ export async function buildSpaceSummary(versionId: string): Promise<SpaceSummary
       refKind: projectVersions.refKind,
       projectId: projectVersions.projectId,
       projectName: projects.name,
+      projectDescription: projects.description,
+      productLineName: productLines.name,
     })
     .from(projectVersions)
     .innerJoin(projects, eq(projectVersions.projectId, projects.id))
+    .innerJoin(productLines, eq(projects.productLineId, productLines.id))
     .where(eq(projectVersions.id, versionId))
     .limit(1))[0];
   if (!v) throw new Error('version not found');
 
   const lines: string[] = [];
   const refText = v.ref ? `(${v.refKind === 'tag' ? 'tag' : 'branch'} ${v.ref})` : '';
-  lines.push(`项目:${v.projectName} / 版本:${v.versionName}${refText}`);
+  lines.push(`产品线:${v.productLineName} / 项目:${v.projectName} / 版本:${v.versionName}${refText}`);
+  if (v.projectDescription) lines.push(`项目描述:${clip100(v.projectDescription)}`);
 
   const envs = await db
     .select({ id: testEnvironments.id, name: testEnvironments.name, isDefault: testEnvironments.isDefault })
@@ -80,6 +91,24 @@ export async function buildSpaceSummary(versionId: string): Promise<SpaceSummary
     .limit(MAX_REQS + 1);
   if (reqs.length > 0) {
     lines.push(`需求(操作场景时引用其 id):${reqs.slice(0, MAX_REQS).map((r) => `${r.title}=${r.id}`).join('、')}${reqs.length > MAX_REQS ? ' …' : ''}`);
+  }
+
+  const devices = await db
+    .select({ name: deviceTargets.name, mobileOs: deviceTargets.mobileOs })
+    .from(deviceTargets)
+    .where(eq(deviceTargets.projectId, v.projectId))
+    .limit(MAX_DEVICES + 1);
+  if (devices.length > 0) {
+    lines.push(`设备目标(移动用例):${devices.slice(0, MAX_DEVICES).map((d) => `${d.name}(${d.mobileOs})`).join('、')}${devices.length > MAX_DEVICES ? ' …' : ''}`);
+  }
+
+  const dss = await db
+    .select({ name: datasets.name, rowCount: datasets.rows })
+    .from(datasets)
+    .where(eq(datasets.projectId, v.projectId))
+    .limit(MAX_DATASETS + 1);
+  if (dss.length > 0) {
+    lines.push(`数据集:${dss.slice(0, MAX_DATASETS).map((d) => `${d.name}(${(d.rowCount as unknown[]).length}行)`).join('、')}${dss.length > MAX_DATASETS ? ' …' : ''}`);
   }
 
   const caseCount = (await db.select({ id: testCases.id }).from(testCases).where(eq(testCases.versionId, versionId))).length;

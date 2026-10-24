@@ -162,8 +162,9 @@ describe('manage_cases 工具', () => {
       .toMatchObject({ ok: false });
   }, 30_000);
 
-  it('list_datasets:仅返回结构(列名/敏感标记/行数),敏感值与行值永不出现在输出', async () => {
+  it('manage_datasets:list 仅结构;get 回脱敏行值({__masked:true}),敏感明文绝不外泄;跨项目拒绝', async () => {
     const seed = await seedProject(pool);
+    const other = await seedProject(pool);
     const { createDataset } = await import('../src/services/datasets.service.js');
     const ds = await createDataset(seed.projectId, {
       name: '登录账号',
@@ -177,10 +178,17 @@ describe('manage_cases 工具', () => {
       ],
     });
     expect(ds.id).toBeTruthy();
+    const otherDs = await createDataset(other.projectId, {
+      name: '他项目数据集',
+      columns: [{ name: 'k', sensitive: false }],
+      rows: [{ cells: { k: 'v' } }],
+    });
     const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
-    const tool = await buildCasesToolsLazy(ctx);
+    const { buildDatasetsTools } = await import('../src/pi/space/tools/datasets.js');
+    const tool = buildDatasetsTools(ctx)[0]!;
 
-    const r = await tool.execute({ action: 'list_datasets' });
+    // list:仅结构(列/敏感标记/行数),无行值;projectId/updatedAt 字段不外泄
+    const r = await tool.execute({ action: 'list' });
     expect(r.ok).toBe(true);
     const raw = (r as { ok: true; data: string }).data;
     const list = JSON.parse(raw) as Array<{ name: string; columns: Array<{ name: string; sensitive: boolean }>; rowCount: number; enabledRowCount: number }>;
@@ -191,12 +199,25 @@ describe('manage_cases 工具', () => {
     ]);
     expect(d.rowCount).toBe(2);
     expect(d.enabledRowCount).toBe(1);
-    // 行值(含非敏感明文与敏感明文)绝不出现;projectId/updatedAt 字段不外泄
     expect(raw).not.toContain('alice');
     expect(raw).not.toContain('bob');
     expect(raw).not.toContain('secret-pass');
     expect(raw).not.toContain('projectId');
     expect(raw).not.toContain('updatedAt');
+
+    // get:非敏感明文可见;敏感格 {__masked:true} 占位,敏感明文/密文绝不外泄
+    const g = await tool.execute({ action: 'get', datasetId: ds.id });
+    expect(g.ok).toBe(true);
+    const gRaw = (g as { ok: true; data: string }).data;
+    const detail = JSON.parse(gRaw) as { rows: Array<{ disabled?: boolean; cells: Record<string, unknown> }> };
+    expect(detail.rows[0]!.cells.username).toBe('alice');
+    expect(detail.rows[0]!.cells.password).toEqual({ __masked: true });
+    expect(detail.rows[1]!.disabled).toBe(true);
+    expect(gRaw).not.toContain('secret-pass');
+    expect(gRaw).not.toContain('"c"');
+
+    // 跨项目数据集拒绝
+    expect(await tool.execute({ action: 'get', datasetId: otherDs.id })).toMatchObject({ ok: false });
   }, 30_000);
 
   it('get:已绑定数据集的用例返回 dataset 结构;未绑定返回 dataset:null', async () => {

@@ -1,6 +1,6 @@
 import { asc, eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { deviceTargets } from '../db/schema.js';
+import { deviceTargets, testCases } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 
 export interface DeviceTargetSaveBody {
@@ -70,4 +70,10 @@ export async function updateDeviceTarget(id: string, body: DeviceTargetSaveBody)
 export async function deleteDeviceTarget(id: string) {
   const deleted = await db.delete(deviceTargets).where(eq(deviceTargets.id, id)).returning({ id: deviceTargets.id });
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'device target not found');
+}
+
+/** 删除前引用计数(绑定该设备目标的移动用例数;删除后 FK set null 自动解绑,计数仅进确认卡提示)。 */
+export async function deviceTargetUsage(id: string): Promise<{ caseCount: number }> {
+  const rows = await db.select({ id: testCases.id }).from(testCases).where(eq(testCases.mobileDeviceTargetId, id));
+  return { caseCount: rows.length };
 }

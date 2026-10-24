@@ -24,14 +24,27 @@ export async function scenarioProjectId(scenarioId: string): Promise<string | nu
   return row?.projectId ?? null;
 }
 
-/** 项目级场景全集(id/title/requirementId),按创建序。 */
+/** 项目级场景全集(id/title/description/requirementId),按创建序。 */
 export async function listScenariosByProject(projectId: string) {
   return db
-    .select({ id: scenarios.id, title: scenarios.title, requirementId: scenarios.requirementId })
+    .select({ id: scenarios.id, title: scenarios.title, description: scenarios.description, requirementId: scenarios.requirementId })
     .from(scenarios)
     .innerJoin(requirements, eq(scenarios.requirementId, requirements.id))
     .where(eq(requirements.projectId, projectId))
     .orderBy(scenarios.createdAt);
+}
+
+/** 项目级需求清单(id/title/status),按创建序。 */
+export async function listRequirementsByProject(projectId: string) {
+  return db
+    .select({ id: requirements.id, title: requirements.title, status: requirements.status })
+    .from(requirements)
+    .where(eq(requirements.projectId, projectId))
+    .orderBy(requirements.createdAt);
+}
+
+export async function getRequirement(requirementId: string) {
+  return (await db.select().from(requirements).where(eq(requirements.id, requirementId)).limit(1))[0] ?? null;
 }
 
 export async function getScenario(scenarioId: string) {

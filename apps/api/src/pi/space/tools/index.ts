@@ -12,6 +12,8 @@ import { buildInspectTool } from './inspect.js';
 import { buildCasesTools } from './cases.js';
 import { buildScenariosTools } from './scenarios.js';
 import { buildEnvironmentsTools } from './environments.js';
+import { buildDatasetsTools } from './datasets.js';
+import { buildDevicesTools } from './devices.js';
 import { buildPlansTools } from './plans.js';
 import { buildHistoryTools } from './history.js';
 import { buildStageTools } from './stage-tools.js';
@@ -80,6 +82,8 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   tools.push(...buildCasesTools(ctx));
   tools.push(...buildScenariosTools(ctx));
   tools.push(...buildEnvironmentsTools(ctx));
+  tools.push(...buildDatasetsTools(ctx));
+  tools.push(...buildDevicesTools(ctx));
   tools.push(...buildPlansTools(ctx));
   tools.push(...buildHistoryTools(ctx));
   // RCA 专用落库工具：仅根因分析后台线程可见，普通对话线程不出现该工具面。

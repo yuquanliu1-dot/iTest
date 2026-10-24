@@ -61,7 +61,7 @@ describe('query_stats 工具', () => {
     expect(pr[0].planName).toBe('t-计划');
   }, 30_000);
 
-  it('failures 空结果给明确文案;report_detail 截断 500 字;参数错误文案可操作', async () => {
+  it('failures 空结果给明确文案;report_detail 截断 1000 字;参数错误文案可操作', async () => {
     const seed = await seedProject(pool);
     const { buildHistoryTools } = await import('../src/pi/space/tools/history.js');
     const ctx = {
@@ -74,16 +74,16 @@ describe('query_stats 工具', () => {
     const empty = (await tool.execute({ action: 'failures', days: 7 })) as { ok: true; data: string };
     expect(empty.data).toContain('近 7 天无失败记录');
 
-    // 长错误截断:600 → 500 + 省略号
+    // 长错误截断:600 字不截(预算内);1200 → 1000 + 省略号
     const caseId = (await pool.query(
       `INSERT INTO test_cases(group_id, version_id, title) VALUES ($1,$2,'t-截断') RETURNING id`, [seed.groupId, seed.versionId],
     )).rows[0]!.id as string;
     const rid = (await pool.query(
       `INSERT INTO reports(case_id, status, duration_ms, step_results) VALUES ($1,'failed',1,$2) RETURNING id`,
-      [caseId, JSON.stringify([{ order: 1, status: 'failed', durationMs: 1, error: 'x'.repeat(600) }])],
+      [caseId, JSON.stringify([{ order: 1, status: 'failed', durationMs: 1, error: 'x'.repeat(1200) }])],
     )).rows[0]!.id as string;
     const detail = JSON.parse(((await tool.execute({ action: 'report_detail', reportId: rid })) as { ok: true; data: string }).data!);
-    expect(detail.steps[0].error.length).toBe(501); // 500 + '…'
+    expect(detail.steps[0].error.length).toBe(1001); // 1000 + '…'
     expect(detail.steps[0].error.endsWith('…')).toBe(true);
 
     // 参数校验:未知 action / 缺 reportId / limit 超界

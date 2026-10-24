@@ -3,7 +3,7 @@
  * 这里只做数据完整性与归属校验(实体 ∈ project/version/org);
  * 用户可见性(assertProjectVisible 等)由调用方(HTTP 边界)负责。
  */
-import { asc, eq, inArray } from 'drizzle-orm';
+import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { caseTags, datasets, groups, productLines, projects, projectVersions, scenarios, tags, testCases, testSteps } from '../db/schema.js';
 import type { AppRef } from '../db/schema.js';
@@ -362,6 +362,25 @@ export async function createGroup(projectId: string, input: { name: string }) {
     .insert(groups)
     .values({ projectId, name: input.name })
     .returning())[0]!;
+}
+
+export async function getGroup(groupId: string) {
+  return (await db.select().from(groups).where(eq(groups.id, groupId)).limit(1))[0] ?? null;
+}
+
+export async function updateGroup(groupId: string, patch: { name: string }) {
+  return (await db.update(groups).set({ name: patch.name, updatedAt: new Date() }).where(eq(groups.id, groupId)).returning())[0]!;
+}
+
+/** 分组下用例数(删除前 not_empty 闸门,对齐 web 409 语义)。 */
+export async function countGroupCases(groupId: string): Promise<number> {
+  const rows = await db.select({ count: sql<number>`count(*)` }).from(testCases).where(eq(testCases.groupId, groupId));
+  return Number(rows[0]?.count ?? 0);
+}
+
+export async function deleteGroup(groupId: string): Promise<void> {
+  const deleted = await db.delete(groups).where(eq(groups.id, groupId)).returning({ id: groups.id });
+  if (deleted.length === 0) throw new HttpError(404, 'not_found', 'group not found');
 }
 
 export async function listVersionsForProject(projectId: string) {

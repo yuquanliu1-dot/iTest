@@ -12,28 +12,37 @@ import { st, type StLang } from '../../../i18n.js';
 import { aiLangFrom } from '../../../agent/langDirective.js';
 
 const Actions = z.object({
-  action: z.enum(['list', 'create', 'update', 'delete']),
+  action: z.enum(['list', 'create', 'update', 'delete', 'list_requirements', 'get_requirement']),
   scenarioId: z.string().uuid().optional(),
   requirementId: z.string().uuid().optional(),
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(4000).nullable().optional(),
 });
 
+/** 需求正文的上下文预算:超长需求文档截断(与 query_stats 的 1000 字口径一致)。 */
+function clipContent(s: string, max = 1000): string {
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
 export function buildScenariosTools(ctx: SpaceToolsContext): ToolExecutor[] {
   return [
     {
       name: 'manage_scenarios',
       description:
-        '场景管理(场景从属需求,用例可绑定场景)。action=list(项目内场景全集,含 requirementId)| create(requirementId+title 必填;requirementId 取自上下文摘要)| update(scenarioId + title/description)| delete(scenarioId,需用户确认)。',
+        '场景与需求读取(场景从属需求,用例可绑定场景)。action=list(项目内场景全集,含 description 与 requirementId)| list_requirements(项目内需求清单:id/title/status)| get_requirement(requirementId,需求详情含正文 content,超长截断)| create(requirementId+title 必填;requirementId 取自上下文摘要或 list_requirements)| update(scenarioId + title/description)| delete(scenarioId,需用户确认)。',
       parameters: Type.Object({
-        action: Type.Union([Type.Literal('list'), Type.Literal('create'), Type.Literal('update'), Type.Literal('delete')]),
+        action: Type.Union([
+          Type.Literal('list'), Type.Literal('create'), Type.Literal('update'), Type.Literal('delete'),
+          Type.Literal('list_requirements'), Type.Literal('get_requirement'),
+        ]),
         scenarioId: Type.Optional(Type.String()),
         requirementId: Type.Optional(Type.String()),
         title: Type.Optional(Type.String()),
         description: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       }),
       promptGuidelines: [
-        '创建场景前先 list 确认是否已存在同名场景;requirementId 必须来自上下文摘要或 list 结果,禁止臆造。',
+        '写用例/场景前先 get_requirement 读需求正文,按需求设计;requirementId 必须来自上下文摘要或 list_requirements 结果,禁止臆造。',
+        '创建场景前先 list 确认是否已存在同名场景。',
         'delete 会向用户发确认卡;被拒或超时视为放弃,不要重试。',
       ],
       execute: async (input) => {
@@ -52,6 +61,16 @@ export function buildScenariosTools(ctx: SpaceToolsContext): ToolExecutor[] {
             case 'list': {
               const rows = await svc.listScenariosByProject(ctx.projectId);
               return { ok: true, data: JSON.stringify(rows, null, 2) };
+            }
+            case 'list_requirements': {
+              const rows = await svc.listRequirementsByProject(ctx.projectId);
+              return { ok: true, data: JSON.stringify(rows.slice(0, 50), null, 2) };
+            }
+            case 'get_requirement': {
+              if (!v.requirementId) return { ok: false, error: 'get_requirement 需要 requirementId' };
+              const req = await svc.getRequirement(v.requirementId);
+              if (!req || req.projectId !== ctx.projectId) return { ok: false, error: '需求不存在或不属于当前项目' };
+              return { ok: true, data: JSON.stringify({ ...req, content: clipContent(req.content) }, null, 2) };
             }
             case 'create': {
               if (!v.requirementId || !v.title) return { ok: false, error: 'create 需要 requirementId 与 title' };

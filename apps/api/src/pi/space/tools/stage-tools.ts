@@ -456,7 +456,7 @@ export const STAGE_PROMPT_GUIDELINES = [
   '步骤里的 {{变量名}} 必须与数据集列名逐字一致（列名只能字母/下划线开头,中文列名非法）——stage_case 响应附「变量体检」,引用未定义/不一致变量时请立即修正后重发。',
   '每条用例都要用 coverageTypes 声明它实际覆盖的测试类型（用户勾选的覆盖要求只是上下文的一句话,勾了不等于你覆盖了）——照实标,不要把一条「登录成功」同时标成 functional+security。响应附「覆盖回执」点名当前暂存区各类分布,分布为 ×0 说明该类确实没人切,确有遗漏就继续补。',
   '登录步骤的凭据不要写明文：用户名输入框 fill 的 value 写字面量 __ITEST_USERNAME__、密码输入框写字面量 __ITEST_PASSWORD__,回放时平台自动替换为测试环境默认 web 服务里配置的应用登录凭据真实值(环境未配置则报 env-missing 失败,不会静默填字面量)。这与数据集变量 {{列名}} 的分工:数据集管同流程多组数据的差异,__ITEST_*__ 只指向环境的单一登录凭据。verify_case / solidify_case 的 AI 相也认同一套占位符,两相行为一致。除这三个字面量外不要臆造别的 __ITEST_xxx__。',
-  '数据集敏感列（密码/密钥等）标 sensitive:true,单元格值仍以明文给出（落库时自动加密,预览对用户可见）;已有数据集的行值/敏感值对你永不可见（list_datasets 仅结构）。修改已有数据集暂不支持;给已有用例绑定已落库数据集走 stage_case_op update_case(patch.datasetId)。',
+  '数据集敏感列（密码/密钥等）标 sensitive:true,单元格值仍以明文给出（落库时自动加密,预览对用户可见）;已有数据集的读/改/删走 manage_datasets（get 行值敏感格脱敏、update/delete 需用户确认）——本工具只负责生成全新数据集;给已有用例绑定已落库数据集走 stage_case_op update_case(patch.datasetId)。',
   '用例创建走「先讨论、再暂存、后编译」三段式（强约束）：(1) 拿到需求先把自然语言步骤草稿直接贴在对话里与用户讨论，不要立刻 stage_case；(2) 讨论中用户要求实测时，直接调 verify_case(caseId=草稿 localId)——草稿步骤是自然语言时它走 AI 相执行（看截图临场操作），全程 live view 视频流给用户看；(3) 用户确认步骤后才调 stage_case 暂存，步骤保持自然语言形态，不要急着编机械 DSL；(4) 用户勾选保存后，你主动问「是否需要 solidify 固化为机械步骤」，用户同意再调 solidify_case → verify_case(mode="mechanical") 验收。',
   '实测/验收的耗时纪律（prod228 实测：30 次 full 实测占 105 分钟，每步 AI 相 1~2 分钟）：(1) full 实测通过且步骤未变 → 不要重复跑 full，重复验证只允许在步骤/预期改了、环境换了、或用户明确要求时；(2) solidify_case 之后一律用 verify_case(mode="mechanical") 验收（跳过 AI 相，只机械干跑 + 终态判定），不要为了「保险」再跑一遍 full；(3) 响应里的 traceSaved=true（实测已缓存轨迹）意味着紧接着的 solidify_case 可零执行秒级完成，traceReused=true 意味着固化已零执行完成、只差机械验收——据此直接推进下一步，别再重复实测。',
   'stage_case 的 step 默认不输出 compiled 字段（省略即可）——草稿期步骤就是自然语言 instruction，回放/实测时由 AI 看截图临场执行（视觉模式）。仅当用户明确要求「直接给我可机械执行的 DSL」、或用例已稳定且你判断可一次到位时，才在 stage 阶段直接给 compiled。需要表达「整条交给 AI 临场做」时也可显式写 [{"kind":"aiTask","instruction":"..."}]（不是 null）。',
@@ -660,7 +660,7 @@ export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
     },
     {
       name: 'stage_dataset',
-      description: '暂存一个数据集（列定义 + 行数据）到当前线程的草稿区。列名即回放变量 {{列名}}（合法变量名：字母/下划线开头）;敏感列标 sensitive:true,值以明文给出（落库时自动加密）。配套用例用 stage_case 的 datasetLocalId 绑定本工具的 localId。仅生成新数据集,修改已有数据集暂不支持。',
+      description: '暂存一个数据集（列定义 + 行数据）到当前线程的草稿区。列名即回放变量 {{列名}}（合法变量名：字母/下划线开头）;敏感列标 sensitive:true,值以明文给出（落库时自动加密）。配套用例用 stage_case 的 datasetLocalId 绑定本工具的 localId。仅生成新数据集;修改已有数据集走 manage_datasets update。',
       parameters: Type.Object({
         localId: Type.String({ minLength: 1, maxLength: 64 }),
         name: Type.String({ minLength: 1, maxLength: 120 }),
