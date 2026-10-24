@@ -98,4 +98,18 @@ describe('checkoutRepo end-to-end (local bare repo)', () => {
     expect(m2.commit).toBe(m1.commit);
     await fs.rm(bare, { recursive: true, force: true });
   }, 30_000);
+
+  it('并发冷 checkout：先锁后检串行化，双请求都成功且目标一致（3 副本同检竞态回归）', async () => {
+    const bare = await makeBareRepo();
+    await pool.query(`UPDATE projects SET repo_url=$1, default_branch='main', provider='github' WHERE id=$2`, [bare, projectId]);
+    const { checkoutRepo } = await import('../src/pi/repo.js');
+    // 两路并发都从「目录不存在」进入：赢家锁内克隆，输家等锁后二次检查走热路径。
+    // 旧实现（冷路径吞锁 + rm 在拿锁前）此场景会互相 rm/克隆同一目录。
+    const [a, b] = await Promise.all([checkoutRepo(reqId), checkoutRepo(reqId)]);
+    expect(a).toBe(b);
+    const meta = JSON.parse(await fs.readFile(path.join(a, '.itest-sandbox.json'), 'utf8'));
+    expect(meta.branch).toBe('main');
+    expect(typeof meta.commit).toBe('string');
+    await fs.rm(bare, { recursive: true, force: true });
+  }, 30_000);
 });

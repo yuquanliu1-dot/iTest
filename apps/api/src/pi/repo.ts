@@ -470,6 +470,35 @@ async function fetchAndReset(target: string, info: ProjectRepo, ref: string): Pr
   return target;
 }
 
+/** 检出/更新临界区：先锁后检。锁在目录存在性判断之前拿，冷热两路同锁——3 副本共享
+ *  .data 卷时，旧实现冷路径 `.catch(() => null)` 吞掉 ELOCKED 后裸克隆、且 rm 发生在拿
+ *  锁之前（会删掉他副本正在 fetch 的目录），两个副本同时冷克隆同一版本即互相践踏。
+ *  锁内二次检查 .git：等锁期间赢家可能已建好仓库，直接走热路径 fetchAndReset。
+ *  重试 5×200ms（指数退避）：短暂等待通常比立刻 LockTimeoutError（调用方有上层重试）
+ *  体验好；锁文件是 `<target>.lock` 兄弟路径，锁内 rm -rf target 不破坏锁本身。 */
+async function withCheckoutLock(target: string, info: ProjectRepo, branch: string): Promise<string> {
+  // proper-lockfile 加锁前会 lstat 目标路径，冷路径目标还不存在 → 先保证目录在（幂等）
+  await fs.mkdir(target, { recursive: true });
+  let release: () => Promise<void>;
+  try {
+    release = await lockfile.lock(target, { stale: 30_000, retries: { retries: 5, minTimeout: 200 } });
+  } catch (e) {
+    if ((e as { code?: string }).code === 'ELOCKED') throw new LockTimeoutError('another fetch in progress');
+    throw e;
+  }
+  try {
+    if (await dirExists(target) && await dirExists(path.join(target, '.git'))) {
+      return await fetchAndReset(target, info, branch);
+    }
+    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
+    await fs.mkdir(target, { recursive: true });
+    await cloneFirst(target, info);
+    return await fetchAndReset(target, info, branch);
+  } finally {
+    await release().catch(() => {});
+  }
+}
+
 /** 第一阶段：先实现 no_repo / 锁 / 目录骨架。clone / fetch / stash 后补。 */
 export async function checkoutRepo(requirementId: string): Promise<string> {
   const info = await loadProjectRepo(requirementId);
@@ -477,25 +506,7 @@ export async function checkoutRepo(requirementId: string): Promise<string> {
 
   await fs.mkdir(REPOS_ROOT, { recursive: true });
   const target = path.join(REPOS_ROOT, requirementId);
-
-  if (await dirExists(target) && await dirExists(path.join(target, '.git'))) {
-    // 锁定；保证并发只跑一次 fetch
-    try {
-      const release = await lockfile.lock(target, { retries: 0, stale: 30_000 });
-      try { return await fetchAndReset(target, info, info.branch); } finally { await release(); }
-    } catch (e) {
-      if ((e as { code?: string }).code === 'ELOCKED') throw new LockTimeoutError('another fetch in progress');
-      throw e;
-    }
-  } else {
-    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
-    await fs.mkdir(target, { recursive: true });
-    const release = await lockfile.lock(target, { retries: 0, stale: 30_000 }).catch(() => null);
-    try {
-      await cloneFirst(target, info);
-      return await fetchAndReset(target, info, info.branch);
-    } finally { if (release) await release(); }
-  }
+  return withCheckoutLock(target, info, info.branch);
 }
 
 async function loadVersionRepo(versionId: string): Promise<ProjectRepo | null> {
@@ -524,23 +535,5 @@ export async function checkoutRepoForVersion(versionId: string, targetDir?: stri
 
   const target = targetDir ?? path.join(REPOS_ROOT, `v-${versionId}`);
   await fs.mkdir(path.dirname(target), { recursive: true });
-
-  if (await dirExists(target) && await dirExists(path.join(target, '.git'))) {
-    // 锁定；保证并发只跑一次 fetch
-    try {
-      const release = await lockfile.lock(target, { retries: 0, stale: 30_000 });
-      try { return await fetchAndReset(target, info, info.branch); } finally { await release(); }
-    } catch (e) {
-      if ((e as { code?: string }).code === 'ELOCKED') throw new LockTimeoutError('another fetch in progress');
-      throw e;
-    }
-  } else {
-    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
-    await fs.mkdir(target, { recursive: true });
-    const release = await lockfile.lock(target, { retries: 0, stale: 30_000 }).catch(() => null);
-    try {
-      await cloneFirst(target, info);
-      return await fetchAndReset(target, info, info.branch);
-    } finally { if (release) await release(); }
-  }
+  return withCheckoutLock(target, info, info.branch);
 }

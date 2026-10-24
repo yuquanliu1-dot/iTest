@@ -8,6 +8,7 @@
  */
 import type { Worker } from 'bullmq';
 import { logger } from '../logger.js';
+import { tryAcquireLock } from '../lib/redisLock.js';
 import { buildWorker, isSchedulerReady } from './queue.js';
 import { reconcileAllSchedules } from './sync.js';
 import { processScheduleFire } from './worker.js';
@@ -28,8 +29,18 @@ export async function startScheduler(): Promise<void> {
     _worker.on('ready', () => logger.info('plan-schedule worker ready'));
     _worker.on('error', (err) => logger.warn({ err: err.message }, 'plan-schedule worker error'));
     _worker.on('failed', (job, err) => logger.warn({ jobId: job?.id, err: err.message }, 'plan-schedule job failed'));
-    // 上电前先把表里的 truth 同步到 BullMQ
-    await reconcileAllSchedules();
+    // 上电前先把表里的 truth 同步到 BullMQ。3 副本同启都跑到这里：reconcile 靠分布式锁
+    // 单飞（输家直接跳过，worker 照常启动——BullMQ 每 job 单消费，多 worker 无重复执行）。
+    const reconcileLock = await tryAcquireLock('itest:sched-reconcile', 30_000);
+    if (!reconcileLock) {
+      logger.info('schedule reconcile skipped: another replica holds the lock');
+    } else {
+      try {
+        await reconcileAllSchedules();
+      } finally {
+        await reconcileLock.release();
+      }
+    }
     logger.info('plan scheduler started');
   } catch (e) {
     logger.warn({ err: (e as Error).message }, 'scheduler init failed; continuing without scheduler');
