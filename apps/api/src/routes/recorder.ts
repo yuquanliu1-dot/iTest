@@ -9,7 +9,7 @@ import { testCases, testSteps, testAttachments, testSessions, groups } from '../
 import { eq } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { StepAction } from '@itest/shared';
-import { createSession, getSession, persistSession } from '../recorder/ws.js';
+import { createSession, getSession, persistSession, appendTabEvent, getSessionTabs, finishSession } from '../recorder/ws.js';
 import { resolveCaseUrl, projectWebOrigins, relativizeUrl } from '../lib/resolve-url.js';
 import { WebServiceMissing } from '../execute/envContext.js';
 import { assertCaseVisible } from '../services/projectAccess.js';
@@ -136,8 +136,11 @@ function mergeConsecutiveFills(steps: unknown[]): unknown[] {
 }
 
 recorderRoute.post('/sessions/:id/finish', async (req, res) => {
-  const session = await getSession(req.params.id);
-  if (!session) throw new HttpError(404, 'not_found', 'session not found');
+  // 终局读取即删除：二次 finish 404（旧实现重复读会二次插步）。steps/tabs 来自追加式存储，
+  // 跨副本（WS 与 REST finish 落不同副本）也能取齐并集。
+  const finished = await finishSession(req.params.id);
+  if (!finished) throw new HttpError(404, 'not_found', 'session not found');
+  const session = finished.meta;
   await assertCaseVisible(session.caseId, req.user!);
   session.ws?.close(1000, 'finished');
   let inserted = 0;
@@ -155,7 +158,7 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
     : null;
   const origins = caseRow ? await projectWebOrigins(caseProjectId!) : new Map<string, string | null>();
   if (caseRow && !caseRow.url) {
-    const firstStepUrl = (session.steps[0] as { url?: string | null } | undefined)?.url ?? null;
+    const firstStepUrl = (finished.steps[0] as { url?: string | null } | undefined)?.url ?? null;
     const candidate = session.targetUrl ?? firstStepUrl ?? (await resolveCaseUrl(caseRow, { defaultEnvFallback: true }));
     if (candidate && /^https?:\/\//.test(candidate)) {
       const rel = relativizeUrl(candidate, origins);
@@ -166,7 +169,7 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
       }).where(eq(testCases.id, session.caseId));
     }
   }
-  const mergedSteps = mergeConsecutiveFills(session.steps);
+  const mergedSteps = mergeConsecutiveFills(finished.steps);
   for (const step of mergedSteps) {
     const item = step as { action: unknown; tabRef?: string; componentKind?: string; url?: string };
     StepAction.parse(item.action);
@@ -210,8 +213,8 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
     });
     inserted++;
   }
-  if (session.tabs && session.tabs.length > 0 && session.dbSessionId) {
-    await db.update(testSessions).set({ tabs: session.tabs }).where(eq(testSessions.id, session.dbSessionId));
+  if (finished.tabs.length > 0 && session.dbSessionId) {
+    await db.update(testSessions).set({ tabs: finished.tabs }).where(eq(testSessions.id, session.dbSessionId));
   }
   // 录制产物改了用例 url + 追加步骤,列表缓存(固化进度列)必须失效
   await invalidateCasesCache(caseProjectId);
@@ -229,10 +232,8 @@ recorderRoute.post('/sessions/:id/tab-events', async (req, res) => {
       url: z.string().optional(),
     })),
   }).parse(req.body);
-  if (!session.tabs) session.tabs = [];
-  session.tabs.push(...body.events);
-  void persistSession(session);
-  res.json({ count: session.tabs.length });
+  for (const ev of body.events) await appendTabEvent(req.params.id, ev);
+  res.json({ count: (await getSessionTabs(req.params.id)).length });
 });
 
 /** 用 @itest/recorder workspace 包的 package.json 反推扩展根目录。

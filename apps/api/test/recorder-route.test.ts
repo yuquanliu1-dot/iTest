@@ -10,7 +10,7 @@ process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? Buffer.alloc(32, 1).t
 let pg: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
-let getSession: typeof import('../src/recorder/ws.js').getSession;
+let appendStep: typeof import('../src/recorder/ws.js').appendStep;
 
 beforeAll(async () => {
   pg = await new PostgreSqlContainer('postgres:16-alpine').start();
@@ -22,7 +22,7 @@ beforeAll(async () => {
   const { casesRoute } = await import('../src/routes/cases.js');
   const { stepsRoute } = await import('../src/routes/steps.js');
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
-  ({ getSession } = await import('../src/recorder/ws.js'));
+  ({ appendStep } = await import('../src/recorder/ws.js'));
   app = express();
   app.use(express.json());
   const { userId, username, orgId, orgPath } = await seedOrg(pool);
@@ -117,11 +117,8 @@ describe('recorder routes', () => {
     const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'NV', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
-    const session = (await getSession(s.body.sessionId))!;
-    session.steps.push(
-      { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'https://app.example.com/home' },
-      { action: { kind: 'fill', locator: [{ strategy: 'css', value: '#b' }], value: 'x' }, url: 'https://app.example.com/home' },
-    );
+    await appendStep(s.body.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'https://app.example.com/home' });
+    await appendStep(s.body.sessionId, { action: { kind: 'fill', locator: [{ strategy: 'css', value: '#b' }], value: 'x' }, url: 'https://app.example.com/home' });
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
     expect(f.body.inserted).toBe(2);
@@ -139,18 +136,15 @@ describe('recorder routes', () => {
     const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'MF', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
-    const session = (await getSession(s.body.sessionId))!;
     const locator = [{ strategy: 'css', value: '#auth-password' }];
-    session.steps.push(
-      { action: { kind: 'click', locator: [{ strategy: 'css', value: '#auth-username' }] }, url: 'https://app.example.com/' },
-      // React input remount / 中途停顿产生的碎片 fill（值为累计值）
-      { action: { kind: 'fill', locator, value: 'a', sensitive: true }, url: 'https://app.example.com/' },
-      { action: { kind: 'fill', locator, value: 'admin', sensitive: true }, url: 'https://app.example.com/' },
-      { action: { kind: 'fill', locator, value: 'admin123', sensitive: true }, url: 'https://app.example.com/' },
-      // 中间夹了别的步骤 → 不合并
-      { action: { kind: 'click', locator: [{ strategy: 'css', value: '#submit' }] }, url: 'https://app.example.com/' },
-      { action: { kind: 'fill', locator, value: 'changed' }, url: 'https://app.example.com/' },
-    );
+    // React input remount / 中途停顿产生的碎片 fill（值为累计值）
+    await appendStep(s.body.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#auth-username' }] }, url: 'https://app.example.com/' });
+    await appendStep(s.body.sessionId, { action: { kind: 'fill', locator, value: 'a', sensitive: true }, url: 'https://app.example.com/' });
+    await appendStep(s.body.sessionId, { action: { kind: 'fill', locator, value: 'admin', sensitive: true }, url: 'https://app.example.com/' });
+    await appendStep(s.body.sessionId, { action: { kind: 'fill', locator, value: 'admin123', sensitive: true }, url: 'https://app.example.com/' });
+    // 中间夹了别的步骤 → 不合并
+    await appendStep(s.body.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#submit' }] }, url: 'https://app.example.com/' });
+    await appendStep(s.body.sessionId, { action: { kind: 'fill', locator, value: 'changed' }, url: 'https://app.example.com/' });
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
     expect(f.body.inserted).toBe(4);
@@ -177,8 +171,7 @@ describe('recorder routes', () => {
     await pool.query(`INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1,'web','默认 Web','{"name":"web","scheme":"https","host":"prod.example.com"}',true)`, [e.rows[0]!.id]);
     const c = await request(app).post('/api/cases').send({ title: 'NVD', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'incognito' });
-    const session = (await getSession(s.body.sessionId))!;
-    session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] } });
+    await appendStep(s.body.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] } });
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
     const tcRows = await pool.query(`SELECT url, web_service_ref FROM test_cases WHERE id = $1`, [c.body.id]);
@@ -199,8 +192,7 @@ describe('recorder routes', () => {
       steps: [{ compiled: [{ kind: 'navigate', url: 'https://app.example.com' }], source: 'manual' }],
     });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'append' });
-    const session = (await getSession(s.body.sessionId))!;
-    session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'https://app.example.com/home' });
+    await appendStep(s.body.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'https://app.example.com/home' });
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
     expect(f.body.inserted).toBe(1);
@@ -222,8 +214,7 @@ describe('recorder routes', () => {
       mode: 'fresh',
       targetUrl: 'https://web-passed.example.com',
     });
-    const session = (await getSession(s.body.sessionId))!;
-    session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] } });
+    await appendStep(s.body.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] } });
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
     expect(f.body.inserted).toBe(1);

@@ -8,6 +8,7 @@ let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
 let getSession: typeof import('../src/recorder/ws.js').getSession;
+let appendStep: typeof import('../src/recorder/ws.js').appendStep;
 let relativizeUrl: typeof import('../src/lib/resolve-url.js').relativizeUrl;
 let projectWebOrigins: typeof import('../src/lib/resolve-url.js').projectWebOrigins;
 let projectId: string;
@@ -28,7 +29,7 @@ beforeAll(async () => {
   const { recorderRoute } = await import('../src/routes/recorder.js');
   const { casesRoute } = await import('../src/routes/cases.js');
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
-  ({ getSession } = await import('../src/recorder/ws.js'));
+  ({ getSession, appendStep } = await import('../src/recorder/ws.js'));
   ({ relativizeUrl, projectWebOrigins } = await import('../src/lib/resolve-url.js'));
   app = express();
   app.use(express.json());
@@ -132,7 +133,7 @@ describe('recorder finish 落库尽力相对化', () => {
   it('初始导航（首步 url）命中环境 origin → 存相对路径 + 绑定服务', async () => {
     await insertWebEnv('frontend', { scheme: 'http', host: 'a.com', port: 8080 });
     const { caseId, session } = await openCaseSession();
-    session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'http://a.com:8080/admin/x?y=1#z' });
+    await appendStep(session.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'http://a.com:8080/admin/x?y=1#z' });
     expect((await finish(session.sessionId)).status).toBe(200);
     expect(await getCase(caseId)).toEqual({ url: '/admin/x?y=1#z', web_service_ref: 'frontend' });
   });
@@ -160,12 +161,10 @@ describe('recorder finish 落库尽力相对化', () => {
   it('中途 navigate 命中 → 剥成相对路径落库；外站 navigate 保留绝对', async () => {
     await insertWebEnv('frontend', { scheme: 'http', host: 'a.com', port: 8080 });
     const { caseId, session } = await openCaseSession();
-    session.steps.push(
-      // 首步 navigate：action.url 是中途剥离对象；顶层 url 是初始导航来源（与扩展上报形状一致）
-      { action: { kind: 'navigate', url: 'http://a.com:8080/setup?p=1' }, url: 'http://a.com:8080/setup?p=1' },
-      { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'http://a.com:8080/setup?p=1' },
-      { action: { kind: 'navigate', url: 'https://other.test/faq' } },
-    );
+    // 首步 navigate：action.url 是中途剥离对象；顶层 url 是初始导航来源（与扩展上报形状一致）
+    await appendStep(session.sessionId, { action: { kind: 'navigate', url: 'http://a.com:8080/setup?p=1' }, url: 'http://a.com:8080/setup?p=1' });
+    await appendStep(session.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'http://a.com:8080/setup?p=1' });
+    await appendStep(session.sessionId, { action: { kind: 'navigate', url: 'https://other.test/faq' } });
     expect((await finish(session.sessionId)).status).toBe(200);
     const steps = await getSteps(caseId);
     expect(steps[0]!.compiled[0]).toEqual({ kind: 'navigate', url: '/setup?p=1' });
@@ -177,7 +176,7 @@ describe('recorder finish 落库尽力相对化', () => {
   it('未命名默认服务命中 → 存相对 + ref 为 null', async () => {
     await insertWebEnv(null, { scheme: 'http', host: 'a.com', port: 8080 });
     const { caseId, session } = await openCaseSession();
-    session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'http://a.com:8080/home' });
+    await appendStep(session.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'http://a.com:8080/home' });
     expect((await finish(session.sessionId)).status).toBe(200);
     expect(await getCase(caseId)).toEqual({ url: '/home', web_service_ref: null });
   });
@@ -187,7 +186,7 @@ describe('recorder finish 落库尽力相对化', () => {
     const c = await request(app).post('/api/cases').send({ title: 'REL-PINNED', url: 'http://a.com:8080/pinned', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'append', targetUrl: 'http://a.com:8080/should-not-win' });
     const session = (await getSession(s.body.sessionId))!;
-    session.steps.push({ action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'http://a.com:8080/pinned' });
+    await appendStep(session.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'http://a.com:8080/pinned' });
     expect((await finish(session.sessionId)).status).toBe(200);
     expect(await getCase(c.body.id)).toEqual({ url: 'http://a.com:8080/pinned', web_service_ref: null });
   });

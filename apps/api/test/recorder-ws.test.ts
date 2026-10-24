@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { attachRecorderWs, createSession, getSession } from '../src/recorder/ws.js';
+import { attachRecorderWs, createSession, getSessionSteps, getSessionTabs } from '../src/recorder/ws.js';
 import { Server } from 'http';
 import { AddressInfo } from 'net';
 import WebSocket from 'ws';
@@ -29,10 +29,10 @@ describe('recorder/ws envelope', () => {
       },
     }));
     await new Promise((r) => setTimeout(r, 50));
-    const got = (await getSession(session.sessionId))!;
-    expect(got.steps).toHaveLength(1);
-    expect((got.steps[0] as { tabRef: string }).tabRef).toBe(`${session.sessionId}|tab#0`);
-    expect((got.steps[0] as { componentKind: string }).componentKind).toBe('select');
+    const got = await getSessionSteps(session.sessionId);
+    expect(got).toHaveLength(1);
+    expect((got[0] as { tabRef: string }).tabRef).toBe(`${session.sessionId}|tab#0`);
+    expect((got[0] as { componentKind: string }).componentKind).toBe('select');
     ws.close();
   });
 
@@ -46,9 +46,8 @@ describe('recorder/ws envelope', () => {
       event: { kind: 'opened', tabRef: `${session.sessionId}|tab#1`, title: 'child', url: 'https://example.com/c' },
     }));
     await new Promise((r) => setTimeout(r, 50));
-    const got = (await getSession(session.sessionId))!;
-    expect(got.tabs).toBeDefined();
-    expect(got.tabs!.some((t) => t.tabRef === `${session.sessionId}|tab#1`)).toBe(true);
+    const tabs = await getSessionTabs(session.sessionId);
+    expect(tabs.some((t) => t.tabRef === `${session.sessionId}|tab#1`)).toBe(true);
     ws.close();
   });
 });
