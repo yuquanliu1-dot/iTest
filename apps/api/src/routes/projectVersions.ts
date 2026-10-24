@@ -5,7 +5,7 @@ import { db } from '../db/client.js';
 import { projects, projectVersions, testCases, executionPlans } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertEnvironmentVisible, assertProjectVisible, assertVersionVisible } from '../services/projectAccess.js';
-import { listRefs, type GitProviderName } from '../services/gitProvider.js';
+import { listRefs, verifyRef, type GitProviderName } from '../services/gitProvider.js';
 import { requireManager } from '../middleware/auth.js';
 
 export const projectVersionsRoute = Router({ mergeParams: true });
@@ -131,6 +131,30 @@ projectVersionsRoute.get('/projects/:projectId/refs', requireManager, async (req
     // （如 gitlab 不支持列 refs）必须放进 message 才能直达 UI 的手动输入分支。
     const message = (err as Error).message;
     res.status(400).json({ kind, refs: [], error: 'refs_list_failed', message });
+  }
+});
+
+/** POST /projects/:projectId/verify-ref — 校验远端 branch/tag 存在性（ref 弹窗「测试」）。仅 manager。 */
+projectVersionsRoute.post('/projects/:projectId/verify-ref', requireManager, async (req, res) => {
+  const pid = String(req.params.projectId);
+  await assertProjectVisible(pid, req.user!);
+  const body = z.object({ ref: z.string().min(1).max(200), kind: RefKindEnum }).parse(req.body);
+  const ps = await db.select().from(projects).where(eq(projects.id, pid));
+  if (ps.length === 0) throw new HttpError(404, 'not_found', 'project not found');
+  const p = ps[0]!;
+  if (!p.repoUrl) throw new HttpError(400, 'no_repo', '项目未配置仓库');
+  try {
+    // ref 弹窗没有 PAT 输入框，一律用库中已存 PAT（GET 从不回传 PAT，同 verify-repo 的回落语义）
+    const result = await verifyRef({
+      repoUrl: p.repoUrl,
+      provider: (p.provider as GitProviderName) ?? 'github',
+      pat: p.patOverride ?? undefined,
+      ref: body.ref,
+      kind: body.kind,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ valid: false, error: (err as Error).message });
   }
 });
 

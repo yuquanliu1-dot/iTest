@@ -77,6 +77,8 @@
     "remoteLabel": "Remote {{refKind}} (unavailable when the project has no repository configured)",
     "manualPlaceholder": "Type a ref name manually",
     "refetch": "Refetch",
+    "test": "Test",
+    "testOk": "Exists on remote",
     "none": "— Unspecified —",
     "clearRef": "Clear ref (unbind)"
   }

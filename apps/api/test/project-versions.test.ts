@@ -1,8 +1,19 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { SCHEMA_SQL, seedProject, seedOrg, resetSeedOrgCache } from './helpers/db.js';
+import { parseLsRemoteRefs } from '../src/services/gitProvider.js';
+
+// 只 mock 网络探测两个入口；parseLsRemoteRefs 等纯函数经 importOriginal 保真（下方单测直接复用）。
+const { listRefsMock, verifyRefMock } = vi.hoisted(() => ({
+  listRefsMock: vi.fn(),
+  verifyRefMock: vi.fn(),
+}));
+vi.mock('../src/services/gitProvider.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/gitProvider.js')>();
+  return { ...actual, listRefs: listRefsMock, verifyRef: verifyRefMock };
+});
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -180,5 +191,80 @@ describe('project versions', () => {
       .send({ name: 'v2.0', environmentId: env.rows[0]!.id });
     expect(r.status).toBe(400);
     expect(r.body.error).toBe('env_project_mismatch');
+  });
+});
+
+describe('refs 列举与 ref 校验（2026-10-24 gitlab 下拉恒空 + 无测试入口）', () => {
+  beforeEach(async () => {
+    listRefsMock.mockReset();
+    verifyRefMock.mockReset();
+    await pool.query(
+      `UPDATE projects SET repo_url=$1, provider='gitlab', pat_override=$2 WHERE id=$3`,
+      ['https://gitlab.example.com/EDR/jwagent-ui.git', 'stored-pat-xyz', projectId],
+    );
+  });
+
+  it('GET /refs 把库中已存 PAT 透传给 listRefs 并返回列表', async () => {
+    listRefsMock.mockResolvedValueOnce(['master', 'feat/x']);
+    const r = await request(app).get(`/api/projects/${projectId}/refs?kind=branch`);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ kind: 'branch', refs: ['master', 'feat/x'] });
+    expect(listRefsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ repoUrl: 'https://gitlab.example.com/EDR/jwagent-ui.git', provider: 'gitlab', pat: 'stored-pat-xyz', kind: 'branch' }),
+    );
+  });
+
+  it('GET /refs listRefs 抛错 → 400，message 直达 UI 手动输入分支', async () => {
+    listRefsMock.mockRejectedValueOnce(new Error('连接超时：GitLab 服务 20s 内无响应'));
+    const r = await request(app).get(`/api/projects/${projectId}/refs?kind=tag`);
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('refs_list_failed');
+    expect(r.body.message).toBe('连接超时：GitLab 服务 20s 内无响应');
+  });
+
+  it('POST /verify-ref 透传 ref/kind + 已存 PAT，存在 → 200 valid:true', async () => {
+    verifyRefMock.mockResolvedValueOnce({ valid: true });
+    const r = await request(app).post(`/api/projects/${projectId}/verify-ref`).send({ ref: 'v2.0.6', kind: 'tag' });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ valid: true });
+    expect(verifyRefMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: 'v2.0.6', kind: 'tag', pat: 'stored-pat-xyz' }),
+    );
+  });
+
+  it('POST /verify-ref ref 不存在也 200（valid:false + 原因）', async () => {
+    verifyRefMock.mockResolvedValueOnce({ valid: false, error: '远端不存在标签 v9.9.9' });
+    const r = await request(app).post(`/api/projects/${projectId}/verify-ref`).send({ ref: 'v9.9.9', kind: 'tag' });
+    expect(r.status).toBe(200);
+    expect(r.body.valid).toBe(false);
+    expect(r.body.error).toBe('远端不存在标签 v9.9.9');
+  });
+
+  it('POST /verify-ref 探测抛错 → 400 {valid:false,error}', async () => {
+    verifyRefMock.mockRejectedValueOnce(new Error('认证失败：私有仓库须配置有效 PAT'));
+    const r = await request(app).post(`/api/projects/${projectId}/verify-ref`).send({ ref: 'main', kind: 'branch' });
+    expect(r.status).toBe(400);
+    expect(r.body.valid).toBe(false);
+    expect(r.body.error).toBe('认证失败：私有仓库须配置有效 PAT');
+  });
+
+  it('POST /verify-ref 未配置仓库 → 400 no_repo', async () => {
+    // seedProject 不配 repo_url；refs describe 的 beforeEach 只给外层 projectId 那个项目配了仓库
+    const other = await seedProject(pool);
+    const r = await request(app).post(`/api/projects/${other.projectId}/verify-ref`).send({ ref: 'main', kind: 'branch' });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('no_repo');
+  });
+});
+
+describe('parseLsRemoteRefs', () => {
+  it('branch：剥 refs/heads/ 前缀，跳过无 tab 杂行与 ^{} 行', () => {
+    const out = 'aaaa\trefs/heads/main\nbbbb\trefs/heads/feat/x\nHEAD\ncccc\trefs/heads/main^{}';
+    expect(parseLsRemoteRefs(out, 'branch')).toEqual(['main', 'feat/x']);
+  });
+
+  it('tag：跳过 ^{} 解引用行（annotated tag 双行），不串到 branch', () => {
+    const out = '1111\trefs/tags/v2.0.6\n2222\trefs/tags/v2.0.6^{}\n3333\trefs/heads/master';
+    expect(parseLsRemoteRefs(out, 'tag')).toEqual(['v2.0.6']);
   });
 });

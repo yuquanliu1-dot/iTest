@@ -33,11 +33,32 @@ export default function RefEditDialog({
   const [refs, setRefs] = useState<string[]>([]);
   const [refsError, setRefsError] = useState<string | null>(null);
   const [loadingRefs, setLoadingRefs] = useState(false);
+  // 「测试」：远端存在性校验（ls-remote / REST）。改 ref 或切 kind 后置回 idle。
+  const [testState, setTestState] = useState<
+    { kind: 'idle' } | { kind: 'checking' } | { kind: 'ok' } | { kind: 'fail'; error: string }
+  >({ kind: 'idle' });
+
+  const updateRef = (val: string) => {
+    setRefValue(val);
+    setTestState({ kind: 'idle' });
+  };
+
+  const runTest = async () => {
+    if (!refKind || !refValue.trim()) return;
+    setTestState({ kind: 'checking' });
+    try {
+      const r = await api.versions.verifyRef(state.projectId, { ref: refValue.trim(), kind: refKind });
+      setTestState(r.valid ? { kind: 'ok' } : { kind: 'fail', error: r.error ?? t('common:testConnectionFailed') });
+    } catch (e) {
+      setTestState({ kind: 'fail', error: (e as Error).message });
+    }
+  };
 
   const loadRefs = async (kind: 'branch' | 'tag') => {
     if (!state.projectId) return;
     setLoadingRefs(true);
     setRefsError(null);
+    setTestState({ kind: 'idle' });
     try {
       const r = await api.versions.listRefs(state.projectId, kind);
       setRefs(r.refs);
@@ -97,7 +118,7 @@ export default function RefEditDialog({
                   <Input
                     placeholder={t('projects:refEdit.manualPlaceholder')}
                     value={refValue}
-                    onChange={(e) => setRefValue(e.target.value)}
+                    onChange={(e) => updateRef(e.target.value)}
                   />
                 </div>
               ) : refs.length === 0 ? (
@@ -106,20 +127,42 @@ export default function RefEditDialog({
                   <Input
                     placeholder={t('projects:refEdit.manualPlaceholder')}
                     value={refValue}
-                    onChange={(e) => setRefValue(e.target.value)}
+                    onChange={(e) => updateRef(e.target.value)}
                   />
                 </div>
               ) : (
                 <select
                   className="input-base"
                   value={refValue}
-                  onChange={(e) => setRefValue(e.target.value)}
+                  onChange={(e) => updateRef(e.target.value)}
                 >
                   <option value="">{t('projects:refEdit.none')}</option>
                   {refs.map((r) => (
                     <option key={r} value={r}>{r}</option>
                   ))}
                 </select>
+              )}
+              {refValue.trim() && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={testState.kind === 'checking'}
+                    onClick={runTest}
+                  >
+                    {testState.kind === 'checking' ? t('common:testing') : t('projects:refEdit.test')}
+                  </Button>
+                  {testState.kind === 'ok' && (
+                    <span className="text-[11px]" style={{ color: 'var(--success, #16a34a)' }}>
+                      ✓ {t('projects:refEdit.testOk')}
+                    </span>
+                  )}
+                  {testState.kind === 'fail' && (
+                    <span className="text-[11px]" style={{ color: 'var(--destructive)' }}>
+                      {testState.error}
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           )}

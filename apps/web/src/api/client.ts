@@ -220,6 +220,12 @@ export const api = {
       request<{ kind: 'branch' | 'tag'; refs: string[]; error?: string }>(
         `/projects/${projectId}/refs?kind=${kind}`,
       ),
+    /** 校验远端 branch/tag 是否存在（ref 弹窗「测试」）。valid=false 时 error 给原因。 */
+    verifyRef: (projectId: string, body: { ref: string; kind: 'branch' | 'tag' }) =>
+      request<{ valid: boolean; error?: string }>(`/projects/${projectId}/verify-ref`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
     /** 写入 ref/refKind（与 patch 分开，避免误改 name/description）。 */
     setRef: (id: string, body: { ref: string | null; refKind: 'branch' | 'tag' | null }) =>
       request<ProjectVersion>(`/project-versions/${id}`, {

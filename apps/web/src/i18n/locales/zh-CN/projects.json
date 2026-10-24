@@ -71,6 +71,8 @@
     "remoteLabel": "远端 {{refKind}}（项目未配置仓库时不可用）",
     "manualPlaceholder": "手动输入 ref 名称",
     "refetch": "重新拉取",
+    "test": "测试",
+    "testOk": "远端存在",
     "none": "— 不指定 —",
     "clearRef": "清空 ref（不绑定）"
   }

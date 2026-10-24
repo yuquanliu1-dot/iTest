@@ -84,18 +84,23 @@ export function validateRepoName(name: string): { valid: boolean; error?: string
  *  - Gitee：URL 形式校验；未配置 token 时只校验 URL
  */
 
+/** 远端 URL 注入 PAT（gitlab 同 clone 语义：oauth2:<pat>；无 PAT 原样返回）。 */
+function withPat(repoUrl: string, pat?: string): string {
+  const u = new URL(repoUrl);
+  if (pat) {
+    u.username = 'oauth2';
+    u.password = pat;
+  }
+  return u.toString();
+}
+
 /** GitLab 真实可达性探测。用 git ls-remote 而非 HTTP HEAD：与 cloneFirst 走完全相同的传输层，
  *  clone 会失败的这里必失败——JW/code.srdcloud.cn 这类网络不通在保存前即暴露，而不是等
  *  AI 工作台 checkout 报「仓库不可用」。PAT 注入规则与 repo.ts injectPat 的 gitlab 分支对齐
  *  （oauth2:<pat>），无 PAT 原样带用户名探测，私有仓库会归为认证失败提示补 PAT。 */
 async function probeGitLab(input: VerifyRepoInput): Promise<VerifyRepoResult> {
-  const u = new URL(input.repoUrl);
-  if (input.pat) {
-    u.username = 'oauth2';
-    u.password = input.pat;
-  }
   // --symref HEAD 顺带吐出远端默认分支（ref: refs/heads/<x>\tHEAD），前端据此自动纠正 main/master 写错
-  const args = ['ls-remote', '--symref', u.toString(), 'HEAD'];
+  const args = ['ls-remote', '--symref', withPat(input.repoUrl, input.pat), 'HEAD'];
   if (input.branch) args.push(`refs/heads/${input.branch}`);
   const r = await runGitProbe(args, 20_000);
   if (!r.ok) return r.result;
@@ -196,13 +201,20 @@ export async function verifyRepoAccess(input: VerifyRepoInput): Promise<VerifyRe
 /**
  * 列出远程 refs（branch 或 tag）。仅做存在性/可达性，不 clone。
  *  - GitHub：REST API（带 PAT 走认证；不带走匿名 60/hr）
- *  - Gitee / GitLab：URL 形式校验 + 头部可达性探针（Gitee/GitLab API 与 iTest 当前解耦，
- *    真实工程上需 PAT 才能稳定列远端 refs；这里给「provider 支持但本函数不支持」的明确错误，
- *    让 UI 显示「该 provider 暂不支持列举 refs，请手动输入」）。
+ *  - GitLab：git ls-remote --refs（与 clone 同传输层，PAT 同 oauth2 注入）——
+ *    2026-10-24 之前只对 GitHub 支持、gitlab 恒报「请手动输入」，版本 ref 弹窗下拉永远空
+ *  - Gitee：未接列 refs 的通道，给明确错误让 UI 走「手动输入」分支。
  */
 export async function listRefs(input: VerifyRepoInput & { kind: 'branch' | 'tag' }): Promise<string[]> {
   const urlCheck = validateRepoUrl(input.repoUrl, input.provider);
   if (!urlCheck.valid) throw new Error(urlCheck.error);
+
+  if (input.provider === 'gitlab') {
+    const args = ['ls-remote', '--refs', withPat(input.repoUrl, input.pat), input.kind === 'tag' ? 'refs/tags/*' : 'refs/heads/*'];
+    const r = await runGitProbe(args, 20_000);
+    if (!r.ok) throw new Error(r.result.error ?? '列举远端 refs 失败');
+    return parseLsRemoteRefs(r.stdout, input.kind);
+  }
 
   if (input.provider === 'github') {
     const m = input.repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(\.git)?\/?$/i);
@@ -222,6 +234,70 @@ export async function listRefs(input: VerifyRepoInput & { kind: 'branch' | 'tag'
     const data = (await res.json()) as Array<{ name: string }>;
     return data.map((r) => r.name);
   }
-  // Gitee / GitLab：当前不接 API 列远端 refs。错误提示 UI 走「手动输入」分支。
+  // Gitee：当前不接 API 列远端 refs。错误提示 UI 走「手动输入」分支。
   throw new Error(`provider ${input.provider} 暂不支持列举 ${input.kind}，请手动输入`);
+}
+
+/** 解析 ls-remote 输出行 `<sha>\t<full-ref>`，剥掉 refs/heads/ 或 refs/tags/ 前缀；
+ *  跳过 `^{}` 解引用行与不含 tab 的杂行。导出仅供单测。 */
+export function parseLsRemoteRefs(stdout: string, kind: 'branch' | 'tag'): string[] {
+  const prefix = kind === 'tag' ? 'refs/tags/' : 'refs/heads/';
+  const out: string[] = [];
+  for (const line of stdout.split('\n')) {
+    const tab = line.indexOf('\t');
+    if (tab <= 0) continue;
+    const full = line.slice(tab + 1).trim();
+    if (!full.startsWith(prefix) || full.endsWith('^{}')) continue;
+    out.push(full.slice(prefix.length));
+  }
+  return out;
+}
+
+export interface VerifyRefResult {
+  valid: boolean;
+  error?: string;
+}
+
+/** 校验远端 branch/tag 是否存在——保存 ref 前的「测试」，写错在弹窗里暴露，
+ *  而不是等 AI 工作台 checkout 静默回落默认分支或 clone 失败。
+ *  - GitLab：git ls-remote 精确匹配 refs/heads/<ref> / refs/tags/<ref>（与 clone 同传输层）；
+ *    无匹配时 git exit 0 + 空 stdout，据此区分「不存在」与「探测失败」
+ *  - GitHub：REST API（branches/<ref> / git/ref/tags/<ref>）
+ *  - Gitee：未接校验通道，提示手动确认。 */
+export async function verifyRef(
+  input: VerifyRepoInput & { ref: string; kind: 'branch' | 'tag' },
+): Promise<VerifyRefResult> {
+  const urlCheck = validateRepoUrl(input.repoUrl, input.provider);
+  if (!urlCheck.valid) return { valid: false, error: urlCheck.error };
+  const ref = input.ref.trim();
+  if (!ref) return { valid: false, error: 'ref 不能为空' };
+  const noun = input.kind === 'tag' ? '标签' : '分支';
+
+  if (input.provider === 'gitlab') {
+    const r = await runGitProbe(['ls-remote', withPat(input.repoUrl, input.pat), `refs/${input.kind}s/${ref}`], 20_000);
+    if (!r.ok) return r.result;
+    return r.stdout.trim().length > 0 ? { valid: true } : { valid: false, error: `远端不存在${noun} ${ref}` };
+  }
+
+  if (input.provider === 'github') {
+    const m = input.repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(\.git)?\/?$/i);
+    if (!m) return { valid: false, error: '无法解析 GitHub owner/repo' };
+    const [, owner, repo] = m;
+    const headers: Record<string, string> = { Accept: 'application/vnd.github+json', 'User-Agent': 'iTest' };
+    if (input.pat) headers.Authorization = `Bearer ${input.pat}`;
+    const url = input.kind === 'tag'
+      ? `https://api.github.com/repos/${owner}/${repo}/git/ref/tags/${encodeURIComponent(ref)}`
+      : `https://api.github.com/repos/${owner}/${repo}/branches/${encodeURIComponent(ref)}`;
+    try {
+      const res = await fetch(url, { headers });
+      if (res.status === 404) return { valid: false, error: `远端不存在${noun} ${ref}` };
+      if (res.status === 403) return { valid: false, error: 'GitHub API 限流，请提供 PAT' };
+      if (!res.ok) return { valid: false, error: `GitHub API 返回 ${res.status}` };
+      return { valid: true };
+    } catch (err) {
+      return { valid: false, error: `网络错误：${(err as Error).message}` };
+    }
+  }
+
+  return { valid: false, error: `provider ${input.provider} 暂不支持校验${noun}，请手动确认` };
 }
