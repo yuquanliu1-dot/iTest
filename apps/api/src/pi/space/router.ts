@@ -19,6 +19,7 @@ import { handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf }
 import type { AuthUser } from '../../services/auth.service.js';
 import { readLlmConfig } from '../modelBridge.js';
 import { resolveConfirmation } from './confirm.js';
+import { subscribeThreadMirror } from './threadBus.js';
 import { generateSpaceSuggestionsOnce } from './suggestions.js';
 import { stageRoute } from './stageRoute.js';
 import { feedbackRoute } from './feedbackRoute.js';
@@ -27,7 +28,7 @@ import { guidesRoute } from './guidesRoute.js';
 import { mcpServersRoute } from './mcpServersRoute.js';
 import { skillsRoute } from './skillsRoute.js';
 import {
-  cancelThread, clearThreadQueue, dropSpaceRecord, ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, spaceRepoIssue, subscribeThread, threadStatus,
+  cancelThread, clearThreadQueue, dropSpaceRecord, ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, spaceRepoIssue, subscribeThread, threadStatusAsync,
 } from './session.js';
 import type { ThreadSnapshot, SpacePromptImage } from './session.js';
 
@@ -99,18 +100,19 @@ async function probeSessionFiles(rows: ThreadListRow[]): Promise<boolean[]> {
       })));
 }
 
-/** 序列化线程行(react-pi 校验兼容:title null 必须缺键;时间出 ISO)。 */
-function serializeThreadRows(rows: ThreadListRow[]) {
-  return rows.map((row) => ({
+/** 序列化线程行(react-pi 校验兼容:title null 必须缺键;时间出 ISO)。status 走 async 版:
+ *  本地无 record 时探他副本运行锁,轮询落在他副本时运行中的线程不被误标 idle。 */
+async function serializeThreadRows(rows: ThreadListRow[]) {
+  return Promise.all(rows.map(async (row) => ({
     id: row.id,
     // react-pi 的 isThreadMetadata 用 isOptionalString 校验 title:null 会被拒 → 整个列表
     // load 抛 Invalid Pi HTTP response。DB 无题线程(title NULL,首条消息落题前的窗口)
     // 必须序列化出 undefined(JSON 里直接缺键)。
     title: row.title ?? undefined,
-    status: threadStatus(row.id) ?? 'idle',
+    status: (await threadStatusAsync(row.id)) ?? 'idle',
     createdAt: row.createdAt?.toISOString(),
     updatedAt: row.updatedAt?.toISOString(),
-  }));
+  })));
 }
 
 /** 列表查询的公共 where:草稿行(piThreadId='')过不了文件判据(fs.access('')必拒),
@@ -139,7 +141,7 @@ spaceRoute.get('/threads', async (req, res) => {
       .orderBy(desc(aiThreads.updatedAt), desc(aiThreads.id))
       .limit(20)) as ThreadListRow[];
     const exists = await probeSessionFiles(rows);
-    res.json(serializeThreadRows(rows.filter((_, i) => exists[i])));
+    res.json(await serializeThreadRows(rows.filter((_, i) => exists[i])));
     return;
   }
 
@@ -178,7 +180,7 @@ spaceRoute.get('/threads', async (req, res) => {
     if (!hasMore) break; // 原始行耗尽(本批不足 want+1)
     cursorId = page[page.length - 1]!.id; // 被截掉的第 want+1 行下轮经 keyset 自然重取
   }
-  res.json({ threads: serializeThreadRows(kept), hasMore });
+  res.json({ threads: await serializeThreadRows(kept), hasMore });
 });
 
 spaceRoute.get('/threads/:id', async (req, res) => {
@@ -301,9 +303,16 @@ spaceRoute.post('/threads/:id/queue/clear', async (req, res) => {
 });
 
 /** 推荐追问:AI 回答落定后由前端按需拉取(POST 而非 GET:触发了 LLM 调用,不该被缓存/预取)。
- *  转写取服务端 session.messages 全文;失败语义见 suggestions.ts(HttpError 透出/其余兜底 [])。 */
+ *  转写取服务端 session.messages 全文;失败语义见 suggestions.ts(HttpError 透出/其余兜底 [])。
+ *  跨副本:会话记录常驻运行副本,本地冷但 pi 会话文件在共享卷 → ensure 从 JSONL 重建转写,
+ *  修掉「轮询落在他副本时固定 404」。piThreadId 为空的孤儿行没有可重建的会话,跳过 ensure
+ *  (避免为从未有过会话的线程触发一次完整建会话的副作用),404 语义不变。 */
 spaceRoute.post('/threads/:id/suggestions', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
+  const row = (await db.select({ piThreadId: aiThreads.piThreadId }).from(aiThreads).where(eq(aiThreads.id, req.params.id!)).limit(1))[0];
+  if (row?.piThreadId) {
+    try { await ensureSpaceRecord(req.params.id!); } catch { /* 404/502 语义由 generate 兜底 */ }
+  }
   res.json(await generateSpaceSuggestionsOnce(req.params.id!));
 });
 
@@ -313,7 +322,8 @@ spaceRoute.post('/threads/:id/confirm', async (req, res) => {
   if (!body.confirmId || typeof body.approved !== 'boolean') {
     throw new HttpError(400, 'bad_request', 'confirmId and approved are required');
   }
-  if (!resolveConfirmation(body.confirmId, body.approved)) {
+  // async:本地无挂起时走跨副本门(GETDEL 认领 + PUBLISH 答案回挂起副本),miss 仍 404。
+  if (!(await resolveConfirmation(body.confirmId, body.approved))) {
     throw new HttpError(404, 'not_found', 'confirmation not found or expired');
   }
   res.status(204).end();
@@ -332,6 +342,7 @@ spaceRoute.get('/threads/:id/events', async (req, res) => {
   // close 事件已触发过、之后再注册的 unsub 永远不会执行 → 监听器泄漏。
   let closed = false;
   let unsub: (() => void) | null = null;
+  let unsubMirror: (() => void) | null = null;
   // 心跳:长任务(verify_case 单步 AI 相可静默 240s)期间保证字节流不中断,否则 nginx
   // proxy_read_timeout(300s)会在读侧静默时段掐掉连接,react-pi 永不重连 = 前端永久冻结。
   // 注释帧 `: ping` 被 EventSource 丢弃,只保活不产生事件。写失败/断连即清定时器收尾。
@@ -339,6 +350,7 @@ spaceRoute.get('/threads/:id/events', async (req, res) => {
   const cleanup = (): void => {
     stopHeartbeat();
     unsub?.();
+    unsubMirror?.();
   };
   res.on('error', cleanup);
   req.on('close', () => { closed = true; cleanup(); });
@@ -355,6 +367,9 @@ spaceRoute.get('/threads/:id/events', async (req, res) => {
     // 走同一 listeners 通道。
     // subscribeThread 同步返回 unsub:自上方的 closed 检查到赋值之间无 await,无竞态窗口。
     unsub = subscribeThread(req.params.id!, send, { includeSnapshot: true });
+    // 跨副本镜像:线程常驻他副本时事件经 Redis 透传进同一响应(origin 过滤本副本回环,
+    // 避免本地已送达的事件被重复透传)。线程在本副本运行时本地 listeners 覆盖,镜像静默。
+    unsubMirror = subscribeThreadMirror(req.params.id!, send);
   } catch {
     cleanup();
     if (res.writable && !res.writableEnded) res.end();

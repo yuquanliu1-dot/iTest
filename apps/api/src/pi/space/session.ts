@@ -24,6 +24,10 @@ import { Type } from '@earendil-works/pi-ai';
 import { checkoutRepoForVersion, LockTimeoutError, RepoUnavailableError, DATA_DIR, REPOS_ROOT, WORKSPACES_ROOT } from '../repo.js';
 import { emptyRepoState, type RepoState } from './tools/context.js';
 import { pendingConfirmPayloads } from './confirm.js';
+import { tryAcquireLock, type RedisLock } from '../../lib/redisLock.js';
+import {
+  publishThreadCancel, publishThreadEvent, startThreadCommandWatch, threadRunRemote, THREAD_RUN_PREFIX,
+} from './threadBus.js';
 
 /** pi 会话 JSONL 落盘目录。落 .data 共享卷(prod228 三副本共享),不能走 pi 默认的
  *  ~/.pi/agent/sessions(容器内本地盘,跨副本看不见)。 */
@@ -84,6 +88,10 @@ interface ThreadRecord {
   lang: AiLang;
   /** 断线重连重放缓冲:emitThreadEvent 追加的会话内自定义事件(条数有界 + TTL 双重上限)。 */
   customEvents: CustomEventRecord[];
+  /** 跨副本运行闸门:runs>0 期间持有 itest:thread-run 锁并 5s 心跳续期(见 acquireRunSlot)。 */
+  runs: number;
+  runLock: RedisLock | null;
+  runHeartbeat: NodeJS.Timeout | null;
 }
 
 /** 重放缓冲条目:事件体 + 发布时间。重放只补最近 CUSTOM_EVENT_REPLAY_TTL_MS 内的事件——
@@ -101,12 +109,63 @@ const CUSTOM_EVENT_REPLAY_TTL_MS = 60 * 60_000;
 const records = new Map<string, ThreadRecord>();
 const inflight = new Map<string, Promise<ThreadRecord>>();
 
+// 跨副本 cancel:他副本发来的命令 → 本地有 record 即 abort。threadBus 经此注入处理函数
+// (避免模块环);无 Redis 时 startThreadCommandWatch 只注册不订阅。
+startThreadCommandWatch((threadId) => {
+  const rec = records.get(threadId);
+  if (rec) rec.session.abort();
+});
+
 let factory: SpaceSessionFactory = createSpaceSessionFactory;
 
 export function setSpaceSessionFactory(f: SpaceSessionFactory): void { factory = f; }
 
+// ── 跨副本运行闸门(itest:thread-run 锁)───────────────────────────────────────
+// nginx 轮询下用户与 rcaWorker 的 prompt 可能落在不同副本:同一线程两副本并发 prompt 会
+// 交错写同一份 JSONL 转写。锁值=持有副本 ORIGIN_ID,TTL 300s + runs>0 期间 5s 心跳续期
+// (TTL 取大:抖动时不会中途丢锁;副本死亡的锁至多 5min 自愈)。同副本并发(steer)按 runs
+// 计数放行、复用同一把锁;他副本持有 → 抛错,由 sendSpaceUserMessage 的 catch 转 assistant_error。
+
+const RUN_LOCK_TTL_MS = 300_000;
+const RUN_HEARTBEAT_MS = 5_000;
+
+async function acquireRunSlot(rec: ThreadRecord): Promise<void> {
+  if (rec.runs > 0) {
+    rec.runs += 1;
+    return;
+  }
+  // 先同步占位再 await:并发首调在同帧内都会看到 runs=0,若先 await 后计数,
+  // 两个快连发的 prompt 会各拿一次锁,输的那个被误判成「他副本持有」。
+  rec.runs = 1;
+  const lock = await tryAcquireLock(`${THREAD_RUN_PREFIX}${rec.threadId}`, RUN_LOCK_TTL_MS);
+  if (!lock) {
+    rec.runs = 0;
+    throw new Error('该线程正在另一个实例上运行，请稍后再试');
+  }
+  rec.runLock = lock;
+  rec.runHeartbeat = setInterval(() => { void rec.runLock?.refresh(); }, RUN_HEARTBEAT_MS);
+}
+
+function releaseRunSlot(rec: ThreadRecord): void {
+  if (rec.runs === 0) return;
+  rec.runs -= 1;
+  if (rec.runs > 0) return;
+  if (rec.runHeartbeat) { clearInterval(rec.runHeartbeat); rec.runHeartbeat = null; }
+  void rec.runLock?.release();
+  rec.runLock = null;
+}
+
+/** record 删除/进程内重置时兜底拆闸门:dispose 不保证 prompt promise 落定,不拆则心跳带着
+ *  运行锁永久续期,线程在任何副本都无法再运行。 */
+function teardownRunSlot(rec: ThreadRecord): void {
+  if (rec.runHeartbeat) { clearInterval(rec.runHeartbeat); rec.runHeartbeat = null; }
+  if (rec.runLock) { void rec.runLock.release(); rec.runLock = null; }
+  rec.runs = 0;
+}
+
 export function resetSpaceSessions(): void {
   for (const r of records.values()) {
+    teardownRunSlot(r);
     // dispose 是同步 void；会话内的 MCP 子进程/thread 生命周期随本进程，reset 不杀它们
     // （进程生命周期内线程常驻，teardown 支撑留给后续需求。见 mcp.ts child-leak deferral）。
     try { r.session.dispose(); } catch { /* ignore */ }
@@ -120,6 +179,7 @@ export function resetSpaceSessions(): void {
 export function dropSpaceRecord(threadId: string): void {
   const r = records.get(threadId);
   if (!r) return;
+  teardownRunSlot(r);
   try { r.session.dispose(); } catch { /* ignore */ }
   try { r.unsub(); } catch { /* ignore */ }
   records.delete(threadId);
@@ -169,6 +229,9 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
     repo,
     lang,
     customEvents: [],
+    runs: 0,
+    runLock: null,
+    runHeartbeat: null,
   };
   const unsub = session.subscribe((event) => fanOut(rec, event));
   rec.unsub = unsub;
@@ -229,6 +292,7 @@ function fanOut(rec: ThreadRecord, event: unknown): void {
   const body = mapSessionEvent(raw, { turnIndex: rec.turnIndex });
   rec.seq += 1;
   const stamped = { ...body, threadId: rec.threadId, seq: rec.seq };
+  publishThreadEvent(rec.threadId, stamped); // 跨副本镜像(fire-and-forget;SSE 侧按 origin 跳过回环)
   for (const fn of rec.listeners) {
     try { fn(stamped); } catch { /* listener errors do not break the supervisor */ }
   }
@@ -246,6 +310,7 @@ export function emitThreadEvent(threadId: string, e: Record<string, unknown>): v
     rec.customEvents.push({ publishedAt: Date.now(), ev: stamped });
     if (rec.customEvents.length > MAX_CUSTOM_EVENT_BUFFER) rec.customEvents.shift();
   }
+  publishThreadEvent(threadId, stamped); // 跨副本镜像(fire-and-forget)
   for (const fn of rec.listeners) {
     try { fn(stamped); } catch { /* ignore */ }
   }
@@ -313,6 +378,14 @@ export function threadStatus(threadId: string): 'running' | 'idle' | undefined {
   return rec.session.isStreaming ? 'running' : 'idle';
 }
 
+/** 跨副本版 threadStatus:本地 record 优先;冷 record 时探他副本的运行锁。线程列表序列化用
+ *  (sync 版只看本副本,nginx 轮询下他副本运行中的线程会被误标 idle)。 */
+export async function threadStatusAsync(threadId: string): Promise<'running' | 'idle' | undefined> {
+  const local = threadStatus(threadId);
+  if (local) return local;
+  return (await threadRunRemote(threadId)) ? 'running' : undefined;
+}
+
 /** 线程构建后记录的仓库检出问题(非 no_repo);无 record 或检出未失败返回 null。 */
 export function spaceRepoIssue(threadId: string): string | null {
   return records.get(threadId)?.repo.issue ?? null;
@@ -338,7 +411,12 @@ export async function sendSpaceUserMessage(
   if (row && !row.title) {
     await db.update(aiThreads).set({ title: Array.from(content.trim()).slice(0, 40).join(''), updatedAt: new Date() }).where(eq(aiThreads.id, threadId));
   }
+  let slot = false;
   try {
+    // 跨副本运行闸门:他副本持有锁 → 抛错,经下方 catch 转 assistant_error(用户面;messages
+    // 路由 204 先行,HTTP 错误码冒泡不到前端)。同副本 steer 并发在 acquireRunSlot 内放行。
+    await acquireRunSlot(rec);
+    slot = true;
     // streamingBehavior 必须透传:Pi 在 isStreaming 时对无参 prompt 直接抛
     // 「Agent is already processing」(agent-session.js:1490)。前端 react-pi 的
     // ThreadController 已按运行态派生出 steer/followUp 并随 input 发来,这里只做转发。
@@ -357,6 +435,8 @@ export async function sendSpaceUserMessage(
       emitThreadEvent(threadId, { type: 'assistant_error', message });
     } catch { /* emit 失败不再遮蔽原始错误 */ }
     throw err;
+  } finally {
+    if (slot) releaseRunSlot(rec);
   }
   // 刷最后活跃时间:列表按 updatedAt 分桶(今天/昨天/7天内/…),不刷则分桶落到建会话那天,
   // 刚聊过的会话会留在旧桶里。放在 prompt 的 try 之外:prompt 失败已由 catch rethrow 返回,
@@ -369,8 +449,10 @@ export async function sendSpaceUserMessage(
 
 export function cancelThread(threadId: string): void {
   const rec = records.get(threadId);
-  if (!rec) return;
-  rec.session.abort();
+  // 本地快路径:record 在本副本直接 abort。命令仍广播(值=发起副本 ORIGIN_ID,各副本过滤
+  // 自己的回环),线程常驻他副本时(rcaWorker 超时收尾/用户点停)由他副本的 watch 执行。
+  if (rec) rec.session.abort();
+  publishThreadCancel(threadId);
 }
 
 /** 清空 Pi 服务端排队消息,返回被清内容供前端还原到输入框。无会话/线程时返空。 */

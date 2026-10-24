@@ -455,6 +455,19 @@ describe('推荐追问(suggestions)', () => {
     expect(r.body).toEqual([]);
   });
 
+  it('冷线程(piThreadId 有值、内存 record 无)→ 先 ensure 重建再生成,不再 404(跨副本轮询落他副本时同款)', async () => {
+    const { versionId } = await seedProject(pool);
+    const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    const id = t.body.metadata.id;
+    const { resetSpaceSessions, snapshotOfThread } = await import('../src/pi/space/session.js');
+    resetSpaceSessions(); // 等价发版重启:piThreadId 已落库但内存 record 冷
+    expect(snapshotOfThread(id)).toBeNull();
+    const r = await request(app).post(`/api/assistant/threads/${id}/suggestions`);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([]);
+    expect(snapshotOfThread(id)).not.toBeNull(); // ensure 已从「有 piThreadId」路径重建会话
+  });
+
   it('有转写但 LLM 未配置 → 502 llm_not_configured', async () => {
     const { versionId } = await seedProject(pool);
     const { setSpaceSessionFactory } = await import('../src/pi/space/session.js');

@@ -15,11 +15,45 @@ vi.mock('../src/pi/repo.js', async (importOriginal) => {
   };
 });
 
+// 跨副本运行闸门用:ioredis 换记账 fake(redisLock 的惰性连接)。其余测试不开 REDIS_URL,
+// client() 直接走 null 分支,零影响;doMock 在 beforeAll 动态 import 之前注册,session.js
+// 静态引入的 redisLock/threadBus 拿到的都是这份 fake。
+class FakeRedis {
+  static all: FakeRedis[] = [];
+  static DEFAULTS: Record<string, unknown> = { set: 'OK', eval: 1 };
+  calls: Record<string, unknown[][]> = {};
+  results: Record<string, unknown> = {};
+  constructor() { FakeRedis.all.push(this); }
+  on(_e: string, _cb: (...a: never[]) => void) { return this; }
+  private rec(cmd: string, args: unknown[]) {
+    (this.calls[cmd] ??= []).push(args);
+    const v = cmd in this.results ? this.results[cmd] : FakeRedis.DEFAULTS[cmd];
+    if (v instanceof Error) return Promise.reject(v);
+    return Promise.resolve(v);
+  }
+  set(...a: unknown[]) { return this.rec('set', a); }
+  eval(...a: unknown[]) { return this.rec('eval', a); }
+  publish(...a: unknown[]) { return this.rec('publish', a); }
+  callsOf(cmd: string): unknown[][] { return this.calls[cmd] ?? []; }
+}
+vi.doMock('ioredis', () => ({ default: FakeRedis }));
+
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
 
 interface Captured { ctx: unknown; prompts: string[]; }
 const captured: Captured[] = [];
+
+/** 运行锁测试用:armed 时 prompt 挂起直到 need 个并发都进入——让两条消息在
+ *  acquireRunSlot 视角真正重叠(假 prompt 微任务级完成时,后到的消息会在前者
+ *  释放锁之后才拿锁,那是串行获取而非重入,测不出「重入只拿一次锁」)。 */
+let promptBarrier: { need: number; n: number; open: () => void; p: Promise<void> } | null = null;
+
+function armPromptBarrier(need: number): void {
+  let open!: () => void;
+  const p = new Promise<void>((r) => { open = r; });
+  promptBarrier = { need, n: 0, open, p };
+}
 
 function makeFakeSession() {
   const listeners = new Set<(e: unknown) => void>();
@@ -28,7 +62,11 @@ function makeFakeSession() {
     messages: [] as unknown[],
     prompts: [] as string[],
     subscribe(fn: (e: unknown) => void) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
-    async prompt(text: string) { this.prompts.push(text); this.messages.push({ role: 'user', content: text }); },
+    async prompt(text: string) {
+      this.prompts.push(text); this.messages.push({ role: 'user', content: text });
+      const b = promptBarrier;
+      if (b) { b.n += 1; if (b.n >= b.need) b.open(); await b.p; }
+    },
     abort() {},
     async dispose() {},
     get isStreaming() { return false; },
@@ -177,6 +215,41 @@ describe('space session supervisor', () => {
       expect(issue).toContain('auth_failed');
     } finally {
       mockCheckout.impl = undefined;
+    }
+  }, 30_000);
+
+  it('跨副本运行闸门:同副本 steer 重入只拿一次锁;他副本持有 → assistant_error + 抛错', async () => {
+    process.env.REDIS_URL = 'redis://localhost:6379';
+    try {
+      const { projectId, versionId } = await seedProject(pool);
+      const threadId = await insertSpaceThread(versionId);
+      const { ensureSpaceRecord, sendSpaceUserMessage, subscribeThread } = await import('../src/pi/space/session.js');
+      await ensureSpaceRecord(threadId);
+      const events: Record<string, unknown>[] = [];
+      subscribeThread(threadId, (e) => events.push(e as Record<string, unknown>));
+
+      // 同副本并发(steer 语义,rcaWorker 二次 prompt 同款):barrier 让两个 prompt 同时挂起,
+      // 第二条只能走 runs>0 重入,不重复拿锁
+      armPromptBarrier(2);
+      try {
+        await Promise.all([sendSpaceUserMessage(threadId, '第一条'), sendSpaceUserMessage(threadId, '第二条')]);
+      } finally {
+        promptBarrier = null;
+      }
+      const redis = FakeRedis.all[0]!; // redisLock 的惰性连接(成功路径不发生事件,threadBus 未建连)
+      expect(redis.callsOf('set')).toHaveLength(1);
+      expect(redis.callsOf('set')[0]).toEqual([`itest:thread-run:${threadId}`, expect.any(String), 'PX', 300_000, 'NX']);
+      // 5s 心跳未到(毫秒级完成);runs 归零 → release 的 Lua DEL 恰一次
+      expect(redis.callsOf('eval')).toHaveLength(1);
+      expect(redis.callsOf('eval')[0]![2]).toBe(`itest:thread-run:${threadId}`);
+
+      // 他副本持有(set → null)→ 抛错 + assistant_error 事件(messages 路由 204 先行,这是用户面)
+      redis.results.set = null;
+      await expect(sendSpaceUserMessage(threadId, '第三条')).rejects.toThrow('另一个实例');
+      expect(events.at(-1)).toMatchObject({ type: 'assistant_error' });
+      expect(String(events.at(-1)!.message)).toContain('另一个实例');
+    } finally {
+      delete process.env.REDIS_URL;
     }
   }, 30_000);
 });
