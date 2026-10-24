@@ -64,7 +64,7 @@ export default function CaseDetail() {
   const [editingIdx, setEditingIdx] = useState(-1);
   /** 2026-10-06：手工新增步骤 — editingMode = 'create' 时 StepEditDrawer 展示不同标题/按钮。
    *  初始 StepClip = { source:'manual', action:{kind:'click', locator:[{strategy:'css', value:''}]}, instruction:'', compiled:[] }
-   *  —— compiled=[] 是未编译信号,dispatcher 会抛 compile-missing,UI 阻塞执行(顶部执行按钮置灰 + 行内"未编译"徽章)。 */
+   *  —— compiled=[] 是未编译信号,dispatcher 抛 compile-missing；无指令的未编译步骤阻塞执行(按钮置灰 + 行内"未编译"徽章),有指令的由 AI 临场执行。 */
   const [editingMode, setEditingMode] = useState<'edit' | 'create'>('edit');
   const [varReport, setVarReport] = useState<VariableReport | null>(null);
   const [windowStrategy, setWindowStrategy] = useState<'maximize' | 'current' | 'custom'>('maximize');
@@ -700,10 +700,10 @@ export default function CaseDetail() {
           {t('cases:viewReport')}
         </Button>
         {(() => {
-          // 2026-10-06：未编译 step 阻塞执行（dispatcher 抛 compile-missing）。
-          //   老数据（无 compiled 列）按未编译处理，强制 user 重新 AI 编译。
-          const uncompiled = caseDetail.steps.filter((s) => isUncompiledStep(s));
-          const blocked = uncompiled.length > 0;
+          // 未编译步骤分两态：有自然语言指令 = 视觉模式步骤，回放时 AI 按指令临场执行（固化可选）；
+          // 无 compiled 且无 instruction = 录制产物未编译，AI 无从执行 → 仍阻塞（dispatcher 抛 compile-missing）。
+          const unexecutable = caseDetail.steps.filter((s) => isUncompiledStep(s) && !s.instruction?.trim());
+          const blocked = unexecutable.length > 0;
           return (
             <Button
               variant="ghost"
@@ -712,7 +712,7 @@ export default function CaseDetail() {
                 execute.mutate();
               }}
               disabled={execute.isPending || caseDetail.steps.length === 0 || blocked}
-              title={blocked ? t('cases:uncompiledBlocking', { count: uncompiled.length }) : undefined}
+              title={blocked ? t('cases:uncompiledBlocking', { count: unexecutable.length }) : undefined}
             >
               <Icon name="play" size={12} />
               {t('cases:execute')}

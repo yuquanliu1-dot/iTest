@@ -118,30 +118,20 @@ function makeEnvCtx(login?: { user: string; password: string }): EnvCtx {
   } as EnvCtx;
 }
 
-const ON = { compileMissing: true, locatorFailed: true };
-const OFF = { compileMissing: false, locatorFailed: false };
+// 2026-10-24 起固化可选：NL 视觉步骤（空 compiled + 有指令）的临场执行是正式执行语义，
+// 不受任何开关管；只有「机械执行失败后 AI 重做」仍由 locatorFailed 开关治理。
+const ON = { locatorFailed: true };
+const OFF = { locatorFailed: false };
 
-describe('回放 AI 降级 — compiled DSL 为空（compile-missing）', () => {
-  it('开关 off：仍抛 compile-missing 判失败，LLM 不被调用', async () => {
-    const { llm, calls } = makeMockLlm([]);
-    const results = await executeCaseReal(
-      '00000000-0000-0000-0000-000000000100',
-      [{ order: 1, id: 's-1', instruction: '点击保存按钮', compiled: [] }],
-      { reportId: 'r-cm-off', aiFallback: OFF, llmClient: llm },
-    );
-    expect(results[0]!.status).toBe('failed');
-    expect(results[0]!.error).toMatch(/compile-missing/);
-    expect(calls).toHaveLength(0);
-  });
-
-  it('开关 on + 有指令：用 instruction 调 AI 临场执行，步骤 passed + warning 标注', async () => {
+describe('NL 视觉步骤（空 compiled + 有指令）— 正式执行语义，不受降级开关管', () => {
+  it('未传 aiFallback（locatorFailed 关 → runCase 不注入）：无条件 AI 临场执行，passed + degraded + warning', async () => {
     const { llm, calls } = makeMockLlm([{ done: true, summary: '已点击保存按钮' }]);
     mocked.__page.evaluate.mockReset();
     mocked.__page.evaluate.mockImplementation(() => Promise.resolve([{ selector: '#save', tag: 'button' }]));
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000101',
       [{ order: 1, id: 's-2', instruction: '点击保存按钮', compiled: [] }],
-      { reportId: 'r-cm-on', aiFallback: ON, llmClient: llm },
+      { reportId: 'r-cm-no-switch', llmClient: llm },
     );
     expect(results[0]!.status).toBe('passed');
     expect(results[0]!.warning).toMatch(/未编译，AI 按指令临场执行/);
@@ -150,18 +140,33 @@ describe('回放 AI 降级 — compiled DSL 为空（compile-missing）', () => 
     expect(calls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('开关 on 但 AI 不可用（LLM 抛错）：回退原 compile-missing 失败', async () => {
+  it('显式 aiFallback.locatorFailed=false 同样执行：与开关彻底解耦', async () => {
+    const { llm, calls } = makeMockLlm([{ done: true, summary: '已点击保存按钮' }]);
+    mocked.__page.evaluate.mockReset();
+    mocked.__page.evaluate.mockImplementation(() => Promise.resolve([{ selector: '#save', tag: 'button' }]));
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000105',
+      [{ order: 1, id: 's-2b', instruction: '点击保存按钮', compiled: [] }],
+      { reportId: 'r-cm-switch-off', aiFallback: OFF, llmClient: llm },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(results[0]!.warning).toMatch(/未编译，AI 按指令临场执行/);
+    expect(results[0]!.degraded).toBe(true);
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('AI 不可用（LLM 抛错）：回退原 compile-missing 失败', async () => {
     const { llm } = makeMockLlm([]); // 空脚本 → complete 抛错
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000102',
       [{ order: 1, id: 's-3', instruction: '点击保存按钮', compiled: [] }],
-      { reportId: 'r-cm-ai-fail', aiFallback: ON, llmClient: llm },
+      { reportId: 'r-cm-ai-fail', llmClient: llm },
     );
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.error).toMatch(/compile-missing/);
   });
 
-  it('开关 on 但无 instruction：无指令不降级，仍 compile-missing 失败', async () => {
+  it('无 instruction：无从执行，仍 compile-missing 失败，LLM 零调用', async () => {
     const { llm, calls } = makeMockLlm([]);
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000103',
@@ -173,7 +178,7 @@ describe('回放 AI 降级 — compiled DSL 为空（compile-missing）', () => 
     expect(calls).toHaveLength(0);
   });
 
-  it('开关 on 但 instruction 为空串：同样不降级，仍 compile-missing 失败', async () => {
+  it('instruction 为空串：同样 compile-missing 失败，LLM 零调用', async () => {
     const { llm, calls } = makeMockLlm([]);
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000104',
@@ -363,7 +368,7 @@ describe('回放 AI 降级 — 机械执行失败（任意失败原因）', () =
 });
 
 describe('回放 AI 降级 — 凭据占位符替换（2026-10-21 prod228 登录空转修复）', () => {
-  it('compileMissing 降级：AI fill 哨兵占位符被替换为环境 login 真实凭据', async () => {
+  it('NL 视觉步骤：AI fill 哨兵占位符被替换为环境 login 真实凭据', async () => {
     mocked.__typed.length = 0;
     const { llm } = makeMockLlm([
       {
@@ -380,7 +385,7 @@ describe('回放 AI 降级 — 凭据占位符替换（2026-10-21 prod228 登录
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000130',
       [{ order: 1, id: 's-cred-1', instruction: '在登录页填写 __ITEST_USERNAME__ / __ITEST_PASSWORD__ 并登录', compiled: [] }],
-      { reportId: 'r-cred-cm', aiFallback: ON, llmClient: llm, envCtx: makeEnvCtx({ user: 'admin', password: 'pw9' }) },
+      { reportId: 'r-cred-cm', llmClient: llm, envCtx: makeEnvCtx({ user: 'admin', password: 'pw9' }) },
     );
     expect(results[0]!.status).toBe('passed');
     expect(results[0]!.degraded).toBe(true);
@@ -390,7 +395,7 @@ describe('回放 AI 降级 — 凭据占位符替换（2026-10-21 prod228 登录
     expect(mocked.__typed.join('|')).not.toMatch(/__ITEST_/);
   });
 
-  it('compileMissing 降级：模型输出花括号变体 {{ITEST_USERNAME}} 同样被替换；指令含凭据不算缺变量', async () => {
+  it('NL 视觉步骤：模型输出花括号变体 {{ITEST_USERNAME}} 同样被替换；指令含凭据不算缺变量', async () => {
     mocked.__typed.length = 0;
     const { llm } = makeMockLlm([
       { actions: [{ type: 'fill', selector: '#user', value: '{{ITEST_USERNAME}}' }], done: true, summary: '已填写' },
@@ -400,7 +405,7 @@ describe('回放 AI 降级 — 凭据占位符替换（2026-10-21 prod228 登录
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000131',
       [{ order: 1, id: 's-cred-2', instruction: '在登录页填写 {{ITEST_USERNAME}} 登录', compiled: [] }],
-      { reportId: 'r-cred-brace', aiFallback: ON, llmClient: llm, envCtx: makeEnvCtx({ user: 'admin', password: 'pw9' }) },
+      { reportId: 'r-cred-brace', llmClient: llm, envCtx: makeEnvCtx({ user: 'admin', password: 'pw9' }) },
     );
     expect(results[0]!.status).toBe('passed');
     expect(results[0]!.degraded).toBe(true);
@@ -416,7 +421,7 @@ describe('回放 AI 降级 — 凭据占位符替换（2026-10-21 prod228 登录
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000132',
       [{ order: 1, id: 's-cred-3', instruction: '在登录页填写 __ITEST_USERNAME__ 登录', compiled: [] }],
-      { reportId: 'r-cred-envmiss', aiFallback: ON, llmClient: llm },
+      { reportId: 'r-cred-envmiss', llmClient: llm },
     );
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.failureReason).toBe('EnvMissing');

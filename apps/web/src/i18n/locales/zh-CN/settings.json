@@ -26,8 +26,6 @@
   "darkGlassDesc": "高对比，适合长时间使用",
   "replayTitle": "回放降级",
   "replayIntro": "步骤机械执行受阻时，可用该步骤的自然语言指令让 AI 临场兜底执行（成功计通过并标注「AI 降级执行」，失败维持原失败）。",
-  "compileFallbackTitle": "compiled DSL 为空自动降级 AI 执行",
-  "compileFallbackDesc": "步骤未编译时用其指令临场执行，不再以 compile-missing 直接判失败。",
   "locatorFallbackTitle": "机械执行失败自动降级 AI 执行",
   "locatorFallbackDesc": "步骤机械执行报错（定位失败、断言不匹配等）时用指令重做本步。",
   "panelAssistant": "AI 助手",

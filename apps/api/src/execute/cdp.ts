@@ -1007,8 +1007,9 @@ async function runStepsInContext(
     logger.warn({ err: e, caseId }, 'preflight failed; continuing');
   }
   const opts: DispatchOpts = { page, vars, ctx, caseId };
-  // 回放 AI 降级开关（全局设置，runCase 层注入 ctx.aiFallback；缺省全关 = 保持既有失败语义）。
-  const fallback = ctx.aiFallback ?? { compileMissing: false, locatorFailed: false };
+  // 机械失败 AI 重做开关（全局设置，runCase 层注入 ctx.aiFallback；缺省关 = 失败即失败）。
+  // compile-missing 分支已不在此列：NL 视觉步骤（空 compiled + 有指令）是正式执行语义，无条件 AI 临场执行。
+  const fallback = ctx.aiFallback ?? { locatorFailed: false };
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]!;
     const started = Date.now();
@@ -1045,10 +1046,11 @@ async function runStepsInContext(
           if (w && !warning) warning = w;
         }
       } else {
-        // AI 降级（可选）：compiled 为空 + 全局开关开 + 有行级指令 → 指令临场执行；成功留 warning 照常过，
-        // 失败维持原 compile-missing 语义（开关开但无 LLM / 指令含未定义变量 / AI 放弃都走这里）。
+        // 视觉模式执行：compiled 为空 + 有行级指令 → AI 指令临场执行（视觉步骤的正式执行语义，
+        // 固化可选——创建流程默认产出 NL 步骤）；成功留 warning 照常过，失败维持原 compile-missing
+        // 语义（无 LLM / 指令含未定义变量 / AI 放弃都走这里）。
         const inst = step.instruction?.trim();
-        if (fallback.compileMissing && inst) {
+        if (inst) {
           const { value: instResolved, missing } = substituteVars(inst, vars);
           // 凭据占位符不来自数据集 vars（substituteVars 恒报 missing）：只缺凭据不算缺变量。
           if (missing.every((m) => referencesCredential(m))) {

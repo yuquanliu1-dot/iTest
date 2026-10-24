@@ -359,7 +359,7 @@ async function runCaseOnceInner(
       ...(caseWebOrigin ? { caseWebOrigin } : {}),
       ...(caseRow.webServiceRef ? { caseWebServiceRef: caseRow.webServiceRef } : {}),
       ...(opts?.liveView ? { liveView: opts.liveView } : {}),
-      ...(aiFallback.compileMissing || aiFallback.locatorFailed ? { aiFallback } : {}),
+      ...(aiFallback.locatorFailed ? { aiFallback } : {}),
     };
     // mobile 用例：直接走 MobileEngine；web 用例：登录准备链路（ownedBrowser）走 executeCaseInBrowser 复用 ctx,
     // 其余走 WebEngine.execute → executeCaseReal（保留 storageState/incognito 注入语义）。
@@ -455,7 +455,7 @@ async function runCaseOnceInner(
         ...(initialVars ? { initialVars } : {}),
         ...(caseWebOrigin ? { caseWebOrigin } : {}),
         ...(caseRow.webServiceRef ? { caseWebServiceRef: caseRow.webServiceRef } : {}),
-        ...(aiFallback.compileMissing || aiFallback.locatorFailed ? { aiFallback } : {}),
+        ...(aiFallback.locatorFailed ? { aiFallback } : {}),
       };
       try {
         await engine.prepare(engineInput);

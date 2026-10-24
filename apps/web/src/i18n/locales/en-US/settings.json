@@ -26,8 +26,6 @@
   "darkGlassDesc": "High contrast, good for long sessions",
   "replayTitle": "Replay fallback",
   "replayIntro": "When a step is blocked from mechanical execution, the step's natural-language instruction lets AI take over on the fly (counts as passed with an “AI fallback execution” mark on success; the original failure is kept on failure).",
-  "compileFallbackTitle": "Automatically fall back to AI execution when compiled DSL is empty",
-  "compileFallbackDesc": "Runs the step on the fly from its instruction when not compiled, instead of failing directly with compile-missing.",
   "locatorFallbackTitle": "Automatically fall back to AI execution when mechanical execution fails",
   "locatorFallbackDesc": "Re-runs the step from its instruction when mechanical execution errors (locator failed, assertion mismatch, etc.).",
   "panelAssistant": "AI Assistant",

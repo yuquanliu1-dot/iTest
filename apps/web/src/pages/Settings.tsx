@@ -30,8 +30,8 @@ const DEFAULT_MODELS: Record<string, string> = {
   google: 'gemini-2.0-flash',
 };
 
-/** 与 apps/api/src/execute/aiFallback.ts 的 AI_FALLBACK_KEYS 互为镜像。 */
-const AI_FALLBACK_COMPILE_MISSING_KEY = 'ai_fallback_compile_missing';
+// 与 apps/api/src/execute/aiFallback.ts 的 AI_FALLBACK_KEYS 互为镜像。
+// （compile-missing 开关已移除：NL 视觉步骤的 AI 临场执行是正式执行语义，不再可关。）
 const AI_FALLBACK_LOCATOR_FAILED_KEY = 'ai_fallback_locator_failed';
 
 type Panel = 'llm' | 'appearance' | 'replay' | 'assistant';
@@ -56,8 +56,7 @@ export default function Settings() {
   const [model, setModel] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
 
-  // 回放 AI 降级开关
-  const [compileMissingFallback, setCompileMissingFallback] = useState(false);
+  // 回放 AI 重做开关（机械失败降级）
   const [locatorFailedFallback, setLocatorFailedFallback] = useState(false);
 
   const { data, isLoading } = useQuery({ queryKey: ['settings'], queryFn: api.settings.list });
@@ -68,7 +67,6 @@ export default function Settings() {
     setApiKey((data.llm_api_key as string) ?? '');
     setModel((data.llm_model as string) ?? '');
     setBaseUrl((data.llm_base_url as string) ?? '');
-    setCompileMissingFallback(data[AI_FALLBACK_COMPILE_MISSING_KEY] === true);
     setLocatorFailedFallback(data[AI_FALLBACK_LOCATOR_FAILED_KEY] === true);
   }, [data]);
 
@@ -267,21 +265,6 @@ export default function Settings() {
                 </p>
               </div>
               <div className="flex flex-col gap-3">
-                <div className="bg-card border flex items-center justify-between" style={{ padding: 16 }}>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>{t('settings:compileFallbackTitle')}</div>
-                    <div className="text-[11px] mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
-                      {t('settings:compileFallbackDesc')}
-                    </div>
-                  </div>
-                  <Toggle
-                    checked={compileMissingFallback}
-                    onChange={(v) => {
-                      setCompileMissingFallback(v);
-                      saveFallback.mutate({ key: AI_FALLBACK_COMPILE_MISSING_KEY, value: v });
-                    }}
-                  />
-                </div>
                 <div className="bg-card border flex items-center justify-between" style={{ padding: 16 }}>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>{t('settings:locatorFallbackTitle')}</div>
