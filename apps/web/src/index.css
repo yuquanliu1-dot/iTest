@@ -197,6 +197,29 @@ select:focus-visible {
 }
 .status-pulse { animation: status-pulse 2s ease-in-out infinite; }
 
+/* ── 数据集行切换器 chip（ReportDetail） ───────────────────────────────────
+   悬浮边框转 primary：背景/边框走 class 而非 inline style（行内样式会压过任何
+   hover 规则，见 .btn-tint 注释）；选中态由调用方 inline 覆盖边框与投影。 */
+.rowchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  min-width: 34px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.1s ease;
+}
+.rowchip:hover:not(:disabled) { border-color: var(--primary); }
+.rowchip:active:not(:disabled) { transform: scale(0.95); }
+
 /* ── Brand glyph — beam（登录页 / 侧边栏 logo 用） ──────────────────────── */
 @keyframes beam-rotate {
   0%   { transform: rotate(0deg); }

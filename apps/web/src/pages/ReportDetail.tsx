@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../i18n';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -115,6 +115,51 @@ export default function ReportDetail() {
     },
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
+
+  // ── 数据集行切换器（同批兄弟行 + 跟随执行） ────────────────────────────────
+  // 老报告无 datasetBatchId → 端点回空 → 切换器不渲染；行间切换复用本页（queryKey ['report', id] 原地换数据）。
+  const [follow, setFollow] = useState(true);
+  const batchEnabled = !!data?.datasetBatchId && (data?.datasetSnapshot?.totalRows ?? 1) > 1;
+  const batchQuery = useQuery({
+    queryKey: ['dataset-batch', data?.datasetBatchId],
+    // 端点收报告 id（服务端从该行反查 batchId）；key 按 batchId，行间切换命中缓存不重取
+    queryFn: () => api.reports.datasetBatch(id!),
+    enabled: batchEnabled,
+    // 批内仍有 running 行 → 2s 轮询（与报告本体同节奏）：行状态收敛 = chip 点色 + 跟随跳行的数据源
+    refetchInterval: (q) => (q.state.data?.rows.some((r) => r.status === 'running') ? 2000 : false),
+  });
+  const batchRows = useMemo(() => batchQuery.data?.rows ?? [], [batchQuery.data]);
+  // 活跃行 = rowIndex 最小的 running 行（行按 rowIndex 串行执行；rows 已按 rowIndex 升序）
+  const activeRow = batchRows.find((r) => r.status === 'running') ?? null;
+  const curRowIdx = batchRows.findIndex((r) => r.id === id);
+
+  // 手动切行（chip / ‹› / ←→）：暂停跟随（终端 auto-scroll 同款语义）
+  const gotoRow = (rid: string) => {
+    setFollow(false);
+    if (rid !== id) navigate(`/p/${projectId}/v/${versionId}/reports/${rid}`);
+  };
+
+  // 跟随执行：活跃行变化时自动切过去。replace 导航不污染历史；
+  // 手动切行走 gotoRow（follow=false 后本 effect 不再跳），「回到最新」置回 true 恢复。
+  useEffect(() => {
+    if (!follow || !activeRow || activeRow.id === id) return;
+    navigate(`/p/${projectId}/v/${versionId}/reports/${activeRow.id}`, { replace: true });
+  }, [follow, activeRow, id, navigate, projectId, versionId]);
+
+  // ←/→ 切行；lightbox 打开（自己的翻页键）或焦点在输入框时让路
+  useEffect(() => {
+    if (batchRows.length <= 1) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (zoomIndex !== null) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (curRowIdx < 0) return;
+      if (e.key === 'ArrowLeft' && curRowIdx > 0) { e.preventDefault(); gotoRow(batchRows[curRowIdx - 1]!.id); }
+      else if (e.key === 'ArrowRight' && curRowIdx < batchRows.length - 1) { e.preventDefault(); gotoRow(batchRows[curRowIdx + 1]!.id); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [batchRows, curRowIdx, id, zoomIndex]);
 
   if (isError) {
     return (
@@ -470,6 +515,67 @@ export default function ReportDetail() {
               replayMetaUrl={api.cases.replayMetaUrl(data.caseId)}
               running={isRunning || keepLiveForDataset}
             />
+            {/* 数据集行切换器：同批 N 行的行号 chip（状态点随 2s 轮询收敛），
+                执行中自动跟随活跃行；点 chip/方向键手动切换并暂停跟随，「回到最新」恢复。 */}
+            {batchRows.length > 1 && (
+              <div className="flex items-center gap-2 flex-wrap bg-card border rounded-[var(--radius-md)] px-4 py-2">
+                <span className="text-[12px] font-medium shrink-0" style={{ color: 'var(--muted-foreground)' }}>
+                  {t('reports:detail.datasetRows')}
+                </span>
+                <div className="flex items-center gap-1 flex-wrap">
+                  {batchRows.map((r, i) => {
+                    const cur = r.id === id;
+                    const isActive = activeRow?.id === r.id;
+                    const dotColor =
+                      r.status === 'passed' ? 'var(--success)'
+                      : r.status === 'failed' ? 'var(--destructive)'
+                      : r.status === 'running' ? 'var(--primary)'
+                      : 'var(--muted-foreground)';
+                    const vars = r.datasetSnapshot
+                      ? Object.entries(r.datasetSnapshot.values).map(([k, v]) => `${k}=${v}`).join(' · ')
+                      : '';
+                    return (
+                      <button
+                        key={r.id}
+                        type="button"
+                        className="rowchip"
+                        style={cur ? { borderColor: 'var(--primary)', boxShadow: '0 0 0 2px var(--primary-soft)' } : undefined}
+                        onClick={() => gotoRow(r.id)}
+                        title={t('reports:detail.rowVarsTitle', { index: i + 1, vars })}
+                      >
+                        {i + 1}
+                        <span
+                          className={isActive ? 'status-pulse' : undefined}
+                          style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+                <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
+                <Button variant="ghost" size="sm" disabled={curRowIdx <= 0} onClick={() => gotoRow(batchRows[curRowIdx - 1]!.id)}>
+                  <Icon name="chevronLeft" size={12} />
+                </Button>
+                <Button variant="ghost" size="sm" disabled={curRowIdx < 0 || curRowIdx >= batchRows.length - 1} onClick={() => gotoRow(batchRows[curRowIdx + 1]!.id)}>
+                  <Icon name="chevronRight" size={12} />
+                </Button>
+                <span className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)', fontVariantNumeric: 'tabular-nums' }}>
+                  {curRowIdx + 1}/{batchRows.length}
+                </span>
+                <div className="flex-1" />
+                {activeRow && (follow ? (
+                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-full" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>
+                    <span className="status-pulse" style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }} />
+                    {t('reports:detail.following')}
+                  </span>
+                ) : (
+                  <Button variant="ghost" size="sm" onClick={() => setFollow(true)}>
+                    {t('reports:detail.backToLatest')}
+                    <Icon name="chevronRight" size={12} />
+                  </Button>
+                ))}
+              </div>
+            )}
             {data.summary && (
               <div className="bg-card border rounded-[var(--radius-md)] p-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
                 {data.summary}

@@ -55,7 +55,11 @@
     "datasetCountTitle": "This case dataset has {{count}} rows, one report per row",
     "datasetCountTitle_one": "This case dataset has {{count}} row, one report per row",
     "datasetCountTitle_other": "This case dataset has {{count}} rows, one report per row",
-    "openCase": "Open case detail"
+    "openCase": "Open case detail",
+    "datasetRows": "Data rows",
+    "following": "Following execution",
+    "backToLatest": "Back to latest",
+    "rowVarsTitle": "Row {{index}}: {{vars}}"
   },
   "meta": {
     "duration": "Duration",
