@@ -87,6 +87,10 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_column THEN null;
 END $$;
 DO $$ BEGIN
+ ALTER TABLE reports ADD COLUMN dataset_batch_id uuid;
+EXCEPTION WHEN duplicate_column THEN null;
+END $$;
+DO $$ BEGIN
  ALTER TABLE plan_run_cases ADD COLUMN report_ids jsonb;
 EXCEPTION WHEN duplicate_column THEN null;
 END $$;

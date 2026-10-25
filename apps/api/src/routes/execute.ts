@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
 import { HttpError } from '../middleware/errorHandler.js';
 import { insertRunningReportRow, type PreseedReport } from '../execute/runCase.js';
 import { DatasetConfigError } from '../services/datasets.service.js';
@@ -41,8 +42,10 @@ executeRoute.post('/cases/:caseId/execute', async (req, res) => {
       if (e instanceof DatasetConfigError) throw new HttpError(400, 'dataset_config_error', e.message);
       throw e;
     }
+    // 批次 id：同一次执行的所有行共用（报告详情页行切换器的分组键）。
+    const batchId = randomUUID();
     for (const row of plan.rows) {
-      preseed.push({ reportId: await insertRunningReportRow(caseRow, row, req.user!.userId), rowIndex: row.rowIndex });
+      preseed.push({ reportId: await insertRunningReportRow(caseRow, row, req.user!.userId, batchId), rowIndex: row.rowIndex });
     }
   } else {
     preseed.push({ reportId: await insertRunningReportRow(caseRow, undefined, req.user!.userId), rowIndex: null });

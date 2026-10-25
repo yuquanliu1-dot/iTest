@@ -1,4 +1,5 @@
 import { eq, asc } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
 import type { Browser, BrowserContext } from 'playwright-core';
 import { logger } from '../logger.js';
 import { db } from '../db/client.js';
@@ -34,11 +35,14 @@ export interface PreseedReport {
 
 /** 插入一条 running 报告行（与 runCaseOnce 原插入值完全一致），返回 reportId。
  *  单用例执行路由提前调用（执行转后台后响应必须带回 reportId），runCaseOnce 靠 preseed 复用。
- *  createdByUserId = 触发执行的人（报告创建人）。 */
+ *  createdByUserId = 触发执行的人（报告创建人）。
+ *  datasetBatchId = 数据集执行的批次 id（同一次 runCase 的所有行共用，报告页行切换器分组键），
+ *  仅数据集行（rowPlan 存在）落值。 */
 export async function insertRunningReportRow(
   caseRow: typeof testCases.$inferSelect,
   rowPlan?: DatasetRowExec,
   createdByUserId?: string | null,
+  datasetBatchId?: string | null,
 ): Promise<string> {
   const inserted = await db
     .insert(reports)
@@ -52,6 +56,7 @@ export async function insertRunningReportRow(
       ...(caseRow.mobileOs ? { mobileOs: caseRow.mobileOs } : {}),
       ...(caseRow.mobileDeviceTargetId ? { deviceTargetId: caseRow.mobileDeviceTargetId } : {}),
       ...(rowPlan ? { datasetRowIndex: rowPlan.rowIndex, datasetSnapshot: rowPlan.snapshot } : {}),
+      ...(rowPlan && datasetBatchId ? { datasetBatchId } : {}),
     })
     .returning();
   return inserted[0]!.id;
@@ -71,6 +76,8 @@ export async function runCase(
     preseed?: PreseedReport[];
     /** 报告创建人 = 触发执行的人；preseed 路径已在路由落库，此处仅覆盖非 preseed 插入。 */
     createdByUserId?: string | null;
+    /** 数据集批次 id（行切换器分组键）：缺省时数据集分支自行生成；preseed 路径路由已落库,不传。 */
+    datasetBatchId?: string | null;
     /**
      * 计划所属项目 id（执行计划链路传入）。用于判定环境 guard 是否该施加：
      * 同项目用例维持「环境必须属于本项目」的强校验；跨产品线共享进来的用例不施加，
@@ -85,11 +92,13 @@ export async function runCase(
   // 数据集绑定：前置校验（0 启用行/列名非法/解密失败）直接抛 DatasetConfigError —— 配置错误不产生垃圾 report。
   if (caseRow.datasetId) {
     const plan = await loadDatasetForRun(caseRow.datasetId);
+    // 批次 id：非 preseed 路径在此生成（plan run / 批量固化等）；preseed 路由已随插入落库，无需再传。
+    const batchId = opts?.preseed ? undefined : randomUUID();
     const reportIds: string[] = [];
     let finalStatus = 'passed';
     for (const row of plan.rows) {
       // 行失败不中断：任何单行错误已在 runCaseOnce 内记为该行 report failed，这里只聚合。
-      const r = await runCaseOnce(caseId, caseRow, opts, row);
+      const r = await runCaseOnce(caseId, caseRow, { ...opts, datasetBatchId: batchId }, row);
       reportIds.push(r.reportId);
       if (r.status !== 'passed') finalStatus = 'failed';
     }
@@ -112,6 +121,7 @@ async function runCaseOnce(
     liveView?: import('./liveView.js').LiveViewHandle;
     preseed?: PreseedReport[];
     createdByUserId?: string | null;
+    datasetBatchId?: string | null;
     planProjectId?: string | null;
   } | undefined,
   rowPlan?: DatasetRowExec,
@@ -136,7 +146,7 @@ async function runCaseOnce(
     if (!match) throw new Error(`preseed report missing for dataset row ${rowPlan?.rowIndex ?? 'none'}`);
     reportId = match.reportId;
   } else {
-    reportId = await insertRunningReportRow(caseRow, rowPlan, opts?.createdByUserId);
+    reportId = await insertRunningReportRow(caseRow, rowPlan, opts?.createdByUserId, opts?.datasetBatchId);
   }
 
   // 非数据集模式保持原语义：内部错误照常上抛（由 HTTP 边界处理）。

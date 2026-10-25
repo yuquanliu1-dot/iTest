@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { eq, desc, inArray } from 'drizzle-orm';
+import { eq, desc, asc, inArray } from 'drizzle-orm';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -60,7 +60,7 @@ reportsRoute.get('/', async (req, res) => {
 
 reportsRoute.get('/:id', async (req, res) => {
   const rows = await db
-    .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt, startedAt: reports.startedAt, finishedAt: reports.finishedAt, datasetRowIndex: reports.datasetRowIndex, datasetSnapshot: reports.datasetSnapshot, platform: reports.platform, mobileOs: reports.mobileOs, deviceName: reports.deviceName, deviceTargetId: reports.deviceTargetId, healed: reports.healed, createdByUserId: reports.createdByUserId })
+    .select({ id: reports.id, caseId: reports.caseId, caseTitle: testCases.title, status: reports.status, durationMs: reports.durationMs, stepResults: reports.stepResults, preflight: reports.preflight, summary: reports.summary, createdAt: reports.createdAt, startedAt: reports.startedAt, finishedAt: reports.finishedAt, datasetRowIndex: reports.datasetRowIndex, datasetSnapshot: reports.datasetSnapshot, datasetBatchId: reports.datasetBatchId, platform: reports.platform, mobileOs: reports.mobileOs, deviceName: reports.deviceName, deviceTargetId: reports.deviceTargetId, healed: reports.healed, createdByUserId: reports.createdByUserId })
     .from(reports)
     .leftJoin(testCases, eq(testCases.id, reports.caseId))
     .where(eq(reports.id, req.params.id));
@@ -93,6 +93,24 @@ reportsRoute.get('/:id', async (req, res) => {
   const { planRuns } = await import('../db/schema.js');
   const planRun = (await db.select({ planId: planRuns.planId }).from(planRuns).where(eq(planRuns.id, link.planRunId)))[0];
   res.json(await attachCreator({ ...report, planRunId: link.planRunId, planId: planRun?.planId ?? null, rca: link.rca ?? null }));
+});
+
+/** 数据集行切换器：同批兄弟行摘要（datasetBatchId 分组，报告页 running 期间 2s 轮询）。
+ *  刻意只回摘要（行号/状态/耗时/行快照），不含 stepResults——步骤明细仍走 GET /:id。
+ *  老报告无 batchId → { batchId: null, rows: [] }，前端据此隐藏切换器。 */
+reportsRoute.get('/:id/dataset-batch', async (req, res) => {
+  await assertReportVisible(req.params.id!, req.user!);
+  const report = (await db.select({ datasetBatchId: reports.datasetBatchId }).from(reports).where(eq(reports.id, req.params.id!)))[0];
+  if (!report?.datasetBatchId) {
+    res.json({ batchId: null, rows: [] });
+    return;
+  }
+  const rows = await db
+    .select({ id: reports.id, datasetRowIndex: reports.datasetRowIndex, status: reports.status, durationMs: reports.durationMs, datasetSnapshot: reports.datasetSnapshot })
+    .from(reports)
+    .where(eq(reports.datasetBatchId, report.datasetBatchId))
+    .orderBy(asc(reports.datasetRowIndex));
+  res.json({ batchId: report.datasetBatchId, rows });
 });
 
 reportsRoute.delete('/:id', async (req, res) => {

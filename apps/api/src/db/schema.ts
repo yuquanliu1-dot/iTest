@@ -291,6 +291,9 @@ export const reports = pgTable('reports', {
   summary: text('summary'),
   datasetRowIndex: integer('dataset_row_index'),
   datasetSnapshot: jsonb('dataset_snapshot'),
+  // 同一次数据集执行的批次 id：runCase 一次调用的所有行共用（无 FK，纯分组键）。
+  // 报告详情页据此拉「同批兄弟行」渲染行切换器；老报告为 null（切换器不渲染）。
+  datasetBatchId: uuid('dataset_batch_id'),
   // 移动端快照：执行期 device_target 解析后的最终值入报表，便于历史追溯。
   // deviceName 取 device_target.name 当时值（device_target 改名不联动历史 report）。
   platform: varchar('platform', { length: 16 }).notNull().default('web'),
@@ -310,6 +313,7 @@ export const reports = pgTable('reports', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({
   caseCreatedIdx: index('idx_reports_case_created').on(t.caseId, t.createdAt),
+  batchIdx: index('idx_reports_dataset_batch').on(t.datasetBatchId),
 }));
 
 export const users = pgTable('users', {

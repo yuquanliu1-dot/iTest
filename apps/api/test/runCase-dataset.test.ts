@@ -257,4 +257,70 @@ describe('runCase dataset iteration', () => {
     expect(r.body.reportId).toBeTruthy();
     expect(r.body.reportIds).toBeUndefined();
   });
+
+  it('批次落库：同一次执行的 N 行共用 datasetBatchId；dataset-batch 端点回同批行摘要（rowIndex 升序）', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '批次切换' });
+    const caseId = await insertCase('批次切换', created.body.id);
+
+    execMock.mockReset();
+    execMock.mockResolvedValue([]);
+    const r = await request(app).post(`/api/cases/${caseId}/execute`);
+    expect(r.status).toBe(200);
+    await waitReportDone(r.body.reportIds[0]!);
+    await waitReportDone(r.body.reportIds[1]!);
+
+    // 同批：两行 batchId 一致且非空
+    const b0 = await pool.query(`SELECT dataset_batch_id FROM reports WHERE id = $1`, [r.body.reportIds[0]]);
+    const b1 = await pool.query(`SELECT dataset_batch_id FROM reports WHERE id = $1`, [r.body.reportIds[1]]);
+    expect(b0.rows[0]!.dataset_batch_id).toBeTruthy();
+    expect(b0.rows[0]!.dataset_batch_id).toBe(b1.rows[0]!.dataset_batch_id);
+
+    // 端点：以第 2 行为锚也能拉到全批，rowIndex 升序 = reportIds 执行序；只回摘要列
+    const batch = await request(app).get(`/api/reports/${r.body.reportIds[1]}/dataset-batch`);
+    expect(batch.status).toBe(200);
+    expect(batch.body.batchId).toBe(b0.rows[0]!.dataset_batch_id);
+    expect(batch.body.rows).toHaveLength(2);
+    expect(batch.body.rows.map((x: { datasetRowIndex: number | null }) => x.datasetRowIndex)).toEqual([0, 1]);
+    expect(batch.body.rows.map((x: { id: string }) => x.id)).toEqual(r.body.reportIds);
+    expect(batch.body.rows[1]!.status).toBe('passed');
+    expect(batch.body.rows[1]!.datasetSnapshot).toBeTruthy();
+    expect(batch.body.rows[0]!.stepResults).toBeUndefined(); // 摘要端点不带步骤明细
+  });
+
+  it('无批次/非数据集 → { batchId: null, rows: [] }；他组织报告 → 404（不泄露存在性）', async () => {
+    // 非数据集执行：单 report 不落批次
+    const plainId = await insertCase('普通无批次', null);
+    execMock.mockReset();
+    execMock.mockResolvedValue([]);
+    const pr = await request(app).post(`/api/cases/${plainId}/execute`);
+    expect(pr.status).toBe(200);
+    await waitReportDone(pr.body.reportId!);
+    const pb = await request(app).get(`/api/reports/${pr.body.reportId}/dataset-batch`);
+    expect(pb.status).toBe(200);
+    expect(pb.body).toEqual({ batchId: null, rows: [] });
+
+    // 老报告（直插、无 dataset_batch_id）同样回空
+    const legacyCase = await insertCase('老报告', null);
+    const ins = await pool.query(
+      `INSERT INTO reports(case_id, status, step_results, summary) VALUES ($1,'passed','[]','x') RETURNING id`,
+      [legacyCase],
+    );
+    const none = await request(app).get(`/api/reports/${ins.rows[0]!.id}/dataset-batch`);
+    expect(none.status).toBe(200);
+    expect(none.body).toEqual({ batchId: null, rows: [] });
+
+    // 跨组织：他 org 项目 → 分组 → 用例 → 报告，种子身份不可见 → 404
+    const otherOrg = crypto.randomUUID();
+    await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1,'他组织-batch',$2)`, [otherOrg, `/${otherOrg}/`]);
+    const lineId = (await pool.query(`INSERT INTO product_lines(organization_id, name) VALUES ($1,'他家线') RETURNING id`, [otherOrg])).rows[0]!.id as string;
+    const projId = (await pool.query(`INSERT INTO projects(product_line_id, name) VALUES ($1,'他家项目') RETURNING id`, [lineId])).rows[0]!.id as string;
+    const gId = (await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1,'他家分组') RETURNING id`, [projId])).rows[0]!.id as string;
+    const cId = (await pool.query(`INSERT INTO test_cases(group_id, title) VALUES ($1,'他家用例') RETURNING id`, [gId])).rows[0]!.id as string;
+    const repId = (await pool.query(
+      `INSERT INTO reports(case_id, status, step_results, summary, dataset_batch_id) VALUES ($1,'passed','[]','x',$2) RETURNING id`,
+      [cId, crypto.randomUUID()],
+    )).rows[0]!.id as string;
+    const foreign = await request(app).get(`/api/reports/${repId}/dataset-batch`);
+    expect(foreign.status).toBe(404);
+  });
 });
