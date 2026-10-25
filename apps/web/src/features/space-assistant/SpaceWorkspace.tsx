@@ -130,11 +130,14 @@ export default function SpaceWorkspace({ versionId, initialMessage, onError, onW
             <SpaceThreadPane threadId={activeThreadId} />
           </div>
           <div className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
-            {/* 有实时画面时上下分栏（可拖拽调整各自高度）；无画面时暂存面板占满。 */}
+            {/* 有实时画面时上下分栏（可拖拽调整各自高度）；无画面时暂存面板占满。
+                无画面分支的 flex flex-col 必须有:否则 CollapsiblePanel 根高度退化为
+                auto,内部 overflow-y-auto 拿不到确定父高不滚,内容被右栏
+                overflow-hidden 裁切(与 VerticalSplit bottom 分支同款约束)。 */}
             {hasLiveView ? (
               <VerticalSplit top={<LiveViewRail />} bottom={<StagePanel projectId={projectId!} versionId={versionId} />} />
             ) : (
-              <div className="flex-1 min-w-0 min-h-0">
+              <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                 <StagePanel projectId={projectId!} versionId={versionId} />
               </div>
             )}

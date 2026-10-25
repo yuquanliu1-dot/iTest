@@ -3,7 +3,11 @@ import { useTranslation } from 'react-i18next';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
 /** 竖直分栏：上半固定像素高(top)，分隔条支持鼠标/触控拖拽调整高度，下半 flex-1。
- *  用 pointer events + setPointerCapture，拖出容器外仍持续跟手；拖拽中禁用文本选中。 */
+ *  用 pointer events + setPointerCapture，拖出容器外仍持续跟手；拖拽中禁用文本选中。
+ *  高度保底:下半槽 minHeight 见 MIN_BOTTOM_PX——容器不够高时上半 shrink 让位,
+ *  保证下半的固定骨架(面板标题+Tabs+「保存选中」操作栏)不溢出被 overflow-hidden 裁掉。 */
+const MIN_BOTTOM_PX = 180;
+
 export default function VerticalSplit({
   top,
   bottom,
@@ -44,7 +48,7 @@ export default function VerticalSplit({
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <div
-        className="shrink-0 min-h-0"
+        className="min-h-0"
         style={{ height: topPx, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}
       >
         {top}
@@ -67,7 +71,9 @@ export default function VerticalSplit({
       >
         <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
       </div>
-      <div className="flex-1 min-h-0 flex flex-col">{bottom}</div>
+      {/* minHeight 保底:拖拽把上半拉满/窗口过矮时,下半收缩到保底值,多出的挤压
+          由上半(无 shrink-0)吸收——shrink-0 骨架(标题/Tabs/操作栏)绝不被裁。 */}
+      <div className="flex-1 flex flex-col" style={{ minHeight: MIN_BOTTOM_PX }}>{bottom}</div>
     </div>
   );
 }
