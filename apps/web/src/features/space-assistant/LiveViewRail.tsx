@@ -31,7 +31,7 @@ export default function LiveViewRail() {
   if (!vp) return null;
   const running = vp.result === null;
   return (
-    <CollapsiblePanel title={t('assistant:liveView.title')} defaultOpen>
+    <CollapsiblePanel title={t('assistant:liveView.title')} defaultOpen divider={false}>
       <div className="px-4 pb-3">
         <LiveViewCard
           liveUrl={vp.liveUrl!}
