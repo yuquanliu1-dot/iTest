@@ -42,6 +42,9 @@ class FakeRedis {
   unsubscribe(...args: unknown[]) { return this.exec('unsubscribe', args); }
   psubscribe(...args: unknown[]) { return this.exec('psubscribe', args); }
   exists(...args: unknown[]) { return this.exec('exists', args); }
+  incr(...args: unknown[]) { return this.exec('incr', args); }
+  get(...args: unknown[]) { return this.exec('get', args); }
+  del(...args: unknown[]) { return this.exec('del', args); }
   callsOf(cmd: string): unknown[][] {
     return this.calls[cmd] ?? [];
   }
@@ -75,6 +78,17 @@ describe('无 REDIS_URL（本地 dev / vitest）全 no-op', () => {
     await expect(bus.threadRunRemote('t1')).resolves.toBe(false);
     expect(got).toHaveLength(0);
     expect(FakeRedis.all).toHaveLength(0); // 全程零连接
+  });
+
+  it('seq 分配/高水位:无 Redis 走进程内兜底计数,单调递增', async () => {
+    const { bus } = await freshReplica();
+    await expect(bus.allocateThreadSeq('t1')).resolves.toBe(1);
+    await expect(bus.allocateThreadSeq('t1')).resolves.toBe(2);
+    await expect(bus.currentThreadSeq('t1')).resolves.toBe(2);
+    await expect(bus.currentThreadSeq('t-none')).resolves.toBe(0);
+    expect(FakeRedis.all).toHaveLength(0); // 全程零连接
+    bus.deleteThreadSeq('t1'); // 本地兜底同步清
+    await expect(bus.currentThreadSeq('t1')).resolves.toBe(0);
   });
 });
 
@@ -178,5 +192,30 @@ describe('有 REDIS_URL（fake ioredis）', () => {
     await expect(bus.threadRunRemote('t1')).resolves.toBe(true);
     redis.results.exists = new Error('down');
     await expect(bus.threadRunRemote('t1')).resolves.toBe(false);
+  });
+
+  it('seq 分配/高水位:INCR 键名 itest:thread-seq:<id>;高水位 GET 同键;删除 DEL;报错落本地兜底', async () => {
+    const { bus } = await freshReplica();
+    await expect(bus.allocateThreadSeq('t1')).resolves.toBe(0); // 首调 lazy 建;fake 缺省 incr → 0
+    const redis = FakeRedis.all[0]!;
+    // 真 INCR 的单调性由 Redis 保证,fake 只验键名与值透传(冷构建基线读同一键)
+    redis.results.incr = 41;
+    await expect(bus.allocateThreadSeq('t1')).resolves.toBe(41);
+    expect(redis.callsOf('incr')[0]).toEqual(['itest:thread-seq:t1']);
+    redis.results.get = 41;
+    await expect(bus.currentThreadSeq('t1')).resolves.toBe(41);
+    expect(redis.callsOf('get')[0]).toEqual(['itest:thread-seq:t1']);
+    redis.results.get = 0; // 键不存在/坏值 → 0
+    await expect(bus.currentThreadSeq('t1')).resolves.toBe(0);
+
+    bus.deleteThreadSeq('t1');
+    expect(redis.callsOf('del')[0]).toEqual(['itest:thread-seq:t1']);
+
+    // Redis 故障降级:本地兜底计数接管(副本间一致性丢失,单进程语义不变)
+    redis.results.incr = new Error('down');
+    redis.results.get = new Error('down');
+    await expect(bus.allocateThreadSeq('t2')).resolves.toBe(1);
+    await expect(bus.allocateThreadSeq('t2')).resolves.toBe(2);
+    await expect(bus.currentThreadSeq('t2')).resolves.toBe(2);
   });
 });

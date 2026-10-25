@@ -182,6 +182,8 @@ describe('space session supervisor', () => {
     const unsub = subscribeThread(threadId, (e) => events.push(e as Record<string, unknown>), { includeSnapshot: true });
     expect(events[0]!.type).toBe('snapshot');
     emitThreadEvent(threadId, { type: 'confirm_request', confirmId: 'c1' });
+    // 事件经 seq 泵异步投递(Redis INCR 分配 seq;无 Redis 走本地兜底,仍是异步微任务)
+    await vi.waitFor(() => expect(events[1]).toBeDefined());
     expect(events[1]).toMatchObject({ type: 'confirm_request', confirmId: 'c1', threadId });
     expect(typeof events[1]!.seq).toBe('number');
     unsub();
@@ -236,7 +238,9 @@ describe('space session supervisor', () => {
       } finally {
         promptBarrier = null;
       }
-      const redis = FakeRedis.all[0]!; // redisLock 的惰性连接(成功路径不发生事件,threadBus 未建连)
+      // seq 全局化后 buildSpaceRecord 先探 Redis 高水位,threadBus 先于 redisLock 建连;
+      // FakeRedis.all 下标不再固定,按「收到过 set」定位 redisLock 那台。
+      const redis = FakeRedis.all.find((r) => r.callsOf('set').length > 0)!;
       expect(redis.callsOf('set')).toHaveLength(1);
       expect(redis.callsOf('set')[0]).toEqual([`itest:thread-run:${threadId}`, expect.any(String), 'PX', 300_000, 'NX']);
       // 5s 心跳未到(毫秒级完成);runs 归零 → release 的 Lua DEL 恰一次
@@ -246,7 +250,8 @@ describe('space session supervisor', () => {
       // 他副本持有(set → null)→ 抛错 + assistant_error 事件(messages 路由 204 先行,这是用户面)
       redis.results.set = null;
       await expect(sendSpaceUserMessage(threadId, '第三条')).rejects.toThrow('另一个实例');
-      expect(events.at(-1)).toMatchObject({ type: 'assistant_error' });
+      // assistant_error 经 seq 泵异步投递,等它落到订阅者
+      await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ type: 'assistant_error' }));
       expect(String(events.at(-1)!.message)).toContain('另一个实例');
     } finally {
       delete process.env.REDIS_URL;

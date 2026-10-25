@@ -109,6 +109,49 @@ export function subscribeThreadMirror(threadId: string, fn: (e: unknown) => void
   };
 }
 
+// ── 线程事件 seq(全局单调) ──────────────────────────────────────────────────
+// seq 曾是每副本内存计数器:三副本下各有一本账,副本重启/冷构建归零,SSE 快照信封带的
+// 基线因此失真——react-pi 把「seq 更低的快照」当序列重置(lastSeq 打回 ~0),后续镜像
+// message_start 无条件 append,用户消息在快照+事件里各一份 = 前端双气泡。seq 上移到
+// Redis(每事件 INCR,串行泵内分配,见 session.ts)后基线全局单调,快照/GET 体带真实
+// 高水位,react-pi 内建的旧事件门/快照重置检测/overtaken 保护全部生效。
+
+export const THREAD_SEQ_PREFIX = 'itest:thread-seq:';
+/** Redis 故障/无 Redis 时的进程内兜底计数(跨副本一致性丢失,单进程语义不变)。 */
+const localSeqFallback = new Map<string, number>();
+
+/** 分配下一个全局事件 seq。Redis 故障时退化为本地计数:已发出的高 seq 会让别的副本
+ *  事件在前端被旧事件门暂时挡住,直到下一次快照重建基线,属可自愈降级。 */
+export async function allocateThreadSeq(threadId: string): Promise<number> {
+  const r = getPub();
+  if (r) {
+    try {
+      return await r.incr(`${THREAD_SEQ_PREFIX}${threadId}`);
+    } catch { /* 落本地兜底 */ }
+  }
+  const next = (localSeqFallback.get(threadId) ?? 0) + 1;
+  localSeqFallback.set(threadId, next);
+  return next;
+}
+
+/** 当前 seq 高水位(冷构建基线)。键不存在/无 Redis → 0。 */
+export async function currentThreadSeq(threadId: string): Promise<number> {
+  const r = getPub();
+  if (r) {
+    try {
+      return Number(await r.get(`${THREAD_SEQ_PREFIX}${threadId}`)) || 0;
+    } catch { /* 落本地兜底 */ }
+  }
+  return localSeqFallback.get(threadId) ?? 0;
+}
+
+/** 线程删除时清 seq 键(幂等)。id 不复用,仅为卫生;进程重启/Redis 重启不清——
+ *  全局单调性正是要跨重启保住的状态。 */
+export function deleteThreadSeq(threadId: string): void {
+  localSeqFallback.delete(threadId);
+  void getPub()?.del(`${THREAD_SEQ_PREFIX}${threadId}`).catch(() => undefined);
+}
+
 // ── cancel 命令 ──────────────────────────────────────────────────────────────
 
 /** 源侧:广播 cancel 命令(值=发起副本 ORIGIN_ID,供各副本过滤自己的回环)。 */

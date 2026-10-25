@@ -26,6 +26,7 @@ import { emptyRepoState, type RepoState } from './tools/context.js';
 import { pendingConfirmPayloads } from './confirm.js';
 import { tryAcquireLock, type RedisLock } from '../../lib/redisLock.js';
 import {
+  allocateThreadSeq, currentThreadSeq, deleteThreadSeq,
   publishThreadCancel, publishThreadEvent, startThreadCommandWatch, threadRunRemote, THREAD_RUN_PREFIX,
 } from './threadBus.js';
 
@@ -80,7 +81,12 @@ interface ThreadRecord {
   session: SpaceSessionLike;
   listeners: Set<(e: unknown) => void>;
   unsub: () => void;
+  /** 已分配的最大事件 seq。 Redis 全局单调(itest:thread-seq:<id> INCR),冷构建时读当前
+   *  高水位作基线;SSE 快照信封与 snapshotOf 都用它——前端靠它区分「旧事件」与「序列重置」。 */
   seq: number;
+  /** 事件串行泵:fanOut/emitThreadEvent 只入队,泵任务依次 INCR 分配 seq → 发布镜像 →
+   *  送达本地 listeners。链式 Promise 保证 FIFO;单条失败由 catch 兜住不拖垮后续。 */
+  seqQueue: Promise<void>;
   turnIndex: number;
   /** 仓库后台检出状态(与工厂/工具共享同一可变引用)。 */
   repo: RepoState;
@@ -179,6 +185,7 @@ export function resetSpaceSessions(): void {
 export function dropSpaceRecord(threadId: string): void {
   const r = records.get(threadId);
   if (!r) return;
+  deleteThreadSeq(threadId); // 卫生清理:不删也不影响正确性(线程 id 不复用)
   teardownRunSlot(r);
   try { r.session.dispose(); } catch { /* ignore */ }
   try { r.unsub(); } catch { /* ignore */ }
@@ -218,13 +225,18 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
   // 其它失败记 repo.issue 供诊断,均不阻断会话。
   const repo = emptyRepoState();
   const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo, createdByUserId: row.createdByUserId, lang, manager, piThreadId: row.piThreadId, purpose: row.purpose ?? 'chat' });
+  // 冷构建基线:读 Redis 当前 seq 高水位作 rec.seq 起点。必须在 records.set(发布点)之前
+  // 完成——订阅注册也在其后,任何 SSE 快照/GET 体都不会带出 0 基线,前端不会再把快照
+  // 误判成「序列重置」而二次 append 镜像事件(用户消息双气泡的根因)。
+  const seqBaseline = await currentThreadSeq(threadId);
   const rec: ThreadRecord = {
     threadId,
     versionId: row.versionId,
     session,
     listeners: new Set(),
     unsub: () => { /* assigned below */ },
-    seq: 0,
+    seq: seqBaseline,
+    seqQueue: Promise.resolve(),
     turnIndex: -1,
     repo,
     lang,
@@ -286,31 +298,48 @@ function mapSessionEvent(event: { type?: string } & Record<string, unknown>, ctx
   }
 }
 
-function fanOut(rec: ThreadRecord, event: unknown): void {
-  const raw = event as { type?: string } & Record<string, unknown>;
-  if (raw.type === 'turn_start') rec.turnIndex += 1;
-  const body = mapSessionEvent(raw, { turnIndex: rec.turnIndex });
-  rec.seq += 1;
-  const stamped = { ...body, threadId: rec.threadId, seq: rec.seq };
+/** 泵任务:全局 INCR 分配 seq → 发布跨副本镜像 → 送达本地 listeners。
+ *  本地送达相对 pi 的同步发射异步化(多一次 Redis 往返,亚毫秒);换来的不变量是 seq
+ *  全局单调,任何副本冷构建出的快照基线都不会再「重置」前端的旧事件门。 */
+async function deliverThreadEvent(rec: ThreadRecord, body: Record<string, unknown>): Promise<void> {
+  const seq = await allocateThreadSeq(rec.threadId);
+  rec.seq = seq;
+  const stamped = { ...body, threadId: rec.threadId, seq };
   publishThreadEvent(rec.threadId, stamped); // 跨副本镜像(fire-and-forget;SSE 侧按 origin 跳过回环)
   for (const fn of rec.listeners) {
     try { fn(stamped); } catch { /* listener errors do not break the supervisor */ }
   }
 }
 
+function fanOut(rec: ThreadRecord, event: unknown): void {
+  const raw = event as { type?: string } & Record<string, unknown>;
+  if (raw.type === 'turn_start') rec.turnIndex += 1;
+  const body = mapSessionEvent(raw, { turnIndex: rec.turnIndex });
+  rec.seqQueue = rec.seqQueue
+    .then(() => deliverThreadEvent(rec, body))
+    .catch((err) => logger.warn({ err, threadId: rec.threadId }, 'thread event delivery failed'));
+}
+
 /** 工具侧向线程 SSE 订阅者广播自定义事件(confirm_request 等);无活跃 session 时静默丢弃。 */
 export function emitThreadEvent(threadId: string, e: Record<string, unknown>): void {
   const rec = records.get(threadId);
   if (!rec) return;
-  rec.seq += 1;
-  const stamped = { ...e, threadId, seq: rec.seq };
+  rec.seqQueue = rec.seqQueue
+    .then(() => deliverCustomEvent(rec, e))
+    .catch((err) => logger.warn({ err, threadId }, 'thread custom event delivery failed'));
+}
+
+async function deliverCustomEvent(rec: ThreadRecord, e: Record<string, unknown>): Promise<void> {
+  const seq = await allocateThreadSeq(rec.threadId);
+  rec.seq = seq;
+  const stamped = { ...e, threadId: rec.threadId, seq };
   // 缓冲自定义事件供断线重放。confirm_request 除外——确认卡的挂起协议在 confirm.ts,
   // 由 pending 表重放(只补仍挂起的卡,已处理/超时的不复活,见 subscribeThread)。
   if (e.type !== 'confirm_request') {
     rec.customEvents.push({ publishedAt: Date.now(), ev: stamped });
     if (rec.customEvents.length > MAX_CUSTOM_EVENT_BUFFER) rec.customEvents.shift();
   }
-  publishThreadEvent(threadId, stamped); // 跨副本镜像(fire-and-forget)
+  publishThreadEvent(rec.threadId, stamped); // 跨副本镜像(fire-and-forget)
   for (const fn of rec.listeners) {
     try { fn(stamped); } catch { /* ignore */ }
   }
@@ -318,11 +347,16 @@ export function emitThreadEvent(threadId: string, e: Record<string, unknown>): v
 
 export interface ThreadSnapshot {
   metadata: { id: string; status: 'running' | 'idle'; messageCount: number };
+  /** 快照对应的事件 seq 高水位:react-pi 用它做「快照比已见事件旧?」的序列重置检测。
+   *  有 record 时必须带真实值——带 0 会被冷副本误判成重置 → 后续镜像事件二次 append
+   *  (用户消息双气泡根因)。缺省(无 record 的兜底响应)客户端当 0,契约允许(可选字段)。 */
+  seq?: number;
   messages: unknown[];
 }
 
 export function snapshotOf(rec: ThreadRecord): ThreadSnapshot {
   return {
+    seq: rec.seq,
     metadata: {
       id: rec.threadId,
       status: rec.session.isStreaming ? 'running' : 'idle',
