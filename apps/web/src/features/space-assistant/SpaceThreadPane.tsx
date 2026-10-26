@@ -15,13 +15,15 @@ import {
   type ToolCallMessagePartProps,
 } from '@assistant-ui/react';
 import { useTranslation } from 'react-i18next';
+import { localizeApiError } from '../../i18n';
+import { useUIStore } from '../../stores/ui';
 import { usePiRuntimeExtras, usePiThreadState } from '@assistant-ui/react-pi';
 import ConfirmCard from './ConfirmCard';
 import FeedbackActions from './FeedbackActions';
 import Icon, { type IconName } from '../../components/Icon';
 import Markdown from '../../components/ui/Markdown';
 import { useSpaceEventsStore, type ArtifactItem } from './spaceEventsStore';
-import { api } from '../../api/client';
+import { api, ApiError } from '../../api/client';
 
 /**
  * 空间助手对话流:只渲染 pi 契约的结构原语,运行时由 SpaceWorkspace 的
@@ -460,6 +462,7 @@ function SolidifyProgressCard() {
  *  不随新一轮对话清空——交付物常驻到线程结束/30min TTL 过后下载会 410（卡片仍在，点下载报错可感知）。 */
 function ArtifactCards({ threadId }: { threadId: string }) {
   const { t } = useTranslation();
+  const toast = useUIStore((s) => s.showToast);
   const items = useSpaceEventsStore((s) => s.artifactsByThread.get(threadId)) ?? [];
   if (items.length === 0) return null;
   const download = async (item: ArtifactItem) => {
@@ -473,9 +476,14 @@ function ArtifactCards({ threadId }: { threadId: string }) {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch {
-      // 过期（410）是被预期的失败态：token 30min TTL。静默失败会让用户以为按钮坏了，给出可感知提示。
-      alert(t('assistant:artifact.expired'));
+    } catch (e) {
+      // 过期（410）/已被清扫（404）是被预期的失败态：token 30min TTL，给出含「让 AI 重新生成」的引导；
+      // 其余失败（网络断/500）走通用错误文案，避免把一切归因为过期。
+      if (e instanceof ApiError && (e.status === 410 || e.status === 404)) {
+        toast(t('assistant:artifact.expired'), 'error');
+      } else {
+        toast(localizeApiError(e as Error), 'error');
+      }
     }
   };
   return (
