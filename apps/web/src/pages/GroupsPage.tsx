@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../i18n';
 import {
@@ -86,7 +86,6 @@ export default function GroupsPage() {
 	const { projectId, groupId, versionId: vidParam } = useParams<{ projectId: string; groupId: string; versionId: string }>();
 	const versionId = vidParam ?? null;
 	const navigate = useNavigate();
-	const location = useLocation();
 	const toast = useUIStore((s) => s.showToast);
 	const qc = useQueryClient();
 	const { t } = useTranslation();
@@ -472,9 +471,12 @@ export default function GroupsPage() {
 	const setScope = (next: typeof scope) => void setRaw({ scope: next, page: '1' });
 	// 分组树导航必须带上当前 query string：scope 等筛选状态全在 search 里，
 	// 裸路径 navigate 会把「产品线用例库」打回「当前版本」（实测踩过）。
+	// 读 window.location 而非 useLocation：nuqs 的 shallow 更新只裸调 history.replaceState、
+	// 不走 router navigate（nuqs dist react-router 适配层 updateUrl），useLocation 的 search
+	// 是陈旧的——点单选切到产品线库后点分组，读到的是空串，scope 照样丢。
 	// page 除外——分组收窄后旧页码可能超出范围，回到第 1 页。
 	const goGroup = (gid: string | null) => {
-		const sp = new URLSearchParams(location.search);
+		const sp = new URLSearchParams(window.location.search);
 		sp.delete('page');
 		const qs = sp.toString();
 		navigate({
