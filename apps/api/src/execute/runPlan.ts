@@ -73,6 +73,33 @@ async function resolveRunLang(triggeredByUserId: string | null | undefined): Pro
   return (row?.lang === 'en-US' ? 'en-US' : 'zh-CN') as StLang;
 }
 
+/**
+ * 造一个「报告行落库即回填 plan_run_cases」的回调。
+ *
+ * 为什么必须回填：report_id 原先只在用例跑完后才写入 plan_run_cases。执行期间前端拿不到
+ * 报告 id → 计划运行详情页只能显示「排队等待执行」，步骤要等整条用例结束才一次性出现
+ * （2026-10-26 实测）。回填后前端能在 running 期间定位报告，2s 轮询逐步看到步骤。
+ *
+ * 口径：
+ * - 非数据集用例（rowIndex=null）→ report_id = 该报告 id；
+ * - 数据集用例（rowIndex 有值）→ report_ids 累积全部行报告 id，report_id 恒指向首行
+ *   （与终态回填口径一致：终态 reportId = reportIds[0]）。
+ */
+function makeReportLinker(planRunCaseId: string): (reportId: string, rowIndex: number | null) => Promise<void> {
+  const reportIds: string[] = [];
+  return async (reportId, rowIndex) => {
+    if (rowIndex === null) {
+      await db.update(planRunCases).set({ reportId }).where(eq(planRunCases.id, planRunCaseId));
+      return;
+    }
+    reportIds.push(reportId);
+    await db
+      .update(planRunCases)
+      .set({ reportId: reportIds[0]!, reportIds: [...reportIds] })
+      .where(eq(planRunCases.id, planRunCaseId));
+  };
+}
+
 /** 启动一次计划执行（异步）。调用方立即返回 planRunId。 */
 export async function runPlanAsync(input: RunPlanInput): Promise<void> {
   const { planRunId } = input;
@@ -183,6 +210,8 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
               liveView: live,
               createdByUserId: run.triggeredByUserId,
               planProjectId: plan.projectId,
+              // 同业务用例：报告行一落库就回填 report_id，执行期间前端即可看到登录步骤逐步推进。
+              onReportCreated: makeReportLinker(row.id),
             });
             await db
               .update(planRunCases)
@@ -278,6 +307,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
         liveView: live,
         createdByUserId: run.triggeredByUserId,
         planProjectId: plan.projectId,
+        onReportCreated: makeReportLinker(ins[0]!.id),
       });
       await db
         .update(planRunCases)

@@ -84,6 +84,11 @@ export async function runCase(
      * 否则它会因「环境属于别的项目」而逐条失败。语义见 resolveEnv 调用处注释。
      */
     planProjectId?: string | null;
+    /** 报告行一落库就回调（reportId + 数据集行号；非数据集为 null）。
+     *  计划运行据此立刻把 report_id 回填到 plan_run_cases —— 否则 report_id 要等整条用例
+     *  跑完才回填，执行期间前端拿不到报告 id，页面只能显示「排队等待执行」，
+     *  步骤要等用例结束才一次性出现。 */
+    onReportCreated?: (reportId: string, rowIndex: number | null) => void | Promise<void>;
   },
 ): Promise<{ reportId: string; status: string; reportIds?: string[] }> {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
@@ -123,6 +128,7 @@ async function runCaseOnce(
     createdByUserId?: string | null;
     datasetBatchId?: string | null;
     planProjectId?: string | null;
+    onReportCreated?: (reportId: string, rowIndex: number | null) => void | Promise<void>;
   } | undefined,
   rowPlan?: DatasetRowExec,
 ): Promise<{ reportId: string; status: string }> {
@@ -147,6 +153,17 @@ async function runCaseOnce(
     reportId = match.reportId;
   } else {
     reportId = await insertRunningReportRow(caseRow, rowPlan, opts?.createdByUserId, opts?.datasetBatchId);
+  }
+
+  // 报告行已落库（status=running）：立刻通知调用方，让计划运行能把 report_id 回填到
+  // plan_run_cases —— 前端据此定位报告并 2s 轮询，逐步看到步骤结果。
+  // 回填失败不该中断执行（前端退化成「等用例结束一次性显示」，与今天一致），故吞掉异常。
+  if (opts?.onReportCreated) {
+    try {
+      await opts.onReportCreated(reportId, rowPlan?.rowIndex ?? null);
+    } catch (e) {
+      logger.warn({ err: e, caseId, reportId }, 'onReportCreated callback failed; report linkage may lag');
+    }
   }
 
   // 非数据集模式保持原语义：内部错误照常上抛（由 HTTP 边界处理）。
