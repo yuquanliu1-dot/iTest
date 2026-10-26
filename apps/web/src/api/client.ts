@@ -944,6 +944,15 @@ export type ExecutionEntry =
       lastAssertion?: string | null;
       /** 自愈通过标记：passed 且 aiTask 缓存分叉后 AI 自愈成功。 */
       healed?: boolean;
+      /** 数据集批次 id（同一次数据集执行的全部行共用）；非数据集执行为 null。 */
+      datasetBatchId?: string | null;
+      /** 本条记录代表的批内成员数（非数据集执行 = 1）。 */
+      batchSize?: number;
+      /** 批内通过 / 失败成员数（按全批真实值算，不受筛选影响）。 */
+      batchPassed?: number;
+      batchFailed?: number;
+      /** 批内全部成员报告 id（批量删除时展开成 N 条 report 删除）。 */
+      memberReportIds?: string[];
       createdAt: string;
       /** 执行人（报告创建人 = 触发执行者）。 */
       createdBy?: Creator | null;

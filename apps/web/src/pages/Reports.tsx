@@ -158,6 +158,7 @@ export default function Executions() {
 	) : null;
 
 	// 按行 kind 分桶后并行提交：case → /reports/batch-delete，plan → /plan-runs/batch-delete
+	// 数据集批次的单条记录代表 N 条 report：勾选一条即删整批（展开 memberReportIds）。
 	const batchDeleteReports = useMutation({
 		mutationFn: async (ids: string[]) => {
 			const idByKind = new Map<string, Set<string>>();
@@ -168,7 +169,9 @@ export default function Executions() {
 					set = new Set<string>();
 					idByKind.set(r.kind, set);
 				}
-				set.add(r.id);
+				const members = (r as { memberReportIds?: string[] }).memberReportIds;
+				if (members?.length) for (const m of members) set.add(m);
+				else set.add(r.id);
 			}
 			const results: { kind: 'case' | 'plan'; count: number }[] = [];
 			if (idByKind.get('case')?.size) {
@@ -255,10 +258,20 @@ export default function Executions() {
 						</span>
 					);
 				}
+				const batchSize = (r as { batchSize?: number }).batchSize ?? 1;
 				return (
 					<span className="flex items-center gap-2 min-w-0">
 						<span className="truncate">{(r as { caseTitle: string | null }).caseTitle ?? t('plans:deletedCase')}</span>
 						<span className="font-mono text-[11px] text-muted-foreground">case {(r as { caseId: string }).caseId.slice(0, 8)}</span>
+						{batchSize > 1 && (
+							<span
+								className="shrink-0 px-1.5 py-px text-[10px] rounded-full"
+								style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}
+								title={t('reports:list.batchRowsTitle', { count: batchSize })}
+							>
+								{t('reports:list.batchRowsBadge', { count: batchSize })}
+							</span>
+						)}
 					</span>
 				);
 			},
@@ -303,6 +316,18 @@ export default function Executions() {
 			cellClassName: 'text-xs text-muted-foreground',
 			cell: (r) => {
 				// 用例行 = vision 断言 reason / 失败步 error；计划行 = 运行结论（N 通过 / M 失败）。
+				// 数据集批次（一条记录代表 N 行）= 批内通过 / 失败计数（单行断言对整批无意义）。
+				const batchSize = (r as { batchSize?: number }).batchSize ?? 1;
+				if (r.kind === 'case' && batchSize > 1) {
+					const passed = (r as { batchPassed?: number }).batchPassed ?? 0;
+					const failed = (r as { batchFailed?: number }).batchFailed ?? 0;
+					const text = t('reports:list.batchSummary', { passed, failed });
+					return (
+						<span className="block truncate" title={text}>
+							{text}
+						</span>
+					);
+				}
 				const text = r.kind === 'case' ? (r.lastAssertion ?? null) : r.summary;
 				if (!text) return <EmptyCellValue />;
 				return (
