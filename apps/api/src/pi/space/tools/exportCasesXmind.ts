@@ -4,7 +4,7 @@
  * 范围：caseIds（显式集合，须 ∈ 当前版本）> groupId > keyword > 全版本。
  */
 import { Type } from '@earendil-works/pi-ai';
-import { inArray, eq } from 'drizzle-orm';
+import { inArray } from 'drizzle-orm';
 import { db } from '../../../db/client.js';
 import { testCases } from '../../../db/schema.js';
 import { searchCasesInVersion } from '../../../services/cases.service.js';
