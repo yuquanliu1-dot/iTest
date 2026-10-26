@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../i18n';
 import {
@@ -86,6 +86,7 @@ export default function GroupsPage() {
 	const { projectId, groupId, versionId: vidParam } = useParams<{ projectId: string; groupId: string; versionId: string }>();
 	const versionId = vidParam ?? null;
 	const navigate = useNavigate();
+	const location = useLocation();
 	const toast = useUIStore((s) => s.showToast);
 	const qc = useQueryClient();
 	const { t } = useTranslation();
@@ -469,6 +470,18 @@ export default function GroupsPage() {
 	const setTagFilter = (next: string[]) => void setRaw({ tag: next, page: '1' });
 	const setProjectsFilter = (next: string[]) => void setRaw({ projects: next, page: '1' });
 	const setScope = (next: typeof scope) => void setRaw({ scope: next, page: '1' });
+	// 分组树导航必须带上当前 query string：scope 等筛选状态全在 search 里，
+	// 裸路径 navigate 会把「产品线用例库」打回「当前版本」（实测踩过）。
+	// page 除外——分组收窄后旧页码可能超出范围，回到第 1 页。
+	const goGroup = (gid: string | null) => {
+		const sp = new URLSearchParams(location.search);
+		sp.delete('page');
+		const qs = sp.toString();
+		navigate({
+			pathname: versionId ? `/p/${projectId}/v/${versionId}/groups${gid ? `/${gid}` : ''}` : `/`,
+			search: qs ? `?${qs}` : '',
+		});
+	};
 	const setVersionsFilter = (next: string[]) => void setRaw({ versions: next, page: '1' });
 	const setSolidifiedFilter = (next: string[]) => void setRaw({ solidified: next, page: '1' });
 	const setPage = (next: number) => void setRaw({ page: String(next) });
@@ -837,7 +850,7 @@ export default function GroupsPage() {
 
 						<button
 							data-active={!effectiveGroupId || undefined}
-							onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups` : `/`)}
+							onClick={() => goGroup(null)}
 							className="group-nav-item text-left px-2 py-1.5 rounded-[var(--radius-sm)] text-[13px]"
 							style={{
 								color: !effectiveGroupId ? 'var(--primary)' : 'var(--muted-foreground)',
@@ -859,7 +872,7 @@ export default function GroupsPage() {
 									<div
 										key={g.id}
 										data-active={active || undefined}
-										onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/groups/${g.id}` : `/`)}
+										onClick={() => goGroup(g.id)}
 										className="group-nav-item group flex items-center gap-1 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer"
 									>
 										<Icon name="gitBranch" size={12} style={{ color: 'var(--muted-foreground)', flexShrink: 0 }} />
