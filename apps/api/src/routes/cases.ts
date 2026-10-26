@@ -58,8 +58,10 @@ const PatchBody = CaseBodyBase.partial()
     status: CaseStatusEnum.optional(),
     // 用例描述允许置空；上限对齐 expectedOutcome
     description: z.string().max(4000).nullable().optional(),
-    // 用例级 init URL 允许置空（清除覆盖，回到分组/项目继承链）
-    url: z.string().url().nullable().optional(),
+    // 用例级 init URL 允许置空（清除覆盖，回到分组/项目继承链）。
+    // 接受相对路径：与创建接口(CaseBodyBase)口径一致——执行层会把相对 url 按环境 web 服务拼
+    // origin（spec 2026-10-16），.url() 的「必须带协议」校验会让界面改不了已存的相对路径用例。
+    url: z.string().nullable().optional(),
     webServiceRef: z.string().max(64).nullable().optional(),
     // 用例默认 environment id；null 表示清空，undefined 表示不动
     defaultEnvId: z.string().uuid().nullable().optional(),
