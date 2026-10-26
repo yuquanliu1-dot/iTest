@@ -257,6 +257,17 @@ describe('cases + steps', () => {
     expect(r.body.incognito).toBe(true);
   });
 
+  it('PATCH url accepts relative path (same as create) and clears with null', async () => {
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'U', groupId, versionId });
+    const r = await request(app).patch(`/api/cases/${c.body.id}`).send({ url: '/siemapp/siem/businessmgr/incidentmgr' });
+    expect(r.status).toBe(200);
+    expect(r.body.url).toBe('/siemapp/siem/businessmgr/incidentmgr');
+    const clr = await request(app).patch(`/api/cases/${c.body.id}`).send({ url: null });
+    expect(clr.status).toBe(200);
+    expect(clr.body.url).toBeNull();
+  });
+
   it('PUT /api/cases/:id/steps replaces all steps with name/delayMs', async () => {
     const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'R', groupId, versionId });
