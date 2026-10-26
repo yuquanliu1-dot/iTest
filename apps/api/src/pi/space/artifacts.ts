@@ -80,10 +80,13 @@ export async function registerArtifact(buffer: Buffer, name: string, threadId: s
 }
 
 /** 磁盘回源登记记录（Map miss 时用，任意副本可读共享卷）。path 以 token 重建，不信落盘字符串；任何异常按不存在处理。 */
+/** 外部 token 直接拼路径，格式先行拒掉（防 `../` 逃逸 EXPORT_DIR 的纵深防御；内部 token 均为 randomUUID）。 */
+const TOKEN_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 async function readRecordFromDisk(token: string): Promise<ArtifactRecord | null> {
   try {
     const r = JSON.parse(await readFile(recordPathOf(token), 'utf8')) as ArtifactRecord;
-    if (typeof r.name !== 'string' || typeof r.size !== 'number' || typeof r.expiresAt !== 'number' || typeof r.threadId !== 'string') return null;
+    if (typeof r.name !== 'string' || typeof r.size !== 'number' || typeof r.expiresAt !== 'number' || !Number.isFinite(r.expiresAt) || typeof r.threadId !== 'string') return null;
     return { ...r, path: pathOf(token) };
   } catch {
     return null;
@@ -92,6 +95,7 @@ async function readRecordFromDisk(token: string): Promise<ArtifactRecord | null>
 
 /** 过期/不存在返回 null（路由层转 410）。Map miss 时从共享磁盘回源，任意副本皆可服务；过期时 best-effort 清掉两个文件。 */
 export async function getArtifact(token: string): Promise<ArtifactRecord | null> {
+  if (!TOKEN_RE.test(token)) return null;
   const a = artifacts.get(token) ?? (await readRecordFromDisk(token));
   if (!a) return null;
   if (Date.now() > a.expiresAt) {
