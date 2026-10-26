@@ -8,20 +8,44 @@ export interface OverviewResponse {
     totalCases: number;
     totalPlans: number;
     passRate: number;
+    firstPassRate: number;
     totalRuns7d: number;
     aiCalls7d: number;
+    aiHealedReports7d: number;
+    p95DurationMs: number | null;
+    solidifyRate: number;
+    solidifyPendingSteps: number;
+    solidifyPendingAiTasks: number;
   };
-  trend: Array<{ date: string; passed: number; failed: number; total: number }>;
+  trend: Array<{
+    date: string;
+    passed: number;
+    firstPassed: number;
+    failed: number;
+    total: number;
+  }>;
   topFailures: Array<{
     caseId: string;
     caseTitle: string;
     failureCount: number;
+    totalRuns: number;
     lastFailureAt: string;
+    flakySuspected: boolean;
   }>;
-  priorityDistribution: Array<{
-    priority: 'urgent' | 'high' | 'medium' | 'low';
-    count: number;
-  }>;
+  executions: { passed: number; failed: number; blocked: number; healed: number };
+  rca: {
+    analyzed: number;
+    highConfidence: number;
+    byCategory: { case_issue: number; environment: number; system_defect: number; other: number };
+  };
+  coverage: {
+    totalRequirements: number;
+    linkedRequirements: number;
+    uncoveredRequirements: number;
+    linkedCases: number;
+    totalCases: number;
+    byCoverageType: Record<string, number>;
+  };
   plans: Array<{
     id: string;
     name: string;
@@ -29,9 +53,12 @@ export interface OverviewResponse {
     lastRunAt: string | null;
     passRate: number;
     totalCases: number;
+    lastRcaCategory: string | null;
+    triggeredBy: 'manual' | 'schedule' | null;
   }>;
+  schedules: { enabledCount: number };
   recordingActivity: Array<{ kind: string; count: number }>;
-  aiActivity: Array<{ date: string; casesGenerated: number; stepsGenerated: number }>;
+  aiUsage: Array<{ date: string; calls: number; healedSteps: number }>;
   recentRuns: Array<{
     id: string;
     caseId: string;

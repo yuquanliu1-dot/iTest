@@ -24,6 +24,22 @@ describe('KpiStripCard', () => {
     expect(container.textContent).toContain('%');
   });
 
+  it('renders footer label when provided, hides it otherwise', () => {
+    const { container, rerender } = render(
+      <MemoryRouter>
+        <KpiStripCard label="Cases" value={10} iconName="beaker" tone="#000" to="/groups" />
+      </MemoryRouter>,
+    );
+    expect(container.textContent).not.toContain('214');
+
+    rerender(
+      <MemoryRouter>
+        <KpiStripCard label="Cases" value={10} iconName="beaker" tone="#000" to="/groups" footLabel="待固化 214 步" />
+      </MemoryRouter>,
+    );
+    expect(container.textContent).toContain('待固化 214 步');
+  });
+
   it('clicking the card triggers navigation without throwing', () => {
     const { container } = render(
       <MemoryRouter initialEntries={['/start']}>
