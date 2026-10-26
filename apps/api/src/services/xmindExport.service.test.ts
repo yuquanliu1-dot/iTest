@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildXmindTree, describeAction, renderXmindWorkbook, type ExportCaseRow, type XmindNode } from './xmindExport.service.js';
+import { buildXmindTree, describeAction, exportFilename, renderXmindWorkbook, zipXmind, type ExportCaseRow, type XmindNode } from './xmindExport.service.js';
 
 function mkCase(over: Partial<ExportCaseRow> = {}): ExportCaseRow {
   return {
@@ -140,5 +140,17 @@ describe('renderXmindWorkbook', () => {
     expect(JSON.parse(wb['metadata.json']!)).toMatchObject({ creator: { name: 'iTest' } });
     const manifest = JSON.parse(wb['manifest.json']!) as { 'file-entries': Record<string, unknown> };
     expect(Object.keys(manifest['file-entries']).sort()).toEqual(['content.json', 'content.xml', 'metadata.json']);
+  });
+});
+
+describe('zipXmind + exportFilename', () => {
+  it('产出合法 zip（PK 魔数）且包含全部条目体积', async () => {
+    const buf = await zipXmind({ 'content.json': '{"a":1}', 'content.xml': '<x/>' });
+    expect(buf.subarray(0, 2).toString()).toBe('PK');
+    expect(buf.length).toBeGreaterThan(100);
+  });
+  it('文件名带版本名与时间戳', () => {
+    const name = exportFilename('V2.3', new Date('2026-10-26T08:09:10'));
+    expect(name).toBe('V2.3-用例-20261026-080910.xmind');
   });
 });

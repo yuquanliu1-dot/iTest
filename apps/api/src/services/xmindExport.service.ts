@@ -5,6 +5,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import archiver from 'archiver';
+import { asc, inArray } from 'drizzle-orm';
+import { db } from '../db/client.js';
+import { groups, projectVersions, testCases, testSteps } from '../db/schema.js';
 
 export interface ExportStepRow {
   order: number;
@@ -251,4 +255,89 @@ export function renderXmindWorkbook(root: XmindNode): Record<string, string> {
     'metadata.json': metadataJson,
     'manifest.json': manifestJson,
   };
+}
+
+/** 内存打 zip。 */
+export async function zipXmind(entries: Record<string, string>): Promise<Buffer> {
+  const archive = archiver('zip', { zlib: { level: 9 } });
+  const chunks: Buffer[] = [];
+  archive.on('data', (c: Buffer) => chunks.push(c));
+  const done = new Promise<void>((resolve, reject) => {
+    archive.on('end', () => resolve());
+    archive.on('error', reject);
+  });
+  for (const [name, content] of Object.entries(entries)) archive.append(content, { name });
+  await archive.finalize();
+  await done;
+  return Buffer.concat(chunks);
+}
+
+export function exportFilename(versionName: string, now = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  const ts = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
+  return `${versionName}-用例-${ts}.xmind`;
+}
+
+/** 批量拉用例 + 步骤 + 分组名/版本名。caseIds 里查不到的静默忽略（调用方负责可见性）。 */
+export async function loadExportCases(caseIds: string[]): Promise<ExportCaseRow[]> {
+  if (caseIds.length === 0) return [];
+  const rows = await db
+    .select({
+      id: testCases.id,
+      title: testCases.title,
+      description: testCases.description,
+      expectedOutcome: testCases.expectedOutcome,
+      groupId: testCases.groupId,
+      versionId: testCases.versionId,
+      createdAt: testCases.createdAt,
+    })
+    .from(testCases)
+    .where(inArray(testCases.id, caseIds));
+  if (rows.length === 0) return [];
+  const stepRows = await db
+    .select({
+      caseId: testSteps.caseId,
+      order: testSteps.order,
+      instruction: testSteps.instruction,
+      compiled: testSteps.compiled,
+      assertion: testSteps.assertion,
+    })
+    .from(testSteps)
+    .where(inArray(testSteps.caseId, rows.map((r) => r.id)))
+    .orderBy(asc(testSteps.order));
+  const gids = [...new Set(rows.map((r) => r.groupId))];
+  const groupRows = await db.select({ id: groups.id, name: groups.name }).from(groups).where(inArray(groups.id, gids));
+  const gName = new Map(groupRows.map((g) => [g.id, g.name]));
+  const vids = [...new Set(rows.map((r) => r.versionId))];
+  const versionRows = await db.select({ id: projectVersions.id, name: projectVersions.name }).from(projectVersions).where(inArray(projectVersions.id, vids));
+  const vName = new Map(versionRows.map((v) => [v.id, v.name]));
+  const stepsByCase = new Map<string, ExportStepRow[]>();
+  for (const s of stepRows) {
+    const list = stepsByCase.get(s.caseId) ?? [];
+    list.push({ order: s.order, instruction: s.instruction, compiled: s.compiled, assertion: s.assertion });
+    stepsByCase.set(s.caseId, list);
+  }
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    description: r.description,
+    expectedOutcome: r.expectedOutcome,
+    groupId: r.groupId,
+    groupName: gName.get(r.groupId) ?? '未分组',
+    versionId: r.versionId,
+    versionName: vName.get(r.versionId) ?? '未命名版本',
+    createdAt: r.createdAt,
+    steps: (stepsByCase.get(r.id) ?? []).sort((a, b) => a.order - b.order),
+  }));
+}
+
+/** 组合：用例集合 → {zip buffer, 文件名}。rootTitle 缺省用第一个用例的版本名。 */
+export async function buildXmindBuffer(
+  cases: ExportCaseRow[],
+  rootTitle?: string,
+): Promise<{ buffer: Buffer; filename: string }> {
+  const filename = exportFilename(cases[0]!.versionName);
+  const tree = buildXmindTree(cases, rootTitle?.trim() || cases[0]!.versionName);
+  const buffer = await zipXmind(renderXmindWorkbook(tree));
+  return { buffer, filename };
 }
