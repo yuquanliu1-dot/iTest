@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { logger } from '../logger.js';
 import type { ExecStepResult } from './cdp.js';
@@ -20,6 +20,18 @@ export interface VisionAssertInput {
   vars: Record<string, string>;
   sensitiveVarKeys: string[];
   llmClient?: import('../agent/llm-client.js').LLMClient;
+  /** 过程证据：最后一步完成时的页面截图（step_results 里的 web 路径 /screenshots/<rid>/step-N.png）。
+   *  瞬时提示（toast）在 settle 后的终态截图里必不存在，只可能出现在这张图里。缺省不传。 */
+  processScreenshotPath?: string | null;
+  /** 过程证据：末几步的页面文本快照（老→新，已去重截断）。瞬时提示的文字只可能出现在这里。 */
+  processPageTexts?: string[];
+}
+
+/** web 截图路径 → 磁盘路径。仅接受本服务自己的 /screenshots/ 前缀（内部 step_results 来源，
+ *  非用户输入；前缀不符一律拒绝，读文件失败由调用方 best-effort 兜底）。 */
+export function processScreenshotDiskPath(webPath: string): string | null {
+  if (!webPath.startsWith('/screenshots/')) return null;
+  return join(SCREENSHOTS_DIR, webPath.slice('/screenshots/'.length));
 }
 
 export interface VisionAssertOutcome {
@@ -67,12 +79,26 @@ export async function runCaseVisionAssert(input: VisionAssertInput): Promise<Vis
       logger.warn({ err: e, reportId: input.reportId }, 'failed to save final vision screenshot');
     }
     const { judgeCaseOutcome } = await import('../agent/judgeCaseOutcome.js');
+    // 过程证据 best-effort 读取：末步截图文件缺失/读取失败都不阻断判定（退化为纯终态判定）。
+    let processImage: { base64: string; mime: 'image/png' } | null = null;
+    if (input.processScreenshotPath) {
+      try {
+        const disk = processScreenshotDiskPath(input.processScreenshotPath);
+        if (disk) {
+          processImage = { base64: (await readFile(disk)).toString('base64'), mime: 'image/png' };
+        }
+      } catch (e) {
+        logger.warn({ err: e, reportId: input.reportId }, 'failed to read process screenshot for vision assert');
+      }
+    }
     const verdict = await judgeCaseOutcome({
       expectedOutcome: expectedForJudge,
       caseTitle: input.caseTitle,
       caseUrl: input.caseUrl,
       screenshot: { base64: buffer.toString('base64'), mime: 'image/png' },
       ...(fullBuffer ? { fullScreenshot: { base64: fullBuffer.toString('base64'), mime: 'image/png' as const } } : {}),
+      ...(processImage ? { processScreenshot: processImage } : {}),
+      ...(input.processPageTexts?.length ? { processPageTexts: input.processPageTexts } : {}),
       llmClient: input.llmClient,
     });
     // 报告侧脱敏:LLM 提示按 spec §8.3 走明文,但落库的 visionAssert(expected / reason 可能复述敏感列值)

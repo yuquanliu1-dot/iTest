@@ -22,6 +22,12 @@ export interface JudgeCaseOutcomeOpts {
   /** 可选的整页截图：页面超出视口时补一张，覆盖需要滚动才能看到的区域。
    *  不传则只按视口图判定（与该字段引入前一致）。 */
   fullScreenshot?: { base64: string; mime: 'image/png' | 'image/jpeg' } | null;
+  /** 过程证据：执行过程中（最后一步完成时）的页面截图。瞬时提示（toast）在终态截图里
+   *  已消失，只可能出现在这张图里。缺省不传（行为与引入前一致）。 */
+  processScreenshot?: { base64: string; mime: 'image/png' | 'image/jpeg' } | null;
+  /** 过程证据：末几步的页面文本快照（老→新）。与 processScreenshot 同动机——DOM 文字
+   *  由机械采集，比截图更不易误读。缺省不传。 */
+  processPageTexts?: string[];
   /** LLM 注入；缺省时按需 resolveLlmClient。 */
   llmClient?: LLMClient;
   /** 界面语言：缺省 zh-CN 回落（执行路径无用户上下文时确定性回落）。 */
@@ -43,26 +49,53 @@ export async function judgeCaseOutcome(opts: JudgeCaseOutcomeOpts): Promise<Visi
       return undefined;
     }
   }
-  // 双图形态：视口图（图 1，用户执行结束时实际看到的）+ 整页图（图 2，覆盖视口以下）。
-  // 走 messages 而非 image 字段——后者只支持单图；三个 client 都已按 messages 的
-  // image block 逐块映射（llm-openai/anthropic/google），无需改 provider 层。
+  // 多图形态：视口图（图 1，用户执行结束时实际看到的）+ 整页图（图 2，覆盖视口以下）+
+  // 过程图（图 3，最后一步完成时——瞬时提示只可能出现在这里）。有任一附加图就走 messages
+  // 而非 image 字段——后者只支持单图；三个 client 都已按 messages 的 image block 逐块映射
+  // （llm-openai/anthropic/google），无需改 provider 层。
   const userMessage = [
     `用例标题: ${opts.caseTitle}`,
     opts.caseUrl ? `用例入口 URL: ${opts.caseUrl}` : '',
     `用例预期: ${expected}`,
-    opts.fullScreenshot ? '以下为执行结束后的页面截图（图 1 视口 / 图 2 整页）：' : '以下为执行结束后的页面截图：',
+    opts.fullScreenshot || opts.processScreenshot
+      ? '以下为执行结束后的页面截图（图 1 视口 / 图 2 整页）：'
+      : '以下为执行结束后的页面截图：',
   ].filter(Boolean).join('\n');
-  const twoImages: LLMMessage[] | undefined = opts.fullScreenshot
-    ? [{
-        role: 'user',
-        content: [
-          { type: 'image', base64: opts.screenshot.base64, mime: opts.screenshot.mime },
-          { type: 'text', text: '图 1：执行结束时用户实际看到的视口范围。' },
-          { type: 'image', base64: opts.fullScreenshot.base64, mime: opts.fullScreenshot.mime },
-          { type: 'text', text: '图 2：同一时刻的整页截图（含视口以下需滚动才能看到的区域）。' },
-          { type: 'text', text: userMessage },
-        ],
-      }]
+  const hasFull = !!opts.fullScreenshot;
+  const hasProcessImage = !!opts.processScreenshot;
+  const processTexts = opts.processPageTexts?.length ? opts.processPageTexts : null;
+  const extraImages = hasFull || hasProcessImage || !!processTexts;
+  const messages: LLMMessage[] | undefined = extraImages
+    ? [
+        {
+          role: 'user',
+          content: [
+            { type: 'image', base64: opts.screenshot.base64, mime: opts.screenshot.mime },
+            { type: 'text', text: '图 1：执行结束时用户实际看到的视口范围。' },
+            ...(hasFull
+              ? [
+                  { type: 'image' as const, base64: opts.fullScreenshot!.base64, mime: opts.fullScreenshot!.mime },
+                  { type: 'text' as const, text: '图 2：同一时刻的整页截图（含视口以下需滚动才能看到的区域）。' },
+                ]
+              : []),
+            ...(hasProcessImage
+              ? [
+                  { type: 'image' as const, base64: opts.processScreenshot!.base64, mime: opts.processScreenshot!.mime },
+                  { type: 'text' as const, text: '图 3：执行过程中（最后一步刚完成时）的页面截图——短时提示只可能出现在这里。' },
+                ]
+              : []),
+            ...(processTexts
+              ? [{
+                  type: 'text' as const,
+                  text: `执行过程页面文本（每步一次捕获的页面文字快照，老→新，共 ${processTexts.length} 份）：\n${processTexts
+                    .map((t, i) => `[快照 ${i + 1}]\n${t}`)
+                    .join('\n---\n')}`,
+                }]
+              : []),
+            { type: 'text', text: userMessage },
+          ],
+        },
+      ]
     : undefined;
   let r;
   try {
@@ -70,8 +103,8 @@ export async function judgeCaseOutcome(opts: JudgeCaseOutcomeOpts): Promise<Visi
       systemPrompt: CASE_OUTCOME_VISION_PROMPT,
       userMessage,
       lang: aiLangFrom(opts.lang ?? null),
-      ...(twoImages
-        ? { messages: twoImages }
+      ...(messages
+        ? { messages }
         : { image: opts.screenshot }),
     });
   } catch (e) {

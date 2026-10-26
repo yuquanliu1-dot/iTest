@@ -927,6 +927,20 @@ export async function writeStepScreenshot(reportId: string, stepIndex: number, p
   }
 }
 
+/** 每步后机械捕获页面文本快照（过程证据）：用例级 vision 判定等页面静默后才截终态图，
+ *  toast 这类短时提示到那时已从 DOM 卸载——文本必须在它存活的窗口内由确定性代码采走。
+ *  与步骤截图同一时刻捕获（writeStepScreenshot 之后）。折叠空白 + 截断控制判定 token 成本；
+ *  纯读取 best-effort，失败返回 null 不影响步骤。 */
+export async function capturePageTextSnapshot(page: Page): Promise<string | null> {
+  try {
+    const raw = await page.evaluate(() => document.body?.innerText ?? '');
+    const t = raw.replace(/\s+/g, ' ').trim();
+    return t ? t.slice(0, 2000) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 报告侧脱敏：把 text 中出现的敏感变量值全部替换为 ******。
  *  用 split/join 而非 RegExp，避免值里含正则元字符；
  *  按值长度降序替换，防止短值是长值子串时留下残段。 */
@@ -1011,6 +1025,9 @@ async function runStepsInContext(
     logger.warn({ err: e, caseId }, 'preflight failed; continuing');
   }
   const opts: DispatchOpts = { page, vars, ctx, caseId };
+  // 过程证据收集：每步通过后采一份页面文本快照（与步骤截图同刻），供用例级 vision 判定
+  // 识别终态截图里已消失的瞬时提示（toast）。失败路径不采——失败后 vision 判定不运行。
+  const pageTextSnaps: string[] = [];
   // 机械失败 AI 重做开关（全局设置，runCase 层注入 ctx.aiFallback；缺省关 = 失败即失败）。
   // compile-missing 分支已不在此列：NL 视觉步骤（空 compiled + 有指令）是正式执行语义，无条件 AI 临场执行。
   const fallback = ctx.aiFallback ?? { locatorFailed: false };
@@ -1103,6 +1120,8 @@ async function runStepsInContext(
         }
       }
       const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
+      const pageTextSnap = await capturePageTextSnapshot(opts.page);
+      if (pageTextSnap) pageTextSnaps.push(pageTextSnap);
       const passedResult: ExecStepResult = {
         order: step.order,
         status: 'passed',
@@ -1191,6 +1210,8 @@ async function runStepsInContext(
             }
             if (aiSummary !== undefined) {
               const aiScreenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
+              const aiTextSnap = await capturePageTextSnapshot(opts.page);
+              if (aiTextSnap) pageTextSnaps.push(aiTextSnap);
               const aiPassed: ExecStepResult = {
                 order: step.order,
                 status: 'passed',
@@ -1252,6 +1273,18 @@ async function runStepsInContext(
   // 若中途已 failed，vision 不再覆盖（避免 vision 误判把真失败洗白）。
   const failedSoFar = results.some((r) => r.status === 'failed');
   if (!failedSoFar && ctx.expectedOutcome && ctx.expectedOutcome.trim()) {
+    // 过程证据：瞬时提示（toast）到 settle 后的终态截图时必已消失，补两路证据——
+    // 末步截图（截自动作刚完成时，短时提示尚在存活窗口内）+ 末几步文本快照（DOM 文字）。
+    // 相邻重复快照（http/db 等不触动页面的步骤）去重后取末 3 份，控制判定 token 成本。
+    let lastShot: string | null = null;
+    for (let k = results.length - 1; k >= 0; k--) {
+      const s = results[k]!.screenshot;
+      if (s) { lastShot = s; break; }
+    }
+    const dedupedTexts: string[] = [];
+    for (const t of pageTextSnaps) {
+      if (t !== dedupedTexts[dedupedTexts.length - 1]) dedupedTexts.push(t);
+    }
     const va = await runCaseVisionAssert({
       page: opts.page,
       reportId: ctx.reportId,
@@ -1262,6 +1295,8 @@ async function runStepsInContext(
       vars,
       sensitiveVarKeys: ctx.sensitiveVarKeys ?? [],
       llmClient: ctx.llmClient,
+      processScreenshotPath: lastShot,
+      ...(dedupedTexts.length ? { processPageTexts: dedupedTexts.slice(-3) } : {}),
     });
     if (va?.failureStep) {
       results.push(va.failureStep);
