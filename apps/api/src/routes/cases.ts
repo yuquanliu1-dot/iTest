@@ -6,6 +6,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertCaseVisible, assertProductLineVisible, assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { copyCaseCore, createCase, deleteCase, getCaseDetail, groupProjectId, invalidateCasesCache, tagsForCases, updateCase } from '../services/cases.service.js';
+import { loadExportCases, buildXmindBuffer } from '../services/xmindExport.service.js';
 import { attachCreators } from '../lib/creator.js';
 import { cache } from '../lib/cache.js';
 import { casesForProjectKey } from '../lib/cache-keys.js';
@@ -218,6 +219,30 @@ casesRoute.get('/', async (req, res) => {
     rows = rows.filter((r) => r.stepsTotal > 0 && r.stepsCompiled === 0);
   }
   res.json(rows);
+});
+
+/** 用例导出 XMind（勾选集合/当前筛选结果全量 id，前端始终传显式 caseIds）。
+ *  注册在动态段之前——单段路径 /export-xmind，与 /solidify-batches 同款预防。 */
+casesRoute.post('/export-xmind', async (req, res) => {
+  const body = z.object({
+    caseIds: z.array(z.string().uuid()).min(1).max(2000),
+    rootTitle: z.string().min(1).max(200).optional(),
+  }).parse(req.body);
+  const cases = await loadExportCases(body.caseIds);
+  // 可见性：分组 → 项目，仅保留调用者可见项目内的用例；全不可见 → 404
+  const gids = [...new Set(cases.map((c) => c.groupId))];
+  const groupProjects = gids.length
+    ? await db.select({ id: groups.id, projectId: groups.projectId }).from(groups).where(inArray(groups.id, gids))
+    : [];
+  const visiblePids = new Set(await visibleProjectIds(req.user!));
+  const visibleSet = new Set(groupProjects.filter((g) => visiblePids.has(g.projectId)).map((g) => g.id));
+  const visibleCases = cases.filter((c) => visibleSet.has(c.groupId));
+  if (visibleCases.length === 0) throw new HttpError(404, 'not_found', 'no visible cases to export');
+  const { buffer, filename } = await buildXmindBuffer(visibleCases, body.rootTitle);
+  const asciiName = filename.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, "'");
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.send(buffer);
 });
 
 /**
