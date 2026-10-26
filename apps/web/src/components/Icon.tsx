@@ -17,6 +17,7 @@ import Time from '@carbon/icons-react/es/Time';
 import Code from '@carbon/icons-react/es/Code';
 import Copy from '@carbon/icons-react/es/Copy';
 import DataBase from '@carbon/icons-react/es/DataBase';
+import Dashboard from '@carbon/icons-react/es/Dashboard';
 import Download from '@carbon/icons-react/es/Download';
 import Edit from '@carbon/icons-react/es/Edit';
 import Launch from '@carbon/icons-react/es/Launch';
@@ -88,6 +89,7 @@ const iconMap: Record<string, CarbonIconType> = {
   code: Code,
   copy: Copy,
   database: DataBase,
+  dashboard: Dashboard,
   table: Table,
   download: Download,
   edit: Edit,

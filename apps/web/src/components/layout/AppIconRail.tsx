@@ -33,7 +33,7 @@ type ProjectNavItem = {
 };
 
 const PROJECT_ITEMS: ProjectNavItem[] = [
-  { titleKey: 'common:navWorkspace', path: 'overview', icon: 'sparkles' },
+  { titleKey: 'common:navWorkspace', path: 'overview', icon: 'dashboard' },
   { titleKey: 'common:navAssistant', path: 'assistant', icon: 'message' },
   { titleKey: 'common:navCases', path: 'groups', icon: 'beaker', related: ['cases', 'ai'] },
   { titleKey: 'common:navPlans', path: 'plans', icon: 'play' },
