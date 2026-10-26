@@ -438,8 +438,12 @@ export default function GroupsPage() {
 	// 导出 XMind：勾选优先，无勾选导出当前筛选结果的全量用例（filteredCases，非当前页 rows）
 	const [exportingXmind, setExportingXmind] = useState(false);
 	const exportXmind = async () => {
-		const ids = selection.count > 0 ? selection.ids : filteredCases.map((c) => c.id);
+		const ids = selection.ids.length > 0 ? selection.ids : filteredCases.map((c) => c.id);
 		if (ids.length === 0) return;
+		if (ids.length > 2000) {
+			toast(t('groups:exportXmindTooMany', { count: ids.length }), 'error');
+			return;
+		}
 		setExportingXmind(true);
 		try {
 			const { blob, filename } = await api.cases.exportXmind(ids);
@@ -447,10 +451,13 @@ export default function GroupsPage() {
 			const a = document.createElement('a');
 			a.href = url;
 			a.download = filename;
+			document.body.appendChild(a);
 			a.click();
-			URL.revokeObjectURL(url);
-		} catch {
-			toast(t('groups:exportXmindFailed'), 'error');
+			a.remove();
+			// 给浏览器一点时间触发下载再回收
+			setTimeout(() => URL.revokeObjectURL(url), 1000);
+		} catch (e) {
+			toast(e instanceof Error ? localizeApiError(e) : String(e), 'error');
 		} finally {
 			setExportingXmind(false);
 		}

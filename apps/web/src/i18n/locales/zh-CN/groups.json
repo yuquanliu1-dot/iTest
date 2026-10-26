@@ -105,7 +105,7 @@
   "batchSolidifyDone": "批量固化完成：{{passed}} 过 / {{failed}} 败",
   "exportXmind": "导出 XMind",
   "exportingXmind": "导出中…",
-  "exportXmindFailed": "导出失败",
+  "exportXmindTooMany": "共 {{count}} 条用例超出单次导出上限 2000，请缩小筛选范围或勾选后分批导出",
   "solidifyColumn": "固化",
   "solidifyLabel": "固化状态",
   "unsolidified": "未固化",
