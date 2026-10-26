@@ -2,18 +2,22 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
+import { useAuthStore } from '../stores/auth';
 import { useOverviewQuery, overviewQueryKey, type Range } from '../features/overview/api';
+import { formatDuration, formatPct } from '../features/overview/format';
 import OverviewHeader from '../features/overview/components/OverviewHeader';
 import OverviewSkeleton from '../features/overview/components/OverviewSkeleton';
 import OverviewEmpty from '../features/overview/components/OverviewEmpty';
 import KpiStripCard from '../features/overview/components/KpiStripCard';
+import WorkbenchShell from '../features/overview/components/WorkbenchShell';
 import PassRateTrendChart from '../features/overview/components/PassRateTrendChart';
+import ExecutionOverviewCard from '../features/overview/components/ExecutionOverviewCard';
+import RcaDistributionCard from '../features/overview/components/RcaDistributionCard';
+import RequirementCoverageCard from '../features/overview/components/RequirementCoverageCard';
 import TopFailuresChart from '../features/overview/components/TopFailuresChart';
-import PriorityDonut from '../features/overview/components/PriorityDonut';
-import PlanStatusLine from '../features/overview/components/PlanStatusLine';
-import RecentRunsStream from '../features/overview/components/RecentRunsStream';
+import PlanOverviewTable from '../features/overview/components/PlanOverviewTable';
 import RecordingActivityChart from '../features/overview/components/RecordingActivityChart';
-import AiActivityChart from '../features/overview/components/AiActivityChart';
+import AiUsageChart from '../features/overview/components/AiUsageChart';
 import { PageShell, PageShellContent } from '../components/layout/PageShell';
 
 export default function Dashboard() {
@@ -23,20 +27,31 @@ export default function Dashboard() {
   const versionId = vidParam ?? null;
   const [range, setRange] = useState<Range>('7d');
   const { data, isLoading, isError } = useOverviewQuery(projectId, range);
+  const user = useAuthStore((s) => s.user);
 
   if (!projectId) return null;
 
+  const days = range === '7d' ? 7 : 30;
+
   if (isError) {
     return (
-      <PageShell>
-        <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
-          {t('overview:loadFailed')}
-        </div>
-      </PageShell>
+      <WorkbenchShell>
+        <PageShell>
+          <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
+            {t('overview:loadFailed')}
+          </div>
+        </PageShell>
+      </WorkbenchShell>
     );
   }
 
-  if (isLoading || !data) return <OverviewSkeleton />;
+  if (isLoading || !data) {
+    return (
+      <WorkbenchShell>
+        <OverviewSkeleton />
+      </WorkbenchShell>
+    );
+  }
 
   const isEmpty = data.kpi.totalCases === 0 && data.kpi.totalPlans === 0 && data.kpi.totalRuns7d === 0;
 
@@ -44,12 +59,14 @@ export default function Dashboard() {
 
   if (isEmpty) {
     return (
-      <PageShell>
-        <OverviewHeader range={range} onRangeChange={setRange} onRefresh={refresh} />
-        <PageShellContent>
-          <OverviewEmpty projectId={projectId} />
-        </PageShellContent>
-      </PageShell>
+      <WorkbenchShell>
+        <PageShell>
+          <OverviewHeader range={range} onRangeChange={setRange} onRefresh={refresh} />
+          <PageShellContent>
+            <OverviewEmpty projectId={projectId} />
+          </PageShellContent>
+        </PageShell>
+      </WorkbenchShell>
     );
   }
 
@@ -65,77 +82,127 @@ export default function Dashboard() {
     versionId ? `/p/${projectId}/v/${versionId}${path}` : `/`;
 
   return (
-    <PageShell>
-      <OverviewHeader range={range} onRangeChange={setRange} onRefresh={refresh} />
+    <WorkbenchShell>
+      <PageShell>
+        <OverviewHeader
+          range={range}
+          onRangeChange={setRange}
+          onRefresh={refresh}
+          summary={{
+            name: user?.displayName || user?.username || 'admin',
+            days,
+            runs: data.kpi.totalRuns7d,
+            passRate: formatPct(data.kpi.passRate),
+            firstPassRate: formatPct(data.kpi.firstPassRate),
+            healed: data.kpi.aiHealedReports7d,
+          }}
+        />
 
-      {/* KPI strip — 5 cards */}
-      <div className="grid grid-cols-5 gap-4 fade-up" data-stagger>
-        <KpiStripCard
-          label={t('overview:kpiTotalCases')}
-          value={data.kpi.totalCases}
-          iconName="beaker"
-          tone="var(--info)"
-          to={link('/groups')}
-        />
-        <KpiStripCard
-          label={t('overview:kpiTotalPlans')}
-          value={data.kpi.totalPlans}
-          iconName="flag"
-          tone="var(--primary)"
-          to={link('/plans')}
-        />
-        <KpiStripCard
-          label={t('overview:kpiPassRate')}
-          value={Math.round(data.kpi.passRate * 100)}
-          suffix="%"
-          iconName="checkCircle"
-          tone="var(--success)"
-          to={link('/reports?filter=passed-7d')}
-        />
-        <KpiStripCard
-          label={t('overview:kpiRuns7d')}
-          value={data.kpi.totalRuns7d}
-          iconName="activity"
-          tone="var(--warning)"
-          to={link('/reports?range=7d')}
-        />
-        <KpiStripCard
-          label={t('reports:summary.aiCalls')}
-          value={data.kpi.aiCalls7d}
-          iconName="sparkles"
-          tone="var(--chart-5)"
-          to={link('/groups')}
-        />
-      </div>
+        {/* KPI strip — 5 cards */}
+        <div className="grid grid-cols-5 gap-4 fade-up" data-stagger>
+          <KpiStripCard
+            label={t('overview:kpiTotalCases')}
+            value={data.kpi.totalCases.toLocaleString()}
+            iconName="beaker"
+            tone="var(--primary)"
+            to={link('/groups')}
+            footLabel={t('overview:kpiFootReqLinked', {
+              linked: data.coverage.linkedCases,
+              total: data.coverage.totalCases,
+            })}
+          />
+          <KpiStripCard
+            label={t('overview:kpiSolidify')}
+            value={formatPct(data.kpi.solidifyRate)}
+            suffix="%"
+            iconName="bolt"
+            tone="var(--chart-4)"
+            to={link('/groups')}
+            footLabel={t('overview:kpiFootPendingSteps', { count: data.kpi.solidifyPendingSteps })}
+          />
+          <KpiStripCard
+            label={t('overview:kpiFinalPass')}
+            value={formatPct(data.kpi.passRate)}
+            suffix="%"
+            iconName="checkCircle"
+            tone="var(--success)"
+            to={link('/reports?filter=passed-7d')}
+            footLabel={t('overview:kpiFootFirstPass', { value: formatPct(data.kpi.firstPassRate) })}
+          />
+          <KpiStripCard
+            label={t('overview:kpiRuns')}
+            value={data.kpi.totalRuns7d.toLocaleString()}
+            iconName="activity"
+            tone="var(--chart-3)"
+            to={link('/reports')}
+            footLabel={t('overview:kpiFootP95', { value: formatDuration(data.kpi.p95DurationMs) })}
+          />
+          <KpiStripCard
+            label={t('overview:kpiAiCalls')}
+            value={data.kpi.aiCalls7d.toLocaleString()}
+            iconName="sparkles"
+            tone="var(--chart-5)"
+            to={link('/reports')}
+            footLabel={t('overview:kpiFootHealed', { count: data.kpi.aiHealedReports7d })}
+          />
+        </div>
 
-      {/* Main grid — charts left, activity right */}
-      <div className="grid grid-cols-12 gap-4 fade-up" data-stagger>
-        <div className="col-span-8 flex flex-col gap-4">
-          <PassRateTrendChart data={data.trend} />
-          <div className="grid grid-cols-2 gap-4">
+        {/* Row: trend (8) + execution overview (4) */}
+        <div className="grid grid-cols-12 gap-4 fade-up">
+          <div className="col-span-8">
+            <PassRateTrendChart data={data.trend} />
+          </div>
+          <div className="col-span-4">
+            <ExecutionOverviewCard
+              days={days}
+              executions={data.executions}
+              totalRuns={data.kpi.totalRuns7d}
+              p95DurationMs={data.kpi.p95DurationMs}
+              solidifyPendingSteps={data.kpi.solidifyPendingSteps}
+              solidifyPendingAiTasks={data.kpi.solidifyPendingAiTasks}
+              topFailures={data.topFailures}
+              rca={data.rca}
+            />
+          </div>
+        </div>
+
+        {/* Row: RCA / coverage / top failures */}
+        <div className="grid grid-cols-12 gap-4 fade-up">
+          <div className="col-span-4">
+            <RcaDistributionCard days={days} rca={data.rca} />
+          </div>
+          <div className="col-span-4">
+            <RequirementCoverageCard coverage={data.coverage} />
+          </div>
+          <div className="col-span-4">
             <TopFailuresChart
               data={data.topFailures}
+              days={days}
               latestReportByCase={latestReportByCase}
               projectId={projectId}
             />
-            <PriorityDonut data={data.priorityDistribution} />
           </div>
         </div>
-        <div className="col-span-4 flex flex-col gap-4">
-          <RecentRunsStream runs={data.recentRuns} projectId={projectId} />
-          <PlanStatusLine plans={data.plans} projectId={projectId} />
-        </div>
-      </div>
 
-      {/* Bottom row — recording + AI activity */}
-      <div className="grid grid-cols-12 gap-4 fade-up" data-stagger>
-        <div className="col-span-6">
-          <RecordingActivityChart data={data.recordingActivity} />
+        {/* Row: plans table */}
+        <div className="fade-up">
+          <PlanOverviewTable
+            plans={data.plans}
+            schedulesCount={data.schedules.enabledCount}
+            projectId={projectId}
+          />
         </div>
-        <div className="col-span-6">
-          <AiActivityChart data={data.aiActivity} />
+
+        {/* Row: recording + AI usage */}
+        <div className="grid grid-cols-12 gap-4 fade-up">
+          <div className="col-span-6">
+            <RecordingActivityChart data={data.recordingActivity} />
+          </div>
+          <div className="col-span-6">
+            <AiUsageChart data={data.aiUsage} days={days} />
+          </div>
         </div>
-      </div>
-    </PageShell>
+      </PageShell>
+    </WorkbenchShell>
   );
 }

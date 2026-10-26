@@ -29,6 +29,18 @@ export default function OverviewSkeleton() {
           <SkeletonBlock h={300} />
         </div>
       </div>
+      <div className="grid grid-cols-12 gap-4">
+        <div className="col-span-4">
+          <SkeletonBlock h={220} />
+        </div>
+        <div className="col-span-4">
+          <SkeletonBlock h={220} />
+        </div>
+        <div className="col-span-4">
+          <SkeletonBlock h={220} />
+        </div>
+      </div>
+      <SkeletonBlock h={240} />
     </PageShell>
   );
 }
