@@ -121,7 +121,7 @@ COPYFILE_DISABLE=1 tar -C "$ROOT" -czf "$TARBALL" \
   --exclude='._*' \
   --exclude='*.log' \
   --exclude='.env' \
-  --exclude='.env.*' \
+  --exclude='.env.production' \
   --exclude='deploy.env' \
   --exclude='deploy.d' \
   .

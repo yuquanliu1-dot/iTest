@@ -147,15 +147,17 @@ if [ -f "$MANIFEST_PREV" ] && [ -f "$MANIFEST_CUR" ]; then
         ../*|*/../*|*/..) echo "  跳过（路径跳目录）：$f"; continue ;;
       esac
       # 保护清单：release.sh 的 tar --exclude 同款模式。这些路径从来不由 tarball 管理，
-      # 是「本地工作区形态」而非「仓库形态」的产物（.env.production 是服务器上的密钥文件、
+      # 是「服务器形态」而非「仓库形态」的产物（.env.production 是服务器上的密钥文件、
       # .data 是运行数据、deploy.d 是部署配置），本地 checkout 里没有它们并不代表它们该被删。
       #
       # 2026-10-26 实测踩坑：13:02 那次发版用的旧 exclude（只排除 '.env'，不排除
       # '.env.production'）把密钥文件打进了 tarball → 进了清单；随后从干净 worktree
       # 发版（无该 gitignored 文件）时，清单差集把 .env.production 判成「本次删除」→
       # deploy.sh 把服务器密钥删了 → compose 找不到 env_file → 整个 up 阶段失败。
+      #
+      # 逐条列出而非用 '.env.*'：后者会连带排除已跟踪的 .env.example（模板，需随包携带）。
       case "$f" in
-        node_modules/*|.git/*|.worktrees/*|.superpowers/*|.claude/*|.turbo/*|.data/*|dist/*|coverage/*|screenshots/*|deploy.d/*|*.log|.env|.env.*|deploy.env|*/node_modules/*|*/.git/*|*/.worktrees/*|*/.superpowers/*|*/.claude/*|*/.turbo/*|*/.data/*|*/dist/*|*/coverage/*|*/screenshots/*|*/deploy.d/*|*/.env|*/.env.*|*/deploy.env)
+        node_modules/*|.git/*|.worktrees/*|.superpowers/*|.claude/*|.turbo/*|.data/*|dist/*|coverage/*|screenshots/*|deploy.d/*|*.log|.env|.env.production|deploy.env|*/node_modules/*|*/.git/*|*/.worktrees/*|*/.superpowers/*|*/.claude/*|*/.turbo/*|*/.data/*|*/dist/*|*/coverage/*|*/screenshots/*|*/deploy.d/*|*/.env|*/.env.production|*/deploy.env)
           echo "  跳过（受保护路径）：$f"; continue ;;
       esac
       if [ -f "$ROOT/$f" ]; then
