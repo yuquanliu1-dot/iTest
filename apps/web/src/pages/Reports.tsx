@@ -80,25 +80,25 @@ export default function Executions() {
 			const base = {
 				kind: tab,
 				statuses: raw.statuses.length ? raw.statuses : undefined,
-				versionIds: raw.versions.length ? raw.versions : undefined,
 				q: raw.q.trim() ? raw.q.trim() : undefined,
 				caseId: raw.caseId || undefined,
 				planId: raw.planId || undefined,
 			};
 			// 产品线执行库：跨项目拉整条线的执行历史（不传 projectId）；线 id 未加载前先按当前版本拉
-			return onLineScope && productLineId
-				? api.executions.list({ ...base, productLineId })
-				: api.executions.list({ ...base, projectId });
+			if (onLineScope && productLineId) {
+				return api.executions.list({
+					...base,
+					productLineId,
+					versionIds: raw.versions.length ? raw.versions : undefined,
+				});
+			}
+			// 「当前版本」范围恒定锁死当前版本（与用例列表页同款口径）——否则这里返回的是整个项目的
+			// 执行历史，「当前版本」这个开关形同虚设。
+			return api.executions.list({ ...base, projectId, versionIds: versionId ? [versionId] : undefined });
 		},
 		enabled: !!projectId,
 	});
 
-	// 版本 facet 选项 = 项目全量版本，与 GroupsPage 一致
-	const { data: projectVersionList } = useQuery({
-		queryKey: ['versions', projectId],
-		queryFn: () => api.versions.list(projectId!),
-		enabled: !!projectId,
-	});
 	// 产品线范围：版本 facet 换成整条线的版本集合
 	const { data: lineVersionList } = useQuery({
 		queryKey: ['versions', 'line', productLineId],
@@ -257,11 +257,14 @@ export default function Executions() {
 				{ value: 'running', label: t('reports:list.statusRunning') },
 			],
 		},
-		{
-			id: 'version',
-			label: t('reports:list.version'),
-			options: (onLineScope ? lineVersionList ?? [] : projectVersionList ?? []).map((v) => ({ value: v.id, label: v.name })),
-		},
+		// 「当前版本」范围恒定锁死版本，这一维无意义；产品线范围才用来跨版本挑基线
+		...(onLineScope
+			? [{
+				id: 'version',
+				label: t('reports:list.version'),
+				options: (lineVersionList ?? []).map((v) => ({ value: v.id, label: v.name })),
+			} as DataTableFacet]
+			: []),
 	];
 
 	const columnsDef: DataTableColumn<(typeof rows)[number]>[] = [
