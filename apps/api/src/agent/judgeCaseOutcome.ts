@@ -28,6 +28,10 @@ export interface JudgeCaseOutcomeOpts {
   /** 过程证据：末几步的页面文本快照（老→新）。与 processScreenshot 同动机——DOM 文字
    *  由机械采集，比截图更不易误读。缺省不传。 */
   processPageTexts?: string[];
+  /** 过程证据：步骤执行记录（每步 warning/error，含临场 AI 对页面现象的描述）。短时提示
+   *  可能出现在某步执行过程中、又在该步结束前消失——只有当时的执行者看到并记进了备注，
+   *  步末快照与终态截图都接不到。缺省不传。 */
+  processStepNotes?: string[];
   /** LLM 注入；缺省时按需 resolveLlmClient。 */
   llmClient?: LLMClient;
   /** 界面语言：缺省 zh-CN 回落（执行路径无用户上下文时确定性回落）。 */
@@ -64,7 +68,8 @@ export async function judgeCaseOutcome(opts: JudgeCaseOutcomeOpts): Promise<Visi
   const hasFull = !!opts.fullScreenshot;
   const hasProcessImage = !!opts.processScreenshot;
   const processTexts = opts.processPageTexts?.length ? opts.processPageTexts : null;
-  const extraImages = hasFull || hasProcessImage || !!processTexts;
+  const processNotes = opts.processStepNotes?.length ? opts.processStepNotes : null;
+  const extraImages = hasFull || hasProcessImage || !!processTexts || !!processNotes;
   const messages: LLMMessage[] | undefined = extraImages
     ? [
         {
@@ -90,6 +95,12 @@ export async function judgeCaseOutcome(opts: JudgeCaseOutcomeOpts): Promise<Visi
                   text: `执行过程页面文本（每步一次捕获的页面文字快照，老→新，共 ${processTexts.length} 份）：\n${processTexts
                     .map((t, i) => `[快照 ${i + 1}]\n${t}`)
                     .join('\n---\n')}`,
+                }]
+              : []),
+            ...(processNotes
+              ? [{
+                  type: 'text' as const,
+                  text: `步骤执行记录（executor 对每步的备注与错误，含临场 AI 对页面现象的描述，老→新）：\n${processNotes.join('\n')}`,
                 }]
               : []),
             { type: 'text', text: userMessage },

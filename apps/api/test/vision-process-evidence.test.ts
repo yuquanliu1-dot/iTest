@@ -7,12 +7,14 @@
  *
  * 修法：把「过程证据」喂给同一次判定——末步截图（截自动作刚完成时，短时提示尚在存活
  * 窗口内）+ 每步机械捕获的页面文本快照（DOM 文字，确定性代码采集，不加新 AI 环节）。
- * 本测试锁四件事：
+ * 本测试锁五件事：
  *   1. 过程图 + 终态图都进 messages，图 1/2/3 标注齐全（真发了，不是只改文案）。
  *   2. 只有过程图没有整页图时也走 messages（image 字段只支持单图）。
  *   3. 过程文本快照作为文本块进消息，内容原样可达。
  *   4. prompt 写明「瞬时现象以图 3/过程文本为准；稳定终态仍以图 1/2 为准」的边界，
  *      防过程证据把真失败洗白（OR 短路的假通过风险用 prompt 规则约束）。
+ *   5. 步骤执行记录（每步 warning/error）作为第三路过程证据——toast 可能出现在某步执行
+ *      过程中、又在该步结束前消失（AI 降级重做耗时数十秒时尤甚），只有当时的执行者记进了备注。
  */
 import { describe, it, expect } from 'vitest';
 import type { LLMClient, LLMRequest, LLMResult } from '../src/agent/llm-client.js';
@@ -98,13 +100,27 @@ describe('judgeCaseOutcome · 过程证据进判定', () => {
     expect(reqs[0]!.image).toBeDefined();
     expect(reqs[0]!.messages).toBeUndefined();
   });
+  it('只有步骤执行记录（无附加图/文本快照）也走 messages，内容原样可达', async () => {
+    const { llm, reqs } = mockLlm();
+    await judgeCaseOutcome({
+      expectedOutcome: '提交后出现「保存成功」提示', caseTitle: 't',
+      screenshot: shot('v'),
+      processStepNotes: ['第 2 步：点击登录后页面顶部出现「验证码不正确」提示，预期已达成'],
+      llmClient: llm,
+    });
+    expect(reqs[0]!.image).toBeUndefined();
+    expect(countImages(reqs[0]!)).toBe(1);
+    const text = textOf(reqs[0]!);
+    expect(text).toContain('步骤执行记录');
+    expect(text).toContain('第 2 步：点击登录后页面顶部出现「验证码不正确」提示');
+  });
 });
 
 describe('prompt · 过程证据的判定边界', () => {
-  it('写明瞬时现象以图 3/过程文本为准', () => {
+  it('写明瞬时现象以图 3/过程文本/步骤执行记录为准', () => {
     expect(CASE_OUTCOME_VISION_PROMPT).toContain('图 3');
     expect(CASE_OUTCOME_VISION_PROMPT).toContain('瞬时');
-    expect(CASE_OUTCOME_VISION_PROMPT).toMatch(/图 3 或过程文本/);
+    expect(CASE_OUTCOME_VISION_PROMPT).toMatch(/图 3、过程文本或步骤执行记录/);
   });
   it('写明稳定终态仍以图 1/图 2 为准——过程证据不能替代终态判定', () => {
     expect(CASE_OUTCOME_VISION_PROMPT).toMatch(/稳定终态/);

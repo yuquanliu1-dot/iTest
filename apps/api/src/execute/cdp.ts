@@ -1285,6 +1285,14 @@ async function runStepsInContext(
     for (const t of pageTextSnaps) {
       if (t !== dedupedTexts[dedupedTexts.length - 1]) dedupedTexts.push(t);
     }
+    // 步骤执行记录：每步 warning/error（含临场 AI 对页面现象的描述）。瞬时提示可能在某步执行
+    // 过程中出现、又在该步结束前消失（AI 降级重做耗时数十秒时尤甚），步末快照与终态截图都接
+    // 不到——只有当时看到它的执行者记进了备注。
+    const stepNotes: string[] = [];
+    for (const r of results) {
+      const note = [r.warning, r.error].filter(Boolean).join('；');
+      if (note) stepNotes.push(`第 ${r.order} 步：${note.slice(0, 300)}`);
+    }
     const va = await runCaseVisionAssert({
       page: opts.page,
       reportId: ctx.reportId,
@@ -1297,6 +1305,7 @@ async function runStepsInContext(
       llmClient: ctx.llmClient,
       processScreenshotPath: lastShot,
       ...(dedupedTexts.length ? { processPageTexts: dedupedTexts.slice(-3) } : {}),
+      ...(stepNotes.length ? { processStepNotes: stepNotes } : {}),
     });
     if (va?.failureStep) {
       results.push(va.failureStep);

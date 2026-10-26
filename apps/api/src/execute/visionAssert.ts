@@ -25,6 +25,9 @@ export interface VisionAssertInput {
   processScreenshotPath?: string | null;
   /** 过程证据：末几步的页面文本快照（老→新，已去重截断）。瞬时提示的文字只可能出现在这里。 */
   processPageTexts?: string[];
+  /** 过程证据：步骤执行记录（每步 warning/error，含临场 AI 对页面现象的描述）。短时提示可能在
+   *  某步执行过程中出现、又在该步结束前消失——只有当时的执行者看到并记进了备注。缺省不传。 */
+  processStepNotes?: string[];
 }
 
 /** web 截图路径 → 磁盘路径。仅接受本服务自己的 /screenshots/ 前缀（内部 step_results 来源，
@@ -99,6 +102,7 @@ export async function runCaseVisionAssert(input: VisionAssertInput): Promise<Vis
       ...(fullBuffer ? { fullScreenshot: { base64: fullBuffer.toString('base64'), mime: 'image/png' as const } } : {}),
       ...(processImage ? { processScreenshot: processImage } : {}),
       ...(input.processPageTexts?.length ? { processPageTexts: input.processPageTexts } : {}),
+      ...(input.processStepNotes?.length ? { processStepNotes: input.processStepNotes } : {}),
       llmClient: input.llmClient,
     });
     // 报告侧脱敏:LLM 提示按 spec §8.3 走明文,但落库的 visionAssert(expected / reason 可能复述敏感列值)
