@@ -525,7 +525,7 @@ export default function CaseDetail() {
     mutationFn: () => api.cases.execute(id!),
     onSuccess: (r) => {
       // 执行已异步化：点击执行立即落到报告页（running 中实时画面 + 跑完原地出报告）。
-      // 数据集多行 → 落到第 1 份报告，报告页顶部有「全部 N 份」入口。
+      // 数据集多行 → 落到第 1 份报告，报告页顶部数据行切换器可翻行。
       qc.invalidateQueries({ queryKey: ['reports'] });
       navigate(`/p/${projectId}/v/${versionId}/reports/${r.reportId}`);
     },

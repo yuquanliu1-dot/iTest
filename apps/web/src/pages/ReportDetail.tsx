@@ -461,16 +461,6 @@ export default function ReportDetail() {
           {t('reports:reportTitle')}
         </h1>
         <StatusPill status={data.status}>{t(`cases:status.${data.status}`, { defaultValue: data.status })}</StatusPill>
-        {data.datasetSnapshot && data.datasetSnapshot.totalRows > 1 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports?tab=case&caseId=${data.caseId}`)}
-            title={t('reports:detail.datasetCountTitle', { count: data.datasetSnapshot.totalRows })}
-          >
-            {t('reports:detail.allReports', { count: data.datasetSnapshot.totalRows })}
-          </Button>
-        )}
         {data.healed && (
           <span
             className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded-full"

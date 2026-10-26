@@ -50,8 +50,6 @@
     "summaryTitle": "汇总",
     "metadataTitle": "元数据",
     "dataRowTitle": "当次数据行",
-    "allReports": "全部 {{count}} 份",
-    "datasetCountTitle": "该用例数据集共 {{count}} 行，每行一份报告",
     "openCase": "打开用例详情",
     "datasetRows": "数据行",
     "following": "跟随执行中",
