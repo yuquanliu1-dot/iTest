@@ -758,6 +758,10 @@ export default function GroupsPage() {
 							onChange={(v) => setScope(v)}
 						/>
 					)}
+					<Button size="sm" variant="ghost" disabled={exportingXmind || filteredCases.length === 0} onClick={exportXmind}>
+						<Icon name="download" size={12} />
+							{exportingXmind ? t('groups:exportingXmind') : t('groups:exportXmind')}
+					</Button>
 					<Button
 						onClick={() => {
 							const gid = effectiveGroupId || groups?.[0]?.id || '';
@@ -938,10 +942,6 @@ export default function GroupsPage() {
 										<Button size="sm" variant="ghost" onClick={() => setConfirmBatchSolidify(true)}>
 											<Icon name="sparkles" size={12} />
 												{t('groups:batchSolidify')}
-										</Button>
-										<Button size="sm" variant="ghost" disabled={exportingXmind || filteredCases.length === 0} onClick={exportXmind}>
-											<Icon name="download" size={12} />
-												{exportingXmind ? t('groups:exportingXmind') : t('groups:exportXmind')}
 										</Button>
 										<select
 											aria-label={t('groups:batchStatusAria')}
