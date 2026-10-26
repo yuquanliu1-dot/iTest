@@ -140,14 +140,35 @@ if [ "$AD_COUNT" != "0" ]; then
 fi
 echo "✓ tarball 无 AppleDouble 条目"
 
+# --- 导出本次发布的文件清单（供远端删除「已删除文件」的残留）---
+# tar 解包是「覆盖」语义、不删旧文件：本地已删的文件会永久留在服务器 checkout 里，
+# 随后被 COPY 进镜像 build context → 编译报错（2026-10-26 实测：工作台 v2.1 删掉的
+# 4 个旧 overview 组件残留，引用已改版的 OverviewResponse 字段，web 镜像构建失败）。
+# 清单 = 本次 tarball 的文件列表（相对路径，LC_ALL=C 排序），单独上传、放在 checkout 之外。
+MANIFEST="$TMP_LOCAL/files-manifest.txt"
+python3 - "$TARBALL" > "$MANIFEST" <<'PY'
+import sys, tarfile
+with tarfile.open(sys.argv[1]) as t:
+    for m in t.getmembers():
+        if m.isfile():
+            print(m.name)
+PY
+# tarball 条目名形如 "./apps/api/src/x.ts"，去掉前导 "./" 才是相对路径
+sed -i.bak 's|^\./||' "$MANIFEST" && rm -f "$MANIFEST.bak"
+LC_ALL=C sort -o "$MANIFEST" "$MANIFEST"
+echo "✓ 文件清单 $(wc -l < "$MANIFEST") 条"
+
 if [ "$DRY_RUN" = "1" ]; then
-  echo "--dry-run: 跳过上传与部署（tarball 保留在 ${TARBALL}）"
+  echo "--dry-run: 跳过上传与部署（tarball 保留在 ${TMP_LOCAL}）"
   trap - EXIT
   exit 0
 fi
 
 echo "== 上传 =="
 put_file "$TARBALL" "$DEPLOY_REMOTE_DIR.tar.gz"
+# 清单传到 .new 后缀：deploy.sh 需要「上一版」与「本版」两份做差集，
+# 所以不能直接覆盖同名文件（覆盖了就拿不到旧清单）。
+put_file "$MANIFEST" "$DEPLOY_REMOTE_DIR.files-manifest.txt.new"
 
 echo "== 远程部署 =="
 # 先解包（含最新的 deploy.sh），再执行——绝不让脚本执行中自我覆盖。

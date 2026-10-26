@@ -106,6 +106,60 @@ else
   echo "== 首次部署：跳过备份（库还是空的）=="
 fi
 
+echo "== 清理已删除文件的残留 =="
+# tar 解包是「覆盖」语义、不删旧文件：本地某次提交删掉的文件会永久留在 checkout 里，
+# 被 COPY 进镜像 build context → 编译报错（2026-10-26 实测：工作台 v2.1 删掉的 4 个旧
+# overview 组件残留，引用已改版的 OverviewResponse 字段，web 镜像构建失败）。
+#
+# 删除集合 = 「上一版清单 − 本版清单」= 本次发布中被删除的文件。
+# 不能用「服务器上所有不在本版清单里的文件」：.env / .data / screenshots / node_modules
+# 等被 tar exclude 的路径从来不在清单里，但服务器上必须保留（配置、数据、运行产物）。
+#
+# 清单文件放在 checkout 之外（/home/wangb/itest-files-manifest.txt）：既不进 build
+# context，也不会被 tar 解包覆盖。
+MANIFEST_CUR="${ROOT}.files-manifest.txt"
+MANIFEST_PREV="${MANIFEST_CUR}.prev"
+if [ -f "$MANIFEST_CUR" ] && [ -f "$MANIFEST_CUR.new" ]; then
+  cp "$MANIFEST_CUR" "$MANIFEST_PREV"
+  mv "$MANIFEST_CUR.new" "$MANIFEST_CUR"
+elif [ -f "$MANIFEST_CUR.new" ]; then
+  # 首次引入清单：没有上一版可比，不删任何东西（残留由本次人工清理兜住）
+  mv "$MANIFEST_CUR.new" "$MANIFEST_CUR"
+  echo "首次引入文件清单，本次不清理残留"
+fi
+
+if [ -f "$MANIFEST_PREV" ] && [ -f "$MANIFEST_CUR" ]; then
+  # 相对路径 + 拒绝绝对路径与含 '..' 路径段：清单内容来自 tarball（受本地工作区控制），
+  # 但仍按「只删 checkout 内、不跳目录」的规则执行，避免路径注入删到别处。
+  #
+  # comm 要求输入已按同一 collation 排序——这里对两份清单各自重排（LC_ALL=C），
+  # 不依赖上传时排过序：排错一次就会把「本版仍存在的文件」误判成已删除并删掉。
+  LC_ALL=C sort "$MANIFEST_PREV" -o "$MANIFEST_PREV"
+  LC_ALL=C sort "$MANIFEST_CUR" -o "$MANIFEST_CUR"
+  REMOVED="$(LC_ALL=C comm -23 "$MANIFEST_PREV" "$MANIFEST_CUR")"
+  if [ -n "$REMOVED" ]; then
+    echo "本次发布删除的文件："
+    echo "$REMOVED" | sed 's/^/  /'
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      case "$f" in
+        /*) echo "  跳过（绝对路径）：$f"; continue ;;
+        ../*|*/../*|*/..) echo "  跳过（路径跳目录）：$f"; continue ;;
+      esac
+      if [ -f "$ROOT/$f" ]; then
+        rm -f "$ROOT/$f" && echo "  已删除 $f"
+      fi
+    done <<EOF
+$REMOVED
+EOF
+    # 不清理空目录：find -delete 会波及 .data 下的用户目录骨架等非本次发布的路径。
+    # git 不跟踪空目录，留着无害；残留文件被删后空壳目录留着也不影响镜像构建。
+  else
+    echo "本次发布无文件删除"
+  fi
+  rm -f "$MANIFEST_PREV"
+fi
+
 echo "== build api =="
 docker build -t itest-api:latest -f infra/docker/api.Dockerfile .
 echo "== build web =="
