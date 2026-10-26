@@ -22,7 +22,7 @@ export function buildExportCasesXmindTool(ctx: SpaceToolsContext): ToolExecutor 
       caseIds: Type.Optional(Type.Array(Type.String(), { maxItems: 500 })),
       groupId: Type.Optional(Type.String()),
       keyword: Type.Optional(Type.String({ maxLength: 200 })),
-      title: Type.Optional(Type.String({ maxLength: 200, description: '根节点标题（也是文件名前缀），缺省用版本名' })),
+      title: Type.Optional(Type.String({ maxLength: 200, description: '根节点标题，缺省用版本名' })),
     }),
     promptGuidelines: [
       '导出内容直接来自库内数据（标题/步骤 instruction/预期结果），不要在对话里复述全部用例内容，简单说明导出范围与用例数即可。',
