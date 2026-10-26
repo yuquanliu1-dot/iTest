@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
+import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { SCHEMA_SQL, seedOrg, seedProject, seedOtherProductLine } from './helpers/db.js';
@@ -452,5 +453,118 @@ describe('plan execution extras', () => {
       if (detail.body.status !== 'running') break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+  });
+});
+
+describe('executions 数据集批次卷起', () => {
+  /** 插入一条 report（可带批次键 / 行号 / 耗时 / 状态）。 */
+  async function insertReport(
+    caseId: string,
+    opts: { batchId?: string; rowIndex?: number; status?: string; durationMs?: number } = {},
+  ): Promise<string> {
+    const r = await pool.query(
+      `INSERT INTO reports(case_id, status, duration_ms, step_results, dataset_batch_id, dataset_row_index)
+       VALUES ($1, $2, $3, '[]'::jsonb, $4, $5) RETURNING id`,
+      [caseId, opts.status ?? 'passed', opts.durationMs ?? 100, opts.batchId ?? null, opts.rowIndex ?? null],
+    );
+    return r.rows[0].id as string;
+  }
+
+  it('同批 N 行卷起成一条：统计按全批、锚点为行号最小者', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const c = await makeCase(groupId, versionId, 'dataset-case');
+    const batchId = randomUUID();
+    const r0 = await insertReport(c, { batchId, rowIndex: 0, status: 'passed', durationMs: 100 });
+    const r1 = await insertReport(c, { batchId, rowIndex: 1, status: 'passed', durationMs: 200 });
+    const r2 = await insertReport(c, { batchId, rowIndex: 2, status: 'failed', durationMs: 300 });
+
+    const list = await request(app).get(`/api/executions?projectId=${projectId}&kind=case`);
+    expect(list.status).toBe(200);
+    const rows = list.body.filter((e: { kind: string }) => e.kind === 'case');
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row.id).toBe(r0); // 锚点 = 行号最小者
+    expect(row.status).toBe('failed'); // 有失败成员 → 整批 failed
+    expect(row.batchSize).toBe(3);
+    expect(row.batchPassed).toBe(2);
+    expect(row.batchFailed).toBe(1);
+    expect(row.durationMs).toBe(600); // 成员耗时之和
+    expect(new Set(row.memberReportIds)).toEqual(new Set([r0, r1, r2]));
+  });
+
+  it('无批次的老报告各占一条、batchSize=1', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const c = await makeCase(groupId, versionId, 'legacy-case');
+    const a = await insertReport(c, { status: 'passed' });
+    const b = await insertReport(c, { status: 'failed' });
+
+    const list = await request(app).get(`/api/executions?projectId=${projectId}&kind=case`);
+    const rows = list.body.filter((e: { kind: string }) => e.kind === 'case');
+    expect(rows).toHaveLength(2);
+    const byId = new Map(rows.map((e: { id: string }) => [e.id, e]));
+    expect(byId.get(a)!.batchSize).toBe(1);
+    expect(byId.get(a)!.datasetBatchId).toBeNull();
+    expect(byId.get(b)!.batchSize).toBe(1);
+  });
+
+  it('两个不同批次各出一条，互不混合', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const c = await makeCase(groupId, versionId, 'two-batches');
+    const b1 = randomUUID();
+    const b2 = randomUUID();
+    await insertReport(c, { batchId: b1, rowIndex: 0 });
+    await insertReport(c, { batchId: b1, rowIndex: 1 });
+    await insertReport(c, { batchId: b2, rowIndex: 0 });
+
+    const list = await request(app).get(`/api/executions?projectId=${projectId}&kind=case`);
+    const rows = list.body.filter((e: { kind: string }) => e.kind === 'case');
+    expect(rows).toHaveLength(2);
+    const sizes = rows.map((e: { batchSize: number }) => e.batchSize).sort();
+    expect(sizes).toEqual([1, 2]);
+  });
+
+  it('状态筛选命中批内任一成员即出现该批，统计仍按全批真实值', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const c = await makeCase(groupId, versionId, 'filtered-batch');
+    const batchId = randomUUID();
+    await insertReport(c, { batchId, rowIndex: 0, status: 'passed' });
+    await insertReport(c, { batchId, rowIndex: 1, status: 'passed' });
+    await insertReport(c, { batchId, rowIndex: 2, status: 'failed' });
+
+    // 只筛 failed：命中批内第 3 行，批本身出现
+    const list = await request(app).get(`/api/executions?projectId=${projectId}&kind=case&statuses=failed`);
+    expect(list.status).toBe(200);
+    const rows = list.body.filter((e: { kind: string }) => e.kind === 'case');
+    expect(rows).toHaveLength(1);
+    // 统计按全批算：不能因为只命中失败行就把通过数报成 0
+    expect(rows[0].batchSize).toBe(3);
+    expect(rows[0].batchPassed).toBe(2);
+    expect(rows[0].batchFailed).toBe(1);
+    expect(rows[0].status).toBe('failed');
+  });
+
+  it('批成员挂在计划运行下时按计划成员排除口径剔除', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const c = await makeCase(groupId, versionId, 'plan-linked-batch');
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    const run = await pool.query(
+      `INSERT INTO plan_runs(plan_id, project_id, status, strategy) VALUES ($1, $2, 'passed', 'run_all') RETURNING id`,
+      [plan.body.id, projectId],
+    );
+    const batchId = randomUUID();
+    const r0 = await insertReport(c, { batchId, rowIndex: 0 });
+    const r1 = await insertReport(c, { batchId, rowIndex: 1 });
+    // r1 挂到计划运行成员下 → 不进单用例执行历史
+    await pool.query(
+      `INSERT INTO plan_run_cases(plan_run_id, case_id, "order", status, step_kind, report_id)
+       VALUES ($1, $2, 1, 'passed', 'business', $3)`,
+      [run.rows[0].id, c, r1],
+    );
+
+    const list = await request(app).get(`/api/executions?projectId=${projectId}&kind=case`);
+    const rows = list.body.filter((e: { kind: string }) => e.kind === 'case');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].batchSize).toBe(1);
+    expect(rows[0].memberReportIds).toEqual([r0]);
   });
 });
