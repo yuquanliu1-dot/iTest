@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildXmindTree, describeAction, type ExportCaseRow } from './xmindExport.service.js';
+import { buildXmindTree, describeAction, renderXmindWorkbook, type ExportCaseRow, type XmindNode } from './xmindExport.service.js';
 
 function mkCase(over: Partial<ExportCaseRow> = {}): ExportCaseRow {
   return {
@@ -102,5 +102,43 @@ describe('describeAction 补充 kind', () => {
   });
   it('sql 压单行截断', () => {
     expect(describeAction({ kind: 'sql', sql: 'select\n  *\n  from t' })).toBe('执行 SQL：select * from t');
+  });
+});
+
+describe('renderXmindWorkbook', () => {
+  const tree: XmindNode = {
+    title: 'V2.3 <root> & "引号"',
+    children: [{ title: '分组A', children: [{ title: '用例一\n第二行' }] }],
+  };
+  const wb = renderXmindWorkbook(tree);
+
+  it('四件齐全', () => {
+    expect(Object.keys(wb).sort()).toEqual(['content.json', 'content.xml', 'manifest.json', 'metadata.json']);
+  });
+
+  it('content.json 结构与参考文件一致（单 sheet + rootTopic + structureClass）', () => {
+    const sheets = JSON.parse(wb['content.json']!) as Array<{ class: string; rootTopic: Record<string, unknown> }>;
+    expect(sheets).toHaveLength(1);
+    expect(sheets[0]!.class).toBe('sheet');
+    expect(sheets[0]!.rootTopic.title).toBe('V2.3 <root> & "引号"');
+    expect(sheets[0]!.rootTopic.structureClass).toBe('org.xmind.ui.logic.right');
+    const children = (sheets[0]!.rootTopic.children as { attached: Array<{ title: string }> }).attached;
+    expect(children[0]!.title).toBe('分组A');
+  });
+
+  it('content.xml well-formed 且特殊字符已转义、换行保留', () => {
+    const xml = wb['content.xml']!;
+    expect(xml.startsWith('<?xml')).toBe(true);
+    expect(xml).toContain('<xmap-content');
+    expect(xml).toContain('V2.3 &lt;root&gt; &amp; "引号"');
+    expect(xml).toContain('用例一\n第二行');
+    // 粗校验标签配对
+    expect(xml.match(/<topic /g)?.length).toBe(xml.match(/<\/topic>/g)?.length);
+  });
+
+  it('metadata/manifest 为固定形状', () => {
+    expect(JSON.parse(wb['metadata.json']!)).toMatchObject({ creator: { name: 'iTest' } });
+    const manifest = JSON.parse(wb['manifest.json']!) as { 'file-entries': Record<string, unknown> };
+    expect(Object.keys(manifest['file-entries']).sort()).toEqual(['content.json', 'content.xml', 'metadata.json']);
   });
 });

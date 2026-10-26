@@ -4,6 +4,8 @@
  * 设计文档：docs/superpowers/specs/2026-10-26-case-export-xmind-design.md
  */
 
+import { randomUUID } from 'node:crypto';
+
 export interface ExportStepRow {
   order: number;
   instruction: string | null;
@@ -193,5 +195,60 @@ export function buildXmindTree(cases: ExportCaseRow[], rootTitle: string): Xmind
   return {
     title: rootTitle,
     children: [...byGroup.keys()].sort((a, b) => a.localeCompare(b, 'zh')).map((g) => groupNode(g, byGroup.get(g)!)),
+  };
+}
+
+function escapeXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function topicToJson(n: XmindNode, isRoot: boolean): Record<string, unknown> {
+  const t: Record<string, unknown> = { id: randomUUID(), class: 'topic', title: n.title };
+  if (isRoot) t.structureClass = 'org.xmind.ui.logic.right';
+  if (n.children?.length) {
+    t.children = { attached: n.children.map((c) => topicToJson(c, false)) };
+  }
+  return t;
+}
+
+function topicToXml(n: XmindNode, isRoot: boolean): string {
+  const attrs = isRoot ? ' structure-class="org.xmind.ui.logic.right"' : '';
+  const inner = `<title>${escapeXml(n.title)}</title>`;
+  const children = n.children?.length
+    ? `<children><topics type="attached">${n.children.map((c) => topicToXml(c, false)).join('')}</topics></children>`
+    : '';
+  return `<topic id="${randomUUID()}"${attrs}>${inner}${children}</topic>`;
+}
+
+/** 双格式序列化：content.json(XMind 2020+/ZEN) + content.xml(XMind 8) + metadata + manifest。 */
+export function renderXmindWorkbook(root: XmindNode): Record<string, string> {
+  const contentJson = JSON.stringify([
+    {
+      id: randomUUID(),
+      class: 'sheet',
+      title: 'Sheet 1',
+      rootTopic: topicToJson(root, true),
+    },
+  ]);
+  const contentXml = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xmap-content xmlns="urn:xmind:xmap:xmlns:content:2.0" xmlns:xlink="http://www.w3.org/1999/xlink" version="2.0">
+  <sheet id="${randomUUID()}">
+    ${topicToXml(root, true)}
+  </sheet>
+</xmap-content>
+`;
+  const metadataJson = JSON.stringify({
+    dataStructureVersion: '2',
+    layoutEngineVersion: '3',
+    creator: { name: 'iTest', version: '1.0' },
+  });
+  const manifestJson = JSON.stringify({
+    'file-entries': { 'content.json': {}, 'content.xml': {}, 'metadata.json': {} },
+  });
+  return {
+    'content.json': contentJson,
+    'content.xml': contentXml,
+    'metadata.json': metadataJson,
+    'manifest.json': manifestJson,
   };
 }
