@@ -27,7 +27,7 @@ import { classify } from './failureClassifier.js';
 import { preflight } from './preflight.js';
 import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
-import { runAiTask, solveCaptchaOnce, isCaptchaFailed, CAPTCHA_TASK_RE, SECRET_PH, makeCredentialValueSub, parseCredentialPlaceholder, CREDENTIAL_PLACEHOLDER_SCAN, referencesCredential, type AiAction } from './aiTask.js';
+import { runAiTask, solveCaptchaOnce, isCaptchaFailed, CAPTCHA_TASK_RE, SECRET_PH, makeCredentialValueSub, parseCredentialPlaceholder, CREDENTIAL_PLACEHOLDER_SCAN, referencesCredential, buildDegradeContext, type AiAction } from './aiTask.js';
 import { buildCredentialSource, renderWebResourceManifest } from './credentialSource.js';
 import { mapAiActionsToCompiled } from './aiActionMap.js';
 import { readAiTaskCache, writeAiTaskCache, bumpAiTaskCacheHit } from './aiTaskCache.js';
@@ -326,6 +326,28 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
   }
 }
 
+/**
+ * 定位表达式里的变量替换：locator 的 value 常带数据集变量（如 waitFor text={{expectedError}}）。
+ *
+ * 2026-10-26 prod228 实测踩过的坑：waitFor / assertVisible 分支漏了替换，机械层实际在等
+ * **字面文本 `{{expectedError}}`**——这个字符串永远不存在，于是「等错误提示出现」这一步
+ * 必然 count=0 失败，进而把整步交给 AI 降级验收（AI 又倾向造现象 → 假通过）。
+ * fill 分支早有替换（action.value），断言类分支则完全缺失——同类问题一次修齐。
+ */
+function substituteLocators(
+  locator: Locator[] | undefined,
+  vars: Record<string, string>,
+): { locator: Locator[]; missing: string[] } {
+  if (!locator || locator.length === 0) return { locator: [], missing: [] };
+  const missing: string[] = [];
+  const out = locator.map((l) => {
+    const { value, missing: miss } = substituteVars(l.value, vars);
+    missing.push(...miss);
+    return { ...l, value };
+  });
+  return { locator: out, missing };
+}
+
 async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
   const { page, vars } = opts;
   // 交互动作前置稳定性检查；不稳定且 DOM 降级成功时以 warning 短路返回。
@@ -423,6 +445,11 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         await page.waitForTimeout(action.timeoutMs ?? 5000);
         return;
       }
+      // 定位值可能是数据集变量（text={{expectedError}}）——不替换则等的是字面模板串，必然超时。
+      const { locator: waitLoc, missing: waitMissing } = substituteLocators(action.locator, vars);
+      if (waitMissing.length > 0) {
+        throw new Error(`var-missing: {{${waitMissing[0]!}}} (locator="${action.locator[0]?.value}")`);
+      }
       // tryFirstMatch 的 count() 是单帧探测：waitFor 语义是「等元素出现」，
       // 点击/导航后元素尚不存在时必须轮询重试，否则 t=0 探测一次 count=0 立即失败。
       const timeoutMs = action.timeoutMs ?? 5000;
@@ -430,7 +457,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       let lastErr: unknown;
       while (Date.now() < deadline) {
         try {
-          const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
+          const loc = await tryFirstMatch(page, waitLoc, action.intentLocator, opts.hitSink);
           await loc.waitFor({ state: 'visible', timeout: Math.max(100, deadline - Date.now()) });
           return;
         } catch (e) {
@@ -438,13 +465,17 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
           await page.waitForTimeout(200);
         }
       }
-      throw lastErr instanceof Error ? lastErr : new Error(`waitFor timeout: ${action.locator[0]?.value}`);
+      throw lastErr instanceof Error ? lastErr : new Error(`waitFor timeout: ${waitLoc[0]?.value}`);
     }
     case 'assertVisible': {
-      const assertLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
+      const { locator: assertLocArr, missing: assertMissing } = substituteLocators(action.locator, vars);
+      if (assertMissing.length > 0) {
+        throw new Error(`var-missing: {{${assertMissing[0]!}}} (locator="${action.locator[0]?.value}")`);
+      }
+      const assertLoc = await tryFirstMatch(page, assertLocArr, action.intentLocator, opts.hitSink);
       try {
         if (!(await assertLoc.isVisible({ timeout: 5000 }))) {
-          throw new Error(`assertVisible failed: ${action.locator[0]?.value}`);
+          throw new Error(`assertVisible failed: ${assertLocArr[0]?.value}`);
         }
       } catch (e) {
         // strict-mode violation（text/role 命中多个元素，如表格列头+筛选区同名文本）
@@ -453,7 +484,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         // DOM 顺序靠前的匹配可能是 visibility:hidden 的副本，必须过滤后再判。
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
           if (!(await assertLoc.filter({ visible: true }).first().isVisible())) {
-            throw new Error(`assertVisible failed: ${action.locator[0]?.value}`);
+            throw new Error(`assertVisible failed: ${assertLocArr[0]?.value}`);
           }
           return;
         }
@@ -465,7 +496,12 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       const a = action as StepAction & { kind: 'assertText' };
       const { value, missing } = substituteVars(a.equals, vars);
       if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${a.equals}")`);
-      const actual = await resolveAssertTextActual(page, a, opts.hitSink);
+      // 定位值可能带数据集变量（text={{expectedError}}）——不替换则找不到目标元素。
+      const { locator: assertLocArr, missing: locMissing } = substituteLocators(a.locator, vars);
+      if (locMissing.length > 0) {
+        throw new Error(`var-missing: {{${locMissing[0]!}}} (locator="${a.locator[0]?.value}")`);
+      }
+      const actual = await resolveAssertTextActual(page, { ...a, locator: assertLocArr }, opts.hitSink);
       const ok = matchAssertText(actual, value, a.match ?? 'equals');
       if (!ok) {
         throw new Error(`assertText failed (${a.target ?? 'specifiedElement'}/${a.match ?? 'equals'}): expected ${JSON.stringify(value)}, actual ${JSON.stringify(actual.slice(0, 100))}`);
@@ -480,7 +516,11 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       if (missingJson.length > 0) {
         throw new Error(`var-missing: {{${missingJson[0]!}}} (template="${JSON.stringify(action.equals).slice(0, 100)}")`);
       }
-      const text = (await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).innerText({ timeout: 5000 })).trim();
+      const { locator: jsonLocArr, missing: jsonLocMissing } = substituteLocators(action.locator, vars);
+      if (jsonLocMissing.length > 0) {
+        throw new Error(`var-missing: {{${jsonLocMissing[0]!}}} (locator="${action.locator[0]?.value}")`);
+      }
+      const text = (await (await tryFirstMatch(page, jsonLocArr, action.intentLocator, opts.hitSink)).innerText({ timeout: 5000 })).trim();
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -1086,6 +1126,9 @@ async function runStepsInContext(
               const credRef = referencesCredential(instResolved);
               const summary = await runAiTask(opts.page, instResolved, client, undefined, {
                 onUsage: (r) => aiUsage.add(r),
+                // 纯自然语言步没有机械语义可参考，但「观察不制造」的守则同样适用：
+                // 指令要的是「观察某现象」时，AI 不得为诱发它而填值/重复提交。
+                degradeContext: buildDegradeContext({ compiled: null }),
                 ...(credRef
                   ? {
                       valueSub: aiCredentialSub(ctx, await resolveStepSecretForAi(ctx, opts.stepId, instResolved)),
@@ -1197,6 +1240,15 @@ async function runStepsInContext(
               const credRef = referencesCredential(instResolved);
               aiSummary = (await runAiTask(opts.page, instResolved, client, undefined, {
                 onUsage: (r) => aiUsage.add(r),
+                // 把机械语义 + 机械失败原因一并告诉 AI：降级路径原本只传自然语言指令，
+                // AI 不知道「本步本意是等某文本出现 10s」也不知道「机械已确认它没出现」，
+                // 于是会造数据把预期现象造出来（2026-10-26 prod228 实测：填编造的错验证码
+                // + 重复提交，负向用例假通过）。
+                degradeContext: buildDegradeContext({
+                  compiled: compiledForClassify,
+                  failedAction,
+                  mechanicalError: rawMsg,
+                }),
                 ...(credRef
                   ? {
                       valueSub: aiCredentialSub(ctx, await resolveStepSecretForAi(ctx, opts.stepId, instResolved)),

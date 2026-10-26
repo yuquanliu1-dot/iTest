@@ -1180,3 +1180,59 @@ describe('sql 步骤分支（查被测系统自己的库）', () => {
     expect(results[0]!.failureReason).toBe('EnvDbMissing');
   });
 });
+
+describe('locator 变量替换 — waitFor/assert* 的定位值带数据集变量', () => {
+  it('waitFor text={{expectedError}} 替换成实际文案后再找（prod228 假通过根因）', async () => {
+    mocked.__getByText.mockClear();
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000050',
+      [{
+        order: 1,
+        compiled: [{
+          kind: 'waitFor',
+          locator: [{ strategy: 'text', value: '{{expectedError}}' }],
+          timeoutMs: 1000,
+        }],
+      }],
+      { reportId: 'r-waitfor-var', initialVars: { expectedError: '验证码不正确' } },
+    );
+    expect(results[0]!.status).toBe('passed');
+    // 关键：不是字面模板串 {{expectedError}}，而是替换后的实际文案
+    expect(mocked.__getByText).toHaveBeenCalledWith('验证码不正确');
+    expect(mocked.__getByText).not.toHaveBeenCalledWith('{{expectedError}}');
+  });
+
+  it('assertVisible 的定位值同样被替换', async () => {
+    mocked.__locator.mockClear();
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000051',
+      [{
+        order: 1,
+        compiled: [{
+          kind: 'assertVisible',
+          locator: [{ strategy: 'css', value: '{{errorSelector}}' }],
+        }],
+      }],
+      { reportId: 'r-assertvar-var', initialVars: { errorSelector: '.error-msg' } },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(mocked.__locator).toHaveBeenCalledWith('.error-msg');
+  });
+
+  it('变量缺失 → var-missing（不再拿字面模板串去等，必然超时的静默失效）', async () => {
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000052',
+      [{
+        order: 1,
+        compiled: [{
+          kind: 'waitFor',
+          locator: [{ strategy: 'text', value: '{{expectedError}}' }],
+          timeoutMs: 1000,
+        }],
+      }],
+      { reportId: 'r-waitfor-var-missing', initialVars: {} },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toMatch(/var-missing/);
+  });
+});

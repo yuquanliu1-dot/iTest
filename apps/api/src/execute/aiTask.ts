@@ -2,7 +2,7 @@ import type { Page } from 'playwright-core';
 import type { LLMClient, LLMMessage } from '../agent/llm-client.js';
 import { tryParseJson } from '../agent/llm-client.js';
 import { aiLangFrom, type AiLang } from '../agent/langDirective.js';
-import { VAR_NAME_RE } from '@itest/shared';
+import { VAR_NAME_RE, type StepAction } from '@itest/shared';
 import type { AiUsageAddend } from './aiUsage.js';
 import { logger } from '../logger.js';
 import { annotateAction, clearAnnotation } from './liveView.js';
@@ -487,6 +487,123 @@ export async function solveCaptchaOnce(
   return `已识别验证码为 ${text} 并填入`;
 }
 
+/** 机械步骤动作 → 人类可读语义（供 AI 降级时说明「这一步本意是什么」）。 */
+function describeAction(a: StepAction): string {
+  const loc = (x: StepAction): string => {
+    const l = (x as { locator?: Array<{ strategy: string; value: string }> }).locator ?? [];
+    return l.map((c) => `${c.strategy}=${c.value}`).join(' | ') || '(无定位)';
+  };
+  switch (a.kind) {
+    case 'waitFor': {
+      const t = (a as { timeoutMs?: number }).timeoutMs;
+      return `等待 ${loc(a)} 出现${t ? `（最多 ${t}ms）` : ''}`;
+    }
+    case 'assertVisible': return `断言 ${loc(a)} 可见`;
+    case 'assertText': return `断言 ${loc(a)} 文本匹配`;
+    case 'assertJson': return `断言 ${loc(a)} JSON 匹配`;
+    case 'click': return `点击 ${loc(a)}`;
+    case 'fill': return `填写 ${loc(a)}`;
+    case 'hover': return `悬停 ${loc(a)}`;
+    case 'check': return `勾选 ${loc(a)}`;
+    case 'select': return `选择 ${loc(a)}`;
+    case 'upload': return `上传 ${loc(a)}`;
+    case 'navigate': return `访问 ${(a as { url?: string }).url ?? ''}`;
+    case 'screenshot': return `截图 ${loc(a)}`;
+    default: return a.kind;
+  }
+}
+
+/** 步骤的机械语义分类：决定降级时给 AI 哪条守则。 */
+export type DegradeStepType = 'observe' | 'interact' | 'unknown';
+
+/** 观察类动作：只看不碰。 */
+const OBSERVE_KINDS = new Set(['waitFor', 'assertVisible', 'assertText', 'assertJson', 'screenshot', 'extract']);
+/** 交互类动作：会改页面状态。 */
+const INTERACT_KINDS = new Set(['click', 'fill', 'check', 'select', 'upload', 'navigate', 'press', 'hover']);
+
+/**
+ * 按机械语义给步骤分类。
+ *
+ * observe（waitFor / assertVisible / assertText / assertJson / screenshot / extract）——本步只要求
+ *   「看到某现象」：降级时 AI 不得填值、不得重复提交、不得为诱发现象而改页面（prod228 实测：
+ *   AI 造了个错验证码 + 重复提交，把预期的错误提示造了出来，负向用例假通过）。
+ * interact（click/fill 等）——本步本来就要改页面：降级时 AI 可以动手，但不得改写前置步骤
+ *   已填入的值（数据忠实）、不得重复执行刚失败的那次交互（重复提交会造出现象、掩盖真实失败）。
+ * unknown——无机械动作（纯自然语言步）：按 observe 处理，指令文字就是意图。
+ */
+export function classifyDegradeStep(input: { compiled: unknown; failedAction?: unknown }): DegradeStepType {
+  const actions: StepAction[] = [];
+  if (Array.isArray(input.compiled)) actions.push(...(input.compiled as StepAction[]));
+  const failed = input.failedAction as StepAction | undefined;
+  if (failed) actions.push(failed);
+  if (actions.length === 0) return 'unknown';
+  // 有交互类动作 → interact；只有观察类 → observe。
+  if (actions.some((a) => INTERACT_KINDS.has(a.kind))) return 'interact';
+  if (actions.some((a) => OBSERVE_KINDS.has(a.kind))) return 'observe';
+  return 'unknown';
+}
+
+/** 各分类对应的降级守则（提示词层约束，非机械拦截）。 */
+function degradeGuard(stepType: DegradeStepType): string[] {
+  // unknown（纯自然语言步）按 observe 处理：这类步没有机械语义兜底，AI 的自由度最大，
+  // 而「只观察」的约束正是防止它为诱发预期现象而造数据的关键。
+  if (stepType === 'observe' || stepType === 'unknown') {
+    return [
+      '  【本步是观察步——严格限制】上面的机械动作只要求「看到某现象」。你只能观察并如实报告'
+      + '此刻看到什么：不得填入任何值、不得点击任何会触发业务动作的按钮、不得重复提交、'
+      + '不得为诱发该现象而改动页面。看到就报达成；没看到就如实报失败（fail + 说明实际看到'
+      + '了什么）——这是正确结果，不是失败。造出来的现象不构成证据。',
+    ];
+  }
+  return [
+    '  【本步是交互步——有限授权】本步本意就是要操作页面，你可以动手，但必须守住两条：'
+    + '① 不得改写指令、数据集或前置步骤已填入的表单值（那会改变测试前提，异常输入本身往往'
+    + '就是测试目的）；② 不得重复执行刚刚失败的那次交互（重复提交会造出现象、把真实失败掩盖'
+    + '成通过）。若重复执行仍无法让本步意图达成，如实报失败并说明实际观察到的状态。',
+  ];
+}
+
+/**
+ * 机械失败后的 AI 降级上下文：把「这一步本意的机械动作」和「机械实际结果」一起告诉 AI。
+ *
+ * 背景（2026-10-26 prod228 实测）：降级路径原本只传自然语言指令，AI 拿到的是「让错误提示出现」
+ * 这个目标 + 一整套改页面的动作，却不知道机械语义是「等某文本出现 10s」、也不知道机械已经
+ * 等满并确认没出现。AI 于是填了个编造的错验证码 + 重复提交，**把预期现象造了出来**，
+ * 负向用例因此假通过。
+ *
+ * 有了机械语义 + 机械结果 + 按步类型的守则，AI 能判断「本步是观察步、等了 10s 没等到」，
+ * 配合守则如实报告未达成。
+ */
+export function buildDegradeContext(input: {
+  compiled: unknown;
+  /** 实际失败的那条动作（可能是步骤级断言，不在 compiled 里）。缺省时只描述 compiled。 */
+  failedAction?: unknown;
+  /** 机械失败原因；缺省表示「本步无机械动作可失败」（未编译的纯自然语言步）。 */
+  mechanicalError?: string;
+}): string {
+  const compiled = Array.isArray(input.compiled) ? (input.compiled as StepAction[]) : [];
+  const semantics = compiled.map(describeAction);
+  // 断言不在 compiled 里（compiled 只有动作，断言是步骤级字段）——失败在断言上时补一条，
+  // 否则 AI 看到的语义与真实失败点对不上。
+  const failed = input.failedAction as StepAction | undefined;
+  if (failed && !semantics.includes(describeAction(failed))) {
+    semantics.push(`${describeAction(failed)}（实际失败于这条）`);
+  }
+  const stepType = classifyDegradeStep({ compiled: input.compiled, failedAction: input.failedAction });
+  return [
+    '【本步机械语义】',
+    semantics.length > 0 ? semantics.map((s, i) => `  ${i + 1}. ${s}`).join('\n') : '  (本步无机械动作——这是一条纯自然语言步骤，语义完全来自下面的指令文字)',
+    '【机械执行结果】',
+    ...(input.mechanicalError ? [`  失败：${input.mechanicalError}`] : ['  (本步无机械动作，未编译)']),
+    '【判定要求】',
+    ...(semantics.length > 0
+      ? ['  上面的机械动作就是本步的测试意图。机械已经执行过并失败——你的任务是判断失败原因、'
+          + '在不违背本步意图的前提下继续，而不是让机械失败的现象「出现」。']
+      : ['  指令文字就是本步的测试意图。按它要观察的现象去观察，不要为了让现象出现而动手改页面。']),
+    ...degradeGuard(stepType),
+  ].join('\n');
+}
+
 /** runAiTask 可选项。 */
 export interface RunAiTaskOpts {
   /** 对话轮数上限（缺省 MAX_TURNS=8）。 */
@@ -501,6 +618,8 @@ export interface RunAiTaskOpts {
   lang?: AiLang;
   /** web 资源清单（name / origin / 有无凭据）文本，由调用方用 renderWebResourceManifest 渲染。 */
   resourceManifest?: string;
+  /** 降级上下文：本步的机械语义 + 机械失败原因（buildDegradeContext 渲染）。缺省不传。 */
+  degradeContext?: string;
 }
 
 /**
@@ -572,9 +691,10 @@ export async function runAiTask(
       `当前 URL：${page.url()}`,
       imageNote,
       `可交互元素（JSON，selector 可直接用于动作）：${JSON.stringify(elements.slice(0, MAX_ELEMENTS))}`,
+      opts?.degradeContext ? opts.degradeContext : '',
       lastResults.length > 0 ? `上轮动作结果：\n${lastResults.join('\n')}` : '（首轮，无历史动作）',
       `第 ${turn}/${maxTurns} 轮。`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
     // 截图放在文本之前：与单轮形态的历史顺序保持一致，且首轮前缀稳定。
     history.push({
       role: 'user',
