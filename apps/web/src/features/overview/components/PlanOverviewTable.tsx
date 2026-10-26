@@ -1,17 +1,27 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import type { CSSProperties } from 'react';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../../components/ui/Table';
 import StatusPill from '../../../components/ui/StatusPill';
+import { Panel } from './Panel';
+import MeterBar from './MeterBar';
 import { formatPct } from '../format';
 import type { OverviewResponse } from '../api';
 
 type Plan = OverviewResponse['plans'][number];
 
+// RCA 徽章配色与主体 RCA 展示一致（RcaBlock.tsx）。
 const RCA_COLOR: Record<string, string> = {
-  case_issue: 'var(--chart-1)',
-  environment: 'var(--chart-3)',
   system_defect: 'var(--destructive)',
+  environment: 'var(--warning)',
+  case_issue: 'var(--muted-foreground)',
   other: 'var(--muted-foreground)',
+};
+
+const RCA_BG: Record<string, string> = {
+  system_defect: 'var(--destructive-soft)',
+  environment: 'var(--warning-soft)',
+  case_issue: 'var(--muted)',
+  other: 'var(--muted)',
 };
 
 const RCA_LABEL: Record<string, string> = {
@@ -27,7 +37,17 @@ function fmtTime(iso: string): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** 计划概览表：状态徽标 + 通过率刻度条 + 最近 RCA 徽标 + 触发方式。行点击进计划详情。 */
+const COLUMNS = [
+  'planColName',
+  'planColStatus',
+  'planColPassRate',
+  'planColCases',
+  'planColLastRun',
+  'planColRca',
+  'planColTrigger',
+];
+
+/** 计划概览表：状态徽标 + 通过率进度条 + 最近 RCA 徽标 + 触发方式。行点击进计划详情。 */
 export default function PlanOverviewTable({
   plans,
   schedulesCount,
@@ -42,52 +62,42 @@ export default function PlanOverviewTable({
   const { versionId } = useParams<{ versionId: string }>();
 
   return (
-    <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
-      <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-[14px] font-semibold" style={{ color: 'var(--foreground)' }}>
-          {t('overview:planTableTitle')}
-        </h3>
-        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+    <Panel
+      title={t('overview:planTableTitle')}
+      subtitle={
+        <>
           {t('overview:planTableSub', { count: plans.length })}
           {schedulesCount > 0 && (
             <span style={{ color: 'var(--primary)', marginLeft: 8 }}>
               {t('overview:planTableSchedules', { count: schedulesCount })}
             </span>
           )}
-        </span>
-      </div>
+        </>
+      }
+      bodyClassName="-mx-1"
+    >
       {plans.length === 0 ? (
         <p className="py-6 text-center text-[12.5px]" style={{ color: 'var(--muted-foreground)' }}>
           {t('overview:planEmpty')}
         </p>
       ) : (
-        <table className="w-full border-collapse">
-          <thead>
-            <tr>
-              {['planColName', 'planColStatus', 'planColPassRate', 'planColCases', 'planColLastRun', 'planColRca', 'planColTrigger'].map(
-                (key) => (
-                  <th
-                    key={key}
-                    className="border-b px-3 pb-2 text-left text-[12px] font-medium"
-                    style={{ borderColor: 'var(--border)', color: 'var(--muted-foreground)' }}
-                  >
-                    {t(`overview:${key}`)}
-                  </th>
-                ),
-              )}
-            </tr>
-          </thead>
-          <tbody>
+        <Table containerClassName="overflow-x-auto">
+          <TableHeader>
+            <TableRow>
+              {COLUMNS.map((key) => (
+                <TableHead key={key}>{t(`overview:${key}`)}</TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {plans.map((p) => (
-              <tr
+              <TableRow
                 key={p.id}
                 onClick={() => navigate(`/p/${projectId}/v/${versionId}/plans/${p.id}`)}
-                className="cursor-pointer transition-colors hover:bg-[var(--muted)]"
+                className="cursor-pointer"
               >
-                <td className="max-w-[220px] truncate px-3 py-3 text-[13px] font-medium" style={{ color: 'var(--foreground)' }}>
-                  {p.name}
-                </td>
-                <td className="px-3 py-3">
+                <TableCell className="max-w-[220px] truncate font-semibold">{p.name}</TableCell>
+                <TableCell>
                   {p.lastStatus ? (
                     <StatusPill status={p.lastStatus} pulse={p.lastStatus === 'running'}>
                       {t(`cases:status.${p.lastStatus}`, { defaultValue: p.lastStatus })}
@@ -95,37 +105,32 @@ export default function PlanOverviewTable({
                   ) : (
                     <StatusPill tone="muted">{t('overview:planNotRun')}</StatusPill>
                   )}
-                </td>
-                <td className="px-3 py-3">
+                </TableCell>
+                <TableCell>
                   {p.lastRunAt ? (
-                    <span className="flex items-center gap-2.5">
-                      <span className="inline-block h-3 w-24 overflow-hidden rounded bg-[var(--muted)]">
-                        <span
-                          className="meter-ticks block h-full rounded"
-                          style={{ '--fill': 'var(--chart-1)', width: `${formatPct(p.passRate)}%` } as CSSProperties}
-                        />
+                    <span className="flex items-center gap-2">
+                      <span className="inline-block w-20">
+                        <MeterBar pct={p.passRate * 100} color="var(--chart-1)" size="sm" />
                       </span>
-                      <span className="text-[12.5px] font-semibold" style={{ color: 'var(--foreground)' }}>
+                      <span className="text-[12.5px] font-semibold tabular-nums">
                         {formatPct(p.passRate)}%
                       </span>
                     </span>
                   ) : (
-                    <span className="text-[12.5px]" style={{ color: 'var(--muted-foreground)' }}>—</span>
+                    <span style={{ color: 'var(--muted-foreground)' }}>—</span>
                   )}
-                </td>
-                <td className="px-3 py-3 text-[13px]" style={{ color: 'var(--foreground)' }}>
-                  {p.totalCases}
-                </td>
-                <td className="px-3 py-3 font-mono text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+                </TableCell>
+                <TableCell className="tabular-nums">{p.totalCases}</TableCell>
+                <TableCell className="font-mono text-[12px] text-muted-foreground">
                   {p.lastRunAt ? fmtTime(p.lastRunAt) : '—'}
-                </td>
-                <td className="px-3 py-3">
+                </TableCell>
+                <TableCell>
                   {p.lastRcaCategory ? (
                     <span
-                      className="inline-flex rounded-md px-2 py-0.5 text-[11.5px] font-medium"
+                      className="inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium"
                       style={{
                         color: RCA_COLOR[p.lastRcaCategory] ?? 'var(--muted-foreground)',
-                        background: `color-mix(in oklch, ${RCA_COLOR[p.lastRcaCategory] ?? 'var(--muted-foreground)'} 13%, transparent)`,
+                        background: RCA_BG[p.lastRcaCategory] ?? 'var(--muted)',
                       }}
                     >
                       {t(RCA_LABEL[p.lastRcaCategory] ?? 'overview:rcaOther')}
@@ -133,24 +138,24 @@ export default function PlanOverviewTable({
                   ) : (
                     <span style={{ color: 'var(--muted-foreground)' }}>—</span>
                   )}
-                </td>
-                <td className="px-3 py-3">
+                </TableCell>
+                <TableCell>
                   {p.triggeredBy ? (
                     <span
-                      className="inline-flex rounded-md border border-[var(--border)] bg-[var(--muted)] px-2 py-0.5 text-[12px]"
-                      style={{ color: 'var(--muted-foreground)' }}
+                      className="inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium"
+                      style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
                     >
                       {t(p.triggeredBy === 'schedule' ? 'overview:triggerSchedule' : 'overview:triggerManual')}
                     </span>
                   ) : (
                     <span style={{ color: 'var(--muted-foreground)' }}>—</span>
                   )}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
-    </div>
+    </Panel>
   );
 }

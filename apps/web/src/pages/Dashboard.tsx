@@ -116,7 +116,7 @@ export default function Dashboard() {
             value={formatPct(data.kpi.solidifyRate)}
             suffix="%"
             iconName="bolt"
-            tone="var(--chart-4)"
+            tone="var(--info)"
             to={link('/groups')}
             footLabel={t('overview:kpiFootPendingSteps', { count: data.kpi.solidifyPendingSteps })}
           />
@@ -133,7 +133,7 @@ export default function Dashboard() {
             label={t('overview:kpiRuns')}
             value={data.kpi.totalRuns7d.toLocaleString()}
             iconName="activity"
-            tone="var(--chart-3)"
+            tone="var(--chart-4)"
             to={link('/reports')}
             footLabel={t('overview:kpiFootP95', { value: formatDuration(data.kpi.p95DurationMs) })}
           />
@@ -141,7 +141,7 @@ export default function Dashboard() {
             label={t('overview:kpiAiCalls')}
             value={data.kpi.aiCalls7d.toLocaleString()}
             iconName="sparkles"
-            tone="var(--chart-5)"
+            tone="var(--chart-3)"
             to={link('/reports')}
             footLabel={t('overview:kpiFootHealed', { count: data.kpi.aiHealedReports7d })}
           />

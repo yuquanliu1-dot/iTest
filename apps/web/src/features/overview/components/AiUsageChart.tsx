@@ -11,23 +11,16 @@ import {
 } from 'recharts';
 import { useTranslation } from 'react-i18next';
 import { chartColors, tooltipContentStyle } from '../chartTheme';
+import { Panel } from './Panel';
 import type { OverviewResponse } from '../api';
 
 type AiUsage = OverviewResponse['aiUsage'];
 
-/** AI 用量：日 bar = AI 调用次数（橙），line = 自愈成功步数（绿）。 */
+/** AI 用量：日 bar = AI 调用次数，line = 自愈成功步数。 */
 export default function AiUsageChart({ data, days }: { data: AiUsage; days: number }) {
   const { t } = useTranslation();
   return (
-    <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-[14px] font-semibold" style={{ color: 'var(--foreground)' }}>
-          {t('overview:aiUsageTitle')}
-        </h3>
-        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-          {t('overview:aiUsageRange', { days })}
-        </span>
-      </div>
+    <Panel title={t('overview:aiUsageTitle')} subtitle={t('overview:aiUsageRange', { days })}>
       <div style={{ width: '100%', height: 200 }}>
         <ResponsiveContainer>
           <ComposedChart data={data}>
@@ -53,6 +46,6 @@ export default function AiUsageChart({ data, days }: { data: AiUsage; days: numb
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-    </div>
+    </Panel>
   );
 }

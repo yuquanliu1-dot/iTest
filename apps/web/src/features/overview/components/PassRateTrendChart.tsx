@@ -11,11 +11,12 @@ import {
 } from 'recharts';
 import { useTranslation } from 'react-i18next';
 import { chartColors, tooltipContentStyle } from '../chartTheme';
+import { Panel } from './Panel';
 import type { OverviewResponse } from '../api';
 
 type Trend = OverviewResponse['trend'];
 
-/** 双通过率三线趋势：最终通过（橙，面积主线）/ 一次通过（绿虚线）/ 失败（紫细线）。
+/** 双通过率三线趋势：最终通过（chart-1 主线）/ 一次通过（chart-2 虚线）/ 失败（chart-3 细线）。
  *  当日无执行（total=0）置 null，connectNulls 跨接空档。 */
 export default function PassRateTrendChart({ data }: { data: Trend }) {
   const { t } = useTranslation();
@@ -27,15 +28,7 @@ export default function PassRateTrendChart({ data }: { data: Trend }) {
     failedRate: d.total ? Math.round((d.failed / d.total) * 1000) / 10 : null,
   }));
   return (
-    <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-[14px] font-semibold" style={{ color: 'var(--foreground)' }}>
-          {t('overview:passRateTrendTitle')}
-        </h3>
-        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-          {t('overview:passRateTrendDays', { count: data.length })}
-        </span>
-      </div>
+    <Panel title={t('overview:passRateTrendTitle')} subtitle={t('overview:passRateTrendDays', { count: data.length })}>
       <div style={{ width: '100%', height: 240 }}>
         <ResponsiveContainer>
           <ComposedChart data={rows} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
@@ -88,6 +81,6 @@ export default function PassRateTrendChart({ data }: { data: Trend }) {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-    </div>
+    </Panel>
   );
 }

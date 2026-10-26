@@ -345,29 +345,8 @@ select:focus-visible {
 .kpi-icon { transition: transform 180ms ease; display: inline-flex; }
 .hover-card:hover .kpi-icon { transform: scale(1.08); }
 
-/* ── 工作台橙 accent 作用域（dashboard-dark-v2）──────────────────────
-   总览内容区包在 .workbench 里，明暗跟随全局 html.dark 主题；
-   .workbench 把 primary/chart 语义色换成橙色系。
-   --*-soft 系列（color-mix 引用 var(--primary/--chart-*)）在元素上惰性求值，
-   自动跟随本作用域的橙值，无需重声明。 */
-.workbench {
-  --primary: #f97316;
-  --primary-foreground: #1c1917;
-  --ring: #fb8c3c;
-  --chart-1: #f97316;
-  --chart-2: #4ade80;
-  --chart-3: #a78bfa;
-  --chart-4: #22d3ee;
-  --chart-5: #fdba74;
-}
-/* 浅色主题：橙加深一档保证浅底可读性 */
-:root:not(.dark) .workbench {
-  --primary: #ea580c;
-  --ring: #f97316;
-}
-
-/* 刻度条填充（执行概览 meters / 通过率刻度 / 计划表通过率列）：
-   repeating-gradient 打透明缝形成刻度感；颜色由 --fill 控制。 */
-.meter-ticks {
-  background-image: repeating-linear-gradient(90deg, var(--fill, var(--primary)) 0 3px, transparent 3px 5px);
-}
+/* ── 工作台内容区作用域 ──────────────────────────────────────────────
+   总览内容区包在 .workbench 里，明暗跟随全局 html.dark 主题。
+   这里只做「内容区铺底」，不再覆盖任何语义色 —— 工作台与产品其他
+   页面共用同一套 token（绿 --primary / --chart-*），避免出现「只有
+   工作台是橙色」的割裂感。 */

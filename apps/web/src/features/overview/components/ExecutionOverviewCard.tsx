@@ -1,6 +1,7 @@
-import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatDuration, formatPct } from '../format';
+import { Panel } from './Panel';
+import MeterBar from './MeterBar';
 import type { OverviewResponse } from '../api';
 
 type Executions = OverviewResponse['executions'];
@@ -16,27 +17,22 @@ function Meter({
 }: {
   label: string;
   count: number;
-  pct: string;
+  pct: number;
   color: string;
   timesText: string;
 }) {
   return (
-    <div className="mb-3.5 last:mb-0">
-      <div className="mb-1.5 flex items-center justify-between text-[13px]">
+    <div className="mb-3 last:mb-0">
+      <div className="mb-1.5 flex items-baseline justify-between text-[13px]">
         <span style={{ color: 'var(--muted-foreground)' }}>{label}</span>
-        <span style={{ color: 'var(--foreground)', fontWeight: 550 }}>
+        <span className="tabular-nums" style={{ color: 'var(--foreground)', fontWeight: 550 }}>
           {count.toLocaleString()}
           <small style={{ color: 'var(--muted-foreground)', fontWeight: 400, marginLeft: 4 }}>
             {timesText}
           </small>
         </span>
       </div>
-      <div className="h-[14px] overflow-hidden rounded bg-[var(--muted)]">
-        <div
-          className="meter-ticks h-full rounded"
-          style={{ '--fill': color, width: `${pct}%` } as CSSProperties}
-        />
-      </div>
+      <MeterBar pct={pct} color={color} />
     </div>
   );
 }
@@ -62,13 +58,13 @@ export default function ExecutionOverviewCard({
   rca: Rca;
 }) {
   const { t } = useTranslation();
-  const pctOf = (n: number) => (totalRuns === 0 ? '0' : formatPct(n / totalRuns));
+  const pctOf = (n: number) => (totalRuns === 0 ? 0 : (n / totalRuns) * 100);
 
   const meters = [
     { label: t('overview:execPassed'), count: executions.passed, color: 'var(--success)' },
     { label: t('overview:execFailed'), count: executions.failed, color: 'var(--destructive)' },
-    { label: t('overview:execBlocked'), count: executions.blocked, color: 'var(--primary)' },
-    { label: t('overview:execHealed'), count: executions.healed, color: 'var(--chart-4)' },
+    { label: t('overview:execBlocked'), count: executions.blocked, color: 'var(--warning)' },
+    { label: t('overview:execHealed'), count: executions.healed, color: 'var(--info)' },
   ];
 
   // 需要关注：Top 失败 / flaky（与 Top 失败去重）/ RCA 环境占比 / 待固化步数
@@ -101,19 +97,14 @@ export default function ExecutionOverviewCard({
   }
 
   return (
-    <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
-      <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-[14px] font-semibold" style={{ color: 'var(--foreground)' }}>
-          {t('overview:execOverviewTitle')}
-        </h3>
-        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-          {t('overview:execOverviewSub', {
-            days,
-            runs: totalRuns.toLocaleString(),
-            p95: formatDuration(p95DurationMs),
-          })}
-        </span>
-      </div>
+    <Panel
+      title={t('overview:execOverviewTitle')}
+      subtitle={t('overview:execOverviewSub', {
+        days,
+        runs: totalRuns.toLocaleString(),
+        p95: formatDuration(p95DurationMs),
+      })}
+    >
       {meters.map((m) => (
         <Meter
           key={m.label}
@@ -121,13 +112,15 @@ export default function ExecutionOverviewCard({
           count={m.count}
           pct={pctOf(m.count)}
           color={m.color}
-          timesText={t('overview:execMeterSuffix', { pct: pctOf(m.count) })}
+          timesText={t('overview:execMeterSuffix', { pct: formatPct(pctOf(m.count) / 100) })}
         />
       ))}
       {attention.length > 0 && (
-        <div className="mt-4 rounded-[10px] border border-[var(--border)] p-3.5">
-          <div className="mb-2.5 flex items-center gap-2 text-[13px]" style={{ color: 'var(--foreground)' }}>
-            <span style={{ color: 'var(--primary)', fontWeight: 600 }}>{attention.length}</span>
+        <div className="mt-4 rounded-[var(--radius-md)] bg-[var(--muted)] p-3">
+          <div className="mb-2 flex items-center gap-2 text-[13px]" style={{ color: 'var(--foreground)' }}>
+            <span className="tabular-nums font-semibold" style={{ color: 'var(--primary)' }}>
+              {attention.length}
+            </span>
             <span>{t('overview:attentionTitle', { count: attention.length })}</span>
           </div>
           {attention.map((item) => (
@@ -136,12 +129,12 @@ export default function ExecutionOverviewCard({
               className="flex items-baseline gap-2 py-[5px] text-[12.5px]"
               style={{ color: 'var(--muted-foreground)' }}
             >
-              <i className="mt-[7px] h-1.5 w-1.5 shrink-0 bg-[var(--primary)]" aria-hidden />
+              <i className="mt-[7px] size-1.5 shrink-0 rounded-full bg-[var(--primary)]" aria-hidden />
               <span className="min-w-0">{item}</span>
             </div>
           ))}
         </div>
       )}
-    </div>
+    </Panel>
   );
 }

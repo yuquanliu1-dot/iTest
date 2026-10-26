@@ -1,10 +1,12 @@
 import { useTranslation } from 'react-i18next';
 import { formatPct } from '../format';
+import { Panel } from './Panel';
+import MeterBar from './MeterBar';
 import type { OverviewResponse } from '../api';
 
 type Coverage = OverviewResponse['coverage'];
 
-/** 需求覆盖：用例需求关联率大数 + 刻度条 + coverageTypes 分布 chips + 未覆盖脚注。 */
+/** 需求覆盖：用例需求关联率大数 + 进度条 + coverageTypes 分布 chips + 未覆盖脚注。 */
 export default function RequirementCoverageCard({ coverage }: { coverage: Coverage }) {
   const { t } = useTranslation();
   const rate = coverage.totalCases === 0 ? 0 : coverage.linkedCases / coverage.totalCases;
@@ -19,20 +21,18 @@ export default function RequirementCoverageCard({ coverage }: { coverage: Covera
     }));
 
   return (
-    <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
-      <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-[14px] font-semibold" style={{ color: 'var(--foreground)' }}>
-          {t('overview:coverageTitle')}
-        </h3>
-        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-          {t('overview:coverageSub', {
-            total: coverage.totalRequirements,
-            linked: coverage.linkedRequirements,
-          })}
-        </span>
-      </div>
+    <Panel
+      title={t('overview:coverageTitle')}
+      subtitle={t('overview:coverageSub', {
+        total: coverage.totalRequirements,
+        linked: coverage.linkedRequirements,
+      })}
+    >
       <div className="flex items-baseline gap-2.5">
-        <span className="text-[32px] font-bold leading-none" style={{ color: 'var(--foreground)' }}>
+        <span
+          className="font-semibold tabular-nums leading-none"
+          style={{ fontSize: 28, color: 'var(--foreground)' }}
+        >
           {formatPct(rate)}%
         </span>
         <span className="text-[12.5px]" style={{ color: 'var(--muted-foreground)' }}>
@@ -42,22 +42,21 @@ export default function RequirementCoverageCard({ coverage }: { coverage: Covera
           })}
         </span>
       </div>
-      <div className="mb-4 mt-2.5 h-[14px] overflow-hidden rounded bg-[var(--muted)]">
-        <div
-          className="meter-ticks h-full rounded"
-          style={{ '--fill': 'var(--success)', width: `${formatPct(rate)}%` } as React.CSSProperties}
-        />
+      <div className="mt-3">
+        <MeterBar pct={rate * 100} color="var(--success)" />
       </div>
       {chips.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+        <div className="mt-4 flex flex-wrap gap-1.5">
           {chips.map((c) => (
             <span
               key={c.type}
-              className="rounded-[7px] border border-[var(--border)] bg-[var(--muted)] px-2.5 py-1 text-[12px]"
-              style={{ color: 'var(--muted-foreground)' }}
+              className="inline-flex items-center rounded-full px-2.5 py-0.5 text-[12px] font-medium"
+              style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
             >
               {c.label}
-              <b style={{ color: 'var(--foreground)', fontWeight: 600, marginLeft: 4 }}>{c.pct}%</b>
+              <b className="tabular-nums" style={{ color: 'var(--foreground)', marginLeft: 4 }}>
+                {c.pct}%
+              </b>
             </span>
           ))}
         </div>
@@ -68,6 +67,6 @@ export default function RequirementCoverageCard({ coverage }: { coverage: Covera
       >
         {t('overview:coverageFootUncovered', { count: coverage.uncoveredRequirements })}
       </div>
-    </div>
+    </Panel>
   );
 }

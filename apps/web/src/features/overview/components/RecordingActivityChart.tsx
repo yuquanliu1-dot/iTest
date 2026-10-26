@@ -1,6 +1,7 @@
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useTranslation } from 'react-i18next';
 import { chartColors, tooltipContentStyle } from '../chartTheme';
+import { Panel } from './Panel';
 import type { OverviewResponse } from '../api';
 
 type Rec = OverviewResponse['recordingActivity'];
@@ -30,14 +31,11 @@ export default function RecordingActivityChart({ data }: { data: Rec }) {
   const { t } = useTranslation();
   if (data.length === 0) {
     return (
-      <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
-        <h3 className="text-[14px] font-semibold mb-3" style={{ color: 'var(--foreground)' }}>
-          {t('overview:recordingTitle')}
-        </h3>
+      <Panel title={t('overview:recordingTitle')}>
         <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
           {t('overview:recordingEmpty')}
         </p>
-      </div>
+      </Panel>
     );
   }
 
@@ -47,10 +45,7 @@ export default function RecordingActivityChart({ data }: { data: Rec }) {
   }));
 
   return (
-    <div className="bg-card border border-[var(--border)] rounded-[var(--radius-md)] p-5">
-      <h3 className="text-[14px] font-semibold mb-3" style={{ color: 'var(--foreground)' }}>
-        {t('overview:recordingTitle')}
-      </h3>
+    <Panel title={t('overview:recordingTitle')}>
       <div style={{ width: '100%', height: 200 }}>
         <ResponsiveContainer>
           <BarChart data={chartData}>
@@ -68,6 +63,6 @@ export default function RecordingActivityChart({ data }: { data: Rec }) {
           </BarChart>
         </ResponsiveContainer>
       </div>
-    </div>
+    </Panel>
   );
 }
