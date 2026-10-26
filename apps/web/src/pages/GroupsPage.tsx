@@ -765,7 +765,8 @@ export default function GroupsPage() {
 							onChange={(v) => setScope(v)}
 						/>
 					)}
-					<Button size="sm" variant="ghost" disabled={exportingXmind || filteredCases.length === 0} onClick={exportXmind}>
+					{/* 勾选优先：有勾选即可导（即使收窄筛选后列表空）；无勾选才看当前筛选结果是否为空 */}
+					<Button size="sm" variant="ghost" disabled={exportingXmind || (selection.ids.length === 0 && filteredCases.length === 0)} onClick={exportXmind}>
 						<Icon name="download" size={12} />
 							{exportingXmind ? t('groups:exportingXmind') : t('groups:exportXmind')}
 					</Button>
