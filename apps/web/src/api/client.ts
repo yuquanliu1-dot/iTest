@@ -388,6 +388,24 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ caseIds, status }),
       }),
+    /** 导出 XMind：fetch → blob（request<T> 走 JSON 解析，二进制单独走 fetch，同 downloadExtensionZip）。 */
+    exportXmind: async (caseIds: string[], rootTitle?: string): Promise<{ blob: Blob; filename: string }> => {
+      const r = await fetch(`${BASE}/cases/export-xmind`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseIds, ...(rootTitle ? { rootTitle } : {}) }),
+      });
+      if (!r.ok) {
+        if (r.status === 401) throw new ApiError(401, '未登录或会话已过期');
+        const body = await r.json().catch(() => ({}));
+        throw new ApiError(r.status, body.message ?? `HTTP ${r.status}`);
+      }
+      const dispo = r.headers.get('Content-Disposition') ?? '';
+      const m = dispo.match(/filename\*=UTF-8''([^;]+)/);
+      const filename = m ? decodeURIComponent(m[1]!) : 'cases.xmind';
+      return { blob: await r.blob(), filename };
+    },
     copy: (id: string, targetGroupId: string, targetVersionId?: string) =>
       request<TestCase>(`/cases/${id}/copy`, { method: 'POST', body: JSON.stringify({ targetGroupId, targetVersionId }) }),
     copyBatch: (caseIds: string[], targetGroupId: string, targetVersionId?: string) =>

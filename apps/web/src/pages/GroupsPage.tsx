@@ -435,6 +435,27 @@ export default function GroupsPage() {
 	// 切 tab 时清空勾选（避免跨 tab 误选），沿用旧 useEffect 行为
 	useEffect(() => { selection.clear(); }, [tab]);
 
+	// 导出 XMind：勾选优先，无勾选导出当前筛选结果的全量用例（filteredCases，非当前页 rows）
+	const [exportingXmind, setExportingXmind] = useState(false);
+	const exportXmind = async () => {
+		const ids = selection.count > 0 ? selection.ids : filteredCases.map((c) => c.id);
+		if (ids.length === 0) return;
+		setExportingXmind(true);
+		try {
+			const { blob, filename } = await api.cases.exportXmind(ids);
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = filename;
+			a.click();
+			URL.revokeObjectURL(url);
+		} catch {
+			toast(t('groups:exportXmindFailed'), 'error');
+		} finally {
+			setExportingXmind(false);
+		}
+	};
+
 	const setPriorityFilter = (next: typeof priority) => void setRaw({ priority: next, page: '1' });
 	const setScenarioFilter = (next: string) => void setRaw({ scenario: next, page: '1' });
 	const setStatusFilter = (next: string[]) => void setRaw({ status: next, page: '1' });
@@ -917,6 +938,10 @@ export default function GroupsPage() {
 										<Button size="sm" variant="ghost" onClick={() => setConfirmBatchSolidify(true)}>
 											<Icon name="sparkles" size={12} />
 												{t('groups:batchSolidify')}
+										</Button>
+										<Button size="sm" variant="ghost" disabled={exportingXmind || filteredCases.length === 0} onClick={exportXmind}>
+											<Icon name="download" size={12} />
+												{exportingXmind ? t('groups:exportingXmind') : t('groups:exportXmind')}
 										</Button>
 										<select
 											aria-label={t('groups:batchStatusAria')}
