@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildXmindTree, type ExportCaseRow } from './xmindExport.service.js';
+import { buildXmindTree, describeAction, type ExportCaseRow } from './xmindExport.service.js';
 
 function mkCase(over: Partial<ExportCaseRow> = {}): ExportCaseRow {
   return {
@@ -91,5 +91,16 @@ describe('buildXmindTree', () => {
     );
     expect(tree.children![0]!.children![0]!.children![1]!.children![0]!.title)
       .toBe('1. 输入 *** → 点击 css=.submit');
+  });
+});
+
+describe('describeAction 补充 kind', () => {
+  it('httpRequest 带 method/url/saveAs', () => {
+    expect(describeAction({ kind: 'httpRequest', method: 'POST', url: 'http://x/api', saveAs: { varName: 'token' } }))
+      .toBe('请求 POST http://x/api → {{token}}');
+    expect(describeAction({ kind: 'httpRequest', url: 'http://x/api' })).toBe('请求 GET http://x/api');
+  });
+  it('sql 压单行截断', () => {
+    expect(describeAction({ kind: 'sql', sql: 'select\n  *\n  from t' })).toBe('执行 SQL：select * from t');
   });
 });

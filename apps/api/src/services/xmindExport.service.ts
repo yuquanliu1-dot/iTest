@@ -47,6 +47,9 @@ interface KnownAction {
   match?: unknown;
   timeoutMs?: unknown;
   checked?: unknown;
+  method?: unknown;
+  sql?: unknown;
+  saveAs?: { varName?: unknown };
 }
 
 function targetText(a: KnownAction): string {
@@ -71,7 +74,11 @@ function valueText(a: KnownAction): string {
   return '';
 }
 
-/** 单个 DSL 动作的服务端中文摘要（与 web stepSummary 同口径，固定中文不走 i18n）。 */
+function assertTextText(a: KnownAction): string {
+  return `验证文本${MATCH_LABEL[str(a.match)] ?? '等于'}「${clip(str(a.equals), 30)}」`;
+}
+
+/** 单个 DSL 动作的服务端中文摘要：常用动作逐 kind 渲染；未覆盖的 kind 降级为 kind 名/JSON 截断（服务端固定中文不走 i18n）。 */
 export function describeAction(a: KnownAction): string {
   const target = targetText(a);
   switch (a.kind) {
@@ -83,9 +90,14 @@ export function describeAction(a: KnownAction): string {
     case 'assertVisible': return `验证 ${clip(target, 30)} 可见`;
     case 'fill': return `输入 ${clip(valueText(a), 40)}`;
     case 'select': return `选择 ${clip(str(a.value), 30)}`;
-    case 'assertText': return `验证文本${MATCH_LABEL[str(a.match)] ?? '等于'}「${clip(str(a.equals), 30)}」`;
+    case 'assertText': return assertTextText(a);
     case 'screenshot': return `截图 ${clip(str(a.name), 20)}`;
     case 'aiTask': return `AI 执行：${clip(str(a.instruction), 50)}`;
+    case 'httpRequest': {
+      const varName = str(a.saveAs?.varName);
+      return `请求 ${str(a.method) || 'GET'} ${clip(str(a.url), 60)}${varName ? ` → {{${varName}}}` : ''}`;
+    }
+    case 'sql': return `执行 SQL：${clip(str(a.sql).replace(/\s+/g, ' ').trim(), 60)}`;
     default: return clip(str(a.kind) || JSON.stringify(a), 40);
   }
 }
@@ -102,7 +114,7 @@ export function describeAssertion(assertion: unknown): string {
   if (!assertion || typeof assertion !== 'object') return '';
   const a = assertion as KnownAction;
   if (a.kind !== 'assertText' || !str(a.equals)) return '';
-  return `验证文本${MATCH_LABEL[str(a.match)] ?? '等于'}「${clip(str(a.equals), 30)}」`;
+  return assertTextText(a);
 }
 
 /** 步骤文本：`N. instruction`，空则 DSL 摘要，再空则断言，全空跳过。 */
