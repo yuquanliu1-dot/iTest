@@ -12,6 +12,11 @@
   "suggestion": {
     "title": "Follow up:"
   },
+  "artifact": {
+    "download": "Download",
+    "count": "{{count}} cases",
+    "expired": "File has expired or does not exist (valid for 30 minutes after generation). Ask the AI to regenerate it."
+  },
   "thinking": "Thinking",
   "notice": {
     "compacting": "Compacting context ({{reason}})…",

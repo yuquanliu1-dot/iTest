@@ -521,6 +521,19 @@ export const api = {
     }
     return r.blob();
   },
+  /** AI 产出文件下载（artifact 下载卡）：fetch → blob，request<T> 走 JSON 解析故二进制单独走 fetch。 */
+  downloadArtifact: async (threadId: string, token: string): Promise<{ blob: Blob; filename: string }> => {
+    const r = await fetch(`${BASE}/assistant/threads/${threadId}/artifacts/${token}`, { credentials: 'same-origin' });
+    if (!r.ok) {
+      if (r.status === 401) throw new ApiError(401, '未登录或会话已过期');
+      const body = await r.json().catch(() => ({}));
+      throw new ApiError(r.status, body.message ?? `HTTP ${r.status}`);
+    }
+    const dispo = r.headers.get('Content-Disposition') ?? '';
+    const m = dispo.match(/filename\*=UTF-8''([^;]+)/);
+    const filename = m ? decodeURIComponent(m[1]!) : 'artifact.xmind';
+    return { blob: await r.blob(), filename };
+  },
   auth: {
     login: (username: string, password: string) =>
       request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),

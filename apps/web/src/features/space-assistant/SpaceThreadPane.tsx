@@ -20,7 +20,8 @@ import ConfirmCard from './ConfirmCard';
 import FeedbackActions from './FeedbackActions';
 import Icon, { type IconName } from '../../components/Icon';
 import Markdown from '../../components/ui/Markdown';
-import { useSpaceEventsStore } from './spaceEventsStore';
+import { useSpaceEventsStore, type ArtifactItem } from './spaceEventsStore';
+import { api } from '../../api/client';
 
 /**
  * 空间助手对话流:只渲染 pi 契约的结构原语,运行时由 SpaceWorkspace 的
@@ -48,6 +49,7 @@ export default function SpaceThreadPane({ threadId }: { threadId: string }) {
         <ThreadPrimitive.ViewportFooter className="border-t p-3" style={{ borderColor: 'var(--border)' }}>
           <VerifyProgressCard />
           <SolidifyProgressCard />
+          <ArtifactCards threadId={threadId} />
           <RuntimeNotice />
           <QueuePanel />
           <ConfirmCard threadId={threadId} />
@@ -451,6 +453,55 @@ function SolidifyProgressCard() {
       )}
       </div>
     </div>
+  );
+}
+
+/** AI 产出文件下载卡：artifact SSE 事件驱动，文件名+大小+下载按钮。
+ *  不随新一轮对话清空——交付物常驻到线程结束/30min TTL 过后下载会 410（卡片仍在，点下载报错可感知）。 */
+function ArtifactCards({ threadId }: { threadId: string }) {
+  const { t } = useTranslation();
+  const items = useSpaceEventsStore((s) => s.artifactsByThread.get(threadId)) ?? [];
+  if (items.length === 0) return null;
+  const download = async (item: ArtifactItem) => {
+    try {
+      const { blob, filename } = await api.downloadArtifact(threadId, item.token);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      // 过期（410）是被预期的失败态：token 30min TTL。静默失败会让用户以为按钮坏了，给出可感知提示。
+      alert(t('assistant:artifact.expired'));
+    }
+  };
+  return (
+    <>
+      {items.map((item) => (
+        <div
+          key={item.token}
+          className="fade-up mb-2 flex items-center gap-2 rounded-[var(--radius-md)] px-3 py-2 text-[12px]"
+          style={{ background: 'var(--muted)', border: '1px solid var(--border)', color: 'var(--foreground)' }}
+        >
+          <Icon name="download" size={12} style={{ flexShrink: 0, color: 'var(--primary)' }} />
+          <span className="min-w-0 truncate">{item.name}</span>
+          <span className="flex-shrink-0" style={{ color: 'var(--muted-foreground)' }}>
+            {Math.max(1, Math.round(item.size / 1024))} KB{item.count != null ? ` · ${t('assistant:artifact.count', { count: item.count })}` : ''}
+          </span>
+          <button
+            type="button"
+            onClick={() => void download(item)}
+            className="btn-tint ml-auto shrink-0 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:underline underline-offset-2"
+            style={{ color: 'var(--primary)' }}
+          >
+            {t('assistant:artifact.download')}
+          </button>
+        </div>
+      ))}
+    </>
   );
 }
 

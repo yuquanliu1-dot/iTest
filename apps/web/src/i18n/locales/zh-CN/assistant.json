@@ -12,6 +12,11 @@
   "suggestion": {
     "title": "继续追问："
   },
+  "artifact": {
+    "download": "下载",
+    "count": "{{count}} 条用例",
+    "expired": "文件已过期或不存在（生成后 30 分钟内有效），请让 AI 重新生成"
+  },
   "thinking": "思考中",
   "notice": {
     "compacting": "正在压缩上下文（{{reason}}）…",

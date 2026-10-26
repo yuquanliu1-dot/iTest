@@ -73,6 +73,15 @@ export interface SolidifyProgressState {
   liveUrl: string | null;
 }
 
+/** artifact SSE 事件（AI 产出文件下载卡）。 */
+export interface ArtifactItem {
+  token: string;
+  name: string;
+  size: number;
+  count?: number;
+  at: string;
+}
+
 /** 暂存条目：stage_case / stage_scenario / stage_environment / stage_plan 写入。
  *  payload 是 StageDoc 中对应 kind 的单条对象,前端直接渲染预览/勾选。 */
 export interface StagedItem<TPayload = unknown> {
@@ -105,6 +114,9 @@ interface SpaceEventsState {
   /** 暂存对象池：用户预览/勾选 → save 时入参的 source of truth。 */
   stagedByThread: StagedByThread;
   stagedSelection: StagedSelection;
+  /** threadId → AI 产出文件列表（artifact 事件驱动；每线程上限 20，新的挤掉最旧的）。
+   *  不随 agent_start 清空——产出物是交付结果，不是进行时进度。 */
+  artifactsByThread: Map<string, ArtifactItem[]>;
   /** Pi client 订阅分流入口:只认空间自定义事件,pi 契约事件忽略。 */
   ingest: (e: Record<string, unknown>) => void;
   setCurrentThreadId: (threadId: string) => void;
@@ -144,6 +156,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
   solidifyProgress: null,
   stagedByThread: new Map(),
   stagedSelection: new Map(),
+  artifactsByThread: new Map(),
   ingest: (e) => {
     // 断线重连重放去重:服务端在快照后按原 seq 重发缓冲的会话内事件,与已实时处理的可能重叠——
     // seq <= 该线程已见最大值 = 已处理过,丢弃;首次见到的推进基线。快照帧不进本 store 的分支,
@@ -332,6 +345,25 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
       }
       return;
     }
+    if (e.type === 'artifact') {
+      const item: ArtifactItem = {
+        token: String(e.token ?? ''),
+        name: String(e.name ?? 'export.xmind'),
+        size: Number(e.size ?? 0),
+        ...(typeof e.count === 'number' ? { count: e.count } : {}),
+        at: new Date().toISOString(),
+      };
+      if (!item.token) return;
+      const tid = typeof e.threadId === 'string' && e.threadId ? e.threadId : get().threadId;
+      set((s) => {
+        const list = s.artifactsByThread.get(tid) ?? [];
+        if (list.some((x) => x.token === item.token)) return s; // 重放去重（token 天然幂等）
+        const next = new Map(s.artifactsByThread);
+        next.set(tid, [...list.slice(-19), item]);
+        return { artifactsByThread: next };
+      });
+      return;
+    }
     if (e.type === 'agent_start') {
       // 新一轮开始:清掉上一轮的 announce/verify/solidify 进度(舞台历史保留)
       set((s) =>
@@ -402,5 +434,6 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
   reset: () => set({
     confirms: [], stageHistory: [], announce: null, verifyProgress: null, solidifyProgress: null,
     stagedByThread: new Map(), stagedSelection: new Map(), lastSeqByThread: new Map(),
+    artifactsByThread: new Map(),
   }),
 }));
