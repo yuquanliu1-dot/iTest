@@ -39,7 +39,9 @@
     "deletedToast_other": "Deleted {{count}} items ({{parts}})",
     "listSeparator": ", ",
     "tabsAll": "All",
-    "tabsCase": "Single case"
+    "tabsCase": "Single case",
+    "scopeVersion": "Current version",
+    "scopeProductLine": "Product line library"
   },
   "delete": {
     "title": "Delete test report",

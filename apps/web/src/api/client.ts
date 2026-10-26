@@ -293,6 +293,8 @@ export const api = {
   executions: {
     list: (params?: {
       projectId?: string;
+      /** 产品线执行库：跨项目拉整条线的用例报告 + 计划运行（与 projectId 二选一） */
+      productLineId?: string;
       kind?: 'case' | 'plan' | 'all';
       statuses?: string[];
       versionIds?: string[];
@@ -304,6 +306,7 @@ export const api = {
     }) => {
       const qs = new URLSearchParams();
       if (params?.projectId) qs.set('projectId', params.projectId);
+      if (params?.productLineId) qs.set('productLineId', params.productLineId);
       if (params?.kind) qs.set('kind', params.kind);
       if (params?.statuses?.length) qs.set('statuses', params.statuses.join(','));
       if (params?.versionIds?.length) qs.set('versionIds', params.versionIds.join(','));

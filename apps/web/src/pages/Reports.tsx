@@ -12,6 +12,7 @@ import EmptyState from '../components/ui/EmptyState';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import IconButton from '../components/ui/IconButton';
+import Segmented from '../components/ui/Segmented';
 import { EmptyCellValue } from '../components/ui/Table';
 import { DataTable, type DataTableColumn, type DataTableFacet, type DataTableTabs } from '../components/ui/DataTable';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
@@ -21,6 +22,7 @@ import { creatorName } from '../lib/creatorName';
 import { useUIStore } from '../stores/ui';
 import {
 	PageShell,
+	PageShellActions,
 	PageShellContent,
 	PageShellDescription,
 	PageShellHeader,
@@ -38,6 +40,8 @@ const executionsParsers = {
 	statuses: parseAsArrayOf(parseAsString).withDefault([]),
 	versions: parseAsArrayOf(parseAsString).withDefault([]),
 	tab: parseAsStringEnum([...TAB_VALUES]).withDefault('all'),
+	// 范围切换：当前版本 / 产品线执行库（与用例列表页同款）；项目挂在产品线下才展示
+	scope: parseAsStringEnum(['version', 'line']).withDefault('version'),
 	// 单用例深链：来自 GroupsPage「查看报告」按钮 → 把 q 固定为标题词
 	caseId: parseAsString.withDefault(''),
 	// 单计划深链：来自 Plans「查看报告」按钮 → 把 tab 固定为 plan
@@ -54,24 +58,38 @@ export default function Executions() {
 
 	const [raw, setRaw] = useQueryStates(executionsParsers, { history: 'replace' });
 	const tab = raw.tab as Tab;
+	const scope = raw.scope;
+	const onLineScope = scope === 'line';
 	const page = Math.max(1, Number(raw.page) || 1);
 	const pageSizeRaw = Number(raw.pageSize);
 	const pageSize = [10, 20, 50, 100].includes(pageSizeRaw) ? pageSizeRaw : 20;
 	/** 待确认删除的计划运行（行内删除入口）；null = 未打开确认弹窗。 */
 	const [confirmDeleteRun, setConfirmDeleteRun] = useState<{ id: string; label: string } | null>(null);
 
+	// 产品线归属：项目挂在某条产品线下时，头部出「当前版本 / 产品线执行库」范围切换
+	const { data: scopeProject } = useQuery({
+		queryKey: ['project', projectId],
+		queryFn: () => api.projects.get(projectId!),
+		enabled: !!projectId,
+	});
+	const productLineId = scopeProject?.productLineId ?? null;
+
 	const { data, isLoading, isError, error } = useQuery({
-		queryKey: ['executions', projectId, versionId, tab, raw.statuses, raw.versions, raw.q, raw.caseId, raw.planId],
-		queryFn: () =>
-			api.executions.list({
-				projectId,
+		queryKey: ['executions', projectId, scope, productLineId, versionId, tab, raw.statuses, raw.versions, raw.q, raw.caseId, raw.planId],
+		queryFn: () => {
+			const base = {
 				kind: tab,
 				statuses: raw.statuses.length ? raw.statuses : undefined,
 				versionIds: raw.versions.length ? raw.versions : undefined,
 				q: raw.q.trim() ? raw.q.trim() : undefined,
 				caseId: raw.caseId || undefined,
 				planId: raw.planId || undefined,
-			}),
+			};
+			// 产品线执行库：跨项目拉整条线的执行历史（不传 projectId）；线 id 未加载前先按当前版本拉
+			return onLineScope && productLineId
+				? api.executions.list({ ...base, productLineId })
+				: api.executions.list({ ...base, projectId });
+		},
 		enabled: !!projectId,
 	});
 
@@ -80,6 +98,12 @@ export default function Executions() {
 		queryKey: ['versions', projectId],
 		queryFn: () => api.versions.list(projectId!),
 		enabled: !!projectId,
+	});
+	// 产品线范围：版本 facet 换成整条线的版本集合
+	const { data: lineVersionList } = useQuery({
+		queryKey: ['versions', 'line', productLineId],
+		queryFn: () => api.projects.versionsByProductLine(productLineId!),
+		enabled: !!productLineId && onLineScope,
 	});
 
 	// caseId 深链的标题：chip 上要显示用例名（否则用户只看到一个裸 UUID，
@@ -114,6 +138,7 @@ export default function Executions() {
 	const setStatusFilter = (next: string[]) => void setRaw({ statuses: next, page: '1' });
 	const setVersionsFilter = (next: string[]) => void setRaw({ versions: next, page: '1' });
 	const setSearch = (next: string) => void setRaw({ q: next, page: '1' });
+	const setScope = (next: typeof scope) => void setRaw({ scope: next, page: '1' });
 	// 清除用例深链时连带清掉 q —— 旧深链会把标题塞进 q，两者与 caseId 是 AND 关系，
 	// 留着 q 会让"取消筛选"看起来没生效（搜索词仍在悄悄收窄结果）。
 	const clearCaseFilter = () => void setRaw({ caseId: null, q: null, page: '1' });
@@ -235,7 +260,7 @@ export default function Executions() {
 		{
 			id: 'version',
 			label: t('reports:list.version'),
-			options: (projectVersionList ?? []).map((v) => ({ value: v.id, label: v.name })),
+			options: (onLineScope ? lineVersionList ?? [] : projectVersionList ?? []).map((v) => ({ value: v.id, label: v.name })),
 		},
 	];
 
@@ -404,6 +429,18 @@ export default function Executions() {
 			<PageShellHeader>
 				<PageShellTitle>{t('common:navReports')}</PageShellTitle>
 				<PageShellDescription>{t('reports:pageDesc')}</PageShellDescription>
+				{productLineId && (
+					<PageShellActions>
+						<Segmented
+							options={[
+								{ value: 'version', label: t('reports:list.scopeVersion'), icon: 'tag' },
+								{ value: 'line', label: t('reports:list.scopeProductLine'), icon: 'layers' },
+							]}
+							value={scope}
+							onChange={(v) => setScope(v)}
+						/>
+					</PageShellActions>
+				)}
 			</PageShellHeader>
 
 			<PageShellContent>

@@ -37,7 +37,9 @@
     "deletedToast": "已删除 {{count}} 条（{{parts}}）",
     "listSeparator": "，",
     "tabsAll": "所有",
-    "tabsCase": "单用例"
+    "tabsCase": "单用例",
+    "scopeVersion": "当前版本",
+    "scopeProductLine": "产品线执行库"
   },
   "delete": {
     "title": "删除测试报告",

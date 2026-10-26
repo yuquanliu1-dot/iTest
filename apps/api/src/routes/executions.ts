@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { eq, desc, inArray, and, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { reports, planRuns, groups, testCases, executionPlans, projectVersions, planRunCases } from '../db/schema.js';
-import { assertProjectVisible, visibleProjectIds } from '../services/projectAccess.js';
+import { reports, planRuns, groups, testCases, executionPlans, projectVersions, planRunCases, projects } from '../db/schema.js';
+import { assertProjectVisible, assertProductLineVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { resolveUsersByIds, type ResolvedUser } from '../lib/creator.js';
 
 export const executionsRoute = Router();
@@ -111,7 +111,7 @@ interface PlanEntry {
 type Entry = CaseEntry | PlanEntry;
 
 executionsRoute.get('/', async (req, res) => {
-  const { projectId, kind = 'all' } = req.query as { projectId?: string; kind?: 'case' | 'plan' | 'all' };
+  const { projectId, productLineId, kind = 'all' } = req.query as { projectId?: string; productLineId?: string; kind?: 'case' | 'plan' | 'all' };
   // 状态 / 版本 / 关键词 facet：statuses / versionIds 走 csv；q 模糊匹配 caseTitle（仅 case 行生效）
   const statusArr = typeof req.query.statuses === 'string' ? req.query.statuses.split(',').filter(Boolean) : [];
   const versionArr = typeof req.query.versionIds === 'string' ? req.query.versionIds.split(',').filter(Boolean) : [];
@@ -123,17 +123,25 @@ executionsRoute.get('/', async (req, res) => {
   if (projectId) await assertProjectVisible(projectId, req.user!);
   // 无 projectId 时按可见项目过滤
   const visiblePids = projectId ? null : await visibleProjectIds(req.user!);
+  // 产品线范围（执行历史「产品线执行库」）：线内全部项目的用例报告 + 计划运行。
+  // 与 projectId 二选一（前端 scope 切换决定传哪个）；可见性经产品线→组织继承（同 cases 列表分支）。
+  let linePids: string[] | null = null;
+  if (productLineId) {
+    await assertProductLineVisible(productLineId, req.user!);
+    linePids = (await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(eq(projects.productLineId, productLineId))).map((p) => p.id);
+  }
+  const scopePids = linePids ?? (projectId ? [projectId] : visiblePids);
 
   let caseRows: CaseEntry[] = [];
   let planRows: PlanEntry[] = [];
 
   if (kind === 'case' || kind === 'all') {
     let gids: string[] = [];
-    if (projectId) {
-      const gs = await db.select().from(groups).where(eq(groups.projectId, projectId));
-      gids = gs.map((g) => g.id);
-    } else if (visiblePids && visiblePids.length > 0) {
-      const gs = await db.select().from(groups).where(inArray(groups.projectId, visiblePids));
+    if (scopePids && scopePids.length > 0) {
+      const gs = await db.select().from(groups).where(inArray(groups.projectId, scopePids));
       gids = gs.map((g) => g.id);
     }
     const cs = gids.length ? await db.select({ id: testCases.id, versionId: testCases.versionId }).from(testCases).where(inArray(testCases.groupId, gids)) : [];
@@ -278,11 +286,8 @@ executionsRoute.get('/', async (req, res) => {
   }
 
   if (kind === 'plan' || kind === 'all') {
-    const conds = projectId
-      ? [eq(planRuns.projectId, projectId)]
-      : visiblePids && visiblePids.length > 0
-        ? [inArray(planRuns.projectId, visiblePids)]
-        : [];
+    // scopePids 空（用户无可见项目/线内无项目）→ 空集,与 case 分支语义一致
+    const conds = scopePids && scopePids.length > 0 ? [inArray(planRuns.projectId, scopePids)] : [];
     if (statusArr.length) conds.push(inArray(planRuns.status, statusArr));
     // plan 行的 versionId 来自 executionPlans.versionId
     if (versionArr.length) conds.push(inArray(executionPlans.versionId, versionArr));
