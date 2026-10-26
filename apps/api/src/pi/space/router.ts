@@ -23,6 +23,7 @@ import { subscribeThreadMirror } from './threadBus.js';
 import { generateSpaceSuggestionsOnce } from './suggestions.js';
 import { stageRoute } from './stageRoute.js';
 import { feedbackRoute } from './feedbackRoute.js';
+import { getArtifact, readArtifactFile, contentDispositionUtf8 } from './artifacts.js';
 import { requireManager } from '../../middleware/auth.js';
 import { guidesRoute } from './guidesRoute.js';
 import { mcpServersRoute } from './mcpServersRoute.js';
@@ -385,6 +386,23 @@ spaceRoute.get('/threads/:id/live/:key', async (req, res) => {
   if (req.query.replay === 'meta') return handleLiveReplayMeta(res, req.params.key!);
   if (req.query.replay === '1') return handleLiveReplay(req, res, req.params.key!, { speed: replaySpeedOf(req.query) });
   handleLiveView(req, res, req.params.key!);
+});
+
+/** AI 产出文件下载（artifact 事件携带的 token 换文件流）。
+ *  鉴权 = 线程可见（与 SSE 同款）；过期/不存在 410；文件被清扫 404。 */
+spaceRoute.get('/threads/:id/artifacts/:token', async (req, res) => {
+  await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
+  const a = getArtifact(req.params.token!);
+  if (!a) throw new HttpError(410, 'artifact_expired', '文件已过期或不存在');
+  let buf: Buffer;
+  try {
+    buf = await readArtifactFile(a);
+  } catch {
+    throw new HttpError(404, 'not_found', '文件已被清理');
+  }
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', contentDispositionUtf8(a.name));
+  res.send(buf);
 });
 
 spaceRoute.use(stageRoute);
