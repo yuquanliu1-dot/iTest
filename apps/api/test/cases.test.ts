@@ -257,6 +257,28 @@ describe('cases + steps', () => {
     expect(r.body.incognito).toBe(true);
   });
 
+  it('PATCH requirementNo sets and clears (nullable free text)', async () => {
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'REQ', groupId, versionId });
+    const set = await request(app).patch(`/api/cases/${c.body.id}`).send({ requirementNo: 'REQ-2024-001' });
+    expect(set.status).toBe(200);
+    expect(set.body.requirementNo).toBe('REQ-2024-001');
+    const clear = await request(app).patch(`/api/cases/${c.body.id}`).send({ requirementNo: null });
+    expect(clear.status).toBe(200);
+    expect(clear.body.requirementNo).toBeNull();
+  });
+
+  it('PATCH description sets and clears (nullable)', async () => {
+    const { groupId, versionId } = await seedProject(pool);
+    const c = await request(app).post('/api/cases').send({ title: 'DESC', groupId, versionId });
+    const set = await request(app).patch(`/api/cases/${c.body.id}`).send({ description: '背景说明' });
+    expect(set.status).toBe(200);
+    expect(set.body.description).toBe('背景说明');
+    const clear = await request(app).patch(`/api/cases/${c.body.id}`).send({ description: null });
+    expect(clear.status).toBe(200);
+    expect(clear.body.description).toBeNull();
+  });
+
   it('PUT /api/cases/:id/steps replaces all steps with name/delayMs', async () => {
     const { groupId, versionId } = await seedProject(pool);
     const c = await request(app).post('/api/cases').send({ title: 'R', groupId, versionId });

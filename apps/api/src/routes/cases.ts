@@ -29,6 +29,8 @@ const CaseBodyBase = z.object({
   windowHeight: z.number().int().min(200).max(10000).optional(),
   incognito: z.boolean().default(false),
   tagIds: z.array(z.string().uuid()).optional(),
+  /** 需求编号（外部编号自由文本，非 requirements FK）。 */
+  requirementNo: z.string().max(64).nullable().optional(),
   /** Track 1：用例级预期描述（自然语言）。回放结束后由 vision LLM 拿最终截图判定。 */
   expectedOutcome: z.string().max(4000).nullable().optional(),
 });
@@ -53,6 +55,8 @@ const PatchBody = CaseBodyBase.partial()
   .extend({
     scenarioId: z.string().uuid().nullable().optional(),
     status: CaseStatusEnum.optional(),
+    // 用例描述允许置空；上限对齐 expectedOutcome
+    description: z.string().max(4000).nullable().optional(),
     // 用例级 init URL 允许置空（清除覆盖，回到分组/项目继承链）
     url: z.string().url().nullable().optional(),
     webServiceRef: z.string().max(64).nullable().optional(),

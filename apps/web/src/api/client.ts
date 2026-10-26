@@ -343,7 +343,7 @@ export const api = {
       body: Partial<{
         title: string;
         priority: string;
-        description: string;
+        description: string | null;
         groupId: string;
         url: string | null;
         windowStrategy: string;
@@ -356,6 +356,8 @@ export const api = {
         defaultEnvId: string | null;
         webServiceRef: string | null;
         datasetId: string | null;
+        /** 需求编号（外部编号自由文本）。空字符串由调用方转 null。 */
+        requirementNo: string | null;
         /** Track 1：用例级预期描述。空字符串由调用方转 null。 */
         expectedOutcome: string | null;
       }>,
@@ -995,6 +997,8 @@ export interface TestCase {
   groupId?: string;
   url?: string | null;
   requirementId?: string | null;
+  /** 需求编号（外部编号自由文本，非 requirements FK）。 */
+  requirementNo?: string | null;
   scenarioId?: string | null;
   scenarioTitle?: string | null;
   tags?: Tag[];

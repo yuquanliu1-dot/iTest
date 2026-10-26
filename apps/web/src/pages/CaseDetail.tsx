@@ -32,7 +32,7 @@ import { stepSummary, fullStepDescription, getKind as getStepKind } from '../lib
 import { creatorName } from '../lib/creatorName';
 
 
-type Tab = 'description' | 'reports' | 'recording';
+type Tab = 'description' | 'reports';
 
 /** 步骤身份快照比较：用于检测并发 mutation 是否动了我们正在编辑的那一行。 */
 function sameStep(a: StepClip, b: StepClip): boolean {
@@ -58,6 +58,12 @@ export default function CaseDetail() {
    *  编辑与保存走 caseDetail.expectedOutcome 同步；用 ref 跟踪 serverKey 避免 refetch 静默覆盖未保存编辑。 */
   const [expectedOutcome, setExpectedOutcome] = useState('');
   const expectedOutcomeSyncRef = useRef<string | null>(null);
+  /** 用例描述：textarea 编辑 + 显式保存；syncRef 防 refetch 覆盖未保存编辑（同 expectedOutcome 模式）。 */
+  const [description, setDescription] = useState('');
+  const descriptionSyncRef = useRef<string | null>(null);
+  /** 需求编号：输入框 blur/Enter 提交（可清空→null）；syncRef 同上。 */
+  const [requirementNo, setRequirementNo] = useState('');
+  const requirementNoSyncRef = useRef<string | null>(null);
   const clipboard = useStepClipboard();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<StepClip | null>(null);
@@ -267,6 +273,24 @@ export default function CaseDetail() {
     expectedOutcomeSyncRef.current = serverValue;
     setExpectedOutcome(serverValue);
   }, [caseDetail, expectedOutcome]);
+
+  // 用例描述与服务端同步（同 expectedOutcome 模式）
+  useEffect(() => {
+    if (!caseDetail) return;
+    const serverValue = caseDetail.description ?? '';
+    if (descriptionSyncRef.current !== null && description !== descriptionSyncRef.current) return;
+    descriptionSyncRef.current = serverValue;
+    setDescription(serverValue);
+  }, [caseDetail, description]);
+
+  // 需求编号与服务端同步（同 expectedOutcome 模式）
+  useEffect(() => {
+    if (!caseDetail) return;
+    const serverValue = caseDetail.requirementNo ?? '';
+    if (requirementNoSyncRef.current !== null && requirementNo !== requirementNoSyncRef.current) return;
+    requirementNoSyncRef.current = serverValue;
+    setRequirementNo(serverValue);
+  }, [caseDetail, requirementNo]);
 
   const { data: groups } = useQuery({
     queryKey: ['groups', projectId],
@@ -621,6 +645,35 @@ export default function CaseDetail() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
+  // 用例描述：显式保存；空 = 清空（传 null）
+  const saveDescription = useMutation({
+    mutationFn: () => api.cases.patch(id!, { description: description.trim() ? description : null }),
+    onSuccess: () => {
+      descriptionSyncRef.current = description.trim() ? description : '';
+      qc.invalidateQueries({ queryKey: ['case', id] });
+      toast(t('cases:saved'), 'success');
+    },
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
+  });
+
+  // 需求编号：blur/Enter 提交；空 = 清空（传 null）。与 description/expectedOutcome 不同步进 saveRuntime——
+  // 输入框在右侧栏，独立即时提交更符合「填完就走」的用法。
+  const saveRequirementNo = useMutation({
+    mutationFn: (value: string | null) => api.cases.patch(id!, { requirementNo: value }),
+    onSuccess: (_r, value) => {
+      requirementNoSyncRef.current = value ?? '';
+      qc.invalidateQueries({ queryKey: ['case', id] });
+      toast(t('cases:saved'), 'success');
+    },
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
+  });
+  const commitRequirementNo = () => {
+    const server = requirementNoSyncRef.current ?? '';
+    const next = requirementNo.trim() ? requirementNo : '';
+    if (next === server || saveRequirementNo.isPending) return;
+    saveRequirementNo.mutate(requirementNo.trim() ? requirementNo : null);
+  };
+
   useEffect(() => {
     return () => {
       if (sessionRef.current) {
@@ -723,7 +776,6 @@ export default function CaseDetail() {
           options={[
             { value: 'description', label: t('cases:tabDescription'), icon: 'list' },
             { value: 'reports', label: t('cases:tabReports'), icon: 'flag' },
-            { value: 'recording', label: t('cases:tabRecording'), icon: 'clock' },
           ]}
           value={tab}
           onChange={(v) => setTab(v)}
@@ -839,13 +891,24 @@ export default function CaseDetail() {
                 </div>
                 <div className="bg-card border rounded-[var(--radius-md)] p-5">
                 <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
-                  {caseDetail.description ? t('cases:description') : t('cases:noDescription')}
+                  {t('cases:description')}
                 </div>
-                {caseDetail.description && (
-                  <p className="text-[13px] mb-4" style={{ color: 'var(--muted-foreground)', lineHeight: 1.7 }}>
-                    {caseDetail.description}
-                  </p>
-                )}
+                <textarea
+                  className="input-base mb-3"
+                  style={{ minHeight: 72, resize: 'vertical', fontSize: 13, lineHeight: 1.7 }}
+                  placeholder={t('cases:descriptionPlaceholder')}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    onClick={() => saveDescription.mutate()}
+                    disabled={saveDescription.isPending || description === (descriptionSyncRef.current ?? '')}
+                  >
+                    {t('common:save')}
+                  </Button>
+                </div>
                 {caseDetail.createdBy && (
                   <div className="text-[11px] mb-2" style={{ color: 'var(--muted-foreground)' }}>
                     {t('cases:createdBy')} {creatorName(caseDetail.createdBy)}
@@ -1190,14 +1253,6 @@ export default function CaseDetail() {
                 } />
               </div>
             )}
-
-            {tab === 'recording' && (
-              <div className="bg-card border rounded-[var(--radius-md)] p-5">
-                <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-                  {t('cases:recordingHistory')}
-                </p>
-              </div>
-            )}
           </div>
 
           {/* Right rail — 操作面板 */}
@@ -1322,6 +1377,16 @@ export default function CaseDetail() {
                   <option key={s.id} value={s.id}>{s.title}</option>
                 ))}
               </select>
+              <div className="flex flex-col gap-1 mt-3">
+                <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:requirementNo')}</span>
+                <Input
+                  value={requirementNo}
+                  placeholder={t('cases:requirementNoPlaceholder')}
+                  onChange={(e) => setRequirementNo(e.target.value)}
+                  onBlur={commitRequirementNo}
+                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                />
+              </div>
               {!caseDetail.requirementId && (
                 <p className="text-[11px] mt-2" style={{ color: 'var(--muted-foreground)' }}>
                   {t('cases:noRequirementHint')}

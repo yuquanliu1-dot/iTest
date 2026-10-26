@@ -109,6 +109,7 @@ describe('case copy', () => {
       windowWidth: 1280,
       windowHeight: 720,
       incognito: true,
+      requirementNo: 'REQ-2024-001',
     });
     expect(patch.status).toBe(200);
 
@@ -120,6 +121,8 @@ describe('case copy', () => {
     expect(same.body.windowWidth).toBe(1280);
     expect(same.body.windowHeight).toBe(720);
     expect(same.body.incognito).toBe(true);
+    // 需求编号是本条用例自身的描述性属性，随拷贝携带
+    expect(same.body.requirementNo).toBe('REQ-2024-001');
 
     // 跨项目复制：环境类绑定不外带（否则副本指向别的项目的环境，执行期报「环境与项目不匹配」）
     const cross = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: b.groupId });

@@ -41,6 +41,9 @@ export const testCases = pgTable('test_cases', {
   /** 用例绑定的 web 服务对象标识(environment_objects objectType='web' 的 payload.name);
    *  空=用环境默认 web 服务。执行时与相对 url 拼绝对地址。 */
   webServiceRef: varchar('web_service_ref', { length: 64 }),
+  /** 需求编号（外部编号自由文本，非 requirements FK——用户编号体系在外部系统）。
+   *  用户在用例详情手填/清空；AI 生成时由 stage_case.requirementNo 从提示词原样带下。 */
+  requirementNo: varchar('requirement_no', { length: 64 }),
   title: varchar('title', { length: 200 }).notNull(),
   description: text('description'),
   priority: varchar('priority', { length: 20 }).notNull().default('P1'),
@@ -120,6 +123,8 @@ export const aiStageCases = pgTable(
     description: text('description'),
     priority: varchar('priority', { length: 20 }),
     url: text('url'),
+    /** AI 从用户提示词里原样提取的需求编号（如 REQ-2024-001）；save 时随用例落到 test_cases.requirement_no */
+    requirementNo: varchar('requirement_no', { length: 64 }),
     steps: jsonb('steps').notNull().default([]),
     defaultEnvId: uuid('default_env_id'),
     expectedOutcome: text('expected_outcome'),

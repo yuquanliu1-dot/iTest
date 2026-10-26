@@ -36,6 +36,8 @@ export interface StagedCase {
   description?: string | null;
   priority?: string | null;
   url?: string | null;
+  /** 需求编号：用户提示词里原样提取（如 REQ-2024-001）；save 时落到 test_cases.requirement_no。 */
+  requirementNo?: string | null;
   steps: unknown[];
   defaultEnvId?: string | null;
   expectedOutcome?: string | null;
@@ -101,6 +103,7 @@ function asStagedCase(row: typeof aiStageCases.$inferSelect): StagedCase & { sta
     description: row.description,
     priority: row.priority,
     url: row.url,
+    requirementNo: row.requirementNo,
     steps: (row.steps ?? []) as unknown[],
     defaultEnvId: row.defaultEnvId,
     expectedOutcome: row.expectedOutcome,
@@ -237,6 +240,7 @@ export async function stageCase(threadId: string, versionId: string, body: Stage
       description: body.description,
       priority: body.priority ?? null,
       url: body.url ?? null,
+      requirementNo: body.requirementNo ?? null,
       steps: body.steps as object,
       defaultEnvId: body.defaultEnvId ?? null,
       expectedOutcome: body.expectedOutcome ?? null,
@@ -250,6 +254,7 @@ export async function stageCase(threadId: string, versionId: string, body: Stage
         description: body.description,
         priority: body.priority ?? null,
         url: body.url ?? null,
+        requirementNo: body.requirementNo ?? null,
         steps: body.steps as object,
         defaultEnvId: body.defaultEnvId ?? null,
         expectedOutcome: body.expectedOutcome ?? null,
@@ -384,6 +389,7 @@ const StageCaseInput = z.object({
   expectedOutcome: z.string().max(4000).nullable().optional(),
   datasetLocalId: z.string().min(1).max(64).nullable().optional(),
   coverageTypes: z.array(z.enum(COVERAGE_TYPE_KEYS as [string, ...string[]])).max(5).optional(),
+  requirementNo: z.string().max(64).nullable().optional(),
 });
 const StageScenarioInput = z.object({
   localId: z.string().min(1).max(64),
@@ -455,6 +461,7 @@ export const STAGE_PROMPT_GUIDELINES = [
   '数据驱动回放（同一流程跑多组数据）用 stage_dataset 生成数据集：列名即回放变量 {{列名}},行间差异（输入值/断言文案/预期提示）写成列值;配套的用例用 stage_case 的 datasetLocalId 绑定（同一批保存时数据集先落库并自动绑定）。用例步骤里 fill 的 value / 断言文案直接写 {{列名}}。',
   '步骤里的 {{变量名}} 必须与数据集列名逐字一致（列名只能字母/下划线开头,中文列名非法）——stage_case 响应附「变量体检」,引用未定义/不一致变量时请立即修正后重发。',
   '每条用例都要用 coverageTypes 声明它实际覆盖的测试类型（用户勾选的覆盖要求只是上下文的一句话,勾了不等于你覆盖了）——照实标,不要把一条「登录成功」同时标成 functional+security。响应附「覆盖回执」点名当前暂存区各类分布,分布为 ×0 说明该类确实没人切,确有遗漏就继续补。',
+  '用户对话里若给出需求编号（如「需求编号：REQ-2024-001」「需求号 NO.123」）,把它原样填入 stage_case 的 requirementNo 字段——只做原样转写,不要臆造、改写格式或补前缀;对话里没有编号就不要填（留空即可）。',
   '登录步骤的凭据不要写明文：用户名输入框 fill 的 value 写字面量 __ITEST_USERNAME__、密码输入框写字面量 __ITEST_PASSWORD__,回放时平台自动替换为测试环境默认 web 服务里配置的应用登录凭据真实值(环境未配置则报 env-missing 失败,不会静默填字面量)。这与数据集变量 {{列名}} 的分工:数据集管同流程多组数据的差异,__ITEST_*__ 只指向环境的单一登录凭据。verify_case / solidify_case 的 AI 相也认同一套占位符,两相行为一致。除这三个字面量外不要臆造别的 __ITEST_xxx__。',
   '数据集敏感列（密码/密钥等）标 sensitive:true,单元格值仍以明文给出（落库时自动加密,预览对用户可见）;已有数据集的读/改/删走 manage_datasets（get 行值敏感格脱敏、update/delete 需用户确认）——本工具只负责生成全新数据集;给已有用例绑定已落库数据集走 stage_case_op update_case(patch.datasetId)。',
   '用例创建走「先讨论、再暂存、后编译」三段式（强约束）：(1) 拿到需求先把自然语言步骤草稿直接贴在对话里与用户讨论，不要立刻 stage_case；(2) 讨论中用户要求实测时，直接调 verify_case(caseId=草稿 localId)——草稿步骤是自然语言时它走 AI 相执行（看截图临场操作），全程 live view 视频流给用户看；(3) 用户确认步骤后才调 stage_case 暂存，步骤保持自然语言形态，不要急着编机械 DSL；(4) 用户勾选保存后，你主动问「是否需要 solidify 固化为机械步骤」，用户同意再调 solidify_case → verify_case(mode="mechanical") 验收。',
@@ -574,6 +581,7 @@ export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
         defaultEnvId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
         expectedOutcome: Type.Optional(Type.Union([Type.String({ maxLength: 4000 }), Type.Null()])),
         datasetLocalId: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 64 }), Type.Null()])),
+        requirementNo: Type.Optional(Type.Union([Type.String({ maxLength: 64 }), Type.Null()])), // 需求编号:用户提示词里给出时原样填入
         coverageTypes: Type.Optional(Type.Array(Type.Union(COVERAGE_TYPE_KEYS.map((k) => Type.Literal(k as 'functional'))) as never)), // 用户勾选的测试类型;落库后可统计覆盖分布
       }),
       promptGuidelines: STAGE_PROMPT_GUIDELINES,

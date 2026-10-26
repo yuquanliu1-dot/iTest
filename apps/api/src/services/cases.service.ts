@@ -96,6 +96,8 @@ export interface CreateCaseInput {
   windowHeight?: number | null;
   incognito?: boolean;
   requirementId?: string | null;
+  /** 需求编号（外部编号自由文本，非 requirements FK）。AI 生成路径由 stage_case 带下来。 */
+  requirementNo?: string | null;
   scenarioId?: string | null;
   tagIds?: string[];
   expectedOutcome?: string | null;
@@ -195,6 +197,7 @@ export interface UpdateCasePatch {
   incognito?: boolean;
   tagIds?: string[];
   expectedOutcome?: string | null;
+  requirementNo?: string | null;
   // 2026-10-07: 移动端支持
   platform?: 'web' | 'mobile';
   mobileOs?: 'ios' | 'android' | null;
@@ -452,6 +455,8 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
     .values({
       title,
       description: src.description,
+      // 需求编号是本条用例自身的描述性属性,随拷贝携带。
+      requirementNo: src.requirementNo,
       priority: src.priority,
       groupId: targetGroupId,
       versionId: targetVersionId ?? src.versionId,
