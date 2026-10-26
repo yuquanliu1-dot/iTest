@@ -392,8 +392,9 @@ spaceRoute.get('/threads/:id/live/:key', async (req, res) => {
  *  鉴权 = 线程可见（与 SSE 同款）；过期/不存在 410；文件被清扫 404。 */
 spaceRoute.get('/threads/:id/artifacts/:token', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
-  const a = getArtifact(req.params.token!);
+  const a = await getArtifact(req.params.token!);
   if (!a) throw new HttpError(410, 'artifact_expired', '文件已过期或不存在');
+  if (a.threadId !== req.params.id) throw new HttpError(410, 'artifact_expired', '文件已过期或不存在');
   let buf: Buffer;
   try {
     buf = await readArtifactFile(a);
