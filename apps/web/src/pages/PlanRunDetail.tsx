@@ -11,6 +11,7 @@ import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import LiveViewCard from '../components/LiveViewCard';
 import RcaBlock from '../components/RcaBlock';
+import ReportStepTimeline, { type StepResult } from '../components/report/ReportStepTimeline';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import { fullDateTime } from '../lib/format';
 import { creatorName } from '../lib/creatorName';
@@ -26,6 +27,41 @@ export default function PlanRunDetail() {
     queryKey: ['planRun', runId],
     queryFn: () => api.planRuns.get(runId!),
     enabled: !!runId,
+    refetchInterval: (q) => (q.state.data?.status === 'running' ? 2000 : false),
+  });
+
+  // ── 用例切换器（照搬数据集行切换器：chip + 状态点 + 跟随执行）──────────────
+  // 跟随 = 选中项自动切到正在执行的用例；手动点 chip 后停跟随，「回到最新」恢复。
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [follow, setFollow] = useState(true);
+  // 数据驱动用例的行选择（按 plan_run_case id 记忆，切用例互不干扰）；未手动选过 → running 行 ?? 首行
+  const [rowSel, setRowSel] = useState<Record<string, number>>({});
+  const cases = run?.cases ?? [];
+  const activeCase = cases.find((c) => c.status === 'running') ?? null;
+  const selected = follow
+    ? activeCase ?? cases.find((c) => c.status === 'failed') ?? cases[0]
+    : cases.find((c) => c.id === selectedId) ?? cases[0];
+  const curIdx = cases.findIndex((c) => c.id === selected?.id);
+  const selectCase = (id: string) => {
+    setFollow(false);
+    setSelectedId(id);
+  };
+  const gotoCase = (delta: number) => {
+    const next = cases[curIdx + delta];
+    if (next) selectCase(next.id);
+  };
+  const selRowIds = selected?.reportIds ?? [];
+  const runningRow = selected ? (selected.rowStatuses ?? []).findIndex((s) => s === 'running') : -1;
+  const rowIdx = selected
+    ? Math.min(rowSel[selected.id] ?? (runningRow >= 0 ? runningRow : 0), Math.max(selRowIds.length - 1, 0))
+    : 0;
+  const viewReportId = selRowIds.length > 1 ? selRowIds[rowIdx] ?? null : selected?.reportId ?? null;
+
+  // 选中用例的报告（与报告详情页共享 queryKey 缓存）：running 期间 2s 轮询，步骤逐条出现
+  const { data: report, isLoading: reportLoading } = useQuery({
+    queryKey: ['report', viewReportId],
+    queryFn: () => api.reports.get(viewReportId!),
+    enabled: !!viewReportId,
     refetchInterval: (q) => (q.state.data?.status === 'running' ? 2000 : false),
   });
 
@@ -124,70 +160,177 @@ export default function PlanRunDetail() {
           {run.summary ?? t('plans:executing')}
         </div>
 
-        <div className="shrink-0 bg-card border rounded-[var(--radius-md)] overflow-hidden">
-          <div className="px-5 py-[10px] hairline-bottom" style={{ background: 'var(--muted)' }}>
-            <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>{t('plans:timeline')}</span>
-          </div>
-          {run.cases.length === 0 ? (
+        {/* 用例切换器：chip 选用例，下方原地渲染该用例的详细执行报告（每步进度）。
+            样式与语义照搬报告详情页的数据集行切换器。 */}
+        {cases.length === 0 ? (
+          <div className="shrink-0 bg-card border rounded-[var(--radius-md)] overflow-hidden">
             <EmptyState icon="listChecks" title={t('cases:noStepsYet')} />
-          ) : (
-            <div className="flex flex-col" data-stagger>
-              {/* mobile plan-run case platform badge: requires backend exposing case.platform on run.cases[i]; tracked as follow-up */}
-              {run.cases.map((c) => (
-                <div key={c.id} data-stagger-item className="flex items-start gap-3 px-5 py-3 hairline-bottom">
-                  <span className="font-mono text-[12px] shrink-0 mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
-                    #{c.order} {c.stepKind === 'login_prepare' ? t('plans:login') : ''}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[12px] flex items-center gap-2 flex-wrap" style={{ color: 'var(--foreground)' }}>
-                      <span className="mr-1">{c.caseTitle ?? <span style={{ color: 'var(--muted-foreground)' }}>{t('plans:deletedCase')}</span>}</span>
-                      <span className="font-mono text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{c.caseId.slice(0, 8)}</span>
-                      <StatusPill status={c.status} pulse={c.status === 'running'}>{t(`cases:status.${c.status}`)}</StatusPill>
-                      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{c.durationMs ?? 0} ms</span>
-                      {(c.reportIds?.length ?? 0) > 1 && (
-                        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                          {t('plans:rowsPassed', { passed: (c.rowStatuses ?? []).filter((s) => s === 'passed').length, total: c.reportIds!.length })}
-                        </span>
+          </div>
+        ) : (
+          <>
+            <div className="shrink-0 flex items-center gap-2 flex-wrap bg-card border rounded-[var(--radius-md)] px-4 py-2">
+              <span className="text-[12px] font-medium shrink-0" style={{ color: 'var(--muted-foreground)' }}>
+                {t('plans:caseSelector')}
+              </span>
+              <div className="flex items-center gap-1 flex-wrap">
+                {cases.map((c) => {
+                  const cur = c.id === selected?.id;
+                  const dotColor =
+                    c.status === 'passed' ? 'var(--success)'
+                    : c.status === 'failed' ? 'var(--destructive)'
+                    : c.status === 'running' ? 'var(--primary)'
+                    : 'var(--muted-foreground)';
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className="rowchip max-w-[260px]"
+                      style={cur ? { borderColor: 'var(--primary)', boxShadow: '0 0 0 2px var(--primary-soft)' } : undefined}
+                      onClick={() => selectCase(c.id)}
+                      title={c.caseTitle ?? c.caseId}
+                    >
+                      <span className="font-mono shrink-0">#{c.order}</span>
+                      {c.stepKind === 'login_prepare' && (
+                        <span className="shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:login')}</span>
                       )}
-                    </div>
-                    {c.error && <div className="text-[12px] mt-1" style={{ color: 'var(--destructive)' }}>{c.error}</div>}
-                    {c.status === 'failed' && c.rca && <RcaBlock rca={c.rca} threadJump assistantPath={`/p/${projectId}/v/${versionId}/assistant`} />}
-                    {/* 通过行展示最后断言结论（vision reason）；失败行 error 已含结论，不重复展示 */}
-                    {!c.error && c.lastAssertion && (
-                      <div className="text-[12px] mt-1 truncate" style={{ color: 'var(--muted-foreground)' }} title={c.lastAssertion}>
-                        {c.lastAssertion}
-                      </div>
-                    )}
-                  </div>
-                  {(c.reportIds?.length ?? 0) > 1 ? (
-                    <div className="flex items-center gap-1 shrink-0">
-                      {(c.reportIds ?? []).map((rid, i) => {
-                        const st = c.rowStatuses?.[i];
+                      <span className="truncate min-w-0">{c.caseTitle ?? t('plans:deletedCase')}</span>
+                      <span
+                        className={c.status === 'running' ? 'status-pulse' : undefined}
+                        style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }}
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+              <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
+              <Button variant="ghost" size="sm" disabled={curIdx <= 0} onClick={() => gotoCase(-1)}>
+                <Icon name="chevronLeft" size={12} />
+              </Button>
+              <Button variant="ghost" size="sm" disabled={curIdx < 0 || curIdx >= cases.length - 1} onClick={() => gotoCase(1)}>
+                <Icon name="chevronRight" size={12} />
+              </Button>
+              <span className="text-[12px] font-medium" style={{ color: 'var(--muted-foreground)', fontVariantNumeric: 'tabular-nums' }}>
+                {curIdx + 1}/{cases.length}
+              </span>
+              <div className="flex-1" />
+              {activeCase && (follow ? (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-full" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>
+                  <span className="status-pulse" style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }} />
+                  {t('reports:detail.following')}
+                </span>
+              ) : (
+                <Button variant="ghost" size="sm" onClick={() => setFollow(true)}>
+                  {t('reports:detail.backToLatest')}
+                  <Icon name="chevronRight" size={12} />
+                </Button>
+              ))}
+            </div>
+
+            {/* 选中用例的详细执行报告 */}
+            {selected && (
+              <div className="shrink-0 flex flex-col gap-3">
+                <div className="bg-card border rounded-[var(--radius-md)] px-4 py-2 flex items-center gap-2 flex-wrap">
+                  <span className="text-[13px] font-medium" style={{ color: 'var(--foreground)' }}>
+                    {selected.caseTitle ?? t('plans:deletedCase')}
+                  </span>
+                  <span className="font-mono text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{selected.caseId.slice(0, 8)}</span>
+                  <StatusPill status={selected.status} pulse={selected.status === 'running'}>{t(`cases:status.${selected.status}`)}</StatusPill>
+                  <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{selected.durationMs ?? 0} ms</span>
+                  {/* 数据驱动用例：行号 chip（行状态点随轮询收敛），行报告在下方步骤时间线内联展示 */}
+                  {(selected.reportIds?.length ?? 0) > 1 && (
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {(selected.reportIds ?? []).map((rid, i) => {
+                        const st = selected.rowStatuses?.[i];
+                        const rowDot =
+                          st === 'passed' ? 'var(--success)'
+                          : st === 'failed' ? 'var(--destructive)'
+                          : st === 'running' ? 'var(--primary)'
+                          : 'var(--muted-foreground)';
                         return (
-                          <Button
+                          <button
                             key={rid}
-                            variant="ghost"
-                            size="sm"
-                            title={st ?? undefined}
-                            onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports/${rid}`)}
+                            type="button"
+                            className="rowchip"
+                            style={i === rowIdx ? { borderColor: 'var(--primary)', boxShadow: '0 0 0 2px var(--primary-soft)' } : undefined}
+                            onClick={() => setRowSel((m) => ({ ...m, [selected.id]: i }))}
+                            title={t('plans:rowLabel', { index: i + 1 })}
                           >
-                            {t('plans:rowLabel', { index: i + 1 })} {st === 'passed' ? '✓' : st === 'failed' ? '✕' : '·'}
-                          </Button>
+                            {i + 1}
+                            <span
+                              className={st === 'running' ? 'status-pulse' : undefined}
+                              style={{ width: 6, height: 6, borderRadius: '50%', background: rowDot, flexShrink: 0 }}
+                            />
+                          </button>
                         );
                       })}
                     </div>
-                  ) : (
-                    c.reportId && (
-                      <Button variant="ghost" size="sm" onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports/${c.reportId}`)}>
-                        {t('plans:report')}
-                      </Button>
-                    )
+                  )}
+                  <div className="flex-1" />
+                  {viewReportId && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => navigate(`/p/${projectId}/v/${versionId}/reports/${viewReportId}`)}
+                    >
+                      {t('plans:openFullReport')}
+                      <Icon name="chevronRight" size={12} />
+                    </Button>
                   )}
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
+                {selected.error && (
+                  <div
+                    className="text-[12px] px-3 py-2 rounded-[var(--radius-sm)]"
+                    style={{ background: 'var(--destructive-soft-strong)', color: 'var(--destructive)' }}
+                  >
+                    {selected.error}
+                  </div>
+                )}
+                {!selected.error && selected.lastAssertion && (
+                  <div
+                    className="text-[12px] px-3 py-2 rounded-[var(--radius-sm)] truncate"
+                    style={{ color: 'var(--muted-foreground)', background: 'var(--muted)' }}
+                    title={selected.lastAssertion}
+                  >
+                    {selected.lastAssertion}
+                  </div>
+                )}
+                {selected.status === 'failed' && selected.rca && (
+                  <div className="bg-card border rounded-[var(--radius-md)] p-4">
+                    <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-2" style={{ color: 'var(--muted-foreground)' }}>
+                      {t('reports:rca.title')}
+                    </div>
+                    <RcaBlock rca={selected.rca} threadJump assistantPath={`/p/${projectId}/v/${versionId}/assistant`} />
+                  </div>
+                )}
+                <div className="bg-card border rounded-[var(--radius-md)] overflow-hidden">
+                  <div className="px-5 py-[10px] hairline-bottom" style={{ background: 'var(--muted)' }}>
+                    <span className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
+                      {t('reports:detail.stepTimeline')}
+                    </span>
+                  </div>
+                  {viewReportId ? (
+                    reportLoading ? (
+                      <div className="flex flex-col items-center justify-center gap-2 px-5 py-14" style={{ color: 'var(--muted-foreground)' }}>
+                        <Icon name="loader" size={16} className="animate-spin" />
+                      </div>
+                    ) : (
+                      <ReportStepTimeline
+                        stepResults={(report?.stepResults as StepResult[]) ?? []}
+                        isRunning={report?.status === 'running'}
+                      />
+                    )
+                  ) : (
+                    // 尚无报告行：排队等待执行（运行中转圈，其余静态文案）
+                    <div className="flex flex-col items-center justify-center gap-2 px-5 py-14" style={{ color: 'var(--muted-foreground)' }}>
+                      <Icon name="loader" size={16} className={selected.status === 'running' ? 'animate-spin' : undefined} />
+                      <span style={{ fontSize: 13 }}>{t('plans:caseQueued')}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <Dialog open={showDelete} onOpenChange={setShowDelete}>
