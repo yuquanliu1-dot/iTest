@@ -424,4 +424,68 @@ describe('routes: batch-solidify', () => {
     expect(byId.get(pending)).toMatchObject({ stepsTotal: 1, stepsCompiled: 0 });
     expect(byId.get(noSteps)).toMatchObject({ stepsTotal: 0, stepsCompiled: 0 });
   });
+
+  it('GET solidify-batches（列表）：含 running 行的批次 + 全量行统计；纯终态批次不出现', async () => {
+    const c1 = await seedCase();
+    const c2 = await seedCase();
+    const c3 = await seedCase();
+    // 批次 A：1 passed + 1 verifying → 在途
+    const batchA = randomUUID();
+    await pool.query(`INSERT INTO solidify_batches(id, project_id) VALUES ($1, $2)`, [batchA, projectId]);
+    await pool.query(
+      `INSERT INTO solidify_batch_cases(batch_id, case_id, status) VALUES ($1,$2,'passed'), ($1,$3,'verifying')`,
+      [batchA, c1, c2],
+    );
+    // 批次 B：全终态 → 不该出现在列表里
+    const batchB = randomUUID();
+    await pool.query(`INSERT INTO solidify_batches(id, project_id) VALUES ($1, $2)`, [batchB, projectId]);
+    await pool.query(`INSERT INTO solidify_batch_cases(batch_id, case_id, status) VALUES ($1,$2,'passed')`, [batchB, c3]);
+
+    const r = await request(app).get(`/api/cases/solidify-batches?projectId=${projectId}`);
+    expect(r.status).toBe(200);
+    expect(r.body.batches).toHaveLength(1);
+    const b = r.body.batches[0];
+    expect(b).toMatchObject({ batchId: batchA, projectId, status: 'running', total: 2, passed: 1, failed: 0, running: 1 });
+    // 行级明细含 caseId/title/status/error
+    expect(b.cases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ caseId: c1, status: 'passed', title: '批量固化用例', error: null }),
+      expect.objectContaining({ caseId: c2, status: 'verifying', title: '批量固化用例' }),
+    ]));
+  });
+
+  it('GET solidify-batches：无在途批次 → 空数组；跨项目不可见 → 404', async () => {
+    const r = await request(app).get(`/api/cases/solidify-batches?projectId=${projectId}`);
+    expect(r.status).toBe(200);
+    expect(r.body.batches).toEqual([]);
+
+    // 别的组织的项目 → 与「不存在」同样 404
+    const otherOrg = randomUUID();
+    await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1,'他组织',$2)`, [otherOrg, `/${otherOrg}/`]);
+    const otherLine = (await pool.query(
+      `INSERT INTO product_lines(organization_id, name) VALUES ($1, '他线') RETURNING id`,
+      [otherOrg],
+    )).rows[0]!.id as string;
+    const otherProject = (await pool.query(
+      `INSERT INTO projects(product_line_id, name) VALUES ($1, '他项目') RETURNING id`,
+      [otherLine],
+    )).rows[0]!.id as string;
+    await expect(request(app).get(`/api/cases/solidify-batches?projectId=${otherProject}`)).resolves.toMatchObject({ status: 404 });
+
+    // 无参 → 按可见项目集合过滤：他组织项目的在途批次不出现
+    const otherGroup = (await pool.query(
+      `INSERT INTO "groups"(project_id, name) VALUES ($1,'他分组') RETURNING id`,
+      [otherProject],
+    )).rows[0]!.id as string;
+    const otherCase = randomUUID();
+    await pool.query(
+      `INSERT INTO test_cases(id, group_id, title, platform) VALUES ($1,$2,'他用例','web')`,
+      [otherCase, otherGroup],
+    );
+    const otherBatch = randomUUID();
+    await pool.query(`INSERT INTO solidify_batches(id, project_id) VALUES ($1, $2)`, [otherBatch, otherProject]);
+    await pool.query(`INSERT INTO solidify_batch_cases(batch_id, case_id, status) VALUES ($1,$2,'queued')`, [otherBatch, otherCase]);
+    const all = await request(app).get('/api/cases/solidify-batches');
+    expect(all.status).toBe(200);
+    expect(all.body.batches.map((x: { batchId: string }) => x.batchId)).not.toContain(otherBatch);
+  });
 });

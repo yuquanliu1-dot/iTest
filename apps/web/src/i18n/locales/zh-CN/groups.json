@@ -106,5 +106,12 @@
   "solidifyColumn": "固化",
   "solidifyLabel": "固化状态",
   "unsolidified": "未固化",
-  "unsolidifiedOnly": "仅看未固化"
+  "unsolidifiedOnly": "仅看未固化",
+  "solidifyRunning": "固化中",
+  "solidifyRunningTooltip": "该用例正在后台固化（AI 实测 NL→DSL + 机械验收）",
+  "batchProgressTitle": "批量固化进行中",
+  "batchProgressSummary": "{{done}}/{{total}} 已完成",
+  "batchProgressSummary_other": "{{done}}/{{total}} 已完成",
+  "batchProgressFailed": "{{failed}} 失败",
+  "batchProgressFailed_other": "{{failed}} 失败"
 }

@@ -2,14 +2,14 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client.js';
 import { testCases, groups, scenarios, projectVersions, projects, testSteps, solidifyBatches, solidifyBatchCases } from '../db/schema.js';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertCaseVisible, assertProductLineVisible, assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
 import { copyCaseCore, createCase, deleteCase, getCaseDetail, groupProjectId, invalidateCasesCache, tagsForCases, updateCase } from '../services/cases.service.js';
 import { attachCreators } from '../lib/creator.js';
 import { cache } from '../lib/cache.js';
 import { casesForProjectKey } from '../lib/cache-keys.js';
-import { checkBatchEligibility, RUNNING_BATCH_STATUSES, runSolidifyBatchCaseJob } from '../execute/batchSolidify.js';
+import { checkBatchEligibility, deriveBatchSummary, RUNNING_BATCH_STATUSES, runSolidifyBatchCaseJob } from '../execute/batchSolidify.js';
 import { getExecutionQueue, isExecutionQueueReady, EXEC_QUEUE_NAME } from '../scheduler/execQueue.js';
 import { logger } from '../logger.js';
 
@@ -214,6 +214,63 @@ casesRoute.get('/', async (req, res) => {
     rows = rows.filter((r) => r.stepsTotal > 0 && r.stepsCompiled === 0);
   }
   res.json(rows);
+});
+
+/**
+ * 在途批量固化批次列表（前端 2s 轮询口）：该用户可见项目范围内、所有「还有 running 行」的批次。
+ * 用途 = 分组页顶部进度横幅 + 行内「固化中」徽标：批次只接「全部步骤未固化」的用例，
+ * 固化完成后行状态转终态 → 批次自动从本列表消失（横幅消失、徽标变回 n/N）。
+ * 纯终态批次不再返回：完成信息由单批次端点（下方）承担。
+ *
+ * 注册位置必须在 GET /:id 之前——「/solidify-batches」是单段路径，会被 /:id 抢先匹配。
+ */
+casesRoute.get('/solidify-batches', async (req, res) => {
+  const { projectId } = req.query as { projectId?: string };
+  // 可见性：给了 projectId 走断言（不存在与不可见统一 404）；没给则按可见项目集合过滤。
+  let pids: string[];
+  if (projectId) {
+    await assertProjectVisible(projectId, req.user!);
+    pids = [projectId];
+  } else {
+    pids = await visibleProjectIds(req.user!);
+  }
+  if (pids.length === 0) {
+    res.json({ batches: [] });
+    return;
+  }
+  // 有 running 行的批次（distinct）
+  const runningBatches = await db
+    .selectDistinct({ batchId: solidifyBatches.id, projectId: solidifyBatches.projectId, createdAt: solidifyBatches.createdAt })
+    .from(solidifyBatches)
+    .innerJoin(solidifyBatchCases, eq(solidifyBatchCases.batchId, solidifyBatches.id))
+    .where(and(inArray(solidifyBatches.projectId, pids), inArray(solidifyBatchCases.status, [...RUNNING_BATCH_STATUSES])));
+  if (runningBatches.length === 0) {
+    res.json({ batches: [] });
+    return;
+  }
+  // 这些批次的全部行（含终态行，用于算 passed/failed 与展示明细）
+  const rows = await db
+    .select({
+      batchId: solidifyBatchCases.batchId,
+      caseId: solidifyBatchCases.caseId,
+      status: solidifyBatchCases.status,
+      error: solidifyBatchCases.error,
+      title: testCases.title,
+    })
+    .from(solidifyBatchCases)
+    .innerJoin(testCases, eq(testCases.id, solidifyBatchCases.caseId))
+    .where(inArray(solidifyBatchCases.batchId, runningBatches.map((b) => b.batchId)));
+  const batches = runningBatches.map((b) => {
+    const cases = rows.filter((r) => r.batchId === b.batchId);
+    return {
+      batchId: b.batchId,
+      projectId: b.projectId,
+      createdAt: b.createdAt,
+      ...deriveBatchSummary(cases),
+      cases: cases.map(({ batchId: _bid, ...c }) => c),
+    };
+  });
+  res.json({ batches });
 });
 
 casesRoute.post('/', async (req, res) => {
@@ -433,9 +490,5 @@ casesRoute.get('/solidify-batches/:id', async (req, res) => {
     .from(solidifyBatchCases)
     .innerJoin(testCases, eq(testCases.id, solidifyBatchCases.caseId))
     .where(eq(solidifyBatchCases.batchId, batch.id));
-  const passed = rows.filter((r) => r.status === 'passed').length;
-  const failed = rows.filter((r) => r.status.endsWith('_failed')).length;
-  const running = rows.filter((r) => (RUNNING_BATCH_STATUSES as readonly string[]).includes(r.status)).length;
-  const status = running > 0 ? 'running' : failed === 0 ? 'passed' : passed === 0 ? 'failed' : 'partial';
-  res.json({ batchId: batch.id, status, total: rows.length, passed, failed, running, cases: rows });
+  res.json({ batchId: batch.id, ...deriveBatchSummary(rows), cases: rows });
 });

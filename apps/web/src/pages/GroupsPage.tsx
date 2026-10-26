@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../i18n';
@@ -27,11 +27,13 @@ import {
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import Segmented from '../components/ui/Segmented';
+import StatusPill from '../components/ui/StatusPill';
 import TagChip from '../components/ui/Tag';
 import IconButton from '../components/ui/IconButton';
 import { EmptyCellValue } from '../components/ui/Table';
 import { DataTable, type DataTableColumn, type DataTableFacet, type DataTableTabs } from '../components/ui/DataTable';
 import { useTableSelection } from '../hooks/useTableSelection';
+import { batchProgressPercent, runningCaseIds } from '../lib/solidifyProgress';
 import { caseStatusLabel, shortDateTime } from '../lib/format';
 import { creatorName } from '../lib/creatorName';
 import { COVERAGE_TYPES, coveragePrompt } from '@itest/shared';
@@ -63,6 +65,8 @@ const caseParsers = {
 	tag: parseAsArrayOf(parseAsString).withDefault([]),
 	versions: parseAsArrayOf(parseAsString).withDefault([]),
 	solidified: parseAsArrayOf(parseAsString).withDefault([]),
+	// 我触发的批次 id（离页/刷新回来仍能续上「这批已完成」的提示）
+	solidifyBatchId: parseAsString.withDefault(''),
 	tab: parseAsStringEnum([...TAB_VALUES]).withDefault('all'),
 	// tab 已被状态筛选占用，范围 tab 另起一个 key
 	scope: parseAsStringEnum([...SCOPE_VALUES]).withDefault('version'),
@@ -332,8 +336,8 @@ export default function GroupsPage() {
 	});
 
 	// 批量后端固化：触发后轮询批次进度（2s），完成时汇总提示并刷列表。
-	const [solidifyBatchId, setSolidifyBatchId] = useState<string | null>(null);
-	const reportedSolidifyRef = useRef<string | null>(null);
+	// batchId 存 URL（nuqs）：离页/刷新后回来仍能续上「我触发的这批」的完成提示。
+	const solidifyBatchId = raw.solidifyBatchId || null;
 	const batchSolidifyCases = useMutation({
 		mutationFn: (caseIds: string[]) => api.cases.batchSolidify(caseIds),
 		onSuccess: (r) => {
@@ -344,8 +348,7 @@ export default function GroupsPage() {
 			}
 			if (r.batchId) {
 				toast(t('groups:batchSolidifyStarted', { count: r.accepted.length }), 'success');
-				reportedSolidifyRef.current = null;
-				setSolidifyBatchId(r.batchId);
+				void setRaw({ solidifyBatchId: r.batchId });
 				selection.clear();
 			}
 		},
@@ -354,6 +357,18 @@ export default function GroupsPage() {
 			setConfirmBatchSolidify(false);
 		},
 	});
+	// 在途批次总览（页顶横幅 + 行内「固化中」徽标的数据源）：覆盖全部可见项目，
+	// 含别人触发的批次；有在途批次时 2s 轮询，全部终态后停。
+	const { data: solidifyOverview } = useQuery({
+		queryKey: ['solidify-batches', projectId],
+		queryFn: () => api.cases.solidifyBatches(projectId!),
+		enabled: !!projectId,
+		refetchInterval: (q) => (q.state.data?.batches.length ? 2000 : false),
+	});
+	const solidifyBatches = useMemo(() => solidifyOverview?.batches ?? [], [solidifyOverview]);
+	// 行内「固化中」徽标的数据源：所有在途批次里正在跑的用例 id（含别人触发的批次）
+	const solidifyRunningCaseIds = useMemo(() => runningCaseIds(solidifyBatches), [solidifyBatches]);
+	// 我触发的这批：完成后批次从总览里消失，用单批次端点取终态（总览只给在途批次）。
 	const { data: solidifyProgress } = useQuery({
 		queryKey: ['solidify-batch', solidifyBatchId],
 		queryFn: () => api.cases.solidifyBatch(solidifyBatchId!),
@@ -363,8 +378,14 @@ export default function GroupsPage() {
 	// 批次到终态：汇总 toast（失败带第一条原因）+ 刷用例列表（固化列/stepsCompiled 已变化）
 	useEffect(() => {
 		const b = solidifyProgress;
-		if (!b || b.status === 'running' || reportedSolidifyRef.current === b.batchId) return;
-		reportedSolidifyRef.current = b.batchId;
+		if (!b || b.status === 'running') return;
+		// 离页/刷新回来不重复播报：已上报过的 batchId 记在 sessionStorage（跨刷新有效）。
+		const reportedKey = `itest:solidify-reported:${b.batchId}`;
+		if (sessionStorage.getItem(reportedKey)) {
+			void setRaw({ solidifyBatchId: null });
+			return;
+		}
+		sessionStorage.setItem(reportedKey, '1');
 		const firstFail = b.cases.find((x) => x.status.endsWith('_failed'));
 		toast(
 			t('groups:batchSolidifyDone', { passed: b.passed, failed: b.failed }) +
@@ -372,7 +393,7 @@ export default function GroupsPage() {
 			b.status === 'passed' ? 'success' : 'error',
 		);
 		qc.invalidateQueries({ queryKey: ['cases', projectId] });
-		setSolidifyBatchId(null);
+		void setRaw({ solidifyBatchId: null });
 	}, [solidifyProgress]);
 
 	// status / tag 在前端做本地筛（cases API 不接）；tab 与 status 等价语义，所以两者去重后取并集。
@@ -525,10 +546,19 @@ export default function GroupsPage() {
 			{
 				id: 'solidify',
 				header: t('groups:solidifyColumn'),
-				width: 'w-[7%]',
+				// 固定宽（不用 %）：「固化中」脉冲 pill 约 63px，百分比列会被标题列挤到 58px 截断
+				width: 'w-[92px]',
 				hideBelow: 'md',
 				cellClassName: 'text-xs text-muted-foreground',
 				cell: (c) => {
+					// 在途（该行正被后台固化）→ 脉冲「固化中」；与「未固化」天然互斥（批次只接全未固化用例）
+					if (solidifyRunningCaseIds.has(c.id)) {
+						return (
+							<StatusPill tone="accent" pulse>
+								<span title={t('groups:solidifyRunningTooltip')}>{t('groups:solidifyRunning')}</span>
+							</StatusPill>
+						);
+					}
 					const total = c.stepsTotal ?? 0;
 					const compiled = c.stepsCompiled ?? 0;
 					if (total === 0) return <EmptyCellValue />;
@@ -723,7 +753,36 @@ export default function GroupsPage() {
 				</PageShellActions>
 			</PageShellHeader>
 
-			<PageShellContent>
+			<PageShellContent className={solidifyBatches.length > 0 ? 'gap-3' : undefined}>
+				{/* 在途批次横幅：每个在途批次一条（含他人触发的）；批次全部出终态后自动消失 */}
+				{solidifyBatches.map((b) => (
+					<div
+						key={b.batchId}
+						className="rounded-[var(--radius-sm)] px-3 py-2 flex items-center gap-2 text-[11px]"
+						style={{
+							border: '1px solid var(--border)',
+							color: 'var(--primary)',
+							background: 'var(--primary-soft)',
+						}}
+					>
+						<Icon name="loader" size={12} className="animate-spin" />
+						<span className="font-medium whitespace-nowrap">{t('groups:batchProgressTitle')}</span>
+						<span className="whitespace-nowrap">
+							{t('groups:batchProgressSummary', { done: b.passed + b.failed, total: b.total })}
+						</span>
+						{b.failed > 0 && (
+							<span className="whitespace-nowrap" style={{ color: 'var(--destructive)' }}>
+								{t('groups:batchProgressFailed', { failed: b.failed })}
+							</span>
+						)}
+						<div className="h-1 flex-1 min-w-[60px] rounded-full" style={{ background: 'var(--border)' }}>
+							<div
+								className="h-1 rounded-full"
+								style={{ width: `${batchProgressPercent(b)}%`, background: 'var(--primary)' }}
+							/>
+						</div>
+					</div>
+				))}
 				<div className="flex flex-1 min-h-0">
 					{/* 左侧分组树 */}
 					<div

@@ -112,5 +112,14 @@
   "solidifyColumn": "Solidified",
   "solidifyLabel": "Solidify status",
   "unsolidified": "Unsolidified",
-  "unsolidifiedOnly": "Unsolidified only"
+  "unsolidifiedOnly": "Unsolidified only",
+  "solidifyRunning": "Solidifying",
+  "solidifyRunningTooltip": "This case is being solidified in the background (AI exploration NL→DSL + mechanical verify)",
+  "batchProgressTitle": "Batch solidify in progress",
+  "batchProgressSummary": "{{done}}/{{total}} done",
+  "batchProgressSummary_one": "{{done}}/{{total}} done",
+  "batchProgressSummary_other": "{{done}}/{{total}} done",
+  "batchProgressFailed": "{{failed}} failed",
+  "batchProgressFailed_one": "{{failed}} failed",
+  "batchProgressFailed_other": "{{failed}} failed"
 }

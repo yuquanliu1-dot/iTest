@@ -21,6 +21,27 @@ import { logger } from '../logger.js';
 /** 进行中的行状态（重复触发防抖与批量进度派生共用）。 */
 export const RUNNING_BATCH_STATUSES = ['queued', 'solidifying', 'verifying'] as const;
 
+/** 批次派生汇总（读时计算，批次表本身不存 status）。 */
+export interface SolidifyBatchSummary {
+  status: 'running' | 'passed' | 'failed' | 'partial';
+  total: number;
+  passed: number;
+  failed: number;
+  running: number;
+}
+
+/**
+ * 批次状态读时派生：有 running 行 = running；否则全过 = passed、全败 = failed、混合 = partial。
+ * 单批次查询与「在途批次列表」两个端点共用，避免两处计数漂移。
+ */
+export function deriveBatchSummary(rows: Array<{ status: string }>): SolidifyBatchSummary {
+  const passed = rows.filter((r) => r.status === 'passed').length;
+  const failed = rows.filter((r) => r.status.endsWith('_failed')).length;
+  const running = rows.filter((r) => (RUNNING_BATCH_STATUSES as readonly string[]).includes(r.status)).length;
+  const status = running > 0 ? 'running' : failed === 0 ? 'passed' : passed === 0 ? 'failed' : 'partial';
+  return { status, total: rows.length, passed, failed, running };
+}
+
 /**
  * 批量固化资格校验：需求口径 = 「所有步骤都没有固化过」。拒绝时给出人读原因（路由聚合回 rejected）。
  * ok 时带 projectId（batch 行归属用；test_cases 无 project_id 列，经分组 join 推导）。

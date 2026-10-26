@@ -375,6 +375,9 @@ export const api = {
       ),
     /** 批量固化进度轮询（行状态 + 读时派生的批量汇总）。 */
     solidifyBatch: (id: string) => request<SolidifyBatchStatus>(`/cases/solidify-batches/${id}`),
+    /** 在途批次列表（分组页顶部横幅 + 行内「固化中」徽标的数据源）。 */
+    solidifyBatches: (projectId?: string) =>
+      request<SolidifyBatchesOverview>(`/cases/solidify-batches${projectId ? `?projectId=${projectId}` : ''}`),
     updateStatusBatch: (caseIds: string[], status: CaseStatus) =>
       request<{ count: number }>('/cases/batch-status', {
         method: 'POST',
@@ -1031,6 +1034,21 @@ export interface SolidifyBatchStatus {
   failed: number;
   running: number;
   cases: Array<{ caseId: string; title: string; status: string; error: string | null }>;
+}
+/** 在途批量固化批次（GET /cases/solidify-batches）：只返回还有 running 行的批次。
+ *  批次全部出终态后自动从列表消失（横幅消失、徽标变回 n/N）。 */
+export interface SolidifyBatchesOverview {
+  batches: Array<{
+    batchId: string;
+    projectId: string;
+    createdAt: string;
+    status: 'running' | 'passed' | 'failed' | 'partial';
+    total: number;
+    passed: number;
+    failed: number;
+    running: number;
+    cases: Array<{ caseId: string; title: string; status: string; error: string | null }>;
+  }>;
 }
 export interface Scenario {
   id: string;
