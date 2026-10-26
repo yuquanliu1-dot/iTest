@@ -13,7 +13,8 @@ const MAX_TURNS = 8;
 /** 每轮喂给 LLM 的可交互元素上限，防止提示词膨胀。 */
 const MAX_ELEMENTS = 60;
 
-const SYSTEM_PROMPT = `你是 Web 测试执行智能体，在真实浏览器里执行一条自然语言测试指令。
+/** 系统提示词主体（不含凭据段）。凭据段按需拼接——见 assembleSystemPrompt。 */
+const SYSTEM_PROMPT_BASE = `你是 Web 测试执行智能体，在真实浏览器里执行一条自然语言测试指令。
 每轮你会收到：当前页面 URL、可交互元素列表、一张截图（整页，或你上轮请求的元素放大图）。
 只输出 JSON，不要输出其他内容。格式：
 {"actions": [...], "done": false, "summary": "一句话进展"}
@@ -32,7 +33,27 @@ actions 元素类型：
 - 验证码/图形文字：先 screenshot 放大验证码图片，下轮逐字符仔细辨认。字符集为字母+数字（绝不出现 0 O o 1 l I），不区分大小写，通常 4 位，有随机旋转和干扰线。识别结果 fill 进对应输入框。
 - 每轮动作要保守，最多 6 个；每个动作的执行结果（ok / 错误信息）下轮反馈给你，出错就换 selector 重试。
 - 页面状态自检：每轮先看「当前 URL + 截图/元素清单」确认自己是否在指令期望的界面上。若目标元素连续 2 个动作都找不到，优先怀疑「页面不在期望界面」（入口/步骤错位、被弹窗或中间态挡住、导航没生效），不要再换 selector 空转——在 summary 里如实写明「当前 URL/可见界面与指令场景的差异」，需要时用 navigate / 点击返回 / 处理弹窗先回到正确界面。只有确认页面就在期望界面、纯粹是元素描述不准时，才换 selector 重试。
-- 凭据（用户名/密码）：fill 的 value 用字面量 __ITEST_USERNAME@服务名__ / __ITEST_PASSWORD@服务名__（服务名取自下方资源清单里的 name；平台在填入的瞬间替换为真实值）；不要输出 {{}} 变量模板，平台不替换模板。`;
+- 数据忠实：不得改写或覆盖指令、数据集或前置步骤已填入的表单值（含账号/密码等输入内容）。输入看起来异常（超长、特殊字符、疑似无效）也原样照填——异常输入往往正是测试目的本身。页面状态自检只用于回到正确界面/找对元素，不用于"修正"表单内容。`;
+
+/** 凭据规则：仅在本次步骤确实需要凭据能力时才拼进系统提示词。 */
+const CREDENTIAL_RULE = `- 凭据（用户名/密码）：fill 的 value 用字面量 __ITEST_USERNAME@服务名__ / __ITEST_PASSWORD@服务名__（服务名取自下方资源清单里的 name；平台在填入的瞬间替换为真实值）；不要输出 {{}} 变量模板，平台不替换模板。`;
+
+/**
+ * 拼装系统提示词。
+ *  credEnabled=false → 完全不含凭据段：AI 看不到占位符形态，就不会拿凭据去重填账号/密码框
+ *  （2026-10-26 prod228 实测：含凭据段时 AI 会主动 fill __ITEST_USERNAME@web__；不含则只填字面量）。
+ *  mobile 版不拼凭据段（移动端无 web 凭据语义）。
+ */
+export function assembleSystemPrompt(opts: { mobile?: boolean; credEnabled: boolean; manifest: string }): string {
+  if (opts.mobile) return MOBILE_SYSTEM_PROMPT;
+  const base = SYSTEM_PROMPT_BASE;
+  if (!opts.credEnabled) return base;
+  const manifest = opts.manifest.trim();
+  const credentialHint = manifest
+    ? `${manifest}\n不写 @服务名 时用标注「默认」的那个。清单里「未配置凭据」的服务不要尝试登录（必然失败）。`
+    : '用户名输入框 fill 的 value 用字面量 __ITEST_USERNAME__，密码用 __ITEST_PASSWORD__（平台在填入的瞬间替换为真实值）。';
+  return `${base}\n${CREDENTIAL_RULE}\n${credentialHint}`;
+}
 
 const MOBILE_SYSTEM_PROMPT = `你是移动端测试执行智能体，在 iOS Simulator / Android Emulator 上执行自然语言测试指令。
 可观测：当前 accessibility tree（节点含 accessibilityId / label / role / bounds）、当前屏幕截图。
@@ -500,10 +521,20 @@ export async function runAiTask(
   // 资源清单进系统提示词：模型据此知道有哪些 web 服务、哪些配了凭据、该用哪个 @name。
   // 无清单时保留旧的固定文案（调用方无环境上下文，行为不变）。
   const manifest = opts?.resourceManifest?.trim() ?? '';
-  const credentialHint = manifest
-    ? `${manifest}\n不写 @服务名 时用标注「默认」的那个。清单里「未配置凭据」的服务不要尝试登录（必然失败）。`
-    : '用户名输入框 fill 的 value 用字面量 __ITEST_USERNAME__，密码用 __ITEST_PASSWORD__（平台在填入的瞬间替换为真实值）。';
-  const systemPrompt = mobile ? MOBILE_SYSTEM_PROMPT : `${SYSTEM_PROMPT}\n${credentialHint}`;
+  // 凭据能力 = 挂了 valueSub（真值替换通道）。没挂 → 提示词里完全不提凭据，
+  // AI 看不到占位符形态，就不会拿凭据去重填账号/密码框（2026-10-26 prod228 实测：
+  // 含凭据段时 AI 会主动 fill __ITEST_USERNAME@web__，不含则只填字面量）。
+  const credEnabled = !!opts?.valueSub;
+  const systemPrompt = assembleSystemPrompt({ mobile, credEnabled, manifest });
+  // 凭据替换留痕：只记次数、不记真值（真值绝不回显给 LLM/日志）。
+  let credSubCount = 0;
+  const valueSub = opts?.valueSub
+    ? (v: string): string => {
+        const real = opts.valueSub!(v);
+        if (real !== v) credSubCount++;
+        return real;
+      }
+    : undefined;
   let lastResults: string[] = [];
   let pendingShot: string | null = null;
   // 多轮累积：每轮把「本轮 user（+截图）」与「上轮 LLM 原始输出」追加到 history，
@@ -591,7 +622,7 @@ export async function runAiTask(
       // 清除保证下轮截图/步截图不被污染。
       if (sel) await annotateAction(page, () => page.locator(sel).first().boundingBox().catch(() => null));
       try {
-        lastResults.push(await execAction(page, a, opts?.valueSub));
+        lastResults.push(await execAction(page, a, valueSub));
         opts?.onAction?.(a, true);
       } catch (e) {
         // 凭据缺失是环境级硬错误：反馈给 LLM 只会让它换 selector 空转烧调用，直接终止本步
@@ -609,7 +640,9 @@ export async function runAiTask(
     }
     // 先执行动作再结束：LLM 可能在 done 响应里携带最终动作（如 fill 验证码）。
     if (parsed.done === true) {
-      return typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
+      const s = typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
+      // 凭据替换留痕：报告里能看到「本步真的用了环境凭据」，便于事后判读。
+      return credSubCount > 0 ? `${s}（凭据占位符已替换 ${credSubCount} 处为环境凭据）` : s;
     }
   }
   throw new Error(`aiTask 超过 ${maxTurns} 轮未完成：${instruction.slice(0, 80)}`);

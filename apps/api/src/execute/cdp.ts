@@ -613,10 +613,14 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         onAction: (a, ok) => { if (ok) collected.push(a); },
       };
       if (opts.aiUsage) aiOpts.onUsage = (r) => opts.aiUsage!.add(r);
-      // valueSub 无条件挂载：SYSTEM_PROMPT 本就指示模型在登录页用 __ITEST_USERNAME@name__（与指令是否
-      // 引用无关），不挂则哨兵/花括号变体会被原样敲进表单（2026-10-21 prod228 实测）。
-      aiOpts.valueSub = aiCredentialSub(opts.ctx, await resolveStepSecretForAi(opts.ctx, opts.stepId, value));
-      if (resourceManifest) aiOpts.resourceManifest = resourceManifest;
+      // 凭据能力按需授予：只有指令显式引用凭据占位符才挂 valueSub / 资源清单。
+      // 无条件挂载会让 AI 看到占位符形态后主动去重填账号/密码框——负向用例（超长/非法账号）
+      // 会被"修正"成环境真实凭据从而真登录成功（2026-10-26 prod228 实测：含凭据段时 AI 会输出
+      // fill __ITEST_USERNAME@web__；不含则只填字面量）。
+      if (referencesCredential(value)) {
+        aiOpts.valueSub = aiCredentialSub(opts.ctx, await resolveStepSecretForAi(opts.ctx, opts.stepId, value));
+        if (resourceManifest) aiOpts.resourceManifest = resourceManifest;
+      }
       const summary = await runAiTask(opts.page, value, client, undefined, aiOpts);
       // 验证码类指令：登记多轮验证上下文。提交（后续 click 步骤）若被系统判验证码错误/过期，
       // 执行器自动重新识别（失败后验证码通常已被前端换新）并重新提交，而非直接判用例失败。
@@ -1059,10 +1063,18 @@ async function runStepsInContext(
             if (preErr) throw preErr;
             try {
               const client = ctx.llmClient ?? (await resolveLlmClient()).client;
+              // 凭据能力按需授予（与 compiled aiTask 步同一门控）：指令显式引用凭据占位符
+              // 才挂 valueSub / 资源清单，否则提示词里不出现凭据形态，AI 不会拿环境凭据
+              // 重填账号/密码框（负向用例会被"修正"成真实凭据从而真登录成功）。
+              const credRef = referencesCredential(instResolved);
               const summary = await runAiTask(opts.page, instResolved, client, undefined, {
                 onUsage: (r) => aiUsage.add(r),
-                valueSub: aiCredentialSub(ctx, await resolveStepSecretForAi(ctx, opts.stepId, instResolved)),
-                resourceManifest: renderWebResourceManifest({ envCtx: ctx.envCtx }),
+                ...(credRef
+                  ? {
+                      valueSub: aiCredentialSub(ctx, await resolveStepSecretForAi(ctx, opts.stepId, instResolved)),
+                      resourceManifest: renderWebResourceManifest({ envCtx: ctx.envCtx }),
+                    }
+                  : {}),
               });
               degraded = true;
               warning = `未编译，AI 按指令临场执行${summary ? `：${summary}` : ''}`;
@@ -1160,10 +1172,18 @@ async function runStepsInContext(
             let aiSummary: string | undefined;
             try {
               const client = ctx.llmClient ?? (await resolveLlmClient()).client;
+              // 凭据能力按需授予（与 compiled aiTask 步同一门控）：指令显式引用凭据占位符
+              // 才挂 valueSub / 资源清单，否则提示词里不出现凭据形态，AI 不会拿环境凭据
+              // 重填账号/密码框（负向用例会被"修正"成真实凭据从而真登录成功）。
+              const credRef = referencesCredential(instResolved);
               aiSummary = (await runAiTask(opts.page, instResolved, client, undefined, {
                 onUsage: (r) => aiUsage.add(r),
-                valueSub: aiCredentialSub(ctx, await resolveStepSecretForAi(ctx, opts.stepId, instResolved)),
-                resourceManifest: renderWebResourceManifest({ envCtx: ctx.envCtx }),
+                ...(credRef
+                  ? {
+                      valueSub: aiCredentialSub(ctx, await resolveStepSecretForAi(ctx, opts.stepId, instResolved)),
+                      resourceManifest: renderWebResourceManifest({ envCtx: ctx.envCtx }),
+                    }
+                  : {}),
               })) || undefined;
             } catch (err) {
               // AI 不可用/放弃/超轮 → 维持原失败（走下方 failedResult），但记下原因供 warning 展示

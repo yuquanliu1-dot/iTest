@@ -174,7 +174,7 @@ describe('runAiTask', () => {
     const summary = await runAiTask(page, '填密码', llm, false, {
       valueSub: (v) => (v === '__ITEST_PASSWORD__' ? 'RealSecret!9' : v),
     });
-    expect(summary).toBe('ok');
+    expect(summary).toBe('ok（凭据占位符已替换 1 处为环境凭据）');
     expect(calls).toContain('type:#pwd:RealSecret!9');
     // 回读命中真实值 → 反馈 ok，任何一轮请求都不含明文
     expect(requests[1]).toContain('fill #pwd: ok');
@@ -281,7 +281,10 @@ describe('runAiTask', () => {
   it('resourceManifest 进系统提示词且不含真实凭据', async () => {
     const { page } = makeStubPage();
     const { llm, systems } = makeMockLlm([{ done: true, summary: 'ok' }]);
+    // 清单随凭据能力一起授予：挂了 valueSub 才披露清单与占位符形态
+    // （2026-10-26 修正：无条件披露会让 AI 主动用占位符重填账号/密码框）。
     await runAiTask(page, '登录', llm, false, {
+      valueSub: (v: string) => v,
       resourceManifest: '可用 web 服务：\n- backend（默认） http://10.0.0.1:90 已配置凭据\n- staging http://10.0.0.9 未配置凭据',
     });
     expect(systems[0]).toContain('backend（默认） http://10.0.0.1:90');
@@ -291,6 +294,16 @@ describe('runAiTask', () => {
     const { llm: l2, systems: s2 } = makeMockLlm([{ done: true, summary: 'ok' }]);
     await runAiTask(page, '登录', l2);
     expect(s2[0]).not.toContain('可用 web 服务');
+  });
+
+  it('未授予凭据能力时清单与占位符形态都不进提示词', async () => {
+    const { page } = makeStubPage();
+    const { llm, systems } = makeMockLlm([{ done: true, summary: 'ok' }]);
+    await runAiTask(page, '识别验证码并填入验证码框', llm, false, {
+      resourceManifest: '可用 web 服务：\n- backend（默认） http://10.0.0.1:90 已配置凭据',
+    });
+    expect(systems[0]).not.toContain('可用 web 服务');
+    expect(systems[0]).not.toContain('ITEST_USERNAME');
   });
 });
 
