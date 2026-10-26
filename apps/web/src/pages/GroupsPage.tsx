@@ -140,11 +140,12 @@ export default function GroupsPage() {
 	});
 
 	const effectiveGroupId = groupId ?? '';
-	// 拉列表时只透传后端支持的过滤（priority/scenarioId/versionIds），status/tags 走前端本地筛（API 暂不接）。
-	// 「当前版本」范围恒定锁死当前版本（含分组下钻，组本身可跨版本，用例仍只看当前版本）；
-	// 「产品线」范围跨项目跨版本拉全，靠 groupId 收窄只对当前项目分组有意义。
+	// 拉列表时只透传后端支持的过滤（priority/scenarioId/versionIds），status/tags/分组下钻走前端本地筛。
+	// 「当前版本」范围恒定锁死当前版本、恒拉整版——queryKey 不含 groupId，分组下钻不缩数据面：
+	// 否则左栏「全部用例」计数会跟着缩成本组的数（实测踩过），且每次切分组都白等一次请求；
+	// 「产品线」范围跨项目跨版本拉全。
 	const { data: cases, isLoading: casesLoading, isError: casesError, error: casesErrorObj } = useQuery({
-		queryKey: ['cases', projectId, scope, effectiveGroupId, priority, scenarioId, productLineId, onLineScope ? versionsSelected : [], solidifiedSelected],
+		queryKey: ['cases', projectId, scope, priority, scenarioId, productLineId, onLineScope ? versionsSelected : [], solidifiedSelected],
 		queryFn: () => {
 			const base = {
 				priority: priority || undefined,
@@ -156,8 +157,7 @@ export default function GroupsPage() {
 				return api.cases.list({ ...base, productLineId, versionIds: versionsSelected.length ? versionsSelected : undefined });
 			}
 			return api.cases.list({
-				groupId: effectiveGroupId || undefined,
-				projectId: effectiveGroupId ? undefined : projectId!,
+				projectId: projectId!,
 				...base,
 				versionIds: [versionId!],
 			});
@@ -404,8 +404,8 @@ export default function GroupsPage() {
 		if (statusSelected.length > 0) list = list.filter((c) => statusSelected.includes(c.status));
 		if (tagSelected.length > 0) list = list.filter((c) => (c.tags ?? []).some((t) => tagSelected.includes(t.id)));
 		if (projectsSelected.length > 0) list = list.filter((c) => projectsSelected.includes(c.projectId ?? ''));
-		// 产品线范围拉的是整条线，分组下钻只能在前端收窄（后端 productLineId 分支不接 groupId）
-		if (onLineScope && effectiveGroupId) list = list.filter((c) => c.groupId === effectiveGroupId);
+		// 分组下钻两个范围统一在前端收窄（cases 恒拉全量、不按 groupId 收窄，见上方 query 注释）
+		if (effectiveGroupId) list = list.filter((c) => c.groupId === effectiveGroupId);
 		if (q.trim()) {
 			const needle = q.trim().toLowerCase();
 			list = list.filter((c) => c.title.toLowerCase().includes(needle));
