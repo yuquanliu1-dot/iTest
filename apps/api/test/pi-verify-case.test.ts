@@ -572,6 +572,44 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.failure.failureReason).toBe('AiTaskAborted');
       expect(data.failure.error).toContain('aiTask 放弃');
       expect(data.failure.page.elements[0]).toContain('button#del');
+      // 有 compiled 的步骤失败仍走 locator 修正文案（agent 可修）
+      expect(data.failure.note).toContain('修正 locator');
+    }
+  });
+
+  it('自然语言步（无 compiled）AI 相失败 → note 分流反馈用户：停止重跑与自诊，不再引导修 locator', async () => {
+    // 需求口径（2026-10-27）：讨论期验证里自然语言步的 AI 相失败大概率是步骤描述与页面不符
+    // （或前面步骤把页面带偏）——agent 改 selector 无从下手、重跑不改变结果，应反馈用户调整。
+    const caseId = await seedCase({ steps: [null] }); // instruction-only 视觉步（instruction=第一步：点击删除按钮）
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockRejectedValue(new Error('aiTask 放弃：页面上没有该目标'));
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('failed');
+      expect(data.failure.failureReason).toBe('AiTaskAborted');
+      expect(data.failure.note).toContain('该步是自然语言步骤，由 AI 相');
+      expect(data.failure.note).toContain('反馈给用户');
+      expect(data.failure.note).toContain('停止重跑');
+      expect(data.failure.note).toContain('不要再调用 verify_case');
+      expect(data.failure.note).toContain('第一步：点击删除按钮'); // 步骤原文回带，便于转述给用户
+      expect(data.failure.note).not.toContain('修正 locator 只能使用'); // 旧 locator 修正文案不得误导
+    }
+  });
+
+  it('compiled 纯 aiTask 形态（kind 全为 aiTask）同样走反馈用户分流', async () => {
+    const caseId = await seedCase({ steps: [[{ kind: 'aiTask', instruction: '关闭可能出现的引导浮层' }]] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValueOnce('{"status":"failed","reason":"找不到浮层","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.failure.failureReason).toBe('StepReportedFailed');
+      expect(data.failure.note).toContain('该步是自然语言步骤，由 AI 相');
     }
   });
 
@@ -1647,5 +1685,12 @@ describe('verify_case 注册', () => {
     expect(guidelines).toContain('完整深链');
     expect(guidelines).toContain('不要写「打开/进入 XX 页面」');
     expect(guidelines).toContain('StagnantRoundLimit');
+  });
+
+  it('工具文案声明自然语言步 AI 相失败分流（agent 依赖文案选路：反馈用户而非重跑）', async () => {
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const guidelines = buildVerifyCaseTool(toolCtx()).promptGuidelines.join('\n');
+    expect(guidelines).toContain('自然语言步骤的 AI 相失败分流');
+    expect(guidelines).toContain('用户明确答复前不再调用 verify_case');
   });
 });

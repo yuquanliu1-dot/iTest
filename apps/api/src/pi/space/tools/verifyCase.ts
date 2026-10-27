@@ -87,6 +87,11 @@ interface RoundState {
 }
 const verifyRoundState = new Map<string, RoundState>();
 const roundKey = (threadId: string, caseId: string) => `${threadId}::${caseId}`;
+/** AI 相（视觉执行）自身的失败原因——与 locator 闸门击杀不同，这类失败说明
+ *  模型看着真实页面也完成不了这步：大概率是自然语言步骤描述与页面实际不符
+ *  （目标不存在/措辞歧义/前置状态没建立），agent 改 selector 无从下手。 */
+const AI_PHASE_FAIL_REASONS = new Set(['AiTaskAborted', 'StepTimedOut', 'StepReportedFailed']);
+
 /** failureReason → 失败大类（停滞护栏的签名口径）。
  *  prod228 2026-10-26 实录（26 轮 verify / 2h39m / 零产出）：旧签名 `${failureReason}:${stepOrder}`
  *  下同签名最长连续仅 2 轮，护栏全程未触发——AI 每轮换选择器、失败步前后挪动，旧签名就当成"新原因"。
@@ -386,12 +391,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       mode: Type.Optional(Type.Union([Type.Literal('full'), Type.Literal('mechanical')])),
     }),
     promptGuidelines: [
-      'verify_case 有两种使用场景，按需选择：(a) 讨论期实测——草稿讨论中用户要求「跑一下看看」时，对 stage_case 暂存的自然语言草稿调用（mode 省略即 full），AI 相执行 + live view 视频流给用户看，失败据 failure 修正步骤后重发 stage_case 再验；(b) 编译后验收——solidify_case 把自然语言编译为机械 DSL 后，对固化结果调用 verify_case(mode="mechanical")，跳过 AI 相只做机械干跑 + 终态判定，失败由你按归因修复 compiled 后重跑，直到通过。',
+      'verify_case 有两种使用场景，按需选择：(a) 讨论期实测——草稿讨论中用户要求「跑一下看看」时，对 stage_case 暂存的自然语言草稿调用（mode 省略即 full），AI 相执行 + live view 视频流给用户看，失败时分流：locator 类失败据 failure 修正后重发 stage_case 再验，自然语言步的 AI 相失败按下方分流指引反馈用户；(b) 编译后验收——solidify_case 把自然语言编译为机械 DSL 后，对固化结果调用 verify_case(mode="mechanical")，跳过 AI 相只做机械干跑 + 终态判定，失败由你按归因修复 compiled 后重跑，直到通过。',
       'verify_case 的 mode 决定验收形态，别乱选：mode="full"（默认）是全 AI 实测，用于语义验证（讨论期实测、或 mechanical 连续两轮同因失败/归因不明时升级到它），实测通过会顺带缓存 AI 动作轨迹；mode="mechanical" 是固化后的机械验收，只跑机械干跑 + 终态判定，不烧 AI 轮次——**固化完成后用 mode="mechanical" 验收，别再跑一遍 full**。',
       '**不要重复跑 full**：full 的 AI 相每步要 1~2 分钟（prod228 实测 30 次 full 调用占 105 分钟）。同一用例 full 已经通过、且步骤/环境未变时，再跑一次 full 是纯浪费——重复验证只允许发生在：步骤或 expectedOutcome 改了、环境换了、mechanical 连续两轮同因失败或归因不明（此时才升级 full）、或用户明确要求重测。全 AI 实测通过时响应里的 traceSaved=true 说明轨迹已缓存，紧接着的 solidify_case 可零执行秒级完成。',
       'mode="mechanical" 的两个限制要如实告知用户：(1) 全视觉用例（无 compiled）会被直接拒绝——此时先调 mode="full" 实测；(2) 机械模式没有 AI 相，整体登录不自动做，靠登录态缓存（30 分钟）注入——但 solidify 固化出的 aiTask 执行步（status=aiTask-fallback，含凭据步）会在干跑里由 AI 真实执行并按 instruction 自助登录，需要 LLM。副本重启或缓存过期落到登录页时，失败页是登录页就改 mode="full" 重测（顺带刷新登录态与轨迹缓存）。',
       'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
+      '自然语言步骤的 AI 相失败分流（failureReason=AiTaskAborted/StepTimedOut/StepReportedFailed 且失败步无 compiled locator 可修，failure.note 会以「该步是自然语言步骤，由 AI 相」开头提示）：大概率是步骤描述与页面实际不符——目标不存在/措辞歧义/前置状态没建立，也可能是前面步骤的描述把页面带偏——这不是你能自行修复的技术错误，重跑不改变结果（AI 相每步 1~2 分钟纯烧时间与 token）。此时停止重跑与自诊，把失败步原文、failureReason、失败页 URL/截图反馈给用户，请用户选择：调整该步（或前面步骤）的自然语言描述 / 补充入口线索 / 确认环境数据后再验；用户明确答复前不再调用 verify_case。仅当你确有把握是措辞歧义（步骤原文与页面实际文案不一致）时，可修正描述重发 stage_case 后再验一次。',
       'stage_case 新建的纯草稿用例（未落库）也可直接 verify_case：caseId 传 stage_case 时声明的 localId；修正循环 = 同 localId 重发 stage_case（幂等覆盖）后再次 verify_case，全程不落库，通过后引导用户在暂存区勾选保存。注意：暂存草稿的 defaultEnvId 只能绑定已落库环境或留空走默认链（暂存环境不支持）。',
       'verify_case 会校验 compiled 选择器能真实命中页面（AI 临场绕开坏 locator 不算通过，回放逐字执行 compiled 会失败）:失败原因含"定位校验不通过"时,必须用 failure.page.elements 里的真实选择器替换原 locator(严禁留着坏 locator 只靠 AI 硬跑)。候选命中多个元素(AmbiguousLocator)同样判失败——回放会静默操作第一个匹配元素,必须给该候选加属性过滤(如 [placeholder=...])或把唯一命中的候选提到首位。verify_case 还会做用例级终态判定(失败原因含 VisionAssertionFailed):步骤都通过但最终页面不符 expectedOutcome 时,修正步骤行为或调整 expectedOutcome 后再验。',
       '终态判定失败(failureReason=VisionAssertionFailed)且 failure.note 含"空数据信号"时,说明被测环境里根本没有可供断言的数据——这是用例缺前置造数步骤,不是选择器写错。正确做法:给用例补上"先造出满足预期的数据"的步骤(如创建一条会触发自动处置的事件),或如实告诉用户环境缺数据。严禁弱化 expectedOutcome 把失败蒙成通过(例:把"自动启动处置成功"改成"页面正常加载"、删掉断言步骤)——那是把用例改得测不出东西,比失败更糟。',
@@ -1346,6 +1352,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           const failed = stepResults[failedIndex - resumeIndex]!;
           const failedStep = effectiveSteps[failedIndex]!;
           const failedHint = summarizeStaticReports(staticByStep[failedIndex] ?? []);
+          // 自然语言步（无 compiled / 纯 aiTask）的 AI 相失败分流：这不是 locator 技术错误——
+          // 大概率是步骤描述与页面实际不符（含前面步骤把页面带偏），agent 自修无从下手、
+          // 重跑不改变结果。失败 note 指向「反馈用户调整」而非「修正 locator」。
+          const nlAiFail = AI_PHASE_FAIL_REASONS.has(failed.failureReason ?? '')
+            && (!failedStep.compiled
+              || (Array.isArray(failedStep.compiled)
+                && failedStep.compiled.every((a) => (a as { kind?: string }).kind === 'aiTask')));
           // 归因全交 LLM：失败页候选命中 + 浮层 + 元素清单
           const stepProbes = await probeLocatorHits(page, collectStepLocators(failedStep.compiled));
           const stepOverlays = (await extractPageEvidence(page)).overlays;
@@ -1385,7 +1398,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               screenshot: failed.screenshot ?? null,
               page: failurePage,
               ...stepEvidenceField,
-              note: `page.elements 为失败页当前可见的可交互元素；修正 locator 只能使用其中真实存在的选择器。快照不含操作后才出现的元素。${failedHint ? ` 源码静态提示:${failedHint}` : ''}${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`,
+              note: nlAiFail
+                ? `该步是自然语言步骤，由 AI 相（视觉执行）在真实页面上执行失败（${failed.failureReason ?? '未知'}）——大概率不是 locator 技术问题，而是步骤描述与页面实际不符：目标不存在/措辞歧义/前置状态没建立，也可能是前面某步的描述把页面带偏。这不是你能自行修复的错误：立即停止重跑与自诊，把失败详情反馈给用户（步骤 ${failed.order}「${failedStep.instruction ?? ''}」原文、failureReason、失败页 URL 与 page.elements/截图，必要时附前一步原文），请用户选择：a.调整该步或前面步骤的自然语言描述 b.补充入口/页面线索 c.确认环境/数据后重验。用户明确答复前不要再调用 verify_case——AI 相每步耗时 1~2 分钟，盲目重跑只烧时间与 token。${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`
+                : `page.elements 为失败页当前可见的可交互元素；修正 locator 只能使用其中真实存在的选择器。快照不含操作后才出现的元素。${failedHint ? ` 源码静态提示:${failedHint}` : ''}${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`,
             },
           });
           updateRoundState(roundKey(ctx.threadId, caseId), rdata);
