@@ -1161,7 +1161,7 @@ describe('verify_case 空转硬上限', () => {
     vi.mocked(judgeCaseOutcome).mockResolvedValue({ passed: false, reason: '最终页面与预期不符' });
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
 
-    // 前 3 轮同因失败（签名 = VisionAssertionFailed:-1:最终页面与预期不符）
+    // 前 3 轮同因失败（失败大类签名 = vision）
     for (let i = 0; i < 3; i++) {
       const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
       expect(r.ok).toBe(true);
@@ -1209,6 +1209,42 @@ describe('verify_case 空转硬上限', () => {
     }
     const stopped = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(JSON.parse(stopped!.data!).failure.failureReason).toBe('StagnantRoundLimit');
+  });
+
+  it('失败大类归一：LocatorMismatch ↔ AiTaskAborted 振荡也计入同因连续，第 4 次调用强制停止', async () => {
+    // prod228 2026-10-26 实录回归：26 轮 verify / 2h39m / 零产出里，locator 闸门击杀与 AI 相
+    // abort 交替出现（同一页面障碍的两种形态），旧签名 `${failureReason}:${stepOrder}` 最长同签名
+    // 连续仅 2 轮 → 护栏全程未触发。归一到失败大类后两类同属 execution，振荡不再绕过护栏。
+    const caseId = await seedCase({
+      steps: [[{ kind: 'click', locator: [{ strategy: 'css', value: '.osc-btn' }] }]],
+    });
+    const { __testState } = (await import('playwright-core')) as unknown as { __testState: { zeroLocators: string[] } };
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+
+    // 第 1 轮：pre-check 命中 0 → LocatorMismatch
+    __testState.zeroLocators.push('.osc-btn');
+    const r1 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(JSON.parse(r1!.data!).failure.failureReason).toBe('LocatorMismatch');
+
+    // 第 2 轮：locator 恢复命中，AI 相 reject → AiTaskAborted（与第 1 轮不同 reason、同类）
+    __testState.zeroLocators.length = 0;
+    vi.mocked(runAiTask).mockRejectedValueOnce(new Error('aiTask 放弃：找不到目标'));
+    const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(JSON.parse(r2!.data!).failure.failureReason).toBe('AiTaskAborted');
+
+    // 第 3 轮：再次 LocatorMismatch —— 三轮 execution 大类连续，计数应已到上限
+    __testState.zeroLocators.push('.osc-btn');
+    const r3 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(JSON.parse(r3!.data!).failure.failureReason).toBe('LocatorMismatch');
+
+    // 第 4 次调用：强制停止，且不再启动浏览器
+    const { chromium } = await import('playwright-core');
+    vi.mocked(chromium.launch).mockClear();
+    const stopped = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(JSON.parse(stopped!.data!).failure.failureReason).toBe('StagnantRoundLimit');
+    expect(JSON.parse(stopped!.data!).failure.humanMessage).toContain('execution');
+    expect(chromium.launch).not.toHaveBeenCalled();
   });
 });
 

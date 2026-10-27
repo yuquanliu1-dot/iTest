@@ -58,7 +58,7 @@ export function computeVerifyTimeoutMs(stepCount: number): number {
   return Math.max(VERIFY_TIMEOUT_BASE_MS, stepCount * VERIFY_TIME_PER_STEP_MS);
 }
 // 同一用例连续失败上限：prompt 建议 3 轮，但 prompt 建议不硬——agent 可无视。这里加硬约束：
-// 第 N+1 轮若失败原因签名与前一轮相同（无进展）即强制停止并给出"环境/前置问题"提示，
+// 第 N+1 轮若失败大类签名与前一轮相同（无进展）即强制停止并给出"环境/前置问题"提示，
 // 避免在环境缺数据/页面持续不稳定的场景里空转烧 LLM 调用。
 const VERIFY_MAX_STAGNANT_ROUNDS = 3;
 
@@ -77,27 +77,48 @@ interface AiStepResult {
 }
 
 /** 按 thread×case 维度跟踪连续同因失败轮次（防空转硬约束用）。
- *  失败签名 = `${failureReason}:${stepOrder}`——签名相同视为无进展。
- *  只取两段（原因 + 失败步序）是刻意为之：错误首行会随 AI 每轮改选择器/改文案而变，
- *  把首行进签名会让「同因无进展」判定永不触发（每轮都像新原因），停滞护栏就失效了。
- *  线程/用例结束（passed 或强制停止）即清掉该条记录。 */
+ *  失败签名 = 失败大类（failureClassFromReason）——签名相同视为无进展。
+ *  通过 → 清除计数；强制停止 → 回退到上限-1（两次强制停止之间放行 1 次实测，不永久死锁）。 */
 interface RoundState {
   lastSignature: string;
   consecutive: number;
 }
 const verifyRoundState = new Map<string, RoundState>();
 const roundKey = (threadId: string, caseId: string) => `${threadId}::${caseId}`;
-/** 从 verify_case 响应 data JSON 解析出"失败签名"；passed 或解析失败 → null（清计数）。 */
+/** failureReason → 失败大类（停滞护栏的签名口径）。
+ *  prod228 2026-10-26 实录（26 轮 verify / 2h39m / 零产出）：旧签名 `${failureReason}:${stepOrder}`
+ *  下同签名最长连续仅 2 轮，护栏全程未触发——AI 每轮换选择器、失败步前后挪动，旧签名就当成"新原因"。
+ *  归一口径：locator 闸门击杀（LocatorMismatch/AmbiguousLocator）与 AI 相执行失败
+ *  （AiTaskAborted/StepTimedOut/StepReportedFailed）合并为 execution——同一页面障碍（元素找不到/
+ *  弹窗挡路/SUT 状态漂移）在不同轮会以这两种形态交替出现，拆成两类会被横跳绕过；
+ *  终态判定 / 机械回放分叉 / 密文缺失语义各自独立成类（修好一类自然换类，属正常推进）。
+ *  未映射的新原因按原样字符串参与比较（同样新原因连续出现仍可累计停滞）。 */
+function failureClassFromReason(reason: string | null | undefined): string {
+  switch (reason) {
+    case 'LocatorMismatch':
+    case 'AmbiguousLocator':
+    case 'AiTaskAborted':
+    case 'StepTimedOut':
+    case 'StepReportedFailed':
+      return 'execution';
+    case 'VisionAssertionFailed':
+      return 'vision';
+    case 'ReplayDivergence':
+      return 'replay';
+    default:
+      return reason ?? 'Unknown';
+  }
+}
+/** 从 verify_case 响应 data JSON 解析出"失败签名"（失败大类）；passed 或解析失败 → null（清计数）。 */
 function failureSignatureFromData(data: string): string | null {
   try {
     const j = JSON.parse(data) as {
       result: 'passed' | 'failed';
-      failure?: { failureReason?: string | null; stepOrder: number; error?: string | null; humanMessage?: string | null };
+      failure?: { failureReason?: string | null };
     };
     if (j.result === 'passed') return null;
     if (!j.failure) return 'unknown';
-    const f = j.failure;
-    return `${f.failureReason ?? 'Unknown'}:${f.stepOrder}`;
+    return failureClassFromReason(j.failure.failureReason);
   } catch {
     return 'unparseable';
   }
@@ -400,8 +421,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               action: null,
               error: null,
               failureReason: 'StagnantRoundLimit',
-              humanMessage: `同一失败原因已连续 ${VERIFY_MAX_STAGNANT_ROUNDS} 轮无任何进展，本次已强制停止验证。这通常是环境前置数据缺失、被测页面持续不稳定或用例存在前置依赖——重复实测无法解决。请停止继续 verify_case,把已验证步骤结果与失败原因如实汇报给用户,并引导检查环境数据 / 页面可用性;环境就绪后再验证会正常继续。`,
-              note: 'verify_case 同因失败轮次上限触发强制停止,防止在无进展状态下空转消耗 LLM 调用。',
+              humanMessage: `同类失败（${roundState.lastSignature}）已连续 ${VERIFY_MAX_STAGNANT_ROUNDS} 轮无任何进展，本次已强制停止验证。这通常是环境前置数据缺失、被测页面持续不稳定或用例存在前置依赖——重复实测无法解决。请停止继续 verify_case,把已验证步骤结果与失败原因如实汇报给用户,并引导检查环境数据 / 页面可用性;环境就绪后再验证会正常继续。`,
+              note: `verify_case 停滞护栏触发:失败大类 ${roundState.lastSignature} 连续 ${VERIFY_MAX_STAGNANT_ROUNDS} 轮无进展,强制停止以防空转消耗 LLM 调用。`,
             },
           }),
         };
