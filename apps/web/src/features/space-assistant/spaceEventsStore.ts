@@ -107,9 +107,10 @@ interface SpaceEventsState {
    *  seq 重发)与实时事件重叠时,seq ≤ 基线直接丢弃;漏掉的事件(seq > 基线)自然补上。 */
   lastSeqByThread: Map<string, number>;
   announce: AnnounceState | null;
-  /** verify_case 实时进度卡数据（verify_progress 事件驱动；agent_start/新一轮清空）。 */
+  /** verify_case 实时进度卡数据（verify_progress 事件驱动）。已完成的卡不随 agent_start
+   *  清空——右栏 live view 定格帧/回放跨轮存活；新一轮事件整体覆盖。 */
   verifyProgress: VerifyProgressState | null;
-  /** solidify_case 实时进度（solidify_progress 事件驱动；agent_start/新一轮清空）。 */
+  /** solidify_case 实时进度（solidify_progress 事件驱动）。生命周期同 verifyProgress。 */
   solidifyProgress: SolidifyProgressState | null;
   /** 暂存对象池：用户预览/勾选 → save 时入参的 source of truth。 */
   stagedByThread: StagedByThread;
@@ -365,12 +366,20 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
       return;
     }
     if (e.type === 'agent_start') {
-      // 新一轮开始:清掉上一轮的 announce/verify/solidify 进度(舞台历史保留)
-      set((s) =>
-        s.announce || s.verifyProgress || s.solidifyProgress
-          ? { announce: null, verifyProgress: null, solidifyProgress: null }
-          : s,
-      );
+      // 新一轮开始:清掉上一轮的 announce(舞台历史保留);verify/solidify 只清「没跑完的」
+      // (停跑/报错残留的 running 卡)。已完成的进度卡必须保留——右栏 live view 的定格帧与
+      // 回放按钮靠它存活,而已结束的 liveUrl 新连接会 404,卸载重挂就是黑屏:B 路径逐条
+      // 确认的讨论窗口里画面不能消失。新一轮执行的事件到达时自然整体覆盖。
+      set((s) => {
+        const verifyStale = s.verifyProgress !== null && s.verifyProgress.result === null;
+        const solidifyStale = s.solidifyProgress !== null && s.solidifyProgress.result === null;
+        if (!s.announce && !verifyStale && !solidifyStale) return s;
+        return {
+          announce: null,
+          verifyProgress: verifyStale ? null : s.verifyProgress,
+          solidifyProgress: solidifyStale ? null : s.solidifyProgress,
+        };
+      });
     }
   },
   removeConfirm: (confirmId) =>

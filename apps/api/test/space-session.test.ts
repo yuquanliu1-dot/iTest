@@ -164,6 +164,17 @@ describe('space session supervisor', () => {
     expect(CASE_AUTHORING_FLOW_EN).toContain('Run and discuss');
     expect(CASE_AUTHORING_FLOW_EN).toContain('verify_case');
     expect(CASE_AUTHORING_FLOW_EN).not.toContain('run_ai_step');
+    // 10-27 prod228 实录（01a17cd5）：用户说了「打开页面」+给了深链,助手仍整段文字背页面结构、
+    // 以「请告诉我第一条测试操作」收尾让用户点菜,首轮零 stage_case/verify_case。守卫 B 段
+    // 必须带「拿到页面就开跑」的主动性规则,且被动等待框架措辞不得回归。
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('拿到页面就开跑');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('观察步');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('打开用户提供的测试页面');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('请告诉我第一条测试操作'); // 作为被禁止的反模式出现
+    expect(CASE_AUTHORING_FLOW_ZH).not.toContain('每收到一条操作指令');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('do not idle in text');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('open the test page the user provided');
+    expect(CASE_AUTHORING_FLOW_EN).not.toContain('For each instruction:');
   });
 
   it('buildSpaceSystemPrompt(…,en-US):英文风格段,不含简体中文约束', async () => {
