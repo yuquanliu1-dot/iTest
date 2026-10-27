@@ -2,14 +2,17 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import Button from '../components/ui/Button';
+import Icon from '../components/Icon';
 import {
   PageShell,
+  PageShellActions,
   PageShellContent,
   PageShellDescription,
   PageShellHeader,
   PageShellTitle,
 } from '../components/layout/PageShell';
 import SpaceWorkspace from '../features/space-assistant/SpaceWorkspace';
+import ThreadHistorySheet from '../features/space-assistant/ThreadHistorySheet';
 
 interface AssistantInitialMessageState {
   initialMessage?: string;
@@ -33,6 +36,8 @@ export default function AssistantPage() {
   // 非阻断警告(repo 不可用等,建线程时后端经快照 lastError 透出):按线程 id 记,对话仍可用
   const [warnings, setWarnings] = useState<Record<string, string>>({});
   const [activeThreadId, setActiveThreadId] = useState('');
+  // 「查看完整历史」抽屉：展示 JSONL 全量（含被压缩掉的旧消息），随活跃线程切换
+  const [historyOpen, setHistoryOpen] = useState(false);
   // 上一跳 location.state 携带的首条 prompt:捕获进组件 state,
   // 因为 SpaceWorkspace 挂载后 location.state 会被 effect 清空。
   const [initialMessage] = useState(((location.state ?? {}) as AssistantInitialMessageState).initialMessage);
@@ -52,6 +57,12 @@ export default function AssistantPage() {
       <PageShellHeader>
         <PageShellTitle>{t('common:navAssistant')}</PageShellTitle>
         <PageShellDescription>{t('assistant:subtitle')}</PageShellDescription>
+        <PageShellActions>
+          <Button variant="ghost" size="sm" disabled={!activeThreadId} onClick={() => setHistoryOpen(true)}>
+            <Icon name="clock" size={14} />
+            {t('assistant:history.button')}
+          </Button>
+        </PageShellActions>
       </PageShellHeader>
 
       <PageShellContent className="min-h-0">
@@ -85,6 +96,8 @@ export default function AssistantPage() {
           onActiveThreadIdChange={setActiveThreadId}
         />
       </PageShellContent>
+
+      <ThreadHistorySheet threadId={activeThreadId} open={historyOpen} onClose={() => setHistoryOpen(false)} />
     </PageShell>
   );
 }

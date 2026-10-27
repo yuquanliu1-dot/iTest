@@ -572,3 +572,120 @@ describe('图片附件透传', () => {
     expect(capturedPrompts[0]!.options?.images).toHaveLength(4);
   });
 });
+
+describe('GET /threads/:id/history 全量历史', () => {
+  /** 手写一条 pi 形 JSONL 到临时目录并落库线程行,返回 threadId 供请求用。 */
+  async function seedThreadWithJsonl(jsonl: string, opts: { piThreadId?: string; kind?: 'version' | 'requirement' } = {}): Promise<string> {
+    const { versionId } = await seedProject(pool);
+    const id = crypto.randomUUID();
+    const sessionPath = opts.piThreadId !== undefined
+      ? opts.piThreadId
+      : path.join(tmpDataDir, 'pi-sessions', `${id}.jsonl`);
+    if (opts.piThreadId === undefined) {
+      await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+      await fs.writeFile(sessionPath, jsonl, 'utf8');
+    }
+    await pool.query(
+      `INSERT INTO ai_threads(id, kind, version_id, pi_thread_id, title) VALUES ($1,$2,$3,$4,'历史线程')`,
+      [id, opts.kind ?? 'version', versionId, sessionPath],
+    );
+    return id;
+  }
+
+  it('pi 形 JSONL 全量映射:user/assistant/toolCall 配对回填/孤立 toolResult 独立块/compaction,坏行与非展示条目跳过', async () => {
+    const lines = [
+      // 坏行:静默跳过
+      'not-json-at-all',
+      // 非展示条目:session_info
+      JSON.stringify({ type: 'session_info', id: 's1', timestamp: '2026-10-27T00:00:00.000Z', name: 't' }),
+      // user:文本 + 图片(base64 裸串)
+      JSON.stringify({
+        type: 'message', id: 'e1', parentId: 's1', timestamp: '2026-10-27T01:00:00.000Z',
+        message: { role: 'user', content: [{ type: 'text', text: '第一问' }, { type: 'image', data: 'aW1n', mimeType: 'image/png' }], timestamp: Date.parse('2026-10-27T01:00:00.000Z') },
+      }),
+      // assistant:text + thinking + toolCall
+      JSON.stringify({
+        type: 'message', id: 'e2', parentId: 'e1', timestamp: '2026-10-27T01:00:05.000Z',
+        message: {
+          role: 'assistant', stopReason: 'toolUse',
+          content: [
+            { type: 'thinking', thinking: '推理过程' },
+            { type: 'text', text: '我来查一下' },
+            { type: 'toolCall', id: 'tc1', name: 'repo_read', arguments: { path: 'a.ts' } },
+          ],
+          timestamp: Date.parse('2026-10-27T01:00:05.000Z'),
+        },
+      }),
+      // 配对 toolResult:回填到 tc1 块
+      JSON.stringify({
+        type: 'message', id: 'e3', parentId: 'e2', timestamp: '2026-10-27T01:00:06.000Z',
+        message: { role: 'toolResult', toolCallId: 'tc1', toolName: 'repo_read', content: [{ type: 'text', text: '文件内容' }], isError: false, timestamp: Date.parse('2026-10-27T01:00:06.000Z') },
+      }),
+      // 孤立 toolResult(无配对 call):独立成块
+      JSON.stringify({
+        type: 'message', id: 'e4', parentId: 'e3', timestamp: '2026-10-27T01:00:07.000Z',
+        message: { role: 'toolResult', toolCallId: 'tcX', toolName: 'verify_case', content: [{ type: 'text', text: '孤立输出' }], isError: true, timestamp: Date.parse('2026-10-27T01:00:07.000Z') },
+      }),
+      // user 纯字符串 content
+      JSON.stringify({
+        type: 'message', id: 'e5', parentId: 'e4', timestamp: '2026-10-27T01:00:08.000Z',
+        message: { role: 'user', content: '第二问', timestamp: Date.parse('2026-10-27T01:00:08.000Z') },
+      }),
+      // assistant 失败(stopReason=error + errorMessage)
+      JSON.stringify({
+        type: 'message', id: 'e6', parentId: 'e5', timestamp: '2026-10-27T01:00:09.000Z',
+        message: { role: 'assistant', stopReason: 'error', errorMessage: '模型超时', content: [], timestamp: Date.parse('2026-10-27T01:00:09.000Z') },
+      }),
+      // compaction:tokensBefore + summary
+      JSON.stringify({ type: 'compaction', id: 'e7', parentId: 'e6', timestamp: '2026-10-27T01:01:00.000Z', summary: '此前对话摘要', firstKeptEntryId: 'e6', tokensBefore: 180000 }),
+    ].join('\n') + '\n';
+    const id = await seedThreadWithJsonl(lines);
+
+    const r = await request(app).get(`/api/assistant/threads/${id}/history`);
+    expect(r.status).toBe(200);
+    expect(r.body.title).toBe('历史线程');
+    const m = r.body.messages;
+    expect(m).toHaveLength(6);
+    expect(m[0]).toEqual({
+      kind: 'user', timestamp: Date.parse('2026-10-27T01:00:00.000Z'),
+      text: '第一问', images: [{ mimeType: 'image/png', data: 'aW1n' }],
+    });
+    expect(m[1]).toEqual({
+      kind: 'assistant', timestamp: Date.parse('2026-10-27T01:00:05.000Z'),
+      blocks: [
+        { type: 'thinking', text: '推理过程' },
+        { type: 'text', text: '我来查一下' },
+        { type: 'tool', name: 'repo_read', argsText: JSON.stringify({ path: 'a.ts' }, null, 2), resultText: '文件内容' },
+      ],
+    });
+    // 孤立 toolResult → 独立 assistant 消息,带 isError
+    expect(m[2]).toEqual({
+      kind: 'assistant', timestamp: Date.parse('2026-10-27T01:00:07.000Z'),
+      blocks: [{ type: 'tool', name: 'verify_case', argsText: '', resultText: '孤立输出', isError: true }],
+    });
+    expect(m[3]).toEqual({ kind: 'user', timestamp: Date.parse('2026-10-27T01:00:08.000Z'), text: '第二问', images: [] });
+    expect(m[4]).toEqual({ kind: 'assistant', timestamp: Date.parse('2026-10-27T01:00:09.000Z'), blocks: [], errorMessage: '模型超时' });
+    expect(m[5]).toEqual({ kind: 'compaction', timestamp: Date.parse('2026-10-27T01:01:00.000Z'), tokensBefore: 180000, summary: '此前对话摘要' });
+  });
+
+  it('pi_thread_id 为空串 → 200 空列表;路径指向不存在的文件 → 200 空列表', async () => {
+    const emptyId = await seedThreadWithJsonl('', { piThreadId: '' });
+    const r1 = await request(app).get(`/api/assistant/threads/${emptyId}/history`);
+    expect(r1.status).toBe(200);
+    expect(r1.body).toEqual({ title: '历史线程', messages: [] });
+
+    const missingId = await seedThreadWithJsonl('', { piThreadId: path.join(tmpDataDir, 'pi-sessions', 'gone.jsonl') });
+    const r2 = await request(app).get(`/api/assistant/threads/${missingId}/history`);
+    expect(r2.status).toBe(200);
+    expect(r2.body.messages).toEqual([]);
+  });
+
+  it('requirement 线程 404;未知线程 id 404', async () => {
+    const { projectId } = await seedProject(pool);
+    const req = (await pool.query(`INSERT INTO requirements(project_id, title, content) VALUES ($1,'r','c') RETURNING id`, [projectId])).rows[0]!.id as string;
+    const rid = crypto.randomUUID();
+    await pool.query(`INSERT INTO ai_threads(id, kind, requirement_id, pi_thread_id) VALUES ($1,'requirement',$2,'')`, [rid, req]);
+    expect((await request(app).get(`/api/assistant/threads/${rid}/history`)).status).toBe(404);
+    expect((await request(app).get(`/api/assistant/threads/${crypto.randomUUID()}/history`)).status).toBe(404);
+  });
+});

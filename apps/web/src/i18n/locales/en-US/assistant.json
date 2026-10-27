@@ -153,5 +153,15 @@
     "submittedPositive": "Marked as helpful",
     "submittedNegative": "Improvement noted",
     "submitFailed": "Failed to submit feedback"
+  },
+  "history": {
+    "button": "View full history",
+    "title": "Full conversation history",
+    "messageCount": "{{count}} messages",
+    "empty": "No history yet",
+    "loadFailed": "Failed to load",
+    "compaction": "Context compacted",
+    "compactionTokens": "{{count}} tokens before compaction",
+    "compactionSummary": "View compacted summary"
   }
 }

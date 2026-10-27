@@ -21,6 +21,7 @@ import { readLlmConfig } from '../modelBridge.js';
 import { resolveConfirmation } from './confirm.js';
 import { subscribeThreadMirror } from './threadBus.js';
 import { generateSpaceSuggestionsOnce } from './suggestions.js';
+import { parseSessionHistory } from './history.js';
 import { stageRoute } from './stageRoute.js';
 import { feedbackRoute } from './feedbackRoute.js';
 import { getArtifact, readArtifactFile, contentDispositionUtf8 } from './artifacts.js';
@@ -193,6 +194,29 @@ spaceRoute.get('/threads/:id', async (req, res) => {
   // 远小于用户感知阈值)让首击即出历史;ensure 幂等单飞,热线程零成本。
   try { await ensureSpaceRecord(req.params.id!); } catch { /* 构建失败仍返回兜底快照,不 500 */ }
   res.json(threadSnapshotResponse(req.params.id!));
+});
+
+/** 全量历史(「查看完整历史」抽屉):直接解析 ai_threads.pi_thread_id 指向的 pi 会话
+ *  JSONL。压缩只追加 compaction 条目、不删旧消息,故这里能取回已被压出模型上下文的对话
+ *  (GET /threads/:id 快照只含压缩后投影)。刻意不 ensureSpaceRecord:冷线程可用,不依赖
+ *  LLM 配置/repo;piThreadId 为空或文件已删 → 200 空列表(线程行还在,历史确实没了)。 */
+spaceRoute.get('/threads/:id/history', async (req, res) => {
+  await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
+  const row = (await db
+    .select({ piThreadId: aiThreads.piThreadId, title: aiThreads.title })
+    .from(aiThreads)
+    .where(eq(aiThreads.id, req.params.id!))
+    .limit(1))[0];
+  const empty = { title: row?.title ?? null, messages: [] };
+  if (!row?.piThreadId) { res.json(empty); return; }
+  let jsonl: string;
+  try {
+    jsonl = await fs.readFile(row.piThreadId, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') { res.json(empty); return; }
+    throw e;
+  }
+  res.json({ title: row.title ?? null, messages: parseSessionHistory(jsonl) });
 });
 
 /** react-pi rename 契约:PATCH {title} → 204。空/非字符串 400;trim 后入库。 */
