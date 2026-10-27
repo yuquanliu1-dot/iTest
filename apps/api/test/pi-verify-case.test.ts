@@ -1414,6 +1414,89 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     expect((entry!.trace.get(stepIds[1]!)![0] as { value: string }).value).toBe('v2');
   });
 
+  it('resume restore 吃确认轨迹：纯 NL 前缀步收到映射后的机械 compiled（不再 compile-missing 打断重跑）', async () => {
+    // 缺口回归：mapForReplay 不带 instruction，纯 NL 前缀步在 restore 里 compile-missing，
+    // resume 退化为「从第一个 NL 步起整体重跑 AI 相」。接线 confirmedTraces → mapAiActionsToCompiled
+    // 后，restore 切片收到机械动作，零 LLM/零截图重建前缀状态。
+    const { caseId } = await seedVisualCase(2);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask)
+      .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
+        opts?.onAction?.({ type: 'click', selector: '#btn-1' }, true);
+        return '{"status":"passed","reason":"完成","login":"not-needed"}';
+      })
+      .mockResolvedValueOnce('{"status":"failed","reason":"失败","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    await buildVerifyCaseTool(toolCtx()).execute({ caseId }); // 第 1 轮：步 1 过、步 2 败
+    // 第 2 轮：restore（前缀步 1）→ AI 相只跑步 2
+    vi.mocked(runAiTask).mockResolvedValueOnce('{"status":"passed","reason":"完成","login":"not-needed"}');
+    const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r2.ok).toBe(true);
+    const data2 = JSON.parse((r2 as { data: string }).data);
+    expect(data2.resumeFrom).toBe(1);
+    expect(data2.result).toBe('passed');
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    // 第 1 轮失败无 cdp 调用；全视觉用例跳过结尾干跑 → 第 2 轮唯一一次 cdp 调用就是 restore
+    expect(executeCaseInBrowser).toHaveBeenCalledTimes(1);
+    const restoreSteps = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ compiled: unknown }>;
+    expect(restoreSteps[0]!.compiled).toEqual([
+      { kind: 'click', locator: [{ strategy: 'css', value: '#btn-1' }] },
+    ]);
+    // AI 相只跑步 2：两轮合计 3 次（轮 1 ×2 + 轮 2 ×1），前缀步不重烧识别
+    expect(runAiTask).toHaveBeenCalledTimes(3);
+  });
+
+  it('确认轨迹映射失败（坐标动作未解析回 selector）→ restore 步保持无 compiled，AI 相照旧接管', async () => {
+    const { caseId } = await seedVisualCase(2);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask)
+      .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
+        opts?.onAction?.({ type: 'click', x: 500, y: 400 }, true); // 坐标动作，无 selector
+        return '{"status":"passed","reason":"完成","login":"not-needed"}';
+      })
+      .mockResolvedValueOnce('{"status":"failed","reason":"失败","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"完成","login":"not-needed"}');
+    await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    const restoreSteps = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ compiled: unknown }>;
+    // 保守回退：映射不出机械动作就不硬喂（坐标动作机械回放无从派发），保持 null 交 AI 接管
+    expect(restoreSteps[0]!.compiled).toBeNull();
+  });
+
+  it('混合前缀：机械步保留原 compiled 不吃轨迹；视觉步吃轨迹——结尾干跑不受影响', async () => {
+    const caseId = await seedCase({ steps: [null, CLICK_COMPILED, null] }); // NL / 机械 / NL
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask)
+      .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
+        opts?.onAction?.({ type: 'click', selector: '#btn-1' }, true);
+        return '{"status":"passed","reason":"完成","login":"not-needed"}';
+      })
+      // 步 2（机械步，AI 相以 compiled 为参考照常过，无轨迹）
+      .mockResolvedValueOnce('{"status":"passed","reason":"完成","login":"not-needed"}')
+      .mockResolvedValueOnce('{"status":"failed","reason":"失败","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    await buildVerifyCaseTool(toolCtx()).execute({ caseId }); // 轮 1：步 1-2 过、步 3 败
+    vi.mocked(runAiTask).mockResolvedValueOnce('{"status":"passed","reason":"完成","login":"not-needed"}');
+    const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r2.ok).toBe(true);
+    const data2 = JSON.parse((r2 as { data: string }).data);
+    expect(data2.resumeFrom).toBe(2);
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    // 轮 2：restore（前缀 2 步）+ 结尾完整干跑（混合用例不跳过）
+    expect(executeCaseInBrowser).toHaveBeenCalledTimes(2);
+    const restoreSteps = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ compiled: unknown }>;
+    expect(restoreSteps[0]!.compiled).toEqual([
+      { kind: 'click', locator: [{ strategy: 'css', value: '#btn-1' }] },
+    ]);
+    expect(restoreSteps[1]!.compiled).toEqual(CLICK_COMPILED); // 机械步原样，不被轨迹覆盖
+    // 结尾干跑走 mapForReplay（保真语义）：NL 步不带轨迹映射产物
+    const replaySteps = vi.mocked(executeCaseInBrowser).mock.calls[1]![1] as Array<{ compiled: unknown }>;
+    expect(replaySteps[0]!.compiled).toBeNull();
+    expect(replaySteps[1]!.compiled).toEqual(CLICK_COMPILED);
+  });
+
   it('敏感步骤不入轨迹（凭据属于环境）', async () => {
     const { caseId, stepIds } = await seedVisualCase(2, { sensitiveFirst: true });
     const { runAiTask } = await import('../src/execute/aiTask.js');

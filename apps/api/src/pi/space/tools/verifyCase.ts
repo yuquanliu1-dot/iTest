@@ -18,7 +18,7 @@ import { db } from '../../../db/client.js';
 import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/schema.js';
 import { runAiTask, USER_PH, PASSWORD_PH, SECRET_PH, makeCredentialValueSub, credentialPlaceholder, type AiAction } from '../../../execute/aiTask.js';
 import { buildCredentialSource, renderWebResourceManifest } from '../../../execute/credentialSource.js';
-import { isVisualStep } from '../../../execute/aiActionMap.js';
+import { isVisualStep, mapAiActionsToCompiled } from '../../../execute/aiActionMap.js';
 import { writeStepScreenshot, executeCaseInBrowser, gotoWithLandedRetry, type ExecStepResult } from '../../../execute/cdp.js';
 import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from '../../../execute/locator-probe.js';
 import { buildCandidates } from '../../../execute/locator-resolver.js';
@@ -704,6 +704,20 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             sensitive: s.sensitive,
             compiled: Array.isArray(s.compiled) ? s.compiled : null,
           });
+          /** restore 专用映射：视觉步（纯 NL / 纯 aiTask）经 mapForReplay 后无机械语义——纯 NL 连
+           *  instruction 都不带，机械引擎直接 compile-missing，前缀里第一个这样的步就会打断 restore、
+           *  AI 相从那里整体重跑（重新截图识别），「已确认步骤不再烧 LLM 轮次」对视觉用例落空。
+           *  改喂上一轮确认轨迹（confirmedTraces，与 solidify 同源）映射出的机械动作重建状态——
+           *  零 LLM/零截图。映射不出（坐标形态/凭据/裸标签被拒）保守回退原形态：机械引擎照旧
+           *  compile-missing/执行失败收敛该步，AI 相接管，语义与未接轨迹前完全一致。 */
+          const mapForRestore = (s: EffectiveStep) => {
+            const base = mapForReplay(s);
+            if (!isVisualStep(s)) return base; // 机械步保留原 compiled（回放保真），敏感步无轨迹自然回退
+            const carried = prevConfirm?.confirmedTraces.get(s.id);
+            if (!carried) return base;
+            const mapped = mapAiActionsToCompiled(carried);
+            return mapped.ok ? { ...base, compiled: mapped.compiled } : base;
+          };
           // 敏感字段解密表：restore 与结尾完整回放共用（解密失败会抛，与原有最终回放语义一致）
           const replaySecrets = buildReplaySecrets(effectiveSteps);
 
@@ -717,7 +731,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             const restoreSlice = effectiveSteps.slice(0, validPrefixLen);
             const restoreRes = await executeCaseInBrowser(
               caseId,
-              restoreSlice.map(mapForReplay),
+              restoreSlice.map(mapForRestore),
               {
                 reportId: `${reportId}-restore`,
                 envCtx,
