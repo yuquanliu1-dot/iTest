@@ -51,6 +51,11 @@ export interface SpaceSessionLike {
   /** 清空 Pi 服务端排队消息并返回被清内容（供 UI 还原到输入框）。 */
   clearQueue(): { steering: string[]; followUp: string[] };
   readonly isStreaming: boolean;
+  // pi AgentSession 的公开 getter（agent-session.d.ts:421/757/387），快照用它带出压缩/重试
+  // 活动标志。可选：测试桩不实现，真实 session 恒有。
+  readonly isCompacting?: boolean;
+  readonly isRetrying?: boolean;
+  readonly retryAttempt?: number;
   messages: unknown[];
 }
 
@@ -346,7 +351,17 @@ async function deliverCustomEvent(rec: ThreadRecord, e: Record<string, unknown>)
 }
 
 export interface ThreadSnapshot {
-  metadata: { id: string; status: 'running' | 'idle'; messageCount: number };
+  metadata: {
+    id: string;
+    status: 'running' | 'idle';
+    messageCount: number;
+    /** 压缩/重试活动标志（react-pi 快照契约的可选字段）。缺失时前端在线程仍 running 期间
+     *  会保留旧值（applySnapshot 的兼容回落）——compaction_end/auto_retry_end 事件一旦在
+     *  断连窗口丢失，「正在压缩上下文」就永久卡住，下次重连快照也无法自愈。 */
+    compactionActive?: boolean;
+    retryActive?: boolean;
+    retryAttempt?: number;
+  };
   /** 快照对应的事件 seq 高水位:react-pi 用它做「快照比已见事件旧?」的序列重置检测。
    *  有 record 时必须带真实值——带 0 会被冷副本误判成重置 → 后续镜像事件二次 append
    *  (用户消息双气泡根因)。缺省(无 record 的兜底响应)客户端当 0,契约允许(可选字段)。 */
@@ -355,12 +370,20 @@ export interface ThreadSnapshot {
 }
 
 export function snapshotOf(rec: ThreadRecord): ThreadSnapshot {
+  // 压缩/重试发生在 run 间隙（pi 的 isStreaming 此刻为 false），status 必须把它们算作
+  // running——否则压缩进行中的合法快照被判 settled，前端压缩提示被误清。
+  // 标志位对齐 react-pi 参考实现 ThreadSupervisor.metadataOf（client 侧校验接受这三个可选字段）。
+  const compacting = rec.session.isCompacting ?? false;
+  const retrying = rec.session.isRetrying ?? false;
   return {
     seq: rec.seq,
     metadata: {
       id: rec.threadId,
-      status: rec.session.isStreaming ? 'running' : 'idle',
+      status: rec.session.isStreaming || compacting || retrying ? 'running' : 'idle',
       messageCount: rec.session.messages.length,
+      compactionActive: compacting,
+      retryActive: retrying,
+      retryAttempt: rec.session.retryAttempt ?? 0,
     },
     messages: rec.session.messages,
   };
