@@ -350,5 +350,9 @@ describe('run_ai_step 注册', () => {
     const guidelines = tool.promptGuidelines!.join('\n');
     expect(guidelines).toContain('不用写用例');
     expect(guidelines).toContain('不要每条都传 url');
+    // 跑完即定型：暂存 → 固化 + mechanical 验收，禁止再跑一遍 full AI 相实测（步骤刚真实执行过）
+    expect(guidelines).toContain('stage_case');
+    expect(guidelines).toContain('solidify_case');
+    expect(guidelines).toContain('不要再跑 verify_case(mode="full")');
   });
 });

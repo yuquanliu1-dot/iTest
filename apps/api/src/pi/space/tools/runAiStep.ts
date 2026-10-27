@@ -112,7 +112,7 @@ export function buildRunAiStepTool(ctx: SpaceToolsContext): ToolExecutor {
     promptGuidelines: [
       '用户明确要求不生成步骤直接跑（如「不用写用例，直接在页面上试试」「先跑一下看看」）时，用 run_ai_step 逐条执行用户的自然语言指令：每次调用执行一个操作意图，跑完把结果（成功/失败与原因、页面变化）回报给用户再继续讨论——不要先 stage_case 或生成用例草稿。',
       'run_ai_step 同线程复用同一浏览器会话：连续指令不要每条都传 url（页面状态保留，上一步打开的弹窗/页面下一步直接操作即可）；只有需要换页面时才传 url。',
-      '跑通的步骤若用户认可、要沉淀为用例，再回到常规流程：stage_case 暂存（步骤=讨论中验证过的自然语言指令）→ verify_case 实测 → solidify_case 固化。',
+      '讨论收敛、指令都跑通后，这些指令就是用例步骤：询问用户并 stage_case 暂存（步骤=本轮跑通的自然语言指令，顺序保留），随后走 solidify_case 固化 + verify_case(mode="mechanical") 机械验收；不要再跑 verify_case(mode="full") AI 相实测——每一步刚在直跑中真实执行过，再跑一遍纯属重复。',
     ],
     execute: async (input) => {
       const { instruction, url, webRef: webRefInput } = input as { instruction: string; url?: string; webRef?: string };
