@@ -9,6 +9,10 @@ import { credentialPlaceholderKind, type AiAction } from './aiTask.js';
 /** Playwright 专有语法（引擎链 / 伪类扩展），平台 css 策略不认识 → 不可映射。 */
 export const PLAYWRIGHT_ONLY_SELECTOR_RE = />>|:has-text|:has\(|:near\(|:above\(|:below\(|engine=|nth=/i;
 
+/** 裸标签选择器（无 #.[: 等任何特异性，如 "span"/"button"）页内必多命中歧义，固化后机械回放
+ *  会静默点错第一个可见命中——第二道防线（合成端唯一性门已在上游拦，这里拦回归/拦外部喂入）。 */
+const BARE_TAG_RE = /^[a-z][a-z0-9-]*$/i;
+
 /** 步骤是否为视觉模式（可固化候选）：未编译（纯 instruction）或 compiled 全部由 aiTask 组成。
  *  原 solidifyCase.ts 定义；verify_case 轨迹收集也要用，下沉到 execute 中性层避免工具间反向依赖。 */
 export function isVisualStep(step: { instruction: string | null; compiled: unknown; sensitive: boolean }): boolean {
@@ -59,6 +63,9 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
         if (!a.selector) return { ok: false, reason: 'click 为坐标动作且未解析回稳定选择器，无法映射为平台 locator' };
         const locator = mapSelector(a.selector);
         if (!locator) return { ok: false, reason: `click 选择器 "${a.selector}" 含 Playwright 专有语法，无法映射为平台 locator` };
+        if (locator.strategy === 'css' && BARE_TAG_RE.test(locator.value)) {
+          return { ok: false, reason: `click 选择器 "${a.selector}" 特异性不足（裸标签必歧义），整步保持 aiTask` };
+        }
         compiled.push({ kind: 'click', locator: [locator] });
         realCount += 1;
         break;
@@ -73,6 +80,9 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
         if (!a.selector) return { ok: false, reason: 'fill 为坐标动作且未解析回稳定选择器，无法映射为平台 locator' };
         const locator = mapSelector(a.selector);
         if (!locator) return { ok: false, reason: `fill 选择器 "${a.selector}" 含 Playwright 专有语法，无法映射为平台 locator` };
+        if (locator.strategy === 'css' && BARE_TAG_RE.test(locator.value)) {
+          return { ok: false, reason: `fill 选择器 "${a.selector}" 特异性不足（裸标签必歧义），整步保持 aiTask` };
+        }
         compiled.push({ kind: 'fill', locator: [locator], value: a.value });
         realCount += 1;
         break;

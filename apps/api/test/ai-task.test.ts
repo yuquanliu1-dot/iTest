@@ -79,6 +79,100 @@ function makeCoordStubPage() {
   return { page: page as unknown as Page, calls };
 }
 
+/** 命中树桩：resolveAtPoint 的页面函数不在浏览器里跑，而是在 Node 里真跑——
+ *  patch globalThis.document/CSS 后直接调用 evaluate 回调，对可配置的假 DOM 树执行。
+ *  上浮（click）、下沉（fill）、富化（has-text/nth-of-type）、唯一性门全部走真实代码路径，
+ *  罐头返回值的桩测不到这些。docHits 给 document.querySelectorAll 计数（值=命中文本列表）。 */
+interface FakeEl {
+  tag: string;
+  id?: string;
+  name?: string;
+  placeholder?: string;
+  role?: string;
+  classes?: string[];
+  text?: string;
+  interactive?: boolean;
+  parent?: FakeEl;
+  inner?: FakeEl[];
+  getValue?: () => string;
+}
+
+function makeTreeStubPage(
+  spec: { hit: FakeEl; docHits?: Record<string, string[]> },
+  state = { typed: '' },
+) {
+  const calls: string[] = [];
+  const shots: Array<Record<string, unknown> | undefined> = [];
+  const realize = (f: FakeEl): Record<string, unknown> => {
+    const el: Record<string, unknown> = {
+      tagName: f.tag.toUpperCase(),
+      id: f.id ?? '',
+      className: (f.classes ?? []).join(' '),
+      textContent: f.text ?? '',
+      getAttribute: (n: string) =>
+        n === 'name' ? f.name ?? null : n === 'placeholder' ? f.placeholder ?? null : n === 'role' ? f.role ?? null : null,
+      matches: () => !!f.interactive,
+      getBoundingClientRect: () => ({ left: 10, top: 20, width: 100, height: 30 }),
+      querySelectorAll: (sel: string) => (sel === 'input, textarea' ? (f.inner ?? []).map(realize) : []),
+    };
+    Object.defineProperty(el, 'value', { get: () => (f.getValue ? f.getValue() : '') });
+    return el;
+  };
+  const withParents = (f: FakeEl): Record<string, unknown> => {
+    const el = realize(f);
+    if (f.parent) el.parentElement = withParents(f.parent);
+    return el;
+  };
+  const hitEl = withParents(spec.hit);
+  const fakeDoc = {
+    elementFromPoint: () => hitEl,
+    querySelectorAll: (sel: string) => (spec.docHits?.[sel] ?? []).map((t) => ({ textContent: t })),
+  };
+  const page = {
+    url: () => 'https://sut.example/list',
+    viewportSize: () => ({ width: 1000, height: 800 }),
+    screenshot: async (opts?: Record<string, unknown>) => {
+      shots.push(opts);
+      return Buffer.from('jpg');
+    },
+    evaluate: async (fn: unknown, arg?: unknown) => {
+      const src = String(fn);
+      if (src.includes('elementFromPoint')) {
+        const g = globalThis as unknown as { document?: unknown; CSS?: unknown };
+        const prevDoc = g.document;
+        const hadCss = 'CSS' in g;
+        g.document = fakeDoc;
+        if (!hadCss) g.CSS = { escape: (s: string) => s };
+        try {
+          return await (fn as (a: unknown) => unknown)(arg);
+        } finally {
+          g.document = prevDoc;
+          if (!hadCss) delete g.CSS;
+        }
+      }
+      if (src.includes('canvas')) return 0;
+      return [];
+    },
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    keyboard: {
+      press: async (key: string) => { calls.push(`press:${key}`); },
+      type: async (v: string) => { calls.push(`type:${v}`); state.typed = v; },
+    },
+    mouse: { click: async (x: number, y: number) => { calls.push(`mouse:click:${x},${y}`); } },
+    waitForTimeout: async (ms: number) => { calls.push(`wait:${ms}`); },
+    locator: (selector: string) => ({
+      first: () => ({
+        click: async () => { calls.push(`click:${selector}`); },
+        waitFor: async () => undefined,
+        evaluate: async () => undefined,
+        screenshot: async () => Buffer.from('zoomed'),
+      }),
+    }),
+  };
+  return { page: page as unknown as Page, calls, shots, state };
+}
+
 /** 按轮次脚本化回复的 mock LLM；每轮收到完整 userMessage。 */
 function makeMockLlm(script: Array<Record<string, unknown> | string>) {
   const requests: string[] = [];
@@ -418,6 +512,108 @@ describe('runAiTask', () => {
     });
     expect(systems[0]).not.toContain('可用 web 服务');
     expect(systems[0]).not.toContain('ITEST_USERNAME');
+  });
+});
+
+describe('runAiTask 坐标解析：上浮/下沉/富化/唯一性门（命中树真实路径）', () => {
+  it('click 命中 button 内层 span → 上浮交互祖先 + has-text 富化，上报富化 selector 形态', async () => {
+    // prod228 实测弱点回归：elementFromPoint 命中 <button><span>查询</span></button> 的内层 span
+    const { page, calls } = makeTreeStubPage({
+      hit: {
+        tag: 'span',
+        text: '查询',
+        parent: { tag: 'button', classes: ['el-button', 'el-button--primary'], text: '查询', interactive: true },
+      },
+      docHits: {
+        // 同款按钮 2 个（查询/重置）→ 基础类名选择器多命中 → 短文本富化收窄
+        'button.el-button.el-button--primary': ['查询', '重置'],
+      },
+    });
+    const reported: Array<{ a: unknown; ok: boolean }> = [];
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'click', x: 500, y: 400 }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '点击查询按钮', llm, false, {
+      onAction: (a, ok) => { reported.push({ a, ok }); },
+    });
+    expect(calls).toContain('mouse:click:500,320');
+    // 不再是裸 span：上浮到 button，且多命中时带 has-text 收窄（页内唯一）
+    expect(reported).toEqual([
+      { a: { type: 'click', selector: 'button.el-button.el-button--primary:has-text("查询")' }, ok: true },
+    ]);
+    expect(requests[1]).toContain('has-text("查询")');
+  });
+
+  it('click 命中裸 span 多命中且无富化信号 → 坐标形态上报（unique=false，固化管线自动拒绝）', async () => {
+    const { page } = makeTreeStubPage({
+      hit: { tag: 'span', parent: { tag: 'div' } },
+      docHits: {
+        span: ['a', 'b', 'c'],
+        'span:nth-of-type(1)': ['a', 'b'],
+      },
+    });
+    const reported: Array<{ a: unknown; ok: boolean }> = [];
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'click', x: 500, y: 400 }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '点目标', llm, false, {
+      onAction: (a, ok) => { reported.push({ a, ok }); },
+    });
+    expect(reported).toEqual([{ a: { type: 'click', x: 500, y: 400 }, ok: true }]);
+  });
+
+  it('fill 命中包装容器 → 下沉内部 input，placeholder selector 上报（真实下沉路径）', async () => {
+    const state = { typed: '' };
+    const { page } = makeTreeStubPage(
+      {
+        hit: {
+          tag: 'label',
+          text: '事件名称',
+          inner: [{ tag: 'input', placeholder: '请输入事件名称', getValue: () => state.typed }],
+        },
+        docHits: { 'input[placeholder="请输入事件名称"]': [''] },
+      },
+      state,
+    );
+    const reported: Array<{ a: unknown; ok: boolean }> = [];
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'fill', x: 200, y: 100, value: '自动化测试-9527' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '填写事件名称', llm, false, {
+      onAction: (a, ok) => { reported.push({ a, ok }); },
+    });
+    expect(reported).toEqual([
+      { a: { type: 'fill', selector: 'input[placeholder="请输入事件名称"]', value: '自动化测试-9527' }, ok: true },
+    ]);
+  });
+
+  it('screenshot 坐标形态：下轮带 clip 裁剪图 + 坐标系不变的附图说明（deepLocate 适配）', async () => {
+    const { page, shots } = makeTreeStubPage({ hit: { tag: 'span' } });
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'screenshot', x: 500, y: 400 }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '看清局部区域', llm);
+    // 1000x800 视口：(500,400)→像素(500,320)，边长 480 → clip 原点 (260,80)
+    const crop = shots.find((s) => s && 'clip' in s);
+    expect(crop?.clip).toEqual({ x: 260, y: 80, width: 480, height: 480 });
+    expect(crop?.type).toBe('jpeg');
+    expect(crop?.quality).toBe(85);
+    expect(requests[1]).toContain('全页坐标系不变');
+  });
+
+  it('screenshot selector 形态不回归：仍走元素 4x 白底截图通道', async () => {
+    const { page } = makeTreeStubPage({ hit: { tag: 'span' } });
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'screenshot', selector: '#captcha-img' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '识别验证码', llm);
+    expect(requests[1]).toContain('#captcha-img');
+    expect(requests[1]).toContain('4 倍放大白底截图');
   });
 });
 

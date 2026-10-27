@@ -41,6 +41,22 @@ describe('mapAiActionsToCompiled :has-text 选择器', () => {
   });
 });
 
+describe('mapAiActionsToCompiled 裸标签门（第二道防线）', () => {
+  it('click/fill 纯裸标签（无 #.[: 特异性）→ 特异性不足拒绝固化', () => {
+    const c = mapAiActionsToCompiled([{ type: 'click', selector: 'span' }]);
+    expect(c.ok).toBe(false);
+    if (!c.ok) expect(c.reason).toContain('特异性不足');
+    const f = mapAiActionsToCompiled([{ type: 'fill', selector: 'textarea', value: 'v' }]);
+    expect(f.ok).toBe(false);
+    if (!f.ok) expect(f.reason).toContain('特异性不足');
+  });
+
+  it('带特异性 selector 照常固化（类名/属性不受裸标签门影响）', () => {
+    const r = mapAiActionsToCompiled([{ type: 'click', selector: 'button.el-button' }]);
+    expect(r).toEqual({ ok: true, skippedCount: 0, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: 'button.el-button' }] }] });
+  });
+});
+
 describe('mapAiActionsToCompiled 坐标动作（未解析回 selector）', () => {
   it('click/fill 无 selector（坐标未解析回稳定选择器）→ 整步保守保持 aiTask', () => {
     const r = mapAiActionsToCompiled([

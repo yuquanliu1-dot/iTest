@@ -29,6 +29,7 @@ actions 元素类型：
 - {"type":"wait","ms":<毫秒>}
 - {"type":"navigate","url":"<绝对地址>"}（仅 http/https 绝对地址）
 - {"type":"screenshot","selector":"<css>"}　请求该元素的 4 倍放大白底截图，下轮会作为附图发给你
+- {"type":"screenshot","x":..,"y":..}　请求 (x,y) 附近视口区域的局部放大截图（密集/相似元素区域校准定位用，deepLocate 两段式）——坐标系与截图一致（视口归一化 0-1000），下轮附图后仍按全页坐标输出动作
 结束方式（二选一）：
 - 指令已完成：{"done": true, "summary": "做了什么"}
 - 无法完成：{"fail": "原因"}（会立即终止并记为该步骤失败）
@@ -96,10 +97,51 @@ interface ElementInfo {
   disabled?: boolean;
 }
 
+/** 页面上下文内执行的选择器合成源码（函数表达式字符串）——dumpElements 与 resolveAtPoint
+ *  经 evaluate 参数传入并在页面内 eval 还原，共用同一份（此前两处手抄副本，prod228 10-27
+ *  实测 button>span 命中产出裸 span 即手抄链无上浮/无唯一性校验的后果）。
+ *  基础优先级不变：#id → tag[name] → tag[placeholder] → [role] → tag.cls1.cls2 → 裸 tag。
+ *  多命中时依次富化，保证机械回放命中唯一：
+ *    1. 短文本（≤30 字符）尾缀 :has-text("…")——非标准 CSS，唯一性按「基础命中中
+ *       textContent 含该文本」的个数模拟计数（与回放侧 getByText 的包含语义同向）；
+ *    2. 父内同 tag 序号 :nth-of-type(k)——标准 CSS，可直接 querySelectorAll 验证。
+ *  仍不唯一 → unique:false（上报链据此保持坐标形态，固化管线保守拒绝该步）。
+ *  字符串源码对 tsx/esbuild 的 evaluate 嵌套函数 keepNames 陷阱免疫；Playwright evaluate
+ *  走 DevTools 通道，不受页面 CSP 的 eval 限制。 */
+const SYNTH_SELECTOR_SRC = `function (el) {
+  var tag = el.tagName.toLowerCase();
+  var name = el.getAttribute('name');
+  var ph = el.getAttribute('placeholder');
+  var role = el.getAttribute('role');
+  var selector = el.id ? '#' + CSS.escape(el.id) : '';
+  if (!selector && name) selector = tag + '[name="' + name + '"]';
+  if (!selector && ph) selector = tag + '[placeholder="' + ph + '"]';
+  if (!selector && role) selector = '[role="' + role + '"]';
+  if (!selector) {
+    var cls = (el.className || '').toString().trim().split(/\\s+/).filter(Boolean).slice(0, 2).join('.');
+    selector = cls ? tag + '.' + cls : tag;
+  }
+  function count(s) { try { return document.querySelectorAll(s).length; } catch (e) { return -1; } }
+  if (count(selector) === 1) return { selector: selector, unique: true };
+  var text = (el.textContent || '').trim().replace(/["\\\\]/g, '').slice(0, 30);
+  if (text) {
+    var hits = document.querySelectorAll(selector);
+    var m = 0;
+    for (var i = 0; i < hits.length; i++) if ((hits[i].textContent || '').indexOf(text) >= 0) m++;
+    if (m === 1) return { selector: selector + ':has-text("' + text + '")', unique: true };
+  }
+  var k = 1;
+  for (var sib = el.previousElementSibling; sib; sib = sib.previousElementSibling) if (sib.tagName === el.tagName) k++;
+  var nth = selector + ':nth-of-type(' + k + ')';
+  if (count(nth) === 1) return { selector: nth, unique: true };
+  return { selector: selector, unique: false };
+}`;
+
 /** 提取视口内可交互元素清单（selector + 与截图对齐的归一化坐标框）。
  *  坐标协议下清单的定位职能降为「对齐锚点 + selector 兜底」，box 才是主要信息。 */
 async function dumpElements(page: Page): Promise<ElementInfo[]> {
-  const raw = (await page.evaluate(() => {
+  const raw = (await page.evaluate((src: string) => {
+    const synth = eval('(' + src + ')') as (el: HTMLElement) => { selector: string; unique: boolean };
     const out: Array<Record<string, unknown>> = [];
     const vw = window.innerWidth || 1;
     const vh = window.innerHeight || 1;
@@ -115,25 +157,15 @@ async function dumpElements(page: Page): Promise<ElementInfo[]> {
       if (r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) continue;
       const style = window.getComputedStyle(he);
       if (style.visibility === 'hidden' || style.display === 'none') continue;
-      const id = he.id ? `#${CSS.escape(he.id)}` : '';
-      const name = he.getAttribute('name');
-      const ph = he.getAttribute('placeholder');
-      const role = he.getAttribute('role');
-      let selector = id;
-      if (!selector && name) selector = `${he.tagName.toLowerCase()}[name="${name}"]`;
-      if (!selector && ph) selector = `${he.tagName.toLowerCase()}[placeholder="${ph}"]`;
-      if (!selector && role) selector = `[role="${role}"]`;
-      if (!selector) {
-        const cls = (he.className || '').toString().trim().split(/\s+/).filter(Boolean).slice(0, 2).join('.');
-        selector = cls ? `${he.tagName.toLowerCase()}.${cls}` : he.tagName.toLowerCase();
-      }
+      const s = synth(he);
       const text = (he.textContent ?? '').trim().slice(0, 40);
       const item: Record<string, unknown> = {
-        selector,
+        selector: s.selector,
         tag: he.tagName.toLowerCase(),
         box: [norm(r.left, vw), norm(r.top, vh), norm(r.right, vw), norm(r.bottom, vh)],
       };
       if (text) item.text = text;
+      const ph = he.getAttribute('placeholder');
       if (ph) item.placeholder = ph;
       const it = (he as HTMLInputElement).type;
       if (he.tagName === 'INPUT' && it) item.inputType = it;
@@ -142,7 +174,7 @@ async function dumpElements(page: Page): Promise<ElementInfo[]> {
       if (out.length >= 60) break;
     }
     return out;
-  })) as Array<Record<string, unknown>>;
+  }, SYNTH_SELECTOR_SRC)) as Array<Record<string, unknown>>;
   return raw as unknown as ElementInfo[];
 }
 
@@ -154,7 +186,7 @@ export type AiAction =
   | { type: 'press'; key: string }
   | { type: 'wait'; ms: number }
   | { type: 'navigate'; url: string }
-  | { type: 'screenshot'; selector: string };
+  | { type: 'screenshot'; selector?: string; x?: number; y?: number };
 
 // AI 相凭据占位符协议：verify_case / solidify_case 的提示词要求 LLM 把用户名/密码/
 // 敏感字段 fill 成这三个字面量，执行时刻由 valueSub 替换为真实值。协议常量定义在
@@ -327,13 +359,20 @@ function parseAction(a: unknown): AiAction | null {
   if (type === 'press' && typeof o.key === 'string') return { type, key: o.key };
   if (type === 'wait' && typeof o.ms === 'number') return { type, ms: Math.min(Math.max(o.ms, 0), 10000) };
   if (type === 'navigate' && typeof o.url === 'string' && /^https?:\/\//.test(o.url)) return { type, url: o.url };
-  if (type === 'screenshot' && typeof o.selector === 'string') return { type, selector: o.selector };
+  if (type === 'screenshot') {
+    // selector 形态（元素 4x 放大）与坐标形态（局部区域裁剪放大）二选一。
+    if (typeof o.selector === 'string' && o.selector) return { type, selector: o.selector };
+    if (clampCoord(o.x) !== null && clampCoord(o.y) !== null) return { type, x: clampCoord(o.x)!, y: clampCoord(o.y)! };
+    return null;
+  }
   return null;
 }
 
-/** 坐标动作的解析结果：该点命中的元素（selector 合成规则与 dumpElements 同链）。 */
+/** 坐标动作的解析结果：该点命中的元素（selector 合成与 dumpElements 共用 SYNTH_SELECTOR_SRC）。 */
 interface PointTarget {
   selector: string;
+  /** 合成选择器在页内是否唯一命中；false 时上报链保持坐标形态（固化管线保守拒绝）。 */
+  unique?: boolean;
   tag: string;
   text?: string;
   /** input/textarea 的当前值（fill 回读用）。 */
@@ -352,58 +391,73 @@ function toViewportPt(a: { x?: number; y?: number }, page: Page): { px: number; 
 
 /** 解析视口坐标上的目标元素：P1 的关键——坐标动作执行前把目标解析回稳定 selector，
  *  onAction 据此上报 selector 形态（固化/缓存管线不变），box 供动作高亮，value 供 fill 回读。
- *  命中包装容器（label/div 蒙在 input 上）时下沉到内部首个可见输入控件——fill/回读语义以控件为准。
+ *  intent='fill'：命中包装容器（label/div 蒙在 input 上）时下沉到内部首个可见输入控件——回读语义以控件为准。
+ *  intent='click'：命中内层非交互节点（如 button 内层 span）时上浮最多 5 层取最近交互祖先——
+ *  合成目标与高亮 box 以祖先为准（整按钮框），不再产出裸 span。
+ *  选择器合成与 dumpElements 共用 SYNTH_SELECTOR_SRC，附唯一性判定（unique）。
  *  坐标点击本身穿透 iframe/shadow DOM，这里解析不到（返回 null）只影响上报形态，不影响执行。 */
-async function resolveAtPoint(page: Page, px: number, py: number): Promise<PointTarget | null> {
+async function resolveAtPoint(
+  page: Page,
+  px: number,
+  py: number,
+  intent: 'click' | 'fill',
+): Promise<PointTarget | null> {
   try {
-    const raw = await page.evaluate((pt: [number, number]) => {
-      const hit = document.elementFromPoint(pt[0]!, pt[1]!);
-      if (!hit) return null;
-      let target = hit as HTMLElement;
-      const t = target.tagName;
-      if (t !== 'INPUT' && t !== 'TEXTAREA' && t !== 'SELECT') {
-        const inner = target.querySelectorAll('input, textarea');
-        for (const c of Array.from(inner)) {
-          const ir = (c as HTMLElement).getBoundingClientRect();
-          if (ir.width > 2 && ir.height > 2) {
-            target = c as HTMLElement;
-            break;
+    const raw = await page.evaluate(
+      (arg: { pt: [number, number]; src: string; it: 'click' | 'fill' }) => {
+        const synth = eval('(' + arg.src + ')') as (el: HTMLElement) => { selector: string; unique: boolean };
+        const hit = document.elementFromPoint(arg.pt[0]!, arg.pt[1]!);
+        if (!hit) return null;
+        let target = hit as HTMLElement;
+        const INTERACTIVE =
+          'input, textarea, select, button, a, summary, label, [role="button"], [role="link"], [role="tab"], [role="switch"], [role="option"], [role="menuitem"]';
+        if (arg.it === 'fill') {
+          const t = target.tagName;
+          if (t !== 'INPUT' && t !== 'TEXTAREA' && t !== 'SELECT') {
+            const inner = target.querySelectorAll('input, textarea');
+            for (const c of Array.from(inner)) {
+              const ir = (c as HTMLElement).getBoundingClientRect();
+              if (ir.width > 2 && ir.height > 2) {
+                target = c as HTMLElement;
+                break;
+              }
+            }
+          }
+        } else if (!target.matches(INTERACTIVE)) {
+          let anc = target.parentElement;
+          for (let i = 0; i < 5 && anc; i++, anc = anc.parentElement) {
+            if ((anc as HTMLElement).matches(INTERACTIVE)) {
+              target = anc as HTMLElement;
+              break;
+            }
           }
         }
-      }
-      const id = target.id ? `#${CSS.escape(target.id)}` : '';
-      const name = target.getAttribute('name');
-      const ph = target.getAttribute('placeholder');
-      const role = target.getAttribute('role');
-      let selector = id;
-      if (!selector && name) selector = `${target.tagName.toLowerCase()}[name="${name}"]`;
-      if (!selector && ph) selector = `${target.tagName.toLowerCase()}[placeholder="${ph}"]`;
-      if (!selector && role) selector = `[role="${role}"]`;
-      if (!selector) {
-        const cls = (target.className || '').toString().trim().split(/\s+/).filter(Boolean).slice(0, 2).join('.');
-        selector = cls ? `${target.tagName.toLowerCase()}.${cls}` : target.tagName.toLowerCase();
-      }
-      const r = target.getBoundingClientRect();
-      const out: Record<string, unknown> = {
-        selector,
-        tag: target.tagName.toLowerCase(),
-        box: { x: r.left, y: r.top, width: r.width, height: r.height },
-      };
-      const text = (target.textContent ?? '').trim().slice(0, 40);
-      if (text) out.text = text;
-      const v = (target as HTMLInputElement).value;
-      if (typeof v === 'string') out.value = v;
-      return out;
-    }, [px, py] as [number, number]);
+        const s = synth(target);
+        const r = target.getBoundingClientRect();
+        const out: Record<string, unknown> = {
+          selector: s.selector,
+          unique: s.unique,
+          tag: target.tagName.toLowerCase(),
+          box: { x: r.left, y: r.top, width: r.width, height: r.height },
+        };
+        const text = (target.textContent ?? '').trim().slice(0, 40);
+        if (text) out.text = text;
+        const v = (target as HTMLInputElement).value;
+        if (typeof v === 'string') out.value = v;
+        return out;
+      },
+      { pt: [px, py] as [number, number], src: SYNTH_SELECTOR_SRC, it: intent },
+    );
     return (raw ?? null) as PointTarget | null;
   } catch {
     return null;
   }
 }
 
-/** onAction 上报形态：坐标动作在解析出稳定 selector 时回填为 selector 形态——
+/** onAction 上报形态：坐标动作在解析出稳定且页内唯一的 selector 时回填为 selector 形态——
  *  mapAiActionsToCompiled / aiTaskCache / solidify 轨迹管线只见 selector 形态，形状不变。
- *  解析失败则原样上报坐标动作（映射层会拒绝固化该步，保守回落 aiTask）。 */
+ *  解析失败或非唯一（unique=false，如裸 span 无富化信号）则原样上报坐标动作
+ *  （映射层会拒绝固化该步，保守回落 aiTask——非唯一 selector 机械回放会静默点错）。 */
 function toReportAction(a: AiAction, resolvedSelector: string | null | undefined): AiAction {
   if ((a.type === 'click' || a.type === 'fill') && typeof a.x === 'number' && resolvedSelector) {
     return a.type === 'fill'
@@ -420,6 +474,8 @@ async function settleAfterAction(page: Page): Promise<void> {
 }
 
 /** 执行单个动作，返回给 LLM 的结果描述 + 坐标动作解析出的稳定 selector。
+ *  resolvedSelector 仅在解析成功且页内唯一（unique !== false）时给出——非唯一时为 null，
+ *  上报链保持坐标形态、固化管线保守拒绝该步。
  *  valueSub：fill value 执行前替换（占位符 → 真实凭据）；发生替换后反馈不回显真实值。 */
 interface ExecOutcome {
   report: string;
@@ -431,10 +487,10 @@ async function execAction(page: Page, action: AiAction, valueSub?: (v: string) =
     case 'click': {
       if (typeof action.x === 'number' && typeof action.y === 'number') {
         const { px, py } = toViewportPt(action, page);
-        const t = await resolveAtPoint(page, px, py);
+        const t = await resolveAtPoint(page, px, py, 'click');
         await page.mouse.click(px, py);
         const label = t?.selector ? `@${action.x},${action.y}（${t.selector}）` : `@${action.x},${action.y}`;
-        return { report: `click ${label}: ok`, resolvedSelector: t?.selector ?? null };
+        return { report: `click ${label}: ok`, resolvedSelector: t && t.unique !== false ? t.selector : null };
       }
       const selector = action.selector!;
       await page.locator(selector).first().click({ timeout: 5000, force: true });
@@ -445,24 +501,25 @@ async function execAction(page: Page, action: AiAction, valueSub?: (v: string) =
       const substituted = realValue !== action.value;
       if (typeof action.x === 'number' && typeof action.y === 'number') {
         const { px, py } = toViewportPt(action, page);
-        const before = await resolveAtPoint(page, px, py);
+        const before = await resolveAtPoint(page, px, py, 'fill');
         await page.mouse.click(px, py);
         await page.keyboard.press('ControlOrMeta+A').catch(() => undefined);
         await page.keyboard.type(realValue, { delay: 20 });
         // React 受控表单常在 blur 时才提交 state / 触发校验；与 selector 路径保持一致。
         await page.keyboard.press('Tab').catch(() => undefined);
         await page.waitForTimeout(80);
-        const after = await resolveAtPoint(page, px, py);
+        const after = await resolveAtPoint(page, px, py, 'fill');
         const actual = typeof after?.value === 'string' ? after.value : null;
         const label = before?.selector ? `@${action.x},${action.y}（${before.selector}）` : `@${action.x},${action.y}`;
+        const resolvedSel = before && before.unique !== false ? before.selector : null;
         if (actual !== null && actual !== realValue) {
           // 发生替换（凭据类 fill）时不回显 actual/目标值——防密码片段泄漏回 LLM。
           if (substituted) {
-            return { report: `fill ${label}: 实际值与目标不一致（实际值长度 ${actual.length}）`, resolvedSelector: before?.selector ?? null };
+            return { report: `fill ${label}: 实际值与目标不一致（实际值长度 ${actual.length}）`, resolvedSelector: resolvedSel };
           }
-          return { report: `fill ${label}: 实际值 "${actual}" 与目标 "${action.value}" 不一致`, resolvedSelector: before?.selector ?? null };
+          return { report: `fill ${label}: 实际值 "${actual}" 与目标 "${action.value}" 不一致`, resolvedSelector: resolvedSel };
         }
-        return { report: `fill ${label}: ok`, resolvedSelector: before?.selector ?? null };
+        return { report: `fill ${label}: ok`, resolvedSelector: resolvedSel };
       }
       const selector = action.selector!;
       const loc = page.locator(selector).first();
@@ -495,8 +552,9 @@ async function execAction(page: Page, action: AiAction, valueSub?: (v: string) =
       return { report: `navigate ${action.url}: ok` };
     }
     case 'screenshot': {
-      // 不在这里截图：标记后由主循环在下一轮开头截 4x 白底图
-      return { report: `screenshot ${action.selector}: 已接受，下轮附图` };
+      // 不在这里截图：标记后由主循环在下一轮开头截 4x 白底图（selector）/ 坐标裁剪放大图（x,y）
+      const label = action.selector ?? `@${action.x},${action.y}`;
+      return { report: `screenshot ${label}: 已接受，下轮附图` };
     }
   }
 }
@@ -518,6 +576,28 @@ async function shotElement(page: Page, selector: string): Promise<Buffer | null>
         (e as HTMLElement).style.background = '';
       }).catch(() => undefined);
     }
+  } catch {
+    return null;
+  }
+}
+
+/** 坐标点附近区域的局部裁剪截图（deepLocate 两段式适配：密集/相似元素区域校准定位）。
+ *  点位为中心裁边长 min(480, 视口短边) 的方块（≥ midscene 400×400 下限），clamp 视口边界。
+ *  不做数字放大：VL 模型无新信息增益，且不换坐标系（附图仅校准，动作仍按全页坐标输出）。 */
+async function shotCrop(page: Page, x: number, y: number): Promise<Buffer | null> {
+  try {
+    const vp = page.viewportSize() ?? { width: 1280, height: 800 };
+    const px = Math.round((x / 1000) * vp.width);
+    const py = Math.round((y / 1000) * vp.height);
+    const size = Math.min(480, Math.min(vp.width, vp.height));
+    const left = Math.max(0, Math.min(vp.width - size, px - Math.floor(size / 2)));
+    const top = Math.max(0, Math.min(vp.height - size, py - Math.floor(size / 2)));
+    return await page.screenshot({
+      timeout: 5000,
+      type: 'jpeg',
+      quality: 85,
+      clip: { x: left, y: top, width: size, height: size },
+    });
   } catch {
     return null;
   }
@@ -815,7 +895,7 @@ export async function runAiTask(
       }
     : undefined;
   let lastResults: string[] = [];
-  let pendingShot: string | null = null;
+  let pendingShot: { kind: 'element'; selector: string } | { kind: 'crop'; x: number; y: number } | null = null;
   /** 同目标连续失败计数（key=selector 或坐标粗桶）：3 连错注入强制页面自检指令，防换 selector 空转。 */
   const errStreak = new Map<string, number>();
   // 多轮累积：每轮把「本轮 user（+截图）」与「上轮 LLM 原始输出」追加到 history，
@@ -832,8 +912,16 @@ export async function runAiTask(
     let shotMime: 'image/png' | 'image/jpeg' = 'image/png';
     let imageNote = '';
     if (pendingShot) {
-      buffer = await shotElement(page, pendingShot);
-      if (buffer) imageNote = `附图：你上轮请求的元素 ${pendingShot} 的 4 倍放大白底截图（请仔细逐字符辨认）。\n`;
+      if (pendingShot.kind === 'element') {
+        buffer = await shotElement(page, pendingShot.selector);
+        if (buffer) imageNote = `附图：你上轮请求的元素 ${pendingShot.selector} 的 4 倍放大白底截图（请仔细逐字符辨认）。\n`;
+      } else {
+        buffer = await shotCrop(page, pendingShot.x, pendingShot.y);
+        if (buffer) {
+          shotMime = 'image/jpeg';
+          imageNote = `附图：你上轮请求的 (${pendingShot.x},${pendingShot.y}) 附近局部放大截图。全页坐标系不变（视口归一化 0-1000），请以此图校准目标后输出全页坐标。\n`;
+        }
+      }
       pendingShot = null;
     }
     if (!buffer) {
@@ -902,8 +990,9 @@ export async function runAiTask(
     lastResults = [];
     for (const a of actions) {
       if (a.type === 'screenshot') {
-        pendingShot = a.selector;
-        lastResults.push(`screenshot ${a.selector}: 已接受，下轮附图`);
+        if (a.selector) pendingShot = { kind: 'element', selector: a.selector };
+        else if (typeof a.x === 'number' && typeof a.y === 'number') pendingShot = { kind: 'crop', x: a.x, y: a.y };
+        lastResults.push(`screenshot ${a.selector ?? `@${a.x},${a.y}`}: 已接受，下轮附图`);
         opts?.onAction?.(a, true);
         continue;
       }
@@ -920,8 +1009,9 @@ export async function runAiTask(
       // 清除保证下轮截图/步截图不被污染。
       if (coordPt) {
         const pt = coordPt;
+        const intent = a.type === 'fill' ? 'fill' : 'click';
         await annotateAction(page, async () =>
-          (await resolveAtPoint(page, pt.px, pt.py))?.box ?? { x: pt.px - 10, y: pt.py - 10, width: 20, height: 20 });
+          (await resolveAtPoint(page, pt.px, pt.py, intent))?.box ?? { x: pt.px - 10, y: pt.py - 10, width: 20, height: 20 });
       } else if (sel) {
         await annotateAction(page, () => page.locator(sel).first().boundingBox().catch(() => null));
       }
