@@ -19,7 +19,7 @@ import { loadEnabledSkillDirs } from './skillsStore.js';
 import { buildMcpExtensionFactory, getMcpServersForThread } from './mcp.js';
 import { readLlmConfig, synthesizeModel, ENV_BY_PROVIDER } from '../modelBridge.js';
 import { HttpError } from '../../middleware/errorHandler.js';
-import { defineTool } from '@earendil-works/pi-coding-agent';
+import { defineTool, sessionEntryToContextMessages, type CompactionEntry, type SessionEntry } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
 import { checkoutRepoForVersion, LockTimeoutError, RepoUnavailableError, DATA_DIR, REPOS_ROOT, WORKSPACES_ROOT } from '../repo.js';
 import { emptyRepoState, type RepoState } from './tools/context.js';
@@ -57,6 +57,10 @@ export interface SpaceSessionLike {
   readonly isRetrying?: boolean;
   readonly retryAttempt?: number;
   messages: unknown[];
+  /** 压缩摘要摘掉的历史前缀（branch 上 firstKeptEntryId 之前的 entries 转消息）。
+   *  快照用它把全量历史按时间序拼进对话流——与活投影严格互补不交，整体替换语义下
+   *  前端缓存不可能重复。测试桩可不实现（快照侧 ?? [] 兜底）。 */
+  preCompactionMessages?(): unknown[];
 }
 
 export interface SpaceThreadContext {
@@ -369,23 +373,59 @@ export interface ThreadSnapshot {
   messages: unknown[];
 }
 
+/**
+ * 计算被压缩摘要「摘掉」的历史前缀：branch 路径上 [0, firstKeptEntryId) 的 entries
+ * 转回消息（firstKept 不在路径上/为 null 时 = [0, compactionIdx)，对齐 buildContextEntries
+ * 的保留语义——pi session-manager.js:201）。与活投影严格互补不交：prefix ∪ 活投影 = 全量
+ * branch，故快照整体替换语义下前端缓存不可能重复。路径上的旧 compaction entry 转成
+ * compactionSummary 消息（前端渲染为中途压缩标记行）。任何异常吞掉返回 []——快照
+ * 不能因前缀计算失败而 500。
+ */
+export function preCompactionMessagesOf(sessionManager: { getBranch(): SessionEntry[] }): unknown[] {
+  try {
+    const path = sessionManager.getBranch();
+    // 路径上最后一个 compaction 为准（buildContextEntries 同款遍历语义，分支回退时文件序最新≠路径上最新）
+    let compactionIdx = -1;
+    for (const [i, entry] of path.entries()) {
+      if (entry.type === 'compaction') compactionIdx = i;
+    }
+    if (compactionIdx < 0) return [];
+    const compaction = path[compactionIdx] as CompactionEntry;
+    let boundary = compactionIdx;
+    if (compaction.firstKeptEntryId) {
+      const keptIdx = path.findIndex((e) => e.id === compaction.firstKeptEntryId);
+      if (keptIdx >= 0 && keptIdx < compactionIdx) boundary = keptIdx;
+    }
+    return path
+      .slice(0, boundary)
+      .flatMap((e) => sessionEntryToContextMessages(e))
+      .filter((m) => (m as { role?: string }).role !== 'system');
+  } catch (e) {
+    logger.warn({ err: e }, 'pre-compaction messages build failed; snapshot without prefix');
+    return [];
+  }
+}
+
 export function snapshotOf(rec: ThreadRecord): ThreadSnapshot {
   // 压缩/重试发生在 run 间隙（pi 的 isStreaming 此刻为 false），status 必须把它们算作
   // running——否则压缩进行中的合法快照被判 settled，前端压缩提示被误清。
   // 标志位对齐 react-pi 参考实现 ThreadSupervisor.metadataOf（client 侧校验接受这三个可选字段）。
   const compacting = rec.session.isCompacting ?? false;
   const retrying = rec.session.isRetrying ?? false;
+  const pre = rec.session.preCompactionMessages?.() ?? [];
   return {
     seq: rec.seq,
     metadata: {
       id: rec.threadId,
       status: rec.session.isStreaming || compacting || retrying ? 'running' : 'idle',
-      messageCount: rec.session.messages.length,
+      messageCount: pre.length + rec.session.messages.length,
       compactionActive: compacting,
       retryActive: retrying,
       retryAttempt: rec.session.retryAttempt ?? 0,
     },
-    messages: rec.session.messages,
+    // 压缩前历史前缀拼在头部:对话流按时间序直接可见全量历史(前端 applySnapshot
+    // 整体替换,拼接只在服务端这一处发生,持久化与缓存天然一致)。
+    messages: [...pre, ...rec.session.messages],
   };
 }
 
@@ -754,5 +794,8 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   });
 
   await db.update(aiThreads).set({ piThreadId: session.sessionFile ?? '', updatedAt: new Date() }).where(eq(aiThreads.id, ctx.threadId));
-  return session as unknown as SpaceSessionLike;
+  // Object.assign 而非 spread:AgentSession 的方法在原型上,spread 会丢。
+  return Object.assign(session as unknown as SpaceSessionLike, {
+    preCompactionMessages: () => preCompactionMessagesOf(sessionManager),
+  });
 }

@@ -258,7 +258,7 @@ function TextPart({ text }: TextMessagePartProps) {
 
 /** 压缩标记 part(pi 会话的 compaction entry 投影而来,快照合并后可能出现在流中部):
  *  居中分隔线 + token 数,摘要可折叠——它就是「这段之前的历史被压缩出模型上下文、
- *  由服务端按时间序拼回对话流」的原因注脚。视觉复刻 ThreadHistorySheet 的 HistoryCompactionRow。 */
+ *  由服务端按时间序拼回对话流」的原因注脚。 */
 function CompactionSummaryPart({ data }: { data?: { summary?: string; tokensBefore?: number | null } }) {
   const { t } = useTranslation();
   return (

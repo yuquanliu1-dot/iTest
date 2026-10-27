@@ -622,10 +622,6 @@ export const api = {
       hasMore: boolean;
     }> =>
       request(`/assistant/threads${qs({ workspacePath: versionId, limit: opts.limit, cursor: opts.cursor })}`),
-    /** 「查看完整历史」:pi 会话 JSONL 全量解析(含被自动压缩掉的旧消息)。
-     *  与后端 apps/api/src/pi/space/history.ts 的 HistoryMessage 联合保持同形。 */
-    threadHistory: (threadId: string) =>
-      request<ThreadHistory>(`/assistant/threads/${threadId}/history`),
     confirm: (threadId: string, confirmId: string, approved: boolean) =>
       request<void>(`/assistant/threads/${threadId}/confirm`, {
         method: 'POST',
@@ -783,47 +779,6 @@ export interface LlmTestResult {
   provider: string;
   latencyMs?: number;
   error?: string;
-}
-
-/** ── 「查看完整历史」(pi 会话 JSONL 全量解析,与后端 history.ts 同形) ───────────── */
-
-export interface HistoryImage {
-  mimeType: string;
-  /** base64 裸串(无 data: 前缀)。 */
-  data: string;
-}
-
-export type HistoryBlock =
-  | { type: 'text'; text: string }
-  | { type: 'thinking'; text: string }
-  | { type: 'tool'; name: string; argsText: string; resultText?: string; isError?: boolean };
-
-export interface HistoryUserMessage {
-  kind: 'user';
-  timestamp: number;
-  text: string;
-  images: HistoryImage[];
-}
-
-export interface HistoryAssistantMessage {
-  kind: 'assistant';
-  timestamp: number;
-  blocks: HistoryBlock[];
-  errorMessage?: string;
-}
-
-export interface HistoryCompaction {
-  kind: 'compaction';
-  timestamp: number;
-  tokensBefore: number | null;
-  summary: string;
-}
-
-export type HistoryMessage = HistoryUserMessage | HistoryAssistantMessage | HistoryCompaction;
-
-export interface ThreadHistory {
-  title: string | null;
-  messages: HistoryMessage[];
 }
 
 /** 创建人/执行人摘要：后端各 list/detail 序列化统一追加；历史存量或用户已删时为 null。 */

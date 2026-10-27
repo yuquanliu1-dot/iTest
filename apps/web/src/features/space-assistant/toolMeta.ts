@@ -1,7 +1,6 @@
 import type { IconName } from '../../components/Icon';
 
-/** 空间工具 → chip 文案与图标;未知工具返回 null 不渲染。label 为 i18n key,由调用方组件 t() 渲染。
- *  对话流(SpaceThreadPane)与完整历史抽屉(ThreadHistorySheet)共用。 */
+/** 空间工具 → chip 文案与图标;未知工具返回 null 不渲染。label 为 i18n key,由调用方组件 t() 渲染。 */
 export function toolMeta(toolName: string, args: unknown): { icon: IconName; label: string; summary: string } | null {
   const a = (args ?? {}) as Record<string, unknown>;
   const action = typeof a.action === 'string' ? a.action : '';

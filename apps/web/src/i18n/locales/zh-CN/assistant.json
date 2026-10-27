@@ -155,11 +155,6 @@
     "submitFailed": "反馈提交失败"
   },
   "history": {
-    "button": "查看完整历史",
-    "title": "完整对话历史",
-    "messageCount": "{{count}} 条消息",
-    "empty": "暂无历史记录",
-    "loadFailed": "加载失败",
     "compaction": "上下文已压缩",
     "compactionTokens": "压缩前 {{count}} tokens",
     "compactionSummary": "查看压缩摘要"
