@@ -33,7 +33,15 @@ actions 元素类型：
 结束方式（二选一）：
 - 指令已完成：{"done": true, "summary": "做了什么"}
 - 无法完成：{"fail": "原因"}（会立即终止并记为该步骤失败）
+子目标清单（可选，指令可分解为 2 条以上子操作时使用；简单指令不需要）：
+- 第 1 轮随 actions 一起输出 "plan": [{"text":"打开新增对话框"},{"text":"填写名称"},{"text":"保存并确认"}]
+- 之后每轮输出更新后的完整清单：截图确认已生效的条目加 "done":true（预期下一步才会完成的不算提前标），可按页面实际增删改条目
+- 每轮的当前进度会回显给你——用它保持方向感，不要重复已完成的目标
 规则：
+- 指令忠实：指令给出明确操作时就只做这些操作，不加戏——「填写表单」只填不提交、「点击按钮」点击即止、「输入文本」不追加回车；只有指令是目标性描述（如「创建一个分类」）时才自行补全操作路径。
+- 持久变更走到底：创建/编辑/保存/提交/删除类指令必须走到保存/确认/提交生效才算完成，不能停在草稿或未保存的编辑态；反之，只要求中间态（填内容、选选项）的指令到态即停。
+- 完成判据要执行证据：输出 done 前逐条核对（有子目标清单时逐条核对清单）——每个操作都要有「动作结果 ok + 截图确认生效」的证据，不能只看终态截图像完成了就判定全部完成。
+- 断言/校验类指令：条件确实不满足且无法满足时输出 fail 如实说明差异，不要绕过断言、放宽判据或改判通过。
 - 每轮最多 2 个动作，宁可多轮推进也不要连发——页面在动作间会变化，连发会让后续动作建立在过期认知上。每个动作的执行结果（ok / 错误信息）下轮反馈给你。
 - 同一目标连续 3 次失败就停止对它重试：先用截图核对当前页面是否还在指令期望的界面（弹窗/跳转/加载中都会让目标消失），页面不对先处理页面；确认页面正确而目标确实不存在 → 输出 fail 如实说明，不要换坐标/selector 空转。
 - fill 后动作结果没报 error，就不要因为「页面上看得见的文本与目标不一致」（窄输入框截断、掩码显示、格式化渲染）清空重输——以执行结果为准，重输会破坏已生效的输入。
@@ -465,6 +473,38 @@ function toReportAction(a: AiAction, resolvedSelector: string | null | undefined
       : { type: 'click', selector: resolvedSelector };
   }
   return a;
+}
+
+/** 步内子目标（对标 midscene deepThink sub-goals，滚动维护给模型方向感）：
+ *  模型每轮随 JSON 输出完整清单，平台整段替换并回显进下一轮 userMessage。 */
+export interface SubGoal {
+  text: string;
+  done: boolean;
+}
+
+/** 宽容解析：接受 [{text,done}] / ["文本"] 混合；全无效返回 null（best-effort，不纠错不反馈）。 */
+function parseSubGoals(v: unknown): SubGoal[] | null {
+  if (!Array.isArray(v) || v.length === 0) return null;
+  const out: SubGoal[] = [];
+  for (const item of v.slice(0, 8)) {
+    if (typeof item === 'string') {
+      const t = item.trim().slice(0, 60);
+      if (t) out.push({ text: t, done: false });
+      continue;
+    }
+    if (item && typeof item === 'object') {
+      const o = item as Record<string, unknown>;
+      const t = typeof o.text === 'string' ? o.text.trim().slice(0, 60) : '';
+      if (t) out.push({ text: t, done: o.done === true });
+    }
+  }
+  return out.length > 0 ? out : null;
+}
+
+/** 回显进 userMessage 的进度块（首轮无清单时不出现）。 */
+function renderSubGoals(goals: SubGoal[]): string {
+  const lines = goals.map((g, i) => `${i + 1}. [${g.done ? '完成' : '进行中'}] ${g.text}`);
+  return `子目标进度（你维护的清单，截图确认生效后标 done:true）：\n${lines.join('\n')}`;
 }
 
 /** 动作后短暂稳定（对标 midscene 300ms + networkIdle）：导航/重渲染落地后再进下一个动作。 */
@@ -904,6 +944,8 @@ export async function runAiTask(
   // 全部历史前缀（实测 86~94%）。assistant 侧回放原始 JSON 输出而非 lastResults 摘要，
   // 以保证与"当轮实际收到的上下文"逐字一致、缓存前缀不漂移。
   const history: LLMMessage[] = [];
+  // 步内子目标滚动清单（模型自维护，平台整段替换+回显；无清单的简单指令恒为 null）
+  let subGoals: SubGoal[] | null = null;
   for (let turn = 1; turn <= maxTurns; turn++) {
     // 每轮先等渲染静默再截图（对标 midscene 所见即所点：截图时刻与决策时刻页面一致）。
     // 指纹收敛 best-effort，超时按当前帧继续，绝不阻塞。
@@ -950,6 +992,7 @@ export async function runAiTask(
       `视口：${vp.width}x${vp.height}`,
       imageNote,
       `可交互元素（JSON，box=[x1,y1,x2,y2] 为视口归一化 0-1000 坐标框，与截图对齐；动作坐标按同一坐标系输出）：${JSON.stringify(elements.slice(0, MAX_ELEMENTS))}`,
+      subGoals ? renderSubGoals(subGoals) : '',
       opts?.degradeContext ? opts.degradeContext : '',
       lastResults.length > 0 ? `上轮动作结果：\n${lastResults.join('\n')}` : '（首轮，无历史动作）',
       `第 ${turn}/${maxTurns} 轮。`,
@@ -983,6 +1026,9 @@ export async function runAiTask(
     if (typeof parsed.fail === 'string' && parsed.fail.trim()) {
       throw new Error(`aiTask 放弃：${parsed.fail.trim()}`);
     }
+    // 子目标清单整段替换（done 响应里的最终状态也先落到 subGoals 再结算进度）
+    const planNow = parseSubGoals(parsed.plan);
+    if (planNow) subGoals = planNow;
     const actions = (Array.isArray(parsed.actions) ? parsed.actions : [])
       .map(parseAction)
       .filter((a): a is AiAction => a !== null)
@@ -1046,8 +1092,13 @@ export async function runAiTask(
     // 先执行动作再结束：LLM 可能在 done 响应里携带最终动作（如 fill 验证码）。
     if (parsed.done === true) {
       const s = typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
+      // 子目标进度留痕：报告/DB 能看到步内计划的结算状态（防"终态像完成"式的虚报）。
+      const goalNote = subGoals
+        ? `（子目标 ${subGoals.filter((g) => g.done).length}/${subGoals.length} 完成）`
+        : '';
+      const credNote = credSubCount > 0 ? `（凭据占位符已替换 ${credSubCount} 处为环境凭据）` : '';
       // 凭据替换留痕：报告里能看到「本步真的用了环境凭据」，便于事后判读。
-      return credSubCount > 0 ? `${s}（凭据占位符已替换 ${credSubCount} 处为环境凭据）` : s;
+      return `${s}${goalNote}${credNote}`;
     }
   }
   throw new Error(`aiTask 超过 ${maxTurns} 轮未完成：${instruction.slice(0, 80)}`);

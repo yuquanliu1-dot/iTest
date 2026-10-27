@@ -617,6 +617,75 @@ describe('runAiTask 坐标解析：上浮/下沉/富化/唯一性门（命中树
   });
 });
 
+describe('runAiTask 步内子目标清单（plan 协议，对标 midscene sub-goals）', () => {
+  it('首轮输出 plan → 次轮回显进度；完成时 summary 附子目标结算', async () => {
+    const { page } = makeStubPage();
+    const { llm, requests } = makeMockLlm([
+      {
+        actions: [{ type: 'click', selector: '#open-dialog' }], done: false,
+        plan: [{ text: '打开新增对话框' }, { text: '填写名称' }, { text: '保存并确认' }],
+      },
+      {
+        actions: [{ type: 'fill', selector: '#name', value: 'x' }], done: false,
+        plan: [{ text: '打开新增对话框', done: true }, { text: '填写名称' }, { text: '保存并确认' }],
+      },
+      {
+        done: true, summary: '创建完成',
+        plan: [
+          { text: '打开新增对话框', done: true },
+          { text: '填写名称', done: true },
+          { text: '保存并确认', done: true },
+        ],
+      },
+    ]);
+    const summary = await runAiTask(page, '创建一个分类', llm);
+    // 第 1 轮还没清单，不回显
+    expect(requests[0]).not.toContain('子目标进度');
+    // 第 2 轮回显第 1 轮的清单（全进行中）——给模型方向感，防漂移
+    expect(requests[1]).toContain('子目标进度');
+    expect(requests[1]).toContain('1. [进行中] 打开新增对话框');
+    // 第 3 轮回显第 2 轮更新后的状态（1 完成）
+    expect(requests[2]).toContain('1. [完成] 打开新增对话框');
+    expect(requests[2]).toContain('2. [进行中] 填写名称');
+    // done 响应里的最终清单先落地再结算
+    expect(summary).toBe('创建完成（子目标 3/3 完成）');
+  });
+
+  it('部分未完成时如实结算（2/3）', async () => {
+    const { page } = makeStubPage();
+    const { llm } = makeMockLlm([
+      {
+        done: true, summary: '先到这里',
+        plan: [{ text: 'a', done: true }, { text: 'b', done: true }, { text: 'c' }],
+      },
+    ]);
+    const summary = await runAiTask(page, '多目标', llm);
+    expect(summary).toBe('先到这里（子目标 2/3 完成）');
+  });
+
+  it('无 plan 的简单指令：不回显进度块、summary 不附结算（既有行为不变）', async () => {
+    const { page } = makeStubPage();
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'click', selector: '#a' }], done: false },
+      { done: true, summary: 'ok' },
+    ]);
+    const summary = await runAiTask(page, '点一下', llm);
+    expect(requests[1]).not.toContain('子目标进度');
+    expect(summary).toBe('ok');
+  });
+
+  it('非法 plan 宽容忽略（全无效条目/非数组），不纠错不烧轮次', async () => {
+    const { page } = makeStubPage();
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'click', selector: '#a' }], plan: [{ text: '' }, { nope: 1 }, ''] },
+      { done: true, summary: 'ok', plan: 'not-an-array' },
+    ]);
+    const summary = await runAiTask(page, '宽容', llm);
+    expect(requests[1]).not.toContain('子目标进度');
+    expect(summary).toBe('ok');
+  });
+});
+
 describe('凭据占位符协议（credentialPlaceholderKind / makeCredentialValueSub）', () => {
   it('识别哨兵与花括号变体，裸名与普通文本不认', () => {
     // 哨兵精确形态
