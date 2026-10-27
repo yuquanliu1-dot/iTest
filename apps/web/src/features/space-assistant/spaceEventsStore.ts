@@ -73,23 +73,6 @@ export interface SolidifyProgressState {
   liveUrl: string | null;
 }
 
-/** run_ai_step 实时进度（ai_step_progress SSE 事件驱动）：免暂存直跑 AI 相的单行指示（start/end 两相）。
- *  同线程连续调用复用一个浏览器会话（liveUrl 跨调用稳定），每条指令一张卡。 */
-export interface AiStepProgressState {
-  /** 本次执行的自然语言指令（start 事件，截断 120 字）。 */
-  instruction: string;
-  targetUrl: string | null;
-  /** 会话建立时登录态缓存是否命中；null=未上报。 */
-  loginCache: 'hit' | 'miss' | null;
-  /** 环境配置的登录用户名；null=未配置凭据。 */
-  loginUser: string | null;
-  result: 'passed' | 'failed' | null;
-  reason: string | null;
-  durationMs: number | null;
-  /** 浏览器实时画面流地址（MJPEG multipart，<img> 直接解码）；null=不可用。 */
-  liveUrl: string | null;
-}
-
 /** artifact SSE 事件（AI 产出文件下载卡）。 */
 export interface ArtifactItem {
   token: string;
@@ -128,8 +111,6 @@ interface SpaceEventsState {
   verifyProgress: VerifyProgressState | null;
   /** solidify_case 实时进度（solidify_progress 事件驱动；agent_start/新一轮清空）。 */
   solidifyProgress: SolidifyProgressState | null;
-  /** run_ai_step 实时进度（ai_step_progress 事件驱动；agent_start/新一轮清空）。 */
-  aiStepProgress: AiStepProgressState | null;
   /** 暂存对象池：用户预览/勾选 → save 时入参的 source of truth。 */
   stagedByThread: StagedByThread;
   stagedSelection: StagedSelection;
@@ -173,7 +154,6 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
   announce: null,
   verifyProgress: null,
   solidifyProgress: null,
-  aiStepProgress: null,
   stagedByThread: new Map(),
   stagedSelection: new Map(),
   artifactsByThread: new Map(),
@@ -365,39 +345,6 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
       }
       return;
     }
-    if (e.type === 'ai_step_progress') {
-      const phase = e.phase as string;
-      if (phase === 'start') {
-        set({
-          aiStepProgress: {
-            instruction: String(e.instruction ?? ''),
-            targetUrl: (e.targetUrl as string | null) ?? null,
-            loginCache: e.loginCache === 'hit' || e.loginCache === 'miss' ? e.loginCache : null,
-            loginUser: typeof e.loginUser === 'string' ? e.loginUser : null,
-            result: null,
-            reason: null,
-            durationMs: null,
-            liveUrl: typeof e.liveUrl === 'string' ? e.liveUrl : null,
-          },
-        });
-        return;
-      }
-      if (phase === 'end') {
-        set((s) =>
-          s.aiStepProgress
-            ? {
-                aiStepProgress: {
-                  ...s.aiStepProgress,
-                  result: e.result === 'failed' ? ('failed' as const) : ('passed' as const),
-                  ...(typeof e.reason === 'string' ? { reason: e.reason } : {}),
-                  ...(typeof e.durationMs === 'number' ? { durationMs: e.durationMs } : {}),
-                },
-              }
-            : s,
-        );
-      }
-      return;
-    }
     if (e.type === 'artifact') {
       const item: ArtifactItem = {
         token: String(e.token ?? ''),
@@ -418,10 +365,10 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
       return;
     }
     if (e.type === 'agent_start') {
-      // 新一轮开始:清掉上一轮的 announce/verify/solidify/ai_step 进度(舞台历史保留)
+      // 新一轮开始:清掉上一轮的 announce/verify/solidify 进度(舞台历史保留)
       set((s) =>
-        s.announce || s.verifyProgress || s.solidifyProgress || s.aiStepProgress
-          ? { announce: null, verifyProgress: null, solidifyProgress: null, aiStepProgress: null }
+        s.announce || s.verifyProgress || s.solidifyProgress
+          ? { announce: null, verifyProgress: null, solidifyProgress: null }
           : s,
       );
     }
@@ -485,7 +432,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
     return { stagedByThread: next, stagedSelection: sel };
   }),
   reset: () => set({
-    confirms: [], stageHistory: [], announce: null, verifyProgress: null, solidifyProgress: null, aiStepProgress: null,
+    confirms: [], stageHistory: [], announce: null, verifyProgress: null, solidifyProgress: null,
     stagedByThread: new Map(), stagedSelection: new Map(), lastSeqByThread: new Map(),
     artifactsByThread: new Map(),
   }),

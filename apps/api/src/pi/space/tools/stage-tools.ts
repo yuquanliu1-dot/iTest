@@ -379,7 +379,9 @@ const StepInput = z.object({
   compiled: CompiledSteps.optional(),
 });
 const StageCaseInput = z.object({
-  localId: z.string().min(1).max(64),
+  // UUID 形状硬校验：verify_case/solidify_case 以 caseId=localId 直查 uuid 列，
+  // 自造短名（prod228 实录 "login-a-positiven"）会炸 invalid uuid——契约从文案升级为校验。
+  localId: z.string().uuid('localId 必须是随机生成的 UUID（UUID v4），不要自造短名/序号'),
   title: z.string().min(1).max(200),
   description: z.string().max(4000).nullable().optional(),
   priority: z.enum(['P0', 'P1', 'P2', 'P3']).optional(),
@@ -566,9 +568,9 @@ export function buildStageTools(ctx: SpaceToolsContext): ToolExecutor[] {
   return [
     {
       name: 'stage_case',
-      description: '暂存一个用例到当前线程的草稿区。localId 必须由调用方生成 UUID v4。steps[].action 是人类可读指令;steps[].compiled 是可回放 DSL 步骤数组（生成时必须给出,规则见 promptGuidelines;放弃用 null）。页面 URL/locator 未知时先调 inspect_page。配套数据集用 datasetLocalId 绑定同批 stage_dataset 的 localId。',
+      description: '暂存一个用例到当前线程的草稿区。localId 必须由调用方生成 UUID v4（非 UUID 会被拒绝）。steps[].action 是人类可读指令;steps[].compiled 是可回放 DSL 步骤数组（生成时必须给出,规则见 promptGuidelines;放弃用 null）。页面 URL/locator 未知时先调 inspect_page。配套数据集用 datasetLocalId 绑定同批 stage_dataset 的 localId。',
       parameters: Type.Object({
-        localId: Type.String({ minLength: 1, maxLength: 64 }),
+        localId: Type.String({ minLength: 36, maxLength: 36, pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }),
         title: Type.String({ minLength: 1, maxLength: 200 }),
         description: Type.Optional(Type.Union([Type.String({ maxLength: 4000 }), Type.Null()])),
         priority: Type.Optional(Type.Union([Type.Literal('P0'), Type.Literal('P1'), Type.Literal('P2'), Type.Literal('P3')])),

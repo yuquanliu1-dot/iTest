@@ -739,6 +739,27 @@ describe('verify_case 逐步 AI 执行编排', () => {
     expect(start).toMatchObject({ caseId: localId, stagedOps: 0 });
   });
 
+  it('非 UUID 草稿 localId：跳过 uuid 列查询直查草稿（回归 prod228 invalid input syntax for type uuid）', async () => {
+    const localId = 'login-a-positiven';
+    await pool.query(
+      `INSERT INTO ai_stage_cases(thread_id, local_id, version_id, title, url, steps, staged_at)
+       VALUES ('t1', $1, $2, '草稿-短名localId', 'http://env.example/page', $3::jsonb, now())`,
+      [localId, versionId, JSON.stringify([{ action: '点击', compiled: CLICK_COMPILED, assertion: null }])],
+    );
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId: localId });
+    // 修复前：先直查 testCases.id(uuid 列) → invalid input syntax for type uuid，草稿回落没机会跑
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('passed');
+      expect(data.basedOn).toBe('staged');
+      expect(data.caseId).toBe(localId);
+    }
+  });
+
   it('纯草稿用例未落库：verify_case 通过后 DB 仍无 test_cases 行（验证全程不落库）', async () => {
     const localId = randomUUID();
     await pool.query(

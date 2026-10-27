@@ -52,7 +52,6 @@ export default function SpaceThreadPane({ threadId }: { threadId: string }) {
         <ThreadPrimitive.ViewportFooter className="border-t p-3" style={{ borderColor: 'var(--border)' }}>
           <VerifyProgressCard />
           <SolidifyProgressCard />
-          <AiStepProgressCard />
           <ArtifactCards threadId={threadId} />
           <RuntimeNotice />
           <QueuePanel />
@@ -205,6 +204,9 @@ function AssistantMessage({ threadId }: { threadId: string }) {
             Text: TextPart,
             Reasoning: ThinkingPart,
             tools: { Fallback: ToolActivity },
+            // pi 投影的压缩标记(role:'compactionSummary' 消息)落成该 data part,
+            // 不注册 renderer 就是空白块——注册后是可见的「上下文已压缩」分隔行。
+            data: { by_name: { 'pi-compaction-summary': CompactionSummaryPart } },
           }}
         />
         {/* LLM 失败(stopReason=error):错误原文必须可见,否则用户看到的是零反馈 */}
@@ -252,6 +254,39 @@ function RunningIndicator() {
 /** 文本 part → markdown 渲染（流式期间随文本增量重解析，量级可忽略）。 */
 function TextPart({ text }: TextMessagePartProps) {
   return <Markdown text={text} />;
+}
+
+/** 压缩标记 part(pi 会话的 compaction entry 投影而来,快照合并后可能出现在流中部):
+ *  居中分隔线 + token 数,摘要可折叠——它就是「这段之前的历史被压缩出模型上下文、
+ *  由服务端按时间序拼回对话流」的原因注脚。视觉复刻 ThreadHistorySheet 的 HistoryCompactionRow。 */
+function CompactionSummaryPart({ data }: { data?: { summary?: string; tokensBefore?: number | null } }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col items-center gap-1 py-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+      <div className="flex w-full items-center gap-2">
+        <span className="h-px flex-1" style={{ background: 'var(--border)' }} />
+        <span className="inline-flex items-center gap-1 whitespace-nowrap">
+          <Icon name="clock" size={11} />
+          {t('assistant:history.compaction')}
+          {data?.tokensBefore != null
+            ? ` · ${t('assistant:history.compactionTokens', { count: data.tokensBefore })}`
+            : ''}
+        </span>
+        <span className="h-px flex-1" style={{ background: 'var(--border)' }} />
+      </div>
+      {data?.summary && (
+        <details className="group w-full max-w-[520px]">
+          <summary className="inline-flex cursor-pointer list-none items-center justify-center gap-1 text-[12px] hover:underline underline-offset-2 [&::-webkit-details-marker]:hidden">
+            {t('assistant:history.compactionSummary')}
+            <Icon name="chevronRight" size={11} className="transition-transform group-open:rotate-90" />
+          </summary>
+          <div className="mt-1 rounded-[var(--radius-sm)] px-2.5 py-2 text-left" style={{ background: 'var(--muted)' }}>
+            <Markdown text={data.summary} />
+          </div>
+        </details>
+      )}
+    </div>
+  );
 }
 
 /** 思考段：进行中给"思考中…"三点动画；完成后折叠成一行「已思考」，
@@ -451,51 +486,6 @@ function SolidifyProgressCard() {
       ) : (
         <Icon name="loader" size={12} className="animate-spin" style={{ color: 'var(--primary)', flexShrink: 0 }} />
       )}
-      </div>
-    </div>
-  );
-}
-
-/** run_ai_step 实时进度卡：ai_step_progress SSE 事件驱动，单行指示（start/end 两相）。
- *  免暂存直跑 AI 相：显示当前执行的自然语言指令与结果（通过/失败及原因）。 */
-function AiStepProgressCard() {
-  const { t } = useTranslation();
-  const ap = useSpaceEventsStore((s) => s.aiStepProgress);
-  if (!ap) return null;
-  const done = ap.result !== null;
-  let status: string;
-  if (!done) status = t('assistant:aiStep.running');
-  else if (ap.result === 'passed') status = t('assistant:aiStep.passed');
-  else status = ap.reason ? `${t('assistant:aiStep.failed')} — ${ap.reason}` : t('assistant:aiStep.failed');
-  return (
-    <div
-      className="fade-up mb-2 rounded-[var(--radius-md)] px-3 py-2 text-[12px]"
-      style={{ background: 'var(--muted)', border: '1px solid var(--border)', color: 'var(--muted-foreground)' }}
-    >
-      {/* 实时画面在右侧栏（LiveViewRail），此处只留单行状态 */}
-      <div className="flex items-center gap-1.5">
-        <Icon name="play" size={12} style={{ flexShrink: 0 }} />
-        <span className="truncate" title={ap.instruction}>
-          {t('assistant:aiStep.cardTitle', {
-            instruction: ap.instruction,
-            statusSuffix: status ? t('assistant:aiStep.statusSuffix', { status }) : '',
-          })}
-        </span>
-        {done && ap.durationMs != null ? (
-          <span style={{ flexShrink: 0 }}>{t('assistant:verify.stepDuration', { sec: (ap.durationMs / 1000).toFixed(1) })}</span>
-        ) : null}
-        {done ? (
-          <Icon
-            name={ap.result === 'passed' ? 'check' : 'close'}
-            size={12}
-            style={{
-              color: ap.result === 'passed' ? 'var(--success)' : 'var(--destructive)',
-              flexShrink: 0,
-            }}
-          />
-        ) : (
-          <Icon name="loader" size={12} className="animate-spin" style={{ color: 'var(--primary)', flexShrink: 0 }} />
-        )}
       </div>
     </div>
   );

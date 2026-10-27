@@ -43,6 +43,10 @@ import type { SpaceToolsContext } from './context.js';
 import { st, type StLang } from '../../../i18n.js';
 import { aiLangFrom } from '../../../agent/langDirective.js';
 
+/** caseId 是 UUID 形状才允许直查 testCases.id（uuid 列）；否则只可能是草稿 localId，跳过 DB 查询
+ *  （与 verify_case 同款防御：非 UUID 直查 uuid 列会炸 invalid input syntax for type uuid）。 */
+const UUID_SHAPE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // 与 verify_case 同款伸缩预算：AI 逐步骤临场执行是慢路径（prod228 实测 85~107s/步），
 // 固定 300s 只装得下 2~3 步用例——多步用例 solidify 必超时（批量固化报告实测）。
 // 预算 = max(保底 300s, 步数 × 130s/步)，公式与 verify_case 的 computeVerifyTimeoutMs 一致。
@@ -190,7 +194,10 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       const { caseId } = input as { caseId: string };
       try {
         // ── 前置校验（不启动浏览器）：caseId 双形态，与 verify_case 一致 ──
-        const dbCase = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
+        // 非 UUID 形状的 localId 跳过 uuid 列查询直查草稿（同 verify_case）
+        const dbCase = UUID_SHAPE_RE.test(caseId)
+          ? (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0]
+          : undefined;
         let stagedCase: typeof aiStageCases.$inferSelect | null = null;
         if (!dbCase) {
           stagedCase =

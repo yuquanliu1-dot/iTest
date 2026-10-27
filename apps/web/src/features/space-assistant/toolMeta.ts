@@ -13,7 +13,6 @@ export function toolMeta(toolName: string, args: unknown): { icon: IconName; lab
   if (toolName === 'manage_plans') return { icon: 'listChecks', label: 'assistant:tool.managePlans', summary: action };
   if (toolName === 'verify_case') return { icon: 'beaker', label: 'assistant:tool.verifyCase', summary: typeof a.caseId === 'string' ? a.caseId.slice(0, 8) : '' };
   if (toolName === 'solidify_case') return { icon: 'sparkles', label: 'assistant:tool.solidifyCase', summary: typeof a.caseId === 'string' ? a.caseId.slice(0, 8) : '' };
-  if (toolName === 'run_ai_step') return { icon: 'play', label: 'assistant:tool.runAiStep', summary: typeof a.instruction === 'string' ? a.instruction.slice(0, 30) : '' };
   if (toolName.startsWith('repo_')) {
     return { icon: 'code', label: 'assistant:tool.readRepo', summary: typeof a.path === 'string' ? a.path : (typeof a.command === 'string' ? a.command : '') };
   }

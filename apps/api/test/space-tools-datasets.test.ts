@@ -270,6 +270,27 @@ describe('stage_case 覆盖类型(coverageTypes)', () => {
   });
 });
 
+describe('stage_case localId 契约', () => {
+  it('非 UUID localId（如自造短名）→ 拒绝并点名 UUID,不入暂存区;UUID 照常暂存', async () => {
+    const seed = await seedProject(pool);
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx, 'stage_case');
+
+    // prod228 2026-10-27 实录:agent 自造 "login-a-positiven" 暂存成功,verify_case 直查 uuid 列炸
+    // invalid input syntax for type uuid——契约从文案升级为 zod 校验
+    const bad = await tool.execute({ localId: 'login-a-positiven', title: '登录正向', steps: [{ action: '点击登录' }] });
+    expect(bad.ok).toBe(false);
+    expect((bad as { error: string }).error).toContain('UUID');
+    expect((bad as { error: string }).error).toContain('localId');
+
+    const n = await pool.query(`SELECT count(*)::int AS n FROM ai_stage_cases WHERE thread_id=$1`, [ctx.threadId]);
+    expect(n.rows[0]!.n).toBe(0);
+
+    const ok = await tool.execute({ localId: randomUUID(), title: '登录正向', steps: [{ action: '点击登录' }] });
+    expect(ok.ok).toBe(true);
+  });
+});
+
 describe('落库链路(createDataset 加密 + createCase 绑定校验)', () => {
   it('createDataset 敏感格加密落库、出参打码;createCaseWithSteps 绑定成功;跨项目/未知 datasetId 拒绝', async () => {
     const seed = await seedProject(pool);

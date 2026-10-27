@@ -610,6 +610,21 @@ describe('solidify_case 编排', () => {
     expect(dbRows.rows).toHaveLength(0);
   });
 
+  it('非 UUID 草稿 localId：跳过 uuid 列查询直查草稿（回归 prod228 invalid input syntax for type uuid）', async () => {
+    const localId = 'login-a-positiven';
+    await pool.query(
+      `INSERT INTO ai_stage_cases(thread_id, local_id, version_id, title, url, steps, staged_at)
+       VALUES ('t1', $1, $2, '草稿-短名localId', 'http://env.example/page', $3::jsonb, now())`,
+      [localId, versionId, JSON.stringify([{ action: '点击删除按钮', compiled: null, assertion: null }])],
+    );
+    stepQueue = [{ actions: [[{ type: 'click', selector: '#del' }, true]] }];
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const r = await buildSolidifyCaseTool(toolCtx()).execute({ caseId: localId });
+    // 修复前：先直查 testCases.id(uuid 列) → invalid input syntax for type uuid，草稿回落没机会跑
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(JSON.parse(r.data!)).toMatchObject({ result: 'solidified', basedOn: 'staged', caseId: localId });
+  });
+
   it('草稿相对 url → resolveCaseUrl 拼默认 web 服务 origin（不落 about:blank）', async () => {
     // 回归:stage-tools 约束要求 AI 写相对 case.url,草稿分支若按字面量渲染相对地址会得到
     // targetUrl=undefined → about:blank。此处断言初始 goto 落在 web 服务 origin + 路径。

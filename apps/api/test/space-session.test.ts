@@ -155,6 +155,17 @@ describe('space session supervisor', () => {
     expect(CASE_AUTHORING_FLOW_EN).toContain('ZERO execution');
   });
 
+  it('B 路径（边跑边讨论）文案：走 stage_case+verify_case，run_ai_step 已退役不再出现', async () => {
+    const { CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN } = await import('../src/pi/space/reqDesign.js');
+    // B 入口段落存在且路由到 verify_case；分叉是「明确要求才进 B，纯需求输入走 A」
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('边跑边讨论');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('verify_case');
+    expect(CASE_AUTHORING_FLOW_ZH).not.toContain('run_ai_step');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('Run and discuss');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('verify_case');
+    expect(CASE_AUTHORING_FLOW_EN).not.toContain('run_ai_step');
+  });
+
   it('buildSpaceSystemPrompt(…,en-US):英文风格段,不含简体中文约束', async () => {
     const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
     const en = buildSpaceSystemPrompt(null, 'en-US');

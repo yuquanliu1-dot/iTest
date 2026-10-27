@@ -52,6 +52,8 @@ const VERIFY_TIMEOUT_BASE_MS = 300_000;
 const VERIFY_TIME_PER_STEP_MS = 130_000;
 const STEP_AI_TIMEOUT_MS = 240_000;
 const STEP_MAX_TURNS = 5;
+/** caseId 是 UUID 形状才允许直查 testCases.id（uuid 列）；否则只可能是草稿 localId，跳过 DB 查询。 */
+const UUID_SHAPE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** 全局看门狗预算 = max(基础 300s, 步数 × 每步 130s)。多步用例的慢是渐进累计的，预算必须随步数增长。 */
 export function computeVerifyTimeoutMs(stepCount: number): number {
@@ -456,7 +458,11 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       try {
         // ── 前置校验（不启动浏览器）──
         // caseId 双形态：落库用例 id，或本线程 stage_case 的 localId（纯草稿——验证全程不落库，save 时才正式建 case/steps）
-        const dbCase = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
+        // 非 UUID 形状的 localId 跳过 uuid 列查询直查草稿（否则先炸 invalid input syntax for type uuid，
+        // 草稿回落根本没机会跑——prod228 2026-10-27 实录）
+        const dbCase = UUID_SHAPE_RE.test(caseId)
+          ? (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0]
+          : undefined;
         let stagedCase: typeof aiStageCases.$inferSelect | null = null;
         if (!dbCase) {
           stagedCase =

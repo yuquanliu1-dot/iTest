@@ -42,7 +42,6 @@
     "managePlans": "计划管理",
     "verifyCase": "实测验证",
     "solidifyCase": "固化用例",
-    "runAiStep": "直跑 AI 相",
     "readRepo": "读取仓库"
   },
   "verify": {
@@ -66,13 +65,6 @@
     "keptSuffix": "，保持视觉 {{count}} 步",
     "nothingWithKept": "无可固化步骤，{{count}} 步保持视觉模式",
     "nothing": "无可固化步骤"
-  },
-  "aiStep": {
-    "cardTitle": "AI 相直跑「{{instruction}}」{{statusSuffix}}",
-    "statusSuffix": " · {{status}}",
-    "running": "执行中…",
-    "passed": "通过",
-    "failed": "失败"
   },
   "kind": {
     "case": "用例",
