@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import Icon from './Icon';
 import { Dialog, DialogContent } from './ui/Modal';
 
@@ -11,6 +12,11 @@ const BADGE: Record<LiveViewMode, { text: string; dot: string }> = {
   replay: { text: 'cases:replay', dot: 'var(--info)' },
   frozen: { text: 'cases:ended', dot: 'var(--muted-foreground)' },
 };
+
+/** 画面高度上下限（px）。默认 220 与改版前一致；拖拽把手在下方。 */
+const DEFAULT_H = 220;
+const MIN_H = 120;
+const MAX_H = 640;
 
 function ModeBadge({ mode }: { mode: LiveViewMode }) {
   const { t } = useTranslation();
@@ -45,6 +51,9 @@ export default function LiveViewImg({
   const [broken, setBroken] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // 画面高度可拖拽调整：默认 220（同改版前 maxHeight），把手在画面下方。
+  const [height, setHeight] = useState(DEFAULT_H);
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
   useEffect(() => {
     if (!broken || !retry) return;
     const timer = setTimeout(() => {
@@ -56,10 +65,26 @@ export default function LiveViewImg({
   if (broken) return null;
   // 重试后重挂 <img>：URL 加 r= 参数绕开缓存，保证真的重新发起流请求
   const src = attempt === 0 ? url : `${url}${url.includes('?') ? '&' : '?'}r=${attempt}`;
+
+  const onHandleDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    dragRef.current = { startY: e.clientY, startH: height };
+    document.body.style.userSelect = 'none';
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onHandleMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    setHeight(Math.min(MAX_H, Math.max(MIN_H, d.startH + (e.clientY - d.startY))));
+  };
+  const onHandleUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    dragRef.current = null;
+    document.body.style.userSelect = '';
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+  };
   return (
     <>
       <div
-        className="relative mb-1.5 cursor-zoom-in overflow-hidden rounded-[var(--radius-sm)]"
+        className="relative cursor-zoom-in overflow-hidden rounded-[var(--radius-sm)]"
         style={{ border: '1px solid var(--border)', background: 'var(--popover)' }}
         onClick={() => setZoomed(true)}
         role="button"
@@ -73,7 +98,7 @@ export default function LiveViewImg({
           onError={() => setBroken(true)}
           alt={t(BADGE[mode].text)}
           className="block w-full object-contain"
-          style={{ maxHeight: 220 }}
+          style={{ maxHeight: height }}
         />
         <ModeBadge mode={mode} />
         <span
@@ -82,6 +107,28 @@ export default function LiveViewImg({
         >
           <Icon name="maximize" size={11} />
         </span>
+      </div>
+
+      {/* 拖拽把手：调画面高度。放在画面外下方，避免与点画面放大冲突。
+          命中区 14px（细线只有 1px，用户看不见也点不中），中间一段短横做可视抓手。 */}
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label={t('common:dragToResizeImage')}
+        onPointerDown={onHandleDown}
+        onPointerMove={onHandleMove}
+        onPointerUp={onHandleUp}
+        className="flex shrink-0 cursor-row-resize items-center justify-center"
+        style={{ height: 14, touchAction: 'none', marginTop: 2 }}
+      >
+        <div
+          style={{
+            width: 36,
+            height: 3,
+            borderRadius: 2,
+            background: 'var(--border)',
+          }}
+        />
       </div>
 
       <Dialog open={zoomed} onOpenChange={(o) => !o && setZoomed(false)}>

@@ -44,6 +44,7 @@
   "clickToEdit": "点击修改",
   "removeTag": "移除标签 {{name}}",
   "dragToResize": "拖动调整上方高度",
+  "dragToResizeImage": "拖动调整画面高度",
   "noOptions": "无可选项",
   "repoFieldsTitle": "仓库配置（可选，用于 AI 工作台参考源码）",
   "repoProvider": "Git 提供方",

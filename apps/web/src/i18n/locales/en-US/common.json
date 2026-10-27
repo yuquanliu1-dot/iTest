@@ -46,6 +46,7 @@
   "clickToEdit": "Click to edit",
   "removeTag": "Remove tag {{name}}",
   "dragToResize": "Drag to resize the top area",
+  "dragToResizeImage": "Drag to resize the view",
   "noOptions": "No options",
   "repoFieldsTitle": "Repository config (optional; used by the AI workspace to reference source)",
   "repoProvider": "Git provider",
