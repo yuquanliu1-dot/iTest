@@ -26,15 +26,20 @@ vi.mock('playwright-core', () => {
   const getByText = vi.fn().mockReturnValue(makeLocator());
   const locatorFn = vi.fn().mockReturnValue(makeLocator());
 
+  // url() 跟随最近一次 goto 目标（真实浏览器行为；也让 init-goto 落地校验判定"已到达"不触发重试）
+  let lastGotoUrl: string | undefined;
   const page = {
-    goto: vi.fn().mockResolvedValue(undefined),
+    goto: vi.fn((targetUrl: string) => {
+      lastGotoUrl = targetUrl;
+      return Promise.resolve(undefined);
+    }),
     locator: locatorFn,
     getByRole,
     getByText,
     screenshot: vi.fn().mockResolvedValue(undefined),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
-    url: vi.fn(() => 'https://example.com/path'),
+    url: vi.fn(() => lastGotoUrl ?? 'https://example.com/path'),
     evaluate: vi.fn().mockResolvedValue('登录成功'),
     keyboard: { press: vi.fn().mockResolvedValue(undefined) },
   };
@@ -47,6 +52,8 @@ vi.mock('playwright-core', () => {
       }),
     },
     __page: page,
+    // 单例 page 跨测试复用，nav 状态须逐测试归位（真实执行每次 newPage 从 about:blank 起）
+    __resetNav: () => { lastGotoUrl = undefined; },
     __getByRole: getByRole,
     __getByText: getByText,
     __locator: locatorFn,
@@ -64,10 +71,14 @@ const mocked = await import('playwright-core') as unknown as {
     evaluate: ReturnType<typeof vi.fn>;
     keyboard: { press: ReturnType<typeof vi.fn> };
   };
+  __resetNav: () => void;
   __getByRole: ReturnType<typeof vi.fn>;
   __getByText: ReturnType<typeof vi.fn>;
   __locator: ReturnType<typeof vi.fn>;
 };
+
+// 单例 mock page 的 nav 状态逐测试归位（真实执行每次 newPage 从 about:blank 起）
+beforeEach(() => mocked.__resetNav());
 
 describe('executeCaseReal — dispatch via mocked chromium', () => {
   it('navigate action forwards url + waitUntil to page.goto', async () => {

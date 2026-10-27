@@ -35,6 +35,8 @@ vi.mock('../src/execute/cdp.js', () => ({
   // runCaseVisionAssert 依赖的模板物化/脱敏（验证场景无数据集变量/敏感列，恒等即可）
   materializeExpectedOutcome: (t: string) => t,
   maskSensitiveValues: (t: string) => t,
+  // init 预导航的落地重试（默认直达；重试语义由 cdp-goto-retry.test.ts 对真实实现单测）
+  gotoWithLandedRetry: vi.fn(async (_page: unknown, targetUrl: string) => ({ landed: true, finalUrl: targetUrl })),
 }));
 vi.mock('../src/pi/inspectPage.js', () => ({
   extractPageElements: vi.fn(async () => ({
@@ -355,8 +357,10 @@ describe('verify_case 逐步 AI 执行编排', () => {
     expect(String(call[1])).toContain('第 1 步 / 共 2 步');
     expect(String(call[1])).not.toContain('__ITEST_USERNAME__'); // 无凭据不注入凭据段
     expect(call[4]).toMatchObject({ maxTurns: 5 });
-    // 初始导航被调（首步非同 URL navigate）
-    expect(await fakeGotos()).toEqual(['http://env.example/page']);
+    // 初始导航被调（首步非同 URL navigate）——经 gotoWithLandedRetry（含落地校验重试兜底）
+    const { gotoWithLandedRetry } = await import('../src/execute/cdp.js');
+    expect(vi.mocked(gotoWithLandedRetry)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(gotoWithLandedRetry).mock.calls[0]![1]).toBe('http://env.example/page');
     // verify_progress SSE 事件序列:start → (step_start + step_done)×2 → replay_start → replay_done → end
     const phases = emitLog.map((e) => (e as { phase: string }).phase);
     expect(phases).toEqual(['start', 'step_start', 'step_done', 'step_start', 'step_done', 'replay_start', 'replay_done', 'end']);
@@ -1177,6 +1181,8 @@ describe('verify_case 空转硬上限', () => {
     const d = JSON.parse(stopped!.data!);
     expect(d.failure.failureReason).toBe('StagnantRoundLimit');
     expect(d.failure.humanMessage).toContain('强制停止');
+    // 措辞加硬（prod228 2026-10-27：软提示被无视，agent 触发后读源码自诊 9~15 分钟）
+    expect(d.failure.humanMessage).toContain('停止调用一切工具');
     expect(chromium.launch).not.toHaveBeenCalled(); // 短路不启动浏览器
 
     // 计数回退一级：下一次放行 1 次实测（仍同因失败会再次触发停止，不永久死锁）
@@ -1184,6 +1190,8 @@ describe('verify_case 空转硬上限', () => {
     const allowed = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(JSON.parse(allowed!.data!).failure.failureReason).toBe('VisionAssertionFailed');
     expect(chromium.launch).toHaveBeenCalled();
+    // 放行轮显式警告：本轮结束后必须汇报，不得继续自行重试
+    expect(JSON.parse(allowed!.data!).roundNotes[0]).toContain('护栏放行');
   });
 
   it('中途通过即清零，不触发强制停止', async () => {
@@ -1627,5 +1635,17 @@ describe('verify_case 注册', () => {
     const st = buildSolidifyCaseTool(toolCtx());
     expect(st.description).toContain('零执行');
     expect(st.promptGuidelines.join('\n')).toContain('mode="mechanical"');
+  });
+
+  it('工具文案声明 url 深链直达人 + 不写导航步（agent 依赖文案选路）', async () => {
+    // prod228 2026-10-26 实录：用例 url 是门户首页 → agent 把「进入 XX 页面」菜单点击写进步骤，
+    // 26 轮 verify 导航步烧掉 64-76% 执行时间；10-27 用户给出业务页深链后 goto 一步直达，导航开销≈0。
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const tool = buildVerifyCaseTool(toolCtx());
+    expect(tool.description).toContain('深链');
+    const guidelines = tool.promptGuidelines.join('\n');
+    expect(guidelines).toContain('完整深链');
+    expect(guidelines).toContain('不要写「打开/进入 XX 页面」');
+    expect(guidelines).toContain('StagnantRoundLimit');
   });
 });

@@ -1000,6 +1000,37 @@ export function materializeExpectedOutcome(text: string, vars: Record<string, st
   return substituteVars(text, vars).value;
 }
 
+/** 深链落地判定用 URL 归一：origin+path 小写、去尾斜杠、去 search、保留 hash（qiankun 路由可能在 hash）。
+ *  只归一 http(s)；about:blank 等非 http 形态原样返回（new URL('about:blank') 不抛错、origin 为字符串 "null"）。 */
+export function normalizeUrlForLandedCheck(raw: string): string {
+  if (!/^https?:\/\//i.test(raw)) return raw;
+  try {
+    const u = new URL(raw);
+    return `${u.origin.toLowerCase()}${u.pathname.replace(/\/+$/, '').toLowerCase()}${u.hash}`;
+  } catch {
+    return raw;
+  }
+}
+
+/** init goto + 落地校验重试：SPA 冷启动深链可能被前端静态兜底路由弹回首页（prod228 SOC
+ *  permission.js 路由守卫竞态，2026-10-27 实录 6 轮中 1 轮被弹回）。goto 成功但最终 URL
+ *  与目标不一致时重试一次——资源已缓存、shell 启动更快，通常能赢路由守卫竞态。仍不落地
+ *  不阻断（返回 landed=false 交上层按现有语义继续），goto 自身抛错语义与裸 goto 完全一致。 */
+export async function gotoWithLandedRetry(
+  page: Page,
+  targetUrl: string,
+): Promise<{ landed: boolean; finalUrl: string }> {
+  const target = normalizeUrlForLandedCheck(targetUrl);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // SPA 就绪等待（与既有 init-goto 语义一致）：domcontentloaded 后 Vue/React 还在异步挂载。
+    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
+    const finalUrl = page.url();
+    if (normalizeUrlForLandedCheck(finalUrl) === target) return { landed: true, finalUrl };
+  }
+  return { landed: false, finalUrl: page.url() };
+}
+
 /** 在已持有的 browser context 中跑用例步骤：init-goto → preflight → 步骤循环 → vision 兜底。
  *  与 `executeCaseReal` 共享核心逻辑；区别是不负责 launch/newContext/close，调用方持有生命周期。 */
 async function runStepsInContext(
@@ -1050,12 +1081,12 @@ async function runStepsInContext(
         return typeof u === 'string' && u === targetUrl;
       })();
   if (targetUrl && !firstStepIsSameNav) {
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    // SPA 就绪等待：domcontentloaded 后 Vue/React SPA 还在异步加载 chunk + mount,
-    // 此时探测 [name=...] / role 都会得到 count=0。实测 SOC 登录页在 domcontentloaded 后
-    // ~300ms 表单才渲染完成；networkidle 是最稳的「JS 跑完 + DOM 渲染完」信号。
-    // 5s 兜底（长连接页面等不到 idle 也不阻塞执行）；空文档（HTML-only）会立刻 idle。
-    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
+    // goto + 落地校验重试（SPA 深链冷启动可能被前端兜底路由弹回首页，重试一次通常能赢竞态；
+    // 等待语义与注释见 gotoWithLandedRetry）。仍不落地不阻断——失败页证据会暴露真实位置。
+    const landed = await gotoWithLandedRetry(page, targetUrl);
+    if (!landed.landed) {
+      logger.warn({ caseId, targetUrl, finalUrl: landed.finalUrl }, 'init goto 未落到目标页(深链被重定向),继续执行');
+    }
   }
   // preflight：执行前置检查（URL 可达 / 登录态 / 标签页 / origin）。失败不阻塞执行。
   try {

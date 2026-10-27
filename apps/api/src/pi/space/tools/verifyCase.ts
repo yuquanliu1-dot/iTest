@@ -19,7 +19,7 @@ import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/
 import { runAiTask, USER_PH, PASSWORD_PH, SECRET_PH, makeCredentialValueSub, credentialPlaceholder, type AiAction } from '../../../execute/aiTask.js';
 import { buildCredentialSource, renderWebResourceManifest } from '../../../execute/credentialSource.js';
 import { isVisualStep } from '../../../execute/aiActionMap.js';
-import { writeStepScreenshot, executeCaseInBrowser, type ExecStepResult } from '../../../execute/cdp.js';
+import { writeStepScreenshot, executeCaseInBrowser, gotoWithLandedRetry, type ExecStepResult } from '../../../execute/cdp.js';
 import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from '../../../execute/locator-probe.js';
 import { buildCandidates } from '../../../execute/locator-resolver.js';
 import type { Locator } from '@itest/shared';
@@ -82,6 +82,8 @@ interface AiStepResult {
 interface RoundState {
   lastSignature: string;
   consecutive: number;
+  /** 熔断后下一次调用是护栏放行的最后一轮（note 会显式警告该轮结束后必须汇报）。入口消费即清。 */
+  escapedAfter?: boolean;
 }
 const verifyRoundState = new Map<string, RoundState>();
 const roundKey = (threadId: string, caseId: string) => `${threadId}::${caseId}`;
@@ -377,7 +379,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'verify_case',
     description:
-      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性。全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理，失败即停并返回失败步骤详情与失败页可交互元素清单。AI 步骤与终态判定全过后，还会用与正式回放同引擎的机械干跑逐字执行 compiled（failureReason=ReplayDivergence 表示 AI 能过但逐字回放分叉）。mode 决定验收形态：mode="full"（默认）= 全 AI 实测（AI 相 + 终态判定 + 机械干跑），实测通过时顺带缓存每步的 AI 动作轨迹（供 solidify_case 零执行复用）；mode="mechanical" = 固化后的机械验收（跳过 AI 相，只做机械干跑 + 终态判定，语义验证已由前一轮实测完成）。**不要对同一用例重复跑 full**：full 的 AI 相每步 1~2 分钟，步骤未变时重复跑纯浪费。caseId 支持两种形态：落库用例 id，或本线程 stage_case 生成的 localId（纯草稿验证，全程不落库，save 时才正式建用例）。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。再次调用会复用上一轮已确认的前缀：以机械回放重建前缀 DOM 状态（代替重跑 AI 相，已确认步骤不再烧 LLM 轮次），AI 相从首个改动/失败步续跑，结尾仍保留与正式回放同引擎的完整机械干跑。验证会产生真实副作用（与正式执行一致，机械干跑会再执行一遍）。',
+      '在真实被测系统上逐步验证用例的 compiled 步骤可执行性。全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理，失败即停并返回失败步骤详情与失败页可交互元素清单。执行前平台直接 goto 用例 url——url 必须是目标业务页的完整深链（含应用前缀），导航/登录不写进步骤，第一步从目标页面上的业务操作开始。AI 步骤与终态判定全过后，还会用与正式回放同引擎的机械干跑逐字执行 compiled（failureReason=ReplayDivergence 表示 AI 能过但逐字回放分叉）。mode 决定验收形态：mode="full"（默认）= 全 AI 实测（AI 相 + 终态判定 + 机械干跑），实测通过时顺带缓存每步的 AI 动作轨迹（供 solidify_case 零执行复用）；mode="mechanical" = 固化后的机械验收（跳过 AI 相，只做机械干跑 + 终态判定，语义验证已由前一轮实测完成）。**不要对同一用例重复跑 full**：full 的 AI 相每步 1~2 分钟，步骤未变时重复跑纯浪费。caseId 支持两种形态：落库用例 id，或本线程 stage_case 生成的 localId（纯草稿验证，全程不落库，save 时才正式建用例）。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。再次调用会复用上一轮已确认的前缀：以机械回放重建前缀 DOM 状态（代替重跑 AI 相，已确认步骤不再烧 LLM 轮次），AI 相从首个改动/失败步续跑，结尾仍保留与正式回放同引擎的完整机械干跑。验证会产生真实副作用（与正式执行一致，机械干跑会再执行一遍）。',
     parameters: Type.Object({
       caseId: Type.String({ minLength: 1 }),
       // full=全 AI 实测（默认，含机械干跑）；mechanical=固化后机械验收（跳过 AI 相，只干跑+终态判定）
@@ -396,8 +398,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       'result.staticAnalysis 与 failure.note 里的"源码无字面命中"只是排序参考,不是"这个选择器是假的"。选择器是否存在一律以 failure.page.elements 和运行时实测为准:框架运行时拼接的 id(如 Element-UI tab 的 #tab-autodo)源码里本就没有字面量,但运行时真实命中。sourceAnalysis 与运行时命中冲突时,信运行时。',
       'verify_case 最后一道关卡是与正式回放同引擎的 compiled 机械干跑(failureReason=ReplayDivergence):AI 临场能跑通但逐字派发 compiled 失败,典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突导致二次执行必挂。修正方式:用 failure.page.elements 里的真实选择器把失败步 compiled 改成更精确的可操作目标(点组件内部真实接收点击的元素),或修正测试数据策略(时间戳命名)后重验。',
       'verify_case 失败反馈带 failure.evidence(可见浮层清单 overlays + 各 locator 候选实时命中数 probes)与 failure.note 里的「⚠ 归因:」段——归因由 LLM 依据形态无关证据判断,先按归因再动手,不要一律当选择器错:(1) 归因=「条件性浮层」:失败页有可见弹窗/抽屉/遮罩,属数据状态才弹的对话框(草稿恢复/权限确认),机械步骤处理不了「可能弹、可能不弹」的分支:在进该页步骤之后补 aiTask 条件兜底步骤(若页面出现浮层则按页面提示关闭或点『确定/继续』,没有则跳过),不要反复改选择器也不要弱化预期;(2) 归因=「位置/流程断裂」:该步全部候选命中 0 且失败页元素清单里也没有同类目标,说明界面根本没挂载,选择器无法命中不存在的元素:去核对导航/入口/向导步骤流程(草稿恢复把向导恢复到中间态即一例),修步骤顺序或补导航,不要改 locator;(3) 归因=「选择器/行为错」:页面状态到位仅该 locator 未命中,才用 failure.page.elements 里真实存在的选择器修正(可组多候选链);(4) 归因=「环境缺数据」:先让用例造出满足预期的数据,或如实汇报,严禁弱化 expectedOutcome。归因未产出(failure.note 无「⚠ 归因:」段)时按既有通用文案结合 failure.evidence 判断,必要时用 repo_grep 翻目标页面源码确认弹窗/向导条件,不要臆测固定文案。',
-      '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。',
+      '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。护栏触发（返回 failureReason=StagnantRoundLimit）= 平台已判定重复实测无意义：必须立即停止所有工具调用（含读源码/查库/建探针用例「自诊」），按返回消息中的汇报模板直接向用户汇报，等用户明确指示后再行动。',
       '环境未配置登录凭据(默认 web 服务未填用户名/密码)而验证卡在登录页时，引导用户到项目环境页配置，不要伪造登录步骤。',
+      '用例 url 必须是目标业务页的完整深链地址（含应用前缀，如 https://host/siemapp/siem/businessmgr/incidentmgr）——平台执行前会直接 goto 到该地址，目标页一步直达。用户没提供页面地址时，先向用户索取（浏览器地址栏完整地址）再暂存用例，禁止拿门户首页/根路径当 url；用例步骤不要写「打开/进入 XX 页面」类导航步与登录步（平台负责到达页面与登录），第一步直接从目标页面上的业务操作开始。',
     ],
     execute: async (input) => {
       const { caseId, mode } = input as { caseId: string; mode?: 'full' | 'mechanical' };
@@ -410,6 +413,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         verifyRoundState.set(roundKey(ctx.threadId, caseId), {
           lastSignature: roundState.lastSignature,
           consecutive: VERIFY_MAX_STAGNANT_ROUNDS - 1,
+          escapedAfter: true,
         });
         return {
           ok: true,
@@ -421,12 +425,26 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               action: null,
               error: null,
               failureReason: 'StagnantRoundLimit',
-              humanMessage: `同类失败（${roundState.lastSignature}）已连续 ${VERIFY_MAX_STAGNANT_ROUNDS} 轮无任何进展，本次已强制停止验证。这通常是环境前置数据缺失、被测页面持续不稳定或用例存在前置依赖——重复实测无法解决。请停止继续 verify_case,把已验证步骤结果与失败原因如实汇报给用户,并引导检查环境数据 / 页面可用性;环境就绪后再验证会正常继续。`,
-              note: `verify_case 停滞护栏触发:失败大类 ${roundState.lastSignature} 连续 ${VERIFY_MAX_STAGNANT_ROUNDS} 轮无进展,强制停止以防空转消耗 LLM 调用。`,
+              // 措辞刻意加硬（prod228 2026-10-27 实录：护栏触发后 agent 无视软提示，
+              // 转头读源码/建探针用例自诊 9~15 分钟）。必须显式禁止一切工具调用并给出可粘贴汇报模板。
+              humanMessage: `【停滞护栏·强制熔断】失败大类 ${roundState.lastSignature} 已连续 ${VERIFY_MAX_STAGNANT_ROUNDS} 轮零进展，本次调用已强制停止验证（未启动浏览器、未消耗 LLM）。同类失败连续出现说明是环境前置数据缺失、被测页面持续不稳定或用例存在前置依赖——重复实测无法解决。你现在必须立即停止调用一切工具（包括 verify_case、读仓库源码、grep、查数据库——它们都无法改变结果），直接向用户汇报，可用模板：「用例验证停滞：已实测多轮，最后卡在〈失败步骤与 failureReason〉；连续同类失败表明环境或用例存在前置问题，重复实测无法解决。建议：a.检查环境数据与页面可用性 b.简化或拆分该用例 c.人工处理。环境就绪后告诉我，我会再验证一轮（护栏会放行）。」在用户明确回复之前，不要再发起任何工具调用。`,
+              note: `verify_case 停滞护栏触发:失败大类 ${roundState.lastSignature} 连续 ${VERIFY_MAX_STAGNANT_ROUNDS} 轮无进展,强制停止以防空转消耗 LLM 调用。触发后必须停止一切工具调用并按 humanMessage 模板向用户汇报;下一次调用是护栏放行的最后一轮,再失败将再次熔断。`,
             },
           }),
         };
       }
+      // 放行轮（熔断后的下一次调用）显式警告：本轮结束后必须汇报，不得继续自行重试。
+      const isEscapeRound = roundState?.escapedAfter === true;
+      if (roundState?.escapedAfter) {
+        verifyRoundState.set(roundKey(ctx.threadId, caseId), { ...roundState, escapedAfter: false });
+      }
+      /** 本轮附加提示（放行轮警告 / 入口重定向告警），随 rdata 顶层 roundNotes 返回给 agent。 */
+      const roundNotes: string[] = [];
+      if (isEscapeRound) {
+        roundNotes.push(`⚠ 停滞护栏放行的最后一轮：本轮再以同类失败结束将再次熔断。本轮结束后必须立即向用户汇报结果（停止一切工具调用），不得继续自行重试或自诊。`);
+      }
+      const withRoundNotes = (payload: Record<string, unknown>): string =>
+        JSON.stringify(roundNotes.length > 0 ? { ...payload, roundNotes } : payload);
       // 最外层兜底：db 查询 / chromium launch / resolveCaseUrl 等未预料异常一律转 ok:false
       // （ToolExecutor 契约：不向 agent 循环抛异常）
       try {
@@ -732,8 +750,12 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               : undefined) as { kind?: string; url?: string } | undefined;
             const skipInit = firstAction?.kind === 'navigate' && firstAction.url === targetUrl;
             if (!skipInit) {
-              await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-              await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
+              // goto + 落地校验重试：深链冷启动可能被前端兜底路由弹回（重试一次通常能赢竞态）。
+              // 落到登录页不告警——full 模式 AI 相会自助登录；其他落点差异在 roundNotes 提示 agent。
+              const landed = await gotoWithLandedRetry(page, targetUrl);
+              if (!landed.landed && !landed.finalUrl.includes('/login')) {
+                roundNotes.push(`入口深链 goto 后未落到目标页（当前在 ${landed.finalUrl}，目标 ${targetUrl}）——多为前端路由冷启动竞态（如 qiankun 兜底路由）或入口地址不对。后续步骤失败时先核对该信息：若失败页元素与目标页无关，属入口未达而非 locator 错，不要盲目改步骤 locator。`);
+              }
             }
           }
 
@@ -1188,7 +1210,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           if (failedIndex < 0 && !visionFailure && !replayFailure) {
             // cacheSaved: 正常收尾均无条件回写（watchdog 超时路径在循环内提前 return,无 end 事件）
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'passed', cacheSaved: true });
-            const rdata = JSON.stringify({
+            const rdata = withRoundNotes({
               result: 'passed',
               caseId,
               envId: envCtx.envId,
@@ -1239,7 +1261,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   ...(emptyDataHint ? { extraHint: `失败页检出空数据信号「${emptyDataHint}」` } : {}),
                 })
               : null;
-            const rdata = JSON.stringify({
+            const rdata = withRoundNotes({
               result: 'failed',
               caseId,
               envId: envCtx.envId,
@@ -1290,7 +1312,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 })
               : null;
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
-            const rdata = JSON.stringify({
+            const rdata = withRoundNotes({
               result: 'failed',
               caseId,
               envId: envCtx.envId,
@@ -1343,7 +1365,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               })
             : null;
           ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
-          const rdata = JSON.stringify({
+          const rdata = withRoundNotes({
             result: 'failed',
             caseId,
             envId: envCtx.envId,
