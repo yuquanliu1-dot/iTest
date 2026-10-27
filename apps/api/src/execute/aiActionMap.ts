@@ -55,6 +55,8 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
   for (const a of actions) {
     switch (a.type) {
       case 'click': {
+        // 坐标动作未解析回 selector（执行点元素解析失败）→ 不可机械固化，整步保持 aiTask。
+        if (!a.selector) return { ok: false, reason: 'click 为坐标动作且未解析回稳定选择器，无法映射为平台 locator' };
         const locator = mapSelector(a.selector);
         if (!locator) return { ok: false, reason: `click 选择器 "${a.selector}" 含 Playwright 专有语法，无法映射为平台 locator` };
         compiled.push({ kind: 'click', locator: [locator] });
@@ -68,6 +70,7 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
         if (credentialPlaceholderKind(a.value)) {
           return { ok: false, reason: 'fill value 为登录/敏感凭据占位符（含 @服务名 归属形态，登录不属于用例步骤，归环境登录），不固化' };
         }
+        if (!a.selector) return { ok: false, reason: 'fill 为坐标动作且未解析回稳定选择器，无法映射为平台 locator' };
         const locator = mapSelector(a.selector);
         if (!locator) return { ok: false, reason: `fill 选择器 "${a.selector}" 含 Playwright 专有语法，无法映射为平台 locator` };
         compiled.push({ kind: 'fill', locator: [locator], value: a.value });

@@ -40,3 +40,22 @@ describe('mapAiActionsToCompiled :has-text 选择器', () => {
     if (!r.ok) expect(r.reason).toContain('Playwright 专有语法');
   });
 });
+
+describe('mapAiActionsToCompiled 坐标动作（未解析回 selector）', () => {
+  it('click/fill 无 selector（坐标未解析回稳定选择器）→ 整步保守保持 aiTask', () => {
+    const r = mapAiActionsToCompiled([
+      { type: 'click', x: 500, y: 400 },
+      { type: 'fill', x: 200, y: 100, value: 'v' },
+    ]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('未解析回稳定选择器');
+  });
+
+  it('坐标动作解析回 selector 后（onAction 已回填）照常固化', () => {
+    const r = mapAiActionsToCompiled([
+      { type: 'click', selector: '#hit' },
+      { type: 'fill', selector: '#name', value: '分类A' },
+    ]);
+    expect(r.ok).toBe(true);
+  });
+});

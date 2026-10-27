@@ -45,6 +45,7 @@ vi.mock('playwright-core', () => {
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     url: vi.fn(() => 'https://example.com/path'),
+    viewportSize: vi.fn(() => ({ width: 1280, height: 800 })),
     evaluate: vi.fn().mockResolvedValue([]),
     keyboard: { press: vi.fn().mockResolvedValue(undefined) },
   };

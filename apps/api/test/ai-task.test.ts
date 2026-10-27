@@ -3,17 +3,29 @@ import type { Page } from 'playwright-core';
 import type { LLMClient, LLMResult } from '../src/agent/llm-client.js';
 import { runAiTask, solveCaptchaOnce, credentialPlaceholderKind, makeCredentialValueSub, referencesCredential, parseCredentialPlaceholder, credentialPlaceholder, isValidCredentialRef } from '../src/execute/aiTask.js';
 
-/** 记录调用顺序的桩 Page：screenshot/evaluate/url 走默认值，locator 动作全部记录。 */
+/** 记录调用顺序的桩 Page：screenshot/evaluate/url 走默认值，locator 动作全部记录。
+ *  evaluate 按 evaluatee 源码分发：elementFromPoint（坐标解析）默认无目标、canvas（指纹）恒稳定、
+ *  其余（dumpElements）空清单——坐标解析的具体用例用 makeCoordStubPage。 */
 function makeStubPage() {
   const calls: string[] = [];
   const values: Record<string, string> = {};
   const page = {
     url: () => 'https://sut.example/login',
-    screenshot: async () => Buffer.from('png'),
-    evaluate: async () => [],
+    viewportSize: () => ({ width: 1280, height: 800 }),
+    screenshot: async () => Buffer.from('jpg'),
+    evaluate: async (fn: unknown) => {
+      const src = String(fn);
+      if (src.includes('elementFromPoint')) return null;
+      if (src.includes('canvas')) return 0;
+      return [];
+    },
     goto: async (u: string) => { calls.push(`goto:${u}`); },
     waitForLoadState: async () => {},
-    keyboard: { press: async (key: string) => { calls.push(`press:${key}`); } },
+    keyboard: {
+      press: async (key: string) => { calls.push(`press:${key}`); },
+      type: async (v: string) => { calls.push(`type:${v}`); },
+    },
+    mouse: { click: async (x: number, y: number) => { calls.push(`mouse:click:${x},${y}`); } },
     waitForTimeout: async (ms: number) => { calls.push(`wait:${ms}`); },
     locator: (selector: string) => ({
       first: () => ({
@@ -31,6 +43,40 @@ function makeStubPage() {
     }),
   };
   return { page: page as unknown as Page, calls, values };
+}
+
+/** 过滤节奏类等待（每轮截图前的指纹采样 200ms / 动作后 settle 150ms），只看真实动作序列。 */
+const actionCalls = (calls: string[]) => calls.filter((c) => c !== 'wait:200' && c !== 'wait:150');
+
+/** 坐标协议专用桩：1000x800 视口，elementFromPoint 恒命中 #hit（value 回显已键入文本）。 */
+function makeCoordStubPage() {
+  const calls: string[] = [];
+  const state = { typed: '' };
+  const page = {
+    url: () => 'https://sut.example/list',
+    viewportSize: () => ({ width: 1000, height: 800 }),
+    screenshot: async () => Buffer.from('jpg'),
+    evaluate: async (fn: unknown) => {
+      const src = String(fn);
+      if (src.includes('elementFromPoint')) {
+        return { selector: '#hit', tag: 'input', value: state.typed, box: { x: 100, y: 40, width: 120, height: 30 } };
+      }
+      if (src.includes('canvas')) return 0;
+      return [];
+    },
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    keyboard: {
+      press: async (key: string) => { calls.push(`press:${key}`); },
+      type: async (v: string) => { calls.push(`type:${v}`); state.typed = v; },
+    },
+    mouse: { click: async (x: number, y: number) => { calls.push(`mouse:click:${x},${y}`); } },
+    waitForTimeout: async (ms: number) => { calls.push(`wait:${ms}`); },
+    locator: (selector: string) => ({
+      first: () => ({ click: async () => { calls.push(`click:${selector}`); } }),
+    }),
+  };
+  return { page: page as unknown as Page, calls };
 }
 
 /** 按轮次脚本化回复的 mock LLM；每轮收到完整 userMessage。 */
@@ -102,7 +148,7 @@ describe('runAiTask', () => {
     ]);
     const summary = await runAiTask(page, '识别验证码并填入输入框', llm);
     expect(summary).toBe('已识别并填入验证码');
-    expect(calls).toEqual([
+    expect(actionCalls(calls)).toEqual([
       'fill:#auth-captcha:',
       'type:#auth-captcha:Ab3d',
       'press:Tab',
@@ -122,7 +168,7 @@ describe('runAiTask', () => {
     ]);
     const summary = await runAiTask(page, '一步点击完成', llm);
     expect(summary).toBe('一步完成');
-    expect(calls).toEqual(['click:#final']);
+    expect(actionCalls(calls)).toEqual(['click:#final']);
   });
 
   it('LLM 输出 fail 时立即抛错', async () => {
@@ -139,7 +185,7 @@ describe('runAiTask', () => {
       { done: true, summary: 'ok' },
     ]);
     await runAiTask(page, '提交表单', llm);
-    expect(calls).toEqual(['press:Enter']);
+    expect(actionCalls(calls)).toEqual(['press:Enter']);
     expect(requests[1]).toContain('不是合法 JSON');
   });
 
@@ -165,6 +211,72 @@ describe('runAiTask', () => {
     expect(requests[1]).toContain('no such element: #missing');
   });
 
+  it('坐标 click：按视口换算像素点击，onAction 上报解析回的 selector 形态', async () => {
+    const { page, calls } = makeCoordStubPage();
+    const reported: Array<{ a: unknown; ok: boolean }> = [];
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'click', x: 500, y: 400 }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '点击新增按钮', llm, false, {
+      onAction: (a, ok) => { reported.push({ a, ok }); },
+    });
+    // 1000x800 视口：归一化 (500,400) → 像素 (500,320)
+    expect(calls).toContain('mouse:click:500,320');
+    expect(reported).toEqual([{ a: { type: 'click', selector: '#hit' }, ok: true }]);
+  });
+
+  it('坐标 fill：点焦+全选+键入+Tab，回读一致后上报 selector 形态', async () => {
+    const { page, calls } = makeCoordStubPage();
+    const reported: Array<{ a: unknown; ok: boolean }> = [];
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'fill', x: 200, y: 100, value: '自动化测试-9527' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '填写分类名称', llm, false, {
+      onAction: (a, ok) => { reported.push({ a, ok }); },
+    });
+    expect(actionCalls(calls)).toEqual([
+      'mouse:click:200,80',
+      'press:ControlOrMeta+A',
+      'type:自动化测试-9527',
+      'press:Tab',
+      'wait:80',
+    ]);
+    expect(reported).toEqual([{ a: { type: 'fill', selector: '#hit', value: '自动化测试-9527' }, ok: true }]);
+  });
+
+  it('同目标 3 连错：第 3 次失败后注入停止重试+页面自检指令', async () => {
+    const { page } = makeStubPage();
+    (page as unknown as { locator: (s: string) => unknown }).locator = (selector: string) => ({
+      first: () => ({ click: async () => { throw new Error(`no such element: ${selector}`); } }),
+    });
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'click', selector: '#missing' }] },
+      { actions: [{ type: 'click', selector: '#missing' }] },
+      { actions: [{ type: 'click', selector: '#missing' }] },
+      { done: true, summary: '自检后放弃该目标' },
+    ]);
+    await runAiTask(page, '点一个持续不存在的目标', llm);
+    // 2 连错只反馈错误本身；3 连错才注入 [system] 强制自检（防换 selector/坐标空转）
+    expect(requests[2]).toContain('no such element: #missing');
+    expect(requests[2]).not.toContain('已连续 3 次失败');
+    expect(requests[3]).toContain('已连续 3 次失败');
+    expect(requests[3]).toContain('停止对它重试');
+  });
+
+  it('每轮最多执行 2 个动作（第 3 个起丢弃）', async () => {
+    const { page, calls } = makeStubPage();
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'wait', ms: 1 }, { type: 'wait', ms: 2 }, { type: 'wait', ms: 3 }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '连发等待', llm);
+    expect(calls).toContain('wait:1');
+    expect(calls).toContain('wait:2');
+    expect(calls).not.toContain('wait:3');
+  });
+
   it('valueSub 替换：占位符在执行时刻还原为真实值，反馈不含真实值', async () => {
     const { page, calls } = makeStubPage();
     const { llm, requests } = makeMockLlm([
@@ -186,6 +298,7 @@ describe('runAiTask', () => {
     // React 截断模拟：回读值与键入值不一致
     const page = {
       url: () => 'https://sut.example/login',
+      viewportSize: () => ({ width: 1280, height: 800 }),
       screenshot: async () => Buffer.from('png'),
       evaluate: async () => [],
       goto: async () => {},
@@ -222,6 +335,7 @@ describe('runAiTask', () => {
   it('未替换 mismatch：保持既有回显（实际值+目标值）', async () => {
     const page = {
       url: () => 'https://sut.example/login',
+      viewportSize: () => ({ width: 1280, height: 800 }),
       screenshot: async () => Buffer.from('png'),
       evaluate: async () => [],
       goto: async () => {},

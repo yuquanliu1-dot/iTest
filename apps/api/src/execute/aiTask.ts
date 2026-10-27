@@ -13,14 +13,18 @@ const MAX_TURNS = 8;
 /** 每轮喂给 LLM 的可交互元素上限，防止提示词膨胀。 */
 const MAX_ELEMENTS = 60;
 
-/** 系统提示词主体（不含凭据段）。凭据段按需拼接——见 assembleSystemPrompt。 */
+/** 系统提示词主体（不含凭据段）。凭据段按需拼接——见 assembleSystemPrompt。
+ *  坐标协议（对标 midscene）：模型用截图上的归一化坐标指认目标，平台换算成视口像素执行
+ *  ——视觉与动作同通道，消灭「看到了哪个元素 → 写出它的 selector」的翻译损耗；坐标点击
+ *  天然穿透 iframe/shadow DOM（qiankun 微前端友好）。selector 降级为兜底通道。 */
 const SYSTEM_PROMPT_BASE = `你是 Web 测试执行智能体，在真实浏览器里执行一条自然语言测试指令。
-每轮你会收到：当前页面 URL、可交互元素列表、一张截图（整页，或你上轮请求的元素放大图）。
+每轮你会收到：当前页面 URL、视口尺寸、一张视口截图、可交互元素清单（含与截图对齐的归一化坐标框）。
 只输出 JSON，不要输出其他内容。格式：
 {"actions": [...], "done": false, "summary": "一句话进展"}
 actions 元素类型：
-- {"type":"click","selector":"<css>"}
-- {"type":"fill","selector":"<css>","value":"<最终文本>"}（React 受控表单已特殊处理，直接给最终值即可）
+- {"type":"click","x":<0-1000>,"y":<0-1000>}　点击截图上的目标元素。坐标按视口归一化 0-1000；指在目标本体（按钮文字/图标/链接文本）的中心，不要指整行、单元格或外层容器
+- {"type":"fill","x":..,"y":..,"value":"<最终文本>"}　聚焦该输入框后整段输入（React 受控表单已特殊处理，直接给最终值）
+- 兼容形态 {"type":"click","selector":"<css>"} / {"type":"fill","selector":"<css>","value":...}：仅当元素清单里确有该 selector 且与你要操作的目标唯一对应时使用；清单里没有时禁止自拟 selector，改用坐标。selector 只能是普通 CSS 或 text=文本，禁止 :has-text()、:has()、:near()、>> 链、nth= 等 Playwright 专有语法
 - {"type":"press","key":"Enter|Tab|Escape|ArrowDown|..."}
 - {"type":"wait","ms":<毫秒>}
 - {"type":"navigate","url":"<绝对地址>"}（仅 http/https 绝对地址）
@@ -29,10 +33,14 @@ actions 元素类型：
 - 指令已完成：{"done": true, "summary": "做了什么"}
 - 无法完成：{"fail": "原因"}（会立即终止并记为该步骤失败）
 规则：
-- 优先用元素列表里给的 selector；列表没有时可自拟（优先 #id、[name=]、[placeholder=]、[role=]，避免脆弱的长 class 链）。selector 只能是普通 CSS 或 text=文本；禁止 :has-text()、:has()、:near()、>> 链、nth= 等 Playwright 专有语法（平台固化映射不认，会拖垮固化率）——按文本找元素用 text=文本。
+- 每轮最多 2 个动作，宁可多轮推进也不要连发——页面在动作间会变化，连发会让后续动作建立在过期认知上。每个动作的执行结果（ok / 错误信息）下轮反馈给你。
+- 同一目标连续 3 次失败就停止对它重试：先用截图核对当前页面是否还在指令期望的界面（弹窗/跳转/加载中都会让目标消失），页面不对先处理页面；确认页面正确而目标确实不存在 → 输出 fail 如实说明，不要换坐标/selector 空转。
+- fill 后动作结果没报 error，就不要因为「页面上看得见的文本与目标不一致」（窄输入框截断、掩码显示、格式化渲染）清空重输——以执行结果为准，重输会破坏已生效的输入。
+- 页面处于加载中/骨架屏时不做判断，先 wait 或留到下一轮观察。
+- 在长列表/下拉框里找目标时小步滚动（每次位移 50~150px 后再观察），不要大幅跳跃以免错过。
+- 元素清单只覆盖视口内元素：目标既不在清单也不在截图里时，先滚动找到它再操作。
 - 验证码/图形文字：先 screenshot 放大验证码图片，下轮逐字符仔细辨认。字符集为字母+数字（绝不出现 0 O o 1 l I），不区分大小写，通常 4 位，有随机旋转和干扰线。识别结果 fill 进对应输入框。
-- 每轮动作要保守，最多 6 个；每个动作的执行结果（ok / 错误信息）下轮反馈给你，出错就换 selector 重试。
-- 页面状态自检：每轮先看「当前 URL + 截图/元素清单」确认自己是否在指令期望的界面上。若目标元素连续 2 个动作都找不到，优先怀疑「页面不在期望界面」（入口/步骤错位、被弹窗或中间态挡住、导航没生效），不要再换 selector 空转——在 summary 里如实写明「当前 URL/可见界面与指令场景的差异」，需要时用 navigate / 点击返回 / 处理弹窗先回到正确界面。只有确认页面就在期望界面、纯粹是元素描述不准时，才换 selector 重试。
+- 页面状态自检：每轮先看「当前 URL + 截图」确认自己是否在指令期望的界面上。目标连续找不到时优先怀疑「页面不在期望界面」（入口/步骤错位、被弹窗或中间态挡住、导航没生效），需要时用 navigate / 点击返回 / 处理弹窗先回到正确界面。
 - 数据忠实：不得改写或覆盖指令、数据集或前置步骤已填入的表单值（含账号/密码等输入内容）。输入看起来异常（超长、特殊字符、疑似无效）也原样照填——异常输入往往正是测试目的本身。页面状态自检只用于回到正确界面/找对元素，不用于"修正"表单内容。`;
 
 /** 凭据规则：仅在本次步骤确实需要凭据能力时才拼进系统提示词。 */
@@ -80,16 +88,22 @@ actions 元素类型：
 interface ElementInfo {
   selector: string;
   tag: string;
+  /** 视口归一化 0-1000 坐标框 [x1,y1,x2,y2]——与截图对齐，模型据此指认目标。 */
+  box: [number, number, number, number];
   text?: string;
   placeholder?: string;
   inputType?: string;
   disabled?: boolean;
 }
 
-/** 提取页面可交互元素的精简清单（供 LLM 选 selector）。 */
+/** 提取视口内可交互元素清单（selector + 与截图对齐的归一化坐标框）。
+ *  坐标协议下清单的定位职能降为「对齐锚点 + selector 兜底」，box 才是主要信息。 */
 async function dumpElements(page: Page): Promise<ElementInfo[]> {
   const raw = (await page.evaluate(() => {
     const out: Array<Record<string, unknown>> = [];
+    const vw = window.innerWidth || 1;
+    const vh = window.innerHeight || 1;
+    const norm = (v: number, size: number): number => Math.round(Math.min(1000, Math.max(0, (v / size) * 1000)));
     const els = document.querySelectorAll(
       'button, input, textarea, select, a[href], [role="button"], [role="link"], [role="textbox"], [role="combobox"], [tabindex]:not([tabindex="-1"])',
     );
@@ -97,6 +111,8 @@ async function dumpElements(page: Page): Promise<ElementInfo[]> {
       const he = el as HTMLElement;
       const r = he.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) continue;
+      // 只保留与视口相交的元素：截图只有视口，清单与截图不对齐会误导坐标指认。
+      if (r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) continue;
       const style = window.getComputedStyle(he);
       if (style.visibility === 'hidden' || style.display === 'none') continue;
       const id = he.id ? `#${CSS.escape(he.id)}` : '';
@@ -112,7 +128,11 @@ async function dumpElements(page: Page): Promise<ElementInfo[]> {
         selector = cls ? `${he.tagName.toLowerCase()}.${cls}` : he.tagName.toLowerCase();
       }
       const text = (he.textContent ?? '').trim().slice(0, 40);
-      const item: Record<string, unknown> = { selector, tag: he.tagName.toLowerCase() };
+      const item: Record<string, unknown> = {
+        selector,
+        tag: he.tagName.toLowerCase(),
+        box: [norm(r.left, vw), norm(r.top, vh), norm(r.right, vw), norm(r.bottom, vh)],
+      };
       if (text) item.text = text;
       if (ph) item.placeholder = ph;
       const it = (he as HTMLInputElement).type;
@@ -126,9 +146,11 @@ async function dumpElements(page: Page): Promise<ElementInfo[]> {
   return raw as unknown as ElementInfo[];
 }
 
+/** click/fill 双形态：坐标（模型主通道，视口归一化 0-1000）或 selector（兜底/解析回填）。
+ *  onAction 对外尽量上报 selector 形态（坐标解析回元素后回填），固化/缓存管线形状不变。 */
 export type AiAction =
-  | { type: 'click'; selector: string }
-  | { type: 'fill'; selector: string; value: string }
+  | { type: 'click'; selector?: string; x?: number; y?: number }
+  | { type: 'fill'; selector?: string; x?: number; y?: number; value: string }
   | { type: 'press'; key: string }
   | { type: 'wait'; ms: number }
   | { type: 'navigate'; url: string }
@@ -280,12 +302,28 @@ function refLabel(src: CredentialSource, ref: string | null): string {
 /** 扫描文本里所有凭据占位符出现（供前置检查逐个解析）。带 @ref 的形态整体匹配。 */
 export const CREDENTIAL_PLACEHOLDER_SCAN = /__?ITEST_(?:USERNAME|PASSWORD|STEP_SECRET)@?[A-Za-z0-9_]*__?|\{\{\s*_*ITEST_(?:USERNAME|PASSWORD|STEP_SECRET)@?[A-Za-z0-9_ ]*_*\s*\}\}/g;
 
+/** 0-1000 归一化坐标的钳制与数值校验（非有限数 → null）。 */
+function clampCoord(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+  return Math.min(1000, Math.max(0, Math.round(v)));
+}
+
 function parseAction(a: unknown): AiAction | null {
   if (!a || typeof a !== 'object') return null;
   const o = a as Record<string, unknown>;
   const type = String(o.type ?? '');
-  if (type === 'click' && typeof o.selector === 'string') return { type, selector: o.selector };
-  if (type === 'fill' && typeof o.selector === 'string' && typeof o.value === 'string') return { type, selector: o.selector, value: o.value };
+  const hasCoord = clampCoord(o.x) !== null && clampCoord(o.y) !== null;
+  if (type === 'click') {
+    // 坐标优先；selector 兜底（两者都在时按坐标执行，selector 由平台解析回填）
+    if (hasCoord) return { type, x: clampCoord(o.x)!, y: clampCoord(o.y)! };
+    if (typeof o.selector === 'string' && o.selector) return { type, selector: o.selector };
+    return null;
+  }
+  if (type === 'fill' && typeof o.value === 'string') {
+    if (hasCoord) return { type, x: clampCoord(o.x)!, y: clampCoord(o.y)!, value: o.value };
+    if (typeof o.selector === 'string' && o.selector) return { type, selector: o.selector, value: o.value };
+    return null;
+  }
   if (type === 'press' && typeof o.key === 'string') return { type, key: o.key };
   if (type === 'wait' && typeof o.ms === 'number') return { type, ms: Math.min(Math.max(o.ms, 0), 10000) };
   if (type === 'navigate' && typeof o.url === 'string' && /^https?:\/\//.test(o.url)) return { type, url: o.url };
@@ -293,18 +331,141 @@ function parseAction(a: unknown): AiAction | null {
   return null;
 }
 
-/** 执行单个动作，返回给人/LLM 的结果描述。
+/** 坐标动作的解析结果：该点命中的元素（selector 合成规则与 dumpElements 同链）。 */
+interface PointTarget {
+  selector: string;
+  tag: string;
+  text?: string;
+  /** input/textarea 的当前值（fill 回读用）。 */
+  value?: string;
+  box: { x: number; y: number; width: number; height: number };
+}
+
+/** 视口归一化 0-1000 → CSS 像素。viewportSize 不可得时按执行器标准视口 1280x800 回落。 */
+function toViewportPt(a: { x?: number; y?: number }, page: Page): { px: number; py: number } {
+  const vp = page.viewportSize() ?? { width: 1280, height: 800 };
+  return {
+    px: Math.round(((a.x ?? 0) / 1000) * vp.width),
+    py: Math.round(((a.y ?? 0) / 1000) * vp.height),
+  };
+}
+
+/** 解析视口坐标上的目标元素：P1 的关键——坐标动作执行前把目标解析回稳定 selector，
+ *  onAction 据此上报 selector 形态（固化/缓存管线不变），box 供动作高亮，value 供 fill 回读。
+ *  命中包装容器（label/div 蒙在 input 上）时下沉到内部首个可见输入控件——fill/回读语义以控件为准。
+ *  坐标点击本身穿透 iframe/shadow DOM，这里解析不到（返回 null）只影响上报形态，不影响执行。 */
+async function resolveAtPoint(page: Page, px: number, py: number): Promise<PointTarget | null> {
+  try {
+    const raw = await page.evaluate((pt: [number, number]) => {
+      const hit = document.elementFromPoint(pt[0]!, pt[1]!);
+      if (!hit) return null;
+      let target = hit as HTMLElement;
+      const t = target.tagName;
+      if (t !== 'INPUT' && t !== 'TEXTAREA' && t !== 'SELECT') {
+        const inner = target.querySelectorAll('input, textarea');
+        for (const c of Array.from(inner)) {
+          const ir = (c as HTMLElement).getBoundingClientRect();
+          if (ir.width > 2 && ir.height > 2) {
+            target = c as HTMLElement;
+            break;
+          }
+        }
+      }
+      const id = target.id ? `#${CSS.escape(target.id)}` : '';
+      const name = target.getAttribute('name');
+      const ph = target.getAttribute('placeholder');
+      const role = target.getAttribute('role');
+      let selector = id;
+      if (!selector && name) selector = `${target.tagName.toLowerCase()}[name="${name}"]`;
+      if (!selector && ph) selector = `${target.tagName.toLowerCase()}[placeholder="${ph}"]`;
+      if (!selector && role) selector = `[role="${role}"]`;
+      if (!selector) {
+        const cls = (target.className || '').toString().trim().split(/\s+/).filter(Boolean).slice(0, 2).join('.');
+        selector = cls ? `${target.tagName.toLowerCase()}.${cls}` : target.tagName.toLowerCase();
+      }
+      const r = target.getBoundingClientRect();
+      const out: Record<string, unknown> = {
+        selector,
+        tag: target.tagName.toLowerCase(),
+        box: { x: r.left, y: r.top, width: r.width, height: r.height },
+      };
+      const text = (target.textContent ?? '').trim().slice(0, 40);
+      if (text) out.text = text;
+      const v = (target as HTMLInputElement).value;
+      if (typeof v === 'string') out.value = v;
+      return out;
+    }, [px, py] as [number, number]);
+    return (raw ?? null) as PointTarget | null;
+  } catch {
+    return null;
+  }
+}
+
+/** onAction 上报形态：坐标动作在解析出稳定 selector 时回填为 selector 形态——
+ *  mapAiActionsToCompiled / aiTaskCache / solidify 轨迹管线只见 selector 形态，形状不变。
+ *  解析失败则原样上报坐标动作（映射层会拒绝固化该步，保守回落 aiTask）。 */
+function toReportAction(a: AiAction, resolvedSelector: string | null | undefined): AiAction {
+  if ((a.type === 'click' || a.type === 'fill') && typeof a.x === 'number' && resolvedSelector) {
+    return a.type === 'fill'
+      ? { type: 'fill', selector: resolvedSelector, value: a.value }
+      : { type: 'click', selector: resolvedSelector };
+  }
+  return a;
+}
+
+/** 动作后短暂稳定（对标 midscene 300ms + networkIdle）：导航/重渲染落地后再进下一个动作。 */
+async function settleAfterAction(page: Page): Promise<void> {
+  await page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => undefined);
+  await page.waitForTimeout(150);
+}
+
+/** 执行单个动作，返回给 LLM 的结果描述 + 坐标动作解析出的稳定 selector。
  *  valueSub：fill value 执行前替换（占位符 → 真实凭据）；发生替换后反馈不回显真实值。 */
-async function execAction(page: Page, action: AiAction, valueSub?: (v: string) => string): Promise<string> {
+interface ExecOutcome {
+  report: string;
+  resolvedSelector?: string | null;
+}
+
+async function execAction(page: Page, action: AiAction, valueSub?: (v: string) => string): Promise<ExecOutcome> {
   switch (action.type) {
     case 'click': {
-      await page.locator(action.selector).first().click({ timeout: 5000, force: true });
-      return `click ${action.selector}: ok`;
+      if (typeof action.x === 'number' && typeof action.y === 'number') {
+        const { px, py } = toViewportPt(action, page);
+        const t = await resolveAtPoint(page, px, py);
+        await page.mouse.click(px, py);
+        const label = t?.selector ? `@${action.x},${action.y}（${t.selector}）` : `@${action.x},${action.y}`;
+        return { report: `click ${label}: ok`, resolvedSelector: t?.selector ?? null };
+      }
+      const selector = action.selector!;
+      await page.locator(selector).first().click({ timeout: 5000, force: true });
+      return { report: `click ${selector}: ok`, resolvedSelector: selector };
     }
     case 'fill': {
-      const loc = page.locator(action.selector).first();
       const realValue = valueSub ? valueSub(action.value) : action.value;
       const substituted = realValue !== action.value;
+      if (typeof action.x === 'number' && typeof action.y === 'number') {
+        const { px, py } = toViewportPt(action, page);
+        const before = await resolveAtPoint(page, px, py);
+        await page.mouse.click(px, py);
+        await page.keyboard.press('ControlOrMeta+A').catch(() => undefined);
+        await page.keyboard.type(realValue, { delay: 20 });
+        // React 受控表单常在 blur 时才提交 state / 触发校验；与 selector 路径保持一致。
+        await page.keyboard.press('Tab').catch(() => undefined);
+        await page.waitForTimeout(80);
+        const after = await resolveAtPoint(page, px, py);
+        const actual = typeof after?.value === 'string' ? after.value : null;
+        const label = before?.selector ? `@${action.x},${action.y}（${before.selector}）` : `@${action.x},${action.y}`;
+        if (actual !== null && actual !== realValue) {
+          // 发生替换（凭据类 fill）时不回显 actual/目标值——防密码片段泄漏回 LLM。
+          if (substituted) {
+            return { report: `fill ${label}: 实际值与目标不一致（实际值长度 ${actual.length}）`, resolvedSelector: before?.selector ?? null };
+          }
+          return { report: `fill ${label}: 实际值 "${actual}" 与目标 "${action.value}" 不一致`, resolvedSelector: before?.selector ?? null };
+        }
+        return { report: `fill ${label}: ok`, resolvedSelector: before?.selector ?? null };
+      }
+      const selector = action.selector!;
+      const loc = page.locator(selector).first();
       await loc.fill('', { timeout: 5000 });
       await loc.pressSequentially(realValue, { delay: 20 });
       // React 受控表单常在 blur 时才提交 state / 触发校验；与 cdp.ts dispatch fill 保持一致。
@@ -314,29 +475,28 @@ async function execAction(page: Page, action: AiAction, valueSub?: (v: string) =
       // 回读确认：若 DOM value 与目标不一致，把实际值反馈给 LLM 以便下轮修正。
       const actual = await loc.inputValue({ timeout: 3000 }).catch(() => '');
       if (actual !== realValue) {
-        // 发生替换（凭据类 fill）时不回显 actual/目标值——防密码片段泄漏回 LLM。
-        if (substituted) return `fill ${action.selector}: 实际值与目标不一致（实际值长度 ${actual.length}）`;
-        return `fill ${action.selector}: 实际值 "${actual}" 与目标 "${action.value}" 不一致`;
+        if (substituted) return { report: `fill ${selector}: 实际值与目标不一致（实际值长度 ${actual.length}）` };
+        return { report: `fill ${selector}: 实际值 "${actual}" 与目标 "${action.value}" 不一致` };
       }
-      return `fill ${action.selector}: ok`;
+      return { report: `fill ${selector}: ok` };
     }
     case 'press': {
       await page.keyboard.press(action.key as never);
-      return `press ${action.key}: ok`;
+      return { report: `press ${action.key}: ok` };
     }
     case 'wait': {
       await page.waitForTimeout(action.ms);
-      return `wait ${action.ms}: ok`;
+      return { report: `wait ${action.ms}: ok` };
     }
     case 'navigate': {
       await page.goto(action.url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
       // 与 init-goto 对齐：等 SPA hydrate，长连接页面 5s 兜底不阻塞。
       await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
-      return `navigate ${action.url}: ok`;
+      return { report: `navigate ${action.url}: ok` };
     }
     case 'screenshot': {
       // 不在这里截图：标记后由主循环在下一轮开头截 4x 白底图
-      return `screenshot ${action.selector}: 已接受，下轮附图`;
+      return { report: `screenshot ${action.selector}: 已接受，下轮附图` };
     }
   }
 }
@@ -656,6 +816,8 @@ export async function runAiTask(
     : undefined;
   let lastResults: string[] = [];
   let pendingShot: string | null = null;
+  /** 同目标连续失败计数（key=selector 或坐标粗桶）：3 连错注入强制页面自检指令，防换 selector 空转。 */
+  const errStreak = new Map<string, number>();
   // 多轮累积：每轮把「本轮 user（+截图）」与「上轮 LLM 原始输出」追加到 history，
   // 请求时整段回传。缓存按前缀匹配，只发当轮会让第 1..N-1 轮内容彻底消失、
   // 每轮都从零建缓存（2026-10-14 网关实测命中率 2%）；累积后第 2 轮起可命中
@@ -663,7 +825,11 @@ export async function runAiTask(
   // 以保证与"当轮实际收到的上下文"逐字一致、缓存前缀不漂移。
   const history: LLMMessage[] = [];
   for (let turn = 1; turn <= maxTurns; turn++) {
+    // 每轮先等渲染静默再截图（对标 midscene 所见即所点：截图时刻与决策时刻页面一致）。
+    // 指纹收敛 best-effort，超时按当前帧继续，绝不阻塞。
+    await waitForPageSettled(page, { timeoutMs: 2500, settleMs: 200 }).catch(() => undefined);
     let buffer: Buffer | null = null;
+    let shotMime: 'image/png' | 'image/jpeg' = 'image/png';
     let imageNote = '';
     if (pendingShot) {
       buffer = await shotElement(page, pendingShot);
@@ -674,9 +840,12 @@ export async function runAiTask(
       // 全页截图超时降级：微前端子应用切换时页面持续重绘/字体慢加载，page.screenshot
       // 等 stable 会 5s 超时抛错。这里不能让它炸掉整个 AI 步骤——重试一次，仍失败则
       // 无图继续本轮（LLM 靠元素清单也能操作），并在下轮结果里标注无图原因。
-      buffer = await page.screenshot({ timeout: 5000 }).catch(() => null);
+      // 主截图走 JPEG（q85）：坐标指认不需要无损精度，token 显著省于 PNG。
+      buffer = await page.screenshot({ timeout: 5000, type: 'jpeg', quality: 85 }).catch(() => null);
+      if (buffer) shotMime = 'image/jpeg';
       if (!buffer) {
-        buffer = await page.screenshot({ timeout: 5000 }).catch(() => null);
+        buffer = await page.screenshot({ timeout: 5000, type: 'jpeg', quality: 85 }).catch(() => null);
+        if (buffer) shotMime = 'image/jpeg';
         if (!buffer) imageNote = '（本轮页面截图超时，无附图；请依赖下方元素清单操作）\n';
       }
     }
@@ -686,11 +855,13 @@ export async function runAiTask(
     } catch (e) {
       logger.warn({ err: e }, 'aiTask dumpElements failed; continuing without element list');
     }
+    const vp = page.viewportSize() ?? { width: 1280, height: 800 };
     const userMessage = [
       `指令：${instruction}`,
       `当前 URL：${page.url()}`,
+      `视口：${vp.width}x${vp.height}`,
       imageNote,
-      `可交互元素（JSON，selector 可直接用于动作）：${JSON.stringify(elements.slice(0, MAX_ELEMENTS))}`,
+      `可交互元素（JSON，box=[x1,y1,x2,y2] 为视口归一化 0-1000 坐标框，与截图对齐；动作坐标按同一坐标系输出）：${JSON.stringify(elements.slice(0, MAX_ELEMENTS))}`,
       opts?.degradeContext ? opts.degradeContext : '',
       lastResults.length > 0 ? `上轮动作结果：\n${lastResults.join('\n')}` : '（首轮，无历史动作）',
       `第 ${turn}/${maxTurns} 轮。`,
@@ -699,7 +870,7 @@ export async function runAiTask(
     history.push({
       role: 'user',
       content: [
-        ...(buffer ? [{ type: 'image' as const, base64: buffer.toString('base64'), mime: 'image/png' as const }] : []),
+        ...(buffer ? [{ type: 'image' as const, base64: buffer.toString('base64'), mime: shotMime }] : []),
         { type: 'text' as const, text: userMessage },
       ],
     });
@@ -709,7 +880,7 @@ export async function runAiTask(
       lang,
       // 单轮字段仍给：无 messages 支持的实现按它们走；回退路径共用。
       userMessage,
-      ...(buffer ? { image: { base64: buffer.toString('base64'), mime: 'image/png' as const } } : {}),
+      ...(buffer ? { image: { base64: buffer.toString('base64'), mime: shotMime } } : {}),
     });
     opts?.onUsage?.(r);
     const raw = r.kind === 'json' ? JSON.stringify(r.value) : r.value;
@@ -727,7 +898,7 @@ export async function runAiTask(
     const actions = (Array.isArray(parsed.actions) ? parsed.actions : [])
       .map(parseAction)
       .filter((a): a is AiAction => a !== null)
-      .slice(0, 6);
+      .slice(0, 2);
     lastResults = [];
     for (const a of actions) {
       if (a.type === 'screenshot') {
@@ -736,21 +907,45 @@ export async function runAiTask(
         opts?.onAction?.(a, true);
         continue;
       }
+      // 同目标连续失败计数（坐标按 ~25‰ 粗桶聚合）：3 连错注入强制自检指令，砍 selector/坐标空转。
+      const streakKey = a.type === 'click' || a.type === 'fill'
+        ? (a.selector ?? (typeof a.x === 'number' && typeof a.y === 'number' ? `@${Math.round(a.x / 25)},${Math.round(a.y / 25)}` : null))
+        : null;
       const sel = 'selector' in a ? a.selector : null;
-      // 动作高亮（blackboard）：selector 动作执行前在目标位置描红框，finally 清除——
-      // 有人观看（playground 画面流）时注入，无人观看零 DOM/CDP 干扰（boundingBox 懒求值）。
+      const coordPt = typeof (a as { x?: number }).x === 'number' && typeof (a as { y?: number }).y === 'number'
+        ? toViewportPt(a as { x?: number; y?: number }, page)
+        : null;
+      // 动作高亮（blackboard）：坐标动作按解析元素取盒（拿不到给点位小盒），selector 动作按
+      // locator 取盒——有人观看（playground 画面流）时注入，无人观看零 DOM/CDP 干扰（懒求值）。
       // 清除保证下轮截图/步截图不被污染。
-      if (sel) await annotateAction(page, () => page.locator(sel).first().boundingBox().catch(() => null));
+      if (coordPt) {
+        const pt = coordPt;
+        await annotateAction(page, async () =>
+          (await resolveAtPoint(page, pt.px, pt.py))?.box ?? { x: pt.px - 10, y: pt.py - 10, width: 20, height: 20 });
+      } else if (sel) {
+        await annotateAction(page, () => page.locator(sel).first().boundingBox().catch(() => null));
+      }
       try {
-        lastResults.push(await execAction(page, a, valueSub));
-        opts?.onAction?.(a, true);
+        const outcome = await execAction(page, a, valueSub);
+        lastResults.push(outcome.report);
+        // onAction 上报 selector 形态（坐标已解析回填），固化/缓存管线形状不变。
+        opts?.onAction?.(toReportAction(a, outcome.resolvedSelector), true);
+        if (streakKey != null) errStreak.delete(streakKey);
+        // 会改页面的动作后短暂稳定，下一个动作不建立在过期认知上（对标 midscene）。
+        if (a.type === 'click' || a.type === 'fill' || a.type === 'navigate') await settleAfterAction(page);
       } catch (e) {
         // 凭据缺失是环境级硬错误：反馈给 LLM 只会让它换 selector 空转烧调用，直接终止本步
         // （EnvMissing/SecretMissing 由 valueSub 抛出，携带可行动的配置指引）。
         if (e instanceof Error && (e.name === 'EnvMissing' || e.name === 'SecretMissing')) throw e;
-        opts?.onAction?.(a, false);
-        const target = sel ?? ('url' in a ? a.url : '');
+        opts?.onAction?.(toReportAction(a, null), false);
+        const streak = streakKey != null ? (errStreak.get(streakKey) ?? 0) + 1 : 0;
+        if (streakKey != null) errStreak.set(streakKey, streak);
+        const target = sel ?? (coordPt ? `@${(a as { x?: number }).x},${(a as { y?: number }).y}` : ('url' in a ? a.url : a.type));
         lastResults.push(`${a.type} ${target}: error ${e instanceof Error ? e.message.slice(0, 150) : String(e)}`);
+        if (streak >= 3) {
+          errStreak.set(streakKey!, 0);
+          lastResults.push(`[system] 目标 ${target} 已连续 3 次失败：停止对它重试。先用截图核对当前页面是否在指令期望的界面（弹窗/跳转/加载中都会让目标消失），页面不对先处理页面；确认页面正确而目标确实不存在，则输出 fail 如实说明。`);
+        }
       } finally {
         await clearAnnotation(page);
       }

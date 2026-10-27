@@ -19,6 +19,7 @@ vi.mock('playwright-core', () => {
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     keyboard: { press: vi.fn().mockResolvedValue(undefined) },
     url: vi.fn(() => 'http://env.example/login'),
+    viewportSize: vi.fn(() => ({ width: 1280, height: 800 })),
     // dumpElements 的 evaluate：返回元素清单
     evaluate: vi.fn().mockResolvedValue([{ selector: '#user', tag: 'input', placeholder: '账号' }]),
     context: vi.fn(() => ({ pages: () => [] })),
