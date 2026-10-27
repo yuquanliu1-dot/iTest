@@ -21,6 +21,7 @@ import { buildLoginTools } from './login.js';
 import { buildVerifyCaseTool } from './verifyCase.js';
 import { buildExportCasesXmindTool } from './exportCasesXmind.js';
 import { buildSolidifyCaseTool } from './solidifyCase.js';
+import { buildRunAiStepTool } from './runAiStep.js';
 import { buildCaseOpsTools } from './case-ops-tools.js';
 import { buildReadSkillTool } from './readSkill.js';
 import { buildRunSkillScriptTool } from './runSkillScript.js';
@@ -79,6 +80,7 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   tools.push(buildExportCasesXmindTool(ctx));
   tools.push(buildVerifyCaseTool(ctx));
   tools.push(buildSolidifyCaseTool(ctx));
+  tools.push(buildRunAiStepTool(ctx));
   tools.push(...buildStageTools(ctx));
   tools.push(...buildCaseOpsTools(ctx));
   tools.push(...buildCasesTools(ctx));

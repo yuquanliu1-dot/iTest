@@ -52,6 +52,7 @@ export default function SpaceThreadPane({ threadId }: { threadId: string }) {
         <ThreadPrimitive.ViewportFooter className="border-t p-3" style={{ borderColor: 'var(--border)' }}>
           <VerifyProgressCard />
           <SolidifyProgressCard />
+          <AiStepProgressCard />
           <ArtifactCards threadId={threadId} />
           <RuntimeNotice />
           <QueuePanel />
@@ -450,6 +451,51 @@ function SolidifyProgressCard() {
       ) : (
         <Icon name="loader" size={12} className="animate-spin" style={{ color: 'var(--primary)', flexShrink: 0 }} />
       )}
+      </div>
+    </div>
+  );
+}
+
+/** run_ai_step 实时进度卡：ai_step_progress SSE 事件驱动，单行指示（start/end 两相）。
+ *  免暂存直跑 AI 相：显示当前执行的自然语言指令与结果（通过/失败及原因）。 */
+function AiStepProgressCard() {
+  const { t } = useTranslation();
+  const ap = useSpaceEventsStore((s) => s.aiStepProgress);
+  if (!ap) return null;
+  const done = ap.result !== null;
+  let status: string;
+  if (!done) status = t('assistant:aiStep.running');
+  else if (ap.result === 'passed') status = t('assistant:aiStep.passed');
+  else status = ap.reason ? `${t('assistant:aiStep.failed')} — ${ap.reason}` : t('assistant:aiStep.failed');
+  return (
+    <div
+      className="fade-up mb-2 rounded-[var(--radius-md)] px-3 py-2 text-[12px]"
+      style={{ background: 'var(--muted)', border: '1px solid var(--border)', color: 'var(--muted-foreground)' }}
+    >
+      {/* 实时画面在右侧栏（LiveViewRail），此处只留单行状态 */}
+      <div className="flex items-center gap-1.5">
+        <Icon name="play" size={12} style={{ flexShrink: 0 }} />
+        <span className="truncate" title={ap.instruction}>
+          {t('assistant:aiStep.cardTitle', {
+            instruction: ap.instruction,
+            statusSuffix: status ? t('assistant:aiStep.statusSuffix', { status }) : '',
+          })}
+        </span>
+        {done && ap.durationMs != null ? (
+          <span style={{ flexShrink: 0 }}>{t('assistant:verify.stepDuration', { sec: (ap.durationMs / 1000).toFixed(1) })}</span>
+        ) : null}
+        {done ? (
+          <Icon
+            name={ap.result === 'passed' ? 'check' : 'close'}
+            size={12}
+            style={{
+              color: ap.result === 'passed' ? 'var(--success)' : 'var(--destructive)',
+              flexShrink: 0,
+            }}
+          />
+        ) : (
+          <Icon name="loader" size={12} className="animate-spin" style={{ color: 'var(--primary)', flexShrink: 0 }} />
+        )}
       </div>
     </div>
   );

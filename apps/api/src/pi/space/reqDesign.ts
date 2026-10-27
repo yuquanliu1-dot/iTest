@@ -60,7 +60,9 @@ export const CASE_AUTHORING_FLOW_ZH = `## 用例创建流程
 5. 固化完成后**自动**调 verify_case(mode='mechanical') 验收：**跳过 AI 相,只做机械干跑（与正式回放同引擎逐字执行 compiled）+ 终态判定**——语义验证已在上一步实测完成,不重复烧 AI 轮次。**固化后的验收一律走 mechanical,不要为了「保险」再跑一遍 full**。失败按失败归因修复 compiled 后重跑 mechanical；**同因连续两轮失败、或失败归因不明时改用 mode='full'**（重跑全 AI 实测,顺带刷新轨迹缓存）。全程同一用例最多 3 轮。
 6. **全程不落库**：实测/固化/验收都作用于暂存草稿,全部通过后引导用户在右侧暂存区勾选**一次性统一保存（落库）**。
 
-**批量场景**：一次需求产出多条用例时，按「逐条讨论 → 逐条暂存」串行推进,不要一次性铺开所有草稿——用户需要逐条审,铺开等于把确认门稀释掉。每条讨论确认后再 stage_case,下一条再开始讨论。实测环节用户确认要多条一起跑时可以接力：一条 AI 相跑完出结论再开下一条,不要并发。`;
+**批量场景**：一次需求产出多条用例时，按「逐条讨论 → 逐条暂存」串行推进,不要一次性铺开所有草稿——用户需要逐条审,铺开等于把确认门稀释掉。每条讨论确认后再 stage_case,下一条再开始讨论。实测环节用户确认要多条一起跑时可以接力：一条 AI 相跑完出结论再开下一条,不要并发。
+
+**免草稿直跑（用户明确要求时）**：用户明确表示「不用生成步骤,直接跑 / 先在页面上试一下」时,可跳过上面的草稿与询问环节,改用 run_ai_step 逐条执行用户的自然语言指令（同线程复用浏览器会话,页面状态保留,可边跑边讨论）,每步跑完即回报结果。跑通的步骤后续要沉淀为用例时,再回到上面的常规流程（stage_case 暂存验证过的步骤 → verify_case 实测 → solidify_case 固化）。`;
 
 /** 用例创建流程指引（S1 seed 用，en）。 */
 export const CASE_AUTHORING_FLOW_EN = `## Case authoring workflow
@@ -71,4 +73,6 @@ export const CASE_AUTHORING_FLOW_EN = `## Case authoring workflow
 5. After solidify completes, AUTOMATICALLY call verify_case(mode='mechanical') for acceptance: **the AI phase is skipped — only a mechanical dry-run (compiled executed literally with the same engine as real replay) plus the final-state judgment**, because the semantic verification already happened in the live test above; no AI round is burned twice. **Acceptance after solidify always goes through mechanical — do NOT run another full "just to be safe".** On failure fix compiled per failure attribution and re-run mechanical; **after two consecutive failures with the same cause, or when the attribution is unclear, switch to mode='full'** (re-run the full AI live test, which also refreshes the trace cache). Max 3 rounds per case overall.
 6. **Nothing lands in the DB throughout** — live test / solidify / acceptance all operate on the staged draft. Only after everything passes, guide the user to check and save ONCE from the staging panel on the right.
 
-**Batch mode**: when one requirement yields multiple cases, drive them serially as "discuss one → stage one". Do NOT dump all drafts at once — the user reviews one at a time, and bulk-dumping dilutes the confirmation gate. Start the next discussion only after the current one is confirmed and staged. For live-test runs the user may approve several at once: chain them serially, starting the next only after the current AI phase finishes; never run them concurrently.`;
+**Batch mode**: when one requirement yields multiple cases, drive them serially as "discuss one → stage one". Do NOT dump all drafts at once — the user reviews one at a time, and bulk-dumping dilutes the confirmation gate. Start the next discussion only after the current one is confirmed and staged. For live-test runs the user may approve several at once: chain them serially, starting the next only after the current AI phase finishes; never run them concurrently.
+
+**Direct run without drafting (only when the user explicitly asks)**: when the user explicitly says "no need to draft steps, just run it / try it on the page directly", skip the drafting-and-asking flow above and use run_ai_step to execute the user's natural-language instructions one at a time (consecutive calls in the same thread reuse one browser session with page state preserved, so you can run and discuss in parallel); report the result of each step as soon as it finishes. When the user later wants to turn the verified steps into a case, return to the regular flow above (stage_case the verified steps → verify_case live test → solidify_case).`;

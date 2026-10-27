@@ -42,6 +42,7 @@
     "managePlans": "Manage plans",
     "verifyCase": "Verify case",
     "solidifyCase": "Solidify case",
+    "runAiStep": "Run AI step",
     "readRepo": "Read repo"
   },
   "verify": {
@@ -65,6 +66,13 @@
     "keptSuffix": ", kept {{count}} steps in visual mode",
     "nothingWithKept": "Nothing to solidify, {{count}} steps stay in visual mode",
     "nothing": "Nothing to solidify"
+  },
+  "aiStep": {
+    "cardTitle": "AI live run \"{{instruction}}\"{{statusSuffix}}",
+    "statusSuffix": " · {{status}}",
+    "running": "running…",
+    "passed": "passed",
+    "failed": "failed"
   },
   "kind": {
     "case": "Case",
