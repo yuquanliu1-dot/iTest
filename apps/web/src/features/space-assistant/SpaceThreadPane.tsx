@@ -314,10 +314,15 @@ function toolMeta(toolName: string, args: unknown): { icon: IconName; label: str
   return null;
 }
 
-/** verify_case 实时进度卡：verify_progress SSE 事件驱动，逐条渲染步骤状态（运行中/通过/失败）。 */
+/** verify_case 实时进度卡：verify_progress SSE 事件驱动，逐条渲染步骤状态（运行中/通过/失败）。
+ *  步骤明细可折叠：实测跑完会有十几步清单常驻输入框上方、挤占输入区——点标题行收起。 */
 function VerifyProgressCard() {
   const { t } = useTranslation();
   const vp = useSpaceEventsStore((s) => s.verifyProgress);
+  const [open, setOpen] = useState(true);
+  // 新一轮实测（换用例）自动展开——上轮的折叠状态不该延续到新一轮。
+  const caseId = vp?.caseId;
+  useEffect(() => { setOpen(true); }, [caseId]);
   if (!vp) return null;
   const done = vp.result !== null;
   return (
@@ -326,7 +331,13 @@ function VerifyProgressCard() {
       style={{ background: 'var(--muted)', border: '1px solid var(--border)' }}
     >
       {/* 实时画面已移到右侧栏（LiveViewRail），此处只留步骤进度 */}
-      <div className="mb-1.5 flex items-center gap-1.5" style={{ color: 'var(--muted-foreground)' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="btn-tint mb-1.5 flex w-full items-center gap-1.5 rounded text-left"
+        style={{ color: 'var(--muted-foreground)' }}
+      >
         <Icon name="beaker" size={12} style={{ flexShrink: 0 }} />
         <span className="truncate">
           {t('assistant:verify.cardTitle', {
@@ -357,7 +368,9 @@ function VerifyProgressCard() {
           <Icon name="loader" size={12} className="animate-spin" style={{ color: 'var(--primary)', flexShrink: 0 }} />
         )}
         {done && vp.cacheSaved ? <span style={{ flexShrink: 0 }}>{t('assistant:verify.cacheWritten')}</span> : null}
-      </div>
+        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} style={{ flexShrink: 0, marginLeft: 'auto' }} />
+      </button>
+      {open && (
       <div className="flex flex-col gap-0.5">
         {vp.steps.map((s) => (
           <div key={s.order} className="flex items-start gap-1.5" style={{ color: 'var(--muted-foreground)' }}>
@@ -409,6 +422,7 @@ function VerifyProgressCard() {
           </div>
         ) : null}
       </div>
+      )}
     </div>
   );
 }
