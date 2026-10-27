@@ -24,8 +24,9 @@ export default function RcaDistributionCard({ days, rca }: { days: number; rca: 
   const { t } = useTranslation();
   const max = Math.max(...CATEGORY_META.map((m) => rca.byCategory[m.key]), 1);
 
+  // h-full：与同排卡片等高（内容短时空白留在卡内，底部对齐）
   return (
-    <Panel title={t('overview:rcaTitle')} subtitle={t('overview:rcaSub', { days, count: rca.analyzed })}>
+    <Panel className="h-full" title={t('overview:rcaTitle')} subtitle={t('overview:rcaSub', { days, count: rca.analyzed })}>
       {rca.analyzed === 0 ? (
         <p className="py-8 text-center text-[12.5px]" style={{ color: 'var(--muted-foreground)' }}>
           {t('overview:rcaEmpty')}

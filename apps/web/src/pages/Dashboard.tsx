@@ -166,7 +166,8 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Row: RCA / coverage / top failures */}
+        {/* Row: RCA / coverage / top failures —— 三张卡片等高（底部对齐）：各卡片 Panel 自带 h-full，
+            短内容卡片（RCA 空态/Top 失败用例）拉伸到与最高一张同高，避免底部留白。 */}
         <div className="grid grid-cols-12 gap-4 fade-up">
           <div className="col-span-4">
             <RcaDistributionCard days={days} rca={data.rca} />

@@ -23,8 +23,9 @@ export default function TopFailuresChart({
   const { versionId } = useParams<{ versionId: string }>();
   const max = Math.max(...data.map((d) => d.failureCount), 1);
 
+  // h-full：与同排卡片等高（内容短时空白留在卡内，底部对齐）
   return (
-    <Panel title={t('overview:topFailuresTitle')} subtitle={t('overview:topFailuresRange', { days })}>
+    <Panel className="h-full" title={t('overview:topFailuresTitle')} subtitle={t('overview:topFailuresRange', { days })}>
       {data.length === 0 ? (
         <p className="py-8 text-center text-[12.5px]" style={{ color: 'var(--muted-foreground)' }}>
           {t('overview:topFailuresEmpty', { days })}

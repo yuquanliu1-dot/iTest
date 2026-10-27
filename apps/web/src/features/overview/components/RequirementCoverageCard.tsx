@@ -22,6 +22,7 @@ export default function RequirementCoverageCard({ coverage }: { coverage: Covera
 
   return (
     <Panel
+      className="h-full"
       title={t('overview:coverageTitle')}
       subtitle={t('overview:coverageSub', {
         total: coverage.totalRequirements,
