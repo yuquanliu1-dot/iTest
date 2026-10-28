@@ -399,6 +399,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       'mode="mechanical" 的两个限制要如实告知用户：(1) 全视觉用例（无 compiled）会被直接拒绝——此时先调 mode="full" 实测；(2) 机械模式没有 AI 相，整体登录不自动做，靠登录态缓存（30 分钟）注入——但 solidify 固化出的 aiTask 执行步（status=aiTask-fallback，含凭据步）会在干跑里由 AI 真实执行并按 instruction 自助登录，需要 LLM。副本重启或缓存过期落到登录页时，失败页是登录页就改 mode="full" 重测（顺带刷新登录态与轨迹缓存）。',
       'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
+      'verify_case 成功响应里的 page 是本轮终态页面上真实存在的可交互元素清单（已去重降噪，另有 N 个同类元素折叠省略）。边跑边讨论提议下一步或讨论筛选项/按钮时，只能引用 page.elements（或 failure.page.elements）里真实存在的控件——清单里没有的输入框/下拉/筛选项（如「时间范围」「等级」）一律不得提议或断言其存在，页面事实以实测清单为准。',
       '自然语言步骤的 AI 相失败分流（failureReason=AiTaskAborted/StepTimedOut/StepReportedFailed 且失败步无 compiled locator 可修，failure.note 会以「该步是自然语言步骤，由 AI 相」开头提示）：大概率是步骤描述与页面实际不符——目标不存在/措辞歧义/前置状态没建立，也可能是前面步骤的描述把页面带偏——这不是你能自行修复的技术错误，重跑不改变结果（AI 相每步 1~2 分钟纯烧时间与 token）。此时停止重跑与自诊，把失败步原文、failureReason、失败页 URL/截图反馈给用户，请用户选择：调整该步（或前面步骤）的自然语言描述 / 补充入口线索 / 确认环境数据后再验；用户明确答复前不再调用 verify_case。仅当你确有把握是措辞歧义（步骤原文与页面实际文案不一致）时，可修正描述重发 stage_case 后再验一次。',
       'stage_case 新建的纯草稿用例（未落库）也可直接 verify_case：caseId 传 stage_case 时声明的 localId；修正循环 = 同 localId 重发 stage_case（幂等覆盖）后再次 verify_case，全程不落库，通过后引导用户在暂存区勾选保存。注意：暂存草稿的 defaultEnvId 只能绑定已落库环境或留空走默认链（暂存环境不支持）。',
       'verify_case 会校验 compiled 选择器能真实命中页面（AI 临场绕开坏 locator 不算通过，回放逐字执行 compiled 会失败）:失败原因含"定位校验不通过"时,必须用 failure.page.elements 里的真实选择器替换原 locator(严禁留着坏 locator 只靠 AI 硬跑)。候选命中多个元素(AmbiguousLocator)同样判失败——回放会静默操作第一个匹配元素,必须给该候选加属性过滤(如 [placeholder=...])或把唯一命中的候选提到首位。verify_case 还会做用例级终态判定(失败原因含 VisionAssertionFailed):步骤都通过但最终页面不符 expectedOutcome 时,修正步骤行为或调整 expectedOutcome 后再验。',
@@ -1236,6 +1237,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           if (failedIndex < 0 && !visionFailure && !replayFailure) {
             // cacheSaved: 正常收尾均无条件回写（watchdog 超时路径在循环内提前 return,无 end 事件）
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'passed', cacheSaved: true });
+            // 成功页实况清单（与 failure.page 对称）：终态页上真实存在的可交互控件。
+            // 边跑边讨论时 agent 讨论「下一步用哪个控件」只能以此为准，杜绝臆造筛选项。
+            // replayPage 是干跑终态页；纯视觉草稿跳过干跑，回落 AI 相页面。
+            const successPage = await extractPageElements(replayPage ?? page).catch(() => null);
             const rdata = withRoundNotes({
               result: 'passed',
               caseId,
@@ -1255,6 +1260,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
               steps: stepsSummary,
               ...droppedField,
+              ...(successPage ? { page: successPage } : {}),
               // replay 只在机械干跑真的跑了时才有意义：全视觉用例（无 compiled）跳过干跑，
               // 此时若照发 durationMs 会是 Date.now()-0 的 epoch 垃圾值（prod228 出现 6 次）。
               ...(replayStartedAt > 0

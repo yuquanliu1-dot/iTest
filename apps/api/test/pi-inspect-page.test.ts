@@ -66,8 +66,11 @@ describe('inspectPage', () => {
     mocks.state.evalValue = {
       title: '元素管理',
       bodyLen: 520,
-      elements: ['- button#add "添加元素" 选择器: #add', '- input[placeholder="搜索元素..."] 选择器: text=搜索元素...'],
-      truncated: false,
+      overflow: false,
+      candidates: [
+        { tag: 'button', type: '', id: 'add', name: '', role: '', text: '添加元素', placeholder: '', aria: '', titleAttr: '', testid: '', editable: false, selector: '#add' },
+        { tag: 'input', type: 'text', id: '', name: 'kw', role: '', text: '', placeholder: '搜索元素...', aria: '', titleAttr: '', testid: '', editable: false, selector: 'text=搜索元素...' },
+      ],
     };
     const out = await inspectPage('http://192.168.30.228:8088/static/element-manager.html');
     expect(mocks.state.gotoUrls).toEqual(['http://192.168.30.228:8088/static/element-manager.html']);
@@ -87,11 +90,13 @@ describe('inspectPage', () => {
     mocks.state.evalValue = {
       title: '元素管理',
       bodyLen: 520,
-      elements: ['- a#1', '- a#2', '- a#3', '- a#4', '- a#5', '- a#6'],
-      truncated: false,
+      overflow: false,
+      candidates: [1, 2, 3, 4, 5, 6].map((i) => ({
+        tag: 'a', type: '', id: String(i), name: '', role: '', text: `链接${i}`, placeholder: '', aria: '', titleAttr: '', testid: '', editable: false, selector: `#${i}`,
+      })),
     };
     const out = await inspectPage('http://192.168.30.228:8088/static/element-manager.html');
-    expect(out).toContain('抓取质量: 正常(可交互元素 6 个,正文 520 字符)');
+    expect(out).toContain('抓取质量: 正常(可交互元素 6 个,正文 520 字符;清单已去重降噪,保留 6 条)');
   });
 
   it('正文过短(<100 字符)时即使元素多也判低质量(空壳/404 特征)', async () => {
@@ -99,5 +104,7 @@ describe('inspectPage', () => {
     expect(assessPageQuality({ title: 'mainApp', bodyLen: 6, elements: ['- a', '- b', '- c', '- d', '- e'] })).toBe('low');
     expect(assessPageQuality({ title: '404', bodyLen: 0, elements: [] })).toBe('low');
     expect(assessPageQuality({ title: 'x', bodyLen: 100, elements: ['- a', '- b', '- c', '- d', '- e'] })).toBe('ok');
+    // 去重/限额后清单很短但真实候选充足时不算空壳（candidateCount 兜底）
+    expect(assessPageQuality({ title: 'x', bodyLen: 200, elements: [], candidateCount: 8 })).toBe('ok');
   });
 });

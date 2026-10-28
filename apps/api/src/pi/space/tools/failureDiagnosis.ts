@@ -105,7 +105,7 @@ function buildEvidenceText(o: {
   }
   lines.push(`可见浮层: ${o.overlays.length === 0 ? '无' : o.overlays.map((x) => `<${x.tag}>「${x.text || x.selector}」`).join('；').slice(0, 500)}`);
   lines.push(`页面: ${o.elements.url}${o.elements.title ? ` / ${o.elements.title}` : ''}`);
-  lines.push(`可交互元素清单(${o.elements.elements.length}${o.elements.truncated ? ',已截断' : ''}):`);
+  lines.push(`可交互元素清单(${o.elements.elements.length}${o.elements.truncated ? ',已截断' : ''}${o.elements.suppressed ? `,另有 ${o.elements.suppressed} 个同类元素折叠省略` : ''}${o.elements.suppressedSummary ? `(${o.elements.suppressedSummary})` : ''}):`);
   lines.push(o.elements.elements.slice(0, 120).join('\n'));
   return lines.join('\n');
 }

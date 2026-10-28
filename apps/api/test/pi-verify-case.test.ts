@@ -376,6 +376,21 @@ describe('verify_case 逐步 AI 执行编排', () => {
     expect(end.cacheSaved).toBe(true);
   });
 
+  it('成功路径也回传终态页元素清单(page)：边跑边讨论讨论控件只以实测清单为准', async () => {
+    const caseId = await seedCase({ steps: [CLICK_COMPILED] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"完成","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('passed');
+      // 成功响应与 failure.page 对称带回 page 元素清单（防 agent 臆造页面控件）
+      expect(data.page.elements[0]).toContain('button#del');
+    }
+  });
+
   it('ctx.liveView=false：不注册实时画面且 start 无 liveUrl（批量后台链路）；缺省会话行为不变', async () => {
     const { registerLiveView } = await import('../src/execute/liveView.js');
     const { runAiTask } = await import('../src/execute/aiTask.js');

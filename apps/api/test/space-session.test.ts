@@ -155,6 +155,22 @@ describe('space session supervisor', () => {
     expect(CASE_AUTHORING_FLOW_EN).toContain('ZERO execution');
   });
 
+  it('简洁专业+禁臆造文案（10-28 prod228 实录：回复啰嗦、编造「时间范围」筛选项）', async () => {
+    const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
+    const { REQ_DESIGN_METHOD, CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN } = await import('../src/pi/space/reqDesign.js');
+    const zh = buildSpaceSystemPrompt(null, undefined, []);
+    expect(zh).toContain('结论先行');
+    expect(zh).toContain('杜绝胡编乱造');
+    const en = buildSpaceSystemPrompt(null, 'en-US', []);
+    expect(en).toContain('Never fabricate');
+    // 方法论补 §6：页面控件以实测清单为准
+    expect(REQ_DESIGN_METHOD).toContain('禁臆造控件');
+    expect(REQ_DESIGN_METHOD).toContain('page.elements');
+    // B 路径回报规则：简洁 + 只引用实测清单里真实存在的控件
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('回报要简洁');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('keep the report concise');
+  });
+
   it('B 路径（边跑边讨论）文案：走 stage_case+verify_case，run_ai_step 已退役不再出现', async () => {
     const { CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN } = await import('../src/pi/space/reqDesign.js');
     // B 入口段落存在且路由到 verify_case；分叉是「明确要求才进 B，纯需求输入走 A」
