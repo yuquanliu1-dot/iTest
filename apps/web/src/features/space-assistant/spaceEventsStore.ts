@@ -55,6 +55,9 @@ export interface VerifyProgressState {
   stagedOps: number;
   /** 浏览器实时画面流地址（MJPEG multipart，<img> 直接解码）；null=不可用。 */
   liveUrl: string | null;
+  /** 本轮 start 事件的 seq（后端全局单调）：多张卡都有 liveUrl 时据此挑「最新一轮」，
+   *  避免登录卡与上一轮已结束的 verify 卡抢同一块画面区（已结束的 liveUrl 再连即 404）。 */
+  seq?: number;
 }
 
 /** solidify_case 实时进度（solidify_progress SSE 事件驱动）：单行指示（start/end 两相）。 */
@@ -71,6 +74,21 @@ export interface SolidifyProgressState {
   reason: string | null;
   /** 浏览器实时画面流地址（MJPEG multipart，<img> 直接解码）；null=不可用。 */
   liveUrl: string | null;
+  /** 本轮 start 事件的 seq（后端全局单调）：多张卡都有 liveUrl 时据此挑「最新一轮」。 */
+  seq?: number;
+}
+
+/** perform_login 环境凭据登录进度（login_progress SSE 事件驱动）：右栏直播登录全过程。 */
+export interface LoginProgressState {
+  /** 环境配置的登录用户名；null=未知（批量链路/无凭据）。 */
+  user: string | null;
+  /** 登录目标 URL。 */
+  targetUrl: string | null;
+  result: 'passed' | 'failed' | null;
+  /** 浏览器实时画面流地址（MJPEG multipart，<img> 直接解码）；null=不可用。 */
+  liveUrl: string | null;
+  /** 本轮 start 事件的 seq（后端全局单调）：多张卡都有 liveUrl 时据此挑「最新一轮」。 */
+  seq?: number;
 }
 
 /** artifact SSE 事件（AI 产出文件下载卡）。 */
@@ -112,6 +130,8 @@ interface SpaceEventsState {
   verifyProgress: VerifyProgressState | null;
   /** solidify_case 实时进度（solidify_progress 事件驱动）。生命周期同 verifyProgress。 */
   solidifyProgress: SolidifyProgressState | null;
+  /** perform_login 环境凭据登录进度（login_progress 事件驱动）。生命周期同 verifyProgress。 */
+  loginProgress: LoginProgressState | null;
   /** 暂存对象池：用户预览/勾选 → save 时入参的 source of truth。 */
   stagedByThread: StagedByThread;
   stagedSelection: StagedSelection;
@@ -155,6 +175,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
   announce: null,
   verifyProgress: null,
   solidifyProgress: null,
+  loginProgress: null,
   stagedByThread: new Map(),
   stagedSelection: new Map(),
   artifactsByThread: new Map(),
@@ -228,6 +249,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
             cacheSaved: false,
             stagedOps: Number(e.stagedOps ?? 0),
             liveUrl: typeof e.liveUrl === 'string' ? e.liveUrl : null,
+            ...(typeof e.seq === 'number' ? { seq: e.seq } : {}),
           },
         });
         return;
@@ -324,6 +346,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
             kept: null,
             reason: null,
             liveUrl: typeof e.liveUrl === 'string' ? e.liveUrl : null,
+            ...(typeof e.seq === 'number' ? { seq: e.seq } : {}),
           },
         });
         return;
@@ -343,6 +366,34 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
             },
           };
         });
+      }
+      return;
+    }
+    if (e.type === 'login_progress') {
+      const phase = e.phase as string;
+      if (phase === 'start') {
+        set({
+          loginProgress: {
+            user: typeof e.user === 'string' ? e.user : null,
+            targetUrl: typeof e.targetUrl === 'string' ? e.targetUrl : null,
+            result: null,
+            liveUrl: typeof e.liveUrl === 'string' ? e.liveUrl : null,
+            ...(typeof e.seq === 'number' ? { seq: e.seq } : {}),
+          },
+        });
+        return;
+      }
+      if (phase === 'end') {
+        set((s) =>
+          s.loginProgress
+            ? {
+                loginProgress: {
+                  ...s.loginProgress,
+                  result: e.result === 'failed' ? ('failed' as const) : ('passed' as const),
+                },
+              }
+            : s,
+        );
       }
       return;
     }
@@ -366,18 +417,20 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
       return;
     }
     if (e.type === 'agent_start') {
-      // 新一轮开始:清掉上一轮的 announce(舞台历史保留);verify/solidify 只清「没跑完的」
+      // 新一轮开始:清掉上一轮的 announce(舞台历史保留);verify/solidify/login 只清「没跑完的」
       // (停跑/报错残留的 running 卡)。已完成的进度卡必须保留——右栏 live view 的定格帧与
       // 回放按钮靠它存活,而已结束的 liveUrl 新连接会 404,卸载重挂就是黑屏:B 路径逐条
       // 确认的讨论窗口里画面不能消失。新一轮执行的事件到达时自然整体覆盖。
       set((s) => {
         const verifyStale = s.verifyProgress !== null && s.verifyProgress.result === null;
         const solidifyStale = s.solidifyProgress !== null && s.solidifyProgress.result === null;
-        if (!s.announce && !verifyStale && !solidifyStale) return s;
+        const loginStale = s.loginProgress !== null && s.loginProgress.result === null;
+        if (!s.announce && !verifyStale && !solidifyStale && !loginStale) return s;
         return {
           announce: null,
           verifyProgress: verifyStale ? null : s.verifyProgress,
           solidifyProgress: solidifyStale ? null : s.solidifyProgress,
+          loginProgress: loginStale ? null : s.loginProgress,
         };
       });
     }
@@ -441,7 +494,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
     return { stagedByThread: next, stagedSelection: sel };
   }),
   reset: () => set({
-    confirms: [], stageHistory: [], announce: null, verifyProgress: null, solidifyProgress: null,
+    confirms: [], stageHistory: [], announce: null, verifyProgress: null, solidifyProgress: null, loginProgress: null,
     stagedByThread: new Map(), stagedSelection: new Map(), lastSeqByThread: new Map(),
     artifactsByThread: new Map(),
   }),

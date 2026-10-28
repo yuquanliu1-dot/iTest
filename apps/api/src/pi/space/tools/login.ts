@@ -3,6 +3,7 @@ import { chromium } from 'playwright-core';
 import { resolveEnv } from '../../../execute/envContext.js';
 import { runAiTask, credentialPlaceholder, makeCredentialValueSub } from '../../../execute/aiTask.js';
 import { buildCredentialSource, renderWebResourceManifest } from '../../../execute/credentialSource.js';
+import { registerLiveView } from '../../../execute/liveView.js';
 import { resolveLlmClient } from '../../../agent/llmSettings.js';
 import { tryParseJson } from '../../../agent/llm-client.js';
 import { loginStateKey, saveLoginState } from './loginStateCache.js';
@@ -71,13 +72,14 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
     {
       name: 'perform_login',
       description:
-        '使用当前版本/项目默认环境的应用登录凭据在被测系统执行登录（AI 驱动浏览器：登录页判断、验证码识别、弹窗处理均由模型自主完成），返回 storageState（JSON 字符串）。webRef 可指定用哪个命名 web 服务的凭据（缺省=默认 web 服务）。后续可将 storageState 传给 inspect_page 以抓取登录态页面；凭据在服务端以占位符注入，不会出现在输出中。',
+        '使用当前版本/项目默认环境的应用登录凭据在被测系统执行登录（AI 驱动浏览器：登录页判断、验证码识别、弹窗处理均由模型自主完成），返回 storageState（JSON 字符串）。**登录全程有实时画面**（右栏 LiveViewRail 显示 MJPEG 流，用户能看到填表与提交）——别把「登录成功」的判断只建立在返回的 storageState 上。webRef 可指定用哪个命名 web 服务的凭据（缺省=默认 web 服务）。后续可将 storageState 传给 inspect_page 以抓取登录态页面；凭据在服务端以占位符注入，不会出现在输出中。',
       parameters: Type.Object({
         url: Type.Optional(Type.String({ minLength: 8, maxLength: 2000 })),
         webRef: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
       }),
       promptGuidelines: [
-        '若 inspect_page 返回登录页，先调用 get_login_credentials 确认凭据已配置，再调用 perform_login 获取 storageState，最后将 storageState 传入 inspect_page。',
+        'perform_login 登录全程有实时画面（用户能在右栏看到填表与提交）——登录成功后不要再抓页面确认登录态,storageState 即登录态凭证。',
+        '仅当用户明确要求分析页面时才用 inspect_page 确认登录态（把 perform_login 返回的 storageState 传进去）。',
         '要登某个具名 web 服务时，perform_login 传 webRef=<服务名>（可用服务名见 get_login_credentials 返回的 webServices）。',
       ],
       execute: async (input) => {
@@ -106,9 +108,24 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
             headless: true,
             executablePath: process.env.CHROMIUM_PATH || undefined,
           });
+          // 实时画面：登录过程对用户可见（填表/验证码/提交都在流里）。
+          // 与 verify_case/solidify_case 同款契约——registerLiveView 拿随机 key，
+          // start 事件把流地址带给前端 LiveViewRail，结束 close 收流（录制留供回放）。
+          // ctx.liveView === false 为批量后台链路：不注册画面源，省 0.5fps 截图轮询开销。
+          let live: ReturnType<typeof registerLiveView> | undefined;
           try {
             const context = await browser.newContext({ ignoreHTTPSErrors: true });
             const page = await context.newPage();
+            if (ctx.liveView !== false) {
+              live = registerLiveView();
+              live.setPage(page);
+            }
+            ctx.emit({
+              type: 'login_progress', phase: 'start',
+              user: cred?.user ?? null,
+              targetUrl,
+              liveUrl: live ? `/api/assistant/threads/${ctx.threadId}/live/${live.key}` : undefined,
+            });
             // 凭据替换复用执行层唯一实现（与 verify_case/solidify_case/机械回放同一把尺）：
             // 显式 webRef 优先，缺省走「用例 web_service_ref → 环境默认 web」链。
             const summary = await runAiTask(
@@ -125,16 +142,19 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
             const parsed = tryParseJson(summary);
             if (parsed?.status === 'failed') {
               const reason = typeof parsed.reason === 'string' ? parsed.reason : summary.slice(0, 200);
+              ctx.emit({ type: 'login_progress', phase: 'end', result: 'failed', reason });
               return { ok: false, error: `登录失败: ${reason}` };
             }
             const storageState = await context.storageState();
             // 暖缓存：verify_case 及后续 perform_login 同环境同账号直接复用（过期自愈）
             saveLoginState(loginStateKey(envCtx.envId, cred?.user), storageState);
+            ctx.emit({ type: 'login_progress', phase: 'end', result: 'passed' });
             return {
               ok: true,
               data: JSON.stringify({ storageState, message: '登录成功' }),
             };
           } finally {
+            live?.close();
             await browser.close().catch(() => {});
           }
         } catch (e) {

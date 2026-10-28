@@ -194,6 +194,28 @@ describe('perform_login（AI 驱动）', () => {
     if (!r.ok) expect(r.error).toContain('验证码始终识别错误');
   });
 
+  it('登录过程广播 login_progress start/end：start 带 liveUrl+user+targetUrl，end 带 result', async () => {
+    mockEnv({ user: 'qa01', password: 'Passw0rd!', loginUrl: 'http://e/login' });
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"登录成功"}');
+    const events: Array<Record<string, unknown>> = [];
+    const [, loginTool] = buildLoginTools({ ...toolCtx(), emit: (e) => events.push(e) });
+    const r = await loginTool.execute({});
+    expect(r.ok).toBe(true);
+    expect(events.map((e) => e.type)).toEqual(['login_progress', 'login_progress']);
+    expect(events[0]).toMatchObject({ phase: 'start', user: 'qa01', targetUrl: 'http://e/login' });
+    expect(String(events[0]!.liveUrl)).toMatch(/^\/api\/assistant\/threads\/t1\/live\//);
+    expect(events[1]).toMatchObject({ phase: 'end', result: 'passed' });
+  });
+
+  it('登录失败 → end 事件 result=failed 携带 reason', async () => {
+    mockEnv({ user: 'qa01', password: 'Passw0rd!', loginUrl: 'http://e/login' });
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"failed","reason":"验证码始终识别错误"}');
+    const events: Array<Record<string, unknown>> = [];
+    const [, loginTool] = buildLoginTools({ ...toolCtx(), emit: (e) => events.push(e) });
+    await loginTool.execute({});
+    expect(events[1]).toMatchObject({ phase: 'end', result: 'failed', reason: '验证码始终识别错误' });
+  });
+
   it('runAiTask reject → ok:false', async () => {
     mockEnv({ user: 'qa01', password: 'Passw0rd!', loginUrl: 'http://e/login' });
     vi.mocked(runAiTask).mockRejectedValue(new Error('aiTask 超过 10 轮未完成'));
