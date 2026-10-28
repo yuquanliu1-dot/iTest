@@ -482,10 +482,34 @@ export const executionPlans = pgTable('execution_plans', {
   versionIdIdx: index('execution_plans_version_idx').on(t.versionId),
 }));
 
+/** 执行分组：计划内用例的有序分组，每组独立配置环境/登录准备/组内 fail_fast/设备与浏览器上下文。
+ *  组间串行按 order 执行；计划级 strategy 管组间失败传导（fail_fast=前组失败取消后续组）。 */
+export const planCaseGroups = pgTable('plan_case_groups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  planId: uuid('plan_id').notNull().references(() => executionPlans.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 200 }).notNull(),
+  order: integer('order').notNull(),
+  environmentId: uuid('environment_id').references(() => testEnvironments.id, { onDelete: 'set null' }),
+  loginPrepareEnabled: boolean('login_prepare_enabled').notNull().default(false),
+  loginCaseId: uuid('login_case_id').references(() => testCases.id, { onDelete: 'set null' }),
+  detectionUrl: text('detection_url'),
+  loginSuccessSelector: text('login_success_selector'),
+  loginUnauthorizedKeywords: jsonb('login_unauthorized_keywords'),
+  /** 组内策略：首例失败后跳过本组剩余用例（计划级 strategy 管组间） */
+  failFast: boolean('fail_fast').notNull().default(false),
+  /** 组级统一生效：deviceTargetId / 浏览器上下文（与 plan_cases.target_override 同形状） */
+  targetConfig: jsonb('target_config').$type<{ deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null>(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  planOrderIdx: index('idx_plan_case_groups_plan_order').on(t.planId, t.order),
+}));
+
 export const planCases = pgTable('plan_cases', {
   id: uuid('id').primaryKey().defaultRandom(),
   planId: uuid('plan_id').notNull().references(() => executionPlans.id, { onDelete: 'cascade' }),
   caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
+  groupId: uuid('group_id').references(() => planCaseGroups.id, { onDelete: 'cascade' }),
   order: integer('order').notNull(),
   // 计划级覆盖：用例默认 device_target / 浏览器上下文可在「加进计划」时改写，
   // 不动用例本体，仅本次计划执行时按覆盖解析。null = 沿用例自带值。
@@ -500,6 +524,9 @@ export const planRuns = pgTable('plan_runs', {
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   status: varchar('status', { length: 20 }).notNull(),
   strategy: varchar('strategy', { length: 20 }).notNull(),
+  /** 组结构快照（enqueue 时写入）：[{id,name,order,environmentId,loginPrepareEnabled,loginCaseId,detectionUrl,loginSuccessSelector,loginUnauthorizedKeywords,failFast,targetConfig}]。
+   *  老运行为 null（引擎兜底合成为单组）。标量 login_* 列保留给老运行 + 新运行写 OR 兼容旧 UI。 */
+  groups: jsonb('groups'),
   loginPrepareEnabled: boolean('login_prepare_enabled').notNull().default(false),
   loginCaseId: uuid('login_case_id').references(() => testCases.id, { onDelete: 'set null' }),
   detectionUrl: text('detection_url'),
@@ -533,6 +560,9 @@ export const planRunCases = pgTable('plan_run_cases', {
   reportId: uuid('report_id').references(() => reports.id, { onDelete: 'set null' }),
   /** 数据集迭代：该用例全部数据行产生的 report id 列表（首元素与 reportId 一致，兼容旧读取）。 */
   reportIds: jsonb('report_ids').$type<string[]>(),
+  groupId: uuid('group_id'),
+  groupName: varchar('group_name', { length: 200 }),
+  groupOrder: integer('group_order'),
   order: integer('order').notNull(),
   status: varchar('status', { length: 20 }).notNull(),
   stepKind: varchar('step_kind', { length: 20 }).notNull(),
