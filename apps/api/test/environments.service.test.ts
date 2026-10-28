@@ -209,4 +209,71 @@ describe('environments.service', () => {
       })).rejects.toMatchObject({ status: 400, code: 'invalid_web_credentials' });
     }, 30_000);
   });
+
+  describe('db 对象库型', () => {
+    it('dbType 非法值被拒', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, { name: 'DB' });
+      await expect(svc.insertEnvironmentObject(env.id, {
+        objectType: 'db', payload: { host: 'h', dbType: 'oracle' },
+      })).rejects.toMatchObject({ status: 400, code: 'invalid_db_type' });
+    }, 30_000);
+
+    it('dbType 与 url 的 jdbc 库型冲突被拒', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, { name: 'DB' });
+      await expect(svc.insertEnvironmentObject(env.id, {
+        objectType: 'db', payload: { host: 'h', dbType: 'postgres', url: 'jdbc:mysql://h:3306/db' },
+      })).rejects.toMatchObject({ status: 400, code: 'invalid_db_payload' });
+    }, 30_000);
+
+    it('update 保留 prev 的 url(jdbc:…) 证据:表单只带 dbType/host/port/dbName/user 也不会把 url 抹掉', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, { name: 'DB' });
+      const obj = await svc.insertEnvironmentObject(env.id, {
+        objectType: 'db',
+        payload: { url: 'jdbc:mysql://h:3306/db', host: 'h', port: 3306, dbName: 'db', user: 'u' },
+      });
+      await svc.updateEnvironmentObject(obj.id, {
+        payload: { dbType: 'mysql', host: 'h', port: 3306, dbName: 'db', user: 'u' },
+      });
+      const raw = (await pool.query(`SELECT payload FROM environment_objects WHERE id=$1`, [obj.id])).rows[0]!.payload as Record<string, unknown>;
+      expect(raw.dbType).toBe('mysql');
+      expect(raw.url).toBe('jdbc:mysql://h:3306/db');
+    }, 30_000);
+
+    it('update 声明了与继承 url 冲突的 dbType → 丢弃过期 url,不报错', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, { name: 'DB' });
+      const obj = await svc.insertEnvironmentObject(env.id, {
+        objectType: 'db',
+        payload: { url: 'jdbc:mysql://h:3306/db', host: 'h', port: 3306, dbName: 'db', user: 'u' },
+      });
+      await svc.updateEnvironmentObject(obj.id, {
+        payload: { dbType: 'postgres', host: 'h', port: 5432, dbName: 'db', user: 'u' },
+      });
+      const raw = (await pool.query(`SELECT payload FROM environment_objects WHERE id=$1`, [obj.id])).rows[0]!.payload as Record<string, unknown>;
+      expect(raw.dbType).toBe('postgres');
+      expect(raw.url).toBeUndefined();
+    }, 30_000);
+
+    it('upsert 已有对象时合并 prev 并保留 url', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, { name: 'DB' });
+      await svc.insertEnvironmentObject(env.id, {
+        objectType: 'db',
+        payload: { url: 'jdbc:mysql://h:3306/db', host: 'h', port: 3306, dbName: 'db', user: 'u' },
+      });
+      await svc.upsertEnvironmentObject(env.id, { objectType: 'db', payload: { dbType: 'mysql' } });
+      const raw = (await pool.query(`SELECT payload FROM environment_objects WHERE environment_id=$1`, [env.id])).rows[0]!.payload as Record<string, unknown>;
+      expect(raw.dbType).toBe('mysql');
+      expect(raw.url).toBe('jdbc:mysql://h:3306/db');
+      expect(raw.host).toBe('h');
+    }, 30_000);
+  });
 });

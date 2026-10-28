@@ -4,7 +4,7 @@
  * 用户可见性(assertProjectVisible/assertEnvironmentVisible)由调用方(HTTP 边界)负责。
  */
 import { and, asc, eq, inArray } from 'drizzle-orm';
-import { VAR_NAME_RE } from '@itest/shared';
+import { VAR_NAME_RE, dialectFromJdbcUrl } from '@itest/shared';
 import { db } from '../db/client.js';
 import { environmentObjects, executionPlans, planCaseGroups, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
@@ -98,6 +98,56 @@ async function assertWebPayload(
     });
     if (dup) throw new HttpError(409, 'web_name_conflict', `web 服务 name "${name}" 在该环境已存在`);
   }
+}
+
+/** db 对象 payload 校验：dbType 合法；host/dbName/user 是字符串；url 的 jdbc 库型与 dbType 不冲突。
+ *
+ *  存在的原因（2026-10-28 prod228 实测）：db/syslog payload 此前完全无校验，
+ *  AI 工具 upsert 时写什么存什么——写进一条 `url: jdbc:mysql://…` 却漏了 `dbType`
+ *  的 db 对象，运行时被「缺省 postgres」当成 PG 去连 MySQL，报出的
+ *  `Connection terminated unexpectedly` 完全掩盖真实原因。
+ *
+ *  校验两条：
+ *  1. dbType 显式给了必须是 postgres/mysql 之一（拼错的值早失败，好过运行时静默走缺省）。
+ *  2. url 存在时其 jdbc 库型不得与 dbType 冲突（jdbc:mysql:// + dbType=postgres
+ *     是自相矛盾的配置，直接拒掉，别让它跑到运行期才炸）。
+ *
+ *  校验对象是「合并后的 payload」。继承来的 url 与调用方声明的 dbType 矛盾时，
+ *  由 mergeDbPayload 先丢掉那个过期 url 再校验——不该让一次无关的字段修改被历史遗留元数据拒掉。
+ */
+function assertDbPayload(payload: Record<string, unknown>): void {
+  const dbType = payload.dbType;
+  if (dbType !== undefined && dbType !== null && dbType !== 'postgres' && dbType !== 'mysql') {
+    throw new HttpError(400, 'invalid_db_type', '数据库类型只能是 postgres 或 mysql');
+  }
+  for (const k of ['host', 'dbName', 'user'] as const) {
+    const v = payload[k];
+    if (v !== undefined && v !== null && typeof v !== 'string') {
+      throw new HttpError(400, 'invalid_db_payload', `数据库对象 ${k} 必须是字符串`);
+    }
+  }
+  const fromUrl = dialectFromJdbcUrl(payload.url);
+  if (fromUrl && dbType !== undefined && dbType !== null && dbType !== fromUrl) {
+    throw new HttpError(
+      400, 'invalid_db_payload',
+      `数据库类型 ${String(dbType)} 与 url 的库型（${fromUrl}）冲突`,
+    );
+  }
+}
+
+/** db payload 合并（update / upsert-已有分支用）：继承 prev 的元数据（url、type 等 UI 不展示的字段）。
+ *
+ *  只在「调用方显式声明了 dbType、且与继承来的 url 矛盾」时丢弃那个过期的 url——
+ *  dbType 才是权威库型（resolveDbDialect 也是 dbType 优先），留着矛盾的 url 只会误导人。
+ *  调用方自带 url 时以调用方为准，不丢。
+ */
+function mergeDbPayload(prev: Record<string, unknown>, incoming: Record<string, unknown>): Record<string, unknown> {
+  const merged = { ...prev, ...incoming };
+  if (incoming.url === undefined && incoming.dbType !== undefined) {
+    const fromPrevUrl = dialectFromJdbcUrl(prev.url);
+    if (fromPrevUrl && fromPrevUrl !== incoming.dbType) delete merged.url;
+  }
+  return merged;
 }
 
 export function isUniqueViolation(e: unknown): boolean {
@@ -206,6 +256,9 @@ export async function insertEnvironmentObject(
     if (input.objectType === 'web') {
       await assertWebPayload(tx, environmentId, input.payload);
     }
+    if (input.objectType === 'db') {
+      assertDbPayload(input.payload);
+    }
     if (input.isDefault) {
       await tx.update(environmentObjects).set({ isDefault: false })
         .where(and(eq(environmentObjects.environmentId, environmentId), eq(environmentObjects.objectType, input.objectType)));
@@ -243,13 +296,20 @@ export async function upsertEnvironmentObject(
       }
       // prev 是从 DB 直读的原始行（含密文三元组），不是掩码后行——直接传进 normalizeObjectPayload 即可
       // input.payload 通常来自调用方（AI 工具 / HTTP 入参），不含 secret
-      const payload = normalizeObjectPayload(input.objectType, { ...prev, ...input.payload }, prev);
+      const merged = input.objectType === 'db' ? mergeDbPayload(prev, input.payload) : { ...prev, ...input.payload };
+      if (input.objectType === 'db') {
+        assertDbPayload(merged);
+      }
+      const payload = normalizeObjectPayload(input.objectType, merged, prev);
       const update: Record<string, unknown> = { payload, updatedAt: new Date() };
       if (input.isDefault !== undefined) update.isDefault = input.isDefault;
       return (await tx.update(environmentObjects).set(update).where(eq(environmentObjects.id, existing.id)).returning())[0]!;
     }
     if (input.objectType === 'web') {
       await assertWebPayload(tx, environmentId, input.payload);
+    }
+    if (input.objectType === 'db') {
+      assertDbPayload(input.payload);
     }
     return (await tx.insert(environmentObjects).values({
       environmentId,
@@ -265,11 +325,23 @@ export async function upsertEnvironmentObject(
 export async function updateEnvironmentObject(objectId: string, patch: { label?: string; payload?: Record<string, unknown> }) {
   const existing = (await db.select().from(environmentObjects).where(eq(environmentObjects.id, objectId)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'environment object not found');
-  const payload = patch.payload !== undefined
-    ? normalizeObjectPayload(existing.objectType as ObjectType, patch.payload, (existing.payload ?? {}) as Record<string, unknown>)
+  const prev = (existing.payload ?? {}) as Record<string, unknown>;
+  // db 对象 merge prev：payload 里的 url(jdbc:…) 与 type 是 UI 表单不展示的元数据，
+  // 表单每次保存只带 dbType/host/port/dbName/user——不 merge 就会在保存时把 url 抹掉，
+  // 而 url 正是「缺 dbType 时判定库型」的兜底信号（抹掉=库型判据被静默销毁）。
+  // 只对 db 做 merge：web 的 payload 是「用户可清空」的字段集（清空 loginUrl 要能真的清掉），
+  //  blanket merge 会让已清空的字段复活。
+  const merged = patch.payload !== undefined && existing.objectType === 'db'
+    ? mergeDbPayload(prev, patch.payload)
+    : patch.payload;
+  const payload = merged !== undefined
+    ? normalizeObjectPayload(existing.objectType as ObjectType, merged, prev)
     : undefined;
   if (payload !== undefined && existing.objectType === 'web') {
     await assertWebPayload(db, existing.environmentId, payload, objectId);
+  }
+  if (payload !== undefined && existing.objectType === 'db') {
+    assertDbPayload(payload);
   }
   const rows = await db.update(environmentObjects).set({
     ...(patch.label !== undefined ? { label: patch.label } : {}),

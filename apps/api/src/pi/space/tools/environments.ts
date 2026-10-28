@@ -37,7 +37,7 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
     {
       name: 'manage_environments',
       description:
-        '测试环境管理。action=list(项目环境全集,对象凭据已掩码)| get(environmentId)| upsert(新建或更新环境与对象字段:environmentId 缺省=新建需 name;objects 按 objectType+label 合并;payload 禁带 password/privateKey)| set_secret(environmentId+objectType+value,需用户确认,值不回显)| delete(environmentId,需用户确认)。 web 对象 payload:{"name":"backend"(可选,英文标识,用例可绑定),"scheme":"http|https","host":"1.2.3.4","port":8080(可选),"user":"admin"(可选,应用登录凭据用户名),"loginUrl":"/login"(可选,登录页相对或绝对路径,可空=计划检测页直接填表)}。一个环境可有多个 web 服务(如前端+后端在不同主机),其中至多一个 isDefault;每个 web 服务可携带自己的应用登录凭据。',
+        '测试环境管理。action=list(项目环境全集,对象凭据已掩码)| get(environmentId)| upsert(新建或更新环境与对象字段:environmentId 缺省=新建需 name;objects 按 objectType+label 合并;payload 禁带 password/privateKey)| set_secret(environmentId+objectType+value,需用户确认,值不回显)| delete(environmentId,需用户确认)。 web 对象 payload:{"name":"backend"(可选,英文标识,用例可绑定),"scheme":"http|https","host":"1.2.3.4","port":8080(可选),"user":"admin"(可选,应用登录凭据用户名),"loginUrl":"/login"(可选,登录页相对或绝对路径,可空=计划检测页直接填表)}。db 对象 payload:{"host":"1.2.3.4","port":3306(可选),"dbName":"app","user":"admin","dbType":"mysql"(必填,"postgres"|"mysql")}。一个环境可有多个 web 服务(如前端+后端在不同主机),其中至多一个 isDefault;每个 web 服务可携带自己的应用登录凭据。',
       parameters: Type.Object({
         action: Type.Union([Type.Literal('list'), Type.Literal('get'), Type.Literal('upsert'), Type.Literal('set_secret'), Type.Literal('delete')]),
         environmentId: Type.Optional(Type.String()),
@@ -54,7 +54,8 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
         value: Type.Optional(Type.String()),
       }),
       promptGuidelines: [
-        'db 对象 payload 常用字段:host/port/dbName/user;syslog 对象:host/sshPort/user/filePath/authType("key"|"password");web 对象可携带应用登录凭据:user/loginUrl(登录页地址,可空=计划检测页),密码用 set_secret 设置。',
+        'db 对象 payload 常用字段:host/port/dbName/user/dbType;syslog 对象:host/sshPort/user/filePath/authType("key"|"password");web 对象可携带应用登录凭据:user/loginUrl(登录页地址,可空=计划检测页),密码用 set_secret 设置。',
+        'db 对象的 dbType 必填,取值 "postgres" 或 "mysql":漏了它系统会按 jdbc url 前缀猜库型,猜错就报成看不懂的连接错误。',
         '凭据(db/syslog 的 password/privateKey、web 的 password)严禁放进 upsert 的 payload:先 upsert 其它字段,再单独调 set_secret(会请用户确认)。',
         'set_secret 的 value 是明文凭据,只会被加密保存,不会出现在任何输出里;用户拒绝即放弃。',
       ],

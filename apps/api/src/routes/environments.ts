@@ -1,6 +1,7 @@
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
+import { resolveDbDialect } from '@itest/shared';
 import { db } from '../db/client.js';
 import { environmentObjects } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
@@ -101,20 +102,21 @@ environmentsRoute.get('/environments/allowed-tables', async (_req, res) => {
 type SecretTriple = { c?: string; i?: string; t?: string } | null | undefined;
 
 /** objectId 回退：取该对象已存密文解出明文（凭据留空走旧密文，与保存语义一致）。
- *  对象不存在 → 404；无密文 → ''；解密失败 → error（调用方回 200 ok:false）。 */
-async function storedSecret(objectId: string, req: Request): Promise<{ secret: string; error?: string }> {
+ *  对象不存在 → 404；无密文 → ''；解密失败 → error（调用方回 200 ok:false）。
+ *  连同原始 payload 一起返回——调用方还要用其中的 url（jdbc 前缀）推断库型。 */
+async function storedSecret(objectId: string, req: Request): Promise<{ secret: string; error?: string; payload: Record<string, unknown> }> {
   const row = (await db.select().from(environmentObjects).where(eq(environmentObjects.id, objectId)).limit(1))[0];
   if (!row) throw new HttpError(404, 'not_found', 'environment object not found');
   await assertEnvironmentVisible(row.environmentId, req.user!);
-  const p = (row.payload ?? {}) as { secret?: SecretTriple };
+  const p = (row.payload ?? {}) as { secret?: SecretTriple } & Record<string, unknown>;
   if (p.secret?.c && p.secret?.i && p.secret?.t) {
     try {
-      return { secret: safeDecrypt(p.secret) };
+      return { secret: safeDecrypt(p.secret), payload: p };
     } catch (e) {
-      return { secret: '', error: `凭据解密失败：${e instanceof Error ? e.message : String(e)}` };
+      return { secret: '', error: `凭据解密失败：${e instanceof Error ? e.message : String(e)}`, payload: p };
     }
   }
-  return { secret: '' };
+  return { secret: '', payload: p };
 }
 
 // mysql2/ssh2 的网络错误常只有 code（如 ETIMEDOUT/ECONNREFUSED）而 message 为空 → 拼接保证可读
@@ -132,22 +134,29 @@ const TestDbBody = z.object({
   dbName: z.string().min(1),
   user: z.string().min(1),
   password: z.string().optional(), // 明文留空 → 沿用旧密文（与保存语义一致）
-  dbType: z.enum(['postgres', 'mysql']).optional(), // 缺省 postgres（老数据兼容）
+  dbType: z.enum(['postgres', 'mysql']).optional(),
+  url: z.string().optional(), // jdbc url：缺 dbType 时用它推断库型（与运行期 resolveDbDialect 同一份逻辑）
 });
 
 // 用表单当前值（未保存也可）探测 DB 连通性；HTTP 200 + ok:false 表示探测失败（与 /settings/llm/test 约定一致）
 environmentsRoute.post('/environments/test-db', async (req, res) => {
   const body = TestDbBody.parse(req.body);
   let password = body.password ?? '';
-  if (!password && body.objectId) {
+  let url = body.url;
+  if (body.objectId) {
     const stored = await storedSecret(body.objectId, req);
-    if (stored.error) {
+    if (!password && stored.error) {
       res.json({ ok: false, error: stored.error });
       return;
     }
     password = stored.secret;
+    // 表单不展示 url，但已存对象的 url 是「缺 dbType 时判定库型」的兜底信号——回填它。
+    const storedUrl = stored.payload.url;
+    url = url ?? (typeof storedUrl === 'string' ? storedUrl : undefined);
   }
-  const dialect = body.dbType ?? 'postgres';
+  // 库型判定与运行期一致（apps/api/src/execute/envContext.ts）：dbType 优先，
+  // 没有就从 jdbc url 前缀推断，都没有才回落 postgres。
+  const dialect = resolveDbDialect({ dbType: body.dbType, url });
   const pool = createQueryPool({
     dialect,
     host: body.host,

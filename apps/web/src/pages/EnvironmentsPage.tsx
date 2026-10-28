@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../i18n';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { resolveDbDialect } from '@itest/shared';
 import { api, type Environment, type EnvironmentObject } from '../api/client';
 import { useUIStore } from '../stores/ui';
 import { creatorName } from '../lib/creatorName';
@@ -236,7 +237,9 @@ export default function EnvironmentsPage() {
       envName: env.name,
       objectType,
       object,
-      dbType: p.dbType === 'mysql' ? 'mysql' : 'postgres',
+      // 缺 dbType 时按 url 的 jdbc 前缀推断（与后端 resolveDbDialect 同一份逻辑）：
+      // 存量数据只有 jdbc:mysql:// 却没写 dbType，回填成 postgres 会把用户推向错误库型。
+      dbType: resolveDbDialect(p),
       syslogAuth: p.authType === 'password' ? 'password' : 'key',
       host: String(p.host ?? ''),
       port: p.port != null ? String(p.port) : '',

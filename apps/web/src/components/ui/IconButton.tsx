@@ -1,20 +1,18 @@
-import type { CSSProperties, MouseEvent } from 'react';
+import type { ComponentProps } from 'react';
 import Icon, { type IconName } from '../Icon';
 import { Button } from './shadcn/button';
 
 type Tone = 'muted' | 'accent' | 'destructive';
 type Size = 'sm' | 'md';
 
-interface IconButtonProps {
+// 必须透传原生 button 属性：Radix 的 <DropdownMenuTrigger asChild> 会把触发器的
+// onPointerDown / aria-haspopup / data-state 合并进子组件，丢了这些下拉菜单就永远打不开。
+interface IconButtonProps extends ComponentProps<'button'> {
   icon: IconName;
   /** Tooltip + aria-label. Falls back to the icon name. */
   title?: string;
   tone?: Tone;
   size?: Size;
-  disabled?: boolean;
-  className?: string;
-  style?: CSSProperties;
-  onClick?: (e: MouseEvent<HTMLButtonElement>) => void;
 }
 
 const toneClass: Record<Tone, string> = {
@@ -38,10 +36,10 @@ export default function IconButton({
   title,
   tone = 'muted',
   size = 'sm',
-  disabled,
   className = '',
-  style,
+  disabled,
   onClick,
+  ...rest
 }: IconButtonProps) {
   const aria = title ?? icon;
   return (
@@ -54,7 +52,7 @@ export default function IconButton({
       disabled={disabled}
       onClick={onClick}
       className={`${toneClass[tone]} ${className}`}
-      style={style}
+      {...rest}
     >
       <Icon name={icon} size={sizeMap[size].icon} />
     </Button>

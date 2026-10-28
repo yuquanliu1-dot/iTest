@@ -2,6 +2,7 @@ import { db } from '../db/client.js';
 import { testEnvironments, environmentObjects, projectVersions } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import { decrypt } from '../lib/secret-crypto.js';
+import { resolveDbDialect } from '@itest/shared';
 import pg from 'pg';
 import mysql from 'mysql2/promise';
 
@@ -21,7 +22,8 @@ export class WebServiceMissing extends Error {
   constructor(message: string) { super(message); this.name = 'WebServiceMissing'; }
 }
 
-export type DbDialect = 'postgres' | 'mysql';
+/** 库型：postgres / mysql。判定逻辑在 @itest/shared（探测与运行期共用同一份）。 */
+export type DbDialect = import('@itest/shared').DbDialect;
 
 /** 方言归一的查询池：queryDb 步骤与连接测试共用，屏蔽 pg / mysql2 的结果形状差异。 */
 export interface QueryPool {
@@ -259,7 +261,8 @@ export async function resolveEnv(
   for (const o of objects.filter((x) => x.objectType === 'db')) {
     const p = (o.payload ?? {}) as DbPayload;
     if (!p.host || !p.dbName || !p.user) continue;
-    const dialect: DbDialect = p.dbType === 'mysql' ? 'mysql' : 'postgres';
+    // 缺 dbType 时从 url 的 jdbc 前缀推断（AI 写了 jdbc:mysql:// 却漏 dbType 的存量数据）
+    const dialect: DbDialect = resolveDbDialect(p);
     dbs.push({
       label: o.label,
       dialect,
