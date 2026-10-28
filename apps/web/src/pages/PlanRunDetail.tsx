@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../i18n';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -37,17 +37,26 @@ export default function PlanRunDetail() {
   // 数据驱动用例的行选择（按 plan_run_case id 记忆，切用例互不干扰）；未手动选过 → running 行 ?? 首行
   const [rowSel, setRowSel] = useState<Record<string, number>>({});
   const cases = run?.cases ?? [];
+  // 分组分节：按（组序, 组内序）排序后按 groupId 聚连续节；老运行 groupId 全 null → 单节不显示组名。
+  const ordered = [...cases].sort((a, b) => (a.groupOrder ?? 0) - (b.groupOrder ?? 0) || a.order - b.order);
+  const sections: Array<{ key: string; name: string; items: typeof ordered }> = [];
+  for (const c of ordered) {
+    const key = c.groupId ?? 'legacy';
+    const last = sections[sections.length - 1];
+    if (last && last.key === key) last.items.push(c);
+    else sections.push({ key, name: c.groupName ?? '', items: [c] });
+  }
   const activeCase = cases.find((c) => c.status === 'running') ?? null;
   const selected = follow
-    ? activeCase ?? cases.find((c) => c.status === 'failed') ?? cases[0]
-    : cases.find((c) => c.id === selectedId) ?? cases[0];
-  const curIdx = cases.findIndex((c) => c.id === selected?.id);
+    ? activeCase ?? cases.find((c) => c.status === 'failed') ?? ordered[0]
+    : cases.find((c) => c.id === selectedId) ?? ordered[0];
+  const curIdx = ordered.findIndex((c) => c.id === selected?.id);
   const selectCase = (id: string) => {
     setFollow(false);
     setSelectedId(id);
   };
   const gotoCase = (delta: number) => {
-    const next = cases[curIdx + delta];
+    const next = ordered[curIdx + delta];
     if (next) selectCase(next.id);
   };
   const selRowIds = selected?.reportIds ?? [];
@@ -173,34 +182,52 @@ export default function PlanRunDetail() {
                 {t('plans:caseSelector')}
               </span>
               <div className="flex items-center gap-1 flex-wrap">
-                {cases.map((c) => {
-                  const cur = c.id === selected?.id;
-                  const dotColor =
-                    c.status === 'passed' ? 'var(--success)'
-                    : c.status === 'failed' ? 'var(--destructive)'
-                    : c.status === 'running' ? 'var(--primary)'
-                    : 'var(--muted-foreground)';
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      className="rowchip max-w-[260px]"
-                      style={cur ? { borderColor: 'var(--primary)', boxShadow: '0 0 0 2px var(--primary-soft)' } : undefined}
-                      onClick={() => selectCase(c.id)}
-                      title={c.caseTitle ?? c.caseId}
-                    >
-                      <span className="font-mono shrink-0">#{c.order}</span>
-                      {c.stepKind === 'login_prepare' && (
-                        <span className="shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:login')}</span>
-                      )}
-                      <span className="truncate min-w-0">{c.caseTitle ?? t('plans:deletedCase')}</span>
-                      <span
-                        className={c.status === 'running' ? 'status-pulse' : undefined}
-                        style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }}
-                      />
-                    </button>
-                  );
-                })}
+                {sections.map((sec) => (
+                  <Fragment key={sec.key}>
+                    {sec.key !== 'legacy' && (
+                      <>
+                        <span className="text-[11px] font-semibold shrink-0">{sec.name}</span>
+                        <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
+                      </>
+                    )}
+                    {sec.items.map((c) => {
+                      const cur = c.id === selected?.id;
+                      const dotColor =
+                        c.status === 'passed' ? 'var(--success)'
+                        : c.status === 'failed' ? 'var(--destructive)'
+                        : c.status === 'running' ? 'var(--primary)'
+                        : 'var(--muted-foreground)';
+                      // fail_fast 策略跳过的用例：chip 内小字标注 + tooltip 说明（后端 error 文案 `skipped: group/plan fail_fast`）
+                      const skipNote =
+                        c.error?.includes('plan fail_fast') ? t('plans:groupSkippedByPlan')
+                        : c.error?.includes('group fail_fast') ? t('plans:groupSkippedByGroup')
+                        : null;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className="rowchip max-w-[260px]"
+                          style={cur ? { borderColor: 'var(--primary)', boxShadow: '0 0 0 2px var(--primary-soft)' } : undefined}
+                          onClick={() => selectCase(c.id)}
+                          title={skipNote ? `${c.caseTitle ?? c.caseId} · ${skipNote}` : c.caseTitle ?? c.caseId}
+                        >
+                          <span className="font-mono shrink-0">#{c.order}</span>
+                          {c.stepKind === 'login_prepare' && (
+                            <span className="shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:login')}</span>
+                          )}
+                          <span className="truncate min-w-0">{c.caseTitle ?? t('plans:deletedCase')}</span>
+                          {skipNote && (
+                            <span className="shrink-0" style={{ color: 'var(--muted-foreground)' }}>{skipNote}</span>
+                          )}
+                          <span
+                            className={c.status === 'running' ? 'status-pulse' : undefined}
+                            style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }}
+                          />
+                        </button>
+                      );
+                    })}
+                  </Fragment>
+                ))}
               </div>
               <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
               <Button variant="ghost" size="sm" disabled={curIdx <= 0} onClick={() => gotoCase(-1)}>
