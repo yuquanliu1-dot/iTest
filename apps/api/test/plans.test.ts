@@ -128,11 +128,11 @@ describe('plan execution extras', () => {
     const detail = await request(app).get(`/api/plans/${planId}`);
     expect(detail.body.strategy).toBe('fail_fast');
     expect(detail.body.rcaEnabled).toBe(true);
-    // 环境/登录字段由 zod 剥离,不再落计划(列仍在,值保持默认;组级配置走 /groups 端点)
-    expect(detail.body.loginPrepareEnabled).toBe(false);
-    expect(detail.body.loginCaseId).toBeNull();
-    expect(detail.body.environment).toBeNull();
-    expect(detail.body.environmentId).toBeNull();
+    // 环境/登录字段由 zod 剥离,不再落计划(计划级列已删,响应不再携带;组级配置走 /groups 端点)
+    expect(detail.body.loginPrepareEnabled).toBeUndefined();
+    expect(detail.body.loginCaseId).toBeUndefined();
+    expect(detail.body.environment).toBeUndefined();
+    expect(detail.body.environmentId).toBeUndefined();
 
     const patch = await request(app)
       .patch(`/api/plans/${planId}`)
@@ -140,8 +140,8 @@ describe('plan execution extras', () => {
     expect(patch.status).toBe(200);
     expect(patch.body.name).toBe('P2');
     expect(patch.body.strategy).toBe('run_all');
-    expect(patch.body.loginPrepareEnabled).toBe(false);
-    expect(patch.body.environmentId).toBeNull();
+    expect(patch.body.loginPrepareEnabled).toBeUndefined();
+    expect(patch.body.environmentId).toBeUndefined();
   });
 
   it('PUT /plans/:id/cases/order 组内重排（必传 groupId）', async () => {

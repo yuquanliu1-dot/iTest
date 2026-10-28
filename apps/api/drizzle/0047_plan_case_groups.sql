@@ -45,3 +45,16 @@ DO $$ BEGIN
   WHERE g.plan_id = pc.plan_id AND pc.group_id IS NULL;
 EXCEPTION WHEN undefined_column THEN null;
 END $$;
+-- 计划级旧列删除（回填完成后执行；闸门：SELECT count(*) FROM plan_cases WHERE group_id IS NULL 必须为 0）
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM plan_cases WHERE group_id IS NULL) THEN
+    RAISE EXCEPTION 'plan_cases with null group_id remain; run backfillPlanCaseGroups first';
+  END IF;
+END $$;
+ALTER TABLE execution_plans DROP COLUMN IF EXISTS environment;
+ALTER TABLE execution_plans DROP COLUMN IF EXISTS environment_id;
+ALTER TABLE execution_plans DROP COLUMN IF EXISTS login_prepare_enabled;
+ALTER TABLE execution_plans DROP COLUMN IF EXISTS login_case_id;
+ALTER TABLE execution_plans DROP COLUMN IF EXISTS detection_url;
+ALTER TABLE execution_plans DROP COLUMN IF EXISTS login_success_selector;
+ALTER TABLE execution_plans DROP COLUMN IF EXISTS login_unauthorized_keywords;

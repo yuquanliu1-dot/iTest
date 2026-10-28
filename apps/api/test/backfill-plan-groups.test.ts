@@ -19,6 +19,13 @@ afterAll(async () => {
 
 async function makePlan(name: string, strategy = 'run_all'): Promise<string> {
   const s = await seedProject(pool);
+  // SCHEMA_SQL 已删计划级旧列——手动补回模拟存量库（回填对象是带旧列的库）
+  await pool.query(`ALTER TABLE execution_plans ADD COLUMN IF NOT EXISTS environment_id uuid`);
+  await pool.query(`ALTER TABLE execution_plans ADD COLUMN IF NOT EXISTS login_prepare_enabled boolean DEFAULT false`);
+  await pool.query(`ALTER TABLE execution_plans ADD COLUMN IF NOT EXISTS login_case_id uuid`);
+  await pool.query(`ALTER TABLE execution_plans ADD COLUMN IF NOT EXISTS detection_url text`);
+  await pool.query(`ALTER TABLE execution_plans ADD COLUMN IF NOT EXISTS login_success_selector text`);
+  await pool.query(`ALTER TABLE execution_plans ADD COLUMN IF NOT EXISTS login_unauthorized_keywords jsonb`);
   const p = await pool.query(
     `INSERT INTO execution_plans(project_id, version_id, name, environment_id, strategy, login_prepare_enabled, login_case_id, detection_url, login_success_selector, login_unauthorized_keywords)
      VALUES ($1, $2, $3, NULL, $4, true, NULL, 'https://x/detect', '.ok', '["未登录"]'::jsonb) RETURNING id`,
@@ -67,4 +74,10 @@ test('空计划不建组', async () => {
   await backfillPlanCaseGroups(pool);
   const n = await pool.query(`SELECT count(*)::int AS n FROM plan_case_groups WHERE plan_id = $1`, [p.rows[0]!.id]);
   expect(n.rows[0]!.n).toBe(0);
+});
+
+test('列缺失 guard：旧列已删（login_prepare_enabled 不存在）时 backfill 直接 no-op 不抛错', async () => {
+  await pool.query(`ALTER TABLE execution_plans DROP COLUMN IF EXISTS login_prepare_enabled`);
+  const { backfillPlanCaseGroups } = await import('../src/db/backfillPlanCaseGroups.js');
+  await expect(backfillPlanCaseGroups(pool)).resolves.toBeUndefined();
 });

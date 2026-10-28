@@ -6,7 +6,7 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { VAR_NAME_RE } from '@itest/shared';
 import { db } from '../db/client.js';
-import { environmentObjects, executionPlans, testCases, testEnvironments } from '../db/schema.js';
+import { environmentObjects, executionPlans, planCaseGroups, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { encrypt } from '../lib/secret-crypto.js';
 import { attachCreators, attachCreator } from '../lib/creator.js';
@@ -183,10 +183,12 @@ export async function updateEnvironment(environmentId: string, patch: { name?: s
   return { ...row, objects: await objectsOf(row.id) };
 }
 
-/** 删除前的引用计数(用例默认环境 + 计划环境)。 */
+/** 删除前的引用计数(用例默认环境 + 计划分组环境)。 */
 export async function environmentUsage(environmentId: string): Promise<{ caseCount: number; planCount: number }> {
   const caseCount = (await db.select({ id: testCases.id }).from(testCases).where(eq(testCases.defaultEnvId, environmentId))).length;
-  const planCount = (await db.select({ id: executionPlans.id }).from(executionPlans).where(eq(executionPlans.environmentId, environmentId))).length;
+  const planCount = (await db.selectDistinct({ id: executionPlans.id }).from(executionPlans)
+    .innerJoin(planCaseGroups, eq(planCaseGroups.planId, executionPlans.id))
+    .where(eq(planCaseGroups.environmentId, environmentId))).length;
   return { caseCount, planCount };
 }
 

@@ -216,7 +216,7 @@ async function versionEnvironmentId(versionId: string): Promise<string | null> {
 }
 
 /**
- * 环境解析链：plan.environmentId → case.defaultEnvId → version.environmentId → 项目默认环境。
+ * 环境解析链：planEnvId（组级环境，runPlan 传 group.environmentId）→ case.defaultEnvId → version.environmentId → 项目默认环境。
  * 命中环境后取 (environmentId, object_type) 的 is_default 对象（缺默认取最早一条）构建连接上下文。
  *
  * guard.expectedProjectId 是「用例所属项目」，负责两件互相独立的事，故拆成开关而非一起关：

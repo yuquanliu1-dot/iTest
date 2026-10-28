@@ -97,17 +97,17 @@ describe('plan versionId', () => {
     expect(env.status).toBe(200);
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId: defaultVersionId });
     expect(plan.status).toBe(200);
-    // 同项目环境：字段被 zod 剥离，不落计划
+    // 同项目环境：字段被 zod 剥离，不落计划（列已删，响应不再携带该键）
     const r = await request(app).patch(`/api/plans/${plan.body.id}`).send({ environmentId: env.body.id });
     expect(r.status).toBe(200);
-    expect(r.body.environmentId).toBeNull();
+    expect(r.body.environmentId).toBeUndefined();
     // 跨项目环境：同样剥离，不再触发 env_project_mismatch
     const other = await seedProject(pool);
     const env2 = await request(app).post(`/api/projects/${other.projectId}/environments`).send({ name: 'other-env' });
     expect(env2.status).toBe(200);
     const r2 = await request(app).patch(`/api/plans/${plan.body.id}`).send({ environmentId: env2.body.id });
     expect(r2.status).toBe(200);
-    expect(r2.body.environmentId).toBeNull();
+    expect(r2.body.environmentId).toBeUndefined();
   });
 
   it('PUT cases 跨版本引用允许', async () => {

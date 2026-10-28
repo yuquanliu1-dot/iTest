@@ -464,14 +464,7 @@ export const executionPlans = pgTable('execution_plans', {
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   versionId: uuid('version_id').references(() => projectVersions.id, { onDelete: 'set null' }),
   name: varchar('name', { length: 200 }).notNull(),
-  environment: varchar('environment', { length: 100 }),
-  environmentId: uuid('environment_id').references(() => testEnvironments.id, { onDelete: 'set null' }),
   strategy: varchar('strategy', { length: 20 }).notNull().default('run_all'),
-  loginPrepareEnabled: boolean('login_prepare_enabled').notNull().default(false),
-  loginCaseId: uuid('login_case_id').references(() => testCases.id, { onDelete: 'set null' }),
-  detectionUrl: text('detection_url'),
-  loginSuccessSelector: text('login_success_selector'),
-  loginUnauthorizedKeywords: jsonb('login_unauthorized_keywords'),
   /** 运行结束后对失败用例自动做 AI 根因分析（快照进 planRuns） */
   rcaEnabled: boolean('rca_enabled').notNull().default(false),
   /** 创建人（对齐 plan_schedules.created_by_user_id 约定） */
