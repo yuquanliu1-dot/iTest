@@ -68,6 +68,8 @@ export async function runCase(
     storageState?: unknown;
     forceFail?: boolean;
     envOverride?: { envId: string } | null;
+    /** 组级统一覆盖：deviceTargetId / 浏览器上下文（plan_case_groups.target_config）。 */
+    targetOverride?: { deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null;
     ownedBrowser?: Browser;
     ownedContext?: BrowserContext;
     /** playground 实时画面源：透传给执行器，页面切换时跟随（计划运行/单用例执行）。 */
@@ -210,6 +212,8 @@ async function runCaseOnceInner(
     storageState?: unknown;
     forceFail?: boolean;
     envOverride?: { envId: string } | null;
+    /** 组级统一覆盖：deviceTargetId / 浏览器上下文（plan_case_groups.target_config）。 */
+    targetOverride?: { deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null;
     ownedBrowser?: Browser;
     ownedContext?: BrowserContext;
     liveView?: import('./liveView.js').LiveViewHandle;
@@ -235,7 +239,12 @@ async function runCaseOnceInner(
     width: caseRow.windowWidth ?? undefined,
     height: caseRow.windowHeight ?? undefined,
   };
-  const incognito = !!caseRow.incognito;
+  // 组级 targetOverride（plan_case_groups.target_config）优先于用例行：
+  // browserContext 覆盖 incognito，deviceTargetId 覆盖 mobileDeviceTargetId。
+  const incognito = opts?.targetOverride?.browserContext
+    ? opts.targetOverride.browserContext === 'incognito'
+    : !!caseRow.incognito;
+  const deviceTargetId = opts?.targetOverride?.deviceTargetId ?? caseRow.mobileDeviceTargetId ?? null;
 
   // Resolve envCtx before any CDP launch: planEnv > case defaultEnv > version link > project default.
   // EnvMissing/EnvProjectMismatch are surfaced as a single failed stepResult (no 500). DecryptError propagates.
@@ -407,7 +416,7 @@ async function runCaseOnceInner(
         caseWindow,
         incognito,
         appRef: caseRow.appRef ?? null,
-        deviceTargetId: caseRow.mobileDeviceTargetId ?? null,
+        deviceTargetId,
         mobileOs,
         ...(rowPlan ? { sensitiveVarKeys: rowPlan.sensitiveVarKeys } : {}),
         ...(initialVars ? { initialVars } : {}),
@@ -475,7 +484,7 @@ async function runCaseOnceInner(
         incognito,
         ...(opts?.storageState ? { storageState: opts.storageState } : {}),
         appRef: caseRow.appRef ?? null,
-        deviceTargetId: caseRow.mobileDeviceTargetId ?? null,
+        deviceTargetId,
         mobileOs,
         ...(opts?.liveView ? { liveView: opts.liveView } : {}),
         ...(rowPlan ? { sensitiveVarKeys: rowPlan.sensitiveVarKeys } : {}),
