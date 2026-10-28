@@ -77,7 +77,7 @@ describe('计划跨项目用例（产品线）', () => {
     const planId = await seedPlan(site.projectId, site.versionId, '局点A回归');
 
     const r = await request(app)
-      .put(`/api/plans/${planId}/cases`)
+      .post(`/api/plans/${planId}/cases`)
       .send({ caseIds: [baselineCase, siteCase] });
     expect(r.status).toBe(200);
 
@@ -98,7 +98,7 @@ describe('计划跨项目用例（产品线）', () => {
     const planId = await seedPlan(lineA.projectId, lineA.versionId, '线A计划');
 
     const r = await request(app)
-      .put(`/api/plans/${planId}/cases`)
+      .post(`/api/plans/${planId}/cases`)
       .send({ caseIds: [foreignCase] });
     expect(r.status).toBe(409);
     expect(r.body.error).toBe('cross_project');
@@ -112,7 +112,7 @@ describe('计划跨项目用例（产品线）', () => {
     const planId = await seedPlan(a.projectId, a.versionId, '同线计划');
 
     const r = await request(app)
-      .put(`/api/plans/${planId}/cases`)
+      .post(`/api/plans/${planId}/cases`)
       .send({ caseIds: [bCase] });
     expect(r.status).toBe(200);
   });
@@ -127,14 +127,14 @@ describe('计划跨项目用例（产品线）', () => {
     const baselineCase = await seedCase(baseline.projectId, baseline.groupId, baseline.versionId, '基线用例');
     const planId = await seedPlan(site.projectId, site.versionId, '解绑前计划');
 
-    const before = await request(app).put(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
+    const before = await request(app).post(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
     expect(before.status).toBe(200);
 
     // R2：product_line_id 必填，不存在「未归线」——脱离当前线的唯一方式是换到另一条线。
     // 测试意图（同线才可跨项目引用）不变：换线后两者不同线，跨项目用例重新被拒。
     await pool.query(`UPDATE projects SET product_line_id = $1 WHERE id = $2`, [otherLineId, baseline.projectId]);
 
-    const after = await request(app).put(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
+    const after = await request(app).post(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
     expect(after.status).toBe(409);
     expect(after.body.error).toBe('cross_project');
   });
@@ -147,7 +147,7 @@ describe('计划跨项目用例（产品线）', () => {
 
     const baselineCase = await seedCase(baseline.projectId, baseline.groupId, baseline.versionId, '基线用例');
     const planId = await seedPlan(site.projectId, site.versionId, '回带计划');
-    await request(app).put(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
+    await request(app).post(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
 
     const detail = await request(app).get(`/api/plans/${planId}`);
     const c = detail.body.cases.find((x: { id: string }) => x.id === baselineCase);
@@ -163,7 +163,7 @@ describe('计划跨项目用例（产品线）', () => {
 
     const baselineCase = await seedCase(baseline.projectId, baseline.groupId, baseline.versionId, '基线用例');
     const planId = await seedPlan(site.projectId, site.versionId, '版本回带计划');
-    await request(app).put(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
+    await request(app).post(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
 
     const detail = await request(app).get(`/api/plans/${planId}`);
     const c = detail.body.cases.find((x: { id: string }) => x.id === baselineCase);
@@ -178,7 +178,7 @@ describe('计划跨项目用例（产品线）', () => {
 
     const baselineCase = await seedCase(baseline.projectId, baseline.groupId, baseline.versionId, '将被删的用例');
     const planId = await seedPlan(site.projectId, site.versionId, '活引用计划');
-    await request(app).put(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
+    await request(app).post(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
 
     await pool.query(`DELETE FROM test_cases WHERE id = $1`, [baselineCase]);
 

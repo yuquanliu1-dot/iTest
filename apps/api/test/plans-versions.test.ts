@@ -110,7 +110,7 @@ describe('plan versionId', () => {
     expect(r2.body.environmentId).toBeUndefined();
   });
 
-  it('PUT cases 跨版本引用允许', async () => {
+  it('POST cases 跨版本引用允许', async () => {
     // 创建两个版本下的用例
     const c1 = await request(app).post('/api/cases').send({ title: 'v0', groupId, versionId: defaultVersionId });
     const c2 = await request(app).post('/api/cases').send({ title: 'v1', groupId, versionId: v1Id });
@@ -121,7 +121,7 @@ describe('plan versionId', () => {
     expect(plan.status).toBe(200);
     // 跨版本引用 c2（v1）到 plan（v0 → 允许）
     const r = await request(app)
-      .put(`/api/plans/${plan.body.id}/cases`)
+      .post(`/api/plans/${plan.body.id}/cases`)
       .send({ caseIds: [c1.body.id, c2.body.id] });
     expect(r.status).toBe(200);
     const detail = await request(app).get(`/api/plans/${plan.body.id}`);

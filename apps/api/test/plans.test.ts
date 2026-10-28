@@ -63,18 +63,19 @@ describe('execution plans', () => {
     expect(list.body[0].caseCount).toBe(0);
   });
 
-  it('PUT cases sets ordered list, detail returns cases in order', async () => {
+  it('PUT group cases sets ordered list, detail returns cases in order', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
     const c1 = await makeCase(groupId, versionId, 'c1');
     const c2 = await makeCase(groupId, versionId, 'c2');
-    const r = await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c2, c1] });
+    const g = await request(app).post(`/api/plans/${plan.body.id}/groups`).send({ name: 'G' });
+    const r = await request(app).put(`/api/plans/${plan.body.id}/groups/${g.body.id}/cases`).send({ caseIds: [c2, c1] });
     expect(r.status).toBe(200);
     const detail = await request(app).get(`/api/plans/${plan.body.id}`);
     expect(detail.body.cases.map((c: { id: string }) => c.id)).toEqual([c2, c1]);
   });
 
-  it('PUT cases rejects cross-product-line case with 409', async () => {
+  it('PUT group cases rejects cross-product-line case with 409', async () => {
     // R2 起项目无组织列，计划的成员范围是「计划所在项目 + 同产品线的兄弟项目」。
     // 所以要 409 必须让那条外案落在**另一条**产品线上（同线内引用是合法的）。
     const a = await seedProject(pool);
@@ -82,7 +83,8 @@ describe('execution plans', () => {
     const otherLineId = await seedOtherProductLine(pool);
     const b = await seedProject(pool, { productLineId: otherLineId });
     const foreign = await makeCase(b.groupId, b.versionId, 'foreign');
-    const r = await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [foreign] });
+    const g = await request(app).post(`/api/plans/${plan.body.id}/groups`).send({ name: 'G' });
+    const r = await request(app).put(`/api/plans/${plan.body.id}/groups/${g.body.id}/cases`).send({ caseIds: [foreign] });
     expect(r.status).toBe(409);
   });
 
@@ -99,7 +101,7 @@ describe('execution plans', () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'run', versionId });
     const c1 = await makeCase(groupId, versionId, 'r1');
-    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1] });
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1] });
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(200);
     expect(typeof r.body.runId).toBe('string');
@@ -150,7 +152,7 @@ describe('plan execution extras', () => {
     const c1 = await makeCase(groupId, versionId, 'c1');
     const c2 = await makeCase(groupId, versionId, 'c2');
     const c3 = await makeCase(groupId, versionId, 'c3');
-    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2, c3] });
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2, c3] });
     const d0 = await request(app).get(`/api/plans/${plan.body.id}`);
     const gid = d0.body.groups[0].id as string;
     // 缺 groupId → 400（zod 校验失败）
@@ -230,7 +232,7 @@ describe('plan execution extras', () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
     const c1 = await makeCase(groupId, versionId, 'c1');
-    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1] });
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1] });
     await request(app).post(`/api/plans/${plan.body.id}/run`);
     const list = await request(app).get(`/api/executions?projectId=${projectId}&kind=all`);
     expect(list.status).toBe(200);
@@ -340,7 +342,7 @@ describe('plan execution extras', () => {
     const plan = await request(app)
       .post(`/api/projects/${projectId}/plans`)
       .send({ name: 'P', versionId, strategy: 'fail_fast' });
-    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2, c3] });
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2, c3] });
     // 两级失败语义：组内跳过由组级 fail_fast 决定（计划级只在组边界评估）
     const detail0 = await request(app).get(`/api/plans/${plan.body.id}`);
     const firstGroup = detail0.body.groups[0] as { id: string };
@@ -379,7 +381,7 @@ describe('plan execution extras', () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     const c1 = await makeCase(groupId, versionId, 'c1');
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
-    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1] });
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1] });
 
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(200);
@@ -405,7 +407,7 @@ describe('plan execution extras', () => {
     await request(app).patch(`/api/cases/${c1}`).send({ status: 'deprecated' });
     await request(app).patch(`/api/cases/${c2}`).send({ status: 'deprecated' });
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
-    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2] });
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2] });
 
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(200);
@@ -430,7 +432,7 @@ describe('plan execution extras', () => {
     const c1 = await makeCase(groupId, versionId, 'c1');
     const c2 = await makeCase(groupId, versionId, 'c2');
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
-    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2] });
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2] });
 
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(200);
@@ -492,7 +494,7 @@ describe('plan execution extras', () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     const inc = await request(app).post('/api/cases').send({ title: 'inc', groupId, versionId, incognito: true });
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
-    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [inc.body.id] });
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [inc.body.id] });
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(200);
     expect(typeof r.body.runId).toBe('string');
