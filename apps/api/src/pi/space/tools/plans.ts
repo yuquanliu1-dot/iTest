@@ -93,7 +93,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const plan = await svc.createPlan(ctx.projectId, {
                 name: v.name,
                 versionId: ctx.versionId,
-                environmentId: v.environmentId ?? undefined,
+                // 环境配置已下沉组级(计划级字段退役);pi 组级适配见 Task 9
                 strategy: v.strategy,
               }, ctx.createdByUserId);
               let added = 0;

@@ -110,40 +110,53 @@ describe('execution plans', () => {
 });
 
 describe('plan execution extras', () => {
-  it('POST/PATCH persists strategy + loginPrepare config', async () => {
-    const { projectId, groupId, versionId } = await seedProject(pool);
-    const loginCase = await makeCase(groupId, versionId, 'login');
+  it('POST/PATCH persists strategy/rcaEnabled；计划级 environmentId/loginPrepare 被剥离不再接受', async () => {
+    const { projectId, versionId } = await seedProject(pool);
     const r = await request(app)
       .post(`/api/projects/${projectId}/plans`)
       .send({
         name: 'P',
         versionId,
         strategy: 'fail_fast',
-        loginPrepare: { enabled: true, caseId: loginCase, unauthorizedKeywords: ['请先登录', '未登录'] },
+        rcaEnabled: true,
+        environment: '预发',
+        environmentId: randomUUID(),
+        loginPrepare: { enabled: true, caseId: randomUUID(), unauthorizedKeywords: ['请先登录'] },
       });
     expect(r.status).toBe(200);
     const planId = r.body.id as string;
     const detail = await request(app).get(`/api/plans/${planId}`);
     expect(detail.body.strategy).toBe('fail_fast');
-    expect(detail.body.loginPrepareEnabled).toBe(true);
-    expect(detail.body.loginCaseId).toBe(loginCase);
-    expect(detail.body.loginUnauthorizedKeywords).toEqual(['请先登录', '未登录']);
+    expect(detail.body.rcaEnabled).toBe(true);
+    // 环境/登录字段由 zod 剥离,不再落计划(列仍在,值保持默认;组级配置走 /groups 端点)
+    expect(detail.body.loginPrepareEnabled).toBe(false);
+    expect(detail.body.loginCaseId).toBeNull();
+    expect(detail.body.environment).toBeNull();
+    expect(detail.body.environmentId).toBeNull();
 
     const patch = await request(app)
       .patch(`/api/plans/${planId}`)
-      .send({ strategy: 'run_all', loginPrepare: { enabled: false } });
+      .send({ name: 'P2', strategy: 'run_all', environmentId: randomUUID(), loginPrepare: { enabled: true } });
+    expect(patch.status).toBe(200);
+    expect(patch.body.name).toBe('P2');
     expect(patch.body.strategy).toBe('run_all');
     expect(patch.body.loginPrepareEnabled).toBe(false);
+    expect(patch.body.environmentId).toBeNull();
   });
 
-  it('PUT /plans/:id/cases/order persists new order', async () => {
+  it('PUT /plans/:id/cases/order 组内重排（必传 groupId）', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
     const c1 = await makeCase(groupId, versionId, 'c1');
     const c2 = await makeCase(groupId, versionId, 'c2');
     const c3 = await makeCase(groupId, versionId, 'c3');
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2, c3] });
-    const r = await request(app).put(`/api/plans/${plan.body.id}/cases/order`).send({ caseIds: [c3, c1, c2] });
+    const d0 = await request(app).get(`/api/plans/${plan.body.id}`);
+    const gid = d0.body.groups[0].id as string;
+    // 缺 groupId → 400（zod 校验失败）
+    const noGroup = await request(app).put(`/api/plans/${plan.body.id}/cases/order`).send({ caseIds: [c3, c1, c2] });
+    expect(noGroup.status).toBe(400);
+    const r = await request(app).put(`/api/plans/${plan.body.id}/cases/order`).send({ groupId: gid, caseIds: [c3, c1, c2] });
     expect(r.status).toBe(200);
     const detail = await request(app).get(`/api/plans/${plan.body.id}`);
     expect(detail.body.cases.map((c: { id: string }) => c.id)).toEqual([c3, c1, c2]);
@@ -152,10 +165,8 @@ describe('plan execution extras', () => {
   it('login prepare enabled without caseId returns 422', async () => {
     const { projectId, versionId } = await seedProject(pool);
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
-    const patched = await request(app).patch(`/api/plans/${plan.body.id}`).send({
-      loginPrepare: { enabled: true },
-    });
-    expect(patched.status).toBe(200);
+    // 计划级 PATCH 已退役登录字段;直写列造老 shape 保 enqueue 校验覆盖(组级校验是 Task 6)
+    await pool.query(`UPDATE execution_plans SET login_prepare_enabled = true WHERE id = $1`, [plan.body.id]);
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(422);
   });
@@ -177,10 +188,11 @@ describe('plan execution extras', () => {
       })],
     );
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
-    await request(app).patch(`/api/plans/${plan.body.id}`).send({
-      environmentId: env.rows[0]!.id as string,
-      loginPrepare: { enabled: true },
-    });
+    // 计划级 PATCH 已退役环境/登录字段;直写列造老 shape(enqueue 仍按计划级列校验)
+    await pool.query(
+      `UPDATE execution_plans SET environment_id = $2, login_prepare_enabled = true WHERE id = $1`,
+      [plan.body.id, env.rows[0]!.id],
+    );
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(200);
   }, 30_000);
@@ -195,10 +207,11 @@ describe('plan execution extras', () => {
       [env.rows[0]!.id],
     );
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
-    await request(app).patch(`/api/plans/${plan.body.id}`).send({
-      environmentId: env.rows[0]!.id as string,
-      loginPrepare: { enabled: true },
-    });
+    // 计划级 PATCH 已退役环境/登录字段;直写列造老 shape(enqueue 仍按计划级列校验)
+    await pool.query(
+      `UPDATE execution_plans SET environment_id = $2, login_prepare_enabled = true WHERE id = $1`,
+      [plan.body.id, env.rows[0]!.id],
+    );
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(422);
     expect(r.body.error).toBe('login_case_required');
@@ -431,8 +444,13 @@ describe('plan execution extras', () => {
     const login = await makeCase(groupId, versionId, 'login');
     const plan = await request(app)
       .post(`/api/projects/${projectId}/plans`)
-      .send({ name: 'P', versionId, loginPrepare: { enabled: true, caseId: login } });
+      .send({ name: 'P', versionId });
     expect(plan.status).toBe(200);
+    // 计划级 POST/PATCH 已退役登录字段;直写列造老 shape(enqueue 仍按计划级列校验)
+    await pool.query(
+      `UPDATE execution_plans SET login_prepare_enabled = true, login_case_id = $2 WHERE id = $1`,
+      [plan.body.id, login],
+    );
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [inc.body.id] });
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(422);
@@ -453,6 +471,96 @@ describe('plan execution extras', () => {
       if (detail.body.status !== 'running') break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+  });
+});
+
+describe('plan case groups (HTTP)', () => {
+  it('组端点全链路：建组→PATCH→409 删非空组→组排序→组内用例替换→POST cases 带 groupId→组内重排→跨组移动→越组 404', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    const planId = plan.body.id as string;
+    const c1 = await makeCase(groupId, versionId, 'c1');
+    const c2 = await makeCase(groupId, versionId, 'c2');
+
+    // 建组：order 递增
+    const g1 = await request(app).post(`/api/plans/${planId}/groups`).send({ name: 'G1' });
+    expect(g1.status).toBe(200);
+    expect(g1.body.name).toBe('G1');
+    expect(g1.body.order).toBe(1);
+    const g2 = await request(app).post(`/api/plans/${planId}/groups`).send({ name: 'G2' });
+    expect(g2.status).toBe(200);
+    expect(g2.body.order).toBe(2);
+
+    // PATCH 组：改组名 + failFast
+    const patched = await request(app)
+      .patch(`/api/plans/${planId}/groups/${g1.body.id}`)
+      .send({ name: 'G1x', failFast: true });
+    expect(patched.status).toBe(200);
+    expect(patched.body.name).toBe('G1x');
+    expect(patched.body.failFast).toBe(true);
+
+    // 组内用例整包替换
+    const setCases = await request(app)
+      .put(`/api/plans/${planId}/groups/${g1.body.id}/cases`)
+      .send({ caseIds: [c1, c2] });
+    expect(setCases.status).toBe(200);
+
+    // 删非空组 → 409
+    const del = await request(app).delete(`/api/plans/${planId}/groups/${g1.body.id}`);
+    expect(del.status).toBe(409);
+    expect(del.body.error).toBe('group_not_empty');
+
+    // 组排序翻转，GET :id 验组序
+    const reorderGroups = await request(app)
+      .put(`/api/plans/${planId}/groups/order`)
+      .send({ groupIds: [g2.body.id, g1.body.id] });
+    expect(reorderGroups.status).toBe(200);
+    const d1 = await request(app).get(`/api/plans/${planId}`);
+    expect(d1.body.groups.map((g: { id: string }) => g.id)).toEqual([g2.body.id, g1.body.id]);
+
+    // POST /cases 带 groupId → 追加到指定组（跨组重复合法）
+    const add = await request(app)
+      .post(`/api/plans/${planId}/cases`)
+      .send({ caseIds: [c1], groupId: g2.body.id });
+    expect(add.status).toBe(200);
+    expect(add.body.added).toBe(1);
+
+    // cases/order 组内重排：G1 [c1,c2] → [c2,c1]
+    const reorderCases = await request(app)
+      .put(`/api/plans/${planId}/cases/order`)
+      .send({ groupId: g1.body.id, caseIds: [c2, c1] });
+    expect(reorderCases.status).toBe(200);
+
+    // 跨组移动：G1 的 c2 行 → G2 尾部
+    const d2 = await request(app).get(`/api/plans/${planId}`);
+    const g1Before = d2.body.groups.find((g: { id: string }) => g.id === g1.body.id);
+    const c2Row = g1Before.cases.find((c: { id: string }) => c.id === c2);
+    const mv = await request(app)
+      .put(`/api/plans/${planId}/cases/move`)
+      .send({ planCaseIds: [c2Row.planCaseId], toGroupId: g2.body.id });
+    expect(mv.status).toBe(200);
+    const d3 = await request(app).get(`/api/plans/${planId}`);
+    const g1After = d3.body.groups.find((g: { id: string }) => g.id === g1.body.id);
+    const g2After = d3.body.groups.find((g: { id: string }) => g.id === g2.body.id);
+    expect(g1After.cases.map((c: { id: string }) => c.id)).toEqual([c1]);
+    expect(g2After.cases.map((c: { id: string }) => c.id)).toEqual([c1, c2]);
+
+    // 越组：用另一计划 id 打本计划的组 → 404 group_not_found
+    const planB = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'PB', versionId });
+    const cross = await request(app)
+      .patch(`/api/plans/${planB.body.id}/groups/${g1.body.id}`)
+      .send({ name: 'X' });
+    expect(cross.status).toBe(404);
+    expect(cross.body.error).toBe('group_not_found');
+  });
+
+  it('空组可直接删除', async () => {
+    const { projectId, versionId } = await seedProject(pool);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    const g = await request(app).post(`/api/plans/${plan.body.id}/groups`).send({ name: 'G' });
+    const del = await request(app).delete(`/api/plans/${plan.body.id}/groups/${g.body.id}`);
+    expect(del.status).toBe(200);
+    expect(del.body.ok).toBe(true);
   });
 });
 

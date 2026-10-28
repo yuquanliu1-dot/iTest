@@ -11,7 +11,11 @@ import {
 } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
-import { createPlan, updatePlan, getPlanDetail, setPlanGroupCases, listPlanGroups, createPlanGroup, planProjectId, removePlanCases, updatePlanCase } from '../services/plans.service.js';
+import {
+  createPlan, updatePlan, getPlanDetail, setPlanGroupCases, listPlanGroups, createPlanGroup, updatePlanGroup, deletePlanGroup, reorderPlanGroups,
+  addPlanCases, reorderPlanGroupCases, movePlanCases,
+  planProjectId, removePlanCases, updatePlanCase,
+} from '../services/plans.service.js';
 import { attachCreators } from '../lib/creator.js';
 import { logger } from '../logger.js';
 import { enqueuePlanRun } from '../execute/enqueuePlanRun.js';
@@ -20,7 +24,8 @@ export const plansRoute = Router({ mergeParams: true });
 
 const StrategyEnum = z.enum(['run_all', 'fail_fast']);
 
-const LoginPrepareBody = z
+/** 组级登录准备配置（环境凭据自动登录 / 登录用例前置）。计划级已退役。 */
+const GroupLoginPrepareBody = z
   .object({
     enabled: z.boolean(),
     caseId: z.string().uuid().optional().nullable(),
@@ -39,24 +44,37 @@ const TargetOverrideBody = z
   .nullable()
   .optional();
 
+/** 组级统一设备/浏览器上下文（与 planCases 行级覆盖同形状）。 */
+const TargetConfigBody = TargetOverrideBody;
+
+const CreateGroupBody = z.object({
+  name: z.string().min(1).max(200),
+  environmentId: z.string().uuid().optional().nullable(),
+  loginPrepare: GroupLoginPrepareBody,
+  failFast: z.boolean().optional(),
+  targetConfig: TargetConfigBody,
+});
+
+const PatchGroupBody = z.object({
+  name: z.string().min(1).max(200).optional(),
+  environmentId: z.string().uuid().nullable().optional(),
+  loginPrepare: GroupLoginPrepareBody,
+  failFast: z.boolean().optional(),
+  targetConfig: TargetConfigBody,
+});
+
+// 计划级 Create/Patch 已瘦身：环境/登录准备配置移到组级(/groups 端点)，未知字段由 zod 剥离。
 const CreateBody = z.object({
   name: z.string().min(1).max(200),
-  environment: z.string().max(100).optional(),
   versionId: z.string().uuid().optional(),
   strategy: StrategyEnum.default('run_all'),
-  loginPrepare: LoginPrepareBody,
-  targetOverride: TargetOverrideBody,
   rcaEnabled: z.boolean().optional(),
 });
 
 const PatchBody = z.object({
   name: z.string().min(1).max(200).optional(),
-  environment: z.string().max(100).optional(),
-  environmentId: z.string().uuid().nullable().optional(),
   versionId: z.string().uuid().nullable().optional(),
   strategy: StrategyEnum.optional(),
-  loginPrepare: LoginPrepareBody,
-  targetOverride: TargetOverrideBody,
   rcaEnabled: z.boolean().optional(),
 });
 
@@ -119,7 +137,7 @@ plansRoute.patch('/:id', async (req, res) => {
   if (!existing) throw new HttpError(404, 'not_found', 'plan not found');
   await assertProjectVisible(existing.projectId, req.user!);
   const body = PatchBody.parse(req.body);
-  // version/environment 归属(∈ 计划所属 project)由 service 兜底
+  // version 归属(∈ 计划所属 project)由 service 兜底
   res.json(await updatePlan(req.params.id!, body));
 });
 
@@ -134,7 +152,7 @@ plansRoute.delete('/:id', async (req, res) => {
 
 // caseIds 归属(∈ 计划所属 project,409 cross_project)由 service assertCasesInProject 承接;
 // 路由仅保留计划级 per-user 可见性。
-/** 临时桥接(replacePlanCases 已退役,Task 5 收口退役本路由):整包替换落到第一个组,无组先建默认分组。 */
+/** 临时桥接(replacePlanCases 已退役,Task 13 收口退役本路由):整包替换落到第一个组,无组先建默认分组。 */
 async function replaceViaFirstGroup(planId: string, caseIds: string[]) {
   const first = (await listPlanGroups(planId))[0];
   const g = first ?? (await createPlanGroup(planId, { name: '默认分组' }));
@@ -150,13 +168,40 @@ plansRoute.put('/:id/cases', async (req, res) => {
   res.json({ ok: true });
 });
 
-plansRoute.put('/:id/cases/order', async (req, res) => {
-  const { caseIds } = z.object({ caseIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
+// 追加用例：groupId 缺省 = 追加到第一个组/自动建默认分组（service 默认行为）。
+plansRoute.post('/:id/cases', async (req, res) => {
+  const { caseIds, groupId } = z.object({
+    caseIds: z.array(z.string().uuid()).min(1),
+    groupId: z.string().uuid().optional(),
+  }).parse(req.body);
   const pid = await planProjectId(req.params.id!);
   if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
   await assertProjectVisible(pid, req.user!);
-  await replaceViaFirstGroup(req.params.id!, caseIds);
-  res.json({ ok: true });
+  res.json({ added: await addPlanCases(req.params.id!, caseIds, groupId) });
+});
+
+// 组内重排：必传 groupId，caseIds 必须恰为该组当前用例集合。
+plansRoute.put('/:id/cases/order', async (req, res) => {
+  const { groupId, caseIds } = z.object({
+    groupId: z.string().uuid(),
+    caseIds: z.array(z.string().uuid()).min(1),
+  }).parse(req.body);
+  const pid = await planProjectId(req.params.id!);
+  if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(pid, req.user!);
+  res.json(await reorderPlanGroupCases(req.params.id!, groupId, caseIds));
+});
+
+// 跨组移动：按 planCaseId（plan_cases 行 id）移动到目标组尾，源组自动重排。
+plansRoute.put('/:id/cases/move', async (req, res) => {
+  const { planCaseIds, toGroupId } = z.object({
+    planCaseIds: z.array(z.string().uuid()).min(1),
+    toGroupId: z.string().uuid(),
+  }).parse(req.body);
+  const pid = await planProjectId(req.params.id!);
+  if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(pid, req.user!);
+  res.json(await movePlanCases(req.params.id!, planCaseIds, toGroupId));
 });
 
 plansRoute.delete('/:id/cases', async (req, res) => {
@@ -180,6 +225,71 @@ plansRoute.patch('/:id/cases/:caseId', async (req, res) => {
   if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
   await assertProjectVisible(pid, req.user!);
   res.json(await updatePlanCase(req.params.id!, caseId, { targetOverride: body.targetOverride }));
+});
+
+// ---- 计划分组端点：每组独立配置环境/登录准备/failFast/设备浏览器上下文。 ----
+
+/** zod 组登录准备 body → service 输入（null 收口缺省字段）。 */
+function toGroupLoginPrepare(b?: z.infer<typeof GroupLoginPrepareBody>) {
+  return b && {
+    enabled: b.enabled,
+    caseId: b.caseId ?? null,
+    detectionUrl: b.detectionUrl ?? null,
+    successSelector: b.successSelector ?? null,
+    unauthorizedKeywords: b.unauthorizedKeywords ?? null,
+  };
+}
+
+plansRoute.post('/:id/groups', async (req, res) => {
+  const pid = await planProjectId(req.params.id!);
+  if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(pid, req.user!);
+  const b = CreateGroupBody.parse(req.body);
+  res.json(await createPlanGroup(req.params.id!, {
+    name: b.name,
+    environmentId: b.environmentId ?? undefined,
+    loginPrepare: toGroupLoginPrepare(b.loginPrepare),
+    failFast: b.failFast,
+    targetConfig: b.targetConfig ?? null,
+  }));
+});
+
+plansRoute.patch('/:id/groups/:groupId', async (req, res) => {
+  const pid = await planProjectId(req.params.id!);
+  if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(pid, req.user!);
+  const b = PatchGroupBody.parse(req.body);
+  res.json(await updatePlanGroup(req.params.id!, req.params.groupId!, {
+    name: b.name,
+    environmentId: b.environmentId,
+    loginPrepare: toGroupLoginPrepare(b.loginPrepare),
+    failFast: b.failFast,
+    targetConfig: b.targetConfig,
+  }));
+});
+
+plansRoute.delete('/:id/groups/:groupId', async (req, res) => {
+  const pid = await planProjectId(req.params.id!);
+  if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(pid, req.user!);
+  res.json(await deletePlanGroup(req.params.id!, req.params.groupId!));
+});
+
+plansRoute.put('/:id/groups/order', async (req, res) => {
+  const { groupIds } = z.object({ groupIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
+  const pid = await planProjectId(req.params.id!);
+  if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(pid, req.user!);
+  res.json(await reorderPlanGroups(req.params.id!, groupIds));
+});
+
+plansRoute.put('/:id/groups/:groupId/cases', async (req, res) => {
+  const { caseIds } = z.object({ caseIds: z.array(z.string().uuid()) }).parse(req.body);
+  const pid = await planProjectId(req.params.id!);
+  if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(pid, req.user!);
+  await setPlanGroupCases(req.params.id!, req.params.groupId!, caseIds);
+  res.json({ ok: true });
 });
 
 plansRoute.get('/:id/login-cases', async (req, res) => {

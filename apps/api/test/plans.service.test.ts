@@ -29,18 +29,13 @@ async function makeCase(groupId: string, versionId: string, title: string): Prom
 }
 
 describe('plans.service', () => {
-  it('createPlan:version 跨项目 → 400;environmentId 跨项目 → 400;成功返回行', async () => {
+  it('createPlan:version 跨项目 → 400;成功返回行', async () => {
     const a = await seedProject(pool);
     const b = await seedProject(pool);
-    const env = (await pool.query(
-      `INSERT INTO test_environments(project_id, name) VALUES ($1,'B环境') RETURNING id`, [b.projectId],
-    )).rows[0]!.id as string;
     const svc = await import('../src/services/plans.service.js');
     await expect(svc.createPlan(a.projectId, { name: 'p', versionId: b.versionId }))
       .rejects.toMatchObject({ status: 400, code: 'version_mismatch' });
     const plan = await svc.createPlan(a.projectId, { name: '冒烟', versionId: a.versionId });
-    await expect(svc.createPlan(a.projectId, { name: 'p2', versionId: a.versionId, environmentId: env }))
-      .rejects.toMatchObject({ status: 400, code: 'env_project_mismatch' });
     expect(plan.versionId).toBe(a.versionId);
     expect(await svc.planProjectId(plan.id)).toBe(a.projectId);
   }, 30_000);

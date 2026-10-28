@@ -92,25 +92,22 @@ describe('plan versionId', () => {
     expect(r.body.error).toBe('version_mismatch');
   });
 
-  it('PATCH environmentId 同项目环境通过', async () => {
+  it('PATCH environmentId 被剥离：计划级环境字段退役（环境归属改到组级），不再校验也不再落库', async () => {
     const env = await request(app).post(`/api/projects/${projectId}/environments`).send({ name: 'e1' });
     expect(env.status).toBe(200);
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId: defaultVersionId });
     expect(plan.status).toBe(200);
+    // 同项目环境：字段被 zod 剥离，不落计划
     const r = await request(app).patch(`/api/plans/${plan.body.id}`).send({ environmentId: env.body.id });
     expect(r.status).toBe(200);
-    expect(r.body.environmentId).toBe(env.body.id);
-  });
-
-  it('PATCH environmentId 跨项目环境返回 400 env_project_mismatch', async () => {
+    expect(r.body.environmentId).toBeNull();
+    // 跨项目环境：同样剥离，不再触发 env_project_mismatch
     const other = await seedProject(pool);
-    const env = await request(app).post(`/api/projects/${other.projectId}/environments`).send({ name: 'other-env' });
-    expect(env.status).toBe(200);
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId: defaultVersionId });
-    expect(plan.status).toBe(200);
-    const r = await request(app).patch(`/api/plans/${plan.body.id}`).send({ environmentId: env.body.id });
-    expect(r.status).toBe(400);
-    expect(r.body.error).toBe('env_project_mismatch');
+    const env2 = await request(app).post(`/api/projects/${other.projectId}/environments`).send({ name: 'other-env' });
+    expect(env2.status).toBe(200);
+    const r2 = await request(app).patch(`/api/plans/${plan.body.id}`).send({ environmentId: env2.body.id });
+    expect(r2.status).toBe(200);
+    expect(r2.body.environmentId).toBeNull();
   });
 
   it('PUT cases 跨版本引用允许', async () => {

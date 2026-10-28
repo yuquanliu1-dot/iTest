@@ -210,7 +210,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     const plan = await plansSvc.createPlan(pid, {
       name: row.name,
       versionId,
-      environmentId: row.environmentId ?? undefined,
+      // 环境配置已下沉组级(计划级字段退役);暂存单组级环境待后续任务接组端点
     }, creatorId);
     if (realCaseIds.length > 0) {
       // 临时桥接(replacePlanCases 退役,Task 9 收口):新计划无组,先建默认分组再整包写入

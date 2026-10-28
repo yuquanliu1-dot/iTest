@@ -26,14 +26,6 @@ export async function listPlansByVersion(versionId: string) {
   return attachCreators(plans.map((p) => ({ ...p, caseCount: countByPlan.get(p.id) ?? 0 })));
 }
 
-export interface LoginPrepareInput {
-  enabled: boolean;
-  caseId?: string | null;
-  detectionUrl?: string | null;
-  successSelector?: string | null;
-  unauthorizedKeywords?: string[] | null;
-}
-
 /** 计划级覆盖：用例默认 device_target / 浏览器上下文可在「加进计划」时改写,
  *  不动用例本体,仅本次计划执行时按覆盖解析。null = 沿用例自带值。 */
 export type TargetOverride = {
@@ -65,10 +57,7 @@ export async function updatePlanCase(planId: string, caseId: string, patch: Upda
 export interface CreatePlanInput {
   name: string;
   versionId: string;
-  environment?: string;
-  environmentId?: string;
   strategy?: string;
-  loginPrepare?: LoginPrepareInput;
   rcaEnabled?: boolean;
 }
 
@@ -86,7 +75,6 @@ async function assertEnvInProject(environmentId: string, projectId: string): Pro
 
 export async function createPlan(projectId: string, input: CreatePlanInput, createdByUserId?: string | null) {
   await assertVersionInProject(input.versionId, projectId);
-  if (input.environmentId) await assertEnvInProject(input.environmentId, projectId);
   if (input.strategy && !['run_all', 'fail_fast'].includes(input.strategy)) {
     throw new HttpError(400, 'bad_strategy', `invalid strategy: ${input.strategy}`);
   }
@@ -95,14 +83,7 @@ export async function createPlan(projectId: string, input: CreatePlanInput, crea
       projectId,
       name: input.name,
       versionId: input.versionId,
-      environment: input.environment,
-      environmentId: input.environmentId,
       strategy: input.strategy ?? 'run_all',
-      loginPrepareEnabled: input.loginPrepare?.enabled ?? false,
-      loginCaseId: input.loginPrepare?.caseId ?? null,
-      detectionUrl: input.loginPrepare?.detectionUrl ?? null,
-      loginSuccessSelector: input.loginPrepare?.successSelector ?? null,
-      loginUnauthorizedKeywords: input.loginPrepare?.unauthorizedKeywords ?? null,
       rcaEnabled: input.rcaEnabled ?? false,
       ...(createdByUserId ? { createdByUserId } : {}),
     }).returning()
@@ -111,11 +92,8 @@ export async function createPlan(projectId: string, input: CreatePlanInput, crea
 
 export interface UpdatePlanPatch {
   name?: string;
-  environment?: string;
-  environmentId?: string | null;
   versionId?: string | null;
   strategy?: string;
-  loginPrepare?: LoginPrepareInput;
   rcaEnabled?: boolean;
 }
 
@@ -123,24 +101,14 @@ export async function updatePlan(planId: string, patch: UpdatePlanPatch) {
   const existing = (await db.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'plan not found');
   if (patch.versionId !== undefined && patch.versionId !== null) await assertVersionInProject(patch.versionId, existing.projectId);
-  if (patch.environmentId !== undefined && patch.environmentId !== null) await assertEnvInProject(patch.environmentId, existing.projectId);
   if (patch.strategy !== undefined && !['run_all', 'fail_fast'].includes(patch.strategy)) {
     throw new HttpError(400, 'bad_strategy', `invalid strategy: ${patch.strategy}`);
   }
   const update: Record<string, unknown> = { updatedAt: new Date() };
   if (patch.name !== undefined) update.name = patch.name;
-  if (patch.environment !== undefined) update.environment = patch.environment;
-  if (patch.environmentId !== undefined) update.environmentId = patch.environmentId;
   if (patch.versionId !== undefined) update.versionId = patch.versionId;
   if (patch.strategy !== undefined) update.strategy = patch.strategy;
   if (patch.rcaEnabled !== undefined) update.rcaEnabled = patch.rcaEnabled;
-  if (patch.loginPrepare !== undefined) {
-    update.loginPrepareEnabled = patch.loginPrepare.enabled;
-    update.loginCaseId = patch.loginPrepare.caseId ?? null;
-    update.detectionUrl = patch.loginPrepare.detectionUrl ?? null;
-    update.loginSuccessSelector = patch.loginPrepare.successSelector ?? null;
-    update.loginUnauthorizedKeywords = patch.loginPrepare.unauthorizedKeywords ?? null;
-  }
   const rows = await db.update(executionPlans).set(update).where(eq(executionPlans.id, planId)).returning();
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'plan not found');
   return rows[0]!;
