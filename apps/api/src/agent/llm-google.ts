@@ -42,7 +42,11 @@ export class GoogleClient implements LLMClient {
     const json = tryParseJson(text);
     const base: LLMCompleteResult = json ? { kind: 'json', value: json } : { kind: 'text', value: text };
     const meta = resp.response.usageMetadata;
-    const usage = meta ? { promptTokens: meta.promptTokenCount ?? 0, completionTokens: meta.candidatesTokenCount ?? 0 } : undefined;
+    // Gemini 口径：promptTokenCount 含 cachedContentTokenCount（后者是它的子集）。平台统一口径是
+    // 「promptTokens = 本次新计算的、cacheReadTokens = 命中缓存的」（见 LLMUsage 注释，
+    // 与 Anthropic 原生口径一致），故这里减去缓存部分，否则命中率会重复计数。
+    const cached = meta?.cachedContentTokenCount ?? 0;
+    const usage = meta ? { promptTokens: Math.max(0, (meta.promptTokenCount ?? 0) - cached), completionTokens: meta.candidatesTokenCount ?? 0, cacheReadTokens: cached } : undefined;
     return { ...base, provider: 'google', vision: turns.some((x) => x.parts.some((p) => 'inlineData' in p)), ...(usage ? { usage } : {}), durationMs, model };
   }
 }

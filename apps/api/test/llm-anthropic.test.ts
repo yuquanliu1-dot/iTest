@@ -9,6 +9,7 @@ vi.mock('@anthropic-ai/sdk', () => {
 });
 
 import { AnthropicClient } from '../src/agent/llm-anthropic.js';
+import { newAiUsage } from '../src/execute/aiUsage.js';
 
 describe('AnthropicClient.complete · content 防守', () => {
   it('网关返回 200 但无 content（安全策略静默拦截形态）→ 抛带含义的 LLMProviderError，而非裸 TypeError', async () => {
@@ -129,6 +130,25 @@ describe('AnthropicClient.complete · 缓存断点与多轮累积', () => {
     const c = new AnthropicClient({ provider: 'anthropic', apiKey: 'k', model: 'm' });
     const r = await c.complete({ systemPrompt: 'sys', userMessage: 'u' });
     expect(r.usage).toMatchObject({ promptTokens: 12, cacheReadTokens: 6000, cacheCreationTokens: 0 });
+  });
+
+  it('端到端：client.usage 的缓存 token 能进到报告用的 aiUsage 累加器', async () => {
+    // 链路：AnthropicClient.complete → onUsage(r) → newAiUsage().stat（挂到 stepResult.aiUsage）。
+    // 中间任一环丢掉 cacheReadTokens，报告页就看不到命中率。
+    createMock.mockResolvedValueOnce({
+      ...okResp,
+      usage: { input_tokens: 12, output_tokens: 3, cache_read_input_tokens: 6000, cache_creation_input_tokens: 250 },
+    });
+    const c = new AnthropicClient({ provider: 'anthropic', apiKey: 'k', model: 'm' });
+    const acc = newAiUsage();
+    acc.add(await c.complete({ systemPrompt: 'sys', userMessage: 'u' }));
+    expect(acc.stat).toMatchObject({
+      calls: 1,
+      promptTokens: 12,
+      completionTokens: 3,
+      cacheReadTokens: 6000,
+      cacheCreationTokens: 250,
+    });
   });
 
   it('缺省 messages 时退化为单轮（兼容性不回归）', async () => {

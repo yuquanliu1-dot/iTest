@@ -82,21 +82,32 @@ export function getLlmClient(config: LLMConfig): LLMClient {
   }
 }
 
+/** 聚合 usage → LLMUsage。缓存 token 恒透出（无命中即 0），调用方据此算命中率。 */
+function usageOf(agg: { promptTokens: number; completionTokens: number; cacheReadTokens: number; cacheCreationTokens: number }): LLMUsage {
+  return {
+    promptTokens: agg.promptTokens,
+    completionTokens: agg.completionTokens,
+    cacheReadTokens: agg.cacheReadTokens,
+    cacheCreationTokens: agg.cacheCreationTokens,
+  };
+}
+
 /** complete 的 JSON 版：解析失败把错误回喂模型重试 1 次（语义重试），仍失败抛错。
  *  返回聚合 usage/durationMs（两次调用累加）与 retries。 */
 export async function completeJson(
   client: LLMClient,
   req: LLMRequest,
 ): Promise<{ value: Record<string, unknown>; retries: number; usage?: LLMUsage; durationMs?: number; model?: string }> {
-  const agg = { promptTokens: 0, completionTokens: 0, hasUsage: false };
+  // 缓存 token 也要聚合：语义重试的两次调用都可能命中缓存，丢掉就无法在报告里看到命中率。
+  const agg = { promptTokens: 0, completionTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, hasUsage: false };
   let durationMs = 0;
   let retries = 0;
   const t0 = Date.now();
   const first = await client.complete(req);
   durationMs += first.durationMs ?? Date.now() - t0;
-  if (first.usage) { agg.promptTokens += first.usage.promptTokens; agg.completionTokens += first.usage.completionTokens; agg.hasUsage = true; }
+  if (first.usage) { agg.promptTokens += first.usage.promptTokens; agg.completionTokens += first.usage.completionTokens; agg.cacheReadTokens += first.usage.cacheReadTokens ?? 0; agg.cacheCreationTokens += first.usage.cacheCreationTokens ?? 0; agg.hasUsage = true; }
   if (first.kind === 'json') {
-    return { value: first.value, retries: 0, ...(agg.hasUsage ? { usage: { promptTokens: agg.promptTokens, completionTokens: agg.completionTokens } } : {}), ...(durationMs > 0 ? { durationMs } : {}), ...(first.model ? { model: first.model } : {}) };
+    return { value: first.value, retries: 0, ...(agg.hasUsage ? { usage: usageOf(agg) } : {}), ...(durationMs > 0 ? { durationMs } : {}), ...(first.model ? { model: first.model } : {}) };
   }
   // 语义重试：把上次的非法输出与错误回喂
   retries = 1;
@@ -109,9 +120,9 @@ export async function completeJson(
     : { ...req, userMessage: `${req.userMessage}${hint}` };
   const second = await client.complete(retryReq);
   durationMs += second.durationMs ?? Date.now() - t1;
-  if (second.usage) { agg.promptTokens += second.usage.promptTokens; agg.completionTokens += second.usage.completionTokens; agg.hasUsage = true; }
+  if (second.usage) { agg.promptTokens += second.usage.promptTokens; agg.completionTokens += second.usage.completionTokens; agg.cacheReadTokens += second.usage.cacheReadTokens ?? 0; agg.cacheCreationTokens += second.usage.cacheCreationTokens ?? 0; agg.hasUsage = true; }
   if (second.kind !== 'json') {
     throw new Error(`LLM 响应不是合法 JSON（重试 1 次后仍失败）：${second.value.slice(0, 200)}`);
   }
-  return { value: second.value, retries, ...(agg.hasUsage ? { usage: { promptTokens: agg.promptTokens, completionTokens: agg.completionTokens } } : {}), ...(durationMs > 0 ? { durationMs } : {}), ...(second.model ? { model: second.model } : {}) };
+  return { value: second.value, retries, ...(agg.hasUsage ? { usage: usageOf(agg) } : {}), ...(durationMs > 0 ? { durationMs } : {}), ...(second.model ? { model: second.model } : {}) };
 }

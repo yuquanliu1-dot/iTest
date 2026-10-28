@@ -18,6 +18,8 @@ describe('newAiUsage accumulator', () => {
       modelCallMs: 2000,
       retries: 1,
       model: 'm-b',
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
     });
   });
 
@@ -28,5 +30,20 @@ describe('newAiUsage accumulator', () => {
     expect(acc.stat.calls).toBe(2);
     expect(acc.stat.promptTokens).toBe(0);
     expect(acc.stat.modelCallMs).toBe(50);
+  });
+
+  it('累加缓存命中/写入 token（provider 透出时）', () => {
+    const acc = newAiUsage();
+    acc.add({ usage: { promptTokens: 100, completionTokens: 10, cacheReadTokens: 800, cacheCreationTokens: 50 } });
+    acc.add({ usage: { promptTokens: 20, completionTokens: 5, cacheReadTokens: 900, cacheCreationTokens: 0 } });
+    expect(acc.stat.cacheReadTokens).toBe(1700);
+    expect(acc.stat.cacheCreationTokens).toBe(50);
+  });
+
+  it('provider 未透出缓存字段时，缓存计数为 0（不产生 undefined 噪声）', () => {
+    const acc = newAiUsage();
+    acc.add({ usage: { promptTokens: 10, completionTokens: 5 } });
+    expect(acc.stat.cacheReadTokens).toBe(0);
+    expect(acc.stat.cacheCreationTokens).toBe(0);
   });
 });

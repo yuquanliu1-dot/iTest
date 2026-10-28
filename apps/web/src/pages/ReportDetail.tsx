@@ -144,12 +144,17 @@ export default function ReportDetail() {
         if (!u) continue;
         acc.calls += u.calls;
         acc.tokens += u.promptTokens + u.completionTokens;
+        acc.prompt += u.promptTokens;
         acc.ms += u.modelCallMs;
+        acc.cacheRead += u.cacheReadTokens ?? 0;
       }
       return acc;
     },
-    { calls: 0, tokens: 0, ms: 0 },
+    { calls: 0, tokens: 0, prompt: 0, ms: 0, cacheRead: 0 },
   );
+  // 缓存命中率：命中 / (本次新计算的 prompt + 命中)。分母为 0（老报告无缓存字段）时不出示。
+  const aiCacheRate =
+    aiTotal.cacheRead + aiTotal.prompt > 0 ? Math.round((aiTotal.cacheRead / (aiTotal.cacheRead + aiTotal.prompt)) * 100) : null;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -314,7 +319,7 @@ export default function ReportDetail() {
               {aiTotal.calls > 0 && (
                 <MetaRow
                   label={t('reports:summary.aiCalls')}
-                  value={<span className="font-mono text-[11px]">{t('reports:aiCallsSummary', { count: aiTotal.calls, tokens: fmtTokens(aiTotal.tokens), seconds: (aiTotal.ms / 1000).toFixed(1) })}</span>}
+                  value={<span className="font-mono text-[11px]">{t('reports:aiCallsSummary', { count: aiTotal.calls, tokens: fmtTokens(aiTotal.tokens), seconds: (aiTotal.ms / 1000).toFixed(1), ...(aiCacheRate != null ? { cacheHitSuffix: t('reports:aiCacheHit', { rate: aiCacheRate }) } : {}) })}</span>}
                 />
               )}
             </div>

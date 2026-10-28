@@ -108,8 +108,9 @@
     "totalSteps": "总步骤",
     "aiCalls": "AI 调用"
   },
-  "aiUsage": "AI {{count}} 次调用 · {{tokens}} tokens · {{seconds}}s",
-  "aiCallsSummary": "{{count}} 次 · {{tokens}} tokens · {{seconds}}s",
+  "aiUsage": "AI {{count}} 次调用 · {{tokens}} tokens · {{seconds}}s{{cacheHitSuffix}}",
+  "aiCallsSummary": "{{count}} 次 · {{tokens}} tokens · {{seconds}}s{{cacheHitSuffix}}",
+  "aiCacheHit": " · 缓存命中 {{rate}}%",
   "retrySuffix": " · 重试 {{count}}",
   "db": {
     "summary": "DB 查询：{{count}} 行",

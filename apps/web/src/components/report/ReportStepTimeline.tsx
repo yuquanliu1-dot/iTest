@@ -15,6 +15,10 @@ interface AiUsage {
   modelCallMs: number;
   retries: number;
   model?: string;
+  /** 命中缓存的 prompt token 数（不含在 promptTokens 内）；老报告无此字段。 */
+  cacheReadTokens?: number;
+  /** 为建立缓存新写入的 token 数；老报告无此字段。 */
+  cacheCreationTokens?: number;
 }
 
 export interface StepResult {
@@ -61,11 +65,21 @@ export function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
+/** 缓存命中率：命中 / (本次新计算 + 命中)。分母为 0 时返回 null（老报告无缓存字段）。 */
+export function cacheHitRate(u: AiUsage): number | null {
+  const read = u.cacheReadTokens ?? 0;
+  const total = read + u.promptTokens;
+  if (total <= 0 || read <= 0) return null;
+  return Math.round((read / total) * 100);
+}
+
 function aiUsageText(t: ReturnType<typeof useTranslation>['t'], u: AiUsage): string {
+  const rate = cacheHitRate(u);
   return t('reports:aiUsage', {
     count: u.calls,
     tokens: fmtTokens(u.promptTokens + u.completionTokens),
     seconds: (u.modelCallMs / 1000).toFixed(1),
+    ...(rate != null ? { cacheHitSuffix: t('reports:aiCacheHit', { rate }) } : {}),
   });
 }
 

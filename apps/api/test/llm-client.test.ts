@@ -42,7 +42,7 @@ describe('completeJson 语义重试', () => {
     const r = await completeJson(c, req);
     expect(r.value).toEqual({ ok: true });
     expect(r.retries).toBe(0);
-    expect(r.usage).toEqual({ promptTokens: 10, completionTokens: 5 });
+    expect(r.usage).toEqual({ promptTokens: 10, completionTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 });
     expect(r.durationMs).toBe(100);
     expect(r.model).toBe('test-model');
     expect(c.requests).toHaveLength(1);
@@ -56,7 +56,7 @@ describe('completeJson 语义重试', () => {
     const r = await completeJson(c, req);
     expect(r.value).toEqual({ ok: 2 });
     expect(r.retries).toBe(1);
-    expect(r.usage).toEqual({ promptTokens: 30, completionTokens: 13 });
+    expect(r.usage).toEqual({ promptTokens: 30, completionTokens: 13, cacheReadTokens: 0, cacheCreationTokens: 0 });
     expect(r.durationMs).toBe(200);
     // 重试请求携带上次错误反馈
     expect(c.requests[1]!.userMessage).toContain('不是合法 JSON');
@@ -67,6 +67,15 @@ describe('completeJson 语义重试', () => {
     const c = fakeClient([{ kind: 'text', value: 'still not json' }]);
     await expect(completeJson(c, req)).rejects.toThrow(/不是合法 JSON/);
     expect(c.requests).toHaveLength(2);
+  });
+
+  it('缓存 token 在语义重试的两次调用间累加（此前被丢弃 → 报告看不到命中率）', async () => {
+    const c = fakeClient([
+      { kind: 'text', value: 'not json', usage: { promptTokens: 10, completionTokens: 5, cacheReadTokens: 100, cacheCreationTokens: 20 } },
+      { kind: 'json', value: { ok: 1 }, usage: { promptTokens: 20, completionTokens: 8, cacheReadTokens: 300, cacheCreationTokens: 0 } },
+    ]);
+    const r = await completeJson(c, req);
+    expect(r.usage).toEqual({ promptTokens: 30, completionTokens: 13, cacheReadTokens: 400, cacheCreationTokens: 20 });
   });
 
   it('多轮形态的语义重试：提示追加为新 user 消息，而不是被 messages 忽略', async () => {
