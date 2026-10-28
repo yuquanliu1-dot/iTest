@@ -93,6 +93,13 @@ export default function SpaceWorkspace({ versionId, initialMessage, onError, onW
     store.reset();
     // 线程 id 存 store:StagePanel 订阅同一份 state 拉暂存列表,spaceEventsStore 用于 SSE stage 事件 upsert
     store.setCurrentThreadId(activeThreadId);
+    // 持久产物灌回:下载卡落库后跨会话/刷新仍在。SSE artifact 事件只在运行态推送,
+    // 静态线程靠这里把下载卡还原。拉取失败不阻断对话(本轮 SSE 事件仍可实时出卡)。
+    if (activeThreadId) {
+      api.listArtifacts(activeThreadId)
+        .then((items) => useSpaceEventsStore.getState().hydrateArtifacts(activeThreadId, items))
+        .catch(() => { /* 列表不可用降级为空,不弹错 */ });
+    }
   }, [activeThreadId]);
   useEffect(() => () => useSpaceEventsStore.getState().setCurrentThreadId(''), []);
   const hasLiveView = !!useActiveLiveView();

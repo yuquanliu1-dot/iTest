@@ -173,6 +173,11 @@ CREATE TABLE assistant_mcp_servers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(
 CREATE INDEX assistant_mcp_servers_enabled_idx ON assistant_mcp_servers(enabled);
 CREATE TABLE assistant_skills (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(120) NOT NULL, description varchar(500) NOT NULL, enabled boolean NOT NULL DEFAULT true, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now(), CONSTRAINT assistant_skills_name_uq UNIQUE(name));
 CREATE INDEX assistant_skills_enabled_idx ON assistant_skills(enabled);
+-- AI 产物文件（skill 脚本生成的可下载文档）：裸 uuid 无 FK，对齐 ai_assistant_feedback 惯例
+CREATE TABLE ai_thread_artifacts (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), thread_id uuid NOT NULL, version_id uuid NOT NULL, project_id uuid NOT NULL, token text NOT NULL, name text NOT NULL, mime text, size integer NOT NULL, count integer, stored_path text NOT NULL, skill_name text, expires_at timestamp, created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL, created_at timestamp NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX ai_thread_artifacts_token_uq ON ai_thread_artifacts(token);
+CREATE INDEX ai_thread_artifacts_thread_idx ON ai_thread_artifacts(thread_id);
+CREATE INDEX ai_thread_artifacts_version_idx ON ai_thread_artifacts(version_id);
 -- RCA：计划开关快照 + 每失败用例分析结果 + 线程用途标记
 DO $$ BEGIN ALTER TABLE execution_plans ADD COLUMN rca_enabled boolean NOT NULL DEFAULT false; EXCEPTION WHEN duplicate_column THEN null; END $$;
 DO $$ BEGIN ALTER TABLE plan_runs      ADD COLUMN rca_enabled boolean NOT NULL DEFAULT false; EXCEPTION WHEN duplicate_column THEN null; END $$;

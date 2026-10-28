@@ -209,6 +209,10 @@ echo "== seed defect-rca =="
 docker exec "$(api_replica)" node /repo/apps/api/scripts/seed-defect-rca.mjs \
   || echo "WARN: defect-rca seed 失败，RCA 线程将看不到该技能（不影响其余功能）"
 
+echo "== seed word-test-report =="
+docker exec "$(api_replica)" node /repo/apps/api/scripts/seed-word-report-skill.mjs \
+  || echo "WARN: word-test-report seed 失败，助手将看不到该技能（不影响其余功能）"
+
 # --- post-deploy smoke ---
 # Warning 策略:任一 FAIL 输出原因但 exit 0;运维根据警告决定是否回滚。
 echo "== post-deploy smoke =="

@@ -813,6 +813,38 @@ export const aiAssistantFeedback = pgTable('ai_assistant_feedback', {
   userIdx: index('ai_assistant_feedback_user_idx').on(t.userId),
 }));
 
+// ── AI 助手产物文件（skill 脚本生成的可下载文档）──
+// skill 脚本产出文件 → 工具层 registerPersistentArtifact 落盘 + 落库 → 前端下载卡。
+// 与 ai_assistant_feedback 同惯例：threadId/versionId/projectId 是裸 uuid 无 FK——产物是
+// 已交付给用户的材料，不应随 version 删除而 cascade 消失（文件本体在卷上也不随之清理）。
+// token 复用 UUID 形态：下载路由的 TOKEN_RE 校验对两类产物（短 TTL / 永久）一视同仁。
+export const aiThreadArtifacts = pgTable('ai_thread_artifacts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  threadId: uuid('thread_id').notNull(),
+  versionId: uuid('version_id').notNull(),
+  projectId: uuid('project_id').notNull(),
+  /** 下载令牌：GET /threads/:id/artifacts/:token 的路径段。唯一约束防同 token 指向多文件。 */
+  token: text('token').notNull().unique(),
+  /** 原始文件名（含扩展名，可中文）。浏览器落盘名 = 此列经 contentDispositionUtf8 编码。 */
+  name: text('name').notNull(),
+  /** Content-Type：按扩展名推断（MIME_TABLE），也可由 skill 清单显式指定覆盖。 */
+  mime: text('mime'),
+  size: integer('size').notNull(),
+  /** 可选条目数（沿用 xmind 导出的语义：文件内含多少条用例/用例行）。 */
+  count: integer('count'),
+  /** 卷上文件的绝对路径；多副本共享 itest-data 卷，任一副本都能服务下载。 */
+  storedPath: text('stored_path').notNull(),
+  /** 产出该文件的 skill 名（可空：原生工具产出而非 skill 脚本）。 */
+  skillName: text('skill_name'),
+  /** null = 永久有效。skill 产物走永久（用户要隔天再下载）；旧 xmind 导出仍走内存态短 TTL，不落此表。 */
+  expiresAt: timestamp('expires_at'),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  threadIdx: index('ai_thread_artifacts_thread_idx').on(t.threadId),
+  versionIdx: index('ai_thread_artifacts_version_idx').on(t.versionId),
+}));
+
 // ── 批量固化（全未固化用例 NL→DSL 后台任务）──
 // 一次触发一批：批次行只做归属/审计；逐用例行由 worker 独占更新（BullMQ 每 job 只碰自己那行，
 // 批次进度读时按行 status 派生，天然免并发写冲突）。失败语义 = 保留已落库 DSL + 标记失败原因。

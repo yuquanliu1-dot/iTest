@@ -148,6 +148,8 @@ interface SpaceEventsState {
   selectAllStaged: (threadId: string, kind: Exclude<StageKind, 'group'>, selected: boolean) => void;
   /** save 后调用:从前端 view 清掉已落库条目 + 选中标记。 */
   removeStagedLocal: (threadId: string, kind: Exclude<StageKind, 'group'>, localIds: string[]) => void;
+  /** 切换会话后灌回持久产物(REST 列表与 SSE 事件合流,token 去重)。 */
+  hydrateArtifacts: (threadId: string, items: Array<{ token: string; name: string; size: number; count: number | null; createdAt: string }>) => void;
   reset: () => void;
 }
 
@@ -492,6 +494,21 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
     for (const lid of localIds) selSet.delete(keyOf(kind, lid));
     sel.set(threadId, selSet);
     return { stagedByThread: next, stagedSelection: sel };
+  }),
+  hydrateArtifacts: (threadId, items) => set((s) => {
+    const existing = s.artifactsByThread.get(threadId) ?? [];
+    const seen = new Set(existing.map((x) => x.token));
+    const merged = [...existing];
+    for (const it of items) {
+      if (seen.has(it.token)) continue;
+      seen.add(it.token);
+      merged.push({ token: it.token, name: it.name, size: it.size, ...(it.count != null ? { count: it.count } : {}), at: it.createdAt });
+    }
+    // 按时间升序对齐 SSE 追加序;上限 20 与 ingest 分支一致。
+    merged.sort((a, b) => a.at.localeCompare(b.at));
+    const next = new Map(s.artifactsByThread);
+    next.set(threadId, merged.slice(-20));
+    return { artifactsByThread: next };
   }),
   reset: () => set({
     confirms: [], stageHistory: [], announce: null, verifyProgress: null, solidifyProgress: null, loginProgress: null,

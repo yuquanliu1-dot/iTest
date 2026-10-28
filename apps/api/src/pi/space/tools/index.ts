@@ -68,7 +68,7 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   //   - manage_cases   → 仅负责 search/get/create_group（实时读 + 仅分组创建仍保留实时写）
   tools.push(...buildLoginTools(ctx));
   tools.push(buildReadSkillTool());
-  tools.push(buildRunSkillScriptTool());
+  tools.push(buildRunSkillScriptTool(ctx));
   // 管理类工具（manage_skill / manage_mcp / import_skill）只对「有效管理员」线程注册：改动全局共享配置
   // （skill 脚本 / MCP command 会在 API 容器上执行），非管理员会话无此面，防模型幻觉调用。
   if (ctx.manager) {

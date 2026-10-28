@@ -528,9 +528,14 @@ export const api = {
     }
     const dispo = r.headers.get('Content-Disposition') ?? '';
     const m = dispo.match(/filename\*=UTF-8''([^;]+)/);
-    const filename = m ? decodeURIComponent(m[1]!) : 'artifact.xmind';
+    const filename = m ? decodeURIComponent(m[1]!) : 'artifact';
     return { blob: await r.blob(), filename };
   },
+  /** 某线程的持久产物列表（skill 生成文档等）。切换会话时拉取，把下载卡灌回界面。 */
+  listArtifacts: (threadId: string) =>
+    request<Array<{ token: string; name: string; mime: string; size: number; count: number | null; createdAt: string }>>(
+      `/assistant/threads/${threadId}/artifacts`,
+    ),
   auth: {
     login: (username: string, password: string) =>
       request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),

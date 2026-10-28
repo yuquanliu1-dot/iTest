@@ -99,5 +99,8 @@ export function buildSkillsSectionContent(
   return `<available_skills>\n${lines.join('\n')}\n</available_skills>\n\n`
     + '按需查阅技能内容时调用 read_skill(skillName) 取 SKILL.md 正文与完整文件树；'
     + '读文件树里的其他文件（references/ agents/ assets/ 等）用 read_skill(skillName, file="references/xxx.md")。'
-    + '执行附带脚本用 run_skill_script(skillName, script="scripts/xxx.py")。skill 正文不会自动进入本提示词。';
+    + '执行附带脚本用 run_skill_script(skillName, script="scripts/xxx.py")。skill 正文不会自动进入本提示词。\n'
+    + '脚本产出文件给用户时：把文件写到该技能的 .out/ 目录，并在 stdout 打印一行 '
+    + '__ITEST_ARTIFACTS__ [{"name":"文件名.docx","path":".out/文件名.docx"}]；'
+    + '平台会把它落库并生成下载卡，用户点击即可下载（格式不限：docx/xlsx/pdf/png/csv 皆可）。';
 }

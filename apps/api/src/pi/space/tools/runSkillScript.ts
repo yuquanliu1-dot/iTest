@@ -21,6 +21,9 @@ import { SCRIPT_RUNTIMES, assertSkillEnabled, isScriptRuntime, skillDirOf } from
 import { resolveInSkill } from '../skillPaths.js';
 import { logger } from '../../../logger.js';
 import { runtimeOfFirstLine } from './readSkill.js';
+import { parseArtifactManifest, resolveArtifactPath, stripArtifactManifest, type ArtifactManifestItem } from '../skillArtifacts.js';
+import { registerPersistentArtifact } from '../artifacts.js';
+import type { SpaceToolsContext } from './context.js';
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.SKILL_SCRIPT_TIMEOUT_MS ?? 60_000);
 const MAX_OUTPUT_CHARS = 100_000;
@@ -94,16 +97,20 @@ function runProcess(
   });
 }
 
-export function buildRunSkillScriptTool(): ToolExecutor {
+export function buildRunSkillScriptTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'run_skill_script',
-    description: '运行某个 skill 附带的脚本（runtime=node|python3|bash|sh）。先 read_skill 看文件树与 runtime；runtime 缺省按脚本 shebang 推断。script 是相对技能根的路径（如 scripts/run_loop.py），只写文件名时会自动回退到 scripts/ 下查找。cwd 为技能根并注入 PYTHONPATH，脚本可以用 `from scripts.x import` 包式引用。执行受默认 60s 超时与 100KB 输出上限保护。args 为脚本命令行参数数组。',
+    description: '运行某个 skill 附带的脚本（runtime=node|python3|bash|sh）。先 read_skill 看文件树与 runtime；runtime 缺省按脚本 shebang 推断。script 是相对技能根的路径（如 scripts/run_loop.py），只写文件名时会自动回退到 scripts/ 下查找。cwd 为技能根并注入 PYTHONPATH，脚本可以用 `from scripts.x import` 包式引用。执行受默认 60s 超时与 100KB 输出上限保护。args 为脚本命令行参数数组。脚本若产出文件（如生成 Word/Excel 报告），把文件写到技能的 .out/ 目录并在 stdout 打印一行 __ITEST_ARTIFACTS__ [{"name":"文件名.docx","path":".out/文件名.docx"}]，平台会把它变成用户可下载的下载卡。',
     parameters: Type.Object({
       skillName: Type.String({ minLength: 1 }),
       script: Type.String({ minLength: 1 }),
       args: Type.Optional(Type.Array(Type.String())),
       runtime: Type.Optional(Type.String()),
     }),
+    promptGuidelines: [
+      '脚本产出文件时：文件写到 <skill>/.out/ 下，stdout 打印一行 __ITEST_ARTIFACTS__ [{"name":"报告.docx","path":".out/报告.docx"}]（name 为用户可读的文件名，含扩展名）。平台据此生成下载卡，用户点击下载。',
+      '产物协议与文件格式无关：docx/xlsx/pdf/png/csv 皆可。name 里的扩展名决定下载文件的 MIME。',
+    ],
     execute: async (input) => {
       const { skillName, script, args, runtime } = input as {
         skillName: string; script: string; args?: unknown; runtime?: unknown;
@@ -150,7 +157,74 @@ export function buildRunSkillScriptTool(): ToolExecutor {
       if (r.timedOut) return { ok: false, error: `脚本执行超时(${DEFAULT_TIMEOUT_MS / 1000}s)${merged ? '\n' + tail(merged, ERROR_TAIL_CHARS) : ''}` };
       if (r.capped) return { ok: false, error: `输出超过 ${MAX_OUTPUT_CHARS} 字符上限，已终止` };
       if (r.exitCode !== 0) return { ok: false, error: `脚本退出码 ${r.exitCode}${merged ? '\n' + tail(merged, ERROR_TAIL_CHARS) : ''}` };
-      return { ok: true, data: merged || '脚本执行完成（无输出）' };
+
+      // 产物交接：脚本 stdout 里的 __ITEST_ARTIFACTS__ 清单 → 落库 → 下载卡。
+      // 清单缺失/非法时静默跳过（脚本只是普通脚本），不改变既有返回语义。
+      const manifest = parseArtifactManifest(merged);
+      if (!manifest || manifest.length === 0) {
+        return { ok: true, data: merged || '脚本执行完成（无输出）' };
+      }
+      const collected = await collectArtifacts(ctx, skillName, skillDir, manifest);
+      const text = stripArtifactManifest(merged);
+      if (collected.registered.length === 0) {
+        // 一个产物都没成：把失败原因回给模型，让它能改参数重试。
+        return {
+          ok: true,
+          data: `${text ? text + '\n' : ''}产物注册失败：${collected.failed.join('；')}`,
+        };
+      }
+      const okDesc = collected.registered.map((a) => `「${a.name}」`).join('、');
+      const failNote = collected.failed.length > 0 ? `\n（${collected.failed.length} 个产物失败：${collected.failed.join('；')}）` : '';
+      return {
+        ok: true,
+        data: `${text ? text + '\n' : ''}已生成 ${collected.registered.length} 个文件（${okDesc}），下载卡已推送给用户${failNote}`,
+      };
     },
   };
+}
+
+/**
+ * 产物清单 → 落库 → SSE artifact 事件。
+ * 单个产物失败只跳过它并记原因，不影响其余产物，也不让整轮工具调用失败。
+ */
+async function collectArtifacts(
+  ctx: SpaceToolsContext,
+  skillName: string,
+  skillDir: string,
+  manifest: ArtifactManifestItem[],
+): Promise<{ registered: Array<{ name: string; size: number }>; failed: string[] }> {
+  const registered: Array<{ name: string; size: number }> = [];
+  const failed: string[] = [];
+  for (const item of manifest) {
+    const resolved = await resolveArtifactPath(skillDir, item.path);
+    if ('error' in resolved) {
+      failed.push(`${item.name}: ${resolved.error}`);
+      continue;
+    }
+    let buf: Buffer;
+    try {
+      buf = await fs.promises.readFile(resolved.abs);
+    } catch (e) {
+      failed.push(`${item.name}: 读取失败（${e instanceof Error ? e.message : String(e)}）`);
+      continue;
+    }
+    try {
+      const token = await registerPersistentArtifact(
+        buf,
+        { name: item.name, mime: item.mime, count: item.count },
+        {
+          threadId: ctx.threadId,
+          versionId: ctx.versionId,
+          projectId: ctx.projectId,
+          skillName,
+          createdByUserId: ctx.createdByUserId,
+        },
+      );
+      ctx.emit({ type: 'artifact', token, name: item.name, size: buf.length, ...(item.count !== undefined ? { count: item.count } : {}) });
+      registered.push({ name: item.name, size: buf.length });
+    } catch (e) {
+      failed.push(`${item.name}: 落库失败（${e instanceof Error ? e.message : String(e)}）`);
+    }
+  }
+  return { registered, failed };
 }

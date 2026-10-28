@@ -48,9 +48,11 @@ ENV NODE_ENV=production \
 # python3:AI 助手 run_skill_script 的 python3 runtime(另有默认自带 node/bash/sh)。
 # python3-yaml:官方 skill-creator 的 scripts/quick_validate.py 需要 PyYAML(2026-10-19)——
 #   走 apt 系统包而非 pip:bookworm 自带,不用 --break-system-packages/venv。
+# python3-docx:word-test-report skill 生成 .docx 用(2026-10-28);缺失时该 skill 会
+#   自动降级为标准库 zipfile 手写 OOXML,装上只为报告样式更好,不构成硬依赖。
 # bookworm-slim 不带任何系统二进制,apt-get 必须。详见 infra/docker/certs/README.md。
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates ripgrep unzip python3 python3-yaml \
+      git ca-certificates ripgrep unzip python3 python3-yaml python3-docx \
       libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
       libxkbcommon0 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
       libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 \

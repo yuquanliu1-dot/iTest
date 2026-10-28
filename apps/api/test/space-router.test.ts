@@ -633,3 +633,48 @@ describe('快照合并压缩前缀(preCompactionMessagesOf + snapshotOf)', () =>
     }
   });
 });
+
+describe('持久产物（skill 生成文档等）', () => {
+  it('列表接口按线程过滤（新→旧）+ 下载 Content-Type 按记录 mime 出', async () => {
+    const { versionId } = await seedProject(pool);
+    const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    const threadId = t.body.metadata.id as string;
+    // 经与 router 同源的模块注册产物（同一 module registry,拿到的就是路由用的那个实例）
+    const { registerPersistentArtifact } = await import('../src/pi/space/artifacts.js');
+    await registerPersistentArtifact(Buffer.from('older'), { name: '旧报告.docx' }, { threadId, versionId, projectId: crypto.randomUUID() });
+    await new Promise((r) => setTimeout(r, 10));
+    const token = await registerPersistentArtifact(Buffer.from('newer'), { name: '新报告.docx', count: 5 }, { threadId, versionId, projectId: crypto.randomUUID() });
+
+    const list = await request(app).get(`/api/assistant/threads/${threadId}/artifacts`);
+    expect(list.status).toBe(200);
+    expect(list.body).toHaveLength(2);
+    expect(list.body[0]).toMatchObject({ name: '新报告.docx', token, size: 5, count: 5 });
+    expect(list.body[0].mime).toContain('wordprocessingml');
+    expect(list.body[1].name).toBe('旧报告.docx'); // 新→旧
+
+    // responseType('blob'):supertest 对未知二进制 mime 会自作主张解析,body 强制留原始 buffer
+    const dl = await request(app).get(`/api/assistant/threads/${threadId}/artifacts/${token}`).responseType('blob');
+    expect(dl.status).toBe(200);
+    expect(dl.headers['content-type']).toContain('wordprocessingml'); // 不再写死 application/zip
+    expect(dl.headers['content-disposition']).toContain("filename*=UTF-8''"); // RFC 5987 中文文件名
+    expect(dl.body.toString()).toBe('newer');
+  });
+
+  it('未知 token / 他线程 token → 410；未知线程 → 404；无产物线程 → 空数组', async () => {
+    const { versionId } = await seedProject(pool);
+    const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    const threadId = t.body.metadata.id as string;
+    const other = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
+    const otherId = other.body.metadata.id as string;
+
+    const { registerPersistentArtifact } = await import('../src/pi/space/artifacts.js');
+    const token = await registerPersistentArtifact(Buffer.from('x'), { name: 'a.docx' }, { threadId, versionId, projectId: crypto.randomUUID() });
+
+    expect((await request(app).get(`/api/assistant/threads/${threadId}/artifacts/00000000-0000-4000-8000-000000000000`)).status).toBe(410);
+    // token 属于 threadId,从 otherId 的 URL 访问 → 410(不跨线程泄漏)
+    expect((await request(app).get(`/api/assistant/threads/${otherId}/artifacts/${token}`)).status).toBe(410);
+    expect((await request(app).get(`/api/assistant/threads/${threadId}/artifacts`)).body).toHaveLength(1);
+    expect((await request(app).get(`/api/assistant/threads/${otherId}/artifacts`)).body).toHaveLength(0);
+    expect((await request(app).get(`/api/assistant/threads/00000000-0000-4000-8000-000000000000/artifacts`)).status).toBe(404);
+  });
+});

@@ -23,7 +23,7 @@ import { subscribeThreadMirror } from './threadBus.js';
 import { generateSpaceSuggestionsOnce } from './suggestions.js';
 import { stageRoute } from './stageRoute.js';
 import { feedbackRoute } from './feedbackRoute.js';
-import { getArtifact, readArtifactFile, contentDispositionUtf8 } from './artifacts.js';
+import { getArtifact, readArtifactFile, contentDispositionUtf8, listThreadArtifacts } from './artifacts.js';
 import { requireManager } from '../../middleware/auth.js';
 import { guidesRoute } from './guidesRoute.js';
 import { mcpServersRoute } from './mcpServersRoute.js';
@@ -388,8 +388,18 @@ spaceRoute.get('/threads/:id/live/:key', async (req, res) => {
   handleLiveView(req, res, req.params.key!);
 });
 
+/** 某线程的持久产物列表（skill 生成的文档等）。前端切换会话时拉取，把下载卡灌回界面——
+ *  SSE artifact 事件只在运行态推送、且服务侧重放缓冲在进程内存里，刷新页面会丢下载卡。 */
+spaceRoute.get('/threads/:id/artifacts', async (req, res) => {
+  await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
+  const items = await listThreadArtifacts(req.params.id!);
+  res.json(items);
+});
+
 /** AI 产出文件下载（artifact 事件携带的 token 换文件流）。
- *  鉴权 = 线程可见（与 SSE 同款）；过期/不存在 410；文件被清扫 404。 */
+ *  鉴权 = 线程可见（与 SSE 同款）；过期/不存在 410；文件被清扫 404。
+ *  Content-Type 按产物记录里的 mime 出——不能写死 application/zip，否则 docx/xlsx/png
+ *  在浏览器里会被当成 zip 下载（扩展名对但类型错）。 */
 spaceRoute.get('/threads/:id/artifacts/:token', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
   const a = await getArtifact(req.params.token!);
@@ -401,7 +411,7 @@ spaceRoute.get('/threads/:id/artifacts/:token', async (req, res) => {
   } catch {
     throw new HttpError(404, 'not_found', '文件已被清理');
   }
-  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Type', a.mime);
   res.setHeader('Content-Disposition', contentDispositionUtf8(a.name));
   res.send(buf);
 });
