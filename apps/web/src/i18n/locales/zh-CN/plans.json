@@ -9,8 +9,6 @@
   "name": "名称",
   "namePlaceholder": "例如：预发冒烟",
   "environment": "环境",
-  "environmentOptional": "环境（可选）",
-  "environmentPlaceholder": "预发 / 生产 / staging",
   "defaultEnvironment": "默认",
   "caseCount": "用例数",
   "caseCountLabel": "{{count}} 个用例",
@@ -167,5 +165,7 @@
   "groupOrder": "分组 {{index}}",
   "loginCaseDeleted": "登录用例已删除",
   "groupSkippedByPlan": "已跳过（计划策略）",
-  "groupSkippedByGroup": "已跳过（组策略）"
+  "groupSkippedByGroup": "已跳过（组策略）",
+  "groupNameAria": "分组名称",
+  "deleteGroupTitle": "删除分组"
 }

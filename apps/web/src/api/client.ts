@@ -99,7 +99,7 @@ export const api = {
         `/projects/${id}/overview?range=${range}`,
       ),
     plans: (id: string) => request<PlanWithCount[]>(`/projects/${id}/plans`),
-    createPlan: (id: string, body: { name: string; environment?: string; versionId?: string }) =>
+    createPlan: (id: string, body: { name: string; versionId?: string }) =>
       request<ExecutionPlan>(`/projects/${id}/plans`, { method: 'POST', body: JSON.stringify(body) }),
   },
   groups: {

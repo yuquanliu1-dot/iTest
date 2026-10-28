@@ -151,7 +151,7 @@ export default function PlanGroupCard({
         <InlineEdit
           value={group.name}
           disabled={patchGroup.isPending}
-          ariaLabel={t('plans:planNameAria')}
+          ariaLabel={t('plans:groupNameAria')}
           onSave={(next) => patchGroup.mutateAsync({ name: next })}
           className="text-[13px] font-semibold max-w-[240px]"
           inputClassName="text-[13px] font-semibold max-w-[240px]"
@@ -202,7 +202,7 @@ export default function PlanGroupCard({
         </label>
         <IconButton
           icon="trash"
-          title={t('plans:deletePlanTitle')}
+          title={t('plans:deleteGroupTitle')}
           tone="destructive"
           disabled={deleteGroup.isPending}
           onClick={() => deleteGroup.mutate()}
@@ -300,7 +300,7 @@ export default function PlanGroupCard({
             description={t('plans:noCasesHint')}
             action={
               <Button size="sm" variant="ghost" disabled={deleteGroup.isPending} onClick={() => deleteGroup.mutate()}>
-                {t('plans:deletePlanTitle')}
+                {t('plans:deleteGroupTitle')}
               </Button>
             }
           />

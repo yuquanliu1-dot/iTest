@@ -67,14 +67,12 @@ export default function Plans() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState('');
-  const [environment, setEnvironment] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
 
   const create = useMutation({
-    mutationFn: () => api.projects.createPlan(projectId!, { name, environment: environment || undefined, versionId: versionId ?? undefined }),
+    mutationFn: () => api.projects.createPlan(projectId!, { name, versionId: versionId ?? undefined }),
     onSuccess: () => {
       setName('');
-      setEnvironment('');
       setShowCreate(false);
       toast(t('plans:createdToast'), 'success');
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
@@ -332,7 +330,6 @@ export default function Plans() {
           </DialogHeader>
           <div className="flex flex-col gap-3 px-5 py-4">
             <Input label={t('plans:name')} placeholder={t('plans:namePlaceholder')} value={name} onChange={(e) => setName(e.target.value)} />
-            <Input label={t('plans:environmentOptional')} placeholder={t('plans:environmentPlaceholder')} value={environment} onChange={(e) => setEnvironment(e.target.value)} />
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setShowCreate(false)}>{t('common:cancel')}</Button>

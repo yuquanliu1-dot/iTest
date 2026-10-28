@@ -9,8 +9,6 @@
   "name": "Name",
   "namePlaceholder": "e.g. Pre-release smoke",
   "environment": "Environment",
-  "environmentOptional": "Environment (optional)",
-  "environmentPlaceholder": "staging / production / staging",
   "defaultEnvironment": "Default",
   "caseCount": "Cases",
   "caseCountLabel": "{{count}} cases",
@@ -172,5 +170,7 @@
   "groupOrder": "Group {{index}}",
   "loginCaseDeleted": "Login case deleted",
   "groupSkippedByPlan": "Skipped (plan strategy)",
-  "groupSkippedByGroup": "Skipped (group strategy)"
+  "groupSkippedByGroup": "Skipped (group strategy)",
+  "groupNameAria": "Group name",
+  "deleteGroupTitle": "Delete group"
 }
