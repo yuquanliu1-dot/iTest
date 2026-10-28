@@ -162,17 +162,21 @@ describe('plan execution extras', () => {
     expect(detail.body.cases.map((c: { id: string }) => c.id)).toEqual([c3, c1, c2]);
   });
 
-  it('login prepare enabled without caseId returns 422', async () => {
+  it('组登录准备无来源（无登录用例、无组环境）→ 422 login_case_required 且报组名', async () => {
     const { projectId, versionId } = await seedProject(pool);
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
-    // 计划级 PATCH 已退役登录字段;直写列造老 shape 保 enqueue 校验覆盖(组级校验是 Task 6)
-    await pool.query(`UPDATE execution_plans SET login_prepare_enabled = true WHERE id = $1`, [plan.body.id]);
+    const g = await request(app)
+      .post(`/api/plans/${plan.body.id}/groups`)
+      .send({ name: '登录组', loginPrepare: { enabled: true } });
+    expect(g.status).toBe(200);
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(422);
+    expect(r.body.error).toBe('login_case_required');
+    expect(r.body.message).toContain('登录组');
   });
 
-  // 0041 起登录凭据并入 web 对象:enqueue 的自登录源判定查「计划环境的默认 web 服务对象」内嵌凭证。
-  it('login prepare no caseId:环境默认 web 对象带内嵌凭据 → run 通过 enqueue（200）', async () => {
+  // 0041 起登录凭据并入 web 对象:enqueue 的自登录源判定查「组环境的默认 web 服务对象」内嵌凭证。
+  it('组登录无登录用例:组环境默认 web 对象带内嵌凭据 → run 通过 enqueue（200）', async () => {
     const { projectId, versionId } = await seedProject(pool);
     const { encrypt } = await import('../src/lib/secret-crypto.js');
     process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
@@ -188,16 +192,21 @@ describe('plan execution extras', () => {
       })],
     );
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
-    // 计划级 PATCH 已退役环境/登录字段;直写列造老 shape(enqueue 仍按计划级列校验)
-    await pool.query(
-      `UPDATE execution_plans SET environment_id = $2, login_prepare_enabled = true WHERE id = $1`,
-      [plan.body.id, env.rows[0]!.id],
-    );
+    const g = await request(app)
+      .post(`/api/plans/${plan.body.id}/groups`)
+      .send({ name: 'G', environmentId: env.rows[0]!.id, loginPrepare: { enabled: true } });
+    expect(g.status).toBe(200);
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(200);
+    // 等后台 run 收敛，避免与 afterAll 的 pool.end 竞争
+    for (let i = 0; i < 50; i++) {
+      const detail = await request(app).get(`/api/plan-runs/${r.body.runId}`);
+      if (detail.body.status !== 'running') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   }, 30_000);
 
-  it('login prepare no caseId:环境默认 web 对象无内嵌凭据 → run 422', async () => {
+  it('组登录无登录用例:组环境默认 web 对象无内嵌凭据 → run 422 login_case_required', async () => {
     const { projectId, versionId } = await seedProject(pool);
     const env = await pool.query(
       `INSERT INTO test_environments(project_id, name) VALUES ($1, 'E') RETURNING id`, [projectId],
@@ -207,14 +216,14 @@ describe('plan execution extras', () => {
       [env.rows[0]!.id],
     );
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
-    // 计划级 PATCH 已退役环境/登录字段;直写列造老 shape(enqueue 仍按计划级列校验)
-    await pool.query(
-      `UPDATE execution_plans SET environment_id = $2, login_prepare_enabled = true WHERE id = $1`,
-      [plan.body.id, env.rows[0]!.id],
-    );
+    const g = await request(app)
+      .post(`/api/plans/${plan.body.id}/groups`)
+      .send({ name: '空凭据组', environmentId: env.rows[0]!.id, loginPrepare: { enabled: true } });
+    expect(g.status).toBe(200);
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(422);
     expect(r.body.error).toBe('login_case_required');
+    expect(r.body.message).toContain('空凭据组');
   }, 30_000);
 
   it('GET /executions returns mixed entries with kind=case or kind=plan', async () => {
@@ -438,7 +447,7 @@ describe('plan execution extras', () => {
     expect(detail!.body.cancelRequested).toBe(true);
   });
 
-  it('rejects run when plan has incognito case and loginPrepare enabled', async () => {
+  it('组登录 + 组内 incognito 用例 → 422 incognito_conflicts_with_login_prepare', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     const inc = await request(app).post('/api/cases').send({ title: 'inc', groupId, versionId, incognito: true });
     const login = await makeCase(groupId, versionId, 'login');
@@ -446,15 +455,33 @@ describe('plan execution extras', () => {
       .post(`/api/projects/${projectId}/plans`)
       .send({ name: 'P', versionId });
     expect(plan.status).toBe(200);
-    // 计划级 POST/PATCH 已退役登录字段;直写列造老 shape(enqueue 仍按计划级列校验)
-    await pool.query(
-      `UPDATE execution_plans SET login_prepare_enabled = true, login_case_id = $2 WHERE id = $1`,
-      [plan.body.id, login],
-    );
-    await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [inc.body.id] });
+    const g = await request(app)
+      .post(`/api/plans/${plan.body.id}/groups`)
+      .send({ name: 'G', loginPrepare: { enabled: true, caseId: login } });
+    expect(g.status).toBe(200);
+    await request(app).put(`/api/plans/${plan.body.id}/groups/${g.body.id}/cases`).send({ caseIds: [inc.body.id] });
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(422);
     expect(r.body.error).toBe('incognito_conflicts_with_login_prepare');
+    expect(r.body.message).toContain(inc.body.id);
+  });
+
+  it('组登录 + 组内 mobile 用例 → 422 login_prepare_skips_mobile 且报组名', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const login = await makeCase(groupId, versionId, 'login');
+    const mob = await makeCase(groupId, versionId, 'mob');
+    // 直写列造 mobile shape（路由建 mobile 用例需整套 mobileOs/deviceTarget/appRef 配置）
+    await pool.query(`UPDATE test_cases SET platform = 'mobile' WHERE id = $1`, [mob]);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    const g = await request(app)
+      .post(`/api/plans/${plan.body.id}/groups`)
+      .send({ name: '移动组', loginPrepare: { enabled: true, caseId: login } });
+    expect(g.status).toBe(200);
+    await request(app).put(`/api/plans/${plan.body.id}/groups/${g.body.id}/cases`).send({ caseIds: [mob] });
+    const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
+    expect(r.status).toBe(422);
+    expect(r.body.error).toBe('login_prepare_skips_mobile');
+    expect(r.body.message).toContain('移动组');
   });
 
   it('allows run with incognito case when loginPrepare disabled', async () => {
@@ -472,6 +499,42 @@ describe('plan execution extras', () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   });
+
+  it('运行快照带 groups（全部组配置，按组序）；标量 login_prepare_enabled = 任一组开启（旧 UI 兼容）', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const login = await makeCase(groupId, versionId, 'login');
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    const g1 = await request(app).post(`/api/plans/${plan.body.id}/groups`).send({ name: 'G1' });
+    const g2 = await request(app)
+      .post(`/api/plans/${plan.body.id}/groups`)
+      .send({ name: 'G2', loginPrepare: { enabled: true, caseId: login }, failFast: true });
+    expect(g1.status).toBe(200);
+    expect(g2.status).toBe(200);
+    const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
+    expect(r.status).toBe(200);
+    const row = await pool.query(
+      `SELECT groups, login_prepare_enabled, login_case_id, detection_url FROM plan_runs WHERE id = $1`,
+      [r.body.runId],
+    );
+    const groups = row.rows[0].groups as Array<{
+      name: string; loginPrepareEnabled: boolean; loginCaseId: string | null; failFast: boolean;
+    }>;
+    expect(groups.map((g) => g.name)).toEqual(['G1', 'G2']);
+    expect(groups[0]!.loginPrepareEnabled).toBe(false);
+    expect(groups[1]!.loginPrepareEnabled).toBe(true);
+    expect(groups[1]!.loginCaseId).toBe(login);
+    expect(groups[1]!.failFast).toBe(true);
+    // 旧 UI 兼容标量：任一组开启登录即 true；细粒度配置只在 groups 快照里
+    expect(row.rows[0].login_prepare_enabled).toBe(true);
+    expect(row.rows[0].login_case_id).toBeNull();
+    expect(row.rows[0].detection_url).toBeNull();
+    // 等后台 run 收敛，避免与 afterAll 的 pool.end 竞争
+    for (let i = 0; i < 50; i++) {
+      const detail = await request(app).get(`/api/plan-runs/${r.body.runId}`);
+      if (detail.body.status !== 'running') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }, 30_000);
 });
 
 describe('plan case groups (HTTP)', () => {
