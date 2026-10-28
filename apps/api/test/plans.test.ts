@@ -341,6 +341,10 @@ describe('plan execution extras', () => {
       .post(`/api/projects/${projectId}/plans`)
       .send({ name: 'P', versionId, strategy: 'fail_fast' });
     await request(app).put(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2, c3] });
+    // 两级失败语义：组内跳过由组级 fail_fast 决定（计划级只在组边界评估）
+    const detail0 = await request(app).get(`/api/plans/${plan.body.id}`);
+    const firstGroup = detail0.body.groups[0] as { id: string };
+    await request(app).patch(`/api/plans/${plan.body.id}/groups/${firstGroup.id}`).send({ failFast: true });
 
     // 强制的现在是第一条：forceFail 在 CDP 前短路，行为与有无 chromium 环境无关
     process.env.FORCE_FAIL_CASE_IDS = c1;
