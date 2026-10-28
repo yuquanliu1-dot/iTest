@@ -325,7 +325,7 @@ export default function ReportDetail() {
               {aiTotal.calls > 0 && (
                 <MetaRow
                   label={t('reports:summary.aiCalls')}
-                  value={<span className="font-mono text-[11px]">{t('reports:aiCallsSummary', { count: aiTotal.calls, tokens: fmtTokens(aiTotal.tokens), seconds: (aiTotal.ms / 1000).toFixed(1), ...(aiCacheRate != null ? { cacheHitSuffix: t('reports:aiCacheHit', { rate: aiCacheRate }) } : {}) })}</span>}
+                  value={<span className="font-mono text-[11px]">{t('reports:aiCallsSummary', { count: aiTotal.calls, tokens: fmtTokens(aiTotal.tokens), seconds: (aiTotal.ms / 1000).toFixed(1), cacheHitSuffix: aiCacheRate != null ? t('reports:aiCacheHit', { rate: aiCacheRate }) : '' })}</span>}
                 />
               )}
             </div>

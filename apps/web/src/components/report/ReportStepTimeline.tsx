@@ -73,13 +73,14 @@ export function cacheHitRate(u: AiUsage): number | null {
   return Math.round((read / total) * 100);
 }
 
-function aiUsageText(t: ReturnType<typeof useTranslation>['t'], u: AiUsage): string {
+export function aiUsageText(t: ReturnType<typeof useTranslation>['t'], u: AiUsage): string {
   const rate = cacheHitRate(u);
   return t('reports:aiUsage', {
     count: u.calls,
     tokens: fmtTokens(u.promptTokens + u.completionTokens),
     seconds: (u.modelCallMs / 1000).toFixed(1),
-    ...(rate != null ? { cacheHitSuffix: t('reports:aiCacheHit', { rate }) } : {}),
+    // 无缓存数据时必须给空串：undefined 会让 i18next 把 {{cacheHitSuffix}} 占位符原样留在输出里
+    cacheHitSuffix: rate != null ? t('reports:aiCacheHit', { rate }) : '',
   });
 }
 
