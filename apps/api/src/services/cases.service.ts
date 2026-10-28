@@ -10,6 +10,7 @@ import type { AppRef } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { resolveDatasetProjectId, resolveDeviceTargetProjectId, resolveEnvironmentProjectId, resolveVersionProjectId } from './projectAccess.js';
+import { enabledRowCount } from './datasets.service.js';
 import { migrateAssertion, sanitizeAssertion } from '../lib/step-migration.js';
 import { attachCreator } from '../lib/creator.js';
 import { cache } from '../lib/cache.js';
@@ -191,6 +192,8 @@ export interface UpdateCasePatch {
   scenarioId?: string | null;
   defaultEnvId?: string | null;
   datasetId?: string | null;
+  /** 数据集行选择：启用行下标数组。[] = 所有启用行；null = 清空选择（等价 []）。 */
+  datasetRowIndexes?: number[] | null;
   windowStrategy?: string;
   windowWidth?: number | null;
   windowHeight?: number | null;
@@ -240,6 +243,29 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
     if (!dsPid) throw new HttpError(404, 'not_found', 'dataset not found');
     if (dsPid !== targetPid) throw new HttpError(400, 'dataset_project_mismatch', 'dataset does not belong to this project');
   }
+  // 数据集行选择与 datasetId 联动：
+  //  - 显式带了选择 → 以请求为准（前端「先换数据集再选行、一次保存」要能落库）
+  //  - 没带选择且换了数据集（含解绑）→ 清空（下标空间属于旧数据集）
+  //  - 选择下标必须落在目标数据集的启用行范围内
+  //  null = 清空（归一为 []）；undefined = 不动。
+  let datasetRowIndexes = patch.datasetRowIndexes;
+  if (datasetRowIndexes === undefined) {
+    if (patch.datasetId !== undefined && patch.datasetId !== existing.datasetId) {
+      datasetRowIndexes = [];
+    }
+  } else if (datasetRowIndexes === null) {
+    datasetRowIndexes = [];
+  }
+  if (datasetRowIndexes && datasetRowIndexes.length > 0) {
+    const dsId = patch.datasetId ?? existing.datasetId;
+    if (!dsId) throw new HttpError(400, 'bad_request', '选择数据集行前须先绑定数据集');
+    const enabledCount = await enabledRowCount(dsId);
+    const bad = datasetRowIndexes.filter((i) => i >= enabledCount);
+    if (bad.length > 0) {
+      throw new HttpError(400, 'bad_request',
+        `选中的数据行 ${bad.map((i) => i + 1).join('、')} 超出该数据集的启用行范围（共 ${enabledCount} 行）`);
+    }
+  }
   // 2026-10-07: 移动端 device target 跨项目断言（service 兜底）
   if (patch.mobileDeviceTargetId !== undefined && patch.mobileDeviceTargetId !== null) {
     const dtPid = await resolveDeviceTargetProjectId(patch.mobileDeviceTargetId);
@@ -247,8 +273,12 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
     if (dtPid !== targetPid) throw new HttpError(400, 'device_target_project_mismatch', 'device target does not belong to this project');
   }
   if (patch.tagIds !== undefined) await assertTagsBelongToOrg(patch.tagIds, targetPid);
-  const { tagIds, ...rest } = patch;
-  const updated = (await db.update(testCases).set({ ...rest, updatedAt: new Date() }).where(eq(testCases.id, caseId)).returning())[0]!;
+  const { tagIds, datasetRowIndexes: _ignored, ...rest } = patch;
+  const updated = (await db.update(testCases).set({
+    ...rest,
+    ...(datasetRowIndexes !== undefined ? { datasetRowIndexes } : {}),
+    updatedAt: new Date(),
+  }).where(eq(testCases.id, caseId)).returning())[0]!;
   if (tagIds !== undefined) {
     await db.delete(caseTags).where(eq(caseTags.caseId, caseId));
     if (tagIds.length > 0) {
@@ -430,13 +460,18 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
     !!targetProjectId && !!ownerProjectId && ownerProjectId === targetProjectId;
   // 数据集绑定随拷贝：仅当源数据集与目标分组同项目时携带（跨项目不外带，置空回退单次执行）。
   let datasetId: string | null = null;
+  // 行选择随数据集绑定一起携带：同一数据集的下标空间相同，跨项目丢绑定时也一并丢弃。
+  let datasetRowIndexes: number[] = [];
   if (src.datasetId) {
     const srcDs = (await db
       .select({ projectId: datasets.projectId })
       .from(datasets)
       .where(eq(datasets.id, src.datasetId))
       .limit(1))[0];
-    if (await ownedByTarget(srcDs?.projectId)) datasetId = src.datasetId;
+    if (await ownedByTarget(srcDs?.projectId)) {
+      datasetId = src.datasetId;
+      datasetRowIndexes = [...(src.datasetRowIndexes ?? [])];
+    }
   }
   // 默认环境同理：环境属项目内资源，跨项目引用会被执行期「环境与项目不匹配」拦下。
   let defaultEnvId: string | null = null;
@@ -462,6 +497,7 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
       versionId: targetVersionId ?? src.versionId,
       url: src.url,
       datasetId,
+      datasetRowIndexes,
       // 用例级语义随拷贝携带：预期结果与覆盖类型是本条用例自身的描述。
       expectedOutcome: src.expectedOutcome,
       coverageTypes: src.coverageTypes,

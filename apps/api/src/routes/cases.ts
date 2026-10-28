@@ -67,6 +67,9 @@ const PatchBody = CaseBodyBase.partial()
     defaultEnvId: z.string().uuid().nullable().optional(),
     // 绑定数据集 id；null 表示解绑，undefined 表示不动
     datasetId: z.string().uuid().nullable().optional(),
+    // 数据集行选择：启用行下标数组。[] = 所有启用行；null = 清空选择。
+    // 跨字段校验（须先绑数据集 / 下标不越界）在 service 层做（PatchBody 末尾已有 superRefine）。
+    datasetRowIndexes: z.array(z.number().int().min(0)).max(500).nullable().optional(),
     // 2026-10-07: 移动端支持
     platform: z.enum(['web', 'mobile']).optional(),
     mobileOs: z.enum(['ios', 'android']).nullable().optional(),

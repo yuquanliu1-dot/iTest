@@ -91,6 +91,9 @@ export async function runCase(
      *  跑完才回填，执行期间前端拿不到报告 id，页面只能显示「排队等待执行」，
      *  步骤要等用例结束才一次性出现。 */
     onReportCreated?: (reportId: string, rowIndex: number | null) => void | Promise<void>;
+    /** 数据集行选择（启用行下标）。传了用传的值（执行路由预检时冻结的集合），
+     *  没传回落用例上存的 datasetRowIndexes（计划运行路径）。[] = 所有启用行。 */
+    datasetRowIndexes?: number[];
   },
 ): Promise<{ reportId: string; status: string; reportIds?: string[] }> {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
@@ -98,7 +101,9 @@ export async function runCase(
 
   // 数据集绑定：前置校验（0 启用行/列名非法/解密失败）直接抛 DatasetConfigError —— 配置错误不产生垃圾 report。
   if (caseRow.datasetId) {
-    const plan = await loadDatasetForRun(caseRow.datasetId);
+    // 行选择：执行路由冻结的最终下标集合优先；否则回落用例上存的选择（计划运行路径）。
+    const rowIndexes = opts?.datasetRowIndexes ?? caseRow.datasetRowIndexes ?? [];
+    const plan = await loadDatasetForRun(caseRow.datasetId, { rowIndexes });
     // 批次 id：非 preseed 路径在此生成（plan run / 批量固化等）；preseed 路由已随插入落库，无需再传。
     const batchId = opts?.preseed ? undefined : randomUUID();
     const reportIds: string[] = [];

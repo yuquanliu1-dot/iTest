@@ -119,7 +119,11 @@ export default function ReportDetail() {
   // 数据集运行整段共享一个流（key=case:<caseId>）：行 0 报告先行收尾但 run 仍在继续，
   // 行 0 页面保持画面直到整个 run 结束。结束后面面定格最后一帧 + 「回放」按钮（录制回放）。
   const isRunning = data.status === 'running';
-  const keepLiveForDataset = data.datasetRowIndex === 0 && (data.datasetSnapshot?.totalRows ?? 1) > 1;
+  // 数据集多行运行时，整段共享一个流（key=case:<caseId>）：非最后一行报告收尾后 run 仍在继续，
+  // 页面保持画面直到整个 run 结束。判定用「批内相对位置」而非 datasetRowIndex===0 ——
+  // 部分行选择时首个执行行的 datasetRowIndex 不一定是 0。
+  const keepLiveForDataset =
+    !!data.datasetBatchId && batchQuery.isSuccess && batchRows.length > 1 && curRowIdx < batchRows.length - 1;
   // 失败根因分析结果（计划开启 rcaEnabled 时由 AI 异步产出；未分析/老报告为 null）
   const rca = data.rca ?? null;
 
@@ -244,6 +248,8 @@ export default function ReportDetail() {
                     const vars = r.datasetSnapshot
                       ? Object.entries(r.datasetSnapshot.values).map(([k, v]) => `${k}=${v}`).join(' · ')
                       : '';
+                    // chip 序号 = 数据集行号（启用行下标 + 1），跨批次稳定；不是批内位置
+                    const rowNo = r.datasetRowIndex != null ? r.datasetRowIndex + 1 : i + 1;
                     return (
                       <button
                         key={r.id}
@@ -251,9 +257,9 @@ export default function ReportDetail() {
                         className="rowchip"
                         style={cur ? { borderColor: 'var(--primary)', boxShadow: '0 0 0 2px var(--primary-soft)' } : undefined}
                         onClick={() => gotoRow(r.id)}
-                        title={t('reports:detail.rowVarsTitle', { index: i + 1, vars })}
+                        title={t('reports:detail.rowVarsTitle', { index: rowNo, vars })}
                       >
-                        {i + 1}
+                        {rowNo}
                         <span
                           className={isActive ? 'status-pulse' : undefined}
                           style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }}

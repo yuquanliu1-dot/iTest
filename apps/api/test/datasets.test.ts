@@ -267,6 +267,88 @@ describe('datasets.service', () => {
     expect(c.rows[0].dataset_id).toBeNull();
   });
 
+  it('loadDatasetForRun：rowIndexes 过滤 —— 只跑选中的启用行，rowIndex 是启用空间下标', async () => {
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, {
+      name: '账号-选行',
+      columns: body.columns,
+      rows: [
+        { disabled: false, cells: { username: 'alice', password: 'pw-0' } },
+        { disabled: false, cells: { username: 'bob', password: 'pw-1' } },
+        { disabled: false, cells: { username: 'carol', password: 'pw-2' } },
+      ],
+    });
+    // 不传 = 全部启用行（旧行为）
+    const all = await svc.loadDatasetForRun(created.id);
+    expect(all.rows).toHaveLength(3);
+    expect(all.rows.map((r) => r.rowIndex)).toEqual([0, 1, 2]);
+    expect(all.rows[0].totalRows).toBe(3);
+    // 只选第 2 行（启用空间下标 1）
+    const one = await svc.loadDatasetForRun(created.id, { rowIndexes: [1] });
+    expect(one.rows).toHaveLength(1);
+    expect(one.rows[0].rowIndex).toBe(1);
+    expect(one.rows[0].vars.username).toBe('bob');
+    // totalRows = 本批次执行行数（分母口径）
+    expect(one.rows[0].totalRows).toBe(1);
+    expect(one.rows[0].snapshot.totalRows).toBe(1);
+    // 选多行 → 按数据集行序执行
+    const many = await svc.loadDatasetForRun(created.id, { rowIndexes: [2, 0] });
+    expect(many.rows.map((r) => r.rowIndex)).toEqual([0, 2]);
+    expect(many.rows[0].totalRows).toBe(2);
+    // 空数组 = 所有行
+    const emptySel = await svc.loadDatasetForRun(created.id, { rowIndexes: [] });
+    expect(emptySel.rows).toHaveLength(3);
+    // 越界 → 抛错（宁可不跑，也不跑错行）
+    await expect(svc.loadDatasetForRun(created.id, { rowIndexes: [5] })).rejects.toThrow('超出该数据集的启用行范围');
+  });
+
+  it('loadDatasetForRun：rowIndexes 编号空间 = 剔除禁用行后重编号', async () => {
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, {
+      name: '账号-禁用重编号',
+      columns: body.columns,
+      rows: [
+        { disabled: true, cells: { username: 'skip', password: 'pw-0' } },
+        { disabled: false, cells: { username: 'alice', password: 'pw-1' } },
+        { disabled: false, cells: { username: 'bob', password: 'pw-2' } },
+      ],
+    });
+    // 启用行只有 2 行 → 下标 0/1；选 1 = 第二个启用行（原始位置 2）
+    const one = await svc.loadDatasetForRun(created.id, { rowIndexes: [1] });
+    expect(one.rows).toHaveLength(1);
+    expect(one.rows[0].rowIndex).toBe(1);
+    expect(one.rows[0].vars.username).toBe('bob');
+    // 选 2 已越界（启用行只有 2 条）
+    await expect(svc.loadDatasetForRun(created.id, { rowIndexes: [2] })).rejects.toThrow('超出该数据集的启用行范围');
+  });
+
+  it('enabledRowCount：只数启用行；数据集不存在返回 0', async () => {
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, {
+      name: '账号-行数',
+      columns: body.columns,
+      rows: [
+        { disabled: true, cells: { username: 'a', password: 'b' } },
+        { disabled: false, cells: { username: 'c', password: 'd' } },
+      ],
+    });
+    expect(await svc.enabledRowCount(created.id)).toBe(1);
+    expect(await svc.enabledRowCount('00000000-0000-0000-0000-000000000000')).toBe(0);
+  });
+
+  it('deleteDataset：清空绑定用例的行选择', async () => {
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, { ...body, name: '待删-选行' });
+    await pool.query(
+      `INSERT INTO test_cases(group_id, version_id, title, dataset_id, dataset_row_indexes) VALUES ($1, $2, '绑定选行用例', $3, ARRAY[0])`,
+      [groupId, versionId, created.id],
+    );
+    await svc.deleteDataset(created.id);
+    const c = await pool.query(`SELECT dataset_id, dataset_row_indexes FROM test_cases WHERE version_id = $1`, [versionId]);
+    expect(c.rows[0].dataset_id).toBeNull();
+    expect(c.rows[0].dataset_row_indexes).toEqual([]);
+  });
+
   it('loadDatasetForRun：敏感格损坏（解密失败）抛 DatasetConfigError', async () => {
     const svc = await import('../src/services/datasets.service.js');
     const created = await svc.createDataset(projectId, { ...body, name: '坏密文' });
@@ -366,6 +448,82 @@ describe('case dataset binding', () => {
     const r = await request(app).patch(`/api/cases/${foreign.rows[0].id}`).send({ datasetId: created.id });
     expect(r.status).toBe(400);
     expect(r.body.error).toBe('dataset_project_mismatch');
+  });
+
+  it('PATCH datasetRowIndexes：合法下标落库并回带；[] = 所有行', async () => {
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, { ...body, name: '行选择目标' });
+    const caseId = await newCase('行选择用例');
+    await request(app).patch(`/api/cases/${caseId}`).send({ datasetId: created.id });
+
+    const r = await request(app).patch(`/api/cases/${caseId}`).send({ datasetRowIndexes: [0, 1] });
+    expect(r.status).toBe(200);
+    expect(r.body.datasetRowIndexes).toEqual([0, 1]);
+    const detail = await request(app).get(`/api/cases/${caseId}`);
+    expect(detail.body.datasetRowIndexes).toEqual([0, 1]);
+
+    // [] = 所有启用行（默认口径）
+    const empty = await request(app).patch(`/api/cases/${caseId}`).send({ datasetRowIndexes: [] });
+    expect(empty.status).toBe(200);
+    expect(empty.body.datasetRowIndexes).toEqual([]);
+  });
+
+  it('PATCH datasetRowIndexes：负数 400；越界 400（文案含越界行号与启用行总数）', async () => {
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, { ...body, name: '行选择校验' });
+    const caseId = await newCase('行选择校验用例');
+    await request(app).patch(`/api/cases/${caseId}`).send({ datasetId: created.id });
+
+    const neg = await request(app).patch(`/api/cases/${caseId}`).send({ datasetRowIndexes: [-1] });
+    expect(neg.status).toBe(400);
+
+    const oob = await request(app).patch(`/api/cases/${caseId}`).send({ datasetRowIndexes: [999] });
+    expect(oob.status).toBe(400);
+    expect(oob.body.message).toContain('超出该数据集的启用行范围');
+    expect(oob.body.message).toContain('共 2 行');
+  });
+
+  it('PATCH datasetRowIndexes：绑定数据集与选行同一次保存 → 选择落库（不被换数据集清掉）', async () => {
+    const svc = await import('../src/services/datasets.service.js');
+    const created = await svc.createDataset(projectId, { ...body, name: '一次保存数据集' });
+    const caseId = await newCase('一次保存用例');
+
+    // 前端「先选数据集 → 选行 → 一次保存」：datasetId 与 datasetRowIndexes 同时到达
+    const both = await request(app).patch(`/api/cases/${caseId}`).send({
+      datasetId: created.id,
+      datasetRowIndexes: [1],
+    });
+    expect(both.status).toBe(200);
+    expect(both.body.datasetRowIndexes).toEqual([1]);
+    const detail = await request(app).get(`/api/cases/${caseId}`);
+    expect(detail.body.datasetRowIndexes).toEqual([1]);
+  });
+
+  it('PATCH datasetRowIndexes：未绑数据集 400；解绑/换数据集 → 选择清空', async () => {
+    const svc = await import('../src/services/datasets.service.js');
+    const ds1 = await svc.createDataset(projectId, { ...body, name: '数据集甲' });
+    const ds2 = await svc.createDataset(projectId, { ...body, name: '数据集乙' });
+
+    // 没有数据集时选行 → 400
+    const noDs = await newCase('无数据集选行');
+    const bad = await request(app).patch(`/api/cases/${noDs}`).send({ datasetRowIndexes: [0] });
+    expect(bad.status).toBe(400);
+
+    // 解绑 → 选择清空
+    const caseId = await newCase('解绑清空');
+    await request(app).patch(`/api/cases/${caseId}`).send({ datasetId: ds1.id });
+    await request(app).patch(`/api/cases/${caseId}`).send({ datasetRowIndexes: [0] });
+    const unbind = await request(app).patch(`/api/cases/${caseId}`).send({ datasetId: null });
+    expect(unbind.status).toBe(200);
+    expect(unbind.body.datasetRowIndexes).toEqual([]);
+
+    // 换数据集 → 选择重置（下标空间属于旧数据集）
+    const caseId2 = await newCase('换数据集重置');
+    await request(app).patch(`/api/cases/${caseId2}`).send({ datasetId: ds1.id });
+    await request(app).patch(`/api/cases/${caseId2}`).send({ datasetRowIndexes: [1] });
+    const swapped = await request(app).patch(`/api/cases/${caseId2}`).send({ datasetId: ds2.id });
+    expect(swapped.status).toBe(200);
+    expect(swapped.body.datasetRowIndexes).toEqual([]);
   });
 
   it('PUT steps：数据集列作初始变量不误报未定义；compiled[1] 里的引用也检出', async () => {

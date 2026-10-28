@@ -54,6 +54,10 @@ export const testCases = pgTable('test_cases', {
   incognito: boolean('incognito').notNull().default(false),
   defaultEnvId: uuid('default_env_id').references(() => testEnvironments.id, { onDelete: 'set null' }),
   datasetId: uuid('dataset_id').references(() => datasets.id, { onDelete: 'set null' }),
+  /** 数据集行选择：启用行下标数组（0 基，剔除 disabled 行后重新编号，与 loadDatasetForRun 同空间）。
+   *  [] = 所有启用行（= 旧行为，无需回填数据）。非空 = 只跑这些行。
+   *  换数据集 / 解绑 / 数据集删除时清空（见 updateCase / deleteDataset）。 */
+  datasetRowIndexes: integer('dataset_row_indexes').array().notNull().default([]),
   scenarioId: uuid('scenario_id').references(() => scenarios.id, { onDelete: 'set null' }),
   /** 用例级预期描述（自然语言）。回放阶段结束时由 vision LLM 拿最终截图 + 此字段判终态；
    * 为空/null 时跳过用例级断言（仅按 step.action 是否全部成功判定 pass/fail）。 */

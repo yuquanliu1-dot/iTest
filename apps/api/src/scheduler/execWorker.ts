@@ -14,12 +14,13 @@ import { buildExecutionWorker, type ExecJob } from './execQueue.js';
 
 /** 单用例执行共用体：worker 与 execute.ts 的 inline 回落都走它(DRY,防两处行为分叉)。
  *  runCase 内部已兜底数据集行错误;真抛(随机崩溃)把预置报告全改 failed 防僵尸。 */
-export async function runCaseJob(data: { caseId: string; preseed?: PreseedReport[]; createdByUserId?: string | null }): Promise<void> {
+export async function runCaseJob(data: { caseId: string; preseed?: PreseedReport[]; datasetRowIndexes?: number[]; createdByUserId?: string | null }): Promise<void> {
   const live = registerLiveView(`case:${data.caseId}`);
   try {
     await runCase(data.caseId, {
       liveView: live,
       preseed: data.preseed,
+      datasetRowIndexes: data.datasetRowIndexes,
       createdByUserId: data.createdByUserId,
     });
   } catch (e) {
@@ -52,7 +53,7 @@ async function processExecJob(data: ExecJob): Promise<void> {
       const { runSolidifyBatchCaseJob } = await import('../execute/batchSolidify.js');
       await runSolidifyBatchCaseJob({ batchId: data.batchId, caseId: data.caseId });
     } else {
-      await runCaseJob({ caseId: data.caseId, preseed: data.preseed, createdByUserId: data.createdByUserId });
+      await runCaseJob({ caseId: data.caseId, preseed: data.preseed, datasetRowIndexes: data.datasetRowIndexes, createdByUserId: data.createdByUserId });
     }
   } catch (e) {
     logger.error({ err: e, kind: data.kind, runId: 'planRunId' in data ? data.planRunId : data.caseId }, 'exec job crashed');

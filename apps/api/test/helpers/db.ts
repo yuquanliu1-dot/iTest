@@ -77,6 +77,11 @@ DO $$ BEGIN
  ALTER TABLE test_cases ADD COLUMN dataset_id uuid REFERENCES datasets(id) ON DELETE SET NULL;
 EXCEPTION WHEN duplicate_column THEN null;
 END $$;
+-- 用例级数据集行选择（启用行下标数组）。[] = 所有启用行。
+DO $$ BEGIN
+ ALTER TABLE test_cases ADD COLUMN dataset_row_indexes integer[] NOT NULL DEFAULT '{}';
+EXCEPTION WHEN duplicate_column THEN null;
+END $$;
 DO $$ BEGIN
  ALTER TABLE reports ADD COLUMN dataset_row_index integer;
 EXCEPTION WHEN duplicate_column THEN null;

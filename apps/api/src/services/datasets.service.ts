@@ -223,8 +223,18 @@ export async function datasetUsage(datasetId: string): Promise<{ caseCount: numb
 }
 
 export async function deleteDataset(datasetId: string): Promise<void> {
-  const deleted = await db.delete(datasets).where(eq(datasets.id, datasetId)).returning({ id: datasets.id });
-  if (deleted.length === 0) throw new HttpError(404, 'not_found', 'dataset not found');
+  const existing = (await db.select({ id: datasets.id }).from(datasets).where(eq(datasets.id, datasetId)).limit(1))[0];
+  if (!existing) throw new HttpError(404, 'not_found', 'dataset not found');
+  // FK 只把 dataset_id 置 null；行选择也得清（不变量：未绑定数据集 ⟹ 选择为空）。
+  // 必须在 delete 之前清 —— delete 触发 FK 后 dataset_id 已是 null，where 就匹配不到了。
+  await db.update(testCases).set({ datasetRowIndexes: [] }).where(eq(testCases.datasetId, datasetId));
+  await db.delete(datasets).where(eq(datasets.id, datasetId));
+}
+
+/** 启用行数（用例行选择的下标上界）。数据集不存在返回 0。 */
+export async function enabledRowCount(datasetId: string): Promise<number> {
+  const d = (await db.select({ rows: datasets.rows }).from(datasets).where(eq(datasets.id, datasetId)).limit(1))[0];
+  return d ? d.rows.filter((r) => !r.disabled).length : 0;
 }
 
 /** 单行回放上下文：vars=解密后初始变量（仅执行期内存）；snapshot=落报告的行快照（敏感值固定 ******）。 */
@@ -236,8 +246,13 @@ export interface DatasetRowExec {
   snapshot: { rowIndex: number; totalRows: number; values: Record<string, string> };
 }
 
-/** 回放装载：过滤 disabled 行、解密敏感格、产出每行初始 vars 与快照。配置错误抛 DatasetConfigError。 */
-export async function loadDatasetForRun(datasetId: string): Promise<{
+/** 回放装载：过滤 disabled 行、按用例的行选择过滤、解密敏感格、产出每行初始 vars 与快照。配置错误抛 DatasetConfigError。
+ *
+ *  rowIndexes：启用行下标数组（0 基，剔除 disabled 行后重新编号）。
+ *  空/未指定 = 全部启用行（旧行为）；非空 = 只跑这些行。
+ *  rowIndex 取值 = 该行在 enabled 数组里的下标（不是 selected 数组内的位置），
+ *  这样报告里的 dataset_row_index 在不同选择下指向同一物理行，跨批次稳定。 */
+export async function loadDatasetForRun(datasetId: string, opts?: { rowIndexes?: number[] | null }): Promise<{
   datasetId: string;
   columns: DatasetColumn[];
   rows: DatasetRowExec[];
@@ -251,8 +266,20 @@ export async function loadDatasetForRun(datasetId: string): Promise<{
   }
   const enabled = d.rows.filter((r) => !r.disabled);
   if (enabled.length === 0) throw new DatasetConfigError('数据集没有启用行，无法回放');
+  const wanted = opts?.rowIndexes ?? [];
+  const outOfRange = wanted.filter((i) => i >= enabled.length);
+  if (outOfRange.length > 0) {
+    throw new DatasetConfigError(
+      `用例选择的数据行 ${outOfRange.map((i) => i + 1).join('、')} 超出该数据集的启用行范围（共 ${enabled.length} 行）`,
+    );
+  }
+  // 升序：执行顺序 = 数据集行序。rowIndex = 启用空间下标。
+  const selectedIdx = wanted.length === 0
+    ? enabled.map((_, i) => i)
+    : [...wanted].sort((a, b) => a - b);
   const sensitiveVarKeys = d.columns.filter((c) => c.sensitive).map((c) => c.name);
-  const rows: DatasetRowExec[] = enabled.map((row, i) => {
+  const rows: DatasetRowExec[] = selectedIdx.map((rowIndex) => {
+    const row = enabled[rowIndex]!;
     const vars: Record<string, string> = {};
     const values: Record<string, string> = {};
     for (const col of d.columns) {
@@ -270,11 +297,12 @@ export async function loadDatasetForRun(datasetId: string): Promise<{
       }
     }
     return {
-      rowIndex: i,
-      totalRows: enabled.length,
+      rowIndex,
+      // totalRows = 本批次实际执行行数（分母口径），不是数据集启用行总数。
+      totalRows: selectedIdx.length,
       vars,
       sensitiveVarKeys,
-      snapshot: { rowIndex: i, totalRows: enabled.length, values },
+      snapshot: { rowIndex, totalRows: selectedIdx.length, values },
     };
   });
   return { datasetId: d.id, columns: d.columns, rows };

@@ -20,6 +20,7 @@ import Toggle from '../components/ui/Toggle';
 import EmptyState from '../components/ui/EmptyState';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Modal';
 import StepEditDrawer from '../components/StepEditDrawer';
+import DatasetRowPickerDialog from '../components/DatasetRowPickerDialog';
 import { MobileRecorder } from '../features/mobile-recorder';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
@@ -79,6 +80,9 @@ export default function CaseDetail() {
   const [incognito, setIncognito] = useState(false);
   const [defaultEnvId, setDefaultEnvId] = useState<string | null>(null);
   const [datasetId, setDatasetId] = useState<string | null>(null);
+  /** 数据集行选择：启用行下标数组。[] = 所有启用行（= 服务端 test_cases.dataset_row_indexes 同语义）。 */
+  const [datasetRowIndexes, setDatasetRowIndexes] = useState<number[]>([]);
+  const [datasetRowPickerOpen, setDatasetRowPickerOpen] = useState(false);
   const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [urlDraft, setUrlDraft] = useState('');
   /** 初始化导航 URL 弹窗里选中的 web 服务（环境 web 对象 payload.name；空 → 默认服务）。 */
@@ -253,8 +257,9 @@ export default function CaseDetail() {
       !!caseDetail.incognito,
       caseDetail.defaultEnvId ?? null,
       caseDetail.datasetId ?? null,
+      caseDetail.datasetRowIndexes ?? [],
     ]);
-    const localKey = JSON.stringify([windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId, datasetId]);
+    const localKey = JSON.stringify([windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId, datasetId, datasetRowIndexes]);
     if (runtimeSyncRef.current !== null && localKey !== runtimeSyncRef.current) return;
     runtimeSyncRef.current = serverKey;
     setWindowStrategy((caseDetail.windowStrategy as 'maximize' | 'current' | 'custom') ?? 'maximize');
@@ -263,7 +268,10 @@ export default function CaseDetail() {
     setIncognito(!!caseDetail.incognito);
     setDefaultEnvId(caseDetail.defaultEnvId ?? null);
     setDatasetId(caseDetail.datasetId ?? null);
-  }, [caseDetail, windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId, datasetId]);
+    // 保持引用不变，避免每次同步都产生新数组（防重渲染循环）
+    const srvRows = caseDetail.datasetRowIndexes ?? [];
+    setDatasetRowIndexes((prev) => (JSON.stringify(prev) === JSON.stringify(srvRows) ? prev : srvRows));
+  }, [caseDetail, windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId, datasetId, datasetRowIndexes]);
 
   // expectedOutcome 与服务端同步：与 runtimeSyncRef 同源模式(serverKey 比对,未保存编辑不覆盖)
   useEffect(() => {
@@ -345,6 +353,15 @@ export default function CaseDetail() {
     const ds = (datasetList ?? []).find((d) => d.id === datasetId);
     return ds ? ds.columns.map((c) => c.name) : [];
   }, [datasetList, datasetId]);
+
+  /** 绑定数据集的启用行数（用于「所有行」提示文案）。 */
+  const datasetEnabledRowCount = (datasetList ?? []).find((d) => d.id === datasetId)?.enabledRowCount ?? 0;
+
+  /** 行范围档位：由已选行数派生（[] = 所有行；1 行 = 一条；≥2 行 = 多条）。 */
+  const datasetRowScope: 'all' | 'one' | 'many' =
+    datasetRowIndexes.length === 0 ? 'all' : datasetRowIndexes.length === 1 ? 'one' : 'many';
+  /** 行选择弹窗模式（one=单选，many=多选）：由用户点的档位决定，与派生值无关。 */
+  const [datasetPickerMode, setDatasetPickerMode] = useState<'one' | 'many'>('many');
 
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [labelsManagerOpen, setLabelsManagerOpen] = useState(false);
@@ -634,6 +651,8 @@ export default function CaseDetail() {
         incognito,
         defaultEnvId,
         datasetId,
+        // 数据集行选择：恒带（[] 也发 —— 服务端以 undefined=不动 / []=全选 区分）
+        datasetRowIndexes,
         // Track 1：与运行设置一并保存；空字符串视作清空（传 null）
         expectedOutcome: expectedOutcome.trim() ? expectedOutcome : null,
       }),
@@ -849,7 +868,12 @@ export default function CaseDetail() {
                     <select
                       className="input-base input-sm"
                       value={datasetId ?? ''}
-                      onChange={(e) => setDatasetId(e.target.value || null)}
+                      onChange={(e) => {
+                        const next = e.target.value || null;
+                        // 换数据集 → 清空行选择（下标空间属于旧数据集）
+                        if (next !== datasetId) setDatasetRowIndexes([]);
+                        setDatasetId(next);
+                      }}
                     >
                       <option value="">{t('cases:noDataset')}</option>
                       {(datasetList ?? []).map((d) => (
@@ -864,6 +888,42 @@ export default function CaseDetail() {
                       </span>
                     )}
                   </label>
+                  {/* 数据集行范围：执行时只跑选中的行。行号 = 启用行下标 + 1（与执行器同编号空间）。 */}
+                  {datasetId && (
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                        {t('cases:datasetRowScope')}
+                      </span>
+                      <Segmented
+                        options={[
+                          { value: 'all', label: t('cases:datasetRowScopeAll') },
+                          { value: 'one', label: t('cases:datasetRowScopeOne') },
+                          { value: 'many', label: t('cases:datasetRowScopeMany') },
+                        ]}
+                        value={datasetRowScope}
+                        onChange={(v) => {
+                          if (v === 'all') {
+                            setDatasetRowIndexes([]);
+                            return;
+                          }
+                          // 一条/多条：开弹窗选行（无法凭空造行）
+                          setDatasetPickerMode(v);
+                          setDatasetRowPickerOpen(true);
+                        }}
+                      />
+                      {datasetRowScope === 'all' ? (
+                        <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
+                          {t('cases:datasetRowScopeAllHint', { count: datasetEnabledRowCount })}
+                        </span>
+                      ) : (
+                        <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
+                          {t('cases:datasetRowSelected', {
+                            indexes: datasetRowIndexes.map((i) => i + 1).join('、'),
+                          })}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {/* Track 1：用例级预期描述。回放结束后由 vision LLM 拿最终截图比对；
                       步骤级 assertion 在回放层已被收紧为「指定元素可见」才生效，整页模糊断言一律跳过。 */}
                   <label className="flex flex-col gap-1">
@@ -1682,6 +1742,17 @@ export default function CaseDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 数据集行选择弹窗：执行时只跑勾选的行。 */}
+      <DatasetRowPickerDialog
+        open={datasetRowPickerOpen}
+        onOpenChange={setDatasetRowPickerOpen}
+        projectId={projectId}
+        datasetId={datasetId}
+        mode={datasetPickerMode}
+        value={datasetRowIndexes}
+        onConfirm={(indexes) => setDatasetRowIndexes(indexes)}
+      />
 
       {/* 移动录制弹窗：仅 platform === 'mobile' 时启用（按钮在上方右侧栏）。onClose 时刷新用例以拉回新步骤。 */}
       {mobileRecorderOpen && projectId && (

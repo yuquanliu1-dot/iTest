@@ -116,10 +116,11 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const pid = await resolveCaseProjectId(v.caseId);
               if (pid !== ctx.projectId) return { ok: false, error: '用例不存在或不属于当前项目' };
               // 绑定数据集 → 附结构(列名即回放初始变量);仅结构,行值/敏感值永不外泄
-              let dataset: { id: string; name: string; columns: Array<{ name: string; sensitive: boolean }>; enabledRowCount: number } | null = null;
+              // rowIndexes = 该用例当前的数据集行选择(启用行下标);[] = 所有启用行
+              let dataset: { id: string; name: string; columns: Array<{ name: string; sensitive: boolean }>; enabledRowCount: number; rowIndexes: number[] } | null = null;
               if (detail.datasetId) {
                 const ds = (await db.select().from(datasets).where(eq(datasets.id, detail.datasetId)).limit(1))[0];
-                if (ds) dataset = { id: ds.id, name: ds.name, columns: ds.columns, enabledRowCount: ds.rows.filter((r) => !r.disabled).length };
+                if (ds) dataset = { id: ds.id, name: ds.name, columns: ds.columns, enabledRowCount: ds.rows.filter((r) => !r.disabled).length, rowIndexes: detail.datasetRowIndexes ?? [] };
               }
               return { ok: true, data: JSON.stringify({ ...detail, dataset }, null, 2) };
             }

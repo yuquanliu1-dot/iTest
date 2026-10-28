@@ -252,6 +252,8 @@ describe('manage_cases 工具', () => {
         { name: 'password', sensitive: true },
       ],
       enabledRowCount: 1,
+      // 行选择：启用行下标数组；[] = 所有启用行
+      rowIndexes: [],
     });
     // dataset 结构信息里不含任何行值
     expect(boundRaw).not.toContain('alice');

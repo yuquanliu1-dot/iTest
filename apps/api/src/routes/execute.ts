@@ -34,10 +34,14 @@ executeRoute.post('/cases/:caseId/execute', async (req, res) => {
 
   // 提前插入 running 报告行拿 reportId：数据集模式每行一条，非数据集单行。
   const preseed: PreseedReport[] = [];
+  // 数据集模式下冻结本次实际执行的下标集合，随 job 下发 ——
+  // worker 侧 loadDatasetForRun 再按同一集合过滤，保证 preseed 与执行行集必然一致
+  // （否则数据集在预检与执行之间被改，会抛 preseed report missing）。
+  let datasetRowIndexes: number[] | undefined;
   if (caseRow.datasetId) {
     let plan;
     try {
-      plan = await loadDatasetForRun(caseRow.datasetId); // 配置错误（无启用行/列名非法/解密失败）→ 400，不产生垃圾 report
+      plan = await loadDatasetForRun(caseRow.datasetId, { rowIndexes: caseRow.datasetRowIndexes ?? [] }); // 配置错误（无启用行/列名非法/解密失败/行越界）→ 400，不产生垃圾 report
     } catch (e) {
       if (e instanceof DatasetConfigError) throw new HttpError(400, 'dataset_config_error', e.message);
       throw e;
@@ -47,6 +51,7 @@ executeRoute.post('/cases/:caseId/execute', async (req, res) => {
     for (const row of plan.rows) {
       preseed.push({ reportId: await insertRunningReportRow(caseRow, row, req.user!.userId, batchId), rowIndex: row.rowIndex });
     }
+    datasetRowIndexes = plan.rows.map((r) => r.rowIndex);
   } else {
     preseed.push({ reportId: await insertRunningReportRow(caseRow, undefined, req.user!.userId), rowIndex: null });
   }
@@ -58,15 +63,16 @@ executeRoute.post('/cases/:caseId/execute', async (req, res) => {
         kind: 'case',
         caseId,
         preseed,
+        datasetRowIndexes,
         createdByUserId: req.user!.userId,
       });
     } catch (e) {
       // redis 假成功(配置了但连不上):add reject → 回落 inline,避免预置 running 报告行变僵尸。
       logger.warn({ err: e, caseId }, 'exec queue add failed; running inline');
-      void runCaseJob({ caseId, preseed, createdByUserId: req.user!.userId });
+      void runCaseJob({ caseId, preseed, datasetRowIndexes, createdByUserId: req.user!.userId });
     }
   } else {
-    void runCaseJob({ caseId, preseed, createdByUserId: req.user!.userId });
+    void runCaseJob({ caseId, preseed, datasetRowIndexes, createdByUserId: req.user!.userId });
   }
 
   res.json({ reportId: preseed[0]!.reportId, ...(preseed.length > 1 ? { reportIds: preseed.map((p) => p.reportId) } : {}) });

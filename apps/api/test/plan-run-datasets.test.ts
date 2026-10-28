@@ -118,6 +118,34 @@ describe('runPlan dataset aggregation', () => {
     expect(boundCase.rowStatuses).toEqual(['passed', 'passed']);
   });
 
+  it('用例级行选择：计划运行只跑选中的行（report_ids 只 1 条）', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '计划行选择' });
+    const boundCaseId = await insertCase('计划行选择用例', created.body.id);
+    // 只跑第 2 行（启用行下标 1）
+    await pool.query(`UPDATE test_cases SET dataset_row_indexes = ARRAY[1] WHERE id = $1`, [boundCaseId]);
+    const plainCaseId = await insertCase('普通3', null);
+    const planRunId = await makePlan(boundCaseId, plainCaseId);
+
+    execMock.mockReset();
+    execMock.mockResolvedValue([]);
+    const { runPlanAsync } = await import('../src/execute/runPlan.js');
+    await runPlanAsync({ planRunId });
+
+    const prc = await pool.query(`SELECT * FROM plan_run_cases WHERE plan_run_id = $1 ORDER BY "order"`, [planRunId]);
+    const bound = prc.rows.find((r: { case_id: string }) => r.case_id === boundCaseId)!;
+    expect(bound.report_ids).toHaveLength(1);
+    expect(bound.status).toBe('passed');
+
+    // 报告实际只有 1 条，且行号 = 数据集启用行号 1
+    const reps = await pool.query(`SELECT dataset_row_index FROM reports WHERE case_id = $1`, [boundCaseId]);
+    expect(reps.rows).toHaveLength(1);
+    expect(reps.rows[0].dataset_row_index).toBe(1);
+
+    const detail = await request(app).get(`/api/plan-runs/${planRunId}`);
+    const boundCase = detail.body.cases.find((c: { caseId: string }) => c.caseId === boundCaseId);
+    expect(boundCase.rowStatuses).toEqual(['passed']);
+  });
+
   it('任一行 fail → 该用例 fail，计划计数 failed+1', async () => {
     const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '行失败' });
     const boundCaseId = await insertCase('行失败用例', created.body.id);

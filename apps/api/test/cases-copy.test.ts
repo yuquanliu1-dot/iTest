@@ -99,6 +99,39 @@ describe('case copy', () => {
     expect(crossProject.body.datasetId).toBeNull();
   });
 
+  it('copy carries dataset row selection within same project; drops it cross-project', async () => {
+    const a = await seedProject(pool);
+    const b = await seedProject(pool);
+    const ds = await pool.query(
+      `INSERT INTO datasets(project_id, name, columns, rows) VALUES ($1, '复制行选择', $2::jsonb, $3::jsonb) RETURNING id`,
+      [
+        a.projectId,
+        JSON.stringify([{ name: 'u', sensitive: false }]),
+        JSON.stringify([
+          { disabled: false, cells: { u: 'x' } },
+          { disabled: false, cells: { u: 'y' } },
+        ]),
+      ],
+    );
+    const src = await makeCaseWithSteps(a.groupId, a.versionId, '绑行选择');
+    await request(app).patch(`/api/cases/${src.id}`).send({ datasetId: ds.rows[0].id });
+    const sel = await request(app).patch(`/api/cases/${src.id}`).send({ datasetRowIndexes: [1] });
+    expect(sel.status).toBe(200);
+    expect(sel.body.datasetRowIndexes).toEqual([1]);
+
+    // 同项目目标分组：绑定 + 行选择一并携带
+    const sameProject = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: a.groupId });
+    expect(sameProject.status).toBe(200);
+    expect(sameProject.body.datasetId).toBe(ds.rows[0].id);
+    expect(sameProject.body.datasetRowIndexes).toEqual([1]);
+
+    // 跨项目目标分组：数据集不外带，行选择也一并丢弃
+    const crossProject = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: b.groupId });
+    expect(crossProject.status).toBe(200);
+    expect(crossProject.body.datasetId).toBeNull();
+    expect(crossProject.body.datasetRowIndexes).toEqual([]);
+  });
+
   it('copy carries case-level semantics (expectedOutcome / window / mobile) and drops cross-project env bindings', async () => {
     const a = await seedProject(pool);
     const b = await seedProject(pool);

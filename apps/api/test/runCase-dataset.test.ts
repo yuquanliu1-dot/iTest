@@ -149,6 +149,92 @@ describe('runCase dataset iteration', () => {
     expect(rep0.body.finishedAt).toBeTruthy();
   });
 
+  it('部分行选择：只跑选中的行 —— 1 条 report，rowIndex 是数据集行号，preseed 一致', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '选行执行' });
+    const caseId = await insertCase('选行回放', created.body.id);
+    // 只选第 2 行（启用行下标 1）
+    await pool.query(`UPDATE test_cases SET dataset_row_indexes = ARRAY[1] WHERE id = $1`, [caseId]);
+
+    execMock.mockReset();
+    execMock.mockResolvedValue([]);
+    const r = await request(app).post(`/api/cases/${caseId}/execute`);
+    expect(r.status).toBe(200);
+    // 只产生 1 条 report（不再跑全部行）；单行时响应沿用旧形状：只有 reportId，无 reportIds
+    expect(r.body.reportIds).toBeUndefined();
+    expect(r.body.reportId).toBeTruthy();
+
+    await waitReportDone(r.body.reportId);
+
+    // 执行器只被调一次，且拿到的是被选中那一行的解密变量
+    expect(execMock).toHaveBeenCalledTimes(1);
+    const ctx = execMock.mock.calls[0]![2] as { initialVars?: Record<string, string> };
+    expect(ctx.initialVars).toEqual({ username: 'bob', password: 'pw-2' });
+
+    // 报告行号 = 数据集启用行号；分母 = 本批次执行行数
+    const rep = await request(app).get(`/api/reports/${r.body.reportId}`);
+    expect(rep.body.datasetRowIndex).toBe(1);
+    expect(rep.body.datasetSnapshot).toEqual({
+      rowIndex: 1,
+      totalRows: 1,
+      values: { username: 'bob', password: '******' },
+    });
+
+    // 该用例名下确实只有 1 条 report（preseed 与执行行集一致，没有多跑/漏跑）
+    const all = await pool.query(
+      `SELECT dataset_row_index FROM reports WHERE case_id = $1 ORDER BY dataset_row_index`,
+      [caseId],
+    );
+    expect(all.rows).toHaveLength(1);
+    expect(all.rows[0].dataset_row_index).toBe(1);
+  });
+
+  it('部分行选择：选多行按数据集行序执行', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({
+      ...dsBody,
+      name: '选多行',
+      rows: [
+        ...dsBody.rows,
+        { disabled: false, cells: { username: 'carol', password: 'pw-3' } },
+      ],
+    });
+    const caseId = await insertCase('选多行回放', created.body.id);
+    await pool.query(`UPDATE test_cases SET dataset_row_indexes = ARRAY[2,0] WHERE id = $1`, [caseId]);
+
+    execMock.mockReset();
+    execMock.mockResolvedValue([]);
+    const r = await request(app).post(`/api/cases/${caseId}/execute`);
+    expect(r.status).toBe(200);
+    expect(r.body.reportIds).toHaveLength(2);
+
+    await waitReportDone(r.body.reportIds[0]);
+    await waitReportDone(r.body.reportIds[1]);
+
+    // 执行序 = 数据集行序（升序）：第 1 行 → 第 3 行
+    const first = execMock.mock.calls[0]![2] as { initialVars?: Record<string, string> };
+    expect(first.initialVars?.username).toBe('alice');
+    const second = execMock.mock.calls[1]![2] as { initialVars?: Record<string, string> };
+    expect(second.initialVars?.username).toBe('carol');
+    // report 的 rowIndex 是数据集行号（0 与 2），不是批内位置（0 与 1）
+    const rows = await pool.query(
+      `SELECT dataset_row_index FROM reports WHERE case_id = $1 ORDER BY dataset_row_index`,
+      [caseId],
+    );
+    expect(rows.rows.map((x: { dataset_row_index: number }) => x.dataset_row_index)).toEqual([0, 2]);
+  });
+
+  it('越界选择 → 400 且不产生任何 report', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '越界选行' });
+    const caseId = await insertCase('越界选行', created.body.id);
+    await pool.query(`UPDATE test_cases SET dataset_row_indexes = ARRAY[9] WHERE id = $1`, [caseId]);
+    const before = await pool.query(`SELECT count(*)::int AS n FROM reports WHERE case_id = $1`, [caseId]);
+
+    const r = await request(app).post(`/api/cases/${caseId}/execute`);
+    expect(r.status).toBe(400);
+    expect(r.body.message).toContain('超出该数据集的启用行范围');
+    const after = await pool.query(`SELECT count(*)::int AS n FROM reports WHERE case_id = $1`, [caseId]);
+    expect(after.rows[0].n).toBe(before.rows[0].n);
+  });
+
   it('单行失败不中断：第 1 行抛错记 failed，第 2 行继续；两条 report 齐全', async () => {
     const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '失败迭代' });
     const caseId = await insertCase('失败不中断', created.body.id);

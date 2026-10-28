@@ -356,6 +356,8 @@ export const api = {
         defaultEnvId: string | null;
         webServiceRef: string | null;
         datasetId: string | null;
+        /** 数据集行选择：启用行下标数组。[] = 所有启用行；null = 清空选择。 */
+        datasetRowIndexes?: number[] | null;
         /** 需求编号（外部编号自由文本）。空字符串由调用方转 null。 */
         requirementNo: string | null;
         /** Track 1：用例级预期描述。空字符串由调用方转 null。 */
@@ -1067,6 +1069,9 @@ export interface TestCase {
   /** 环境 web 服务对象名（payload.name）；空 → 用环境默认 web 服务拼相对 URL。 */
   webServiceRef?: string | null;
   datasetId?: string | null;
+  /** 数据集行选择：启用行下标数组（0 基，剔除禁用行后重新编号）。
+   *  [] = 所有启用行（= 服务端 test_cases.dataset_row_indexes 同语义）。 */
+  datasetRowIndexes?: number[];
   /** Track 1：用例级预期描述（自然语言）。回放结束后由 vision LLM 拿最终截图判定。 */
   expectedOutcome?: string | null;
   platform?: 'web' | 'mobile';
