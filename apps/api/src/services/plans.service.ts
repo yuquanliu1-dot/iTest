@@ -316,3 +316,103 @@ export async function removePlanCases(planId: string, caseIds: string[]): Promis
     return removed.length;
   });
 }
+
+export interface PlanGroupLoginPrepareInput {
+  enabled: boolean;
+  caseId?: string | null;
+  detectionUrl?: string | null;
+  successSelector?: string | null;
+  unauthorizedKeywords?: string[] | null;
+}
+
+export interface CreatePlanGroupInput {
+  name: string;
+  environmentId?: string | null;
+  loginPrepare?: PlanGroupLoginPrepareInput;
+  failFast?: boolean;
+  targetConfig?: { deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null;
+}
+
+export interface UpdatePlanGroupPatch extends Partial<Omit<CreatePlanGroupInput, 'name'>> {
+  name?: string;
+}
+
+/** 组必须属于该计划;不存在 → 404(事务外用的只读版)。 */
+async function getPlanGroup(planId: string, groupId: string) {
+  const g = (await db.select().from(planCaseGroups)
+    .where(and(eq(planCaseGroups.id, groupId), eq(planCaseGroups.planId, planId))).limit(1))[0];
+  if (!g) throw new HttpError(404, 'group_not_found', 'plan case group not found');
+  return g;
+}
+
+export async function listPlanGroups(planId: string) {
+  return db.select().from(planCaseGroups).where(eq(planCaseGroups.planId, planId)).orderBy(asc(planCaseGroups.order));
+}
+
+export async function createPlanGroup(planId: string, input: CreatePlanGroupInput) {
+  const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
+  if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
+  if (input.environmentId) await assertEnvInProject(input.environmentId, plan.projectId);
+  const base = Number((await db.select({ m: sql<number>`coalesce(max("order"), 0)` })
+    .from(planCaseGroups).where(eq(planCaseGroups.planId, planId)))[0]?.m ?? 0);
+  return (await db.insert(planCaseGroups).values({
+    planId,
+    name: input.name,
+    order: base + 1,
+    environmentId: input.environmentId ?? null,
+    loginPrepareEnabled: input.loginPrepare?.enabled ?? false,
+    loginCaseId: input.loginPrepare?.caseId ?? null,
+    detectionUrl: input.loginPrepare?.detectionUrl ?? null,
+    loginSuccessSelector: input.loginPrepare?.successSelector ?? null,
+    loginUnauthorizedKeywords: input.loginPrepare?.unauthorizedKeywords ?? null,
+    failFast: input.failFast ?? false,
+    targetConfig: input.targetConfig ?? null,
+  }).returning())[0]!;
+}
+
+export async function updatePlanGroup(planId: string, groupId: string, patch: UpdatePlanGroupPatch) {
+  await getPlanGroup(planId, groupId);
+  if (patch.environmentId !== undefined && patch.environmentId !== null) {
+    const plan = (await db.select({ projectId: executionPlans.projectId }).from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
+    if (plan) await assertEnvInProject(patch.environmentId, plan.projectId);
+  }
+  const update: Record<string, unknown> = { updatedAt: new Date() };
+  if (patch.name !== undefined) update.name = patch.name;
+  if (patch.environmentId !== undefined) update.environmentId = patch.environmentId;
+  if (patch.failFast !== undefined) update.failFast = patch.failFast;
+  if (patch.targetConfig !== undefined) update.targetConfig = patch.targetConfig;
+  if (patch.loginPrepare !== undefined) {
+    update.loginPrepareEnabled = patch.loginPrepare.enabled;
+    update.loginCaseId = patch.loginPrepare.caseId ?? null;
+    update.detectionUrl = patch.loginPrepare.detectionUrl ?? null;
+    update.loginSuccessSelector = patch.loginPrepare.successSelector ?? null;
+    update.loginUnauthorizedKeywords = patch.loginPrepare.unauthorizedKeywords ?? null;
+  }
+  return (await db.update(planCaseGroups).set(update).where(eq(planCaseGroups.id, groupId)).returning())[0]!;
+}
+
+/** 组内有用例 → 409(对齐删产品线 409 惯例);空组直接删。 */
+export async function deletePlanGroup(planId: string, groupId: string) {
+  await getPlanGroup(planId, groupId);
+  const n = (await db.select({ c: sql<number>`count(*)::int` }).from(planCases)
+    .where(eq(planCases.groupId, groupId)))[0]?.c ?? 0;
+  if (n > 0) throw new HttpError(409, 'group_not_empty', `group still has ${n} case(s); move or remove them first`);
+  await db.delete(planCaseGroups).where(eq(planCaseGroups.id, groupId));
+  return { ok: true };
+}
+
+/** 组排序整包替换;groupIds 必须恰好是计划的全部分组。事务 + 计划行锁。 */
+export async function reorderPlanGroups(planId: string, groupIds: string[]) {
+  return db.transaction(async (tx) => {
+    await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update');
+    const current = await tx.select({ id: planCaseGroups.id }).from(planCaseGroups).where(eq(planCaseGroups.planId, planId));
+    const have = new Set(current.map((g) => g.id));
+    if (groupIds.length !== have.size || groupIds.some((id) => !have.has(id))) {
+      throw new HttpError(404, 'group_not_found', 'groupIds must be exactly the plan groups');
+    }
+    for (let i = 0; i < groupIds.length; i++) {
+      await tx.update(planCaseGroups).set({ order: i + 1, updatedAt: new Date() }).where(eq(planCaseGroups.id, groupIds[i]!));
+    }
+    return { ok: true };
+  });
+}

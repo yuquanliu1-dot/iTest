@@ -99,3 +99,56 @@ describe('plans.service', () => {
     expect(upd.name).toBe('L2');
   }, 30_000);
 });
+
+describe('plan case groups CRUD', () => {
+  it('建组递增 order、改组、删空组、删非空组 409、清空后可删', async () => {
+    const s = await seedProject(pool);
+    const svc = await import('../src/services/plans.service.js');
+    const plan = await svc.createPlan(s.projectId, { name: '分组计划', versionId: s.versionId });
+    const g1 = await svc.createPlanGroup(plan.id, { name: '组A' });
+    const g2 = await svc.createPlanGroup(plan.id, { name: '组B' });
+    expect(g1.order).toBe(1);
+    expect(g2.order).toBe(2);
+
+    const renamed = await svc.updatePlanGroup(plan.id, g1.id, { name: '组A1', failFast: true });
+    expect(renamed.name).toBe('组A1');
+    expect(renamed.failFast).toBe(true);
+
+    await expect(svc.deletePlanGroup(plan.id, g2.id)).resolves.toMatchObject({ ok: true });
+
+    // 组A 直插 plan_cases 造非空组(setPlanGroupCases 是 Task 4) → 删除 409
+    const c = await makeCase(s.groupId, s.versionId, 'gc1');
+    await pool.query(`INSERT INTO plan_cases(plan_id, case_id, group_id, "order") VALUES ($1,$2,$3,1)`, [plan.id, c, g1.id]);
+    await expect(svc.deletePlanGroup(plan.id, g1.id)).rejects.toMatchObject({ status: 409, code: 'group_not_empty' });
+
+    // 清空后可删
+    await pool.query(`DELETE FROM plan_cases WHERE plan_id = $1 AND group_id = $2`, [plan.id, g1.id]);
+    await expect(svc.deletePlanGroup(plan.id, g1.id)).resolves.toMatchObject({ ok: true });
+  }, 30_000);
+
+  it('组重排：整包替换 order，groupId 不属于该计划 → 404', async () => {
+    const s = await seedProject(pool);
+    const svc = await import('../src/services/plans.service.js');
+    const plan = await svc.createPlan(s.projectId, { name: 'p2', versionId: s.versionId });
+    const g1 = await svc.createPlanGroup(plan.id, { name: 'A' });
+    const g2 = await svc.createPlanGroup(plan.id, { name: 'B' });
+    await svc.reorderPlanGroups(plan.id, [g2.id, g1.id]);
+    const after = await svc.listPlanGroups(plan.id);
+    expect(after.map((g) => g.name)).toEqual(['B', 'A']);
+    await expect(svc.reorderPlanGroups(plan.id, ['00000000-0000-4000-8000-000000000000']))
+      .rejects.toMatchObject({ status: 404 });
+  }, 30_000);
+
+  it('组环境必须属于计划项目：跨产品线 → 400 env_project_mismatch', async () => {
+    const s = await seedProject(pool);
+    const svc = await import('../src/services/plans.service.js');
+    const plan = await svc.createPlan(s.projectId, { name: 'p3', versionId: s.versionId });
+    const otherLine = await seedOtherProductLine(pool);
+    const s2 = await seedProject(pool, { productLineId: otherLine });
+    const env = (await pool.query(
+      `INSERT INTO test_environments(project_id, name) VALUES ($1,'e') RETURNING id`, [s2.projectId],
+    )).rows[0]!.id as string;
+    await expect(svc.createPlanGroup(plan.id, { name: 'g', environmentId: env }))
+      .rejects.toMatchObject({ status: 400, code: 'env_project_mismatch' });
+  }, 30_000);
+});
