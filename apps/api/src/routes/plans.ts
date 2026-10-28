@@ -11,7 +11,7 @@ import {
 } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '../services/projectAccess.js';
-import { createPlan, updatePlan, getPlanDetail, replacePlanCases, planProjectId, removePlanCases, updatePlanCase } from '../services/plans.service.js';
+import { createPlan, updatePlan, getPlanDetail, setPlanGroupCases, listPlanGroups, createPlanGroup, planProjectId, removePlanCases, updatePlanCase } from '../services/plans.service.js';
 import { attachCreators } from '../lib/creator.js';
 import { logger } from '../logger.js';
 import { enqueuePlanRun } from '../execute/enqueuePlanRun.js';
@@ -134,12 +134,19 @@ plansRoute.delete('/:id', async (req, res) => {
 
 // caseIds 归属(∈ 计划所属 project,409 cross_project)由 service assertCasesInProject 承接;
 // 路由仅保留计划级 per-user 可见性。
+/** 临时桥接(replacePlanCases 已退役,Task 5 收口退役本路由):整包替换落到第一个组,无组先建默认分组。 */
+async function replaceViaFirstGroup(planId: string, caseIds: string[]) {
+  const first = (await listPlanGroups(planId))[0];
+  const g = first ?? (await createPlanGroup(planId, { name: '默认分组' }));
+  return setPlanGroupCases(planId, g.id, caseIds);
+}
+
 plansRoute.put('/:id/cases', async (req, res) => {
   const { caseIds } = z.object({ caseIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
   const pid = await planProjectId(req.params.id!);
   if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
   await assertProjectVisible(pid, req.user!);
-  await replacePlanCases(req.params.id!, caseIds);
+  await replaceViaFirstGroup(req.params.id!, caseIds);
   res.json({ ok: true });
 });
 
@@ -148,7 +155,7 @@ plansRoute.put('/:id/cases/order', async (req, res) => {
   const pid = await planProjectId(req.params.id!);
   if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
   await assertProjectVisible(pid, req.user!);
-  await replacePlanCases(req.params.id!, caseIds);
+  await replaceViaFirstGroup(req.params.id!, caseIds);
   res.json({ ok: true });
 });
 

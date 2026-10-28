@@ -213,7 +213,9 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
       environmentId: row.environmentId ?? undefined,
     }, creatorId);
     if (realCaseIds.length > 0) {
-      await plansSvc.replacePlanCases(plan.id, realCaseIds);
+      // 临时桥接(replacePlanCases 退役,Task 9 收口):新计划无组,先建默认分组再整包写入
+      const g = await plansSvc.createPlanGroup(plan.id, { name: '默认分组' });
+      await plansSvc.setPlanGroupCases(plan.id, g.id, realCaseIds);
     }
   }
 

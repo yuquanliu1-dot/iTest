@@ -99,7 +99,9 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               let added = 0;
               if (v.caseIds?.length) {
                 try {
-                  added = await svc.replacePlanCases(plan.id, v.caseIds);
+                  // 临时桥接(replacePlanCases 退役,Task 9 收口):新计划无组,先建默认分组再整包写入
+                  const g = await svc.createPlanGroup(plan.id, { name: '默认分组' });
+                  added = await svc.setPlanGroupCases(plan.id, g.id, v.caseIds);
                 } catch (e) {
                   const reason = e instanceof HttpError ? e.message : `操作失败:${e instanceof Error ? e.message : String(e)}`;
                   return { ok: false, error: `计划已创建但用例编排失败(计划 ${plan.id}):${reason};可对该 planId 调 add_cases 补齐,勿重复 create` };

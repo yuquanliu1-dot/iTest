@@ -1,5 +1,5 @@
 /**
- * 执行计划领域服务:计划 CRUD 与用例编排(replace/add/remove)。
+ * 执行计划领域服务:计划 CRUD 与组内用例编排(set/add/remove/move/reorder)。
  * 归属校验(计划 ∈ project、version/environment/cases ∈ 计划所属 project)在这里;
  * 用户可见性由调用方(HTTP 边界)负责。
  */
@@ -146,12 +146,14 @@ export async function updatePlan(planId: string, patch: UpdatePlanPatch) {
   return rows[0]!;
 }
 
-/** 计划详情:cases 按 order 带 title/url/versionId;versionName 一并解析。
+/** 计划详情:分组形状 groups[].cases(组内 order 1..n,带 planCaseId);另保留平铺 cases(按组序拼接,
+ *  order=组内序、globalOrder=全局 1..N)做旧读取兼容。versionName 一并解析。
  *  每条用例额外回带 projectId/projectName/versionName——跨产品线共享后,同一个计划里可能混着
  *  基线项目与局点项目的用例,前端要靠它标出「这条用例来自哪个项目哪个版本」。 */
 export async function getPlanDetail(planId: string) {
   const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
   if (!plan) return null;
+  const gs = await db.select().from(planCaseGroups).where(eq(planCaseGroups.planId, plan.id)).orderBy(asc(planCaseGroups.order));
   const pcs = await db.select().from(planCases).where(eq(planCases.planId, plan.id)).orderBy(asc(planCases.order));
   // 一次 join 取回每个用例的项目/版本归属,避免逐条回查（N+1）
   const rows = pcs.length
@@ -172,27 +174,48 @@ export async function getPlanDetail(planId: string) {
         .where(inArray(testCases.id, pcs.map((p) => p.caseId)))
     : [];
   const byId = new Map(rows.map((c) => [c.id, c]));
+  const caseMeta = (caseId: string) => {
+    const c = byId.get(caseId);
+    return {
+      id: caseId,
+      title: c?.title ?? 'unknown',
+      url: c?.url ?? null,
+      versionId: c?.versionId ?? null,
+      versionName: c?.versionName ?? null,
+      projectId: c?.projectId ?? null,
+      projectName: c?.projectName ?? null,
+    };
+  };
   let versionName: string | null = null;
   if (plan.versionId) {
     const v = (await db.select({ name: projectVersions.name }).from(projectVersions).where(eq(projectVersions.id, plan.versionId)).limit(1))[0];
     versionName = v?.name ?? null;
   }
+  const planGroups = gs.map((g) => ({
+    id: g.id,
+    name: g.name,
+    order: g.order,
+    environmentId: g.environmentId,
+    loginPrepareEnabled: g.loginPrepareEnabled,
+    loginCaseId: g.loginCaseId,
+    detectionUrl: g.detectionUrl,
+    loginSuccessSelector: g.loginSuccessSelector,
+    loginUnauthorizedKeywords: g.loginUnauthorizedKeywords,
+    failFast: g.failFast,
+    targetConfig: g.targetConfig,
+    cases: pcs.filter((pc) => pc.groupId === g.id).map((pc, i) => ({
+      planCaseId: pc.id,
+      order: i + 1,
+      ...caseMeta(pc.caseId),
+    })),
+  }));
+  // 平铺 cases:按组序拼接,order=组内序,globalOrder=全局 1..N(兼容旧读取/UI 过渡)
+  const flat = planGroups.flatMap((g) => g.cases);
   return attachCreator({
     ...plan,
     versionName,
-    cases: pcs.map((pc) => {
-      const c = byId.get(pc.caseId);
-      return {
-        id: pc.caseId,
-        order: pc.order,
-        title: c?.title ?? 'unknown',
-        url: c?.url ?? null,
-        versionId: c?.versionId ?? null,
-        versionName: c?.versionName ?? null,
-        projectId: c?.projectId ?? null,
-        projectName: c?.projectName ?? null,
-      };
-    }),
+    groups: planGroups,
+    cases: flat.map((c, i) => ({ ...c, globalOrder: i + 1 })),
   });
 }
 
@@ -256,62 +279,118 @@ export async function caseIdsOutsideProject(projectId: string, caseIds: string[]
 /** db.transaction 回调的 tx 参数类型（组编排 helper 共用）。 */
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-/** 事务内确保计划至少有一个分组（取 order 最小组，无则建「默认分组」），返回组 id。
- *  group_id NOT NULL 后旧编排路径（replace/add）经此桥接；Task 4 将全面分组化。 */
-async function ensureDefaultGroup(tx: Tx, planId: string): Promise<string> {
-  const first = (await tx.select({ id: planCaseGroups.id }).from(planCaseGroups)
-    .where(eq(planCaseGroups.planId, planId)).orderBy(asc(planCaseGroups.order)).limit(1))[0];
-  if (first) return first.id;
-  const g = (await tx.insert(planCaseGroups).values({ planId, name: '默认分组', order: 1 }).returning())[0]!;
-  return g.id;
+/** 事务内锁计划行 + 校验组归属（组编排写路径共用）。 */
+async function lockPlanGroup(tx: Tx, planId: string, groupId: string) {
+  const plan = (await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update'))[0];
+  if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
+  const g = (await tx.select().from(planCaseGroups)
+    .where(and(eq(planCaseGroups.id, groupId), eq(planCaseGroups.planId, planId))).limit(1))[0];
+  if (!g) throw new HttpError(404, 'group_not_found', 'plan case group not found');
+  return { plan, group: g };
 }
 
-export async function replacePlanCases(planId: string, caseIds: string[]): Promise<number> {
-  if (caseIds.length === 0) throw new HttpError(400, 'cases_required', 'caseIds must not be empty');
+/** 整包替换该组用例(组内去重、1..n;空数组=清空该组);跨组重复合法。事务 + 计划行锁。 */
+export async function setPlanGroupCases(planId: string, groupId: string, caseIds: string[]): Promise<number> {
   const ids = [...new Set(caseIds)];
-  await db.transaction(async (tx) => {
-    const plan = (await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update'))[0];
-    if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
+  return db.transaction(async (tx) => {
+    const { plan } = await lockPlanGroup(tx, planId, groupId);
     await assertCasesInProject(plan.projectId, ids);
-    await tx.delete(planCases).where(eq(planCases.planId, planId));
-    const gid = await ensureDefaultGroup(tx, planId);
-    await tx.insert(planCases).values(ids.map((caseId, i) => ({ planId, caseId, groupId: gid, order: i + 1 })));
+    await tx.delete(planCases).where(eq(planCases.groupId, groupId));
+    if (ids.length > 0) {
+      await tx.insert(planCases).values(ids.map((caseId, i) => ({ planId, caseId, groupId, order: i + 1 })));
+    }
+    return ids.length;
   });
-  return ids.length;
 }
 
-/** 追加用例(已存在的跳过),返回实际新增数;order 接 max+1。事务 + 计划行锁,查-算-插原子化。 */
-export async function addPlanCases(planId: string, caseIds: string[]): Promise<number> {
+/** 组内重排:caseIds 必须恰为该组当前用例集合。事务 + 计划行锁。 */
+export async function reorderPlanGroupCases(planId: string, groupId: string, caseIds: string[]) {
+  const ids = [...new Set(caseIds)];
+  return db.transaction(async (tx) => {
+    await lockPlanGroup(tx, planId, groupId);
+    const rows = await tx.select({ caseId: planCases.caseId })
+      .from(planCases).where(eq(planCases.groupId, groupId));
+    const have = new Set(rows.map((r) => r.caseId));
+    if (ids.length !== have.size || ids.some((c) => !have.has(c))) {
+      throw new HttpError(400, 'cases_mismatch', 'caseIds must be exactly the group cases');
+    }
+    for (let i = 0; i < ids.length; i++) {
+      await tx.update(planCases).set({ order: i + 1 })
+        .where(and(eq(planCases.groupId, groupId), eq(planCases.caseId, ids[i]!)));
+    }
+    return { ok: true };
+  });
+}
+
+/** 跨组移动行(按 plan_cases.id,不是 caseId——同用例可多行)。追加到目标组尾,源组重排。事务 + 计划行锁。 */
+export async function movePlanCases(planId: string, planCaseIds: string[], toGroupId: string) {
+  const ids = [...new Set(planCaseIds)];
+  return db.transaction(async (tx) => {
+    await lockPlanGroup(tx, planId, toGroupId);
+    const rows = await tx.select().from(planCases)
+      .where(and(eq(planCases.planId, planId), inArray(planCases.id, ids)));
+    if (rows.length !== ids.length) throw new HttpError(404, 'not_found', 'plan case row not found');
+    const base = Number((await tx.select({ m: sql<number>`coalesce(max("order"), 0)` })
+      .from(planCases).where(eq(planCases.groupId, toGroupId)))[0]?.m ?? 0);
+    for (let i = 0; i < rows.length; i++) {
+      await tx.update(planCases).set({ groupId: toGroupId, order: base + i + 1 }).where(eq(planCases.id, rows[i]!.id));
+    }
+    // 源组重排
+    for (const gid of [...new Set(rows.map((r) => r.groupId))]) {
+      if (gid === toGroupId) continue;
+      await renumberGroup(tx, gid);
+    }
+    return { ok: true };
+  });
+}
+
+/** 组内行按现有 order 重排为 1..m(删除/移动后收口)。 */
+async function renumberGroup(tx: Tx, groupId: string) {
+  const rest = await tx.select({ id: planCases.id }).from(planCases)
+    .where(eq(planCases.groupId, groupId)).orderBy(asc(planCases.order));
+  for (let i = 0; i < rest.length; i++) {
+    await tx.update(planCases).set({ order: i + 1 }).where(eq(planCases.id, rest[i]!.id));
+  }
+}
+
+/** 追加用例到指定组(缺省取第一个组;无组计划自动建「默认分组」)。仅对目标组内已有 id 去重,跨组重复合法。 */
+export async function addPlanCases(planId: string, caseIds: string[], groupId?: string): Promise<number> {
   return db.transaction(async (tx) => {
     const plan = (await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update'))[0];
     if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
     await assertCasesInProject(plan.projectId, caseIds);
-    const existing = await tx.select({ caseId: planCases.caseId }).from(planCases).where(eq(planCases.planId, planId));
+    let gid = groupId;
+    if (!gid) {
+      const first = (await tx.select({ id: planCaseGroups.id }).from(planCaseGroups)
+        .where(eq(planCaseGroups.planId, planId)).orderBy(asc(planCaseGroups.order)).limit(1))[0];
+      gid = first ? first.id : (await tx.insert(planCaseGroups).values({ planId, name: '默认分组', order: 1 }).returning())[0]!.id;
+    } else {
+      const g = (await tx.select({ id: planCaseGroups.id }).from(planCaseGroups)
+        .where(and(eq(planCaseGroups.id, gid), eq(planCaseGroups.planId, planId))).limit(1))[0];
+      if (!g) throw new HttpError(404, 'group_not_found', 'plan case group not found');
+    }
+    const existing = await tx.select({ caseId: planCases.caseId }).from(planCases).where(eq(planCases.groupId, gid));
     const have = new Set(existing.map((e) => e.caseId));
     const fresh = [...new Set(caseIds)].filter((c) => !have.has(c));
     if (fresh.length === 0) return 0;
-    const base = Number((await tx.select({ m: sql<number>`coalesce(max("order"), 0)` }).from(planCases).where(eq(planCases.planId, planId)))[0]?.m ?? 0);
-    const gid = await ensureDefaultGroup(tx, planId);
-    await tx.insert(planCases).values(fresh.map((caseId, i) => ({ planId, caseId, groupId: gid, order: base + i + 1 })));
+    const base = Number((await tx.select({ m: sql<number>`coalesce(max("order"), 0)` })
+      .from(planCases).where(eq(planCases.groupId, gid)))[0]?.m ?? 0);
+    await tx.insert(planCases).values(fresh.map((caseId, i) => ({ planId, caseId, groupId: gid!, order: base + i + 1 })));
     return fresh.length;
   });
 }
 
-/** 移除用例并把剩余重排为 1..m,返回移除数;事务 + 计划行锁,无命中直接返回(免无效全删重插)。 */
+/** 移除用例(按 caseId 删该计划所有行——同用例多行一并删),受影响组内重排 1..m;事务 + 计划行锁,无命中返回 0。 */
 export async function removePlanCases(planId: string, caseIds: string[]): Promise<number> {
   if (caseIds.length === 0) return 0;
   return db.transaction(async (tx) => {
-    const plan = (await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update'))[0];
-    if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
+    await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update');
     const removed = await tx.delete(planCases)
       .where(and(eq(planCases.planId, planId), inArray(planCases.caseId, caseIds)))
-      .returning({ id: planCases.id });
+      .returning({ id: planCases.id, groupId: planCases.groupId });
     if (removed.length === 0) return 0;
-    const rest = await tx.select({ caseId: planCases.caseId, groupId: planCases.groupId }).from(planCases)
-      .where(eq(planCases.planId, planId)).orderBy(asc(planCases.order));
-    if (rest.length > 0) {
-      await tx.delete(planCases).where(eq(planCases.planId, planId));
-      await tx.insert(planCases).values(rest.map((r, i) => ({ planId, caseId: r.caseId, groupId: r.groupId, order: i + 1 })));
+    for (const gid of [...new Set(removed.map((r) => r.groupId))]) {
+      await renumberGroup(tx, gid);
     }
     return removed.length;
   });
