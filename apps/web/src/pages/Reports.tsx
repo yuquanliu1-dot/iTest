@@ -63,8 +63,13 @@ export default function Executions() {
 	const page = Math.max(1, Number(raw.page) || 1);
 	const pageSizeRaw = Number(raw.pageSize);
 	const pageSize = [10, 20, 50, 100].includes(pageSizeRaw) ? pageSizeRaw : 20;
-	/** 待确认删除的计划运行（行内删除入口）；null = 未打开确认弹窗。 */
-	const [confirmDeleteRun, setConfirmDeleteRun] = useState<{ id: string; label: string } | null>(null);
+	/** 待确认删除的行（行内删除入口）；null = 未打开确认弹窗。batchCount：数据集批次行代表的报告数。 */
+	const [confirmDelete, setConfirmDelete] = useState<{
+		kind: 'case' | 'plan';
+		id: string;
+		label: string;
+		batchCount?: number;
+	} | null>(null);
 
 	// 产品线归属：项目挂在某条产品线下时，头部出「当前版本 / 产品线执行库」范围切换
 	const { data: scopeProject } = useQuery({
@@ -215,6 +220,7 @@ export default function Executions() {
 				.map((r) => `${t(r.kind === 'plan' ? 'plans:planRunTitle' : 'reports:report')} ${r.count}`)
 				.join(t('reports:list.listSeparator'));
 			toast(t('reports:list.deletedToast', { count: total, parts }), 'success');
+			setConfirmDelete(null);
 			selection.clear();
 			qc.invalidateQueries({ queryKey: ['executions'] });
 			qc.invalidateQueries({ queryKey: ['reports'] });
@@ -228,7 +234,7 @@ export default function Executions() {
 		mutationFn: (id: string) => api.planRuns.remove(id),
 		onSuccess: () => {
 			toast(t('plans:runDeletedToast'), 'success');
-			setConfirmDeleteRun(null);
+			setConfirmDelete(null);
 			// 行勾选后单删：不清会把已删 id 留在 selection 里，批量栏一直显示残留勾选
 			selection.clear();
 			qc.invalidateQueries({ queryKey: ['executions'] });
@@ -400,21 +406,31 @@ export default function Executions() {
 			width: 'w-[44px]',
 			align: 'right',
 			hideable: false,
-			// 计划运行支持单条删除（连带成员报告）；单用例报告走「报告详情页」删除，
-			// 这里不给行内入口，避免同一份数据两套删除语义。
-			cell: (r) =>
-				r.kind !== 'plan' ? null : (
-					<span className="flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
-						<IconButton
-							icon="trash"
-							title={t('plans:deleteRunTitle')}
-							tone="destructive"
-							// 运行中禁止删除：执行器还在写成员表与报告表，删一半会留悬挂数据
-							disabled={r.status === 'running'}
-							onClick={() => setConfirmDeleteRun({ id: r.id, label: r.id.slice(0, 8) })}
-						/>
-					</span>
-				),
+			// 行内删除：计划运行连带成员报告删；用例报告（含数据集批次，确认弹窗里说明行数）
+			// 复用批量删除接口，与勾选删除同一套语义。
+			cell: (r) => (
+				<span className="flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
+					<IconButton
+						icon="trash"
+						title={r.kind === 'plan' ? t('plans:deleteRunTitle') : t('reports:delete.title')}
+						tone="destructive"
+						// 运行中禁止删除：执行器还在写成员表与报告表，删一半会留悬挂数据
+						disabled={r.status === 'running'}
+						onClick={() => {
+							const batchSize = (r as { batchSize?: number }).batchSize ?? 1;
+							setConfirmDelete({
+								kind: r.kind,
+								id: r.id,
+								label:
+									r.kind === 'plan'
+										? r.id.slice(0, 8)
+										: (r as { caseTitle?: string | null }).caseTitle ?? r.id.slice(0, 8),
+								batchCount: r.kind === 'case' && batchSize > 1 ? batchSize : undefined,
+							});
+						}}
+					/>
+				</span>
+			),
 		},
 	];
 
@@ -536,20 +552,30 @@ export default function Executions() {
 				)}
 			</PageShellContent>
 
-			<Dialog open={!!confirmDeleteRun} onOpenChange={(o) => { if (!o) setConfirmDeleteRun(null); }}>
+			<Dialog open={!!confirmDelete} onOpenChange={(o) => { if (!o) setConfirmDelete(null); }}>
 				<DialogContent style={{ maxWidth: 420 }}>
-					<DialogHeader><DialogTitle>{t('plans:deleteRunTitle')}</DialogTitle></DialogHeader>
+					<DialogHeader>
+						<DialogTitle>{confirmDelete?.kind === 'case' ? t('reports:delete.title') : t('plans:deleteRunTitle')}</DialogTitle>
+					</DialogHeader>
 					<div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-						{t('plans:deleteRunConfirm', { id: confirmDeleteRun?.label })}
+						{confirmDelete?.kind === 'case'
+							? confirmDelete.batchCount
+								? t('reports:delete.confirmBatch', { count: confirmDelete.batchCount })
+								: t('reports:delete.confirm')
+							: t('plans:deleteRunConfirm', { id: confirmDelete?.label })}
 					</div>
 					<DialogFooter>
-						<Button variant="ghost" onClick={() => setConfirmDeleteRun(null)}>{t('common:cancel')}</Button>
+						<Button variant="ghost" onClick={() => setConfirmDelete(null)}>{t('common:cancel')}</Button>
 						<Button
 							variant="destructive"
-							disabled={deleteRun.isPending}
-							onClick={() => confirmDeleteRun && deleteRun.mutate(confirmDeleteRun.id)}
+							disabled={deleteRun.isPending || batchDeleteReports.isPending}
+							onClick={() => {
+								if (!confirmDelete) return;
+								if (confirmDelete.kind === 'case') batchDeleteReports.mutate([confirmDelete.id]);
+								else deleteRun.mutate(confirmDelete.id);
+							}}
 						>
-							{deleteRun.isPending ? t('cases:deleting') : t('cases:confirmDelete')}
+							{deleteRun.isPending || batchDeleteReports.isPending ? t('cases:deleting') : t('cases:confirmDelete')}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

@@ -45,7 +45,8 @@
   },
   "delete": {
     "title": "Delete test report",
-    "confirm": "Delete this test report? Related screenshots will be removed too and cannot be recovered."
+    "confirm": "Delete this test report? Related screenshots will be removed too and cannot be recovered.",
+    "confirmBatch": "This record contains {{count}} data-row reports. Delete them all? Related screenshots will be removed too and cannot be recovered."
   },
   "detail": {
     "stepTimeline": "Step timeline",
