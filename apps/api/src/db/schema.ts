@@ -509,7 +509,7 @@ export const planCases = pgTable('plan_cases', {
   id: uuid('id').primaryKey().defaultRandom(),
   planId: uuid('plan_id').notNull().references(() => executionPlans.id, { onDelete: 'cascade' }),
   caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
-  groupId: uuid('group_id').references(() => planCaseGroups.id, { onDelete: 'cascade' }),
+  groupId: uuid('group_id').notNull().references(() => planCaseGroups.id, { onDelete: 'cascade' }),
   order: integer('order').notNull(),
   // 计划级覆盖：用例默认 device_target / 浏览器上下文可在「加进计划」时改写，
   // 不动用例本体，仅本次计划执行时按覆盖解析。null = 沿用例自带值。

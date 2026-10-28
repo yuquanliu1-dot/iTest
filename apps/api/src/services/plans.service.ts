@@ -5,7 +5,7 @@
  */
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { executionPlans, groups, planCases, projects, projectVersions, testCases, testEnvironments } from '../db/schema.js';
+import { executionPlans, groups, planCaseGroups, planCases, projects, projectVersions, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { attachCreators, attachCreator } from '../lib/creator.js';
 
@@ -253,6 +253,19 @@ export async function caseIdsOutsideProject(projectId: string, caseIds: string[]
  * 事务内第一步锁计划行(SELECT ... FOR UPDATE):同计划的所有编排串行化,
  * 消除查-算-插竞态与 order 撞号;行不存在 → 404(requirePlan 语义并入锁步骤)。
  */
+/** db.transaction 回调的 tx 参数类型（组编排 helper 共用）。 */
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** 事务内确保计划至少有一个分组（取 order 最小组，无则建「默认分组」），返回组 id。
+ *  group_id NOT NULL 后旧编排路径（replace/add）经此桥接；Task 4 将全面分组化。 */
+async function ensureDefaultGroup(tx: Tx, planId: string): Promise<string> {
+  const first = (await tx.select({ id: planCaseGroups.id }).from(planCaseGroups)
+    .where(eq(planCaseGroups.planId, planId)).orderBy(asc(planCaseGroups.order)).limit(1))[0];
+  if (first) return first.id;
+  const g = (await tx.insert(planCaseGroups).values({ planId, name: '默认分组', order: 1 }).returning())[0]!;
+  return g.id;
+}
+
 export async function replacePlanCases(planId: string, caseIds: string[]): Promise<number> {
   if (caseIds.length === 0) throw new HttpError(400, 'cases_required', 'caseIds must not be empty');
   const ids = [...new Set(caseIds)];
@@ -261,7 +274,8 @@ export async function replacePlanCases(planId: string, caseIds: string[]): Promi
     if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
     await assertCasesInProject(plan.projectId, ids);
     await tx.delete(planCases).where(eq(planCases.planId, planId));
-    await tx.insert(planCases).values(ids.map((caseId, i) => ({ planId, caseId, order: i + 1 })));
+    const gid = await ensureDefaultGroup(tx, planId);
+    await tx.insert(planCases).values(ids.map((caseId, i) => ({ planId, caseId, groupId: gid, order: i + 1 })));
   });
   return ids.length;
 }
@@ -277,7 +291,8 @@ export async function addPlanCases(planId: string, caseIds: string[]): Promise<n
     const fresh = [...new Set(caseIds)].filter((c) => !have.has(c));
     if (fresh.length === 0) return 0;
     const base = Number((await tx.select({ m: sql<number>`coalesce(max("order"), 0)` }).from(planCases).where(eq(planCases.planId, planId)))[0]?.m ?? 0);
-    await tx.insert(planCases).values(fresh.map((caseId, i) => ({ planId, caseId, order: base + i + 1 })));
+    const gid = await ensureDefaultGroup(tx, planId);
+    await tx.insert(planCases).values(fresh.map((caseId, i) => ({ planId, caseId, groupId: gid, order: base + i + 1 })));
     return fresh.length;
   });
 }
@@ -292,11 +307,11 @@ export async function removePlanCases(planId: string, caseIds: string[]): Promis
       .where(and(eq(planCases.planId, planId), inArray(planCases.caseId, caseIds)))
       .returning({ id: planCases.id });
     if (removed.length === 0) return 0;
-    const rest = await tx.select({ caseId: planCases.caseId }).from(planCases)
+    const rest = await tx.select({ caseId: planCases.caseId, groupId: planCases.groupId }).from(planCases)
       .where(eq(planCases.planId, planId)).orderBy(asc(planCases.order));
     if (rest.length > 0) {
       await tx.delete(planCases).where(eq(planCases.planId, planId));
-      await tx.insert(planCases).values(rest.map((r, i) => ({ planId, caseId: r.caseId, order: i + 1 })));
+      await tx.insert(planCases).values(rest.map((r, i) => ({ planId, caseId: r.caseId, groupId: r.groupId, order: i + 1 })));
     }
     return removed.length;
   });

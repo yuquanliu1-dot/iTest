@@ -2,6 +2,7 @@ import pg from 'pg';
 import { spawnSync } from 'node:child_process';
 import { logger } from '../logger.js';
 import { seedAssistantGuides } from './seed.js';
+import { backfillPlanCaseGroups } from './backfillPlanCaseGroups.js';
 
 const LOCK_ID = 0x4954455354; // 'ITEST'
 const LOCK_TIMEOUT_MS = 600_000; // 10min
@@ -24,6 +25,9 @@ export async function runPushWithLock(): Promise<void> {
     throw new Error('schema sync lock timeout (600s)');
   }
   try {
+    // 分组回迁必须在 push 之前：回填完 group_id 后 push 才能安全置 NOT NULL。
+    logger.info('advisory lock 获取成功，执行分组回迁（push 前）');
+    await backfillPlanCaseGroups(client);
     logger.info('advisory lock 获取成功，执行 drizzle-kit push');
     const r = spawnSync('pnpm', ['exec', 'drizzle-kit', 'push', '--force'], {
       stdio: 'inherit',
