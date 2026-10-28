@@ -302,7 +302,7 @@ export function buildRepoSandboxTools(cwdRoot: string | (() => string)): ToolExe
     },
     {
       name: 'static_locator',
-      description: '对一组候选 locator 做源码静态定位分析：逐候选查询该锚点字面量在仓库源码中的命中次数，返回 verdict（unique=源码唯一锚点 / multiple=源码命中多处→回放歧义风险 / not-found=源码未字面命中且无语义键（疑似臆造或改名）/ dynamic-suspect=源码未字面命中但存在动态绑定（如 :placeholder="变量"），运行时为准，勿据此判死 / skipped=无静态可判）。用于生成或修正 compiled 步骤的 locator 时：把伪唯一锚点（如 [title="查看"] 源码命中多处）换成语义唯一锚点（如 .icon-chakan）。',
+      description: '对一组候选 locator 做源码静态定位分析：逐候选查询该锚点字面量在仓库源码中的命中次数，返回 verdict（unique=源码唯一锚点 / multiple=源码命中多处→回放歧义风险 / not-found=源码未字面命中且无语义键（疑似臆造或改名）/ dynamic-suspect=源码未字面命中但存在动态绑定（如 :placeholder="变量"），运行时为准，勿据此判死 / skipped=无静态可判）。**仅在用户明确要求分析源码时使用**——用例创建与实测过程禁止用它做侦察（locator 证据以 verify_case 实测反馈为准）。确认存在后用于修正 compiled 步骤的 locator：把伪唯一锚点（如 [title="查看"] 源码命中多处）换成语义唯一锚点（如 .icon-chakan）。',
       parameters: Type.Object({
         locators: Type.Array(Type.Object({ strategy: Type.String({ minLength: 1 }), value: Type.String({ minLength: 1 }) })),
       }),

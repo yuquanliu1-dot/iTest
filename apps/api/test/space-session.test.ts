@@ -177,6 +177,19 @@ describe('space session supervisor', () => {
     expect(CASE_AUTHORING_FLOW_EN).not.toContain('For each instruction:');
   });
 
+  it('侦察红线文案：固化前禁 inspect_page/repo_*，失败先回报再动手（10-27 prod228 实录：失败分支自主考古 3 分钟）', async () => {
+    const { CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN, REQ_DESIGN_METHOD } = await import('../src/pi/space/reqDesign.js');
+    // 红线块存在于中英文流程指引,且失败分支强调「先回报、后动手」
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('侦察红线');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('禁止调用 inspect_page 与 repo_ls/repo_read/repo_grep/static_locator');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('先回报失败详情与归因');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('Recon red line');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('report FIRST, then act');
+    // REQ_DESIGN_METHOD:运行时机身证据优先取代「先抓页面」;§2 断言句不再点名 inspect_page
+    expect(REQ_DESIGN_METHOD).toContain('运行时机身证据优先');
+    expect(REQ_DESIGN_METHOD).not.toContain('断言前先触发对应操作:inspect_page');
+  });
+
   it('buildSpaceSystemPrompt(…,en-US):英文风格段,不含简体中文约束', async () => {
     const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
     const en = buildSpaceSystemPrompt(null, 'en-US');

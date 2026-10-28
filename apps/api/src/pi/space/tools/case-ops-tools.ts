@@ -97,7 +97,7 @@ export const STAGE_CASE_OP_GUIDELINES = [
   '修改已有用例（更新元数据 / 删除 / 移动分组）或编辑已有用例的步骤（重编译 / 改 instruction / 插入 / 删除 / 排序）时，统一调用 stage_case_op；用户在右侧 StagePanel 勾选确认后才落库。',
   '不要直接调用 manage_cases 的 update/delete/move_group —— 那些场景已下线。manage_cases 只剩 search/get/create_group。',
   '不要用 stage_case / manage_cases.create 修改已有用例 —— stage_case 是创建全新用例的，请用 action=update_case/move_case。',
-  '在生成 compiled 前，先调用 manage_cases get 拿 caseId/versionId/expectedOutcome/steps 全量，再用 inspect_page 抓真实页面元素（locator 的 testId/aria-label/css 必须取自快照，禁止凭"典型实现"臆造）。',
+  '在生成 compiled 前，先调用 manage_cases get 拿 caseId/versionId/expectedOutcome/steps 全量；locator 证据优先用 verify_case 失败反馈的 failure.page.elements（运行时真实元素），仅当用户明确要求抓取页面时才调 inspect_page（locator 的 testId/aria-label/css 必须取自真实元素清单，禁止凭"典型实现"臆造）。',
   'compiled 是 JSON 数组（元素形如 {kind, ...}），允许 kind：navigate / click / fill / hover / waitFor / assertText / assertVisible / check / select / extract / aiTask（动态验证码/弹窗等用 aiTask，不要用普通 fill）/ httpRequest {method, url, headers[], body?, timeoutMs?, carryLoginState?, saveAs?, assertion?}（REST API 请求步骤：saveAs 提取响应值为 {{var}} 供后续步骤消费,carryLoginState 转发浏览器登录态；url/headers 值/body 支持 {{变量}}）。禁止输出 aiStep。',
   'case.url 只存相对路径(如 /admin/login),执行时由环境 web 服务拼接;update_case 的 patch.url 传相对;patch.webServiceRef 可指定环境内 web 服务标识(缺省用默认)。',
   '若判断无法可靠编译（指令过于模糊），把 compiled 设为 null 表示「已放弃」。空数组也会被映射为 null（回放里等价于「什么都不做」会隐藏失败）。',
