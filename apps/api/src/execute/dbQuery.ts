@@ -1,4 +1,4 @@
-import type { QueryDbAction, DbAssertionMatch } from '@itest/shared';
+import type { QueryDbAction, DbAssertionMatch, DbQueryRowResult } from '@itest/shared';
 import type { QueryPool, DbDialect } from './envContext.js';
 
 export class QueryDbError extends Error {
@@ -34,13 +34,7 @@ export function assertColumnsAllowed(table: string, columns: string[]): void {
   }
 }
 
-export interface DbQueryRowResult {
-  rowCount: number;
-  durationMs: number;
-  rows: Record<string, unknown>[];
-  truncated?: boolean;
-  assertion?: { matched: boolean; expected: string; match: 'equals' | 'contains' | 'regex' };
-}
+export type { DbQueryRowResult };
 
 const TRUNCATE = 50;
 
@@ -111,7 +105,8 @@ export async function runQueryDb(opts: {
     };
   }
 
-  return { rowCount: rows.length, durationMs, rows: truncatedRows, ...(truncated ? { truncated: true } : {}), assertion };
+  // sql/params = 实际发给库的语句与绑定值（报告页对照「发了什么 / 回了什么」）
+  return { rowCount: rows.length, durationMs, rows: truncatedRows, sql, params, ...(truncated ? { truncated: true } : {}), assertion };
 }
 
 function matchesAssertion(

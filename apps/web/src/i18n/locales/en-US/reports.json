@@ -126,20 +126,26 @@
     "summary_other": "DB query: {{count}} rows",
     "logSummary": "Log: matched {{count}} lines",
     "logSummary_one": "Log: matched {{count}} line",
-    "logSummary_other": "Log: matched {{count}} lines"
+    "logSummary_other": "Log: matched {{count}} lines",
+    "result": "Result"
   },
   "sql": {
     "summary": "SQL: {{count}} rows",
     "summary_one": "SQL: {{count}} row",
-    "summary_other": "SQL: {{count}} rows"
+    "summary_other": "SQL: {{count}} rows",
+    "request": "Executed SQL",
+    "params": "Bound parameters",
+    "result": "Result"
   },
   "http": {
     "summary": "HTTP: {{method}} {{path}} → {{status}} ({{ms}}ms)",
     "summaryTransportFailure": "HTTP: {{method}} {{path}} → transport failure (no response)",
     "transportFailure": "Transport failure",
+    "requestLine": "Request line",
     "headers": "Request headers",
     "body": "Request body",
     "response": "Response {{status}} {{statusText}}",
+    "responseHeaders": "Response headers",
     "emptyBody": "(empty)",
     "extract": "Extracted {{name}}",
     "extractVar": "Extracted variables"

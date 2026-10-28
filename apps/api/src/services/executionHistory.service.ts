@@ -232,6 +232,16 @@ function shapeRows(o: Record<string, unknown>): { rows: Record<string, unknown>[
   return { rows, ...(o.truncated === true || over ? { truncated: true } : {}) };
 }
 
+/** db/sql 结果里的「实际执行的 SQL + 绑定参数」：老报告缺省，params 逐项 clip。 */
+function shapeSqlText(o: Record<string, unknown>): { sql?: string; params?: unknown[] } {
+  const out: { sql?: string; params?: unknown[] } = {};
+  if (typeof o.sql === 'string') out.sql = clipText(o.sql);
+  if (Array.isArray(o.params)) {
+    out.params = o.params.map((p) => (typeof p === 'string' ? clipText(p) : p));
+  }
+  return out;
+}
+
 interface HistoryAssertion {
   matched: boolean;
   expected?: string;
@@ -254,6 +264,10 @@ export interface HistoryStepDb {
   rowCount: number;
   durationMs: number;
   rows: Record<string, unknown>[];
+  /** 实际执行的 SQL（占位符形态）。老报告缺省。 */
+  sql?: string;
+  /** 绑定参数值。老报告缺省。 */
+  params?: unknown[];
   truncated?: boolean;
   assertion?: HistoryAssertion;
 }
@@ -308,6 +322,7 @@ export function shapeStructured(s: Record<string, unknown>): HistoryStructured {
       rowCount: numOf(db.rowCount),
       durationMs: numOf(db.durationMs),
       ...rows,
+      ...shapeSqlText(db),
       ...(a ? { assertion: a } : {}),
     };
   }
@@ -320,6 +335,7 @@ export function shapeStructured(s: Record<string, unknown>): HistoryStructured {
       rowCount: numOf(sq.rowCount),
       durationMs: numOf(sq.durationMs),
       ...rows,
+      ...shapeSqlText(sq),
       ...(a ? { assertion: a } : {}),
     };
   }

@@ -132,4 +132,26 @@ describe('runSql', () => {
     const r = await runSql({ pool, action: { ...base, sql: 'SELECT 1' } });
     expect(r.dbRef).toBeNull();
   });
+
+  it('结果带上实际执行的 SQL 与绑定参数（报告页对照「发了什么/回了什么」）', async () => {
+    const pool = fakePool([{ id: 1 }]);
+    const r = await runSql({
+      pool,
+      action: { ...base, sql: 'SELECT * FROM dw WHERE u = {{name}}' },
+      vars: { name: 'alice' },
+    });
+    expect(r.sql).toBe('SELECT * FROM dw WHERE u = $1');
+    expect(r.params).toEqual(['alice']);
+  });
+
+  it('mysql 方言的 SQL 同样落结果（? 占位符）', async () => {
+    const pool = fakePool([{ id: 1 }], { dialect: 'mysql' });
+    const r = await runSql({
+      pool,
+      action: { ...base, sql: 'SELECT * FROM dw WHERE u = {{name}}' },
+      vars: { name: 'alice' },
+    });
+    expect(r.sql).toBe('SELECT * FROM dw WHERE u = ?');
+    expect(r.params).toEqual(['alice']);
+  });
 });

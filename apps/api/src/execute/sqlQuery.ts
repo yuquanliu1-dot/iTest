@@ -109,6 +109,10 @@ export async function runSql(opts: {
     rowCount: clipped.length,
     durationMs: Date.now() - started,
     rows: clipped,
+    // 实际发给库的语句 + 绑定参数值：报告页要能对照「发了什么 / 回了什么」。
+    // 模板变量的值只进 params（位置绑定），sql 里是占位符——这正是真正发出去的东西。
+    sql,
+    params,
     ...(truncated ? { truncated: true } : {}),
   };
 

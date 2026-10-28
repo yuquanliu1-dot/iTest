@@ -1162,6 +1162,33 @@ describe('sql 步骤分支（查被测系统自己的库）', () => {
     expect(results[0]!.sql?.rows).toEqual([{ id: 1, status: 'ok' }]);
   });
 
+  it('结果带上实际执行的 SQL 与绑定参数', async () => {
+    const { env } = makeSqlEnv([{ id: 1 }]);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000043',
+      [{ order: 1, compiled: [{ kind: 'sql', dbRef: 'olap', sql: 'SELECT * FROM t WHERE u = {{who}}' }] }],
+      { reportId: 'r-sql-4', envCtx: env as never, initialVars: { who: 'alice' } },
+    );
+    expect(results[0]!.sql?.sql).toBe('SELECT * FROM t WHERE u = $1');
+    expect(results[0]!.sql?.params).toEqual(['alice']);
+  });
+
+  it('绑定参数含数据集敏感列值 → 落报告前打码', async () => {
+    const { env } = makeSqlEnv([{ id: 1 }]);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000044',
+      [{ order: 1, compiled: [{ kind: 'sql', dbRef: 'olap', sql: 'SELECT * FROM t WHERE p = {{pwd}}' }] }],
+      {
+        reportId: 'r-sql-5',
+        envCtx: env as never,
+        initialVars: { pwd: 'sup3rs3cret' },
+        sensitiveVarKeys: ['pwd'],
+      },
+    );
+    expect(results[0]!.sql?.params).toEqual(['******']);
+    expect(JSON.stringify(results[0]!.sql)).not.toContain('sup3rs3cret');
+  });
+
   it('断言不命中 → SqlAssertionFailed，rows 仍留在结果里', async () => {
     const { env } = makeSqlEnv([{ status: 'fail' }]);
     const results = await executeCaseReal(

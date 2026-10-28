@@ -453,6 +453,45 @@ export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenC
   );
 }
 
+/** 结果块统一样式：等宽、可换行、可滚动（SQL / 响应体都可能很长）。 */
+const RESULT_PRE_STYLE: React.CSSProperties = {
+  maxHeight: 240,
+  overflow: 'auto',
+  fontSize: 11,
+  margin: '4px 0',
+  padding: 8,
+  borderRadius: 4,
+  background: 'var(--muted)',
+  color: 'var(--muted-foreground)',
+  border: '1px solid var(--border)',
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-all',
+  fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+};
+
+/** 「请求」块：实际执行的 SQL（占位符形态）+ 绑定参数值。
+ *  老报告没有 sql/params 字段 → 不渲染（不显示空块）。 */
+function SqlRequestBlock({ sql, params }: { sql?: string; params?: unknown[] }) {
+  const { t } = useTranslation();
+  if (!sql && (!params || params.length === 0)) return null;
+  return (
+    <div style={{ margin: '4px 0', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {sql && (
+        <div>
+          <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:sql.request')}</div>
+          <pre style={RESULT_PRE_STYLE}>{sql}</pre>
+        </div>
+      )}
+      {params && params.length > 0 && (
+        <div>
+          <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:sql.params')}</div>
+          <pre style={RESULT_PRE_STYLE}>{JSON.stringify(params, null, 2)}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DbResultCell({ db }: { db: DbQueryRowResult }) {
   const { t } = useTranslation();
   return (
@@ -473,19 +512,9 @@ function DbResultCell({ db }: { db: DbQueryRowResult }) {
           </span>
         )}
       </summary>
-      <pre
-        style={{
-          maxHeight: 240,
-          overflow: 'auto',
-          fontSize: 11,
-          margin: '4px 0',
-          padding: 8,
-          borderRadius: 4,
-          background: 'var(--muted)',
-          color: 'var(--muted-foreground)',
-          border: '1px solid var(--border)',
-        }}
-      >
+      <SqlRequestBlock sql={db.sql} params={db.params} />
+      <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:db.result')}</div>
+      <pre style={RESULT_PRE_STYLE}>
         {JSON.stringify(db.rows.slice(0, 5), null, 2)}
       </pre>
     </details>
@@ -514,19 +543,9 @@ function SqlResultCell({ sql }: { sql: SqlStepResult }) {
           </span>
         )}
       </summary>
-      <pre
-        style={{
-          maxHeight: 240,
-          overflow: 'auto',
-          fontSize: 11,
-          margin: '4px 0',
-          padding: 8,
-          borderRadius: 4,
-          background: 'var(--muted)',
-          color: 'var(--muted-foreground)',
-          border: '1px solid var(--border)',
-        }}
-      >
+      <SqlRequestBlock sql={sql.sql} params={sql.params} />
+      <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:sql.result')}</div>
+      <pre style={RESULT_PRE_STYLE}>
         {JSON.stringify(sql.rows.slice(0, 5), null, 2)}
       </pre>
     </details>
@@ -534,19 +553,6 @@ function SqlResultCell({ sql }: { sql: SqlStepResult }) {
 }
 
 function HttpResultCell({ http }: { http: HttpStepResult }) {  const { t } = useTranslation();
-  const PRE_STYLE: React.CSSProperties = {
-    maxHeight: 240,
-    overflow: 'auto',
-    fontSize: 11,
-    margin: '4px 0',
-    padding: 8,
-    borderRadius: 4,
-    background: 'var(--muted)',
-    color: 'var(--muted-foreground)',
-    border: '1px solid var(--border)',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-all',
-  };
   let path = '';
   try { path = new URL(http.request.url).pathname + new URL(http.request.url).search; } catch { path = http.request.url; }
   return (
@@ -578,32 +584,44 @@ function HttpResultCell({ http }: { http: HttpStepResult }) {  const { t } = use
       </summary>
       <div style={{ margin: '4px 0', display: 'flex', flexDirection: 'column', gap: 4 }}>
         <div>
+          <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:http.requestLine')}</div>
+          <pre style={RESULT_PRE_STYLE}>{`${http.request.method} ${http.request.url}`}</pre>
+        </div>
+        <div>
           <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:http.headers')}</div>
-          <pre style={PRE_STYLE}>{JSON.stringify(http.request.headers, null, 2)}</pre>
+          <pre style={RESULT_PRE_STYLE}>{JSON.stringify(http.request.headers, null, 2)}</pre>
         </div>
         {http.request.bodyPreview !== undefined && (
           <div>
             <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:http.body')}</div>
-            <pre style={PRE_STYLE}>{http.request.bodyPreview}</pre>
+            <pre style={RESULT_PRE_STYLE}>{http.request.bodyPreview}</pre>
           </div>
         )}
         {http.transportFailure ? (
           <div>
             <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:http.transportFailure')}</div>
-            <pre style={PRE_STYLE}>{http.transportFailure}</pre>
+            <pre style={RESULT_PRE_STYLE}>{http.transportFailure}</pre>
           </div>
         ) : (
-          <div>
-            <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>
-              {t('reports:http.response', { status: http.response!.status, statusText: http.response!.statusText })}
+          <>
+            <div>
+              <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>
+                {t('reports:http.response', { status: http.response!.status, statusText: http.response!.statusText })}
+              </div>
+              <pre style={RESULT_PRE_STYLE}>{http.response!.bodyText || t('reports:http.emptyBody')}</pre>
             </div>
-            <pre style={PRE_STYLE}>{http.response!.bodyText || t('reports:http.emptyBody')}</pre>
-          </div>
+            {http.response!.headers && Object.keys(http.response!.headers).length > 0 && (
+              <div>
+                <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:http.responseHeaders')}</div>
+                <pre style={RESULT_PRE_STYLE}>{JSON.stringify(http.response!.headers, null, 2)}</pre>
+              </div>
+            )}
+          </>
         )}
         {http.saved && (
           <div>
             <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:http.extractVar')}</div>
-            <pre style={PRE_STYLE}>{`{{${http.saved.varName}}} = ${http.saved.value}`}</pre>
+            <pre style={RESULT_PRE_STYLE}>{`{{${http.saved.varName}}} = ${http.saved.value}`}</pre>
           </div>
         )}
       </div>
@@ -631,21 +649,7 @@ function SyslogResultCell({ syslog }: { syslog: SyslogStepResult }) {
           <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>
             {t('reports:syslog.meta', { facility: syslog.facility, severity: syslog.severity, bytes: syslog.bytes })}
           </div>
-          <pre
-            style={{
-              maxHeight: 240,
-              overflow: 'auto',
-              fontSize: 11,
-              margin: '4px 0',
-              padding: 8,
-              borderRadius: 4,
-              background: 'var(--muted)',
-              color: 'var(--muted-foreground)',
-              border: '1px solid var(--border)',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
-            }}
-          >
+          <pre style={RESULT_PRE_STYLE}>
             {syslog.packet}
           </pre>
         </div>

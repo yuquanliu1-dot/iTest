@@ -114,18 +114,24 @@
   "retrySuffix": " · 重试 {{count}}",
   "db": {
     "summary": "DB 查询：{{count}} 行",
-    "logSummary": "日志：匹配 {{count}} 行"
+    "logSummary": "日志：匹配 {{count}} 行",
+    "result": "返回结果"
   },
   "sql": {
-    "summary": "SQL：{{count}} 行"
+    "summary": "SQL：{{count}} 行",
+    "request": "实际执行的 SQL",
+    "params": "绑定参数",
+    "result": "返回结果"
   },
   "http": {
     "summary": "HTTP：{{method}} {{path}} → {{status}}（{{ms}}ms）",
     "summaryTransportFailure": "HTTP：{{method}} {{path}} → 传输层失败（无响应）",
     "transportFailure": "传输层失败",
+    "requestLine": "请求行",
     "headers": "请求头",
     "body": "请求体",
     "response": "响应 {{status}} {{statusText}}",
+    "responseHeaders": "响应头",
     "emptyBody": "（空）",
     "extract": "提取 {{name}}",
     "extractVar": "提取变量"

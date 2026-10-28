@@ -705,6 +705,10 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         vars: opts.vars,
         dbRef: envCtx.resolveDb(dbRef)?.label ?? null,
       });
+      // 绑定参数值可能含数据集敏感列的值，落报告前打码（SQL 文本是占位符形态，本身不含明文）。
+      if (result.params && opts.ctx.sensitiveVarKeys?.length) {
+        result.params = maskSqlParams(result.params, opts.vars, opts.ctx.sensitiveVarKeys);
+      }
       // 先写 sink 再判断言：断言失败时报告里仍要能看到 rows
       if (opts.sqlSink) opts.sqlSink.current = result;
       if (result.assertion && !result.assertion.matched) {
@@ -992,6 +996,15 @@ export function maskSensitiveValues(text: string, vars: Record<string, string>, 
   let out = text;
   for (const v of vals) out = out.split(v).join('******');
   return out;
+}
+
+/** 报告侧脱敏：SQL 绑定参数值里可能含数据集敏感列的值（如按密码查用户）。
+ *  SQL 文本本身是占位符形态（$n / ?）不含明文，只有 params 里的值需要打码。 */
+function maskSqlParams(params: unknown[], vars: Record<string, string>, keys: readonly string[]): unknown[] {
+  if (keys.length === 0) return params;
+  return params.map((p) =>
+    typeof p === 'string' ? maskSensitiveValues(p, vars, keys) : p,
+  );
 }
 
 /** 行级预期物化：expectedOutcome 模板按当次运行最终 vars（数据集初始变量 + extract）替换后交 vision 判定。

@@ -74,11 +74,17 @@ export interface PreflightReport {
   durationMs: number;
 }
 
-/** queryDb 步骤执行结果：行数 / 耗时 / 命中行（最多 50 行）/ 断言命中情况。 */
+/** queryDb 步骤执行结果：行数 / 耗时 / 命中行（最多 50 行）/ 断言命中情况。
+ *  sql/params = 实际发给库的语句与绑定参数值（模板变量已换成占位符，值在 params 里），
+ *  报告页要能同时看到「发了什么」和「回了什么」。老报告缺这两个字段。 */
 export interface DbQueryRowResult {
   rowCount: number;
   durationMs: number;
   rows: Record<string, unknown>[];
+  /** 实际执行的 SQL（占位符形态：pg $n / mysql ?）。 */
+  sql?: string;
+  /** 绑定参数值（与 sql 里的占位符一一对应）。 */
+  params?: unknown[];
   truncated?: boolean;
   assertion?: { matched: boolean; expected: string; match: 'equals' | 'contains' | 'regex' };
 }
@@ -92,12 +98,18 @@ export interface ObserveLogLineResult {
   assertion?: { matched: boolean; expected: string; match: 'equals' | 'contains' | 'regex' };
 }
 
-/** sql 步骤执行结果：命中的 db 对象 label / 行数 / 行内容（值截断）/ 断言命中。 */
+/** sql 步骤执行结果：命中的 db 对象 label / 行数 / 行内容（值截断）/ 断言命中。
+ *  sql/params = 实际发给库的语句与绑定参数值（模板变量已换成占位符，值在 params 里），
+ *  报告页要能同时看到「发了什么」和「回了什么」。老报告缺这两个字段。 */
 export interface SqlStepResult {
   dbRef: string | null;
   rowCount: number;
   durationMs: number;
   rows: Record<string, unknown>[];
+  /** 实际执行的 SQL（占位符形态：pg $n / mysql ?）。 */
+  sql?: string;
+  /** 绑定参数值（与 sql 里的占位符一一对应）。 */
+  params?: unknown[];
   truncated?: boolean;
   assertion?: { matched: boolean; expected: string; match: 'equals' | 'contains' | 'regex' };
 }

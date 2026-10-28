@@ -67,6 +67,20 @@ describe('shapeStructured (老报告缺字段容错)', () => {
     expect(out.sql!.rows).toEqual([]);
     expect(out.sql!.truncated).toBeUndefined();
   });
+  it('carries the executed SQL + bound params through for db/sql;老报告缺省则不带这两个键', () => {
+    const out = shapeStructured({
+      sql: { dbRef: 'main', rowCount: 1, durationMs: 5, rows: [], sql: 'SELECT * FROM t WHERE u = $1', params: ['alice'] },
+      db: { rowCount: 1, durationMs: 5, rows: [], sql: 'SELECT "id" FROM "reports" LIMIT 10', params: [] },
+    });
+    expect(out.sql!.sql).toBe('SELECT * FROM t WHERE u = $1');
+    expect(out.sql!.params).toEqual(['alice']);
+    expect(out.db!.sql).toBe('SELECT "id" FROM "reports" LIMIT 10');
+    expect(out.db!.params).toEqual([]);
+    // 老报告无这两个字段 → 不产生空串/空数组（否则前端会渲染一个空的「实际执行的 SQL」块）
+    const legacy = shapeStructured({ sql: { dbRef: 'main', rowCount: 1, durationMs: 5, rows: [] } });
+    expect(legacy.sql!.sql).toBeUndefined();
+    expect(legacy.sql!.params).toBeUndefined();
+  });
   it('shapes log result: lines>10 → 10 lines + truncated; non-object lines coerced to raw', () => {
     const s = { log: { matchedLineCount: 12, durationMs: 8, lines: [...Array.from({ length: 12 }, (_, i) => ({ ts: `t${i}`, raw: 'r'.repeat(1200) })), 'plain'] } };
     const out = shapeStructured(s);
