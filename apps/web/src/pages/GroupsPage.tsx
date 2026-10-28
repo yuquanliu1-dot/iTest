@@ -274,10 +274,8 @@ export default function GroupsPage() {
 
 	const addToPlan = useMutation({
 		mutationFn: async ({ caseIds, planId }: { caseIds: string[]; planId: string }) => {
-			// PUT 是覆盖语义：取现有 + 追加去重
-			const detail = await api.plans.get(planId);
-			const merged = [...detail.cases.map((c) => c.id), ...caseIds].filter((v, i, arr) => arr.indexOf(v) === i);
-			return api.plans.setCases(planId, merged);
+			// 追加语义：POST 落到第一个组（无组自动建默认分组），组内去重由服务端收口
+			return api.plans.addCases(planId, caseIds);
 		},
 		onSuccess: () => {
 			toast(t('groups:addedToPlan'), 'success');
@@ -1141,7 +1139,7 @@ export default function GroupsPage() {
 						<select className="input-base" value={planTarget} onChange={(e) => setPlanTarget(e.target.value)}>
 							<option value="">{t('groups:pleaseSelect')}</option>
 							{(plans ?? []).map((p) => (
-								<option key={p.id} value={p.id}>{p.name}{p.environment ? `（${p.environment}）` : ''}</option>
+								<option key={p.id} value={p.id}>{p.name}</option>
 							))}
 						</select>
 						{(plans ?? []).length === 0 && (

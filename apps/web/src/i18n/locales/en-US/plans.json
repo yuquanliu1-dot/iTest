@@ -154,5 +154,23 @@
     "monthly": "Monthly on day {{day}} at {{time}}"
   },
   "enableRca": "Failure root cause analysis (AI)",
-  "enableRcaHint": "After a plan run finishes, the AI assistant analyzes failed cases automatically: system defects get root cause and fix suggestions from the code repo; case/environment issues get a one-line conclusion only."
+  "enableRcaHint": "After a plan run finishes, the AI assistant analyzes failed cases automatically: system defects get root cause and fix suggestions from the code repo; case/environment issues get a one-line conclusion only.",
+  "strategyHint": "The plan strategy applies between groups: stop on first failure skips later groups after a failed group; in-group stop-on-failure is configured per group.",
+  "noGroups": "No groups yet",
+  "noGroupsHint": "Create the first group to configure environment and login preparation per group",
+  "addGroup": "Add group",
+  "newGroupName": "New group",
+  "groupFailFast": "Stop group on first failure",
+  "groupBrowserContext": "Browser context",
+  "followCase": "Follow case",
+  "incognito": "Incognito",
+  "persistent": "Persistent",
+  "moveToGroup": "Move to group",
+  "groupNotEmpty": "Group still has cases; move or remove them first",
+  "targetGroup": "Add to group",
+  "alreadyInPlan": "Already in plan",
+  "groupOrder": "Group {{index}}",
+  "loginCaseDeleted": "Login case deleted",
+  "groupSkippedByPlan": "Skipped (plan strategy)",
+  "groupSkippedByGroup": "Skipped (group strategy)"
 }

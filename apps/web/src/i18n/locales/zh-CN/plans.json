@@ -149,5 +149,23 @@
     "monthly": "每月 {{day}} 日 {{time}}"
   },
   "enableRca": "失败根因分析（AI）",
-  "enableRcaHint": "计划运行结束后，AI 助手自动分析失败用例：判定为系统缺陷的结合代码仓给出根因与修复建议；用例自身/环境问题只记录一句结论。"
+  "enableRcaHint": "计划运行结束后，AI 助手自动分析失败用例：判定为系统缺陷的结合代码仓给出根因与修复建议；用例自身/环境问题只记录一句结论。",
+  "strategyHint": "计划策略作用于分组之间：失败即停止=前组失败后不再执行后续分组；组内失败即停由各分组单独配置。",
+  "noGroups": "还没有分组",
+  "noGroupsHint": "创建第一个分组，为每组独立配置环境与登录准备",
+  "addGroup": "添加分组",
+  "newGroupName": "新分组",
+  "groupFailFast": "组内失败即停",
+  "groupBrowserContext": "浏览器上下文",
+  "followCase": "跟随用例",
+  "incognito": "无痕",
+  "persistent": "持久",
+  "moveToGroup": "移动到分组",
+  "groupNotEmpty": "分组内还有用例，先移出或删除",
+  "targetGroup": "加入分组",
+  "alreadyInPlan": "已在计划",
+  "groupOrder": "分组 {{index}}",
+  "loginCaseDeleted": "登录用例已删除",
+  "groupSkippedByPlan": "已跳过（计划策略）",
+  "groupSkippedByGroup": "已跳过（组策略）"
 }

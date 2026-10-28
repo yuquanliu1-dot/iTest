@@ -136,30 +136,27 @@ export const api = {
       id: string,
       body: Partial<{
         name: string;
-        environment: string;
-        environmentId: string | null;
         strategy: 'run_all' | 'fail_fast';
-        loginPrepare: {
-          enabled: boolean;
-          caseId: string | null;
-          detectionUrl: string | null;
-          successSelector: string | null;
-          unauthorizedKeywords: string[] | null;
-        };
         rcaEnabled: boolean;
       }>,
     ) => request<ExecutionPlan>(`/plans/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/plans/${id}`, { method: 'DELETE' }),
-    setCases: (id: string, caseIds: string[]) =>
-      request<{ ok: boolean }>(`/plans/${id}/cases`, {
-        method: 'PUT',
-        body: JSON.stringify({ caseIds }),
-      }),
-    reorderCases: (id: string, caseIds: string[]) =>
-      request<{ ok: boolean }>(`/plans/${id}/cases/order`, {
-        method: 'PUT',
-        body: JSON.stringify({ caseIds }),
-      }),
+    createGroup: (id: string, body: { name: string; environmentId?: string | null; failFast?: boolean }) =>
+      request<PlanCaseGroup>(`/plans/${id}/groups`, { method: 'POST', body: JSON.stringify(body) }),
+    patchGroup: (id: string, groupId: string, body: Partial<{ name: string; environmentId: string | null; failFast: boolean; loginPrepare: { enabled: boolean; caseId: string | null; detectionUrl: string | null; successSelector: string | null; unauthorizedKeywords: string[] | null }; targetConfig: { deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null }>) =>
+      request<PlanCaseGroup>(`/plans/${id}/groups/${groupId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    deleteGroup: (id: string, groupId: string) =>
+      request<{ ok: boolean }>(`/plans/${id}/groups/${groupId}`, { method: 'DELETE' }),
+    reorderGroups: (id: string, groupIds: string[]) =>
+      request<{ ok: boolean }>(`/plans/${id}/groups/order`, { method: 'PUT', body: JSON.stringify({ groupIds }) }),
+    setGroupCases: (id: string, groupId: string, caseIds: string[]) =>
+      request<{ ok: boolean }>(`/plans/${id}/groups/${groupId}/cases`, { method: 'PUT', body: JSON.stringify({ caseIds }) }),
+    addCases: (id: string, caseIds: string[], groupId?: string) =>
+      request<{ added: number }>(`/plans/${id}/cases`, { method: 'POST', body: JSON.stringify({ caseIds, groupId }) }),
+    reorderGroupCases: (id: string, groupId: string, caseIds: string[]) =>
+      request<{ ok: boolean }>(`/plans/${id}/cases/order`, { method: 'PUT', body: JSON.stringify({ groupId, caseIds }) }),
+    moveCases: (id: string, planCaseIds: string[], toGroupId: string) =>
+      request<{ ok: boolean }>(`/plans/${id}/cases/move`, { method: 'PUT', body: JSON.stringify({ planCaseIds, toGroupId }) }),
     removeCases: (id: string, caseIds: string[]) =>
       request<{ ok: boolean }>(`/plans/${id}/cases`, {
         method: 'DELETE',
@@ -890,8 +887,6 @@ export interface ExecutionPlan {
   versionId: string | null;
   versionName?: string | null;
   name: string;
-  environment: string | null;
-  environmentId?: string | null;
   /** 运行结束后对失败用例自动做 AI 根因分析 */
   rcaEnabled?: boolean;
   createdAt: string;
@@ -901,14 +896,26 @@ export interface ExecutionPlan {
 export interface PlanWithCount extends ExecutionPlan {
   caseCount: number;
 }
-export interface PlanDetail extends ExecutionPlan {
-  cases: Array<{ id: string; order: number; title: string; url: string | null; versionId: string | null; versionName: string | null; projectId: string | null; projectName: string | null }>;
-  strategy: 'run_all' | 'fail_fast';
+/** 计划分组：每组独立配置环境/登录准备/failFast/浏览器上下文，组内用例有序。 */
+export interface PlanCaseGroup {
+  id: string;
+  name: string;
+  order: number;
+  environmentId: string | null;
   loginPrepareEnabled: boolean;
   loginCaseId: string | null;
   detectionUrl: string | null;
   loginSuccessSelector: string | null;
   loginUnauthorizedKeywords: string[] | null;
+  failFast: boolean;
+  targetConfig: { deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null;
+  cases: Array<{ planCaseId: string; id: string; order: number; title: string; url: string | null; versionId: string | null; versionName: string | null; projectId: string | null; projectName: string | null }>;
+}
+export interface PlanDetail extends ExecutionPlan {
+  /** 平铺口径：按组序拼接（order=组内序、globalOrder=全局 1..N），供计数与跨组去重标显示。 */
+  cases: Array<{ planCaseId: string; id: string; order: number; globalOrder: number; title: string; url: string | null; versionId: string | null; versionName: string | null; projectId: string | null; projectName: string | null }>;
+  groups: PlanCaseGroup[];
+  strategy: 'run_all' | 'fail_fast';
 }
 export interface PlanRunDetail {
   id: string;
@@ -932,6 +939,10 @@ export interface PlanRunDetail {
     reportId: string | null;
     reportIds?: string[] | null;
     rowStatuses?: string[];
+    /** 所属计划分组（老运行为 null）。 */
+    groupId: string | null;
+    groupName: string | null;
+    groupOrder: number | null;
     order: number;
     status: string;
     stepKind: 'business' | 'login_prepare';

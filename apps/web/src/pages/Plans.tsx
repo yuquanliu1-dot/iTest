@@ -114,14 +114,6 @@ export default function Plans() {
       cellClassName: 'min-w-0',
     },
     {
-      id: 'environment',
-      header: t('plans:environment'),
-      width: 'w-[10%]',
-      hideBelow: 'lg',
-      cellClassName: 'text-muted-foreground',
-      cell: (p) => <span className="truncate">{p.environment ?? <EmptyCellValue />}</span>,
-    },
-    {
       id: 'caseCount',
       header: t('plans:caseCount'),
       width: 'w-[8%]',
@@ -259,9 +251,6 @@ export default function Plans() {
                     <div className="text-[14px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>
                       {p.name}
                     </div>
-                    <span className="text-[10px] uppercase font-semibold px-2 py-[2px] rounded-full" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>
-                      {p.environment ?? t('plans:defaultEnvironment')}
-                    </span>
                   </div>
                   <div className="text-[12px] mt-2" style={{ color: 'var(--muted-foreground)' }}>
                     {t('plans:caseCountLabel', { count: p.caseCount })}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../i18n';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -9,9 +9,9 @@ import Icon from '../components/Icon';
 import StatusPill from '../components/ui/StatusPill';
 import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
-import IconButton from '../components/ui/IconButton';
 import InlineEdit from '../components/ui/InlineEdit';
 import ScheduleListCard from '../components/plans/ScheduleListCard';
+import PlanGroupCard from '../components/plans/PlanGroupCard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
@@ -49,11 +49,10 @@ export default function PlanDetail() {
 
   const [showAdd, setShowAdd] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
-  /** 用例移除确认弹窗:点击行内 🗑 时弹出,避免误点(执行计划不含跨域层级,误移易踩雷)。 */
-  const [confirmRemoveCase, setConfirmRemoveCase] = useState<{ id: string; title: string } | null>(null);
   const [selectedAdd, setSelectedAdd] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
-  const [environmentId, setEnvironmentId] = useState<string | null>(null);
+  /** 加用例弹窗的目标分组：缺省末组；无组时空串（后端自动建默认分组）。 */
+  const [targetGroupId, setTargetGroupId] = useState('');
 
   /** 计划所属项目的归属信息：决定用例池是否跨产品线取（未归线的项目池子与现状完全一致）。 */
   const { data: planProject } = useQuery({
@@ -103,12 +102,13 @@ export default function PlanDetail() {
     || addFilters.statuses.length > 0 || addFilters.priorities.length > 0 || addFilters.tags.length > 0
     || addFilters.projects.length > 0;
   const activeFilterCount = addFilters.groups.length + addFilters.versions.length
-    + addFilters.statuses.length + addFilters.priorities.length + addFilters.tags.length
-    + addFilters.projects.length;
+    + addFilters.statuses.length + addFilters.priorities.length
+    + addFilters.tags.length + addFilters.projects.length;
 
+  /** 已在计划的用例 id：候选不再过滤（跨组重复合法），仅在行尾标「已在计划」。 */
   const inPlanIds = useMemo(() => new Set((plan?.cases ?? []).map((c) => c.id)), [plan]);
   const candidates = useMemo(() => {
-    let list = (allCases ?? []).filter((c) => !inPlanIds.has(c.id));
+    let list = [...(allCases ?? [])];
     // 状态/标签走前端本地筛（GET /cases 不接这两个参数，与 GroupsPage 一致）
     if (addFilters.groups.length) list = list.filter((c) => addFilters.groups.includes(c.groupId ?? ''));
     if (addFilters.versions.length) list = list.filter((c) => c.versionId != null && addFilters.versions.includes(c.versionId));
@@ -118,7 +118,7 @@ export default function PlanDetail() {
     if (addFilters.tags.length) list = list.filter((c) => (c.tags ?? []).some((t) => addFilters.tags.includes(t.id)));
     if (search.trim()) list = list.filter((c) => c.title.includes(search.trim()));
     return list;
-  }, [allCases, inPlanIds, addFilters, search]);
+  }, [allCases, addFilters, search]);
 
   /** 产品线项目下的「项目」筛选项：从候选池反推，避免多发一次 GET。 */
   const projectOptions = useMemo(() => {
@@ -129,11 +129,11 @@ export default function PlanDetail() {
     return [...m.entries()].map(([value, label]) => ({ value, label }));
   }, [allCases]);
 
-  const [loginQ, setLoginQ] = useState('');
+  /** 登录准备候选：任一组启用登录准备才需要（组卡内本地按标题过滤）。 */
   const { data: loginCases } = useQuery({
-    queryKey: ['plan', id, 'login-cases', loginQ],
-    queryFn: () => api.plans.loginCases(id!, loginQ),
-    enabled: !!id && (plan?.loginPrepareEnabled ?? false),
+    queryKey: ['plan', id, 'login-cases'],
+    queryFn: () => api.plans.loginCases(id!),
+    enabled: !!id && (plan?.groups ?? []).some((g) => g.loginPrepareEnabled),
   });
 
   const { data: environments } = useQuery({
@@ -142,15 +142,10 @@ export default function PlanDetail() {
     enabled: !!plan?.projectId,
   });
 
-  // plan 重新加载时同步 serverValue；本地未保存改动时（如保存其他字段）避免被覆盖
-  const envSyncRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!plan) return;
-    const serverValue = plan.environmentId ?? null;
-    if (envSyncRef.current !== null && envSyncRef.current !== serverValue && environmentId !== serverValue) return;
-    envSyncRef.current = serverValue;
-    setEnvironmentId(serverValue);
-  }, [plan, environmentId]);
+  const invalidatePlan = () => {
+    qc.invalidateQueries({ queryKey: ['plan', id] });
+    qc.invalidateQueries({ queryKey: ['plans', projectId] });
+  };
 
   const patchPlan = useMutation({
     mutationFn: (body: Parameters<typeof api.plans.patch>[1]) => api.plans.patch(id!, body),
@@ -161,33 +156,19 @@ export default function PlanDetail() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  const setCases = useMutation({
-    mutationFn: (caseIds: string[]) => api.plans.setCases(id!, caseIds),
+  const createGroup = useMutation({
+    mutationFn: () => api.plans.createGroup(id!, { name: t('plans:newGroupName') }),
+    onSuccess: invalidatePlan,
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
+  });
+
+  const addCases = useMutation({
+    mutationFn: (vars: { caseIds: string[]; groupId?: string }) => api.plans.addCases(id!, vars.caseIds, vars.groupId),
     onSuccess: () => {
       toast(t('plans:casesUpdated'), 'success');
-      qc.invalidateQueries({ queryKey: ['plan', id] });
-      qc.invalidateQueries({ queryKey: ['plans', projectId] });
+      invalidatePlan();
       setShowAdd(false);
       setSelectedAdd(new Set());
-    },
-    onError: (e: Error) => toast(localizeApiError(e), 'error'),
-  });
-
-  const reorder = useMutation({
-    mutationFn: (caseIds: string[]) => api.plans.reorderCases(id!, caseIds),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['plan', id] });
-    },
-    onError: (e: Error) => toast(localizeApiError(e), 'error'),
-  });
-
-  const removeCases = useMutation({
-    mutationFn: (caseIds: string[]) => api.plans.removeCases(id!, caseIds),
-    onSuccess: (data, vars) => {
-      toast(t('plans:removedCount', { count: vars.length }), 'success');
-      setConfirmRemoveCase(null);
-      qc.invalidateQueries({ queryKey: ['plan', id] });
-      qc.invalidateQueries({ queryKey: ['plans', projectId] });
     },
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
@@ -213,8 +194,12 @@ export default function PlanDetail() {
   });
 
   useEffect(() => {
-    if (showAdd) setSelectedAdd(new Set());
-  }, [showAdd]);
+    if (showAdd) {
+      setSelectedAdd(new Set());
+      // 默认加入末组；无组计划留空（后端自动建默认分组）
+      setTargetGroupId(plan?.groups.length ? plan.groups[plan.groups.length - 1]!.id : '');
+    }
+  }, [showAdd, plan]);
 
   if (isError) {
     return (
@@ -233,38 +218,7 @@ export default function PlanDetail() {
     );
   }
 
-  const moveBy = (idx: number, delta: number) => {
-    const list = [...(plan.cases ?? [])];
-    const j = idx + delta;
-    if (j < 0 || j >= list.length) return;
-    [list[idx], list[j]] = [list[j]!, list[idx]!];
-    reorder.mutate(list.map((c) => c.id));
-  };
-
-  const onDragStart = (e: React.DragEvent, idx: number) => {
-    e.dataTransfer.setData('text/plain', String(idx));
-  };
-  const onDrop = (e: React.DragEvent, idx: number) => {
-    const from = Number(e.dataTransfer.getData('text/plain'));
-    if (Number.isNaN(from) || from === idx) return;
-    const list = [...(plan.cases ?? [])];
-    const [moved] = list.splice(from, 1);
-    list.splice(idx, 0, moved!);
-    reorder.mutate(list.map((c) => c.id));
-  };
-
   const updateStrategy = (v: Strategy) => patchPlan.mutate({ strategy: v });
-  const updateLoginPrepare = (next: { enabled?: boolean; caseId?: string | null; detectionUrl?: string | null; successSelector?: string | null; unauthorizedKeywords?: string[] | null }) => {
-    patchPlan.mutate({
-      loginPrepare: {
-        enabled: next.enabled ?? plan.loginPrepareEnabled,
-        caseId: next.caseId === undefined ? plan.loginCaseId : next.caseId,
-        detectionUrl: next.detectionUrl === undefined ? plan.detectionUrl : next.detectionUrl,
-        successSelector: next.successSelector === undefined ? plan.loginSuccessSelector : next.successSelector,
-        unauthorizedKeywords: next.unauthorizedKeywords === undefined ? (plan.loginUnauthorizedKeywords as string[] | null) : next.unauthorizedKeywords,
-      },
-    });
-  };
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -298,6 +252,10 @@ export default function PlanDetail() {
           </span>
         ) : null}
         <div className="flex-1" />
+        <Button variant="ghost" disabled={createGroup.isPending} onClick={() => createGroup.mutate()}>
+          <Icon name="plus" size={12} />
+          {t('plans:addGroup')}
+        </Button>
         <Button variant="ghost" onClick={() => { setShowAdd(true); setAddFilters(EMPTY_ADD_FILTERS); setSearch(''); }}>
           <Icon name="plus" size={12} />
           {t('plans:addCases')}
@@ -327,108 +285,15 @@ export default function PlanDetail() {
               value={plan.strategy}
               onChange={(e) => updateStrategy(e.target.value as Strategy)}
               className="input-base input-sm flex-1"
-              style={{ minWidth: 160 }}
+              style={{ minWidth: 160, maxWidth: 240 }}
             >
               <option value="run_all">{t('plans:strategyRunAll')}</option>
               <option value="fail_fast">{t('plans:strategyFailFast')}</option>
             </select>
-            <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:targetEnvironment')}</span>
-            <select
-              value={environmentId ?? ''}
-              onChange={(e) => setEnvironmentId(e.target.value || null)}
-              className="input-base input-sm flex-1"
-              style={{ minWidth: 160 }}
-              disabled={(environments ?? []).length === 0}
-            >
-              <option value="">{t('plans:noEnvironmentSpecified')}</option>
-              {(environments ?? []).map((env) => (
-                <option key={env.id} value={env.id}>
-                  {env.name}
-                </option>
-              ))}
-            </select>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={patchPlan.isPending}
-              onClick={() => patchPlan.mutate({ environmentId })}
-            >
-              {t('common:save')}
-            </Button>
           </div>
+          <div className="mt-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('plans:strategyHint')}</div>
           <div className="mt-4">
-            <label className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-              <input
-                type="checkbox"
-                checked={plan.loginPrepareEnabled}
-                onChange={(e) => updateLoginPrepare({ enabled: e.target.checked })}
-              />
-              {t('plans:enableLoginPrepare')}
-            </label>
-            {plan.loginPrepareEnabled && (
-              <div className="mt-3 flex flex-col gap-2 pl-5">
-                <div className="flex items-center gap-2">
-                  <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:loginCase')}</span>
-                  <select
-                    value={plan.loginCaseId ?? ''}
-                    onChange={(e) => updateLoginPrepare({ caseId: e.target.value || null })}
-                    className="input-base input-sm flex-1"
-                    style={{ minWidth: 220 }}
-                  >
-                    <option value="">{t('plans:pleaseSelect')}</option>
-                    {(loginCases ?? []).map((c) => (
-                      <option key={c.id} value={c.id}>{c.title}</option>
-                    ))}
-                  </select>
-                  <input
-                    type="text"
-                    placeholder={t('plans:searchCaseOrGroup')}
-                    value={loginQ}
-                    onChange={(e) => setLoginQ(e.target.value)}
-                    className="input-base input-sm flex-1"
-                    style={{ minWidth: 180 }}
-                  />
-                </div>
-                <details className="text-[12px]">
-                  <summary className="cursor-pointer" style={{ color: 'var(--muted-foreground)' }}>{t('plans:advancedConfig')}</summary>
-                  <div className="mt-2 flex flex-col gap-2 pl-4 max-w-[520px]">
-                    <label className="flex flex-col gap-1">
-                      <span style={{ color: 'var(--muted-foreground)' }}>{t('plans:detectionUrl')}</span>
-                      <input
-                        type="text"
-                        placeholder={t('plans:detectionUrlPlaceholder')}
-                        defaultValue={plan.detectionUrl ?? ''}
-                        onBlur={(e) => updateLoginPrepare({ detectionUrl: e.target.value || null })}
-                        className="input-base input-sm"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span style={{ color: 'var(--muted-foreground)' }}>{t('plans:successSelector')}</span>
-                      <input
-                        type="text"
-                        placeholder={t('plans:successSelectorPlaceholder')}
-                        defaultValue={plan.loginSuccessSelector ?? ''}
-                        onBlur={(e) => updateLoginPrepare({ successSelector: e.target.value || null })}
-                        className="input-base input-sm"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span style={{ color: 'var(--muted-foreground)' }}>{t('plans:unauthorizedKeywords')}</span>
-                      <textarea
-                        defaultValue={((plan.loginUnauthorizedKeywords as string[] | null) ?? []).join('\n')}
-                        onBlur={(e) => {
-                          const lines = e.target.value.split('\n').map((s) => s.trim()).filter(Boolean);
-                          updateLoginPrepare({ unauthorizedKeywords: lines.length ? lines : null });
-                        }}
-                        className="input-base input-sm"
-                        rows={3}
-                      />
-                    </label>
-                  </div>
-                </details>
-              </div>
-            )}
-            <div className="mt-4 hairline-top pt-3">
+            <div className="hairline-top pt-3">
               <label className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
                 <input
                   type="checkbox"
@@ -452,67 +317,31 @@ export default function PlanDetail() {
           <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3 hairline-bottom pb-2" style={{ color: 'var(--muted-foreground)' }}>
             {t('plans:caseOrder', { count: plan.cases.length })}
           </div>
-          {plan.cases.length === 0 ? (
-            <EmptyState icon="flag" title={t('plans:noCases')} description={t('plans:noCasesHint')} />
+          {plan.groups.length === 0 ? (
+            <EmptyState
+              icon="flag"
+              title={t('plans:noGroups')}
+              description={t('plans:noGroupsHint')}
+              action={
+                <Button size="sm" disabled={createGroup.isPending} onClick={() => createGroup.mutate()}>
+                  + {t('plans:addGroup')}
+                </Button>
+              }
+            />
           ) : (
-            <ol className="flex flex-col gap-2" data-stagger>
-              {plan.cases.map((c, idx) => {
-                  // 「跨版本 / 跨项目」标签不如直接说清楚「这条用例来自哪个项目哪个版本」——
-                  // 前者只说差异，后者说事实，且产品线合并页面后一行就能定位来源。
-                  const fromOtherProject = c.projectId && c.projectId !== plan.projectId;
-                  const fromOtherVersion = c.versionId && c.versionId !== plan.versionId;
-                  return (
-                    <li
-                      key={c.id}
-                      data-stagger-item
-                      draggable
-                      onDragStart={(e) => onDragStart(e, idx)}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => onDrop(e, idx)}
-                      className="flex items-center gap-3 px-3 py-2 rounded-[var(--radius-sm)] list-row-clickable"
-                      style={{ background: 'var(--muted)', border: '1px solid var(--border)' }}
-                    >
-                      <Icon name="gripVertical" size={12} className="cursor-grab shrink-0" style={{ color: 'var(--muted-foreground)' }} />
-                      <span className="text-[11px] font-mono shrink-0 w-5" style={{ color: 'var(--muted-foreground)' }}>{idx + 1}</span>
-                      <span
-                        onClick={() => navigate(c.versionId ? `/p/${projectId}/v/${c.versionId}/cases/${c.id}` : `/`)}
-                        className="text-[12px] flex-1 truncate cursor-pointer"
-                        style={{ color: 'var(--foreground)' }}
-                      >
-                        {c.title}
-                      </span>
-                      {fromOtherProject && c.projectName && (
-                        <span
-                          className="text-[10px] font-semibold px-1.5 py-[1px] rounded shrink-0"
-                          style={{ background: 'var(--primary-soft, var(--muted))', color: 'var(--primary, var(--foreground))' }}
-                          title={t('plans:caseFromProject', { project: c.projectName })}
-                        >
-                          {c.projectName}
-                        </span>
-                      )}
-                      {fromOtherVersion && c.versionName && (
-                        <span
-                          className="text-[10px] font-semibold px-1.5 py-[1px] rounded shrink-0"
-                          style={{ background: 'var(--warning-soft, var(--primary-soft))', color: 'var(--warning, var(--primary))' }}
-                          title={t('plans:caseFromVersion', { version: c.versionName })}
-                        >
-                          {c.versionName}
-                        </span>
-                      )}
-                      <IconButton icon="chevronUp" title={t('cases:moveUp')} onClick={() => moveBy(idx, -1)} />
-                      <IconButton icon="chevronDown" title={t('cases:moveDown')} onClick={() => moveBy(idx, 1)} />
-                      <IconButton
-                        icon="trash"
-                        title={t('plans:removeFromPlan')}
-                        tone="destructive"
-                        disabled={removeCases.isPending}
-                        onClick={() => setConfirmRemoveCase({ id: c.id, title: c.title })}
-                      />
-                      <StatusPill status="default">{c.id.slice(0, 8)}</StatusPill>
-                    </li>
-                  );
-                })}
-              </ol>
+            <div className="flex flex-col gap-4">
+              {plan.groups.map((g) => (
+                <PlanGroupCard
+                  key={g.id}
+                  plan={plan}
+                  group={g}
+                  groups={plan.groups}
+                  environments={environments ?? []}
+                  loginCases={loginCases ?? []}
+                  onInvalidate={invalidatePlan}
+                />
+              ))}
+            </div>
           )}
         </div>
       </div>
@@ -594,6 +423,23 @@ export default function PlanDetail() {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+          <div className="px-5 pb-2 flex items-center gap-2">
+            <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:targetGroup')}</span>
+            <select
+              value={targetGroupId}
+              onChange={(e) => setTargetGroupId(e.target.value)}
+              className="input-base input-sm flex-1"
+              style={{ minWidth: 200 }}
+            >
+              {plan.groups.length === 0 ? (
+                <option value="">{t('plans:newGroupName')}</option>
+              ) : (
+                plan.groups.map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))
+              )}
+            </select>
+          </div>
           <div className="px-5 pb-4 max-h-[400px] overflow-y-auto flex flex-col gap-1">
             {candidates.length === 0 ? (
               <div className="text-[12px] py-8 text-center" style={{ color: 'var(--muted-foreground)' }}>
@@ -602,6 +448,7 @@ export default function PlanDetail() {
             ) : (
               candidates.map((c) => {
                 const checked = selectedAdd.has(c.id);
+                const inPlan = inPlanIds.has(c.id);
                 return (
                   <div
                     key={c.id}
@@ -616,6 +463,15 @@ export default function PlanDetail() {
                   >
                     <input type="checkbox" readOnly checked={checked} />
                     <span className="text-[12px] flex-1 truncate" style={{ color: 'var(--foreground)' }}>{c.title}</span>
+                    {/* 跨组重复合法：已在计划的候选仍可勾选（加入其他分组），仅提示不拦 */}
+                    {inPlan && (
+                      <span
+                        className="text-[10px] font-semibold px-1.5 py-[1px] rounded shrink-0"
+                        style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
+                      >
+                        {t('plans:alreadyInPlan')}
+                      </span>
+                    )}
                     {/* 跨项目候选行标出来源项目，避免用户在计划里混进自己没注意的兄弟项目用例 */}
                     {productLineId && c.projectId && c.projectId !== projectId && (
                       <span
@@ -641,8 +497,7 @@ export default function PlanDetail() {
             <Button
               disabled={selectedAdd.size === 0}
               onClick={() => {
-                const next = [...plan.cases.map((c) => c.id), ...Array.from(selectedAdd)];
-                setCases.mutate(next);
+                addCases.mutate({ caseIds: Array.from(selectedAdd), groupId: targetGroupId || undefined });
               }}
             >
               {t('groups:addToPlan')}
@@ -672,26 +527,6 @@ export default function PlanDetail() {
               style={{ background: 'var(--destructive)', color: '#fff', border: 'none' }}
             >
               {remove.isPending ? t('cases:deleting') : t('cases:confirmDelete')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* 用例移除确认:误删需重新打开"添加用例"找回,前端一律先弹再发请求 */}
-      <Dialog open={!!confirmRemoveCase} onOpenChange={(o) => !o && setConfirmRemoveCase(null)}>
-        <DialogContent style={{ maxWidth: 420 }}>
-          <DialogHeader><DialogTitle>{t('plans:removeCaseTitle')}</DialogTitle></DialogHeader>
-          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            {t('plans:removeCaseConfirm', { title: confirmRemoveCase?.title })}
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirmRemoveCase(null)}>{t('common:cancel')}</Button>
-            <Button
-              variant="danger"
-              disabled={removeCases.isPending}
-              onClick={() => confirmRemoveCase && removeCases.mutate([confirmRemoveCase.id])}
-            >
-              {removeCases.isPending ? t('plans:removing') : t('plans:confirmRemove')}
             </Button>
           </DialogFooter>
         </DialogContent>
