@@ -275,8 +275,10 @@ export default function PlanDetail() {
         </Button>
       </div>
 
-      {/* 内容列限宽居中（同 PageShell clamp 容器），宽屏下表单不散成一整行 */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-4 mx-auto w-full max-w-[min(100%-2rem,100rem)]">
+      {/* 滚动容器全宽（滚动条贴视口右缘），clamp 限宽居中放内层——同 PageShell 的 scroll/clamp 两层结构，
+          clamp 放滚动层上会让滚动条悬在限宽容器边缘而不是屏幕最右 */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="p-6 flex flex-col gap-4 mx-auto w-full max-w-[min(100%-2rem,100rem)]">
         <div className="bg-card border rounded-[var(--radius-md)] p-5">
           {/* input-base 默认 width:100%，flex 行内会把标签挤到竖排；控件 flex-1 弹性填充 + 标签 shrink-0 */}
           <div className="flex items-center gap-4">
@@ -343,6 +345,7 @@ export default function PlanDetail() {
               ))}
             </div>
           )}
+        </div>
         </div>
       </div>
 

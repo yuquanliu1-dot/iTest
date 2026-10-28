@@ -166,7 +166,7 @@ export default function PlanGroupCard({
             value={group.environmentId ?? ''}
             onChange={(e) => patchGroup.mutate({ environmentId: e.target.value || null })}
             className="input-base input-sm"
-            style={{ minWidth: 140 }}
+            style={{ width: 180 }}
             disabled={environments.length === 0}
           >
             <option value="">{t('plans:noEnvironmentSpecified')}</option>
@@ -184,7 +184,7 @@ export default function PlanGroupCard({
               patchGroup.mutate({ targetConfig: { ...group.targetConfig, browserContext: v ? (v as 'incognito' | 'persistent') : undefined } });
             }}
             className="input-base input-sm"
-            style={{ minWidth: 110 }}
+            style={{ width: 130 }}
           >
             <option value="">{t('plans:followCase')}</option>
             <option value="incognito">{t('plans:incognito')}</option>

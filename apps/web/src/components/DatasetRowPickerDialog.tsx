@@ -75,7 +75,7 @@ export default function DatasetRowPickerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>{t('cases:datasetRowScope')}</DialogTitle>
         </DialogHeader>
@@ -86,7 +86,8 @@ export default function DatasetRowPickerDialog({
           <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:datasetRowEmpty')}</p>
         ) : (
           <div className="max-h-[50vh] overflow-y-auto">
-            <table className="w-full">
+            {/* table-fixed：勾选/序号列固定，数据列均分剩余宽度——auto 布局下长描述列会被挤成 1 字宽竖条 */}
+            <table className="w-full table-fixed">
               <thead>
                 <tr>
                   <th className="px-2 py-1.5 w-[36px]">
@@ -100,11 +101,11 @@ export default function DatasetRowPickerDialog({
                       />
                     )}
                   </th>
-                  <th className="px-2 py-1.5 text-left text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                  <th className="px-2 py-1.5 w-[36px] text-left text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                     #
                   </th>
                   {data?.columns.map((c) => (
-                    <th key={c.name} className="px-2 py-1.5 text-left text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                    <th key={c.name} className="px-2 py-1.5 text-left text-[11px] break-words" style={{ color: 'var(--muted-foreground)' }}>
                       {c.name}
                     </th>
                   ))}
@@ -116,7 +117,7 @@ export default function DatasetRowPickerDialog({
                   const enabledIndex = displayIdx;
                   return (
                     <tr key={displayIdx} className="hairline-bottom">
-                      <td className="px-2 py-1.5 text-center">
+                      <td className="px-2 py-1.5 text-center align-top">
                         <input
                           type="checkbox"
                           checked={picked.includes(enabledIndex)}
@@ -125,14 +126,14 @@ export default function DatasetRowPickerDialog({
                           style={{ accentColor: 'var(--primary)' }}
                         />
                       </td>
-                      <td className="px-2 py-1.5 font-mono text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                      <td className="px-2 py-1.5 font-mono text-[11px] align-top" style={{ color: 'var(--muted-foreground)' }}>
                         {enabledIndex + 1}
                       </td>
                       {data?.columns.map((c) => {
                         const cell = r.cells[c.name];
                         const masked = isMasked(cell);
                         return (
-                          <td key={c.name} className="px-2 py-1.5 font-mono text-[11px]">
+                          <td key={c.name} className="px-2 py-1.5 font-mono text-[11px] break-words align-top">
                             {masked ? (
                               <span style={{ color: 'var(--muted-foreground)' }} title={t('cases:datasetRowMasked')}>
                                 ••••••
