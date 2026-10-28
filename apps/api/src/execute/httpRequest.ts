@@ -115,6 +115,11 @@ function decompress(buf: Buffer, encoding: string | undefined): string {
  * （prod228 报告 15dd42d9：期望 400 实际 200 + SPA 外壳页）。node:http 原样透传这些头。
  *
  * redirect：node:http 本就不跟随重定向，与 fetch 的 redirect:'manual' 语义一致。
+ *
+ * 自签证书：被测系统常用自签 https（内网测试环境普遍如此），浏览器路径早已放行
+ * （cdp.ts 建 context 时 ignoreHTTPSErrors: true）。node:https 默认校验证书链，
+ * 自签证书直接 ERR DEPTH_ZERO_SELF_SIGNED_CERT —— 同一个被测系统，浏览器能访问、
+ * httpRequest 步骤却 100% 假失败。故此处与浏览器侧对齐：拒绝校验证书链。
  */
 function rawRequest(opts: {
   url: string;
@@ -149,6 +154,8 @@ function rawRequest(opts: {
         path: `${u.pathname}${u.search}`,
         method: opts.method,
         headers: opts.headers,
+        // 自签证书放行（与浏览器路径 ignoreHTTPSErrors 对齐，见上方注释）。
+        ...(u.protocol === 'https:' ? { rejectUnauthorized: false } : {}),
       },
       (res) => {
         const chunks: Buffer[] = [];

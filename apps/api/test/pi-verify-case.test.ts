@@ -1813,3 +1813,125 @@ describe('verify_case 注册', () => {
     expect(guidelines).toContain('用户明确答复前不再调用 verify_case');
   });
 });
+
+describe('verify_case 机械执行步（不经浏览器）', () => {
+  const SQL_COMPILED = [
+    { kind: 'sql', sql: 'select asset_name from t where host_ip = ?', params: ['{{ip}}'], assertion: { match: 'contains', expected: 'x' } },
+  ];
+
+  beforeEach(async () => {
+    // 干跑桩复位成默认全过：clearAllMocks 只清调用记录、不清 implementation，
+    // 上一个用例留下的 mockImplementation（失败版）会漏到这里污染结果。
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    vi.mocked(executeCaseInBrowser).mockImplementation(
+      async (_cid: string, steps: Array<{ order: number }>) =>
+        steps.map((s) => ({ order: s.order, status: 'passed' as const, durationMs: 10 })),
+    );
+  });
+
+  it('纯 sql 步：AI 相不执行该步（浏览器无 DB 通道），由结尾干跑裁决', async () => {
+    // 回归点：prod228 2026-10-28 实录——AI 相被要求执行 SQL，反复尝试超 5 轮未完成
+    // （agent 自记「AI 相是浏览器执行器，无法执行 SQL 查询数据库」）。机械步不该进 AI 相。
+    const caseId = await seedCase({ steps: [SQL_COMPILED] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const emitLog: unknown[] = [];
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId });
+    expect(r.ok).toBe(true);
+    // AI 相一次都没被调用（该步被跳过，其余步也没有）
+    expect(vi.mocked(runAiTask)).not.toHaveBeenCalled();
+    // 干跑照跑（真值由它裁决）
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    expect(executeCaseInBrowser).toHaveBeenCalledTimes(1);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.result).toBe('passed');
+    // 该步在 steps 里记 passed，并说明它由干跑裁决
+    expect(data.steps[0].status).toBe('passed');
+    expect(String(data.steps[0].warning)).toContain('机械执行步');
+  });
+
+  it('混合步（click + sql）：AI 相只做浏览器那半，指令里明说机械部分别碰', async () => {
+    const caseId = await seedCase({
+      steps: [[{ kind: 'click', locator: [{ strategy: 'css', value: '#ok' }] }, ...SQL_COMPILED]],
+    });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    expect(vi.mocked(runAiTask)).toHaveBeenCalledTimes(1);
+    const instruction = vi.mocked(runAiTask).mock.calls[0]![1] as string;
+    expect(instruction).toContain('只负责浏览器里的那部分动作');
+  });
+
+  it('干跑查库结果随响应带出：replay.steps[].sql 含 dbRef/rowCount/rows（agent 据此认真值）', async () => {
+    // 回归点：prod228 2026-10-28——agent 看不到查库返回行，只能连建 15 个 PROBE 探针用例摸表结构。
+    const caseId = await seedCase({ steps: [SQL_COMPILED] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    vi.mocked(executeCaseInBrowser).mockImplementationOnce(
+      async (_cid: string, steps: Array<{ order: number }>) =>
+        steps.map((s) => ({
+          order: s.order,
+          status: 'passed' as const,
+          durationMs: 7,
+          sql: {
+            dbRef: 'SIEM数据库',
+            rowCount: 1,
+            durationMs: 11,
+            rows: [{ asset_name: 'paas-es-test-02' }],
+            assertion: { matched: true, expected: 'x', match: 'contains' as const },
+          },
+        })),
+    );
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.replay.steps[0].sql.dbRef).toBe('SIEM数据库');
+    expect(data.replay.steps[0].sql.rowCount).toBe(1);
+    expect(data.replay.steps[0].sql.rows).toEqual([{ asset_name: 'paas-es-test-02' }]);
+  });
+
+  it('干跑查库断言失败：failure.sql 带出实际行（断言未命中时 rows 仍在）', async () => {
+    const caseId = await seedCase({ steps: [SQL_COMPILED] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    vi.mocked(executeCaseInBrowser).mockImplementationOnce(
+      async (_cid: string, steps: Array<{ order: number }>) =>
+        steps.map((s) => ({
+          order: s.order,
+          status: 'failed' as const,
+          durationMs: 9,
+          error: 'sql assertion failed',
+          failureReason: 'SqlAssertionFailed' as const,
+          humanMessage: 'SQL 结果断言未命中',
+          sql: {
+            dbRef: 'SIEM数据库',
+            rowCount: 0,
+            durationMs: 5,
+            rows: [],
+            assertion: { matched: false, expected: 'x', match: 'contains' as const },
+          },
+        })),
+    );
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.result).toBe('failed');
+    expect(data.failure.failureReason).toBe('ReplayDivergence');
+    expect(data.failure.sql.dbRef).toBe('SIEM数据库');
+    expect(data.failure.sql.assertion.matched).toBe(false);
+  });
+
+  it('工具文案声明机械步由干跑裁决 + 查库结果随响应带出（agent 依赖文案选路）', async () => {
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const guidelines = buildVerifyCaseTool(toolCtx()).promptGuidelines.join('\n');
+    expect(guidelines).toContain('replay.steps[].sql');
+    expect(guidelines).toContain('不要建探针用例');
+  });
+});

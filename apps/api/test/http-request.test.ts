@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'node:http';
+import https from 'node:https';
 import zlib from 'node:zlib';
 import type { AddressInfo } from 'node:net';
 import type { Page } from 'playwright-core';
@@ -291,5 +292,98 @@ describe('runHttpRequest 传输层（node:http）', () => {
     await expect(
       runHttpRequest({ action: action({ url: 'http://127.0.0.1:1/' }), page: stubPage, vars: {} }),
     ).rejects.toBeInstanceOf(HttpRequestError);
+  });
+});
+
+/**
+ * 自签证书（https）。
+ *
+ * 回归点：浏览器路径早已放行自签证书（cdp.ts 建 context 时 ignoreHTTPSErrors: true），
+ * node:https 默认校验证书链 → 同一个被测系统浏览器能访问、httpRequest 步骤 100% 假失败
+ * （ERR DEPTH_ZERO_SELF_SIGNED_CERT）。内网测试环境自签 https 极普遍。
+ */
+describe('runHttpRequest 自签证书（https）', () => {
+  // 固定的自签证书/私钥（CN=127.0.0.1，SAN 含 IP:127.0.0.1）。仅测试用，非任何真实凭据。
+  const SELF_SIGNED_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDBj5X6FiK0WeKy
++KdV3X4fePDC/grllza6c74sihbaf5I0ucz2cHfQg3MHftbA6XF9wmOe2f1dxyEn
+7DfKubZCyY5yMOe9UL9vXcTMBmR52mtahiUlTJgh3XUwarny9KHlfcdsFsDmGjTn
+2kWWnU/+6sBKB5N3R+gjWgMWgZTi6O9+jiACbB7h52JIqvf/4WJjxd3XyfNTkZsb
+qn8jD/9JVYktUKSrqEM5XnunrhKw/7EEtKxQ1R2qg0zFX9pavgX1EERV0R1V5A/P
+lSaBaXbfSi5cGPYG09QB1LdQd6Ggtnl7vdoJDybUxCFTbIQyVErnj5qDwSXE00Qc
+BL5pd/TxAgMBAAECggEAI6CpS2oNo0K0PpsUOfLWBzb8ofeey9nEghdR1uLoB/nZ
+UIkul+Hlu+SmJKgNIV8Wu74vFgsr3roLeUy6jD8YtDxjUtN7pFYbloUc9yzqC5/P
+iM8OQUpS6lDYBDxw066Bqjs3nManZPNH77E2g92a3uIY2MeCNj9vFCq6TMc3P3is
+nM1gFkRjtSnrVf6l5N2tLmtJxuVD327IQhZs3U+a5rZWXmge5pYR/v4JVyh/oKN1
+qdUWmdOh7hlH+g4XZZnZOKBDMliwAxJyzzLR29x/JVtt6whS7SppQQqpWi51dFD1
+tTqG3ipEkqUjk1//m4EGMbKt8iKrWUymYVPdE9WXkQKBgQDsRdq42wRQCG3kG9ni
+xvEXUSeojGRhaHe/RWEuXzz+L8H6Yp5KB0vkrIzJY6q/zchkCRgEllZ8u5+Z0kyf
+6dTSAgWU5hm23w0B1UiginHASrBqTx01m49GkrgdoED+JANyp/QIcPKwZ/K+kWov
+ABe99DlKkoJhAIPKMTCGUORSLQKBgQDRuMvqpwuT/Uir/rkawBwzTVmtrrxUgi/q
+NQGr2uHrNp/HppZ7sNcFCOG7qbDL2X6Zlnk6A1LEolZm4g2+UhH+x0WZ4hrhiQR4
+1munlkXlBGKwaR+z0vNu8yKTmdl7bMYrF3BYVrPNOXz7RNR+a3VpF2VYTsdB+hDL
+IlGyG3LcVQKBgQC/Ls8LIX3d3NQ+7iJilCPlgC+c/O0EvOmYheVbBoluDOrjVgVL
+VZgdk1ngY5t41GTAPXOH0rZs+8zrRPXnt+gTfrtRftdz2AzIXPMFpMDing0eGKJE
+DHnk2zfMES5F9pIrpqeaZPqbr6EGftfy7BpKBGKPavnA0A/T/fWL2czGiQKBgQCA
+IU80hepk+BI2QuIEneqczV1E58TYPNHZXZkvzgLJGg50hCrcVyaHRO3lIb+KS881
+NuHJt84RpLz1Dpcm+C1WY5j6c1HJCVVaHmaXdRAu44cIELH1w6RG3PT7CLv+1G4e
+VaulzRL9B2p8eYj5091f35NjaH4EqSspcEZJcsuyIQKBgD1Avn5haVqRq8cwS81V
+NsSnQFS8AD+DBBbg7PU5Un0LNaKxv0lFmhPtSbWzAIC9lfIkd43O3Po0fNiuANKs
+tQHrosdHYolxlzEEifR7rC50v1fRNfFjGT3AByWAGXBHEz0yPGXY0F3itH2kmChR
+rJvc0B63wf6d7Txgkl/03MXJ
+-----END PRIVATE KEY-----`;
+  const SELF_SIGNED_CERT = `-----BEGIN CERTIFICATE-----
+MIICwDCCAaigAwIBAgIJAOSbPIsUPqvgMA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNV
+BAMMCTEyNy4wLjAuMTAgFw0yNjEwMjgxNTI3MjJaGA8yMTI2MTAwNDE1MjcyMlow
+FDESMBAGA1UEAwwJMTI3LjAuMC4xMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIB
+CgKCAQEAwY+V+hYitFnisvinVd1+H3jwwv4K5Zc2unO+LIoW2n+SNLnM9nB30INz
+B37WwOlxfcJjntn9XcchJ+w3yrm2QsmOcjDnvVC/b13EzAZkedprWoYlJUyYId11
+MGq58vSh5X3HbBbA5ho059pFlp1P/urASgeTd0foI1oDFoGU4ujvfo4gAmwe4edi
+SKr3/+FiY8Xd18nzU5GbG6p/Iw//SVWJLVCkq6hDOV57p64SsP+xBLSsUNUdqoNM
+xV/aWr4F9RBEVdEdVeQPz5UmgWl230ouXBj2BtPUAdS3UHehoLZ5e73aCQ8m1MQh
+U2yEMlRK54+ag8ElxNNEHAS+aXf08QIDAQABoxMwETAPBgNVHREECDAGhwR/AAAB
+MA0GCSqGSIb3DQEBCwUAA4IBAQAmIT8ewof2nO88808z/QZp1yR+J+hroXDy+sOx
+C0O2QyUs+Gx9GalO7Kw8Ab9OiJ7rHSd28CvWe4EDoyh7fWResM9XkB0z7md5x3iA
+Wy743QjaDebxpLC5CiSbaXWJSMs1s8UlGhRXJjzAtrqWvI1Fxt5mD5XubVtsO/Sk
+9tzygnHtQ3A8Sok7Xi3VR+x6c8yJVqNu5W6gJWoknWeXp6tRIv0J8Ix/SfMX+YYK
+ETF1lPaHlpK4yHot7q4uh7LdMfqNauJxB4/+nuik2xFXDYkzoobt8ZbV0LqEFKSd
+QKbP5/Ixifd5GFrXIN0dKgI4RFBD01Gs8HvFwwl136BCVdMG
+-----END CERTIFICATE-----`;
+
+  const stubPage = { context: () => ({ cookies: async () => [] }) } as unknown as Page;
+  let server: https.Server;
+  let base: string;
+
+  beforeAll(async () => {
+    server = https.createServer(
+      { key: SELF_SIGNED_KEY, cert: SELF_SIGNED_CERT },
+      (_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('ok');
+      },
+    );
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    base = `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    server.closeAllConnections?.();
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+
+  it('自签证书的 https 被测系统照常请求成功（与浏览器路径 ignoreHTTPSErrors 对齐）', async () => {
+    const r = await runHttpRequest({
+      action: {
+        kind: 'httpRequest',
+        method: 'GET',
+        url: `${base}/`,
+        headers: [],
+        timeoutMs: 5000,
+      } as HttpRequestAction,
+      page: stubPage,
+      vars: {},
+    });
+    expect(r.response.status).toBe(200);
+    expect(r.response.bodyText).toBe('ok');
   });
 });

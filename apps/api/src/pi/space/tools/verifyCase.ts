@@ -118,6 +118,31 @@ function failureClassFromReason(reason: string | null | undefined): string {
       return reason ?? 'Unknown';
   }
 }
+/** 机械执行步（不经浏览器、直接发协议/查库的 kind）：浏览器 AI 相结构上无法执行它们。
+ *  prod228 2026-10-28 实录：AI 相被要求「执行 SQL 查询数据库」时反复尝试、超 5 轮未完成
+ *  （agent 自己记下「AI 相是浏览器执行器，无法执行 SQL 查询数据库」）。这类步骤的真值由
+ *  结尾的 compiled 机械干跑裁决（runSql/runHttpRequest 等不经 Playwright），AI 相不该掺和。 */
+const MECHANICAL_ONLY_KINDS: ReadonlySet<string> = new Set([
+  'httpRequest',
+  'queryDb',
+  'sql',
+  'observeLog',
+  'sendSyslog',
+]);
+
+/** 一步的 compiled 是否全部由机械执行步组成（= 无任何浏览器动作）。 */
+function isMechanicalOnlyStep(compiled: unknown): boolean {
+  const actions = (Array.isArray(compiled) ? compiled : []) as Array<{ kind?: string }>;
+  if (actions.length === 0) return false;
+  return actions.every((a) => MECHANICAL_ONLY_KINDS.has(a?.kind ?? ''));
+}
+
+/** 一步的 compiled 是否含机械执行步（混合步：浏览器动作 + 机械步）。 */
+function hasMechanicalStep(compiled: unknown): boolean {
+  const actions = (Array.isArray(compiled) ? compiled : []) as Array<{ kind?: string }>;
+  return actions.some((a) => MECHANICAL_ONLY_KINDS.has(a?.kind ?? ''));
+}
+
 /** 从 verify_case 响应 data JSON 解析出"失败签名"（失败大类）；passed 或解析失败 → null（清计数）。 */
 function failureSignatureFromData(data: string): string | null {
   try {
@@ -336,6 +361,8 @@ export function buildStepInstruction(
   sec: { hasLogin: boolean; hasSecret: boolean },
   droppedAssertion?: string | null,
   webManifest?: string,
+  /** 本步含机械执行步（sql/httpRequest 等）：AI 相只做浏览器那一半。 */
+  hasMechanicalAction?: boolean,
 ): string {
   const lines: string[] = [];
   lines.push('你是网页测试执行器，在当前浏览器页面上完成下面这一步测试操作，完成后按输出契约结束。');
@@ -344,6 +371,10 @@ export function buildStepInstruction(
   lines.push(`- 自然语言：${step.instruction ?? '（无，以编译动作为准）'}`);
   lines.push('- 编译动作（compiled DSL，供参考；若页面实际与它不符，以实际页面为准自行调整）：');
   lines.push(JSON.stringify(step.compiled));
+  if (hasMechanicalAction) {
+    // 混合作业：机械那半 AI 结构上做不到，明说边界，别让它反复尝试白烧轮次。
+    lines.push('- 本步含机械执行动作（数据库查询 / HTTP 请求 / 日志读取等不经浏览器）：**你只负责浏览器里的那部分动作**。机械动作由平台在验证末尾用 compiled 干跑执行并裁决，你不要尝试在浏览器里查库或发接口请求，也不要因为做不到而报失败。');
+  }
   if (droppedAssertion) {
     // 判定为描述性短语的断言已被丢弃：不写「预期结果」行，改为如实告知，
     // 免得 AI 自行完成操作后又去核实一个页面上根本不存在的文案。
@@ -406,6 +437,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       '终态判定失败(failureReason=VisionAssertionFailed)且 failure.note 含"空数据信号"时,说明被测环境里根本没有可供断言的数据——这是用例缺前置造数步骤,不是选择器写错。正确做法:给用例补上"先造出满足预期的数据"的步骤(如创建一条会触发自动处置的事件),或如实告诉用户环境缺数据。严禁弱化 expectedOutcome 把失败蒙成通过(例:把"自动启动处置成功"改成"页面正常加载"、删掉断言步骤)——那是把用例改得测不出东西,比失败更糟。',
       'result.staticAnalysis 与 failure.note 里的"源码无字面命中"只是排序参考,不是"这个选择器是假的"。选择器是否存在一律以 failure.page.elements 和运行时实测为准:框架运行时拼接的 id(如 Element-UI tab 的 #tab-autodo)源码里本就没有字面量,但运行时真实命中。sourceAnalysis 与运行时命中冲突时,信运行时。',
       'verify_case 最后一道关卡是与正式回放同引擎的 compiled 机械干跑(failureReason=ReplayDivergence):AI 临场能跑通但逐字派发 compiled 失败,典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突导致二次执行必挂。修正方式:用 failure.page.elements 里的真实选择器把失败步 compiled 改成更精确的可操作目标(点组件内部真实接收点击的元素),或修正测试数据策略(时间戳命名)后重验。',
+      '查库步骤(sql / queryDb / httpRequest / observeLog / sendSyslog)不经浏览器,由结尾的 compiled 干跑裁决——AI 相不掺和这类步(浏览器里没有 DB 工具,硬让它做只会白烧轮次)。干跑结果随响应带出：replay.steps[].sql 是该步实际查到的行(dbRef/rowCount/rows/assertion),失败时也在 failure.sql 里。**据此确认真值,不要建探针用例去摸表名/字段名/数据形态**——prod228 2026-10-28 实录:因看不到查库返回行,agent 连续建了 15 个 PROBE 探针用例(每次一整轮)才摸清一张表的形状。sql 步骤的形状是固定的,一次写对：{"kind":"sql","sql":"select ... from ...","params":["{{变量}}"],"assertion":{...}},变量走 params 配 ? 占位符、别写进 sql 文本;查被测系统的库用 sql,查平台自己的库用 queryDb(表名被枚举锁死)。',
       'verify_case 失败反馈带 failure.evidence(可见浮层清单 overlays + 各 locator 候选实时命中数 probes)与 failure.note 里的「⚠ 归因:」段——归因由 LLM 依据形态无关证据判断,先按归因再动手,不要一律当选择器错:(1) 归因=「条件性浮层」:失败页有可见弹窗/抽屉/遮罩,属数据状态才弹的对话框(草稿恢复/权限确认),机械步骤处理不了「可能弹、可能不弹」的分支:在进该页步骤之后补 aiTask 条件兜底步骤(若页面出现浮层则按页面提示关闭或点『确定/继续』,没有则跳过),不要反复改选择器也不要弱化预期;(2) 归因=「位置/流程断裂」:该步全部候选命中 0 且失败页元素清单里也没有同类目标,说明界面根本没挂载,选择器无法命中不存在的元素:去核对导航/入口/向导步骤流程(草稿恢复把向导恢复到中间态即一例),修步骤顺序或补导航,不要改 locator;(3) 归因=「选择器/行为错」:页面状态到位仅该 locator 未命中,才用 failure.page.elements 里真实存在的选择器修正(可组多候选链);(4) 归因=「环境缺数据」:先让用例造出满足预期的数据,或如实汇报,严禁弱化 expectedOutcome。归因未产出(failure.note 无「⚠ 归因:」段)时按既有通用文案结合 failure.evidence 判断,不要臆测固定文案,也不要自行翻源码——用户明确要求分析源码时才用 repo_grep 确认弹窗/向导条件。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。护栏触发（返回 failureReason=StagnantRoundLimit）= 平台已判定重复实测无意义：必须立即停止所有工具调用（含读源码/查库/建探针用例「自诊」），按返回消息中的汇报模板直接向用户汇报，等用户明确指示后再行动。',
       '环境未配置登录凭据(默认 web 服务未填用户名/密码)而验证卡在登录页时，引导用户到项目环境页配置，不要伪造登录步骤。',
@@ -905,12 +937,30 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 droppedAssertions.set(s.id, s.assertion);
               }
             }
+            // 纯机械步（sql / httpRequest / queryDb / observeLog / sendSyslog）：不经浏览器，
+            // 浏览器 AI 相结构上无法执行——让它试只会白烧轮次（prod228 2026-10-28 实录：
+            // 「AI 相是浏览器执行器，无法执行 SQL 查询数据库」，超 5 轮未完成）。
+            // 真值由结尾的 compiled 机械干跑裁决（runSql/runHttpRequest 不经 Playwright），
+            // 这里直接记 passed——干跑失败会以 ReplayDivergence 如实报出，不会被放过。
+            if (mode !== 'mechanical' && isMechanicalOnlyStep(s.compiled)) {
+              stepResults.push({
+                order: s.order, status: 'passed', durationMs: Date.now() - started,
+                warning: '机械执行步（不经浏览器），由结尾 compiled 干跑裁决',
+              });
+              ctx.emit({
+                type: 'verify_progress', phase: 'step_done', order: s.order, status: 'passed',
+                reason: '机械执行步（不经浏览器），由结尾 compiled 干跑裁决',
+              });
+              continue;
+            }
             const instruction = buildStepInstruction(
               { order: s.order, instruction: s.instruction, compiled: s.compiled, assertion: assertionForRun },
               effectiveSteps.length,
               { hasLogin: !!envCtx.login, hasSecret: stepSecret !== undefined },
               droppedAssertion,
               webManifest,
+              // 混合步（浏览器动作 + 机械步）：告诉 AI 只做浏览器那一半，别去够机械那半。
+              hasMechanicalStep(s.compiled),
             );
             ctx.emit({
               type: 'verify_progress', phase: 'step_start', order: s.order,
@@ -1226,6 +1276,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(r.failureReason ? { failureReason: r.failureReason } : {}),
             ...(r.screenshot ? { screenshot: r.screenshot } : {}),
             ...(r.hitLocator ? { hitLocator: r.hitLocator } : {}),
+            // 干跑跑出的查库结果：agent 据此确认真值（表名/字段名/数据形态），不再靠建探针用例猜。
+            ...(r.sql ? { sql: { dbRef: r.sql.dbRef, rowCount: r.sql.rowCount, rows: r.sql.rows, assertion: r.sql.assertion } } : {}),
           }));
           // 体检丢弃的断言原样回传：LLM 据此把「描述性短语」改写成页面上真实存在的
           // UI 文案（或干脆删掉），而不是靠弱化断言蒙混过关。
@@ -1263,8 +1315,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               ...(successPage ? { page: successPage } : {}),
               // replay 只在机械干跑真的跑了时才有意义：全视觉用例（无 compiled）跳过干跑，
               // 此时若照发 durationMs 会是 Date.now()-0 的 epoch 垃圾值（prod228 出现 6 次）。
+              // 干跑的逐步明细（含查库返回行）一并带出：agent 据此确认真值，
+              // 不用再另建探针用例去猜表名/字段名/数据形态。
               ...(replayStartedAt > 0
-                ? { replay: { result: 'passed' as const, durationMs: Date.now() - replayStartedAt } }
+                ? { replay: { result: 'passed' as const, durationMs: Date.now() - replayStartedAt, steps: replaySummary } }
                 : {}),
             });
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
@@ -1365,6 +1419,18 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 humanMessage: replayFailure.humanMessage ?? replayFailure.error ?? null,
                 screenshot: replayFailure.screenshot ?? null,
                 page: failurePage,
+                // 失败步的查库结果（断言未命中时 rows 仍在——执行器先写 sink 再判断言）：
+                // agent 据此看到「库里到底有什么」，改 expected/查询条件即可，不必建探针用例去摸数据。
+                ...(replayFailure.sql
+                  ? {
+                      sql: {
+                        dbRef: replayFailure.sql.dbRef,
+                        rowCount: replayFailure.sql.rowCount,
+                        rows: replayFailure.sql.rows,
+                        assertion: replayFailure.sql.assertion,
+                      },
+                    }
+                  : {}),
                 ...replayEvidenceField,
                 note: `${mode === 'mechanical' ? '机械验收模式（无 AI 相对照）下 compiled 机械逐字执行失败' : 'AI 临场执行能通过，但与正式回放同引擎的 compiled 机械逐字执行失败（回放分叉）'}——典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突二次执行必挂。请用 failure.page.elements 中真实存在的选择器把该步 compiled 改成更精确的可操作目标（组件内部真实接收点击/输入的元素），或修正测试数据策略（时间戳命名）后重验。${mode === 'mechanical' ? '（机械模式无自动登录：若失败页是登录页，多为登录态缓存失效/副本重启——改 mode=full 重新实测登录即可；同因连续两轮失败或归因不明也建议改 full 复核。）' : ''}${replayDiag ? ` ⚠ 归因:${replayDiag.note}` : ''}${replayHint ? ` 源码静态提示:${replayHint}` : ''}`,
               },
