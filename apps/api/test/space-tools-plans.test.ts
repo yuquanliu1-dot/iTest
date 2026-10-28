@@ -74,6 +74,26 @@ describe('manage_plans 工具', () => {
     expect(list.find((p) => p.name === '冒烟')!.caseCount).toBe(2);
   }, 30_000);
 
+  it('create 带 caseIds → 计划含 1 个「默认分组」,组内 2 用例', async () => {
+    const seed = await seedProject(pool);
+    const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
+    const tool = await toolOf(ctx);
+    const c1 = await makeCase(seed.groupId, seed.versionId, 'g1');
+    const c2 = await makeCase(seed.groupId, seed.versionId, 'g2');
+    await tool.execute({ action: 'create', name: '分组冒烟', caseIds: [c1, c2] });
+    const planId = (await pool.query(`SELECT id FROM execution_plans WHERE name='分组冒烟'`)).rows[0]!.id as string;
+    const groups = (await pool.query(`SELECT name FROM plan_case_groups WHERE plan_id=$1 ORDER BY "order"`, [planId])).rows as Array<{ name: string }>;
+    expect(groups).toEqual([{ name: '默认分组' }]);
+    const detail = JSON.parse(((await tool.execute({ action: 'get', planId })) as { data: string }).data) as {
+      groups: Array<{ name: string; cases: Array<{ id: string }> }>;
+      cases: Array<{ id: string }>;
+    };
+    expect(detail.groups).toHaveLength(1);
+    expect(detail.groups[0]!.name).toBe('默认分组');
+    expect(detail.groups[0]!.cases.map((c) => c.id)).toEqual([c1, c2]);
+    expect(detail.cases.map((c) => c.id)).toEqual([c1, c2]); // 平铺视图按组序拼接
+  }, 30_000);
+
   it('add_cases 跨产品线 → 门控前报错不出确认卡;remove_cases/update 需确认,stage 带确认时同一 diff', async () => {
     const seed = await seedProject(pool);
     // R2 起越界判定按产品线（不是项目）做，外案必须挂在**另一条**线上。
@@ -116,6 +136,13 @@ describe('manage_plans 工具', () => {
     const stage2 = events.find((e) => e.type === 'stage') as { diff?: string };
     expect(stage2.diff).toContain('name: 全量 → 全量2');
     expect(stage2.diff).toContain('strategy: run_all → fail_fast');
+
+    // environmentId 已从工具退役:传入被忽略,不再构成可修改字段(环境请到 UI 分组配置)
+    events.length = 0;
+    const envOnly = (await tool.execute({ action: 'update', planId, environmentId: null })) as { ok: boolean; error: string };
+    expect(envOnly.ok).toBe(false);
+    expect(envOnly.error).toContain('name/strategy');
+    expect(events.find((e) => e.type === 'confirm_request')).toBeUndefined();
   }, 30_000);
 
   it('create 缺 name → 参数错误;跨项目 planId 被拒', async () => {

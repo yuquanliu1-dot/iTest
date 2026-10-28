@@ -17,7 +17,6 @@ const Actions = z.object({
   planId: z.string().uuid().optional(),
   scheduleId: z.string().uuid().optional(),
   name: z.string().min(1).max(200).optional(),
-  environmentId: z.string().uuid().nullable().optional(),
   strategy: z.enum(['run_all', 'fail_fast']).optional(),
   caseIds: z.array(z.string().uuid()).max(200).optional(),
   cronExpr: z.string().min(1).max(120).optional(),
@@ -39,7 +38,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
     {
       name: 'manage_plans',
       description:
-        '执行计划管理。action=list(本版本计划,含 caseCount)| get(planId,含有序用例)| create(name 必填,可带 environmentId/strategy/caseIds)| update(planId + name/environmentId/strategy)| add_cases(planId+caseIds,追加到队尾,重复跳过)| remove_cases(planId+caseIds,余量重排)| list_schedules(planId)| create_schedule(planId + cronExpr,可选 timezone/enabled)| update_schedule(scheduleId,可选 cronExpr/timezone/enabled,至少一个)| delete_schedule(scheduleId)。',
+        '执行计划管理。计划用例按分组组织。action=list(本版本计划,含 caseCount)| get(planId,含分组与有序用例)| create(name 必填,可带 strategy/caseIds,caseIds 自动写入「默认分组」)| update(planId + name/strategy)| add_cases(planId+caseIds,追加到第一组,重复跳过)| remove_cases(planId+caseIds,余量重排)| list_schedules(planId)| create_schedule(planId + cronExpr,可选 timezone/enabled)| update_schedule(scheduleId,可选 cronExpr/timezone/enabled,至少一个)| delete_schedule(scheduleId)。',
       parameters: Type.Object({
         action: Type.Union([
           Type.Literal('list'), Type.Literal('get'), Type.Literal('create'), Type.Literal('update'),
@@ -49,7 +48,6 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
         planId: Type.Optional(Type.String()),
         scheduleId: Type.Optional(Type.String()),
         name: Type.Optional(Type.String()),
-        environmentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
         strategy: Type.Optional(Type.Union([Type.Literal('run_all'), Type.Literal('fail_fast')])),
         caseIds: Type.Optional(Type.Array(Type.String(), { maxItems: 200 })),
         cronExpr: Type.Optional(Type.String()),
@@ -58,6 +56,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
       }),
       promptGuidelines: [
         'caseIds 必须来自 manage_cases 的 search/get 结果,禁止臆造;加入计划的用例必须属于当前项目。',
+        '计划用例按分组组织:create 的 caseIds 写入「默认分组」,add_cases 追加到第一组(无组自动建默认分组);分组的环境/登录等配置本工具不提供,需要调整时告知用户去 UI 的分组设置。',
         '本工具不会执行计划,只做配置;需要执行时告知用户去执行页操作。',
         'create 时若用例编排失败(如 caseIds 跨项目),已建的计划不会回滚:按错误信息中的 planId 用 add_cases 补齐,勿重复 create。',
         'schedule 操作(action=list_schedules/create_schedule/update_schedule/delete_schedule)需走阻塞确认卡,新建/修改前先在自然语言里讲清 cron 含义(例如 `0 9 * * *` = 每天 09:00)。',
@@ -93,13 +92,12 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const plan = await svc.createPlan(ctx.projectId, {
                 name: v.name,
                 versionId: ctx.versionId,
-                // 环境配置已下沉组级(计划级字段退役);pi 组级适配见 Task 9
                 strategy: v.strategy,
               }, ctx.createdByUserId);
               let added = 0;
               if (v.caseIds?.length) {
                 try {
-                  // 临时桥接(replacePlanCases 退役,Task 9 收口):新计划无组,先建默认分组再整包写入
+                  // 计划级不再承载用例编排:建「默认分组」承载 create 传入的 caseIds
                   const g = await svc.createPlanGroup(plan.id, { name: '默认分组' });
                   added = await svc.setPlanGroupCases(plan.id, g.id, v.caseIds);
                 } catch (e) {
@@ -115,11 +113,10 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               const pid = await svc.planProjectId(v.planId);
               if (pid !== ctx.projectId) return { ok: false, error: '计划不存在或不属于当前项目' };
               const before = await svc.getPlanDetail(v.planId);
-              const patch: { name?: string; environmentId?: string | null; strategy?: string } = {};
+              const patch: { name?: string; strategy?: string } = {};
               if (v.name !== undefined) patch.name = v.name;
-              if (v.environmentId !== undefined) patch.environmentId = v.environmentId;
               if (v.strategy !== undefined) patch.strategy = v.strategy;
-              if (Object.keys(patch).length === 0) return { ok: false, error: 'update 未提供任何要修改的字段(name/environmentId/strategy)' };
+              if (Object.keys(patch).length === 0) return { ok: false, error: 'update 未提供任何要修改的字段(name/strategy);环境配置已下沉到分组,请到 UI 的分组设置里调整' };
               // 挂起前预计算 diff(旧值 vs 合成新值),确认卡与实际执行共用一份数据
               const diff = diffText(before ?? {}, { ...(before ?? {}), ...patch });
               if (diff !== undefined) {
@@ -141,7 +138,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               // 门控前校验用例归属:跨项目用例直接报错并点名,不弹确认卡(否则用户确认的是必然失败的操作)
               const outside = await svc.caseIdsOutsideProject(ctx.projectId, v.caseIds);
               if (outside.length > 0) return { ok: false, error: `用例不属于当前项目:${outside.join('、')}` };
-              // 挂起前算精确增量(重复 id 去重、已在计划中的跳过);N=0 短路不执行
+              // 挂起前算精确增量(重复 id 去重、已在计划任何组即跳过——计划级去重,跨组重复属 UI 高级用法);N=0 短路不执行
               const detail = await svc.getPlanDetail(v.planId);
               const have = new Set((detail?.cases ?? []).map((c) => c.id));
               const pendingCount = [...new Set(v.caseIds)].filter((c) => !have.has(c)).length;
