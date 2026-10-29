@@ -55,6 +55,7 @@
     "loginCacheMissNoUser": "No login credentials configured",
     "stagedOps": "Running on staged changes ({{count}} modifications)",
     "cacheWritten": " · login cache rewritten",
+    "cancelled": "Stopped",
     "stepBriefSuffix": ": {{brief}}",
     "stepLoggedIn": " · logged in",
     "stepDuration": " ({{sec}}s)",
@@ -66,7 +67,8 @@
     "done": "Solidified {{count}} steps{{keptSuffix}}",
     "keptSuffix": ", kept {{count}} steps in visual mode",
     "nothingWithKept": "Nothing to solidify, {{count}} steps stay in visual mode",
-    "nothing": "Nothing to solidify"
+    "nothing": "Nothing to solidify",
+    "cancelled": "Stopped (nothing staged)"
   },
   "kind": {
     "case": "Case",

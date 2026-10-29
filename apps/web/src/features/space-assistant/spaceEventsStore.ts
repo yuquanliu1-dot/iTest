@@ -48,7 +48,7 @@ export interface VerifyProgressState {
   steps: VerifyProgressStep[];
   /** compiled 机械回放干跑（replay_start/replay_done 事件）；null=未进入该阶段。 */
   replay: { status: 'running' | 'passed' | 'failed'; reason?: string } | null;
-  result: 'passed' | 'failed' | null;
+  result: 'passed' | 'failed' | 'cancelled' | null;
   /** end 事件：本轮是否已回写登录态缓存。 */
   cacheSaved: boolean;
   /** 本线程暂存的 caseOp 叠加数（>0 表示验证基于暂存修改，未落库）。 */
@@ -66,7 +66,7 @@ export interface SolidifyProgressState {
   total: number;
   /** 可固化（视觉模式）步骤数（start 事件）。 */
   solidifiable: number;
-  result: 'solidified' | 'failed' | 'nothing-solidified' | null;
+  result: 'solidified' | 'failed' | 'nothing-solidified' | 'cancelled' | null;
   /** end 事件：固化步骤数 / 保持视觉步骤数。 */
   solidified: number | null;
   kept: number | null;
@@ -326,7 +326,10 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
             ? {
                 verifyProgress: {
                   ...s.verifyProgress,
-                  result: e.result === 'failed' ? ('failed' as const) : ('passed' as const),
+                  result:
+                    e.result === 'failed' ? ('failed' as const)
+                    : e.result === 'cancelled' ? ('cancelled' as const)
+                    : ('passed' as const),
                   cacheSaved: e.cacheSaved === true,
                 },
               }
@@ -357,7 +360,10 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
         set((s) => {
           if (!s.solidifyProgress) return s;
           const result =
-            e.result === 'failed' ? 'failed' : e.result === 'nothing-solidified' ? 'nothing-solidified' : 'solidified';
+            e.result === 'failed' ? 'failed'
+            : e.result === 'nothing-solidified' ? 'nothing-solidified'
+            : e.result === 'cancelled' ? 'cancelled'
+            : 'solidified';
           return {
             solidifyProgress: {
               ...s.solidifyProgress,

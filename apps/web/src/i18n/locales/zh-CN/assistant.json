@@ -55,6 +55,7 @@
     "loginCacheMissNoUser": "未配置登录凭据",
     "stagedOps": "基于暂存（{{count}} 项修改）",
     "cacheWritten": " · 已回写登录缓存",
+    "cancelled": "已停止",
     "stepBriefSuffix": "：{{brief}}",
     "stepLoggedIn": " · 已登录",
     "stepDuration": "（{{sec}}s）",
@@ -66,7 +67,8 @@
     "done": "已固化 {{count}} 步{{keptSuffix}}",
     "keptSuffix": "，保持视觉 {{count}} 步",
     "nothingWithKept": "无可固化步骤，{{count}} 步保持视觉模式",
-    "nothing": "无可固化步骤"
+    "nothing": "无可固化步骤",
+    "cancelled": "已停止（未暂存任何修改）"
   },
   "kind": {
     "case": "用例",

@@ -38,7 +38,7 @@ import { diffText } from './diff.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
 import { registerLiveView } from '../../../execute/liveView.js';
 import { buildStepInstruction, collectStepLocators, USER_PH, PASSWORD_PH, SECRET_PH } from './verifyCase.js';
-import type { ToolExecutor } from '../../tools.js';
+import { abortGuard, type ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 import { st, type StLang } from '../../../i18n.js';
 import { aiLangFrom } from '../../../agent/langDirective.js';
@@ -234,9 +234,11 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       '同一用例反复固化是安全幂等的：暂存 localId 按 stepId 确定（solidify-<stepId>），重复固化覆盖上一轮暂存；已固化为 aiTask 执行步且指令未变的步骤直接保持原样（steps[].status=unchanged-aiTask），不重跑不重映射；执行失败（任一步骤未过）时不会暂存任何修改，修正后重跑即可。',
       '被固化的 fill value 是 AI 当轮填入的原始值：若 instruction 引用了 {{变量}} 而 AI 填了具体值，固化会把该值冻结进 compiled——数据驱动用例（绑定数据集）不建议固化含变量填写的步骤，或固化后把 value 手工改回 {{变量}}。',
     ],
-    execute: async (input) => {
+    execute: async (input, signal) => {
       const lang: StLang = aiLangFrom(ctx.lang);
       const { caseId } = input as { caseId: string };
+      // 停止检查点：会话已停止就直接短路，不起浏览器不烧 LLM。
+      if (signal?.aborted) return { ok: false, error: '已停止：用户中断了本次固化' };
       try {
         // ── 前置校验（不启动浏览器）：caseId 双形态，与 verify_case 一致 ──
         // 非 UUID 形状的 localId 跳过 uuid 列查询直查草稿（同 verify_case）
@@ -389,6 +391,8 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           timedOut = true;
           if (browser) void browser.close().catch(() => undefined);
         }, solidifyTimeoutMs);
+        // 停止守卫：用户点停止即抢占在途 AI；finally 关浏览器让残余操作随之终止。
+        const stopGuard = abortGuard(signal, '已停止：用户中断了本次固化');
         try {
           const resolvedUrl = await resolveCaseUrl(
             {
@@ -401,6 +405,8 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             { envCtx },
           );
           const targetUrl = resolvedUrl && /^https?:\/\//.test(resolvedUrl) ? resolvedUrl : undefined;
+          // 停止检查点：起浏览器前再探一次（前置校验/环境解析期间用户可能已点停止）。
+          if (signal?.aborted) return { ok: false, error: '已停止：用户中断了本次固化' };
           browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
           const loginKey = loginStateKey(envCtx.envId, envCtx.login?.user);
           const cachedState = getLoginState(loginKey);
@@ -452,6 +458,11 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           for (let i = 0; i < effectiveSteps.length; i++) {
             const s = effectiveSteps[i]!;
             const solidifiable = isVisualStep(s) && !s.sensitive && !isAiTaskSolidified(s);
+            // 停止检查点：每步开始前探测，命中即收尾 cancelled（不暂存任何修改）。
+            if (signal?.aborted) {
+              ctx.emit({ type: 'solidify_progress', phase: 'end', result: 'cancelled' });
+              return { ok: false, error: '已停止：用户中断了本次固化（未暂存任何修改）' };
+            }
 
             stepSecret = undefined;
             if (s.sensitive) {
@@ -482,8 +493,9 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               webManifest,
             );
             let stepActions: AiAction[] = [];
+            let aiRun: Promise<string> | undefined;
             try {
-              const summary = await runAiTask(page, instruction, client, false, {
+              aiRun = runAiTask(page, instruction, client, false, {
                 maxTurns: STEP_MAX_TURNS,
                 valueSub,
                 lang: ctx.lang,
@@ -492,6 +504,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   if (solidifiable && ok) stepActions.push(action);
                 },
               });
+              const summary = await Promise.race([aiRun, stopGuard]);
               const parsed = tryParseJson(summary);
               if (parsed && parsed.status === 'failed') {
                 failedIndex = i;
@@ -501,6 +514,12 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               }
               if (solidifiable && stepActions.length > 0) collected.set(s.id, stepActions);
             } catch (e) {
+              // 用户停止：丢弃在途 aiRun（finally 关浏览器令其终止），不暂存任何修改。
+              if (signal?.aborted) {
+                void aiRun?.catch(() => undefined);
+                ctx.emit({ type: 'solidify_progress', phase: 'end', result: 'cancelled' });
+                return { ok: false, error: '已停止：用户中断了本次固化（未暂存任何修改）' };
+              }
               if (timedOut) return { ok: false, error: `固化超时（${solidifyTimeoutMs / 1000}s）已终止` };
               failedIndex = i;
               failedError = (e as Error).message.slice(0, 300);
@@ -548,6 +567,11 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             };
           }
           if (timedOut) return { ok: false, error: `固化超时（${solidifyTimeoutMs / 1000}s）已终止` };
+          // 停止检查点：映射/暂存前再探一次——停止意味着什么都不暂存。
+          if (signal?.aborted) {
+            ctx.emit({ type: 'solidify_progress', phase: 'end', result: 'cancelled' });
+            return { ok: false, error: '已停止：用户中断了本次固化（未暂存任何修改）' };
+          }
 
           // ── 映射 + 暂存：全部步骤执行通过，逐视觉步骤把收集到的动作映射为 compiled ──
           const { stepReports, solidifiedCount, keptCount } = await mapAndStageSteps(

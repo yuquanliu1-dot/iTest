@@ -38,7 +38,7 @@ import { judgeAssertionText } from './assertionJudge.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
 import { registerLiveView } from '../../../execute/liveView.js';
 import { repoToolCwd } from './context.js';
-import type { ToolExecutor } from '../../tools.js';
+import { abortGuard, type ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
 // AI 轮次慢于编译回放，watchdog 基础 300s；多步用例按步数缩放（每步 ~130s 预算，
@@ -454,8 +454,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       '环境未配置登录凭据(默认 web 服务未填用户名/密码)而验证卡在登录页时，引导用户到项目环境页配置，不要伪造登录步骤。',
       '用例 url 必须是目标业务页的完整深链地址（含应用前缀，如 https://host/siemapp/siem/businessmgr/incidentmgr）——平台执行前会直接 goto 到该地址，目标页一步直达。用户没提供页面地址时，先向用户索取（浏览器地址栏完整地址）再暂存用例，禁止拿门户首页/根路径当 url；用例步骤不要写「打开/进入 XX 页面」类导航步与登录步（平台负责到达页面与登录），第一步直接从目标页面上的业务操作开始。',
     ],
-    execute: async (input) => {
+    execute: async (input, signal) => {
       const { caseId, mode } = input as { caseId: string; mode?: 'full' | 'mechanical' };
+      // 停止检查点：会话已停止就直接短路，不起浏览器不烧 LLM。
+      if (signal?.aborted) return { ok: false, error: '已停止：用户中断了本次验证' };
       // ── 空转硬约束：同一用例同因连续失败达上限即强制停止（prompt 指南对 agent 不硬,这里真正拦截）──
       // 失败签名未变即无进展：环境缺前导数据/被测页面持续不稳定这类前置问题重试再多轮也只重复烧 LLM,
       // 直接短路返回把结论交给 agent 如实汇报。触发后将计数回退到上限-1——下一次调用允许正常跑一轮：
@@ -688,6 +690,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           timedOut = true;
           if (browser) void browser.close().catch(() => undefined);
         }, verifyTimeoutMs);
+        // 停止守卫：用户点停止即抢占在途 AI/回放；finally 关浏览器让残余操作随之终止。
+        const stopGuard = abortGuard(signal, '已停止：用户中断了本次验证');
         try {
           // resolveCaseUrl 可能抛 WebServiceMissing(相对 url 但环境无 web 服务),放进本 try 让 finally
           // 的 envCtx.close 兜底(异常路径也不泄漏连接池)。
@@ -708,6 +712,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // 此前两处 ctx 都没带，机械干跑遇 /开头 navigate 一律 invalid-navigate-url（prod228 实测）。
           let caseWebOrigin: string | null = null;
           try { caseWebOrigin = envCtx.resolveWebOrigin(effectiveCase.webServiceRef ?? null); } catch { caseWebOrigin = null; }
+          // 停止检查点：起浏览器前再探一次（上面的 DB/静态分析期间用户可能已点停止）。
+          if (signal?.aborted) return { ok: false, error: '已停止：用户中断了本次验证' };
           browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
           // 命中登录态缓存则注入 context:同环境重试轮/后续用例免登录（过期自愈,见 loginStateCache）
           const loginKey = loginStateKey(envCtx.envId, envCtx.login?.user);
@@ -781,7 +787,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           if (validPrefixLen > 0) {
             let restoredPage: Page | null = null;
             const restoreSlice = effectiveSteps.slice(0, validPrefixLen);
-            const restoreRes = await executeCaseInBrowser(
+            // 停止可抢占 restore：在途回放随 finally 关浏览器终止，异常吞掉不上抛。
+            const restorePromise = executeCaseInBrowser(
               caseId,
               restoreSlice.map(mapForRestore),
               {
@@ -806,6 +813,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               // restore 失败现场即 AI 续跑起点（切片步下标 == 全局下标：切片自 0 起）
               async (p, j) => { restoredPage = p; resumeIndex = j; },
             );
+            void restorePromise.catch(() => undefined);
+            const restoreRes = await Promise.race([restorePromise, stopGuard]);
             if (restoreRes.some((r) => r.status === 'failed')) {
               const j = restoreRes.findIndex((r) => r.status === 'failed');
               resumeIndex = j < 0 ? validPrefixLen : j;
@@ -895,6 +904,11 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           for (let i = mode === 'mechanical' ? effectiveSteps.length : resumeIndex; i < effectiveSteps.length; i++) {
             const s = effectiveSteps[i]!;
             const started = Date.now();
+            // 停止检查点：每步开始前探测（机械等待/上一步收尾期间用户可能已点停止）。
+            if (signal?.aborted) {
+              ctx.emit({ type: 'verify_progress', phase: 'end', result: 'cancelled' });
+              return { ok: false, error: '已停止：用户中断了本次验证' };
+            }
             // 轨迹收集目标：视觉模式且非敏感的步骤（与 solidify_case 的固化候选同口径）
             const solidifiable = isVisualStep(s) && !s.sensitive;
             let stepActions: AiAction[] = [];
@@ -1009,7 +1023,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               const stepGuard = new Promise<never>((_, reject) => {
                 guardTimer = setTimeout(() => reject(new Error(`STEP_TIMEOUT:${s.order}`)), STEP_AI_TIMEOUT_MS);
               });
-              const summary = await Promise.race([aiRun, stepGuard]);
+              const summary = await Promise.race([aiRun, stepGuard, stopGuard]);
               clearTimeout(guardTimer);
               const parsed = tryParseJson(summary);
               if (parsed && parsed.status === 'failed') {
@@ -1059,6 +1073,12 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               });
             } catch (e) {
               clearTimeout(guardTimer);
+              // 用户停止：丢弃在途 aiRun（finally 关浏览器令其终止），进度卡收尾为 cancelled。
+              if (signal?.aborted) {
+                void aiRun?.catch(() => undefined);
+                ctx.emit({ type: 'verify_progress', phase: 'end', result: 'cancelled' });
+                return { ok: false, error: '已停止：用户中断了本次验证' };
+              }
               // watchdog 强关浏览器会让在途 runAiTask 抛错——此时真实原因是超时而非步骤失败
               if (timedOut) {
                 // 全局超时:前缀写缓存 + 带完成步数,下轮 resume 续跑(见 commitTimeoutPrefix)
@@ -1184,7 +1204,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             replayStartedAt = Date.now();
             try {
               // 敏感字段注入复用顶部 buildReplaySecrets（restore 与结尾完整回放共用一套解密表）
-              replaySteps = await executeCaseInBrowser(
+              // 停止可抢占干跑：在途回放随 finally 关浏览器终止，异常吞掉不上抛。
+              const replayPromise = executeCaseInBrowser(
                 caseId,
                 effectiveSteps.map(mapForReplay),
                 {
@@ -1215,10 +1236,20 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   replayPage = p;
                 },
               );
+              void replayPromise.catch(() => undefined);
+              replaySteps = await Promise.race([replayPromise, stopGuard]);
               replayFailure = replaySteps.find((r) => r.status === 'failed') ?? null;
             } catch (e) {
+              if (signal?.aborted) {
+                ctx.emit({ type: 'verify_progress', phase: 'end', result: 'cancelled' });
+                return { ok: false, error: '已停止：用户中断了本次验证' };
+              }
               if (timedOut) return commitTimeoutPrefix('机械回放中');
               throw e;
+            }
+            if (signal?.aborted) {
+              ctx.emit({ type: 'verify_progress', phase: 'end', result: 'cancelled' });
+              return { ok: false, error: '已停止：用户中断了本次验证' };
             }
             if (timedOut) return commitTimeoutPrefix('机械回放中');
             ctx.emit({

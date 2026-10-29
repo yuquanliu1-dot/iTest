@@ -651,7 +651,10 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
 
   type ToolRaw = {
     name: string; description: string; parameters: ReturnType<typeof Type.Object>;
-    execute: (input: unknown) => Promise<{ ok: true; data?: string } | { ok: false; error: string }>;
+    execute: (
+      input: unknown,
+      signal?: AbortSignal,
+    ) => Promise<{ ok: true; data?: string } | { ok: false; error: string }>;
     promptGuidelines?: string[];
   };
   const rawTools: ToolRaw[] = buildSpaceTools({ ...ctx, workspaceDir, emit: (e) => emitThreadEvent(ctx.threadId, e) }) as ToolRaw[];
@@ -662,8 +665,8 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
       description: t.description,
       parameters: t.parameters,
       ...(t.promptGuidelines ? { promptGuidelines: t.promptGuidelines } : {}),
-      execute: async (_callId, params, _signal, _onUpdate, _ctx) => {
-        const r = await t.execute(params);
+      execute: async (_callId, params, signal, _onUpdate, _ctx) => {
+        const r = await t.execute(params, signal);
         return r.ok
           ? { content: [{ type: 'text', text: r.data ?? 'ok' }], details: undefined }
           : { content: [{ type: 'text', text: r.error }], details: undefined, isError: true };

@@ -9,10 +9,23 @@ export interface ToolExecutor {
   name: string;
   description: string;
   parameters: ReturnType<typeof Type.Object>;
-  /** 成功时可携带回传给模型的文本（如 inspect_page 的元素清单）；缺省回 'ok'。 */
-  execute: (input: unknown) => Promise<{ ok: true; data?: string } | { ok: false; error: string }>;
+  /** 成功时可携带回传给模型的文本（如 inspect_page 的元素清单）；缺省回 'ok'。
+   *  signal = 会话停止信号（pi agent 逐工具透传）：长任务（verify/solidify）据此中断。 */
+  execute: (
+    input: unknown,
+    signal?: AbortSignal,
+  ) => Promise<{ ok: true; data?: string } | { ok: false; error: string }>;
   /** 透传到 defineTool 的 promptGuidelines，追加到 agent system prompt 的 Guidelines 段。 */
   promptGuidelines?: string[];
+}
+
+/** 停止守卫：signal 已中止或中止时立刻 reject 的 promise，供 Promise.race 抢占长任务。 */
+export function abortGuard(signal: AbortSignal | undefined, message = '已停止：用户中断了本次操作'): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    if (!signal) return;
+    if (signal.aborted) reject(new Error(message));
+    else signal.addEventListener('abort', () => reject(new Error(message)), { once: true });
+  });
 }
 
 /**

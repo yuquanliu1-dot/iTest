@@ -48,3 +48,18 @@ describe('login_progress（环境凭据自动登录进度）', () => {
     expect(store().loginProgress).toBeNull();
   });
 });
+
+describe('verify_progress / solidify_progress cancelled 收尾', () => {
+  it('verify end result=cancelled → 进度卡 result=cancelled（不再停留转圈）', () => {
+    store().ingest({ type: 'verify_progress', phase: 'start', caseId: 'c1', total: 3 });
+    store().ingest({ type: 'verify_progress', phase: 'step_done', order: 1, status: 'passed' });
+    store().ingest({ type: 'verify_progress', phase: 'end', result: 'cancelled' });
+    expect(store().verifyProgress?.result).toBe('cancelled');
+  });
+
+  it('solidify end result=cancelled → 进度卡 result=cancelled', () => {
+    store().ingest({ type: 'solidify_progress', phase: 'start', caseId: 'c1', total: 3, solidifiable: 2 });
+    store().ingest({ type: 'solidify_progress', phase: 'end', result: 'cancelled' });
+    expect(store().solidifyProgress?.result).toBe('cancelled');
+  });
+});

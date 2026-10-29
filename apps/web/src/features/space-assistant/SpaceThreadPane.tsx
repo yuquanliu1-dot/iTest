@@ -422,11 +422,22 @@ function VerifyProgressCard() {
           </span>
         ) : null}
         {vp.stagedOps > 0 ? <span style={{ flexShrink: 0 }}>{t('assistant:verify.stagedOps', { count: vp.stagedOps })}</span> : null}
+        {done && vp.result === 'cancelled' ? (
+          <span style={{ flexShrink: 0 }}>{t('assistant:verify.cancelled')}</span>
+        ) : null}
         {done ? (
           <Icon
             name={vp.result === 'passed' ? 'check' : 'close'}
             size={12}
-            style={{ color: vp.result === 'passed' ? 'var(--success)' : 'var(--destructive)', flexShrink: 0 }}
+            style={{
+              color:
+                vp.result === 'passed'
+                  ? 'var(--success)'
+                  : vp.result === 'cancelled'
+                    ? 'var(--muted-foreground)'
+                    : 'var(--destructive)',
+              flexShrink: 0,
+            }}
           />
         ) : (
           <Icon name="loader" size={12} className="animate-spin" style={{ color: 'var(--primary)', flexShrink: 0 }} />
@@ -502,6 +513,7 @@ function SolidifyProgressCard() {
   let status: string;
   if (!done) status = t('cases:status.running');
   else if (ok) status = t('assistant:solidify.done', { count: sp.solidified ?? 0, keptSuffix: sp.kept ? t('assistant:solidify.keptSuffix', { count: sp.kept }) : '' });
+  else if (sp.result === 'cancelled') status = t('assistant:solidify.cancelled');
   else if (sp.result === 'nothing-solidified') status = sp.kept ? t('assistant:solidify.nothingWithKept', { count: sp.kept }) : t('assistant:solidify.nothing');
   else status = sp.reason ? `${t('cases:status.failed')} — ${sp.reason}` : t('cases:status.failed');
   return (
@@ -524,7 +536,12 @@ function SolidifyProgressCard() {
           name={ok || sp.result === 'nothing-solidified' ? 'check' : 'close'}
           size={12}
           style={{
-            color: sp.result === 'failed' ? 'var(--destructive)' : 'var(--success)',
+            color:
+              sp.result === 'failed'
+                ? 'var(--destructive)'
+                : sp.result === 'cancelled'
+                  ? 'var(--muted-foreground)'
+                  : 'var(--success)',
             flexShrink: 0,
           }}
         />
