@@ -26,6 +26,7 @@ export default function PlanGroupCard({
   environments,
   loginCases,
   onInvalidate,
+  onAddCases,
 }: {
   plan: PlanDetail;
   group: PlanCaseGroup;
@@ -33,6 +34,8 @@ export default function PlanGroupCard({
   environments: Environment[];
   loginCases: LoginCaseOption[];
   onInvalidate: () => void;
+  /** 打开添加用例弹窗并锁定目标为本组（弹窗内不再选组）。 */
+  onAddCases: () => void;
 }) {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
@@ -289,8 +292,14 @@ export default function PlanGroupCard({
 
       {/* 组内用例：拖拽/上下移组内重排，行尾可跨组移动（跨组重复合法，按 planCaseId 移动） */}
       <div className="mt-4">
-        <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3 hairline-bottom pb-2" style={{ color: 'var(--muted-foreground)' }}>
-          {t('plans:caseOrder', { count: group.cases.length })}
+        <div className="flex items-center justify-between gap-2 mb-3 hairline-bottom pb-2">
+          <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
+            {t('plans:caseOrder', { count: group.cases.length })}
+          </div>
+          <Button size="sm" variant="ghost" onClick={onAddCases}>
+            <Icon name="plus" size={12} />
+            {t('plans:addCases')}
+          </Button>
         </div>
         {group.cases.length === 0 ? (
           <EmptyState

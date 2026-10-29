@@ -205,7 +205,8 @@ function FacetSubmenu({
 								<DropdownMenuCheckboxItem
 									key={opt.value}
 									checked={checked}
-									onCheckedChange={(next) => onChange(toggleArray(selected, opt.value, next === true))}
+									onSelect={(e) => e.preventDefault()} // 多选勾选不能关菜单（Radix 默认 select 即关）
+										onCheckedChange={(next) => onChange(toggleArray(selected, opt.value, next === true))}
 								>
 									{opt.label}
 								</DropdownMenuCheckboxItem>

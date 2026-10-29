@@ -13,11 +13,7 @@ import InlineEdit from '../components/ui/InlineEdit';
 import ScheduleListCard from '../components/plans/ScheduleListCard';
 import PlanGroupCard from '../components/plans/PlanGroupCard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
-import {
-  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
-  DropdownMenuCheckboxItem, DropdownMenuItem, DropdownMenuSeparator,
-  DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
-} from '../components/ui/shadcn/dropdown-menu';
+import { Popover, PopoverTrigger, PopoverContent } from '../components/ui/shadcn/popover';
 import { caseStatusLabel } from '../lib/format';
 import { creatorName } from '../lib/creatorName';
 
@@ -51,7 +47,7 @@ export default function PlanDetail() {
   const [showDelete, setShowDelete] = useState(false);
   const [selectedAdd, setSelectedAdd] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
-  /** 加用例弹窗的目标分组：缺省末组；无组时空串（后端自动建默认分组）。 */
+  /** 加用例弹窗的目标分组：由打开入口锁定（组卡按钮=本组；无组计划走顶部按钮=后端自动建默认分组）。 */
   const [targetGroupId, setTargetGroupId] = useState('');
 
   /** 计划所属项目的归属信息：决定用例池是否跨产品线取（未归线的项目池子与现状完全一致）。 */
@@ -101,9 +97,6 @@ export default function PlanDetail() {
   const hasAddFilter = addFilters.groups.length > 0 || addFilters.versions.length > 0
     || addFilters.statuses.length > 0 || addFilters.priorities.length > 0 || addFilters.tags.length > 0
     || addFilters.projects.length > 0;
-  const activeFilterCount = addFilters.groups.length + addFilters.versions.length
-    + addFilters.statuses.length + addFilters.priorities.length
-    + addFilters.tags.length + addFilters.projects.length;
 
   /** 已在计划的用例 id：候选不再过滤（跨组重复合法），仅在行尾标「已在计划」。 */
   const inPlanIds = useMemo(() => new Set((plan?.cases ?? []).map((c) => c.id)), [plan]);
@@ -116,7 +109,9 @@ export default function PlanDetail() {
     if (addFilters.statuses.length) list = list.filter((c) => addFilters.statuses.includes(c.status));
     if (addFilters.priorities.length) list = list.filter((c) => addFilters.priorities.includes(c.priority));
     if (addFilters.tags.length) list = list.filter((c) => (c.tags ?? []).some((t) => addFilters.tags.includes(t.id)));
-    if (search.trim()) list = list.filter((c) => c.title.includes(search.trim()));
+    // 搜索：大小写不敏感，标题或标签名命中任一即保留
+    const q = search.trim().toLowerCase();
+    if (q) list = list.filter((c) => c.title.toLowerCase().includes(q) || (c.tags ?? []).some((tg) => tg.name.toLowerCase().includes(q)));
     return list;
   }, [allCases, addFilters, search]);
 
@@ -128,6 +123,30 @@ export default function PlanDetail() {
     }
     return [...m.entries()].map(([value, label]) => ({ value, label }));
   }, [allCases]);
+
+  /** 筛选维度描述：维度按钮行与 chips 行共用一份（顺序即按钮顺序：分组/项目/版本/标签/优先级/状态）。 */
+  const filterDimensions: Array<{ key: keyof AddFilters; label: string; options: Array<{ value: string; label: string }> }> = [
+    { key: 'groups', label: t('groups:group'), options: (projectGroups ?? []).map((g) => ({ value: g.id, label: g.name })) },
+    // 产品线项目才需要「项目」维度：未归线时池子里只有本项目用例，这一维恒为单值
+    ...(productLineId && projectOptions.length > 1
+      ? [{ key: 'projects' as const, label: t('productLines:project'), options: projectOptions }]
+      : []),
+    { key: 'versions', label: t('groups:version'), options: (projectVersions ?? []).map((v) => ({ value: v.id, label: v.name })) },
+    { key: 'tags', label: t('groups:tagLabel'), options: (projectTags ?? []).map((tag) => ({ value: tag.id, label: tag.name })) },
+    { key: 'priorities', label: t('groups:priority'), options: ['P0', 'P1', 'P2', 'P3'].map((p) => ({ value: p, label: p })) },
+    { key: 'statuses', label: t('groups:statusLabel'), options: (['draft', 'review', 'ready', 'deprecated'] as const).map((s) => ({ value: s, label: t(caseStatusLabel(s)) })) },
+  ];
+
+  /** 全选筛选结果：勾=并入当前筛选命中的全部 id；取消=只移除可见 id（隐藏项的选择保留）。 */
+  const visibleSelectedCount = candidates.reduce((n, c) => n + (selectedAdd.has(c.id) ? 1 : 0), 0);
+  const allCandidatesSelected = candidates.length > 0 && visibleSelectedCount === candidates.length;
+  const someCandidatesSelected = visibleSelectedCount > 0 && !allCandidatesSelected;
+  const toggleSelectAllCandidates = () => {
+    const next = new Set(selectedAdd);
+    if (allCandidatesSelected) candidates.forEach((c) => next.delete(c.id));
+    else candidates.forEach((c) => next.add(c.id));
+    setSelectedAdd(next);
+  };
 
   /** 登录准备候选：任一组启用登录准备才需要（组卡内本地按标题过滤）。 */
   const { data: loginCases } = useQuery({
@@ -194,12 +213,9 @@ export default function PlanDetail() {
   });
 
   useEffect(() => {
-    if (showAdd) {
-      setSelectedAdd(new Set());
-      // 默认加入末组；无组计划留空（后端自动建默认分组）
-      setTargetGroupId(plan?.groups.length ? plan.groups[plan.groups.length - 1]!.id : '');
-    }
-  }, [showAdd, plan]);
+    // 目标分组由打开入口决定（组卡按钮=本组；无组计划走顶部按钮=后端自动建默认分组）
+    if (showAdd) setSelectedAdd(new Set());
+  }, [showAdd]);
 
   if (isError) {
     return (
@@ -256,10 +272,13 @@ export default function PlanDetail() {
           <Icon name="plus" size={12} />
           {t('plans:addGroup')}
         </Button>
-        <Button variant="ghost" onClick={() => { setShowAdd(true); setAddFilters(EMPTY_ADD_FILTERS); setSearch(''); }}>
-          <Icon name="plus" size={12} />
-          {t('plans:addCases')}
-        </Button>
+        {/* 有分组时添加入口在各组卡内；顶部按钮仅无组计划保留（后端自动建默认分组） */}
+        {plan.groups.length === 0 && (
+          <Button variant="ghost" onClick={() => { setTargetGroupId(''); setAddFilters(EMPTY_ADD_FILTERS); setSearch(''); setShowAdd(true); }}>
+            <Icon name="plus" size={12} />
+            {t('plans:addCases')}
+          </Button>
+        )}
         <Button onClick={() => run.mutate()} disabled={run.isPending || plan.cases.length === 0}>
           <Icon name="play" size={12} />
           {run.isPending ? t('plans:starting') : t('plans:runOnce')}
@@ -341,6 +360,7 @@ export default function PlanDetail() {
                   environments={environments ?? []}
                   loginCases={loginCases ?? []}
                   onInvalidate={invalidatePlan}
+                  onAddCases={() => { setTargetGroupId(g.id); setAddFilters(EMPTY_ADD_FILTERS); setSearch(''); setShowAdd(true); }}
                 />
               ))}
             </div>
@@ -350,100 +370,82 @@ export default function PlanDetail() {
       </div>
 
       <Dialog open={showAdd} onOpenChange={setShowAdd}>
-        <DialogContent style={{ maxWidth: 600 }}>
+        <DialogContent style={{ maxWidth: 720 }}>
           <DialogHeader>
             <DialogTitle>{t('plans:addCases')}</DialogTitle>
           </DialogHeader>
-          <div className="px-5 py-3 flex items-center gap-2">
-            <div className="input-wrap flex-1 min-w-0">
+          <div className="px-5 py-3">
+            <div className="input-wrap">
               <Icon name="search" size={14} className="input-icon" />
               <input
                 type="text"
+                autoFocus
                 placeholder={t('plans:searchCase')}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="input-base input-sm input-with-leading"
               />
             </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button type="button" variant="ghost" size="sm" className="shrink-0">
-                  <Icon name="settings" size={12} />
-                  {t('plans:filter')}
-                  {activeFilterCount > 0 && (
-                    <span className="text-[11px] tabular-nums opacity-70">({activeFilterCount})</span>
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-52">
-                {activeFilterCount > 0 && (
-                  <>
-                    <DropdownMenuItem onSelect={() => setAddFilters(EMPTY_ADD_FILTERS)}>
-                      {t('plans:clearAllFilters')}
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
+            {/* 维度按钮行：每个维度单击展开扁平多选，勾选不关弹层 */}
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {filterDimensions.map((d) => (
+                <DimensionPicker
+                  key={d.key}
+                  label={d.label}
+                  options={d.options}
+                  selected={addFilters[d.key]}
+                  onChange={(v) => setAddFilters({ ...addFilters, [d.key]: v })}
+                />
+              ))}
+            </div>
+            {/* 激活条件 chips：一眼可见、逐个可删；搜索词也是一枚 chip */}
+            {(hasAddFilter || search.trim()) && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {filterDimensions.flatMap((d) =>
+                  addFilters[d.key].map((v) => (
+                    <FilterChip
+                      key={`${d.key}:${v}`}
+                      label={t('plans:chipLabel', { dim: d.label, value: d.options.find((o) => o.value === v)?.label ?? v })}
+                      onRemove={() => setAddFilters({ ...addFilters, [d.key]: addFilters[d.key].filter((x) => x !== v) })}
+                    />
+                  )),
                 )}
-                <FilterSubmenu
-                  label={t('groups:group')}
-                  options={(projectGroups ?? []).map((g) => ({ value: g.id, label: g.name }))}
-                  selected={addFilters.groups}
-                  onChange={(v) => setAddFilters({ ...addFilters, groups: v })}
-                />
-                <FilterSubmenu
-                  label={t('groups:version')}
-                  options={(projectVersions ?? []).map((v) => ({ value: v.id, label: v.name }))}
-                  selected={addFilters.versions}
-                  onChange={(v) => setAddFilters({ ...addFilters, versions: v })}
-                />
-                {/* 产品线项目才需要「项目」维度：未归线时池子里只有本项目用例，这一维恒为单值 */}
-                {productLineId && projectOptions.length > 1 && (
-                  <FilterSubmenu
-                    label={t('productLines:project')}
-                    options={projectOptions}
-                    selected={addFilters.projects}
-                    onChange={(v) => setAddFilters({ ...addFilters, projects: v })}
+                {search.trim() && (
+                  <FilterChip
+                    label={t('plans:chipLabel', { dim: t('plans:searchKeyword'), value: search.trim() })}
+                    onRemove={() => setSearch('')}
                   />
                 )}
-                <FilterSubmenu
-                  label={t('groups:statusLabel')}
-                  options={(['draft', 'review', 'ready', 'deprecated'] as const).map((s) => ({ value: s, label: t(caseStatusLabel(s)) }))}
-                  selected={addFilters.statuses}
-                  onChange={(v) => setAddFilters({ ...addFilters, statuses: v })}
-                />
-                <FilterSubmenu
-                  label={t('groups:priority')}
-                  options={['P0', 'P1', 'P2', 'P3'].map((p) => ({ value: p, label: p }))}
-                  selected={addFilters.priorities}
-                  onChange={(v) => setAddFilters({ ...addFilters, priorities: v })}
-                />
-                <FilterSubmenu
-                  label={t('groups:tagLabel')}
-                  options={(projectTags ?? []).map((t) => ({ value: t.id, label: t.name }))}
-                  selected={addFilters.tags}
-                  onChange={(v) => setAddFilters({ ...addFilters, tags: v })}
-                />
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          <div className="px-5 pb-2 flex items-center gap-2">
-            <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:targetGroup')}</span>
-            <select
-              value={targetGroupId}
-              onChange={(e) => setTargetGroupId(e.target.value)}
-              className="input-base input-sm flex-1"
-              style={{ minWidth: 200 }}
-            >
-              {plan.groups.length === 0 ? (
-                <option value="">{t('plans:newGroupName')}</option>
-              ) : (
-                plan.groups.map((g) => (
-                  <option key={g.id} value={g.id}>{g.name}</option>
-                ))
-              )}
-            </select>
+                <button
+                  type="button"
+                  className="press inline-flex items-center text-[12px] hover:underline shrink-0"
+                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--primary)' }}
+                  onClick={() => { setAddFilters(EMPTY_ADD_FILTERS); setSearch(''); }}
+                >
+                  {t('plans:clearAll')}
+                </button>
+              </div>
+            )}
           </div>
           <div className="px-5 pb-4 max-h-[400px] overflow-y-auto flex flex-col gap-1">
+            {/* 全选筛选结果：含「已在计划」/deprecated 行（跨组重复合法，与手点一致） */}
+            {candidates.length > 0 && (
+              <div
+                className="sticky top-0 z-10 flex items-center gap-2 px-3 py-2 hairline-bottom"
+                style={{ background: 'var(--popover)' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={allCandidatesSelected}
+                  ref={(el) => { if (el) el.indeterminate = someCandidatesSelected; }}
+                  onChange={toggleSelectAllCandidates}
+                  aria-label={t('plans:selectAllFiltered', { count: candidates.length })}
+                />
+                <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+                  {t('plans:selectAllFiltered', { count: candidates.length })}
+                </span>
+              </div>
+            )}
             {candidates.length === 0 ? (
               <div className="text-[12px] py-8 text-center" style={{ color: 'var(--muted-foreground)' }}>
                 {hasAddFilter || search.trim() ? t('plans:noMatchingCases') : t('plans:noAddableCases')}
@@ -495,7 +497,14 @@ export default function PlanDetail() {
             )}
           </div>
           <DialogFooter>
-            <span className="text-[12px] mr-auto" style={{ color: 'var(--muted-foreground)' }}>{t('plans:selectedCount', { count: selectedAdd.size })}</span>
+            <span className="text-[12px] mr-auto flex items-center gap-2" style={{ color: 'var(--muted-foreground)' }}>
+              {t('plans:selectedCount', { count: selectedAdd.size })}
+              {/* 目标分组由打开入口锁定（组卡按钮），此处仅展示去向 */}
+              {t('plans:targetGroup')}
+              <span className="font-semibold" style={{ color: 'var(--foreground)' }}>
+                {plan.groups.find((g) => g.id === targetGroupId)?.name ?? t('plans:newGroupName')}
+              </span>
+            </span>
             <Button variant="ghost" onClick={() => setShowAdd(false)}>{t('common:cancel')}</Button>
             <Button
               disabled={selectedAdd.size === 0}
@@ -538,9 +547,9 @@ export default function PlanDetail() {
   );
 }
 
-/** 添加用例弹窗过滤菜单的单个维度子菜单（镜像 DataTable FacetSubmenu 交互）：
- *  父菜单「过滤」内 hover 展开，checkbox 多选；options 空 → 禁选「无可选项」；有选中 → 顶部「清除」一键清空该维。 */
-function FilterSubmenu({
+/** 添加用例弹窗的单维度筛选器：单击展开的扁平多选 Popover（勾选不关弹层；>8 项带迷你搜索）。
+ *  触发器三态：未选=维度名；单选=「维度 · 选项名」；多选=「维度 · N 项」。 */
+function DimensionPicker({
   label,
   options,
   selected,
@@ -552,36 +561,103 @@ function FilterSubmenu({
   onChange: (values: string[]) => void;
 }) {
   const { t } = useTranslation();
-  const active = selected.length > 0;
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const keyword = q.trim().toLowerCase();
+  const visibleOptions = keyword
+    ? options.filter((o) => o.label.toLowerCase().includes(keyword))
+    : options;
+  const triggerLabel = selected.length === 0
+    ? label
+    : selected.length === 1
+      ? `${label} · ${options.find((o) => o.value === selected[0])?.label ?? ''}`
+      : `${label} · ${t('plans:nItems', { count: selected.length })}`;
   return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger>
-        {label}
-        {active ? ` (${selected.length})` : ''}
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="max-h-72 min-w-52 overflow-y-auto">
-        {options.length === 0 ? (
-          <DropdownMenuItem disabled>{t('common:noOptions')}</DropdownMenuItem>
-        ) : (
-          <>
-            {active && (
-              <>
-                <DropdownMenuItem onSelect={() => onChange([])}>{t('plans:clear')}</DropdownMenuItem>
-                <DropdownMenuSeparator />
-              </>
-            )}
-            {options.map((o) => (
-              <DropdownMenuCheckboxItem
-                key={o.value}
-                checked={selected.includes(o.value)}
-                onCheckedChange={(next) => onChange(next === true ? [...selected, o.value] : selected.filter((v) => v !== o.value))}
-              >
-                {o.label}
-              </DropdownMenuCheckboxItem>
-            ))}
-          </>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setQ('');
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={options.length === 0}
+          className={selected.length > 0 ? 'bg-primary/10 text-primary' : undefined}
+        >
+          <span className="truncate max-w-[140px]">{triggerLabel}</span>
+          <Icon name="chevronDown" size={12} className="shrink-0 opacity-60" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-2 gap-1">
+        {options.length > 8 && (
+          <div className="input-wrap">
+            <Icon name="search" size={12} className="input-icon" />
+            <input
+              type="text"
+              autoFocus
+              placeholder={t('plans:searchInOptions')}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              className="input-base input-sm input-with-leading"
+            />
+          </div>
         )}
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
+        <div className="max-h-64 overflow-y-auto flex flex-col">
+          {visibleOptions.length === 0 ? (
+            <div className="text-[12px] px-2 py-3 text-center" style={{ color: 'var(--muted-foreground)' }}>
+              {t('plans:noMatchInOptions')}
+            </div>
+          ) : (
+            visibleOptions.map((o) => {
+              const checked = selected.includes(o.value);
+              return (
+                <label
+                  key={o.value}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer hover-card"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() =>
+                      onChange(checked ? selected.filter((v) => v !== o.value) : [...selected, o.value])
+                    }
+                  />
+                  <span className="text-[12px] truncate" style={{ color: 'var(--foreground)' }}>{o.label}</span>
+                </label>
+              );
+            })
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** 激活筛选条件 chip：中性底色 + × 单击移除（镜像 TagChip 结构，但不绑定标签色）。 */
+function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full font-medium"
+      style={{ background: 'var(--muted)', color: 'var(--foreground)', padding: '2px 8px', fontSize: 12, lineHeight: 1.4 }}
+    >
+      <span className="truncate max-w-[160px]">{label}</span>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        aria-label={t('plans:removeFilterChip', { label })}
+        className="inline-flex items-center justify-center"
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, color: 'inherit', opacity: 0.7 }}
+      >
+        <Icon name="close" size={10} />
+      </button>
+    </span>
   );
 }
