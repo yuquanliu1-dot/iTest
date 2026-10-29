@@ -96,20 +96,6 @@ describe('step-dsl — phase1 new kinds', () => {
     expect(r.success).toBe(true);
   });
 
-  it('accepts aiStep with compiled steps', () => {
-    const r = StepAction.safeParse({
-      kind: 'aiStep',
-      instruction: '关闭弹窗',
-      compiled: [{ kind: 'assertVisible', locator: [{ strategy: 'role', value: 'main' }] }],
-    });
-    expect(r.success).toBe(true);
-  });
-
-  it('accepts aiStep with compiled = null', () => {
-    const r = StepAction.safeParse({ kind: 'aiStep', instruction: 'x', compiled: null });
-    expect(r.success).toBe(true);
-  });
-
   it('rejects extract without varName', () => {
     const r = StepAction.safeParse({
       kind: 'extract',
@@ -136,52 +122,9 @@ describe('step-dsl — phase1 new kinds', () => {
     expect(r.success).toBe(false);
   });
 
-  it('accepts aiStep nested inside aiStep compiled (recursion)', () => {
-    const r = StepAction.safeParse({
-      kind: 'aiStep',
-      instruction: '外层',
-      compiled: [{ kind: 'aiStep', instruction: '内层', compiled: null }],
-    });
-    expect(r.success).toBe(true);
-  });
-
-  it('accepts aiStep with optional assertion string', () => {
-    const r = StepAction.safeParse({
-      kind: 'aiStep',
-      instruction: '提交订单',
-      compiled: null,
-      assertion: '页面显示订单提交成功',
-    });
-    expect(r.success).toBe(true);
-  });
-
-  it('accepts aiStep with assertion = null', () => {
-    const r = StepAction.safeParse({
-      kind: 'aiStep',
-      instruction: '提交订单',
-      compiled: null,
-      assertion: null,
-    });
-    expect(r.success).toBe(true);
-  });
-
-  it('accepts aiStep without assertion field (backward compat)', () => {
-    const r = StepAction.safeParse({
-      kind: 'aiStep',
-      instruction: '提交订单',
-      compiled: null,
-    });
-    expect(r.success).toBe(true);
-  });
-
-  it('rejects aiStep with non-string assertion', () => {
-    const r = StepAction.safeParse({
-      kind: 'aiStep',
-      instruction: '提交订单',
-      compiled: null,
-      assertion: 123,
-    });
-    expect(r.success).toBe(false);
+  it('rejects removed legacy kinds (aiStep / solveCaptcha)', () => {
+    expect(StepAction.safeParse({ kind: 'aiStep', instruction: 'x', compiled: null }).success).toBe(false);
+    expect(StepAction.safeParse({ kind: 'solveCaptcha', imageLocator: [], inputLocator: [] }).success).toBe(false);
   });
 
   it('generator defaults materialize on parse', () => {
