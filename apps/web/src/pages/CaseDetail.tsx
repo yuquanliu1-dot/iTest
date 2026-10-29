@@ -843,54 +843,61 @@ export default function CaseDetail() {
                       {t('cases:incognitoHint')}
                     </span>
                   </div>
-                  <label className="flex flex-col gap-1">
-                    <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:defaultEnv')}</span>
-                    <select
-                      className="input-base input-sm"
-                      value={defaultEnvId ?? ''}
-                      onChange={(e) => setDefaultEnvId(e.target.value || null)}
-                      disabled={(environments ?? []).length === 0}
+                  {/* 环境与数据一行条：默认环境/测试数据集/行范围同排，长 hint 全文收进 hover 提示（正文不再铺长灰字）。 */}
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <label
+                      className="flex items-center gap-2 text-[11px] shrink-0 cursor-pointer"
+                      style={{ color: 'var(--muted-foreground)' }}
                     >
-                      <option value="">{t('cases:noEnvOverride')}</option>
-                      {(environments ?? []).map((e) => (
-                        <option key={e.id} value={e.id}>
-                          {e.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex flex-col gap-1">
-                    <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:testDataset')}</span>
-                    <select
-                      className="input-base input-sm"
-                      value={datasetId ?? ''}
-                      onChange={(e) => {
-                        const next = e.target.value || null;
-                        // 换数据集 → 清空行选择（下标空间属于旧数据集）
-                        if (next !== datasetId) setDatasetRowIndexes([]);
-                        setDatasetId(next);
-                      }}
+                      {t('cases:defaultEnv')}
+                      <select
+                        className="input-base input-sm"
+                        style={{ width: 160 }}
+                        value={defaultEnvId ?? ''}
+                        onChange={(e) => setDefaultEnvId(e.target.value || null)}
+                        disabled={(environments ?? []).length === 0}
+                      >
+                        <option value="">{t('cases:noEnvOverride')}</option>
+                        {(environments ?? []).map((e) => (
+                          <option key={e.id} value={e.id}>
+                            {e.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <span className="w-px h-3.5 shrink-0" style={{ background: 'var(--border)' }} />
+                    <label
+                      className="flex items-center gap-2 text-[11px] cursor-pointer"
+                      style={{ color: 'var(--muted-foreground)' }}
+                      title={datasetId ? t('cases:datasetRunHint', { col: '{{列名}}' }) : undefined}
                     >
-                      <option value="">{t('cases:noDataset')}</option>
-                      {(datasetList ?? []).map((d) => (
-                        <option key={d.id} value={d.id}>
-                          {d.name}{t('cases:datasetEnabledRows', { count: d.enabledRowCount })}
-                        </option>
-                      ))}
-                    </select>
+                      {t('cases:testDataset')}
+                      <select
+                        className="input-base input-sm"
+                        style={{ width: 200 }}
+                        value={datasetId ?? ''}
+                        onChange={(e) => {
+                          const next = e.target.value || null;
+                          // 换数据集 → 清空行选择（下标空间属于旧数据集）
+                          if (next !== datasetId) setDatasetRowIndexes([]);
+                          setDatasetId(next);
+                        }}
+                      >
+                        <option value="">{t('cases:noDataset')}</option>
+                        {(datasetList ?? []).map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name}{t('cases:datasetEnabledRows', { count: d.enabledRowCount })}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {/* 数据集行范围：统一「选择数据」入口 → 多选弹窗 → 显示条数（不分三档）。 */}
                     {datasetId && (
-                      <span className="text-[10px]" style={{ color: 'var(--info)' }}>
-                        {t('cases:datasetRunHint', { col: '{{列名}}' })}
-                      </span>
-                    )}
-                  </label>
-                  {/* 数据集行范围：统一「选择数据」入口 → 多选弹窗 → 显示条数（不分三档）。 */}
-                  {datasetId && (
-                    <div className="flex flex-col gap-1">
-                      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                        {t('cases:datasetRowScope')}
-                      </span>
                       <div className="flex items-center gap-2">
+                        <span className="w-px h-3.5 shrink-0" style={{ background: 'var(--border)' }} />
+                        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                          {t('cases:datasetRowScope')}
+                        </span>
                         <Button variant="ghost" size="sm" onClick={() => setDatasetRowPickerOpen(true)}>
                           {t('cases:datasetRowChoose')}
                         </Button>
@@ -900,8 +907,8 @@ export default function CaseDetail() {
                             : t('cases:datasetRowSelected', { indexes: datasetRowIndexes.map((i) => i + 1).join('、') })}
                         </span>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                   {/* Track 1：用例级预期描述。回放结束后由 vision LLM 拿最终截图比对；
                       步骤级 assertion 在回放层已被收紧为「指定元素可见」才生效，整页模糊断言一律跳过。 */}
                   <label className="flex flex-col gap-1">
