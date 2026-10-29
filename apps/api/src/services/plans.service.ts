@@ -5,7 +5,7 @@
  */
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { executionPlans, groups, planCaseGroups, planCases, projects, projectVersions, testCases, testEnvironments } from '../db/schema.js';
+import { datasets, executionPlans, groups, planCaseGroups, planCases, projects, projectVersions, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { attachCreators, attachCreator } from '../lib/creator.js';
 import { assertDatasetRowIndexes } from './datasets.service.js';
@@ -159,11 +159,17 @@ export async function getPlanDetail(planId: string) {
           versionName: projectVersions.name,
           projectId: groups.projectId,
           projectName: projects.name,
+          // 计划级数据行选择三态展示所需：绑定的数据集 + 用例级选择；启用行数 SQL 内联统计
+          datasetId: testCases.datasetId,
+          caseRowIndexes: testCases.datasetRowIndexes,
+          datasetName: datasets.name,
+          datasetEnabledRowCount: sql<number>`(SELECT count(*)::int FROM jsonb_array_elements(coalesce(${datasets.rows}, '[]'::jsonb)) AS r WHERE (r->>'disabled')::boolean IS NOT TRUE)`,
         })
         .from(testCases)
         .innerJoin(groups, eq(groups.id, testCases.groupId))
         .innerJoin(projects, eq(projects.id, groups.projectId))
         .leftJoin(projectVersions, eq(projectVersions.id, testCases.versionId))
+        .leftJoin(datasets, eq(datasets.id, testCases.datasetId))
         .where(inArray(testCases.id, pcs.map((p) => p.caseId)))
     : [];
   const byId = new Map(rows.map((c) => [c.id, c]));
@@ -177,6 +183,11 @@ export async function getPlanDetail(planId: string) {
       versionName: c?.versionName ?? null,
       projectId: c?.projectId ?? null,
       projectName: c?.projectName ?? null,
+      // 计划级数据行选择三态展示所需（未绑数据集时 datasetId 为 null）
+      datasetId: c?.datasetId ?? null,
+      datasetName: c?.datasetName ?? null,
+      datasetEnabledRowCount: c?.datasetEnabledRowCount ?? 0,
+      caseRowIndexes: c?.caseRowIndexes ?? [],
     };
   };
   let versionName: string | null = null;
@@ -200,6 +211,8 @@ export async function getPlanDetail(planId: string) {
       planCaseId: pc.id,
       order: i + 1,
       ...caseMeta(pc.caseId),
+      // 计划行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集
+      planRowIndexes: pc.datasetRowIndexes ?? null,
     })),
   }));
   // 平铺 cases:按组序拼接,order=组内序,globalOrder=全局 1..N(兼容旧读取/UI 过渡)

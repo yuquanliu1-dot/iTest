@@ -157,6 +157,13 @@ export const api = {
       request<{ ok: boolean }>(`/plans/${id}/cases/order`, { method: 'PUT', body: JSON.stringify({ groupId, caseIds }) }),
     moveCases: (id: string, planCaseIds: string[], toGroupId: string) =>
       request<{ ok: boolean }>(`/plans/${id}/cases/move`, { method: 'PUT', body: JSON.stringify({ planCaseIds, toGroupId }) }),
+    /** 计划级数据行选择（按 plan_cases.id 定位，跨组重复用例各行独立）：
+     *  null = 跟随用例级；[] = 全部启用行；非空 = 子集。 */
+    patchPlanCase: (id: string, planCaseId: string, body: { datasetRowIndexes: number[] | null }) =>
+      request<{ ok: boolean; datasetRowIndexes: number[] | null }>(`/plans/${id}/plan-cases/${planCaseId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
     removeCases: (id: string, caseIds: string[]) =>
       request<{ ok: boolean }>(`/plans/${id}/cases`, {
         method: 'DELETE',
@@ -944,11 +951,22 @@ export interface PlanCaseGroup {
   loginUnauthorizedKeywords: string[] | null;
   failFast: boolean;
   targetConfig: { deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null;
-  cases: Array<{ planCaseId: string; id: string; order: number; title: string; url: string | null; versionId: string | null; versionName: string | null; projectId: string | null; projectName: string | null }>;
+  cases: Array<{
+    planCaseId: string; id: string; order: number; title: string; url: string | null;
+    versionId: string | null; versionName: string | null; projectId: string | null; projectName: string | null;
+    /** 绑定的数据集（未绑为 null）与名称/启用行数/用例级行选择（[] = 全部）。 */
+    datasetId: string | null;
+    datasetName: string | null;
+    datasetEnabledRowCount: number;
+    caseRowIndexes: number[];
+    /** 计划行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集。 */
+    planRowIndexes: number[] | null;
+  }>;
 }
 export interface PlanDetail extends ExecutionPlan {
-  /** 平铺口径：按组序拼接（order=组内序、globalOrder=全局 1..N），供计数与跨组去重标显示。 */
-  cases: Array<{ planCaseId: string; id: string; order: number; globalOrder: number; title: string; url: string | null; versionId: string | null; versionName: string | null; projectId: string | null; projectName: string | null }>;
+  /** 平铺口径：按组序拼接（order=组内序、globalOrder=全局 1..N），供计数与跨组去重标显示。
+   *  字段与 groups[].cases 同形（服务端由组用例直接 flatMap 而来，含数据集三态字段）+ globalOrder。 */
+  cases: Array<PlanCaseGroup['cases'][number] & { globalOrder: number }>;
   groups: PlanCaseGroup[];
   strategy: 'run_all' | 'fail_fast';
 }

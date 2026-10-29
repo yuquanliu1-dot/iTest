@@ -849,4 +849,16 @@ describe('计划级数据集行选择（PATCH /plans/:id/plan-cases/:planCaseId�
     expect(byRow.get(pc1)).toEqual([0]);
     expect(byRow.get(pc2)).toEqual([1, 2]);
   });
+
+  it('detail 回带数据集字段与三态 planRowIndexes', async () => {
+    const s = await seedSelection();
+    await request(app).patch(`/api/plans/${s.planId}/plan-cases/${s.planCaseId}`).send({ datasetRowIndexes: [0] });
+    const detail = await request(app).get(`/api/plans/${s.planId}`);
+    const row = detail.body.groups[0].cases[0];
+    expect(row.datasetId).toBe(s.datasetId);
+    expect(row.datasetName).toBe('行选择数据');
+    expect(row.datasetEnabledRowCount).toBe(2);
+    expect(row.caseRowIndexes).toEqual([]); // 用例级选择：[] = 全部
+    expect(row.planRowIndexes).toEqual([0]); // 计划级覆盖
+  });
 });
