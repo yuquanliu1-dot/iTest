@@ -937,7 +937,7 @@ export default function CaseDetail() {
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                 />
-                <div className="flex justify-end">
+                <div className="flex justify-end mb-3">
                   <Button
                     size="sm"
                     onClick={() => saveDescription.mutate()}
