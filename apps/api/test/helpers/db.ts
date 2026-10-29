@@ -139,6 +139,11 @@ DO $$ BEGIN
   ALTER TABLE plan_cases ADD COLUMN target_override jsonb;
 EXCEPTION WHEN duplicate_column THEN null;
 END $$;
+-- 计划级数据集行选择（三态覆盖，可空；null = 跟随用例级）
+DO $$ BEGIN
+  ALTER TABLE plan_cases ADD COLUMN dataset_row_indexes integer[];
+EXCEPTION WHEN duplicate_column THEN null;
+END $$;
 DO $$ BEGIN
   ALTER TABLE reports ADD COLUMN healed boolean NOT NULL DEFAULT false;
 EXCEPTION WHEN duplicate_column THEN null;

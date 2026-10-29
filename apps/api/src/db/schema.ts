@@ -525,6 +525,9 @@ export const planCases = pgTable('plan_cases', {
   // 计划级覆盖：用例默认 device_target / 浏览器上下文可在「加进计划」时改写，
   // 不动用例本体，仅本次计划执行时按覆盖解析。null = 沿用例自带值。
   targetOverride: jsonb('target_override').$type<{ deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null>(),
+  // 计划级数据集行选择（三态覆盖）：null = 跟随用例级配置（执行回落 test_cases.dataset_row_indexes）；
+  // [] = 全部启用行；非空 = 启用行下标子集（与用例级同一编号空间）。同用例跨组=多行，各行独立。
+  datasetRowIndexes: integer('dataset_row_indexes').array(),
 }, (t) => ({
   planOrderIdx: index('idx_plan_cases_plan_order').on(t.planId, t.order),
 }));
