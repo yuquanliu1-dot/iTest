@@ -242,7 +242,7 @@ export async function enabledRowCount(datasetId: string): Promise<number> {
  *  null（清覆盖）由调用方自行放行，不进本函数。 */
 export async function assertDatasetRowIndexes(datasetId: string | null | undefined, rowIndexes: number[]): Promise<void> {
   if (rowIndexes.length === 0) return;
-  if (rowIndexes.length > 500) throw new HttpError(400, 'bad_request', '数据行选择最多 500 行');
+  if (rowIndexes.length > MAX_ROWS) throw new HttpError(400, 'bad_request', `数据行选择最多 ${MAX_ROWS} 行`);
   if (rowIndexes.some((i) => !Number.isInteger(i) || i < 0)) {
     throw new HttpError(400, 'bad_request', '数据行下标必须是非负整数');
   }
