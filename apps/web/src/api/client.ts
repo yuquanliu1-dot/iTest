@@ -509,6 +509,34 @@ export const api = {
         `/cases/${caseId}/attachments`,
       ),
   },
+  assistantAttachments: {
+    /** 助手 docx 预上传（版本作用域）。X-Filename 走 encodeURIComponent：中文文件名
+     *  直塞 Headers 在部分浏览器抛 ByteString 错（cases 旧路径未处理，不动旧码，这里做对）。 */
+    uploadDocx: async (versionId: string, file: File) => {
+      const buf = await file.arrayBuffer();
+      const r = await fetch(`${BASE}/assistant/versions/${versionId}/attachments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Filename': encodeURIComponent(file.name),
+        },
+        body: buf,
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({})) as { message?: string };
+        throw new Error(body.message ?? `HTTP ${r.status}`);
+      }
+      return r.json() as Promise<{
+        name: string;
+        path: string;
+        chars: number | null;
+        size: number;
+        sha256: string;
+        deduped: boolean;
+        extracted: boolean;
+      }>;
+    },
+  },
   /** 浏览器原生下载：fetch → blob → `<a download>`，不走 JSON 解析。
    *  与 request() 不同：401 不会自动跳登录（保持与原始 `<a>` 一致），调用方按需处理。 */
   downloadExtensionZip: async (): Promise<Blob> => {
