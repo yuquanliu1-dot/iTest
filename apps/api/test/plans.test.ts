@@ -900,6 +900,27 @@ describe('计划级数据集行选择（PATCH /plans/:id/plan-cases/:planCaseId�
     expect(row.caseRowIndexes).toEqual([]);
     expect(row.planRowIndexes).toBeNull();
   });
+
+  it('404：planCaseId 属于另一个计划（跨计划隔离）', async () => {
+    const a = await seedSelection();
+    const b = await seedSelection();
+    // 用 A 的计划 id + B 的 planCaseId → 定位不到（planId+planCaseId 联合不匹配）
+    const r = await request(app)
+      .patch(`/api/plans/${a.planId}/plan-cases/${b.planCaseId}`)
+      .send({ datasetRowIndexes: [0] });
+    expect(r.status).toBe(404);
+    // B 的覆盖不被误写
+    const pc = await pool.query(`SELECT dataset_row_indexes FROM plan_cases WHERE id = $1`, [b.planCaseId]);
+    expect(pc.rows[0].dataset_row_indexes).toBeNull();
+  });
+
+  it('404：未知 planCaseId', async () => {
+    const s = await seedSelection();
+    const r = await request(app)
+      .patch(`/api/plans/${s.planId}/plan-cases/00000000-0000-4000-8000-000000000000`)
+      .send({ datasetRowIndexes: [0] });
+    expect(r.status).toBe(404);
+  });
 });
 
 describe('计划行覆盖联动清空', () => {
