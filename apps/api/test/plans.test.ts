@@ -924,4 +924,14 @@ describe('计划行覆盖联动清空', () => {
     const pc = await pool.query(`SELECT dataset_row_indexes FROM plan_cases WHERE id = $1`, [s.planCaseId]);
     expect(pc.rows[0].dataset_row_indexes).toBeNull();
   });
+
+  it('校验失败的换绑请求不清计划覆盖（404 → 零副作用）', async () => {
+    const s = await seedSelection();
+    await request(app).patch(`/api/plans/${s.planId}/plan-cases/${s.planCaseId}`).send({ datasetRowIndexes: [0] });
+    // tagIds 校验晚于清空点：不存在的 tag → 404，此时用例应零改动、计划覆盖原样保留
+    const bad = await request(app).patch(`/api/cases/${s.caseId}`).send({ datasetId: null, tagIds: [randomUUID()] });
+    expect(bad.status).toBe(404);
+    const pc = await pool.query(`SELECT dataset_row_indexes FROM plan_cases WHERE id = $1`, [s.planCaseId]);
+    expect(pc.rows[0].dataset_row_indexes).toEqual([0]);
+  });
 });

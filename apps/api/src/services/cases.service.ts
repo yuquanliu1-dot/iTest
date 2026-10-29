@@ -259,11 +259,6 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
   if (datasetRowIndexes && datasetRowIndexes.length > 0) {
     await assertDatasetRowIndexes(patch.datasetId ?? existing.datasetId, datasetRowIndexes);
   }
-  // 换数据集/解绑：该用例在所有计划里的行级覆盖一并清空（下标空间属于旧数据集）。
-  // 计划级置 null（跟随用例级），与用例级清空同触发；用例删除无需处理（plan_cases.caseId 外键 CASCADE）。
-  if (patch.datasetId !== undefined && patch.datasetId !== existing.datasetId) {
-    await db.update(planCases).set({ datasetRowIndexes: null }).where(eq(planCases.caseId, caseId));
-  }
   // 2026-10-07: 移动端 device target 跨项目断言（service 兜底）
   if (patch.mobileDeviceTargetId !== undefined && patch.mobileDeviceTargetId !== null) {
     const dtPid = await resolveDeviceTargetProjectId(patch.mobileDeviceTargetId);
@@ -271,6 +266,11 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
     if (dtPid !== targetPid) throw new HttpError(400, 'device_target_project_mismatch', 'device target does not belong to this project');
   }
   if (patch.tagIds !== undefined) await assertTagsBelongToOrg(patch.tagIds, targetPid);
+  // 换数据集/解绑：该用例在所有计划里的行级覆盖一并清空（下标空间属于旧数据集）。
+  // 计划级置 null（跟随用例级），与用例级清空同触发；用例删除无需处理（plan_cases.caseId 外键 CASCADE）。
+  if (patch.datasetId !== undefined && patch.datasetId !== existing.datasetId) {
+    await db.update(planCases).set({ datasetRowIndexes: null }).where(eq(planCases.caseId, caseId));
+  }
   const { tagIds, datasetRowIndexes: _ignored, ...rest } = patch;
   const updated = (await db.update(testCases).set({
     ...rest,

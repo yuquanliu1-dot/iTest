@@ -241,6 +241,7 @@ export async function deleteDataset(datasetId: string): Promise<void> {
   // 必须在 delete 之前清 —— delete 触发 FK 后 dataset_id 已是 null，where 就匹配不到了。
   await db.update(testCases).set({ datasetRowIndexes: [] }).where(eq(testCases.datasetId, datasetId));
   // 计划级行覆盖一并清空（置 null = 跟随用例级）：下标空间属于被删数据集，留下即垃圾值。
+  // 须在 db.delete(datasets) 之前执行：删除后 FK 置空 test_cases.dataset_id，子查询将匹配 0 行（静默 no-op）。
   await db.update(planCases).set({ datasetRowIndexes: null }).where(
     inArray(planCases.caseId, db.select({ id: testCases.id }).from(testCases).where(eq(testCases.datasetId, datasetId))),
   );
