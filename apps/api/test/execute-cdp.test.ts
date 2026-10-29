@@ -598,6 +598,30 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
     expect(results[0]!.status).toBe('passed');
   });
 
+  it('element-level assertion runs and leaves no skipped-assertion warning', async () => {
+    // 元素级断言（specifiedElement + 非空 locator）真实参与逐步判定 → 无跳过告警（P1-3 对照）。
+    mocked.__locator.mockClear();
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000034',
+      [
+        {
+          order: 1,
+          compiled: [{ kind: 'navigate', url: 'https://example.com' }],
+          assertion: {
+            kind: 'assertText',
+            locator: [{ strategy: 'css', value: '#status' }],
+            target: 'specifiedElement',
+            match: 'contains',
+            equals: 'code',
+          },
+        },
+      ],
+      { reportId: 'r-step-assert-element' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(results[0]!.warning).toBeUndefined();
+  });
+
   it('skips whole-page fuzzy text assertion (Track 1: expectedOutcome + vision is the final judgement)', async () => {
     // target:'page' + locator:[] + match:'contains' 是 AI 写出来的描述性短语断言形态
     // （"登录表单正常展示"等），cdp.ts:normalizeStepAssertion 主动 filter，不再让回放因
@@ -623,6 +647,8 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
       { reportId: 'r-step-assert-fail' },
     );
     expect(results[0]!.status).toBe('passed');
+    // 被跳过的断言显式留痕（P1-3）：报告/warning 能看出「这步其实没断言」，不再静默。
+    expect(String(results[0]!.warning)).toContain('步骤级断言未执行');
   });
 
   it('legacy assertion shape {kind,text} is normalised to canonical and runs', async () => {

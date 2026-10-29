@@ -1137,6 +1137,12 @@ async function runStepsInContext(
     const tabIndex =
       ctx.tabMap && step.tabRef ? Array.from(ctx.tabMap.keys()).indexOf(step.tabRef) : 0;
     const assertionAction = normalizeStepAssertion(step.assertion);
+    // 被跳过的步骤级断言显式留痕：normalizeStepAssertion 只放行元素级 assertText，整页模糊
+    // 文本断言（AI 写的描述性断言正是这个形态）此前被静默跳过——报告里看不出「这步其实
+    // 没断言」。advisory warning 不影响通过判定；终态仍由用例级 expectedOutcome 的 vision 判定裁决。
+    const skippedAssertionWarn = step.assertion != null && !assertionAction
+      ? '步骤级断言未执行：整页模糊文本断言不参与逐步判定，终态由用例级预期结果（expectedOutcome）判定裁决'
+      : undefined;
     try {
       if (step.delayMs) await opts.page.waitForTimeout(step.delayMs);
       // dispatcher 唯一回放路径:按 compiled 数组派原子步骤。
@@ -1216,7 +1222,7 @@ async function runStepsInContext(
         startedAt: new Date(started).toISOString(),
         instruction: step.instruction ?? undefined,
         compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
-        warning,
+        warning: [warning, skippedAssertionWarn].filter(Boolean).join('；') || undefined,
         screenshot,
         hitLocator: opts.hitSink.current ?? undefined,
         tabIndex: tabIndex >= 0 ? tabIndex : 0,

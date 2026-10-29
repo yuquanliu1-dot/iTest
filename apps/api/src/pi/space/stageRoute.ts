@@ -90,6 +90,11 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
   }
 
   // 1b. cases: 拉 stage 行 → 校验 groupId 归属 → 调 createCaseWithSteps 落库
+  //  P1-3 落库闸门：① 死步骤（无 compiled 且无指令）直接 422 拦截并点名——落库后回放只能报
+  //  compile-missing，暂存期拦住让 AI 当轮补写。注意不能拦「自然语言草稿」（compiled 为空 +
+  //  有指令是助手边跑边讨论的正规形态），只拦真死步。② 纯 NL 草稿 + 字符串断言 → advisory
+  //  warnings（字符串断言未编译时不参与逐步判定，终态以 expectedOutcome 判定为准），不阻断。
+  const saveWarnings: string[] = [];
   const stageCaseRows = cases.length
     ? await db.select().from(aiStageCases)
         .where(and(eq(aiStageCases.threadId, threadId), inArray(aiStageCases.localId, cases.map((c) => c.localId))))
@@ -103,6 +108,20 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     const gidPid = await casesSvc.groupProjectId(gid);
     if (!gidPid) throw new HttpError(404, 'not_found', `group ${gid} 不存在`);
     if (gidPid !== pid) throw new HttpError(400, 'cross_project', `group ${gid} 不属于当前项目`);
+    const draftSteps = ((row.steps as unknown[]) ?? []) as Array<{ action?: unknown; assertion?: unknown; compiled?: unknown }>;
+    const deadSteps = draftSteps
+      .map((s, i) => ({ s, n: i + 1 }))
+      .filter(({ s }) => !(Array.isArray(s.compiled) && s.compiled.length > 0)
+        && !(typeof s.action === 'string' && s.action.trim().length > 0));
+    if (deadSteps.length > 0) {
+      throw new HttpError(422, 'dead_steps',
+        `用例「${row.title}」第 ${deadSteps.map((d) => d.n).join('、')} 步既无可执行 DSL 也没有自然语言指令，保存后无法执行——请让助手补写该步内容或删除该步后重试`);
+    }
+    const hasCompiled = draftSteps.some((s) => Array.isArray(s.compiled) && s.compiled.length > 0);
+    const hasStringAssertion = draftSteps.some((s) => typeof s.assertion === 'string' && s.assertion.trim().length > 0);
+    if (!hasCompiled && hasStringAssertion) {
+      saveWarnings.push(`用例「${row.title}」当前是自然语言草稿：步骤级断言不参与逐步判定（机械回放会跳过整页模糊断言），终态以用例级预期结果（expectedOutcome）的判定为准`);
+    }
     // 配套数据集绑定：datasetLocalId 仅在本批 datasets 里解析;未勾选/未找到则跳过绑定（沿 plans caseLocalIds 先例）。
     const datasetId = row.datasetLocalId ? createdDatasetIds.get(row.datasetLocalId) : undefined;
     const created = await casesSvc.createCaseWithSteps({
@@ -117,14 +136,11 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
       coverageTypes: (row.coverageTypes ?? []) as string[],
       datasetId: datasetId ?? undefined,
       createdByUserId: creatorId,
-      steps: ((row.steps as unknown[]) ?? []).map((s) => {
-        const o = s as { action?: unknown; assertion?: unknown; compiled?: unknown };
-        return {
-          instruction: typeof o.action === 'string' ? o.action : '',
-          assertion: typeof o.assertion === 'string' ? o.assertion : null,
-          compiled: Array.isArray(o.compiled) ? o.compiled : undefined,
-        };
-      }),
+      steps: draftSteps.map((s) => ({
+        instruction: typeof s.action === 'string' ? s.action : '',
+        assertion: typeof s.assertion === 'string' ? s.assertion : null,
+        compiled: Array.isArray(s.compiled) ? s.compiled : undefined,
+      })),
     });
     createdCaseIds.set(sel.localId, created.id);
   }
@@ -266,6 +282,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     savedDatasets: datasets.length,
     caseIdMap: Object.fromEntries(createdCaseIds),
     datasetIdMap: Object.fromEntries(createdDatasetIds),
+    ...(saveWarnings.length > 0 ? { warnings: saveWarnings } : {}),
   });
 });
 
