@@ -44,6 +44,19 @@ export function mapSelector(selector: string): Locator | null {
   return { strategy: 'css', value: selector };
 }
 
+/**
+ * mapSelector + 固化同款防线（激活态 class / css 裸标签拒绝）收口：
+ * 供 locator 修复记忆（cdp.ts 降级路径）等不经 mapAiActionsToCompiled 的写入方复用，
+ * 防止 a.router-link-active 这类回放必碎的易碎 selector 被冻结进缓存（2026-10-28 prod228 实录）。
+ */
+export function mapSelectorStrict(selector: string): Locator | null {
+  if (ACTIVE_STATE_SELECTOR_RE.test(selector)) return null;
+  const locator = mapSelector(selector);
+  if (!locator) return null;
+  if (locator.strategy === 'css' && BARE_TAG_RE.test(locator.value)) return null;
+  return locator;
+}
+
 export type SolidifyMapResult =
   | { ok: true; compiled: StepAction[]; skippedCount: number }
   | { ok: false; reason: string };

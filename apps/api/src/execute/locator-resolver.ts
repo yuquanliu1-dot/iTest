@@ -5,6 +5,9 @@ import { isStableCssPath } from '@itest/recorder/modules/selector-filter.js';
 export interface ResolverInput {
   locator: Locator[];
   intentLocator?: IntentLocator;
+  /** 修复记忆候选（step_locator_cache）：追加到候选链末位兜底——作者候选链永远优先，
+   *  缓存只在全链失败时参与探测；与作者候选重复（同 src）时跳过。 */
+  repair?: Locator | null;
 }
 
 /** 单段 CSS 是否为「纯 #id 形式且 id 非动态」——满足则提升优先级。 */
@@ -88,6 +91,22 @@ export function buildCandidates(
     if (l.strategy === 'testId') {
       const v = l.value.startsWith('[') ? l.value : `[data-testid="${l.value}"]`;
       push('testId', page.locator(v), l.value);
+    }
+  }
+
+  // 6: 修复记忆候选（末位兜底）。kind='repair-cache' 供 tryFirstMatch 写 hitSink 时特判展示。
+  if (action.repair) {
+    const r = action.repair;
+    const already = out.some((c) => c.src === r.value);
+    if (!already) {
+      if (r.strategy === 'css') push('repair-cache', page.locator(r.value), r.value);
+      else if (r.strategy === 'xpath') push('repair-cache', page.locator(`xpath=${r.value}`), r.value);
+      else if (r.strategy === 'text') push('repair-cache', page.getByText(r.value), r.value);
+      else if (r.strategy === 'role') push('repair-cache', page.getByRole(r.value as never), r.value);
+      else if (r.strategy === 'testId') {
+        const v = r.value.startsWith('[') ? r.value : `[data-testid="${r.value}"]`;
+        push('repair-cache', page.locator(v), r.value);
+      }
     }
   }
 

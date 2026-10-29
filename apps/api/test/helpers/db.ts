@@ -155,6 +155,7 @@ END $$;
 CREATE TABLE plan_schedules (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), plan_id uuid REFERENCES execution_plans(id) ON DELETE CASCADE NOT NULL, enabled boolean NOT NULL DEFAULT true, cron_expr varchar(120) NOT NULL, timezone varchar(64) NOT NULL DEFAULT 'Asia/Shanghai', last_run_at timestamp, next_run_at timestamp, created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 CREATE INDEX plan_schedules_plan_idx ON plan_schedules(plan_id);
 CREATE TABLE step_action_cache (step_id uuid PRIMARY KEY REFERENCES test_steps(id) ON DELETE CASCADE, instruction text NOT NULL, actions jsonb NOT NULL, hits integer NOT NULL DEFAULT 0, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
+CREATE TABLE step_locator_cache (step_id uuid PRIMARY KEY REFERENCES test_steps(id) ON DELETE CASCADE, action_kind varchar(16) NOT NULL, locator jsonb NOT NULL, hits integer NOT NULL DEFAULT 0, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 -- 核心对象创建人跟踪（对齐 schema.ts createdByUserId；用户删除后置 NULL，不牵连业务行）
 DO $$ BEGIN ALTER TABLE test_cases      ADD COLUMN created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL; EXCEPTION WHEN duplicate_column THEN null; END $$;
 DO $$ BEGIN ALTER TABLE ai_threads      ADD COLUMN created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL; EXCEPTION WHEN duplicate_column THEN null; END $$;

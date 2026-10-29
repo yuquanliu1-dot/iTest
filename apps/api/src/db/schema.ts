@@ -14,7 +14,7 @@ import {
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import type { StepAction } from '@itest/shared';
+import type { StepAction, Locator } from '@itest/shared';
 
 export const settings = pgTable('settings', {
   key: varchar('key', { length: 100 }).primaryKey(),
@@ -285,6 +285,20 @@ export const stepActionCache = pgTable('step_action_cache', {
   stepId: uuid('step_id').primaryKey().references(() => testSteps.id, { onDelete: 'cascade' }),
   instruction: text('instruction').notNull(),
   actions: jsonb('actions').$type<StepAction[]>().notNull(),
+  hits: integer('hits').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+/** 机械步骤 locator 修复记忆：AI 降级（ai_fallback_locator_failed）整步重做成功后，
+ *  把 AI 动作解析回的稳定 selector（经 mapSelectorStrict 净化）按 step_id 缓存；
+ *  后续回放把缓存 locator 追加进候选链末位参与探测——零 LLM 命中即过；
+ *  缓存也失灵 → 照旧 AI 降级 → 覆写缓存（自愈协议）。对 test_steps.compiled 零侵入。
+ *  key = stepId（action_kind 区分步内多动作）；步骤删除级联清缓存。 */
+export const stepLocatorCache = pgTable('step_locator_cache', {
+  stepId: uuid('step_id').primaryKey().references(() => testSteps.id, { onDelete: 'cascade' }),
+  actionKind: varchar('action_kind', { length: 16 }).notNull(),
+  locator: jsonb('locator').$type<Locator>().notNull(),
   hits: integer('hits').notNull().default(0),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),

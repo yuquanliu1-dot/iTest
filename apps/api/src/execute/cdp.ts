@@ -29,8 +29,9 @@ import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
 import { runAiTask, solveCaptchaOnce, isCaptchaFailed, CAPTCHA_TASK_RE, SECRET_PH, makeCredentialValueSub, parseCredentialPlaceholder, CREDENTIAL_PLACEHOLDER_SCAN, referencesCredential, buildDegradeContext, type AiAction } from './aiTask.js';
 import { buildCredentialSource, renderWebResourceManifest } from './credentialSource.js';
-import { mapAiActionsToCompiled } from './aiActionMap.js';
+import { mapAiActionsToCompiled, mapSelectorStrict } from './aiActionMap.js';
 import { readAiTaskCache, writeAiTaskCache, bumpAiTaskCacheHit } from './aiTaskCache.js';
+import { readLocatorCache, writeLocatorCache, bumpLocatorCacheHit } from './locatorCache.js';
 import type { EnvCtx } from './envContext.js';
 import type { AiFallbackSettings } from './aiFallback.js';
 import { runQueryDb } from './dbQuery.js';
@@ -173,6 +174,15 @@ interface DispatchOpts {
   aiUsage?: AiUsageAccumulator;
   /** 记录本步是否发生缓存分叉后 AI 自愈成功（由 aiTask 分支写入） */
   healedSink?: { current: boolean };
+  /** 本步的 locator 修复记忆（AI 降级成功时写入 step_locator_cache，步循环开始时读）；
+   *  按 kind 匹配注入 tryFirstMatch 候选链末位，零 LLM 兜底。 */
+  repairLocator?: { current: { locator: Locator; actionKind: string } | null };
+}
+
+/** 当前动作可用的修复缓存 locator（kind 不匹配 → null，不注入）。 */
+function repairFor(opts: DispatchOpts, action: StepAction): Locator | null {
+  const r = opts.repairLocator?.current;
+  return r && r.actionKind === action.kind ? r.locator : null;
 }
 
 /** 交互动作：执行前先做稳定性检查 */
@@ -375,10 +385,10 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       try {
         // React 受控表单的 button 经常在 onChange → setState → re-render 之前仍是 disabled。
         // 这里用 force: true 跳过 enabled 检查直接 click（按钮在 click 时只要 password state 非空就能触发 submit）。
-        await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).click({ timeout: 5000, force: true });
+        await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action))).click({ timeout: 5000, force: true });
       } catch (e) {
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
-          const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
+          const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
           // 不能裸 first()：Element-UI 在 .el-table 首子节点渲染 display:none 的 .hidden-columns
           // 模板克隆（.el-table__fixed 里还有隐藏克隆），DOM 顺序早于真实元素，first() 会抓到
           // 不可见副本等 5s 超时（规则查看 回测根因）。与 assertVisible 兜底同款 visible 过滤。
@@ -405,7 +415,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         }
         value = resolveEnvCredential(materializeValue(action.value, vars), opts.ctx);
       }
-      const fillLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
+      const fillLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
       try {
         // React 受控表单：fill() 只改 DOM value，onChange 不一定冒泡。
         // 先 fill('')，再用 pressSequentially 模拟真实键入，确保组件重新计算 state（disabled 状态、错误信息等）。
@@ -425,7 +435,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       return;
     }
     case 'hover': {
-      const hoverLoc = await tryFirstMatch(page, action.locator, undefined, opts.hitSink);
+      const hoverLoc = await tryFirstMatch(page, action.locator, undefined, opts.hitSink, repairFor(opts, action));
       try {
         await hoverLoc.hover({ timeout: 5000 });
       } catch (e) {
@@ -457,7 +467,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       let lastErr: unknown;
       while (Date.now() < deadline) {
         try {
-          const loc = await tryFirstMatch(page, waitLoc, action.intentLocator, opts.hitSink);
+          const loc = await tryFirstMatch(page, waitLoc, action.intentLocator, opts.hitSink, repairFor(opts, action));
           await loc.waitFor({ state: 'visible', timeout: Math.max(100, deadline - Date.now()) });
           return;
         } catch (e) {
@@ -472,7 +482,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       if (assertMissing.length > 0) {
         throw new Error(`var-missing: {{${assertMissing[0]!}}} (locator="${action.locator[0]?.value}")`);
       }
-      const assertLoc = await tryFirstMatch(page, assertLocArr, action.intentLocator, opts.hitSink);
+      const assertLoc = await tryFirstMatch(page, assertLocArr, action.intentLocator, opts.hitSink, repairFor(opts, action));
       try {
         if (!(await assertLoc.isVisible({ timeout: 5000 }))) {
           throw new Error(`assertVisible failed: ${assertLocArr[0]?.value}`);
@@ -501,7 +511,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       if (locMissing.length > 0) {
         throw new Error(`var-missing: {{${locMissing[0]!}}} (locator="${a.locator[0]?.value}")`);
       }
-      const actual = await resolveAssertTextActual(page, { ...a, locator: assertLocArr }, opts.hitSink);
+      const actual = await resolveAssertTextActual(page, { ...a, locator: assertLocArr }, opts.hitSink, repairFor(opts, a));
       const ok = matchAssertText(actual, value, a.match ?? 'equals');
       if (!ok) {
         throw new Error(`assertText failed (${a.target ?? 'specifiedElement'}/${a.match ?? 'equals'}): expected ${JSON.stringify(value)}, actual ${JSON.stringify(actual.slice(0, 100))}`);
@@ -520,7 +530,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       if (jsonLocMissing.length > 0) {
         throw new Error(`var-missing: {{${jsonLocMissing[0]!}}} (locator="${action.locator[0]?.value}")`);
       }
-      const text = (await (await tryFirstMatch(page, jsonLocArr, action.intentLocator, opts.hitSink)).innerText({ timeout: 5000 })).trim();
+      const text = (await (await tryFirstMatch(page, jsonLocArr, action.intentLocator, opts.hitSink, repairFor(opts, action))).innerText({ timeout: 5000 })).trim();
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -545,7 +555,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       return;
     }
     case 'check': {
-      const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
+      const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
       const current = await loc.isChecked({ timeout: 5000 });
       if (current !== action.checked) {
         if (action.checked) await loc.check({ timeout: 5000 });
@@ -556,7 +566,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
     case 'select': {
       const { value, missing } = substituteVars(action.value, vars);
       if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.value}")`);
-      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).selectOption(value, { timeout: 5000 });
+      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action))).selectOption(value, { timeout: 5000 });
       return;
     }
     case 'upload': {
@@ -564,7 +574,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         ? await opts.ctx.attachmentResolver(action.fileId)
         : await defaultAttachmentResolver(action.fileId, opts.ctx.projectId);
       if (!meta) throw new Error(`attachment-missing: ${action.fileId}`);
-      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink)).setInputFiles(meta.storedPath, { timeout: 5000 });
+      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action))).setInputFiles(meta.storedPath, { timeout: 5000 });
       return;
     }
     case 'switchTab': {
@@ -590,7 +600,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       return;
     }
     case 'extract': {
-      const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink);
+      const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
       let text: string;
       try {
         text = await loc.inputValue({ timeout: 5000 });
@@ -815,6 +825,7 @@ async function tryFirstMatch(
   locator: Locator[],
   intentLocator?: IntentLocator,
   hitSink?: { current: HitLocator | null },
+  repairLoc?: Locator | null,
 ): Promise<ReturnType<Page['locator']>> {
   // 2026-10-07: mobile-only locator strategy 在 web engine dispatcher 中标 unsupported,
   // 避免误用(如 web case 误用 accessibilityId 命中空节点导致 fail)。
@@ -825,7 +836,12 @@ async function tryFirstMatch(
       throw new Error(`locator strategy '${l.strategy}' is mobile-only; cannot run on web engine`);
     }
   }
-  const cands = buildCandidates(page, { locator, intentLocator });
+  const cands = buildCandidates(page, { locator, intentLocator, repair: repairLoc });
+  // hitSink 展示值：修复缓存候选不在作者 locator 数组里，直接用其 DSL value；其余反查。
+  const hitFor = (c: { kind: string; src?: string }): HitLocator => ({
+    kind: c.kind,
+    value: c.kind === 'repair-cache' ? (c.src ?? '') : locatorForCandidate(locator, intentLocator, c.kind),
+  });
   if (cands.length === 0) {
     throw new Error('locator array is empty');
   }
@@ -845,7 +861,7 @@ async function tryFirstMatch(
       const probe = c.loc as unknown as ProbeLocator;
       if (!probe || typeof probe.count !== 'function') {
         // 没有 count()（如 getByText 路径）直接接受
-        if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
+        if (hitSink) hitSink.current = hitFor(c);
         await annotateAction(page, () => c.loc.boundingBox().catch(() => null));
         return c.loc;
       }
@@ -866,7 +882,7 @@ async function tryFirstMatch(
           lastErr = new Error(`resolved ${n} match(es) but none visible (${c.kind})`);
           continue;
         }
-        if (hitSink) hitSink.current = { kind: c.kind, value: locatorForCandidate(locator, intentLocator, c.kind) };
+        if (hitSink) hitSink.current = hitFor(c);
         const chosen = (vn > 0 ? visibleLoc! : c.loc) as ReturnType<Page['locator']>;
         await annotateAction(page, () => chosen.boundingBox().catch(() => null));
         return chosen;
@@ -882,6 +898,7 @@ async function resolveAssertTextActual(
   page: Page,
   action: StepAction & { kind: 'assertText' },
   hitSink?: { current: HitLocator | null },
+  repairLoc?: Locator | null,
 ): Promise<string> {
   const target = action.target ?? 'specifiedElement';
   if (target === 'page') {
@@ -898,7 +915,7 @@ async function resolveAssertTextActual(
   }
   // specifiedElement（默认）
   if (action.locator.length === 0) throw new Error('assertText: specifiedElement 模式需要 locator');
-  const loc = await tryFirstMatch(page, action.locator, action.intentLocator, hitSink);
+  const loc = await tryFirstMatch(page, action.locator, action.intentLocator, hitSink, repairLoc);
   return (await loc.innerText({ timeout: 5000 })).trim();
 }
 
@@ -1129,6 +1146,8 @@ async function runStepsInContext(
     const aiUsage = newAiUsage();
     opts.aiUsage = aiUsage;
     opts.healedSink = { current: false };
+    // 修复记忆：本步若有缓存的修复 locator（AI 降级成功时写入），按 kind 匹配注入候选链末位。
+    opts.repairLocator = { current: step.id ? await readLocatorCache(step.id) : null };
     // AI 降级失败原因（compileMissing / locatorFailed 两处共写，失败结果 warning 用）；
     // compileMissing 已试过 AI 的标记——失败后 locatorFailed 不再重跑同一指令
     // （2026-10-21 prod228 实测同一指令双重 AI 空转 12+ 次调用）。
@@ -1212,6 +1231,12 @@ async function runStepsInContext(
           if (retryWarning) warning = warning ? `${warning}; ${retryWarning}` : retryWarning;
         }
       }
+      // 修复记忆命中留痕：hitLocator 已显示 repair-cache 候选；warning 标注 + 命中计数。
+      // 不置 degraded/healed——纯机械命中，不进双通过率口径。
+      if (opts.hitSink.current?.kind === 'repair-cache') {
+        warning = `${warning ? `${warning}；` : ''}locator 修复缓存命中：${opts.hitSink.current.value}`;
+        if (opts.stepId && UUID_RE.test(opts.stepId)) void bumpLocatorCacheHit(opts.stepId).catch(() => undefined);
+      }
       const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
       const pageTextSnap = await capturePageTextSnapshot(opts.page);
       if (pageTextSnap) pageTextSnaps.push(pageTextSnap);
@@ -1275,6 +1300,15 @@ async function runStepsInContext(
         && !(e instanceof Error && (e.name === 'EnvMissing' || e.name === 'SecretMissing'))
       ) {
         const { value: instResolved, missing } = substituteVars(inst, vars);
+        // 修复记忆可缓存判定（与 aiTask 运行时缓存门控同语义）：
+        // 指令插值为 no-op = 无数据集变量（不同行页面状态不同，物化 selector 跨行必错）；
+        // 验证码豁免与 aiTask 缓存对齐；目标动作须带 locator（navigate 等无定位可修）。
+        const repairCacheable = !!opts.caseId && !!opts.stepId && UUID_RE.test(opts.stepId)
+          && instResolved === inst
+          && !CAPTCHA_TASK_RE.test(inst)
+          && !!firstCompiledAction
+          && Array.isArray((firstCompiledAction as { locator?: unknown }).locator)
+          && ((firstCompiledAction as { locator?: unknown[] }).locator?.length ?? 0) > 0;
         // 凭据占位符不来自数据集 vars：只缺凭据不算缺变量（值由 valueSub 执行时刻替换）。
         if (missing.every((m) => referencesCredential(m))) {
           const preErr = credentialPreflightError(instResolved, ctx);
@@ -1282,6 +1316,8 @@ async function runStepsInContext(
             aiDegradedErr = preErr.message;
           } else {
             let aiSummary: string | undefined;
+            // 收集 AI 重做的成功动作：降级成功后从中解析目标元素 selector 写修复缓存（自愈协议）。
+            const collected: AiAction[] = [];
             try {
               const client = ctx.llmClient ?? (await resolveLlmClient()).client;
               // 凭据能力按需授予（与 compiled aiTask 步同一门控）：指令显式引用凭据占位符
@@ -1289,6 +1325,7 @@ async function runStepsInContext(
               // 重填账号/密码框（负向用例会被"修正"成真实凭据从而真登录成功）。
               const credRef = referencesCredential(instResolved);
               aiSummary = (await runAiTask(opts.page, instResolved, client, undefined, {
+                onAction: (a, ok) => { if (ok) collected.push(a); },
                 onUsage: (r) => aiUsage.add(r),
                 // 把机械语义 + 机械失败原因一并告诉 AI：降级路径原本只传自然语言指令，
                 // AI 不知道「本步本意是等某文本出现 10s」也不知道「机械已确认它没出现」，
@@ -1311,6 +1348,18 @@ async function runStepsInContext(
               aiDegradedErr = err instanceof Error ? err.message : String(err);
             }
             if (aiSummary !== undefined) {
+              // 修复记忆写入：从 AI 成功动作里挑目标元素 selector（同 kind 优先，否则第一个
+              // 带 selector 的 click/fill），mapSelectorStrict 净化（拒专有语法/激活态 class/裸标签）
+              // 后按 stepId 落 step_locator_cache；fire-and-forget，失败不影响本步结果。
+              if (repairCacheable) {
+                const kind = firstCompiledAction!.kind;
+                const withSelector = (a: AiAction): a is AiAction & { selector: string } =>
+                  (a.type === 'click' || a.type === 'fill') && typeof a.selector === 'string' && a.selector.length > 0;
+                const targetable = collected.filter(withSelector);
+                const pick = targetable.find((a) => a.type === kind) ?? targetable[0];
+                const loc = pick ? mapSelectorStrict(pick.selector) : null;
+                if (loc) void writeLocatorCache(opts.stepId!, loc, kind).catch(() => undefined);
+              }
               const aiScreenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
               const aiTextSnap = await capturePageTextSnapshot(opts.page);
               if (aiTextSnap) pageTextSnaps.push(aiTextSnap);
