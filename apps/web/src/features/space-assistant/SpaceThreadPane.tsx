@@ -24,6 +24,7 @@ import Icon, { type IconName } from '../../components/Icon';
 import Markdown from '../../components/ui/Markdown';
 import { useSpaceEventsStore, type ArtifactItem } from './spaceEventsStore';
 import { toolMeta } from './toolMeta';
+import { splitUploadedFileTags, type UploadedFileMeta } from './uploadedFileTag';
 import { api, ApiError } from '../../api/client';
 
 /**
@@ -146,7 +147,7 @@ function UserMessage() {
       >
         {/* 附件必须给 Image 组件:assistant-ui 的默认 Image part 渲染是 null,
             不覆盖的话用户发的截图在历史消息里完全不可见。 */}
-        <MessagePrimitive.Parts components={{ Image: UserImagePart }} />
+        <MessagePrimitive.Parts components={{ Image: UserImagePart, Text: UserTextPart }} />
       </div>
     </div>
   );
@@ -161,6 +162,38 @@ function UserImagePart({ image }: { image: string }) {
       className="my-1 max-h-64 max-w-full rounded-[var(--radius-sm)] object-contain"
     />
   );
+}
+
+/** 用户消息文本 part：把 <uploaded-file …/> 引用标签折叠成附件 chip，其余原样。
+ *  只做显示层变换——消息原文（含标签）保持原样进 pi 会话与对账 key。 */
+function UserTextPart({ text }: TextMessagePartProps) {
+  const parts = splitUploadedFileTags(text);
+  if (parts.length === 1 && typeof parts[0] === 'string') return <>{parts[0]}</>;
+  return (
+    <>
+      {parts.map((p, i) => (typeof p === 'string' ? <span key={i}>{p}</span> : <UploadedFileChip key={i} meta={p} />))}
+    </>
+  );
+}
+
+/** 历史消息里的文档附件 chip：图标 + 文件名 + 字数。 */
+function UploadedFileChip({ meta }: { meta: UploadedFileMeta }) {
+  const chars = meta.chars === 'unknown' ? '' : ` · ${Number(meta.chars).toLocaleString()} 字`;
+  return (
+    <span
+      className="my-1 inline-flex max-w-full items-center gap-1 rounded-[var(--radius-sm)] border px-2 py-0.5 text-[12px]"
+      style={{ borderColor: 'var(--border)', background: 'var(--popover)', color: 'var(--muted-foreground)' }}
+    >
+      <Icon name="file" size={12} />
+      <span className="max-w-[240px] truncate">{meta.name}</span>
+      <span>{chars}</span>
+    </span>
+  );
+}
+
+/** docx 附件判别：contentType（浏览器对 .docx 给 wordprocessingml mime）或扩展名兜底。 */
+function isDocxAttachment(a: Attachment): boolean {
+  return /\.docx$/i.test(a.name) || /wordprocessingml/i.test(a.contentType ?? '');
 }
 
 /** 输入框上方的待发送图片附件。
@@ -179,11 +212,23 @@ function ComposerAttachment({ attachment, removeLabel }: { attachment: Attachmen
   return (
     <AttachmentPrimitive.Root className="flex w-fit max-w-full items-start gap-1" style={{ color: 'var(--muted-foreground)' }}>
       <AttachmentPrimitive.unstable_Thumb>
-        <img
-          src={dataUrl ?? objectUrl ?? ''}
-          alt={attachment.name}
-          className="h-14 w-auto rounded-[var(--radius-sm)] object-cover"
-        />
+        {isDocxAttachment(attachment) ? (
+          <div
+            className="flex h-14 w-32 items-center gap-1.5 rounded-[var(--radius-sm)] border px-2"
+            style={{ borderColor: 'var(--border)', background: 'var(--popover)' }}
+          >
+            <Icon name="file" size={14} />
+            <span className="truncate text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+              {attachment.name}
+            </span>
+          </div>
+        ) : (
+          <img
+            src={dataUrl ?? objectUrl ?? ''}
+            alt={attachment.name}
+            className="h-14 w-auto rounded-[var(--radius-sm)] object-cover"
+          />
+        )}
       </AttachmentPrimitive.unstable_Thumb>
       <AttachmentPrimitive.Remove
         className="btn-tint shrink-0 rounded-[var(--radius-sm)]"

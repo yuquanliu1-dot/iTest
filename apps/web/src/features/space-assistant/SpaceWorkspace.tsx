@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   AssistantRuntimeProvider,
+  CompositeAttachmentAdapter,
   SimpleImageAttachmentAdapter,
   useAui,
   useAuiState,
   type ThreadSuggestion,
 } from '@assistant-ui/react';
+import { useTranslation } from 'react-i18next';
 import { createPiHttpClient, usePiRuntime, type PiClientEvent } from '@assistant-ui/react-pi';
+import { DocxAttachmentAdapter } from './DocxAttachmentAdapter';
 import SpaceThreadPane from './SpaceThreadPane';
 import SpaceThreadList from './SpaceThreadList';
 import StagePanel from './StagePanel';
@@ -103,11 +106,17 @@ export default function SpaceWorkspace({ versionId, initialMessage, onError, onW
   }, [activeThreadId]);
   useEffect(() => () => useSpaceEventsStore.getState().setCurrentThreadId(''), []);
   const hasLiveView = !!useActiveLiveView();
-  // 图片附件 adapter:composer 的 addAttachment 没有 adapter 会直接抛
-  // 「Attachments are not supported」(base-composer-runtime-core.js:470),而 react-pi
-  // 不提供 attachment adapter,必须由这里注入。这个实现把 File 读成 dataURL,
-  // ThreadController 再拆成 pi 的 ImageContent 随 input.attachments 上行。
-  const attachments = useMemo(() => new SimpleImageAttachmentAdapter(), []);
+  const { t } = useTranslation();
+  // 组合附件 adapter：图片走 SimpleImage（dataURL → pi ImageContent）；
+  // docx 走 Docx（预上传 → send() 把 <uploaded-file …/> 标签作为文本部件返回，
+  // ThreadController 拍平进消息正文——与 pi 记录逐字一致，userContentKey 对账无重复气泡）。
+  const attachments = useMemo(
+    () => new CompositeAttachmentAdapter([
+      new SimpleImageAttachmentAdapter(),
+      new DocxAttachmentAdapter(versionId, { tooLarge: t('assistant:attachment.docxTooLarge') }),
+    ]),
+    [versionId, t],
+  );
   // 推荐追问:AI 每轮回答落定后由 SuggestionWatcher 拉一次,喂给 runtime 的 suggestions
   // (react-pi 原样透传进外部 store,渲染见 SpaceThreadPane 的 SuggestionRow)。
   const [suggestions, setSuggestions] = useState<readonly ThreadSuggestion[]>([]);

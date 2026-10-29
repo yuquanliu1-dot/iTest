@@ -5,8 +5,10 @@
     "stop": "停止"
   },
   "attachment": {
-    "add": "添加图片",
-    "remove": "移除图片"
+    "add": "添加图片/文件",
+    "remove": "移除",
+    "docxTooLarge": "docx 超过 10MB 上限",
+    "docxFile": "Word 文档"
   },
   "runningIndicator": "正在运行",
   "suggestion": {

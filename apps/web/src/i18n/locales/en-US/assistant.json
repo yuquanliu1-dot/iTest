@@ -5,8 +5,10 @@
     "stop": "Stop"
   },
   "attachment": {
-    "add": "Add image",
-    "remove": "Remove image"
+    "add": "Add image/file",
+    "remove": "Remove",
+    "docxTooLarge": "docx exceeds the 10MB limit",
+    "docxFile": "Word document"
   },
   "runningIndicator": "Running",
   "suggestion": {
