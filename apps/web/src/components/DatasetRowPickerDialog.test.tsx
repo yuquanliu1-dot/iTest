@@ -42,6 +42,7 @@ const detail = {
 
 function renderPicker(props: Partial<React.ComponentProps<typeof DatasetRowPickerDialog>> = {}) {
   const onConfirm = vi.fn();
+  const onFollowCase = vi.fn();
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
@@ -50,20 +51,21 @@ function renderPicker(props: Partial<React.ComponentProps<typeof DatasetRowPicke
         onOpenChange={() => {}}
         projectId="p1"
         datasetId="ds-1"
-        mode="many"
         value={[]}
         onConfirm={onConfirm}
         {...props}
       />
     </QueryClientProvider>,
   );
-  return { onConfirm };
+  return { onConfirm, onFollowCase };
 }
 
 /** 行表格 tbody 里的勾选框（表头全选框在 thead，不参与）。 */
 function rowCheckboxes(): HTMLInputElement[] {
   return Array.from(document.querySelectorAll('tbody input[type=checkbox]')) as HTMLInputElement[];
 }
+
+const confirmBtn = () => screen.getByRole('button', { name: '确认' }) as HTMLButtonElement;
 
 describe('DatasetRowPickerDialog', () => {
   beforeEach(() => {
@@ -74,10 +76,8 @@ describe('DatasetRowPickerDialog', () => {
   it('只渲染启用行，编号 = 启用行下标 + 1（禁用行不占号）', async () => {
     renderPicker();
     await waitFor(() => expect(datasetGet).toHaveBeenCalled());
-    // 3 行里 1 行被禁用 → 只渲染 2 行
     await waitFor(() => expect(rowCheckboxes()).toHaveLength(2));
     expect(screen.queryByText('skip')).toBeNull();
-    // 编号列：1 和 2（禁用行不占号，bob 是第 2 个启用行）
     const numbers = screen.getAllByRole('row').slice(1).map((tr) => tr.children[1]?.textContent);
     expect(numbers).toEqual(['1', '2']);
   });
@@ -88,39 +88,85 @@ describe('DatasetRowPickerDialog', () => {
     expect(screen.getAllByText('••••••')).toHaveLength(2);
   });
 
-  it('0 选中时确认按钮禁用；选中后确认回传升序下标', async () => {
-    const { onConfirm } = renderPicker();
-    await waitFor(() => expect(rowCheckboxes()).toHaveLength(2));
-
-    const confirmBtn = screen.getByRole('button', { name: '确认' }) as HTMLButtonElement;
-    expect(confirmBtn.disabled).toBe(true);
-
-    // 选第 2 个启用行（下标 1）
-    await act(async () => {
-      rowCheckboxes()[1]!.click();
+  it('value=[]（全部行）→ 打开即全选；确认回传 []', async () => {
+    const { onConfirm } = renderPicker({ value: [] });
+    // 先等行渲染出来再断言全选——空数组的 every() 恒真，会假通过
+    await waitFor(() => {
+      const boxes = rowCheckboxes();
+      expect(boxes).toHaveLength(2);
+      expect(boxes.every((c) => c.checked)).toBe(true);
     });
-    await waitFor(() => expect((screen.getByRole('button', { name: '确认' }) as HTMLButtonElement).disabled).toBe(false));
-
     await act(async () => {
-      (screen.getByRole('button', { name: '确认' }) as HTMLButtonElement).click();
+      confirmBtn().click();
+    });
+    expect(onConfirm).toHaveBeenCalledWith([]);
+  });
+
+  it('value=子集 → 只勾子集；确认回传子集', async () => {
+    const { onConfirm } = renderPicker({ value: [1] });
+    await waitFor(() => expect(rowCheckboxes()).toHaveLength(2));
+    expect(rowCheckboxes()[0]!.checked).toBe(false);
+    expect(rowCheckboxes()[1]!.checked).toBe(true);
+    await act(async () => {
+      confirmBtn().click();
     });
     expect(onConfirm).toHaveBeenCalledWith([1]);
   });
 
-  it("mode='one'：再选一行即替换，最多保留一行", async () => {
-    const { onConfirm } = renderPicker({ mode: 'one' });
-    await waitFor(() => expect(rowCheckboxes()).toHaveLength(2));
+  it('全选状态取消一行 → 确认回传剩余下标', async () => {
+    const { onConfirm } = renderPicker({ value: [] });
+    // 先等行渲染出来再断言全选——空数组的 every() 恒真，会假通过
+    await waitFor(() => {
+      const boxes = rowCheckboxes();
+      expect(boxes).toHaveLength(2);
+      expect(boxes.every((c) => c.checked)).toBe(true);
+    });
+    await act(async () => {
+      rowCheckboxes()[0]!.click();
+    });
+    await act(async () => {
+      confirmBtn().click();
+    });
+    expect(onConfirm).toHaveBeenCalledWith([1]);
+  });
 
+  it('手动取消全部勾选 → 确认禁用；表头全选可恢复（回到全部的唯一入口）', async () => {
+    renderPicker({ value: [] });
+    // 先等行渲染出来再断言全选——空数组的 every() 恒真，会假通过
+    await waitFor(() => {
+      const boxes = rowCheckboxes();
+      expect(boxes).toHaveLength(2);
+      expect(boxes.every((c) => c.checked)).toBe(true);
+    });
     await act(async () => {
       rowCheckboxes()[0]!.click();
     });
     await act(async () => {
       rowCheckboxes()[1]!.click();
     });
+    expect(confirmBtn().disabled).toBe(true);
     await act(async () => {
-      (screen.getByRole('button', { name: '确认' }) as HTMLButtonElement).click();
+      (screen.getByTitle('全选') as HTMLInputElement).click();
     });
-    expect(onConfirm).toHaveBeenCalledWith([1]);
+    expect(confirmBtn().disabled).toBe(false);
+  });
+
+  it('传 onFollowCase → 显示「跟随用例」按钮，点击回调并关弹窗', async () => {
+    const onFollowCase = vi.fn();
+    const onOpenChange = vi.fn();
+    renderPicker({ onFollowCase, onOpenChange });
+    await waitFor(() => expect(rowCheckboxes()).toHaveLength(2));
+    await act(async () => {
+      (screen.getByRole('button', { name: '跟随用例' }) as HTMLButtonElement).click();
+    });
+    expect(onFollowCase).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('未传 onFollowCase → 不渲染「跟随用例」按钮', async () => {
+    renderPicker();
+    await waitFor(() => expect(rowCheckboxes()).toHaveLength(2));
+    expect(screen.queryByRole('button', { name: '跟随用例' })).toBeNull();
   });
 
   it('关闭时不拉数据集（零额外请求）', async () => {

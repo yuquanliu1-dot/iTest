@@ -13,34 +13,35 @@ interface DatasetRowPickerDialogProps {
   onOpenChange: (open: boolean) => void;
   projectId: string | undefined;
   datasetId: string | null;
-  /** 'one' = 单选（选一行即替换）；'many' = 多选。 */
-  mode: 'one' | 'many';
-  /** 当前已选（启用行下标，0 基）。 */
+  /** 当前已选（启用行下标，0 基）。[] = 全部启用行（打开即全选）。 */
   value: number[];
+  /** 确认回传：勾满全部启用行 → []；部分勾选 → 升序下标；未勾任何行时确认禁用。 */
   onConfirm: (indexes: number[]) => void;
+  /** 计划级专用：传了才显示「跟随用例」按钮——清计划级覆盖（置 null），执行回落用例级配置。 */
+  onFollowCase?: () => void;
 }
 
 /**
- * 数据集行选择弹窗：只渲染「启用行」，编号用启用行下标 + 1（与执行器同一编号空间）。
- * 只在打开时拉数据集（页面加载零额外请求）；敏感格显示 ••••••。
+ * 数据集行选择弹窗（统一多选，不分单行/多行模式）：只渲染「启用行」，
+ * 编号用启用行下标 + 1（与执行器同一编号空间）。只在打开时拉数据集（页面加载零额外请求）；
+ * 敏感格显示 ••••••。
  */
 export default function DatasetRowPickerDialog({
   open,
   onOpenChange,
   projectId,
   datasetId,
-  mode,
   value,
   onConfirm,
+  onFollowCase,
 }: DatasetRowPickerDialogProps) {
   const { t } = useTranslation();
-  const [picked, setPicked] = useState<number[]>(value);
+  /** 用户交互后的选择；null = 尚未交互，按 value 派生（[] = 全选）。每次打开重置。 */
+  const [pickedOverride, setPickedOverride] = useState<number[] | null>(null);
 
-  // 打开时重置为当前值并拉数据集详情
   useEffect(() => {
-    if (!open) return;
-    setPicked(value);
-  }, [open, value]);
+    if (open) setPickedOverride(null);
+  }, [open]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['dataset', datasetId],
@@ -52,24 +53,23 @@ export default function DatasetRowPickerDialog({
   const enabledRows = (data?.rows ?? [])
     .map((r, i) => ({ r, enabledIndex: i }))
     .filter(({ r }) => !r.disabled);
-  // 启用行下标 = 剔除禁用行后的重新编号
   const enabledIndexes = enabledRows.map((_, i) => i);
 
+  // 未交互时按 value 派生：[] = 全部启用行；非空 = 子集
+  const picked = pickedOverride ?? (value.length === 0 ? enabledIndexes : value);
+
   const toggle = (idx: number) => {
-    if (mode === 'one') {
-      setPicked([idx]);
-      return;
-    }
-    setPicked((prev) => (prev.includes(idx) ? prev.filter((x) => x !== idx) : [...prev, idx]));
+    setPickedOverride(picked.includes(idx) ? picked.filter((x) => x !== idx) : [...picked, idx]);
   };
 
   const toggleAll = () => {
-    if (mode === 'one') return;
-    setPicked((prev) => (prev.length === enabledIndexes.length ? [] : [...enabledIndexes]));
+    setPickedOverride(picked.length === enabledIndexes.length ? [] : [...enabledIndexes]);
   };
 
   const confirm = () => {
-    onConfirm([...picked].sort((a, b) => a - b));
+    // 勾满全部启用行 → 存 []（语义=全部行）；部分勾选 → 升序下标
+    const all = picked.length === enabledIndexes.length;
+    onConfirm(all ? [] : [...picked].sort((a, b) => a - b));
     onOpenChange(false);
   };
 
@@ -91,15 +91,13 @@ export default function DatasetRowPickerDialog({
               <thead>
                 <tr>
                   <th className="px-2 py-1.5 w-[36px]">
-                    {mode === 'many' && (
-                      <input
-                        type="checkbox"
-                        checked={picked.length === enabledIndexes.length && enabledIndexes.length > 0}
-                        onChange={toggleAll}
-                        title={t('cases:datasetRowSelectAll')}
-                        style={{ accentColor: 'var(--primary)' }}
-                      />
-                    )}
+                    <input
+                      type="checkbox"
+                      checked={picked.length === enabledIndexes.length && enabledIndexes.length > 0}
+                      onChange={toggleAll}
+                      title={t('cases:datasetRowSelectAll')}
+                      style={{ accentColor: 'var(--primary)' }}
+                    />
                   </th>
                   <th className="px-2 py-1.5 w-[36px] text-left text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                     #
@@ -153,6 +151,18 @@ export default function DatasetRowPickerDialog({
         )}
 
         <DialogFooter>
+          {onFollowCase && (
+            <Button
+              variant="ghost"
+              className="mr-auto"
+              onClick={() => {
+                onFollowCase();
+                onOpenChange(false);
+              }}
+            >
+              {t('plans:followCase')}
+            </Button>
+          )}
           <Button variant="ghost" onClick={() => onOpenChange(false)}>{t('common:cancel')}</Button>
           <Button onClick={confirm} disabled={picked.length === 0}>{t('common:confirm')}</Button>
         </DialogFooter>
