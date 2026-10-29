@@ -14,7 +14,7 @@ import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '.
 import {
   createPlan, updatePlan, getPlanDetail, setPlanGroupCases, createPlanGroup, updatePlanGroup, deletePlanGroup, reorderPlanGroups,
   addPlanCases, reorderPlanGroupCases, movePlanCases,
-  planProjectId, removePlanCases, updatePlanCase,
+  planProjectId, removePlanCases, updatePlanCase, updatePlanCaseDatasetRows,
 } from '../services/plans.service.js';
 import { attachCreators } from '../lib/creator.js';
 import { logger } from '../logger.js';
@@ -211,6 +211,19 @@ plansRoute.patch('/:id/cases/:caseId', async (req, res) => {
   if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
   await assertProjectVisible(pid, req.user!);
   res.json(await updatePlanCase(req.params.id!, caseId, { targetOverride: body.targetOverride }));
+});
+
+// 计划级数据集行选择：按 plan_cases.id 定位（同用例跨组=多行，各改各的）。
+// null = 清覆盖（执行回落用例级）；[] = 全部启用行；非空 = 启用行下标子集。
+// 不复用 PATCH /:id/cases/:caseId——那个按 caseId+limit(1) 定位，跨组重复用例有歧义。
+plansRoute.patch('/:id/plan-cases/:planCaseId', async (req, res) => {
+  const { datasetRowIndexes } = z.object({
+    datasetRowIndexes: z.array(z.number().int().min(0)).max(500).nullable(),
+  }).parse(req.body);
+  const pid = await planProjectId(req.params.id!);
+  if (!pid) throw new HttpError(404, 'not_found', 'plan not found');
+  await assertProjectVisible(pid, req.user!);
+  res.json(await updatePlanCaseDatasetRows(req.params.id!, req.params.planCaseId!, datasetRowIndexes));
 });
 
 // ---- 计划分组端点：每组独立配置环境/登录准备/failFast/设备浏览器上下文。 ----

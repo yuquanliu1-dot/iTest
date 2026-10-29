@@ -35,6 +35,9 @@ beforeAll(async () => {
   app.use('/api/plan-runs', planRunsRoute);
   app.use('/api/executions', executionsRoute);
   app.use('/api/cases', casesRoute);
+  // 数据集路由（行选择校验/联动清空测试用）：挂载形状同 plan-run-datasets.test.ts
+  const { datasetsRoute } = await import('../src/routes/datasets.js');
+  app.use('/api', datasetsRoute);
   app.use(errorHandler);
 });
 
@@ -743,5 +746,107 @@ describe('executions 数据集批次卷起', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].batchSize).toBe(1);
     expect(rows[0].memberReportIds).toEqual([r0]);
+  });
+});
+
+describe('计划级数据集行选择（PATCH /plans/:id/plan-cases/:planCaseId）', () => {
+  /** 建项目/计划/分组 + 绑数据集用例（2 启用行），把用例加进组并返回各 id 与 planCaseId。 */
+  async function seedSelection(): Promise<{
+    projectId: string; planId: string; caseId: string; datasetId: string; planCaseId: string;
+  }> {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const ds = await request(app).post(`/api/projects/${projectId}/datasets`).send({
+      name: '行选择数据',
+      columns: [{ name: 'username', sensitive: false }],
+      rows: [
+        { disabled: false, cells: { username: 'u1' } },
+        { disabled: false, cells: { username: 'u2' } },
+      ],
+    });
+    expect(ds.status).toBe(200);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    const g = await request(app).post(`/api/plans/${plan.body.id}/groups`).send({ name: 'G' });
+    const c = await makeCase(groupId, versionId, '绑数据集用例');
+    await pool.query(`UPDATE test_cases SET dataset_id = $2 WHERE id = $1`, [c, ds.body.id]);
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c], groupId: g.body.id });
+    const detail = await request(app).get(`/api/plans/${plan.body.id}`);
+    const planCaseId = detail.body.groups[0].cases[0].planCaseId as string;
+    return { projectId, planId: plan.body.id, caseId: c, datasetId: ds.body.id, planCaseId };
+  }
+
+  it('落库：PATCH 子集 → plan_cases.dataset_row_indexes 持久化', async () => {
+    const s = await seedSelection();
+    const r = await request(app)
+      .patch(`/api/plans/${s.planId}/plan-cases/${s.planCaseId}`)
+      .send({ datasetRowIndexes: [1] });
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    const pc = await pool.query(`SELECT dataset_row_indexes FROM plan_cases WHERE id = $1`, [s.planCaseId]);
+    expect(pc.rows[0].dataset_row_indexes).toEqual([1]);
+  });
+
+  it('null 清覆盖（置 NULL）；[] 存全部行（空数组）', async () => {
+    const s = await seedSelection();
+    await request(app).patch(`/api/plans/${s.planId}/plan-cases/${s.planCaseId}`).send({ datasetRowIndexes: [0] });
+    await request(app).patch(`/api/plans/${s.planId}/plan-cases/${s.planCaseId}`).send({ datasetRowIndexes: null });
+    let pc = await pool.query(`SELECT dataset_row_indexes FROM plan_cases WHERE id = $1`, [s.planCaseId]);
+    expect(pc.rows[0].dataset_row_indexes).toBeNull();
+
+    await request(app).patch(`/api/plans/${s.planId}/plan-cases/${s.planCaseId}`).send({ datasetRowIndexes: [] });
+    pc = await pool.query(`SELECT dataset_row_indexes FROM plan_cases WHERE id = $1`, [s.planCaseId]);
+    expect(pc.rows[0].dataset_row_indexes).toEqual([]);
+  });
+
+  it('校验：越界 400（文案含越界行号与启用行总数）', async () => {
+    const s = await seedSelection();
+    const bad = await request(app)
+      .patch(`/api/plans/${s.planId}/plan-cases/${s.planCaseId}`)
+      .send({ datasetRowIndexes: [5] });
+    expect(bad.status).toBe(400);
+    expect(bad.body.message).toContain('共 2 行');
+  });
+
+  it('校验：未绑数据集 400', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P2', versionId });
+    const g = await request(app).post(`/api/plans/${plan.body.id}/groups`).send({ name: 'G' });
+    const c = await makeCase(groupId, versionId, '裸用例');
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c], groupId: g.body.id });
+    const detail = await request(app).get(`/api/plans/${plan.body.id}`);
+    const pcId = detail.body.groups[0].cases[0].planCaseId;
+    const r = await request(app)
+      .patch(`/api/plans/${plan.body.id}/plan-cases/${pcId}`)
+      .send({ datasetRowIndexes: [0] });
+    expect(r.status).toBe(400);
+  });
+
+  it('跨组重复用例：两行各写各的（写路径独立性）', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const ds = await request(app).post(`/api/projects/${projectId}/datasets`).send({
+      name: '跨组数据',
+      columns: [{ name: 'username', sensitive: false }],
+      rows: [
+        { disabled: false, cells: { username: 'u1' } },
+        { disabled: false, cells: { username: 'u2' } },
+        { disabled: false, cells: { username: 'u3' } },
+      ],
+    });
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+    const g1 = await request(app).post(`/api/plans/${plan.body.id}/groups`).send({ name: 'G1' });
+    const g2 = await request(app).post(`/api/plans/${plan.body.id}/groups`).send({ name: 'G2' });
+    const c = await makeCase(groupId, versionId, '重复用例');
+    await pool.query(`UPDATE test_cases SET dataset_id = $2 WHERE id = $1`, [c, ds.body.id]);
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c], groupId: g1.body.id });
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c], groupId: g2.body.id });
+    const detail = await request(app).get(`/api/plans/${plan.body.id}`);
+    const pc1 = detail.body.groups[0].cases[0].planCaseId as string;
+    const pc2 = detail.body.groups[1].cases[0].planCaseId as string;
+    await request(app).patch(`/api/plans/${plan.body.id}/plan-cases/${pc1}`).send({ datasetRowIndexes: [0] });
+    await request(app).patch(`/api/plans/${plan.body.id}/plan-cases/${pc2}`).send({ datasetRowIndexes: [1, 2] });
+    const rows = await pool.query(`SELECT id, dataset_row_indexes FROM plan_cases WHERE plan_id = $1`, [plan.body.id]);
+    expect(rows.rows).toHaveLength(2);
+    const byRow = new Map<string, number[] | null>(rows.rows.map((r: { id: string; dataset_row_indexes: number[] | null }) => [r.id, r.dataset_row_indexes]));
+    expect(byRow.get(pc1)).toEqual([0]);
+    expect(byRow.get(pc2)).toEqual([1, 2]);
   });
 });

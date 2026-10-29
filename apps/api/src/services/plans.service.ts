@@ -8,6 +8,7 @@ import { db } from '../db/client.js';
 import { executionPlans, groups, planCaseGroups, planCases, projects, projectVersions, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { attachCreators, attachCreator } from '../lib/creator.js';
+import { assertDatasetRowIndexes } from './datasets.service.js';
 
 export async function planProjectId(planId: string): Promise<string | null> {
   const row = (await db.select({ projectId: executionPlans.projectId }).from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
@@ -52,6 +53,30 @@ export async function updatePlanCase(planId: string, caseId: string, patch: Upda
   }
   const after = (await db.select({ targetOverride: planCases.targetOverride }).from(planCases).where(eq(planCases.id, existing.id)).limit(1))[0];
   return { caseId, targetOverride: after?.targetOverride ?? null };
+}
+
+/** 计划级数据集行选择写入：按 plan_cases.id 定位（同用例跨组=多行，各改各的）。
+ *  null = 清覆盖（执行回落用例级）；[] = 全部启用行；非空 = 启用行下标子集。
+ *  非空时校验口径与用例级共用 assertDatasetRowIndexes（已绑数据集 + 下标在启用行范围内）。 */
+export async function updatePlanCaseDatasetRows(
+  planId: string,
+  planCaseId: string,
+  datasetRowIndexes: number[] | null,
+): Promise<{ ok: boolean; datasetRowIndexes: number[] | null }> {
+  const existing = (await db.select().from(planCases)
+    .where(and(eq(planCases.planId, planId), eq(planCases.id, planCaseId))).limit(1))[0];
+  if (!existing) throw new HttpError(404, 'not_found', 'plan case not found');
+  if (datasetRowIndexes !== null) {
+    const c = (await db.select({ datasetId: testCases.datasetId }).from(testCases)
+      .where(eq(testCases.id, existing.caseId)).limit(1))[0];
+    if (!c) throw new HttpError(404, 'not_found', 'case not found');
+    await assertDatasetRowIndexes(c.datasetId, datasetRowIndexes);
+  }
+  const rows = await db.update(planCases)
+    .set({ datasetRowIndexes })
+    .where(eq(planCases.id, existing.id))
+    .returning({ datasetRowIndexes: planCases.datasetRowIndexes });
+  return { ok: true, datasetRowIndexes: rows[0]?.datasetRowIndexes ?? null };
 }
 
 export interface CreatePlanInput {
