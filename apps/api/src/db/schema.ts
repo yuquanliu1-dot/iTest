@@ -849,6 +849,35 @@ export const aiThreadArtifacts = pgTable('ai_thread_artifacts', {
   versionIdx: index('ai_thread_artifacts_version_idx').on(t.versionId),
 }));
 
+// ── 助手附件（版本级 docx 预上传）──
+// 选文件即上传（react-pi 草稿线程发首条消息前没有 threadId，作用域只能取版本）。
+// 引用标签由前端 adapter 在 send() 拼进消息正文（自闭合 <uploaded-file …/>），
+// 后端不改写消息文本——react-pi 乐观消息按纯文本 key 对账，任何后端改写都会造成重复气泡。
+export const aiAssistantAttachments = pgTable('ai_assistant_attachments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  /** 作用域：同版本各线程可用；read_thread_attachment 以它做路径+行双重约束。 */
+  versionId: uuid('version_id').notNull(),
+  /** 用户原始文件名（含扩展名，可中文）；引用标签与 chip 展示用。 */
+  name: text('name').notNull(),
+  /** 固定为 docx mime（端点只收 docx）。 */
+  mime: text('mime').notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  /** 去重键：同版本同内容只存一份文件与一行记录。 */
+  sha256: text('sha256').notNull(),
+  /** 原件绝对路径（<UPLOAD_DIR>/assistant/<versionId>/<sha>.docx）。 */
+  storagePath: text('storage_path').notNull(),
+  /** mammoth 提取文本 sidecar（<sha>.txt）；提取失败（文件损坏）为 null。 */
+  extractedPath: text('extracted_path'),
+  /** 提取文本字符数（引用标签的 chars 属性）；失败为 null。 */
+  extractedChars: integer('extracted_chars'),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  versionIdx: index('ai_assistant_attachments_version_idx').on(t.versionId),
+  // 去重唯一：并发上传同文件靠 onConflictDoNothing + 回读兜底。
+  uniq: uniqueIndex('ai_assistant_attachments_version_sha_unq').on(t.versionId, t.sha256),
+}));
+
 // ── 批量固化（全未固化用例 NL→DSL 后台任务）──
 // 一次触发一批：批次行只做归属/审计；逐用例行由 worker 独占更新（BullMQ 每 job 只碰自己那行，
 // 批次进度读时按行 status 派生，天然免并发写冲突）。失败语义 = 保留已落库 DSL + 标记失败原因。
