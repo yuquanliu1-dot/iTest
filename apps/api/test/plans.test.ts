@@ -861,4 +861,43 @@ describe('计划级数据集行选择（PATCH /plans/:id/plan-cases/:planCaseId�
     expect(row.caseRowIndexes).toEqual([]); // 用例级选择：[] = 全部
     expect(row.planRowIndexes).toEqual([0]); // 计划级覆盖
   });
+
+  it('detail 启用行数只数启用行（含 disabled 行的数据集）', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const ds = await request(app).post(`/api/projects/${projectId}/datasets`).send({
+      name: '含禁用行数据',
+      columns: [{ name: 'username', sensitive: false }],
+      rows: [
+        { disabled: false, cells: { username: 'u1' } },
+        { disabled: true, cells: { username: 'u2' } },
+        { disabled: false, cells: { username: 'u3' } },
+      ],
+    });
+    expect(ds.status).toBe(200);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P-disabled', versionId });
+    const g = await request(app).post(`/api/plans/${plan.body.id}/groups`).send({ name: 'G' });
+    const c = await makeCase(groupId, versionId, '含禁用行用例');
+    await pool.query(`UPDATE test_cases SET dataset_id = $2 WHERE id = $1`, [c, ds.body.id]);
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c], groupId: g.body.id });
+    const detail = await request(app).get(`/api/plans/${plan.body.id}`);
+    const row = detail.body.groups[0].cases[0];
+    expect(row.datasetId).toBe(ds.body.id);
+    expect(row.datasetName).toBe('含禁用行数据');
+    expect(row.datasetEnabledRowCount).toBe(2); // 3 行里 1 行被禁用 → 只数 2 个启用行
+  });
+
+  it('detail：未绑数据集的用例四字段回退（null/null/0/[]）', async () => {
+    const { projectId, groupId, versionId } = await seedProject(pool);
+    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P-nods', versionId });
+    const g = await request(app).post(`/api/plans/${plan.body.id}/groups`).send({ name: 'G' });
+    const c = await makeCase(groupId, versionId, '未绑数据集用例');
+    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c], groupId: g.body.id });
+    const detail = await request(app).get(`/api/plans/${plan.body.id}`);
+    const row = detail.body.groups[0].cases[0];
+    expect(row.datasetId).toBeNull();
+    expect(row.datasetName).toBeNull();
+    expect(row.datasetEnabledRowCount).toBe(0);
+    expect(row.caseRowIndexes).toEqual([]);
+    expect(row.planRowIndexes).toBeNull();
+  });
 });

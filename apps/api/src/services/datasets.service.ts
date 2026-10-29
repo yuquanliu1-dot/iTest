@@ -147,6 +147,18 @@ function isUniqueViolation(e: unknown): boolean {
   return typeof e === 'object' && e !== null && (e as { code?: string }).code === '23505';
 }
 
+/** 启用行数组（唯一口径）：剔除 disabled 行后的行序即「行下标空间」（0 基重新编号）。
+ *  计数（countEnabledRows）与回放装载（loadDatasetForRun）必须同源，否则 UI 给的下标会被执行器判越界。 */
+export function enabledRows<T extends { disabled?: boolean }>(rows: T[] | null | undefined): T[] {
+  return (rows ?? []).filter((r) => !r.disabled);
+}
+
+/** 启用行计数（唯一口径）：datasets.rows 里未禁用的行数。行下标空间按启用行重新编号（0 基）。
+ *  TS 侧与 SQL 侧（计划详情回带）必须共用此规则，否则 UI 给的下标会被执行器判越界。 */
+export function countEnabledRows(rows: { disabled?: boolean }[] | null | undefined): number {
+  return enabledRows(rows).length;
+}
+
 /** 列表出参：不带 rows 明细，带行数统计。 */
 export async function listDatasets(projectId: string) {
   const rows = await db.select().from(datasets).where(eq(datasets.projectId, projectId)).orderBy(asc(datasets.createdAt));
@@ -157,7 +169,7 @@ export async function listDatasets(projectId: string) {
     description: d.description,
     columns: d.columns,
     rowCount: d.rows.length,
-    enabledRowCount: d.rows.filter((r) => !r.disabled).length,
+    enabledRowCount: countEnabledRows(d.rows),
     createdByUserId: d.createdByUserId,
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
@@ -234,7 +246,7 @@ export async function deleteDataset(datasetId: string): Promise<void> {
 /** 启用行数（用例行选择的下标上界）。数据集不存在返回 0。 */
 export async function enabledRowCount(datasetId: string): Promise<number> {
   const d = (await db.select({ rows: datasets.rows }).from(datasets).where(eq(datasets.id, datasetId)).limit(1))[0];
-  return d ? d.rows.filter((r) => !r.disabled).length : 0;
+  return d ? countEnabledRows(d.rows) : 0;
 }
 
 /** 行选择共用校验（用例级 cases.service / 计划级 plans.service 同一口径）：
@@ -282,7 +294,7 @@ export async function loadDatasetForRun(datasetId: string, opts?: { rowIndexes?:
       throw new DatasetConfigError(`数据集列名 ${c.name} 不是合法变量名，无法注入回放变量`);
     }
   }
-  const enabled = d.rows.filter((r) => !r.disabled);
+  const enabled = enabledRows(d.rows);
   if (enabled.length === 0) throw new DatasetConfigError('数据集没有启用行，无法回放');
   const wanted = opts?.rowIndexes ?? [];
   const outOfRange = wanted.filter((i) => i >= enabled.length);

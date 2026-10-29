@@ -954,10 +954,15 @@ export interface PlanCaseGroup {
   cases: Array<{
     planCaseId: string; id: string; order: number; title: string; url: string | null;
     versionId: string | null; versionName: string | null; projectId: string | null; projectName: string | null;
-    /** 绑定的数据集（未绑为 null）与名称/启用行数/用例级行选择（[] = 全部）。 */
+    /** 绑定的数据集（未绑为 null）与名称/启用行数/用例级行选择。
+     *  未绑数据集时：datasetId=null、datasetName=null、datasetEnabledRowCount=0、caseRowIndexes=[]。
+     *  caseRowIndexes=[] 表示「全部启用行」（也含未绑数据集时的空集回退），
+     *  非空则为启用行下标子集（0 基，按启用行重新编号）。 */
     datasetId: string | null;
     datasetName: string | null;
+    /** 该数据集的启用行数（未绑数据集为 0）——caseRowIndexes 的下标上界。 */
     datasetEnabledRowCount: number;
+    /** 用例级行选择：[] = 全部启用行；未绑数据集时也是 []（此时 datasetEnabledRowCount=0）。 */
     caseRowIndexes: number[];
     /** 计划行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集。 */
     planRowIndexes: number[] | null;

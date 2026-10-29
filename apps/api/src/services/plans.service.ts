@@ -8,7 +8,7 @@ import { db } from '../db/client.js';
 import { datasets, executionPlans, groups, planCaseGroups, planCases, projects, projectVersions, testCases, testEnvironments } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { attachCreators, attachCreator } from '../lib/creator.js';
-import { assertDatasetRowIndexes } from './datasets.service.js';
+import { assertDatasetRowIndexes, countEnabledRows } from './datasets.service.js';
 
 export async function planProjectId(planId: string): Promise<string | null> {
   const row = (await db.select({ projectId: executionPlans.projectId }).from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
@@ -149,7 +149,7 @@ export async function getPlanDetail(planId: string) {
   const gs = await db.select().from(planCaseGroups).where(eq(planCaseGroups.planId, plan.id)).orderBy(asc(planCaseGroups.order));
   const pcs = await db.select().from(planCases).where(eq(planCases.planId, plan.id)).orderBy(asc(planCases.order));
   // 一次 join 取回每个用例的项目/版本归属,避免逐条回查（N+1）
-  const rows = pcs.length
+  const caseRows = pcs.length
     ? await db
         .select({
           id: testCases.id,
@@ -159,22 +159,33 @@ export async function getPlanDetail(planId: string) {
           versionName: projectVersions.name,
           projectId: groups.projectId,
           projectName: projects.name,
-          // 计划级数据行选择三态展示所需：绑定的数据集 + 用例级选择；启用行数 SQL 内联统计
+          // 计划级数据行选择三态展示所需：绑定的数据集 id + 用例级选择
           datasetId: testCases.datasetId,
           caseRowIndexes: testCases.datasetRowIndexes,
-          datasetName: datasets.name,
-          datasetEnabledRowCount: sql<number>`(SELECT count(*)::int FROM jsonb_array_elements(coalesce(${datasets.rows}, '[]'::jsonb)) AS r WHERE (r->>'disabled')::boolean IS NOT TRUE)`,
         })
         .from(testCases)
         .innerJoin(groups, eq(groups.id, testCases.groupId))
         .innerJoin(projects, eq(projects.id, groups.projectId))
         .leftJoin(projectVersions, eq(projectVersions.id, testCases.versionId))
-        .leftJoin(datasets, eq(datasets.id, testCases.datasetId))
         .where(inArray(testCases.id, pcs.map((p) => p.caseId)))
     : [];
-  const byId = new Map(rows.map((c) => [c.id, c]));
+  // 数据集名称与启用行数：按 distinct datasetId 一次性取回,rows jsonb 每个数据集只解析一次
+  // （曾在 join 里用相关子查询逐行统计,导致 N×M 重复解析整份 rows）。
+  const dsIds = [...new Set(caseRows.map((r) => r.datasetId).filter((v): v is string => !!v))];
+  const dsMeta = new Map<string, { name: string; enabledRowCount: number }>();
+  if (dsIds.length > 0) {
+    const dsRows = await db
+      .select({ id: datasets.id, name: datasets.name, rows: datasets.rows })
+      .from(datasets)
+      .where(inArray(datasets.id, dsIds));
+    for (const d of dsRows) {
+      dsMeta.set(d.id, { name: d.name, enabledRowCount: countEnabledRows(d.rows) });
+    }
+  }
+  const byId = new Map(caseRows.map((c) => [c.id, c]));
   const caseMeta = (caseId: string) => {
     const c = byId.get(caseId);
+    const ds = c?.datasetId ? dsMeta.get(c.datasetId) : undefined;
     return {
       id: caseId,
       title: c?.title ?? 'unknown',
@@ -185,8 +196,8 @@ export async function getPlanDetail(planId: string) {
       projectName: c?.projectName ?? null,
       // 计划级数据行选择三态展示所需（未绑数据集时 datasetId 为 null）
       datasetId: c?.datasetId ?? null,
-      datasetName: c?.datasetName ?? null,
-      datasetEnabledRowCount: c?.datasetEnabledRowCount ?? 0,
+      datasetName: ds?.name ?? null,
+      datasetEnabledRowCount: ds?.enabledRowCount ?? 0,
       caseRowIndexes: c?.caseRowIndexes ?? [],
     };
   };

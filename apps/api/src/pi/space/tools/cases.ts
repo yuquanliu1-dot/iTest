@@ -27,6 +27,7 @@ import { resolveCaseProjectId, resolveVersionProjectId } from '../../../services
 import { HttpError } from '../../../middleware/errorHandler.js';
 import { db } from '../../../db/client.js';
 import { datasets } from '../../../db/schema.js';
+import { countEnabledRows } from '../../../services/datasets.service.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 import { emitStage } from './stage.js';
@@ -120,7 +121,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
               let dataset: { id: string; name: string; columns: Array<{ name: string; sensitive: boolean }>; enabledRowCount: number; rowIndexes: number[] } | null = null;
               if (detail.datasetId) {
                 const ds = (await db.select().from(datasets).where(eq(datasets.id, detail.datasetId)).limit(1))[0];
-                if (ds) dataset = { id: ds.id, name: ds.name, columns: ds.columns, enabledRowCount: ds.rows.filter((r) => !r.disabled).length, rowIndexes: detail.datasetRowIndexes ?? [] };
+                if (ds) dataset = { id: ds.id, name: ds.name, columns: ds.columns, enabledRowCount: countEnabledRows(ds.rows), rowIndexes: detail.datasetRowIndexes ?? [] };
               }
               return { ok: true, data: JSON.stringify({ ...detail, dataset }, null, 2) };
             }
