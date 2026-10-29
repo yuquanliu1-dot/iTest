@@ -17,12 +17,16 @@ export const ALLOWED_QUERY_COLUMNS: Record<string, ReadonlySet<string>> = {
   users: new Set(['id', 'username', 'display_name', 'email', 'language_preference', 'created_at', 'updated_at']),
   test_cases: new Set(['id', 'requirement_id', 'group_id', 'title', 'priority', 'status', 'scenario_id', 'default_env_id', 'created_at', 'updated_at']),
   test_steps: new Set(['id', 'case_id', 'order', 'name', 'source', 'tab_ref', 'component_kind', 'created_at']),
+  datasets: new Set(['id', 'project_id', 'name', 'description', 'created_by_user_id', 'created_at', 'updated_at']),
   reports: new Set(['id', 'case_id', 'status', 'duration_ms', 'created_at']),
   test_environments: new Set(['id', 'project_id', 'name', 'is_default', 'created_at', 'updated_at']),
   environment_objects: new Set(['id', 'environment_id', 'object_type', 'label', 'is_default', 'created_at', 'updated_at']),
   execution_plans: new Set(['id', 'project_id', 'name', 'environment', 'environment_id', 'strategy', 'login_prepare_enabled', 'created_at', 'updated_at']),
+  plan_case_groups: new Set(['id', 'plan_id', 'name', 'order', 'environment_id', 'login_prepare_enabled', 'login_case_id', 'fail_fast', 'login_dataset_row_indexes', 'created_at', 'updated_at']),
+  plan_cases: new Set(['id', 'plan_id', 'case_id', 'group_id', 'order', 'dataset_row_indexes']),
   plan_runs: new Set(['id', 'plan_id', 'project_id', 'status', 'started_at', 'finished_at', 'duration_ms', 'total_cases', 'passed_cases', 'failed_cases', 'skipped_cases']),
   plan_run_cases: new Set(['id', 'plan_run_id', 'case_id', 'report_id', 'order', 'status', 'step_kind', 'started_at', 'finished_at', 'duration_ms']),
+  plan_schedules: new Set(['id', 'plan_id', 'enabled', 'cron_expr', 'timezone', 'last_run_at', 'next_run_at', 'created_by_user_id', 'created_at', 'updated_at']),
   test_attachments: new Set(['id', 'case_id', 'project_id', 'step_id', 'original_name', 'size', 'sha256', 'created_at']),
 };
 

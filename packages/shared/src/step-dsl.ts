@@ -176,8 +176,9 @@ export type DbAssertionMatch = z.infer<typeof DbAssertionMatch>;
 export const QueryDbAction = z.object({
   kind: z.literal('queryDb'),
   table: z.enum([
-    'projects', 'groups', 'users', 'test_cases', 'test_steps',
-    'reports', 'execution_plans', 'plan_runs', 'plan_run_cases', 'test_attachments',
+    'projects', 'groups', 'users', 'test_cases', 'test_steps', 'datasets',
+    'reports', 'execution_plans', 'plan_case_groups', 'plan_cases',
+    'plan_runs', 'plan_run_cases', 'plan_schedules', 'test_attachments',
   ]),
   where: z.array(z.object({
     column: z.string().min(1).max(64),

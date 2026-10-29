@@ -36,6 +36,12 @@ describe('ALLOWED_QUERY_COLUMNS', () => {
       }
     }
   });
+  it('covers newer plan / dataset tables', () => {
+    expect(() => assertColumnsAllowed('datasets', ['id', 'project_id', 'name'])).not.toThrow();
+    expect(() => assertColumnsAllowed('plan_case_groups', ['id', 'plan_id', 'fail_fast', 'login_dataset_row_indexes'])).not.toThrow();
+    expect(() => assertColumnsAllowed('plan_cases', ['id', 'plan_id', 'case_id', 'group_id', 'dataset_row_indexes'])).not.toThrow();
+    expect(() => assertColumnsAllowed('plan_schedules', ['id', 'plan_id', 'cron_expr', 'enabled'])).not.toThrow();
+  });
 });
 
 describe('runQueryDb (integration placeholder)', () => {

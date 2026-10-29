@@ -57,6 +57,8 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
       promptGuidelines: [
         'caseIds 必须来自 manage_cases 的 search/get 结果,禁止臆造;加入计划的用例必须属于当前项目。',
         '计划用例按分组组织:create 的 caseIds 写入「默认分组」,add_cases 追加到第一组(无组自动建默认分组);分组的环境/登录等配置本工具不提供,需要调整时告知用户去 UI 的分组设置。',
+        'strategy 两级语义:plan.strategy=fail_fast 只作用于组间(前组出现失败即跳过后续分组);组内失败即停由各分组自己的 failFast 控制(get 回带 groups[].failFast),计划级 strategy 管不到组内。',
+        '数据集行选择三态读法:cases[].planRowIndexes(计划级覆盖)与 groups[].loginDatasetRowIndexes(登录用例覆盖)——null=跟随用例级 / []=全部启用行 / 非空数组=启用行下标子集;cases[].caseRowIndexes 是用例级选择(同一下标空间,datasetEnabledRowCount=启用行总数)。行覆盖与分组配置本工具不提供修改,需要调整时引导用户去 UI。',
         '本工具不会执行计划,只做配置;需要执行时告知用户去执行页操作。',
         'create 时若用例编排失败(如 caseIds 跨项目),已建的计划不会回滚:按错误信息中的 planId 用 add_cases 补齐,勿重复 create。',
         'schedule 操作(action=list_schedules/create_schedule/update_schedule/delete_schedule)需走阻塞确认卡,新建/修改前先在自然语言里讲清 cron 含义(例如 `0 9 * * *` = 每天 09:00)。',
