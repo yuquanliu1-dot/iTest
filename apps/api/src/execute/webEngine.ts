@@ -32,6 +32,7 @@ export class WebEngine implements Engine {
       ...(input.sensitiveVarKeys ? { sensitiveVarKeys: input.sensitiveVarKeys } : {}),
       ...(input.liveView ? { liveView: input.liveView } : {}),
       ...(input.aiFallback ? { aiFallback: input.aiFallback } : {}),
+      ...(input.shouldAbort ? { shouldAbort: input.shouldAbort } : {}),
     };
     return executeCaseReal(
       input.caseId,

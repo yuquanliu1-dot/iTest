@@ -94,6 +94,8 @@ export async function runCase(
     /** 数据集行选择（启用行下标）。传了用传的值（执行路由预检时冻结的集合），
      *  没传回落用例上存的 datasetRowIndexes（计划运行路径）。[] = 所有启用行。 */
     datasetRowIndexes?: number[];
+    /** 终止检查点（计划运行取消）：注入执行器步循环与 AI 轮次，命中即停。 */
+    shouldAbort?: () => boolean | Promise<boolean>;
   },
 ): Promise<{ reportId: string; status: string; reportIds?: string[] }> {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
@@ -136,6 +138,7 @@ async function runCaseOnce(
     datasetBatchId?: string | null;
     planProjectId?: string | null;
     onReportCreated?: (reportId: string, rowIndex: number | null) => void | Promise<void>;
+    shouldAbort?: () => boolean | Promise<boolean>;
   } | undefined,
   rowPlan?: DatasetRowExec,
 ): Promise<{ reportId: string; status: string }> {
@@ -223,6 +226,7 @@ async function runCaseOnceInner(
     ownedContext?: BrowserContext;
     liveView?: import('./liveView.js').LiveViewHandle;
     planProjectId?: string | null;
+    shouldAbort?: () => boolean | Promise<boolean>;
   } | undefined,
   projectId: string | undefined,
   steps: (typeof testSteps.$inferSelect)[],
@@ -401,6 +405,7 @@ async function runCaseOnceInner(
       ...(caseRow.webServiceRef ? { caseWebServiceRef: caseRow.webServiceRef } : {}),
       ...(opts?.liveView ? { liveView: opts.liveView } : {}),
       ...(aiFallback.locatorFailed ? { aiFallback } : {}),
+      ...(opts?.shouldAbort ? { shouldAbort: opts.shouldAbort } : {}),
     };
     // mobile 用例：直接走 MobileEngine；web 用例：登录准备链路（ownedBrowser）走 executeCaseInBrowser 复用 ctx,
     // 其余走 WebEngine.execute → executeCaseReal（保留 storageState/incognito 注入语义）。
@@ -497,6 +502,7 @@ async function runCaseOnceInner(
         ...(caseWebOrigin ? { caseWebOrigin } : {}),
         ...(caseRow.webServiceRef ? { caseWebServiceRef: caseRow.webServiceRef } : {}),
         ...(aiFallback.locatorFailed ? { aiFallback } : {}),
+        ...(opts?.shouldAbort ? { shouldAbort: opts.shouldAbort } : {}),
       };
       try {
         await engine.prepare(engineInput);

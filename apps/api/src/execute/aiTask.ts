@@ -904,6 +904,8 @@ export interface RunAiTaskOpts {
   resourceManifest?: string;
   /** 降级上下文：本步的机械语义 + 机械失败原因（buildDegradeContext 渲染）。缺省不传。 */
   degradeContext?: string;
+  /** 终止检查点（计划运行取消）：每轮对话开始前轮询，命中即抛错中断 AI 步骤。 */
+  shouldAbort?: () => boolean | Promise<boolean>;
 }
 
 /**
@@ -951,6 +953,9 @@ export async function runAiTask(
   // 步内子目标滚动清单（模型自维护，平台整段替换+回显；无清单的简单指令恒为 null）
   let subGoals: SubGoal[] | null = null;
   for (let turn = 1; turn <= maxTurns; turn++) {
+    if (opts?.shouldAbort && (await opts.shouldAbort())) {
+      throw new Error('计划运行已终止，AI 步骤中断');
+    }
     // 每轮先等渲染静默再截图（对标 midscene 所见即所点：截图时刻与决策时刻页面一致）。
     // 指纹收敛 best-effort，超时按当前帧继续，绝不阻塞。
     await waitForPageSettled(page, { timeoutMs: 2500, settleMs: 200 }).catch(() => undefined);

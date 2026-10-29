@@ -40,6 +40,8 @@ export interface EngineInput {
   mobileOs?: 'ios' | 'android' | null;
   /** playground 实时画面源：每页新开时 setPage，让画面跟随执行（计划运行/单用例执行）。 */
   liveView?: import('./liveView.js').LiveViewHandle;
+  /** 终止检查点（计划运行取消）：runPlan 注入 isCancelRequested，步循环每步开始前轮询。 */
+  shouldAbort?: () => boolean | Promise<boolean>;
 }
 
 export interface Engine {

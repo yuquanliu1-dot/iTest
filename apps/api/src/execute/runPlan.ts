@@ -320,6 +320,8 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
                       liveView: live,
                       createdByUserId: run.triggeredByUserId,
                       planProjectId: plan.projectId,
+                      // 终止检查点：步循环/AI 轮次轮询取消标记，命中即停（登录用例同样可停）。
+                      shouldAbort: () => isCancelRequested(planRunId),
                       // 同业务用例：报告行一落库就回填 report_id，执行期间前端即可看到登录步骤逐步推进。
                       onReportCreated: makeReportLinker(row.id),
                     });
@@ -433,6 +435,8 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
                 liveView: live,
                 createdByUserId: run.triggeredByUserId,
                 planProjectId: plan.projectId,
+                // 终止检查点：步循环/AI 轮次轮询取消标记，命中即停，不再等整条用例跑完。
+                shouldAbort: () => isCancelRequested(planRunId),
                 onReportCreated: makeReportLinker(ins[0]!.id),
               });
               await db

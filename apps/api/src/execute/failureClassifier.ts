@@ -50,6 +50,8 @@ const HUMAN: Record<FailureReason, string> = {
   /** 平台侧 LLM 网关/提供商错误：页面与定位无关联，误报页面慢会引偏排查。 */
   LLMProviderError: 'LLM 网关/提供商异常（空响应或已被安全策略拦截），请检查模型服务状态',
   VisionAssertionFailed: '最终页面与用例预期不符(vision 判定失败)',
+  /** 计划运行被用户终止：非故障，仅说明本步因取消未执行。 */
+  Cancelled: '计划运行已终止，本步及后续步骤不再执行',
   EngineUnavailable: '移动端引擎不可用，请检查设备配置或 agent-device daemon',
   MobileUnsupportedCapability: '当前 mobile 引擎不支持该动作',
   MobileStepFailed: 'agent-device 命令失败',

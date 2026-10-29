@@ -139,6 +139,9 @@ export interface ExecContext {
   onPageReady?: (page: Page) => void;
   /** 回放 AI 降级开关（全局设置，runCase 层读入注入；缺省全关 = 保持既有失败语义）。 */
   aiFallback?: AiFallbackSettings;
+  /** 计划运行终止探针（runPlan 注入 isCancelRequested）：每步开始前检查，命中即记
+   *  Cancelled 失败步并停止后续步骤——取消不再只能等整条用例跑完（用例边界）才生效。 */
+  shouldAbort?: () => boolean | Promise<boolean>;
 }
 
 /** 用例级窗口策略（maximize/current/custom），custom 时携带 width/height。 */
@@ -1135,6 +1138,23 @@ async function runStepsInContext(
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]!;
     const started = Date.now();
+    // 计划运行终止检查点：每步开始前探测取消标志（内存快路径 + DB 兜底），
+    // 命中即本步记 Cancelled 失败、后续步骤不再执行——报告立即收尾为 failed，
+    // plan_run 层据此把剩余用例标 skipped、整个运行收敛为 cancelled。
+    if (ctx.shouldAbort && await ctx.shouldAbort()) {
+      const cancelled: ExecStepResult = {
+        order: step.order,
+        status: 'failed',
+        durationMs: Date.now() - started,
+        startedAt: new Date(started).toISOString(),
+        error: 'cancelled',
+        failureReason: 'Cancelled',
+        humanMessage: '计划运行已终止，本步及后续步骤不再执行',
+      };
+      results.push(cancelled);
+      onStep?.(cancelled);
+      break;
+    }
     opts.stepId = step.id;
     opts.hitSink = { current: null };
     opts.dbSink = { current: null };
@@ -1195,6 +1215,7 @@ async function runStepsInContext(
               const credRef = referencesCredential(instResolved);
               const summary = await runAiTask(opts.page, instResolved, client, undefined, {
                 onUsage: (r) => aiUsage.add(r),
+                ...(ctx.shouldAbort ? { shouldAbort: ctx.shouldAbort } : {}),
                 // 纯自然语言步没有机械语义可参考，但「观察不制造」的守则同样适用：
                 // 指令要的是「观察某现象」时，AI 不得为诱发它而填值/重复提交。
                 degradeContext: buildDegradeContext({ compiled: null }),
@@ -1327,6 +1348,7 @@ async function runStepsInContext(
               aiSummary = (await runAiTask(opts.page, instResolved, client, undefined, {
                 onAction: (a, ok) => { if (ok) collected.push(a); },
                 onUsage: (r) => aiUsage.add(r),
+                ...(ctx.shouldAbort ? { shouldAbort: ctx.shouldAbort } : {}),
                 // 把机械语义 + 机械失败原因一并告诉 AI：降级路径原本只传自然语言指令，
                 // AI 不知道「本步本意是等某文本出现 10s」也不知道「机械已确认它没出现」，
                 // 于是会造数据把预期现象造出来（2026-10-26 prod228 实测：填编造的错验证码

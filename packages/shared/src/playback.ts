@@ -49,6 +49,8 @@ export const FailureReason = z.enum([
   'WebServiceMissing',
   /** Track 1: 用例级 vision LLM 判定最终截图与 expectedOutcome 不符 */
   'VisionAssertionFailed',
+  /** 计划运行被用户终止：当前步及后续步骤不再执行（步级取消检查点） */
+  'Cancelled',
   /** 2026-10-07: mobile engine 失败归类 */
   'EngineUnavailable',
   'MobileUnsupportedCapability',
