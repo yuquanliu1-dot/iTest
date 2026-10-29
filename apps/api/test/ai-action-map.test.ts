@@ -57,6 +57,29 @@ describe('mapAiActionsToCompiled 裸标签门（第二道防线）', () => {
   });
 });
 
+describe('mapAiActionsToCompiled 激活态选择器门（第二道防线）', () => {
+  it('click/fill 命中激活态 class（router-link-active/is-active）→ 拒绝固化（回放时激活态可能不存在）', () => {
+    // 回归动机:2026-10-28 prod228 实录——「进入 XX 菜单」被固化为
+    // a.router-link-exact-active.router-link-active，回放深链直达时该 class 不存在必碎。
+    const c = mapAiActionsToCompiled([{ type: 'click', selector: 'a.router-link-exact-active.router-link-active' }]);
+    expect(c.ok).toBe(false);
+    if (!c.ok) expect(c.reason).toContain('激活态');
+    const c2 = mapAiActionsToCompiled([{ type: 'click', selector: 'li.is-active > a' }]);
+    expect(c2.ok).toBe(false);
+    if (!c2.ok) expect(c2.reason).toContain('激活态');
+    const f = mapAiActionsToCompiled([{ type: 'fill', selector: 'input.is-active', value: 'v' }]);
+    expect(f.ok).toBe(false);
+    if (!f.ok) expect(f.reason).toContain('激活态');
+  });
+
+  it('普通类名含 active 子串不受误伤（如 btn-active-confirm / inactive）', () => {
+    const r = mapAiActionsToCompiled([{ type: 'click', selector: 'button.tab-item.inactive' }]);
+    expect(r.ok).toBe(true);
+    const r2 = mapAiActionsToCompiled([{ type: 'click', selector: '#menu-active-panel' }]);
+    expect(r2.ok).toBe(true);
+  });
+});
+
 describe('mapAiActionsToCompiled 坐标动作（未解析回 selector）', () => {
   it('click/fill 无 selector（坐标未解析回稳定选择器）→ 整步保守保持 aiTask', () => {
     const r = mapAiActionsToCompiled([

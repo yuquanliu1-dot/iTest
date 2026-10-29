@@ -108,7 +108,9 @@ interface ElementInfo {
 /** 页面上下文内执行的选择器合成源码（函数表达式字符串）——dumpElements 与 resolveAtPoint
  *  经 evaluate 参数传入并在页面内 eval 还原，共用同一份（此前两处手抄副本，prod228 10-27
  *  实测 button>span 命中产出裸 span 即手抄链无上浮/无唯一性校验的后果）。
- *  基础优先级不变：#id → tag[name] → tag[placeholder] → [role] → tag.cls1.cls2 → 裸 tag。
+ *  基础优先级不变：#id → tag[name] → tag[placeholder] → [role] → tag.cls1.cls2 → 裸 tag；
+ *  class 候选剔除激活态 class（router-link-active/is-active 由路由状态动态加减，固化后回放
+ *  会因菜单未激活而落空——2026-10-28 prod228 实录 a.router-link-exact-active.router-link-active）。
  *  多命中时依次富化，保证机械回放命中唯一：
  *    1. 短文本（≤30 字符）尾缀 :has-text("…")——非标准 CSS，唯一性按「基础命中中
  *       textContent 含该文本」的个数模拟计数（与回放侧 getByText 的包含语义同向）；
@@ -126,7 +128,9 @@ const SYNTH_SELECTOR_SRC = `function (el) {
   if (!selector && ph) selector = tag + '[placeholder="' + ph + '"]';
   if (!selector && role) selector = '[role="' + role + '"]';
   if (!selector) {
-    var cls = (el.className || '').toString().trim().split(/\\s+/).filter(Boolean).slice(0, 2).join('.');
+    var cls = (el.className || '').toString().trim().split(/\\s+/).filter(Boolean)
+      .filter(function (c) { return !/^(router-link-(exact-)?active|is-active)$/i.test(c); })
+      .slice(0, 2).join('.');
     selector = cls ? tag + '.' + cls : tag;
   }
   function count(s) { try { return document.querySelectorAll(s).length; } catch (e) { return -1; } }

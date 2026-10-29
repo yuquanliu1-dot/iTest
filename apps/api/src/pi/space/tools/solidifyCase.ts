@@ -47,6 +47,19 @@ import { aiLangFrom } from '../../../agent/langDirective.js';
  *  （与 verify_case 同款防御：非 UUID 直查 uuid 列会炸 invalid input syntax for type uuid）。 */
 const UUID_SHAPE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** 步骤是否已是「AI 执行步固化」的稳定产物（compiled=[aiTask] 且 instruction 未被改过）。
+ *  幂等的关键：这类步骤的固化输出是其 instruction 的确定性函数，重复固化只会原样覆盖；
+ *  但不设防时每轮仍会为它真跑一遍 AI 再映射——轨迹一变（如被二次 full 覆盖缓存）产物就漂移。
+ *  已固化态直接跳过重映射；用户改过 instruction（≠ 存量 aiTask.instruction）即视为要求重固化。 */
+function isAiTaskSolidified(s: EffectiveStep): boolean {
+  const c = Array.isArray(s.compiled) ? s.compiled : [];
+  if (c.length !== 1) return false;
+  const a = c[0] as { kind?: unknown; instruction?: unknown };
+  if (a?.kind !== 'aiTask' || typeof a.instruction !== 'string') return false;
+  const inst = typeof s.instruction === 'string' ? s.instruction.trim() : '';
+  return inst.length > 0 && a.instruction === inst;
+}
+
 // 与 verify_case 同款伸缩预算：AI 逐步骤临场执行是慢路径（prod228 实测 85~107s/步），
 // 固定 300s 只装得下 2~3 步用例——多步用例 solidify 必超时（批量固化报告实测）。
 // 预算 = max(保底 300s, 步数 × 130s/步)，公式与 verify_case 的 computeVerifyTimeoutMs 一致。
@@ -69,6 +82,21 @@ export { mapAiActionsToCompiled, isVisualStep, type SolidifyMapResult } from '..
  * 映射失败（凭据占位/press/选择器不可映射/纯观察动作）但有 instruction 的步骤固化为显式
  * aiTask 执行步——留 null 会让机械验收与正式回放在该步 compile-missing 卡死（prod228 实测）。
  */
+/** 导航步冗余探测（只提示不删）：case.url 是深链（非根路径/非登录页）直达目标页时，
+ *  首步再写「进入 XX 菜单」就是冗余导航——init goto 已落地目标页，回放时的菜单 click/
+ *  navigate 是重复动作，还可能把页面带离深链落地页。2026-10-28 prod228 实录：用例 url
+ *  直达资产详情页，首步仍「进入资产管理菜单」。措辞千变万化，仅认菜单语义词。 */
+const NAV_STEP_RE = /进入|导航|跳转|打开.{0,10}菜单|点击.{0,10}菜单/;
+
+export function isDeepLinkUrl(raw: string): boolean {
+  try {
+    const path = new URL(raw).pathname.replace(/\/+$/, '');
+    return path.length > 0 && path !== '/login';
+  } catch {
+    return false;
+  }
+}
+
 async function mapAndStageSteps(
   ctx: SpaceToolsContext,
   effectiveSteps: EffectiveStep[],
@@ -77,6 +105,8 @@ async function mapAndStageSteps(
     dbCase: typeof testCases.$inferSelect | null | undefined;
     stagedCase: typeof aiStageCases.$inferSelect | null;
     lang: StLang;
+    /** 用例有效 url（叠加暂存后）：首步导航冗余探测用。 */
+    caseUrl?: string | null;
   },
 ): Promise<{ stepReports: Array<Record<string, unknown>>; solidifiedCount: number; keptCount: number }> {
   const { stagedCase, lang } = opts;
@@ -85,13 +115,26 @@ async function mapAndStageSteps(
   const stepReports: Array<Record<string, unknown>> = [];
   let solidifiedCount = 0;
   let keptCount = 0;
+  // 首步导航冗余提示（advisory）：深链直达 + 首步是「进入菜单」类导航才提示。
+  const navNote = (() => {
+    const url = typeof opts.caseUrl === 'string' ? opts.caseUrl : '';
+    const first = effectiveSteps[0];
+    const inst = typeof first?.instruction === 'string' ? first.instruction : '';
+    if (!url || !isDeepLinkUrl(url) || !NAV_STEP_RE.test(inst)) return null;
+    return `case.url（${url}）已直达目标页，首步「进入菜单」类导航在回放时冗余（init goto 已落地目标页）——建议删除该导航步，或把 case.url 改为系统首页由步骤自行导航`;
+  })();
   const draftSteps = stagedCase
     ? (stagedCase.steps as Array<{ action?: unknown; assertion?: unknown; compiled?: unknown }>)
     : null;
   for (const s of effectiveSteps) {
     const base = { order: s.order, instruction: s.instruction };
+    const navWarn: string | null = navNote && s.order === effectiveSteps[0]!.order ? navNote : null;
     if (!isVisualStep(s)) {
-      stepReports.push({ ...base, status: 'skipped-compiled', reason: s.sensitive ? '敏感步骤（凭据不进 compiled）' : '已编译步骤不动' });
+      stepReports.push({ ...base, status: 'skipped-compiled', reason: s.sensitive ? '敏感步骤（凭据不进 compiled）' : '已编译步骤不动', ...(navWarn ? { warning: navWarn } : {}) });
+      continue;
+    }
+    if (isAiTaskSolidified(s)) {
+      stepReports.push({ ...base, status: 'unchanged-aiTask', reason: '已是 AI 执行步固化且指令未变，保持原样（幂等）' });
       continue;
     }
     if (s.sensitive) {
@@ -120,14 +163,16 @@ async function mapAndStageSteps(
       ? [{ kind: 'aiTask', instruction: aiInstruction }]
       : mapped.compiled;
     solidifiedCount += 1;
+    const mapWarn = mapped.ok && mapped.skippedCount > 0 ? `跳过 ${mapped.skippedCount} 个观察性截图动作` : null;
+    const warning = [mapWarn, navWarn].filter(Boolean).join('；') || undefined;
     stepReports.push(
       fallback
-        ? { ...base, status: 'aiTask-fallback', compiled: finalCompiled, reason: `${mapped.reason}——已固化为 AI 执行步（aiTask），机械验收时由 AI 真实执行` }
+        ? { ...base, status: 'aiTask-fallback', compiled: finalCompiled, reason: `${mapped.reason}——已固化为 AI 执行步（aiTask），机械验收时由 AI 真实执行`, ...(warning ? { warning } : {}) }
         : {
             ...base,
             status: 'solidified',
             compiled: mapped.compiled,
-            ...(mapped.skippedCount > 0 ? { warning: `跳过 ${mapped.skippedCount} 个观察性截图动作` } : {}),
+            ...(warning ? { warning } : {}),
           },
     );
     // 暂存写：DB 用例逐步骤 update_step（确定性 localId，重复固化幂等覆盖）；草稿整例重暂存
@@ -186,7 +231,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       '调用时机（前置条件）：用户确认自然语言草稿后（无论草稿是否已落库,固化可直接作用于暂存草稿）,你主动询问「是否需要固化为机械步骤」得到肯定答复，或用户明确要求把视觉步骤转为机械步骤时才调用。不要在 stage_case 刚落暂存就自动 solidify——草稿期保持自然语言更利于多轮讨论修改。',
       'solidify_case 优先复用 verify_case 实测缓存的轨迹零执行完成固化（结果里 traceReused=true）：只要上一步实测通过、步骤内容与环境未变，就不需要再跑一遍用例。没有轨迹可复用时（如从未实测、轨迹超过 30 分钟、或步骤已改）才真实执行一遍收集 AI 临场动作，机械映射为 compiled 后暂存为 update_step 修改（草稿用例整例更新）。暂存后必须立即 verify_case(mode="mechanical") 验收（跳过 AI 相，只做机械干跑 + 终态判定）——机械干跑通过才算固化完成；verify 失败由你根据失败归因修复 compiled 后重跑 mechanical，同因连续两轮失败或归因不明则改 mode="full" 重测。通过后引导用户在暂存区勾选保存。固化前后**不要重复跑 full 实测**（每步 AI 相 1~2 分钟，重复跑纯浪费）。',
       'solidify_case 结果里 status=aiTask-fallback 的步骤是「无法机械映射但已固化为 AI 执行步（aiTask）」（原因见 reason：登录凭据占位 / press 无机械对应 / 选择器不可映射 / 纯等待截图观察动作）：机械验收与正式回放时这些步由 AI 真实执行（凭据步的 instruction 已带自助登录提示），不要强行改写；确需机械化的（如选择器含 Playwright 专有语法）可先用 stage_case_op 换成平台可表达的选择器后重新固化。status=kept-aiTask（连 instruction 都没有）才保持视觉模式。wait 与真实动作混合时映射为固定时长 waitFor 一并固化，纯等待步不再产出盲等 waitFor（视为观察动作走 aiTask 化）。',
-      '同一用例反复固化是安全幂等的：暂存 localId 按 stepId 确定（solidify-<stepId>），重复固化覆盖上一轮暂存；执行失败（任一步骤未过）时不会暂存任何修改，修正后重跑即可。',
+      '同一用例反复固化是安全幂等的：暂存 localId 按 stepId 确定（solidify-<stepId>），重复固化覆盖上一轮暂存；已固化为 aiTask 执行步且指令未变的步骤直接保持原样（steps[].status=unchanged-aiTask），不重跑不重映射；执行失败（任一步骤未过）时不会暂存任何修改，修正后重跑即可。',
       '被固化的 fill value 是 AI 当轮填入的原始值：若 instruction 引用了 {{变量}} 而 AI 填了具体值，固化会把该值冻结进 compiled——数据驱动用例（绑定数据集）不建议固化含变量填写的步骤，或固化后把 value 手工改回 {{变量}}。',
     ],
     execute: async (input) => {
@@ -266,9 +311,11 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         }
         if (effectiveSteps.length === 0) return { ok: false, error: '用例没有可执行的步骤' };
 
-        const visualSteps = effectiveSteps.filter(isVisualStep);
+        // 可固化候选 = 视觉模式且非敏感且未处于 AI 执行步固化态（isAiTaskSolidified 已固化的
+        // 步骤保持原样 → 重复固化幂等，见 P1-1）。全无候选时直接短返回，不启动浏览器。
+        const visualSteps = effectiveSteps.filter((s) => isVisualStep(s) && !isAiTaskSolidified(s));
         if (visualSteps.length === 0) {
-          return { ok: false, error: '用例没有视觉模式步骤（全部已编译或为敏感步骤），无需固化。若要把已编译步骤回退为视觉模式，先用 stage_case_op update_step 把 compiled 置 null。' };
+          return { ok: false, error: '用例没有待固化的视觉模式步骤（全部已编译、已是 AI 执行步固化或为敏感步骤），无需固化——重复调用是幂等的。若要重新固化某步，先用 stage_case_op update_step 把该步 compiled 置 null（或改它的 instruction）。' };
         }
         const effectiveCase = { ...caseMeta, ...overlayPatches };
 
@@ -279,7 +326,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           traceKey(ctx.threadId, caseId),
           hashEffectiveSteps(effectiveSteps),
           hashVerifyMeta({ url: effectiveCase.url, defaultEnvId: effectiveCase.defaultEnvId, versionId: effectiveCase.versionId }),
-          effectiveSteps.filter((s) => isVisualStep(s) && !s.sensitive).map((s) => s.id),
+          effectiveSteps.filter((s) => isVisualStep(s) && !s.sensitive && !isAiTaskSolidified(s)).map((s) => s.id),
         );
         if (cachedTrace) {
           ctx.emit({
@@ -287,7 +334,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             solidifiable: visualSteps.length, targetUrl: effectiveCase.url ?? null, traceReused: true,
           });
           const { stepReports, solidifiedCount, keptCount } = await mapAndStageSteps(
-            ctx, effectiveSteps, cachedTrace, { dbCase, stagedCase, lang },
+            ctx, effectiveSteps, cachedTrace, { dbCase, stagedCase, lang, caseUrl: effectiveCase.url },
           );
           const result = solidifiedCount > 0 ? 'solidified' : 'nothing-solidified';
           ctx.emit({ type: 'solidify_progress', phase: 'end', result, solidified: solidifiedCount, kept: keptCount });
@@ -404,7 +451,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           });
           for (let i = 0; i < effectiveSteps.length; i++) {
             const s = effectiveSteps[i]!;
-            const solidifiable = isVisualStep(s) && !s.sensitive;
+            const solidifiable = isVisualStep(s) && !s.sensitive && !isAiTaskSolidified(s);
 
             stepSecret = undefined;
             if (s.sensitive) {
@@ -504,7 +551,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
 
           // ── 映射 + 暂存：全部步骤执行通过，逐视觉步骤把收集到的动作映射为 compiled ──
           const { stepReports, solidifiedCount, keptCount } = await mapAndStageSteps(
-            ctx, effectiveSteps, collected, { dbCase, stagedCase, lang },
+            ctx, effectiveSteps, collected, { dbCase, stagedCase, lang, caseUrl: effectiveCase.url },
           );
 
           const result = solidifiedCount > 0 ? 'solidified' : 'nothing-solidified';

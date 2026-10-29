@@ -13,6 +13,13 @@ export const PLAYWRIGHT_ONLY_SELECTOR_RE = />>|:has-text|:has\(|:near\(|:above\(
  *  会静默点错第一个可见命中——第二道防线（合成端唯一性门已在上游拦，这里拦回归/拦外部喂入）。 */
 const BARE_TAG_RE = /^[a-z][a-z0-9-]*$/i;
 
+/** 「激活态」选择器：router-link-active / is-active 等由路由状态动态加减的 class，录制时命中
+ *  只因目标菜单**恰好**处于激活态；回放（深链直达目标页 / 前序步骤已切走菜单）时该 class
+ *  可能不存在 → 固化必碎。2026-10-28 prod228 实录：「进入 XX 菜单」被固化为
+ *  a.router-link-exact-active.router-link-active。第二道防线（合成端已剔除激活态 class，
+ *  这里拦回归/拦外部喂入），固化映射时直接拒绝。 */
+export const ACTIVE_STATE_SELECTOR_RE = /router-link-(exact-)?active|\.is-active(?![\w-])/i;
+
 /** 步骤是否为视觉模式（可固化候选）：未编译（纯 instruction）或 compiled 全部由 aiTask 组成。
  *  原 solidifyCase.ts 定义；verify_case 轨迹收集也要用，下沉到 execute 中性层避免工具间反向依赖。 */
 export function isVisualStep(step: { instruction: string | null; compiled: unknown; sensitive: boolean }): boolean {
@@ -61,6 +68,9 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
       case 'click': {
         // 坐标动作未解析回 selector（执行点元素解析失败）→ 不可机械固化，整步保持 aiTask。
         if (!a.selector) return { ok: false, reason: 'click 为坐标动作且未解析回稳定选择器，无法映射为平台 locator' };
+        if (ACTIVE_STATE_SELECTOR_RE.test(a.selector)) {
+          return { ok: false, reason: `click 选择器 "${a.selector}" 是激活态 class（由路由状态动态加减，回放时会因菜单未激活而落空），整步保持 aiTask` };
+        }
         const locator = mapSelector(a.selector);
         if (!locator) return { ok: false, reason: `click 选择器 "${a.selector}" 含 Playwright 专有语法，无法映射为平台 locator` };
         if (locator.strategy === 'css' && BARE_TAG_RE.test(locator.value)) {
@@ -78,6 +88,9 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
           return { ok: false, reason: 'fill value 为登录/敏感凭据占位符（含 @服务名 归属形态，登录不属于用例步骤，归环境登录），不固化' };
         }
         if (!a.selector) return { ok: false, reason: 'fill 为坐标动作且未解析回稳定选择器，无法映射为平台 locator' };
+        if (ACTIVE_STATE_SELECTOR_RE.test(a.selector)) {
+          return { ok: false, reason: `fill 选择器 "${a.selector}" 是激活态 class（由路由状态动态加减，回放时会因菜单未激活而落空），整步保持 aiTask` };
+        }
         const locator = mapSelector(a.selector);
         if (!locator) return { ok: false, reason: `fill 选择器 "${a.selector}" 含 Playwright 专有语法，无法映射为平台 locator` };
         if (locator.strategy === 'css' && BARE_TAG_RE.test(locator.value)) {

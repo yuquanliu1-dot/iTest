@@ -337,7 +337,7 @@ describe('solidify_case 前置校验', () => {
     const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
     const r = await buildSolidifyCaseTool(toolCtx()).execute({ caseId });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain('没有视觉模式步骤');
+    if (!r.ok) expect(r.error).toContain('没有待固化的视觉模式步骤');
   });
 
   it('LLM 未配置 → ok:false，不启动浏览器', async () => {
@@ -567,6 +567,100 @@ describe('solidify_case 编排', () => {
       action: 'update_step', caseId, stepId,
       compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#loginBtn' }] }],
     });
+  });
+
+  it('幂等：已固化的 aiTask 步（指令未变）→ unchanged-aiTask 不重映射不暂存，仅其余视觉步重跑', async () => {
+    // 回归动机:prod228 实录——非凭据类 aiTask-fallback 步每轮重固化都重跑重映射,
+    // 轨迹一变产物就漂移。固化输出应是 instruction 的确定性函数,已固化态直接保持原样。
+    const caseId = await seedCase({
+      steps: [
+        { instruction: '按下回车提交', compiled: [{ kind: 'aiTask', instruction: '按下回车提交' }] },
+        { instruction: '点击删除按钮' },
+      ],
+    });
+    const stepRows = await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
+    const stepId2 = stepRows.rows[1]!.id as string;
+    stepQueue = [
+      { actions: [[{ type: 'press', key: 'Enter' }, true]] }, // 步 1 照常执行但不收集
+      { actions: [[{ type: 'click', selector: '#del' }, true]] },
+    ];
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const r = await buildSolidifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.steps[0]).toMatchObject({ order: 1, status: 'unchanged-aiTask' });
+    expect(data.steps[1]).toMatchObject({ order: 2, status: 'solidified' });
+    const ops = await stageOps();
+    expect(ops).toHaveLength(1); // 已固化步不再暂存
+    expect(ops[0]!.local_id).toBe(`solidify-${stepId2}`);
+  });
+
+  it('幂等：全部步骤已固化（机械 + aiTask 执行步）→ ok:false 短返回零执行，不启动浏览器', async () => {
+    const caseId = await seedCase({
+      steps: [
+        { instruction: '点击删除按钮', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#del' }] }] },
+        { instruction: '按下回车提交', compiled: [{ kind: 'aiTask', instruction: '按下回车提交' }] },
+      ],
+    });
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const r = await buildSolidifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('无需固化');
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    expect(runAiTask).not.toHaveBeenCalled();
+    const { chromium } = await import('playwright-core');
+    expect(chromium.launch).not.toHaveBeenCalled();
+  });
+
+  it('幂等豁免：指令被改过（≠ 存量 aiTask.instruction）→ 重固化放行，产物跟随新指令', async () => {
+    const caseId = await seedCase({
+      steps: [{ instruction: '改过的指令：按下回车', compiled: [{ kind: 'aiTask', instruction: '按下回车提交' }] }],
+    });
+    stepQueue = [{ actions: [[{ type: 'press', key: 'Enter' }, true]] }];
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const r = await buildSolidifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.steps[0]).toMatchObject({
+      status: 'aiTask-fallback',
+      compiled: [{ kind: 'aiTask', instruction: '改过的指令：按下回车' }],
+    });
+  });
+
+  it('导航冗余提示：case.url 深链直达 + 首步「进入菜单」→ warning（advisory，不阻断固化）', async () => {
+    // 回归动机:prod228 实录——用例 url 直达资产详情页,首步仍「进入资产管理菜单」,
+    // 固化后回放的菜单 click 把页面带离深链落地页。
+    const caseId = await seedCase({
+      url: 'http://env.example/assets/detail',
+      steps: [{ instruction: '进入资产管理菜单' }],
+    });
+    stepQueue = [{ actions: [[{ type: 'click', selector: '#menu-asset' }, true]] }];
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const r = await buildSolidifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.steps[0].status).toBe('solidified'); // 只提示，不影响固化结果
+    expect(String(data.steps[0].warning)).toContain('冗余');
+  });
+
+  it('导航冗余提示不误伤：根路径 url / 非菜单语义词首步 → 无 warning', async () => {
+    const caseId = await seedCase({
+      url: 'http://env.example/',
+      steps: [{ instruction: '进入资产管理菜单' }],
+    });
+    const caseId2 = await seedCase({
+      url: 'http://env.example/assets/detail',
+      steps: [{ instruction: '点击删除按钮' }],
+    });
+    stepQueue = [{ actions: [[{ type: 'click', selector: '#menu-asset' }, true]] }];
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const r1 = await buildSolidifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r1.ok).toBe(true);
+    expect(JSON.parse((r1 as { data: string }).data).steps[0].warning).toBeUndefined();
+    stepQueue = [{ actions: [[{ type: 'click', selector: '#del' }, true]] }];
+    const r2 = await buildSolidifyCaseTool(toolCtx()).execute({ caseId: caseId2 });
+    expect(r2.ok).toBe(true);
+    expect(JSON.parse((r2 as { data: string }).data).steps[0].warning).toBeUndefined();
   });
 
   it('纯草稿用例（stage_case localId）：固化后整例重暂存（compiled 填充），不落 DB', async () => {
