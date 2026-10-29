@@ -843,38 +843,32 @@ export default function CaseDetail() {
                       {t('cases:incognitoHint')}
                     </span>
                   </div>
-                  {/* 环境与数据一行条：默认环境/测试数据集/行范围同排，长 hint 全文收进 hover 提示（正文不再铺长灰字）。 */}
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                    <label
-                      className="flex items-center gap-2 text-[11px] shrink-0 cursor-pointer"
-                      style={{ color: 'var(--muted-foreground)' }}
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:defaultEnv')}</span>
+                    <select
+                      className="input-base input-sm"
+                      value={defaultEnvId ?? ''}
+                      onChange={(e) => setDefaultEnvId(e.target.value || null)}
+                      disabled={(environments ?? []).length === 0}
                     >
-                      {t('cases:defaultEnv')}
-                      <select
-                        className="input-base input-sm"
-                        style={{ width: 160 }}
-                        value={defaultEnvId ?? ''}
-                        onChange={(e) => setDefaultEnvId(e.target.value || null)}
-                        disabled={(environments ?? []).length === 0}
-                      >
-                        <option value="">{t('cases:noEnvOverride')}</option>
-                        {(environments ?? []).map((e) => (
-                          <option key={e.id} value={e.id}>
-                            {e.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <span className="w-px h-3.5 shrink-0" style={{ background: 'var(--border)' }} />
+                      <option value="">{t('cases:noEnvOverride')}</option>
+                      {(environments ?? []).map((e) => (
+                        <option key={e.id} value={e.id}>
+                          {e.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {/* 数据集与行范围并一行：左侧数据集下拉（label 在上），绑定后右侧同排「选择数据」入口 + 条数（与下拉底对齐）。
+                      运行时替换提示全文收进 hover，不再单独铺一行灰字。 */}
+                  <div className="flex flex-wrap items-end gap-2">
                     <label
-                      className="flex items-center gap-2 text-[11px] cursor-pointer"
-                      style={{ color: 'var(--muted-foreground)' }}
+                      className="flex flex-col gap-1"
                       title={datasetId ? t('cases:datasetRunHint', { col: '{{列名}}' }) : undefined}
                     >
-                      {t('cases:testDataset')}
+                      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:testDataset')}</span>
                       <select
                         className="input-base input-sm"
-                        style={{ width: 200 }}
                         value={datasetId ?? ''}
                         onChange={(e) => {
                           const next = e.target.value || null;
@@ -891,10 +885,8 @@ export default function CaseDetail() {
                         ))}
                       </select>
                     </label>
-                    {/* 数据集行范围：统一「选择数据」入口 → 多选弹窗 → 显示条数（不分三档）。 */}
                     {datasetId && (
-                      <div className="flex items-center gap-2">
-                        <span className="w-px h-3.5 shrink-0" style={{ background: 'var(--border)' }} />
+                      <div className="flex items-center gap-2 pb-0.5">
                         <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                           {t('cases:datasetRowScope')}
                         </span>
