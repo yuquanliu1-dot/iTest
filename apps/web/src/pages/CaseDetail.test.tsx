@@ -101,11 +101,6 @@ function saveButton(): HTMLElement {
   return screen.getAllByRole('button', { name: '保存' })[0]!;
 }
 
-/** 行范围分段控件里的三个档位（radix ToggleGroup 单选 → role=radio）。 */
-function scopeButtons(): HTMLElement[] {
-  return ['所有行', '一条', '多条'].map((label) => screen.getByRole('radio', { name: label }));
-}
-
 describe('CaseDetail 数据集行选择', () => {
   beforeEach(() => {
     caseGet.mockReset();
@@ -135,7 +130,7 @@ describe('CaseDetail 数据集行选择', () => {
       sel.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await waitFor(() => expect(screen.getByText('数据集行范围')).toBeTruthy());
-    expect(scopeButtons()).toHaveLength(3);
+    expect(screen.getByRole('button', { name: '选择数据' })).toBeTruthy();
   });
 
   it('默认档位是「所有行」，提示文案带启用行数', async () => {

@@ -359,12 +359,6 @@ export default function CaseDetail() {
   /** 绑定数据集的启用行数（用于「所有行」提示文案）。 */
   const datasetEnabledRowCount = (datasetList ?? []).find((d) => d.id === datasetId)?.enabledRowCount ?? 0;
 
-  /** 行范围档位：由已选行数派生（[] = 所有行；1 行 = 一条；≥2 行 = 多条）。 */
-  const datasetRowScope: 'all' | 'one' | 'many' =
-    datasetRowIndexes.length === 0 ? 'all' : datasetRowIndexes.length === 1 ? 'one' : 'many';
-  /** 行选择弹窗模式（one=单选，many=多选）：由用户点的档位决定，与派生值无关。 */
-  const [datasetPickerMode, setDatasetPickerMode] = useState<'one' | 'many'>('many');
-
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [labelsManagerOpen, setLabelsManagerOpen] = useState(false);
   const [tagSearch, setTagSearch] = useState('');
@@ -890,40 +884,22 @@ export default function CaseDetail() {
                       </span>
                     )}
                   </label>
-                  {/* 数据集行范围：执行时只跑选中的行。行号 = 启用行下标 + 1（与执行器同编号空间）。 */}
+                  {/* 数据集行范围：统一「选择数据」入口 → 多选弹窗 → 显示条数（不分三档）。 */}
                   {datasetId && (
                     <div className="flex flex-col gap-1">
                       <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                         {t('cases:datasetRowScope')}
                       </span>
-                      <Segmented
-                        options={[
-                          { value: 'all', label: t('cases:datasetRowScopeAll') },
-                          { value: 'one', label: t('cases:datasetRowScopeOne') },
-                          { value: 'many', label: t('cases:datasetRowScopeMany') },
-                        ]}
-                        value={datasetRowScope}
-                        onChange={(v) => {
-                          if (v === 'all') {
-                            setDatasetRowIndexes([]);
-                            return;
-                          }
-                          // 一条/多条：开弹窗选行（无法凭空造行）
-                          setDatasetPickerMode(v);
-                          setDatasetRowPickerOpen(true);
-                        }}
-                      />
-                      {datasetRowScope === 'all' ? (
-                        <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
-                          {t('cases:datasetRowScopeAllHint', { count: datasetEnabledRowCount })}
+                      <div className="flex items-center gap-2">
+                        <Button variant="ghost" size="sm" onClick={() => setDatasetRowPickerOpen(true)}>
+                          {t('cases:datasetRowChoose')}
+                        </Button>
+                        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                          {datasetRowIndexes.length === 0
+                            ? t('cases:datasetRowScopeAllHint', { count: datasetEnabledRowCount })
+                            : t('cases:datasetRowSelected', { indexes: datasetRowIndexes.map((i) => i + 1).join('、') })}
                         </span>
-                      ) : (
-                        <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
-                          {t('cases:datasetRowSelected', {
-                            indexes: datasetRowIndexes.map((i) => i + 1).join('、'),
-                          })}
-                        </span>
-                      )}
+                      </div>
                     </div>
                   )}
                   {/* Track 1：用例级预期描述。回放结束后由 vision LLM 拿最终截图比对；
@@ -1785,7 +1761,6 @@ export default function CaseDetail() {
         onOpenChange={setDatasetRowPickerOpen}
         projectId={projectId}
         datasetId={datasetId}
-        mode={datasetPickerMode}
         value={datasetRowIndexes}
         onConfirm={(indexes) => setDatasetRowIndexes(indexes)}
       />
