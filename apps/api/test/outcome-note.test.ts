@@ -51,6 +51,39 @@ describe('buildOutcomeNote · expectedOutcome 自洽体检', () => {
     })).toBeTruthy();
   });
 
+  it('sendSyslog/sql/observeLog 协议步产生或取证 SUT 状态 → 无提示（dump1 syslog 用例误报回归）', () => {
+    // 回归动机:dump1 实测——「发送 syslog → 查日志确认联动」用例被旧口径误报
+    // 「步骤里没有会产生该结果的操作」,AI 被带偏去补无谓的造数步骤。
+    for (const kind of ['sendSyslog', 'sql', 'observeLog']) {
+      expect(buildOutcomeNote({
+        expectedOutcome: '自动启动处置成功',
+        stepActions: ['发送日志并观察联动结果'],
+        stepCompileds: [[{ kind }]],
+      })).toBeNull();
+    }
+    // queryDb 查的是平台自己的库,与 SUT 业务状态无关 → 仍提示
+    expect(buildOutcomeNote({
+      expectedOutcome: '自动启动处置成功',
+      stepActions: ['查询平台数据'],
+      stepCompileds: [[{ kind: 'queryDb' }]],
+    })).toBeTruthy();
+  });
+
+  it('纯观察型预期（观察词无强结果词）→ 豁免；观察词+强结果词 → 仍提示', () => {
+    // 「页面正常加载成功」含 RESULT 词（成功）但本质是观察型 → 不体检
+    expect(buildOutcomeNote({
+      expectedOutcome: '页面正常加载成功',
+      stepActions: ['打开登录页'],
+      stepCompileds: [CLICK],
+    })).toBeNull();
+    // 「列表可见」+「自动启动处置」两头占 → 不豁免（防弱化措辞蒙混）
+    expect(buildOutcomeNote({
+      expectedOutcome: '处置列表可见且自动启动处置成功',
+      stepActions: ['查看列表'],
+      stepCompileds: [CLICK],
+    })).toBeTruthy();
+  });
+
   it('expectedOutcome 只描述页面可达性（非业务结果）→ 无提示，不误伤打开页型用例', () => {
     expect(buildOutcomeNote({
       expectedOutcome: '页面正常加载，展示登录表单',

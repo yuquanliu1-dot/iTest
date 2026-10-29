@@ -11,6 +11,10 @@
  * 能产生该结果的操作 → 提示补造数步骤，或如实调整预期。
  *
  * 纯启发式、只提示不判死：步骤描述是自然语言，写法千变万化，误报把正确用例带偏比漏报更伤。
+ * 2026-10-29 dump1 实录再补两类免报形态：① 步骤用 sendSyslog/sql/observeLog 等协议步
+ * 产生或取证 SUT 状态（syslog 事件本身就能触发 SUT 联动），旧口径只认 UI 动词与
+ * mutating http，把这类用例误报成「造不出状态」；② 预期本身就是纯观察型（页面可达/
+ * 元素可见），没有「造不出」可言。
  */
 import type { StepAction } from '@itest/shared';
 
@@ -25,21 +29,35 @@ const RESULT_RE = /成功|失败|生效|触发|已?生成|完成|变更|更新�
 /** 造数的另一种形态：mutating httpRequest（API 造数 → UI 验证）。 */
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+/** 会产生或取证 SUT 状态的 compiled 动作 kind：sendSyslog 向被测系统写事件（可触发 SIEM
+ *  联动=业务结果本身）、sql 可写被测库、observeLog 验证 SUT 已发生的事实（事件由真实流量
+ *  产生）。queryDb 刻意排除——它查的是平台自己的库，与被断言的 SUT 业务状态无关。
+ *  httpRequest 不在此列：mutating 与否按 method 判（GET 是读取，MUTATING_METHODS 已覆盖）。 */
+const EVIDENCE_KINDS: ReadonlySet<string> = new Set(['sendSyslog', 'sql', 'observeLog']);
+
+/** 纯观察型预期（页面可达 / 元素可见）：不存在「造不出」的问题，不体检。 */
+const OBSERVATIONAL_OUTCOME_RE = /可达|可见|渲染|展示|显示|加载出|页面正常|正常打开/;
+
+/** 强业务结果词：与观察词同时出现时不豁免（「列表可见且自动启动处置」仍要体检——
+ *  防「弱化成观察措辞 + 保留结果词」两头占的蒙混形态）。 */
+const STRONG_RESULT_RE = /生效|触发|已?生成|变更|更新为|变更为|显示为|自动启动/;
+
 export interface OutcomeNoteInput {
   expectedOutcome: string | null | undefined;
   /** 步骤的自然语言描述（staged case 的 action / DB step 的 instruction）。 */
   stepActions: Array<string | null | undefined>;
-  /** 步骤的 compiled，用于识别 httpRequest 造数。 */
+  /** 步骤的 compiled，用于识别 httpRequest / 协议步造数。 */
   stepCompileds: Array<unknown>;
 }
 
-/** 步骤里是否有能产生业务状态的操作动作（操作动词 或 mutating httpRequest）。 */
+/** 步骤里是否有能产生业务状态的操作动作（操作动词 / mutating httpRequest / 协议取证步）。 */
 function hasStateChangingAction(stepActions: string[], stepCompileds: unknown[]): boolean {
   if (stepActions.some((a) => typeof a === 'string' && OP_VERB_RE.test(a))) return true;
   return stepCompileds.some((compiled) =>
-    (Array.isArray(compiled) ? compiled : []).some(
-      (a) => MUTATING_METHODS.has(String((a as { method?: unknown })?.method ?? '').toUpperCase()),
-    ),
+    (Array.isArray(compiled) ? compiled : []).some((a) => {
+      if (EVIDENCE_KINDS.has(String((a as { kind?: unknown })?.kind ?? ''))) return true;
+      return MUTATING_METHODS.has(String((a as { method?: unknown })?.method ?? '').toUpperCase());
+    }),
   );
 }
 
@@ -50,6 +68,8 @@ function hasStateChangingAction(stepActions: string[], stepCompileds: unknown[])
 export function buildOutcomeNote(input: OutcomeNoteInput): string | null {
   const outcome = typeof input.expectedOutcome === 'string' ? input.expectedOutcome.trim() : '';
   if (!outcome || !RESULT_RE.test(outcome)) return null;
+  // 纯观察型预期（观察词 + 无强结果词）不体检：它验证的是可达性/可见性，不欠一笔「造数」。
+  if (OBSERVATIONAL_OUTCOME_RE.test(outcome) && !STRONG_RESULT_RE.test(outcome)) return null;
   if (hasStateChangingAction(
     input.stepActions.filter((a): a is string => typeof a === 'string'),
     input.stepCompileds,
