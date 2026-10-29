@@ -12,6 +12,7 @@ import Button from '../ui/Button';
 import IconButton from '../ui/IconButton';
 import InlineEdit from '../ui/InlineEdit';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/Modal';
+import DatasetRowPickerDialog from '../DatasetRowPickerDialog';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '../ui/shadcn/dropdown-menu';
 
 /** 登录准备候选（/plans/:id/login-cases，页面级查询下发）。 */
@@ -45,6 +46,8 @@ export default function PlanGroupCard({
   const [loginQ, setLoginQ] = useState('');
   /** 组内行移除确认（与旧计划级列表同款防误点弹窗）。 */
   const [confirmRemoveCase, setConfirmRemoveCase] = useState<{ id: string; title: string } | null>(null);
+  /** 行内「选择数据」弹窗目标行（null = 关闭）。存整行：projectId/datasetId/生效下标都从它取。 */
+  const [datasetPickerCase, setDatasetPickerCase] = useState<PlanCaseGroup['cases'][number] | null>(null);
 
   const invalidate = () => onInvalidate();
 
@@ -88,6 +91,24 @@ export default function PlanGroupCard({
     onSuccess: invalidate,
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
+
+  const patchPlanCase = useMutation({
+    mutationFn: ({ planCaseId, datasetRowIndexes }: { planCaseId: string; datasetRowIndexes: number[] | null }) =>
+      api.plans.patchPlanCase(plan.id, planCaseId, { datasetRowIndexes }),
+    onSuccess: invalidate,
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
+  });
+
+  /** 行内数据选择状态文字三态：跟随用例 · N 行（N=用例级生效条数）/ 全部 N 行 / 已选 M 行。 */
+  const datasetStatusLabel = (c: PlanCaseGroup['cases'][number]): string => {
+    if (c.planRowIndexes !== null) {
+      return c.planRowIndexes.length === 0
+        ? t('plans:datasetAllRows', { count: c.datasetEnabledRowCount })
+        : t('plans:datasetSelectedRows', { count: c.planRowIndexes.length });
+    }
+    const n = c.caseRowIndexes.length === 0 ? c.datasetEnabledRowCount : c.caseRowIndexes.length;
+    return t('plans:datasetFollowCaseRows', { count: n });
+  };
 
   const removeCases = useMutation({
     mutationFn: (caseIds: string[]) => api.plans.removeCases(plan.id, caseIds),
@@ -356,6 +377,18 @@ export default function PlanGroupCard({
                       {c.versionName}
                     </span>
                   )}
+                  {/* 计划级数据行选择入口：仅绑了数据集才显示；点开多选弹窗，行内文字三态。 */}
+                  {c.datasetId && (
+                    <button
+                      type="button"
+                      className="press shrink-0 text-[10px] font-medium px-1.5 py-[1px] rounded"
+                      style={{ background: 'var(--muted)', color: 'var(--muted-foreground)', border: '1px solid var(--border)', cursor: 'pointer' }}
+                      onClick={() => setDatasetPickerCase(c)}
+                      title={t('plans:datasetEntry')}
+                    >
+                      {datasetStatusLabel(c)}
+                    </button>
+                  )}
                   {otherGroups.length > 0 && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -406,6 +439,26 @@ export default function PlanGroupCard({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 计划级数据行选择弹窗：value=生效下标（计划覆盖值；未覆盖用用例级生效值）。
+          跨产品线共享用例拉数据集用用例自己的项目（projectId ?? plan.projectId）。 */}
+      {datasetPickerCase && (
+        <DatasetRowPickerDialog
+          open
+          onOpenChange={(o) => !o && setDatasetPickerCase(null)}
+          projectId={datasetPickerCase.projectId ?? plan.projectId}
+          datasetId={datasetPickerCase.datasetId}
+          value={datasetPickerCase.planRowIndexes ?? datasetPickerCase.caseRowIndexes}
+          onConfirm={(indexes) =>
+            patchPlanCase.mutate({ planCaseId: datasetPickerCase.planCaseId, datasetRowIndexes: indexes })
+          }
+          onFollowCase={
+            datasetPickerCase.planRowIndexes !== null
+              ? () => patchPlanCase.mutate({ planCaseId: datasetPickerCase.planCaseId, datasetRowIndexes: null })
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 }
