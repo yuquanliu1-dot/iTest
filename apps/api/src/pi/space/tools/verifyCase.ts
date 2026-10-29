@@ -215,13 +215,24 @@ export function collectStepLocators(compiled: unknown): Locator[] {
   return out;
 }
 
-/** 全视觉判定：全部步骤无 compiled（或纯 aiTask）→ 机械干跑无意义（无 compiled 可逐字派发）。
- *  full 模式据此跳过机械干跑；mechanical 模式据此直接拒绝（引导先 full 实测 / solidify 固化）。 */
+/** 全视觉判定：全部步骤无 compiled（或纯 aiTask）→ full 模式据此跳过机械干跑。
+ *  注意「纯 aiTask」不在 mechanical 闸门里用：机械干跑 dispatch 到 aiTask 会真实执行
+ *  （cdp.ts case 'aiTask'），是正式可派发动作——mechanical 闸门看 hasNoCompiledSteps。 */
 function isAllVisualSteps(steps: EffectiveStep[]): boolean {
   return steps.every((s) => {
     const c = (s as { compiled?: unknown }).compiled;
     if (!Array.isArray(c) || c.length === 0) return true;
     return (c as Array<{ kind?: string }>).every((a) => a?.kind === 'aiTask');
+  });
+}
+
+/** 全部步骤都没有可派发的 compiled（纯自然语言）：机械干跑无从逐字派发，mechanical 模式据此拒绝。
+ *  与 isAllVisualSteps 的区别：纯 aiTask 的 compiled 也是正式可派发动作——2026-10-28 prod228 实录：
+ *  全 aiTask 固化结果被旧口径拒之门外，被迫再跑一遍被明令禁止的 full。 */
+function hasNoCompiledSteps(steps: EffectiveStep[]): boolean {
+  return steps.every((s) => {
+    const c = (s as { compiled?: unknown }).compiled;
+    return !Array.isArray(c) || c.length === 0;
   });
 }
 
@@ -425,9 +436,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
     }),
     promptGuidelines: [
       'verify_case 有两种使用场景，按需选择：(a) 讨论期实测——草稿讨论中用户要求「跑一下看看」时，对 stage_case 暂存的自然语言草稿调用（mode 省略即 full），AI 相执行 + live view 视频流给用户看，失败时分流：locator 类失败据 failure 修正后重发 stage_case 再验，自然语言步的 AI 相失败按下方分流指引反馈用户；(b) 编译后验收——solidify_case 把自然语言编译为机械 DSL 后，对固化结果调用 verify_case(mode="mechanical")，跳过 AI 相只做机械干跑 + 终态判定，失败由你按归因修复 compiled 后重跑，直到通过。',
-      'verify_case 的 mode 决定验收形态，别乱选：mode="full"（默认）是全 AI 实测，用于语义验证（讨论期实测、或 mechanical 连续两轮同因失败/归因不明时升级到它），实测通过会顺带缓存 AI 动作轨迹；mode="mechanical" 是固化后的机械验收，只跑机械干跑 + 终态判定，不烧 AI 轮次——**固化完成后用 mode="mechanical" 验收，别再跑一遍 full**。',
+      'verify_case 的 mode 决定验收形态，别乱选：mode="full"（默认）是全 AI 实测，用于语义验证（讨论期实测、或 mechanical 连续两轮同因失败/归因不明时升级到它），实测通过会顺带缓存 AI 动作轨迹；mode="mechanical" 是固化后的机械验收，只跑机械干跑 + 终态判定（纯 compiled 步不烧 AI 轮次；固化出的 aiTask 执行步在干跑里由 AI 真实执行，仍会烧 LLM）——**固化完成后用 mode="mechanical" 验收，别再跑一遍 full**。',
       '**不要重复跑 full**：full 的 AI 相每步要 1~2 分钟（prod228 实测 30 次 full 调用占 105 分钟）。同一用例 full 已经通过、且步骤/环境未变时，再跑一次 full 是纯浪费——重复验证只允许发生在：步骤或 expectedOutcome 改了、环境换了、mechanical 连续两轮同因失败或归因不明（此时才升级 full）、或用户明确要求重测。全 AI 实测通过时响应里的 traceSaved=true 说明轨迹已缓存，紧接着的 solidify_case 可零执行秒级完成。',
-      'mode="mechanical" 的两个限制要如实告知用户：(1) 全视觉用例（无 compiled）会被直接拒绝——此时先调 mode="full" 实测；(2) 机械模式没有 AI 相，整体登录不自动做，靠登录态缓存（30 分钟）注入——但 solidify 固化出的 aiTask 执行步（status=aiTask-fallback，含凭据步）会在干跑里由 AI 真实执行并按 instruction 自助登录，需要 LLM。副本重启或缓存过期落到登录页时，失败页是登录页就改 mode="full" 重测（顺带刷新登录态与轨迹缓存）。',
+      'mode="mechanical" 的两个限制要如实告知用户：(1) 纯自然语言用例（无 compiled）会被直接拒绝——此时先调 mode="full" 实测，solidify_case 固化出 compiled 后再回来验收；含 aiTask 的固化结果是可派发动作，mechanical 正常验收；(2) 机械模式没有 AI 相，整体登录不自动做，靠登录态缓存（30 分钟）注入——但 solidify 固化出的 aiTask 执行步（status=aiTask-fallback，含凭据步）会在干跑里由 AI 真实执行并按 instruction 自助登录，需要 LLM。副本重启或缓存过期落到登录页时，失败页是登录页就改 mode="full" 重测（顺带刷新登录态与轨迹缓存）。',
       'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
       'verify_case 成功响应里的 page 是本轮终态页面上真实存在的可交互元素清单（已去重降噪，另有 N 个同类元素折叠省略）。边跑边讨论提议下一步或讨论筛选项/按钮时，只能引用 page.elements（或 failure.page.elements）里真实存在的控件——清单里没有的输入框/下拉/筛选项（如「时间范围」「等级」）一律不得提议或断言其存在，页面事实以实测清单为准。',
@@ -584,11 +595,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         });
         // ── 机械验收模式（mode='mechanical'）：solidify 固化后的验收专用 ──
         // AI 相的语义验证已在实测轮完成，本模式只做 compiled 机械干跑 + 终态判定；
-        // 无 compiled 的视觉用例无从逐字派发 → 拒绝并引导 full（实测轮顺带收集 solidify 轨迹）。
-        if (mode === 'mechanical' && isAllVisualSteps(effectiveSteps)) {
+        // 纯自然语言用例（无 compiled）无从逐字派发 → 拒绝并引导 full。含 aiTask 的 compiled
+        // 是正式可派发动作（干跑 dispatch aiTask 由 AI 真实执行）→ 放行（2026-10-28 prod228
+        // 实录：全 aiTask 固化结果被旧口径拒绝，被迫再跑被明令禁止的 full）。
+        if (mode === 'mechanical' && hasNoCompiledSteps(effectiveSteps)) {
           return {
             ok: false,
-            error: 'mechanical 模式验收的是 compiled 的机械可回放性：当前用例全部步骤都是视觉模式（无 compiled）。请改调 verify_case(mode="full") 做全 AI 实测（通过后会顺带缓存可被 solidify_case 零执行复用的实测轨迹）。',
+            error: 'mechanical 模式验收的是 compiled 的机械可回放性：当前用例全部步骤都是纯自然语言（无 compiled）。请改调 verify_case(mode="full") 做全 AI 实测（通过后可 solidify_case 固化出 compiled，再回来做 mechanical 验收）。',
           };
         }
         const prevConfirm = verifyConfirmCache.get(ckey) ?? null;
@@ -1157,16 +1170,16 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // 目录，避免与 AI 相同名 step-N.png 互相覆盖。副作用与正式执行一致（二次执行
           // 恰好暴露唯一名冲突等回放脆弱性，属有意语义）。
           //
-          // 讨论期实测场景：草稿步骤是纯自然语言（无 compiled）或纯 aiTask（视觉模式）时
-          // 跳过机械干跑——没有可逐字派发的 compiled,跑了也只会以 compile-missing 报"未知错误",
-          // 反而误导用户以为用例有问题。solidify 固化后再跑 verify 时 compiled 已就位,
-          // 机械干跑自然恢复生效。
+          // 讨论期实测场景：草稿步骤是纯自然语言（无 compiled）时跳过机械干跑——没有可逐字
+          // 派发的 compiled,跑了也只会以 compile-missing 报"未知错误",反而误导用户以为用例有问题。
+          // full 模式下纯 aiTask（视觉模式）同样跳过；但 mechanical 模式必须干跑：aiTask 是正式
+          // 可派发动作（dispatch 由 AI 真实执行），solidify 产出全 aiTask 固化结果的验收正落在这一轮。
           const allVisual = isAllVisualSteps(effectiveSteps);
           let replayFailure: ExecStepResult | null = null;
           let replaySteps: ExecStepResult[] = [];
           let replayPage: Page | null = null;
           let replayStartedAt = 0;
-          if (failedIndex < 0 && !visionFailure && !allVisual) {
+          if (failedIndex < 0 && !visionFailure && (mode === 'mechanical' || !allVisual)) {
             ctx.emit({ type: 'verify_progress', phase: 'replay_start' });
             replayStartedAt = Date.now();
             try {
@@ -1313,7 +1326,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               steps: stepsSummary,
               ...droppedField,
               ...(successPage ? { page: successPage } : {}),
-              // replay 只在机械干跑真的跑了时才有意义：全视觉用例（无 compiled）跳过干跑，
+              // replay 只在机械干跑真的跑了时才有意义：full 模式下全视觉用例跳过干跑，
               // 此时若照发 durationMs 会是 Date.now()-0 的 epoch 垃圾值（prod228 出现 6 次）。
               // 干跑的逐步明细（含查库返回行）一并带出：agent 据此确认真值，
               // 不用再另建探针用例去猜表名/字段名/数据形态。

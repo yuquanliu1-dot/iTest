@@ -1606,6 +1606,36 @@ describe('verify_case mechanical 机械验收模式', () => {
     expect(chromium.launch).not.toHaveBeenCalled();
   });
 
+  it('全 aiTask 固化结果 → mechanical 放行并干跑（aiTask 是可派发动作，不强迫重跑 full）', async () => {
+    // 回归动机:2026-10-28 prod228 实录——solidify 把无法机械映射的步骤固化为 aiTask 执行步,
+    // 全 aiTask 用例被旧口径（isAllVisualSteps）拒之门外,agent 被迫再跑被明令禁止的 full。
+    const AI_TASK_COMPILED = [{ kind: 'aiTask', instruction: '点击删除按钮' }];
+    const caseId = await seedCase({ steps: [AI_TASK_COMPILED, AI_TASK_COMPILED] });
+    const emitLog: unknown[] = [];
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId, mode: 'mechanical' });
+    expect(r.ok).toBe(true);
+    // verify 本体不跑 AI 相；干跑里 aiTask 由执行引擎派发（本测试 mock 掉引擎，只验闸门与传参）
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    expect(runAiTask).not.toHaveBeenCalled();
+    expect(executeCaseInBrowser).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(executeCaseInBrowser).mock.calls[0]! as unknown as [
+      string,
+      Array<{ compiled: unknown[] }>,
+    ];
+    expect(call[1][0]!.compiled).toEqual(AI_TASK_COMPILED);
+    expect(call[1][1]!.compiled).toEqual(AI_TASK_COMPILED);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('passed');
+      expect(data.mode).toBe('mechanical');
+      expect(data.replay.result).toBe('passed');
+    }
+    const phases = emitLog.map((e) => (e as { phase: string }).phase);
+    expect(phases).toEqual(['start', 'replay_start', 'replay_done', 'end']);
+  });
+
   it('干跑失败 → ReplayDivergence + note 提示 full 复核/登录态', async () => {
     const caseId = await seedCase({ steps: [CLICK_COMPILED] });
     const replayPageStub = {
