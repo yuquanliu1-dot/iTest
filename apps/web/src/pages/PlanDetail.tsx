@@ -298,43 +298,48 @@ export default function PlanDetail() {
           clamp 放滚动层上会让滚动条悬在限宽容器边缘而不是屏幕最右 */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="p-6 flex flex-col gap-4 mx-auto w-full max-w-[min(100%-2rem,100rem)]">
-        <div className="bg-card border rounded-[var(--radius-md)] p-5">
-          {/* input-base 默认 width:100%，flex 行内会把标签挤到竖排；控件 flex-1 弹性填充 + 标签 shrink-0 */}
-          <div className="flex items-center gap-4">
-            <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:strategy')}</span>
+        {/* 执行设置一行条：策略/RCA/创建人同排，hint 全文收进 hover 提示（正文不再铺长灰字） */}
+        <div className="bg-card border rounded-[var(--radius-md)] px-4 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-2">
+          <label
+            className="flex items-center gap-2 text-[12px] shrink-0 cursor-pointer"
+            style={{ color: 'var(--muted-foreground)' }}
+            title={t('plans:strategyHint')}
+          >
+            {t('plans:strategy')}
             <select
               value={plan.strategy}
               onChange={(e) => updateStrategy(e.target.value as Strategy)}
-              className="input-base input-sm flex-1"
-              style={{ minWidth: 160, maxWidth: 240 }}
+              className="input-base input-sm"
+              style={{ width: 150 }}
             >
               <option value="run_all">{t('plans:strategyRunAll')}</option>
               <option value="fail_fast">{t('plans:strategyFailFast')}</option>
             </select>
-          </div>
-          <div className="mt-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('plans:strategyHint')}</div>
-          <div className="mt-4">
-            <div className="hairline-top pt-3">
-              <label className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-                <input
-                  type="checkbox"
-                  checked={plan.rcaEnabled ?? false}
-                  disabled={patchPlan.isPending}
-                  onChange={(e) => patchPlan.mutate({ rcaEnabled: e.target.checked })}
-                />
-                {t('plans:enableRca')}
-              </label>
-              <div className="mt-1 pl-6 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('plans:enableRcaHint')}</div>
-            </div>
-          </div>
-          <div className="mt-4 hairline-top pt-3 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+          </label>
+          <span className="w-px h-3.5 shrink-0" style={{ background: 'var(--border)' }} />
+          <label
+            className="flex items-center gap-2 text-[12px] cursor-pointer"
+            style={{ color: 'var(--muted-foreground)' }}
+            title={t('plans:enableRcaHint')}
+          >
+            <input
+              type="checkbox"
+              checked={plan.rcaEnabled ?? false}
+              disabled={patchPlan.isPending}
+              onChange={(e) => patchPlan.mutate({ rcaEnabled: e.target.checked })}
+            />
+            {t('plans:enableRca')}
+          </label>
+          <span className="w-px h-3.5 shrink-0" style={{ background: 'var(--border)' }} />
+          <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
             {t('groups:createdBy')} {creatorName(plan.createdBy)}
-          </div>
+          </span>
         </div>
 
         <ScheduleListCard planId={id!} />
 
-        <div className="bg-card border rounded-[var(--radius-md)] p-5">
+        {/* 组卡自带边框，外层不再套卡壳（双框显厚重）；仅保留区块标题行 */}
+        <div>
           <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3 hairline-bottom pb-2" style={{ color: 'var(--muted-foreground)' }}>
             {t('plans:caseOrder', { count: plan.cases.length })}
           </div>

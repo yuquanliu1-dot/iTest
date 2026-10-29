@@ -65,24 +65,22 @@ export default function ScheduleListCard({ planId }: Props) {
 
   const schedules = list.data ?? [];
 
+  const empty = schedules.length === 0;
   return (
-    <div className="bg-card border rounded-[var(--radius-md)] p-5">
-      <div className="flex items-center gap-2 mb-3">
+    <div className={`bg-card border rounded-[var(--radius-md)] ${empty ? 'px-4 py-2.5' : 'p-5'}`}>
+      <div className={`flex items-center gap-2 ${empty ? '' : 'mb-3'}`}>
         <h2 className="text-[14px] font-semibold m-0">{t('plans:schedule')}</h2>
         <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-          {schedules.length === 0 ? t('plans:noSchedule') : t('plans:scheduleCount', { count: schedules.length })}
+          {empty ? t('plans:noSchedule') : t('plans:scheduleCount', { count: schedules.length })}
         </span>
         <div className="flex-1" />
-        <Button size="sm" variant="ghost" onClick={() => setCreating(true)}>
+        {/* 空态压一行：cron 说明全文收进按钮 hover 提示 */}
+        <Button size="sm" variant="ghost" title={t('plans:addScheduleHint')} onClick={() => setCreating(true)}>
           {t('plans:addSchedule')}
         </Button>
       </div>
 
-      {schedules.length === 0 ? (
-        <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-          {t('plans:addScheduleHint')}
-        </div>
-      ) : (
+      {empty ? null : (
         <div className="flex flex-col gap-2">
           {schedules.map((s) => (
             <ScheduleRow

@@ -167,8 +167,8 @@ export default function PlanGroupCard({
 
   return (
     <div className="bg-card border rounded-[var(--radius-md)] p-5">
-      {/* 组头：名称行内编辑 + 组间排序 + 组级配置（环境/登录准备/failFast/浏览器上下文） */}
-      <div className="flex items-center gap-3 flex-wrap">
+      {/* 组头行 1：序号 + 名称行内编辑 + 组间排序 + 删除（配置移行 2，避免一行七控件换行错落） */}
+      <div className="flex items-center gap-3">
         <span className="text-[11px] font-mono shrink-0" style={{ color: 'var(--muted-foreground)' }}>
           {t('plans:groupOrder', { index: groupIdx + 1 })}
         </span>
@@ -184,6 +184,16 @@ export default function PlanGroupCard({
         <IconButton icon="chevronUp" title={t('cases:moveUp')} onClick={() => moveGroupBy(-1)} disabled={groupIdx <= 0} />
         <IconButton icon="chevronDown" title={t('cases:moveDown')} onClick={() => moveGroupBy(1)} disabled={groupIdx >= groups.length - 1} />
         <div className="flex-1" />
+        <IconButton
+          icon="trash"
+          title={t('plans:deleteGroupTitle')}
+          tone="destructive"
+          disabled={deleteGroup.isPending}
+          onClick={() => deleteGroup.mutate()}
+        />
+      </div>
+      {/* 组头行 2：组级配置一行（环境/浏览器上下文/组内失败即停/登录准备开关） */}
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-5 gap-y-2">
         <label className="flex items-center gap-2 text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>
           {t('plans:targetEnvironment')}
           <select
@@ -224,18 +234,7 @@ export default function PlanGroupCard({
           />
           {t('plans:groupFailFast')}
         </label>
-        <IconButton
-          icon="trash"
-          title={t('plans:deleteGroupTitle')}
-          tone="destructive"
-          disabled={deleteGroup.isPending}
-          onClick={() => deleteGroup.mutate()}
-        />
-      </div>
-
-      {/* 组级登录准备：环境凭据自动登录 / 登录用例前置（从计划级面板平移） */}
-      <div className="mt-3">
-        <label className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+        <label className="flex items-center gap-2 text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>
           <input
             type="checkbox"
             checked={group.loginPrepareEnabled}
@@ -244,8 +243,11 @@ export default function PlanGroupCard({
           />
           {t('plans:enableLoginPrepare')}
         </label>
-        {group.loginPrepareEnabled && (
-          <div className="mt-3 flex flex-col gap-2 pl-5">
+      </div>
+
+      {/* 组级登录准备：环境凭据自动登录 / 登录用例前置（勾选行 2 的开关后展开） */}
+      {group.loginPrepareEnabled && (
+        <div className="mt-3 flex flex-col gap-2 pl-5">
             <div className="flex items-center gap-2">
               <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:loginCase')}</span>
               <select
@@ -307,9 +309,8 @@ export default function PlanGroupCard({
                 </label>
               </div>
             </details>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* 组内用例：拖拽/上下移组内重排，行尾可跨组移动（跨组重复合法，按 planCaseId 移动） */}
       <div className="mt-4">
