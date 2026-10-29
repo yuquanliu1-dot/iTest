@@ -237,6 +237,24 @@ export async function enabledRowCount(datasetId: string): Promise<number> {
   return d ? d.rows.filter((r) => !r.disabled).length : 0;
 }
 
+/** 行选择共用校验（用例级 cases.service / 计划级 plans.service 同一口径）：
+ *  空数组放行（[]=全部行）；非空要求 ≤500 个非负整数下标、已绑数据集、落在启用行范围内。
+ *  null（清覆盖）由调用方自行放行，不进本函数。 */
+export async function assertDatasetRowIndexes(datasetId: string | null | undefined, rowIndexes: number[]): Promise<void> {
+  if (rowIndexes.length === 0) return;
+  if (rowIndexes.length > 500) throw new HttpError(400, 'bad_request', '数据行选择最多 500 行');
+  if (rowIndexes.some((i) => !Number.isInteger(i) || i < 0)) {
+    throw new HttpError(400, 'bad_request', '数据行下标必须是非负整数');
+  }
+  if (!datasetId) throw new HttpError(400, 'bad_request', '选择数据集行前须先绑定数据集');
+  const enabledCount = await enabledRowCount(datasetId);
+  const bad = rowIndexes.filter((i) => i >= enabledCount);
+  if (bad.length > 0) {
+    throw new HttpError(400, 'bad_request',
+      `选中的数据行 ${bad.map((i) => i + 1).join('、')} 超出该数据集的启用行范围（共 ${enabledCount} 行）`);
+  }
+}
+
 /** 单行回放上下文：vars=解密后初始变量（仅执行期内存）；snapshot=落报告的行快照（敏感值固定 ******）。 */
 export interface DatasetRowExec {
   rowIndex: number;

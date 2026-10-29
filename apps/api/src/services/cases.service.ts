@@ -10,7 +10,7 @@ import type { AppRef } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
 import { resolveDatasetProjectId, resolveDeviceTargetProjectId, resolveEnvironmentProjectId, resolveVersionProjectId } from './projectAccess.js';
-import { enabledRowCount } from './datasets.service.js';
+import { assertDatasetRowIndexes } from './datasets.service.js';
 import { migrateAssertion, sanitizeAssertion } from '../lib/step-migration.js';
 import { attachCreator } from '../lib/creator.js';
 import { cache } from '../lib/cache.js';
@@ -257,14 +257,7 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
     datasetRowIndexes = [];
   }
   if (datasetRowIndexes && datasetRowIndexes.length > 0) {
-    const dsId = patch.datasetId ?? existing.datasetId;
-    if (!dsId) throw new HttpError(400, 'bad_request', '选择数据集行前须先绑定数据集');
-    const enabledCount = await enabledRowCount(dsId);
-    const bad = datasetRowIndexes.filter((i) => i >= enabledCount);
-    if (bad.length > 0) {
-      throw new HttpError(400, 'bad_request',
-        `选中的数据行 ${bad.map((i) => i + 1).join('、')} 超出该数据集的启用行范围（共 ${enabledCount} 行）`);
-    }
+    await assertDatasetRowIndexes(patch.datasetId ?? existing.datasetId, datasetRowIndexes);
   }
   // 2026-10-07: 移动端 device target 跨项目断言（service 兜底）
   if (patch.mobileDeviceTargetId !== undefined && patch.mobileDeviceTargetId !== null) {
