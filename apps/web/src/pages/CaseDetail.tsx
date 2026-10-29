@@ -55,6 +55,8 @@ export default function CaseDetail() {
   const [confirmResume, setConfirmResume] = useState<{ stepId: string; order: number } | null>(null);
   /** 删除步骤前一律先弹 modal —— 步骤误删需重新录制或编辑回填。 */
   const [confirmDeleteStep, setConfirmDeleteStep] = useState<{ stepId: string; order: number; instruction: string } | null>(null);
+  /** 批量删除确认（与单删同款防误点；走 mutateSteps 全量替换，可撤销）。 */
+  const [confirmDeleteSelected, setConfirmDeleteSelected] = useState(false);
   /** Track 1：用例级预期描述（自然语言）。回放结束由 vision LLM 拿最终截图比对。
    *  编辑与保存走 caseDetail.expectedOutcome 同步；用 ref 跟踪 serverKey 避免 refetch 静默覆盖未保存编辑。 */
   const [expectedOutcome, setExpectedOutcome] = useState('');
@@ -1051,6 +1053,16 @@ export default function CaseDetail() {
                   <Button
                     variant="ghost"
                     size="sm"
+                    onClick={() => setConfirmDeleteSelected(true)}
+                    disabled={selected.size === 0 || recorder.status === 'recording'}
+                    style={{ color: 'var(--destructive)' }}
+                  >
+                    <Icon name="trash" size={12} />
+                    {t('cases:deleteSelected', { count: selected.size })}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() =>
                       mutateSteps((cur) => {
                         const selIdx = cur
@@ -1708,6 +1720,30 @@ export default function CaseDetail() {
               onClick={() => confirmDeleteStep && deleteStep.mutate(confirmDeleteStep.stepId)}
             >
               {deleteStep.isPending ? t('cases:deleting') : t('cases:confirmDelete')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量删除确认：走 mutateSteps 全量替换（自动入撤销栈，可用「撤销」恢复） */}
+      <Dialog open={confirmDeleteSelected} onOpenChange={setConfirmDeleteSelected}>
+        <DialogContent style={{ maxWidth: 420 }}>
+          <DialogHeader><DialogTitle>{t('cases:deleteSelectedTitle')}</DialogTitle></DialogHeader>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+            {t('cases:deleteSelectedConfirm', { count: selected.size })}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmDeleteSelected(false)}>{t('common:cancel')}</Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                if (!caseDetail || selected.size === 0) return;
+                mutateSteps((cur) => cur.filter((_, i) => !selected.has(caseDetail.steps[i]!.id)));
+                setSelected(new Set());
+                setConfirmDeleteSelected(false);
+              }}
+            >
+              {t('cases:confirmDelete')}
             </Button>
           </DialogFooter>
         </DialogContent>
