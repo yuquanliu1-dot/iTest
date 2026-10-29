@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../stores/ui';
 import { api } from '../../api/client';
+import { copyTextToClipboard } from '../../lib/clipboard';
 
 interface Props {
   visible: boolean;
@@ -43,9 +44,9 @@ export default function ResetPasswordModal({ visible, userId, userName, onClose 
 
   const copyPassword = () => {
     if (!temporaryPassword) return;
-    navigator.clipboard.writeText(temporaryPassword)
-      .then(() => toast(t('members:copied'), 'success'))
-      .catch(() => toast(t('members:copyFailed'), 'error'));
+    void copyTextToClipboard(temporaryPassword).then((ok) =>
+      toast(ok ? t('members:copied') : t('members:copyFailed'), ok ? 'success' : 'error'),
+    );
   };
 
   if (!visible) return null;
