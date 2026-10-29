@@ -45,16 +45,16 @@ beforeEach(async () => {
 });
 
 describe('S1 guides：seed 幂等 + loadActiveGuides 语义 + CRUD/鉴权', () => {
-  it('seedAssistantGuides 跑两遍仍是 3 行（REQ_DESIGN_METHOD·any + FLOW·zh/en）', async () => {
+  it('seedAssistantGuides 跑两遍仍是 4 行（REQ_DESIGN_METHOD·any + FLOW·zh/en + 能力边界·any）', async () => {
     const { seedAssistantGuides } = await import('../src/db/seed.js');
     await seedAssistantGuides(pool);
     const first = (await pool.query(`SELECT count(*)::int n FROM assistant_guides`)).rows[0]!.n as number;
     await seedAssistantGuides(pool); // 模拟容器二次启动
     const second = (await pool.query(`SELECT count(*)::int n FROM assistant_guides`)).rows[0]!.n as number;
-    expect(first).toBe(3);
-    expect(second).toBe(3); // ON CONFLICT (id) DO NOTHING 幂等
+    expect(first).toBe(4);
+    expect(second).toBe(4); // ON CONFLICT (id) DO NOTHING 幂等
     const rows = (await pool.query(`SELECT lang::text lang, kind::text kind FROM assistant_guides ORDER BY id`)).rows;
-    expect(rows.map((r) => `${r.kind}:${r.lang}`).sort()).toEqual(['flow:any', 'flow:en', 'flow:zh']);
+    expect(rows.map((r) => `${r.kind}:${r.lang}`).sort()).toEqual(['flow:any', 'flow:any', 'flow:en', 'flow:zh']);
   });
 
   it('loadActiveGuides：scope version>project>global + sort + lang/enabled 过滤', async () => {
