@@ -460,21 +460,33 @@ export default function StagePanel({ projectId, versionId }: Props) {
     <CollapsiblePanel title={t('assistant:stage.panelTitle', { count: total })} defaultOpen divider={false}>
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex items-center gap-1 px-3 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        {TABS.map((tabItem) => (
-          <button
-            key={tabItem.key}
-            type="button"
-            onClick={() => setTab(tabItem.key)}
-            className={`btn-tint rounded px-2 py-1 text-[12px] ${tab === tabItem.key ? 'btn-sel' : ''}`}
-            style={{
-              color: tab === tabItem.key ? 'var(--primary)' : 'var(--muted-foreground)',
-              fontWeight: tab === tabItem.key ? 600 : 400,
-            }}
-            aria-current={tab === tabItem.key}
-          >
-            {t(tabItem.label)} ({partitioned[tabItem.key].length})
-          </button>
-        ))}
+        {TABS.map((tabItem) => {
+          const count = partitioned[tabItem.key].length;
+          const active = tab === tabItem.key;
+          return (
+            <button
+              key={tabItem.key}
+              type="button"
+              onClick={() => setTab(tabItem.key)}
+              className={`btn-tint rounded px-2 py-1 text-[12px] ${active ? 'btn-sel' : ''}`}
+              style={{
+                // 有暂存对象的 Tab 提亮（非 muted），配合计数徽章一眼可见；激活态仍由 btn-sel 主导
+                color: active ? 'var(--primary)' : count > 0 ? 'var(--foreground)' : 'var(--muted-foreground)',
+                fontWeight: active ? 600 : 400,
+              }}
+              aria-current={active}
+            >
+              {t(tabItem.label)}
+              {count > 0 ? (
+                <span className="ml-1 inline-flex items-center rounded-full bg-primary/10 px-1.5 py-[1px] text-[10px] font-semibold leading-none text-primary">
+                  {count}
+                </span>
+              ) : (
+                <span className="ml-1">({count})</span>
+              )}
+            </button>
+          );
+        })}
         {tabItems.length > 0 && (
           <button
             type="button"
