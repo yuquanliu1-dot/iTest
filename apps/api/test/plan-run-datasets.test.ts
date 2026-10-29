@@ -165,3 +165,69 @@ describe('runPlan dataset aggregation', () => {
     expect(detail.body.passedCases).toBe(1);
   });
 });
+
+describe('runPlan 计划级行选择覆盖', () => {
+  it('计划级子集覆盖用例级：用例级全部、计划 [1] → 只跑启用行 2', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '计划覆盖A' });
+    const boundCaseId = await insertCase('计划覆盖A用例', created.body.id);
+    await pool.query(`UPDATE test_cases SET dataset_row_indexes = ARRAY[0,1] WHERE id = $1`, [boundCaseId]);
+    const plainCaseId = await insertCase('普通5', null);
+    const planRunId = await makePlan(boundCaseId, plainCaseId);
+    const { rows: pr } = await pool.query(`SELECT plan_id FROM plan_runs WHERE id = $1`, [planRunId]);
+    await pool.query(
+      `UPDATE plan_cases SET dataset_row_indexes = ARRAY[1]::integer[] WHERE plan_id = $1 AND case_id = $2`,
+      [pr[0].plan_id, boundCaseId],
+    );
+
+    execMock.mockReset();
+    execMock.mockResolvedValue([]);
+    const { runPlanAsync } = await import('../src/execute/runPlan.js');
+    await runPlanAsync({ planRunId });
+
+    const reps = await pool.query(`SELECT dataset_row_index FROM reports WHERE case_id = $1`, [boundCaseId]);
+    expect(reps.rows).toHaveLength(1);
+    expect(reps.rows[0].dataset_row_index).toBe(1);
+  });
+
+  it('计划级 null → 回落用例级选择（[1] 只跑行 2）', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '计划回落' });
+    const boundCaseId = await insertCase('计划回落用例', created.body.id);
+    await pool.query(`UPDATE test_cases SET dataset_row_indexes = ARRAY[1] WHERE id = $1`, [boundCaseId]);
+    const plainCaseId = await insertCase('普通6', null);
+    const planRunId = await makePlan(boundCaseId, plainCaseId);
+    // plan_cases.dataset_row_indexes 保持 NULL（默认）
+
+    execMock.mockReset();
+    execMock.mockResolvedValue([]);
+    const { runPlanAsync } = await import('../src/execute/runPlan.js');
+    await runPlanAsync({ planRunId });
+
+    const reps = await pool.query(`SELECT dataset_row_index FROM reports WHERE case_id = $1`, [boundCaseId]);
+    expect(reps.rows).toHaveLength(1);
+    expect(reps.rows[0].dataset_row_index).toBe(1);
+  });
+
+  it('计划级 [] 覆盖为全部行：用例级 [0] 子集 → 跑 2 行', async () => {
+    const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '计划全行' });
+    const boundCaseId = await insertCase('计划全行用例', created.body.id);
+    await pool.query(`UPDATE test_cases SET dataset_row_indexes = ARRAY[0] WHERE id = $1`, [boundCaseId]);
+    const plainCaseId = await insertCase('普通7', null);
+    const planRunId = await makePlan(boundCaseId, plainCaseId);
+    const { rows: pr } = await pool.query(`SELECT plan_id FROM plan_runs WHERE id = $1`, [planRunId]);
+    await pool.query(
+      `UPDATE plan_cases SET dataset_row_indexes = ARRAY[]::integer[] WHERE plan_id = $1 AND case_id = $2`,
+      [pr[0].plan_id, boundCaseId],
+    );
+
+    execMock.mockReset();
+    execMock.mockResolvedValue([]);
+    const { runPlanAsync } = await import('../src/execute/runPlan.js');
+    await runPlanAsync({ planRunId });
+
+    const reps = await pool.query(
+      `SELECT dataset_row_index FROM reports WHERE case_id = $1 ORDER BY dataset_row_index`,
+      [boundCaseId],
+    );
+    expect(reps.rows.map((r: { dataset_row_index: number }) => r.dataset_row_index)).toEqual([0, 1]);
+  });
+});

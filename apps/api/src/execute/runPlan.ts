@@ -167,6 +167,8 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       status: testCases.status,
       platform: testCases.platform,
       incognito: testCases.incognito,
+      // 计划级行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集（实时读 plan_cases，不进快照）
+      datasetRowIndexes: planCases.datasetRowIndexes,
     })
     .from(planCases)
     .innerJoin(testCases, eq(testCases.id, planCases.caseId))
@@ -432,6 +434,8 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
                 forceFail: forceFailIds.has(c.caseId),
                 ...(groupEnv ? { envOverride: { envId: groupEnv.envId } } : {}),
                 targetOverride: group.targetConfig ?? null,
+                // 计划级行覆盖：null→undefined→回落用例级；[] 照传→全部行（覆盖用例级子集）；非空→子集
+                datasetRowIndexes: c.datasetRowIndexes ?? undefined,
                 liveView: live,
                 createdByUserId: run.triggeredByUserId,
                 planProjectId: plan.projectId,
