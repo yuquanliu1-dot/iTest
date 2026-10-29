@@ -749,31 +749,31 @@ describe('executions 数据集批次卷起', () => {
   });
 });
 
-describe('计划级数据集行选择（PATCH /plans/:id/plan-cases/:planCaseId）', () => {
-  /** 建项目/计划/分组 + 绑数据集用例（2 启用行），把用例加进组并返回各 id 与 planCaseId。 */
-  async function seedSelection(): Promise<{
-    projectId: string; planId: string; caseId: string; datasetId: string; planCaseId: string;
-  }> {
-    const { projectId, groupId, versionId } = await seedProject(pool);
-    const ds = await request(app).post(`/api/projects/${projectId}/datasets`).send({
-      name: '行选择数据',
-      columns: [{ name: 'username', sensitive: false }],
-      rows: [
-        { disabled: false, cells: { username: 'u1' } },
-        { disabled: false, cells: { username: 'u2' } },
-      ],
-    });
-    expect(ds.status).toBe(200);
-    const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
-    const g = await request(app).post(`/api/plans/${plan.body.id}/groups`).send({ name: 'G' });
-    const c = await makeCase(groupId, versionId, '绑数据集用例');
-    await pool.query(`UPDATE test_cases SET dataset_id = $2 WHERE id = $1`, [c, ds.body.id]);
-    await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c], groupId: g.body.id });
-    const detail = await request(app).get(`/api/plans/${plan.body.id}`);
-    const planCaseId = detail.body.groups[0].cases[0].planCaseId as string;
-    return { projectId, planId: plan.body.id, caseId: c, datasetId: ds.body.id, planCaseId };
-  }
+/** 建项目/计划/分组 + 绑数据集用例（2 启用行），把用例加进组并返回各 id 与 planCaseId。 */
+async function seedSelection(): Promise<{
+  projectId: string; planId: string; caseId: string; datasetId: string; planCaseId: string;
+}> {
+  const { projectId, groupId, versionId } = await seedProject(pool);
+  const ds = await request(app).post(`/api/projects/${projectId}/datasets`).send({
+    name: '行选择数据',
+    columns: [{ name: 'username', sensitive: false }],
+    rows: [
+      { disabled: false, cells: { username: 'u1' } },
+      { disabled: false, cells: { username: 'u2' } },
+    ],
+  });
+  expect(ds.status).toBe(200);
+  const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
+  const g = await request(app).post(`/api/plans/${plan.body.id}/groups`).send({ name: 'G' });
+  const c = await makeCase(groupId, versionId, '绑数据集用例');
+  await pool.query(`UPDATE test_cases SET dataset_id = $2 WHERE id = $1`, [c, ds.body.id]);
+  await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c], groupId: g.body.id });
+  const detail = await request(app).get(`/api/plans/${plan.body.id}`);
+  const planCaseId = detail.body.groups[0].cases[0].planCaseId as string;
+  return { projectId, planId: plan.body.id, caseId: c, datasetId: ds.body.id, planCaseId };
+}
 
+describe('计划级数据集行选择（PATCH /plans/:id/plan-cases/:planCaseId）', () => {
   it('落库：PATCH 子集 → plan_cases.dataset_row_indexes 持久化', async () => {
     const s = await seedSelection();
     const r = await request(app)
@@ -899,5 +899,29 @@ describe('计划级数据集行选择（PATCH /plans/:id/plan-cases/:planCaseId�
     expect(row.datasetEnabledRowCount).toBe(0);
     expect(row.caseRowIndexes).toEqual([]);
     expect(row.planRowIndexes).toBeNull();
+  });
+});
+
+describe('计划行覆盖联动清空', () => {
+  it('数据集删除 → 关联用例的 plan_cases.dataset_row_indexes 置 null', async () => {
+    const s = await seedSelection();
+    await request(app).patch(`/api/plans/${s.planId}/plan-cases/${s.planCaseId}`).send({ datasetRowIndexes: [0] });
+    const del = await request(app).delete(`/api/projects/${s.projectId}/datasets/${s.datasetId}?confirm=true`);
+    expect(del.status).toBe(200);
+    const pc = await pool.query(`SELECT dataset_row_indexes FROM plan_cases WHERE id = $1`, [s.planCaseId]);
+    expect(pc.rows[0].dataset_row_indexes).toBeNull();
+    // 用例级选择同时被清空（既有行为，一并守住）
+    const c = await pool.query(`SELECT dataset_row_indexes, dataset_id FROM test_cases WHERE id = $1`, [s.caseId]);
+    expect(c.rows[0].dataset_row_indexes).toEqual([]);
+    expect(c.rows[0].dataset_id).toBeNull();
+  });
+
+  it('用例解绑数据集 → 该用例所有计划行覆盖置 null', async () => {
+    const s = await seedSelection();
+    await request(app).patch(`/api/plans/${s.planId}/plan-cases/${s.planCaseId}`).send({ datasetRowIndexes: [1] });
+    const r = await request(app).patch(`/api/cases/${s.caseId}`).send({ datasetId: null });
+    expect(r.status).toBe(200);
+    const pc = await pool.query(`SELECT dataset_row_indexes FROM plan_cases WHERE id = $1`, [s.planCaseId]);
+    expect(pc.rows[0].dataset_row_indexes).toBeNull();
   });
 });

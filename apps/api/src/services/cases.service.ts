@@ -5,7 +5,7 @@
  */
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { caseTags, datasets, groups, productLines, projects, projectVersions, scenarios, tags, testCases, testSteps } from '../db/schema.js';
+import { caseTags, datasets, groups, planCases, productLines, projects, projectVersions, scenarios, tags, testCases, testSteps } from '../db/schema.js';
 import type { AppRef } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
@@ -258,6 +258,11 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
   }
   if (datasetRowIndexes && datasetRowIndexes.length > 0) {
     await assertDatasetRowIndexes(patch.datasetId ?? existing.datasetId, datasetRowIndexes);
+  }
+  // 换数据集/解绑：该用例在所有计划里的行级覆盖一并清空（下标空间属于旧数据集）。
+  // 计划级置 null（跟随用例级），与用例级清空同触发；用例删除无需处理（plan_cases.caseId 外键 CASCADE）。
+  if (patch.datasetId !== undefined && patch.datasetId !== existing.datasetId) {
+    await db.update(planCases).set({ datasetRowIndexes: null }).where(eq(planCases.caseId, caseId));
   }
   // 2026-10-07: 移动端 device target 跨项目断言（service 兜底）
   if (patch.mobileDeviceTargetId !== undefined && patch.mobileDeviceTargetId !== null) {

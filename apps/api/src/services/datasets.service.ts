@@ -3,9 +3,9 @@
  * 敏感列单元格以 AES-256-GCM {c,i,t} 加密存 rows jsonb；出参一律 {__masked:true} 占位。
  * 列名即变量名（回放时注入 {{列名}}），须过 validateVariableName。
  */
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { datasets, testCases } from '../db/schema.js';
+import { datasets, planCases, testCases } from '../db/schema.js';
 import type { DatasetColumn, DatasetRow, DatasetEncCell } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { encrypt, decrypt } from '../lib/secret-crypto.js';
@@ -240,6 +240,10 @@ export async function deleteDataset(datasetId: string): Promise<void> {
   // FK 只把 dataset_id 置 null；行选择也得清（不变量：未绑定数据集 ⟹ 选择为空）。
   // 必须在 delete 之前清 —— delete 触发 FK 后 dataset_id 已是 null，where 就匹配不到了。
   await db.update(testCases).set({ datasetRowIndexes: [] }).where(eq(testCases.datasetId, datasetId));
+  // 计划级行覆盖一并清空（置 null = 跟随用例级）：下标空间属于被删数据集，留下即垃圾值。
+  await db.update(planCases).set({ datasetRowIndexes: null }).where(
+    inArray(planCases.caseId, db.select({ id: testCases.id }).from(testCases).where(eq(testCases.datasetId, datasetId))),
+  );
   await db.delete(datasets).where(eq(datasets.id, datasetId));
 }
 
