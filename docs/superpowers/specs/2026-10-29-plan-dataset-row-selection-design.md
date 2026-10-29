@@ -37,7 +37,7 @@
 - `[]` = 全部启用行
 - 非空 = 子集（0 基启用行下标，与 `test_cases.dataset_row_indexes` 同一编号空间）
 
-存量行为 `null` = 行为不变，零回迁。迁移编号 **0047**（0046 已被用例级选行占用；若开工时 0047 已存在则顺延）。prod 随 api 容器启动 `drizzle-kit push --force` 自动应用。
+存量行为 `null` = 行为不变，零回迁。迁移编号 **0051**（0046-0050 已被占用；若开工时 0051 已存在则顺延）。prod 随 api 容器启动 `drizzle-kit push --force` 自动应用。
 
 ## 后端 API
 
@@ -92,7 +92,7 @@
 
 | 触发 | 处理 |
 |---|---|
-| 数据集行变更/删除 | 现有清用例级选择的位置（`datasets.service`），同一位置追加一条：按 caseId 反联 `test_cases.dataset_id` 清空 `plan_cases.dataset_row_indexes`（置 null） |
+| 数据集删除 | `deleteDataset` 清用例级选择的位置（`datasets.service`），同一处追加一条：按 caseId 反联 `test_cases.dataset_id` 清空 `plan_cases.dataset_row_indexes`（置 null）。行编辑不触发清空（用例级现状：越界选择留到执行时报 DatasetConfigError），计划级对齐该口径 |
 | 用例换数据集/解绑 | cases.service 清用例级选择处，连带清该用例在所有计划里的行级覆盖 |
 | 用例删除 | `plan_cases.caseId` 外键 CASCADE，无需处理 |
 
