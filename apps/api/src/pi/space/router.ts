@@ -22,6 +22,7 @@ import { resolveConfirmation } from './confirm.js';
 import { subscribeThreadMirror } from './threadBus.js';
 import { generateSpaceSuggestionsOnce } from './suggestions.js';
 import { stageRoute } from './stageRoute.js';
+import { saveDocxUpload, MAX_DOCX_BYTES } from './threadAttachments.js';
 import { feedbackRoute } from './feedbackRoute.js';
 import { getArtifact, readArtifactFile, contentDispositionUtf8, listThreadArtifacts } from './artifacts.js';
 import { requireManager } from '../../middleware/auth.js';
@@ -258,6 +259,38 @@ spaceRoute.post('/threads/:id/messages', async (req, res) => {
     }
   })();
   res.status(204).end();
+});
+
+/** 助手 docx 预上传：composer 选文件即传（草稿线程尚无 threadId → 作用域=版本）。
+ *  raw octet-stream + X-Filename（全局 express.raw 已挂，与 /api/cases 附件同模式）。
+ *  引用标签由前端 adapter 在 send() 拼进消息正文——本路由不碰任何消息文本。
+ *  X-Filename 走 encodeURIComponent（中文文件名直塞 Headers 在部分浏览器抛 ByteString 错），
+ *  服务端解码，失败保原值。 */
+spaceRoute.post('/versions/:versionId/attachments', async (req, res) => {
+  const versionId = req.params.versionId!;
+  await assertVersionVisible(versionId, req.user as AuthUser);
+  const buf = req.body as Buffer;
+  if (!Buffer.isBuffer(buf)) throw new HttpError(400, 'bad_request', 'expected octet-stream body');
+  if (buf.length === 0) throw new HttpError(400, 'bad_request', 'empty body');
+  if (buf.length > MAX_DOCX_BYTES) throw new HttpError(413, 'too_large', 'docx exceeds 10MB');
+  const rawName = req.header('x-filename') ?? 'document.docx';
+  let name = rawName;
+  try { name = decodeURIComponent(rawName); } catch { /* 非编码值保原样 */ }
+  const { row, deduped } = await saveDocxUpload({
+    versionId,
+    name,
+    buf,
+    createdByUserId: (req.user as AuthUser).userId ?? null,
+  });
+  res.json({
+    name: row.name,
+    path: row.storagePath,
+    chars: row.extractedChars,
+    size: row.sizeBytes,
+    sha256: row.sha256,
+    deduped,
+    extracted: row.extractedPath !== null,
+  });
 });
 
 /** 单张图片的字节上限。base64 编码膨胀约 4/3,单条消息最坏体积由这两个常量
