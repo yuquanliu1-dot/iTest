@@ -143,7 +143,7 @@ export const api = {
     remove: (id: string) => request<{ ok: boolean }>(`/plans/${id}`, { method: 'DELETE' }),
     createGroup: (id: string, body: { name: string; environmentId?: string | null; failFast?: boolean }) =>
       request<PlanCaseGroup>(`/plans/${id}/groups`, { method: 'POST', body: JSON.stringify(body) }),
-    patchGroup: (id: string, groupId: string, body: Partial<{ name: string; environmentId: string | null; failFast: boolean; loginPrepare: { enabled: boolean; caseId: string | null; detectionUrl: string | null; successSelector: string | null; unauthorizedKeywords: string[] | null }; targetConfig: { deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null }>) =>
+    patchGroup: (id: string, groupId: string, body: Partial<{ name: string; environmentId: string | null; failFast: boolean; loginPrepare: { enabled: boolean; caseId: string | null; detectionUrl: string | null; successSelector: string | null; unauthorizedKeywords: string[] | null; datasetRowIndexes: number[] | null }; targetConfig: { deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null }>) =>
       request<PlanCaseGroup>(`/plans/${id}/groups/${groupId}`, { method: 'PATCH', body: JSON.stringify(body) }),
     deleteGroup: (id: string, groupId: string) =>
       request<{ ok: boolean }>(`/plans/${id}/groups/${groupId}`, { method: 'DELETE' }),
@@ -946,6 +946,15 @@ export interface PlanCaseGroup {
   environmentId: string | null;
   loginPrepareEnabled: boolean;
   loginCaseId: string | null;
+  /** 选中登录用例的标题（未选为 null）——选择按钮回显用。 */
+  loginCaseTitle: string | null;
+  /** 选中登录用例绑定的数据集与用例级行选择（未绑数据集时 null/[]/0）。 */
+  loginCaseDatasetId: string | null;
+  loginCaseRowIndexes: number[];
+  /** 登录用例数据集的启用行数——loginCaseRowIndexes 的下标上界。 */
+  loginCaseEnabledRowCount: number;
+  /** 登录用例行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集。 */
+  loginDatasetRowIndexes: number[] | null;
   detectionUrl: string | null;
   loginSuccessSelector: string | null;
   loginUnauthorizedKeywords: string[] | null;

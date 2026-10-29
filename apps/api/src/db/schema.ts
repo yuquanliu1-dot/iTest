@@ -508,6 +508,9 @@ export const planCaseGroups = pgTable('plan_case_groups', {
   loginUnauthorizedKeywords: jsonb('login_unauthorized_keywords'),
   /** 组内策略：首例失败后跳过本组剩余用例（计划级 strategy 管组间） */
   failFast: boolean('fail_fast').notNull().default(false),
+  /** 登录用例数据行覆盖（三态，与 plan_cases.dataset_row_indexes 同语义）：
+   *  null = 跟随用例级；[] = 全部启用行；非空 = 子集。仅在 login_case_id 指向绑数据集的用例时生效。 */
+  loginDatasetRowIndexes: integer('login_dataset_row_indexes').array(),
   /** 组级统一生效：deviceTargetId / 浏览器上下文（与 plan_cases.target_override 同形状） */
   targetConfig: jsonb('target_config').$type<{ deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null>(),
   createdAt: timestamp('created_at').defaultNow().notNull(),

@@ -5,7 +5,7 @@
  */
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { caseTags, datasets, groups, planCases, productLines, projects, projectVersions, scenarios, tags, testCases, testSteps } from '../db/schema.js';
+import { caseTags, datasets, groups, planCases, planCaseGroups, productLines, projects, projectVersions, scenarios, tags, testCases, testSteps } from '../db/schema.js';
 import type { AppRef } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { resolveCaseUrl } from '../lib/resolve-url.js';
@@ -268,8 +268,10 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
   if (patch.tagIds !== undefined) await assertTagsBelongToOrg(patch.tagIds, targetPid);
   // 换数据集/解绑：该用例在所有计划里的行级覆盖一并清空（下标空间属于旧数据集）。
   // 计划级置 null（跟随用例级），与用例级清空同触发；用例删除无需处理（plan_cases.caseId 外键 CASCADE）。
+  // 该用例被组登录准备引用时，login_dataset_row_indexes 同口径清空。
   if (patch.datasetId !== undefined && patch.datasetId !== existing.datasetId) {
     await db.update(planCases).set({ datasetRowIndexes: null }).where(eq(planCases.caseId, caseId));
+    await db.update(planCaseGroups).set({ loginDatasetRowIndexes: null }).where(eq(planCaseGroups.loginCaseId, caseId));
   }
   const { tagIds, datasetRowIndexes: _ignored, ...rest } = patch;
   const updated = (await db.update(testCases).set({

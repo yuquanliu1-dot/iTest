@@ -55,6 +55,8 @@ export interface PlanGroupExec {
   environmentId: string | null;
   loginPrepareEnabled: boolean;
   loginCaseId: string | null;
+  /** 登录用例数据行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集 */
+  loginDatasetRowIndexes: number[] | null;
   detectionUrl: string | null;
   loginSuccessSelector: string | null;
   loginUnauthorizedKeywords: unknown;
@@ -65,7 +67,7 @@ export interface PlanGroupExec {
 /** 登录复用签名：环境 + 登录配置 + target_config（+ failFast，按计划测试口径）完全一致才复用 storageState。 */
 export function loginSignature(g: PlanGroupExec): string {
   return JSON.stringify([
-    g.environmentId, g.loginPrepareEnabled, g.loginCaseId, g.detectionUrl,
+    g.environmentId, g.loginPrepareEnabled, g.loginCaseId, g.loginDatasetRowIndexes ?? null, g.detectionUrl,
     g.loginSuccessSelector, g.loginUnauthorizedKeywords ?? null, g.targetConfig ?? null, g.failFast,
   ]);
 }
@@ -150,6 +152,7 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
       environmentId: null, // 老运行计划级环境已废弃，逐用例走默认链
       loginPrepareEnabled: run.loginPrepareEnabled,
       loginCaseId: run.loginCaseId,
+      loginDatasetRowIndexes: null, // 老运行无登录行覆盖概念
       detectionUrl: run.detectionUrl,
       loginSuccessSelector: run.loginSuccessSelector,
       loginUnauthorizedKeywords: run.loginUnauthorizedKeywords,
@@ -317,6 +320,8 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
                     // 让 loginPrepare 走 finally 关 browser。
                     const r = await runCase(cid, {
                       ...(groupEnv ? { envOverride: { envId: groupEnv.envId } } : {}),
+                      // 登录用例行覆盖三态：null→undefined→回落用例级；[] 照传→全部行；非空→子集
+                      datasetRowIndexes: group.loginDatasetRowIndexes ?? undefined,
                       ownedBrowser: browser,
                       ownedContext: ctx,
                       liveView: live,

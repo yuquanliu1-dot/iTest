@@ -169,9 +169,25 @@ export async function getPlanDetail(planId: string) {
         .leftJoin(projectVersions, eq(projectVersions.id, testCases.versionId))
         .where(inArray(testCases.id, pcs.map((p) => p.caseId)))
     : [];
+  // 登录用例可能不在计划用例之列：单独按组配置的 loginCaseId 取回标题/数据集字段（行选择三态展示与弹窗回显用）。
+  const loginIds = [...new Set(gs.map((g) => g.loginCaseId).filter((v): v is string => !!v))];
+  const loginRows = loginIds.length
+    ? await db
+        .select({
+          id: testCases.id,
+          title: testCases.title,
+          datasetId: testCases.datasetId,
+          caseRowIndexes: testCases.datasetRowIndexes,
+        })
+        .from(testCases)
+        .where(inArray(testCases.id, loginIds))
+    : [];
+  const loginById = new Map(loginRows.map((r) => [r.id, r]));
   // 数据集名称与启用行数：按 distinct datasetId 一次性取回,rows jsonb 每个数据集只解析一次
-  // （曾在 join 里用相关子查询逐行统计,导致 N×M 重复解析整份 rows）。
-  const dsIds = [...new Set(caseRows.map((r) => r.datasetId).filter((v): v is string => !!v))];
+  // （曾在 join 里用相关子查询逐行统计,导致 N×M 重复解析整份 rows）。计划用例与登录用例的 datasetId 合并去重。
+  const dsIds = [...new Set(
+    [...caseRows.map((r) => r.datasetId), ...loginRows.map((r) => r.datasetId)].filter((v): v is string => !!v),
+  )];
   const dsMeta = new Map<string, { name: string; enabledRowCount: number }>();
   if (dsIds.length > 0) {
     const dsRows = await db
@@ -217,6 +233,16 @@ export async function getPlanDetail(planId: string) {
     loginSuccessSelector: g.loginSuccessSelector,
     loginUnauthorizedKeywords: g.loginUnauthorizedKeywords,
     failFast: g.failFast,
+    // 登录用例展示/行选择三态所需：选中用例的标题 + 其绑定的数据集（与计划用例同形字段）
+    loginCaseTitle: g.loginCaseId ? loginById.get(g.loginCaseId)?.title ?? null : null,
+    loginCaseDatasetId: g.loginCaseId ? loginById.get(g.loginCaseId)?.datasetId ?? null : null,
+    loginCaseRowIndexes: g.loginCaseId ? loginById.get(g.loginCaseId)?.caseRowIndexes ?? [] : [],
+    loginCaseEnabledRowCount: (() => {
+      const dsId = g.loginCaseId ? loginById.get(g.loginCaseId)?.datasetId : null;
+      return dsId ? dsMeta.get(dsId)?.enabledRowCount ?? 0 : 0;
+    })(),
+    // 登录用例行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集
+    loginDatasetRowIndexes: g.loginDatasetRowIndexes ?? null,
     targetConfig: g.targetConfig,
     cases: pcs.filter((pc) => pc.groupId === g.id).map((pc, i) => ({
       planCaseId: pc.id,
@@ -419,6 +445,8 @@ export interface PlanGroupLoginPrepareInput {
   detectionUrl?: string | null;
   successSelector?: string | null;
   unauthorizedKeywords?: string[] | null;
+  /** 登录用例数据行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集 */
+  datasetRowIndexes?: number[] | null;
 }
 
 export interface CreatePlanGroupInput {
@@ -449,6 +477,12 @@ export async function createPlanGroup(planId: string, input: CreatePlanGroupInpu
   const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
   if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
   if (input.environmentId) await assertEnvInProject(input.environmentId, plan.projectId);
+  const loginRows = input.loginPrepare?.datasetRowIndexes ?? null;
+  if (loginRows && loginRows.length > 0 && input.loginPrepare?.caseId) {
+    const c = (await db.select({ datasetId: testCases.datasetId }).from(testCases)
+      .where(eq(testCases.id, input.loginPrepare.caseId)).limit(1))[0];
+    await assertDatasetRowIndexes(c?.datasetId, loginRows);
+  }
   const base = Number((await db.select({ m: sql<number>`coalesce(max("order"), 0)` })
     .from(planCaseGroups).where(eq(planCaseGroups.planId, planId)))[0]?.m ?? 0);
   return (await db.insert(planCaseGroups).values({
@@ -461,13 +495,14 @@ export async function createPlanGroup(planId: string, input: CreatePlanGroupInpu
     detectionUrl: input.loginPrepare?.detectionUrl ?? null,
     loginSuccessSelector: input.loginPrepare?.successSelector ?? null,
     loginUnauthorizedKeywords: input.loginPrepare?.unauthorizedKeywords ?? null,
+    loginDatasetRowIndexes: loginRows,
     failFast: input.failFast ?? false,
     targetConfig: input.targetConfig ?? null,
   }).returning())[0]!;
 }
 
 export async function updatePlanGroup(planId: string, groupId: string, patch: UpdatePlanGroupPatch) {
-  await getPlanGroup(planId, groupId);
+  const existing = await getPlanGroup(planId, groupId);
   if (patch.environmentId !== undefined && patch.environmentId !== null) {
     const plan = (await db.select({ projectId: executionPlans.projectId }).from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
     if (plan) await assertEnvInProject(patch.environmentId, plan.projectId);
@@ -483,6 +518,20 @@ export async function updatePlanGroup(planId: string, groupId: string, patch: Up
     update.detectionUrl = patch.loginPrepare.detectionUrl ?? null;
     update.loginSuccessSelector = patch.loginPrepare.successSelector ?? null;
     update.loginUnauthorizedKeywords = patch.loginPrepare.unauthorizedKeywords ?? null;
+    // 登录用例行覆盖：换用例/清空用例 → 置 null（下标空间属于旧用例的数据集，跳过校验防陈旧值误报）；
+    // 用例不变才接受显式值，非空时与用例级/计划级同口径校验。
+    let loginRows: number[] | null;
+    if (patch.loginPrepare.caseId !== existing.loginCaseId) {
+      loginRows = null;
+    } else {
+      loginRows = patch.loginPrepare.datasetRowIndexes ?? null;
+      if (loginRows && loginRows.length > 0 && patch.loginPrepare.caseId) {
+        const c = (await db.select({ datasetId: testCases.datasetId }).from(testCases)
+          .where(eq(testCases.id, patch.loginPrepare.caseId)).limit(1))[0];
+        await assertDatasetRowIndexes(c?.datasetId, loginRows);
+      }
+    }
+    update.loginDatasetRowIndexes = loginRows;
   }
   return (await db.update(planCaseGroups).set(update).where(eq(planCaseGroups.id, groupId)).returning())[0]!;
 }

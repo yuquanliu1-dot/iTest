@@ -956,3 +956,122 @@ describe('计划行覆盖联动清空', () => {
     expect(pc.rows[0].dataset_row_indexes).toEqual([0]);
   });
 });
+
+/** 建项目/计划 + 绑数据集登录用例（2 启用行）+ 开登录准备的组；另备一个换绑目标用例。 */
+async function seedLoginSelection(): Promise<{
+  projectId: string; planId: string; groupId: string; caseId: string; datasetId: string; otherCaseId: string;
+}> {
+  const { projectId, groupId, versionId } = await seedProject(pool);
+  const ds = await request(app).post(`/api/projects/${projectId}/datasets`).send({
+    name: '登录行数据',
+    columns: [{ name: 'username', sensitive: false }],
+    rows: [
+      { disabled: false, cells: { username: 'u1' } },
+      { disabled: false, cells: { username: 'u2' } },
+    ],
+  });
+  expect(ds.status).toBe(200);
+  const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P-login', versionId });
+  const caseId = await makeCase(groupId, versionId, '登录用例');
+  const otherCaseId = await makeCase(groupId, versionId, '另一用例');
+  await pool.query(`UPDATE test_cases SET dataset_id = $2 WHERE id = $1`, [caseId, ds.body.id]);
+  const g = await request(app)
+    .post(`/api/plans/${plan.body.id}/groups`)
+    .send({ name: 'G', loginPrepare: { enabled: true, caseId } });
+  expect(g.status).toBe(200);
+  return { projectId, planId: plan.body.id, groupId: g.body.id, caseId, datasetId: ds.body.id, otherCaseId };
+}
+
+describe('登录用例数据集行选择（组级 loginPrepare.datasetRowIndexes）', () => {
+  it('落库三态：PATCH 子集 → [1]；null → NULL（清覆盖）；[] → []（全部行）', async () => {
+    const s = await seedLoginSelection();
+    const patch = (datasetRowIndexes: number[] | null) =>
+      request(app)
+        .patch(`/api/plans/${s.planId}/groups/${s.groupId}`)
+        .send({ loginPrepare: { enabled: true, caseId: s.caseId, datasetRowIndexes } });
+
+    expect((await patch([1])).status).toBe(200);
+    let row = await pool.query(`SELECT login_dataset_row_indexes FROM plan_case_groups WHERE id = $1`, [s.groupId]);
+    expect(row.rows[0].login_dataset_row_indexes).toEqual([1]);
+
+    expect((await patch(null)).status).toBe(200);
+    row = await pool.query(`SELECT login_dataset_row_indexes FROM plan_case_groups WHERE id = $1`, [s.groupId]);
+    expect(row.rows[0].login_dataset_row_indexes).toBeNull();
+
+    expect((await patch([])).status).toBe(200);
+    row = await pool.query(`SELECT login_dataset_row_indexes FROM plan_case_groups WHERE id = $1`, [s.groupId]);
+    expect(row.rows[0].login_dataset_row_indexes).toEqual([]);
+  });
+
+  it('校验：越界 400（文案含越界行号与启用行总数）', async () => {
+    const s = await seedLoginSelection();
+    const r = await request(app)
+      .patch(`/api/plans/${s.planId}/groups/${s.groupId}`)
+      .send({ loginPrepare: { enabled: true, caseId: s.caseId, datasetRowIndexes: [5] } });
+    expect(r.status).toBe(400);
+    expect(r.body.message).toContain('共 2 行');
+  });
+
+  it('换登录用例 → 行覆盖重置 null（陈旧下标不误报越界）', async () => {
+    const s = await seedLoginSelection();
+    await request(app)
+      .patch(`/api/plans/${s.planId}/groups/${s.groupId}`)
+      .send({ loginPrepare: { enabled: true, caseId: s.caseId, datasetRowIndexes: [0] } });
+    // 换到未绑数据集的用例 + 带陈旧越界下标 → 不校验直接置 null
+    const r = await request(app)
+      .patch(`/api/plans/${s.planId}/groups/${s.groupId}`)
+      .send({ loginPrepare: { enabled: true, caseId: s.otherCaseId, datasetRowIndexes: [9] } });
+    expect(r.status).toBe(200);
+    const row = await pool.query(`SELECT login_dataset_row_indexes FROM plan_case_groups WHERE id = $1`, [s.groupId]);
+    expect(row.rows[0].login_dataset_row_indexes).toBeNull();
+  });
+
+  it('detail 回带登录用例标题/数据集字段与三态 loginDatasetRowIndexes', async () => {
+    const s = await seedLoginSelection();
+    await request(app)
+      .patch(`/api/plans/${s.planId}/groups/${s.groupId}`)
+      .send({ loginPrepare: { enabled: true, caseId: s.caseId, datasetRowIndexes: [1] } });
+    const detail = await request(app).get(`/api/plans/${s.planId}`);
+    const g = detail.body.groups[0];
+    expect(g.loginCaseTitle).toBe('登录用例');
+    expect(g.loginCaseDatasetId).toBe(s.datasetId);
+    expect(g.loginCaseEnabledRowCount).toBe(2);
+    expect(g.loginCaseRowIndexes).toEqual([]); // 用例级：[] = 全部
+    expect(g.loginDatasetRowIndexes).toEqual([1]); // 组级覆盖
+  });
+
+  it('运行快照 groups 带登录行覆盖；执行层三态判别同 plan_cases 口径', async () => {
+    const s = await seedLoginSelection();
+    await request(app)
+      .patch(`/api/plans/${s.planId}/groups/${s.groupId}`)
+      .send({ loginPrepare: { enabled: true, caseId: s.caseId, datasetRowIndexes: [1] } });
+    const r = await request(app).post(`/api/plans/${s.planId}/run`);
+    expect(r.status).toBe(200);
+    const row = await pool.query(`SELECT groups FROM plan_runs WHERE id = $1`, [r.body.runId]);
+    const groups = row.rows[0].groups as Array<{ loginCaseId: string | null; loginDatasetRowIndexes: number[] | null }>;
+    expect(groups[0]!.loginCaseId).toBe(s.caseId);
+    expect(groups[0]!.loginDatasetRowIndexes).toEqual([1]);
+  });
+
+  it('登录用例解绑数据集 → 组行覆盖联动清 null', async () => {
+    const s = await seedLoginSelection();
+    await request(app)
+      .patch(`/api/plans/${s.planId}/groups/${s.groupId}`)
+      .send({ loginPrepare: { enabled: true, caseId: s.caseId, datasetRowIndexes: [0] } });
+    const r = await request(app).patch(`/api/cases/${s.caseId}`).send({ datasetId: null });
+    expect(r.status).toBe(200);
+    const row = await pool.query(`SELECT login_dataset_row_indexes FROM plan_case_groups WHERE id = $1`, [s.groupId]);
+    expect(row.rows[0].login_dataset_row_indexes).toBeNull();
+  });
+
+  it('数据集删除 → 组行覆盖联动清 null', async () => {
+    const s = await seedLoginSelection();
+    await request(app)
+      .patch(`/api/plans/${s.planId}/groups/${s.groupId}`)
+      .send({ loginPrepare: { enabled: true, caseId: s.caseId, datasetRowIndexes: [0] } });
+    const del = await request(app).delete(`/api/projects/${s.projectId}/datasets/${s.datasetId}?confirm=true`);
+    expect(del.status).toBe(200);
+    const row = await pool.query(`SELECT login_dataset_row_indexes FROM plan_case_groups WHERE id = $1`, [s.groupId]);
+    expect(row.rows[0].login_dataset_row_indexes).toBeNull();
+  });
+});

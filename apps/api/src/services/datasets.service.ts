@@ -5,7 +5,7 @@
  */
 import { asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { datasets, planCases, testCases } from '../db/schema.js';
+import { datasets, planCases, planCaseGroups, testCases } from '../db/schema.js';
 import type { DatasetColumn, DatasetRow, DatasetEncCell } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { encrypt, decrypt } from '../lib/secret-crypto.js';
@@ -244,6 +244,10 @@ export async function deleteDataset(datasetId: string): Promise<void> {
   // 须在 db.delete(datasets) 之前执行：删除后 FK 置空 test_cases.dataset_id，子查询将匹配 0 行（静默 no-op）。
   await db.update(planCases).set({ datasetRowIndexes: null }).where(
     inArray(planCases.caseId, db.select({ id: testCases.id }).from(testCases).where(eq(testCases.datasetId, datasetId))),
+  );
+  // 登录用例行覆盖同口径清理（组配置引用该数据集的登录用例）：同样必须在 delete 之前。
+  await db.update(planCaseGroups).set({ loginDatasetRowIndexes: null }).where(
+    inArray(planCaseGroups.loginCaseId, db.select({ id: testCases.id }).from(testCases).where(eq(testCases.datasetId, datasetId))),
   );
   await db.delete(datasets).where(eq(datasets.id, datasetId));
 }

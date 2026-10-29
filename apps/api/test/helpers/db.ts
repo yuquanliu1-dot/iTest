@@ -144,6 +144,11 @@ DO $$ BEGIN
   ALTER TABLE plan_cases ADD COLUMN dataset_row_indexes integer[];
 EXCEPTION WHEN duplicate_column THEN null;
 END $$;
+-- 登录用例数据行选择（组级三态覆盖，可空；null = 跟随用例级）
+DO $$ BEGIN
+  ALTER TABLE plan_case_groups ADD COLUMN login_dataset_row_indexes integer[];
+EXCEPTION WHEN duplicate_column THEN null;
+END $$;
 DO $$ BEGIN
   ALTER TABLE reports ADD COLUMN healed boolean NOT NULL DEFAULT false;
 EXCEPTION WHEN duplicate_column THEN null;

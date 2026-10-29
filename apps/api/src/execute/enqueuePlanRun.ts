@@ -96,6 +96,7 @@ export async function enqueuePlanRun(opts: EnqueuePlanRunOpts): Promise<EnqueueP
     groups: groups.map((g) => ({
       id: g.id, name: g.name, order: g.order, environmentId: g.environmentId,
       loginPrepareEnabled: g.loginPrepareEnabled, loginCaseId: g.loginCaseId,
+      loginDatasetRowIndexes: g.loginDatasetRowIndexes ?? null,
       detectionUrl: g.detectionUrl, loginSuccessSelector: g.loginSuccessSelector,
       loginUnauthorizedKeywords: g.loginUnauthorizedKeywords, failFast: g.failFast,
       targetConfig: g.targetConfig,

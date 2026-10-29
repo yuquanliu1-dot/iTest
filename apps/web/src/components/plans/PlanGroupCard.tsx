@@ -14,6 +14,7 @@ import InlineEdit from '../ui/InlineEdit';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/Modal';
 import DatasetRowPickerDialog from '../DatasetRowPickerDialog';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '../ui/shadcn/dropdown-menu';
+import LoginCasePickerDialog from './LoginCasePickerDialog';
 
 /** 登录准备候选（/plans/:id/login-cases，页面级查询下发）。 */
 export type LoginCaseOption = { id: string; title: string; groupId: string };
@@ -43,11 +44,13 @@ export default function PlanGroupCard({
   const navigate = useNavigate();
   const { projectId } = plan;
 
-  const [loginQ, setLoginQ] = useState('');
   /** 组内行移除确认（与旧计划级列表同款防误点弹窗）。 */
   const [confirmRemoveCase, setConfirmRemoveCase] = useState<{ id: string; title: string } | null>(null);
   /** 行内「选择数据」弹窗目标行（null = 关闭）。存整行：projectId/datasetId/生效下标都从它取。 */
   const [datasetPickerCase, setDatasetPickerCase] = useState<PlanCaseGroup['cases'][number] | null>(null);
+  /** 登录用例选择弹窗 / 登录用例数据行弹窗。 */
+  const [loginPickerOpen, setLoginPickerOpen] = useState(false);
+  const [loginRowPickerOpen, setLoginRowPickerOpen] = useState(false);
 
   const invalidate = () => onInvalidate();
 
@@ -151,7 +154,8 @@ export default function PlanGroupCard({
     reorderGroupCases.mutate(list.map((c) => c.id));
   };
 
-  const updateLoginPrepare = (next: { enabled?: boolean; caseId?: string | null; detectionUrl?: string | null; successSelector?: string | null; unauthorizedKeywords?: string[] | null }) => {
+  const updateLoginPrepare = (next: { enabled?: boolean; caseId?: string | null; detectionUrl?: string | null; successSelector?: string | null; unauthorizedKeywords?: string[] | null; datasetRowIndexes?: number[] | null }) => {
+    const caseChanged = next.caseId !== undefined && next.caseId !== group.loginCaseId;
     patchGroup.mutate({
       loginPrepare: {
         enabled: next.enabled ?? group.loginPrepareEnabled,
@@ -159,8 +163,21 @@ export default function PlanGroupCard({
         detectionUrl: next.detectionUrl === undefined ? group.detectionUrl : next.detectionUrl,
         successSelector: next.successSelector === undefined ? group.loginSuccessSelector : next.successSelector,
         unauthorizedKeywords: next.unauthorizedKeywords === undefined ? (group.loginUnauthorizedKeywords as string[] | null) : next.unauthorizedKeywords,
+        // 换用例 → 行覆盖一并清空（下标空间属于旧用例的数据集）；未换时显式传值或保持现值
+        datasetRowIndexes: caseChanged ? null : next.datasetRowIndexes === undefined ? group.loginDatasetRowIndexes : next.datasetRowIndexes,
       },
     });
+  };
+
+  /** 登录用例数据行三态文案：跟随用例 · N 行 / 全部 N 行 / 已选 M 行（与组内用例同款）。 */
+  const loginDatasetStatusLabel = (): string => {
+    if (group.loginDatasetRowIndexes !== null) {
+      return group.loginDatasetRowIndexes.length === 0
+        ? t('plans:datasetAllRows', { count: group.loginCaseEnabledRowCount })
+        : t('plans:datasetSelectedRows', { count: group.loginDatasetRowIndexes.length });
+    }
+    const n = group.loginCaseRowIndexes.length === 0 ? group.loginCaseEnabledRowCount : group.loginCaseRowIndexes.length;
+    return t('plans:datasetFollowCaseRows', { count: n });
   };
 
   const browserContext = group.targetConfig?.browserContext ?? '';
@@ -248,27 +265,25 @@ export default function PlanGroupCard({
           <div className="mt-3 flex flex-col gap-2 pl-5">
             <div className="flex items-center gap-2">
               <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:loginCase')}</span>
-              <select
-                value={group.loginCaseId ?? ''}
-                onChange={(e) => updateLoginPrepare({ caseId: e.target.value || null })}
-                className="input-base input-sm flex-1"
-                style={{ minWidth: 220 }}
+              <button
+                type="button"
+                className="input-base input-sm flex-1 text-left"
+                style={{ minWidth: 220, cursor: 'pointer' }}
+                onClick={() => setLoginPickerOpen(true)}
               >
-                <option value="">{t('plans:pleaseSelect')}</option>
-                {loginCases
-                  .filter((c) => !loginQ.trim() || c.title.toLowerCase().includes(loginQ.trim().toLowerCase()))
-                  .map((c) => (
-                    <option key={c.id} value={c.id}>{c.title}</option>
-                  ))}
-              </select>
-              <input
-                type="text"
-                placeholder={t('plans:searchCaseOrGroup')}
-                value={loginQ}
-                onChange={(e) => setLoginQ(e.target.value)}
-                className="input-base input-sm flex-1"
-                style={{ minWidth: 180 }}
-              />
+                {group.loginCaseTitle ?? t('plans:pleaseSelect')}
+              </button>
+              {group.loginCaseId && group.loginCaseDatasetId && (
+                <button
+                  type="button"
+                  className="press shrink-0 text-[10px] font-medium px-1.5 py-[1px] rounded"
+                  style={{ background: 'var(--muted)', color: 'var(--muted-foreground)', border: '1px solid var(--border)', cursor: 'pointer' }}
+                  onClick={() => setLoginRowPickerOpen(true)}
+                  title={t('plans:datasetEntry')}
+                >
+                  {loginDatasetStatusLabel()}
+                </button>
+              )}
             </div>
             <details className="text-[12px]">
               <summary className="cursor-pointer" style={{ color: 'var(--muted-foreground)' }}>{t('plans:advancedConfig')}</summary>
@@ -455,6 +470,35 @@ export default function PlanGroupCard({
           onFollowCase={
             datasetPickerCase.planRowIndexes !== null
               ? () => patchPlanCase.mutate({ planCaseId: datasetPickerCase.planCaseId, datasetRowIndexes: null })
+              : undefined
+          }
+        />
+      )}
+
+      {/* 登录用例选择弹窗：候选来自页面级 login-cases 查询；点行即选定。 */}
+      {loginPickerOpen && (
+        <LoginCasePickerDialog
+          open
+          onOpenChange={(o) => !o && setLoginPickerOpen(false)}
+          cases={loginCases}
+          selectedId={group.loginCaseId}
+          onPick={(caseId) => updateLoginPrepare({ caseId })}
+        />
+      )}
+
+      {/* 登录用例数据行选择弹窗：三态同组内用例（跟随用例=清组级覆盖）。
+          登录用例候选限定本计划项目，数据集一定属于 plan.projectId。 */}
+      {loginRowPickerOpen && (
+        <DatasetRowPickerDialog
+          open
+          onOpenChange={(o) => !o && setLoginRowPickerOpen(false)}
+          projectId={plan.projectId}
+          datasetId={group.loginCaseDatasetId}
+          value={group.loginDatasetRowIndexes ?? group.loginCaseRowIndexes}
+          onConfirm={(indexes) => updateLoginPrepare({ datasetRowIndexes: indexes })}
+          onFollowCase={
+            group.loginDatasetRowIndexes !== null
+              ? () => updateLoginPrepare({ datasetRowIndexes: null })
               : undefined
           }
         />

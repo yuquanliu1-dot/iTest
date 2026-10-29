@@ -32,6 +32,8 @@ const GroupLoginPrepareBody = z
     detectionUrl: z.string().url().optional().nullable(),
     successSelector: z.string().max(500).optional().nullable(),
     unauthorizedKeywords: z.array(z.string().max(80)).max(20).optional().nullable(),
+    /** 登录用例数据行覆盖三态：null/缺省 = 跟随用例级；[] = 全部行；非空 = 子集 */
+    datasetRowIndexes: z.array(z.number().int().min(0)).max(500).optional().nullable(),
   })
   .optional();
 
@@ -236,6 +238,7 @@ function toGroupLoginPrepare(b?: z.infer<typeof GroupLoginPrepareBody>) {
     detectionUrl: b.detectionUrl ?? null,
     successSelector: b.successSelector ?? null,
     unauthorizedKeywords: b.unauthorizedKeywords ?? null,
+    datasetRowIndexes: b.datasetRowIndexes ?? null,
   };
 }
 
