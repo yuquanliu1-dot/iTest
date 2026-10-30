@@ -140,8 +140,9 @@ spaceRoute.get('/threads', async (req, res) => {
       .select(threadListColumns)
       .from(aiThreads)
       .where(threadListWhere(versionId))
-      // id 决胜给出全序:keyset 分页的前提;同刻 tie 的展示顺序原本未定义,无行为差异。
-      .orderBy(desc(aiThreads.updatedAt), desc(aiThreads.id))
+      // 排序锚点=创建时间:updatedAt 会被改名/新消息落题等 UPDATE 顶起,旧会话上浮错位;
+      // id 决胜给出全序,同刻 tie 的展示顺序原本未定义,无行为差异。
+      .orderBy(desc(aiThreads.createdAt), desc(aiThreads.id))
       .limit(20)) as ThreadListRow[];
     const exists = await probeSessionFiles(rows);
     res.json(await serializeThreadRows(rows.filter((_, i) => exists[i])));
@@ -150,11 +151,11 @@ spaceRoute.get('/threads', async (req, res) => {
 
   const limit = Math.min(Math.floor(limitRaw), 200);
   // 文件存在性只能逐行探测、无法下推进 SQL,过滤后可能不足页 ⇒ keyset 循环取数:
-  // 每轮按 (updatedAt,id) 全序取一批原始行,凑满 limit 或原始行耗尽为止(20 轮封顶,
-  // 防全库草稿行把探测拖成全表扫)。游标 = 上一批最后一行的线程 id;比较值(updatedAt,id)
+  // 每轮按 (createdAt,id) 全序取一批原始行,凑满 limit 或原始行耗尽为止(20 轮封顶,
+  // 防全库草稿行把探测拖成全表扫)。游标 = 上一批最后一行的线程 id;比较值(createdAt,id)
   // 经行值子查询让 DB 自己解析——timestamp 是微秒精度,经 ISO 字符串往返会毫秒截断,
   // 同毫秒 tie 行会被跳过;子查询无此损耗。游标行被删 → 子查询 NULL → 整页空,接受
-  // (仅另一端恰好删掉游标行时发生)。
+  // (仅另一端恰好删掉游标行时发生)。createdAt 不可变 ⇒ 位置稳定,keyset 无漂移。
   // 每轮多取 1 行作存在性判据 ⇒ hasMore 是精确值而非乐观猜测。乐观语义有实际害处:
   // 客户端每次 reload 都新鲜拉第 1 页并回写 hasMore,乐观 true 会在「已滚到底 + 库已
   // 耗尽」时把哨兵复活,触发一次注定为空的翻页请求;精确 false 让哨兵保持熄灭。
@@ -170,10 +171,10 @@ spaceRoute.get('/threads', async (req, res) => {
       .where(and(
         threadListWhere(versionId),
         cursorId
-          ? sql`(${aiThreads.updatedAt}, ${aiThreads.id}) < (SELECT ${aiThreads.updatedAt}, ${aiThreads.id} FROM ${aiThreads} WHERE ${aiThreads.id} = ${cursorId})`
+          ? sql`(${aiThreads.createdAt}, ${aiThreads.id}) < (SELECT ${aiThreads.createdAt}, ${aiThreads.id} FROM ${aiThreads} WHERE ${aiThreads.id} = ${cursorId})`
           : undefined,
       ))
-      .orderBy(desc(aiThreads.updatedAt), desc(aiThreads.id))
+      .orderBy(desc(aiThreads.createdAt), desc(aiThreads.id))
       .limit(want + 1)) as ThreadListRow[];
     hasMore = batch.length > want;
     const page = hasMore ? batch.slice(0, want) : batch;

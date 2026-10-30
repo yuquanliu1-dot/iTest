@@ -30,12 +30,12 @@ describe('bucketOf', () => {
 });
 
 describe('groupByBucket', () => {
-  it('桶序固定 today→older,桶内按 updatedAt 降序,空桶不产出', () => {
+  it('桶序固定 today→older,桶内按 createdAt 降序,空桶不产出', () => {
     const rows = [
-      { id: 'a', updatedAt: iso(2026, 9, 19, 10) }, // today
-      { id: 'b', updatedAt: iso(2026, 9, 19, 14) }, // today(较新)
-      { id: 'c', updatedAt: iso(2026, 9, 18, 10) }, // yesterday
-      { id: 'd', updatedAt: iso(2026, 6, 1, 10) }, // older
+      { id: 'a', createdAt: iso(2026, 9, 19, 10) }, // today
+      { id: 'b', createdAt: iso(2026, 9, 19, 14) }, // today(较新)
+      { id: 'c', createdAt: iso(2026, 9, 18, 10) }, // yesterday
+      { id: 'd', createdAt: iso(2026, 6, 1, 10) }, // older
     ];
     const g = groupByBucket(rows, NOW);
     expect(g.map((x) => x.key)).toEqual(['today', 'yesterday', 'older']);

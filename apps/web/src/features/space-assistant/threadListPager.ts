@@ -36,8 +36,8 @@ export class ThreadListPager {
   private listeners = new Set<() => void>();
   private loadMorePromise: Promise<void> | null = null;
   /** keyset 是否已耗尽:loadMore 拿到 hasMore=false 即置位,此后 reload 不得把 hasMore
-   *  复活(见 refreshForRuntime)。行只会因收到新消息 updatedAt 增大而上浮,不会沉到
-   *  游标之下,故置位后无需失效。 */
+   *  复活(见 refreshForRuntime)。排序锚点是 createdAt(不可变),行位置永不移动;新会话
+   *  只会出现在第 1 页顶部,不会沉到游标之下,故置位后无需失效。 */
   private reachedEnd = false;
 
   constructor(

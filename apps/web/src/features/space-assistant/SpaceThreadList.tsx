@@ -20,7 +20,7 @@ import { useThreadPager, type ThreadListPager } from './threadListPager';
  * 可收缩:collapsed 时只剩窄条(展开按钮 + 新对话图标),宽度切换由父级容器驱动。
  * 分页:列表数据由 ThreadListPager 供给(react-pi 适配层封死内建分页),滚动近底部
  * 经哨兵自动翻页 + aui.threads.reload() 把缓存灌回 runtime store;时间表直接读
- * pager 行(react-pi 的 mapThreadMetadata 丢弃 updatedAt,store 里拿不到时间)。
+ * pager 行(react-pi 的 mapThreadMetadata 丢弃时间字段,store 里拿不到)。
  */
 export default function SpaceThreadList({ pager, collapsed, onToggleCollapsed }: {
   pager: ThreadListPager;
@@ -35,8 +35,8 @@ export default function SpaceThreadList({ pager, collapsed, onToggleCollapsed }:
   // SuggestionWatcher 的 aui.threads.reload() → runtime list() → pager.refreshForRuntime()
   // → commit 通知,时间表随之刷新,无需这里自拉。
   const snap = useSyncExternalStore(pager.subscribe, pager.getSnapshot);
-  const updatedAtById = useMemo(
-    () => Object.fromEntries(snap.rows.map((r) => [r.id, r.updatedAt])),
+  const createdAtById = useMemo(
+    () => Object.fromEntries(snap.rows.map((r) => [r.id, r.createdAt])),
     [snap.rows],
   );
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -92,7 +92,7 @@ export default function SpaceThreadList({ pager, collapsed, onToggleCollapsed }:
             {t('assistant:threadList.noHistory')}
           </div>
         )}
-        <GroupedItems updatedAtById={updatedAtById} pager={pager} scrollRef={scrollRef} />
+        <GroupedItems createdAtById={createdAtById} pager={pager} scrollRef={scrollRef} />
       </div>
     </div>
   );
@@ -228,8 +228,8 @@ function IndexedRailItem() {
 /** 按五段分组渲染。Items 原语内部是 threadIds.map 死平铺、插不进段标题,
  *  故用 ItemByIndex 按 index 自行排版,保留 item scope 的 switchTo/rename/delete。
  *  末尾挂无限滚动哨兵:hasMore 时滚动近底部自动翻页。 */
-function GroupedItems({ updatedAtById, pager, scrollRef }: {
-  updatedAtById: Record<string, string | undefined>;
+function GroupedItems({ createdAtById, pager, scrollRef }: {
+  createdAtById: Record<string, string | undefined>;
   pager: ThreadListPager;
   scrollRef: React.RefObject<HTMLDivElement | null>;
 }) {
@@ -243,8 +243,8 @@ function GroupedItems({ updatedAtById, pager, scrollRef }: {
     [threadItems],
   );
   const rows = useMemo(
-    () => groupByBucket(threadIds.map((id) => ({ id, updatedAt: updatedAtById[remoteIdById.get(id) ?? id] }))),
-    [threadIds, updatedAtById, remoteIdById],
+    () => groupByBucket(threadIds.map((id) => ({ id, createdAt: createdAtById[remoteIdById.get(id) ?? id] }))),
+    [threadIds, createdAtById, remoteIdById],
   );
   // ItemByIndex 的 index 必须是 threadIds 里的原始下标,不能用分组后的序号
   const indexById = useMemo(() => new Map(threadIds.map((id, i) => [id, i])), [threadIds]);

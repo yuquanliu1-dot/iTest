@@ -15,14 +15,15 @@ let tmpDir: string;
 
 /** 造一条 kind='version' 线程;sessionFile 给真实文件路径则过 fs 探测,不给则指向不存在
  *  的路径(非空 piThreadId 过 SQL where、被 fs 探测滤掉——对应生产上 session 文件被清的线程)。
- *  updatedAt 用显式分钟差保证 (updatedAt,id) 全序确定。 */
-async function insertThread(versionId: string, opts: { updatedAt: string; title?: string; sessionFile?: string }): Promise<string> {
+ *  createdAt 用显式分钟差保证 (createdAt,id) 全序确定;updatedAt 缺省同刻,可单独后拨
+ *  模拟改名/新消息落题(排序不应被它带跑)。 */
+async function insertThread(versionId: string, opts: { updatedAt: string; updatedAtLater?: string; title?: string; sessionFile?: string }): Promise<string> {
   const id = randomUUID();
   const sessionFile = opts.sessionFile ?? path.join(tmpDir, 'missing', `${randomUUID()}.jsonl`);
   await pool.query(
     `INSERT INTO ai_threads(id, kind, version_id, title, pi_thread_id, created_at, updated_at)
-     VALUES ($1, 'version', $2, $3, $4, $5::timestamp, $5::timestamp)`,
-    [id, versionId, opts.title ?? null, sessionFile, opts.updatedAt],
+     VALUES ($1, 'version', $2, $3, $4, $5::timestamp, $6::timestamp)`,
+    [id, versionId, opts.title ?? null, sessionFile, opts.updatedAt, opts.updatedAtLater ?? opts.updatedAt],
   );
   return id;
 }
@@ -117,7 +118,7 @@ describe('GET /api/assistant/threads 分页契约(?limit=)', () => {
     for (const t of res.body.threads) expect(t.title).toMatch(/^线程/);
   });
 
-  it('同 updated_at tie 按 id 决胜,keyset 游标不重不漏(行值子查询)', async () => {
+  it('同 created_at tie 按 id 决胜,keyset 游标不重不漏(行值子查询)', async () => {
     const versionId = await freshVersion();
     const ties = new Set<string>();
     for (let i = 0; i < 3; i++) {
@@ -136,6 +137,22 @@ describe('GET /api/assistant/threads 分页契约(?limit=)', () => {
       cursor = res.body.threads[0]!.id as string;
     }
     expect(new Set(seen)).toEqual(ties);
+  });
+
+  it('排序锚点是创建时间:老线程 updatedAt 被改名/新消息顶新也不上浮', async () => {
+    const versionId = await freshVersion();
+    // A 先建(300 分钟前)但最近活跃(updated_at=now);B 后建(100 分钟前)无活跃
+    const fileA = path.join(tmpDir, `${randomUUID()}.jsonl`);
+    const fileB = path.join(tmpDir, `${randomUUID()}.jsonl`);
+    await fs.writeFile(fileA, '');
+    await fs.writeFile(fileB, '');
+    const a = await insertThread(versionId, { updatedAt: at(300), updatedAtLater: at(0), title: 'A-老会话新活跃', sessionFile: fileA });
+    const b = await insertThread(versionId, { updatedAt: at(100), title: 'B-较新会话', sessionFile: fileB });
+    // 旧契约(裸数组,20 硬顶)与分页契约都必须 B 在前:按创建时间,B 比 A 新
+    const legacy = await list(versionId, '');
+    expect((legacy.body as { id: string }[]).map((t) => t.id)).toEqual([b, a]);
+    const paged = await list(versionId, '&limit=10');
+    expect((paged.body.threads as { id: string }[]).map((t) => t.id)).toEqual([b, a]);
   });
 
   it('limit 超 200 收口;非法 limit 走旧契约(裸数组)', async () => {

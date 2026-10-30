@@ -195,7 +195,7 @@ function SuggestionWatcher({ threadId, onSuggestions }: { threadId: string; onSu
     // 避免每次进入线程都白烧一次 LLM 调用。
     if (!settled || !threadId) return;
     // 首条消息的自动标题落库在本轮 settle 之后,晋升的草稿条目此刻还顶着「新对话」兜底名;
-    // settle 边沿重拉一次列表,把标题与 updatedAt 排序刷新进左栏。
+    // settle 边沿重拉一次列表,把标题(与按创建时间入列的新会话)刷新进左栏。
     void aui.threads.reload().catch(() => {});
     const gen = genRef.current;
     void api.assistant
