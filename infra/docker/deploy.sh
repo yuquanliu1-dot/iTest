@@ -217,6 +217,10 @@ echo "== seed docx-to-cases =="
 docker exec "$(api_replica)" node /repo/apps/api/scripts/seed-docx-to-cases-skill.mjs \
   || echo "WARN: docx-to-cases seed 失败，助手将看不到该技能（不影响其余功能）"
 
+echo "== seed export-cases =="
+docker exec "$(api_replica)" node /repo/apps/api/scripts/seed-export-cases-skill.mjs \
+  || echo "WARN: export-cases seed 失败，助手将无法导出用例文件（不影响其余功能）"
+
 # --- post-deploy smoke ---
 # Warning 策略:任一 FAIL 输出原因但 exit 0;运维根据警告决定是否回滚。
 echo "== post-deploy smoke =="

@@ -433,32 +433,25 @@ export default function GroupsPage() {
 	// 切 tab 时清空勾选（避免跨 tab 误选），沿用旧 useEffect 行为
 	useEffect(() => { selection.clear(); }, [tab]);
 
-	// 导出 XMind：勾选优先，无勾选导出当前筛选结果的全量用例（filteredCases，非当前页 rows）
-	const [exportingXmind, setExportingXmind] = useState(false);
-	const exportXmind = async () => {
-		const ids = selection.ids.length > 0 ? selection.ids : filteredCases.map((c) => c.id);
-		if (ids.length === 0) return;
-		if (ids.length > 2000) {
-			toast(t('groups:exportXmindTooMany', { count: ids.length }), 'error');
-			return;
+	// 导出 XMind/Word：不再走 HTTP blob 下载，统一跳 AI 助手（export-cases 技能渲染，下载卡交付）。
+	// 勾选优先（≤500，与 dump_cases_payload 上限一致）；无勾选按分组筛选/当前版本全部描述范围。
+	const exportViaAssistant = (format: 'xmind' | 'docx') => {
+		if (!versionId) return; // 产品线 scope 无版本工作区，助手路由不存在（与 startAiCaseSession 同兜底）
+		const fmt = format === 'xmind' ? 'XMind' : 'Word';
+		let initialMessage: string;
+		if (selection.ids.length > 0) {
+			if (selection.ids.length > 500) {
+				toast(t('groups:exportTooMany', { count: selection.ids.length }), 'error');
+				return;
+			}
+			initialMessage = `请把以下 ${selection.ids.length} 条用例导出为 ${fmt} 文档（用例 id：${selection.ids.join('、')}）。`;
+		} else {
+			if (filteredCases.length === 0) return;
+			initialMessage = effectiveGroupId
+				? `请把分组「${groupName.get(effectiveGroupId) ?? ''}」（groupId: ${effectiveGroupId}）的用例导出为 ${fmt} 文档。`
+				: `请把当前版本的全部用例导出为 ${fmt} 文档。`;
 		}
-		setExportingXmind(true);
-		try {
-			const { blob, filename } = await api.cases.exportXmind(ids);
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement('a');
-			a.href = url;
-			a.download = filename;
-			document.body.appendChild(a);
-			a.click();
-			a.remove();
-			// 给浏览器一点时间触发下载再回收
-			setTimeout(() => URL.revokeObjectURL(url), 1000);
-		} catch (e) {
-			toast(e instanceof Error ? localizeApiError(e) : String(e), 'error');
-		} finally {
-			setExportingXmind(false);
-		}
+		navigate(`/p/${projectId}/v/${versionId}/assistant`, { state: { initialMessage } });
 	};
 
 	const setPriorityFilter = (next: typeof priority) => void setRaw({ priority: next, page: '1' });
@@ -778,10 +771,15 @@ export default function GroupsPage() {
 							onChange={(v) => setScope(v)}
 						/>
 					)}
-					{/* 勾选优先：有勾选即可导（即使收窄筛选后列表空）；无勾选才看当前筛选结果是否为空 */}
-					<Button size="sm" variant="ghost" disabled={exportingXmind || (selection.ids.length === 0 && filteredCases.length === 0)} onClick={exportXmind}>
+					{/* 勾选优先：有勾选即可导（即使收窄筛选后列表空）；无勾选才看当前筛选结果是否为空。
+					    导出统一经 AI 助手（export-cases 技能），点击即跳助手页自动发送指令。 */}
+					<Button size="sm" variant="ghost" disabled={selection.ids.length === 0 && filteredCases.length === 0} onClick={() => exportViaAssistant('xmind')}>
 						<Icon name="download" size={12} />
-							{exportingXmind ? t('groups:exportingXmind') : t('groups:exportXmind')}
+							{t('groups:exportXmind')}
+					</Button>
+					<Button size="sm" variant="ghost" disabled={selection.ids.length === 0 && filteredCases.length === 0} onClick={() => exportViaAssistant('docx')}>
+						<Icon name="download" size={12} />
+							{t('groups:exportWord')}
 					</Button>
 					<Button
 						onClick={() => {

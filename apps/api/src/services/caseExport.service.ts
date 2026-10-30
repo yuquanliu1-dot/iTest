@@ -1,11 +1,11 @@
 /**
- * 用例导出 XMind：树构建（纯函数）。
+ * 用例导出数据层：查库 + DSL 步骤中文摘要 + 导出树构建（纯函数，格式无关）。
+ * 序列化（xmind/docx）由 export-cases skill 的 python 脚本按 buildExportPayload 产物渲染——
+ * 树的层级与排序（分组 zh 排序、跨版本插层）在本文件定死，脚本只按 payload 顺序输出。
  * 层级：root(版本名) → [版本(跨版本时)] → 分组 → 用例 → 预置条件/测试步骤/预期结果。
- * 设计文档：docs/superpowers/specs/2026-10-26-case-export-xmind-design.md
+ * 前身：services/xmindExport.service.ts（2026-10-26 XMind 导出设计）。
  */
 
-import { randomUUID } from 'node:crypto';
-import archiver from 'archiver';
 import { asc, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { groups, projectVersions, testCases, testSteps } from '../db/schema.js';
@@ -32,9 +32,10 @@ export interface ExportCaseRow {
   steps: ExportStepRow[];
 }
 
-export interface XmindNode {
+/** 导出树节点（JSON 安全：全部字符串，dump 工具直接序列化给 skill 脚本）。 */
+export interface ExportNode {
   title: string;
-  children?: XmindNode[];
+  children?: ExportNode[];
 }
 
 const clip = (s: string, n = 60): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -141,13 +142,13 @@ export function outcomeLines(expectedOutcome: string | null, steps: ExportStepRo
 }
 
 /** 树构建：分组按名称排序，用例按 createdAt 排序；跨版本时插版本层。 */
-export function buildXmindTree(cases: ExportCaseRow[], rootTitle: string): XmindNode {
+export function buildExportTree(cases: ExportCaseRow[], rootTitle: string): ExportNode {
   const sorted = [...cases].sort(
     (a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.title.localeCompare(b.title, 'zh'),
   );
 
-  function caseNode(c: ExportCaseRow): XmindNode {
-    const children: XmindNode[] = [];
+  function caseNode(c: ExportCaseRow): ExportNode {
+    const children: ExportNode[] = [];
     if (c.description?.trim()) {
       children.push({ title: '预置条件', children: [{ title: c.description.trim() }] });
     }
@@ -160,7 +161,7 @@ export function buildXmindTree(cases: ExportCaseRow[], rootTitle: string): Xmind
     return { title: c.title, ...(children.length > 0 ? { children } : {}) };
   }
 
-  function groupNode(groupName: string, groupCases: ExportCaseRow[]): XmindNode {
+  function groupNode(groupName: string, groupCases: ExportCaseRow[]): ExportNode {
     return { title: groupName, children: groupCases.map(caseNode) };
   }
 
@@ -200,82 +201,6 @@ export function buildXmindTree(cases: ExportCaseRow[], rootTitle: string): Xmind
     title: rootTitle,
     children: [...byGroup.keys()].sort((a, b) => a.localeCompare(b, 'zh')).map((g) => groupNode(g, byGroup.get(g)!)),
   };
-}
-
-function escapeXml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function topicToJson(n: XmindNode, isRoot: boolean): Record<string, unknown> {
-  const t: Record<string, unknown> = { id: randomUUID(), class: 'topic', title: n.title };
-  if (isRoot) t.structureClass = 'org.xmind.ui.logic.right';
-  if (n.children?.length) {
-    t.children = { attached: n.children.map((c) => topicToJson(c, false)) };
-  }
-  return t;
-}
-
-function topicToXml(n: XmindNode, isRoot: boolean): string {
-  const attrs = isRoot ? ' structure-class="org.xmind.ui.logic.right"' : '';
-  const inner = `<title>${escapeXml(n.title)}</title>`;
-  const children = n.children?.length
-    ? `<children><topics type="attached">${n.children.map((c) => topicToXml(c, false)).join('')}</topics></children>`
-    : '';
-  return `<topic id="${randomUUID()}"${attrs}>${inner}${children}</topic>`;
-}
-
-/** 双格式序列化：content.json(XMind 2020+/ZEN) + content.xml(XMind 8) + metadata + manifest。 */
-export function renderXmindWorkbook(root: XmindNode): Record<string, string> {
-  const contentJson = JSON.stringify([
-    {
-      id: randomUUID(),
-      class: 'sheet',
-      title: 'Sheet 1',
-      rootTopic: topicToJson(root, true),
-    },
-  ]);
-  const contentXml = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<xmap-content xmlns="urn:xmind:xmap:xmlns:content:2.0" xmlns:xlink="http://www.w3.org/1999/xlink" version="2.0">
-  <sheet id="${randomUUID()}">
-    ${topicToXml(root, true)}
-  </sheet>
-</xmap-content>
-`;
-  const metadataJson = JSON.stringify({
-    dataStructureVersion: '2',
-    layoutEngineVersion: '3',
-    creator: { name: 'iTest', version: '1.0' },
-  });
-  const manifestJson = JSON.stringify({
-    'file-entries': { 'content.json': {}, 'content.xml': {}, 'metadata.json': {} },
-  });
-  return {
-    'content.json': contentJson,
-    'content.xml': contentXml,
-    'metadata.json': metadataJson,
-    'manifest.json': manifestJson,
-  };
-}
-
-/** 内存打 zip。 */
-export async function zipXmind(entries: Record<string, string>): Promise<Buffer> {
-  const archive = archiver('zip', { zlib: { level: 9 } });
-  const chunks: Buffer[] = [];
-  archive.on('data', (c: Buffer) => chunks.push(c));
-  const done = new Promise<void>((resolve, reject) => {
-    archive.on('end', () => resolve());
-    archive.on('error', reject);
-  });
-  for (const [name, content] of Object.entries(entries)) archive.append(content, { name });
-  await archive.finalize();
-  await done;
-  return Buffer.concat(chunks);
-}
-
-export function exportFilename(versionName: string, now = new Date()): string {
-  const p = (n: number) => String(n).padStart(2, '0');
-  const ts = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
-  return `${versionName}-用例-${ts}.xmind`;
 }
 
 /** 批量拉用例 + 步骤 + 分组名/版本名。caseIds 里查不到的静默忽略（调用方负责可见性）。 */
@@ -324,20 +249,27 @@ export async function loadExportCases(caseIds: string[]): Promise<ExportCaseRow[
     expectedOutcome: r.expectedOutcome,
     groupId: r.groupId,
     groupName: gName.get(r.groupId) ?? '未分组',
-    versionId: r.versionId,
     versionName: vName.get(r.versionId) ?? '未命名版本',
+    versionId: r.versionId,
     createdAt: r.createdAt,
     steps: (stepsByCase.get(r.id) ?? []).sort((a, b) => a.order - b.order),
   }));
 }
 
-/** 组合：用例集合 → {zip buffer, 文件名}。rootTitle 缺省用第一个用例的版本名。 */
-export async function buildXmindBuffer(
-  cases: ExportCaseRow[],
-  rootTitle?: string,
-): Promise<{ buffer: Buffer; filename: string }> {
-  const filename = exportFilename(cases[0]!.versionName);
-  const tree = buildXmindTree(cases, rootTitle?.trim() || cases[0]!.versionName);
-  const buffer = await zipXmind(renderXmindWorkbook(tree));
-  return { buffer, filename };
+/** 导出 payload：dump_cases_payload 工具落盘、export-cases skill 脚本消费的 JSON 形状。
+ *  baseName 供脚本拼文件名（`{baseName}-用例-{时间戳}.{ext}`）；tree 的叶子已是渲染好的文本行。 */
+export interface ExportPayload {
+  baseName: string;
+  count: number;
+  tree: ExportNode;
+}
+
+/** 组合：用例集合 → JSON 安全 payload。rootTitle 缺省用第一个用例的版本名。 */
+export function buildExportPayload(cases: ExportCaseRow[], rootTitle?: string): ExportPayload {
+  const baseName = rootTitle?.trim() || cases[0]!.versionName;
+  return {
+    baseName,
+    count: cases.length,
+    tree: buildExportTree(cases, baseName),
+  };
 }

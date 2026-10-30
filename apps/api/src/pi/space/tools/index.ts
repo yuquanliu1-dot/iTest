@@ -19,7 +19,7 @@ import { buildHistoryTools } from './history.js';
 import { buildStageTools } from './stage-tools.js';
 import { buildLoginTools } from './login.js';
 import { buildVerifyCaseTool } from './verifyCase.js';
-import { buildExportCasesXmindTool } from './exportCasesXmind.js';
+import { buildDumpCasesPayloadTool } from './dumpCasesPayload.js';
 import { buildSolidifyCaseTool } from './solidifyCase.js';
 import { buildCaseOpsTools } from './case-ops-tools.js';
 import { buildReadSkillTool } from './readSkill.js';
@@ -78,7 +78,7 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
     tools.push(buildManageMcpTool(ctx));
     tools.push(buildImportSkillTool(ctx));
   }
-  tools.push(buildExportCasesXmindTool(ctx));
+  tools.push(buildDumpCasesPayloadTool(ctx));
   tools.push(buildVerifyCaseTool(ctx));
   tools.push(buildSolidifyCaseTool(ctx));
   tools.push(...buildStageTools(ctx));

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildXmindTree, describeAction, exportFilename, renderXmindWorkbook, zipXmind, type ExportCaseRow, type XmindNode } from './xmindExport.service.js';
+import { buildExportTree, buildExportPayload, describeAction, type ExportCaseRow } from './caseExport.service.js';
 
 function mkCase(over: Partial<ExportCaseRow> = {}): ExportCaseRow {
   return {
@@ -21,9 +21,9 @@ function mkCase(over: Partial<ExportCaseRow> = {}): ExportCaseRow {
   };
 }
 
-describe('buildXmindTree', () => {
+describe('buildExportTree', () => {
   it('root=版本名，一层分组、二层用例、三层三要素', () => {
-    const tree = buildXmindTree([mkCase()], 'V2.3');
+    const tree = buildExportTree([mkCase()], 'V2.3');
     expect(tree.title).toBe('V2.3');
     expect(tree.children).toHaveLength(1);
     const group = tree.children![0]!;
@@ -44,13 +44,13 @@ describe('buildXmindTree', () => {
     const a = mkCase({ title: '用例A', groupName: 'B组', createdAt: new Date('2026-01-02T00:00:00Z') });
     const b = mkCase({ title: '用例B', groupName: 'B组', createdAt: new Date('2026-01-01T00:00:00Z') });
     const c = mkCase({ title: '用例C', groupName: 'A组' });
-    const tree = buildXmindTree([a, b, c], 'V2.3');
+    const tree = buildExportTree([a, b, c], 'V2.3');
     expect(tree.children!.map((g) => g.title)).toEqual(['A组', 'B组']);
     expect(tree.children![1]!.children!.map((x) => x.title)).toEqual(['用例B', '用例A']);
   });
 
   it('跨版本时在 root 与分组之间插版本层', () => {
-    const tree = buildXmindTree(
+    const tree = buildExportTree(
       [mkCase({ versionName: 'V2.3' }), mkCase({ versionName: 'V2.4' })],
       '导出',
     );
@@ -59,7 +59,7 @@ describe('buildXmindTree', () => {
   });
 
   it('空字段省略：无 description/expectedOutcome/steps 的用例只出标题节点', () => {
-    const tree = buildXmindTree(
+    const tree = buildExportTree(
       [mkCase({ description: null, expectedOutcome: null, steps: [] })],
       'V2.3',
     );
@@ -68,9 +68,9 @@ describe('buildXmindTree', () => {
   });
 
   it('expectedOutcome 优先，多行拆编号；为空时逐条行级断言兜底', () => {
-    const withOutcome = buildXmindTree([mkCase({ expectedOutcome: '第一行\n第二行' })], 'V').children![0]!.children![0]!;
+    const withOutcome = buildExportTree([mkCase({ expectedOutcome: '第一行\n第二行' })], 'V').children![0]!.children![0]!;
     expect(withOutcome.children![2]!.children!.map((n) => n.title)).toEqual(['1. 第一行', '2. 第二行']);
-    const noOutcome = buildXmindTree(
+    const noOutcome = buildExportTree(
       [mkCase({ expectedOutcome: null, steps: [
         { order: 1, instruction: 'a', compiled: null, assertion: { kind: 'assertText', match: 'contains', equals: '成功' } },
       ] })],
@@ -80,7 +80,7 @@ describe('buildXmindTree', () => {
   });
 
   it('多动作 compiled 链用 → 串联；敏感值掩码', () => {
-    const tree = buildXmindTree(
+    const tree = buildExportTree(
       [mkCase({ steps: [
         { order: 1, instruction: '', compiled: [
           { kind: 'fill', locator: [{ strategy: 'css', value: '#pw' }], value: 'secret', sensitive: true },
@@ -105,52 +105,15 @@ describe('describeAction 补充 kind', () => {
   });
 });
 
-describe('renderXmindWorkbook', () => {
-  const tree: XmindNode = {
-    title: 'V2.3 <root> & "引号"',
-    children: [{ title: '分组A', children: [{ title: '用例一\n第二行' }] }],
-  };
-  const wb = renderXmindWorkbook(tree);
-
-  it('四件齐全', () => {
-    expect(Object.keys(wb).sort()).toEqual(['content.json', 'content.xml', 'manifest.json', 'metadata.json']);
-  });
-
-  it('content.json 结构与参考文件一致（单 sheet + rootTopic + structureClass）', () => {
-    const sheets = JSON.parse(wb['content.json']!) as Array<{ class: string; rootTopic: Record<string, unknown> }>;
-    expect(sheets).toHaveLength(1);
-    expect(sheets[0]!.class).toBe('sheet');
-    expect(sheets[0]!.rootTopic.title).toBe('V2.3 <root> & "引号"');
-    expect(sheets[0]!.rootTopic.structureClass).toBe('org.xmind.ui.logic.right');
-    const children = (sheets[0]!.rootTopic.children as { attached: Array<{ title: string }> }).attached;
-    expect(children[0]!.title).toBe('分组A');
-  });
-
-  it('content.xml well-formed 且特殊字符已转义、换行保留', () => {
-    const xml = wb['content.xml']!;
-    expect(xml.startsWith('<?xml')).toBe(true);
-    expect(xml).toContain('<xmap-content');
-    expect(xml).toContain('V2.3 &lt;root&gt; &amp; "引号"');
-    expect(xml).toContain('用例一\n第二行');
-    // 粗校验标签配对
-    expect(xml.match(/<topic /g)?.length).toBe(xml.match(/<\/topic>/g)?.length);
-  });
-
-  it('metadata/manifest 为固定形状', () => {
-    expect(JSON.parse(wb['metadata.json']!)).toMatchObject({ creator: { name: 'iTest' } });
-    const manifest = JSON.parse(wb['manifest.json']!) as { 'file-entries': Record<string, unknown> };
-    expect(Object.keys(manifest['file-entries']).sort()).toEqual(['content.json', 'content.xml', 'metadata.json']);
-  });
-});
-
-describe('zipXmind + exportFilename', () => {
-  it('产出合法 zip（PK 魔数）且包含全部条目体积', async () => {
-    const buf = await zipXmind({ 'content.json': '{"a":1}', 'content.xml': '<x/>' });
-    expect(buf.subarray(0, 2).toString()).toBe('PK');
-    expect(buf.length).toBeGreaterThan(100);
-  });
-  it('文件名带版本名与时间戳', () => {
-    const name = exportFilename('V2.3', new Date('2026-10-26T08:09:10'));
-    expect(name).toBe('V2.3-用例-20261026-080910.xmind');
+describe('buildExportPayload', () => {
+  it('baseName 缺省用第一个用例的版本名；rootTitle 优先；tree 与 count 就位且 JSON 可序列化', () => {
+    const p = buildExportPayload([mkCase()]);
+    expect(p.baseName).toBe('V2.3');
+    expect(p.count).toBe(1);
+    expect(p.tree.title).toBe('V2.3');
+    expect(() => JSON.stringify(p)).not.toThrow();
+    const p2 = buildExportPayload([mkCase()], ' 评审材料 ');
+    expect(p2.baseName).toBe('评审材料');
+    expect(p2.tree.title).toBe('评审材料');
   });
 });
