@@ -48,9 +48,10 @@ export async function assertSpaceThreadVisible(threadId: string, user: AuthUser)
   return row.versionId;
 }
 
-/** react-pi 契约:POST/GET threads 必须返回完整 PiThreadSnapshot;兜底空快照刻意无 seq(requirement 级 /api/pi 兜底带 legacy seq:0,勿同步)。 */
-function threadSnapshotResponse(threadId: string): ThreadSnapshot {
-  const live = snapshotOfThread(threadId);
+/** react-pi 契约:POST/GET threads 必须返回完整 PiThreadSnapshot;兜底空快照刻意无 seq(requirement 级 /api/pi 兜底带 legacy seq:0,勿同步)。
+ *  异步:snapshotOfThread 内部要等 seq 泵排空,保证水位 ≥ 内容(毒快照会让前端双气泡)。 */
+async function threadSnapshotResponse(threadId: string): Promise<ThreadSnapshot> {
+  const live = await snapshotOfThread(threadId);
   return live ?? { metadata: { id: threadId, status: 'idle', messageCount: 0 }, messages: [] };
 }
 
@@ -73,7 +74,7 @@ spaceRoute.post('/threads', async (req, res) => {
     if (e instanceof HttpError) throw e;
     throw new HttpError(500, 'session_init_failed', e instanceof Error ? e.message : '会话初始化失败');
   }
-  const snap: ThreadSnapshot & { lastError?: string } = threadSnapshotResponse(threadId);
+  const snap: ThreadSnapshot & { lastError?: string } = await threadSnapshotResponse(threadId);
   const issue = spaceRepoIssue(threadId);
   if (issue) snap.lastError = `仓库暂不可用:${issue};对话可用,repo 类工具在修复仓库配置前会失败`;
   res.json(snap);
@@ -193,7 +194,7 @@ spaceRoute.get('/threads/:id', async (req, res) => {
   // (第二次 SSE 已把会话从 JSONL 重建好)。这里从磁盘重建会话(冷路径实测 ~20ms,
   // 远小于用户感知阈值)让首击即出历史;ensure 幂等单飞,热线程零成本。
   try { await ensureSpaceRecord(req.params.id!); } catch { /* 构建失败仍返回兜底快照,不 500 */ }
-  res.json(threadSnapshotResponse(req.params.id!));
+  res.json(await threadSnapshotResponse(req.params.id!));
 });
 
 /** react-pi rename 契约:PATCH {title} → 204。空/非字符串 400;trim 后入库。 */

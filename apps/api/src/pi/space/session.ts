@@ -429,6 +429,20 @@ export function snapshotOf(rec: ThreadRecord): ThreadSnapshot {
   };
 }
 
+/** 泵排空后再组装快照。pi 同步写 session.messages、seq 泵异步盖水位戳,两者之间直接
+ *  snapshotOf 会产出「内容已含新消息、水位还没盖住它」的毒快照:前端按快照定基线后,
+ *  迟到的 message_start(seq>水位)穿过旧事件门被无条件 append——同一条用户消息渲染
+ *  两次(只输一次回显两次的根因;库里仅一条,刷新自愈)。排法:await 当前队列尾后确认
+ *  它仍是尾(期间无新投递入队)再同步读取——JS 单线程保证「验尾+读」原子,水位必然 ≥
+ *  内容;持续流式下最多多等几个投递周期,对快照读取方可接受。 */
+async function drainedSnapshotOf(rec: ThreadRecord): Promise<ThreadSnapshot> {
+  for (;;) {
+    const tail = rec.seqQueue;
+    await tail;
+    if (rec.seqQueue === tail) return snapshotOf(rec);
+  }
+}
+
 function snapshotEventOf(threadId: string, seq: number, snapshot: ThreadSnapshot): Record<string, unknown> {
   return { type: 'snapshot', snapshot, threadId, seq };
 }
@@ -446,27 +460,39 @@ export function subscribeThread(
     return () => {};
   }
   if (opts.includeSnapshot === true) {
-    // 快照携带当前 seq 先把会话基线定住,随后在同一同步帧内按发布时间重放缓冲事件
-    // (verify_progress/announce/stage/solidify_progress)与仍挂起的确认卡,再注册监听器——
-    // 重放先于任何后续实时事件,seq 单调不逆。前端 store 按 seq 去重:已处理过的实时
-    // 事件不因重放二次生效,断线期间漏掉的事件自然补上(状态重建)。
-    fn(snapshotEventOf(rec.threadId, rec.seq, snapshotOf(rec)));
-    const now = Date.now();
-    for (const r of rec.customEvents) {
-      if (now - r.publishedAt > CUSTOM_EVENT_REPLAY_TTL_MS) continue;
-      fn(r.ev);
-    }
-    for (const p of pendingConfirmPayloads()) {
-      if (p.threadId === threadId) fn(p);
-    }
+    // 快照必须经 drainedSnapshotOf(水位 ≥ 内容,见其注释),无法同步产出 → 监听器先同步
+    // 注册(与上方 closed 检查之间无 await 的 unsub 契约不变),快照+缓冲重放异步补发:
+    // 排队中的投递会先直达本监听器(快照随后整体替换,内容必含这些事件,水位盖住其 seq,
+    // 前端不会二次 append),随后按发布时间重放缓冲自定义事件与仍挂起的确认卡。前端 store
+    // 按 seq 去重:实时已到的事件不因重放二次生效,断线期间漏掉的自然补上(状态重建)。
+    void (async () => {
+      try {
+        const snapshot = await drainedSnapshotOf(rec);
+        if (!rec.listeners.has(fn)) return; // 退订后不再补发(SSE 已关,写入只会报错)
+        fn(snapshotEventOf(rec.threadId, snapshot.seq ?? 0, snapshot));
+        const now = Date.now();
+        for (const r of rec.customEvents) {
+          if (!rec.listeners.has(fn)) return;
+          if (now - r.publishedAt > CUSTOM_EVENT_REPLAY_TTL_MS) continue;
+          fn(r.ev);
+        }
+        for (const p of pendingConfirmPayloads()) {
+          if (p.threadId === threadId && rec.listeners.has(fn)) fn(p);
+        }
+      } catch (err) {
+        logger.warn({ err, threadId: rec.threadId }, 'thread snapshot emit failed');
+      }
+    })();
   }
   rec.listeners.add(fn);
   return () => { rec.listeners.delete(fn); };
 }
 
-export function snapshotOfThread(threadId: string): ThreadSnapshot | null {
+/** GET/POST 线程体用的快照:必须走 drained(水位 ≥ 内容),否则毒快照会让前端把
+ *  同一条消息渲染两次。无 record 返回 null(调用方兜底空快照)。 */
+export async function snapshotOfThread(threadId: string): Promise<ThreadSnapshot | null> {
   const rec = records.get(threadId);
-  return rec ? snapshotOf(rec) : null;
+  return rec ? drainedSnapshotOf(rec) : null;
 }
 
 export function threadStatus(threadId: string): 'running' | 'idle' | undefined {

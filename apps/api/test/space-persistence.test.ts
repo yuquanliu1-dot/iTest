@@ -116,18 +116,18 @@ describe('会话文件持久化(真实工厂,JSONL 落盘)', () => {
 
     await ensureSpaceRecord(threadId);
     await sendSpaceUserMessage(threadId, '你好').catch(() => undefined);
-    expect(snapshotOfThread(threadId)!.metadata.messageCount).toBeGreaterThan(0);
+    expect((await snapshotOfThread(threadId))!.metadata.messageCount).toBeGreaterThan(0);
     const file = await sessionFileOf(threadId);
 
     // 模拟进程重启：只丢内存 record，DB 行与磁盘文件都该还在
     resetSpaceSessions();
-    expect(snapshotOfThread(threadId)).toBeNull();
+    expect(await snapshotOfThread(threadId)).toBeNull();
     expect(await sessionFileOf(threadId)).toBe(file);
     await expect(fs.access(file)).resolves.toBeUndefined();
 
     // 重新 ensure → 走 SessionManager.open(piThreadId, ...) 恢复历史
     await ensureSpaceRecord(threadId);
-    expect(snapshotOfThread(threadId)!.metadata.messageCount).toBeGreaterThan(0);
+    expect((await snapshotOfThread(threadId))!.metadata.messageCount).toBeGreaterThan(0);
   });
 
   it('会话文件损坏时 ensureSpaceRecord 不抛,降级重建', async () => {

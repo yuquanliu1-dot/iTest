@@ -231,12 +231,55 @@ describe('space session supervisor', () => {
     await ensureSpaceRecord(threadId);
     const events: Record<string, unknown>[] = [];
     const unsub = subscribeThread(threadId, (e) => events.push(e as Record<string, unknown>), { includeSnapshot: true });
+    // 快照改为「seq 泵排空后异步补发」(水位≥内容,防双气泡),不再同步首达
+    await vi.waitFor(() => expect(events[0]).toBeDefined());
     expect(events[0]!.type).toBe('snapshot');
     emitThreadEvent(threadId, { type: 'confirm_request', confirmId: 'c1' });
     // 事件经 seq 泵异步投递(Redis INCR 分配 seq;无 Redis 走本地兜底,仍是异步微任务)
     await vi.waitFor(() => expect(events[1]).toBeDefined());
     expect(events[1]).toMatchObject({ type: 'confirm_request', confirmId: 'c1', threadId });
     expect(typeof events[1]!.seq).toBe('number');
+    unsub();
+  }, 30_000);
+
+  it('毒快照回归:泵未盖戳时取快照须等投递完成,水位盖住 message_start(只输一次回显两次的根因)', async () => {
+    const { projectId, versionId } = await seedProject(pool);
+    const threadId = await insertSpaceThread(versionId);
+    const { ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, subscribeThread } = await import('../src/pi/space/session.js');
+    const rec = await ensureSpaceRecord(threadId);
+    const fake = rec.session as unknown as { listeners: Set<(e: unknown) => void> };
+    const delivered: Record<string, unknown>[] = [];
+    const unsub = subscribeThread(threadId, (e) => delivered.push(e as Record<string, unknown>));
+    // pi 语义:用户消息同步进内容,message_start 紧随发射——fanOut 只入队,seq 戳在异步泵里盖
+    await sendSpaceUserMessage(threadId, '只发一次');
+    const userMsg = { role: 'user', content: '只发一次' };
+    for (const l of fake.listeners) l({ type: 'message_start', message: userMsg });
+    // 老实现此刻同步读 = 内容已含消息、水位仍旧值的毒快照;新实现等泵排空后再读
+    const snap = await snapshotOfThread(threadId);
+    const stampedSeq = delivered.filter((e) => e.type === 'message_start').at(-1)!.seq;
+    expect(snap!.messages).toContainEqual(userMsg);
+    expect(snap!.seq).toBe(stampedSeq); // 前端旧事件门按 seq>水位 放行,水位盖住即不会二次 append
+    unsub();
+  }, 30_000);
+
+  it('毒快照回归:泵排队期订阅,快照须盖住已投递事件(水位≥内容,异步补发)', async () => {
+    const { projectId, versionId } = await seedProject(pool);
+    const threadId = await insertSpaceThread(versionId);
+    const { ensureSpaceRecord, sendSpaceUserMessage, subscribeThread } = await import('../src/pi/space/session.js');
+    const rec = await ensureSpaceRecord(threadId);
+    const fake = rec.session as unknown as { listeners: Set<(e: unknown) => void> };
+    // 真实场景:SSE 重连/新监听器恰好在发送后的泵窗口内进来——先有入队投递,再有订阅
+    await sendSpaceUserMessage(threadId, 'hello');
+    const userMsg = { role: 'user', content: 'hello' };
+    for (const l of fake.listeners) l({ type: 'message_start', message: userMsg });
+    const got: Record<string, unknown>[] = [];
+    const unsub = subscribeThread(threadId, (e) => got.push(e as Record<string, unknown>), { includeSnapshot: true });
+    // 微任务泵先送达盖戳的 message_start(监听器已同步注册),快照随后补发且水位不落后
+    await vi.waitFor(() => expect(got.some((e) => e.type === 'snapshot')).toBe(true));
+    const snapEv = got.find((e) => e.type === 'snapshot')!;
+    const maxDelivered = Math.max(0, ...got.filter((e) => e.type !== 'snapshot').map((e) => Number(e.seq ?? 0)));
+    expect((snapEv.snapshot as { messages: unknown[] }).messages).toContainEqual(userMsg);
+    expect(Number(snapEv.seq)).toBeGreaterThanOrEqual(maxDelivered); // 迟到的 message_start 不会再穿门 append
     unsub();
   }, 30_000);
 

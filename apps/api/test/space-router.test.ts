@@ -216,13 +216,13 @@ describe('space wire contract', () => {
     // 关键在于它被建起来了(record 不再是 null)——修复前 GET 不 ensure,record 永远 null。
     const { resetSpaceSessions, snapshotOfThread } = await import('../src/pi/space/session.js');
     resetSpaceSessions();
-    expect(snapshotOfThread(threadId)).toBeNull();
+    expect(await snapshotOfThread(threadId)).toBeNull();
 
     const g = await request(app).get(`/api/assistant/threads/${threadId}`);
     expect(g.status).toBe(200);
     expect(g.body.metadata.messageCount).toBe(0);
     // 修复的核心断言:GET 之后 record 已建成(下一次 GET 命中内存,不再依赖 SSE 顺带建)
-    expect(snapshotOfThread(threadId)).not.toBeNull();
+    expect(await snapshotOfThread(threadId)).not.toBeNull();
   });
 
   it('GET /threads/:id 冷线程但会话构建失败:仍 200 + 兜底空快照(不 500)', async () => {
@@ -431,7 +431,7 @@ describe('线程列表作用域与改名/删除(react-pi ThreadList 契约)', ()
     // 内存 record 已 drop:快照接口 404(行没了),且旧会话不再被 status 查询命中
     expect((await request(app).get(`/api/assistant/threads/${id}`)).status).toBe(404);
     const { snapshotOfThread } = await import('../src/pi/space/session.js');
-    expect(snapshotOfThread(id)).toBeNull();
+    expect(await snapshotOfThread(id)).toBeNull();
     // 再删一次:行不存在 → 404(可见性校验先拦截;客户端 deleteThread 对 404 同样容忍)
     expect((await request(app).delete(`/api/assistant/threads/${id}`)).status).toBe(404);
   });
@@ -461,11 +461,11 @@ describe('推荐追问(suggestions)', () => {
     const id = t.body.metadata.id;
     const { resetSpaceSessions, snapshotOfThread } = await import('../src/pi/space/session.js');
     resetSpaceSessions(); // 等价发版重启:piThreadId 已落库但内存 record 冷
-    expect(snapshotOfThread(id)).toBeNull();
+    expect(await snapshotOfThread(id)).toBeNull();
     const r = await request(app).post(`/api/assistant/threads/${id}/suggestions`);
     expect(r.status).toBe(200);
     expect(r.body).toEqual([]);
-    expect(snapshotOfThread(id)).not.toBeNull(); // ensure 已从「有 piThreadId」路径重建会话
+    expect(await snapshotOfThread(id)).not.toBeNull(); // ensure 已从「有 piThreadId」路径重建会话
   });
 
   it('有转写但 LLM 未配置 → 502 llm_not_configured', async () => {
