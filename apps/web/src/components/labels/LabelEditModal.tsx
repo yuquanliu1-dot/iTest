@@ -163,7 +163,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
           </div>
         </div>
         <div
-          className="flex justify-end gap-2 px-5 py-4 hairline-top"
+          className="flex justify-end gap-2 px-5 py-4 hairline-top sticky bottom-0 bg-popover rounded-b-lg"
           style={{ borderColor: 'var(--border)' }}
         >
           <Button variant="ghost" onClick={onClose}>{t('common:cancel')}</Button>

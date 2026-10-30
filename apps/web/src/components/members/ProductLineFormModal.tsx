@@ -70,6 +70,7 @@ export default function ProductLineFormModal({ visible, line, organizationId, on
           borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-2xl)',
           width: 420, maxWidth: 'calc(100vw - 32px)', padding: 16,
           display: 'flex', flexDirection: 'column', gap: 10,
+          maxHeight: '85vh', overflowY: 'auto',
         }}
       >
         <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--foreground)' }}>

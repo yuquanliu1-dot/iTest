@@ -583,7 +583,7 @@ export default function ProjectsHome() {
             />
           </div>
           <div
-            className="flex justify-end gap-2 px-5 py-3 hairline-top shrink-0"
+            className="flex justify-end gap-2 px-5 py-3 hairline-top shrink-0 sticky bottom-0 bg-popover rounded-b-lg"
             style={{ borderColor: 'var(--border)' }}
           >
             <Button variant="ghost" onClick={() => setForm(EMPTY_FORM)}>{t('common:cancel')}</Button>
@@ -642,7 +642,7 @@ export default function ProjectsHome() {
             </div>
           </div>
           <div
-            className="flex justify-end gap-2 px-5 py-4 hairline-top"
+            className="flex justify-end gap-2 px-5 py-4 hairline-top sticky bottom-0 bg-popover rounded-b-lg"
             style={{ borderColor: 'var(--border)' }}
           >
             <Button variant="ghost" onClick={() => setVersionForm(EMPTY_VERSION_FORM)}>{t('common:cancel')}</Button>
@@ -669,7 +669,7 @@ export default function ProjectsHome() {
             {t('projects:deleteProjectConfirm', { name: confirmDelete?.name })}
           </div>
           <div
-            className="flex justify-end gap-2 px-5 py-4 hairline-top"
+            className="flex justify-end gap-2 px-5 py-4 hairline-top sticky bottom-0 bg-popover rounded-b-lg"
             style={{ borderColor: 'var(--border)' }}
           >
             <Button variant="ghost" onClick={() => setConfirmDelete(null)}>{t('common:cancel')}</Button>
@@ -692,7 +692,7 @@ export default function ProjectsHome() {
             {t('projects:deleteVersionConfirm', { versionName: confirmDeleteVersion?.versionName })}
           </div>
           <div
-            className="flex justify-end gap-2 px-5 py-4 hairline-top"
+            className="flex justify-end gap-2 px-5 py-4 hairline-top sticky bottom-0 bg-popover rounded-b-lg"
             style={{ borderColor: 'var(--border)' }}
           >
             <Button variant="ghost" onClick={() => setConfirmDeleteVersion(null)}>{t('common:cancel')}</Button>

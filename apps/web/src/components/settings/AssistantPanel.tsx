@@ -200,7 +200,7 @@ function McpServersSection() {
               <span style={{ fontSize: 12, color: 'var(--foreground)' }}>{t('settings:mcpEnabled')}</span>
             </div>
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex justify-end gap-2 px-5 py-4 hairline-top sticky bottom-0 bg-popover rounded-b-lg" style={{ borderColor: 'var(--border)' }}>
             <Button variant="ghost" onClick={() => setForm(EMPTY_MCP)}>{t('common:cancel')}</Button>
             <Button disabled={!form.name.trim() || save.isPending} onClick={() => save.mutate()}>
               {save.isPending ? t('common:saving') : t('common:save')}

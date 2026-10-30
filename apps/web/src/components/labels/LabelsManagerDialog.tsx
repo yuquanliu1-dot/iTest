@@ -199,7 +199,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
             {t('cases:labelDialog.deleteConfirm', { name: pendingDelete?.name ?? '' })}
           </div>
           <div
-            className="flex justify-end gap-2 px-5 py-4 hairline-top"
+            className="flex justify-end gap-2 px-5 py-4 hairline-top sticky bottom-0 bg-popover rounded-b-lg"
             style={{ borderColor: 'var(--border)' }}
           >
             <Button variant="ghost" onClick={() => setPendingDelete(null)}>{t('common:cancel')}</Button>

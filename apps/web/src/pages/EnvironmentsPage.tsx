@@ -450,7 +450,7 @@ export default function EnvironmentsPage() {
               onChange={(e) => setEnvForm((f) => ({ ...f, name: e.target.value }))}
             />
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex justify-end gap-2 px-5 py-4 hairline-top sticky bottom-0 bg-popover rounded-b-lg" style={{ borderColor: 'var(--border)' }}>
             <Button variant="ghost" onClick={() => setEnvForm(EMPTY_ENV_FORM)}>{t('common:cancel')}</Button>
             <Button disabled={!envForm.name.trim() || saveEnv.isPending} onClick={() => saveEnv.mutate()}>
               {saveEnv.isPending ? t('environments:saving') : t('common:save')}
@@ -633,7 +633,7 @@ export default function EnvironmentsPage() {
               ? t('environments:deleteConfirmReferenced', { caseCount: confirmEnv.caseCount, planCount: confirmEnv.planCount })
               : t('environments:deleteConfirmUnreferenced')}
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex justify-end gap-2 px-5 py-4 hairline-top sticky bottom-0 bg-popover rounded-b-lg" style={{ borderColor: 'var(--border)' }}>
             <Button variant="ghost" onClick={() => setConfirmEnv(null)}>{t('common:cancel')}</Button>
             <Button
               variant="danger"
@@ -652,7 +652,7 @@ export default function EnvironmentsPage() {
           <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
             {t('environments:objDeleteConfirm', { label: confirmObj?.label })}
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex justify-end gap-2 px-5 py-4 hairline-top sticky bottom-0 bg-popover rounded-b-lg" style={{ borderColor: 'var(--border)' }}>
             <Button variant="ghost" onClick={() => setConfirmObj(null)}>{t('common:cancel')}</Button>
             <Button
               variant="danger"

@@ -370,7 +370,9 @@ export default function PlanDetail() {
       </div>
 
       <Dialog open={showAdd} onOpenChange={setShowAdd}>
-        <DialogContent style={{ maxWidth: 720 }}>
+        {/* flex 纵列改写默认 grid 单块滚动:弹窗贴 85vh 上限时只有用例列表内滚
+            (flex-1 min-h-0),搜索/筛选区与 footer 常驻,消除从前的双层滚动。 */}
+        <DialogContent className="flex flex-col overflow-hidden" style={{ maxWidth: 720 }}>
           <DialogHeader>
             <DialogTitle>{t('plans:addCases')}</DialogTitle>
           </DialogHeader>
@@ -427,7 +429,7 @@ export default function PlanDetail() {
               </div>
             )}
           </div>
-          <div className="px-5 pb-4 max-h-[400px] overflow-y-auto flex flex-col gap-1">
+          <div className="flex-1 min-h-0 px-5 pb-4 overflow-y-auto flex flex-col gap-1">
             {/* 全选筛选结果：含「已在计划」/deprecated 行（跨组重复合法，与手点一致） */}
             {candidates.length > 0 && (
               <div
@@ -496,7 +498,7 @@ export default function PlanDetail() {
               })
             )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="shrink-0 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
             <span className="text-[12px] mr-auto flex items-center gap-2" style={{ color: 'var(--muted-foreground)' }}>
               {t('plans:selectedCount', { count: selectedAdd.size })}
               {/* 目标分组由打开入口锁定（组卡按钮），此处仅展示去向 */}

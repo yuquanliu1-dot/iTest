@@ -62,11 +62,19 @@ function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivEleme
   );
 }
 
+// sticky 常驻 footer:DialogContent 是单个 overflow-y-auto 滚动容器,内容超高时
+// footer 会随内容滚出视口(小屏实测主操作按钮完全不可见)。sticky bottom-0 让它在
+// 超限时钉在滚动区底部:短内容时容器无滚动,sticky 不激活,表现与从前一致。
+// bg-popover 不透明底是 sticky footer 的标配(内容从其下滑过),rounded-b-lg 对齐
+// DialogContent 的圆角避免钉底时方角出血到遮罩上。
 function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
       data-slot="dialog-footer"
-      className={cn('flex flex-col-reverse gap-2 sm:flex-row sm:justify-end', className)}
+      className={cn(
+        'sticky bottom-0 rounded-b-lg bg-popover flex flex-col-reverse gap-2 sm:flex-row sm:justify-end',
+        className,
+      )}
       {...props}
     />
   );
