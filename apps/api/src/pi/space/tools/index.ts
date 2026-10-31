@@ -29,6 +29,7 @@ import { buildManageSkillTool } from './manageSkill.js';
 import { buildManageMcpTool } from './manageMcp.js';
 import { buildImportSkillTool } from './importSkill.js';
 import { buildSaveRcaResultTool } from './saveRcaResult.js';
+import { buildMemoryTools } from './memories.js';
 
 export type { SpaceToolsContext } from './context.js';
 export { emitStage, type StageKind } from './stage.js';
@@ -69,6 +70,8 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   //   - manage_cases   → 仅负责 search/get/create_group（实时读 + 仅分组创建仍保留实时写）
   tools.push(...buildLoginTools(ctx));
   tools.push(buildReadSkillTool());
+  // R1 短期记忆：chat/rca 线程均可用（产品线内共享，写入门禁在工具 description）
+  tools.push(...buildMemoryTools(ctx));
   tools.push(buildRunSkillScriptTool(ctx));
   tools.push(buildReadThreadAttachmentTool(ctx));
   // 管理类工具（manage_skill / manage_mcp / import_skill）只对「有效管理员」线程注册：改动全局共享配置

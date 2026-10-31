@@ -91,10 +91,9 @@ describe('R1 memories：服务层', () => {
     const { buildMemoriesSection } = await import('../src/pi/space/memories.js');
     const rows = Array.from({ length: 30 }, (_, i) => ({ title: `T${i}`, hook: 'x'.repeat(200) }));
     const out = buildMemoriesSection(rows);
-    expect(out.length).toBeLessThanOrEqual(4_200); // 预算 4000 + 头脚余量
-    for (const line of out.split('\n')) {
-      expect(line === '' || line.startsWith('#') || line.startsWith('- [') || !line.startsWith('-')).toBe(true);
-    }
+    expect(out.length).toBeLessThanOrEqual(4_000); // 预算 4000 硬顶
+    const inputLines = new Set(rows.map(r => `- [${r.title}] ${r.hook}`));
+    out.split('\n').filter(l => l.startsWith('- [')).forEach(l => expect(inputLines.has(l)).toBe(true));
     expect(out).not.toContain('- [T29]'); // 30×~210 字符必然超 4000，尾部被截
   });
 
@@ -123,5 +122,52 @@ describe('R1 memories：服务层', () => {
     const { findMemoriesByTitle } = await import('../src/pi/space/memories.js');
     const hits = await findMemoriesByTitle(lineId, '登录');
     expect(hits.map((h) => h.title).sort()).toEqual(['登录接口怪癖', '登录页特殊行为']);
+  });
+});
+
+describe('R1 memories：工具层', () => {
+  async function toolCtx(projectId: string) {
+    const { emptyRepoState } = await import('../src/pi/space/tools/context.js');
+    return {
+      threadId: randomUUID(), versionId: randomUUID(), projectId,
+      repo: emptyRepoState(), emit: () => {}, createdByUserId: null, manager: true,
+    };
+  }
+
+  it('save_memory：新建/更新语义 + product_line 解析 + global 不查线', async () => {
+    const { buildSaveMemoryTool } = await import('../src/pi/space/tools/memories.js');
+    const { projectId } = await seedProject(pool);
+    const tool = buildSaveMemoryTool(await toolCtx(projectId));
+    const r1 = await tool.execute({ title: '环境怪癖', hook: '测试环境每晚 2 点重启', provenance: 'user_stated' });
+    expect(r1.ok).toBe(true);
+    expect((r1 as { ok: true; data: string }).data).toContain('新建');
+    const r2 = await tool.execute({ title: '环境怪癖', hook: '测试环境每晚 2 点重启（已证实）', provenance: 'user_stated' });
+    expect((r2 as { ok: true; data: string }).data).toContain('更新');
+    const g = await tool.execute({ title: '平台事实', hook: '附件下载有 24h 过期', provenance: 'user_stated', scope: 'global' });
+    expect(g.ok).toBe(true);
+  });
+
+  it('save_memory：项目不存在时 product_line 报错不写入', async () => {
+    const { buildSaveMemoryTool } = await import('../src/pi/space/tools/memories.js');
+    const tool = buildSaveMemoryTool(await toolCtx(randomUUID()));
+    const r = await tool.execute({ title: 'X', hook: 'Y', provenance: 'user_stated' });
+    expect(r.ok).toBe(false);
+  });
+
+  it('read_memory：模糊命中返回正文 + hit_count 递增；找不到给可用标题清单', async () => {
+    const { buildSaveMemoryTool, buildReadMemoryTool } = await import('../src/pi/space/tools/memories.js');
+    const { projectId } = await seedProject(pool);
+    const ctx = await toolCtx(projectId);
+    await buildSaveMemoryTool(ctx).execute({ title: '登录页特殊行为', hook: '先关弹窗', body: '公告弹窗出现在登录页首次加载，selector .announce-modal，必须先点右上角关闭才能点登录按钮。', provenance: 'ai_inferred' });
+    const read = buildReadMemoryTool(ctx);
+    const r = await read.execute({ title: '登录页' });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { ok: true; data: string }).data);
+    expect(data.body).toContain('announce-modal');
+    const hit = (await pool.query(`SELECT hit_count::int h FROM assistant_memories WHERE title='登录页特殊行为'`)).rows[0]!;
+    expect(hit.h).toBe(1);
+    const miss = await read.execute({ title: '不存在的主题' });
+    expect(miss.ok).toBe(false);
+    expect((miss as { ok: false; error: string }).error).toContain('登录页特殊行为');
   });
 });
