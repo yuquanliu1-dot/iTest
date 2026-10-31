@@ -194,3 +194,49 @@ describe('R1 memories：system prompt 注入', () => {
     expect(iWorkspace).toBeGreaterThan(iMem);
   });
 });
+
+describe('R1 memories：管理路由', () => {
+  it('GET：global + 本组织线可见，他组织线不可见；带 productLineName', async () => {
+    const org1 = await seedOrg(pool);
+    const line1 = await seedProductLineInOrg(pool, org1.orgId, `本线-${randomUUID().slice(0, 8)}`);
+    // 第二组织 + 该组织下的线（manager 不在其子树）
+    const org2Id = randomUUID();
+    await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1,$2,$3)`, [org2Id, `他组织-${org2Id.slice(0, 8)}`, `/${org2Id}/`]);
+    const line2 = await seedProductLineInOrg(pool, org2Id, `他线-${randomUUID().slice(0, 8)}`);
+    await pool.query(`INSERT INTO assistant_memories (id, scope, product_line_id, title, hook, provenance) VALUES
+      ($1,'product_line',$2,'本线记忆','h','user_stated'),
+      ($3,'global',NULL,'全局记忆','h','user_stated'),
+      ($4,'product_line',$5,'他组织线记忆','h','user_stated')`,
+      [randomUUID(), line1, randomUUID(), randomUUID(), line2]);
+    const res = await request(managerApp).get('/api/assistant/memories');
+    expect(res.status).toBe(200);
+    const titles = (res.body as Array<{ title: string; productLineName: string | null }>).map((r) => r.title);
+    expect(titles).toContain('本线记忆');
+    expect(titles).toContain('全局记忆');
+    expect(titles).not.toContain('他组织线记忆');
+    const mine = (res.body as Array<{ title: string; productLineName: string | null }>).find((r) => r.title === '本线记忆');
+    expect(mine!.productLineName).toBeTruthy();
+  });
+
+  it('DELETE：软删（行保留 status=deleted），loadActiveMemories 不再返回；member 403', async () => {
+    const { projectId } = await seedProject(pool);
+    const lineId = (await pool.query(`SELECT product_line_id FROM projects WHERE id=$1`, [projectId])).rows[0]!.product_line_id as string;
+    const id = randomUUID();
+    await pool.query(`INSERT INTO assistant_memories (id, scope, product_line_id, title, hook, provenance) VALUES ($1,'product_line',$2,'待删','h','user_stated')`, [id, lineId]);
+    const forbidden = await request(memberApp).delete(`/api/assistant/memories/${id}`);
+    expect(forbidden.status).toBe(403);
+    const res = await request(managerApp).delete(`/api/assistant/memories/${id}`);
+    expect(res.status).toBe(204);
+    const row = (await pool.query(`SELECT status FROM assistant_memories WHERE id=$1`, [id])).rows[0]!;
+    expect(row.status).toBe('deleted');
+    const { loadActiveMemories } = await import('../src/pi/space/memories.js');
+    expect((await loadActiveMemories(lineId)).map((r) => r.title)).not.toContain('待删');
+  });
+
+  it('GET ?status=deleted：软删行可查（审计）', async () => {
+    await pool.query(`INSERT INTO assistant_memories (id, scope, title, hook, provenance, status) VALUES ($1,'global','已删','h','user_stated','deleted')`, [randomUUID()]);
+    const res = await request(managerApp).get('/api/assistant/memories?status=deleted');
+    expect(res.status).toBe(200);
+    expect((res.body as Array<{ title: string }>).some((r) => r.title === '已删')).toBe(true);
+  });
+});
