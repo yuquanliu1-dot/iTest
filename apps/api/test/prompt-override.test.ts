@@ -3,7 +3,7 @@
  * 三个常量是 session.ts 改造前(:650-652) 原文的硬拷贝——独立锚点，禁止 import 被测常量。
  * Task 3 会在此文件追加覆盖生效/DB 集成用例。
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { SCHEMA_SQL } from './helpers/db.js';
@@ -21,6 +21,10 @@ beforeAll(async () => {
   pool = new Pool({ connectionString: container.getConnectionUri() });
   await pool.query(SCHEMA_SQL);
 }, 60_000);
+
+beforeEach(async () => {
+  await pool.query(`TRUNCATE assistant_prompt_module_versions`);
+});
 
 afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
@@ -44,5 +48,39 @@ describe('R3 渲染红线：零覆盖 = 现状逐字节', () => {
     expect(p).toContain(EN_STYLE);
     expect(p).toContain(WORKSPACE);
     expect(p.endsWith('## 版本空间上下文\nsummary')).toBe(true);
+  });
+
+  it('默认参数与显式空覆盖逐字节一致（红线第二锚点）', async () => {
+    const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
+    expect(buildSpaceSystemPrompt('s', 'zh-CN', [], '', ''))
+      .toBe(buildSpaceSystemPrompt('s', 'zh-CN', [], '', '', {}));
+  });
+
+  it('style 覆盖生效：注入值替换原文风格段', async () => {
+    const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
+    const p = buildSpaceSystemPrompt('s', 'zh-CN', [], '', '', { style: '## 新风格\n- 简洁' });
+    expect(p).toContain('## 新风格\n- 简洁');
+    expect(p).not.toContain(ZH_STYLE);
+    expect(p).toContain(WORKSPACE); // workspace 未覆盖仍为默认
+  });
+
+  it('workspace 覆盖生效', async () => {
+    const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
+    const p = buildSpaceSystemPrompt('s', 'zh-CN', [], '', '', { workspace: '## 新工作台' });
+    expect(p).toContain('## 新工作台');
+    expect(p).not.toContain(WORKSPACE);
+    expect(p).toContain(ZH_STYLE);
+  });
+
+  it('DB 覆盖链路：插 style 行后 loadPromptModuleOverridesSafe → textOverrideOf 命中', async () => {
+    await pool.query(`INSERT INTO assistant_prompt_module_versions (module_key, value, source) VALUES ('space.style.zh', '## DB风格', 'manual_edit')`);
+    const { loadPromptModuleOverridesSafe, textOverrideOf } = await import('../src/pi/space/promptModules.js');
+    const ov = await loadPromptModuleOverridesSafe();
+    expect(textOverrideOf(ov, 'space.style.zh')).toBe('## DB风格');
+    // 组装即注入：覆盖值进 buildSpaceSystemPrompt 后原文风格段被替换
+    const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
+    const p = buildSpaceSystemPrompt('s', 'zh-CN', [], '', '', { style: textOverrideOf(ov, 'space.style.zh') });
+    expect(p).toContain('## DB风格');
+    expect(p).not.toContain(ZH_STYLE);
   });
 });

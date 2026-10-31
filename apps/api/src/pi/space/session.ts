@@ -18,7 +18,11 @@ import { type AssistantGuideRow, buildGuidesSection, loadActiveGuides } from './
 import { buildMemoriesSection, loadActiveMemories, resolveProductLineId } from './memories.js';
 import { buildTrajectoriesSection, loadActiveTrajectories } from './trajectories.js';
 import { loadEnabledSkillDirs } from './skillsStore.js';
-import { STYLE_EN_DEFAULT, STYLE_ZH_DEFAULT, WORKSPACE_DEFAULT } from './promptModules.js';
+import {
+  STYLE_EN_DEFAULT, STYLE_ZH_DEFAULT, WORKSPACE_DEFAULT,
+  STYLE_EN_KEY, STYLE_ZH_KEY, WORKSPACE_KEY,
+  applyToolTextOverrides, loadPromptModuleOverridesSafe, textOverrideOf,
+} from './promptModules.js';
 import { buildMcpExtensionFactory, getMcpServersForThread } from './mcp.js';
 import { readLlmConfig, synthesizeModel, ENV_BY_PROVIDER } from '../modelBridge.js';
 import { HttpError } from '../../middleware/errorHandler.js';
@@ -645,10 +649,11 @@ export function buildSpaceSystemPrompt(
   guides: Array<Pick<AssistantGuideRow, 'kind' | 'body'>> = [],
   memoriesSection = '',
   trajectoriesSection = '',
+  overrides: { style?: string; workspace?: string } = {},
 ): string {
   const isEn = aiLangFrom(lang ?? null) === 'en-US';
-  const style = isEn ? STYLE_EN_DEFAULT : STYLE_ZH_DEFAULT;
-  const workspace = WORKSPACE_DEFAULT;
+  const style = isEn ? (overrides.style ?? STYLE_EN_DEFAULT) : (overrides.style ?? STYLE_ZH_DEFAULT);
+  const workspace = overrides.workspace ?? WORKSPACE_DEFAULT;
   const guidesSection = buildGuidesSection(guides);
   const body = [style, guidesSection, memoriesSection, trajectoriesSection, workspace].filter(Boolean).join('\n\n');
   if (!summaryText) return body;
@@ -689,6 +694,9 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
     promptGuidelines?: string[];
   };
   const rawTools: ToolRaw[] = buildSpaceTools({ ...ctx, workspaceDir, emit: (e) => emitThreadEvent(ctx.threadId, e) }) as ToolRaw[];
+  // R3 prompt 可编辑化：线程冷构建时快照 DB 覆盖（线程内不热更）；失败回落代码默认。
+  const promptOverrides = await loadPromptModuleOverridesSafe();
+  applyToolTextOverrides(rawTools, promptOverrides);
   const tools = rawTools.map((t) =>
     defineTool({
       name: t.name,
@@ -773,11 +781,14 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   }
   // loader 的 cwd 与 session 工作目录都指向版本独立工作空间（仓库在 ./repo 子目录），
   // 让 AI 对自身所在位置有正确认知，同时避免写入污染仓库检出。
+  // R3 prompt 可编辑化：主 prompt 三段覆盖值（NULL=跟随代码默认→不覆盖）。
+  const styleOverride = textOverrideOf(promptOverrides, aiLangFrom(ctx.lang ?? null) === 'en-US' ? STYLE_EN_KEY : STYLE_ZH_KEY);
+  const workspaceOverride = textOverrideOf(promptOverrides, WORKSPACE_KEY);
   const loader = new DefaultResourceLoader({
     cwd: workspaceDir,
     agentDir: getAgentDir(),
     additionalSkillPaths: skillPaths,
-    appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText, ctx.lang, guides, memoriesSection, trajectoriesSection)],
+    appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText, ctx.lang, guides, memoriesSection, trajectoriesSection, { style: styleOverride, workspace: workspaceOverride })],
     // 每轮开跑前把 preamble 换成产品身份。见 buildSpacePreamble 的注释：不能走
     // loader.systemPrompt，也不能直接改 systemPromptOptions.customPrompt，那两条路都会
     // 丢掉 rules 段里的工具 promptGuidelines。
