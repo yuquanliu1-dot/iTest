@@ -208,6 +208,9 @@ CREATE INDEX solidify_batch_cases_batch_idx ON solidify_batch_cases(batch_id);
 CREATE INDEX solidify_batch_cases_case_idx ON solidify_batch_cases(case_id);
 CREATE TABLE assistant_memories (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), scope varchar(16) NOT NULL, product_line_id uuid REFERENCES product_lines(id) ON DELETE CASCADE, title varchar(120) NOT NULL, hook varchar(200) NOT NULL, body text, provenance varchar(16) NOT NULL, status varchar(20) NOT NULL DEFAULT 'active', retired_by_batch uuid, source_thread_id uuid, created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL, hit_count integer NOT NULL DEFAULT 0, last_hit_at timestamp, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 CREATE INDEX assistant_memories_active_idx ON assistant_memories(scope, product_line_id, status);
+CREATE TABLE assistant_trajectories (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), product_line_id uuid REFERENCES product_lines(id) ON DELETE CASCADE NOT NULL, task_title varchar(200) NOT NULL, task_keywords text NOT NULL, digest text NOT NULL, case_title varchar(200) NOT NULL, status varchar(20) NOT NULL DEFAULT 'active', retired_by_batch uuid, source_thread_id uuid, source_case_id uuid, source_project_id uuid, source_version_id uuid, created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL, distill_model varchar(64) NOT NULL, hit_count integer NOT NULL DEFAULT 0, last_hit_at timestamp, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
+CREATE INDEX assistant_trajectories_line_idx ON assistant_trajectories(product_line_id, status);
+CREATE UNIQUE INDEX assistant_trajectories_case_uq ON assistant_trajectories(source_case_id) WHERE status = 'active';
 `;
 
 export interface SeedOrg {

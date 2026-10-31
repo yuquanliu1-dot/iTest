@@ -830,6 +830,36 @@ export const assistantMemories = pgTable('assistant_memories', {
   activeIdx: index('assistant_memories_active_idx').on(t.scope, t.productLineId, t.status),
 }));
 
+// ── AI 助手轨迹库（产品线级，R2：成功用例生成轨迹的程序性记忆 exemplar）──
+// 写入 = stage/save 落库钩子 → worker 读 pi-sessions JSONL 判据核实（verify_case
+// toolResult isError=false）后 LLM 蒸馏入库；读取 = system prompt 索引段 +
+// search_trajectories 工具。无 global 档：轨迹含锚点/URL 线特有细节，跨线泄漏
+// 即事故。partial unique：一 case 一 active 轨迹，DB 层防重复蒸馏（R1 竞态教训）。
+// R3 预留：retired_by_batch；R5 预留：hit_count/last_hit_at（search 埋点）。
+export const assistantTrajectories = pgTable('assistant_trajectories', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  productLineId: uuid('product_line_id').notNull().references(() => productLines.id, { onDelete: 'cascade' }),
+  taskTitle: varchar('task_title', { length: 200 }).notNull(),
+  taskKeywords: text('task_keywords').notNull(),
+  digest: text('digest').notNull(),
+  caseTitle: varchar('case_title', { length: 200 }).notNull(),
+  status: varchar('status', { length: 20 }).notNull().default('active'),
+  retiredByBatch: uuid('retired_by_batch'),
+  sourceThreadId: uuid('source_thread_id'),
+  sourceCaseId: uuid('source_case_id'),
+  sourceProjectId: uuid('source_project_id'),
+  sourceVersionId: uuid('source_version_id'),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  distillModel: varchar('distill_model', { length: 64 }).notNull(),
+  hitCount: integer('hit_count').notNull().default(0),
+  lastHitAt: timestamp('last_hit_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  lineIdx: index('assistant_trajectories_line_idx').on(t.productLineId, t.status),
+  caseUq: uniqueIndex('assistant_trajectories_case_uq').on(t.sourceCaseId).where(sql`status = 'active'`),
+}));
+
 // ── AI 助手用户反馈（Phase 1：只收集，不消费）──
 // 用户在对话中对 AI 回复提出的建议/质疑/诉求，落库供后续沉淀为优化依据。
 // 刻意不存指向消息的外键：消息全内存（SessionManager.inMemory），没有可外键的表，
