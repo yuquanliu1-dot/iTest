@@ -141,6 +141,8 @@ export const api = {
       }>,
     ) => request<ExecutionPlan>(`/plans/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: boolean }>(`/plans/${id}`, { method: 'DELETE' }),
+    removeBatch: (planIds: string[]) =>
+      request<{ count: number }>(`/plans/batch-delete`, { method: 'POST', body: JSON.stringify({ planIds }) }),
     createGroup: (id: string, body: { name: string; environmentId?: string | null; failFast?: boolean }) =>
       request<PlanCaseGroup>(`/plans/${id}/groups`, { method: 'POST', body: JSON.stringify(body) }),
     patchGroup: (id: string, groupId: string, body: Partial<{ name: string; environmentId: string | null; failFast: boolean; loginPrepare: { enabled: boolean; caseId: string | null; detectionUrl: string | null; successSelector: string | null; unauthorizedKeywords: string[] | null; datasetRowIndexes: number[] | null }; targetConfig: { deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null }>) =>

@@ -5,6 +5,7 @@ import { db } from '../db/client.js';
 import {
   executionPlans,
   planCases,
+  planRuns,
   testCases,
   groups,
   projectVersions,
@@ -19,6 +20,7 @@ import {
 import { attachCreators } from '../lib/creator.js';
 import { logger } from '../logger.js';
 import { enqueuePlanRun } from '../execute/enqueuePlanRun.js';
+import { assertNotRunning, deleteRunsWithReports } from './planRuns.js';
 
 export const plansRoute = Router({ mergeParams: true });
 
@@ -143,13 +145,39 @@ plansRoute.patch('/:id', async (req, res) => {
   res.json(await updatePlan(req.params.id!, body));
 });
 
+/** 计划删除统一语义：连运行历史一起删（runs + 成员报告 + 截图）。reports 无 FK（plan_run_cases.report_id → SET NULL），
+ *  只删计划行会让孤儿报告以「独立用例执行」形态回流执行历史，故必须先走 deleteRunsWithReports。 */
+async function deletePlansWithRuns(planIds: string[]): Promise<void> {
+  const runRows = await db.select({ id: planRuns.id }).from(planRuns).where(inArray(planRuns.planId, planIds));
+  const runIds = runRows.map((r) => r.id);
+  await assertNotRunning(runIds);
+  if (runIds.length) await deleteRunsWithReports(runIds);
+}
+
 plansRoute.delete('/:id', async (req, res) => {
   const existing = (await db.select().from(executionPlans).where(eq(executionPlans.id, req.params.id)))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'plan not found');
   await assertProjectVisible(existing.projectId, req.user!);
+  await deletePlansWithRuns([req.params.id!]);
   const deleted = await db.delete(executionPlans).where(eq(executionPlans.id, req.params.id)).returning();
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'plan not found');
   res.json({ ok: true });
+});
+
+const BatchDeleteBody = z.object({ planIds: z.array(z.string().uuid()).min(1) });
+
+plansRoute.post('/batch-delete', async (req, res) => {
+  const { planIds: raw } = BatchDeleteBody.parse(req.body);
+  const planIds = [...new Set(raw)];
+  const rows = await db.select().from(executionPlans).where(inArray(executionPlans.id, planIds));
+  if (rows.length !== planIds.length) throw new HttpError(404, 'not_found', 'plan not found');
+  for (const p of rows) await assertProjectVisible(p.projectId, req.user!);
+  await deletePlansWithRuns(planIds);
+  const deleted = await db
+    .delete(executionPlans)
+    .where(inArray(executionPlans.id, planIds))
+    .returning({ id: executionPlans.id });
+  res.json({ count: deleted.length });
 });
 
 // caseIds 归属(∈ 计划所属 project,409 cross_project)由 service assertCasesInProject 承接;

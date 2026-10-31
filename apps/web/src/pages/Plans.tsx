@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { parseAsArrayOf, parseAsString, parseAsStringEnum, useQueryStates } from 'nuqs';
+import { Search } from 'lucide-react';
 import { localizeApiError } from '../i18n';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type PlanWithCount } from '../api/client';
@@ -14,7 +16,8 @@ import IconButton from '../components/ui/IconButton';
 import Segmented from '../components/ui/Segmented';
 import StatusPill from '../components/ui/StatusPill';
 import { EmptyCellValue } from '../components/ui/Table';
-import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
+import { DataTable, type DataTableColumn, type DataTableFacet } from '../components/ui/DataTable';
+import { useTableSelection } from '../hooks/useTableSelection';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
 import Pagination from '../components/ui/Pagination';
 import { shortDateTime, fullDateTime } from '../lib/format';
@@ -30,6 +33,19 @@ import {
 
 type ViewMode = 'card' | 'table';
 
+const VIEW_VALUES = ['card', 'table'] as const;
+/** 计划运行状态域：running 初始 + passed/failed/cancelled 终态；'never' = 从未运行（本地派生值）。 */
+const STATUS_FACET_VALUES = ['never', 'running', 'passed', 'failed', 'cancelled'] as const;
+
+const plansParsers = {
+  q: parseAsString.withDefault(''),
+  page: parseAsString.withDefault('1'),
+  pageSize: parseAsString.withDefault('20'),
+  statuses: parseAsArrayOf(parseAsString).withDefault([]),
+  creators: parseAsArrayOf(parseAsString).withDefault([]),
+  view: parseAsStringEnum([...VIEW_VALUES]).withDefault('table'),
+};
+
 export default function Plans() {
   const { projectId, versionId } = useParams<{ projectId: string; versionId?: string }>();
   const navigate = useNavigate();
@@ -42,15 +58,26 @@ export default function Plans() {
     queryFn: () => api.projects.plans(projectId!),
     enabled: !!projectId,
   });
-  // 按当前 versionId 过滤（NULL 版本 = 跨版本计划也展示，但用副标记）
-  const filteredPlans = (plans ?? []).filter((p) => !versionId || p.versionId == null || p.versionId === versionId);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [view, setView] = useState<ViewMode>('table');
+  // 筛选/分页/视图全走 URL（nuqs），与用例列表、执行历史一致
+  const [raw, setRaw] = useQueryStates(plansParsers, { history: 'replace' });
+  const view = raw.view as ViewMode;
+  const page = Math.max(1, Number(raw.page) || 1);
+  const pageSizeRaw = Number(raw.pageSize);
+  const pageSize = [10, 20, 50, 100].includes(pageSizeRaw) ? pageSizeRaw : 20;
+  const setSearch = (next: string) => void setRaw({ q: next, page: '1' });
+  const setPage = (next: number) => void setRaw({ page: String(next) });
+  const setPageSize = (next: number) => void setRaw({ pageSize: String(next), page: '1' });
+  const setStatusFilter = (next: string[]) => void setRaw({ statuses: next, page: '1' });
+  const setCreatorFilter = (next: string[]) => void setRaw({ creators: next, page: '1' });
   useEffect(() => {
-    setPage(1);
+    void setRaw({ page: '1' });
   }, [versionId]);
-  const visiblePlans = filteredPlans.slice((page - 1) * pageSize, page * pageSize);
+
+  // 按当前 versionId 过滤（NULL 版本 = 跨版本计划也展示，但用副标记）
+  const versionPlans = useMemo(
+    () => (plans ?? []).filter((p) => !versionId || p.versionId == null || p.versionId === versionId),
+    [plans, versionId],
+  );
   const { data: planRuns } = useQuery({
     queryKey: ['executions', projectId, 'plan'],
     queryFn: () => api.executions.list({ projectId, kind: 'plan' }),
@@ -65,9 +92,58 @@ export default function Plans() {
     return m;
   }, [planRuns]);
 
+  // 搜索（名称/版本/创建人，大小写不敏感）→ 状态/创建人 facet → 分页切片
+  const statusOf = (p: PlanWithCount) => latestByPlan.get(p.id)?.status ?? 'never';
+  const qLower = raw.q.trim().toLowerCase();
+  const filteredPlans = useMemo(
+    () =>
+      versionPlans.filter((p) => {
+        if (qLower) {
+          const hit =
+            p.name.toLowerCase().includes(qLower) ||
+            (p.versionName ?? '').toLowerCase().includes(qLower) ||
+            creatorName(p.createdBy).toLowerCase().includes(qLower);
+          if (!hit) return false;
+        }
+        if (raw.statuses.length && !raw.statuses.includes(statusOf(p))) return false;
+        if (raw.creators.length && !(p.createdBy && raw.creators.includes(p.createdBy.id))) return false;
+        return true;
+      }),
+    [versionPlans, qLower, raw.statuses, raw.creators, latestByPlan],
+  );
+  const visiblePlans = filteredPlans.slice((page - 1) * pageSize, page * pageSize);
+
+  const creatorOptions = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of versionPlans) if (p.createdBy) m.set(p.createdBy.id, creatorName(p.createdBy));
+    return [...m.entries()]
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([value, label]) => ({ value, label }));
+  }, [versionPlans]);
+
+  const facets: DataTableFacet[] = [
+    {
+      id: 'status',
+      label: t('plans:latestStatus'),
+      options: STATUS_FACET_VALUES.map((s) => ({
+        value: s,
+        label: s === 'never' ? t('plans:statusNever') : t(`cases:status.${s}`),
+      })),
+    },
+    {
+      id: 'creator',
+      label: t('plans:facetCreator'),
+      options: creatorOptions,
+    },
+  ];
+
+  // 批量选择（表格视图当前页行）
+  const selection = useTableSelection(visiblePlans.map((p) => p.id));
+
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
 
   const create = useMutation({
     mutationFn: () => api.projects.createPlan(projectId!, { name, versionId: versionId ?? undefined }),
@@ -97,8 +173,25 @@ export default function Plans() {
       setConfirmDelete(null);
       qc.invalidateQueries({ queryKey: ['plans', projectId] });
       qc.invalidateQueries({ queryKey: ['executions'] });
+      qc.invalidateQueries({ queryKey: ['reports'] });
     },
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
+  });
+
+  const batchDeletePlans = useMutation({
+    mutationFn: (planIds: string[]) => api.plans.removeBatch(planIds),
+    onSuccess: (r) => {
+      toast(t('plans:deletedPlansToast', { count: r.count }), 'success');
+      setConfirmBatchDelete(false);
+      selection.clear();
+      qc.invalidateQueries({ queryKey: ['plans', projectId] });
+      qc.invalidateQueries({ queryKey: ['executions'] });
+      qc.invalidateQueries({ queryKey: ['reports'] });
+    },
+    onError: (e: Error) => {
+      toast(localizeApiError(e), 'error');
+      setConfirmBatchDelete(false);
+    },
   });
 
   const goPlanDetail = (p: PlanWithCount) =>
@@ -196,13 +289,23 @@ export default function Plans() {
       <PageShellHeader>
         <PageShellTitle>{t('plans:title')}</PageShellTitle>
         <PageShellActions>
+          <div className="relative w-full sm:max-w-xs">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+            <Input
+              value={raw.q}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t('plans:searchPlaceholder')}
+              className="pl-7"
+              size="sm"
+            />
+          </div>
           <Segmented<ViewMode>
             options={[
               { value: 'card', label: '', icon: 'grid', title: t('plans:cardView') },
               { value: 'table', label: '', icon: 'table', title: t('plans:tableView') },
             ]}
             value={view}
-            onChange={setView}
+            onChange={(v) => void setRaw({ view: v })}
           />
           <Button onClick={() => setShowCreate(true)}>
             <Icon name="plus" size={14} />
@@ -234,6 +337,11 @@ export default function Plans() {
           />
         ) : view === 'card' ? (
           <>
+            {visiblePlans.length === 0 ? (
+              <div className="flex items-center justify-center py-12 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+                {t('plans:noPlansOnPage')}
+              </div>
+            ) : (
             <div
               className="grid grid-cols-3 gap-4 content-start flex-1 min-h-0 overflow-y-auto"
               data-stagger
@@ -280,6 +388,7 @@ export default function Plans() {
                 </div>
               ))}
             </div>
+            )}
             <div className="mt-4">
               <Pagination
                 page={page}
@@ -308,14 +417,29 @@ export default function Plans() {
               setPage: (p) => setPage(p),
               setPageSize: (s) => setPageSize(s),
               setTab: () => {},
-              setFilter: () => {},
-              filters: {},
+              setFilter: (id, values) => {
+                if (id === 'status') setStatusFilter(values);
+                else if (id === 'creator') setCreatorFilter(values);
+              },
+              filters: {
+                status: raw.statuses,
+                creator: raw.creators,
+              },
             }}
             columns={columnsDef}
             getRowId={(p) => p.id}
             rows={visiblePlans}
             total={filteredPlans.length}
+            facets={facets}
             onRowClick={goPlanDetail}
+            selection={{ state: selection, actions: (
+              <>
+                <Button size="sm" variant="destructive" onClick={() => setConfirmBatchDelete(true)}>
+                  <Icon name="trash" size={12} />
+                  {t('groups:batchDelete')}
+                </Button>
+              </>
+            ) }}
             empty={
               <EmptyState icon="flag" title={t('plans:noPlansOnPage')} description={t('plans:noPlansOnPageHint')} />
             }
@@ -354,6 +478,26 @@ export default function Plans() {
               onClick={() => confirmDelete && deletePlan.mutate(confirmDelete.id)}
             >
               {deletePlan.isPending ? t('cases:deleting') : t('cases:confirmDelete')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量删除确认：运行历史与报告一并删除，与单删同语义 */}
+      <Dialog open={confirmBatchDelete} onOpenChange={(open) => { if (!open) setConfirmBatchDelete(false); }}>
+        <DialogContent style={{ maxWidth: 420 }}>
+          <DialogHeader><DialogTitle>{t('plans:batchDeleteTitle')}</DialogTitle></DialogHeader>
+          <div className="px-5 py-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+            {t('plans:batchDeleteConfirm', { count: selection.count })}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmBatchDelete(false)}>{t('common:cancel')}</Button>
+            <Button
+              variant="destructive"
+              disabled={batchDeletePlans.isPending || selection.count === 0}
+              onClick={() => batchDeletePlans.mutate(selection.ids)}
+            >
+              {batchDeletePlans.isPending ? t('cases:deleting') : t('plans:batchDeleteButton', { count: selection.count })}
             </Button>
           </DialogFooter>
         </DialogContent>

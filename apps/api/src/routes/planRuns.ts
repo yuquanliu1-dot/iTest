@@ -47,7 +47,7 @@ async function collectRunReportIds(planRunIds: string[]): Promise<string[]> {
  *
  * 报告删掉后其 screenshots/<reportId>/ 目录一并清理，避免磁盘堆积。
  */
-async function deleteRunsWithReports(planRunIds: string[]): Promise<number> {
+export async function deleteRunsWithReports(planRunIds: string[]): Promise<number> {
   const reportIds = await collectRunReportIds(planRunIds);
   const deleted = await db
     .delete(planRuns)
@@ -65,7 +65,7 @@ async function deleteRunsWithReports(planRunIds: string[]): Promise<number> {
 }
 
 /** 运行中的计划运行不允许删除：执行器还会往成员表和报告表继续写，删了库等于删一半。 */
-async function assertNotRunning(planRunIds: string[]): Promise<void> {
+export async function assertNotRunning(planRunIds: string[]): Promise<void> {
   const running = await db
     .select({ id: planRuns.id })
     .from(planRuns)
