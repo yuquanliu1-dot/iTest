@@ -15,7 +15,7 @@ import { findMemoriesByTitle, loadActiveMemories, resolveProductLineId, upsertMe
 export function buildSaveMemoryTool(ctx: SpaceToolsContext): ToolExecutor {
   return {
     name: 'save_memory',
-    description: '把对当前产品线长期有价值的经验写入共享短期记忆（同线所有后续会话的提示词可见索引行）。该记：用户显式说「记住 X」；verify_case/执行结果证实的踩坑结论；产品线环境事实（账号怪癖、环境特殊行为）。不该记：能从代码/DB/guides 推导的信息；会话临时状态（当前进度）；未经验证的归因——确要记必须 provenance=ai_inferred 且 hook 以「未验证：」开头。同 title 已存在时自动更新（先读后写，更新优先于新建）。',
+    description: '把对当前产品线长期有价值的经验写入共享短期记忆（同线所有后续会话的提示词可见索引行）。该记：用户显式说「记住 X」；verify_case/执行结果证实的踩坑结论；产品线环境事实（账号怪癖、环境特殊行为）。不该记：能从代码/DB/guides 推导的信息；会话临时状态（当前进度）；未经验证的归因——确要记必须 provenance=ai_inferred 且 hook 以「未验证：」开头。同 title 已存在时自动更新（先读后写，更新优先于新建）。scope=global 会注入所有产品线的提示词，仅限跨线普适的平台级事实且用户明确要求时使用，默认留空。',
     parameters: Type.Object({
       title: Type.String({ minLength: 1, maxLength: 120 }),
       hook: Type.String({ minLength: 1, maxLength: 200 }),
