@@ -3,7 +3,7 @@
  * 失败语义（设计 §4.2）：LLM 超时/输出不合法/文件缺失/项目未归线 → 丢弃 + warn，不重试
  * 不阻塞（transcript 仍在卷上，R3 可重蒸）。
  */
-import { readdir, readFile } from 'node:fs/promises';
+import { access, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { asc, eq } from 'drizzle-orm';
 import type { Worker } from 'bullmq';
@@ -42,8 +42,15 @@ const DistillOutput = z.object({
   digest: z.string().min(1),
 });
 
-/** 定位线程会话文件：SESSIONS_ROOT 下 `*_<piThreadId>.jsonl`。 */
+/** 定位线程会话文件。DB 里 pi_thread_id 是 sessionFile 完整路径（session.ts:849 回填，
+ *  router.ts 同款直探语义）；兼容裸 UUID 形式（按 `*_<piThreadId>.jsonl` 匹配）。 */
 export async function findSessionFile(sessionsRoot: string, piThreadId: string): Promise<string | null> {
+  if (piThreadId.endsWith('.jsonl')) {
+    try {
+      await access(piThreadId);
+      return piThreadId;
+    } catch { /* 路径失效（卷迁移等）→ 落回目录扫描 */ }
+  }
   try {
     const names = await readdir(sessionsRoot);
     const hit = names.find((n) => n.endsWith(`_${piThreadId}.jsonl`));

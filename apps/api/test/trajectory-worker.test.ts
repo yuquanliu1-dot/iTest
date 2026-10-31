@@ -51,7 +51,7 @@ function stubClient() {
 }
 
 describe('R2 trajectories：蒸馏 worker', () => {
-  async function seedThreadWithFixture(opts: { verified: boolean }): Promise<{ threadId: string; caseId: string; lineId: string; sessionsRoot: string; versionId: string; projectId: string }> {
+  async function seedThreadWithFixture(opts: { verified: boolean }): Promise<{ threadId: string; caseId: string; lineId: string; sessionsRoot: string; versionId: string; projectId: string; sessionFile: string }> {
     const { projectId, versionId } = await seedProject(pool);
     const lineId = (await pool.query(`SELECT product_line_id FROM projects WHERE id=$1`, [projectId])).rows[0]!.product_line_id as string;
     const threadId = randomUUID();
@@ -74,7 +74,7 @@ describe('R2 trajectories：蒸馏 worker', () => {
     const sessionsRoot = mkdtempSync(join(tmpdir(), 'traj-sessions-'));
     tmpRoots.push(sessionsRoot);
     writeFileSync(join(sessionsRoot, `2026-10-31T00-00-00-000Z_${piThreadId}.jsonl`), jsonl);
-    return { threadId, caseId, lineId, sessionsRoot, versionId, projectId };
+    return { threadId, caseId, lineId, sessionsRoot, versionId, projectId, sessionFile: join(sessionsRoot, `2026-10-31T00-00-00-000Z_${piThreadId}.jsonl`) };
   }
 
   it('判据满足：蒸馏入库（task_title/keywords/digest/distill_model/溯源列全）', async () => {
@@ -116,6 +116,19 @@ describe('R2 trajectories：蒸馏 worker', () => {
       { kind: 'trajectory', threadId: fx.threadId, versionId: fx.versionId, userId: null, items: [{ localId: 'loc-1', caseId: fx.caseId }] },
       { client: stubClient(), sessionsRoot: emptyRoot },
     )).resolves.toBeUndefined();
+  });
+
+  it('pi_thread_id 为完整路径（生产 session.ts:849 形态）：仍能定位文件并蒸馏入库', async () => {
+    const fx = await seedThreadWithFixture({ verified: true });
+    // 生产代码写的是 sessionFile 完整路径，不是裸 UUID——fixture 对齐真实形态
+    await pool.query(`UPDATE ai_threads SET pi_thread_id=$1 WHERE id=$2`, [fx.sessionFile, fx.threadId]);
+    const { processTrajectoryJob } = await import('../src/scheduler/trajectoryWorker.js');
+    await processTrajectoryJob(
+      { kind: 'trajectory', threadId: fx.threadId, versionId: fx.versionId, userId: null, items: [{ localId: 'loc-1', caseId: fx.caseId }] },
+      { client: stubClient(), sessionsRoot: fx.sessionsRoot },
+    );
+    const n = (await pool.query(`SELECT count(*)::int n FROM assistant_trajectories`)).rows[0]!;
+    expect(n.n).toBe(1);
   });
 
   it('LLM 输出形状不合法：丢弃该 item 不入库、不抛', async () => {
