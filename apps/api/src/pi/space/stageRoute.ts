@@ -8,6 +8,7 @@
  */
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { Router } from 'express';
+import { logger } from '../../logger.js';
 import { db } from '../../db/client.js';
 import {
   aiStageCaseOps, aiStageCases, aiStageDatasets, aiStageEnvironments, aiStagePlans, aiStageScenarios, groups, testCases,
@@ -271,6 +272,23 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     if (localIds.length === 0) continue;
     await deleteStaged(threadId, [kind], localIds);
     for (const lid of localIds) emitStageRemove(threadId, kind, lid);
+  }
+
+  // R2 轨迹库：确认落库的用例投递轨迹蒸馏（fire-and-forget；verify 判据由 worker 在
+  // transcript 核实，未实测的确认用例不会产轨迹）。绝不影响落库主流程。
+  if (createdCaseIds.size > 0) {
+    try {
+      const { enqueueTrajectoryDistill } = await import('../../scheduler/trajectoryQueue.js');
+      await enqueueTrajectoryDistill({
+        kind: 'trajectory',
+        threadId,
+        versionId,
+        userId: creatorId,
+        items: Array.from(createdCaseIds, ([localId, caseId]) => ({ localId, caseId })),
+      });
+    } catch (e) {
+      logger.warn({ err: e, threadId }, 'trajectory distill enqueue failed; save unaffected');
+    }
   }
 
   res.json({

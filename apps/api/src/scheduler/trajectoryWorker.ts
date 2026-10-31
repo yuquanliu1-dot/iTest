@@ -132,7 +132,9 @@ export async function startTrajectoryWorker(): Promise<void> {
   }
   try {
     const cfg = await readLlmConfig();
-    if (!cfg) { logger.info('trajectory: LLM not configured; worker not started'); return; }
+    // REDIS 在而 LLM 未配置：enqueue 走 redis 但无人消费——任务会静默堆积。
+    // warn 点名后果；LLM 配好后重启进程即可消化积压（BullMQ 任务持久在 redis）。
+    if (!cfg) { logger.warn('trajectory: LLM not configured; worker not started (enqueued jobs will wait until a worker starts)'); return; }
     const client = getLlmClient({ provider: cfg.provider, apiKey: cfg.apiKey, model: cfg.model, baseUrl: cfg.baseUrl ?? undefined });
     _worker = buildTrajectoryWorker((job) => processTrajectoryJob(job, { client }));
     _worker.on('ready', () => logger.info('trajectory worker ready'));
@@ -142,5 +144,20 @@ export async function startTrajectoryWorker(): Promise<void> {
   } catch (e) {
     logger.warn({ err: (e as Error).message }, 'trajectory worker init failed; continuing inline');
     _worker = null;
+    return;
   }
+  registerShutdown();
+}
+
+let _shutdownRegistered = false;
+function registerShutdown(): void {
+  if (_shutdownRegistered) return;
+  _shutdownRegistered = true;
+  const stop = async (sig: string) => {
+    if (!_worker) return;
+    logger.info({ sig }, 'shutting down trajectory worker');
+    try { await _worker.close(); } catch (e) { logger.warn({ err: (e as Error).message }, 'trajectory worker close failed'); }
+  };
+  process.on('SIGTERM', () => void stop('SIGTERM'));
+  process.on('SIGINT', () => void stop('SIGINT'));
 }

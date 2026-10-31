@@ -25,6 +25,7 @@ import { secretsRoute } from './routes/secrets.js';
 import { attachRecorderWs } from './recorder/ws.js';
 import { startExecutionWorker } from './scheduler/execWorker.js';
 import { startRcaWorker } from './scheduler/rcaWorker.js';
+import { startTrajectoryWorker } from './scheduler/trajectoryWorker.js';
 import { startScheduler } from './scheduler/index.js';
 import { authRoute } from './routes/auth.js';
 import { organizationsRoute } from './routes/organizations.js';
@@ -85,6 +86,7 @@ const server = app.listen(port, host, () => {
   logger.info({ port, host }, 'api listening');
   void startExecutionWorker();
   void startRcaWorker();
+  void startTrajectoryWorker();
   void startScheduler();
 });
 attachRecorderWs(server);
