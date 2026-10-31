@@ -185,12 +185,12 @@ describe('R1 memories：system prompt 注入', () => {
     const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
     const { buildMemoriesSection } = await import('../src/pi/space/memories.js');
     const mem = buildMemoriesSection([{ title: 'T', hook: 'H' } as never]);
-    const out = buildSpaceSystemPrompt(null, 'zh-CN', [], mem);
+    const out = buildSpaceSystemPrompt(null, 'zh-CN', [{ kind: 'flow', body: 'F' }], mem);
     const iGuides = out.indexOf('# 流程指令');
     const iMem = out.indexOf('# 产品线记忆');
     const iWorkspace = out.indexOf('## 工作空间');
-    expect(iMem).toBeGreaterThan(-1);
-    expect(iMem).toBeGreaterThan(iGuides === -1 ? -Infinity : iGuides);
+    expect(iGuides).toBeGreaterThan(-1);
+    expect(iMem).toBeGreaterThan(iGuides);
     expect(iWorkspace).toBeGreaterThan(iMem);
   });
 });
