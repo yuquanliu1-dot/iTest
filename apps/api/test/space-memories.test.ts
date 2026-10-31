@@ -171,3 +171,26 @@ describe('R1 memories：工具层', () => {
     expect((miss as { ok: false; error: string }).error).toContain('登录页特殊行为');
   });
 });
+
+describe('R1 memories：system prompt 注入', () => {
+  it('零记忆时输出与旧构造完全一致（回归红线）', async () => {
+    const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
+    const withMem = buildSpaceSystemPrompt('SUMMARY', 'zh-CN', [{ kind: 'flow', body: 'F' }], '');
+    const noArg = buildSpaceSystemPrompt('SUMMARY', 'zh-CN', [{ kind: 'flow', body: 'F' }]);
+    expect(withMem).toBe(noArg);
+    expect(withMem).not.toContain('产品线记忆');
+  });
+
+  it('记忆段位于 guides 段之后、workspace 段之前', async () => {
+    const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
+    const { buildMemoriesSection } = await import('../src/pi/space/memories.js');
+    const mem = buildMemoriesSection([{ title: 'T', hook: 'H' } as never]);
+    const out = buildSpaceSystemPrompt(null, 'zh-CN', [], mem);
+    const iGuides = out.indexOf('# 流程指令');
+    const iMem = out.indexOf('# 产品线记忆');
+    const iWorkspace = out.indexOf('## 工作空间');
+    expect(iMem).toBeGreaterThan(-1);
+    expect(iMem).toBeGreaterThan(iGuides === -1 ? -Infinity : iGuides);
+    expect(iWorkspace).toBeGreaterThan(iMem);
+  });
+});
