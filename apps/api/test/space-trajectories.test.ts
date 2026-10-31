@@ -71,3 +71,80 @@ describe('R2 trajectories：表与约束', () => {
     expect(n.n).toBe(0);
   });
 });
+
+describe('R2 trajectories：服务层', () => {
+  async function lineOfSeed(): Promise<string> {
+    const { projectId } = await seedProject(pool);
+    return (await pool.query(`SELECT product_line_id FROM projects WHERE id=$1`, [projectId])).rows[0]!.product_line_id as string;
+  }
+  async function insertRow(lineId: string, o: { title?: string; keywords?: string; caseTitle?: string; caseId?: string; ago?: number }) {
+    await pool.query(`INSERT INTO assistant_trajectories (id, product_line_id, task_title, task_keywords, digest, case_title, distill_model, source_case_id, updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,'m',$7, now() - ($8 || ' seconds')::interval)`,
+      [randomUUID(), lineId, o.title ?? 'T', o.keywords ?? 'k', 'digest-body', o.caseTitle ?? 'C', o.caseId ?? randomUUID(), String(o.ago ?? 0)]);
+  }
+
+  it('loadActiveTrajectories：本线 active 降序；他线/deleted 不泄漏', async () => {
+    const lineId = await lineOfSeed();
+    const otherLine = await seedProductLineInOrg(pool, (await seedOrg(pool)).orgId, `他线-${randomUUID().slice(0, 8)}`);
+    await insertRow(lineId, { title: '旧', ago: 60 });
+    await insertRow(lineId, { title: '新', ago: 0 });
+    await insertRow(otherLine, { title: '他线行' });
+    await insertRow(lineId, { title: '已删' });
+    await pool.query(`UPDATE assistant_trajectories SET status='deleted' WHERE task_title='已删'`);
+    const { loadActiveTrajectories } = await import('../src/pi/space/trajectories.js');
+    const rows = await loadActiveTrajectories(lineId);
+    expect(rows.map((r) => r.taskTitle)).toEqual(['新', '旧']);
+  });
+
+  it(`buildTrajectoriesSection：空→''；正常含标题行+检索指引脚注；超预算截完整行`, async () => {
+    const { buildTrajectoriesSection, TRAJECTORY_SECTION_MAX_CHARS } = await import('../src/pi/space/trajectories.js');
+    expect(buildTrajectoriesSection([])).toBe('');
+    const out = buildTrajectoriesSection([
+      { taskTitle: '登录失败锁定提示', caseTitle: '用户管理-登录-密码错误' },
+      { taskTitle: '列表导出按钮遮蔽绕行', caseTitle: '事件管理-导出' },
+    ]);
+    expect(out).toContain('# 成功用例轨迹');
+    expect(out).toContain('- 登录失败锁定提示（用例：用户管理-登录-密码错误）');
+    expect(out).toContain('search_trajectories');
+    const many = Array.from({ length: 60 }, (_, i) => ({ taskTitle: `T${i}${'x'.repeat(80)}`, caseTitle: `C${i}` }));
+    const big = buildTrajectoriesSection(many);
+    expect(big.length).toBeLessThanOrEqual(TRAJECTORY_SECTION_MAX_CHARS);
+    big.split('\n').filter((l) => l.startsWith('- ')).forEach((l) => {
+      expect(many.some((m) => `- ${m.taskTitle}（用例：${m.caseTitle}）`.startsWith(l) || l === `- ${m.taskTitle}（用例：${m.caseTitle}）`.slice(0, l.length))).toBe(true);
+    });
+  });
+
+  it('searchTrajectoriesByQuery：命中字段数打分 top-3、同分 updatedAt 降序、命中行 hit_count +1；miss 返回空 hits 带全集', async () => {
+    const lineId = await lineOfSeed();
+    const lineOther = await seedProductLineInOrg(pool, (await seedOrg(pool)).orgId, `他线-${randomUUID().slice(0, 8)}`);
+    const c1 = randomUUID(), c2 = randomUUID(), c3 = randomUUID();
+    await insertRow(lineId, { title: '登录 失败 提示', keywords: '登录 密码错误', caseTitle: '登录用例', caseId: c1, ago: 300 });
+    await insertRow(lineId, { title: '登录锁定', keywords: '账号锁', caseTitle: '登录用例B', caseId: c2, ago: 200 });
+    await insertRow(lineId, { title: '列表导出', keywords: '导出 excel', caseTitle: '导出用例', caseId: c3, ago: 100 });
+    await insertRow(lineOther, { title: '他线 登录', caseId: randomUUID() });
+    const { searchTrajectoriesByQuery } = await import('../src/pi/space/trajectories.js');
+    const r = await searchTrajectoriesByQuery(lineId, '登录');
+    expect(r.hits.length).toBe(2); // 本线只有 2 条含「登录」
+    expect(r.hits[0]!.taskTitle).toBe('登录 失败 提示'); // title+keywords+caseTitle 三字段命中 > 单字段
+    const hits = (await pool.query(`SELECT hit_count::int h FROM assistant_trajectories WHERE source_case_id = ANY($1)`, [[c1, c2]])).rows;
+    expect(hits.every((x) => x.h === 1)).toBe(true);
+    const miss = await searchTrajectoriesByQuery(lineId, '不存在词');
+    expect(miss.hits).toEqual([]);
+    expect(miss.all.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('insertTrajectory：onConflictDoNothing——同 case 二次插入返回 false 不新建', async () => {
+    const lineId = await lineOfSeed();
+    const caseId = randomUUID();
+    const { insertTrajectory } = await import('../src/pi/space/trajectories.js');
+    const input = {
+      productLineId: lineId, taskTitle: 'T', taskKeywords: 'k', digest: 'd', caseTitle: 'C',
+      status: 'active' as const, retiredByBatch: null, sourceThreadId: null, sourceCaseId: caseId,
+      sourceProjectId: null, sourceVersionId: null, createdByUserId: null, distillModel: 'm',
+    };
+    expect(await insertTrajectory(input)).toBe(true);
+    expect(await insertTrajectory(input)).toBe(false);
+    const n = (await pool.query(`SELECT count(*)::int n FROM assistant_trajectories`)).rows[0]!;
+    expect(n.n).toBe(1);
+  });
+});
