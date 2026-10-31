@@ -806,6 +806,30 @@ export const assistantSkills = pgTable('assistant_skills', {
   enabledIdx: index('assistant_skills_enabled_idx').on(t.enabled),
 }));
 
+// ── AI 助手短期记忆（产品线级，仿 Claude Code auto-memory：索引常驻 + 正文按需读）──
+// 写入 = 模型 save_memory 工具（upsert 同 title 的 active 行）；读取 = system prompt
+// 索引段 + read_memory 工具。status 软删/退役保审计，所有读路径只取 active。
+// R3 预留：retired_by_batch（固化批次）；R5 预留：hit_count/last_hit_at（read_memory 埋点）。
+export const assistantMemories = pgTable('assistant_memories', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  scope: varchar('scope', { length: 16 }).notNull(),
+  productLineId: uuid('product_line_id').references(() => productLines.id, { onDelete: 'cascade' }),
+  title: varchar('title', { length: 120 }).notNull(),
+  hook: varchar('hook', { length: 200 }).notNull(),
+  body: text('body'),
+  provenance: varchar('provenance', { length: 16 }).notNull(),
+  status: varchar('status', { length: 20 }).notNull().default('active'),
+  retiredByBatch: uuid('retired_by_batch'),
+  sourceThreadId: uuid('source_thread_id'),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  hitCount: integer('hit_count').notNull().default(0),
+  lastHitAt: timestamp('last_hit_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  activeIdx: index('assistant_memories_active_idx').on(t.scope, t.productLineId, t.status),
+}));
+
 // ── AI 助手用户反馈（Phase 1：只收集，不消费）──
 // 用户在对话中对 AI 回复提出的建议/质疑/诉求，落库供后续沉淀为优化依据。
 // 刻意不存指向消息的外键：消息全内存（SessionManager.inMemory），没有可外键的表，
