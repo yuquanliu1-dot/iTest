@@ -728,6 +728,32 @@ export const api = {
       remove: (id: string) =>
         request<void>(`/assistant/trajectories/${id}`, { method: 'DELETE' }),
     },
+    /** 系统设置：系统提示词模块（R3）。无行=代码默认；skill 组只读（仅 fromSeq 回滚）。 */
+    promptModules: {
+      list: () => request<PromptModule[]>('/assistant/prompt-modules'),
+      versions: (key: string) =>
+        request<PromptModuleVersion[]>(`/assistant/prompt-modules/${encodeURIComponent(key)}/versions`),
+      setValue: (key: string, body: { value?: string | null; fromSeq?: number }) =>
+        request<{ seq: number | null }>(`/assistant/prompt-modules/${encodeURIComponent(key)}/value`, {
+          method: 'POST', body: JSON.stringify(body),
+        }),
+    },
+    /** 系统设置：固化盘点（R3）。LLM 只产提案，应用一律经人工批准。 */
+    solidify: {
+      scan: () => request<{ id: string }>('/assistant/solidify/scan', { method: 'POST', body: '{}' }),
+      batches: () => request<SolidifyBatch[]>('/assistant/solidify/batches'),
+      proposals: (params?: { batchId?: string; status?: string }) =>
+        request<SolidifyProposal[]>(`/assistant/solidify/proposals${qs(params ?? {})}`),
+      proposal: (id: string) => request<SolidifyProposal>(`/assistant/solidify/proposals/${id}`),
+      approve: (id: string, retireIds: string[]) =>
+        request<{ ok: boolean }>(`/assistant/solidify/proposals/${id}/approve`, {
+          method: 'POST', body: JSON.stringify({ retireIds }),
+        }),
+      reject: (id: string) =>
+        request<{ ok: boolean }>(`/assistant/solidify/proposals/${id}/reject`, {
+          method: 'POST', body: '{}',
+        }),
+    },
     /** 系统设置：全局共享 MCP server（scope 固定 global）。 */
     mcpServers: {
       list: () => request<AssistantMcpServer[]>('/assistant/mcp-servers'),
@@ -1220,6 +1246,64 @@ export interface AssistantTrajectory {
   lastHitAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+/** R3 prompt 模块（设置页系统提示词）。isDefault=true 表示当前用代码默认值。 */
+export interface PromptModule {
+  key: string;
+  group: 'main' | 'tool' | 'skill';
+  label: string;
+  readonly: boolean;
+  hasRow: boolean;
+  seq: number | null;
+  source: string | null;
+  value: string | null;
+  isDefault: boolean;
+  text: string;
+}
+
+export interface PromptModuleVersion {
+  seq: number;
+  moduleKey: string;
+  value: string | null;
+  source: string;
+  sourceRef: string | null;
+  createdByUserId: string | null;
+  createdAt: string;
+}
+
+export interface SolidifyBatch {
+  id: string;
+  status: 'running' | 'done' | 'failed';
+  inputSummary: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SolidifyProposalSource {
+  type: 'memory' | 'trajectory';
+  id: string;
+  title: string;
+  lineName: string;
+  retireRecommended: boolean;
+}
+
+export interface SolidifyProposal {
+  id: string;
+  batchId: string;
+  kind: 'prompt_amendment' | 'skill_revision';
+  target: string;
+  title: string;
+  body: string;
+  rationale: string;
+  sources: SolidifyProposalSource[];
+  status: 'pending' | 'approved' | 'rejected';
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  appliedAt: string | null;
+  applyError: string | null;
+  distillModel: string;
+  createdAt: string;
 }
 /** 系统设置里管理的全局共享 AI 技能（assistant_skills 表）。
  *  2026-10-19 存储翻转：DB 只留元数据，内容在服务端目录树 SKILLS_ROOT/<name>/，
