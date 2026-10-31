@@ -1,7 +1,7 @@
 /**
  * 短期记忆体（产品线级）核心服务：加载/渲染/upsert/模糊查。
  * 设计：docs/superpowers/specs/2026-10-31-assistant-shortterm-memory-design.md
- * 注入走 buildSpaceSystemPrompt 记忆索引段（guides 同轨，每轮重算热生效）。
+ * 注入走 buildSpaceSystemPrompt 记忆索引段（线程冷构建时快照；会话内新鲜数据走 read_memory 实时查库）。
  */
 import { and, desc, eq, ilike, isNull, or } from 'drizzle-orm';
 import { db } from '../../db/client.js';
@@ -68,7 +68,7 @@ export async function upsertMemory(input: {
         ? eq(assistantMemories.productLineId, input.productLineId)
         : isNull(assistantMemories.productLineId),
       eq(assistantMemories.title, input.title),
-    )).limit(1))[0];
+    )).orderBy(desc(assistantMemories.updatedAt)).limit(1))[0];
   if (existing) {
     await db.update(assistantMemories)
       .set({ hook: input.hook, body: input.body, provenance: input.provenance, updatedAt: new Date() })
