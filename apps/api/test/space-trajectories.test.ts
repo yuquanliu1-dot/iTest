@@ -182,3 +182,28 @@ describe('R2 trajectories：工具层', () => {
     expect(r.ok).toBe(false);
   });
 });
+
+describe('R2 trajectories：system prompt 注入', () => {
+  it('零轨迹时输出与旧构造完全一致（回归红线）', async () => {
+    const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
+    const legacy = buildSpaceSystemPrompt('SUMMARY', 'zh-CN', [{ kind: 'flow', body: 'F' }], 'MEM');
+    const withEmpty = buildSpaceSystemPrompt('SUMMARY', 'zh-CN', [{ kind: 'flow', body: 'F' }], 'MEM', '');
+    expect(legacy).toBe(withEmpty);
+    expect(withEmpty).not.toContain('成功用例轨迹');
+  });
+
+  it('轨迹段位于 memories 之后、workspace 之前；工厂零轨迹时第 5 参缺省可用', async () => {
+    const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
+    const out = buildSpaceSystemPrompt(null, 'zh-CN', [{ kind: 'flow', body: 'F' }], '# 产品线记忆\n- x', '# 成功用例轨迹\n- t');
+    const iGuides = out.indexOf('# 流程指令');
+    const iMem = out.indexOf('# 产品线记忆');
+    const iTraj = out.indexOf('# 成功用例轨迹');
+    const iWorkspace = out.indexOf('## 工作空间');
+    expect(iGuides).toBeGreaterThan(-1);
+    expect(iMem).toBeGreaterThan(iGuides);
+    expect(iTraj).toBeGreaterThan(iMem);
+    expect(iWorkspace).toBeGreaterThan(iTraj);
+    // 缺省第 5 参（旧调用）编译期兼容
+    expect(() => buildSpaceSystemPrompt(null, 'zh-CN', [], '')).not.toThrow();
+  });
+});

@@ -16,6 +16,7 @@ import { buildSkillsSectionContent } from './tools/readSkill.js';
 import { buildSpaceSummary } from './summary.js';
 import { type AssistantGuideRow, buildGuidesSection, loadActiveGuides } from './guides.js';
 import { buildMemoriesSection, loadActiveMemories, resolveProductLineId } from './memories.js';
+import { buildTrajectoriesSection, loadActiveTrajectories } from './trajectories.js';
 import { loadEnabledSkillDirs } from './skillsStore.js';
 import { buildMcpExtensionFactory, getMcpServersForThread } from './mcp.js';
 import { readLlmConfig, synthesizeModel, ENV_BY_PROVIDER } from '../modelBridge.js';
@@ -642,6 +643,7 @@ export function buildSpaceSystemPrompt(
   lang?: AiLang,
   guides: Array<Pick<AssistantGuideRow, 'kind' | 'body'>> = [],
   memoriesSection = '',
+  trajectoriesSection = '',
 ): string {
   const isEn = aiLangFrom(lang ?? null) === 'en-US';
   const style = isEn
@@ -649,7 +651,7 @@ export function buildSpaceSystemPrompt(
     : '## 输出风格\n- 用户使用简体中文提问,全部回复一律用简体中文(代码、命令、英文术语可保留原文)。这条约束覆盖**每一条**用户可见文本,包括最终答复、调用工具前的过程说明、以及思考/推理独白——不要出现「Let me check」「I found that」「I should」这类英文句子,想查什么直接调工具即可。\n- 不要使用 emoji;强调用 markdown 加粗,列举用列表/表格。\n- 以资深测试专家的标准要求自己:简洁专业、结论先行。默认每条回复不超过 5 行(汇报步骤结果时用短列表);不复述工具动作过程、不复述页面结构、不把元素清单原文贴给用户、不输出超过 4 行的大表格——用一句话概括。\n- 杜绝胡编乱造:对被测系统的任何断言(页面上有哪些控件/筛选项/按钮、系统行为如何)必须有证据——verify_case 返回的实测元素清单(page/failure.page)、执行结果、或用户告知;清单里没有的控件一律当作不存在,不得提议、不得写进步骤。不确定就明说并询问用户。';
   const workspace = '## 工作空间\n- 当前目录是版本专属工作空间，项目仓库已检出到 ./repo 子目录。\n- repo_ls / repo_read / repo_grep 仅在用户明确要求看代码或分析仓库时使用；用例创建与实测过程不要用它们做侦察——元素与页面问题以 verify_case 实测反馈为证据。';
   const guidesSection = buildGuidesSection(guides);
-  const body = [style, guidesSection, memoriesSection, workspace].filter(Boolean).join('\n\n');
+  const body = [style, guidesSection, memoriesSection, trajectoriesSection, workspace].filter(Boolean).join('\n\n');
   if (!summaryText) return body;
   return `${body}\n\n## 版本空间上下文\n${summaryText}`;
 }
@@ -739,6 +741,15 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   } catch (e) {
     logger.warn({ err: e, versionId: ctx.versionId }, 'memories 加载失败;继续无记忆段');
   }
+  // R2 轨迹库：产品线级成功轨迹索引段（active，updatedAt 降序，预算内）。
+  // 与 guides/memories 同款容错：装载失败不拖垮会话工厂。
+  let trajectoriesSection = '';
+  try {
+    const lineId = await resolveProductLineId(ctx.projectId);
+    trajectoriesSection = lineId ? buildTrajectoriesSection(await loadActiveTrajectories(lineId)) : '';
+  } catch (e) {
+    logger.warn({ err: e, versionId: ctx.versionId }, 'trajectories 加载失败;继续无轨迹段');
+  }
   // S2 catalog：全局 skills 共享库。文件系统即真源——会话建立不做任何写入，只把
   // 「DB enabled 的技能各自的目录绝对路径」交给 loader。传逐技能目录而非 SKILLS_ROOT，
   // pi 的 loadSkills 见到 SKILL.md 即停不再下钻，故停用技能与孤儿目录天然不可见。
@@ -767,7 +778,7 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
     cwd: workspaceDir,
     agentDir: getAgentDir(),
     additionalSkillPaths: skillPaths,
-    appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText, ctx.lang, guides, memoriesSection)],
+    appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText, ctx.lang, guides, memoriesSection, trajectoriesSection)],
     // 每轮开跑前把 preamble 换成产品身份。见 buildSpacePreamble 的注释：不能走
     // loader.systemPrompt，也不能直接改 systemPromptOptions.customPrompt，那两条路都会
     // 丢掉 rules 段里的工具 promptGuidelines。
