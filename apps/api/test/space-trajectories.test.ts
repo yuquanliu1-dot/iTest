@@ -148,3 +148,37 @@ describe('R2 trajectories：服务层', () => {
     expect(n.n).toBe(1);
   });
 });
+
+describe('R2 trajectories：工具层', () => {
+  async function toolCtx(projectId: string) {
+    const { emptyRepoState } = await import('../src/pi/space/tools/context.js');
+    return { threadId: randomUUID(), versionId: randomUUID(), projectId, repo: emptyRepoState(), emit: () => {}, createdByUserId: null, manager: true };
+  }
+
+  it('search_trajectories：命中返回 digest+task_title；命中行 hit_count +1；miss 返回可用清单', async () => {
+    const { buildSearchTrajectoryTool } = await import('../src/pi/space/tools/trajectories.js');
+    const { projectId } = await seedProject(pool);
+    const lineId = (await pool.query(`SELECT product_line_id FROM projects WHERE id=$1`, [projectId])).rows[0]!.product_line_id as string;
+    const caseId = randomUUID();
+    await pool.query(`INSERT INTO assistant_trajectories (id, product_line_id, task_title, task_keywords, digest, case_title, distill_model, source_case_id)
+      VALUES ($1,$2,'登录失败提示','登录 密码','## 任务描述…','登录-密码错误','m',$3)`, [randomUUID(), lineId, caseId]);
+    const tool = buildSearchTrajectoryTool(await toolCtx(projectId));
+    const hit = await tool.execute({ query: '登录 失败' });
+    expect(hit.ok).toBe(true);
+    const data = JSON.parse((hit as { ok: true; data: string }).data);
+    expect(Array.isArray(data.trajectories)).toBe(true);
+    expect(data.trajectories[0].task_title).toBe('登录失败提示');
+    expect(data.trajectories[0].digest).toContain('任务描述');
+    expect((await pool.query(`SELECT hit_count::int h FROM assistant_trajectories WHERE source_case_id=$1`, [caseId])).rows[0]!.h).toBe(1);
+    const miss = await tool.execute({ query: '不存在词' });
+    expect(miss.ok).toBe(false);
+    expect((miss as { ok: false; error: string }).error).toContain('登录失败提示');
+  });
+
+  it('项目未归线：报错不抛', async () => {
+    const { buildSearchTrajectoryTool } = await import('../src/pi/space/tools/trajectories.js');
+    const tool = buildSearchTrajectoryTool(await toolCtx(randomUUID()));
+    const r = await tool.execute({ query: 'x' });
+    expect(r.ok).toBe(false);
+  });
+});
