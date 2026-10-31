@@ -15,7 +15,8 @@ export default function MemoriesSection() {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
-  const listQ = useQuery({ queryKey: ['assistant-memories'], queryFn: () => api.assistant.memories.list() });
+  // 默认只看 active：软删/退役即从界面消失（与注入、工具读路径同口径）；审计走 API status 参数。
+  const listQ = useQuery({ queryKey: ['assistant-memories'], queryFn: () => api.assistant.memories.list({ status: 'active' }) });
   const [lineFilter, setLineFilter] = useState('all');
   const [deleting, setDeleting] = useState<AssistantMemory | null>(null);
 
