@@ -183,6 +183,41 @@ describe('R2 trajectories：工具层', () => {
   });
 });
 
+describe('R2 trajectories：管理路由', () => {
+  it('GET：本组织线可见+带 productLineName+默认 active；他组织线不可见；?status=deleted 可审计', async () => {
+    const org1 = await seedOrg(pool);
+    const line1 = await seedProductLineInOrg(pool, org1.orgId, `本线-${randomUUID().slice(0, 8)}`);
+    const org2Id = randomUUID();
+    await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1,$2,$3)`, [org2Id, `他组织-${org2Id.slice(0, 8)}`, `/${org2Id}/`]);
+    const line2 = await seedProductLineInOrg(pool, org2Id, `他线-${randomUUID().slice(0, 8)}`);
+    await pool.query(`INSERT INTO assistant_trajectories (id, product_line_id, task_title, task_keywords, digest, case_title, distill_model) VALUES
+      ($1,$2,'本线轨迹','k','d','C','m'), ($3,$4,'他组织线轨迹','k','d','C','m')`, [randomUUID(), line1, randomUUID(), line2]);
+    const res = await request(managerApp).get('/api/assistant/trajectories');
+    expect(res.status).toBe(200);
+    const titles = (res.body as Array<{ taskTitle: string; productLineName: string | null }>).map((r) => r.taskTitle);
+    expect(titles).toContain('本线轨迹');
+    expect(titles).not.toContain('他组织线轨迹');
+    expect((res.body as Array<{ productLineName: string | null }>).find((r) => r.productLineName)).toBeTruthy();
+    await pool.query(`UPDATE assistant_trajectories SET status='deleted' WHERE task_title='本线轨迹'`);
+    const activeRes = await request(managerApp).get('/api/assistant/trajectories');
+    expect((activeRes.body as Array<{ taskTitle: string }>).some((r) => r.taskTitle === '本线轨迹')).toBe(false);
+    const auditRes = await request(managerApp).get('/api/assistant/trajectories?status=deleted');
+    expect((auditRes.body as Array<{ taskTitle: string }>).some((r) => r.taskTitle === '本线轨迹')).toBe(true);
+  });
+
+  it('DELETE：软删 status=deleted；member 403；不存在 404', async () => {
+    const { projectId } = await seedProject(pool);
+    const lineId = (await pool.query(`SELECT product_line_id FROM projects WHERE id=$1`, [projectId])).rows[0]!.product_line_id as string;
+    const id = randomUUID();
+    await pool.query(`INSERT INTO assistant_trajectories (id, product_line_id, task_title, task_keywords, digest, case_title, distill_model) VALUES ($1,$2,'待删','k','d','C','m')`, [id, lineId]);
+    expect((await request(memberApp).delete(`/api/assistant/trajectories/${id}`)).status).toBe(403);
+    expect((await request(managerApp).delete(`/api/assistant/trajectories/${randomUUID()}`)).status).toBe(404);
+    const res = await request(managerApp).delete(`/api/assistant/trajectories/${id}`);
+    expect(res.status).toBe(204);
+    expect((await pool.query(`SELECT status FROM assistant_trajectories WHERE id=$1`, [id])).rows[0]!.status).toBe('deleted');
+  });
+});
+
 describe('R2 trajectories：system prompt 注入', () => {
   it('零轨迹时输出与旧构造完全一致（回归红线）', async () => {
     const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');

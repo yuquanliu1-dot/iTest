@@ -30,6 +30,7 @@ import { guidesRoute } from './guidesRoute.js';
 import { mcpServersRoute } from './mcpServersRoute.js';
 import { skillsRoute } from './skillsRoute.js';
 import { memoriesRoute } from './memoriesRoute.js';
+import { trajectoriesRoute } from './trajectoriesRoute.js';
 import {
   cancelThread, clearThreadQueue, dropSpaceRecord, ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, spaceRepoIssue, subscribeThread, threadStatusAsync,
 } from './session.js';
@@ -464,3 +465,4 @@ spaceRoute.use('/guides', requireManager, guidesRoute);
 spaceRoute.use('/mcp-servers', requireManager, mcpServersRoute);
 spaceRoute.use('/skills', requireManager, skillsRoute);
 spaceRoute.use('/memories', requireManager, memoriesRoute);
+spaceRoute.use('/trajectories', requireManager, trajectoriesRoute);

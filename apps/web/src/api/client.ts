@@ -721,6 +721,13 @@ export const api = {
       remove: (id: string) =>
         request<void>(`/assistant/memories/${id}`, { method: 'DELETE' }),
     },
+    /** 系统设置：助手轨迹（只读+软删；写入唯一入口是落库钩子→蒸馏 worker）。 */
+    trajectories: {
+      list: (params?: { productLineId?: string; status?: string }) =>
+        request<AssistantTrajectory[]>(`/assistant/trajectories${qs(params ?? {})}`),
+      remove: (id: string) =>
+        request<void>(`/assistant/trajectories/${id}`, { method: 'DELETE' }),
+    },
     /** 系统设置：全局共享 MCP server（scope 固定 global）。 */
     mcpServers: {
       list: () => request<AssistantMcpServer[]>('/assistant/mcp-servers'),
@@ -1196,6 +1203,21 @@ export interface AssistantMemory {
   hitCount: number;
   lastHitAt: string | null;
   createdByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+/** 助手轨迹行（GET /assistant/trajectories；productLineName 由路由 join 带出）。 */
+export interface AssistantTrajectory {
+  id: string;
+  productLineId: string;
+  productLineName: string | null;
+  taskTitle: string;
+  taskKeywords: string;
+  digest: string;
+  caseTitle: string;
+  status: string;
+  hitCount: number;
+  lastHitAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
