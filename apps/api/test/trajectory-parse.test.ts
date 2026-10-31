@@ -26,23 +26,72 @@ describe('trajectoryParse：JSONL → 会话轮次', () => {
     expect(turns.filter((t) => t.role === 'toolResult')).toHaveLength(2);
   });
 
-  it('findVerifiedLocalIds：verify_case 成功→收录；isError=true 不收；只有别的 case 的成功不收；多次调用末次成功即成功', async () => {
+  /** 生产形态 verify rdata 正文（session 包装层 ok:true → isError:false，text 是 JSON 串）。 */
+  const passedBody = (extra: Record<string, unknown> = {}) => JSON.stringify({ result: 'passed', basedOn: 'staged', steps: [], ...extra });
+  const failedBody = (extra: Record<string, unknown> = {}) => JSON.stringify({ result: 'failed', basedOn: 'staged', failure: { stepOrder: 1, error: '找不到按钮' }, ...extra });
+  const verifyLine = (callId: string, caseId: string, text: string, isError = false) => ([
+    msgLine('assistant', [toolCallBlock(callId, 'verify_case', { caseId })]),
+    msgLine('toolResult', [{ type: 'text', text }], { toolCallId: callId, toolName: 'verify_case', isError }),
+  ]);
+
+  it('findVerifiedLocalIds：passed+staged→收录；isError=true（infra）不收；只有别的 case 的成功不收', async () => {
     const { parseSessionJsonl, findVerifiedLocalIds } = await import('../src/scheduler/trajectoryParse.js');
     const jsonl = [
-      msgLine('assistant', [toolCallBlock('a', 'verify_case', { caseId: 'ok-1' })]),
-      msgLine('toolResult', [{ type: 'text', text: '通过' }], { toolCallId: 'a', toolName: 'verify_case', isError: false }),
-      msgLine('assistant', [toolCallBlock('b', 'verify_case', { caseId: 'fail-1' })]),
-      msgLine('toolResult', [{ type: 'text', text: '失败：找不到按钮' }], { toolCallId: 'b', toolName: 'verify_case', isError: true }),
-      msgLine('assistant', [toolCallBlock('c', 'verify_case', { caseId: 'other' })]),
-      msgLine('toolResult', [{ type: 'text', text: '通过' }], { toolCallId: 'c', toolName: 'verify_case', isError: false }),
-      msgLine('assistant', [toolCallBlock('d', 'verify_case', { caseId: 'retry-1' })]),
-      msgLine('toolResult', [{ type: 'text', text: '失败' }], { toolCallId: 'd', toolName: 'verify_case', isError: true }),
-      msgLine('assistant', [toolCallBlock('e', 'verify_case', { caseId: 'retry-1' })]),
-      msgLine('toolResult', [{ type: 'text', text: '通过' }], { toolCallId: 'e', toolName: 'verify_case', isError: false }),
+      ...verifyLine('a', 'ok-1', passedBody()),
+      ...verifyLine('b', 'infra-1', '验证失败: browser crashed', true),
+      ...verifyLine('c', 'other', passedBody()),
     ].join('\n');
-    const turns = parseSessionJsonl(jsonl);
-    const verified = findVerifiedLocalIds(turns, ['ok-1', 'fail-1', 'retry-1']);
-    expect(Array.from(verified).sort()).toEqual(['ok-1', 'retry-1']);
+    const verified = findVerifiedLocalIds(parseSessionJsonl(jsonl), ['ok-1', 'infra-1']);
+    expect(Array.from(verified)).toEqual(['ok-1']);
+  });
+
+  it('C1 负向：ok:true + result:"failed"（常规验证失败的生产形态）→ 不算证实', async () => {
+    const { parseSessionJsonl, findVerifiedLocalIds } = await import('../src/scheduler/trajectoryParse.js');
+    const jsonl = [...verifyLine('a', 'loc-9', failedBody())].join('\n');
+    expect(findVerifiedLocalIds(parseSessionJsonl(jsonl), ['loc-9']).size).toBe(0);
+  });
+
+  it('C1 负向：result:"passed" 但 basedOn:"db"（验的是撞名真用例非暂存草稿）→ 不算证实', async () => {
+    const { parseSessionJsonl, findVerifiedLocalIds } = await import('../src/scheduler/trajectoryParse.js');
+    const jsonl = [...verifyLine('a', 'loc-9', JSON.stringify({ result: 'passed', basedOn: 'db' }))].join('\n');
+    expect(findVerifiedLocalIds(parseSessionJsonl(jsonl), ['loc-9']).size).toBe(0);
+  });
+
+  it('I1 时序：passed 后同 localId 又 stage_case（改稿未复验）→ 不算；stage_case 是别的 localId → 不影响', async () => {
+    const { parseSessionJsonl, findVerifiedLocalIds } = await import('../src/scheduler/trajectoryParse.js');
+    const jsonl = [
+      ...verifyLine('a1', 'loc-a', passedBody()),
+      msgLine('assistant', [toolCallBlock('a2', 'stage_case', { localId: 'loc-a', title: '改过的草稿' })]),
+      ...verifyLine('b1', 'loc-b', passedBody()),
+      msgLine('assistant', [toolCallBlock('b2', 'stage_case', { localId: 'loc-other', title: '别的草稿' })]),
+    ].join('\n');
+    const verified = findVerifiedLocalIds(parseSessionJsonl(jsonl), ['loc-a', 'loc-b']);
+    expect(Array.from(verified)).toEqual(['loc-b']);
+  });
+
+  it('I1 末次胜：failed(JSON,isError:false)→修正 stage_case→再 verify passed → 算', async () => {
+    const { parseSessionJsonl, findVerifiedLocalIds } = await import('../src/scheduler/trajectoryParse.js');
+    const jsonl = [
+      ...verifyLine('d1', 'loc-1', failedBody()),
+      msgLine('assistant', [toolCallBlock('d2', 'stage_case', { localId: 'loc-1', title: '修正后的草稿' })]),
+      ...verifyLine('d3', 'loc-1', passedBody()),
+    ].join('\n');
+    expect(findVerifiedLocalIds(parseSessionJsonl(jsonl), ['loc-1']).size).toBe(1);
+  });
+
+  it('fail-closed：isError:false 但正文非 JSON（纯文本「通过」）→ 不算', async () => {
+    const { parseSessionJsonl, findVerifiedLocalIds } = await import('../src/scheduler/trajectoryParse.js');
+    const jsonl = [...verifyLine('a', 'plain-1', '通过：终态达成')].join('\n');
+    expect(findVerifiedLocalIds(parseSessionJsonl(jsonl), ['plain-1']).size).toBe(0);
+  });
+
+  it('stage_case 缺 localId 字段 → 不影响既有 passed 判定（不误杀）', async () => {
+    const { parseSessionJsonl, findVerifiedLocalIds } = await import('../src/scheduler/trajectoryParse.js');
+    const jsonl = [
+      ...verifyLine('a', 'loc-1', passedBody()),
+      msgLine('assistant', [toolCallBlock('s', 'stage_case', { title: '缺 localId 的调用' })]),
+    ].join('\n');
+    expect(findVerifiedLocalIds(parseSessionJsonl(jsonl), ['loc-1']).size).toBe(1);
   });
 
   it('findVerifiedLocalIds：toolResult 缺 isError 字段——不算成功（fail-closed）', async () => {
@@ -68,5 +117,33 @@ describe('trajectoryParse：JSONL → 会话轮次', () => {
     expect(out).toContain('stage_case');
     expect(out).not.toContain('内部思考不该出现');
     expect(out.length).toBeLessThanOrEqual(3_200); // 截断容差
+  });
+
+  it('compressConversation：尾部截断保首条用户消息在头部（22min 长会话检索锚不丢）；总量仍 ≤ 预算', async () => {
+    const { parseSessionJsonl, compressConversation } = await import('../src/scheduler/trajectoryParse.js');
+    const lines = [msgLine('user', [{ type: 'text', text: '首条需求：为 SOC 事件管理建导出用例' }])];
+    for (let i = 0; i < 12; i++) {
+      lines.push(...[
+        msgLine('assistant', [toolCallBlock(`c${i}`, 'verify_case', { caseId: `loc-${i}` })]),
+        msgLine('toolResult', [{ type: 'text', text: `R${i}-` + 'x'.repeat(400) }], { toolCallId: `c${i}`, toolName: 'verify_case', isError: false }),
+      ]);
+    }
+    const out = compressConversation(parseSessionJsonl(lines.join('\n')), 2_000);
+    expect(out.startsWith('[用户] 首条需求')).toBe(true);
+    expect(out).toContain('R11-'); // 最新上下文仍在（尾部截断语义保留）
+    expect(out.length).toBeLessThanOrEqual(2_000);
+  });
+
+  it('compressConversation：首条用户消息本身超长 → 截到 2000 仍在头部', async () => {
+    const { parseSessionJsonl, compressConversation } = await import('../src/scheduler/trajectoryParse.js');
+    const lines = [
+      msgLine('user', [{ type: 'text', text: '需'.repeat(5_000) }]),
+      msgLine('assistant', [{ type: 'text', text: '收到' }]),
+    ];
+    const out = compressConversation(parseSessionJsonl(lines.join('\n')), 24_000);
+    const firstLine = out.split('\n')[0]!;
+    expect(firstLine.length).toBe(2_000); // 整行（含「[用户] 」标记）截到 2000
+    expect(firstLine.startsWith(`[用户] ${'需'.repeat(1_000)}`)).toBe(true);
+    expect(out).toContain('[助手] 收到');
   });
 });

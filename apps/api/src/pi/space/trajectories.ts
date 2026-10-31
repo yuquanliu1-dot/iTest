@@ -80,10 +80,17 @@ export async function searchTrajectoriesByQuery(
 }
 
 /** 幂等插入：ON CONFLICT DO NOTHING（partial unique source_case_id where active）。
- *  返回是否真正插入。 */
+ *  入库清洗单一收口：taskTitle/taskKeywords 去 \n/\r（防换行伪造 system prompt 段结构）；
+ *  taskTitle≤200（列宽）/ taskKeywords≤500 / digest≤8000 截断。返回是否真正插入。 */
 export async function insertTrajectory(
   input: typeof assistantTrajectories.$inferInsert,
 ): Promise<boolean> {
-  const rows = await db.insert(assistantTrajectories).values(input).onConflictDoNothing().returning({ id: assistantTrajectories.id });
+  const clean = {
+    ...input,
+    taskTitle: input.taskTitle.replace(/[\r\n]/g, ' ').slice(0, 200),
+    taskKeywords: input.taskKeywords.replace(/[\r\n]/g, ' ').slice(0, 500),
+    digest: input.digest.slice(0, 8_000),
+  };
+  const rows = await db.insert(assistantTrajectories).values(clean).onConflictDoNothing().returning({ id: assistantTrajectories.id });
   return rows.length > 0;
 }

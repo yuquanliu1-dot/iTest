@@ -112,6 +112,16 @@ describe('R2 trajectories：服务层', () => {
     big.split('\n').filter((l) => l.startsWith('- ')).forEach((l) => {
       expect(many.some((m) => `- ${m.taskTitle}（用例：${m.caseTitle}）`.startsWith(l) || l === `- ${m.taskTitle}（用例：${m.caseTitle}）`.slice(0, l.length))).toBe(true);
     });
+    // 对抗形态：列宽上限（title/caseTitle 各 200）的胖行密集排列——仍不超帽、只截完整行
+    const fat = Array.from({ length: 30 }, (_, i) => ({ taskTitle: `F${i}${'f'.repeat(199)}`, caseTitle: 'k'.repeat(200) }));
+    const fatOut = buildTrajectoriesSection(fat);
+    expect(fatOut.length).toBeLessThanOrEqual(TRAJECTORY_SECTION_MAX_CHARS);
+    const fatLines = fatOut.split('\n');
+    expect(fatLines[0]).toBe('# 成功用例轨迹'); // 头部恒在
+    expect(fatLines[fatLines.length - 1]).toContain('禁止照抄'); // 脚注恒在
+    fatLines.filter((l) => l.startsWith('- ')).forEach((l) => {
+      expect(fat.some((m) => `- ${m.taskTitle}（用例：${m.caseTitle}）`.startsWith(l))).toBe(true);
+    });
   });
 
   it('searchTrajectoriesByQuery：命中字段数打分 top-3、同分 updatedAt 降序、命中行 hit_count +1；miss 返回空 hits 带全集', async () => {
@@ -146,6 +156,26 @@ describe('R2 trajectories：服务层', () => {
     expect(await insertTrajectory(input)).toBe(false);
     const n = (await pool.query(`SELECT count(*)::int n FROM assistant_trajectories`)).rows[0]!;
     expect(n.n).toBe(1);
+  });
+
+  it('insertTrajectory：入库清洗——title/keywords 去换行；title≤200/keywords≤500/digest≤8000 截断', async () => {
+    const lineId = await lineOfSeed();
+    const { insertTrajectory } = await import('../src/pi/space/trajectories.js');
+    expect(await insertTrajectory({
+      productLineId: lineId,
+      taskTitle: `标\n题\r\n第二行${'x'.repeat(300)}`,
+      taskKeywords: `kw1\nkw2\rc${'y'.repeat(600)}`,
+      digest: 'd'.repeat(9_000),
+      caseTitle: 'C', status: 'active' as const, retiredByBatch: null, sourceThreadId: null,
+      sourceCaseId: randomUUID(), sourceProjectId: null, sourceVersionId: null, createdByUserId: null, distillModel: 'm',
+    })).toBe(true);
+    const row = (await pool.query(`SELECT task_title, task_keywords, digest FROM assistant_trajectories`)).rows[0]!;
+    expect(row.task_title).not.toMatch(/[\r\n]/); // 换行伪造 system prompt 段结构——堵死
+    expect(row.task_title.length).toBeLessThanOrEqual(200);
+    expect(row.task_title.startsWith('标')).toBe(true); // 截断保留前缀
+    expect(row.task_keywords).not.toMatch(/[\r\n]/);
+    expect(row.task_keywords.length).toBeLessThanOrEqual(500);
+    expect(row.digest.length).toBe(8_000);
   });
 });
 

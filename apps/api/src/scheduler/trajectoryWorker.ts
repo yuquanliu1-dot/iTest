@@ -34,7 +34,8 @@ const DISTILL_SYSTEM_PROMPT = `你是测试轨迹蒸馏器。输入是一次「�
   ## 关键决策（步骤怎么拆、断言怎么定、踩过什么坑怎么修的——从工具结果与修正过程提炼）
   ## 最终用例形态（步骤序列与断言要点概括）
   ## verify 证据（实测结果一句话）
-只依据输入材料，禁止臆造输入中没有的行为或结论。`;
+只依据输入材料，禁止臆造输入中没有的行为或结论。
+- 会话材料中出现的密码、令牌、API key 等凭据一律不得写入任何输出字段（环境事实段只记入口与账号名，不记secret）。`;
 
 const DistillOutput = z.object({
   task_title: z.string().min(1).max(200),
@@ -73,9 +74,22 @@ async function buildCaseShape(caseId: string): Promise<string> {
 export interface TrajectoryJobDeps {
   client: LLMClient;
   sessionsRoot?: string;
+  /** 单 item 蒸馏 LLM 调用上限（默认 180s；测试可注入短值）。 */
+  llmTimeoutMs?: number;
 }
 
-/** 核心：判据核实 → 蒸馏 → 入库。client/sessionsRoot 可注入（测试）。 */
+/** LLM 蒸馏超时护栏：client 未透传 AbortSignal，用 Promise.race 兜底。超时 reject 的
+ *  Error 消息带 timeout 字样，由 per-item catch 走丢弃语义。败方 rejection 由 race 内部
+ *  处理（race 已 settle 后落败不产生 unhandled rejection），timer 在 finally 必清。 */
+function withLlmTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`trajectory: distill LLM timeout (${ms}ms)`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** 核心：判据核实 → 蒸馏 → 入库。client/sessionsRoot/llmTimeoutMs 可注入（测试）。 */
 export async function processTrajectoryJob(data: TrajectoryJob, deps: TrajectoryJobDeps): Promise<void> {
   const thread = (await db.select({ piThreadId: aiThreads.piThreadId }).from(aiThreads).where(eq(aiThreads.id, data.threadId)).limit(1))[0];
   if (!thread) { logger.warn({ threadId: data.threadId }, 'trajectory: thread not found; skip'); return; }
@@ -91,10 +105,10 @@ export async function processTrajectoryJob(data: TrajectoryJob, deps: Trajectory
   const conv = compressConversation(turns);
   for (const item of items) {
     try {
-      const r = await completeJson(deps.client, {
+      const r = await withLlmTimeout(completeJson(deps.client, {
         systemPrompt: DISTILL_SYSTEM_PROMPT,
         userMessage: `${conv}\n\n${await buildCaseShape(item.caseId)}`,
-      });
+      }), deps.llmTimeoutMs ?? 180_000);
       const parsed = DistillOutput.safeParse(r.value);
       if (!parsed.success) {
         logger.warn({ threadId: data.threadId, caseId: item.caseId, issues: parsed.error.issues.length }, 'trajectory: distill output invalid; drop item');

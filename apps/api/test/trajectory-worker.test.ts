@@ -62,6 +62,10 @@ describe('R2 trajectories：蒸馏 worker', () => {
     const caseId = (await pool.query(`INSERT INTO test_cases (group_id, version_id, title, expected_outcome) VALUES ($1,$2,'登录-密码错误',$3) RETURNING id`, [gid, versionId, '提示密码错误'])).rows[0]!.id;
     await pool.query(`INSERT INTO test_steps (case_id, "order", source, instruction) VALUES ($1,0,'ai','输入错误密码'),($1,1,'ai','点击登录')`, [caseId]);
     const callId = 'c1';
+    // 生产形态：verify_case 常规失败也是 ok:true → isError:false，判据在正文 JSON（C1）。
+    const verifyText = opts.verified
+      ? JSON.stringify({ result: 'passed', basedOn: 'staged', caseId: 'loc-1', resumeFrom: 0, steps: [] })
+      : JSON.stringify({ result: 'failed', basedOn: 'staged', caseId: 'loc-1', failure: { stepOrder: 1, error: '找不到元素' } });
     const jsonl = [
       JSON.stringify({ type: 'session', version: 3, id: piThreadId, timestamp: 'x', cwd: '/x' }),
       JSON.stringify({ type: 'message', id: 'm1', parentId: null, timestamp: 'x', message: { role: 'user', content: [{ type: 'text', text: '建一条登录失败提示用例' }] } }),
@@ -69,7 +73,7 @@ describe('R2 trajectories：蒸馏 worker', () => {
         { type: 'text', text: '先暂存再实测验证' },
         { type: 'toolCall', id: callId, name: 'verify_case', arguments: { caseId: 'loc-1' } },
       ] } }),
-      JSON.stringify({ type: 'message', id: 'm3', parentId: 'm2', timestamp: 'x', message: { role: 'toolResult', toolCallId: callId, toolName: 'verify_case', isError: !opts.verified, content: [{ type: 'text', text: opts.verified ? '通过：终态达成' : '失败：找不到元素' }] } }),
+      JSON.stringify({ type: 'message', id: 'm3', parentId: 'm2', timestamp: 'x', message: { role: 'toolResult', toolCallId: callId, toolName: 'verify_case', isError: false, content: [{ type: 'text', text: verifyText }] } }),
     ].join('\n');
     const sessionsRoot = mkdtempSync(join(tmpdir(), 'traj-sessions-'));
     tmpRoots.push(sessionsRoot);
@@ -140,6 +144,18 @@ describe('R2 trajectories：蒸馏 worker', () => {
     await processTrajectoryJob(
       { kind: 'trajectory', threadId: fx.threadId, versionId: fx.versionId, userId: null, items: [{ localId: 'loc-1', caseId: fx.caseId }] },
       { client: bad, sessionsRoot: fx.sessionsRoot },
+    );
+    const n = (await pool.query(`SELECT count(*)::int n FROM assistant_trajectories`)).rows[0]!;
+    expect(n.n).toBe(0);
+  });
+
+  it('LLM 蒸馏超时（complete 永不 resolve）：丢弃该 item 不入库、不抛', async () => {
+    const fx = await seedThreadWithFixture({ verified: true });
+    const hang = { ...stubClient(), complete: () => new Promise<never>(() => {}) };
+    const { processTrajectoryJob } = await import('../src/scheduler/trajectoryWorker.js');
+    await processTrajectoryJob(
+      { kind: 'trajectory', threadId: fx.threadId, versionId: fx.versionId, userId: null, items: [{ localId: 'loc-1', caseId: fx.caseId }] },
+      { client: hang, sessionsRoot: fx.sessionsRoot, llmTimeoutMs: 50 },
     );
     const n = (await pool.query(`SELECT count(*)::int n FROM assistant_trajectories`)).rows[0]!;
     expect(n.n).toBe(0);
