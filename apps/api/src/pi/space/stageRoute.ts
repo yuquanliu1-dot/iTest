@@ -279,13 +279,19 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
   if (createdCaseIds.size > 0) {
     try {
       const { enqueueTrajectoryDistill } = await import('../../scheduler/trajectoryQueue.js');
-      await enqueueTrajectoryDistill({
-        kind: 'trajectory',
-        threadId,
-        versionId,
-        userId: creatorId,
-        items: Array.from(createdCaseIds, ([localId, caseId]) => ({ localId, caseId })),
-      });
+      // 2s 上限：Redis 连接挂死时也不许拖住落库主流程（超时=放弃投递，丢弃语义）
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        enqueueTrajectoryDistill({
+          kind: 'trajectory',
+          threadId,
+          versionId,
+          userId: creatorId,
+          items: Array.from(createdCaseIds, ([localId, caseId]) => ({ localId, caseId })),
+        }),
+        new Promise<void>((resolve) => { timer = setTimeout(() => resolve(), 2_000); }),
+      ]);
+      if (timer) clearTimeout(timer);
     } catch (e) {
       logger.warn({ err: e, threadId }, 'trajectory distill enqueue failed; save unaffected');
     }
