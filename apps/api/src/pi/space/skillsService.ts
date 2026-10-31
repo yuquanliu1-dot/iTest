@@ -49,7 +49,7 @@ export async function assertSkillNameUnique(name: string, excludeId?: string): P
 }
 
 /** 写 SKILL.md 骨架：frontmatter 的 name/description 由 DB 值回填（磁盘正文是真身，前言是索引）。 */
-function writeSkillMd(dir: string, name: string, description: string, body = ''): void {
+export function writeSkillMd(dir: string, name: string, description: string, body = ''): void {
   writeSkillFileAtomic(
     path.join(dir, 'SKILL.md'),
     `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}`,
