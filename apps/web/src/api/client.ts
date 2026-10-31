@@ -714,6 +714,13 @@ export const api = {
       listProjects: () =>
         request<Array<{ id: string; name: string }>>('/assistant/feedback/projects'),
     },
+    /** 系统设置：助手短期记忆（只读+软删；写入唯一入口是助手 save_memory 工具）。 */
+    memories: {
+      list: (params?: { productLineId?: string; status?: string }) =>
+        request<AssistantMemory[]>(`/assistant/memories${qs(params ?? {})}`),
+      remove: (id: string) =>
+        request<void>(`/assistant/memories/${id}`, { method: 'DELETE' }),
+    },
     /** 系统设置：全局共享 MCP server（scope 固定 global）。 */
     mcpServers: {
       list: () => request<AssistantMcpServer[]>('/assistant/mcp-servers'),
@@ -1172,6 +1179,23 @@ export interface AssistantMcpServer {
   env: Record<string, string> | null;
   exposure: string;
   enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+/** 助手短期记忆行（GET /assistant/memories；productLineName 由路由 join 带出）。 */
+export interface AssistantMemory {
+  id: string;
+  scope: 'product_line' | 'global';
+  productLineId: string | null;
+  productLineName: string | null;
+  title: string;
+  hook: string;
+  body: string | null;
+  provenance: 'user_stated' | 'ai_inferred';
+  status: string;
+  hitCount: number;
+  lastHitAt: string | null;
+  createdByUserId: string | null;
   createdAt: string;
   updatedAt: string;
 }
