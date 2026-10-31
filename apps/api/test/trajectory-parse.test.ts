@@ -45,6 +45,16 @@ describe('trajectoryParse：JSONL → 会话轮次', () => {
     expect(Array.from(verified).sort()).toEqual(['ok-1', 'retry-1']);
   });
 
+  it('findVerifiedLocalIds：toolResult 缺 isError 字段——不算成功（fail-closed）', async () => {
+    const { parseSessionJsonl, findVerifiedLocalIds } = await import('../src/scheduler/trajectoryParse.js');
+    const jsonl = [
+      msgLine('assistant', [toolCallBlock('x', 'verify_case', { caseId: 'no-flag-1' })]),
+      msgLine('toolResult', [{ type: 'text', text: '结果未带错误标志' }], { toolCallId: 'x', toolName: 'verify_case' }), // 无 isError
+    ].join('\n');
+    const verified = findVerifiedLocalIds(parseSessionJsonl(jsonl), ['no-flag-1']);
+    expect(verified.size).toBe(0);
+  });
+
   it('compressConversation：user 全文 / assistant 文本（无 thinking）/ toolCall 行 / toolResult 截断；总量限预算', async () => {
     const { parseSessionJsonl, compressConversation } = await import('../src/scheduler/trajectoryParse.js');
     const jsonl = [

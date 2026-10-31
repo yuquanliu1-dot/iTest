@@ -47,7 +47,7 @@ export function parseSessionJsonl(content: string): ParsedTurn[] {
         toolCalls: [],
         toolCallId: typeof m.toolCallId === 'string' ? m.toolCallId : undefined,
         toolName: typeof m.toolName === 'string' ? m.toolName : undefined,
-        isError: m.isError === true,
+        isError: typeof m.isError === 'boolean' ? m.isError : undefined,
       });
     }
   }
