@@ -57,7 +57,7 @@ R2 轨迹(active) ─┘   （无落点 → 只记提示,不产提案）        
 
 索引：`(module_key, seq desc)` —— 当前值解析主路径。
 
-恢复默认 = 追加 `value=NULL, source='manual_edit'` 行（不需要独立 source 枚举）。
+恢复默认 = 追加 `value=NULL, source='manual_edit'` 行（不需要独立 source 枚举）。此语义仅适用于代码默认模块；skill 组没有代码默认，其「回到最初」= 回滚到 baseline 行（见 §6/§7）。
 
 ### 3.2 `assistant_solidify_batches` —— 盘点批次
 
@@ -138,7 +138,7 @@ resolvePromptModules(): Promise<Map<string, PromptModuleState>>
 
 ### 5.2 蒸馏输入与判据
 
-输入 = 全库 `active` 记忆 + `active` 轨迹（>200 条时按 `hit_count` desc 取 top 200——高频被引用者优先，顺带防 prompt 爆炸）+ 现有 skill 清单（slug+name+description，供去碎片化比对）。
+输入 = 全库 `active` 记忆 + `active` 轨迹（两源合并 >200 条时按 `hit_count` desc 取 top 200——高频被引用者优先，顺带防 prompt 爆炸）+ 现有 skill 清单（slug+name+description，供去碎片化比对）。
 
 LLM 蒸馏判据（system prompt 明示，输出 per-proposal zod 校验，单条不合法丢弃该条不炸批次）：
 
@@ -155,7 +155,7 @@ LLM 蒸馏判据（system prompt 明示，输出 per-proposal zod 校验，单�
 - 应用（乐观锁成功后执行，失败不吞）：
   - **prompt_amendment**：校验 target 是注册表键；把 body 追加到当前值尾部（当前为 NULL/无行时先追加 baseline 行固化代码默认，再追加增量）；写 `source='solidify_apply', source_ref=proposal.id`。source_ref unique 兜底：重放只落一行。
   - **skill_revision**：校验 skill 存在（磁盘目录+DB enabled）；该 skill 首次被固化时先记 `baseline` 行（磁盘现正文去 frontmatter）供 diff/回滚起点；**先写文件再记版本行**——body 是完整正文（不含 frontmatter），写文件时 frontmatter 从 DB 的 name/description 重新拼回（防文件/DB 元数据漂移）；重放无害（同值幂等写）。重试时若 source_ref 行已存在则跳过写文件。
-  - **退役**：`UPDATE ... SET status='retired_solidified', retired_by_batch=<batch_id> WHERE id IN (retireIds) AND status='active'`——active 守卫防重复退役/复活已删条目。
+  - **退役**：retireIds 校验仅接受本提案 sources 内的 id（越界 400）；`UPDATE ... SET status='retired_solidified', retired_by_batch=<batch_id> WHERE id IN (retireIds) AND status='active'`——active 守卫防重复退役/复活已删条目。
   - 部分失败：apply_error 记原因，status 回 `pending`（可再次 approve 重试；幂等三件套保证重试安全）。
 - `POST /proposals/:id/reject`：同样乐观锁置 rejected，不碰任何资产。
 
@@ -165,7 +165,7 @@ LLM 蒸馏判据（system prompt 明示，输出 per-proposal zod 校验，单�
 |---|---|
 | GET `/assistant/prompt-modules` | 分组列表：key/label/group/当前值/来源/是否默认 |
 | GET `/assistant/prompt-modules/:key/versions` | 版本链（seq desc） |
-| POST `/assistant/prompt-modules/:key/value` | `{value?: string\|null, fromSeq?: number}`；fromSeq→rollback（校验该行存在，复制其 value），否则 manual_edit；key 须在注册表，skill.* 拒绝直接写 |
+| POST `/assistant/prompt-modules/:key/value` | `{value?: string\|null, fromSeq?: number}`；fromSeq→rollback（校验该行存在，复制其 value；skill 组回滚同时把该值写回磁盘文件），否则 manual_edit；key 须在注册表；skill.* 拒绝 value 直改（只允许 fromSeq 回滚） |
 | POST `/assistant/solidify/scan` | 发盘点（409 防重入），返回批次 id |
 | GET `/assistant/solidify/batches` | 批次历史（含 running 供前端轮询） |
 | GET `/assistant/solidify/proposals?batchId=&status=` | 提案列表 |
@@ -177,7 +177,7 @@ LLM 蒸馏判据（system prompt 明示，输出 per-proposal zod 校验，单�
 
 两个 Section：
 
-1. **系统提示词**：模块分组列表（主 prompt / 工具 / skill 只读组），当前值来源 badge（默认/手工/回滚/固化/基线）；编辑抽屉（大文本域；skill 组只读）；版本历史抽屉（值 diff、回滚按钮、恢复默认按钮——恢复默认对 skill 组也可用=回滚到 baseline）。
+1. **系统提示词**：模块分组列表（主 prompt / 工具 / skill 只读组），当前值来源 badge（默认/手工/回滚/固化/基线）；编辑抽屉（大文本域；skill 组只读）；版本历史抽屉（值 diff、回滚按钮、恢复默认按钮——恢复默认（写 NULL 行）仅代码默认模块可用，skill 组的「回到最初」= 回滚到 baseline 行，且回滚会写回磁盘）。
 2. **固化盘点**：「发起盘点」按钮（running 409 → 提示进行中）；批次历史；提案列表 → 详情页：kind badge、target、rationale、**全文 diff**（prompt_amendment 显示增量文案与叠加预览；skill_revision 显示 baseline vs 修订正文）、来源清单（标题/类型/来源线 + 退役勾选，预填建议值）；批准（带勾选退役）/驳回。
 
 错误路径全部 localizeApiError 分支处理（R1 教训：409/404/校验错误各自有文案，不落「未知错误」）。前端轮询 running 批次 → done/failed 后刷新提案列表。
