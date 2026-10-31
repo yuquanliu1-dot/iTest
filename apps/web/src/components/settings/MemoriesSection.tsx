@@ -36,11 +36,15 @@ export default function MemoriesSection() {
     for (const r of rows) if (r.scope === 'product_line' && r.productLineId) m.set(r.productLineId, r.productLineName ?? r.productLineId);
     return Array.from(m.entries());
   }, [rows]);
-  const filtered = lineFilter === 'all'
+  // 筛选的线被删空后 lineId 失配——钳回 all，避免 select 悬空+假「暂无记忆」。
+  const effectiveFilter = lineFilter !== 'all' && lineFilter !== 'global' && !lineOptions.some(([id]) => id === lineFilter)
+    ? 'all'
+    : lineFilter;
+  const filtered = effectiveFilter === 'all'
     ? rows
-    : lineFilter === 'global'
+    : effectiveFilter === 'global'
       ? rows.filter((r) => r.scope === 'global')
-      : rows.filter((r) => r.productLineId === lineFilter);
+      : rows.filter((r) => r.productLineId === effectiveFilter);
 
   return (
     <div className="bg-card border rounded-[var(--radius-sm)]">
@@ -52,7 +56,8 @@ export default function MemoriesSection() {
         <select
           className="input-base"
           style={{ width: 'auto', fontSize: 12 }}
-          value={lineFilter}
+          aria-label={t('settings:memoryFilterAll')}
+          value={effectiveFilter}
           onChange={(e) => setLineFilter(e.target.value)}
         >
           <option value="all">{t('settings:memoryFilterAll')}</option>
