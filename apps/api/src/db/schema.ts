@@ -7,6 +7,7 @@ import {
   jsonb,
   timestamp,
   boolean,
+  bigserial,
   unique,
   primaryKey,
   index,
@@ -858,6 +859,72 @@ export const assistantTrajectories = pgTable('assistant_trajectories', {
 }, (t) => ({
   lineIdx: index('assistant_trajectories_line_idx').on(t.productLineId, t.status),
   caseUq: uniqueIndex('assistant_trajectories_case_uq').on(t.sourceCaseId).where(sql`status = 'active'`),
+}));
+
+// ── R3 prompt 可编辑化：模块值存储（append-only 版本链）──
+// 代码是模块注册表（promptModules.ts），DB 是值存储：无行=代码默认（清库回出厂）；
+// value=NULL=「跟随代码默认」（显式恢复默认，值随发版演进）；当前值=每 module_key
+// 取 seq 最大行；回滚=把历史行 value 复制追加为新行（回滚也留痕，可再回滚）。
+// partial unique：同一固化提案重复应用只落一行（幂等锚）；NULL 手工行不受限。
+export const assistantPromptModuleVersions = pgTable('assistant_prompt_module_versions', {
+  seq: bigserial('seq', { mode: 'number' }).primaryKey(),
+  moduleKey: varchar('module_key', { length: 100 }).notNull(),
+  value: text('value'),
+  source: varchar('source', { length: 20 }).notNull(),
+  sourceRef: uuid('source_ref'),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  keySeqIdx: index('assistant_prompt_module_versions_key_seq_idx').on(t.moduleKey, t.seq),
+  sourceRefUq: uniqueIndex('assistant_prompt_module_versions_source_ref_uq').on(t.sourceRef).where(sql`${t.sourceRef} is not null`),
+}));
+
+// ── R3 固化管线：盘点批次 ──
+// 人工低频动作：inline fire-and-forget（R2 trajectoryQueue 同款），不引 BullMQ。
+// status=running 时再发起 → 409 防重入。
+export const assistantSolidifyBatches = pgTable('assistant_solidify_batches', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  status: varchar('status', { length: 16 }).notNull(),
+  inputSummary: text('input_summary'),
+  error: text('error'),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ── R3 固化管线：固化提案 ──
+// LLM 只产提案不碰资产；应用一律经人工批准。prompt_amendment 的 body=追加进模块值
+// 的增量文案；skill_revision 的 body=修订后的完整正文（不含 frontmatter）。
+// 部分失败：apply_error 记原因 + status 回 pending 可重试（幂等三件套保证重试安全）。
+export interface AssistantSolidifyProposalSource {
+  type: 'memory' | 'trajectory';
+  id: string;
+  title: string;
+  /** 来源线名（创建时定格，'global'=全局记忆）——审批详情展示「来源线」用，免 UI 二次 join。 */
+  lineName: string;
+  /** 服务端定值（不信任 LLM 输出）：memory=true（固化后线内注入冗余），trajectory=false（保留 few-shot 价值）。 */
+  retireRecommended: boolean;
+}
+
+export const assistantSolidifyProposals = pgTable('assistant_solidify_proposals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  batchId: uuid('batch_id').references(() => assistantSolidifyBatches.id, { onDelete: 'cascade' }).notNull(),
+  kind: varchar('kind', { length: 20 }).notNull(),
+  target: varchar('target', { length: 100 }).notNull(),
+  title: varchar('title', { length: 200 }).notNull(),
+  body: text('body').notNull(),
+  rationale: text('rationale').notNull(),
+  sources: jsonb('sources').$type<AssistantSolidifyProposalSource[]>().notNull(),
+  status: varchar('status', { length: 16 }).notNull().default('pending'),
+  reviewedBy: uuid('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+  reviewedAt: timestamp('reviewed_at'),
+  appliedAt: timestamp('applied_at'),
+  applyError: text('apply_error'),
+  distillModel: varchar('distill_model', { length: 64 }).notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  batchIdx: index('assistant_solidify_proposals_batch_idx').on(t.batchId, t.status),
 }));
 
 // ── AI 助手用户反馈（Phase 1：只收集，不消费）──
