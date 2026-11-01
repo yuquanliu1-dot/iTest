@@ -1,18 +1,23 @@
-/** 固化盘点管线：防重入/LLM 未配置/空输入/蒸馏入库/单条丢弃/超时/无落点。 */
+/** 固化盘点管线：防重入/LLM 未配置/空输入/蒸馏入库/单条丢弃/超时/无落点；R3.6 会话信号接线。 */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let sessionsRoot: string;
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   process.env.DATABASE_URL = container.getConnectionUri();
   pool = new Pool({ connectionString: container.getConnectionUri() });
   await pool.query(SCHEMA_SQL);
+  sessionsRoot = await mkdtemp(join(tmpdir(), 'pi-sess-ss-'));
 }, 60_000);
 
 afterAll(async () => {
@@ -24,7 +29,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   // RESTART IDENTITY：R3.5 用例硬编码 rollback#2/refId '2'，bigserial 须每例从 1 重来。
-  await pool.query(`TRUNCATE assistant_solidify_proposals, assistant_solidify_batches, assistant_memories, assistant_trajectories, assistant_skills, assistant_failure_signals, assistant_failure_lessons, assistant_prompt_module_versions, settings RESTART IDENTITY`);
+  await pool.query(`TRUNCATE assistant_solidify_proposals, assistant_solidify_batches, assistant_memories, assistant_trajectories, assistant_skills, assistant_failure_signals, assistant_failure_lessons, assistant_prompt_module_versions, settings, ai_threads RESTART IDENTITY`);
 });
 
 /** stub LLM client：completeJson 首轮 kind:'json' 即透传 value/model（trajectory-worker.test 同款）。 */
@@ -351,5 +356,100 @@ describe('runSolidifyScan：R3.5 失败教训', () => {
     await runSolidifyScan(await newBatchId(), { client: second as never });
     // 第二次扫描信号已消费 → 阶段 1 跳过 → 资产蒸馏是最后一次调用
     expect(JSON.stringify(second.calls[second.calls.length - 1])).not.toContain('教训A');
+  });
+});
+
+// ── R3.6 会话信号 ──
+
+/** 可疑会话 JSONL（failure-lessons.test 同款：verify 死循环 3 连 + 31min 时长 → 嫌疑分 7）。 */
+function suspiciousJsonl(firstUserText = '首条需求：核查SOC事件列表'): string {
+  const t0 = Date.parse('2026-11-01T10:00:00Z');
+  const at = (min: number) => new Date(t0 + min * 60_000).toISOString();
+  const line = (role: string, content: unknown[], extra: Record<string, unknown> = {}, ts = at(0)) =>
+    JSON.stringify({ type: 'message', timestamp: ts, message: { role, content, ...extra } });
+  const lines = [line('user', [{ type: 'text', text: firstUserText }])];
+  for (let i = 1; i <= 3; i++) {
+    lines.push(line('assistant', [{ type: 'toolCall', id: `c${i}`, name: 'verify_case', arguments: { caseId: 'loc-1' } }], {}, at(i * 10)));
+    lines.push(line('toolResult', [{ type: 'text', text: 'r' }], { toolCallId: `c${i}`, toolName: 'verify_case', isError: false }, at(i * 10 + 1)));
+  }
+  return lines.join('\n');
+}
+
+/** 插 chat 线程 + 写 JSONL。pi_thread_id 用裸 uuid（非绝对路径）——逼 findSessionFile 走
+ *  readdir 兜底，使 SolidifyRunDeps.sessionsRoot 的 DI 成为测试载荷（绝对路径会绕过 DI 直探）。
+ *  updated_at 用 UTC 墙钟串（drizzle 写路径同款语义），返回测试自持 Date 做真值。 */
+async function seedChatThread(firstUserText?: string): Promise<{ id: string; updatedAt: Date }> {
+  const uuid = randomUUID();
+  await writeFile(join(sessionsRoot, `sess_${uuid}.jsonl`), suspiciousJsonl(firstUserText));
+  const updatedAt = new Date(Date.parse('2026-11-01T12:00:00Z'));
+  const id = (await pool.query(
+    `INSERT INTO ai_threads (pi_thread_id, purpose, updated_at, created_at) VALUES ($1, 'chat', $2, $2) RETURNING id`,
+    [uuid, updatedAt.toISOString().slice(0, 19).replace('T', ' ')])).rows[0]!.id as string;
+  return { id, updatedAt };
+}
+
+describe('runSolidifyScan：R3.6 会话信号', () => {
+  it('可疑会话 fixture → call#1 输入含 type=session 信号（SolidifyRunDeps.sessionsRoot 透传）', async () => {
+    const { runSolidifyScan } = await import('../src/pi/space/solidifyService.js');
+    await seedChatThread();
+    const stub = sequentialStub([{ lessons: [], notes: [] }, { proposals: [], notes: [] }]);
+    const id = await newBatchId();
+    await runSolidifyScan(id, { client: stub as never, sessionsRoot });
+    expect(stub.calls).toHaveLength(2); // 有信号不早退，蒸馏两连调
+    expect(JSON.stringify(stub.calls[0])).toContain('type=session');
+    expect(JSON.stringify(stub.calls[0])).toContain('首条需求：核查SOC事件列表');
+    const summary = JSON.parse((await batchRow(id)).input_summary as string);
+    expect(summary).toMatchObject({ signals: 1 });
+  });
+
+  it('会话信号归 platform → 教训入库但不进 call#2 输入（三道闸第二道）', async () => {
+    const { runSolidifyScan } = await import('../src/pi/space/solidifyService.js');
+    const t = await seedChatThread();
+    const refId = `session#${t.id}#${t.updatedAt.getTime()}`;
+    const stub = sequentialStub([
+      { lessons: [{ attribution: 'platform', title: '网关停顿慢会话', lesson: '现象:…根因:…', signalRefs: [refId] }], notes: [] },
+      { proposals: [], notes: [] },
+    ]);
+    const id = await newBatchId();
+    await runSolidifyScan(id, { client: stub as never, sessionsRoot });
+    const lesson = (await pool.query(`SELECT * FROM assistant_failure_lessons`)).rows[0]!;
+    expect(lesson.attribution).toBe('platform');
+    expect(lesson.signals[0]).toMatchObject({ type: 'session', refId });
+    expect(JSON.stringify(stub.calls[1])).not.toContain('网关停顿慢会话');
+    const summary = JSON.parse((await batchRow(id)).input_summary as string);
+    expect(summary).toMatchObject({ lessons: 0, signals: 1 });
+  });
+
+  it('会话信号归 prompt → 教训进 call#2 → prompt_correction 提案 sources 引用会话教训', async () => {
+    const { runSolidifyScan } = await import('../src/pi/space/solidifyService.js');
+    const t = await seedChatThread();
+    const refId = `session#${t.id}#${t.updatedAt.getTime()}`;
+    const stub = sequentialStub([
+      { lessons: [{ attribution: 'prompt', title: 'verify 死循环引导缺陷', lesson: '现象:…建议:…', signalRefs: [refId] }], notes: [] },
+      async () => {
+        const lid = (await pool.query(`SELECT id FROM assistant_failure_lessons LIMIT 1`)).rows[0]!.id as string;
+        return { proposals: [{ kind: 'prompt_correction', target: 'space.style.zh', title: '修正死循环引导', body: '## 全文', rationale: '1 条 session 会话证据教训', sources: [lid] }], notes: [] };
+      },
+    ]);
+    const id = await newBatchId();
+    await runSolidifyScan(id, { client: stub as never, sessionsRoot });
+    expect(JSON.stringify(stub.calls[1])).toContain('verify 死循环引导缺陷');
+    const p = (await pool.query(`SELECT * FROM assistant_solidify_proposals`)).rows[0]!;
+    expect(p.kind).toBe('prompt_correction');
+    expect(p.sources[0]).toMatchObject({ type: 'lesson', attribution: 'prompt', signalCount: 1 });
+  });
+
+  it('采集器 note（>8MB 跳过）并入批次 summary.notes（早退路径除外）', async () => {
+    const { runSolidifyScan } = await import('../src/pi/space/solidifyService.js');
+    await seedSources(); // 资产池非空防早退
+    const uuid = randomUUID();
+    await writeFile(join(sessionsRoot, `sess_${uuid}.jsonl`), 'x'.repeat(9 * 1024 * 1024)); // 内容无所谓——按尺寸先跳过
+    await pool.query(`INSERT INTO ai_threads (pi_thread_id, purpose, updated_at, created_at) VALUES ($1, 'chat', $2, $2)`,
+      [uuid, '2026-11-01 12:00:00']);
+    const stub = sequentialStub([{ proposals: [], notes: [] }]); // 0 信号 → 无阶段 1，只有资产蒸馏一次调用
+    const id = await newBatchId();
+    await runSolidifyScan(id, { client: stub as never, sessionsRoot });
+    const summary = JSON.parse((await batchRow(id)).input_summary as string);
+    expect(summary.notes.some((n: string) => n.includes('8MB'))).toBe(true);
   });
 });

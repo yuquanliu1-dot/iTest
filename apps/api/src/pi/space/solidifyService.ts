@@ -32,7 +32,7 @@ const SOLIDIFY_SYSTEM_PROMPT = `你是测试助手平台的「经验固化盘点
 - target：prompt_amendment / prompt_correction 只能从【prompt_amendment 可选 target】清单中选；skill_revision 只能从【现有 skill 清单】中选
 - title：≤60 字的人话提案名（审批列表用）
 - body：prompt_amendment = 要追加的增量文案（markdown，拼到模块当前值尾部）；skill_revision = 修订后的完整正文（markdown，不含 frontmatter）；prompt_correction = 修正后的模块完整正文（markdown，可增可删可改，应用时整体覆盖模块当前值）
-- rationale：为什么值得固化。prompt_amendment / skill_revision 必须写明有几条产品线来源支撑（如「3 条来源线：线A/线B/global」）；prompt_correction 必须写明信号数与信号类型（如「2 个独立失败信号命中同一误解」或「1 次人工回滚（人工已判定）」）
+- rationale：为什么值得固化。prompt_amendment / skill_revision 必须写明有几条产品线来源支撑（如「3 条来源线：线A/线B/global」）；prompt_correction 必须写明信号数与信号类型（如「2 个独立失败信号命中同一误解」「1 次人工回滚（人工已判定）」或「3 条 session 会话证据同指一类死循环」）
 - sources：支撑本提案的输入条目 id 数组。prompt_amendment / skill_revision 从【输入条目】中选；prompt_correction 只能从【失败教训】中选（用教训 id）
 
 四条判据——全部满足才产提案：
@@ -41,7 +41,7 @@ const SOLIDIFY_SYSTEM_PROMPT = `你是测试助手平台的「经验固化盘点
 3. 去碎片化：先查现有 skill 清单——有落点才产 skill_revision；泛化经验没有现成 skill 落点时不要硬凑 target，写进 notes：「建议人工用 skill-creator 新建：<一句话>」。
 4. 按形状分证据判据：
    - prompt_amendment / skill_revision：跨线普适——≥2 条产品线来源支撑（global 记忆可作一条线）。单线孤证不固化。
-   - prompt_correction：频次——同一模块同一类误解被 ≥2 个独立失败教训/信号命中；或单个人工回滚类教训即可（人工已判定=最强证据）。按教训正文的「建议修正方向」写 body；教训之间互相冲突时不产提案写进 notes。【失败教训】里不会出现 platform/sut 归因的条目——严禁凭空猜测平台问题来写提示词补丁。
+   - prompt_correction：频次——同一模块同一类误解被 ≥2 个独立失败教训/信号命中（含 session 会话证据教训）；或单个人工回滚类教训即可（人工已判定=最强证据）。按教训正文的「建议修正方向」写 body；教训之间互相冲突时不产提案写进 notes。【失败教训】里不会出现 platform/sut 归因的条目——严禁凭空猜测平台问题来写提示词补丁。
 
 notes：无法落成提案但有价值的观察（无 skill 落点的泛化经验、低质量信号等），没有就空数组。`;
 
@@ -88,6 +88,8 @@ export interface SolidifyRunDeps {
   /** 注入 LLM client（测试）；缺省读 settings 自建，未配置 → 批次 failed。 */
   client?: LLMClient;
   llmTimeoutMs?: number;
+  /** 注入会话根目录（测试 DI）；透传给 S4 会话采集器，缺省 DATA_DIR/pi-sessions。 */
+  sessionsRoot?: string;
 }
 
 /** 执行盘点：输入聚合 → LLM 蒸馏 → 服务端校验 → 提案入库 → 批次 done。 */
@@ -133,8 +135,8 @@ export async function runSolidifyScan(batchId: string, deps: SolidifyRunDeps = {
         title: t.taskTitle, text: t.digest, hitCount: t.hitCount,
       })),
     ].sort((a, b) => b.hitCount - a.hitCount).slice(0, 200);
-    // 失败信号采集（零 LLM）：S1 回滚/恢复默认 + S2 负反馈 + S3 nl_ai_fail，已消费的剔除
-    const signalBundle = await collectUnconsumedSignals();
+    // 失败信号采集（零 LLM）：S1 回滚/恢复默认 + S2 负反馈 + S3 nl_ai_fail + S4 会话质量，已消费的剔除
+    const signalBundle = await collectUnconsumedSignals({ sessionsRoot: deps.sessionsRoot });
 
     // 空资产池但有未消费信号 → 不早退（教训可独立产提案）；两者全空才直接 done。
     if (merged.length === 0 && signalBundle.signals.length === 0) {
@@ -145,6 +147,9 @@ export async function runSolidifyScan(batchId: string, deps: SolidifyRunDeps = {
       }).where(eq(assistantSolidifyBatches.id, batchId));
       return;
     }
+
+    // 采集层护栏 note（如 >8MB 会话跳过）并入 summary；早退路径 summary 硬编码零改动
+    notes.push(...signalBundle.notes);
 
     // ── 阶段 1：失败教训蒸馏（有信号才执行；整体失败降级不炸批次，信号保留待重试）──
     if (signalBundle.signals.length > 0) {
