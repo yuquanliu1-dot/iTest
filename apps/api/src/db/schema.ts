@@ -897,13 +897,16 @@ export const assistantSolidifyBatches = pgTable('assistant_solidify_batches', {
 // 的增量文案；skill_revision 的 body=修订后的完整正文（不含 frontmatter）。
 // 部分失败：apply_error 记原因 + status 回 pending 可重试（幂等三件套保证重试安全）。
 export interface AssistantSolidifyProposalSource {
-  type: 'memory' | 'trajectory';
+  type: 'memory' | 'trajectory' | 'lesson';
   id: string;
   title: string;
-  /** 来源线名（创建时定格，'global'=全局记忆）——审批详情展示「来源线」用，免 UI 二次 join。 */
+  /** 来源线名（创建时定格，'global'=全局记忆）。lesson 来源为空串（UI 渲染 attribution 徽标代替）。 */
   lineName: string;
-  /** 服务端定值（不信任 LLM 输出）：memory=true（固化后线内注入冗余），trajectory=false（保留 few-shot 价值）。 */
+  /** 服务端定值（不信任 LLM 输出）：memory=true / trajectory=false / lesson=false（lesson 应用即自动 resolved，不走退役勾选）。 */
   retireRecommended: boolean;
+  /** 仅 lesson：归因与信号数快照（审批详情展示）。 */
+  attribution?: 'prompt' | 'step_description';
+  signalCount?: number;
 }
 
 export const assistantSolidifyProposals = pgTable('assistant_solidify_proposals', {
