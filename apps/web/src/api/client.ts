@@ -754,6 +754,13 @@ export const api = {
           method: 'POST', body: '{}',
         }),
     },
+    /** 系统设置：失败教训（R3.5）。signals 采集表不外露。 */
+    failureLessons: {
+      list: (status?: 'active' | 'resolved' | 'retired') =>
+        request<FailureLesson[]>(`/assistant/failure-lessons${qs(status ? { status } : {})}`),
+      retire: (id: string) =>
+        request<{ ok: boolean }>(`/assistant/failure-lessons/${id}/retire`, { method: 'POST', body: '{}' }),
+    },
     /** 系统设置：全局共享 MCP server（scope 固定 global）。 */
     mcpServers: {
       list: () => request<AssistantMcpServer[]>('/assistant/mcp-servers'),
@@ -1281,17 +1288,21 @@ export interface SolidifyBatch {
 }
 
 export interface SolidifyProposalSource {
-  type: 'memory' | 'trajectory';
+  type: 'memory' | 'trajectory' | 'lesson';
   id: string;
   title: string;
+  /** 来源线名（创建时定格，'global'=全局记忆）。lesson 来源为空串。 */
   lineName: string;
   retireRecommended: boolean;
+  /** 仅 lesson：归因与信号数快照（审批详情展示）。 */
+  attribution?: 'prompt' | 'step_description';
+  signalCount?: number;
 }
 
 export interface SolidifyProposal {
   id: string;
   batchId: string;
-  kind: 'prompt_amendment' | 'skill_revision';
+  kind: 'prompt_amendment' | 'skill_revision' | 'prompt_correction';
   target: string;
   title: string;
   body: string;
@@ -1303,7 +1314,23 @@ export interface SolidifyProposal {
   appliedAt: string | null;
   applyError: string | null;
   distillModel: string;
+  /** 仅 prompt_correction：盘点时的版本链头（应用时复查，被人工改过 → 拒绝）。 */
+  baseSeq: number | null;
   createdAt: string;
+}
+
+/** 系统设置：失败教训（R3.5）。signals 采集表不外露。 */
+export interface FailureLesson {
+  id: string;
+  status: 'active' | 'resolved' | 'retired';
+  attribution: 'prompt' | 'step_description' | 'platform' | 'sut';
+  title: string;
+  lesson: string;
+  signals: Array<{ type: string; refId: string; excerpt: string }>;
+  resolvedByProposal: string | null;
+  distillModel: string;
+  createdAt: string;
+  updatedAt: string;
 }
 /** 系统设置里管理的全局共享 AI 技能（assistant_skills 表）。
  *  2026-10-19 存储翻转：DB 只留元数据，内容在服务端目录树 SKILLS_ROOT/<name>/，
