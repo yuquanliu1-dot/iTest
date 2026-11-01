@@ -38,6 +38,7 @@ import { judgeAssertionText } from './assertionJudge.js';
 import { getLoginState, loginStateKey, saveLoginState } from './loginStateCache.js';
 import { registerLiveView } from '../../../execute/liveView.js';
 import { repoToolCwd } from './context.js';
+import { recordNlAiFailSignal } from '../failureSignals.js';
 import { abortGuard, type ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
@@ -1495,6 +1496,19 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             && (!failedStep.compiled
               || (Array.isArray(failedStep.compiled)
                 && failedStep.compiled.every((a) => (a as { kind?: string }).kind === 'aiTask')));
+          if (nlAiFail) {
+            // R3.5：落一条原始失败信号（fire-and-forget，失败只 warn 不影响 verify）
+            void recordNlAiFailSignal({
+              threadId: ctx.threadId, projectId: ctx.projectId, caseId, stepOrder: failed.order,
+              payload: {
+                caseTitle: effectiveCase.title,
+                stepInstruction: failedStep.instruction ?? '',
+                failureReason: failed.failureReason ?? 'unknown',
+                targetUrl: targetUrl ?? null,
+                pageUrl: page.url(),
+              },
+            });
+          }
           // 归因全交 LLM：失败页候选命中 + 浮层 + 元素清单
           const stepProbes = await probeLocatorHits(page, collectStepLocators(failedStep.compiled));
           const stepOverlays = (await extractPageEvidence(page)).overlays;
