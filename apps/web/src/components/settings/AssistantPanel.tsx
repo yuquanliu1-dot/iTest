@@ -14,6 +14,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 import SkillsSection from './skills/SkillsSection';
 import MemoriesSection from './MemoriesSection';
 import TrajectoriesSection from './TrajectoriesSection';
+import PromptModulesSection from './PromptModulesSection';
+import SolidifySection from './SolidifySection';
 import FeedbackSection from './FeedbackSection';
 
 /** MCP_EXPOSURES 与服务端 mcp.js 同源白名单（oauth 服务端不支持）。 */
@@ -241,6 +243,8 @@ export default function AssistantPanel() {
       <McpServersSection />
       <MemoriesSection />
       <TrajectoriesSection />
+      <PromptModulesSection />
+      <SolidifySection />
       <SkillsSection />
       <FeedbackSection />
     </div>
