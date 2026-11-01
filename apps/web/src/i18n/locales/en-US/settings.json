@@ -80,6 +80,7 @@
   "solidifyBatchRunning": "Running",
   "solidifyBatchDone": "Done",
   "solidifyBatchFailed": "Failed",
+  "solidifyBatchSummary": "{{memories}} memories · {{trajectories}} trajectories · {{proposals}} proposals",
   "solidifyProposalNone": "No proposals — distilled results appear here after a scan.",
   "solidifyKindPrompt": "Prompt amendment",
   "solidifyKindSkill": "Skill revision",

@@ -80,6 +80,7 @@
   "solidifyBatchRunning": "进行中",
   "solidifyBatchDone": "完成",
   "solidifyBatchFailed": "失败",
+  "solidifyBatchSummary": "记忆 {{memories}} · 轨迹 {{trajectories}} · 产出提案 {{proposals}}",
   "solidifyProposalNone": "暂无提案——发起盘点后蒸馏结果会出现在这里。",
   "solidifyKindPrompt": "提示词增量",
   "solidifyKindSkill": "Skill 修订",

@@ -16,6 +16,18 @@ const PROPOSAL_STATUS_KEY: Record<SolidifyProposal['status'], string> = {
   pending: 'solidifyStatusPending', approved: 'solidifyStatusApproved', rejected: 'solidifyStatusRejected',
 };
 
+/** inputSummary 是服务端 JSON.stringify 的 {memories,trajectories,proposals,notes[]}；解析失败回 null（行内回退显示时间）。 */
+function batchSummary(raw: string | null): { memories: number; trajectories: number; proposals: number; notes: string[] } | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as { memories?: number; trajectories?: number; proposals?: number; notes?: string[] };
+    return {
+      memories: v.memories ?? 0, trajectories: v.trajectories ?? 0,
+      proposals: v.proposals ?? 0, notes: Array.isArray(v.notes) ? v.notes : [],
+    };
+  } catch { return null; }
+}
+
 /** 设置页「固化盘点」：发起盘点（409 防重入 toast）→ 轮询批次 → 提案列表 → 详情 diff + 退役勾选 → 批准/驳回。 */
 export default function SolidifySection() {
   const { t } = useTranslation();
@@ -114,16 +126,24 @@ export default function SolidifySection() {
             <div className="px-2 py-1 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
               {t('settings:solidifyBatchEmpty')}
             </div>
-          ) : (batchesQ.data ?? []).slice(0, 5).map((b) => (
-            <div key={b.id} className="flex items-center gap-2 px-2 py-1">
-              <span className="text-[10px] px-1.5 py-[1px] rounded shrink-0" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>
-                {t(`settings:${BATCH_STATUS_KEY[b.status]}`)}
-              </span>
-              <span className="text-[11px] truncate flex-1" style={{ color: 'var(--muted-foreground)' }}>
-                {b.error ?? b.inputSummary ?? new Date(b.createdAt).toLocaleString()}
-              </span>
-            </div>
-          ))}
+          ) : (batchesQ.data ?? []).slice(0, 5).map((b) => {
+            const s = batchSummary(b.inputSummary);
+            const text = b.error
+              ?? (s
+                ? `${t('settings:solidifyBatchSummary', { memories: s.memories, trajectories: s.trajectories, proposals: s.proposals })}${s.notes[0] ? ` · ${s.notes[0]}` : ''}`
+                : null)
+              ?? new Date(b.createdAt).toLocaleString();
+            return (
+              <div key={b.id} className="flex items-center gap-2 px-2 py-1" title={b.error ?? s?.notes.join('\n')}>
+                <span className="text-[10px] px-1.5 py-[1px] rounded shrink-0" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>
+                  {t(`settings:${BATCH_STATUS_KEY[b.status]}`)}
+                </span>
+                <span className="text-[11px] truncate flex-1" style={{ color: 'var(--muted-foreground)' }}>
+                  {text}
+                </span>
+              </div>
+            );
+          })}
         </div>
         {/* 提案列表 */}
         {proposalsQ.isLoading ? (
