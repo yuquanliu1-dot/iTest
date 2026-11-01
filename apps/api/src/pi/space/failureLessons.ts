@@ -1,6 +1,7 @@
 /**
  * R3.5 失败教训蒸馏层：
- *  - collectUnconsumedSignals：S1 回滚/恢复默认（既有版本链直查）+ S2 负向反馈 + S3 nl_ai_fail，
+ *  - collectUnconsumedSignals：S1 回滚/恢复默认（既有版本链直查）+ S2 负向反馈 + S3 nl_ai_fail
+ *    + R3.6 S4 session（近 7 天会话质量，采集器见 sessionSignals.ts），
  *    过滤「已被任意 status 教训 signals 引用」的信号（一次性消费，防 retire→再喂循环）。
  *  - distillLessons：LLM call#1，逐条归因（prompt/step_description/platform/sut），
  *    单条坏丢弃不炸批次；整体失败 throw 由调用方降级（solidifyService）。
@@ -16,14 +17,15 @@ import {
   assistantPromptModuleVersions, assistantSolidifyProposals, productLines, projects,
 } from '../../db/schema.js';
 import { completeJson, type LLMClient } from '../../agent/llm-client.js';
+import { collectSessionSignals } from './sessionSignals.js';
 
-export type SignalType = 'rollback' | 'restore_default' | 'negative_feedback' | 'nl_ai_fail';
+export type SignalType = 'rollback' | 'restore_default' | 'negative_feedback' | 'nl_ai_fail' | 'session';
 
 export interface CollectedSignal {
-  /** LLM 引用键：rollback#<seq> / negfb#<uuid> / nlaifail#<uuid>。 */
+  /** LLM 引用键：rollback#<seq> / negfb#<uuid> / nlaifail#<uuid> / session#<threadId>#<epoch>。 */
   key: string;
   type: SignalType;
-  /** 消费幂等记账：版本行 seq（S1，字符串化）/ 行 uuid（S2/S3）。 */
+  /** 消费幂等记账：版本行 seq（S1，字符串化）/ 行 uuid（S2/S3）/ threadId#epoch（S4）。 */
   refId: string;
   time: string;
   line: string;
@@ -37,8 +39,8 @@ const SIGNAL_CAP = 60;
 const TEXT_CAP = 400;
 const clip = (s: string, n = TEXT_CAP) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
-/** 信号采集（查询，无 LLM）。返回值：signals=截断后的蒸馏输入；total=未消费总数（input_summary 记账）。 */
-export async function collectUnconsumedSignals(): Promise<{ signals: CollectedSignal[]; total: number }> {
+/** 信号采集（查询+fs 扫描，无 LLM）。返回值：signals=截断后的蒸馏输入；total=未消费总数；notes=采集层护栏提示（超 8MB 等）。 */
+export async function collectUnconsumedSignals(deps?: { sessionsRoot?: string }): Promise<{ signals: CollectedSignal[]; total: number; notes: string[] }> {
   const lessons = await db.select({ signals: assistantFailureLessons.signals }).from(assistantFailureLessons);
   const consumed = new Set<string>();
   for (const l of lessons) {
@@ -132,9 +134,24 @@ export async function collectUnconsumedSignals(): Promise<{ signals: CollectedSi
     });
   }
 
+  // S4：近 7 天会话质量（R3.6，采集器含消费幂等预剔除——consumed 所有权仍在本层）
+  const sessionBundle = await collectSessionSignals({ consumedRefIds: consumed, sessionsRoot: deps?.sessionsRoot });
+  for (const s of sessionBundle.signals) {
+    collected.push({
+      key: s.key,
+      type: 'session',
+      refId: s.refId,
+      time: s.time,
+      line: 'global',
+      title: s.title,
+      excerpt: s.excerpt,
+      selfSolidify: false,
+    });
+  }
+
   const total = collected.length;
-  // S1 在最前天然优先；超量截断防爆 prompt
-  return { signals: collected.slice(0, SIGNAL_CAP), total };
+  // S1 在最前天然优先；session append 在最后再截——超量时先牺牲 S4（选样已限 12）
+  return { signals: collected.slice(0, SIGNAL_CAP), total, notes: sessionBundle.notes };
 }
 
 // ── 教训蒸馏（LLM call #1）──

@@ -1,18 +1,23 @@
-/** R3.5 蒸馏层：S1/S2/S3 信号聚合与消费幂等/教训蒸馏校验/提案输入过滤。 */
+/** R3.5 蒸馏层：S1/S2/S3 信号聚合与消费幂等/教训蒸馏校验/提案输入过滤；R3.6 增 S4 session 信号。 */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
+let sessionsRoot: string;
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   process.env.DATABASE_URL = container.getConnectionUri();
   pool = new Pool({ connectionString: container.getConnectionUri() });
   await pool.query(SCHEMA_SQL);
+  sessionsRoot = await mkdtemp(join(tmpdir(), 'pi-sess-fl-'));
 }, 60_000);
 
 afterAll(async () => {
@@ -23,7 +28,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE assistant_failure_signals, assistant_failure_lessons, assistant_solidify_proposals, assistant_solidify_batches, assistant_prompt_module_versions, ai_assistant_feedback`);
+  await pool.query(`TRUNCATE assistant_failure_signals, assistant_failure_lessons, assistant_solidify_proposals, assistant_solidify_batches, assistant_prompt_module_versions, ai_assistant_feedback, ai_threads`);
 });
 
 /** 顺序计数 stub：按调用次序回放 value；记录每次入参（形状无关断言用 JSON.stringify）。 */
@@ -126,6 +131,83 @@ describe('collectUnconsumedSignals', () => {
     expect(signals).toHaveLength(60);
     expect(total).toBe(71);
     expect(signals.find((s) => s.refId === String(seq))).toBeTruthy(); // S1 没被截掉
+  });
+});
+
+// ── R3.6 S4 session 信号 ──
+
+/** 可疑会话 JSONL（同 collector 测试款：verify 死循环 3 连 + 31min 时长 → 嫌疑分 7）。 */
+function suspiciousJsonl(firstUserText = '首条需求：核查SOC事件列表'): string {
+  const t0 = Date.parse('2026-11-01T10:00:00Z');
+  const at = (min: number) => new Date(t0 + min * 60_000).toISOString();
+  const line = (role: string, content: unknown[], extra: Record<string, unknown> = {}, ts = at(0)) =>
+    JSON.stringify({ type: 'message', timestamp: ts, message: { role, content, ...extra } });
+  const lines = [line('user', [{ type: 'text', text: firstUserText }])];
+  for (let i = 1; i <= 3; i++) {
+    lines.push(line('assistant', [{ type: 'toolCall', id: `c${i}`, name: 'verify_case', arguments: { caseId: 'loc-1' } }], {}, at(i * 10)));
+    lines.push(line('toolResult', [{ type: 'text', text: 'r' }], { toolCallId: `c${i}`, toolName: 'verify_case', isError: false }, at(i * 10 + 1)));
+  }
+  return lines.join('\n');
+}
+
+/** 插 chat 线程 + 写 JSONL（updated_at 用 UTC 墙钟串——drizzle 写路径同款语义，见 collector 测试）。 */
+async function seedChatThread(firstUserText?: string): Promise<{ id: string; refIdPrefix: string }> {
+  const file = join(sessionsRoot, `sess_${randomUUID()}.jsonl`);
+  await writeFile(file, suspiciousJsonl(firstUserText));
+  const id = (await pool.query(
+    `INSERT INTO ai_threads (pi_thread_id, purpose, updated_at, created_at) VALUES ($1, 'chat', $2, $2) RETURNING id`,
+    [file, '2026-11-01 12:00:00'])).rows[0]!.id as string;
+  return { id, refIdPrefix: `session#${id}#` };
+}
+
+describe('R3.6 session 信号', () => {
+  it('会话信号进聚合（type=session）；流经 distillLessons：signalRefs session#... 接受入库', async () => {
+    const { collectUnconsumedSignals, distillLessons } = await import('../src/pi/space/failureLessons.js');
+    const t = await seedChatThread();
+    const { signals } = await collectUnconsumedSignals({ sessionsRoot });
+    const s = signals.find((x) => x.refId.startsWith(t.refIdPrefix))!;
+    expect(s.type).toBe('session');
+    expect(s.key).toBe(s.refId);
+    expect(s.line).toBe('global');
+    expect(s.excerpt).toContain('首条需求：核查SOC事件列表');
+    // 流经蒸馏：LLM 引用 session 信号 key → 教训入库且 signals 记账为 session
+    const stub = sequentialStub([{
+      lessons: [{ attribution: 'prompt', title: 'verify 死循环教训', lesson: 'l', signalRefs: [s.refId] }],
+      notes: [],
+    }]);
+    const n = await distillLessons(stub as never, signals, 5_000);
+    expect(n).toBe(1);
+    const row = (await pool.query(`SELECT * FROM assistant_failure_lessons`)).rows[0]!;
+    expect(row.signals[0]).toMatchObject({ type: 'session', refId: s.refId });
+  });
+
+  it('merge 顺序与 cap 优先级：S1+70 条 S3 + 会话 → 60 条里 S1 在、session 被 slice 戮掉', async () => {
+    const { collectUnconsumedSignals } = await import('../src/pi/space/failureLessons.js');
+    const seq = await seedRollback('space.style.zh', '高精度信号', 'rollback', '好');
+    for (let i = 0; i < 70; i++) {
+      await pool.query(
+        `INSERT INTO assistant_failure_signals (type, thread_id, case_id, step_order, payload) VALUES ('nl_ai_fail', $1, $2, 1, '{}')`,
+        [randomUUID(), `c${i}`]);
+    }
+    const t = await seedChatThread();
+    const { signals, total } = await collectUnconsumedSignals({ sessionsRoot });
+    expect(signals).toHaveLength(60);
+    expect(total).toBe(72);
+    expect(signals.find((s) => s.refId === String(seq))).toBeTruthy(); // S1 天然优先
+    expect(signals.find((s) => s.refId.startsWith(t.refIdPrefix))).toBeUndefined(); // session append 末位先被截
+  });
+
+  it('消费幂等贯通：lesson 引用 session refId 后不再采集同 epoch 线程', async () => {
+    const { collectUnconsumedSignals } = await import('../src/pi/space/failureLessons.js');
+    const t = await seedChatThread();
+    const first = await collectUnconsumedSignals({ sessionsRoot });
+    const s = first.signals.find((x) => x.refId.startsWith(t.refIdPrefix))!;
+    await pool.query(
+      `INSERT INTO assistant_failure_lessons (status, attribution, title, lesson, signals, distill_model)
+       VALUES ('retired', 'prompt', 't', 'l', $1::jsonb, 'm')`,
+      [JSON.stringify([{ type: 'session', refId: s.refId, excerpt: 'e' }])]);
+    const second = await collectUnconsumedSignals({ sessionsRoot });
+    expect(second.signals.find((x) => x.refId === s.refId)).toBeUndefined();
   });
 });
 
