@@ -73,7 +73,7 @@
   "promptVersionLabel": "版本 {{seq}}",
   "promptCurrentLabel": "{{name}} · 当前值",
   "solidifyTitle": "固化盘点",
-  "solidifyIntro": "从助手记忆与轨迹蒸馏跨产品线的泛化经验产出提案——LLM 只产提案，应用一律经人工批准。",
+  "solidifyIntro": "从助手记忆、轨迹与近期会话质量蒸馏跨产品线的泛化经验产出提案——LLM 只产提案，应用一律经人工批准。",
   "solidifyScan": "发起盘点",
   "solidifyScanning": "盘点中…",
   "solidifyBatchEmpty": "尚无盘点批次",

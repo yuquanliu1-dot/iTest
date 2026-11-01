@@ -73,7 +73,7 @@
   "promptVersionLabel": "Version {{seq}}",
   "promptCurrentLabel": "{{name}} · current",
   "solidifyTitle": "Solidify Scan",
-  "solidifyIntro": "Distills cross-product-line general experience from memories and trajectories into proposals — the LLM only proposes; every apply goes through human approval.",
+  "solidifyIntro": "Distills cross-product-line general experience from memories, trajectories, and recent session quality into proposals — the LLM only proposes; every apply goes through human approval.",
   "solidifyScan": "Start scan",
   "solidifyScanning": "Scanning…",
   "solidifyBatchEmpty": "No batches yet",
