@@ -217,6 +217,13 @@ CREATE UNIQUE INDEX assistant_prompt_module_versions_source_ref_uq ON assistant_
 CREATE TABLE assistant_solidify_batches (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), status varchar(16) NOT NULL, input_summary text, error text, created_by uuid REFERENCES users(id) ON DELETE SET NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 CREATE TABLE assistant_solidify_proposals (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), batch_id uuid REFERENCES assistant_solidify_batches(id) ON DELETE CASCADE NOT NULL, kind varchar(20) NOT NULL, target varchar(100) NOT NULL, title varchar(200) NOT NULL, body text NOT NULL, rationale text NOT NULL, sources jsonb NOT NULL, status varchar(16) NOT NULL DEFAULT 'pending', reviewed_by uuid REFERENCES users(id) ON DELETE SET NULL, reviewed_at timestamp, applied_at timestamp, apply_error text, distill_model varchar(64) NOT NULL, created_by uuid REFERENCES users(id) ON DELETE SET NULL, created_at timestamp NOT NULL DEFAULT now());
 CREATE INDEX assistant_solidify_proposals_batch_idx ON assistant_solidify_proposals(batch_id, status);
+-- R3.5 失败教训蒸馏：原始失败信号 + 教训
+CREATE TABLE assistant_failure_signals (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), type varchar(20) NOT NULL, thread_id uuid NOT NULL, case_id varchar(64) NOT NULL, step_order integer NOT NULL, product_line_id uuid REFERENCES product_lines(id) ON DELETE SET NULL, payload jsonb NOT NULL, created_at timestamp NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX assistant_failure_signals_step_uq ON assistant_failure_signals(thread_id, case_id, step_order) WHERE type = 'nl_ai_fail';
+CREATE INDEX assistant_failure_signals_created_idx ON assistant_failure_signals(created_at);
+CREATE TABLE assistant_failure_lessons (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), status varchar(16) NOT NULL DEFAULT 'active', attribution varchar(20) NOT NULL, title varchar(200) NOT NULL, lesson text NOT NULL, signals jsonb NOT NULL, resolved_by_proposal uuid, distill_model varchar(64) NOT NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
+CREATE INDEX assistant_failure_lessons_status_idx ON assistant_failure_lessons(status, created_at);
+ALTER TABLE assistant_solidify_proposals ADD COLUMN base_seq integer;
 `;
 
 export interface SeedOrg {

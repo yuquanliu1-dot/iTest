@@ -920,11 +920,60 @@ export const assistantSolidifyProposals = pgTable('assistant_solidify_proposals'
   reviewedAt: timestamp('reviewed_at'),
   appliedAt: timestamp('applied_at'),
   applyError: text('apply_error'),
+  /** 仅 prompt_correction 用：盘点时定格 target 模块当前 max(seq)。apply 时检测人工修改（防静默 clobber）。 */
+  baseSeq: integer('base_seq'),
   distillModel: varchar('distill_model', { length: 64 }).notNull(),
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({
   batchIdx: index('assistant_solidify_proposals_batch_idx').on(t.batchId, t.status),
+}));
+
+// ── R3.5 失败教训蒸馏：原始失败信号（采集层，零 LLM）──
+// verify nlAiFail 分流等结构化失败证据在此落行；教训蒸馏（盘点时）只消费未被引用的信号。
+// threadId 无 FK：审计数据惯例（同 ai_assistant_feedback），不随 version 删除 cascade 消失。
+export const assistantFailureSignals = pgTable('assistant_failure_signals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  /** v1 仅 'nl_ai_fail'（verify 自然语言步 AI 相失败分流）；后续信号类型同表扩展。 */
+  type: varchar('type', { length: 20 }).notNull(),
+  threadId: uuid('thread_id').notNull(),
+  /** verify 的 caseId 可能是 staged 草稿 localId（非 uuid），按 varchar 64 对齐。 */
+  caseId: varchar('case_id', { length: 64 }).notNull(),
+  stepOrder: integer('step_order').notNull(),
+  /** 信号来源线（教训层不做线隔离，审批展示/排查需要来源）。 */
+  productLineId: uuid('product_line_id').references(() => productLines.id, { onDelete: 'set null' }),
+  /** {caseTitle, stepInstruction, failureReason, targetUrl, pageUrl}——快照自包含，线程不可溯仍可读。 */
+  payload: jsonb('payload').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  // 同一 (线程, 用例, 步) 只落一条：同轮重跑同一步失败不重复（写入侧 onConflictDoNothing）
+  stepUq: uniqueIndex('assistant_failure_signals_step_uq').on(t.threadId, t.caseId, t.stepOrder)
+    .where(sql`${t.type} = 'nl_ai_fail'`),
+  createdIdx: index('assistant_failure_signals_created_idx').on(t.createdAt),
+}));
+
+// ── R3.5 失败教训蒸馏：教训（蒸馏层，盘点时 LLM call#1 产物）──
+// platform/sut 归因的教训只入库（R5 平台/SUT 改进素材），严禁变成提示词补丁；
+// 仅 prompt/step_description 归因进入资产蒸馏输入。
+export const assistantFailureLessons = pgTable('assistant_failure_lessons', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  /** active | resolved（correction 提案应用后自动置）| retired（人工驳回：误报/过时/不修）。 */
+  status: varchar('status', { length: 16 }).notNull().default('active'),
+  /** prompt | step_description | platform | sut——LLM 蒸馏判定，误判由人工审批兜底。 */
+  attribution: varchar('attribution', { length: 20 }).notNull(),
+  /** 人话教训名（「guide 断言未限定实测范围导致泛化出自动登录」级颗粒度）。 */
+  title: varchar('title', { length: 200 }).notNull(),
+  /** 结构化正文：现象 → 根因 → 影响面 → 建议修正方向（蒸馏 prompt 规定段落）。 */
+  lesson: text('lesson').notNull(),
+  /** [{type, refId, excerpt}]——证据溯源 + 信号消费幂等的记账依据。 */
+  signals: jsonb('signals').notNull(),
+  /** 置 resolved 时记录是哪个修正提案。 */
+  resolvedByProposal: uuid('resolved_by_proposal'),
+  distillModel: varchar('distill_model', { length: 64 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  statusIdx: index('assistant_failure_lessons_status_idx').on(t.status, t.createdAt),
 }));
 
 // ── AI 助手用户反馈（Phase 1：只收集，不消费）──
