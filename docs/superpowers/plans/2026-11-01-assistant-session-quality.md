@@ -75,10 +75,10 @@ docs(specs): R3.6 会话质量盘点设计+实施计划——历史会话纳入�
 
 ## Task 1：解析层透传 timestamp
 
-- [ ] 1.1 `apps/api/src/scheduler/trajectoryParse.ts`：行类型（:23）加 `timestamp?: string`；`ParsedTurn`（:9-16）加 `timestamp?: number`。三分支（user :33-35 / assistant :36-42 / toolResult :43-52）各带 `Date.parse` + `Number.isNaN` 守卫（`const ts = line.timestamp ? Date.parse(line.timestamp) : NaN;` → `...(Number.isNaN(ts) ? {} : { timestamp: ts })`）。
-- [ ] 1.2 `apps/api/test/trajectory-parse.test.ts` 新断言（fixture msgLine helper 加 timestamp 参数）：有 timestamp 行 → epoch ms；缺/坏（`"timestamp":"not-a-date"`）→ undefined；user/assistant/toolResult 三分支覆盖。
-- [ ] 1.3 跑红→绿：`npx vitest run test/trajectory-parse.test.ts`。既有消费面零影响（findVerifiedLocalIds/compressConversation 不读该字段）。
-- [ ] 1.4 提交：
+- [x] 1.1 `apps/api/src/scheduler/trajectoryParse.ts`：行类型（:23）加 `timestamp?: string`；`ParsedTurn`（:9-16）加 `timestamp?: number`。三分支（user :33-35 / assistant :36-42 / toolResult :43-52）各带 `Date.parse` + `Number.isNaN` 守卫（`const ts = line.timestamp ? Date.parse(line.timestamp) : NaN;` → `...(Number.isNaN(ts) ? {} : { timestamp: ts })`）。
+- [x] 1.2 `apps/api/test/trajectory-parse.test.ts` 新断言（fixture msgLine helper 加 timestamp 参数）：有 timestamp 行 → epoch ms；缺/坏（`"timestamp":"not-a-date"`）→ undefined；user/assistant/toolResult 三分支覆盖。
+- [x] 1.3 跑红→绿：`npx vitest run test/trajectory-parse.test.ts`。既有消费面零影响（findVerifiedLocalIds/compressConversation 不读该字段）。
+- [x] 1.4 提交：
 
 ```
 feat(scheduler): R3.6 parseSessionJsonl 透传行级 timestamp
@@ -86,7 +86,7 @@ feat(scheduler): R3.6 parseSessionJsonl 透传行级 timestamp
 
 ## Task 2：纯函数——指标 + 嫌疑分
 
-- [ ] 2.1 新 `apps/api/src/pi/space/sessionSignals.ts`：
+- [x] 2.1 新 `apps/api/src/pi/space/sessionSignals.ts`：
 
 ```ts
 export const DEFAULT_SESSIONS_ROOT = path.join(DATA_DIR, 'pi-sessions'); // session.ts:42 同源；禁止 import session.ts/trajectoryWorker
@@ -104,9 +104,9 @@ export function sessionSuspicionScore(m: SessionMetrics, ctx: { negativeFeedback
 ```
 
 权重：时长 ≥30min +3 / ≥10min +2；verifyCalls ≥6 +4 / ≥3 +2；toolResultErrors ×2 封顶 4；repeatedIdentical ≥2 +2；turns ≥20 +1；负反馈 +3；nlAiFailCount ≥1 起 +2 每多 +1 封顶 4。
-- [ ] 2.2 新 `apps/api/test/session-signals.test.ts`（无 DB，fixture turns）：各权重断言 + 排序（score desc → updatedAt desc 的比较器若在此层导出则一并测）+ duration null（无 timestamp）。
-- [ ] 2.3 跑红→绿：`npx vitest run test/session-signals.test.ts`。
-- [ ] 2.4 提交：
+- [x] 2.2 新 `apps/api/test/session-signals.test.ts`（无 DB，fixture turns）：各权重断言 + 排序（score desc → updatedAt desc 的比较器若在此层导出则一并测）+ duration null（无 timestamp）。
+- [x] 2.3 跑红→绿：`npx vitest run test/session-signals.test.ts`。
+- [x] 2.4 提交：
 
 ```
 feat(space): R3.6 会话指标+嫌疑分纯函数——时长/verify/工具错误/重复调用加权选样
@@ -114,15 +114,15 @@ feat(space): R3.6 会话指标+嫌疑分纯函数——时长/verify/工具错�
 
 ## Task 3：采集器（DB+fs）
 
-- [ ] 3.1 `sessionSignals.ts` 追加 `collectSessionSignals({ consumedRefIds, sessionsRoot?, now? })`：
+- [x] 3.1 `sessionSignals.ts` 追加 `collectSessionSignals({ consumedRefIds, sessionsRoot?, now? })`：
   1. 查 `ai_threads`：`purpose='chat' AND updatedAt >= now()-7d AND piThreadId <> ''` order by updatedAt desc limit 30；
   2. refId（`${id}#${updatedAt.getTime()}`）已消费的**读文件前剔除**；
   3. 辅助映射：负反馈 threadId 集合（ai_assistant_feedback sentiment='negative'）、nl_ai_fail 按 thread_id 计数（assistant_failure_signals）；
   4. 读文件（stat >8MB 跳过记 note；坏行/缺文件静默跳）→ parseSessionJsonl → computeSessionMetrics → 打分 → top 12；
   5. 产出 CollectedSignal：`key/refId = session#<threadId>#<epoch>`、`type:'session'`、`title`（`会话 N 轮/Xmin · verify N 次 · 工具错误 N[ · 含负反馈]`，时长未知省略时长段）、`excerpt` = 指标头 + `compressConversation(turns, 2000)`、`line:'global'`、`time=updatedAt ISO`、`selfSolidify:false`。返回 `{ signals, notes }`。
-- [ ] 3.2 新 `apps/api/test/session-signals-collector.test.ts`（testcontainers + 临时目录 fixture JSONL，复用 trajectory-parse 的 msgLine 造行法）：窗口内 chat → 1 信号 + key 格式 + excerpt 含指标头与首条用户消息；消费幂等（同 epoch 抑制 / UPDATE updated_at → 新 epoch 重喂）；rca 排除；8 天前排除；>30 条候选截断；top-12 选样；坏文件跳过不炸批；缺文件静默；>8MB 跳过记 note。
-- [ ] 3.3 跑红→绿。
-- [ ] 3.4 提交：
+- [x] 3.2 新 `apps/api/test/session-signals-collector.test.ts`（testcontainers + 临时目录 fixture JSONL，复用 trajectory-parse 的 msgLine 造行法）：窗口内 chat → 1 信号 + key 格式 + excerpt 含指标头与首条用户消息；消费幂等（同 epoch 抑制 / UPDATE updated_at → 新 epoch 重喂）；rca 排除；8 天前排除；>30 条候选截断；top-12 选样；坏文件跳过不炸批；缺文件静默；>8MB 跳过记 note。
+- [x] 3.3 跑红→绿。
+- [x] 3.4 提交：
 
 ```
 feat(space): R3.6 会话信号采集器——7d/30候选/8MB/12选样四重护栏+epoch 消费幂等
@@ -130,10 +130,10 @@ feat(space): R3.6 会话信号采集器——7d/30候选/8MB/12选样四重护�
 
 ## Task 4：并入 failureLessons
 
-- [ ] 4.1 `apps/api/src/pi/space/failureLessons.ts`：`SignalType` 加 `'session'`；`collectUnconsumedSignals(deps?: { sessionsRoot?: string })` 在 S1/S2/S3 之后 merge `collectSessionSignals({ consumedRefIds: [...consumed], sessionsRoot: deps?.sessionsRoot })`（后 append → SIGNAL_CAP=60 slice 保 S1 优先）；采集器 notes 合并进返回值（供上层 summary）。
-- [ ] 4.2 `apps/api/test/failure-lessons.test.ts` 新增：session 信号流经 distillLessons（signalRefs `session#...` 接受入库，lesson.signals 记 `{type:'session', refId, excerpt}`）；merge 顺序与 cap 优先级（S1+70 条 nl_ai_fail 时 S1 保留、session 被 slice 截掉的边界按 append 序断言）。
-- [ ] 4.3 跑绿：`npx vitest run test/failure-lessons.test.ts`。
-- [ ] 4.4 提交：
+- [x] 4.1 `apps/api/src/pi/space/failureLessons.ts`：`SignalType` 加 `'session'`；`collectUnconsumedSignals(deps?: { sessionsRoot?: string })` 在 S1/S2/S3 之后 merge `collectSessionSignals({ consumedRefIds: [...consumed], sessionsRoot: deps?.sessionsRoot })`（后 append → SIGNAL_CAP=60 slice 保 S1 优先）；采集器 notes 合并进返回值（供上层 summary）。
+- [x] 4.2 `apps/api/test/failure-lessons.test.ts` 新增：session 信号流经 distillLessons（signalRefs `session#...` 接受入库，lesson.signals 记 `{type:'session', refId, excerpt}`）；merge 顺序与 cap 优先级（S1+70 条 nl_ai_fail 时 S1 保留、session 被 slice 截掉的边界按 append 序断言）。
+- [x] 4.3 跑绿：`npx vitest run test/failure-lessons.test.ts`。
+- [x] 4.4 提交：
 
 ```
 feat(space): R3.6 S4 session 信号并入信号聚合——append 末位保 S1 优先,记账所有权不外移
@@ -141,17 +141,17 @@ feat(space): R3.6 S4 session 信号并入信号聚合——append 末位保 S1 �
 
 ## Task 5：solidifyService 接线 + 提示词
 
-- [ ] 5.1 `apps/api/src/pi/space/solidifyService.ts`：
+- [x] 5.1 `apps/api/src/pi/space/solidifyService.ts`：
   - `SolidifyRunDeps` 加 `sessionsRoot?: string`，透传 `collectUnconsumedSignals({ sessionsRoot: deps.sessionsRoot })`；早退/summary 结构零改动。
   - `LESSON_SYSTEM_PROMPT` 增补：session 信号语义（近 7 天 chat 会话压缩流+量化指标头）；归因判别口径（关键背景 8 全文）。
   - `SOLIDIFY_SYSTEM_PROMPT` 判据 4 的 prompt_correction 频次措辞扩「（含 session 会话证据教训）」；rationale 要求引用会话信号数。
-- [ ] 5.2 `apps/api/test/solidify-service.test.ts` 新增（红线断言 **不动**）：
+- [x] 5.2 `apps/api/test/solidify-service.test.ts` 新增（红线断言 **不动**）：
   - 无线程 → 既有红线绿；
   - 可疑会话 fixture（deps.sessionsRoot 指向临时目录）→ call#1 输入含 `type=session`；
   - LLM 归 platform → 教训入库但不出现在 call#2 输入；
   - 归 prompt → prompt_correction 提案 sources 引用会话教训。
-- [ ] 5.3 跑绿：`npx vitest run test/solidify-service.test.ts`（R3/R3.5 既有用例必须全绿）。
-- [ ] 5.4 提交：
+- [x] 5.3 跑绿：`npx vitest run test/solidify-service.test.ts`（R3/R3.5 既有用例必须全绿）。
+- [x] 5.4 提交：
 
 ```
 feat(space): R3.6 盘点接线——会话信号进蒸馏输入+提示词侧/平台侧归因判别口径
@@ -159,9 +159,9 @@ feat(space): R3.6 盘点接线——会话信号进蒸馏输入+提示词侧/平
 
 ## Task 6：Web 文案
 
-- [ ] 6.1 zh `solidifyIntro`：「从助手记忆、轨迹与近期会话质量蒸馏跨产品线的泛化经验产出提案——LLM 只产提案，应用一律经人工批准。」en 对应补 `/ recent session quality` 语义。
-- [ ] 6.2 `cd apps/web && pnpm verify`。
-- [ ] 6.3 提交：
+- [x] 6.1 zh `solidifyIntro`：「从助手记忆、轨迹与近期会话质量蒸馏跨产品线的泛化经验产出提案——LLM 只产提案，应用一律经人工批准。」en 对应补 `/ recent session quality` 语义。
+- [x] 6.2 `cd apps/web && pnpm verify`。
+- [x] 6.3 提交：
 
 ```
 feat(web): R3.6 固化盘点文案纳入近期会话质量语义
@@ -169,9 +169,9 @@ feat(web): R3.6 固化盘点文案纳入近期会话质量语义
 
 ## Task 7：回归收尾
 
-- [ ] 7.1 api 全量：`cd apps/api && npm test`（sendSyslog 基线红为既有噪声）；trajectory-parse / trajectory-worker / space-session 相关套件绿。
-- [ ] 7.2 `git status` 核对无源码污染（历史教训：测试把反引号写进模板字面量）。
-- [ ] 7.3 dev 冒烟：dev 库插一条 chat ai_threads 行 + 手写 JSONL 到 dev 容器 pi-sessions → UI 发起盘点 → 批次 summary 出会话信号计数 → 教训块渲染（网关慢则按设计降级，信号保留）。
+- [x] 7.1 api 全量：`cd apps/api && npm test`（sendSyslog 基线红为既有噪声）；trajectory-parse / trajectory-worker / space-session 相关套件绿。
+- [x] 7.2 `git status` 核对无源码污染（历史教训：测试把反引号写进模板字面量）。
+- [x] 7.3 dev 冒烟：dev 库插一条 chat ai_threads 行 + 手写 JSONL 到 dev 容器 pi-sessions → UI 发起盘点 → 批次 summary 出会话信号计数 → 教训块渲染（网关慢则按设计降级，信号保留）。
 - [ ] 7.4 发版 prod228 + 锚点记录：api dist grep `sessionSignals`/`computeSessionMetrics`/归因判别措辞；web bundle 含新 intro 文案。
 
 ---
