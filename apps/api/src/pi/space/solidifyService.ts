@@ -72,7 +72,8 @@ export async function startSolidifyScan(userId: string | null): Promise<string> 
 async function llmClientFromConfig(): Promise<LLMClient | null> {
   const cfg = await readLlmConfig();
   if (!cfg) return null;
-  return getLlmClient({ provider: cfg.provider, apiKey: cfg.apiKey, model: cfg.model, baseUrl: cfg.baseUrl ?? undefined });
+  // 整体展开而非手搓字段：新增 LlmConfig 字段（如 maxTokens）自动透传，防再漏
+  return getLlmClient({ ...cfg, baseUrl: cfg.baseUrl ?? undefined });
 }
 
 /** LLM 超时护栏（与 scheduler/trajectoryWorker 同款；不共享是为免 space↔scheduler import 环）。 */

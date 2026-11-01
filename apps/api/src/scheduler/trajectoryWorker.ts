@@ -140,7 +140,7 @@ export async function processTrajectoryJob(data: TrajectoryJob, deps: Trajectory
 export async function processTrajectoryJobInline(data: TrajectoryJob): Promise<void> {
   const cfg = await readLlmConfig();
   if (!cfg) { logger.warn('trajectory: LLM not configured; skip inline distill'); return; }
-  await processTrajectoryJob(data, { client: getLlmClient({ provider: cfg.provider, apiKey: cfg.apiKey, model: cfg.model, baseUrl: cfg.baseUrl ?? undefined }) });
+  await processTrajectoryJob(data, { client: getLlmClient({ ...cfg, baseUrl: cfg.baseUrl ?? undefined }) });
 }
 
 let _worker: Worker<TrajectoryJob> | null = null;
@@ -156,7 +156,7 @@ export async function startTrajectoryWorker(): Promise<void> {
     // REDIS 在而 LLM 未配置：enqueue 走 redis 但无人消费——任务会静默堆积。
     // warn 点名后果；LLM 配好后重启进程即可消化积压（BullMQ 任务持久在 redis）。
     if (!cfg) { logger.warn('trajectory: LLM not configured; worker not started (enqueued jobs will wait until a worker starts)'); return; }
-    const client = getLlmClient({ provider: cfg.provider, apiKey: cfg.apiKey, model: cfg.model, baseUrl: cfg.baseUrl ?? undefined });
+    const client = getLlmClient({ ...cfg, baseUrl: cfg.baseUrl ?? undefined });
     _worker = buildTrajectoryWorker((job) => processTrajectoryJob(job, { client }));
     _worker.on('ready', () => logger.info('trajectory worker ready'));
     _worker.on('error', (err) => logger.warn({ err: err.message }, 'trajectory worker error'));

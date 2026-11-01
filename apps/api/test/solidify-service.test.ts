@@ -1,5 +1,5 @@
 /** 固化盘点管线：防重入/LLM 未配置/空输入/蒸馏入库/单条丢弃/超时/无落点；R3.6 会话信号接线。 */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { randomUUID } from 'node:crypto';
@@ -7,6 +7,15 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
+
+// 仅被「内部建 client」用例触达（其余用例全部 DI 注入 stub，不碰真 SDK）。
+const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
+vi.mock('@anthropic-ai/sdk', () => {
+  class Anthropic {
+    messages = { create: createMock };
+  }
+  return { __esModule: true, default: Anthropic };
+});
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -451,5 +460,33 @@ describe('runSolidifyScan：R3.6 会话信号', () => {
     await runSolidifyScan(id, { client: stub as never, sessionsRoot });
     const summary = JSON.parse((await batchRow(id)).input_summary as string);
     expect(summary.notes.some((n: string) => n.includes('8MB'))).toBe(true);
+  });
+});
+
+// ── llm_max_tokens 接线（2026-11-01 prod228 实测回归锚）──
+// 生产 bug：内部建 client 手搓字段丢掉 cfg.maxTokens → 网关思考模型在默认 4096 里烧光
+// 预算 → 空文本，蒸馏必败；设置页配 16384 也不生效。锚定：不注入 deps.client、走
+// readLlmConfig → getLlmClient 的真实路径，请求体必须透传配置的 max_tokens。
+describe('runSolidifyScan：内部建 client 透传 llm_max_tokens', () => {
+  it('settings 配 max_tokens=16384 → Anthropic 请求体 max_tokens=16384（而非默认 4096）', async () => {
+    await pool.query(`INSERT INTO settings(key, value) VALUES
+      ('llm_provider','"anthropic"'),
+      ('llm_api_key','"sk-test"'),
+      ('llm_model','"m"'),
+      ('llm_max_tokens','"16384"')`);
+    createMock.mockResolvedValueOnce({
+      id: 'msg_1', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: JSON.stringify({ proposals: [], notes: [] }) }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+    const { runSolidifyScan } = await import('../src/pi/space/solidifyService.js');
+    await seedSources(); // 资产池非空防早退（0 信号 → 无阶段 1，只有资产蒸馏一次调用）
+    const id = await newBatchId();
+    await runSolidifyScan(id, { sessionsRoot }); // 不注入 client → 内部 readLlmConfig 建 client
+    const b = await batchRow(id);
+    expect(b.status).toBe('done');
+    expect(createMock).toHaveBeenCalledTimes(1);
+    const body = createMock.mock.calls[0]![0] as { max_tokens: number };
+    expect(body.max_tokens).toBe(16384);
   });
 });
