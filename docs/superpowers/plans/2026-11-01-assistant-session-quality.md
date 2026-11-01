@@ -172,7 +172,7 @@ feat(web): R3.6 固化盘点文案纳入近期会话质量语义
 - [x] 7.1 api 全量：`cd apps/api && npm test`（sendSyslog 基线红为既有噪声）；trajectory-parse / trajectory-worker / space-session 相关套件绿。
 - [x] 7.2 `git status` 核对无源码污染（历史教训：测试把反引号写进模板字面量）。
 - [x] 7.3 dev 冒烟：dev 库插一条 chat ai_threads 行 + 手写 JSONL 到 dev 容器 pi-sessions → UI 发起盘点 → 批次 summary 出会话信号计数 → 教训块渲染（网关慢则按设计降级，信号保留）。
-- [ ] 7.4 发版 prod228 + 锚点记录：api dist grep `sessionSignals`/`computeSessionMetrics`/归因判别措辞；web bundle 含新 intro 文案。
+- [x] 7.4 发版 prod228 + 锚点记录：api dist grep `sessionSignals`/`computeSessionMetrics`/归因判别措辞；web bundle 含新 intro 文案。
 
 ---
 
