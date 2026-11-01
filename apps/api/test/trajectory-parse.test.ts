@@ -26,6 +26,28 @@ describe('trajectoryParse：JSONL → 会话轮次', () => {
     expect(turns.filter((t) => t.role === 'toolResult')).toHaveLength(2);
   });
 
+  it('parseSessionJsonl：行级 timestamp 透传为 epoch ms；缺/坏 → undefined（三分支覆盖）', async () => {
+    const { parseSessionJsonl } = await import('../src/scheduler/trajectoryParse.js');
+    const mk = (role: string, ts: string | undefined, extra: Record<string, unknown> = {}) =>
+      JSON.stringify({ type: 'message', ...(ts !== undefined ? { timestamp: ts } : {}), message: { role, content: [{ type: 'text', text: 'x' }], ...extra } });
+    const jsonl = [
+      mk('user', '2026-11-01T08:00:00.000Z'),
+      mk('assistant', '2026-11-01T08:01:00.500Z'),
+      mk('toolResult', '2026-11-01T08:02:00.000Z', { toolCallId: 'c1', toolName: 't', isError: false }),
+      mk('user', 'not-a-date'),
+      mk('assistant', undefined),
+    ].join('\n');
+    const turns = parseSessionJsonl(jsonl);
+    const users = turns.filter((t) => t.role === 'user');
+    expect(users[0]!.timestamp).toBe(Date.parse('2026-11-01T08:00:00.000Z'));
+    expect(users[1]!.timestamp).toBeUndefined(); // 坏 timestamp
+    const assts = turns.filter((t) => t.role === 'assistant');
+    expect(assts[0]!.timestamp).toBe(Date.parse('2026-11-01T08:01:00.500Z'));
+    expect(assts[1]!.timestamp).toBeUndefined(); // 缺 timestamp
+    const tr = turns.find((t) => t.role === 'toolResult')!;
+    expect(tr.timestamp).toBe(Date.parse('2026-11-01T08:02:00.000Z'));
+  });
+
   /** 生产形态 verify rdata 正文（session 包装层 ok:true → isError:false，text 是 JSON 串）。 */
   const passedBody = (extra: Record<string, unknown> = {}) => JSON.stringify({ result: 'passed', basedOn: 'staged', steps: [], ...extra });
   const failedBody = (extra: Record<string, unknown> = {}) => JSON.stringify({ result: 'failed', basedOn: 'staged', failure: { stepOrder: 1, error: '找不到按钮' }, ...extra });
