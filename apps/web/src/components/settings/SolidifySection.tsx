@@ -15,14 +15,22 @@ const BATCH_STATUS_KEY: Record<SolidifyBatch['status'], string> = {
 const PROPOSAL_STATUS_KEY: Record<SolidifyProposal['status'], string> = {
   pending: 'solidifyStatusPending', approved: 'solidifyStatusApproved', rejected: 'solidifyStatusRejected',
 };
+const KIND_KEY: Record<SolidifyProposal['kind'], string> = {
+  prompt_amendment: 'solidifyKindPrompt', skill_revision: 'solidifyKindSkill', prompt_correction: 'solidifyKindCorrect',
+};
+const LESSON_ATTRIBUTION_KEY: Record<string, string> = {
+  prompt: 'lessonAttributionPrompt', step_description: 'lessonAttributionStep',
+  platform: 'lessonAttributionPlatform', sut: 'lessonAttributionSut',
+};
 
-/** inputSummary 是服务端 JSON.stringify 的 {memories,trajectories,proposals,notes[]}；解析失败回 null（行内回退显示时间）。 */
-function batchSummary(raw: string | null): { memories: number; trajectories: number; proposals: number; notes: string[] } | null {
+/** inputSummary 是服务端 JSON.stringify 的 {memories,trajectories,lessons,signals,proposals,notes[]}；解析失败回 null（行内回退显示时间）。 */
+function batchSummary(raw: string | null): { memories: number; trajectories: number; lessons: number; signals: number; proposals: number; notes: string[] } | null {
   if (!raw) return null;
   try {
-    const v = JSON.parse(raw) as { memories?: number; trajectories?: number; proposals?: number; notes?: string[] };
+    const v = JSON.parse(raw) as { memories?: number; trajectories?: number; lessons?: number; signals?: number; proposals?: number; notes?: string[] };
     return {
       memories: v.memories ?? 0, trajectories: v.trajectories ?? 0,
+      lessons: v.lessons ?? 0, signals: v.signals ?? 0,
       proposals: v.proposals ?? 0, notes: Array.isArray(v.notes) ? v.notes : [],
     };
   } catch { return null; }
@@ -52,6 +60,26 @@ export default function SolidifySection() {
     queryKey: ['prompt-modules'],
     queryFn: () => api.assistant.promptModules.list(),
     staleTime: 60_000,
+  });
+  // R3.5 失败教训：三个状态并行拉，active 渲染列表，resolved/retired 折叠成计数
+  const lessonsQ = useQuery({
+    queryKey: ['failure-lessons'],
+    queryFn: async () => {
+      const [active, resolved, retired] = await Promise.all([
+        api.assistant.failureLessons.list('active'),
+        api.assistant.failureLessons.list('resolved'),
+        api.assistant.failureLessons.list('retired'),
+      ]);
+      return { active, resolved, retired };
+    },
+  });
+  const retireLesson = useMutation({
+    mutationFn: (id: string) => api.assistant.failureLessons.retire(id),
+    onSuccess: () => {
+      toast(t('settings:solidifyReviewed'), 'success');
+      qc.invalidateQueries({ queryKey: ['failure-lessons'] });
+    },
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
   const [openId, setOpenId] = useState<string | null>(null);
@@ -85,6 +113,8 @@ export default function SolidifySection() {
         // 退役发生在批准：记忆/轨迹列表里被勾选来源随之消失（active 口径）
         qc.invalidateQueries({ queryKey: ['assistant-memories'] });
         qc.invalidateQueries({ queryKey: ['assistant-trajectories'] });
+        // correction 应用 → sources 内 lesson 自动 resolved → 教训块收口
+        qc.invalidateQueries({ queryKey: ['failure-lessons'] });
       }
     },
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
@@ -120,6 +150,34 @@ export default function SolidifySection() {
         {t('settings:solidifyIntro')}
       </div>
       <div className="p-2 flex flex-col gap-3">
+        {/* R3.5 失败教训：active 列表（≤10）+ 折叠计数；retire=人工驳回（误报/不修） */}
+        <div className="flex flex-col gap-1">
+          <div className="text-[11px] font-medium px-2" style={{ color: 'var(--muted-foreground)' }}>
+            {t('settings:lessonBlockTitle')}
+            {lessonsQ.data && (lessonsQ.data.resolved.length > 0 || lessonsQ.data.retired.length > 0) && (
+              <span className="ml-2 font-normal">
+                {t('settings:lessonSettledCounts', { resolved: lessonsQ.data.resolved.length, retired: lessonsQ.data.retired.length })}
+              </span>
+            )}
+          </div>
+          {(lessonsQ.data?.active ?? []).length === 0 ? (
+            <div className="px-2 py-1 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>{t('settings:lessonEmpty')}</div>
+          ) : (lessonsQ.data?.active ?? []).slice(0, 10).map((l) => (
+            <div key={l.id} className="flex items-center gap-2 px-2 py-1">
+              <span className="text-[10px] px-1.5 py-[1px] rounded shrink-0" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>
+                {t(`settings:${LESSON_ATTRIBUTION_KEY[l.attribution] ?? 'lessonAttributionPrompt'}`)}
+              </span>
+              <span className="text-[12px] truncate flex-1" style={{ color: 'var(--foreground)' }} title={l.lesson}>{l.title}</span>
+              <span className="text-[10px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>
+                {t('settings:lessonSignalCount', { count: l.signals?.length ?? 0 })}
+              </span>
+              <button type="button" className="text-[11px] shrink-0" style={{ color: 'var(--muted-foreground)' }}
+                disabled={retireLesson.isPending} onClick={() => retireLesson.mutate(l.id)}>
+                {t('settings:lessonIgnore')}
+              </button>
+            </div>
+          ))}
+        </div>
         {/* 批次历史：最新在前；running 转终态由轮询+invalidate 收口 */}
         <div className="flex flex-col gap-1">
           {(batchesQ.data ?? []).length === 0 ? (
@@ -130,7 +188,7 @@ export default function SolidifySection() {
             const s = batchSummary(b.inputSummary);
             const text = b.error
               ?? (s
-                ? `${t('settings:solidifyBatchSummary', { memories: s.memories, trajectories: s.trajectories, proposals: s.proposals })}${s.notes[0] ? ` · ${s.notes[0]}` : ''}`
+                ? `${t('settings:solidifyBatchSummary', { memories: s.memories, trajectories: s.trajectories, lessons: s.lessons, signals: s.signals, proposals: s.proposals })}${s.notes[0] ? ` · ${s.notes[0]}` : ''}`
                 : null)
               ?? new Date(b.createdAt).toLocaleString();
             return (
@@ -162,7 +220,7 @@ export default function SolidifySection() {
             onClick={() => openProposal(p)}
           >
             <span className="text-[10px] px-1.5 py-[1px] rounded shrink-0" style={{ background: 'var(--muted)', color: 'var(--foreground)' }}>
-              {t(`settings:${p.kind === 'prompt_amendment' ? 'solidifyKindPrompt' : 'solidifyKindSkill'}`)}
+              {t(`settings:${KIND_KEY[p.kind]}`)}
             </span>
             <span className="text-[12px] font-medium truncate flex-1" style={{ color: 'var(--foreground)' }}>{p.title}</span>
             <span className="text-[10px] px-1.5 py-[1px] rounded shrink-0" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>
@@ -182,7 +240,7 @@ export default function SolidifySection() {
             <div className="px-5 py-3 flex flex-col gap-3">
               <div className="flex flex-wrap items-center gap-2 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                 <span className="text-[10px] px-1.5 py-[1px] rounded" style={{ background: 'var(--muted)', color: 'var(--foreground)' }}>
-                  {t(`settings:${detail.kind === 'prompt_amendment' ? 'solidifyKindPrompt' : 'solidifyKindSkill'}`)}
+                  {t(`settings:${KIND_KEY[detail.kind]}`)}
                 </span>
                 <span>{t('settings:solidifyTarget')}：<code className="font-mono">{detail.target}</code></span>
                 <span>{t('settings:solidifyModel')}：{detail.distillModel}</span>
@@ -220,18 +278,32 @@ export default function SolidifySection() {
               <div className="flex flex-col gap-1">
                 <div className="text-[11px] font-medium" style={{ color: 'var(--muted-foreground)' }}>{t('settings:solidifySources')}</div>
                 {detail.sources.map((s) => (
-                  <label key={s.id} className="flex items-center gap-2 px-2 py-1 rounded cursor-pointer" style={{ background: 'var(--muted)' }}>
-                    <input
-                      type="checkbox"
-                      checked={retireIds.includes(s.id)}
-                      onChange={(e) => setRetireIds((prev) =>
-                        e.target.checked ? [...prev, s.id] : prev.filter((x) => x !== s.id))}
-                    />
+                  <label key={s.id} className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'var(--muted)', cursor: s.type === 'lesson' ? 'default' : 'pointer' }}>
+                    {s.type !== 'lesson' && (
+                      <input
+                        type="checkbox"
+                        checked={retireIds.includes(s.id)}
+                        onChange={(e) => setRetireIds((prev) =>
+                          e.target.checked ? [...prev, s.id] : prev.filter((x) => x !== s.id))}
+                      />
+                    )}
                     <span className="text-[10px] px-1.5 py-[1px] rounded shrink-0" style={{ background: 'var(--card)', color: 'var(--muted-foreground)' }}>
-                      {s.type === 'memory' ? 'memory' : 'trajectory'}
+                      {s.type === 'memory' ? 'memory' : s.type === 'trajectory' ? 'trajectory' : t('settings:solidifySourceLesson')}
                     </span>
+                    {s.type === 'lesson' && s.attribution && (
+                      <span className="text-[10px] px-1.5 py-[1px] rounded shrink-0" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>
+                        {t(`settings:${LESSON_ATTRIBUTION_KEY[s.attribution] ?? 'lessonAttributionPrompt'}`)}
+                      </span>
+                    )}
+                    {s.type === 'lesson' && s.signalCount != null && (
+                      <span className="text-[10px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>
+                        {t('settings:lessonSignalCount', { count: s.signalCount })}
+                      </span>
+                    )}
                     <span className="text-[11px] truncate flex-1" style={{ color: 'var(--foreground)' }}>{s.title}</span>
-                    <span className="text-[10px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{s.lineName}</span>
+                    {s.type === 'lesson'
+                      ? <span className="text-[10px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('settings:lessonAutoResolve')}</span>
+                      : <span className="text-[10px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{s.lineName}</span>}
                   </label>
                 ))}
               </div>
