@@ -82,6 +82,7 @@ export default function Settings() {
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
+  const [maxTokens, setMaxTokens] = useState('');
 
   // 回放 AI 重做开关（机械失败降级）
   const [locatorFailedFallback, setLocatorFailedFallback] = useState(false);
@@ -94,6 +95,7 @@ export default function Settings() {
     setApiKey((data.llm_api_key as string) ?? '');
     setModel((data.llm_model as string) ?? '');
     setBaseUrl((data.llm_base_url as string) ?? '');
+    setMaxTokens(data.llm_max_tokens != null ? String(data.llm_max_tokens) : '');
     setLocatorFailedFallback(data[AI_FALLBACK_LOCATOR_FAILED_KEY] === true);
   }, [data]);
 
@@ -103,10 +105,21 @@ export default function Settings() {
       await api.settings.put('llm_api_key', apiKey);
       await api.settings.put('llm_model', model);
       await api.settings.put('llm_base_url', baseUrl);
+      await api.settings.put('llm_max_tokens', maxTokens.trim());
     },
     onSuccess: () => toast(t('settings:saved'), 'success'),
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
+
+  // 最大输出 Tokens 保存前校验：非法值服务端会静默忽略回退默认，这里拦在前端给明确反馈
+  const saveLlm = () => {
+    const mt = maxTokens.trim();
+    if (mt !== '' && (!/^\d+$/.test(mt) || Number(mt) < 1)) {
+      toast(t('settings:maxTokensInvalid'), 'error');
+      return;
+    }
+    save.mutate();
+  };
 
   const test = useMutation({
     mutationFn: () => api.settings.testConnection({ provider, apiKey, model, baseUrl }),
@@ -236,8 +249,21 @@ export default function Settings() {
                   </p>
                 )}
               </div>
+              <div>
+                <Input
+                  label={t('settings:maxTokensLabel')}
+                  placeholder={t('settings:maxTokensPlaceholder')}
+                  type="number"
+                  min={1}
+                  value={maxTokens}
+                  onChange={(e) => setMaxTokens(e.target.value)}
+                />
+                <p className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
+                  {t('settings:maxTokensHelp')}
+                </p>
+              </div>
               <div className="flex items-center gap-3">
-                <Button disabled={save.isPending} onClick={() => save.mutate()}>
+                <Button disabled={save.isPending} onClick={saveLlm}>
                   {save.isPending ? t('settings:saving') : t('common:save')}
                 </Button>
                 <Button variant="ghost" disabled={test.isPending} onClick={() => test.mutate()}>

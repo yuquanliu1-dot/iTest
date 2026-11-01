@@ -9,6 +9,8 @@ export interface LlmConfig {
   apiKey: string;
   model: string;
   baseUrl: string | null;
+  /** 单次回复最大输出 token（llm_max_tokens）；未配置/非法 → undefined，client 用自己的默认。 */
+  maxTokens?: number;
 }
 
 const KEYS = {
@@ -16,6 +18,7 @@ const KEYS = {
   apiKey: 'llm_api_key',
   model: 'llm_model',
   baseUrl: 'llm_base_url',
+  maxTokens: 'llm_max_tokens',
 } as const;
 
 const VALID: readonly LlmProvider[] = ['openai', 'anthropic', 'google'];
@@ -25,7 +28,7 @@ export async function readLlmConfig(): Promise<LlmConfig | null> {
   const all = await db
     .select()
     .from(settings)
-    .where(inArray(settings.key, [KEYS.provider, KEYS.apiKey, KEYS.model, KEYS.baseUrl]));
+    .where(inArray(settings.key, [KEYS.provider, KEYS.apiKey, KEYS.model, KEYS.baseUrl, KEYS.maxTokens]));
   const map = new Map(all.map((r) => [r.key, r.value as unknown]));
   const rawProvider = String(map.get(KEYS.provider) ?? '');
   if (!(VALID as readonly string[]).includes(rawProvider)) return null;
@@ -34,7 +37,14 @@ export async function readLlmConfig(): Promise<LlmConfig | null> {
   const model = String(map.get(KEYS.model) ?? '');
   const rawBase = String(map.get(KEYS.baseUrl) ?? '');
   if (!apiKey || !model) return null;
-  return { provider, apiKey, model, baseUrl: rawBase || null };
+  const n = Number(String(map.get(KEYS.maxTokens) ?? '').trim());
+  return {
+    provider,
+    apiKey,
+    model,
+    baseUrl: rawBase || null,
+    ...(Number.isInteger(n) && n > 0 ? { maxTokens: n } : {}),
+  };
 }
 
 /**

@@ -15,7 +15,8 @@ export class GoogleClient implements LLMClient {
     const m = this.client.getGenerativeModel({
       model,
       systemInstruction: systemPrompt || 'You are a helpful assistant. Reply with JSON only.',
-      generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
+      // 未配置不传参（走服务商默认，与既有行为一致）
+      generationConfig: { responseMimeType: 'application/json', temperature: 0.2, ...(this.cfg.maxTokens ? { maxOutputTokens: this.cfg.maxTokens } : {}) },
     });
     // 多轮累积：req.messages 存在时按 user/assistant 交替回传，否则退化为单轮。
     // 空数组按单轮处理：startChat 的 history 必须以 user 开头，且末轮要单独 sendMessage，

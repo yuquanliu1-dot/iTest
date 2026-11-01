@@ -8,6 +8,8 @@ export interface LLMConfig {
   model: string;
   /** 自定义网关地址（如内网代理）；留空用各 SDK 官方默认。 */
   baseUrl?: string;
+  /** 单次回复最大输出 token（settings 键 llm_max_tokens）；缺省各 client 用自己的默认。 */
+  maxTokens?: number;
 }
 
 /** 一条对话消息（多轮累积形态）。content 里的 image 是截图 block。 */

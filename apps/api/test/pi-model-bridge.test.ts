@@ -61,4 +61,56 @@ describe('readLlmConfig', () => {
     const { readLlmConfig } = await import('../src/pi/modelBridge.js');
     expect(await readLlmConfig()).toBeNull();
   });
+
+  it('parses llm_max_tokens（正整数字符串）into maxTokens', async () => {
+    await pool.query(`INSERT INTO settings(key, value) VALUES
+      ('llm_provider','"anthropic"'),
+      ('llm_api_key','"sk-test"'),
+      ('llm_model','"Auto"'),
+      ('llm_max_tokens','"16384"')`);
+    const { readLlmConfig } = await import('../src/pi/modelBridge.js');
+    expect(await readLlmConfig()).toEqual({
+      provider: 'anthropic',
+      apiKey: 'sk-test',
+      model: 'Auto',
+      baseUrl: null,
+      maxTokens: 16384,
+    });
+  });
+
+  it('ignores invalid llm_max_tokens（乱码/非正数）→ 无 maxTokens 字段', async () => {
+    await pool.query(`INSERT INTO settings(key, value) VALUES
+      ('llm_provider','"anthropic"'),
+      ('llm_api_key','"sk-test"'),
+      ('llm_model','"Auto"'),
+      ('llm_max_tokens','"abc"')`);
+    const { readLlmConfig } = await import('../src/pi/modelBridge.js');
+    const cfg = await readLlmConfig();
+    expect(cfg).not.toBeNull();
+    expect(cfg!.maxTokens).toBeUndefined();
+  });
+});
+
+describe('resolveLlmClient', () => {
+  it('reads llm_max_tokens into config.maxTokens', async () => {
+    await pool.query(`INSERT INTO settings(key, value) VALUES
+      ('llm_provider','"anthropic"'),
+      ('llm_api_key','"sk-test"'),
+      ('llm_model','"Auto"'),
+      ('llm_max_tokens','"16384"')`);
+    const { resolveLlmClient } = await import('../src/agent/llmSettings.js');
+    const { config } = await resolveLlmClient();
+    expect(config.maxTokens).toBe(16384);
+  });
+
+  it('invalid llm_max_tokens → config.maxTokens undefined（回退 client 默认）', async () => {
+    await pool.query(`INSERT INTO settings(key, value) VALUES
+      ('llm_provider','"anthropic"'),
+      ('llm_api_key','"sk-test"'),
+      ('llm_model','"Auto"'),
+      ('llm_max_tokens','"0"')`);
+    const { resolveLlmClient } = await import('../src/agent/llmSettings.js');
+    const { config } = await resolveLlmClient();
+    expect(config.maxTokens).toBeUndefined();
+  });
 });

@@ -33,6 +33,8 @@ export class OpenAIClient implements LLMClient {
     const systemPrompt = req.lang ? `${req.systemPrompt}\n${langDirective(req.lang)}` : req.systemPrompt;
     const resp = await this.client.chat.completions.create({
       model,
+      // 未配置不传参（走服务商默认，与既有行为一致）
+      ...(this.cfg.maxTokens ? { max_tokens: this.cfg.maxTokens } : {}),
       messages: [
         ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
         ...(history as OpenAI.Chat.ChatCompletionMessageParam[]),

@@ -48,6 +48,30 @@ describe('AnthropicClient.complete · content 防守', () => {
   });
 });
 
+describe('AnthropicClient.complete · max_tokens 可配置', () => {
+  const resp = {
+    id: 'msg_mt', type: 'message', role: 'assistant', model: 'm',
+    content: [{ type: 'text', text: '{"ok":true}' }],
+    usage: { input_tokens: 5, output_tokens: 3 },
+  };
+  /** 取最后一次请求体的 max_tokens。 */
+  const lastMaxTokens = () => (createMock.mock.calls.at(-1)![0] as { max_tokens: number }).max_tokens;
+
+  it('cfg.maxTokens=16384 → 请求体透传（思考模型把思考计入预算，4096 会被整段吃光致空文本）', async () => {
+    createMock.mockResolvedValueOnce(resp);
+    const c = new AnthropicClient({ provider: 'anthropic', apiKey: 'k', model: 'm', maxTokens: 16384 });
+    await c.complete({ systemPrompt: 'sys', userMessage: 'u' });
+    expect(lastMaxTokens()).toBe(16384);
+  });
+
+  it('未配置 → 保持 4096 默认（既有行为零变化）', async () => {
+    createMock.mockResolvedValueOnce(resp);
+    const c = new AnthropicClient({ provider: 'anthropic', apiKey: 'k', model: 'm' });
+    await c.complete({ systemPrompt: 'sys', userMessage: 'u' });
+    expect(lastMaxTokens()).toBe(4096);
+  });
+});
+
 describe('AnthropicClient.complete · 缓存断点与多轮累积', () => {
   /** 取最后一次 createMock 调用的请求体。 */
   function lastBody(): {

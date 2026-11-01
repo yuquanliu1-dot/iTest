@@ -44,7 +44,10 @@ export class AnthropicClient implements LLMClient {
     const t0 = Date.now();
     const resp = await this.client.messages.create({
       model,
-      max_tokens: 4096,
+      // Anthropic API 必填且思考内容也计入该预算：网关别名路由到 thinking 模型时
+      // 4096 会被思考整段吃光 → text 空、JSON 解析必失败（2026-11-01 prod 实测）。
+      // 设置页 llm_max_tokens 可调大（如 16384）；缺省保持 4096。
+      max_tokens: this.cfg.maxTokens ?? 4096,
       system: [{ type: 'text', text: systemPrompt || 'You are a helpful assistant. Reply with JSON only.', cache_control: EPHEMERAL }],
       messages: buildMessages(req),
     });

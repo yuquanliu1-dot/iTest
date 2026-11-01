@@ -8,6 +8,7 @@ const KEYS = {
   apiKey: 'llm_api_key',
   model: 'llm_model',
   baseUrl: 'llm_base_url',
+  maxTokens: 'llm_max_tokens',
 } as const;
 
 export interface ResolvedLLM {
@@ -33,7 +34,14 @@ export async function resolveLlmClient(): Promise<ResolvedLLM> {
   if (!apiKey) {
     throw new Error(`LLM provider ${provider} selected but API key is empty`);
   }
-  const config: LLMConfig = { provider, apiKey, model, baseUrl };
+  const rawMax = Number(String(map.get(KEYS.maxTokens) ?? '').trim());
+  const config: LLMConfig = {
+    provider,
+    apiKey,
+    model,
+    baseUrl,
+    ...(Number.isInteger(rawMax) && rawMax > 0 ? { maxTokens: rawMax } : {}),
+  };
   return { config, client: getLlmClient(config) };
 }
 
