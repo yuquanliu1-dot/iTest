@@ -2,12 +2,13 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { localizeApiError } from '../../i18n';
-import { api, type PromptModule, type PromptModuleVersion } from '../../api/client';
+import { api, type AssistantSkill, type PromptModule, type PromptModuleVersion } from '../../api/client';
 import { useUIStore } from '../../stores/ui';
 import Icon from '../Icon';
 import Button from '../ui/Button';
 import EmptyState from '../ui/EmptyState';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
+import SkillFilesDialog from './skills/SkillFilesDialog';
 
 const GROUPS: Array<PromptModule['group']> = ['main', 'tool', 'skill'];
 const GROUP_KEY: Record<PromptModule['group'], string> = {
@@ -29,10 +30,13 @@ export default function PromptModulesSection() {
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
   const listQ = useQuery({ queryKey: ['prompt-modules'], queryFn: () => api.assistant.promptModules.list() });
+  // skill 查看复用文件管理器：需要 AssistantSkill 行（id 定位 tree API）；与 SkillsSection 同 key 共享缓存
+  const skillsQ = useQuery({ queryKey: ['assistant-skills'], queryFn: api.assistant.skills.list });
   const [editing, setEditing] = useState<PromptModule | null>(null);
   const [draft, setDraft] = useState('');
   const [versionsOf, setVersionsOf] = useState<PromptModule | null>(null);
   const [pickedSeq, setPickedSeq] = useState<number | null>(null);
+  const [filesFor, setFilesFor] = useState<AssistantSkill | null>(null);
 
   const versionsQ = useQuery({
     queryKey: ['prompt-module-versions', versionsOf?.key],
@@ -98,7 +102,16 @@ export default function PromptModulesSection() {
                     </div>
                     <Button
                       variant="ghost"
-                      onClick={() => { setEditing(m); setDraft(m.text); }}
+                      onClick={() => {
+                        // skill 行「查看」直接开文件管理器（SKILL.md + references/ 整棵树）；
+                        // 查不到 DB 行（孤儿目录等异常态）回退只读抽屉
+                        if (m.group === 'skill') {
+                          const skill = (skillsQ.data ?? []).find((s) => s.name === m.key.slice('skill.'.length));
+                          if (skill?.id) { setFilesFor(skill); return; }
+                        }
+                        setEditing(m);
+                        setDraft(m.text);
+                      }}
                     >
                       {t(m.group === 'skill' ? 'settings:promptView' : 'settings:promptEdit')}
                     </Button>
@@ -227,6 +240,14 @@ export default function PromptModulesSection() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* skill 行查看 = 文件管理器（与技能 Section 同一能力）；关闭时刷新模块列表（SKILL.md 投影可能已改） */}
+      {filesFor && (
+        <SkillFilesDialog
+          skill={filesFor}
+          onClose={() => { setFilesFor(null); void qc.invalidateQueries({ queryKey: ['prompt-modules'] }); }}
+        />
+      )}
     </div>
   );
 }
