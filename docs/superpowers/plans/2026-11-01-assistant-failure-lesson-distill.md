@@ -78,7 +78,7 @@ apps/web/src/i18n/...                              # 改：settings 命名空间
 
 ## Task 1：DB schema（两新表 + proposals.base_seq）
 
-- [ ] 1.1 `apps/api/src/db/schema.ts`：在 `assistant_solidify_proposals` 定义之后（`}));` 之后、`// ── AI 助手用户反馈` 注释之前）插入两表；并给 proposals 表加 `baseSeq` 列（放 `applyError` 之后）：
+- [x] 1.1 `apps/api/src/db/schema.ts`：在 `assistant_solidify_proposals` 定义之后（`}));` 之后、`// ── AI 助手用户反馈` 注释之前）插入两表；并给 proposals 表加 `baseSeq` 列（放 `applyError` 之后）：
 
 ```ts
   /** 仅 prompt_correction 用：盘点时定格 target 模块当前 max(seq)。apply 时检测人工修改（防静默 clobber）。 */
@@ -136,7 +136,7 @@ export const assistantFailureLessons = pgTable('assistant_failure_lessons', {
 
 （确认 `sql` 已在 schema.ts import；`integer` 若未 import 一并补。）
 
-- [ ] 1.2 `apps/api/test/helpers/db.ts`：SCHEMA_SQL 模板串末尾（`assistant_solidify_proposals_batch_idx` 行之后、闭合反引号之前）追加：
+- [x] 1.2 `apps/api/test/helpers/db.ts`：SCHEMA_SQL 模板串末尾（`assistant_solidify_proposals_batch_idx` 行之后、闭合反引号之前）追加：
 
 ```sql
 -- R3.5 失败教训蒸馏：原始失败信号 + 教训
@@ -148,7 +148,7 @@ CREATE INDEX assistant_failure_lessons_status_idx ON assistant_failure_lessons(s
 ALTER TABLE assistant_solidify_proposals ADD COLUMN base_seq integer;
 ```
 
-- [ ] 1.3 写测试 `apps/api/test/failure-schema.test.ts`（先跑红——列不存在）：
+- [x] 1.3 写测试 `apps/api/test/failure-schema.test.ts`（先跑红——列不存在）：
 
 ```ts
 /** R3.5 建表：部分唯一去重 / 默认值 / base_seq 可空。 */
@@ -216,7 +216,7 @@ describe('assistant_solidify_proposals.base_seq', () => {
 });
 ```
 
-- [ ] 1.4 dev DB 手动建表（**本任务就要做**，后续任务的本地测试才连得上 dev 库——虽然单测走 testcontainers 不依赖 dev 库，但 dev api 跑起来需要）：
+- [x] 1.4 dev DB 手动建表（**本任务就要做**，后续任务的本地测试才连得上 dev 库——虽然单测走 testcontainers 不依赖 dev 库，但 dev api 跑起来需要）：
 
 ```bash
 docker exec -i itest-pg psql -U postgres -d itest <<'SQL'
@@ -229,8 +229,8 @@ ALTER TABLE assistant_solidify_proposals ADD COLUMN IF NOT EXISTS base_seq integ
 SQL
 ```
 
-- [ ] 1.5 `cd apps/api && npx vitest run test/failure-schema.test.ts` 绿。
-- [ ] 1.6 提交：
+- [x] 1.5 `cd apps/api && npx vitest run test/failure-schema.test.ts` 绿。
+- [x] 1.6 提交：
 
 ```
 feat(space): R3.5 两张新表——失败信号采集层(部分唯一去重)+教训蒸馏层,proposals 扩 base_seq
@@ -238,7 +238,7 @@ feat(space): R3.5 两张新表——失败信号采集层(部分唯一去重)+�
 
 ## Task 2：failureSignals.ts + verifyCase 接线
 
-- [ ] 2.1 写测试 `apps/api/test/failure-signals.test.ts`：
+- [x] 2.1 写测试 `apps/api/test/failure-signals.test.ts`：
 
 ```ts
 /** 失败信号采集：落库带线归并/同键去重/INSERT 失败不打断（fire-and-forget 语义）。 */
@@ -310,8 +310,8 @@ describe('recordNlAiFailSignal', () => {
 });
 ```
 
-- [ ] 2.2 跑红：`npx vitest run test/failure-signals.test.ts`（模块不存在）。
-- [ ] 2.3 实现 `apps/api/src/pi/space/failureSignals.ts`：
+- [x] 2.2 跑红：`npx vitest run test/failure-signals.test.ts`（模块不存在）。
+- [x] 2.3 实现 `apps/api/src/pi/space/failureSignals.ts`：
 
 ```ts
 /**
@@ -356,7 +356,7 @@ export async function recordNlAiFailSignal(input: {
 }
 ```
 
-- [ ] 2.4 verifyCase 接线：`apps/api/src/pi/space/tools/verifyCase.ts`
+- [x] 2.4 verifyCase 接线：`apps/api/src/pi/space/tools/verifyCase.ts`
   - import 区加：`import { recordNlAiFailSignal } from '../failureSignals.js';`
   - 在 nlAiFail 判定（`const nlAiFail = ...` 结束处，约 :1497）之后插入：
 
@@ -378,8 +378,8 @@ export async function recordNlAiFailSignal(input: {
 
   （`ctx.threadId`/`ctx.projectId`/`caseId`/`failed.order`/`failedStep`/`effectiveCase`/`targetUrl`/`page` 在该作用域均已在——rdata 构造处同样引用。若 `ctx.projectId` 实际取名不同，以 :637 `expectedProjectId: ctx.projectId` 为准核对。）
 
-- [ ] 2.5 回归：`npx vitest run test/failure-signals.test.ts test/pi-verify-case.test.ts` 全绿（接线不得破坏 verify 既有行为）。
-- [ ] 2.6 提交：
+- [x] 2.5 回归：`npx vitest run test/failure-signals.test.ts test/pi-verify-case.test.ts` 全绿（接线不得破坏 verify 既有行为）。
+- [x] 2.6 提交：
 
 ```
 feat(space): R3.5 nlAiFail 分流信号落库——fire-and-forget INSERT+同键去重,verify 主流程零打扰
@@ -387,7 +387,7 @@ feat(space): R3.5 nlAiFail 分流信号落库——fire-and-forget INSERT+同键
 
 ## Task 3：failureLessons.ts（信号聚合 + 教训蒸馏 + 提案输入查询）
 
-- [ ] 3.1 写测试 `apps/api/test/failure-lessons.test.ts`：
+- [x] 3.1 写测试 `apps/api/test/failure-lessons.test.ts`：
 
 ```ts
 /** R3.5 蒸馏层：S1/S2/S3 信号聚合与消费幂等/教训蒸馏校验/提案输入过滤。 */
@@ -601,8 +601,8 @@ describe('listProposalInputLessons', () => {
 });
 ```
 
-- [ ] 3.2 跑红。
-- [ ] 3.3 实现 `apps/api/src/pi/space/failureLessons.ts`：
+- [x] 3.2 跑红。
+- [x] 3.3 实现 `apps/api/src/pi/space/failureLessons.ts`：
 
 ```ts
 /**
@@ -866,8 +866,8 @@ export async function listProposalInputLessons(): Promise<LessonForInput[]> {
 }
 ```
 
-- [ ] 3.4 跑绿：`npx vitest run test/failure-lessons.test.ts`。
-- [ ] 3.5 提交：
+- [x] 3.4 跑绿：`npx vitest run test/failure-lessons.test.ts`。
+- [x] 3.5 提交：
 
 ```
 feat(space): R3.5 教训蒸馏层——S1/S2/S3 信号聚合+消费幂等(一次性)+逐条归因蒸馏+提案输入过滤
@@ -875,7 +875,7 @@ feat(space): R3.5 教训蒸馏层——S1/S2/S3 信号聚合+消费幂等(一次
 
 ## Task 4：solidifyService 三阶段接线
 
-- [ ] 4.1 `apps/api/test/solidify-service.test.ts` 扩展：
+- [x] 4.1 `apps/api/test/solidify-service.test.ts` 扩展：
   - beforeEach TRUNCATE 追加：`assistant_failure_signals, assistant_failure_lessons, assistant_prompt_module_versions`。
   - 追加 stub 与 seed（放在 `stubClient` 附近）：
 
@@ -1037,8 +1037,8 @@ describe('runSolidifyScan：R3.5 失败教训', () => {
 });
 ```
 
-- [ ] 4.2 跑红。
-- [ ] 4.3 实现 `apps/api/src/pi/space/solidifyService.ts`：
+- [x] 4.2 跑红。
+- [x] 4.3 实现 `apps/api/src/pi/space/solidifyService.ts`：
   1. import 区：`loadPromptModuleOverrides` 加入 promptModules.js 的既有 import；新增 `import { collectUnconsumedSignals, distillLessons, listProposalInputLessons } from './failureLessons.js';`；schema import 加 `assistantFailureSignals` 不需要（聚合在 failureLessons 内），但 `AssistantSolidifyProposalSource` 类型来源在 schema——sources 构造直接用字面量（$inferInsert 校验）。
   2. `SOLIDIFY_SYSTEM_PROMPT` 全文替换为：
 
@@ -1162,8 +1162,8 @@ export interface AssistantSolidifyProposalSource {
 }
 ```
 
-- [ ] 4.4 跑绿：`npx vitest run test/solidify-service.test.ts`（R3 既有用例必须全绿——`toMatchObject` 子集断言兼容新键）。
-- [ ] 4.5 提交：
+- [x] 4.4 跑绿：`npx vitest run test/solidify-service.test.ts`（R3 既有用例必须全绿——`toMatchObject` 子集断言兼容新键）。
+- [x] 4.5 提交：
 
 ```
 feat(space): R3.5 盘点三阶段——信号采集/教训蒸馏(失败降级)/资产蒸馏扩 prompt_correction+baseSeq
@@ -1171,7 +1171,7 @@ feat(space): R3.5 盘点三阶段——信号采集/教训蒸馏(失败降级)/�
 
 ## Task 5：solidifyApply（correction 应用 + 教训自动 resolved）
 
-- [ ] 5.1 `apps/api/test/solidify-apply.test.ts` 扩展：
+- [x] 5.1 `apps/api/test/solidify-apply.test.ts` 扩展：
   - `seedProposal` 的 opts.kind 扩 `'prompt_correction'`，支持 `baseSeq` 与 lesson 型 sources：
 
 ```ts
@@ -1267,8 +1267,8 @@ describe('approveProposal：prompt_correction', () => {
 });
 ```
 
-- [ ] 5.2 跑红。
-- [ ] 5.3 实现 `apps/api/src/pi/space/solidifyApply.ts`：
+- [x] 5.2 跑红。
+- [x] 5.3 实现 `apps/api/src/pi/space/solidifyApply.ts`：
   1. schema import 加 `assistantFailureLessons`。
   2. `applyPromptCorrection`（放在 `applySkillRevision` 之后）：
 
@@ -1313,8 +1313,8 @@ async function resolveLessons(prop: ProposalRow): Promise<void> {
 ```
 
   5. `ProposalRow` 的 `baseSeq` 随 schema 自动可得（drizzle $inferSelect）。`retireIds` 子集校验对 lesson 来源天然安全（retireSources 只处理 memory/trajectory）。
-- [ ] 5.4 跑绿：`npx vitest run test/solidify-apply.test.ts`。
-- [ ] 5.5 提交：
+- [x] 5.4 跑绿：`npx vitest run test/solidify-apply.test.ts`。
+- [x] 5.5 提交：
 
 ```
 feat(space): R3.5 correction 应用——baseSeq 陈旧基线防护+全文覆盖写+教训自动 resolved
@@ -1322,7 +1322,7 @@ feat(space): R3.5 correction 应用——baseSeq 陈旧基线防护+全文覆盖
 
 ## Task 6：failureLessonsRoute + 挂载
 
-- [ ] 6.1 写测试 `apps/api/test/failure-lessons-route.test.ts`（harness 抄 prompt-modules-route.test.ts：动态 import spaceRoute + express + errorHandler，manager/member 双身份）：
+- [x] 6.1 写测试 `apps/api/test/failure-lessons-route.test.ts`（harness 抄 prompt-modules-route.test.ts：动态 import spaceRoute + express + errorHandler，manager/member 双身份）：
 
 ```ts
 /** 失败教训路由：列表（status 过滤）/retire（active 守卫 404）/权限门。 */
@@ -1337,8 +1337,8 @@ feat(space): R3.5 correction 应用——baseSeq 陈旧基线防护+全文覆盖
 ```
 
 （实现时把 harness 与断言写全；TRUNCATE 含 `assistant_failure_lessons`。）
-- [ ] 6.2 跑红。
-- [ ] 6.3 实现 `apps/api/src/pi/space/failureLessonsRoute.ts`：
+- [x] 6.2 跑红。
+- [x] 6.3 实现 `apps/api/src/pi/space/failureLessonsRoute.ts`：
 
 ```ts
 /**
@@ -1376,15 +1376,15 @@ router.post('/:id/retire', async (req, res) => {
 export default router;
 ```
 
-- [ ] 6.4 挂载 `apps/api/src/pi/space/router.ts`：`/solidify` 挂载行（:472）之后加：
+- [x] 6.4 挂载 `apps/api/src/pi/space/router.ts`：`/solidify` 挂载行（:472）之后加：
 
 ```ts
 spaceRoute.use('/failure-lessons', requireManager, failureLessonsRoute);
 ```
 
 （import 区加 `import failureLessonsRoute from './failureLessonsRoute.js';`——与 promptModulesRoute 同款默认导出。）
-- [ ] 6.5 跑绿：`npx vitest run test/failure-lessons-route.test.ts`。
-- [ ] 6.6 提交：
+- [x] 6.5 跑绿：`npx vitest run test/failure-lessons-route.test.ts`。
+- [x] 6.6 提交：
 
 ```
 feat(space): R3.5 失败教训路由——列表 status 过滤+人工退役(active 守卫),signals 表不外露
@@ -1392,7 +1392,7 @@ feat(space): R3.5 失败教训路由——列表 status 过滤+人工退役(acti
 
 ## Task 7：web client.ts 类型与 API
 
-- [ ] 7.1 `apps/web/src/api/client.ts`：
+- [x] 7.1 `apps/web/src/api/client.ts`：
   - `SolidifyProposalSource`（:1283）扩：
 
 ```ts
@@ -1438,8 +1438,8 @@ export interface FailureLesson {
     },
 ```
 
-- [ ] 7.2 `cd apps/web && pnpm verify` 过（此时 SolidifySection 未消费新类型也能编译——union 扩展是向后兼容的）。
-- [ ] 7.3 提交：
+- [x] 7.2 `cd apps/web && pnpm verify` 过（此时 SolidifySection 未消费新类型也能编译——union 扩展是向后兼容的）。
+- [x] 7.3 提交：
 
 ```
 feat(web): R3.5 client——FailureLesson 类型+failureLessons API 组,提案 kind/baseSeq/lesson 来源透出
@@ -1447,7 +1447,7 @@ feat(web): R3.5 client——FailureLesson 类型+failureLessons API 组,提案 k
 
 ## Task 8：SolidifySection + i18n
 
-- [ ] 8.1 i18n：`rg -l solidifyKindPrompt apps/web/src` 定位 settings 命名空间 zh/en 两个文件，加键：
+- [x] 8.1 i18n：`rg -l solidifyKindPrompt apps/web/src` 定位 settings 命名空间 zh/en 两个文件，加键：
 
 zh：
 ```json
@@ -1485,7 +1485,7 @@ en：
 
 （若 `solidifyBatchSummary` 现有文案键名不同，以现有键为准扩展格式串。）
 
-- [ ] 8.2 `apps/web/src/components/settings/SolidifySection.tsx`：
+- [x] 8.2 `apps/web/src/components/settings/SolidifySection.tsx`：
   1. `batchSummary` 解析器加键：`lessons: v.lessons ?? 0, signals: v.signals ?? 0`（返回类型同步）。
   2. 两处 kind 三元（列表行 :165 与详情 :185）替换为映射：
 
@@ -1583,12 +1583,12 @@ const KIND_KEY: Record<SolidifyProposal['kind'], string> = {
 ```
 
   5. `review.onSuccess` 的 approve 分支加 `qc.invalidateQueries({ queryKey: ['failure-lessons'] });`（应用 → lesson resolved → 列表收口）。
-- [ ] 8.3 `cd apps/web && pnpm verify` 过。
-- [ ] 8.4 浏览器实测（dev 起来后）：
+- [x] 8.3 `cd apps/web && pnpm verify` 过。
+- [x] 8.4 浏览器实测（dev 起来后）：
   - 设置页教训块：空态文案；手插一条 active 教训（psql）→ 列表出现徽标/信号数；点忽略 → 消失、折叠计数 +1。
   - 手插一条 prompt_correction pending 提案（sources 带 lesson，psql 直插）→ 列表 kind 徽标「修正提示词」；详情左右栏=当前值 vs 修正后全文；来源行=教训徽标+auto-resolve 提示、无勾选框；批准 → 版本行落库 + 教训 resolved + 教训块计数收口。
   - 老批次行（无新键 inputSummary）显示不炸（lessons/signals 回 0）。
-- [ ] 8.5 提交：
+- [x] 8.5 提交：
 
 ```
 feat(web): R3.5 设置页——失败教训块/三 kind 徽标/lesson 来源行(auto-resolve)/批次 summary 扩键
@@ -1596,15 +1596,15 @@ feat(web): R3.5 设置页——失败教训块/三 kind 徽标/lesson 来源行(
 
 ## Task 9：全量回归 + E2E + 收尾
 
-- [ ] 9.1 api 全量：`cd apps/api && npm test`——R3 既有（prompt-modules / prompt-modules-route / solidify-service / solidify-apply / solidify-route / memories / trajectories / 渲染红线）全绿；sendSyslog 基线红为已知噪声。
-- [ ] 9.2 web：`cd apps/web && pnpm verify`。
-- [ ] 9.3 `git status` 核对：仅本计划清单内文件有改动；测试污染的陌生源码改动还原（历史教训：反引号写进模板字面量 → build 挂）。
-- [ ] 9.4 dev 环境冒烟（记忆事项：起 dev api 前清 ANTHROPIC 四件套环境变量；dev 新表 Task 1.4 已手建）：
+- [x] 9.1 api 全量：`cd apps/api && npm test`——R3 既有（prompt-modules / prompt-modules-route / solidify-service / solidify-apply / solidify-route / memories / trajectories / 渲染红线）全绿；sendSyslog 基线红为已知噪声。
+- [x] 9.2 web：`cd apps/web && pnpm verify`。
+- [x] 9.3 `git status` 核对：仅本计划清单内文件有改动；测试污染的陌生源码改动还原（历史教训：反引号写进模板字面量 → build 挂）。
+- [x] 9.4 dev 环境冒烟（记忆事项：起 dev api 前清 ANTHROPIC 四件套环境变量；dev 新表 Task 1.4 已手建）：
   1. 手插一条 S1 信号（prompt-modules 页面直改 space.style.zh 再回滚）→ 发起盘点 → 批次 done、教训块出现 prompt 归因教训。
   2. 盘点产出的 correction（若 LLM 产）走 approve → 版本行 + 教训 resolved。
   3. 真实 verify nlAiFail 信号（可选，需 SUT）：跑一个自然语言步必败用例 → assistant_failure_signals 落行 → 下次盘点进教训。
-- [ ] 9.5 发版（prod228 由 drizzle-kit push --force 自动建表）+ 发版锚点记录：api dist grep `assistant_failure_lessons` / `prompt_correction` / `模块已被人工修改`；manifest sha。
-- [ ] 9.6 收尾提交（如有零星修复）+ 汇报（含 R5 接口兑现情况：lessons 表即 R5 底座）。
+- [x] 9.5 发版（prod228 由 drizzle-kit push --force 自动建表）+ 发版锚点记录：api dist grep `assistant_failure_lessons` / `prompt_correction` / `模块已被人工修改`；manifest sha。
+- [x] 9.6 收尾提交（如有零星修复）+ 汇报（含 R5 接口兑现情况：lessons 表即 R5 底座）。
 
 ---
 
