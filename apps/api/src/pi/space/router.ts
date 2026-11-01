@@ -33,6 +33,7 @@ import { memoriesRoute } from './memoriesRoute.js';
 import { trajectoriesRoute } from './trajectoriesRoute.js';
 import promptModulesRoute from './promptModulesRoute.js';
 import solidifyRoute from './solidifyRoute.js';
+import failureLessonsRoute from './failureLessonsRoute.js';
 import {
   cancelThread, clearThreadQueue, dropSpaceRecord, ensureSpaceRecord, sendSpaceUserMessage, snapshotOfThread, spaceRepoIssue, subscribeThread, threadStatusAsync,
 } from './session.js';
@@ -470,3 +471,4 @@ spaceRoute.use('/memories', requireManager, memoriesRoute);
 spaceRoute.use('/trajectories', requireManager, trajectoriesRoute);
 spaceRoute.use('/prompt-modules', requireManager, promptModulesRoute);
 spaceRoute.use('/solidify', requireManager, solidifyRoute);
+spaceRoute.use('/failure-lessons', requireManager, failureLessonsRoute);
