@@ -8,8 +8,8 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { HttpError } from '../../middleware/errorHandler.js';
 import { db } from '../../db/client.js';
 import {
-  assistantMemories, assistantPromptModuleVersions, assistantSolidifyProposals,
-  assistantTrajectories,
+  assistantFailureLessons, assistantMemories, assistantPromptModuleVersions,
+  assistantSolidifyProposals, assistantTrajectories,
 } from '../../db/schema.js';
 import {
   insertPromptModuleVersion, listPromptModuleDefs, loadPromptModuleOverrides,
@@ -65,6 +65,21 @@ async function applySkillRevision(prop: ProposalRow, userId: string | null): Pro
   });
 }
 
+/** prompt_correction：全文覆盖语义。baseSeq 复查（盘点后被人工改过 → 拒绝，回 pending 由人工重盘）。 */
+async function applyPromptCorrection(prop: ProposalRow, userId: string | null): Promise<void> {
+  const def = (await listPromptModuleDefs()).find((d) => d.key === prop.target && d.group !== 'skill');
+  if (!def) throw new Error(`target 不在注册表：${prop.target}`);
+  if (await hasAppliedVersionRow(prop.target, prop.id)) return; // 重试重放：已应用过，跳过写值
+  const currentSeq = (await loadPromptModuleOverrides()).get(prop.target)?.seq ?? null;
+  if (currentSeq !== (prop.baseSeq ?? null)) {
+    throw new Error('模块已被人工修改，请重新盘点');
+  }
+  const seq = await insertPromptModuleVersion({
+    moduleKey: prop.target, value: prop.body, source: 'solidify_apply', sourceRef: prop.id, createdByUserId: userId,
+  });
+  if (seq == null) return; // 并发重放被 unique 吞掉——视为已应用
+}
+
 /** 源退役：active 守卫防重复退役/复活已删条目；按 type 分表更新。 */
 async function retireSources(prop: ProposalRow, retireIds: string[]): Promise<void> {
   if (retireIds.length === 0) return;
@@ -83,6 +98,15 @@ async function retireSources(prop: ProposalRow, retireIds: string[]): Promise<vo
   }
 }
 
+/** correction 应用后，其 sources 内的 lesson 自动置 resolved（active 守卫，不复活已 retired/resolved）。 */
+async function resolveLessons(prop: ProposalRow): Promise<void> {
+  const lessonIds = prop.sources.filter((s) => s.type === 'lesson').map((s) => s.id);
+  if (lessonIds.length === 0) return;
+  await db.update(assistantFailureLessons)
+    .set({ status: 'resolved', resolvedByProposal: prop.id, updatedAt: new Date() })
+    .where(and(inArray(assistantFailureLessons.id, lessonIds), eq(assistantFailureLessons.status, 'active')));
+}
+
 /** 批准并应用：乐观锁（0 行→409）→ 应用 → 退役 → appliedAt；失败回 pending + apply_error。 */
 export async function approveProposal(userId: string | null, proposalId: string, retireIds: string[]): Promise<void> {
   const prop = (await db.select().from(assistantSolidifyProposals)
@@ -99,7 +123,10 @@ export async function approveProposal(userId: string | null, proposalId: string,
   if (locked.length === 0) throw new HttpError(409, 'proposal_not_pending', '提案不在待审批状态');
   try {
     if (prop.kind === 'prompt_amendment') await applyPromptAmendment(prop, userId);
+    else if (prop.kind === 'prompt_correction') await applyPromptCorrection(prop, userId);
     else await applySkillRevision(prop, userId);
+    await retireSources(prop, retireIds);
+    await resolveLessons(prop);
     await retireSources(prop, retireIds);
     await db.update(assistantSolidifyProposals)
       .set({ appliedAt: new Date() })

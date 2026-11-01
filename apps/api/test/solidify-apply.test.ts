@@ -30,7 +30,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE assistant_solidify_proposals, assistant_solidify_batches, assistant_prompt_module_versions, assistant_memories, assistant_trajectories, assistant_skills`);
+  await pool.query(`TRUNCATE assistant_solidify_proposals, assistant_solidify_batches, assistant_prompt_module_versions, assistant_memories, assistant_trajectories, assistant_skills, assistant_failure_lessons`);
 });
 
 async function seedBatch(): Promise<string> {
@@ -46,14 +46,30 @@ async function seedSources(): Promise<{ memoryId: string; trajectoryId: string }
   return { memoryId, trajectoryId };
 }
 
-async function seedProposal(opts: { kind: 'prompt_amendment' | 'skill_revision'; target: string; sourceIds: Array<{ type: 'memory' | 'trajectory'; id: string }> }): Promise<string> {
+async function seedProposal(opts: {
+  kind: 'prompt_amendment' | 'skill_revision' | 'prompt_correction';
+  target: string;
+  sourceIds: Array<{ type: 'memory' | 'trajectory' | 'lesson'; id: string }>;
+  baseSeq?: number | null;
+}): Promise<string> {
   const batchId = await seedBatch();
   return (await pool.query(
-    `INSERT INTO assistant_solidify_proposals (batch_id, kind, target, title, body, rationale, sources, distill_model)
-     VALUES ($1, $2, $3, '提案', $4, 'r', $5::jsonb, 'm') RETURNING id`,
-    [batchId, opts.kind, opts.target, opts.kind === 'skill_revision' ? '修订后正文' : '- 增量文案',
-     JSON.stringify(opts.sourceIds.map((s) => ({ type: s.type, id: s.id, title: 'src', retireRecommended: s.type === 'memory' })))],
-  )).rows[0]!.id as string;
+    `INSERT INTO assistant_solidify_proposals (batch_id, kind, target, title, body, rationale, sources, base_seq, distill_model)
+     VALUES ($1, $2, $3, '提案', $4, 'r', $5::jsonb, $6, 'm') RETURNING id`,
+    [batchId, opts.kind, opts.target,
+     opts.kind === 'skill_revision' ? '修订后正文' : opts.kind === 'prompt_correction' ? '修正后全文' : '- 增量文案',
+     JSON.stringify(opts.sourceIds.map((s) => ({
+       type: s.type, id: s.id, title: 'src', lineName: s.type === 'lesson' ? '' : '线',
+       retireRecommended: s.type === 'memory',
+       ...(s.type === 'lesson' ? { attribution: 'prompt', signalCount: 2 } : {}),
+     }))),
+     opts.kind === 'prompt_correction' ? (opts.baseSeq ?? null) : null,
+    ])).rows[0]!.id as string;
+}
+
+async function seedLesson(): Promise<string> {
+  return (await pool.query(
+    `INSERT INTO assistant_failure_lessons (attribution, title, lesson, signals, distill_model) VALUES ('prompt', '教训', 'l', '[]', 'm') RETURNING id`)).rows[0]!.id as string;
 }
 
 async function seedSkill(name = 'demo-skill') {
@@ -181,5 +197,60 @@ describe('rejectProposal', () => {
     const n = (await pool.query(`SELECT count(*)::int n FROM assistant_prompt_module_versions`)).rows[0]!;
     expect(n.n).toBe(0);
     await expect(rejectProposal(null, id)).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('approveProposal：prompt_correction', () => {
+  it('应用=全文覆盖写版本行（source=solidify_apply+sourceRef 幂等）；lesson 置 resolved', async () => {
+    const { approveProposal } = await import('../src/pi/space/solidifyApply.js');
+    await pool.query(`INSERT INTO assistant_prompt_module_versions (module_key, value, source) VALUES ('space.style.zh', '当前值', 'manual_edit')`);
+    const current = (await pool.query(`SELECT seq FROM assistant_prompt_module_versions WHERE module_key='space.style.zh' ORDER BY seq DESC LIMIT 1`)).rows[0]!.seq as number;
+    const lessonId = await seedLesson();
+    const id = await seedProposal({ kind: 'prompt_correction', target: 'space.style.zh', sourceIds: [{ type: 'lesson', id: lessonId }], baseSeq: current });
+    await approveProposal(null, id, []);
+    const row = (await pool.query(`SELECT * FROM assistant_prompt_module_versions ORDER BY seq DESC LIMIT 1`)).rows[0]!;
+    expect(row).toMatchObject({ module_key: 'space.style.zh', value: '修正后全文', source: 'solidify_apply', source_ref: id });
+    const lesson = (await pool.query(`SELECT * FROM assistant_failure_lessons WHERE id=$1`, [lessonId])).rows[0]!;
+    expect(lesson.status).toBe('resolved');
+    expect(lesson.resolved_by_proposal).toBe(id);
+  });
+
+  it('baseSeq 冲突（盘点后被人工改过）→ apply_error「人工修改」+ status 回 pending + 500', async () => {
+    const { approveProposal } = await import('../src/pi/space/solidifyApply.js');
+    const lessonId = await seedLesson();
+    const id = await seedProposal({ kind: 'prompt_correction', target: 'space.style.zh', sourceIds: [{ type: 'lesson', id: lessonId }], baseSeq: 7 });
+    // 盘点后人工又改了一轮 → 当前 max(seq) 前进
+    await pool.query(`INSERT INTO assistant_prompt_module_versions (module_key, value, source) VALUES ('space.style.zh', '人工改过', 'manual_edit')`);
+    await expect(approveProposal(null, id, [])).rejects.toMatchObject({ status: 500 });
+    const p = (await pool.query(`SELECT * FROM assistant_solidify_proposals WHERE id=$1`, [id])).rows[0]!;
+    expect(p.status).toBe('pending');
+    expect(p.apply_error).toContain('人工修改');
+    const n = (await pool.query(`SELECT count(*)::int n FROM assistant_prompt_module_versions WHERE source_ref=$1`, [id])).rows[0]!;
+    expect(n.n).toBe(0); // 没写任何版本行
+    const lesson = (await pool.query(`SELECT status FROM assistant_failure_lessons WHERE id=$1`, [lessonId])).rows[0]!;
+    expect(lesson.status).toBe('active'); // 教训不被误 resolved
+  });
+
+  it('重试重放：sourceRef 行已存在 → 跳过写值继续（lesson 补 resolved）', async () => {
+    const { approveProposal } = await import('../src/pi/space/solidifyApply.js');
+    const lessonId = await seedLesson();
+    const id = await seedProposal({ kind: 'prompt_correction', target: 'space.style.zh', sourceIds: [{ type: 'lesson', id: lessonId }], baseSeq: null });
+    await approveProposal(null, id, []);
+    // 模拟「版本行已写但 lesson 未 resolved」的部分失败：回 pending 再批
+    await pool.query(`UPDATE assistant_solidify_proposals SET status='pending', applied_at=null WHERE id=$1`, [id]);
+    await approveProposal(null, id, []);
+    const n = (await pool.query(`SELECT count(*)::int n FROM assistant_prompt_module_versions WHERE source_ref=$1`, [id])).rows[0]!;
+    expect(n.n).toBe(1);
+    const lesson = (await pool.query(`SELECT status FROM assistant_failure_lessons WHERE id=$1`, [lessonId])).rows[0]!;
+    expect(lesson.status).toBe('resolved');
+  });
+
+  it('target=skill.*（绕过盘点直插 DB）→ 应用拒绝', async () => {
+    const { approveProposal } = await import('../src/pi/space/solidifyApply.js');
+    const lessonId = await seedLesson();
+    const id = await seedProposal({ kind: 'prompt_correction', target: 'skill.demo', sourceIds: [{ type: 'lesson', id: lessonId }], baseSeq: null });
+    await expect(approveProposal(null, id, [])).rejects.toMatchObject({ status: 500 });
+    const p = (await pool.query(`SELECT * FROM assistant_solidify_proposals WHERE id=$1`, [id])).rows[0]!;
+    expect(p.apply_error).toContain('不在注册表');
   });
 });
