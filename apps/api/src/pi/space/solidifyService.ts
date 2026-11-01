@@ -154,7 +154,8 @@ export async function runSolidifyScan(batchId: string, deps: SolidifyRunDeps = {
     // ── 阶段 1：失败教训蒸馏（有信号才执行；整体失败降级不炸批次，信号保留待重试）──
     if (signalBundle.signals.length > 0) {
       try {
-        const distilled = await distillLessons(client, signalBundle.signals, deps.llmTimeoutMs ?? 180_000);
+        // 网关思考模型（Auto 别名）完整蒸馏 ~250s（2026-11-01 prod 实测）——180s 装不下
+        const distilled = await distillLessons(client, signalBundle.signals, deps.llmTimeoutMs ?? 300_000);
         if (distilled === 0) notes.push(`教训蒸馏未产出新教训（${signalBundle.total} 条信号保留待下次盘点）`);
       } catch (e) {
         logger.warn({ err: e, batchId }, 'solidify: lesson distill failed (degraded, signals retained)');
@@ -186,7 +187,7 @@ export async function runSolidifyScan(batchId: string, deps: SolidifyRunDeps = {
 
     const r = await withLlmTimeout(
       completeJson(client, { systemPrompt: SOLIDIFY_SYSTEM_PROMPT, userMessage }),
-      deps.llmTimeoutMs ?? 180_000,
+      deps.llmTimeoutMs ?? 300_000,
     );
     const parsed = SolidifyOutput.safeParse(r.value);
     if (!parsed.success) {
