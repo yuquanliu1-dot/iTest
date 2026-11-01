@@ -228,25 +228,26 @@ function McpServersSection() {
   );
 }
 
-export default function AssistantPanel() {
-  const { t } = useTranslation();
+/** AI 助手各 Section 的 key——设置页按子页拆分后由 Settings 传入要渲染哪些。 */
+export type AssistantSectionKey =
+  | 'mcp'
+  | 'memories'
+  | 'trajectories'
+  | 'prompts'
+  | 'solidify'
+  | 'skills'
+  | 'feedback';
+
+export default function AssistantPanel({ sections }: { sections: AssistantSectionKey[] }) {
   return (
     <div className="flex flex-col gap-4 max-w-2xl">
-      <div>
-        <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--foreground)' }}>
-          {t('settings:panelAssistant')}
-        </h3>
-        <p className="text-[12px] mb-4" style={{ color: 'var(--muted-foreground)' }}>
-          {t('settings:assistantIntro')}
-        </p>
-      </div>
-      <McpServersSection />
-      <MemoriesSection />
-      <TrajectoriesSection />
-      <PromptModulesSection />
-      <SolidifySection />
-      <SkillsSection />
-      <FeedbackSection />
+      {sections.includes('mcp') && <McpServersSection />}
+      {sections.includes('memories') && <MemoriesSection />}
+      {sections.includes('trajectories') && <TrajectoriesSection />}
+      {sections.includes('prompts') && <PromptModulesSection />}
+      {sections.includes('solidify') && <SolidifySection />}
+      {sections.includes('skills') && <SkillsSection />}
+      {sections.includes('feedback') && <FeedbackSection />}
     </div>
   );
 }

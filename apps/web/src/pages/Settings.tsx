@@ -9,7 +9,7 @@ import Icon from '../components/Icon';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Toggle from '../components/ui/Toggle';
-import AssistantPanel from '../components/settings/AssistantPanel';
+import AssistantPanel, { type AssistantSectionKey } from '../components/settings/AssistantPanel';
 import {
   PageShell,
   PageShellDescription,
@@ -34,21 +34,48 @@ const DEFAULT_MODELS: Record<string, string> = {
 // （compile-missing 开关已移除：NL 视觉步骤的 AI 临场执行是正式执行语义，不再可关。）
 const AI_FALLBACK_LOCATOR_FAILED_KEY = 'ai_fallback_locator_failed';
 
-type Panel = 'llm' | 'appearance' | 'replay' | 'assistant';
+type Panel = 'general' | 'llm' | 'assistant-tools' | 'assistant-memory' | 'assistant-prompt' | 'assistant-feedback';
 
-const PANELS: Array<{ key: Panel; labelKey: string; icon: 'beaker' | 'sparkles' | 'layers' | 'plug' }> = [
-  { key: 'llm', labelKey: 'settings:llmProvider', icon: 'beaker' },
-  { key: 'appearance', labelKey: 'settings:panelAppearance', icon: 'sparkles' },
-  { key: 'replay', labelKey: 'settings:panelReplay', icon: 'layers' },
-  { key: 'assistant', labelKey: 'settings:panelAssistant', icon: 'plug' },
+/** 左侧导航按域分组：通用（外观/回放/模型接入）+ AI 助手（按内容拆四个子页）。 */
+const NAV_GROUPS: Array<{
+  labelKey: string;
+  items: Array<{ key: Panel; labelKey: string; icon: 'sun' | 'beaker' | 'plug' | 'database' | 'terminal' | 'message' }>;
+}> = [
+  {
+    labelKey: 'settings:panelGeneral',
+    items: [
+      { key: 'general', labelKey: 'settings:panelAppearanceReplay', icon: 'sun' },
+      { key: 'llm', labelKey: 'settings:llmProvider', icon: 'beaker' },
+    ],
+  },
+  {
+    labelKey: 'settings:panelAssistant',
+    items: [
+      { key: 'assistant-tools', labelKey: 'settings:panelAssistantTools', icon: 'plug' },
+      { key: 'assistant-memory', labelKey: 'settings:panelAssistantMemory', icon: 'database' },
+      { key: 'assistant-prompt', labelKey: 'settings:panelAssistantPrompt', icon: 'terminal' },
+      { key: 'assistant-feedback', labelKey: 'settings:feedbackTitle', icon: 'message' },
+    ],
+  },
 ];
+
+/** AI 助手子页 → 页头（标题+简介）与要渲染的 Section。单卡片页（用户反馈）卡片自带标题简介，页头省去免重复。 */
+const ASSISTANT_PAGES: Record<
+  Exclude<Panel, 'general' | 'llm'>,
+  { titleKey: string; introKey: string; sections: AssistantSectionKey[]; hideHeader?: boolean }
+> = {
+  'assistant-tools': { titleKey: 'settings:panelAssistantTools', introKey: 'settings:assistantIntro', sections: ['mcp', 'skills'] },
+  'assistant-memory': { titleKey: 'settings:panelAssistantMemory', introKey: 'settings:assistantMemoryIntro', sections: ['memories', 'trajectories'] },
+  'assistant-prompt': { titleKey: 'settings:panelAssistantPrompt', introKey: 'settings:assistantPromptIntro', sections: ['prompts', 'solidify'] },
+  'assistant-feedback': { titleKey: 'settings:feedbackTitle', introKey: 'settings:feedbackIntro', sections: ['feedback'], hideHeader: true },
+};
 
 export default function Settings() {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
-  const [panel, setPanel] = useState<Panel>('llm');
+  const [panel, setPanel] = useState<Panel>('general');
 
   // LLM form
   const [provider, setProvider] = useState('openai');
@@ -119,34 +146,44 @@ export default function Settings() {
             </h2>
           </div>
           <div className="flex-1 overflow-y-auto" style={{ padding: 8 }}>
-            {PANELS.map((p) => {
-              const active = p.key === panel;
-              return (
-                <button
-                  key={p.key}
-                  onClick={() => setPanel(p.key)}
-                  data-active={active || undefined}
-                  className="group-nav-item block"
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', textAlign: 'left', padding: 0 }}
+            {NAV_GROUPS.map((g) => (
+              <div key={g.labelKey} className="mb-1">
+                <div
+                  className="px-2 pt-2 pb-1 text-[10px] font-medium tracking-wide"
+                  style={{ color: 'var(--muted-foreground)', opacity: 0.75 }}
                 >
-                  <div
-                    className="flex items-center gap-2 w-full"
-                    style={{
-                      height: 36,
-                      padding: '0 8px',
-                      borderRadius: 'var(--radius-sm)',
-                      background: active ? 'var(--primary-soft)' : undefined,
-                      color: active ? 'var(--primary)' : 'var(--muted-foreground)',
-                      fontWeight: active ? 500 : 400,
-                      fontSize: 13,
-                    }}
-                  >
-                    <Icon name={p.icon} size={14} />
-                    <span className="flex-1">{t(p.labelKey)}</span>
-                  </div>
-                </button>
-              );
-            })}
+                  {t(g.labelKey)}
+                </div>
+                {g.items.map((p) => {
+                  const active = p.key === panel;
+                  return (
+                    <button
+                      key={p.key}
+                      onClick={() => setPanel(p.key)}
+                      data-active={active || undefined}
+                      className="group-nav-item block"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', textAlign: 'left', padding: 0 }}
+                    >
+                      <div
+                        className="flex items-center gap-2 w-full"
+                        style={{
+                          height: 36,
+                          padding: '0 8px',
+                          borderRadius: 'var(--radius-sm)',
+                          background: active ? 'var(--primary-soft)' : undefined,
+                          color: active ? 'var(--primary)' : 'var(--muted-foreground)',
+                          fontWeight: active ? 500 : 400,
+                          fontSize: 13,
+                        }}
+                      >
+                        <Icon name={p.icon} size={14} />
+                        <span className="flex-1">{t(p.labelKey)}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         </div>
 
@@ -230,17 +267,17 @@ export default function Settings() {
             </div>
           )}
 
-          {panel === 'appearance' && (
-            <div className="flex flex-col gap-4 max-w-xl">
-              <div>
-                <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--foreground)' }}>
-                  {t('settings:appearance')}
-                </h3>
-                <p className="text-[12px] mb-4" style={{ color: 'var(--muted-foreground)' }}>
-                  {t('settings:currentTheme', { theme: theme === 'dark' ? t('settings:darkGlass') : t('settings:lightGlass') })}
-                </p>
-              </div>
-              <div className="flex flex-col gap-3">
+          {panel === 'general' && (
+            <div className="flex flex-col gap-8 max-w-xl">
+              <div className="flex flex-col gap-4">
+                <div>
+                  <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--foreground)' }}>
+                    {t('settings:appearance')}
+                  </h3>
+                  <p className="text-[12px] mb-2" style={{ color: 'var(--muted-foreground)' }}>
+                    {t('settings:currentTheme', { theme: theme === 'dark' ? t('settings:darkGlass') : t('settings:lightGlass') })}
+                  </p>
+                </div>
                 <div className="bg-card border flex items-center justify-between" style={{ padding: 16 }}>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>{t('settings:darkGlass')}</div>
@@ -251,20 +288,15 @@ export default function Settings() {
                   <Toggle checked={theme === 'dark'} onChange={() => toggleTheme()} />
                 </div>
               </div>
-            </div>
-          )}
-
-          {panel === 'replay' && (
-            <div className="flex flex-col gap-4 max-w-xl">
-              <div>
-                <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--foreground)' }}>
-                  {t('settings:replayTitle')}
-                </h3>
-                <p className="text-[12px] mb-4" style={{ color: 'var(--muted-foreground)' }}>
-                  {t('settings:replayIntro')}
-                </p>
-              </div>
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-4">
+                <div>
+                  <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--foreground)' }}>
+                    {t('settings:replayTitle')}
+                  </h3>
+                  <p className="text-[12px] mb-2" style={{ color: 'var(--muted-foreground)' }}>
+                    {t('settings:replayIntro')}
+                  </p>
+                </div>
                 <div className="bg-card border flex items-center justify-between" style={{ padding: 16 }}>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>{t('settings:locatorFallbackTitle')}</div>
@@ -283,7 +315,22 @@ export default function Settings() {
               </div>
             </div>
           )}
-        {panel === 'assistant' && <AssistantPanel />}
+
+          {panel !== 'general' && panel !== 'llm' && (
+            <div className="flex flex-col gap-4 max-w-2xl">
+              {!ASSISTANT_PAGES[panel].hideHeader && (
+                <div>
+                  <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--foreground)' }}>
+                    {t(ASSISTANT_PAGES[panel].titleKey)}
+                  </h3>
+                  <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+                    {t(ASSISTANT_PAGES[panel].introKey)}
+                  </p>
+                </div>
+              )}
+              <AssistantPanel sections={ASSISTANT_PAGES[panel].sections} />
+            </div>
+          )}
         </div>
       </div>
     </PageShell>
