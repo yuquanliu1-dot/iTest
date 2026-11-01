@@ -2,13 +2,12 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { localizeApiError } from '../../i18n';
-import { api, type AssistantSkill, type PromptModule, type PromptModuleVersion } from '../../api/client';
+import { api, type PromptModule, type PromptModuleVersion } from '../../api/client';
 import { useUIStore } from '../../stores/ui';
 import Icon from '../Icon';
 import Button from '../ui/Button';
 import EmptyState from '../ui/EmptyState';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
-import SkillFilesDialog from './skills/SkillFilesDialog';
 
 const GROUPS: Array<PromptModule['group']> = ['main', 'tool', 'skill'];
 const GROUP_KEY: Record<PromptModule['group'], string> = {
@@ -24,19 +23,16 @@ function sourceBadgeKey(t: ReturnType<typeof useTranslation>['t'], m: PromptModu
   return t(`settings:${map[m.source ?? ''] ?? 'promptSourceManual'}`);
 }
 
-/** 设置页「系统提示词」：模块分组列表 + 编辑抽屉（skill 只读）+ 版本历史抽屉（回滚/恢复默认）。 */
+/** 设置页「系统提示词」：模块分组列表 + 编辑抽屉（仅 main/tool 组）+ 版本历史抽屉（回滚/恢复默认；skill 组只做版本审计，正文管理归技能页）。 */
 export default function PromptModulesSection() {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
   const listQ = useQuery({ queryKey: ['prompt-modules'], queryFn: () => api.assistant.promptModules.list() });
-  // skill 查看复用文件管理器：需要 AssistantSkill 行（id 定位 tree API）；与 SkillsSection 同 key 共享缓存
-  const skillsQ = useQuery({ queryKey: ['assistant-skills'], queryFn: api.assistant.skills.list });
   const [editing, setEditing] = useState<PromptModule | null>(null);
   const [draft, setDraft] = useState('');
   const [versionsOf, setVersionsOf] = useState<PromptModule | null>(null);
   const [pickedSeq, setPickedSeq] = useState<number | null>(null);
-  const [filesFor, setFilesFor] = useState<AssistantSkill | null>(null);
 
   const versionsQ = useQuery({
     queryKey: ['prompt-module-versions', versionsOf?.key],
@@ -59,7 +55,6 @@ export default function PromptModulesSection() {
   const modules = listQ.data ?? [];
   const versions = versionsQ.data ?? [];
   const picked = versions.find((v) => v.seq === pickedSeq) ?? null;
-  const isSkill = editing?.group === 'skill';
 
   return (
     <div className="bg-card border rounded-[var(--radius-sm)]">
@@ -100,21 +95,11 @@ export default function PromptModulesSection() {
                       </div>
                       <span className="text-[11px] truncate" style={{ color: 'var(--muted-foreground)' }}>{m.key}</span>
                     </div>
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        // skill 行「查看」直接开文件管理器（SKILL.md + references/ 整棵树）；
-                        // 查不到 DB 行（孤儿目录等异常态）回退只读抽屉
-                        if (m.group === 'skill') {
-                          const skill = (skillsQ.data ?? []).find((s) => s.name === m.key.slice('skill.'.length));
-                          if (skill?.id) { setFilesFor(skill); return; }
-                        }
-                        setEditing(m);
-                        setDraft(m.text);
-                      }}
-                    >
-                      {t(m.group === 'skill' ? 'settings:promptView' : 'settings:promptEdit')}
-                    </Button>
+                    {m.group !== 'skill' && (
+                      <Button variant="ghost" onClick={() => { setEditing(m); setDraft(m.text); }}>
+                        {t('settings:promptEdit')}
+                      </Button>
+                    )}
                     <Button variant="ghost" onClick={() => { setVersionsOf(m); setPickedSeq(null); }}>
                       {t('settings:promptVersions')}
                     </Button>
@@ -126,48 +111,38 @@ export default function PromptModulesSection() {
         )}
       </div>
 
-      {/* 编辑/查看抽屉：skill 组只读 + 回磁盘回滚提示；代码默认组可恢复默认（写 NULL 行） */}
+      {/* 编辑抽屉（仅 main/tool 组可进；skill 正文管理归技能页）；代码默认组可恢复默认（写 NULL 行） */}
       <Dialog open={!!editing} onOpenChange={(open) => { if (!open) setEditing(null); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{editing ? `${editing.label}（${editing.key}）` : ''}</DialogTitle>
           </DialogHeader>
           <div className="px-5 py-3 flex flex-col gap-2">
-            {isSkill && (
-              <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-                {t('settings:promptSkillReadonlyHint')}
-              </div>
-            )}
             <textarea
               className="input-base font-mono text-[12px]"
               style={{ minHeight: 240, resize: 'vertical' }}
               value={draft}
-              readOnly={isSkill}
               onChange={(e) => setDraft(e.target.value)}
             />
           </div>
           <div className="flex justify-end gap-2 px-5 py-4">
-            {!isSkill && (
-              <Button
-                variant="ghost"
-                disabled={save.isPending || editing?.isDefault}
-                title={editing?.isDefault ? t('settings:promptValuePlaceholder') : undefined}
-                onClick={() => editing && window.confirm(t('settings:promptRestoreDefaultConfirm'))
-                  && save.mutate({ key: editing.key, body: { value: null } })}
-              >
-                {t('settings:promptRestoreDefault')}
-              </Button>
-            )}
+            <Button
+              variant="ghost"
+              disabled={save.isPending || editing?.isDefault}
+              title={editing?.isDefault ? t('settings:promptValuePlaceholder') : undefined}
+              onClick={() => editing && window.confirm(t('settings:promptRestoreDefaultConfirm'))
+                && save.mutate({ key: editing.key, body: { value: null } })}
+            >
+              {t('settings:promptRestoreDefault')}
+            </Button>
             <Button variant="ghost" onClick={() => setEditing(null)}>{t('common:close')}</Button>
-            {!isSkill && (
-              <Button
-                variant="primary"
-                disabled={save.isPending}
-                onClick={() => editing && save.mutate({ key: editing.key, body: { value: draft } })}
-              >
-                {t('common:save')}
-              </Button>
-            )}
+            <Button
+              variant="primary"
+              disabled={save.isPending}
+              onClick={() => editing && save.mutate({ key: editing.key, body: { value: draft } })}
+            >
+              {t('common:save')}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -241,13 +216,6 @@ export default function PromptModulesSection() {
         </DialogContent>
       </Dialog>
 
-      {/* skill 行查看 = 文件管理器（与技能 Section 同一能力）；关闭时刷新模块列表（SKILL.md 投影可能已改） */}
-      {filesFor && (
-        <SkillFilesDialog
-          skill={filesFor}
-          onClose={() => { setFilesFor(null); void qc.invalidateQueries({ queryKey: ['prompt-modules'] }); }}
-        />
-      )}
     </div>
   );
 }
