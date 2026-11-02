@@ -186,6 +186,8 @@ echo "== build api =="
 docker build -t itest-api:latest -f infra/docker/api.Dockerfile .
 echo "== build web =="
 docker build -t itest-web:latest -f infra/docker/web.Dockerfile .
+echo "== build gauss-bridge =="
+docker build -t itest-gauss-bridge:latest -f infra/docker/gauss-bridge.Dockerfile .
 
 echo "== up services =="
 # --wait 用 healthcheck 替代 pg_isready + curl 轮询；超 120s 仍未 healthy 抛错（set -e 触发）。
@@ -329,6 +331,14 @@ console.log('locales ok:', locale);
 " >/dev/null 2>&1; then
   SMOKE_WARN="$SMOKE_WARN
   - 录制扩展 _locales 缺失 FAIL（manifest 声明了 default_locale，但镜像内无 _locales/<locale>/messages.json：Chrome 会拒绝安装扩展，报 Default locale was specified, but _locales subtree is missing。检查 api.Dockerfile 是否 COPY apps/recorder/_locales）"
+  SMOKE_FAIL=1
+fi
+
+# (h) gauss 桥健康：api → gauss-bridge 内网链路（gauss100 的 test-db / sql 步骤都经它）。
+#     api 不 depends_on 桥（懒失败设计），此处仅探测链路，失败进 smoke 告警不阻断容器运行。
+if ! docker exec "$(api_replica)" node -e "fetch('http://gauss-bridge:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
+  SMOKE_WARN="$SMOKE_WARN
+  - gauss-bridge /healthz FAIL（gauss100 数据库将不可用：docker compose -p itest logs gauss-bridge 看桥日志；api 侧 GAUSS_BRIDGE_URL=http://gauss-bridge:8080）"
   SMOKE_FAIL=1
 fi
 
