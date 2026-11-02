@@ -48,7 +48,7 @@ export async function runSql(opts: {
   // 2) 绑定：模板变量与显式占位符二选一。
   const tplCount = [...action.sql.matchAll(TPL_RE)].length;
   const hasExplicitPlaceholder =
-    pool.dialect === 'mysql' ? /\?/.test(action.sql) : /\$\d+/.test(action.sql);
+    pool.dialect === 'postgres' ? /\$\d+/.test(action.sql) : /\?/.test(action.sql);
   if (tplCount > 0 && (action.params.length > 0 || hasExplicitPlaceholder)) {
     throw new Error(
       `sql-params-conflict: SQL 里的 {{变量}} 与显式占位符/params 不能混用（模板变量会占用前面的占位符位置，顺序无法推断）。` +
@@ -63,7 +63,7 @@ export async function runSql(opts: {
     let n = 0;
     sql = action.sql.replace(TPL_RE, (_m, name: string) => {
       bound.push(vars[name]);
-      return pool.dialect === 'mysql' ? '?' : `$${++n}`;
+      return pool.dialect === 'postgres' ? `$${++n}` : '?';
     });
     params = bound;
   } else {

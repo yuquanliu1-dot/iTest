@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { Pool } from 'pg';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
@@ -164,5 +166,76 @@ describe('environments CRUD', () => {
     expect(r.body.reports).toContain('status');
     expect(r.body.environment_objects).toContain('object_type');
     expect(r.body.environment_objects).not.toContain('payload');
+  });
+});
+
+describe('POST /environments/test-db gauss100（经 JDBC 桥）', () => {
+  const gaussBody = { dbType: 'gauss100', host: 'gauss.example.com', dbName: 'BSSPUB', user: 'u', password: 'p' };
+
+  it('正常路径：SQL 发给桥，dbName 映射为 schema，端口缺省 2888', async () => {
+    const requests: Record<string, unknown>[] = [];
+    const server = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => { raw += c; });
+      req.on('end', () => {
+        requests.push({ url: req.url, ...(raw ? JSON.parse(raw) as Record<string, unknown> : {}) });
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ rows: [{ ok: 1 }] }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const prev = process.env.GAUSS_BRIDGE_URL;
+    process.env.GAUSS_BRIDGE_URL = url;
+    try {
+      const r = await request(app).post('/api/environments/test-db').send(gaussBody);
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(true);
+      expect(r.body.latencyMs).toBeGreaterThanOrEqual(0);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        url: '/query', host: 'gauss.example.com', port: 2888, user: 'u', password: 'p',
+        schema: 'BSSPUB', sql: 'SELECT 1', params: [],
+      });
+    } finally {
+      if (prev === undefined) delete process.env.GAUSS_BRIDGE_URL; else process.env.GAUSS_BRIDGE_URL = prev;
+      server.closeAllConnections?.();
+      server.close();
+    }
+  });
+
+  it('桥回 GS 错误（400）→ ok:false 且 GS 码透传', async () => {
+    const server = http.createServer((_req, res) => {
+      res.statusCode = 400;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: 'GS-00329: connection rejected by whitelist (SQLState=28000)' }));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const prev = process.env.GAUSS_BRIDGE_URL;
+    process.env.GAUSS_BRIDGE_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const r = await request(app).post('/api/environments/test-db').send(gaussBody);
+      expect(r.status).toBe(200); // 200 + ok:false 是探测失败的既定约定
+      expect(r.body.ok).toBe(false);
+      expect(r.body.error).toContain('GS-00329');
+      expect(r.body.error).toContain('HTTP 400');
+    } finally {
+      if (prev === undefined) delete process.env.GAUSS_BRIDGE_URL; else process.env.GAUSS_BRIDGE_URL = prev;
+      server.closeAllConnections?.();
+      server.close();
+    }
+  });
+
+  it('未配 GAUSS_BRIDGE_URL → ok:false 非 500，错误含变量名（R1 懒失败回归）', async () => {
+    const prev = process.env.GAUSS_BRIDGE_URL;
+    delete process.env.GAUSS_BRIDGE_URL;
+    try {
+      const r = await request(app).post('/api/environments/test-db').send(gaussBody);
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(false);
+      expect(r.body.error).toContain('GAUSS_BRIDGE_URL');
+    } finally {
+      if (prev === undefined) delete process.env.GAUSS_BRIDGE_URL; else process.env.GAUSS_BRIDGE_URL = prev;
+    }
   });
 });

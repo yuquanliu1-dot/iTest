@@ -108,7 +108,7 @@ async function assertWebPayload(
  *  `Connection terminated unexpectedly` 完全掩盖真实原因。
  *
  *  校验两条：
- *  1. dbType 显式给了必须是 postgres/mysql 之一（拼错的值早失败，好过运行时静默走缺省）。
+ *  1. dbType 显式给了必须是 postgres/mysql/gauss100 之一（拼错的值早失败，好过运行时静默走缺省）。
  *  2. url 存在时其 jdbc 库型不得与 dbType 冲突（jdbc:mysql:// + dbType=postgres
  *     是自相矛盾的配置，直接拒掉，别让它跑到运行期才炸）。
  *
@@ -117,8 +117,8 @@ async function assertWebPayload(
  */
 function assertDbPayload(payload: Record<string, unknown>): void {
   const dbType = payload.dbType;
-  if (dbType !== undefined && dbType !== null && dbType !== 'postgres' && dbType !== 'mysql') {
-    throw new HttpError(400, 'invalid_db_type', '数据库类型只能是 postgres 或 mysql');
+  if (dbType !== undefined && dbType !== null && dbType !== 'postgres' && dbType !== 'mysql' && dbType !== 'gauss100') {
+    throw new HttpError(400, 'invalid_db_type', '数据库类型只能是 postgres、mysql 或 gauss100');
   }
   for (const k of ['host', 'dbName', 'user'] as const) {
     const v = payload[k];

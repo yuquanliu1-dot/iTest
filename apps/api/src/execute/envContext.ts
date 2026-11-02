@@ -2,7 +2,7 @@ import { db } from '../db/client.js';
 import { testEnvironments, environmentObjects, projectVersions } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import { decrypt } from '../lib/secret-crypto.js';
-import { resolveDbDialect } from '@itest/shared';
+import { resolveDbDialect, defaultDbPort } from '@itest/shared';
 import pg from 'pg';
 import mysql from 'mysql2/promise';
 
@@ -16,6 +16,14 @@ export class EnvProjectMismatch extends Error {
 
 export class DecryptError extends Error {
   constructor(cause: string) { super(`decrypt failed: ${cause}`); this.name = 'DecryptError'; }
+}
+
+/** gauss100 桥未配置（GAUSS_BRIDGE_URL 未设：本地 dev 无桥；生产 compose 内已注入）。 */
+export class GaussBridgeMissing extends Error {
+  constructor() {
+    super('gauss-bridge-missing: gauss100 数据库需经 JDBC 桥访问，但未配置 GAUSS_BRIDGE_URL（生产环境随 compose 注入 http://gauss-bridge:8080；本地 dev 请自建桥并导出该变量）');
+    this.name = 'GaussBridgeMissing';
+  }
 }
 
 export class WebServiceMissing extends Error {
@@ -40,6 +48,49 @@ export function createQueryPool(cfg: {
   user: string;
   password: string;
 }): QueryPool {
+  if (cfg.dialect === 'gauss100') {
+    // GaussDB 100 = 华为私有线协议，Node 无驱动 → SQL 经 HTTP 转发给 JDBC 桥（infra/docker/gauss-bridge）。
+    // 懒失败：创建必须恒成功（test-db 在 try 之外建池，创建即抛会变 500），URL 缺失在 query() 首调才报。
+    return {
+      dialect: 'gauss100',
+      async query(sql, params) {
+        const base = process.env.GAUSS_BRIDGE_URL; // 每次现读：测试与运维改 env 即时生效
+        if (!base) throw new GaussBridgeMissing();
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        const token = process.env.GAUSS_BRIDGE_TOKEN;
+        if (token) headers['x-bridge-token'] = token;
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), 30_000);
+        let res: Response;
+        try {
+          res = await fetch(`${base.replace(/\/+$/, '')}/query`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              host: cfg.host, port: cfg.port, user: cfg.user,
+              password: cfg.password, schema: cfg.database, sql, params,
+            }),
+            signal: ac.signal,
+          });
+        } catch (e) {
+          throw new Error(`gauss bridge: 无法连接 SQL 桥（${base}）: ${e instanceof Error ? e.message : String(e)}`);
+        } finally {
+          clearTimeout(timer);
+        }
+        const text = await res.text();
+        if (!res.ok) {
+          const msg = (() => { try { return String(JSON.parse(text).error ?? text); } catch { return text; } })();
+          throw new Error(`gauss bridge: HTTP ${res.status}: ${msg}`);
+        }
+        try {
+          return { rows: JSON.parse(text).rows as Record<string, unknown>[] };
+        } catch {
+          throw new Error(`gauss bridge: 响应不是合法 JSON: ${text.slice(0, 200)}`);
+        }
+      },
+      end: async () => undefined, // 桥无状态（每请求独立 JDBC 连接），无资源可释放
+    };
+  }
   if (cfg.dialect === 'mysql') {
     const pool = mysql.createPool({
       host: cfg.host,
@@ -160,7 +211,7 @@ interface DbPayload {
   port?: number | null;
   dbName?: string | null;
   /** 缺省按 postgres 处理（老数据兼容）。 */
-  dbType?: 'postgres' | 'mysql';
+  dbType?: DbDialect;
   user?: string | null;
   secret?: { c?: string | null; i?: string | null; t?: string | null } | null;
 }
@@ -267,7 +318,7 @@ export async function resolveEnv(
       label: o.label,
       dialect,
       host: p.host,
-      port: p.port ?? (dialect === 'mysql' ? 3306 : 5432),
+      port: p.port ?? defaultDbPort(dialect),
       database: p.dbName,
       user: p.user,
       password: p.secret?.c && p.secret?.i && p.secret?.t ? safeDecrypt(p.secret) : '',

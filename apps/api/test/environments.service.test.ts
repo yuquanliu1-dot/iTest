@@ -229,6 +229,27 @@ describe('environments.service', () => {
       })).rejects.toMatchObject({ status: 400, code: 'invalid_db_payload' });
     }, 30_000);
 
+    it('gauss100 + jdbc:zenith:@ url 合法入库', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, { name: 'DB' });
+      const obj = await svc.insertEnvironmentObject(env.id, {
+        objectType: 'db',
+        payload: { dbType: 'gauss100', url: 'jdbc:zenith:@192.168.2.60:2888', host: '192.168.2.60', port: 2888, dbName: 'BSSPUB', user: 'BSSPUB' },
+      });
+      const raw = (await pool.query(`SELECT payload FROM environment_objects WHERE id=$1`, [obj.id])).rows[0]!.payload as Record<string, unknown>;
+      expect(raw.dbType).toBe('gauss100');
+    }, 30_000);
+
+    it('dbType 非 gauss100 与 jdbc:zenith url 冲突被拒', async () => {
+      const { projectId } = await seedProject(pool);
+      const svc = await import('../src/services/environments.service.js');
+      const env = await svc.createEnvironment(projectId, { name: 'DB' });
+      await expect(svc.insertEnvironmentObject(env.id, {
+        objectType: 'db', payload: { host: 'h', dbType: 'postgres', url: 'jdbc:zenith:@h:2888' },
+      })).rejects.toMatchObject({ status: 400, code: 'invalid_db_payload' });
+    }, 30_000);
+
     it('update 保留 prev 的 url(jdbc:…) 证据:表单只带 dbType/host/port/dbName/user 也不会把 url 抹掉', async () => {
       const { projectId } = await seedProject(pool);
       const svc = await import('../src/services/environments.service.js');

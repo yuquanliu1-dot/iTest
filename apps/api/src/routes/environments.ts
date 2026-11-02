@@ -1,7 +1,7 @@
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
-import { resolveDbDialect } from '@itest/shared';
+import { resolveDbDialect, defaultDbPort } from '@itest/shared';
 import { db } from '../db/client.js';
 import { environmentObjects } from '../db/schema.js';
 import { HttpError } from '../middleware/errorHandler.js';
@@ -134,7 +134,7 @@ const TestDbBody = z.object({
   dbName: z.string().min(1),
   user: z.string().min(1),
   password: z.string().optional(), // 明文留空 → 沿用旧密文（与保存语义一致）
-  dbType: z.enum(['postgres', 'mysql']).optional(),
+  dbType: z.enum(['postgres', 'mysql', 'gauss100']).optional(),
   url: z.string().optional(), // jdbc url：缺 dbType 时用它推断库型（与运行期 resolveDbDialect 同一份逻辑）
 });
 
@@ -160,7 +160,7 @@ environmentsRoute.post('/environments/test-db', async (req, res) => {
   const pool = createQueryPool({
     dialect,
     host: body.host,
-    port: body.port ?? (dialect === 'mysql' ? 3306 : 5432),
+    port: body.port ?? defaultDbPort(dialect),
     database: body.dbName,
     user: body.user,
     password,

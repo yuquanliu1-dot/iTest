@@ -3,7 +3,7 @@ import { QueryDbError, QueryDbColumnNotAllowed, QueryDbTableNotAllowed, assertCo
 import type { QueryPool } from './envContext.js';
 
 /** 假池：记录被执行的 sql / params。 */
-function fakePool(rows: Record<string, unknown>[], dialect: 'postgres' | 'mysql' = 'postgres'): QueryPool & { calls: Array<{ sql: string; params: unknown[] }> } {
+function fakePool(rows: Record<string, unknown>[], dialect: 'postgres' | 'mysql' | 'gauss100' = 'postgres'): QueryPool & { calls: Array<{ sql: string; params: unknown[] }> } {
   const calls: Array<{ sql: string; params: unknown[] }> = [];
   return {
     dialect,
@@ -69,6 +69,12 @@ describe('buildSelectSql', () => {
   it('mysql: escapes embedded backticks in identifiers', () => {
     const { sql } = buildSelectSql('mysql', 'reports', ['we`ird'], [], 5);
     expect(sql).toContain('`we``ird`');
+  });
+
+  it('gauss100: double-quoted identifiers + ? placeholders（同 mysql 占位、同 pg 引号）', () => {
+    const { sql, params } = buildSelectSql('gauss100', 'reports', ['id'], [{ column: 'status', equals: 'failed' }], 10);
+    expect(sql).toBe('SELECT "id" FROM "reports" WHERE "status" = ? LIMIT 10');
+    expect(params).toEqual(['failed']);
   });
 
   it('empty where → no WHERE clause, empty params', () => {

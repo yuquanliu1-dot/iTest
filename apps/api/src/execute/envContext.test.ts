@@ -254,6 +254,34 @@ describe('resolveEnv', () => {
     await env.close();
   });
 
+  it('gauss100 payload → pool dialect gauss100, port 2888, 未配桥时 query 抛 GaussBridgeMissing（懒失败）', async () => {
+    const enc = encrypt('gspass');
+    mockTables({
+      test_environments: [ENV_ROW],
+      environment_objects: [{
+        id: 'obj-db', environmentId: 'env-1', objectType: 'db', label: '默认', isDefault: true,
+        payload: {
+          dbType: 'gauss100', host: 'gauss.example.com', dbName: 'BSSPUB', user: 'BSSPUB',
+          secret: { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') },
+        },
+      }],
+      project_versions: [],
+    });
+    const prev = process.env.GAUSS_BRIDGE_URL;
+    delete process.env.GAUSS_BRIDGE_URL;
+    try {
+      const env = await resolveEnv({ caseEnvId: 'env-1' });
+      expect(env.pool?.dialect).toBe('gauss100');
+      expect(env.db?.port).toBe(2888);
+      expect(env.db?.password).toBe('gspass');
+      // 懒失败：建池不抛（test-db 在 try 外建池），首调 query 才抛具名错误
+      await expect(env.pool!.query('SELECT 1', [])).rejects.toMatchObject({ name: 'GaussBridgeMissing' });
+      await env.close();
+    } finally {
+      if (prev !== undefined) process.env.GAUSS_BRIDGE_URL = prev;
+    }
+  });
+
   it('syslog password authType → password ctx without privateKey', async () => {
     const enc = encrypt('s3cret');
     mockTables({

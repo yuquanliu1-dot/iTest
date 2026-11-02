@@ -5,7 +5,7 @@ import { runSql } from '../src/execute/sqlQuery.js';
 /** 假池：记录被执行的 sql / params，按需抛错。 */
 function fakePool(
   rows: Record<string, unknown>[],
-  opts: { fail?: Error; dialect?: 'postgres' | 'mysql' } = {},
+  opts: { fail?: Error; dialect?: 'postgres' | 'mysql' | 'gauss100' } = {},
 ): QueryPool & { calls: Array<{ sql: string; params: unknown[] }> } {
   const calls: Array<{ sql: string; params: unknown[] }> = [];
   return {
@@ -49,6 +49,20 @@ describe('runSql', () => {
     await runSql({ pool: my, action: { ...base, sql: 'SELECT {{a}}, {{b}}' }, vars: { a: 'x', b: 'y' } });
     expect(my.calls[0]!.sql).toBe('SELECT ?, ?');
     expect(my.calls[0]!.params).toEqual(['x', 'y']);
+  });
+
+  it('gauss100 与 mysql 同用 ? 占位（显式占位符检测亦按 ? 判定）', async () => {
+    const g = fakePool([], { dialect: 'gauss100' });
+    await runSql({ pool: g, action: { ...base, sql: 'SELECT {{a}}, {{b}}' }, vars: { a: 'x', b: 'y' } });
+    expect(g.calls[0]!.sql).toBe('SELECT ?, ?');
+    expect(g.calls[0]!.params).toEqual(['x', 'y']);
+
+    // 显式 ? 与模板变量混用 → 冲突拒绝（与 mysql 同语义）
+    const g2 = fakePool([], { dialect: 'gauss100' });
+    await expect(
+      runSql({ pool: g2, action: { ...base, sql: 'SELECT ? , {{v}}', params: ['p'] }, vars: { v: 'k' } }),
+    ).rejects.toThrow(/sql-params-conflict/);
+    expect(g2.calls).toHaveLength(0);
   });
 
   it('同一变量出现多次 → 按出现次数重复绑定', async () => {

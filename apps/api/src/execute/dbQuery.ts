@@ -42,7 +42,7 @@ export type { DbQueryRowResult };
 
 const TRUNCATE = 50;
 
-/** 双方言 SELECT 构造：标识符 pg `"col"`（`""` 转义）/ mysql `` `col` ``（`` `` `` 转义）；占位符 pg `$n` / mysql `?`。 */
+/** SELECT 构造：标识符 pg/gauss100 `"col"`（`""` 转义）/ mysql `` `col` ``（`` `` `` 转义）；占位符 pg `$n` / mysql、gauss100 `?`。 */
 export function buildSelectSql(
   dialect: DbDialect,
   table: string,
@@ -52,7 +52,7 @@ export function buildSelectSql(
 ): { sql: string; params: unknown[] } {
   const quote = (id: string) =>
     dialect === 'mysql' ? `\`${id.replace(/`/g, '``')}\`` : `"${id.replace(/"/g, '""')}"`;
-  const placeholder = (i: number) => (dialect === 'mysql' ? '?' : `$${i + 1}`);
+  const placeholder = (i: number) => (dialect === 'postgres' ? `$${i + 1}` : '?');
 
   const params: unknown[] = [];
   const whereParts = where.map((w, i) => {
