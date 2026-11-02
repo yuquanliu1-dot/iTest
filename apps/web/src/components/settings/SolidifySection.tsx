@@ -232,7 +232,9 @@ export default function SolidifySection() {
 
       {/* 提案详情：diff 双栏 + 来源退役勾选 + 批准/驳回 */}
       <Dialog open={!!openId} onOpenChange={(open) => { if (!open) setOpenId(null); }}>
-        <DialogContent>
+        {/* 隐式 grid 列 auto 取 items 的 min-content（truncate 来源行=全文宽）会把列撑到超框 →
+            显式 minmax(0,1fr) 钳到可用宽。加宽 sm:max-w-3xl 改善双栏 diff 可读性（须 sm: 变体，基础样式带 sm:max-w-lg 会盖掉裸 max-w）。 */}
+        <DialogContent className="grid-cols-[minmax(0,1fr)] sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>{detail?.title ?? ''}</DialogTitle>
           </DialogHeader>
