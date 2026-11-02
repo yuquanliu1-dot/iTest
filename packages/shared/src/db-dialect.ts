@@ -14,8 +14,8 @@
  *   3. 都没有 → postgres（兼容 0023 迁移平铺的老数据：那些库确实都是 PG）。
  */
 
-/** 库型：postgres / mysql。命名与 apps/api 的 DbDialect 一致。 */
-export type DbDialect = 'postgres' | 'mysql';
+/** 库型：postgres / mysql / gauss100（GaussDB 100，Zenith 私有协议，Node 无驱动走 HTTP 桥）。命名与 apps/api 的 DbDialect 一致。 */
+export type DbDialect = 'postgres' | 'mysql' | 'gauss100';
 
 /** db 对象 payload 里与库型判定相关的字段（其余字段不关心）。 */
 export interface DbDialectPayload {
@@ -25,7 +25,7 @@ export interface DbDialectPayload {
 
 /**
  * jdbc url → 方言。只认 url 的 scheme 前缀，不解析 host/port：
- * `jdbc:mysql://…` / `jdbc:postgresql://…`（含 `jdbc:postgresqls://`? 不认）。
+ * `jdbc:mysql://…` / `jdbc:postgresql://…` / `jdbc:zenith:@…`（GaussDB 100，注意无 `//`）。
  * 认不出就返回 null（交由调用方回落到缺省）。
  */
 export function dialectFromJdbcUrl(url: unknown): DbDialect | null {
@@ -33,6 +33,7 @@ export function dialectFromJdbcUrl(url: unknown): DbDialect | null {
   const s = url.trim().toLowerCase();
   if (s.startsWith('jdbc:mysql://')) return 'mysql';
   if (s.startsWith('jdbc:postgresql://')) return 'postgres';
+  if (s.startsWith('jdbc:zenith:@')) return 'gauss100';
   return null;
 }
 
@@ -44,8 +45,20 @@ export function dialectFromJdbcUrl(url: unknown): DbDialect | null {
  */
 export function resolveDbDialect(payload: DbDialectPayload | null | undefined, fallback: DbDialect = 'postgres'): DbDialect {
   if (!payload) return fallback;
-  if (payload.dbType === 'mysql' || payload.dbType === 'postgres') return payload.dbType;
+  if (payload.dbType === 'mysql' || payload.dbType === 'postgres' || payload.dbType === 'gauss100') return payload.dbType;
   const fromUrl = dialectFromJdbcUrl(payload.url);
   if (fromUrl) return fromUrl;
   return fallback;
+}
+
+/** 各库型的默认端口（gauss100 的「库名」= schema，端口 2888）。 */
+export function defaultDbPort(dialect: DbDialect): number {
+  switch (dialect) {
+    case 'mysql':
+      return 3306;
+    case 'gauss100':
+      return 2888;
+    default:
+      return 5432;
+  }
 }
