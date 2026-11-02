@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../i18n';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -44,8 +44,7 @@ export default function DatasetsPage() {
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<DatasetSummary | null>(null);
-  const [tsvOpen, setTsvOpen] = useState(false);
-  const [tsvText, setTsvText] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const loadDetail = useMutation({
     mutationFn: (id: string) => api.datasets.get(projectId!, id),
@@ -158,33 +157,42 @@ export default function DatasetsPage() {
     return { ...d, rows };
   });
 
-  /** TSV 粘贴：首行是表头（列名），其余为数据行；已有同名列复用，新列按非敏感创建。 */
-  const applyTsv = () => {
-    const lines = tsvText.replace(/\r/g, '').split('\n').filter((l) => l.trim() !== '');
-    if (lines.length < 2) {
-      toast(t('datasets:tsvNeedAtLeast'), 'error');
-      return;
+  /** 下载导入模板：编辑已有数据集时把当前列名带给后端，模板表头即数据集现列。 */
+  const downloadTemplate = async () => {
+    try {
+      const blob = await api.datasets.downloadTemplate(
+        projectId!,
+        draft!.columns.map((c) => c.name.trim()).filter(Boolean),
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'dataset-template.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      toast(localizeApiError(e as Error), 'error');
     }
-    const headers = lines[0]!.split('\t').map((h) => h.trim());
-    mutate((d) => {
-      const columns = [...d.columns];
-      for (const h of headers) {
-        if (h && !columns.some((c) => c.name === h)) columns.push({ name: h, sensitive: false });
-      }
-      const rows = [...d.rows];
-      for (const line of lines.slice(1)) {
-        const cells: Record<string, DraftCell> = {};
-        line.split('\t').forEach((v, i) => {
-          if (headers[i]) cells[headers[i]!] = v;
-        });
-        rows.push({ disabled: false, cells });
-      }
-      return { ...d, columns, rows };
-    });
-    setTsvOpen(false);
-    setTsvText('');
-    toast(t('datasets:importedRows', { count: lines.length - 1 }), 'success');
   };
+
+  // Excel 导入：服务端解析 xlsx → 同名列复用（保留敏感标志），新列非敏感，行追加进 draft；保存时才落库。
+  const doImport = useMutation({
+    mutationFn: (file: File) => api.datasets.importFile(projectId!, file),
+    onSuccess: (payload) => {
+      mutate((d) => {
+        const columns = [...d.columns];
+        for (const c of payload.columns) {
+          if (!columns.some((x) => x.name === c.name)) columns.push({ name: c.name, sensitive: false });
+        }
+        const rows = [...d.rows, ...payload.rows.map((r) => ({ disabled: false, cells: { ...r.cells } }))];
+        return { ...d, columns, rows };
+      });
+      toast(t('datasets:importedRows', { count: payload.rows.length }), 'success');
+    },
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
+  });
 
   const saveBlocked = useMemo(() => {
     if (!draft) return true;
@@ -296,10 +304,30 @@ export default function DatasetsPage() {
           {draft.id ? t('datasets:editDataset') : t('datasets:createDataset')}
         </h1>
         <div className="flex-1" />
-        <Button variant="ghost" size="sm" onClick={() => setTsvOpen(true)}>
-          <Icon name="upload" size={12} />
-          {t('datasets:pasteFromExcel')}
+        <Button variant="ghost" size="sm" onClick={downloadTemplate}>
+          <Icon name="download" size={12} />
+          {t('datasets:downloadTemplate')}
         </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={doImport.isPending}
+          onClick={() => fileRef.current?.click()}
+        >
+          <Icon name="upload" size={12} />
+          {doImport.isPending ? t('datasets:importing') : t('datasets:importExcel')}
+        </Button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".xlsx"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) doImport.mutate(f);
+            e.target.value = '';
+          }}
+        />
         <Button onClick={() => save.mutate(draft)} disabled={saveBlocked || save.isPending}>
           {save.isPending ? t('datasets:saving') : t('common:save')}
         </Button>
@@ -427,28 +455,6 @@ export default function DatasetsPage() {
           </div>
         </div>
       </div>
-
-      <Dialog open={tsvOpen} onOpenChange={setTsvOpen}>
-        <DialogContent style={{ maxWidth: 560 }}>
-          <DialogHeader><DialogTitle>{t('datasets:tsvTitle')}</DialogTitle></DialogHeader>
-          <p className="text-[12px] mb-2" style={{ color: 'var(--muted-foreground)' }}>
-            {t('datasets:tsvDescription')}
-          </p>
-          <textarea
-            className="input-base input-sm w-full"
-            rows={8}
-            style={{ fontFamily: 'monospace' }}
-            placeholder={'username\tpassword\nalice\tpw1'}
-            value={tsvText}
-            onChange={(e) => setTsvText(e.target.value)}
-            autoFocus
-          />
-          <DialogFooter>
-            <Button variant="ghost" size="sm" onClick={() => setTsvOpen(false)}>{t('common:cancel')}</Button>
-            <Button size="sm" onClick={applyTsv}>{t('datasets:import')}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

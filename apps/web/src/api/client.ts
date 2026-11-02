@@ -295,6 +295,32 @@ export const api = {
         `/projects/${projectId}/datasets/${id}${opts?.confirm ? '?confirm=true' : ''}`,
         { method: 'DELETE' },
       ),
+    /** 下载导入模板（fetch → blob，同 downloadExtensionZip 不走 JSON 解析；调用方 a[download] 落盘）。
+     *  columns：编辑已有数据集时带当前列名，模板表头即数据集现列。 */
+    downloadTemplate: async (projectId: string, columns?: string[]): Promise<Blob> => {
+      const q = columns && columns.length > 0 ? `?columns=${encodeURIComponent(columns.join(','))}` : '';
+      const r = await fetch(`${BASE}/projects/${projectId}/datasets/template${q}`, { credentials: 'same-origin' });
+      if (!r.ok) {
+        if (r.status === 401) throw new ApiError(401, '未登录或会话已过期');
+        const body = await r.json().catch(() => ({}));
+        throw new ApiError(r.status, body.message ?? `HTTP ${r.status}`);
+      }
+      return r.blob();
+    },
+    /** 上传 xlsx 解析为草稿载荷（octet-stream，同 attachments.upload）。只解析不入库。 */
+    importFile: async (projectId: string, file: File): Promise<DatasetImportPayload> => {
+      const buf = await file.arrayBuffer();
+      const r = await fetch(`${BASE}/projects/${projectId}/datasets/import-parse`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) },
+        body: buf,
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({})) as { message?: string; code?: string };
+        throw new ApiError(r.status, body.message ?? `HTTP ${r.status}`, body.code);
+      }
+      return r.json() as Promise<DatasetImportPayload>;
+    },
   },
   executions: {
     list: (params?: {
@@ -501,9 +527,9 @@ export const api = {
       ),
   },
   assistantAttachments: {
-    /** 助手 docx 预上传（版本作用域）。X-Filename 走 encodeURIComponent：中文文件名
+    /** 助手附件预上传（版本作用域，.docx/.xlsx）。X-Filename 走 encodeURIComponent：中文文件名
      *  直塞 Headers 在部分浏览器抛 ByteString 错（cases 旧路径未处理，不动旧码，这里做对）。 */
-    uploadDocx: async (versionId: string, file: File) => {
+    uploadAttachment: async (versionId: string, file: File) => {
       const buf = await file.arrayBuffer();
       const r = await fetch(`${BASE}/assistant/versions/${versionId}/attachments`, {
         method: 'POST',
@@ -1518,6 +1544,11 @@ export interface DatasetSaveBody {
   rows: Array<{ disabled?: boolean; cells: Record<string, unknown> }>;
   /** 列改名声明（旧列名 → 新列名）：让服务端把旧列密文 re-key 到新列名（编辑已有数据集时）。 */
   renames?: Record<string, string>;
+}
+/** xlsx 导入解析出参（import-parse）：新列一律非敏感、行未禁用，合入 draft 后仍走普通保存。 */
+export interface DatasetImportPayload {
+  columns: Array<{ name: string; sensitive: false }>;
+  rows: Array<{ disabled: false; cells: Record<string, string> }>;
 }
 export interface DatasetSummary {
   id: string;

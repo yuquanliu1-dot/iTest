@@ -4,11 +4,12 @@
   "backToList": "返回列表",
   "createDataset": "新建数据集",
   "editDataset": "编辑数据集",
-  "pasteFromExcel": "从 Excel 粘贴",
+  "downloadTemplate": "下载模板",
+  "importExcel": "导入 Excel",
+  "importing": "导入中...",
   "saved": "已保存",
   "saving": "保存中...",
   "deletedWithName": "已删除数据集（{{name}}）",
-  "tsvNeedAtLeast": "至少需要表头 + 1 行数据",
   "importedRows": "已导入 {{count}} 行",
   "emptyTitle": "暂无数据集",
   "emptyDescription": "新建数据集后，在用例执行设置里绑定即可实现数据驱动回放（N 行 = N 次回放）。",
@@ -37,8 +38,5 @@
     "unbindSuffix": "，绑定该数据集的用例将自动解绑（回放退回单次执行）。"
   },
   "deleting": "删除中...",
-  "confirmDelete": "确认删除",
-  "tsvTitle": "从 Excel 粘贴（TSV）",
-  "tsvDescription": "在 Excel/表格里复制区域后粘贴到这里：首行是列名，其余每行一条数据。同名列自动复用，新列默认非敏感。",
-  "import": "导入"
+  "confirmDelete": "确认删除"
 }

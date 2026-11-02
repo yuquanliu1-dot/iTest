@@ -4,11 +4,12 @@
   "backToList": "Back to list",
   "createDataset": "New dataset",
   "editDataset": "Edit dataset",
-  "pasteFromExcel": "Paste from Excel",
+  "downloadTemplate": "Download template",
+  "importExcel": "Import Excel",
+  "importing": "Importing...",
   "saved": "Saved",
   "saving": "Saving...",
   "deletedWithName": "Deleted dataset ({{name}})",
-  "tsvNeedAtLeast": "At least a header + 1 data row is required",
   "importedRows": "Imported {{count}} rows",
   "importedRows_one": "Imported {{count}} row",
   "importedRows_other": "Imported {{count}} rows",
@@ -41,8 +42,5 @@
     "unbindSuffix": " Cases bound to this dataset are unbound automatically (replay falls back to single execution)."
   },
   "deleting": "Deleting...",
-  "confirmDelete": "Confirm delete",
-  "tsvTitle": "Paste from Excel (TSV)",
-  "tsvDescription": "Copy a range in Excel/spreadsheet and paste it here: the first row is the header (column names), each remaining row is one data entry. Same-named columns are reused automatically; new columns default to non-sensitive.",
-  "import": "Import"
+  "confirmDelete": "Confirm delete"
 }

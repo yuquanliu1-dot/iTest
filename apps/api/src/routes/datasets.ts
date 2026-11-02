@@ -14,6 +14,7 @@ import {
   listDatasets,
   updateDataset,
 } from '../services/datasets.service.js';
+import { buildTemplateWorkbook, parseImportWorkbook } from '../services/datasetImport.service.js';
 
 export const datasetsRoute = Router();
 
@@ -45,6 +46,24 @@ datasetsRoute.post('/projects/:projectId/datasets', async (req, res) => {
   await assertProjectVisible(req.params.projectId!, req.user!);
   const body = SaveBody.parse(req.body);
   res.json(await createDataset(req.params.projectId!, body, req.user!.userId));
+});
+
+// 必须注册在 GET /:dsId 之前：Express 按序匹配，否则 template 会被当 dsId。
+datasetsRoute.get('/projects/:projectId/datasets/template', async (req, res) => {
+  await assertProjectVisible(req.params.projectId!, req.user!);
+  const raw = typeof req.query.columns === 'string' ? req.query.columns : '';
+  const columns = raw.split(',').map((c) => c.trim()).filter(Boolean);
+  const buf = await buildTemplateWorkbook(columns.length > 0 ? columns : undefined);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="dataset-template.xlsx"');
+  res.send(buf);
+});
+
+datasetsRoute.post('/projects/:projectId/datasets/import-parse', async (req, res) => {
+  await assertProjectVisible(req.params.projectId!, req.user!);
+  const buf = req.body as Buffer;
+  if (!Buffer.isBuffer(buf)) throw new HttpError(400, 'bad_request', 'expected octet-stream body');
+  res.json(await parseImportWorkbook(buf));
 });
 
 datasetsRoute.get('/projects/:projectId/datasets/:dsId', async (req, res) => {
