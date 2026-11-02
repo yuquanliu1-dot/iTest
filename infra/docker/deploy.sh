@@ -219,6 +219,10 @@ echo "== seed docx-to-cases =="
 docker exec "$(api_replica)" node /repo/apps/api/scripts/seed-docx-to-cases-skill.mjs \
   || echo "WARN: docx-to-cases seed 失败，助手将看不到该技能（不影响其余功能）"
 
+echo "== seed xlsx-to-cases =="
+docker exec "$(api_replica)" node /repo/apps/api/scripts/seed-xlsx-to-cases-skill.mjs \
+  || echo "WARN: xlsx-to-cases seed 失败，助手将看不到该技能（不影响其余功能）"
+
 echo "== seed export-cases =="
 docker exec "$(api_replica)" node /repo/apps/api/scripts/seed-export-cases-skill.mjs \
   || echo "WARN: export-cases seed 失败，助手将无法导出用例文件（不影响其余功能）"
