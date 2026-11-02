@@ -278,11 +278,15 @@ async function buildOverview(projectId: string, days: number, today: Date) {
   const aiUsage = buildDayBuckets(today, days);
   const aiUsageDayMap = new Map(aiUsage.map((b) => [b.date, b]));
   for (const row of aiUsageRows.rows as Array<{
-    created_at: Date;
+    // db.execute 走 drizzle 的 rawSQL 解析器：timestamp(tz off) 原样回字符串，不经列映射
+    created_at: string;
     calls: string | number;
     healed_steps: string | number;
   }>) {
-    const bucket = aiUsageDayMap.get(dateKey(new Date(row.created_at)));
+    // 无时区字符串直接 new Date 会按进程本地时区解析（UTC 容器写入的 UTC 墙钟在 +08 机器上
+    // 被错误平移 8h，桶落到「昨天」）；补 +0000 与 drizzle 列映射（timestamp.cjs mapFromDriverValue）
+    // 同一口径——按 UTC 解释。
+    const bucket = aiUsageDayMap.get(dateKey(new Date(`${row.created_at}+0000`)));
     if (!bucket) continue;
     bucket.calls += Number(row.calls) || 0;
     bucket.healedSteps += Number(row.healed_steps) || 0;
