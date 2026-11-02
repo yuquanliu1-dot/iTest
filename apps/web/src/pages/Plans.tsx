@@ -289,7 +289,7 @@ export default function Plans() {
       <PageShellHeader>
         <PageShellTitle>{t('plans:title')}</PageShellTitle>
         <PageShellActions>
-          <div className="relative w-full sm:max-w-xs">
+          <div className="relative w-48 sm:w-56">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
             <Input
               value={raw.q}
