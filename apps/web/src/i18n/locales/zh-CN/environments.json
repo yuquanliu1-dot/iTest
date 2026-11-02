@@ -49,6 +49,7 @@
     "dbHost": "数据库主机",
     "dbPort": "数据库端口",
     "dbName": "数据库名",
+    "dbNameGaussHint": "GaussDB 100 此处填 schema（不填默认与用户名同名）",
     "dbUser": "数据库用户",
     "dbPassword": "数据库密码",
     "leaveBlankModify": "留空表示不修改",

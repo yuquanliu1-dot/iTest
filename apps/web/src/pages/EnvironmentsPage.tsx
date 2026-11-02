@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { localizeApiError } from '../i18n';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { resolveDbDialect } from '@itest/shared';
+import { resolveDbDialect, defaultDbPort } from '@itest/shared';
 import { api, type Environment, type EnvironmentObject } from '../api/client';
 import { useUIStore } from '../stores/ui';
 import { creatorName } from '../lib/creatorName';
@@ -38,7 +38,7 @@ interface ObjFormState {
   objectType: ObjType;
   /** null → 新建对象 */
   object: EnvironmentObject | null;
-  dbType: 'postgres' | 'mysql';
+  dbType: 'postgres' | 'mysql' | 'gauss100';
   syslogAuth: 'key' | 'password';
   host: string;
   port: string;
@@ -478,12 +478,20 @@ export default function EnvironmentsPage() {
                     options={[
                       { value: 'postgres', label: 'PostgreSQL' },
                       { value: 'mysql', label: 'MySQL' },
+                      { value: 'gauss100', label: 'GaussDB 100' },
                     ]}
                   />
                 </div>
                 <Input label={t('environments:form.dbHost')} value={objForm.host} onChange={(e) => setObjForm((f) => ({ ...f, host: e.target.value }))} placeholder="db.example.com" />
-                <Input label={t('environments:form.dbPort')} value={objForm.port} onChange={(e) => setObjForm((f) => ({ ...f, port: e.target.value }))} placeholder={objForm.dbType === 'mysql' ? '3306' : '5432'} />
-                <Input label={t('environments:form.dbName')} value={objForm.dbName} onChange={(e) => setObjForm((f) => ({ ...f, dbName: e.target.value }))} />
+                <Input label={t('environments:form.dbPort')} value={objForm.port} onChange={(e) => setObjForm((f) => ({ ...f, port: e.target.value }))} placeholder={String(defaultDbPort(objForm.dbType))} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <Input label={t('environments:form.dbName')} value={objForm.dbName} onChange={(e) => setObjForm((f) => ({ ...f, dbName: e.target.value }))} />
+                  {objForm.dbType === 'gauss100' && (
+                    <p className="text-[11px] m-0" style={{ color: 'var(--muted-foreground)' }}>
+                      {t('environments:form.dbNameGaussHint')}
+                    </p>
+                  )}
+                </div>
                 <Input label={t('environments:form.dbUser')} value={objForm.user} onChange={(e) => setObjForm((f) => ({ ...f, user: e.target.value }))} />
                 <Input
                   label={t('environments:form.dbPassword')}

@@ -49,6 +49,7 @@
     "dbHost": "Database host",
     "dbPort": "Database port",
     "dbName": "Database name",
+    "dbNameGaussHint": "For GaussDB 100 this is the schema (defaults to the username if left empty)",
     "dbUser": "Database user",
     "dbPassword": "Database password",
     "leaveBlankModify": "Leave blank to keep unchanged",
