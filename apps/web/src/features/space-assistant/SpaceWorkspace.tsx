@@ -10,7 +10,7 @@ import {
 } from '@assistant-ui/react';
 import { useTranslation } from 'react-i18next';
 import { createPiHttpClient, usePiRuntime, type PiClientEvent } from '@assistant-ui/react-pi';
-import { DocxAttachmentAdapter } from './DocxAttachmentAdapter';
+import { FileAttachmentAdapter } from './FileAttachmentAdapter';
 import SpaceThreadPane from './SpaceThreadPane';
 import SpaceThreadList from './SpaceThreadList';
 import StagePanel from './StagePanel';
@@ -108,12 +108,12 @@ export default function SpaceWorkspace({ versionId, initialMessage, onError, onW
   const hasLiveView = !!useActiveLiveView();
   const { t } = useTranslation();
   // 组合附件 adapter：图片走 SimpleImage（dataURL → pi ImageContent）；
-  // docx 走 Docx（预上传 → send() 把 <uploaded-file …/> 标签作为文本部件返回，
+  // docx/xlsx 走 File（预上传 → send() 把 <uploaded-file …/> 标签作为文本部件返回，
   // ThreadController 拍平进消息正文——与 pi 记录逐字一致，userContentKey 对账无重复气泡）。
   const attachments = useMemo(
     () => new CompositeAttachmentAdapter([
       new SimpleImageAttachmentAdapter(),
-      new DocxAttachmentAdapter(versionId, { tooLarge: t('assistant:attachment.docxTooLarge') }),
+      new FileAttachmentAdapter(versionId, { tooLarge: t('assistant:attachment.fileTooLarge') }),
     ]),
     [versionId, t],
   );

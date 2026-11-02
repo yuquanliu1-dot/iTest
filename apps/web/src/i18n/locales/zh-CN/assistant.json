@@ -7,8 +7,7 @@
   "attachment": {
     "add": "添加图片/文件",
     "remove": "移除",
-    "docxTooLarge": "docx 超过 10MB 上限",
-    "docxFile": "Word 文档"
+    "fileTooLarge": "文件超过 10MB 上限"
   },
   "runningIndicator": "正在运行",
   "suggestion": {

@@ -59,9 +59,10 @@ export default function SpaceThreadPane({ threadId }: { threadId: string }) {
           <ConfirmCard threadId={threadId} />
           <SuggestionRow />
           <ComposerPrimitive.Root className="flex items-end gap-2">
-            {/* 图片附件:AddAttachment 走 <input type=file>,Accept 由 SimpleImageAttachmentAdapter
-                (image/*) 在 useComposerAddAttachment 里从 composer 状态读,这里不用再传 accept。
-                附件在发送时由 ThreadController 转成 pi 的 ImageContent 随 input.attachments 上行。 */}
+            {/* 附件:AddAttachment 走 <input type=file>,Accept 由 CompositeAttachmentAdapter
+                把各 adapter(image/*、.docx/.xlsx+两 mime)的 accept 聚合后经 composer 状态读出,
+                这里不用再传 accept。图片在发送时转成 pi 的 ImageContent 随 input.attachments 上行;
+                文档(docx/xlsx)由 FileAttachmentAdapter 拼成 <uploaded-file/> 文本标签进正文。 */}
             <ComposerPrimitive.AttachmentDropzone className="flex min-w-0 flex-1 flex-col gap-1.5">
               <ComposerPrimitive.Attachments>
                 {({ attachment }) => <ComposerAttachment attachment={attachment} removeLabel={t('assistant:attachment.remove')} />}
@@ -191,9 +192,11 @@ function UploadedFileChip({ meta }: { meta: UploadedFileMeta }) {
   );
 }
 
-/** docx 附件判别：contentType（浏览器对 .docx 给 wordprocessingml mime）或扩展名兜底。 */
-function isDocxAttachment(a: Attachment): boolean {
-  return /\.docx$/i.test(a.name) || /wordprocessingml/i.test(a.contentType ?? '');
+/** 文档附件判别（.docx/.xlsx）：contentType（浏览器给的 wordprocessingml/spreadsheetml mime）
+ *  或扩展名兜底。不命中则按图片渲染（xlsx 落 img 分支会渲染空白框——这是最先暴露的回归点）。 */
+function isDocumentAttachment(a: Attachment): boolean {
+  return /\.(docx|xlsx)$/i.test(a.name)
+    || /wordprocessingml|spreadsheetml/i.test(a.contentType ?? '');
 }
 
 /** 输入框上方的待发送图片附件。
@@ -212,7 +215,7 @@ function ComposerAttachment({ attachment, removeLabel }: { attachment: Attachmen
   return (
     <AttachmentPrimitive.Root className="flex w-fit max-w-full items-start gap-1" style={{ color: 'var(--muted-foreground)' }}>
       <AttachmentPrimitive.unstable_Thumb>
-        {isDocxAttachment(attachment) ? (
+        {isDocumentAttachment(attachment) ? (
           <div
             className="flex h-14 w-32 items-center gap-1.5 rounded-[var(--radius-sm)] border px-2"
             style={{ borderColor: 'var(--border)', background: 'var(--popover)' }}
