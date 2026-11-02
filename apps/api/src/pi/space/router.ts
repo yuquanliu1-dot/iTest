@@ -6,6 +6,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import {
@@ -22,7 +23,7 @@ import { resolveConfirmation } from './confirm.js';
 import { subscribeThreadMirror } from './threadBus.js';
 import { generateSpaceSuggestionsOnce } from './suggestions.js';
 import { stageRoute } from './stageRoute.js';
-import { saveDocxUpload, MAX_DOCX_BYTES } from './threadAttachments.js';
+import { saveAssistantAttachmentUpload, MAX_ATTACHMENT_BYTES, type AttachmentExt } from './threadAttachments.js';
 import { feedbackRoute } from './feedbackRoute.js';
 import { getArtifact, readArtifactFile, contentDispositionUtf8, listThreadArtifacts } from './artifacts.js';
 import { requireManager } from '../../middleware/auth.js';
@@ -268,25 +269,31 @@ spaceRoute.post('/threads/:id/messages', async (req, res) => {
   res.status(204).end();
 });
 
-/** 助手 docx 预上传：composer 选文件即传（草稿线程尚无 threadId → 作用域=版本）。
+/** 助手附件预上传：composer 选文件即传（草稿线程尚无 threadId → 作用域=版本）。
  *  raw octet-stream + X-Filename（全局 express.raw 已挂，与 /api/cases 附件同模式）。
  *  引用标签由前端 adapter 在 send() 拼进消息正文——本路由不碰任何消息文本。
+ *  类型按 X-Filename 扩展名白名单分派（.docx/.xlsx）；.xls 是 OLE2 二进制不是 zip，
+ *  改名混入也会被 zip 魔数拒，400 文案直接提示另存为 .xlsx。
  *  X-Filename 走 encodeURIComponent（中文文件名直塞 Headers 在部分浏览器抛 ByteString 错），
- *  服务端解码，失败保原值。 */
+ *  服务端解码，失败保原值。缺省名仅是防御性兜底（前端始终带该头）。 */
 spaceRoute.post('/versions/:versionId/attachments', async (req, res) => {
   const versionId = req.params.versionId!;
   await assertVersionVisible(versionId, req.user as AuthUser);
   const buf = req.body as Buffer;
   if (!Buffer.isBuffer(buf)) throw new HttpError(400, 'bad_request', 'expected octet-stream body');
   if (buf.length === 0) throw new HttpError(400, 'bad_request', 'empty body');
-  if (buf.length > MAX_DOCX_BYTES) throw new HttpError(413, 'too_large', 'docx exceeds 10MB');
+  if (buf.length > MAX_ATTACHMENT_BYTES) throw new HttpError(413, 'too_large', 'file exceeds the 10MB limit');
   const rawName = req.header('x-filename') ?? 'document.docx';
   let name = rawName;
   try { name = decodeURIComponent(rawName); } catch { /* 非编码值保原样 */ }
-  const { row, deduped } = await saveDocxUpload({
+  const extName = path.extname(name).toLowerCase();
+  const ext: AttachmentExt | null = extName === '.docx' ? 'docx' : extName === '.xlsx' ? 'xlsx' : null;
+  if (!ext) throw new HttpError(400, 'bad_request', '仅支持 .docx / .xlsx 附件（.xls 请先另存为 .xlsx）');
+  const { row, deduped } = await saveAssistantAttachmentUpload({
     versionId,
     name,
     buf,
+    ext,
     createdByUserId: (req.user as AuthUser).userId ?? null,
   });
   res.json({

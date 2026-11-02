@@ -1042,7 +1042,7 @@ export const aiThreadArtifacts = pgTable('ai_thread_artifacts', {
   versionIdx: index('ai_thread_artifacts_version_idx').on(t.versionId),
 }));
 
-// ── 助手附件（版本级 docx 预上传）──
+// ── 助手附件（版本级预上传，.docx/.xlsx）──
 // 选文件即上传（react-pi 草稿线程发首条消息前没有 threadId，作用域只能取版本）。
 // 引用标签由前端 adapter 在 send() 拼进消息正文（自闭合 <uploaded-file …/>），
 // 后端不改写消息文本——react-pi 乐观消息按纯文本 key 对账，任何后端改写都会造成重复气泡。
@@ -1052,14 +1052,14 @@ export const aiAssistantAttachments = pgTable('ai_assistant_attachments', {
   versionId: uuid('version_id').notNull(),
   /** 用户原始文件名（含扩展名，可中文）；引用标签与 chip 展示用。 */
   name: text('name').notNull(),
-  /** 固定为 docx mime（端点只收 docx）。 */
+  /** docx/xlsx 对应 mime（端点按 X-Filename 扩展名白名单分派）。 */
   mime: text('mime').notNull(),
   sizeBytes: integer('size_bytes').notNull(),
   /** 去重键：同版本同内容只存一份文件与一行记录。 */
   sha256: text('sha256').notNull(),
-  /** 原件绝对路径（<UPLOAD_DIR>/assistant/<versionId>/<sha>.docx）。 */
+  /** 原件绝对路径（<UPLOAD_DIR>/assistant/<versionId>/<sha>.docx|.xlsx）。 */
   storagePath: text('storage_path').notNull(),
-  /** mammoth 提取文本 sidecar（<sha>.txt）；提取失败（文件损坏）为 null。 */
+  /** 提取文本 sidecar（<sha>.txt；docx=mammoth、xlsx=exceljs）；提取失败（损坏/加密）为 null。 */
   extractedPath: text('extracted_path'),
   /** 提取文本字符数（引用标签的 chars 属性）；失败为 null。 */
   extractedChars: integer('extracted_chars'),
