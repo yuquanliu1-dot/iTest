@@ -361,18 +361,22 @@ function substituteLocators(
   return { locator: out, missing };
 }
 
-/** force click 前的有界目标就绪等待：目标元素（或其祖先 button——录制定位器常落在 button
+/** 交互目标的有界就绪等待：目标元素（或其祖先 button——录制定位器常落在 button
  *  内的 span 上，disabled 属性在祖先）处于禁用/加载态时等它恢复。录制回放的快节奏步骤会
- *  抢跑页面加载（prod228 报告 2b64ba27：Modify 在表格 spinner 期被 force-click，应用从未
- *  进入编辑模式，后续 fill 对恒 disabled 的 textarea 等 5s 超时）。已就绪零等待（一次
- *  evaluate 开销）；探测失败（strict-mode 多匹配等）视为已就绪保持现状；到点仍禁用则照旧
- *  force click——绝不比现状差。 */
+ *  抢跑页面加载（prod228 报告 2b64ba27：Modify 在表格 spinner 期被点，应用从未进入编辑
+ *  模式）。已就绪零等待（一次 evaluate 开销）；探测失败（strict-mode 多匹配等）视为已就绪
+ *  保持现状；到点仍禁用返回 false——调用方必须放弃操作（prod228 5b86de6e 实录：对仍禁用
+ *  的 Modify 强点是无效点击，不进编辑态却继续走，引发 fill 超时+连锁降级；等不到宁可失败，
+ *  交给 AI 降级或直接红，都比静默无效动作好）。预算 15s：MRM 编辑态激活实测可超 15s，
+ *  5s 不够；只在目标真禁用时才轮询，健康应用零成本。 */
+const WAIT_TARGET_ENABLED_MS = 15000;
+
 async function waitTargetEnabled(
   page: Page,
   loc: ReturnType<Page['locator']>,
-  timeoutMs = 5000,
+  timeoutMs = WAIT_TARGET_ENABLED_MS,
   pollMs = 250,
-): Promise<void> {
+): Promise<boolean> {
   const notReady = async (): Promise<boolean | null> => {
     try {
       return await loc.evaluate((el) => {
@@ -390,9 +394,10 @@ async function waitTargetEnabled(
   const maxIters = Math.max(2, Math.ceil(timeoutMs / Math.max(1, pollMs)) + 5);
   for (let iter = 0; iter < maxIters && Date.now() < deadline; iter++) {
     const r = await notReady();
-    if (!r) return; // false=已就绪；null=探不了（strict-mode 多匹配等）→ 按现状直接点
+    if (!r) return true; // false=已就绪；null=探不了（strict-mode 多匹配等）→ 按现状直接操作
     await page.waitForTimeout(pollMs).catch(() => undefined);
   }
+  return false; // 到点仍禁用：调用方放弃操作
 }
 
 async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
@@ -422,9 +427,12 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       try {
         // React 受控表单的 button 经常在 onChange → setState → re-render 之前仍是 disabled。
         // 这里用 force: true 跳过 enabled 检查直接 click（按钮在 click 时只要 password state 非空就能触发 submit）。
-        // 但抢跑真实加载态会丢点击（见 waitTargetEnabled 注释）——先有界等目标恢复再 force。
+        // 但抢跑真实加载态会丢点击（见 waitTargetEnabled 注释）——先有界等目标恢复；
+        // 到点仍禁用则抛错放弃：对禁用元素强点是无效操作，宁失败不误做（5b86de6e 实录）。
         const clickLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
-        await waitTargetEnabled(page, clickLoc);
+        if (!(await waitTargetEnabled(page, clickLoc))) {
+          throw new Error(`target-disabled: 目标等待 ${WAIT_TARGET_ENABLED_MS}ms 仍处禁用/加载态，拒绝无效强点`);
+        }
         await clickLoc.click({ timeout: 5000, force: true });
       } catch (e) {
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
@@ -456,6 +464,9 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         value = resolveEnvCredential(materializeValue(action.value, vars), opts.ctx);
       }
       const fillLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+      if (!(await waitTargetEnabled(page, fillLoc))) {
+        throw new Error(`target-disabled: 输入框等待 ${WAIT_TARGET_ENABLED_MS}ms 仍处禁用/加载态，无法填入`);
+      }
       try {
         // React 受控表单：fill() 只改 DOM value，onChange 不一定冒泡。
         // 先 fill('')，再用 pressSequentially 模拟真实键入，确保组件重新计算 state（disabled 状态、错误信息等）。
@@ -606,7 +617,11 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
     case 'select': {
       const { value, missing } = substituteVars(action.value, vars);
       if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.value}")`);
-      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action))).selectOption(value, { timeout: 5000 });
+      const selectLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+      if (!(await waitTargetEnabled(page, selectLoc))) {
+        throw new Error(`target-disabled: 下拉框等待 ${WAIT_TARGET_ENABLED_MS}ms 仍处禁用/加载态，无法选择`);
+      }
+      await selectLoc.selectOption(value, { timeout: 5000 });
       return;
     }
     case 'upload': {

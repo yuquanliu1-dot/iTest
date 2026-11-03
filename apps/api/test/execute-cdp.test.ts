@@ -108,10 +108,10 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(mocked.__locator).toHaveBeenCalledWith('#btn');
   });
 
-  // —— waitTargetEnabled（prod228 2b64ba27 回归）——
+  // —— waitTargetEnabled（prod228 2b64ba27 / 5b86de6e 回归）——
   // 录制快节奏步骤 force-click 抢跑页面加载：Modify 在 spinner 期被点，编辑模式未进入，
-  // 后续 fill 对恒 disabled 的 textarea 超时。修复 = force 前对目标（或其祖先 button）的
-  // 禁用/加载态做有界等待；探测失败或到点仍禁用则照旧 force click。
+  // 后续 fill 对恒 disabled 的 textarea 超时。修复 = 对目标（或其祖先 button）的禁用/加载
+  // 态做有界等待；探测失败视为就绪保持现状；到点仍禁用则放弃操作抛 target-disabled。
 
   function clickWaitLocator(evaluateImpl: ReturnType<typeof vi.fn>) {
     return {
@@ -143,7 +143,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     mocked.__locator.mockClear();
   });
 
-  it('click 目标恒禁用：有界等待后仍照旧 force click（不比现状差）', async () => {
+  it('click 目标恒禁用：有界等待后放弃强点，步骤失败并带 target-disabled', async () => {
     const evaluate = vi.fn().mockResolvedValue(true);
     const loc = clickWaitLocator(evaluate);
     mocked.__locator.mockClear();
@@ -153,9 +153,60 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
       [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#modify' }] }] }],
       { reportId: 'r-click-stuck' },
     );
-    expect(results[0]!.status).toBe('passed');
+    // 5b86de6e 实录后的语义变更：对仍禁用目标强点是无效操作，宁可失败（步骤无
+    // instruction，测试环境不触发 AI 降级，直接红）。
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toContain('target-disabled');
     expect(evaluate.mock.calls.length).toBeGreaterThan(5); // maxIters 兜底，墙钟不推进也终止
-    expect(loc.click).toHaveBeenCalledTimes(1);
+    expect(loc.click).not.toHaveBeenCalled();
+    mocked.__locator.mockClear();
+  });
+
+  it('fill 目标先禁用后恢复：等到恢复后才 fill', async () => {
+    const evaluate = vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false);
+    const loc = {
+      fill: vi.fn().mockResolvedValue(undefined),
+      pressSequentially: vi.fn().mockResolvedValue(undefined),
+      filter: vi.fn().mockReturnThis(),
+      first: vi.fn().mockReturnThis(),
+      count: vi.fn().mockResolvedValue(1),
+      isVisible: vi.fn().mockResolvedValue(true),
+      evaluate,
+    };
+    mocked.__locator.mockClear();
+    mocked.__locator.mockReturnValueOnce(loc as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000055',
+      [{ order: 1, compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '.el-textarea__inner' }], value: 'test' }] }],
+      { reportId: 'r-fill-wait' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(evaluate.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(loc.fill).toHaveBeenCalled();
+    mocked.__locator.mockClear();
+  });
+
+  it('fill 目标恒禁用：放弃填入，步骤失败并带 target-disabled', async () => {
+    const evaluate = vi.fn().mockResolvedValue(true);
+    const loc = {
+      fill: vi.fn().mockResolvedValue(undefined),
+      pressSequentially: vi.fn().mockResolvedValue(undefined),
+      filter: vi.fn().mockReturnThis(),
+      first: vi.fn().mockReturnThis(),
+      count: vi.fn().mockResolvedValue(1),
+      isVisible: vi.fn().mockResolvedValue(true),
+      evaluate,
+    };
+    mocked.__locator.mockClear();
+    mocked.__locator.mockReturnValueOnce(loc as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000056',
+      [{ order: 1, compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '.el-textarea__inner' }], value: 'test' }] }],
+      { reportId: 'r-fill-stuck' },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toContain('target-disabled');
+    expect(loc.fill).not.toHaveBeenCalled();
     mocked.__locator.mockClear();
   });
 
