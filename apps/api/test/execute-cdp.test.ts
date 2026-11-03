@@ -20,6 +20,8 @@ vi.mock('playwright-core', () => {
     first: vi.fn().mockReturnThis(),
     count: vi.fn().mockResolvedValue(1),
     pressSequentially: vi.fn().mockResolvedValue(undefined),
+    // waitTargetEnabled 的就绪探针（默认 false = 未禁用，既有 click 用例零等待通过）
+    evaluate: vi.fn().mockResolvedValue(false),
   });
 
   const getByRole = vi.fn().mockReturnValue(makeLocator());
@@ -104,6 +106,57 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
       { reportId: 'r-2' },
     );
     expect(mocked.__locator).toHaveBeenCalledWith('#btn');
+  });
+
+  // —— waitTargetEnabled（prod228 2b64ba27 回归）——
+  // 录制快节奏步骤 force-click 抢跑页面加载：Modify 在 spinner 期被点，编辑模式未进入，
+  // 后续 fill 对恒 disabled 的 textarea 超时。修复 = force 前对目标（或其祖先 button）的
+  // 禁用/加载态做有界等待；探测失败或到点仍禁用则照旧 force click。
+
+  function clickWaitLocator(evaluateImpl: ReturnType<typeof vi.fn>) {
+    return {
+      click: vi.fn().mockResolvedValue(undefined),
+      filter: vi.fn().mockReturnThis(),
+      first: vi.fn().mockReturnThis(),
+      count: vi.fn().mockResolvedValue(1),
+      isVisible: vi.fn().mockResolvedValue(true),
+      evaluate: evaluateImpl,
+    };
+  }
+
+  it('click 目标先禁用后恢复：等到恢复后才 click', async () => {
+    const evaluate = vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false);
+    const loc = clickWaitLocator(evaluate);
+    mocked.__locator.mockClear();
+    // Once：locator 工厂是跨用例单例，mockReturnValue 会永久污染后续用例
+    mocked.__locator.mockReturnValueOnce(loc as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000053',
+      [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#modify' }] }] }],
+      { reportId: 'r-click-wait' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(evaluate.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(loc.click).toHaveBeenCalledTimes(1);
+    expect(loc.click).toHaveBeenCalledWith(expect.objectContaining({ force: true }));
+    // locator 是跨用例单例：清掉本用例的 results，别污染后面读 mock.results[0] 的用例
+    mocked.__locator.mockClear();
+  });
+
+  it('click 目标恒禁用：有界等待后仍照旧 force click（不比现状差）', async () => {
+    const evaluate = vi.fn().mockResolvedValue(true);
+    const loc = clickWaitLocator(evaluate);
+    mocked.__locator.mockClear();
+    mocked.__locator.mockReturnValueOnce(loc as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000054',
+      [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#modify' }] }] }],
+      { reportId: 'r-click-stuck' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(evaluate.mock.calls.length).toBeGreaterThan(5); // maxIters 兜底，墙钟不推进也终止
+    expect(loc.click).toHaveBeenCalledTimes(1);
+    mocked.__locator.mockClear();
   });
 
   it('fill action passes value through to fill()', async () => {
@@ -351,7 +404,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     );
     expect(results).toHaveLength(1);
     expect(results[0]!.status).toBe('passed');
-    // init goto 被跳过；只剩 step 自身的 navigate + preflight 的二次 goto
+    // init goto 被跳过（initLanded=false → preflight 不跳导航）；preflight 补位 goto + step 自身的 navigate
     expect(mocked.__page.goto).toHaveBeenCalledTimes(2);
     expect(mocked.__page.goto).toHaveBeenCalledWith('https://init.example.com', expect.anything());
   });
@@ -366,8 +419,8 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     );
     expect(results).toHaveLength(1);
     expect(results[0]!.status).toBe('passed');
-    // init + step + preflight
-    expect(mocked.__page.goto).toHaveBeenCalledTimes(3);
+    // init 落地（mock url 跟随 goto）→ preflight 跳过二次 goto；只剩 init + step navigate
+    expect(mocked.__page.goto).toHaveBeenCalledTimes(2);
   });
 
   it('init goto fires when steps[0] is not a navigate', async () => {
@@ -379,8 +432,8 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
       'https://init.example.com',
     );
     expect(results).toHaveLength(1);
-    // init + preflight（没有 step navigate）
-    expect(mocked.__page.goto).toHaveBeenCalledTimes(2);
+    // init 落地 → preflight 跳过二次 goto（prod228 02c812ea 修复前此处是 2 次 goto）
+    expect(mocked.__page.goto).toHaveBeenCalledTimes(1);
     expect(mocked.__page.goto).toHaveBeenCalledWith('https://init.example.com', expect.anything());
   });
 

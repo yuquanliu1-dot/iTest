@@ -361,6 +361,40 @@ function substituteLocators(
   return { locator: out, missing };
 }
 
+/** force click 前的有界目标就绪等待：目标元素（或其祖先 button——录制定位器常落在 button
+ *  内的 span 上，disabled 属性在祖先）处于禁用/加载态时等它恢复。录制回放的快节奏步骤会
+ *  抢跑页面加载（prod228 报告 2b64ba27：Modify 在表格 spinner 期被 force-click，应用从未
+ *  进入编辑模式，后续 fill 对恒 disabled 的 textarea 等 5s 超时）。已就绪零等待（一次
+ *  evaluate 开销）；探测失败（strict-mode 多匹配等）视为已就绪保持现状；到点仍禁用则照旧
+ *  force click——绝不比现状差。 */
+async function waitTargetEnabled(
+  page: Page,
+  loc: ReturnType<Page['locator']>,
+  timeoutMs = 5000,
+  pollMs = 250,
+): Promise<void> {
+  const notReady = async (): Promise<boolean | null> => {
+    try {
+      return await loc.evaluate((el) => {
+        const t = (el.closest('button') ?? el) as HTMLElement & { disabled?: boolean };
+        return t.disabled === true
+          || t.getAttribute('aria-busy') === 'true'
+          || t.getAttribute('data-loading') === 'true'
+          || t.getAttribute('aria-disabled') === 'true';
+      });
+    } catch {
+      return null;
+    }
+  };
+  const deadline = Date.now() + timeoutMs;
+  const maxIters = Math.max(2, Math.ceil(timeoutMs / Math.max(1, pollMs)) + 5);
+  for (let iter = 0; iter < maxIters && Date.now() < deadline; iter++) {
+    const r = await notReady();
+    if (!r) return; // false=已就绪；null=探不了（strict-mode 多匹配等）→ 按现状直接点
+    await page.waitForTimeout(pollMs).catch(() => undefined);
+  }
+}
+
 async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
   const { page, vars } = opts;
   // 交互动作前置稳定性检查；不稳定且 DOM 降级成功时以 warning 短路返回。
@@ -388,7 +422,10 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       try {
         // React 受控表单的 button 经常在 onChange → setState → re-render 之前仍是 disabled。
         // 这里用 force: true 跳过 enabled 检查直接 click（按钮在 click 时只要 password state 非空就能触发 submit）。
-        await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action))).click({ timeout: 5000, force: true });
+        // 但抢跑真实加载态会丢点击（见 waitTargetEnabled 注释）——先有界等目标恢复再 force。
+        const clickLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+        await waitTargetEnabled(page, clickLoc);
+        await clickLoc.click({ timeout: 5000, force: true });
       } catch (e) {
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
           const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
@@ -1045,6 +1082,35 @@ export function normalizeUrlForLandedCheck(raw: string): string {
   }
 }
 
+/** 页面「有实质内容」探针：body 存在且（有可见文本或已出现交互/媒体元素）。慢 SPA 冷启动时
+ *  domcontentloaded + networkidle 后 body 可能仍是空壳（networkidle 在「HTML 已到、XHR 未发起」
+ *  的安静窗口会假性提前放行）——prod228 报告 02c812ea：init-goto 后整页空白，第 1 步 locator
+ *  3s 预算内 count=0。有界轮询（deadline + maxIters 双保险，模式同 waitForPageSettled：单测
+ *  mock 墙钟不推进需迭代上限）；探测不可用（evaluate 缺失/抛错）立即放弃等待，绝不更差。 */
+async function waitForPageSubstance(page: Page, timeoutMs = 8000, pollMs = 250): Promise<boolean> {
+  const hasSubstance = async (): Promise<boolean | null> => {
+    try {
+      return await page.evaluate(() => {
+        const b = document.body;
+        if (!b) return false;
+        if ((b.innerText ?? '').trim().length > 0) return true;
+        return !!document.querySelector('button, input, select, textarea, a, img, canvas, [role="button"]');
+      });
+    } catch {
+      return null;
+    }
+  };
+  const deadline = Date.now() + timeoutMs;
+  const maxIters = Math.max(2, Math.ceil(timeoutMs / Math.max(1, pollMs)) + 5);
+  for (let iter = 0; iter < maxIters && Date.now() < deadline; iter++) {
+    const r = await hasSubstance();
+    if (r === null) return false; // 探不了（evaluate 缺失/抛错）→ 不等
+    if (r) return true;
+    await page.waitForTimeout(pollMs).catch(() => undefined);
+  }
+  return false;
+}
+
 /** init goto + 落地校验重试：SPA 冷启动深链可能被前端静态兜底路由弹回首页（prod228 SOC
  *  permission.js 路由守卫竞态，2026-10-27 实录 6 轮中 1 轮被弹回）。goto 成功但最终 URL
  *  与目标不一致时重试一次——资源已缓存、shell 启动更快，通常能赢路由守卫竞态。仍不落地
@@ -1059,7 +1125,14 @@ export async function gotoWithLandedRetry(
     // SPA 就绪等待（与既有 init-goto 语义一致）：domcontentloaded 后 Vue/React 还在异步挂载。
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
     const finalUrl = page.url();
-    if (normalizeUrlForLandedCheck(finalUrl) === target) return { landed: true, finalUrl };
+    if (normalizeUrlForLandedCheck(finalUrl) === target) {
+      // URL 已落地但 SPA 可能仍在启动（body 空壳）——有界等内容出现再放行后续步骤；超时只
+      // 告警不阻断、也不触发第二轮 goto（重载 SPA 只会把启动推得更远）。
+      if (!(await waitForPageSubstance(page))) {
+        logger.warn({ targetUrl }, 'init goto 已落地但页面内容探针超时(可能仍在启动),继续执行');
+      }
+      return { landed: true, finalUrl };
+    }
   }
   return { landed: false, finalUrl: page.url() };
 }
@@ -1113,17 +1186,21 @@ async function runStepsInContext(
           : undefined);
         return typeof u === 'string' && u === targetUrl;
       })();
+  let initLanded = false;
   if (targetUrl && !firstStepIsSameNav) {
     // goto + 落地校验重试（SPA 深链冷启动可能被前端兜底路由弹回首页，重试一次通常能赢竞态；
     // 等待语义与注释见 gotoWithLandedRetry）。仍不落地不阻断——失败页证据会暴露真实位置。
     const landed = await gotoWithLandedRetry(page, targetUrl);
+    initLanded = landed.landed;
     if (!landed.landed) {
       logger.warn({ caseId, targetUrl, finalUrl: landed.finalUrl }, 'init goto 未落到目标页(深链被重定向),继续执行');
     }
   }
   // preflight：执行前置检查（URL 可达 / 登录态 / 标签页 / origin）。失败不阻塞执行。
+  // skipNavigate=init 已落地：preflight 的二次 goto 等于整页重载、无落定等待，会把慢 SPA 打回
+  // 启动初期（prod228 02c812ea 首步空白页根因）——已在该页就只做检查，不再导航。
   try {
-    const report = await preflight(page, { url: targetUrl ?? null, title: '' });
+    const report = await preflight(page, { url: targetUrl ?? null, title: '' }, { skipNavigate: initLanded });
     onPreflight?.(report);
   } catch (e) {
     logger.warn({ err: e, caseId }, 'preflight failed; continuing');

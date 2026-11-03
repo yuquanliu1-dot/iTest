@@ -60,3 +60,47 @@ describe('gotoWithLandedRetry', () => {
     expect(page.goto).toHaveBeenCalledTimes(1);
   });
 });
+
+// —— 页面内容探针（prod228 02c812ea 回归）——
+// 旧 fakePage 无 evaluate：探针拿不到结果立即放弃等待，上方 4 用例即隐式覆盖该路径。
+// 下面用带 evaluate/waitForTimeout 的 fake（waitForTimeout 立即 resolve，墙钟不推进，
+// 靠 waitForPageSubstance 的 maxIters 兜底终止，与真实 deadline 行为等价）。
+function substancePage(urls: string[], evaluateResults: boolean[]) {
+  let i = 0;
+  let e = 0;
+  return {
+    goto: vi.fn(async () => undefined),
+    waitForLoadState: vi.fn(async () => undefined),
+    url: () => urls[Math.min(i++, urls.length - 1)],
+    evaluate: vi.fn(async () => evaluateResults[Math.min(e++, evaluateResults.length - 1)]),
+    waitForTimeout: vi.fn(async () => undefined),
+  };
+}
+
+describe('gotoWithLandedRetry — 页面内容探针', () => {
+  const target = 'https://host.test/mrm/numberLevel.view';
+
+  it('URL 落地后等内容出现：空白 2 轮后出现 → landed=true、goto 仍 1 次', async () => {
+    const page = substancePage([target], [false, false, true]);
+    const r = await gotoWithLandedRetry(page as unknown as Page, target);
+    expect(r).toEqual({ landed: true, finalUrl: target });
+    expect(page.goto).toHaveBeenCalledTimes(1);
+    expect(page.evaluate.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('恒空白：maxIters 兜底终止，仍 landed=true 不抛（超时只告警不阻断）', async () => {
+    const page = substancePage([target], [false]);
+    const r = await gotoWithLandedRetry(page as unknown as Page, target);
+    expect(r.landed).toBe(true);
+    expect(page.goto).toHaveBeenCalledTimes(1); // 内容超时不触发第二轮 goto
+    expect(page.evaluate.mock.calls.length).toBeGreaterThan(5);
+  });
+
+  it('两轮都未落地：内容探针不参与（只在落地分支等待），重试语义不变', async () => {
+    const page = substancePage(['https://host.test/home', 'https://host.test/home'], [true]);
+    const r = await gotoWithLandedRetry(page as unknown as Page, target);
+    expect(r.landed).toBe(false);
+    expect(page.goto).toHaveBeenCalledTimes(2);
+    expect(page.evaluate).not.toHaveBeenCalled();
+  });
+});
