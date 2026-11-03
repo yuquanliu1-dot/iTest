@@ -9,6 +9,9 @@ const mockState = vi.hoisted(() => ({
   clickReject: false,
   launchCount: 0,
   closeCount: 0,
+  // 探测页主响应状态（null=无响应对象/200）；body 文本（null=沿用 'val' 默认）
+  gotoStatus: null as number | null,
+  bodyText: null as string | null,
   // 单例 browser/context —— 让所有 chromium.launch() 拿到同一个对象，便于断言 close 调用次数
   browser: undefined as unknown as Browser,
   ctx: undefined as unknown as BrowserContext,
@@ -26,7 +29,7 @@ vi.mock('playwright-core', () => {
     hover: vi.fn().mockResolvedValue(undefined),
     first: vi.fn().mockReturnThis(),
     inputValue: vi.fn().mockResolvedValue('val'),
-    innerText: vi.fn().mockResolvedValue('val'),
+    innerText: vi.fn().mockImplementation(async () => mockState.bodyText ?? 'val'),
     isVisible: vi.fn().mockResolvedValue(true),
     isChecked: vi.fn().mockResolvedValue(false),
     check: vi.fn().mockResolvedValue(undefined),
@@ -34,7 +37,9 @@ vi.mock('playwright-core', () => {
     selectOption: vi.fn().mockResolvedValue(undefined),
   });
   const makePage = (): Page => ({
-    goto: vi.fn().mockResolvedValue(undefined),
+    goto: vi.fn().mockImplementation(async () =>
+      mockState.gotoStatus != null ? { status: () => mockState.gotoStatus } : undefined,
+    ),
     locator: vi.fn().mockImplementation(() => makeLocator()),
     getByText: vi.fn().mockImplementation(() => makeLocator()),
     getByRole: vi.fn().mockImplementation(() => makeLocator()),
@@ -138,6 +143,9 @@ beforeEach(() => {
   mockState.launchCount = 0;
   mockState.closeCount = 0;
   mockState.newContextOpts.length = 0;
+  mockState.locatorCount = 1;
+  mockState.gotoStatus = null;
+  mockState.bodyText = null;
   // mock spy 调用计数清零（保留 mock 引用；mock 函数本身是稳定的）
   (mockState.browser as unknown as { close: ReturnType<typeof vi.fn> }).close.mockClear();
   (mockState.ctx as unknown as { newPage: ReturnType<typeof vi.fn> }).newPage.mockClear();
@@ -299,5 +307,59 @@ describe('loginPrepare — autoFillLogin 相对 loginUrl 拼接', () => {
     );
     expect(res.status).toBe('failed');
     expect(res.reason).toBe('auto login: loginUrl is relative but no default web origin');
+  });
+});
+
+// prod228 bd6a1cf0（2026-11-03）回归：探测地址落到 Whitelabel 404 错误页——无 URL login
+// 特征、无密码框、无未登录关键词 → 旧排除式判定给出「no login signals 已登录」→ 登录用例
+// 被静默跳过。修复后：HTTP≥400 或错误页签名 → 按未登录处理，走登录用例。
+describe('loginPrepare — 探测错误页不再判已登录', () => {
+  const cfg = {
+    enabled: true,
+    caseId: '00000000-0000-0000-0000-0000000000c3',
+    // page.url() mock 固定为 https://example.com/（无 login 特征），密码框由 locatorCount 控制
+    detectionUrl: 'https://app.example.com/',
+    unauthorizedKeywords: null,
+  };
+
+  it('主响应 HTTP 404 → 不判已登录，执行登录用例', async () => {
+    mockState.gotoStatus = 404;
+    mockState.locatorCount = 0; // 无密码框：旧逻辑此刻会误判 no login signals
+    const runner = vi.fn(async () => ({ passed: true }));
+    const result = await loginPrepare(cfg, { loginCaseRunner: runner });
+    expect(result.status).toBe('passed');
+    expect(result.reason).toBe('login case executed');
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('主响应 HTTP 502 → 同样执行登录用例（状态码通用）', async () => {
+    mockState.gotoStatus = 502;
+    mockState.locatorCount = 0;
+    const runner = vi.fn(async () => ({ passed: true }));
+    const result = await loginPrepare(cfg, { loginCaseRunner: runner });
+    expect(result.status).toBe('passed');
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('HTTP 200 + Whitelabel 错误页签名 body → 走签名分支执行登录用例', async () => {
+    mockState.gotoStatus = null; // 无响应对象（或 200）
+    mockState.locatorCount = 0;
+    mockState.bodyText = 'Whitelabel Error Page\nThis application has no explicit mapping for /error\n404 Not Found';
+    const runner = vi.fn(async () => ({ passed: true }));
+    const result = await loginPrepare(cfg, { loginCaseRunner: runner });
+    expect(result.status).toBe('passed');
+    expect(result.reason).toBe('login case executed');
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('回归守卫：正常 body 无登录信号 → 仍 skipped（no login signals），不执行登录用例', async () => {
+    mockState.gotoStatus = null;
+    mockState.locatorCount = 0;
+    mockState.bodyText = 'Welcome to portal home';
+    const runner = vi.fn(async () => ({ passed: true }));
+    const result = await loginPrepare(cfg, { loginCaseRunner: runner });
+    expect(result.status).toBe('skipped');
+    expect(result.reason).toBe('no login signals');
+    expect(runner).not.toHaveBeenCalled();
   });
 });

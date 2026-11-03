@@ -10,6 +10,10 @@ const DEFAULT_KEYWORDS = ['请先登录', '未登录', '未授权', '登录后']
 
 const URL_LOGIN_HINTS = /(?:^|\/)(login|signin|sign-in|auth|unauthorized)(?:\/|$|\?)/i;
 
+// 常见错误页签名：命中则不能据此判定「已登录」（排除式探测对错误页天然假阳性，
+// prod228 实录：Whitelabel 404 被当 no login signals → 登录用例静默跳过）。
+const ERROR_PAGE_SIGNATURE = /whitelabel error page|http status \d{3}|\b404 not found\b|\b502 bad gateway\b|\b503 service unavailable\b/i;
+
 export interface LoginPrepareConfig {
   enabled: boolean;
   caseId?: string | null;
@@ -45,12 +49,16 @@ async function resolveDetectionUrl(c: LoginPrepareConfig): Promise<string | null
   return resolveCaseUrl(row, { defaultEnvFallback: true });
 }
 
-async function openDetectionPage(browser: BrowserContext, url: string, timeoutMs = 5000): Promise<Page | null> {
+async function openDetectionPage(
+  browser: BrowserContext,
+  url: string,
+  timeoutMs = 5000,
+): Promise<{ page: Page; status: number | null } | null> {
   const page = await browser.newPage();
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForLoadState('networkidle', { timeout: timeoutMs }).catch(() => undefined);
-    return page;
+    return { page, status: resp?.status() ?? null };
   } catch (e) {
     logger.warn({ err: e, url }, 'login detection: navigation failed');
     await page.close().catch(() => undefined);
@@ -63,16 +71,23 @@ interface DetectionOutcome {
   reason: string;
 }
 
-async function detectLoginState(page: Page, c: LoginPrepareConfig): Promise<DetectionOutcome> {
+async function detectLoginState(page: Page, c: LoginPrepareConfig, status?: number | null): Promise<DetectionOutcome> {
   if (c.successSelector) {
     const found = await page.locator(c.successSelector).first().count().catch(() => 0);
     if (found > 0) return { alreadyLoggedIn: true, reason: 'selector hit' };
+  }
+  // 探测页本身是错误响应（4xx/5xx）时不能证明有可用会话：按未登录处理，走登录用例/autoLogin。
+  if (status != null && status >= 400) {
+    return { alreadyLoggedIn: false, reason: `detection page error (HTTP ${status})` };
   }
   const url = page.url();
   if (!URL_LOGIN_HINTS.test(url)) {
     const hasPassword = await page.locator('input[type="password"]').count().catch(() => 0);
     if (hasPassword === 0) {
       const body = (await page.locator('body').innerText().catch(() => '')).slice(0, 4000);
+      if (ERROR_PAGE_SIGNATURE.test(body)) {
+        return { alreadyLoggedIn: false, reason: 'detection page error (error-page signature)' };
+      }
       const keywords = buildKeywords(c);
       const hit = keywords.find((k) => body.includes(k));
       if (!hit) return { alreadyLoggedIn: true, reason: 'no login signals' };
@@ -193,12 +208,13 @@ export async function loginPrepare(
   let takeOwnership = false;
   try {
     const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
-    const page = await openDetectionPage(ctx, url);
-    if (!page) return { status: 'failed', reason: 'detection page navigation failed' };
+    const opened = await openDetectionPage(ctx, url);
+    if (!opened) return { status: 'failed', reason: 'detection page navigation failed' };
+    const page = opened.page;
     // 探测/自动登录页纳入实时画面（loginCaseRunner 路径随后由 runCase 的 newPage 接管切换）
     opts.liveView?.setPage(page);
 
-    const detect = await detectLoginState(page, cfg);
+    const detect = await detectLoginState(page, cfg, opened.status);
     if (detect.alreadyLoggedIn) {
       await page.close().catch(() => undefined);
       const ss = await ctx.storageState();

@@ -361,6 +361,12 @@ export async function runPlanAsync(input: RunPlanInput): Promise<void> {
                 },
               },
             );
+            if (result.status === 'skipped') {
+              logger.info(
+                { planRunId, planId: plan.id, group: group.name, reason: result.reason },
+                'group login prepare skipped',
+              );
+            }
             if (result.status === 'failed') {
               loginPrepareFailed = true;
               logger.warn(
