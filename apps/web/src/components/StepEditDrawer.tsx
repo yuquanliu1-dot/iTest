@@ -367,6 +367,8 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       else delete next.timeoutMs;
     }
     if (kind === 'check') next.checked = checked;
+    // press 的 key 必填（zod）；无值/丢字段时兜底 Enter（录制器只产 Enter press）
+    if (kind === 'press') next.key = typeof next.key === 'string' && next.key.trim() ? next.key : 'Enter';
     if (kind === 'switchTab') next.tabRef = tabRef;
     if (kind === 'screenshot') next.name = shotName;
     if (kind === 'queryDb') {

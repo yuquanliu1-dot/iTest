@@ -18,6 +18,7 @@ interface KnownAction {
   checked?: unknown;
   table?: unknown;
   keywords?: unknown;
+  key?: unknown;
   [k: string]: unknown;
 }
 
@@ -104,6 +105,8 @@ function actionSummary(a: KnownAction, t: TFunction): string {
       return t('cases:stepSummary.act.navigate', { url: clip(str(a.url), 40) });
     case 'click':
       return t('cases:stepSummary.act.click', { target: clip(target, 20) });
+    case 'press':
+      return t('cases:stepSummary.act.press', { target: clip(target, 20), key: str(a.key) || 'Enter' });
     case 'hover':
       return t('cases:stepSummary.act.hover', { target: clip(target, 20) });
     case 'check':
@@ -197,6 +200,7 @@ function describeAction(a: KnownAction, t: TFunction): string[] {
 
   push('cases:stepSummary.fieldKind', str(a.kind));
   push('cases:stepSummary.fieldLocator', targetText(a));
+  if (a.kind === 'press') push('cases:stepSummary.fieldKey', str(a.key) || 'Enter');
   if (Array.isArray(a.locator) && a.locator.length > 1) {
     const extra = a.locator
       .slice(1)

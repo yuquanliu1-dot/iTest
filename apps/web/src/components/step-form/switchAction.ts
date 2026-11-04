@@ -1,7 +1,7 @@
 import type { StepClip } from '../../stores/stepClipboard';
 
 export const STEP_KINDS = [
-  'navigate', 'click', 'fill', 'select', 'check', 'hover', 'waitFor',
+  'navigate', 'click', 'press', 'fill', 'select', 'check', 'hover', 'waitFor',
   'assertVisible', 'assertText', 'assertJson', 'extract', 'upload',
   'switchTab', 'screenshot', 'aiTask', 'queryDb', 'observeLog', 'httpRequest', 'sendSyslog', 'sql',
   'tap', 'swipe', 'setAppearance', 'setNetwork', 'setLocation',
@@ -10,7 +10,7 @@ export const STEP_KINDS = [
 export type StepKind = (typeof STEP_KINDS)[number];
 
 const WITH_LOCATOR: ReadonlySet<string> = new Set([
-  'click', 'hover', 'fill', 'select', 'check', 'waitFor',
+  'click', 'press', 'hover', 'fill', 'select', 'check', 'waitFor',
   'assertVisible', 'assertText', 'assertJson', 'upload', 'extract',
   'tap', 'swipe',
 ]);
@@ -39,8 +39,9 @@ export function switchAction(clip: StepClip, to: StepKind): StepClip {
       break;
     case 'click':
     case 'hover':
+    case 'press':
     case 'assertVisible':
-      action = { kind: to, locator: locator!, ...base() };
+      action = { kind: to, locator: locator!, ...(to === 'press' ? { key: 'Enter' } : {}), ...base() };
       break;
     case 'waitFor':
       action = { kind: 'waitFor', locator: locator!, ...base() };

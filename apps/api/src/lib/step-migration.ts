@@ -21,7 +21,7 @@ export function migrateAction(raw: unknown): unknown {
   }
 
   // 含 locator 的所有 kind 都补 intentLocator=undefined（保持字段位置一致）
-  const locatorKinds = new Set(['click', 'fill', 'hover', 'waitFor', 'check', 'select']);
+  const locatorKinds = new Set(['click', 'fill', 'hover', 'waitFor', 'check', 'select', 'press']);
   if (locatorKinds.has(String(kind))) {
     if (!('intentLocator' in action)) action.intentLocator = undefined;
     return action;

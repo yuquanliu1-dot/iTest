@@ -17,6 +17,7 @@
   },
   "stepKind": {
     "click": "点击",
+    "press": "按键",
     "hover": "悬停",
     "fill": "输入",
     "select": "下拉选择",
@@ -408,6 +409,7 @@
     "act": {
       "navigate": "打开 {{url}}",
       "click": "点击 {{target}}",
+      "press": "在 {{target}} 上按 {{key}}",
       "hover": "悬停 {{target}}",
       "check": "勾选",
       "uncheck": "取消勾选",
@@ -434,6 +436,7 @@
     },
     "fieldKind": "类型：",
     "fieldLocator": "定位：",
+    "fieldKey": "按键：",
     "fieldBackupLocator": "备用定位：\n  ",
     "fieldUrl": "URL：",
     "fieldValue": "值：",

@@ -11,13 +11,15 @@ export interface RecorderOptions {
   fillFlushMs?: number;
 }
 
-export type RecordedStepType = 'click' | 'fill' | 'hover' | 'check' | 'select' | 'upload' | 'aiTask';
+export type RecordedStepType = 'click' | 'fill' | 'press' | 'hover' | 'check' | 'select' | 'upload' | 'aiTask';
 
 export interface RecordedStep {
   type: RecordedStepType;
   target: Locator[];
   /** fill/select 的值；upload 的文件名 */
   value?: string;
+  /** press 的键名（Playwright 键名，如 "Enter"） */
+  key?: string;
   /** check 的目标状态 */
   checked?: boolean;
   url: string;
@@ -340,6 +342,37 @@ export class RecorderManager {
       // 用户失焦（点别处 / Tab 切走）时强制 flush 当前 fill，避免 500ms 内就跳转丢失步骤。
       this.flushPendingFill();
     };
+    // 输入框内按 Enter 提交（表单无提交按钮 / 用户习惯直接回车）：此前全程无 click 事件，
+    // 登录动作整段丢失。keydown 时先 flush 累计 fill（回放顺序 = fill 完整值 → press Enter），
+    // 再发射 press 步骤。只录 text 类输入框上的 Enter——button 聚焦时按 Enter 浏览器会派发
+    // click，由 onClick 记录，这里再记就重复了。IME 组合期（isComposing / keyCode 229）的
+    // Enter 是「确认候选词」不是提交，跳过。
+    const onKeyDown = (e: Event) => {
+      if (!this.canRecord()) return;
+      if (isOnRecorderPanel(e)) return;
+      const ke = e as KeyboardEvent;
+      if (ke.key !== 'Enter') return;
+      if (ke.isComposing || ke.keyCode === 229) return;
+      const target = ke.target as HTMLInputElement | HTMLTextAreaElement | null;
+      if (!target) return;
+      const tag = (target.tagName ?? '').toLowerCase();
+      if (tag !== 'input' && tag !== 'textarea') return;
+      if (tag === 'input') {
+        const t = (target as HTMLInputElement).type;
+        if (t === 'checkbox' || t === 'radio' || t === 'file' || t === 'button' || t === 'submit') return;
+      }
+      if (!target.isConnected) return;
+      this.flushPendingFill();
+      const intentLocator = buildIntentLocator(target);
+      this.handler?.({
+        type: 'press',
+        target: generateLocators(target),
+        key: 'Enter',
+        url: location.href,
+        timestamp: Date.now(),
+        ...(intentLocator ? { intentLocator } : {}),
+      });
+    };
     // Chrome 自动填充 / 1Password / LastPass 等密码管理器扩展会直接调 native setter 写 value,
     // **不触发** input 事件,只触发 change 事件(且通常在失焦之后一次性发)。
     // onChange 已 flush pending fill,这里再针对密码输入框补一条「change 但无 pending」路径,
@@ -510,6 +543,7 @@ export class RecorderManager {
     document.addEventListener('change', onChange, true);
     // blur 强制 flush fill——避免切走焦点时 500ms 内丢失最后一次输入。
     document.addEventListener('focusout', onBlur, true);
+    document.addEventListener('keydown', onKeyDown, true);
     document.addEventListener('mouseover', onMouseOver, true);
     document.addEventListener('mouseleave', onMouseLeave, true);
     this.listeners.push(
@@ -517,6 +551,7 @@ export class RecorderManager {
       { el: document, type: 'input', fn: onInput },
       { el: document, type: 'change', fn: onChange },
       { el: document, type: 'focusout', fn: onBlur },
+      { el: document, type: 'keydown', fn: onKeyDown },
       { el: document, type: 'mouseover', fn: onMouseOver },
       { el: document, type: 'mouseleave', fn: onMouseLeave },
     );

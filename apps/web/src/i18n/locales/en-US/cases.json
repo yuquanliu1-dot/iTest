@@ -17,6 +17,7 @@
   },
   "stepKind": {
     "click": "Click",
+    "press": "Press key",
     "hover": "Hover",
     "fill": "Fill",
     "select": "Select from dropdown",
@@ -424,6 +425,7 @@
     "act": {
       "navigate": "Open {{url}}",
       "click": "Click {{target}}",
+      "press": "Press {{key}} on {{target}}",
       "hover": "Hover {{target}}",
       "check": "Check",
       "uncheck": "Uncheck",
@@ -450,6 +452,7 @@
     },
     "fieldKind": "Kind: ",
     "fieldLocator": "Locator: ",
+    "fieldKey": "Key: ",
     "fieldBackupLocator": "Backup locators:\n  ",
     "fieldUrl": "URL: ",
     "fieldValue": "Value: ",

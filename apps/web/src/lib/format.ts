@@ -48,6 +48,7 @@ export function formatBytes(bytes: number): string {
 /** 步骤类型展示名 = i18n key（仅展示用，存储值仍为英文 kind；由调用方组件 t() 渲染）。 */
 export const STEP_KIND_LABELS: Record<string, string> = {
   click: 'cases:stepKind.click',
+  press: 'cases:stepKind.press',
   hover: 'cases:stepKind.hover',
   fill: 'cases:stepKind.fill',
   select: 'cases:stepKind.select',

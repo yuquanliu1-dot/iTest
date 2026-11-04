@@ -129,6 +129,14 @@ export const SelectAction = z.object({
   intentLocator: IntentLocator.optional(),
   value: z.string().min(1),
 });
+/** 2026-11-04: press 步骤——在定位元素上按单个键（录制器捕获输入框内 Enter 提交等键盘动作）。
+ *  key 用 Playwright 键名（如 "Enter" / "Tab"），回放映射 locator.press(key)。 */
+export const PressAction = z.object({
+  kind: z.literal('press'),
+  locator: z.array(Locator).min(1),
+  intentLocator: IntentLocator.optional(),
+  key: z.string().min(1).max(30),
+});
 export const UploadAction = z.object({
   kind: z.literal('upload'),
   locator: z.array(Locator).min(1),
@@ -349,6 +357,7 @@ export type StepAction =
   | z.infer<typeof ScreenshotAction>
   | z.infer<typeof CheckAction>
   | z.infer<typeof SelectAction>
+  | z.infer<typeof PressAction>
   | z.infer<typeof UploadAction>
   | z.infer<typeof SwitchTabAction>
   | z.infer<typeof AiTaskAction>
@@ -380,6 +389,7 @@ export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
   ScreenshotAction,
   CheckAction,
   SelectAction,
+  PressAction,
   UploadAction,
   SwitchTabAction,
   AiTaskAction,

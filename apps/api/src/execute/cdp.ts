@@ -189,7 +189,7 @@ function repairFor(opts: DispatchOpts, action: StepAction): Locator | null {
 }
 
 /** 交互动作：执行前先做稳定性检查 */
-const INTERACTIVE_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select', 'upload', 'aiTask'];
+const INTERACTIVE_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'press', 'check', 'select', 'upload', 'aiTask'];
 /** 验证码多轮验证的最大重试轮数（不含首轮识别提交）。 */
 const CAPTCHA_RETRY_ROUNDS = 2;
 /** 稳定性检查不过时可尝试 DOM 降级的动作 */
@@ -338,7 +338,8 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
     // 但效果被后到的异步重渲染冲掉」（prod228 14dd97e2/e3f9a616：行点击落在 Search 响应到达
     // 前 275ms，响应到来后 el-table 重渲染清掉 current-row 选中态，下一步等 Modify 到
     // target-disabled）。best-effort 等落定，绝不失败本步；dom-fallback 警告路径的 click 同样生效。
-    if (action.kind === 'click') await waitForDomQuiet(opts.page);
+    // press（Enter 提交）与 click 同族——提交后同样有导航/重渲染落定期。
+    if (action.kind === 'click' || action.kind === 'press') await waitForDomQuiet(opts.page);
     return warning;
   } finally {
     await clearAnnotation(opts.page);
@@ -485,6 +486,25 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         // （visible 过滤防隐藏克隆劫持，同 click 兜底）
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
           await fillLoc.filter({ visible: true }).first().fill(value, { timeout: 5000 });
+          return;
+        }
+        throw e;
+      }
+      return;
+    }
+    case 'press': {
+      // 2026-11-04: 录制器捕获的输入框内按键（Enter 提交等）。与 fill 同构：
+      // tryFirstMatch → 禁用态有界等待 → strict violation 兜底 visible first()。
+      // 不进 DOM_FALLBACK_KINDS：合成 KeyboardEvent 触发不了浏览器原生表单提交，降级不可靠。
+      const pressLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+      if (!(await waitTargetEnabled(page, pressLoc))) {
+        throw new Error(`target-disabled: 目标等待 ${WAIT_TARGET_ENABLED_MS}ms 仍处禁用/加载态，无法按键`);
+      }
+      try {
+        await pressLoc.press(action.key, { timeout: 5000 });
+      } catch (e) {
+        if (e instanceof Error && /strict mode violation/.test(e.message)) {
+          await pressLoc.filter({ visible: true }).first().press(action.key, { timeout: 5000 });
           return;
         }
         throw e;

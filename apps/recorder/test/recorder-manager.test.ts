@@ -87,6 +87,50 @@ describe('RecorderManager — happy path E2E', () => {
   });
 });
 
+describe('RecorderManager — Enter 提交（press 步骤）', () => {
+  function fireKey(target: Element, init: KeyboardEventInit = {}) {
+    const ev = new dom.window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter', ...init });
+    target.dispatchEvent(ev);
+  }
+
+  it('input 上按 Enter 产出 press 步骤（key=Enter）', () => {
+    const input = makeEl('<input type="text" name="captcha" />');
+    dom.window.document.body.appendChild(input);
+    withRecorder(() => fireKey(input));
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.type).toBe('press');
+    expect(captured[0]!.key).toBe('Enter');
+  });
+
+  it('Enter 前先 flush 累计 fill（回放顺序 fill → press）', () => {
+    const input = makeEl('<input type="text" />');
+    dom.window.document.body.appendChild(input);
+    (input as HTMLInputElement).value = '1111';
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(input, 'input');
+      // 停顿 <250ms，fill 仍在合并窗内；Enter 事件先行 flush。
+      fireKey(input);
+    });
+    expect(captured.map((s) => s.type)).toEqual(['fill', 'press']);
+    expect(captured[0]!.value).toBe('1111');
+  });
+
+  it('IME 组合期的 Enter 不产 press（是确认候选词，不是提交）', () => {
+    const input = makeEl('<input type="text" />');
+    dom.window.document.body.appendChild(input);
+    withRecorder(() => fireKey(input, { isComposing: true }));
+    expect(captured).toHaveLength(0);
+  });
+
+  it('button 上的 Enter 不产 press（浏览器会派发 click，由 click 路径记录）', () => {
+    const btn = makeEl('<button>x</button>');
+    dom.window.document.body.appendChild(btn);
+    withRecorder(() => fireKey(btn));
+    expect(captured).toHaveLength(0);
+  });
+});
+
 describe('RecorderManager — noise filtering', () => {
   it('dedups rapid clicks on the same target within 200ms', () => {
     const btn = makeEl('<button data-testid="go">go</button>');

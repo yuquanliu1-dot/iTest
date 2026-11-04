@@ -787,6 +787,7 @@ function describeAction(a: StepAction): string {
     case 'assertJson': return `断言 ${loc(a)} JSON 匹配`;
     case 'click': return `点击 ${loc(a)}`;
     case 'fill': return `填写 ${loc(a)}`;
+    case 'press': return `在 ${loc(a)} 上按键 ${(a as { key?: string }).key ?? ''}`;
     case 'hover': return `悬停 ${loc(a)}`;
     case 'check': return `勾选 ${loc(a)}`;
     case 'select': return `选择 ${loc(a)}`;

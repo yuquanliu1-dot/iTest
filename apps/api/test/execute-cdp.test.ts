@@ -6,6 +6,7 @@ vi.mock('playwright-core', () => {
   const makeLocator = () => ({
     click: vi.fn().mockResolvedValue(undefined),
     fill: vi.fn().mockResolvedValue(undefined),
+    press: vi.fn().mockResolvedValue(undefined),
     hover: vi.fn().mockResolvedValue(undefined),
     waitFor: vi.fn().mockResolvedValue(undefined),
     isVisible: vi.fn().mockResolvedValue(true),
@@ -307,6 +308,73 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(results[0]!.status).toBe('passed');
     expect(multi.filter).toHaveBeenCalledWith({ visible: true });
     expect(okClick).toHaveBeenCalled();
+  });
+
+  it('press action forwards key to locator.press（录制 Enter 提交回放）', async () => {
+    mocked.__locator.mockClear();
+    const press = vi.fn().mockResolvedValue(undefined);
+    const loc = {
+      press,
+      filter: vi.fn().mockReturnThis(),
+      first: vi.fn().mockReturnThis(),
+      count: vi.fn().mockResolvedValue(1),
+      isVisible: vi.fn().mockResolvedValue(true),
+      evaluate: vi.fn().mockResolvedValue(false),
+    };
+    mocked.__locator.mockReturnValueOnce(loc as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000060',
+      [{ order: 1, compiled: [{ kind: 'press', locator: [{ strategy: 'css', value: 'input[name=captcha]' }], key: 'Enter' }] }],
+      { reportId: 'r-press' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(press).toHaveBeenCalledWith('Enter', expect.objectContaining({ timeout: 5000 }));
+    mocked.__locator.mockClear();
+  });
+
+  it('press falls back to visible-filtered first() on strict mode violation', async () => {
+    mocked.__locator.mockClear();
+    const okPress = vi.fn().mockResolvedValue(undefined);
+    const multi = {
+      press: vi.fn().mockRejectedValueOnce(new Error('strict mode violation: locator(\'input\') resolved to 2 elements')),
+      filter: vi.fn().mockReturnThis(),
+      first: vi.fn().mockReturnValue({ press: okPress }),
+      count: vi.fn().mockResolvedValue(2),
+    };
+    mocked.__locator.mockReturnValueOnce(multi as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000061',
+      [{ order: 1, compiled: [{ kind: 'press', locator: [{ strategy: 'css', value: 'input' }], key: 'Enter' }] }],
+      { reportId: 'r-press-strict' },
+    );
+    expect(results[0]!.status).toBe('passed');
+    expect(multi.filter).toHaveBeenCalledWith({ visible: true });
+    expect(okPress).toHaveBeenCalledWith('Enter', expect.objectContaining({ timeout: 5000 }));
+    mocked.__locator.mockClear();
+  });
+
+  it('press 目标恒禁用：放弃按键，步骤失败并带 target-disabled', async () => {
+    mocked.__locator.mockClear();
+    // evaluate 恒 true = 目标处于禁用/加载态（waitTargetEnabled 探针）
+    const evaluate = vi.fn().mockResolvedValue(true);
+    const loc = {
+      press: vi.fn().mockResolvedValue(undefined),
+      filter: vi.fn().mockReturnThis(),
+      first: vi.fn().mockReturnThis(),
+      count: vi.fn().mockResolvedValue(1),
+      isVisible: vi.fn().mockResolvedValue(true),
+      evaluate,
+    };
+    mocked.__locator.mockReturnValueOnce(loc as never);
+    const results = await executeCaseReal(
+      '00000000-0000-0000-0000-000000000062',
+      [{ order: 1, compiled: [{ kind: 'press', locator: [{ strategy: 'css', value: 'input[name=captcha]' }], key: 'Enter' }] }],
+      { reportId: 'r-press-stuck' },
+    );
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.error).toContain('target-disabled');
+    expect(loc.press).not.toHaveBeenCalled();
+    mocked.__locator.mockClear();
   });
 
   it('upload without bound fileId fails attachment-missing', async () => {

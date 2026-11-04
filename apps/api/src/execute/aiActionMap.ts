@@ -121,7 +121,8 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
         skippedCount += 1; // 观察性动作（AI 自己看页面用），无副作用，不进 compiled
         break;
       case 'press':
-        return { ok: false, reason: `含键盘动作 press(${a.key})，DSL 无对应机械动作，整步保持 aiTask` };
+        // AI 的 press 是页面级键盘动作（page.keyboard.press，无元素定位），映射不了带 locator 的 press DSL。
+        return { ok: false, reason: `含键盘动作 press(${a.key})（页面级键盘、无元素定位），整步保持 aiTask` };
       case 'wait':
         // AI 相的页面稳定等待映射为固定时长 waitFor（空 locator = 不等元素，睡满 timeoutMs）
         compiled.push({ kind: 'waitFor', locator: [], timeoutMs: a.ms });

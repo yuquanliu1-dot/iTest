@@ -27,6 +27,7 @@ function toDSL(step) {
     dsl.value = step.value ?? '';
     if (step.sensitive) dsl.sensitive = true;
   }
+  if (dsl.kind === 'press') dsl.key = step.key ?? 'Enter';
   if (dsl.kind === 'aiTask') dsl.instruction = step.value ?? '';
   return dsl;
 }
