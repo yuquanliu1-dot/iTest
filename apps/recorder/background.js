@@ -333,9 +333,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 syncBridgeRegistration();
 
-/** 面板窗口初高：仅 AI 模式仍开窗（无拾取环节）；断言/悬停/存变量已改页面内面板内联拾取。 */
-const PANEL_INITIAL_HEIGHT = { ai: 240 };
-
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'start' && msg.session) {
     void (async () => {
@@ -518,27 +515,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ recording: recordingTabId !== null, paused });
     })();
     return true;
-  }
-
-  if (msg.type === 'open-panel') {
-    // 页面内控制面板的功能按钮：打开对应模式的录制面板窗口（与 action 弹窗同一路径）
-    // 高度只是初值：断言/悬停模式只有一行提示（断言改为选中即生成后不再有表单），
-    // 固定 420 会让窗口下方留一大片空白。panel.js 载入后按实际内容高度再收敛一次。
-    const height = PANEL_INITIAL_HEIGHT[msg.mode] ?? 220;
-    chrome.windows.create(
-      {
-        url: chrome.runtime.getURL(`popup/panel.html?mode=${msg.mode}`),
-        type: 'popup',
-        width: 360,
-        height,
-      },
-      (win) => {
-        // 置顶：拾取断言元素要点击被测页面，本窗口随之失焦；不置顶会被被测系统窗口盖住，
-        // 「已生成步骤 ✓」的结果用户根本看不到。
-        if (win) chrome.windows.update(win.id, { alwaysOnTop: true });
-      },
-    );
-    return;
   }
 
   if (msg.type === 'pick' || msg.type === 'emit-step' || msg.type === 'set-options') {

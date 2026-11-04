@@ -84,7 +84,8 @@
       .panel.collapsed .body { display: none; }
       .panel.collapsed .head { padding: 7px 10px; }
       .panel.collapsed .count { margin-right: 2px; }
-      .opts { display: flex; flex-direction: column; gap: 4px; padding: 2px 0; }
+      /* 两个录制选项并排一行（英文标签过长时 wrap 兜底换行，不裁切） */
+      .opts { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; padding: 2px 0; }
       .opts label {
         font-size: 11px; color: #6b6b6b; display: flex; align-items: center; gap: 6px;
         cursor: pointer; user-select: none;
@@ -103,18 +104,18 @@
       .pick-status.info { display: block; background: #f4f4f4; color: #171717; }
       .pick-status.ok { display: block; background: rgba(0, 107, 79, 0.10); color: #006b4f; }
       .pick-status.err { display: block; background: rgba(174, 46, 36, 0.08); color: #ae2e24; }
-      /* 存变量内联表单：拾取完成后直接在本面板填变量名（弹窗路径已废弃） */
+      /* 存变量/AI 内联表单：拾取完成后或 AI 指令直接在本面板填写（弹窗路径已整体退役） */
       .pick-form { display: none; flex-direction: column; gap: 4px; }
       .pick-form.open { display: flex; }
       .form-hint { font-size: 11px; color: #6b6b6b; line-height: 1.5; word-break: break-all; }
       .form-row { display: flex; gap: 6px; }
-      .var-input {
+      .form-input {
         flex: 1; min-width: 0; font-size: 12px; font-family: inherit;
         padding: 4px 8px; border: 1px solid #e2e2e2; border-radius: 5px;
         background: #fff; color: #171717;
       }
-      .var-input:focus { outline: none; border-color: #006b4f; }
-      .var-cancel { flex: 0 0 auto; padding: 6px 8px; }
+      .form-input:focus { outline: none; border-color: #006b4f; }
+      .form-cancel { flex: 0 0 auto; padding: 6px 8px; }
     </style>
     <div class="panel">
       <div class="head">
@@ -142,9 +143,9 @@
         <div class="pick-form">
           <div class="form-hint"></div>
           <div class="form-row">
-            <input class="var-input" />
-            <button class="btn primary var-ok"></button>
-            <button class="btn ghost var-cancel" title="×">×</button>
+            <input class="form-input" />
+            <button class="btn primary form-ok"></button>
+            <button class="btn ghost form-cancel" title="×">×</button>
           </div>
         </div>
         <button class="btn primary back">${t('backToCase')}</button>
@@ -165,11 +166,11 @@
   const hoverChk = shadow.querySelector('.opt-hover');
   const fillMsInput = shadow.querySelector('.opt-fill-ms');
   const statusEl = shadow.querySelector('.pick-status');
-  const varForm = shadow.querySelector('.pick-form');
-  const varHint = shadow.querySelector('.form-hint');
-  const varInput = shadow.querySelector('.var-input');
-  const varOk = shadow.querySelector('.var-ok');
-  const varCancel = shadow.querySelector('.var-cancel');
+  const pickForm = shadow.querySelector('.pick-form');
+  const formHint = shadow.querySelector('.form-hint');
+  const formInput = shadow.querySelector('.form-input');
+  const formOk = shadow.querySelector('.form-ok');
+  const formCancel = shadow.querySelector('.form-cancel');
 
   let statusTimer = null;
   const hideStatus = () => {
@@ -184,10 +185,11 @@
     if (statusTimer) clearTimeout(statusTimer);
     // 成功/失败提示 6s 后自动收起；拾取提示不自动收（由回调覆盖或超时前完成）
     if (kind !== 'info') statusTimer = setTimeout(hideStatus, 6000);
+    fitViewport();
   };
 
-  // 断言/悬停/存变量内联拾取：不再开扩展弹窗——v0.0.4 置顶 + v0.0.5 alwaysOnTop 两轮均仍被
-  // 被测系统窗口盖住；本面板是页面的一部分，任何外部窗口都盖不住它，结果直接显示在这里。
+  // 断言/悬停/存变量/AI 全部在面板内完成：扩展弹窗在用户点选被测页面后失焦被盖
+  // （v0.0.4 置顶、v0.0.5 alwaysOnTop 两轮均失效），本面板是页面的一部分，盖不住。
   const emitInline = (dsl) => {
     chrome.runtime.sendMessage({ type: 'emit-step', dsl }, (resp) => {
       if (resp?.ok) showStatus(t('stepGenerated'), 'ok');
@@ -195,36 +197,50 @@
     });
   };
 
-  // ---- 存变量内联表单：拾取成功后在面板里填变量名并确认 ----
+  // ---- 内联表单（存变量/AI 共用）：填值后确定提交 ----
   const suggestVarName = (r) => {
     const raw = r.id || r.nameAttr || '';
     if (!raw) return '';
     return raw.replace(/[^a-zA-Z0-9]+(.)/g, (_, c) => c.toUpperCase()).replace(/^[A-Z]/, (c) => c.toLowerCase());
   };
-  let pendingPick = null; // 拾取结果暂存，等变量名表单提交
-  const closeVarForm = () => { pendingPick = null; varForm.classList.remove('open'); };
-  const openVarForm = (r) => {
-    pendingPick = r;
+  let formMode = null; // 'variable' | 'ai'：内联表单当前服务哪种步骤
+  let pendingPick = null; // variable 模式暂存的拾取结果
+  const closeForm = () => {
+    formMode = null;
+    pendingPick = null;
+    pickForm.classList.remove('open');
+  };
+  const openForm = (mode, hint, value) => {
+    formMode = mode;
     hideStatus();
-    varHint.textContent = t('elementText', [r.text.slice(0, 60) || r.inputValue.slice(0, 60) || t('emptyText')]);
-    varInput.value = suggestVarName(r);
-    varOk.textContent = t('submit');
-    varForm.classList.add('open');
-    varInput.focus();
+    formHint.textContent = hint;
+    formInput.value = value;
+    formOk.textContent = t('submit');
+    pickForm.classList.add('open');
+    formInput.focus();
+    fitViewport();
   };
-  const submitVarForm = () => {
-    const varName = varInput.value.trim();
-    if (!varName) { showStatus(t('enterVarName'), 'err'); return; }
-    const r = pendingPick;
-    closeVarForm();
-    if (r) emitInline({ kind: 'extract', locator: r.locators, varName });
+  const openVarForm = (r) => { pendingPick = r; openForm('variable', t('elementText', [r.text.slice(0, 60) || r.inputValue.slice(0, 60) || t('emptyText')]), suggestVarName(r)); };
+  const openAiForm = () => openForm('ai', t('aiHint'), '');
+  const submitForm = () => {
+    const value = formInput.value.trim();
+    if (formMode === 'variable') {
+      if (!value) { showStatus(t('enterVarName'), 'err'); return; }
+      const r = pendingPick;
+      closeForm();
+      if (r) emitInline({ kind: 'extract', locator: r.locators, varName: value });
+    } else if (formMode === 'ai') {
+      if (!value) { showStatus(t('enterInstruction'), 'err'); return; }
+      closeForm();
+      emitInline({ kind: 'aiTask', instruction: value });
+    }
   };
-  varOk.addEventListener('click', submitVarForm);
-  varCancel.addEventListener('click', () => { closeVarForm(); hideStatus(); });
-  varInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitVarForm(); });
+  formOk.addEventListener('click', submitForm);
+  formCancel.addEventListener('click', () => { closeForm(); hideStatus(); });
+  formInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitForm(); });
 
   const startInlinePick = (mode) => {
-    closeVarForm();
+    closeForm();
     showStatus(t('pickHint'));
     chrome.runtime.sendMessage({ type: 'pick' }, (r) => {
       if (!r || r.ok === false) {
@@ -305,6 +321,30 @@
     panel.classList.remove('dragging');
   });
 
+  // 内容增高（拾取状态行/内联表单出现）后把面板钳回视口：拖动过锚点变 top/left，
+  // 向下生长会探出视口底把「回中台」裁掉；默认 bottom 锚定虽向上生长，但视口过矮时
+  // 顶边也可能越界，这里一并按实际尺寸收回。
+  const fitViewport = () => {
+    const m = 8;
+    const r = panel.getBoundingClientRect();
+    if (r.bottom > window.innerHeight - m) {
+      host.style.top = `${Math.max(m, Math.round(window.innerHeight - m - r.height))}px`;
+      host.style.bottom = 'auto';
+    }
+    if (r.top < m) {
+      host.style.top = `${m}px`;
+      host.style.bottom = 'auto';
+    }
+    if (r.right > window.innerWidth - m) {
+      host.style.left = `${Math.max(m, Math.round(window.innerWidth - m - r.width))}px`;
+      host.style.right = 'auto';
+    }
+    if (r.left < m) {
+      host.style.left = `${m}px`;
+      host.style.right = 'auto';
+    }
+  };
+
   pauseBtn.addEventListener('click', () => chrome.runtime.sendMessage({ type: paused ? 'resume' : 'pause' }));
   // 停止后顺手切回发起录制的用例详情页（步骤写入完成后自动跳转，免去用户手动找标签）
   stopBtn.addEventListener('click', () => {
@@ -315,9 +355,9 @@
   featBtns.forEach((btn) => {
     const mode = btn.dataset.mode;
     btn.addEventListener('click', () => {
-      // 断言/悬停/存变量走面板内联拾取（弹窗会被被测系统窗口盖住）；仅 AI 仍开弹窗（无拾取环节，需输入框）
-      if (mode !== 'ai') { startInlinePick(mode); return; }
-      chrome.runtime.sendMessage({ type: 'open-panel', mode });
+      // 断言/悬停/存变量/AI 全部内联在本面板完成（AI 直接开表单，无拾取环节），不再开任何扩展弹窗
+      if (mode === 'ai') { openAiForm(); return; }
+      startInlinePick(mode);
     });
   });
 
