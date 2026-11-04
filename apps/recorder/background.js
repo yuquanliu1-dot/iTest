@@ -333,6 +333,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 syncBridgeRegistration();
 
+/** 面板窗口初高（各模式内容实际高度）：断言/悬停只有标题+一行提示，变量/AI 模式带表单。 */
+const PANEL_INITIAL_HEIGHT = { assert: 130, hover: 130, variable: 240, ai: 240 };
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'start' && msg.session) {
     void (async () => {
@@ -519,7 +522,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'open-panel') {
     // 页面内控制面板的功能按钮：打开对应模式的录制面板窗口（与 action 弹窗同一路径）
-    const height = msg.mode === 'assert' ? 420 : msg.mode === 'ai' ? 280 : 240;
+    // 高度只是初值：断言/悬停模式只有一行提示（断言改为选中即生成后不再有表单），
+    // 固定 420 会让窗口下方留一大片空白。panel.js 载入后按实际内容高度再收敛一次。
+    const height = PANEL_INITIAL_HEIGHT[msg.mode] ?? 220;
     chrome.windows.create({
       url: chrome.runtime.getURL(`popup/panel.html?mode=${msg.mode}`),
       type: 'popup',

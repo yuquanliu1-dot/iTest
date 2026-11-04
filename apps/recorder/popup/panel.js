@@ -16,6 +16,30 @@ const field1 = document.getElementById('field1');
 const field2 = document.getElementById('field2');
 const field2Label = document.getElementById('field2-label');
 
+/**
+ * 窗口高度跟随内容：各模式内容差很多（断言只有一行提示，变量/AI 模式带表单），
+ * 固定高度会在下方留一大片空白。这里按容器实际高度收敛窗口，状态变化后再收敛一次。
+ */
+function fitWindow() {
+  const container = document.querySelector('.container');
+  if (!container) return;
+  const contentH = Math.ceil(container.getBoundingClientRect().height);
+  chrome.windows.getCurrent((win) => {
+    // 只调整扩展自己开的 popup 窗口：面板页若被直接开在普通标签页里，
+    // getCurrent 返回的是浏览器主窗口，不能去改它的高度
+    if (!win || win.type !== 'popup') return;
+    // 窗口边框/标题栏占的高度 = 外框高 − 内容视口高
+    const frame = Math.max(0, win.height - document.documentElement.clientHeight);
+    chrome.windows.update(win.id, { height: contentH + frame });
+  });
+}
+
+/** 改状态文案并顺带按新内容收敛窗口高度。 */
+function setStatus(text) {
+  statusEl.textContent = text;
+  fitWindow();
+}
+
 const TITLES = {
   variable: t('modeSavingVariable'),
   assert: t('modeAddAssertion'),
@@ -29,17 +53,16 @@ closeBtn.addEventListener('click', () => window.close());
 function emit(dsl) {
   chrome.runtime.sendMessage({ type: 'emit-step', dsl }, (resp) => {
     if (resp?.ok) {
-      statusEl.textContent = t('stepGenerated');
       form.classList.add('hidden');
       closeBtn.classList.remove('hidden');
+      setStatus(t('stepGenerated'));
     } else {
-      statusEl.textContent = t('failStatus', [resp?.error ?? t('unknownError')]);
+      setStatus(t('failStatus', [resp?.error ?? t('unknownError')]));
     }
   });
 }
 
 function showForm(html) {
-  statusEl.textContent = html.hint;
   document.getElementById('field1-label').textContent = html.label1;
   field1.value = html.value1 ?? '';
   if (html.label2) {
@@ -50,6 +73,7 @@ function showForm(html) {
   }
   form.classList.remove('hidden');
   document.getElementById('submit').onclick = html.onSubmit;
+  setStatus(html.hint);
 }
 
 function suggestVarName(r) {
@@ -66,23 +90,23 @@ if (mode === 'ai') {
     onSubmit: () => {
       const instruction = field1.value.trim();
       if (!instruction) {
-        statusEl.textContent = t('enterInstruction');
+        setStatus(t('enterInstruction'));
         return;
       }
       emit({ kind: 'aiTask', instruction });
     },
   });
 } else {
-  statusEl.textContent = t('pickHint');
+  setStatus(t('pickHint'));
   chrome.runtime.sendMessage({ type: 'pick' }, (r) => {
     if (!r || r.ok === false) {
-      statusEl.textContent = t('pickFailed', [r?.error ?? t('notRecording')]);
       closeBtn.classList.remove('hidden');
+      setStatus(t('pickFailed', [r?.error ?? t('notRecording')]));
       return;
     }
     if (r.canceled) {
-      statusEl.textContent = t('canceled');
       closeBtn.classList.remove('hidden');
+      setStatus(t('canceled'));
       return;
     }
     if (mode === 'hover') {
@@ -97,7 +121,7 @@ if (mode === 'ai') {
         onSubmit: () => {
           const varName = field1.value.trim();
           if (!varName) {
-            statusEl.textContent = t('enterVarName');
+            setStatus(t('enterVarName'));
             return;
           }
           emit({ kind: 'extract', locator: r.locators, varName });
