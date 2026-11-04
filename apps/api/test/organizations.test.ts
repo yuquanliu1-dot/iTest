@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { randomUUID } from 'node:crypto';
 import { hashSync } from 'bcryptjs';
 import { SCHEMA_SQL, SEED_USER_PASSWORD } from './helpers/db.js';
@@ -10,7 +10,6 @@ import { SCHEMA_SQL, SEED_USER_PASSWORD } from './helpers/db.js';
 let authCookie: typeof import('./helpers/auth.js').authCookie;
 let memberUserOf: typeof import('./helpers/auth.js').memberUserOf;
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
 
@@ -38,9 +37,9 @@ async function loginAndGetCookie(username: string, password: string): Promise<st
 }
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   ({ authCookie, memberUserOf } = await import('./helpers/auth.js'));
 
@@ -73,7 +72,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 describe('GET /api/organizations 可见组织', () => {

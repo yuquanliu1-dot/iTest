@@ -3,10 +3,9 @@ import request from 'supertest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
 let projectId: string;
@@ -16,10 +15,10 @@ let orgId: string;
 let orgPath: string;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   const { default: express } = await import('express');
   const { environmentsRoute } = await import('../src/routes/environments.js');
@@ -45,7 +44,6 @@ afterAll(async () => {
   const { pool: p } = await import('../src/db/client.js');
   await p.end().catch(() => undefined);
   await pool.end();
-  await container.stop();
 });
 
 function readSecret(payload: unknown): { c: string; i: string; t: string } | undefined {

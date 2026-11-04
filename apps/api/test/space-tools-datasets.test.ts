@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { randomUUID } from 'node:crypto';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 import type { SpaceToolsContext } from '../src/pi/space/tools/context.js';
@@ -8,14 +8,13 @@ import type { ToolExecutor } from '../src/pi/tools.js';
 
 // 注意:stage-tools / services 链上静态引入 db/client(DATABASE_URL 在 beforeAll 才指向容器),
 // 必须在测试体内动态 import(与 space-case-ops.test.ts 同模式),否则查询打到默认本地库。
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   // listStage 并行查全部 6 张 stage 表,其余 4 张补空表(列定义照 src/db/schema.ts)
   await pool.query(`
@@ -86,7 +85,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 function makeCtx(over: Partial<SpaceToolsContext> = {}): { ctx: SpaceToolsContext; events: Array<Record<string, unknown>> } {

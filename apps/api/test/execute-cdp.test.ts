@@ -1060,11 +1060,10 @@ describe('机械 fill 的环境凭据占位符（compiled 不再需要明文密�
 // ===== T6: runCase 相对 url 集成（testcontainers + 真实 DB；浏览器仍走上方 playwright mock）=====
 // runCase → WebEngine → executeCaseReal：同一 mock chromium 驱动，断言 goto 目标 + WebServiceMissing 失败报告。
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
 describe('runCase — 相对 url 与环境 web 服务', () => {
-  let container: StartedPostgreSqlContainer;
   let pool: Pool;
   let projectId: string;
   let groupId: string;
@@ -1105,26 +1104,25 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
   };
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer('postgres:16-alpine').start();
-    process.env.DATABASE_URL = container.getConnectionUri();
+    const pgDb = await createTestDatabase();
+    process.env.DATABASE_URL = pgDb.uri;
     process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? 'nqh12UCAW+ZhepC+gqL/n1phEn5mo+xq82Key67ePXI=';
-    pool = new Pool({ connectionString: container.getConnectionUri() });
+    pool = new Pool({ connectionString: pgDb.uri });
     await pool.query(SCHEMA_SQL);
     const seed = await seedOrg(pool);
     const s = await seedProject(pool);
     projectId = s.projectId;
     groupId = s.groupId;
     // 本文件顶部静态 import cdp.js → db/client.js，pool 已按兜底 localhost 建好（上部单测未发过任何
-    // 真实连接）。把共享 pool 的 connectionString 改指测试容器——runCase 走同一 pool，新连接落容器 DB。
+    // 真实连接）。把共享 pool 的 connectionString 改指测试库——runCase 走同一 pool，新连接落该库。
     const { pool: sharedPool } = await import('../src/db/client.js');
-    (sharedPool as unknown as { options: { connectionString: string } }).options.connectionString = container.getConnectionUri();
+    (sharedPool as unknown as { options: { connectionString: string } }).options.connectionString = pgDb.uri;
   }, 60000);
 
   afterAll(async () => {
     const { pool: sharedPool } = await import('../src/db/client.js');
     await sharedPool.end().catch(() => undefined);
     await pool.end();
-    await container.stop();
   });
 
   it('相对 url + 环境 web 对象 → goto 拼接地址，报告 passed', async () => {

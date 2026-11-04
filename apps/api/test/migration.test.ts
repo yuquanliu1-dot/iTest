@@ -2,9 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 
 const MIGRATIONS_DIR = new URL('../drizzle/', import.meta.url).pathname;
@@ -24,13 +23,12 @@ async function applyMigration(prefix: string) {
 }
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  const pgDb = await createTestDatabase();
+  pool = new Pool({ connectionString: pgDb.uri });
 });
 
 afterAll(async () => {
   await pool.end();
-  await container.stop();
 });
 
 describe('migrations', () => {

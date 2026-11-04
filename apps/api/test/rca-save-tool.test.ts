@@ -1,17 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 import { emptyRepoState, type SpaceToolsContext } from '../src/pi/space/tools/context.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   await import('../src/db/client.js');
 }, 60_000);
@@ -20,7 +19,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 /** 造一条 failed 计划运行 + 失败用例行（plan_run_cases）。

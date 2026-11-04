@@ -2,20 +2,19 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
 // P1-3 落库闸门：/stage/save 对死步骤（无 compiled 且无指令）422 拦截 + 纯 NL 草稿 advisory warnings。
 // 路由级测试（supertest + 真实 stageRoute），与 space-guides.test.ts 同款挂载。
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
   process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? Buffer.alloc(32, 1).toString('base64');
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   const { default: exp } = await import('express');
   const { spaceRoute } = await import('../src/pi/space/router.js');
@@ -35,7 +34,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 beforeEach(async () => {

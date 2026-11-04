@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL } from './helpers/db.js';
 
 /**
@@ -14,7 +14,6 @@ import { SCHEMA_SQL } from './helpers/db.js';
  *  - 「重启」后内存 Map 为空仍能从 DB 读回（下载卡跨会话/跨进程语义的根基）
  *  - 旧 registerArtifact（xmind）30min TTL 语义不回归；过期记录（含发版前旧路径）被拒
  */
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let root: string;
 let artifacts: typeof import('../src/pi/space/artifacts.js');
@@ -22,12 +21,12 @@ let artifacts: typeof import('../src/pi/space/artifacts.js');
 const poolsToClose: Pool[] = [];
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-artifact-'));
   process.env.PI_DATA_DIR = path.join(root, 'pi-data');
   vi.resetModules();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  pool = new Pool({ connectionString: pgDb.uri });
   poolsToClose.push(pool);
   await pool.query(SCHEMA_SQL);
   artifacts = await import('../src/pi/space/artifacts.js');
@@ -36,7 +35,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   for (const p of poolsToClose) await p.end().catch(() => {});
-  await container?.stop();
   await fs.rm(root, { recursive: true, force: true });
 });
 

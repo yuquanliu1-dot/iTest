@@ -132,7 +132,7 @@ chromium 二进制 **不会** 随 `pnpm install` 下载，需要本机已存在�
 pnpm verify  # lint + typecheck + test（web + api）
 ```
 
-后端测试需要 Docker（testcontainers 起临时 PG）；apps/api 已固化 `TESTCONTAINERS_RYUK_DISABLED=true`。
+后端测试需要 Docker（vitest globalSetup 起一个共享 PG 容器，每个测试文件在容器内拿到自己的独立数据库）；apps/api 已固化 `TESTCONTAINERS_RYUK_DISABLED=true`。
 
 ## 部署
 
@@ -151,7 +151,7 @@ pnpm verify  # lint + typecheck + test（web + api）
 
 欢迎通过 PR 贡献。`main` 分支受保护：合并前需要 **至少 1 个 approving review**，且所有对话需被解决。请先开 issue 讨论较大改动，避免白做。
 
-- 提交前跑 `pnpm verify`（lint + typecheck + test）——后端测试需要 Docker（testcontainers 起临时 PG）
+- 提交前跑 `pnpm verify`（lint + typecheck + test）——后端测试需要 Docker（vitest globalSetup 起一个共享 PG 容器）
 - 不要提交任何密钥/凭据：本地配置走 `.env`（参考 `.env.example`），`infra/docker/deploy.d/` 与 `infra/docker/.env.production` 已被 gitignore
 
 ## 许可证

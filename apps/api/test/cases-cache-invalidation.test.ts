@@ -7,11 +7,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 import { __setClientForTests } from '../src/lib/cache.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
 
@@ -45,10 +44,10 @@ const fake = (() => {
 })();
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   __setClientForTests(fake as never);
   const { default: express } = await import('express');
@@ -74,7 +73,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 describe('cases list cache invalidation', () => {

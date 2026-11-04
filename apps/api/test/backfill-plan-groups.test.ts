@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, expect, test } from 'vitest';
-import { PostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { Pool } from 'pg';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
 let pool: Pool;
 
 beforeAll(async () => {
-  const c = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = c.getConnectionUri();
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
   process.env.ENCRYPTION_KEY = 'test-encryption-key-32bytes-padding!';
   pool = new Pool({ connectionString: process.env.DATABASE_URL });
   await pool.query(SCHEMA_SQL);

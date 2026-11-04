@@ -1,9 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedProject, seedOrg, resetSeedOrgCache } from './helpers/db.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let resolveCaseUrl: typeof import('../src/lib/resolve-url.js').resolveCaseUrl;
 let relativizeUrl: typeof import('../src/lib/resolve-url.js').relativizeUrl;
@@ -12,9 +11,9 @@ let projectId: string;
 let groupId: string;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   // db/client.js 在 import 时读 DATABASE_URL，必须等容器就绪后再动态加载（envContext 同理，它引了 db/client）
   ({ resolveCaseUrl, relativizeUrl } = await import('../src/lib/resolve-url.js'));
@@ -25,7 +24,6 @@ afterAll(async () => {
   const { pool: p } = await import('../src/db/client.js');
   await p.end().catch(() => undefined);
   await pool.end();
-  await container.stop();
 });
 
 beforeEach(async () => {

@@ -1,17 +1,16 @@
 /** 失败信号采集：落库带线归并/同键去重/INSERT 失败不打断（fire-and-forget 语义）。 */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { randomUUID } from 'node:crypto';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
 }, 60_000);
 
@@ -19,7 +18,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 beforeEach(async () => {

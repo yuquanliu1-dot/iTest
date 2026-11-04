@@ -1,14 +1,13 @@
 /** R3.6 会话信号采集器：窗口/消费幂等/rca 排除/候选与选样上限/文件护栏（testcontainers + 临时目录 fixture）。 */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SCHEMA_SQL } from './helpers/db.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let sessionsRoot: string;
 /** 固定「现在」，窗口/age 计算全以此为基准。 */
@@ -17,9 +16,9 @@ const MIN = 60_000;
 const DAY = 24 * 60 * 60 * 1000;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   sessionsRoot = await mkdtemp(join(tmpdir(), 'pi-sess-'));
 }, 60_000);
@@ -28,7 +27,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 beforeEach(async () => {

@@ -21,11 +21,10 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL } from './helpers/db.js';
 import type { SpaceToolsContext } from '../src/pi/space/tools/context.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let dbPool: { end: () => Promise<void> };
 let dataDir: string;
@@ -55,9 +54,9 @@ async function runMcp(ctx: SpaceToolsContext, input: Record<string, unknown>) {
 }
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   // 必须在动态 import 之前：SKILLS_ROOT 在模块加载时就从 PI_DATA_DIR 解析。
   dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'itest-mgrtools-'));
@@ -78,7 +77,6 @@ afterAll(async () => {
   await dbPool.end();
   await pool.end();
   await fsp.rm(dataDir, { recursive: true, force: true });
-  await container.stop();
 });
 
 beforeEach(async () => {

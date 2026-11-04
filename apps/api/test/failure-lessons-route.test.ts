@@ -1,7 +1,7 @@
 /** 失败教训路由：列表（status 过滤）/retire（active 守卫 404）/权限门。 */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import type { Express } from 'express';
 import request from 'supertest';
 import { SCHEMA_SQL, seedOrg } from './helpers/db.js';
@@ -10,7 +10,6 @@ import { SCHEMA_SQL, seedOrg } from './helpers/db.js';
 let managerUserOf: typeof import('./helpers/auth.js').managerUserOf;
 let memberUserOf: typeof import('./helpers/auth.js').memberUserOf;
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let orgId = '';
 let orgPath = '';
@@ -19,9 +18,9 @@ let orgUsername = '';
 let mount: (role: 'manager' | 'member') => Promise<Express>;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   const org = await seedOrg(pool);
   orgId = org.orgId;
@@ -49,7 +48,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 beforeEach(async () => {

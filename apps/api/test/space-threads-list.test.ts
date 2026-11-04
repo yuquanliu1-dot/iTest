@@ -5,10 +5,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
 let tmpDir: string;
@@ -53,9 +52,9 @@ const list = (versionId: string, query: string) =>
   request(app).get(`/api/assistant/threads?workspacePath=${versionId}${query}`);
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   await seedOrg(pool);
   const { default: exp } = await import('express');
@@ -75,7 +74,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 

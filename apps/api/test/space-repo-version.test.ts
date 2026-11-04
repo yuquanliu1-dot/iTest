@@ -4,19 +4,18 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedProductLine } from './helpers/db.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 
 const GIT = (cmd: string, cwd: string) => execSync(cmd, { cwd, stdio: 'pipe' }).toString().trim();
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
   process.env.PI_DATA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-space-repo-'));
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   await import('../src/db/client.js');
 }, 60_000);
@@ -25,7 +24,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 async function makeFixtureRepo(): Promise<string> {

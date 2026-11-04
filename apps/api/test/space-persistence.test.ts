@@ -21,10 +21,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 /** 隔离的 .data 根：必须在任何动态 import session.js（连带 repo.ts 的模块级 DATA_DIR/SESSIONS_ROOT）之前设好。 */
 let tmpDataDir: string;
@@ -32,12 +31,12 @@ let tmpDataDir: string;
 let stubServer: http.Server;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
   tmpDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-spacedata-'));
   process.env.PI_DATA_DIR = tmpDataDir;
   vi.resetModules();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
 
   // 任何请求一律回 HTTP 400（非可重试错误）：pi 拿到 400 立即失败，不退避重试。
@@ -62,7 +61,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
   await new Promise<void>((resolve, reject) => {
     stubServer.closeAllConnections();
     stubServer.close((err) => (err ? reject(err) : resolve()));

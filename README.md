@@ -132,7 +132,7 @@ Supports **iOS Simulator** and **Android Emulator**, based on the [agent-device]
 pnpm verify  # lint + typecheck + test (web + api)
 ```
 
-Backend tests require Docker (testcontainers spins up a temporary PG); `apps/api` has `TESTCONTAINERS_RYUK_DISABLED=true` pinned.
+Backend tests require Docker (vitest globalSetup shares one PG container; each test file gets its own database inside it); `apps/api` has `TESTCONTAINERS_RYUK_DISABLED=true` pinned.
 
 ## Deployment
 
@@ -151,7 +151,7 @@ Backend tests require Docker (testcontainers spins up a temporary PG); `apps/api
 
 Contributions via PR are welcome. The `main` branch is protected: merging requires **at least 1 approving review**, and all conversations must be resolved. Please open an issue to discuss larger changes first, so nobody wastes effort.
 
-- Run `pnpm verify` before committing (lint + typecheck + test) — backend tests require Docker (testcontainers spins up a temporary PG)
+- Run `pnpm verify` before committing (lint + typecheck + test) — backend tests require Docker (one shared PG container via vitest globalSetup)
 - Do not commit any secrets or credentials: local configuration goes in `.env` (see `.env.example`); `infra/docker/deploy.d/` and `infra/docker/.env.production` are gitignored
 
 ## License

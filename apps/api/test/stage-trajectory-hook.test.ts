@@ -2,23 +2,22 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
 // R2 落库钩子：/stage/save 成功落库后投递轨迹蒸馏（fire-and-forget），enqueue 抛错绝不影响主流程。
 // mock 机制：vi.resetModules + vi.doMock 拦截钩子里的动态 import('../../scheduler/trajectoryQueue.js')
 // ——stageRoute 必须在 doMock 之后重导，动态 import 才会解析到 mock（两种相对路径解析到同一文件）。
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
 let seedUserId: string;
 const enqueueMock = vi.fn(async () => {});
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
   process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? Buffer.alloc(32, 1).toString('base64');
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   vi.resetModules();
   vi.doMock('../src/scheduler/trajectoryQueue.js', () => ({
@@ -45,7 +44,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 beforeEach(async () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { randomUUID } from 'node:crypto';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
@@ -88,7 +88,6 @@ let executeCaseReal: typeof import('../src/execute/cdp.js').executeCaseReal;
 let runAiTask: ReturnType<typeof vi.fn>;
 let testState: { clicks: string[]; failClicks: number; deadSelectors: Set<string> };
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let groupId: string;
 let versionId: string;
@@ -98,9 +97,9 @@ let aiActions: Array<[Record<string, unknown>, boolean]> = [];
 let aiError: Error | null = null;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   ({ executeCaseReal } = await import('../src/execute/cdp.js'));
   ({ runAiTask } = await import('../src/execute/aiTask.js'));
@@ -111,7 +110,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 beforeEach(async () => {

@@ -5,10 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
 /** 隔离的 .data 根:fake 会话的落盘文件写这里,不污染开发者真实的 apps/api/.data(须先于任何动态 import 设好)。 */
@@ -57,12 +56,12 @@ async function stubFactory(ctx: { threadId: string }) {
 }
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
   tmpDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-spacedata-'));
   process.env.PI_DATA_DIR = tmpDataDir;
   vi.resetModules();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   // DELETE /threads 清暂存会触及全部 6 张 ai_stage_* 表;SCHEMA_SQL 只建了 ai_stage_cases,
   // 其余 5 张在此补齐(IF NOT EXISTS,列定义照 src/db/schema.ts)。
@@ -91,7 +90,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
   await fs.rm(tmpDataDir, { recursive: true, force: true });
 });
 

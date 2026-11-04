@@ -1,23 +1,22 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject, seedProductLine } from './helpers/db.js';
 
 // mock 真实 git 探测（不连外网）；记录入参以断言 PAT 回落。
 const { verifyRepoAccessMock } = vi.hoisted(() => ({ verifyRepoAccessMock: vi.fn() }));
 vi.mock('../src/services/gitProvider.js', () => ({ verifyRepoAccess: verifyRepoAccessMock }));
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let app: import('express').Express;
 /** 新建项目必填 productLineId：全程复用同一条种子线。 */
 let lineId: string;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   const { default: express } = await import('express');
   const { projectsRoute } = await import('../src/routes/projects.js');
@@ -43,7 +42,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 describe('projects', () => {

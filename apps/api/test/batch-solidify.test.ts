@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { randomUUID } from 'node:crypto';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
@@ -14,7 +14,6 @@ vi.mock('../src/pi/space/tools/verifyCase.js', () => ({
   buildVerifyCaseTool: vi.fn(),
 }));
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let projectId: string;
 let groupId: string;
@@ -22,10 +21,10 @@ let versionId: string;
 let app: import('express').Express;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   // supertest 应用（路由层测试用）：注入种子组织管理员身份，挂 cases 路由
   const { default: express } = await import('express');
@@ -47,7 +46,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
 });
 
 beforeEach(async () => {

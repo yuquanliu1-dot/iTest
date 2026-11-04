@@ -5,10 +5,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg } from './helpers/db.js';
 
-let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let managerApp: import('express').Express;
 let memberApp: import('express').Express;
@@ -20,12 +19,12 @@ const skillsRoot = (): string => path.join(tmpDataDir, 'skills');
 const skillDir = (name: string): string => path.join(skillsRoot(), name);
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
   tmpDataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'itest-skilldata-'));
   process.env.PI_DATA_DIR = tmpDataDir;
   vi.resetModules();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   const { default: exp } = await import('express');
   const { spaceRoute } = await import('../src/pi/space/router.js');
@@ -49,7 +48,6 @@ afterAll(async () => {
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
-  await container.stop();
   await fs.promises.rm(tmpDataDir, { recursive: true, force: true });
 });
 

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { createTestDatabase, type TestDatabase } from './helpers/pg.js';
 import { MySqlContainer, StartedMySqlContainer } from '@testcontainers/mysql';
 import { SCHEMA_SQL, seedProject, seedOrg, resetSeedOrgCache } from './helpers/db.js';
 
-let container: StartedPostgreSqlContainer;
 let mysqlContainer: StartedMySqlContainer;
+let pgDb: TestDatabase;
 let pool: Pool;
 let app: import('express').Express;
 let userId: string;
@@ -17,11 +17,11 @@ let projectId: string;
 let defaultVersionId: string;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
+  pgDb = await createTestDatabase();
   mysqlContainer = await new MySqlContainer('mysql:8.0').start();
-  process.env.DATABASE_URL = container.getConnectionUri();
+  process.env.DATABASE_URL = pgDb.uri;
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   const { default: express } = await import('express');
   const { environmentsRoute } = await import('../src/routes/environments.js');
@@ -46,7 +46,6 @@ afterAll(async () => {
   const { pool: p } = await import('../src/db/client.js');
   await p.end().catch(() => undefined);
   await pool.end();
-  await container.stop();
   await mysqlContainer.stop();
 });
 
@@ -104,14 +103,14 @@ describe('environments project-level model', () => {
 
 describe('POST /environments/test-db 连接测试', () => {
   const conn = () => ({
-    host: container.getHost(),
-    port: container.getMappedPort(5432),
-    dbName: container.getDatabase(),
-    user: container.getUsername(),
+    host: pgDb.host,
+    port: pgDb.port,
+    dbName: pgDb.database,
+    user: pgDb.user,
   });
 
   it('正确凭据 → 200 ok:true + latencyMs', async () => {
-    const r = await request(app).post('/api/environments/test-db').send({ ...conn(), password: container.getPassword() });
+    const r = await request(app).post('/api/environments/test-db').send({ ...conn(), password: pgDb.password });
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
     expect(r.body.latencyMs).toBeGreaterThanOrEqual(0);
@@ -127,7 +126,7 @@ describe('POST /environments/test-db 连接测试', () => {
   it('编辑态密码留空 → objectId 回退已存密文', async () => {
     const env = await request(app).post(`/api/projects/${projectId}/environments`).send({
       name: 'has-db',
-      objects: [{ objectType: 'db', payload: { ...conn(), password: container.getPassword() } }],
+      objects: [{ objectType: 'db', payload: { ...conn(), password: pgDb.password } }],
     });
     const obj = env.body.objects.find((o: { objectType: string }) => o.objectType === 'db');
     const r = await request(app).post('/api/environments/test-db').send({ ...conn(), objectId: obj.id });
