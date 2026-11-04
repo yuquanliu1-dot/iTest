@@ -17,8 +17,8 @@ const field2 = document.getElementById('field2');
 const field2Label = document.getElementById('field2-label');
 
 /**
- * 窗口高度跟随内容：各模式内容差很多（断言只有一行提示，变量/AI 模式带表单），
- * 固定高度会在下方留一大片空白。这里按容器实际高度收敛窗口，状态变化后再收敛一次。
+ * 窗口高度跟随内容：按容器实际高度收敛窗口，状态变化后再收敛一次，
+ * 固定高度会在下方留一大片空白。
  */
 function fitWindow() {
   const container = document.querySelector('.container');
@@ -76,12 +76,9 @@ function showForm(html) {
   setStatus(html.hint);
 }
 
-function suggestVarName(r) {
-  const raw = r.id || r.nameAttr || '';
-  if (!raw) return '';
-  return raw.replace(/[^a-zA-Z0-9]+(.)/g, (_, c) => c.toUpperCase()).replace(/^[A-Z]/, (c) => c.toLowerCase());
-}
-
+// v0.0.6 起本页只服务 AI 模式：断言/悬停/存变量已改在页面内控制面板内联拾取——
+// 扩展弹窗在用户点选被测页面元素后失焦，会被被测系统窗口盖住（置顶/拉回均不可靠），
+// 而页面内面板是页面的一部分，任何外部窗口都盖不住。AI 模式无拾取环节，开窗即聚焦，保留弹窗。
 if (mode === 'ai') {
   showForm({
     hint: t('aiHint'),
@@ -95,50 +92,5 @@ if (mode === 'ai') {
       }
       emit({ kind: 'aiTask', instruction });
     },
-  });
-} else {
-  setStatus(t('pickHint'));
-  chrome.runtime.sendMessage({ type: 'pick' }, (r) => {
-    if (!r || r.ok === false) {
-      closeBtn.classList.remove('hidden');
-      setStatus(t('pickFailed', [r?.error ?? t('notRecording')]));
-      return;
-    }
-    if (r.canceled) {
-      closeBtn.classList.remove('hidden');
-      setStatus(t('canceled'));
-      return;
-    }
-    if (mode === 'hover') {
-      emit({ kind: 'hover', locator: r.locators });
-      return;
-    }
-    if (mode === 'variable') {
-      showForm({
-        hint: t('elementText', [r.text.slice(0, 60) || r.inputValue.slice(0, 60) || t('emptyText')]),
-        label1: t('labelVarName'),
-        value1: suggestVarName(r),
-        onSubmit: () => {
-          const varName = field1.value.trim();
-          if (!varName) {
-            setStatus(t('enterVarName'));
-            return;
-          }
-          emit({ kind: 'extract', locator: r.locators, varName });
-        },
-      });
-      return;
-    }
-    if (mode === 'assert') {
-      // 2026-11-04: 选中即生成，不再弹表单——原表单流程用户选完元素直接关窗，「确定」没点
-      // emit 从未发生，断言就丢了（b0dbb886 RCA）。期望值沿用原表单默认：元素当前文本/输入值。
-      // 两者皆空（图标按钮等）退化为元素级 assertVisible，不依赖文案。
-      const expected = r.text || r.inputValue;
-      if (expected) {
-        emit({ kind: 'assertText', locator: r.locators, equals: expected });
-      } else {
-        emit({ kind: 'assertVisible', locator: r.locators });
-      }
-    }
   });
 }

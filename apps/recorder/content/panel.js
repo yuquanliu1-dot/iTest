@@ -95,6 +95,26 @@
       }
       .opts input[type=number]:focus { outline: none; border-color: #006b4f; }
       .opts input[type=checkbox] { accent-color: #006b4f; cursor: pointer; }
+      /* 断言/悬停内联拾取的状态行（v0.0.6：不再开扩展弹窗，结果直接显示在本面板） */
+      .pick-status {
+        display: none; font-size: 11px; line-height: 1.5; border-radius: 5px;
+        padding: 6px 8px; word-break: break-all;
+      }
+      .pick-status.info { display: block; background: #f4f4f4; color: #171717; }
+      .pick-status.ok { display: block; background: rgba(0, 107, 79, 0.10); color: #006b4f; }
+      .pick-status.err { display: block; background: rgba(174, 46, 36, 0.08); color: #ae2e24; }
+      /* 存变量内联表单：拾取完成后直接在本面板填变量名（弹窗路径已废弃） */
+      .pick-form { display: none; flex-direction: column; gap: 4px; }
+      .pick-form.open { display: flex; }
+      .form-hint { font-size: 11px; color: #6b6b6b; line-height: 1.5; word-break: break-all; }
+      .form-row { display: flex; gap: 6px; }
+      .var-input {
+        flex: 1; min-width: 0; font-size: 12px; font-family: inherit;
+        padding: 4px 8px; border: 1px solid #e2e2e2; border-radius: 5px;
+        background: #fff; color: #171717;
+      }
+      .var-input:focus { outline: none; border-color: #006b4f; }
+      .var-cancel { flex: 0 0 auto; padding: 6px 8px; }
     </style>
     <div class="panel">
       <div class="head">
@@ -118,6 +138,15 @@
           <button class="btn ghost feat" data-mode="hover" title="${t('manualHoverHint')}">${t('insertHoverStep')}</button>
           <button class="btn ghost feat" data-mode="ai">${t('aiNaturalLang')}</button>
         </div>
+        <div class="pick-status"></div>
+        <div class="pick-form">
+          <div class="form-hint"></div>
+          <div class="form-row">
+            <input class="var-input" />
+            <button class="btn primary var-ok"></button>
+            <button class="btn ghost var-cancel" title="×">×</button>
+          </div>
+        </div>
         <button class="btn primary back">${t('backToCase')}</button>
       </div>
     </div>
@@ -135,6 +164,90 @@
   const featBtns = shadow.querySelectorAll('.feat');
   const hoverChk = shadow.querySelector('.opt-hover');
   const fillMsInput = shadow.querySelector('.opt-fill-ms');
+  const statusEl = shadow.querySelector('.pick-status');
+  const varForm = shadow.querySelector('.pick-form');
+  const varHint = shadow.querySelector('.form-hint');
+  const varInput = shadow.querySelector('.var-input');
+  const varOk = shadow.querySelector('.var-ok');
+  const varCancel = shadow.querySelector('.var-cancel');
+
+  let statusTimer = null;
+  const hideStatus = () => {
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = null;
+    statusEl.className = 'pick-status';
+    statusEl.textContent = '';
+  };
+  const showStatus = (text, kind = 'info') => {
+    statusEl.textContent = text;
+    statusEl.className = `pick-status ${kind}`;
+    if (statusTimer) clearTimeout(statusTimer);
+    // 成功/失败提示 6s 后自动收起；拾取提示不自动收（由回调覆盖或超时前完成）
+    if (kind !== 'info') statusTimer = setTimeout(hideStatus, 6000);
+  };
+
+  // 断言/悬停/存变量内联拾取：不再开扩展弹窗——v0.0.4 置顶 + v0.0.5 alwaysOnTop 两轮均仍被
+  // 被测系统窗口盖住；本面板是页面的一部分，任何外部窗口都盖不住它，结果直接显示在这里。
+  const emitInline = (dsl) => {
+    chrome.runtime.sendMessage({ type: 'emit-step', dsl }, (resp) => {
+      if (resp?.ok) showStatus(t('stepGenerated'), 'ok');
+      else showStatus(t('failStatus', [resp?.error ?? t('unknownError')]), 'err');
+    });
+  };
+
+  // ---- 存变量内联表单：拾取成功后在面板里填变量名并确认 ----
+  const suggestVarName = (r) => {
+    const raw = r.id || r.nameAttr || '';
+    if (!raw) return '';
+    return raw.replace(/[^a-zA-Z0-9]+(.)/g, (_, c) => c.toUpperCase()).replace(/^[A-Z]/, (c) => c.toLowerCase());
+  };
+  let pendingPick = null; // 拾取结果暂存，等变量名表单提交
+  const closeVarForm = () => { pendingPick = null; varForm.classList.remove('open'); };
+  const openVarForm = (r) => {
+    pendingPick = r;
+    hideStatus();
+    varHint.textContent = t('elementText', [r.text.slice(0, 60) || r.inputValue.slice(0, 60) || t('emptyText')]);
+    varInput.value = suggestVarName(r);
+    varOk.textContent = t('submit');
+    varForm.classList.add('open');
+    varInput.focus();
+  };
+  const submitVarForm = () => {
+    const varName = varInput.value.trim();
+    if (!varName) { showStatus(t('enterVarName'), 'err'); return; }
+    const r = pendingPick;
+    closeVarForm();
+    if (r) emitInline({ kind: 'extract', locator: r.locators, varName });
+  };
+  varOk.addEventListener('click', submitVarForm);
+  varCancel.addEventListener('click', () => { closeVarForm(); hideStatus(); });
+  varInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitVarForm(); });
+
+  const startInlinePick = (mode) => {
+    closeVarForm();
+    showStatus(t('pickHint'));
+    chrome.runtime.sendMessage({ type: 'pick' }, (r) => {
+      if (!r || r.ok === false) {
+        showStatus(t('pickFailed', [r?.error ?? t('notRecording')]), 'err');
+        return;
+      }
+      if (r.canceled) {
+        showStatus(t('canceled'));
+        return;
+      }
+      if (mode === 'hover') {
+        emitInline({ kind: 'hover', locator: r.locators });
+        return;
+      }
+      if (mode === 'variable') {
+        openVarForm(r);
+        return;
+      }
+      // assert：选中即生成（期望值=元素当前文本/输入值，皆空退化 assertVisible），与原弹窗逻辑一致
+      const expected = r.text || r.inputValue;
+      emitInline(expected ? { kind: 'assertText', locator: r.locators, equals: expected } : { kind: 'assertVisible', locator: r.locators });
+    });
+  };
 
   const render = () => {
     panel.classList.toggle('collapsed', collapsed);
@@ -200,7 +313,12 @@
   });
   backBtn.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'open-console' }));
   featBtns.forEach((btn) => {
-    btn.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'open-panel', mode: btn.dataset.mode }));
+    const mode = btn.dataset.mode;
+    btn.addEventListener('click', () => {
+      // 断言/悬停/存变量走面板内联拾取（弹窗会被被测系统窗口盖住）；仅 AI 仍开弹窗（无拾取环节，需输入框）
+      if (mode !== 'ai') { startInlinePick(mode); return; }
+      chrome.runtime.sendMessage({ type: 'open-panel', mode });
+    });
   });
 
   chrome.runtime.onMessage.addListener((msg) => {

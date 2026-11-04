@@ -333,8 +333,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 syncBridgeRegistration();
 
-/** 面板窗口初高（各模式内容实际高度）：断言/悬停只有标题+一行提示，变量/AI 模式带表单。 */
-const PANEL_INITIAL_HEIGHT = { assert: 130, hover: 130, variable: 240, ai: 240 };
+/** 面板窗口初高：仅 AI 模式仍开窗（无拾取环节）；断言/悬停/存变量已改页面内面板内联拾取。 */
+const PANEL_INITIAL_HEIGHT = { ai: 240 };
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'start' && msg.session) {
