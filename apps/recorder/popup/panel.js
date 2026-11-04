@@ -106,29 +106,15 @@ if (mode === 'ai') {
       return;
     }
     if (mode === 'assert') {
-      showForm({
-        hint: t('assertHint'),
-        label1: t('assertType'),
-        value1: 'text',
-        label2: t('assertExpected'),
-        value2: r.text || r.inputValue,
-        onSubmit: () => {
-          const type = field1.value.trim();
-          const expected = field2.value;
-          if (type === 'json') {
-            let parsed;
-            try {
-              parsed = JSON.parse(expected);
-            } catch {
-              statusEl.textContent = t('invalidJson');
-              return;
-            }
-            emit({ kind: 'assertJson', locator: r.locators, equals: parsed });
-          } else {
-            emit({ kind: 'assertText', locator: r.locators, equals: expected });
-          }
-        },
-      });
+      // 2026-11-04: 选中即生成，不再弹表单——原表单流程用户选完元素直接关窗，「确定」没点
+      // emit 从未发生，断言就丢了（b0dbb886 RCA）。期望值沿用原表单默认：元素当前文本/输入值。
+      // 两者皆空（图标按钮等）退化为元素级 assertVisible，不依赖文案。
+      const expected = r.text || r.inputValue;
+      if (expected) {
+        emit({ kind: 'assertText', locator: r.locators, equals: expected });
+      } else {
+        emit({ kind: 'assertVisible', locator: r.locators });
+      }
     }
   });
 }
