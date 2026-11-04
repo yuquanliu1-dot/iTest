@@ -6,7 +6,7 @@ function makePage(evalResult: unknown) {
   } as never;
 }
 
-import { waitForStable, ElementNotStable, stabilityProbeFn } from '../src/execute/stability.js';
+import { waitForStable, ElementNotStable, stabilityProbeFn, waitForDomQuiet } from '../src/execute/stability.js';
 
 describe('waitForStable', () => {
   it('returns ready when evaluate reports no blockers', async () => {
@@ -83,5 +83,45 @@ describe('stabilityProbeFn（页内探测）', () => {
   it('页面无交互元素 → 就绪', () => {
     withStubDom({ querySelector: () => null, activeElement: null });
     expect(stabilityProbeFn()).toEqual({ ready: true });
+  });
+});
+
+describe('waitForDomQuiet（点击后静默期）', () => {
+  function makeQuietPage(evalImpl: () => Promise<unknown>) {
+    return {
+      evaluate: vi.fn(evalImpl),
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it('指纹恒定 → 收敛返回（静默路径）', async () => {
+    const page = makeQuietPage(() => Promise.resolve(12345));
+    await waitForDomQuiet(page as never, 2000, 300, 50);
+    expect(page.evaluate.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(page.waitForTimeout).toHaveBeenCalled();
+  });
+
+  it('指纹变化重置静默计时，落定后才返回', async () => {
+    const seq = [100, 200, 200, 200, 200];
+    const page = makeQuietPage(() => Promise.resolve(seq.shift() ?? 200));
+    await waitForDomQuiet(page as never, 2000, 300, 50);
+    // 至少轮询到变化点之后：签名采样数 > 序列中唯一变化次数
+    expect(page.evaluate.mock.calls.length).toBeGreaterThanOrEqual(seq.length + 1);
+  });
+
+  it('evaluate 抛错（探不了）→ 立即放行，零等待', async () => {
+    const page = makeQuietPage(() => Promise.reject(new Error('page navigated')));
+    await waitForDomQuiet(page as never, 2000, 300, 50);
+    expect(page.waitForTimeout).not.toHaveBeenCalled();
+    expect(page.evaluate.mock.calls.length).toBe(1);
+  });
+
+  it('指纹持续变化 → maxIters 兜底终止（墙钟不推进也不死循环）', async () => {
+    let n = 0;
+    const page = makeQuietPage(() => Promise.resolve(++n));
+    await waitForDomQuiet(page as never, 1000, 300, 50);
+    // 1000/50 + 5 = 25 轮上限 + 首次采样
+    expect(page.evaluate.mock.calls.length).toBeLessThanOrEqual(30);
+    expect(page.evaluate.mock.calls.length).toBeGreaterThanOrEqual(20);
   });
 });

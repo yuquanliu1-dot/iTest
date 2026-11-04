@@ -22,7 +22,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildCandidates } from './locator-resolver.js';
 import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from './locator-probe.js';
-import { waitForStable, ElementNotStable } from './stability.js';
+import { waitForStable, ElementNotStable, waitForDomQuiet } from './stability.js';
 import { classify } from './failureClassifier.js';
 import { preflight } from './preflight.js';
 import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
@@ -333,7 +333,13 @@ function aiCredentialSub(ctx: ExecContext, secret: string | undefined): (v: stri
  */
 async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
   try {
-    return await dispatchInner(action, opts);
+    const warning = await dispatchInner(action, opts);
+    // 点击后静默期：pre-action 稳定性检查（waitForStable/waitTargetEnabled）拦不住「点击成功
+    // 但效果被后到的异步重渲染冲掉」（prod228 14dd97e2/e3f9a616：行点击落在 Search 响应到达
+    // 前 275ms，响应到来后 el-table 重渲染清掉 current-row 选中态，下一步等 Modify 到
+    // target-disabled）。best-effort 等落定，绝不失败本步；dom-fallback 警告路径的 click 同样生效。
+    if (action.kind === 'click') await waitForDomQuiet(opts.page);
+    return warning;
   } finally {
     await clearAnnotation(opts.page);
   }

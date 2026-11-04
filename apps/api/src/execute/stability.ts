@@ -98,3 +98,54 @@ export async function waitForStable(
     await new Promise((r) => setTimeout(r, pollMs));
   }
 }
+
+/**
+ * 点击后静默期：机械 click 成功后等 DOM 落定再放行下一步。
+ *
+ * 现有稳定性机制全是 pre-action（waitForStable 查 disabled/loading/overlay、waitTargetEnabled
+ * 等目标恢复），拦不住「点击已成功、效果被后到的异步重渲染冲掉」：prod228 14dd97e2/e3f9a616
+ * 实录——行点击落在 Search 响应到达前 275ms，响应到来后 el-table 替换数据数组清掉
+ * current-row 选中态，下一步等 Modify 启用等到 target-disabled 降级 AI；而 Search 后等 4s
+ * 再点行则一切正常（Modify ≤2.5s 启用）。这里按 DOM 指纹（元素数 + innerText 长度）轮询，
+ * 连续 quietMs 无变化视为静默，让异步响应与重渲染在下一次动作前落完。
+ *
+ * best-effort：绝不失败本步（点击已发生）——探不了（evaluate 缺失/页面跳转抛错）立即放行，
+ * 预算到点仍未静默也放行，不比现状差。deadline + maxIters 双保险（模式同 waitForPageSettled：
+ * 单测 mock 墙钟不推进需迭代上限终止）。预算 4s 覆盖实测 0.5-2s 的查询响应窗口；健康页面
+ * 代价约 quietMs(400ms)/次 click。
+ */
+export async function waitForDomQuiet(
+  page: Page,
+  budgetMs = 4000,
+  quietMs = 400,
+  pollMs = 100,
+): Promise<void> {
+  const signature = async (): Promise<number | null> => {
+    try {
+      return await page.evaluate(() => {
+        const n = document.getElementsByTagName('*').length;
+        const t = document.body?.innerText ?? '';
+        return n * 1000003 + t.length;
+      });
+    } catch {
+      return null;
+    }
+  };
+  let prev = await signature();
+  if (prev === null) return; // 探不了 → 不等，绝不比现状差
+  let lastChange = Date.now();
+  const deadline = lastChange + budgetMs;
+  const maxIters = Math.max(2, Math.ceil(budgetMs / Math.max(1, pollMs)) + 5);
+  for (let iter = 0; iter < maxIters && Date.now() < deadline; iter++) {
+    await page.waitForTimeout(pollMs).catch(() => undefined);
+    const cur = await signature();
+    if (cur === null) return;
+    if (cur !== prev) {
+      prev = cur;
+      lastChange = Date.now();
+    } else if (Date.now() - lastChange >= quietMs) {
+      return; // 连续 quietMs 无 DOM 变化 → 已静默
+    }
+  }
+  // 预算到点仍未静默 → 返回，绝不失败本步
+}
