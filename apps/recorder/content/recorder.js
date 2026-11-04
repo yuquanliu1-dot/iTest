@@ -32,7 +32,10 @@
       step.componentHint = lastComponentHint;
       lastComponentHint = null;
     }
-    chrome.runtime.sendMessage({ type: 'step', step, tabRef: currentTabRef });
+    // 带回调消费后台的接收结果：后台确认「已送达服务端或已入队待发」才算这步到手。
+    // 回调只用于吞掉响应（避免 message port closed 告警），失败不重试——
+    // 不可接收时后台会回失败，弹窗路径据此显示，录制路径只能靠面板计数器观察。
+    chrome.runtime.sendMessage({ type: 'step', step, tabRef: currentTabRef }, () => void chrome.runtime.lastError);
   };
   // panel 里切换的录制选项：startCapture 时透传给 manager；页面内面板用 set-options 实时更新。
   let panelOptions = {};
@@ -77,8 +80,13 @@
       });
       return true;
     } else if (msg?.type === 'emit-step') {
-      chrome.runtime.sendMessage({ type: 'step', dsl: msg.dsl, url: location.href, tabRef: currentTabRef });
-      sendResponse({ ok: true });
+      // 端到端 ack：等后台确认这步被接收（已送达服务端或已入队待发）再回报弹窗。
+      // 旧实现立刻回 ok:true，弹窗显示「已生成步骤 ✓」而后台可能压根没收到 → 假成功。
+      chrome.runtime.sendMessage(
+        { type: 'step', dsl: msg.dsl, url: location.href, tabRef: currentTabRef },
+        (resp) => sendResponse(resp?.ok ? { ok: true } : { ok: false, error: resp?.error ?? chrome.i18n.getMessage('notRecording') }),
+      );
+      return true;
     }
   });
 })();
