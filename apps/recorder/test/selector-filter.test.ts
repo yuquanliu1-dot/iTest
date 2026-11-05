@@ -105,6 +105,34 @@ describe('transient interaction-state classes（悬停/聚焦瞬态）', () => {
   });
 });
 
+describe('Element-UI 运行时位置类（资产管理-资产编辑 用例回归）', () => {
+  // 回归动机：run eed6450e 第 4 步断言唯一候选 .has-gutter .el-table_1_column_4 > .cell
+  // 回放 count=0——el-table_{实例号}_column_{列序} 是组件创建序/列注册序，跨会话渲染一变即漂移；
+  // has-gutter 只在有横向滚动条时渲染。两者与 hover-row 同族：录制在、回放不可依赖。
+  it('isTransientStateClass: el-table_{n}[_column_{n}] 与 has-gutter', () => {
+    expect(isTransientStateClass('el-table_1')).toBe(true);
+    expect(isTransientStateClass('el-table_1_column_4')).toBe(true);
+    expect(isTransientStateClass('el-table_12_column_34')).toBe(true);
+    expect(isTransientStateClass('has-gutter')).toBe(true);
+    // BEM 稳定结构类不误伤（无 _数字 序号）
+    expect(isTransientStateClass('el-table__row')).toBe(false);
+    expect(isTransientStateClass('el-table__header-wrapper')).toBe(false);
+    expect(isTransientStateClass('el-table__fixed-right')).toBe(false);
+    // 非 el-table 开头的数字后缀不误伤
+    expect(isTransientStateClass('icon-chakan')).toBe(false);
+    expect(isTransientStateClass('glass-card')).toBe(false);
+  });
+  it('hasUnstableClass flags runtime positional paths', () => {
+    expect(hasUnstableClass('tr.has-gutter > th.el-table_1_column_4 > div.cell')).toBe(true);
+    expect(hasUnstableClass('th.is-sortable > div.cell')).toBe(false);
+  });
+  it('filterCssPath strips runtime positional / gutter but keeps tags and stable classes', () => {
+    expect(filterCssPath('div.el-table__header-wrapper > table > tr.has-gutter > th.el-table_1_column_4.is-sortable > div.cell'))
+      .toBe('div.el-table__header-wrapper > table > tr > th.is-sortable > div.cell');
+    expect(filterCssPath('div.el-table_1 > div.cell')).toBe('div > div.cell'); // 运行时壳被剥，tag 保留
+  });
+});
+
 describe('isUtilityClass (Tailwind strip)', () => {
   it('detects plain Tailwind utilities', () => {
     expect(isUtilityClass('flex')).toBe(true);

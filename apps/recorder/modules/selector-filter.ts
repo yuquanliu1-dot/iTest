@@ -11,12 +11,28 @@ const TRANSIENT_STATE_CLASS_RE = /^(?:hover-row|current-row|hovering|focused|mou
 /** 后缀族：cell-hover / row-hover / ant-table-cell-row-hover / tab-active / btn-selected 等——
  *  以 -hover/-focus/-active/-selected 结尾的 class 几乎全是交互态样式钩子，按瞬态丢弃。 */
 const TRANSIENT_CLASS_TAIL_RE = /-(?:hover|focus|active|selected)$/i;
+/** Element-UI 运行时位置类：`el-table_{组件实例序号}` / `el-table_{实例序号}_column_{列序号}`。
+ *  实例号=本次页面加载里第 N 个创建的 el-table 组件、列号=列在表内的注册序——微应用挂载时序、
+ *  条件列/列配置、录制与回放两侧任何渲染差异都会让它对不上（资产管理-资产编辑 用例根因：
+ *  `.has-gutter .el-table_1_column_4 > .cell` 回放 count=0，而页面上「主识别IP」表头明明在）。
+ *  注意 `el-table__header-wrapper` / `el-table__row` 这类 BEM 命名不含 `_数字` 序号，不命中本模式。 */
+const RUNTIME_POSITIONAL_CLASS_RE = /^el-table_\d+(?:_column_\d+)?$/i;
+/** Element-UI header 行布局态类：只有存在横向 gutter（滚动条占位列）时才渲染，
+ *  视口一宽 / 滚动条消失即不在——与 hover-row 同族的「录制在、回放未必在」。 */
+const LAYOUT_GUTTER_CLASS_RE = /^has-gutter$/i;
 
-/** class 是否运行时瞬态（STATE_CLASSES 精确集 + UI 库瞬态族）：录制存在、回放必无。
+/** class 是否运行时瞬态/位置类（STATE_CLASSES 精确集 + UI 库瞬态族 + Element-UI 运行时位置/布局态）：
+ *  录制存在、回放必无或跨会话必漂移。
  *  selector-core 的 finder className 过滤与本文件的两条清洗路径（hasUnstableClass / filterSegment）
  *  共用同一口径——finder 产物不掺瞬态类，兜底清洗也能把它们剥掉。 */
 export function isTransientStateClass(cls: string): boolean {
-  return STATE_CLASSES.has(cls) || TRANSIENT_STATE_CLASS_RE.test(cls) || TRANSIENT_CLASS_TAIL_RE.test(cls);
+  return (
+    STATE_CLASSES.has(cls) ||
+    TRANSIENT_STATE_CLASS_RE.test(cls) ||
+    TRANSIENT_CLASS_TAIL_RE.test(cls) ||
+    RUNTIME_POSITIONAL_CLASS_RE.test(cls) ||
+    LAYOUT_GUTTER_CLASS_RE.test(cls)
+  );
 }
 /** Radix / shadcn 等组件库在运行时挂的状态属性。`data-[state=open]:animate-in` 这类属性选择器
  *  在 buildCssPath 时会被当成 class 段保留下来，但每次 state 切换都会变化，必须当作 STATE 丢掉。

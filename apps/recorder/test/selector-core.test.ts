@@ -287,6 +287,39 @@ describe('selector-core — 悬停瞬态与属性名候选（规则查看 用例
     expect(cssLocs.every((l) => !l.value.includes('hover-row'))).toBe(true);
   });
 
+  it('可排序表头 cell：运行时位置类（el-table_1_column_4 / has-gutter）不进 css 候选', () => {
+    // 回归动机：资产管理-资产编辑 用例第 4 步断言唯一候选 .has-gutter .el-table_1_column_4 > .cell
+    // 回放 count=0（实例号/列序跨会话漂移 + gutter 布局态），而页面文本「主识别IP」明明在。
+    const dom = new JSDOM(`<!doctype html><html><body>
+      <div class="el-table">
+        <div class="el-table__header-wrapper">
+          <table>
+            <thead>
+              <tr class="has-gutter">
+                <th class="el-table_1_column_1"><div class="cell"><label class="el-checkbox">全选</label></div></th>
+                <th class="el-table_1_column_2 is-sortable"><div class="cell">主识别IP<span class="caret-wrapper"><i class="sort-caret ascending"></i><i class="sort-caret descending"></i></span></div></th>
+                <th class="el-table_1_column_3 is-sortable"><div class="cell">资产类型<span class="caret-wrapper"><i class="sort-caret ascending"></i><i class="sort-caret descending"></i></span></div></th>
+                <th class="el-table_1_column_4"><div class="cell">归属部门</div></th>
+              </tr>
+            </thead>
+          </table>
+        </div>
+      </div>
+    </body></html>`);
+    mountToBody(dom);
+    const cell = document.querySelectorAll('.el-table__header-wrapper .cell')[1]!;
+    const locs = generateLocators(cell);
+    const allCss = locs.filter((l) => l.strategy === 'css').map((l) => l.value);
+    expect(allCss.length).toBeGreaterThan(0);
+    for (const v of allCss) {
+      expect(v).not.toMatch(/el-table_\d+(?:_column_\d+)?/);
+      expect(v).not.toContain('has-gutter');
+    }
+    // 退化事实记录：div.cell 含排序 caret 子元素 → 非叶子 → 不产 text 候选（th 也无 role/testId）。
+    // 这正是断言面板要靠 r.text 补 text 兜底候选的原因（content/panel.js assert 分支）。
+    expect(locs.find((l) => l.strategy === 'text')).toBeUndefined();
+  });
+
   it('纯图标元素：title 属性不产 text 候选（getByText 看不到属性），改产 [title=...] css 候选', () => {
     const dom = new JSDOM('<i class="icon-chakan" title="查看"></i>');
     const icon = dom.window.document.querySelector('i')!;

@@ -259,9 +259,26 @@
         openVarForm(r);
         return;
       }
-      // assert：选中即生成（期望值=元素当前文本/输入值，皆空退化 assertVisible），与原弹窗逻辑一致
+      // assert：选中即生成（期望值=元素当前文本/输入值，皆空退化 assertVisible），与原弹窗逻辑一致。
+      // 候选排序（资产管理-资产编辑 RCA：断言唯一候选 .has-gutter .el-table_1_column_4 > .cell 跨会话
+      // 漂移 count=0，而页面文本「主识别IP」明明在）：css 链含 Element-UI 运行时位置类
+      // （el-table_{实例号}[_column_{列序}] / has-gutter，口径同 modules/selector-filter.ts），
+      // 或链在当前页面就不唯一（多可排序列的表头剥掉运行时类后无法区分兄弟列）——这两种链当不了
+      // 首候选，text 放首位；链唯一且稳定则 css-first 保唯一性，text 排链尾兜底
+      // （链活时轮不到，链死时按文本命中）。
       const expected = r.text || r.inputValue;
-      emitInline(expected ? { kind: 'assertText', locator: r.locators, equals: expected } : { kind: 'assertVisible', locator: r.locators });
+      const locs = Array.isArray(r.locators) ? r.locators.slice() : [];
+      if (r.text && !locs.some((l) => l.strategy === 'text' && l.value === r.text)) {
+        const textLoc = { strategy: 'text', value: r.text };
+        const cssChainFragile =
+          locs.some((l) => l.strategy === 'css' && /el-table_\d+(?:_column_\d+)?|has-gutter/.test(l.value)) ||
+          !locs.some((l) => {
+            if (l.strategy !== 'css') return false;
+            try { return document.querySelectorAll(l.value).length === 1; } catch { return false; }
+          });
+        cssChainFragile ? locs.unshift(textLoc) : locs.push(textLoc);
+      }
+      emitInline(expected ? { kind: 'assertText', locator: locs, equals: expected } : { kind: 'assertVisible', locator: locs });
     });
   };
 
