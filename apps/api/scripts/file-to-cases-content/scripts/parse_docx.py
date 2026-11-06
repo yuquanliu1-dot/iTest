@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""docx 结构化解析器（docx-to-cases 技能专用；零第三方依赖：zipfile + xml.etree）。
+"""docx 结构化解析器（file-to-cases 技能专用；零第三方依赖：zipfile + xml.etree）。
 
 用法：
   parse_docx.py <path>                      # outline：顶层章节骨架 + 表格形状 + stats

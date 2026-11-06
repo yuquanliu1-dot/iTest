@@ -61,7 +61,7 @@ export async function confinedPath(baseDir: string, p: string): Promise<string |
 }
 
 // ── xlsx → 文本提取（sidecar 用，供 read_thread_attachment 一般问答）──
-// 深解析（渐进读 sheet/大表/合并单元格）走 xlsx-to-cases 技能的 parse_xlsx.py，
+// 深解析（渐进读 sheet/大表/合并单元格）走 file-to-cases 技能的 parse_xlsx.py，
 // 这里只做有界快照：每 sheet 行数与单 cell 字符双护栏。
 const XLSX_MAX_ROWS_PER_SHEET = 2000;
 const XLSX_MAX_CELL_CHARS = 200;

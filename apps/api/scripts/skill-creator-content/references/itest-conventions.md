@@ -1,12 +1,12 @@
 # iTest 平台 skill 写作规范
 
-本平台（iTest）上运行的 skill 与通用 skill 有一层额外约定。用 skill-creator 为 iTest 写新 skill、或改进平台既有 skill（xlsx-to-cases、docx-to-cases、defect-rca 等）时，**先读本文件再动笔**。既有 skill 就是最好的参照样例——写之前先读一个同类样例。
+本平台（iTest）上运行的 skill 与通用 skill 有一层额外约定。用 skill-creator 为 iTest 写新 skill、或改进平台既有 skill（file-to-cases、defect-rca 等）时，**先读本文件再动笔**。既有 skill 就是最好的参照样例——写之前先读一个同类样例。
 
 ## 1. 渐进披露三层（平台运行时强制）
 
 iTest 的 skill 运行时就是按三层加载的，写的时候要主动顺着这个结构：
 
-1. **frontmatter description** —— 唯一常驻上下文的部分，是触发的全部依据。描述要「pushy」：写清做什么 + 列出用户会说什么话时触发（含不同说法），否则会欠触发。平台内触发还常依赖消息里的 `<uploaded-file …/>` 标签，有此依赖要写进 description（参照 xlsx-to-cases 的写法）。
+1. **frontmatter description** —— 唯一常驻上下文的部分，是触发的全部依据。描述要「pushy」：写清做什么 + 列出用户会说什么话时触发（含不同说法），否则会欠触发。平台内触发还常依赖消息里的 `<uploaded-file …/>` 标签，有此依赖要写进 description（参照 file-to-cases 的写法）。
 2. **read_skill 读 references/** —— 重负载内容（字段映射表、设计原则、checklist）全部下沉到 references/，SKILL.md 里只留一句「必读 `references/xxx.md`」+ 何时读。读取方式是 `read_skill(skillName="…", file="references/xxx.md")`。
 3. **run_skill_script 跑脚本** —— 确定性工作（解析 Excel/Word、生成文档）写成 scripts/ 下的脚本，SKILL.md 只给调用签名和参数示例。
 
@@ -45,5 +45,5 @@ iTest skill 的正文用「第 0 步…第 N 步」线性流水线，每步三�
 
 ## 参照样例
 
-- `xlsx-to-cases`：三层结构完整版（决策树 + 脚本黑盒分段取数 + references 下沉 + stage_case 分批）。
+- `file-to-cases`：三层结构完整版（双路径/双形态决策树 + 脚本黑盒分段取数 + references 下沉 + stage_case 分批）。
 - `defect-rca`：单文件自足版（分类决策树 + 降级路径 + 禁止段），适合无脚本依赖的纯推理型 skill。

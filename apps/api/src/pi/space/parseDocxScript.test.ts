@@ -8,7 +8,7 @@ import { Writable } from 'node:stream';
 import archiver from 'archiver';
 
 const exec = promisify(execFile);
-const SCRIPT = path.resolve(process.cwd(), 'scripts/docx-to-cases-content/scripts/parse_docx.py');
+const SCRIPT = path.resolve(process.cwd(), 'scripts/file-to-cases-content/scripts/parse_docx.py');
 
 /** 用 archiver（已有依赖）现场构造最小 docx（zip + document.xml/styles.xml）。 */
 async function buildDocx(files: Record<string, string>): Promise<string> {

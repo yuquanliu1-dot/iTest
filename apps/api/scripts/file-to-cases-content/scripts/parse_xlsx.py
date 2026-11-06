@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""xlsx 结构化解析器（xlsx-to-cases 技能专用；零第三方依赖：zipfile + xml.etree）。
+"""xlsx 结构化解析器（file-to-cases 技能专用；零第三方依赖：zipfile + xml.etree）。
 
 用法：
   parse_xlsx.py <path>                        # outline：sheet 清单/行列数/表头预览/合并单元格数

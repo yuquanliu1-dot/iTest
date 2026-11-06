@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-/** docx-to-cases skill 种子：落盘目录树 + upsert 元数据；缺失才铺，改文案须手动重铺（删目录或手动 cp）。
+/** file-to-cases skill 种子：落盘目录树 + upsert 元数据；缺失才铺，改文案须手动重铺（删目录或手动 cp）。
  *  结构与 seed-word-report-skill.mjs 一致（存储翻转后内容以文件系统为真源，DB 只留元数据）。 */
 import { readFile, cp, rm, mkdir, readdir, access } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
-const CONTENT_DIR = join(dirname(fileURLToPath(import.meta.url)), 'docx-to-cases-content');
-const NAME = 'docx-to-cases';
+const CONTENT_DIR = join(dirname(fileURLToPath(import.meta.url)), 'file-to-cases-content');
+const NAME = 'file-to-cases';
 
 /** 与 skillImport.parseFrontmatter 同源的极简 frontmatter 取值（够覆盖自产 + 常见第三方）。 */
 function parseFrontmatter(raw) {
@@ -60,7 +60,7 @@ async function pruneAppleDouble(dir) {
 async function main() {
   const md = await readFile(join(CONTENT_DIR, 'SKILL.md'), 'utf8');
   const fm = parseFrontmatter(md);
-  const description = (fm.description ?? 'docx-to-cases skill').trim().slice(0, 500);
+  const description = (fm.description ?? 'file-to-cases skill').trim().slice(0, 500);
 
   const root = process.env.PI_DATA_DIR
     ? join(process.env.PI_DATA_DIR, 'skills')
@@ -88,6 +88,14 @@ async function main() {
     : new pg.Client({ host: 'itest-pg', user: 'itest', password: 'itest', database: 'itest' });
   await client.connect();
   try {
+    // 合并迁移：docx-to-cases / xlsx-to-cases 已并入 file-to-cases（2026-11），清掉旧元数据行。
+    // 回滚安全：旧版 seed 脚本重跑时 INSERT ON CONFLICT DO NOTHING 会重新补回元数据行（目录仍在磁盘）。
+    const legacy = await client.query(
+      `DELETE FROM assistant_skills WHERE name IN ('docx-to-cases', 'xlsx-to-cases')`,
+    );
+    if (legacy.rowCount > 0) {
+      console.log(`已清理旧技能元数据行 ${legacy.rowCount} 条（docx-to-cases / xlsx-to-cases → 已并入 file-to-cases）`);
+    }
     const fileCount = await countFiles(target);
     let inserted = false;
     let r;

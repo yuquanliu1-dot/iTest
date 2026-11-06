@@ -1,17 +1,19 @@
-# 字段 → stage_case 参数映射（xlsx-to-cases）
+# 字段 → stage_case 参数映射（file-to-cases）
 
 ## 需求矩阵：映射表
 
-| 表格侧信息 | stage_case 参数 | 规则 |
+（[Word] 信息来自文档段落/表格，[Excel] 来自表格列；下表按「来源侧信息」统称。）
+
+| 来源侧信息 | stage_case 参数 | 规则 |
 |---|---|---|
 | （每例生成） | `localId` | 每条用例新生成一个 UUID v4，绝不复用 |
 | 需求点 + 场景 | `title` | 「模块-需求点-场景」动宾短语，≤200 字，不用句号结尾 |
-| 需求描述/背景列 | `description` | ≤4000 字；来源单元格压缩，保留验收标准原文 |
-| 优先级列（原表标注） | `priority` | 表写「高/严重」→ P0/P1，「中」→ P2，「低」→ P3；未标 → 按设计原则的优先级判据定级（design-principles.md） |
-| 登录页/入口 URL（表内明确给出时） | `url` | 原样；没给就不填，不要编 |
-| 步骤描述列 | `steps[].action` | 自然语言一步一做事，≤2000 字/步，最多 30 步；具体性见 design-principles |
-| 预期结果列 | `steps[].assertion` 或 `expectedOutcome` | 步内可判的写 assertion；整例终态写 expectedOutcome |
-| 需求编号列 | `requirementNo` | 原样带入（≤64 字），多条需求合成一例时取主需求编号；表里没给编号时，在确认清单里给每条需求建稳定短标签（如 REQ-CUSTOM-01）并声明「标签为本流程生成」，用户确认后带入——不留空，也不写「见需求」式模糊引用 |
+| 需求描述/背景（段落或列） | `description` | ≤4000 字；来源段落/单元格压缩，保留验收标准原文 |
+| 优先级（原文标注） | `priority` | 原文写「高/严重」→ P0/P1，「中」→ P2，「低」→ P3；未标 → 按设计原则的优先级判据定级（design-principles.md） |
+| 登录页/入口 URL（原文明确给出时） | `url` | 原样；没给就不填，不要编 |
+| 操作步骤（列或段落） | `steps[].action` | 自然语言一步一做事，≤2000 字/步，最多 30 步；具体性见 design-principles |
+| 预期结果 | `steps[].assertion` 或 `expectedOutcome` | 步内可判的写 assertion；整例终态写 expectedOutcome |
+| 需求编号 | `requirementNo` | 原样带入（≤64 字），多条需求合成一例时取主需求编号；原文没给编号时，在确认清单里给每条需求建稳定短标签（如 REQ-CUSTOM-01）并声明「标签为本流程生成」，用户确认后带入——不留空，也不写「见需求」式模糊引用 |
 | 测试类型（第 3 步确认的范围） | `coverageTypes` | 仅当用户明确选择了测试类型才填；默认不填 |
 
 ## 用例矩阵：列名模糊映射

@@ -9,7 +9,7 @@ import archiver from 'archiver';
 import ExcelJS from 'exceljs';
 
 const exec = promisify(execFile);
-const SCRIPT = path.resolve(process.cwd(), 'scripts/xlsx-to-cases-content/scripts/parse_xlsx.py');
+const SCRIPT = path.resolve(process.cwd(), 'scripts/file-to-cases-content/scripts/parse_xlsx.py');
 
 /** archiver 手拼 zip（边角用例要精确控制内部 XML，exceljs 不给这种自由度）。 */
 async function buildZip(files: Record<string, string>): Promise<string> {
