@@ -47,7 +47,11 @@ args=["<path>", "--section", "N", "--sub", "M"]   # 子章节；M 与 outline �
 字段映射与 stage_case 参数规范必读 `references/case-mapping.md`（用 read_skill 的
 file 参数读取，如 `read_skill(skillName="docx-to-cases", file="references/case-mapping.md")`）。
 
-## 第 5 步：逐条暂存
+## 第 5 步：暂存前自检 + 逐条暂存
+
+**暂存前自检（必做）**：必读 `references/quality-checklist.md`（用 read_skill 的 file 参数读取），
+对拟暂存用例逐条核验（具体对象/可观察预期/原值回填/负向不带真实凭据），不合规的修正后再进入暂存；
+第 5/6 条的覆盖度与配比统计记下来，收尾时要报。
 
 每条用例调用一次 `stage_case`（localId 每例新生成 UUID）。需求 >20 条时**串行分批**：
 每批 ≤10 条 stage_case 后继续下一批，不要等待用户逐条确认（暂存面板统一确认）。
@@ -56,7 +60,8 @@ file 参数读取，如 `read_skill(skillName="docx-to-cases", file="references/
 ## 第 6 步：收尾
 
 汇总：X 条需求 → Y 条用例（按模块/测试类型分布），提醒用户到暂存面板确认落库；
-可提示 `export_cases_xmind` 导出。
+可提示 `export_cases_xmind` 导出。末尾追加自检统计行（格式见 quality-checklist.md）：
+需求覆盖 X/Y 条 + 配比 正常/异常/边界/安全 实际占比 vs 目标。
 
 ## 核心纪律
 
