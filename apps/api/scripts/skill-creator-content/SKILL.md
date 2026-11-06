@@ -134,6 +134,8 @@ Input: Added user authentication with JWT tokens
 Output: feat(auth): implement JWT-based authentication
 ```
 
+**iTest platform skills** - If the skill you are creating will run inside the iTest platform (its AI assistant skill system, e.g. case-generation or RCA skills), you MUST also read `references/itest-conventions.md` before writing. It covers platform-specific mechanics: progressive disclosure via `read_skill`/`run_skill_script` (100KB output cap), the `<uploaded-file>` input tag, `stage_case` staging semantics, and the ~100-line SKILL.md discipline observed by existing skills like xlsx-to-cases and defect-rca.
+
 ### Writing Style
 
 Try to explain to the model why things are important in lieu of heavy-handed musty MUSTs. Use theory of mind and try to make the skill general and not super-narrow to specific examples. Start by writing a draft and then look at it with fresh eyes and improve it.
@@ -466,6 +468,7 @@ The agents/ directory contains instructions for specialized subagents. Read them
 
 The references/ directory has additional documentation:
 - `references/schemas.md` — JSON structures for evals.json, grading.json, etc.
+- `references/itest-conventions.md` — iTest platform skill writing conventions (required reading for iTest skills)
 
 ---
 
