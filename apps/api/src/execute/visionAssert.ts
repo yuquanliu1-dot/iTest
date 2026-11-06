@@ -4,6 +4,7 @@ import { logger } from '../logger.js';
 import type { ExecStepResult } from './cdp.js';
 import { materializeExpectedOutcome, maskSensitiveValues } from './cdp.js';
 import { waitForPageSettled } from './pageSettle.js';
+import { drainConsoleForPage } from './consoleCapture.js';
 import type { AiUsageStat } from './aiUsage.js';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
@@ -114,6 +115,8 @@ export async function runCaseVisionAssert(input: VisionAssertInput): Promise<Vis
     const expectedForReport = maskForReport(expectedForJudge);
     if (verdict && !verdict.passed) {
       // 用例级 vision 判失败 → 追加一个 order=-1 的 failed stepResult,调用方以「任意 failed」判定为失败。
+      // 判定窗口（settle+截图+LLM）内页面若冒出 JS 报错，一并归到这条失败步。
+      const consoleEntries = drainConsoleForPage(input.page);
       return {
         failureStep: {
           order: -1,
@@ -125,6 +128,7 @@ export async function runCaseVisionAssert(input: VisionAssertInput): Promise<Vis
           failureReason: 'VisionAssertionFailed',
           humanMessage: '最终页面与用例预期不符',
           visionAssert: { passed: false, reason: maskForReport(verdict.reason), screenshot: visionScreenshotPath, expected: expectedForReport, ...(verdict.aiUsage ? { aiUsage: verdict.aiUsage } : {}) },
+          ...(consoleEntries.length ? { console: consoleEntries } : {}),
         },
       };
     }

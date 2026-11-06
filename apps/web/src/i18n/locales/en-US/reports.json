@@ -169,5 +169,10 @@
     "suggestion": "Suggested fix",
     "category": { "system_defect": "System defect", "case_issue": "Case issue", "environment": "Environment", "other": "Other" },
     "confidence": { "high": "High confidence", "medium": "Medium confidence", "low": "Low confidence" }
+  },
+  "console": {
+    "summary": "Browser JS errors: {{count}}",
+    "consoleError": "console.error",
+    "pageerror": "Uncaught exception"
   }
 }

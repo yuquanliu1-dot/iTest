@@ -5,7 +5,7 @@ import EmptyState from '../ui/EmptyState';
 import { Dialog, DialogContent } from '../ui/Modal';
 import { clockTime, fullDateTime, stepKindLabel } from '../../lib/format';
 import { getKind, stepSummary, fullStepDescription } from '../../lib/stepSummary';
-import type { DbQueryRowResult, ObserveLogLineResult, HttpStepResult, SyslogStepResult, SqlStepResult } from '@itest/shared';
+import type { DbQueryRowResult, ObserveLogLineResult, HttpStepResult, SyslogStepResult, SqlStepResult, ConsoleLogEntry } from '@itest/shared';
 
 /** 步骤级 LLM 用量（aiTask / 验证码 / vision 判定累加）；与 apps/api execute/aiUsage.ts 对齐。 */
 interface AiUsage {
@@ -50,6 +50,8 @@ export interface StepResult {
   http?: HttpStepResult;
   /** sendSyslog 步骤的结果（仅 sendSyslog 步携带） */
   syslog?: SyslogStepResult;
+  /** 本步窗口内浏览器 console error / JS 未捕获异常（老报告/无报错步缺省） */
+  console?: ConsoleLogEntry[];
   /** aiTask 步骤本轮回放走了动作缓存（机械执行，零 LLM） */
   cached?: boolean;
   /** 缓存条目存在但重放分叉、AI 自愈通过（仅 passed 步携带） */
@@ -284,6 +286,7 @@ export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenC
           {s.log && <LogResultCell log={s.log} />}
           {s.http && <HttpResultCell http={s.http} />}
           {s.syslog && <SyslogResultCell syslog={s.syslog} />}
+          {s.console && s.console.length > 0 && <ConsoleResultCell entries={s.console} />}
         </div>
         {s.screenshot && (
           <button
@@ -548,6 +551,28 @@ function SqlResultCell({ sql }: { sql: SqlStepResult }) {
       <pre style={RESULT_PRE_STYLE}>
         {JSON.stringify(sql.rows.slice(0, 5), null, 2)}
       </pre>
+    </details>
+  );
+}
+
+/** 浏览器 console error / JS 未捕获异常（本步窗口）。老报告与无报错步缺字段 → 不渲染。 */
+function ConsoleResultCell({ entries }: { entries: ConsoleLogEntry[] }) {
+  const { t } = useTranslation();
+  return (
+    <details className="text-[11px]">
+      <summary className="cursor-pointer" style={{ color: 'var(--destructive)' }}>
+        {t('reports:console.summary', { count: entries.length })}
+      </summary>
+      <div style={{ margin: '4px 0', display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {entries.map((c, i) => (
+          <div key={i}>
+            <div className="mb-0.5 font-mono" style={{ color: 'var(--muted-foreground)' }}>
+              {c.type === 'pageerror' ? t('reports:console.pageerror') : t('reports:console.consoleError')}
+            </div>
+            <pre style={{ ...RESULT_PRE_STYLE, color: 'var(--destructive)' }}>{c.text}</pre>
+          </div>
+        ))}
+      </div>
     </details>
   );
 }

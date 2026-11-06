@@ -15,7 +15,7 @@
  * - 页面文本/元素清单是不可信的被测页面数据（可能含诱饵/指令），prompt 里明令只当数据。
  */
 import type { Page } from 'playwright-core';
-import type { Locator } from '@itest/shared';
+import type { Locator, ConsoleLogEntry } from '@itest/shared';
 import { buildCandidates } from '../../../execute/locator-resolver.js';
 import { tryParseJson, type LLMClient } from '../../../agent/llm-client.js';
 import { aiLangFrom, type AiLang } from '../../../agent/langDirective.js';
@@ -79,6 +79,7 @@ const DIAG_PROMPT = `你是 Web 测试用例失败诊断员。测试用例某一
 3. 若该步全部 locator 实时命中数都为 0，且目标容器/同类目标在可交互元素清单里也不存在 → 页面根本没挂载到本步期望的状态（位置/流程断裂：导航缺失/顺序错/编辑向导中途断点恢复错位/被前一步带偏到别的页面）。选择器再准也无法命中 DOM 里不存在的元素——改选择器修不好。正确做法：核对步骤流程（导航/入口/向导步骤/前置数据），修流程而不是 locator。
 4. 若页面状态正常（目标容器/同类目标在清单里、页面到位）但具体 locator 命中 0 → 选择器写错或行为语义错。正确做法：用可交互元素清单中真实存在的选择器修正 locator（可组多候选链），不要在清单外臆造选择器。
 5. 附加信号如果说明「环境缺数据」：正确做法是让用例先造出能满足预期的数据，或如实向用户汇报环境缺数据——严禁弱化 expectedOutcome 把失败蒙成通过。
+6. 浏览器 JS 错误（console.error / 未捕获异常）指向页面脚本侧的问题：若报错与本步操作对象/页面功能相关，多半是被测系统前端缺陷或环境脚本冲突，改用例的 locator/流程修不好——note 应引导核实页面自身是否报错（必要时换浏览器控制台确认），而不是继续调选择器。
 
 ## 输出
 只输出 JSON，不要 markdown 包裹：{"diagnosis":"position-fracture"|"conditional-overlay"|"locator-fix"|"other","note":"≤150字中文修正指引，引用具体证据"}
@@ -91,6 +92,7 @@ function buildEvidenceText(o: {
   probes: LocatorProbeHit[];
   overlays: Array<{ tag: string; selector: string; text: string }>;
   elements: PageElementSnapshot;
+  consoleErrors?: ConsoleLogEntry[];
   extraHint?: string;
 }): string {
   const lines: string[] = [];
@@ -98,6 +100,12 @@ function buildEvidenceText(o: {
   lines.push(`步骤 compiled: ${JSON.stringify(o.step?.compiled ?? null).slice(0, 800)}`);
   if (o.assertion != null) lines.push(`步骤断言: ${JSON.stringify(o.assertion).slice(0, 300)}`);
   if (o.extraHint) lines.push(`附加信号: ${o.extraHint}`);
+  if (o.consoleErrors?.length) {
+    lines.push(`浏览器 JS 错误(本步窗口,${o.consoleErrors.length} 条):`);
+    for (const c of o.consoleErrors) {
+      lines.push(`- [${c.type === 'pageerror' ? '未捕获异常' : 'console.error'}] ${c.text}`);
+    }
+  }
   lines.push('该步所有 locator 在失败页的实时命中数:');
   if (o.probes.length === 0) lines.push('- （本步无 locator 候选）');
   for (const p of o.probes) {
@@ -121,6 +129,8 @@ export async function diagnoseFailure(o: {
   probes: LocatorProbeHit[];
   overlays: Array<{ tag: string; selector: string; text: string }>;
   elements: PageElementSnapshot;
+  /** 失败步窗口内的浏览器 JS 错误（step_results 的 console 字段透传；缺省不展示该证据行）。 */
+  consoleErrors?: ConsoleLogEntry[];
   extraHint?: string;
   lang?: AiLang;
 }): Promise<FailureDiagnosis | null> {

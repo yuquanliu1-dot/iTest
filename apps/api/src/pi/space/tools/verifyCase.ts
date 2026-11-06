@@ -22,8 +22,9 @@ import { isVisualStep, mapAiActionsToCompiled } from '../../../execute/aiActionM
 import { writeStepScreenshot, executeCaseInBrowser, gotoWithLandedRetry, type ExecStepResult } from '../../../execute/cdp.js';
 import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from '../../../execute/locator-probe.js';
 import { buildCandidates } from '../../../execute/locator-resolver.js';
-import type { Locator } from '@itest/shared';
+import type { Locator, ConsoleLogEntry } from '@itest/shared';
 import { runCaseVisionAssert } from '../../../execute/visionAssert.js';
+import { createConsoleCapture } from '../../../execute/consoleCapture.js';
 import { resolveEnv } from '../../../execute/envContext.js';
 import { resolveCaseUrl } from '../../../lib/resolve-url.js';
 import { decrypt } from '../../../lib/secret-crypto.js';
@@ -725,6 +726,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(cachedState ? { storageState: cachedState } : {}),
           });
           let page = await context.newPage();
+          // 浏览器 console error / pageerror 采集：AI 相自管 page（不经 runStepsInContext），
+          // 自挂订阅；失败收尾时 drain 进归因证据（缓冲上限 10 条，典型即失败步的报错）。
+          const consoleCapture = createConsoleCapture(page);
           // playground 实时画面：注册页面源，start 事件把流地址带给前端进度卡；finally close 结束流
           // （ctx.liveView === false 为批量后台链路：不注册画面源，省 0.5fps 截图轮询开销）
           if (ctx.liveView !== false) {
@@ -1157,7 +1161,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // 用例级终态判定：与正式回放同一 vision 断言（cdp.ts runCaseVisionAssert），
           // 全部步骤通过后再判 expectedOutcome——verify_case 不能只保证"步骤能执行"，还得保证"终态符合预期"。
           // 机械模式的终态判定移到机械干跑之后（在干跑终态页上判，见 replay 段之后）。
-          let visionFailure: { error?: string | null; humanMessage?: string | null; screenshot?: string | null; failureReason?: string | null } | null = null;
+          let visionFailure: { error?: string | null; humanMessage?: string | null; screenshot?: string | null; failureReason?: string | null; console?: ConsoleLogEntry[] } | null = null;
           if (mode !== 'mechanical' && failedIndex < 0 && typeof effectiveCase.expectedOutcome === 'string' && effectiveCase.expectedOutcome.trim()) {
             const va = await runCaseVisionAssert({
               page,
@@ -1389,6 +1393,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   overlays: visionOverlays,
                   elements: failurePage,
                   lang: ctx.lang,
+                  ...(visionFailure.console?.length ? { consoleErrors: visionFailure.console } : {}),
                   ...(emptyDataHint ? { extraHint: `失败页检出空数据信号「${emptyDataHint}」` } : {}),
                 })
               : null;
@@ -1440,6 +1445,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   overlays: replayOverlays,
                   elements: failurePage,
                   lang: ctx.lang,
+                  ...(replayFailure.console?.length ? { consoleErrors: replayFailure.console } : {}),
                 })
               : null;
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
@@ -1509,9 +1515,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               },
             });
           }
-          // 归因全交 LLM：失败页候选命中 + 浮层 + 元素清单
+          // 归因全交 LLM：失败页候选命中 + 浮层 + 元素清单（+ 本轮浏览器 JS 报错缓冲）
           const stepProbes = await probeLocatorHits(page, collectStepLocators(failedStep.compiled));
           const stepOverlays = (await extractPageEvidence(page)).overlays;
+          const failedConsole = consoleCapture.drain();
           const stepEvidenceField =
             stepProbes.length > 0 || stepOverlays.length > 0
               ? { evidence: { overlays: stepOverlays, probes: stepProbes } }
@@ -1525,6 +1532,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 overlays: stepOverlays,
                 elements: failurePage,
                 lang: ctx.lang,
+                ...(failedConsole.length ? { consoleErrors: failedConsole } : {}),
               })
             : null;
           ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
@@ -1548,6 +1556,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               screenshot: failed.screenshot ?? null,
               page: failurePage,
               ...stepEvidenceField,
+              // 本轮窗口内浏览器 JS 报错原文：agent 修正步骤时可直接看到前端侧故障信号。
+              ...(failedConsole.length ? { console: failedConsole } : {}),
               note: nlAiFail
                 ? `该步是自然语言步骤，由 AI 相（视觉执行）在真实页面上执行失败（${failed.failureReason ?? '未知'}）——大概率不是 locator 技术问题，而是步骤描述与页面实际不符：目标不存在/措辞歧义/前置状态没建立，也可能是前面某步的描述把页面带偏。这不是你能自行修复的错误：立即停止重跑与自诊，把失败详情反馈给用户（步骤 ${failed.order}「${failedStep.instruction ?? ''}」原文、failureReason、失败页 URL 与 page.elements/截图，必要时附前一步原文），请用户选择：a.调整该步或前面步骤的自然语言描述 b.补充入口/页面线索 c.确认环境/数据后重验。用户明确答复前不要再调用 verify_case——AI 相每步耗时 1~2 分钟，盲目重跑只烧时间与 token。${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`
                 : `page.elements 为失败页当前可见的可交互元素；修正 locator 只能使用其中真实存在的选择器。快照不含操作后才出现的元素。${failedHint ? ` 源码静态提示:${failedHint}` : ''}${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`,

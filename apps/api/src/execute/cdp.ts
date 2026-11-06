@@ -10,6 +10,7 @@ import type {
   DbQueryRowResult,
   ObserveLogLineResult,
   SqlStepResult,
+  ConsoleLogEntry,
 } from '@itest/shared';
 import { deepEqual, materializeValue, substituteVars } from '@itest/shared';
 import { eq, and } from 'drizzle-orm';
@@ -40,6 +41,7 @@ import { runObserveLog } from './syslogReader.js';
 import { runHttpRequest, type HttpStepResult } from './httpRequest.js';
 import { runSendSyslog, type SyslogStepResult } from './sendSyslog.js';
 import { runCaseVisionAssert } from './visionAssert.js';
+import { createConsoleCapture } from './consoleCapture.js';
 import { newAiUsage, type AiUsageStat, type AiUsageAccumulator, type AiUsageAddend } from './aiUsage.js';
 import { annotateAction, clearAnnotation, type LiveViewHandle } from './liveView.js';
 
@@ -98,6 +100,8 @@ export interface ExecStepResult {
   instruction?: string;
   /** compiled DSL 快照（与 test_steps 落库内容一致，敏感值为模板/占位）。报告页据此生成动作摘要。 */
   compiled?: unknown[];
+  /** 本步窗口内浏览器 console error / JS 未捕获异常（consoleCapture 按步骤 drain 归属；无错误或缺省不带）。 */
+  console?: ConsoleLogEntry[];
 }
 
 export interface ExecContext {
@@ -1212,6 +1216,9 @@ async function runStepsInContext(
   ctx.liveView?.setPage(page);
   // 页面就绪通知（verify_case 恢复续跑场景用它拿回机械回放创建的这个 page）。
   ctx.onPageReady?.(page);
+  // 浏览器 console error / pageerror 采集：挂一次订阅，各步结果构造点 drain 切片归属
+  // （前端 JS 报错是"点击无反应/白屏"类失败的一手归因证据）。
+  const consoleCapture = createConsoleCapture(page);
   // 初始导航：用例级 init URL（targetUrl）始终先 goto 一次。
   // 若首条 step 也是 navigate 且 URL 与 init 相同，让 step 来做这一步，避免重复加载。
   const firstCompiled = steps[0]?.compiled;
@@ -1260,6 +1267,7 @@ async function runStepsInContext(
     // 命中即本步记 Cancelled 失败、后续步骤不再执行——报告立即收尾为 failed，
     // plan_run 层据此把剩余用例标 skipped、整个运行收敛为 cancelled。
     if (ctx.shouldAbort && await ctx.shouldAbort()) {
+      const cancelledConsole = consoleCapture.drain();
       const cancelled: ExecStepResult = {
         order: step.order,
         status: 'failed',
@@ -1268,6 +1276,7 @@ async function runStepsInContext(
         error: 'cancelled',
         failureReason: 'Cancelled',
         humanMessage: '计划运行已终止，本步及后续步骤不再执行',
+        ...(cancelledConsole.length ? { console: cancelledConsole } : {}),
       };
       results.push(cancelled);
       onStep?.(cancelled);
@@ -1379,6 +1388,7 @@ async function runStepsInContext(
       const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
       const pageTextSnap = await capturePageTextSnapshot(opts.page);
       if (pageTextSnap) pageTextSnaps.push(pageTextSnap);
+      const passedConsole = consoleCapture.drain();
       const passedResult: ExecStepResult = {
         order: step.order,
         status: 'passed',
@@ -1399,6 +1409,7 @@ async function runStepsInContext(
         ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
         ...(opts.healedSink.current ? { healed: true } : {}),
         ...(degraded ? { degraded: true } : {}),
+        ...(passedConsole.length ? { console: passedConsole } : {}),
       };
       results.push(passedResult);
       onStep?.(passedResult);
@@ -1503,6 +1514,7 @@ async function runStepsInContext(
               const aiScreenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
               const aiTextSnap = await capturePageTextSnapshot(opts.page);
               if (aiTextSnap) pageTextSnaps.push(aiTextSnap);
+              const aiConsole = consoleCapture.drain();
               const aiPassed: ExecStepResult = {
                 order: step.order,
                 status: 'passed',
@@ -1522,6 +1534,7 @@ async function runStepsInContext(
                 syslog: opts.syslogSink.current ?? undefined,
                 ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
                 degraded: true,
+                ...(aiConsole.length ? { console: aiConsole } : {}),
               };
               results.push(aiPassed);
               onStep?.(aiPassed);
@@ -1530,6 +1543,7 @@ async function runStepsInContext(
           }
         }
       }
+      const failedConsole = consoleCapture.drain();
       const failedResult: ExecStepResult = {
         order: step.order,
         status: 'failed',
@@ -1552,6 +1566,7 @@ async function runStepsInContext(
         // 否则报告只留机械报错 + 孤立 aiUsage，看不出 AI 已介入却没救回来。
         ...(aiDegradedErr ? { warning: `AI 降级尝试未成功：${aiDegradedErr}` } : {}),
         ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
+        ...(failedConsole.length ? { console: failedConsole } : {}),
       };
       results.push(failedResult);
       onStep?.(failedResult);

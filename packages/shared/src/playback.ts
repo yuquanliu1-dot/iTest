@@ -138,6 +138,15 @@ export interface HttpStepResult {
   saved?: { varName: string; value: string };
 }
 
+/** 浏览器 console 错误 / 未捕获异常采集条目。执行引擎在页面级订阅,
+ *  按步骤起止 drain 归属:console-error = console.error 级输出,pageerror = JS 未捕获异常。
+ *  老报告与合成失败步(无 page)缺此字段。 */
+export interface ConsoleLogEntry {
+  type: 'console-error' | 'pageerror';
+  text: string;
+  ts: number;
+}
+
 /** sendSyslog 步骤执行结果：发出的原始 RFC3164 报文与耗时/字节数。 */
 export interface SyslogStepResult {
   protocol: 'udp' | 'tcp';

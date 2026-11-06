@@ -14,6 +14,7 @@
 import { randomUUID } from 'node:crypto';
 import { Type } from '@earendil-works/pi-ai';
 import type { StepAction } from '@itest/shared';
+import { createConsoleCapture } from '../../../execute/consoleCapture.js';
 import { chromium } from 'playwright-core';
 import type { Browser } from 'playwright-core';
 import { asc, eq, and } from 'drizzle-orm';
@@ -416,6 +417,9 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(cachedState ? { storageState: cachedState } : {}),
           });
           const page = await context.newPage();
+          // 浏览器 console error / pageerror 采集：本路径不经 runStepsInContext（AI 相自管 page），
+          // 自挂一次订阅，失败时 drain 进归因证据。
+          const consoleCapture = createConsoleCapture(page);
           // playground 实时画面：与 verify_case 同模式（注册页面源 → start 事件带流地址 → finally close）。
           // ctx.liveView === false 为批量后台链路：不注册画面源，省 0.5fps 截图轮询开销。
           if (ctx.liveView !== false) {
@@ -539,8 +543,9 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             // 失败归因（与 verify_case 同一判别）：形态无关探针（每条 locator 实时命中数）+ 浮层清单 + 元素清单交 LLM 归因。
             const probes = await probeLocatorHits(page, collectStepLocators(failedStep.compiled));
             const evidence = await extractPageEvidence(page).catch(() => ({ overlays: [] as Array<{ tag: string; selector: string; text: string }> }));
+            const consoleEntries = consoleCapture.drain();
             const diag = failurePage
-              ? await diagnoseFailure({ client, step: failedStep, assertion: failedStep.assertion, probes, overlays: evidence.overlays, elements: failurePage, lang: ctx.lang })
+              ? await diagnoseFailure({ client, step: failedStep, assertion: failedStep.assertion, probes, overlays: evidence.overlays, elements: failurePage, lang: ctx.lang, ...(consoleEntries.length ? { consoleErrors: consoleEntries } : {}) })
               : null;
             const evidenceField =
               probes.length > 0 || evidence.overlays.length > 0
