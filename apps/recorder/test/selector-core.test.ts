@@ -364,6 +364,37 @@ describe('selector-core — 悬停瞬态与属性名候选（规则查看 用例
   });
 });
 
+describe('selector-core — label 关联文本（role 候选可访问名）', () => {
+  it('label[for=id] 关联文本进 role 候选 name（input 自身无任何文本来源）', () => {
+    // <label for> 文本在目标元素外，getByText 回放必 count=0（规则查看 同款根因），
+    // 所以只允许进 role 候选——getByRole 的可访问名计算含 label 关联。
+    const dom = new JSDOM(`<label for="u">用户名</label><input id="u" />`);
+    const input = dom.window.document.querySelector('input')!;
+    const locs = generateLocators(input);
+    expect(locs.find((l) => l.strategy === 'role')?.value).toBe('textbox[name="用户名"]');
+    // label 文本不得泄漏进 text 候选
+    expect(locs.find((l) => l.strategy === 'text')).toBeUndefined();
+  });
+
+  it('包裹式 label 的文本同样进 role 候选 name', () => {
+    const dom = new JSDOM(`<label>密码<input type="password" /></label>`);
+    const input = dom.window.document.querySelector('input')!;
+    expect(generateLocators(input).find((l) => l.strategy === 'role')?.value).toBe('textbox[name="密码"]');
+  });
+
+  it('aria-label 仍优先于 label 关联文本（属性名最稳）', () => {
+    const dom = new JSDOM(`<label for="a">备注</label><input id="a" aria-label="账号" />`);
+    const input = dom.window.document.querySelector('input')!;
+    expect(generateLocators(input).find((l) => l.strategy === 'role')?.value).toBe('textbox[name="账号"]');
+  });
+
+  it('volatile 的 label 文本不产 role 候选 name（同 text 候选口径）', () => {
+    const dom = new JSDOM(`<label for="t">13 天前</label><input id="t" />`);
+    const input = dom.window.document.querySelector('input')!;
+    expect(generateLocators(input).find((l) => l.strategy === 'role')).toBeUndefined();
+  });
+});
+
 describe('positionalOwnClassCandidate — 位置链兜底候选', () => {
   it('≥3 段 :nth-of-type 且元素带可辨识 class → 给 .own-class 候选', () => {
     const dom = new JSDOM('<div class="op-btn icon-edit">A</div>');

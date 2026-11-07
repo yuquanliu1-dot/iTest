@@ -189,6 +189,10 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
   const [tabRef, setTabRef] = useState(String(action.tabRef ?? ''));
   const [shotName, setShotName] = useState(String(action.name ?? ''));
 
+  // scroll 绝对位置（字符串态便于输入框编辑，buildAction 归一为非负整数）
+  const [scrollTopInput, setScrollTopInput] = useState(String(action.scrollTop ?? 0));
+  const [scrollLeftInput, setScrollLeftInput] = useState(String(action.scrollLeft ?? 0));
+
   // 2026-10-06：行级 compiled 数组（aiTask 用得到）。其余 kind
   //   由 buildAction 自然回填到 compiled=[action]，与 dispatcher 走同一条路径。
   // 2026-10-07：aiTask 编译改为跳 AI 助手走 stage_case_op(action=update_step / insert_step),
@@ -367,6 +371,10 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       else delete next.timeoutMs;
     }
     if (kind === 'check') next.checked = checked;
+    if (kind === 'scroll') {
+      next.scrollTop = Math.max(0, Math.round(Number(scrollTopInput) || 0));
+      next.scrollLeft = Math.max(0, Math.round(Number(scrollLeftInput) || 0));
+    }
     // press 的 key 必填（zod）；无值/丢字段时兜底 Enter（录制器只产 Enter press）
     if (kind === 'press') next.key = typeof next.key === 'string' && next.key.trim() ? next.key : 'Enter';
     if (kind === 'switchTab') next.tabRef = tabRef;
@@ -591,6 +599,35 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
           <div className="flex flex-col gap-1.5">
             <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:locatorCandidates')}</span>
             <LocatorArrayEditor locators={locators} onChange={setLocators} errors={fieldErrors} mobile={isMobileForm} />
+          </div>
+        )}
+
+        {kind === 'scroll' && (
+          <div className="flex gap-3">
+            <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
+              <span>{t('cases:stepSummary.fieldScrollTop')}</span>
+              <input
+                className="input-base input-xs"
+                aria-invalid={!!fieldErrors['action.scrollTop']}
+                value={scrollTopInput}
+                onChange={(e) => setScrollTopInput(e.target.value)}
+                placeholder="0"
+                inputMode="numeric"
+              />
+              <FieldError msg={fieldErrors['action.scrollTop']} />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px] flex-1" style={{ color: 'var(--muted-foreground)' }}>
+              <span>{t('cases:stepSummary.fieldScrollLeft')}</span>
+              <input
+                className="input-base input-xs"
+                aria-invalid={!!fieldErrors['action.scrollLeft']}
+                value={scrollLeftInput}
+                onChange={(e) => setScrollLeftInput(e.target.value)}
+                placeholder="0"
+                inputMode="numeric"
+              />
+              <FieldError msg={fieldErrors['action.scrollLeft']} />
+            </label>
           </div>
         )}
 

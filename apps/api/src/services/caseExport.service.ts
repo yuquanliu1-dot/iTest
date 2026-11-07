@@ -54,6 +54,8 @@ interface KnownAction {
   match?: unknown;
   timeoutMs?: unknown;
   checked?: unknown;
+  scrollTop?: unknown;
+  scrollLeft?: unknown;
   method?: unknown;
   sql?: unknown;
   saveAs?: { varName?: unknown };
@@ -91,6 +93,7 @@ export function describeAction(a: KnownAction): string {
   switch (a.kind) {
     case 'navigate': return `打开 ${clip(str(a.url), 60)}`;
     case 'click': return `点击 ${clip(target, 30)}`;
+    case 'scroll': return `滚动 ${clip(target, 30)} 至 (${str(a.scrollTop)}, ${str(a.scrollLeft)})`;
     case 'hover': return `悬停 ${clip(target, 30)}`;
     case 'check': return a.checked === false ? '取消勾选' : '勾选';
     case 'waitFor': return target ? `等待 ${clip(target, 30)}` : `等待 ${typeof a.timeoutMs === 'number' ? a.timeoutMs : 5000}ms`;

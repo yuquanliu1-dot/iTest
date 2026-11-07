@@ -8,6 +8,7 @@ const SWITCH_MATRIX: Record<string, Set<string>> = {
   select: new Set(['fill']),
   waitFor: new Set(['assertVisible']),
   assertVisible: new Set(['waitFor']),
+  scroll: new Set(['click', 'hover']),
 };
 
 export function canSwitch(from: string, to: string): boolean {
@@ -63,6 +64,14 @@ export function switchAction(action: StepAction, to: string): StepAction {
       };
     case 'assertVisible':
       return { kind: 'assertVisible', locator: locator as never, intentLocator: intentLocator as never };
+    case 'scroll':
+      return {
+        kind: 'scroll',
+        locator: locator as never,
+        intentLocator: intentLocator as never,
+        scrollTop: 0,
+        scrollLeft: 0,
+      };
   }
   return action;
 }

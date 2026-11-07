@@ -7,7 +7,8 @@
  *  新增 kind 时同步改这里，否则 LLM 会重新走「试探错误信息」的老路。 */
 export const STEP_DSL_SPEC = `StepAction 按 kind 区分（discriminated union），只允许以下形状：
 - {"kind":"navigate","url":"https://..."}（url 必须是完整合法 URL，或以 / 开头的相对路径，或以 {{变量}} 打头）
-- {"kind":"click","locator":[Locator,...]}
+- {"kind":"click","locator":[Locator,...],"clickCount":2（可选，2=双击 3=三连击，缺省单击）}
+- {"kind":"scroll","locator":[Locator,...],"scrollTop":400,"scrollLeft":0（可选，默认 0）}（把滚动容器滚到绝对位置；locator 指实际滚动的容器元素。页面跳转后表格/长列表需要滚动才能看到目标元素时用它）
 - {"kind":"press","locator":[Locator,...],"key":"Enter"}（在定位元素上按键；key 用 Playwright 键名如 "Enter"/"Tab"。录制器把输入框内回车提交录成 press——表单无提交按钮或用户直接回车时的登录提交用它）
 - {"kind":"fill","locator":[Locator,...],"value":"文本" 或 ValueGenerator 或 CompositeValue}
 - {"kind":"hover","locator":[Locator,...]}

@@ -36,7 +36,8 @@
     "observeLog": "Watch log",
     "httpRequest": "HTTP request",
     "sendSyslog": "Send syslog log",
-    "sql": "SQL query"
+    "sql": "SQL query",
+    "scroll": "Scroll"
   },
   "statusChanged": "Status changed to {{status}}",
   "changeStatus": "Click to change status",
@@ -425,6 +426,7 @@
     "act": {
       "navigate": "Open {{url}}",
       "click": "Click {{target}}",
+      "scroll": "Scroll {{target}} to ({{top}}, {{left}})",
       "press": "Press {{key}} on {{target}}",
       "hover": "Hover {{target}}",
       "check": "Check",
@@ -453,6 +455,8 @@
     "fieldKind": "Kind: ",
     "fieldLocator": "Locator: ",
     "fieldKey": "Key: ",
+    "fieldScrollTop": "Scroll top: ",
+    "fieldScrollLeft": "Scroll left: ",
     "fieldBackupLocator": "Backup locators:\n  ",
     "fieldUrl": "URL: ",
     "fieldValue": "Value: ",

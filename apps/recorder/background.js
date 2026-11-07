@@ -36,6 +36,7 @@ let socketPromise = null;
 function toDSL(step) {
   if (step.type === 'check') return { kind: 'check', locator: step.target, checked: !!step.checked, ...intentField(step) };
   if (step.type === 'select') return { kind: 'select', locator: step.target, value: step.value ?? '', ...intentField(step) };
+  if (step.type === 'scroll') return { kind: 'scroll', locator: step.target, scrollTop: step.scrollTop ?? 0, scrollLeft: step.scrollLeft ?? 0, ...intentField(step) };
   if (step.type === 'upload') {
     // 上传步骤 fileId 由 web 端绑定；此处只占位
     return { kind: 'upload', locator: step.target, fileId: '__pending__', ...intentField(step) };
@@ -47,6 +48,8 @@ function toDSL(step) {
   }
   if (dsl.kind === 'press') dsl.key = step.key ?? 'Enter';
   if (dsl.kind === 'aiTask') dsl.instruction = step.value ?? '';
+  // dblclick 升级产物：2=双击 3=三连击（缺省单击不带字段）
+  if (dsl.kind === 'click' && (step.clickCount === 2 || step.clickCount === 3)) dsl.clickCount = step.clickCount;
   return dsl;
 }
 

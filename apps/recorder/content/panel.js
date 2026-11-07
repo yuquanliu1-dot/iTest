@@ -116,6 +116,15 @@
       }
       .form-input:focus { outline: none; border-color: #006b4f; }
       .form-cancel { flex: 0 0 auto; padding: 6px 8px; }
+      /* 断言表单：对象 + 匹配方式两个下拉（仅 assert 模式显示） */
+      .assert-row { display: none; gap: 6px; }
+      .pick-form.mode-assert .assert-row { display: flex; }
+      .form-select {
+        flex: 1; min-width: 0; font-size: 12px; font-family: inherit;
+        padding: 4px 4px; border: 1px solid #e2e2e2; border-radius: 5px;
+        background: #fff; color: #171717;
+      }
+      .form-select:focus { outline: none; border-color: #006b4f; }
     </style>
     <div class="panel">
       <div class="head">
@@ -142,6 +151,10 @@
         <div class="pick-status"></div>
         <div class="pick-form">
           <div class="form-hint"></div>
+          <div class="assert-row">
+            <select class="form-select assert-target" title="${t('assertTarget')}"></select>
+            <select class="form-select assert-match" title="${t('assertExpected')}"></select>
+          </div>
           <div class="form-row">
             <input class="form-input" />
             <button class="btn primary form-ok"></button>
@@ -171,6 +184,29 @@
   const formInput = shadow.querySelector('.form-input');
   const formOk = shadow.querySelector('.form-ok');
   const formCancel = shadow.querySelector('.form-cancel');
+  const targetSel = shadow.querySelector('.assert-target');
+  const matchSel = shadow.querySelector('.assert-match');
+
+  const fillSelect = (sel, opts) => {
+    for (const [v, label] of opts) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = label;
+      sel.appendChild(o);
+    }
+  };
+  fillSelect(targetSel, [
+    ['specifiedElement', t('assertTargetElement')],
+    ['page', t('assertTargetPage')],
+    ['errorMessage', t('assertTargetError')],
+    ['url', t('assertTargetUrl')],
+  ]);
+  fillSelect(matchSel, [
+    ['equals', t('assertMatchEquals')],
+    ['contains', t('assertMatchContains')],
+    ['notContains', t('assertMatchNotContains')],
+    ['regex', t('assertMatchRegex')],
+  ]);
 
   let statusTimer = null;
   const hideStatus = () => {
@@ -203,12 +239,13 @@
     if (!raw) return '';
     return raw.replace(/[^a-zA-Z0-9]+(.)/g, (_, c) => c.toUpperCase()).replace(/^[A-Z]/, (c) => c.toLowerCase());
   };
-  let formMode = null; // 'variable' | 'ai'：内联表单当前服务哪种步骤
-  let pendingPick = null; // variable 模式暂存的拾取结果
+  let formMode = null; // 'variable' | 'ai' | 'assert'：内联表单当前服务哪种步骤
+  let pendingPick = null; // variable/assert 模式暂存的拾取结果
   const closeForm = () => {
     formMode = null;
     pendingPick = null;
     pickForm.classList.remove('open');
+    pickForm.classList.remove('mode-assert');
   };
   const openForm = (mode, hint, value) => {
     formMode = mode;
@@ -216,12 +253,33 @@
     formHint.textContent = hint;
     formInput.value = value;
     formOk.textContent = t('submit');
+    pickForm.classList.toggle('mode-assert', mode === 'assert');
     pickForm.classList.add('open');
     formInput.focus();
     fitViewport();
   };
   const openVarForm = (r) => { pendingPick = r; openForm('variable', t('elementText', [r.text.slice(0, 60) || r.inputValue.slice(0, 60) || t('emptyText')]), suggestVarName(r)); };
   const openAiForm = () => openForm('ai', t('aiHint'), '');
+  // 断言期望值建议：元素对象=元素当前文本/输入值；页面 URL=当前地址；页面文本/错误提示=空（用户自己写）。
+  // 切换对象时若期望值输入框仍是上一次的「原样预填」（用户没动过），跟着换成新对象的建议值。
+  let pristine = '';
+  const suggestExpected = (target, r) => {
+    if (target === 'url') return location.href;
+    if (target === 'specifiedElement' && r) return r.text || r.inputValue || '';
+    return '';
+  };
+  targetSel.addEventListener('change', () => {
+    const v = suggestExpected(targetSel.value, pendingPick);
+    if (formInput.value === pristine) formInput.value = v;
+    pristine = v;
+  });
+  const openAssertForm = (r) => {
+    pendingPick = r;
+    targetSel.value = 'specifiedElement';
+    matchSel.value = 'equals';
+    pristine = suggestExpected('specifiedElement', r);
+    openForm('assert', t('assertHint'), pristine);
+  };
   const submitForm = () => {
     const value = formInput.value.trim();
     if (formMode === 'variable') {
@@ -233,11 +291,53 @@
       if (!value) { showStatus(t('enterInstruction'), 'err'); return; }
       closeForm();
       emitInline({ kind: 'aiTask', instruction: value });
+    } else if (formMode === 'assert') {
+      const target = targetSel.value;
+      const match = matchSel.value;
+      if (match === 'regex') {
+        try { new RegExp(value); } catch { showStatus(t('regexInvalid'), 'err'); return; }
+      }
+      if (!value) {
+        // 空期望 + 元素对象 + 等于 → 退化 assertVisible（元素在页面上=通过）；其余组合空值拦截
+        if (target === 'specifiedElement' && match === 'equals') {
+          const r = pendingPick;
+          closeForm();
+          if (r) emitInline({ kind: 'assertVisible', locator: assertLocators(r) });
+          return;
+        }
+        showStatus(t('assertValueNeeded'), 'err');
+        return;
+      }
+      const r = pendingPick;
+      closeForm();
+      // locator 只在元素对象时携带；page/errorMessage/url 由回放端从页面整体取值，不需要候选
+      emitInline({ kind: 'assertText', locator: target === 'specifiedElement' && r ? assertLocators(r) : [], target, match, equals: value });
     }
   };
   formOk.addEventListener('click', submitForm);
   formCancel.addEventListener('click', () => { closeForm(); hideStatus(); });
   formInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitForm(); });
+
+  // 断言候选排序（资产管理-资产编辑 RCA：断言唯一候选 .has-gutter .el-table_1_column_4 > .cell 跨会话
+  // 漂移 count=0，而页面文本「主识别IP」明明在）：css 链含 Element-UI 运行时位置类
+  // （el-table_{实例号}[_column_{列序}] / has-gutter，口径同 modules/selector-filter.ts），
+  // 或链在当前页面就不唯一（多可排序列的表头剥掉运行时类后无法区分兄弟列）——这两种链当不了
+  // 首候选，text 放首位；链唯一且稳定则 css-first 保唯一性，text 排链尾兜底
+  // （链活时轮不到，链死时按文本命中）。
+  const assertLocators = (r) => {
+    const locs = Array.isArray(r?.locators) ? r.locators.slice() : [];
+    if (r?.text && !locs.some((l) => l.strategy === 'text' && l.value === r.text)) {
+      const textLoc = { strategy: 'text', value: r.text };
+      const cssChainFragile =
+        locs.some((l) => l.strategy === 'css' && /el-table_\d+(?:_column_\d+)?|has-gutter/.test(l.value)) ||
+        !locs.some((l) => {
+          if (l.strategy !== 'css') return false;
+          try { return document.querySelectorAll(l.value).length === 1; } catch { return false; }
+        });
+      cssChainFragile ? locs.unshift(textLoc) : locs.push(textLoc);
+    }
+    return locs;
+  };
 
   const startInlinePick = (mode) => {
     closeForm();
@@ -259,26 +359,11 @@
         openVarForm(r);
         return;
       }
-      // assert：选中即生成（期望值=元素当前文本/输入值，皆空退化 assertVisible），与原弹窗逻辑一致。
-      // 候选排序（资产管理-资产编辑 RCA：断言唯一候选 .has-gutter .el-table_1_column_4 > .cell 跨会话
-      // 漂移 count=0，而页面文本「主识别IP」明明在）：css 链含 Element-UI 运行时位置类
-      // （el-table_{实例号}[_column_{列序}] / has-gutter，口径同 modules/selector-filter.ts），
-      // 或链在当前页面就不唯一（多可排序列的表头剥掉运行时类后无法区分兄弟列）——这两种链当不了
-      // 首候选，text 放首位；链唯一且稳定则 css-first 保唯一性，text 排链尾兜底
-      // （链活时轮不到，链死时按文本命中）。
-      const expected = r.text || r.inputValue;
-      const locs = Array.isArray(r.locators) ? r.locators.slice() : [];
-      if (r.text && !locs.some((l) => l.strategy === 'text' && l.value === r.text)) {
-        const textLoc = { strategy: 'text', value: r.text };
-        const cssChainFragile =
-          locs.some((l) => l.strategy === 'css' && /el-table_\d+(?:_column_\d+)?|has-gutter/.test(l.value)) ||
-          !locs.some((l) => {
-            if (l.strategy !== 'css') return false;
-            try { return document.querySelectorAll(l.value).length === 1; } catch { return false; }
-          });
-        cssChainFragile ? locs.unshift(textLoc) : locs.push(textLoc);
+      if (mode === 'assert') {
+        // 拾取后先进断言表单：对象/匹配方式/期望值都可改，确定才生成（v0.0.9 起，
+        // 旧行为「选中即生成」只能录元素文本等于，录不了 contains/页面断言/URL 断言）
+        openAssertForm(r);
       }
-      emitInline(expected ? { kind: 'assertText', locator: locs, equals: expected } : { kind: 'assertVisible', locator: locs });
     });
   };
 

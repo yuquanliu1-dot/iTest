@@ -4,6 +4,7 @@ export const STEP_KINDS = [
   'navigate', 'click', 'press', 'fill', 'select', 'check', 'hover', 'waitFor',
   'assertVisible', 'assertText', 'assertJson', 'extract', 'upload',
   'switchTab', 'screenshot', 'aiTask', 'queryDb', 'observeLog', 'httpRequest', 'sendSyslog', 'sql',
+  'scroll',
   'tap', 'swipe', 'setAppearance', 'setNetwork', 'setLocation',
   'appOpen', 'appBack', 'appRestart', 'home',
 ] as const;
@@ -12,6 +13,7 @@ export type StepKind = (typeof STEP_KINDS)[number];
 const WITH_LOCATOR: ReadonlySet<string> = new Set([
   'click', 'press', 'hover', 'fill', 'select', 'check', 'waitFor',
   'assertVisible', 'assertText', 'assertJson', 'upload', 'extract',
+  'scroll',
   'tap', 'swipe',
 ]);
 
@@ -54,6 +56,9 @@ export function switchAction(clip: StepClip, to: StepKind): StepClip {
       break;
     case 'check':
       action = { kind: 'check', locator: locator!, checked: true, ...base() };
+      break;
+    case 'scroll':
+      action = { kind: 'scroll', locator: locator!, scrollTop: 0, scrollLeft: 0, ...base() };
       break;
     case 'assertText':
       action = { kind: 'assertText', locator: locator!, target: 'specifiedElement', match: 'equals', equals: '', ...base() };

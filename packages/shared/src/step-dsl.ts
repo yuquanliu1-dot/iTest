@@ -40,6 +40,18 @@ export const ClickAction = z.object({
   kind: z.literal('click'),
   locator: z.array(Locator).min(1),
   intentLocator: IntentLocator.optional(),
+  /** 2=双击 3=三连击；缺省 1（单击）。录制器捕获原生 dblclick 时置 2。 */
+  clickCount: z.number().int().min(2).max(3).optional(),
+});
+
+/** 滚动：绝对位置滚动（非增量 delta——回放与起点无关，浏览器自动钳到内容边界）。
+ *  locator 指向实际滚动的容器；窗口级滚动录 document.scrollingElement（css 'html'）。 */
+export const ScrollAction = z.object({
+  kind: z.literal('scroll'),
+  locator: z.array(Locator).min(1),
+  intentLocator: IntentLocator.optional(),
+  scrollTop: z.number().int().min(0),
+  scrollLeft: z.number().int().min(0).default(0),
 });
 
 /** 单段 CompositeValue 的可能形态；按顺序拼接生成最终输入。 */
@@ -349,6 +361,7 @@ export const HomeAction = z.object({ kind: z.literal('home') });
 export type StepAction =
   | z.infer<typeof NavigateAction>
   | z.infer<typeof ClickAction>
+  | z.infer<typeof ScrollAction>
   | z.infer<typeof FillAction>
   | z.infer<typeof HoverAction>
   | z.infer<typeof WaitForAction>
@@ -381,6 +394,7 @@ export type StepAction =
 export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
   NavigateAction,
   ClickAction,
+  ScrollAction,
   FillAction,
   HoverAction,
   WaitForAction,

@@ -353,6 +353,209 @@ describe('RecorderManager — default options', () => {
   });
 });
 
+describe('RecorderManager — dblclick 升级', () => {
+  const fireDblClick = (target: Element, detail = 2) => {
+    target.dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true, detail }));
+  };
+
+  it('单击单独发生：250ms 窗口到点按单击发射（无 clickCount）', () => {
+    const btn = makeEl('<button data-testid="row">行</button>');
+    dom.window.document.body.appendChild(btn);
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(btn, 'click');
+      vi.advanceTimersByTime(300);
+    });
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.type).toBe('click');
+    expect(captured[0]!.clickCount).toBeUndefined();
+  });
+
+  it('click + dblclick 升级为 clickCount=2（表格行双击进详情）', () => {
+    const btn = makeEl('<button data-testid="row">行</button>');
+    dom.window.document.body.appendChild(btn);
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(btn, 'click');
+      fireDblClick(btn);
+    });
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.clickCount).toBe(2);
+    // dblclick 已即时发射，后续窗口到点不再补发单击
+    vi.advanceTimersByTime(300);
+    expect(captured).toHaveLength(1);
+  });
+
+  it('dblclick detail=3 升级为三连击（clickCount=3）', () => {
+    const btn = makeEl('<button data-testid="row">行</button>');
+    dom.window.document.body.appendChild(btn);
+    withRecorder(() => {
+      fire(btn, 'click');
+      fireDblClick(btn, 3);
+    });
+    expect(captured[0]!.clickCount).toBe(3);
+  });
+
+  it('去重窗内的第二次 click 不产独立步骤（双击只出一条）', () => {
+    const btn = makeEl('<button data-testid="row">行</button>');
+    dom.window.document.body.appendChild(btn);
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(btn, 'click');
+      fire(btn, 'click');
+      vi.advanceTimersByTime(300);
+    });
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.clickCount).toBeUndefined();
+  });
+
+  it('页面拦截 dblclick 时不丢步：挂起单击照常发射', () => {
+    // 有些页面 preventDefault 掉 dblclick，浏览器不派发——timer 到点仍按单击发射，
+    // 比旧版「压成 1 个 click」多救回一次真实动作。
+    const btn = makeEl('<button data-testid="row">行</button>');
+    dom.window.document.body.appendChild(btn);
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(btn, 'click');
+      // 不派发 dblclick，模拟被拦截
+      vi.advanceTimersByTime(300);
+    });
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.type).toBe('click');
+  });
+
+  it('click → input 时挂起 click 先落定（步骤时序不被 pending 窗口打乱）', () => {
+    const btn = makeEl('<button data-testid="btn">按钮</button>');
+    const input = makeEl('<input type="text" name="kw" />');
+    dom.window.document.body.appendChild(btn);
+    dom.window.document.body.appendChild(input);
+    const inp = input as HTMLInputElement;
+    vi.useFakeTimers();
+    withRecorder(() => {
+      fire(btn, 'click');
+      inp.value = '搜索词';
+      fire(inp, 'input');
+      vi.advanceTimersByTime(300);
+    });
+    expect(captured.map((s) => s.type)).toEqual(['click', 'fill']);
+  });
+});
+
+describe('RecorderManager — scroll 捕获', () => {
+  const fireScroll = (target: EventTarget) => {
+    target.dispatchEvent(new dom.window.Event('scroll'));
+  };
+
+  it('元素滚动：静止 350ms 后发射绝对位置步骤', () => {
+    const pane = makeEl('<div data-testid="pane">内容</div>');
+    dom.window.document.body.appendChild(pane);
+    vi.useFakeTimers();
+    withRecorder(() => {
+      (pane as HTMLElement).scrollTop = 200;
+      fireScroll(pane);
+      vi.advanceTimersByTime(100);
+      // 滚动流持续重置 settle 计时
+      (pane as HTMLElement).scrollTop = 260;
+      fireScroll(pane);
+      vi.advanceTimersByTime(400);
+    });
+    const scrolls = captured.filter((s) => s.type === 'scroll');
+    expect(scrolls).toHaveLength(1);
+    expect(scrolls[0]!.scrollTop).toBe(260);
+    expect(scrolls[0]!.scrollLeft).toBe(0);
+    expect(scrolls[0]!.target.some((l) => l.strategy === 'testId')).toBe(true);
+  });
+
+  it('净位移 <10px 的微动不产步骤', () => {
+    const pane = makeEl('<div data-testid="pane">内容</div>');
+    dom.window.document.body.appendChild(pane);
+    vi.useFakeTimers();
+    withRecorder(() => {
+      (pane as HTMLElement).scrollTop = 5;
+      fireScroll(pane);
+      (pane as HTMLElement).scrollTop = 8;
+      fireScroll(pane);
+      vi.advanceTimersByTime(400);
+    });
+    expect(captured.filter((s) => s.type === 'scroll')).toHaveLength(0);
+  });
+
+  it('窗口级滚动锚到 css html（scrollingElement / 无 scrollTop 的 target）', () => {
+    // jsdom 没有 document.scrollingElement，target=document 无 scrollTop → 走窗口分支，
+    // el 取 documentElement，回放侧对 css 'html' evaluate scrollTop 即窗口滚动。
+    vi.useFakeTimers();
+    withRecorder(() => {
+      (dom.window.document.documentElement as HTMLElement).scrollTop = 100;
+      fireScroll(dom.window.document);
+      (dom.window.document.documentElement as HTMLElement).scrollTop = 300;
+      fireScroll(dom.window.document);
+      vi.advanceTimersByTime(400);
+    });
+    const scrolls = captured.filter((s) => s.type === 'scroll');
+    expect(scrolls).toHaveLength(1);
+    expect(scrolls[0]!.scrollTop).toBe(300);
+    expect(scrolls[0]!.target).toEqual([{ strategy: 'css', value: 'html' }]);
+    expect(scrolls[0]!.intentLocator).toBeUndefined();
+  });
+
+  it('换容器滚动：旧的先落定再起新序列（两个区域各一条）', () => {
+    const a = makeEl('<div data-testid="pane-a">A</div>');
+    const b = makeEl('<div data-testid="pane-b">B</div>');
+    dom.window.document.body.appendChild(a);
+    dom.window.document.body.appendChild(b);
+    vi.useFakeTimers();
+    withRecorder(() => {
+      (a as HTMLElement).scrollTop = 100;
+      fireScroll(a);
+      (a as HTMLElement).scrollTop = 130;
+      fireScroll(a);
+      (b as HTMLElement).scrollTop = 50;
+      fireScroll(b);
+      (b as HTMLElement).scrollTop = 70;
+      fireScroll(b);
+      vi.advanceTimersByTime(400);
+    });
+    const scrolls = captured.filter((s) => s.type === 'scroll');
+    expect(scrolls).toHaveLength(2);
+    // 发射的是各序列的最终绝对位置（回放与起点无关）
+    expect(scrolls[0]!.scrollTop).toBe(130);
+    expect(scrolls[1]!.scrollTop).toBe(70);
+  });
+
+  it('单事件跳变（scrollIntoView 式程序滚动）不产步骤', () => {
+    // 真实浏览器里用户手势滚动是连续事件流；单事件跳变是程序行为（锚点/scrollIntoView），
+    // 序列起点=首事件位置 → 净位移 0 → 视为噪声丢弃。用此语义锁定。
+    const pane = makeEl('<div data-testid="pane">内容</div>');
+    dom.window.document.body.appendChild(pane);
+    vi.useFakeTimers();
+    withRecorder(() => {
+      (pane as HTMLElement).scrollTop = 500;
+      fireScroll(pane);
+      vi.advanceTimersByTime(400);
+    });
+    expect(captured.filter((s) => s.type === 'scroll')).toHaveLength(0);
+  });
+
+  it('scroll 后接 input：挂起 scroll 先落定（时序保持 scroll → fill）', () => {
+    const pane = makeEl('<div data-testid="pane">内容</div>');
+    const input = makeEl('<input type="text" name="kw" />');
+    dom.window.document.body.appendChild(pane);
+    dom.window.document.body.appendChild(input);
+    const inp = input as HTMLInputElement;
+    vi.useFakeTimers();
+    withRecorder(() => {
+      (pane as HTMLElement).scrollTop = 120;
+      fireScroll(pane);
+      (pane as HTMLElement).scrollTop = 160;
+      fireScroll(pane);
+      inp.value = '词';
+      fire(inp, 'input');
+      vi.advanceTimersByTime(400);
+    });
+    expect(captured.map((s) => s.type)).toEqual(['scroll', 'fill']);
+  });
+});
+
 describe('recorder-manager — phase1 change events + pause', () => {
   function setup() {
     const mgr = new RecorderManager();
@@ -450,7 +653,10 @@ describe('recorder-manager — phase1 change events + pause', () => {
     btn.dispatchEvent(new Event('click', { bubbles: true }));
     expect(captured).toHaveLength(0);
     mgr.setPaused(false);
+    vi.useFakeTimers();
     btn.dispatchEvent(new Event('click', { bubbles: true }));
+    // click 走 250ms 延迟发射窗
+    vi.advanceTimersByTime(300);
     expect(captured).toHaveLength(1);
     btn.remove();
   });
@@ -462,7 +668,10 @@ describe('recorder-manager — phase1 change events + pause', () => {
     mgr.start((s) => captured.push(s));
     const btn = document.createElement('button');
     document.body.appendChild(btn);
+    vi.useFakeTimers();
     btn.dispatchEvent(new Event('click', { bubbles: true }));
+    // click 走 250ms 延迟发射窗
+    vi.advanceTimersByTime(300);
     expect(captured).toHaveLength(1);
     btn.remove();
   });

@@ -36,7 +36,8 @@
     "observeLog": "日志观察",
     "httpRequest": "HTTP 请求",
     "sendSyslog": "发送 syslog 日志",
-    "sql": "SQL 查询"
+    "sql": "SQL 查询",
+    "scroll": "滚动"
   },
   "statusChanged": "状态已改为 {{status}}",
   "changeStatus": "点击修改状态",
@@ -409,6 +410,7 @@
     "act": {
       "navigate": "打开 {{url}}",
       "click": "点击 {{target}}",
+      "scroll": "滚动 {{target}} 至 ({{top}}, {{left}})",
       "press": "在 {{target}} 上按 {{key}}",
       "hover": "悬停 {{target}}",
       "check": "勾选",
@@ -437,6 +439,8 @@
     "fieldKind": "类型：",
     "fieldLocator": "定位：",
     "fieldKey": "按键：",
+    "fieldScrollTop": "纵向位置：",
+    "fieldScrollLeft": "横向位置：",
     "fieldBackupLocator": "备用定位：\n  ",
     "fieldUrl": "URL：",
     "fieldValue": "值：",

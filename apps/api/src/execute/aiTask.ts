@@ -786,6 +786,7 @@ function describeAction(a: StepAction): string {
     case 'assertText': return `断言 ${loc(a)} 文本匹配`;
     case 'assertJson': return `断言 ${loc(a)} JSON 匹配`;
     case 'click': return `点击 ${loc(a)}`;
+    case 'scroll': return `滚动 ${loc(a)} 至 (${(a as { scrollTop?: number }).scrollTop ?? 0}, ${(a as { scrollLeft?: number }).scrollLeft ?? 0})`;
     case 'fill': return `填写 ${loc(a)}`;
     case 'press': return `在 ${loc(a)} 上按键 ${(a as { key?: string }).key ?? ''}`;
     case 'hover': return `悬停 ${loc(a)}`;

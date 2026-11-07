@@ -11,7 +11,7 @@ export interface RecorderOptions {
   fillFlushMs?: number;
 }
 
-export type RecordedStepType = 'click' | 'fill' | 'press' | 'hover' | 'check' | 'select' | 'upload' | 'aiTask';
+export type RecordedStepType = 'click' | 'fill' | 'press' | 'hover' | 'check' | 'select' | 'upload' | 'aiTask' | 'scroll';
 
 export interface RecordedStep {
   type: RecordedStepType;
@@ -20,6 +20,11 @@ export interface RecordedStep {
   value?: string;
   /** press 的键名（Playwright 键名，如 "Enter"） */
   key?: string;
+  /** click 的连击数：2=双击 3=三连击；缺省单击。来自原生 dblclick（e.detail）。 */
+  clickCount?: 2 | 3;
+  /** scroll 的绝对滚动位置（滚动容器 / 窗口级=scrollingElement）。 */
+  scrollTop?: number;
+  scrollLeft?: number;
   /** check 的目标状态 */
   checked?: boolean;
   url: string;
@@ -62,9 +67,12 @@ function isCaptchaInput(el: HTMLInputElement): boolean {
 
 /**
  * 浏览器端录制协调器：
- *  - click / input / change / mouseover 事件被捕获并生成多候选 locator。
+ *  - click / input / change / mouseover / dblclick / scroll 事件被捕获并生成多候选 locator。
  *  - change 细分：checkbox → check（带目标状态），select → select（带选中值），file → upload（只记文件名）。
- *  - 200ms 内的重复 click 去重（双击是用户意图但不应产生 2 个 click 步骤）。
+ *  - click 延迟 250ms 发射：窗口内 dblclick 到达则升级为 clickCount=2/3（表格行双击进详情）；
+ *    200ms 内同签名重复 click 去重（双击的第二击不产独立步骤）。
+ *  - scroll 以事件流 debounce 记录：静止 350ms 后发射滚动容器的绝对位置（窗口级锚 'html'），
+ *    净位移 <10px 的微动不产步骤。
  *  - 当 input 事件触发时，跳过紧随其后的 mouseover，避免「键入即 hover」噪声。
  *  - mouseover 需在同一元素停留 ≥500ms 才产出 hover（停留门槛）：光标移动路径上划过的元素不记录；
  *    已记录元素的内部微动不重复记录；click/input/离开元素会取消未到时的悬停。
@@ -107,6 +115,13 @@ export class RecorderManager {
   /** 密码自动填充兜底去重窗：Chrome autofill / 1Password 在失焦+focus 反复时可能连续触发 change，
    *  同一 locator 1s 内只产一条 fill,避免重复步骤。 */
   private static SENSITIVE_CHANGE_DEDUP_MS = 1000;
+  /** click 发射延迟窗：窗口内来 dblclick 则把挂起的单击升级为双击。需略大于两次 click 间隔
+   *  （浏览器 dblclick 判定约 500ms 内），250ms 与 fill 合并窗同量级、交互上无感。 */
+  private static CLICK_FLUSH_MS = 250;
+  /** scroll 事件流静止判定窗：滚动期间持续重置，静止此时长后才发射最终位置。 */
+  private static SCROLL_SETTLE_MS = 350;
+  /** scroll 最小净位移（px）：起点到终点的 |Δtop|+|Δleft| 低于此值视为微动噪声不产步骤。 */
+  private static SCROLL_MIN_DELTA = 10;
   /** 最近一次敏感字段 change 兜底发射的 locator 签名 + 时间戳:SENSITIVE_CHANGE_DEDUP_MS 窗内去重。 */
   private lastSensitiveChange: { signature: string; at: number } | null = null;
 
@@ -115,6 +130,31 @@ export class RecorderManager {
     target: HTMLInputElement;
     timer: ReturnType<typeof setTimeout>;
     intentLocator?: ReturnType<typeof buildIntentLocator>;
+    /** 挂起序列起点：与 pendingClick/pendingScroll 排序发射，保持用户动作时序。 */
+    since: number;
+  } | null = null;
+  /** 待 flush 的 click 步骤：click 延迟 CLICK_FLUSH_MS 发射，窗口内若来 dblclick 则升级为
+   *  clickCount=2（此前双击被压成 1 个 click——element-ui 表格行双击进详情是高频场景）。
+   *  sig 是该挂起的 locator 签名：不同目标的新 click 到达时旧挂起先落定，同目标的覆盖
+   *  （dblclick 第二击走 dedup return 或覆盖路径，升级语义不变）。 */
+  private pendingClick: {
+    locs: Locator[];
+    sig: string;
+    timer: ReturnType<typeof setTimeout>;
+    intentLocator?: ReturnType<typeof buildIntentLocator>;
+    since: number;
+  } | null = null;
+  /** 待 flush 的 scroll 步骤：scroll 事件流 debounce，静止 SCROLL_SETTLE_MS 后发射绝对位置。
+   *  startTop/startLeft 是本次滚动序列的起点——净位移小于 SCROLL_MIN_DELTA 的微动不产步骤。 */
+  private pendingScroll: {
+    el: Element;
+    windowScroll: boolean;
+    startTop: number;
+    startLeft: number;
+    top: number;
+    left: number;
+    timer: ReturnType<typeof setTimeout>;
+    since: number;
   } | null = null;
   /** 最近一次 aiTask 步骤的 locator 签名 + 时间戳：1.5s 窗内同签名去重。 */
   private lastAiTaskSig: { signature: string; at: number } | null = null;
@@ -137,17 +177,25 @@ export class RecorderManager {
     this.lastHoverEl = null;
     this.lastHoverSig = null;
     this.cancelPendingFill();
+    this.cancelPendingClick();
+    this.cancelPendingScroll();
     this.lastAiTaskSig = null;
     this.lastSensitiveChange = null;
     this.attachListeners();
   }
 
   stop() {
+    // 先落定挂起的 click / scroll（此刻 handler 还在、canRecord 还为真）：click 在引入延迟窗
+    // 之前是同步发射，「点完最后一个动作立即停止录制」从不丢步，这里保持该不变量。
+    this.flushPendingClick();
+    this.flushPendingScroll();
     this.active = false;
     this.paused = false;
     this.handler = null;
     this.cancelPendingHover();
     this.cancelPendingFill();
+    this.cancelPendingClick();
+    this.cancelPendingScroll();
     this.lastHoverEl = null;
     this.lastHoverSig = null;
     this.lastAiTaskSig = null;
@@ -192,6 +240,78 @@ export class RecorderManager {
       clearTimeout(this.pendingFill.timer);
       this.pendingFill = null;
     }
+  }
+
+  private cancelPendingClick() {
+    if (this.pendingClick) {
+      clearTimeout(this.pendingClick.timer);
+      this.pendingClick = null;
+    }
+  }
+
+  private cancelPendingScroll() {
+    if (this.pendingScroll) {
+      clearTimeout(this.pendingScroll.timer);
+      this.pendingScroll = null;
+    }
+  }
+
+  private flushPendingClick() {
+    if (!this.pendingClick) return;
+    const { locs, timer, intentLocator } = this.pendingClick;
+    this.pendingClick = null;
+    clearTimeout(timer);
+    if (!this.canRecord()) return;
+    this.handler?.({
+      type: 'click',
+      target: locs,
+      url: location.href,
+      timestamp: Date.now(),
+      ...(intentLocator ? { intentLocator } : {}),
+    });
+  }
+
+  private flushPendingScroll() {
+    if (!this.pendingScroll) return;
+    const p = this.pendingScroll;
+    this.pendingScroll = null;
+    clearTimeout(p.timer);
+    if (!this.canRecord()) return;
+    if (!p.el.isConnected) return;
+    // 净位移过小 / 滚回原位：滚动微动噪声不产步骤。
+    const moved = Math.abs(p.top - p.startTop) + Math.abs(p.left - p.startLeft);
+    if (moved < RecorderManager.SCROLL_MIN_DELTA) return;
+    // 窗口级滚动锚到 scrollingElement（standards 模式恒为 <html>，css 'html' 单候选即可——
+    // 回放 evaluate el.scrollTop 即窗口滚动）；元素级滚动用常规候选链。
+    const locs: Locator[] = p.windowScroll ? [{ strategy: 'css', value: 'html' }] : generateLocators(p.el);
+    const intentLocator = p.windowScroll ? undefined : buildIntentLocator(p.el);
+    this.handler?.({
+      type: 'scroll',
+      target: locs,
+      scrollTop: p.top,
+      scrollLeft: p.left,
+      url: location.href,
+      timestamp: Date.now(),
+      ...(intentLocator ? { intentLocator } : {}),
+    });
+  }
+
+  /** 把挂起的 click / scroll 按各自序列起点时间排序发射（fill 不动——它有自己的 debounce 语义，
+   *  由 input/change/blur 入口单独管理）。用于 input 等高频入口，保证 click→input、scroll→input
+   *  的步骤顺序不被 pending 窗口打乱。 */
+  private flushInteractions() {
+    const jobs: Array<{ since: number; run: () => void }> = [];
+    if (this.pendingClick) jobs.push({ since: this.pendingClick.since, run: () => this.flushPendingClick() });
+    if (this.pendingScroll) jobs.push({ since: this.pendingScroll.since, run: () => this.flushPendingScroll() });
+    jobs.sort((a, b) => a.since - b.since);
+    for (const j of jobs) j.run();
+  }
+
+  /** click + fill + scroll 全部落定（按序列起点排序）。用于 change/keydown/blur 这类
+   *  「输入定型」入口和 dblclick 之外的显式交互入口。 */
+  private flushAllTransient() {
+    this.flushInteractions();
+    this.flushPendingFill();
   }
 
   private flushPendingFill() {
@@ -263,8 +383,9 @@ export class RecorderManager {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
       this.cancelPendingHover();
-      // 切到按钮 / 别处点击：flush 当前 input 的累计 fill，否则会丢最后一次停顿前的字符。
-      this.flushPendingFill();
+      // 切到按钮 / 别处点击：flush 当前 input 的累计 fill，否则会丢最后一次停顿前的字符；
+      // 挂起中的 click/scroll（快速连续操作）也按序落定，保持步骤时序。
+      this.flushAllTransient();
       const target = e.target as Element;
       if (!target) return;
       const locs = generateLocators(target);
@@ -272,22 +393,92 @@ export class RecorderManager {
       const now = Date.now();
       if (this.lastClick && this.lastClick.signature === sig && now - this.lastClick.at < RecorderManager.DEDUP_WINDOW_MS) {
         this.lastClick.at = now;
+        // 双击/三击的第二击：不重置 pendingClick（等 dblclick 决定升级；
+        // dblclick 被页面拦截不来时，timer 到点照常发射单击——比旧版「压成 1 个 click」多救回一次）
         return;
       }
       this.lastClick = { signature: sig, at: now };
+      // 不同目标的挂起 click 先落定（250ms 内连点两个不同目标各留一步）；同目标的旧挂起
+      // 不 flush——dblclick 升级靠它（>200ms 去重窗的第二击走到这里覆盖旧 pending，
+      // dblclick 到达时升级的仍是最新一击，双击总数恒为一条）。
+      if (this.pendingClick && this.pendingClick.sig !== sig) this.flushPendingClick();
+      // click 延迟 CLICK_FLUSH_MS 发射：窗口内 dblclick 到达即升级为 clickCount=2/3，
+      // 否则 timer 到点按单击发射。此前双击被压成 1 个 click，表格行双击进详情这类场景录不出来。
       const intentLocator = buildIntentLocator(target);
+      const timer = setTimeout(() => {
+        if (this.pendingClick && this.pendingClick.timer === timer) this.flushPendingClick();
+      }, RecorderManager.CLICK_FLUSH_MS);
+      this.pendingClick = { locs, sig, timer, intentLocator: intentLocator ?? undefined, since: now };
+    };
+    const onDblClick = (e: Event) => {
+      if (!this.canRecord()) return;
+      if (isOnRecorderPanel(e)) return;
+      this.cancelPendingHover();
+      const target = e.target as Element;
+      if (!target) return;
+      // 常态：双击前必有同目标 click 挂起（第二次 click 走 dedup return）——取走它升级为双击。
+      const taken = this.pendingClick;
+      this.pendingClick = null;
+      if (taken) clearTimeout(taken.timer);
+      // 其余挂起（fill/scroll）按序先落定：fill → 双击。
+      this.flushPendingFill();
+      this.flushPendingScroll();
+      this.lastClick = null;
+      const detail = (e as MouseEvent).detail ?? 2;
+      const clickCount: 2 | 3 = detail >= 3 ? 3 : 2;
+      // pendingClick 被提前 flush 走的兜底：用 dblclick 自己的 target 重产候选。
+      const locs = taken ? taken.locs : generateLocators(target);
+      const intentLocator = taken ? taken.intentLocator : buildIntentLocator(target);
       this.handler?.({
         type: 'click',
         target: locs,
+        clickCount,
         url: location.href,
-        timestamp: now,
+        timestamp: Date.now(),
         ...(intentLocator ? { intentLocator } : {}),
       });
+    };
+    // scroll 事件不冒泡，capture 监听在 document 上可拦截任意元素/文档的滚动。
+    // 事件流 debounce：滚动期间持续重置 timer 并更新最终位置，静止 SCROLL_SETTLE_MS 后发射
+    // 绝对位置（回放与起点无关）。窗口级滚动（target=document/scrollingElement）锚到 'html'。
+    const onScroll = (e: Event) => {
+      if (!this.canRecord()) return;
+      if (isOnRecorderPanel(e)) return;
+      const maybe = e.target as Element | null;
+      if (!maybe) return;
+      // Document 上没有 scrollTop（元素才有）——以此区分文档级滚动与元素级滚动。
+      const se = document.scrollingElement;
+      const isWindowScroll = maybe === se || (maybe as { scrollTop?: unknown }).scrollTop === undefined;
+      const el = isWindowScroll ? (se ?? document.documentElement) : maybe;
+      // 不用 instanceof Element 判别（跨 realm / jsdom 测试下不可靠，同 onChange 的约定）；
+      // scroll 事件的 target 只会是元素或 document，窗口分支已锚定 documentElement。
+      if (!el.isConnected) return;
+      const top = Math.max(0, Math.round(el.scrollTop));
+      const left = Math.max(0, Math.round(el.scrollLeft));
+      const now = Date.now();
+      if (this.pendingScroll && this.pendingScroll.el !== el) {
+        // 换容器：旧的先落定（用户滚了两个区域）。
+        this.flushPendingScroll();
+      }
+      const timer = setTimeout(() => {
+        if (this.pendingScroll && this.pendingScroll.timer === timer) this.flushPendingScroll();
+      }, RecorderManager.SCROLL_SETTLE_MS);
+      if (this.pendingScroll) {
+        this.pendingScroll.top = top;
+        this.pendingScroll.left = left;
+        clearTimeout(this.pendingScroll.timer);
+        this.pendingScroll.timer = timer;
+      } else {
+        this.pendingScroll = { el, windowScroll: isWindowScroll, startTop: top, startLeft: left, top, left, timer, since: now };
+      }
     };
     const onInput = (e: Event) => {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
       this.cancelPendingHover();
+      // 挂起中的 click/scroll 先按序落定（click→input 顺序不被 pending 窗口打乱）；
+      // fill 不在此 flush——它有自己的 debounce 合并窗。
+      this.flushInteractions();
       const target = e.target as HTMLInputElement;
       if (!target) return;
       // select/radio 由 change 产出 select/check 步骤，checkbox 由 change 产出 check，file 由 change 产出 upload；
@@ -336,11 +527,12 @@ export class RecorderManager {
           this.flushPendingFill();
         }
       }, flushMs);
-      this.pendingFill = { target, timer, intentLocator: intentLocator ?? undefined };
+      this.pendingFill = { target, timer, intentLocator: intentLocator ?? undefined, since: Date.now() };
     };
     const onBlur = (e: Event) => {
-      // 用户失焦（点别处 / Tab 切走）时强制 flush 当前 fill，避免 500ms 内就跳转丢失步骤。
-      this.flushPendingFill();
+      // 用户失焦（点别处 / Tab 切走）时强制 flush 当前 fill + 挂起的 click/scroll，
+      // 避免 500ms 内就跳转丢失步骤。
+      this.flushAllTransient();
     };
     // 输入框内按 Enter 提交（表单无提交按钮 / 用户习惯直接回车）：此前全程无 click 事件，
     // 登录动作整段丢失。keydown 时先 flush 累计 fill（回放顺序 = fill 完整值 → press Enter），
@@ -362,7 +554,7 @@ export class RecorderManager {
         if (t === 'checkbox' || t === 'radio' || t === 'file' || t === 'button' || t === 'submit') return;
       }
       if (!target.isConnected) return;
-      this.flushPendingFill();
+      this.flushAllTransient();
       const intentLocator = buildIntentLocator(target);
       this.handler?.({
         type: 'press',
@@ -416,8 +608,9 @@ export class RecorderManager {
     const onChange = (e: Event) => {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
-      // change 触发意味着用户对当前 input 的输入已经定型（失焦 / Enter / 选择项），先 flush 累计的 fill。
-      this.flushPendingFill();
+      // change 触发意味着用户对当前 input 的输入已经定型（失焦 / Enter / 选择项），flush 全部挂起
+      // （fill + click/scroll 按序）。
+      this.flushAllTransient();
       onChangePasswordAutofill(e);
       const target = e.target as HTMLInputElement | HTMLSelectElement;
       if (!target) return;
@@ -539,6 +732,8 @@ export class RecorderManager {
       if (this.pendingHover && t.contains(this.pendingHover.el)) this.cancelPendingHover();
     };
     document.addEventListener('click', onClick, true);
+    document.addEventListener('dblclick', onDblClick, true);
+    document.addEventListener('scroll', onScroll, true);
     document.addEventListener('input', onInput, true);
     document.addEventListener('change', onChange, true);
     // blur 强制 flush fill——避免切走焦点时 500ms 内丢失最后一次输入。
@@ -548,6 +743,8 @@ export class RecorderManager {
     document.addEventListener('mouseleave', onMouseLeave, true);
     this.listeners.push(
       { el: document, type: 'click', fn: onClick },
+      { el: document, type: 'dblclick', fn: onDblClick },
+      { el: document, type: 'scroll', fn: onScroll },
       { el: document, type: 'input', fn: onInput },
       { el: document, type: 'change', fn: onChange },
       { el: document, type: 'focusout', fn: onBlur },

@@ -71,9 +71,21 @@ function getSubtreeText(el: Element): string | null {
   return lastSpace > 20 ? slice.slice(0, lastSpace) : slice;
 }
 
-/** role 候选的 name：属性名优先（Playwright 可访问名计算含 aria-label/title），回退子树文本。 */
+/** label 关联文本（<label for=id> / 包裹式 label）：input 子树无文本时的可访问名来源。
+ *  只进 role 候选——getByRole 的可访问名计算含 label 关联；**不进 text 候选**，getByText
+ *  只匹配文本节点，label 文本在目标元素外，回放必然 count=0（规则查看 用例同款根因）。 */
+function getLabelText(el: Element): string | null {
+  const first = (el as HTMLInputElement).labels?.[0];
+  if (!first) return null;
+  const raw = normalize(first.innerText ?? first.textContent);
+  if (!raw || raw.length > 50 || VOLATILE_TAIL_RE.test(raw)) return null;
+  return raw;
+}
+
+/** role 候选的 name：属性名优先（Playwright 可访问名计算含 aria-label/title），
+ *  再 label 关联文本，回退子树文本。 */
 function getAccessibleName(el: Element): string | null {
-  return getAttrName(el) ?? getSubtreeText(el);
+  return getAttrName(el) ?? getLabelText(el) ?? getSubtreeText(el);
 }
 
 /** 含 element 子节点即视为非 leaf。SVG 元素及其子节点也按此规则——svg/path 等的 innerText
@@ -272,7 +284,9 @@ export function generateLocators(el: Element, options: GenerateLocatorsOptions =
   const role = getAccessibleRole(el);
   const attrName = getAttrName(el);
   const subtreeText = getSubtreeText(el);
-  const name = attrName ?? subtreeText;
+  // 可访问名链：属性名 → label 关联文本 → 子树文本（getAccessibleName）。label 关联只进 role
+  // 候选——getByRole 的可访问名计算含 label 关联，而 getByText 匹配不到目标元素外的 label 文本。
+  const name = getAccessibleName(el);
   if (role && name) push({ strategy: 'role', value: `${role}[name="${name.replace(/"/g, '\\"')}"]` });
 
   const testId = getTestId(el);

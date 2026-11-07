@@ -444,19 +444,31 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         if (!(await waitTargetEnabled(page, clickLoc))) {
           throw new Error(`target-disabled: 目标等待 ${WAIT_TARGET_ENABLED_MS}ms 仍处禁用/加载态，拒绝无效强点`);
         }
-        await clickLoc.click({ timeout: 5000, force: true });
+        // clickCount: 2/3 = 双击/三连击（录制器捕获原生 dblclick 时置 2）；缺省 1 与历史行为一致。
+        await clickLoc.click({ timeout: 5000, force: true, clickCount: action.clickCount ?? 1 });
       } catch (e) {
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
           const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
           // 不能裸 first()：Element-UI 在 .el-table 首子节点渲染 display:none 的 .hidden-columns
           // 模板克隆（.el-table__fixed 里还有隐藏克隆），DOM 顺序早于真实元素，first() 会抓到
           // 不可见副本等 5s 超时（规则查看 回测根因）。与 assertVisible 兜底同款 visible 过滤。
-          await loc.filter({ visible: true }).first().click({ timeout: 5000 });
+          await loc.filter({ visible: true }).first().click({ timeout: 5000, clickCount: action.clickCount ?? 1 });
           return;
         }
         throw e;
       }
       return;
+    case 'scroll': {
+      // 绝对位置滚动：locator 指实际滚动容器（窗口级滚动录的是 document.scrollingElement）。
+      // evaluate 设 scrollTop/scrollLeft，浏览器自动钳到内容边界 → 回放与起点无关、确定性。
+      // 只读位置写入，不需要稳定性检查/strict 兜底。
+      const scrollLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+      await scrollLoc.evaluate(
+        (el, [top, left]) => { el.scrollTop = top; el.scrollLeft = left; },
+        [action.scrollTop, action.scrollLeft] as [number, number],
+      );
+      return;
+    }
     case 'fill': {
       let value: string;
       if (action.sensitive) {
