@@ -191,16 +191,24 @@ describe('space session supervisor', () => {
     expect(CASE_AUTHORING_FLOW_EN).not.toContain('For each instruction:');
   });
 
-  it('侦察红线文案：固化前禁 inspect_page/repo_*，失败先回报再动手（10-27 prod228 实录：失败分支自主考古 3 分钟）', async () => {
+  it('证据自取纪律文案：事实自己取证、实测为最终证据、失败先回报再深挖（11-07 用户口径：动不动求助用户=不智能）', async () => {
     const { CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN, REQ_DESIGN_METHOD } = await import('../src/pi/space/reqDesign.js');
-    // 红线块存在于中英文流程指引,且失败分支强调「先回报、后动手」
-    expect(CASE_AUTHORING_FLOW_ZH).toContain('侦察红线');
-    expect(CASE_AUTHORING_FLOW_ZH).toContain('禁止调用 inspect_page 与 repo_ls/repo_read/repo_grep/static_locator');
-    expect(CASE_AUTHORING_FLOW_ZH).toContain('先回报失败详情与归因');
-    expect(CASE_AUTHORING_FLOW_EN).toContain('Recon red line');
-    expect(CASE_AUTHORING_FLOW_EN).toContain('report FIRST, then act');
-    // REQ_DESIGN_METHOD:运行时机身证据优先取代「先抓页面」;§2 断言句不再点名 inspect_page
+    // 纪律块存在于中英文流程指引:自取渠道枚举 + 实测终局 + 求助用户仅限两类
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('证据自取纪律');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('repo_ls/repo_read/repo_grep(读代码)');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('求助用户只限两类');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('先回报再深挖');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('Self-serve evidence discipline');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('report FIRST, then dig');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('ask the user ONLY for two things');
+    // 旧「未经同意禁侦察」红线不得回归
+    expect(CASE_AUTHORING_FLOW_ZH).not.toContain('未经用户同意,禁止调用 inspect_page');
+    expect(CASE_AUTHORING_FLOW_EN).not.toContain('Recon red line');
+    // REQ_DESIGN_METHOD:运行时机身证据优先 + §6 自取取证(旧三路径/裸抛问题文案不得回归)
     expect(REQ_DESIGN_METHOD).toContain('运行时机身证据优先');
+    expect(REQ_DESIGN_METHOD).toContain('缺页面事实自己取证,不抛给用户');
+    expect(REQ_DESIGN_METHOD).toContain('求助用户只限两类');
+    expect(REQ_DESIGN_METHOD).not.toContain('给用户确认路径而不是裸抛问题');
     expect(REQ_DESIGN_METHOD).not.toContain('断言前先触发对应操作:inspect_page');
   });
 

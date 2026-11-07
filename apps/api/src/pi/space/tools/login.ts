@@ -79,7 +79,7 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
       }),
       promptGuidelines: [
         'perform_login 登录全程有实时画面（用户能在右栏看到填表与提交）——登录成功后不要再抓页面确认登录态,storageState 即登录态凭证。',
-        '仅当用户明确要求分析页面时才用 inspect_page 确认登录态（把 perform_login 返回的 storageState 传进去）。',
+        '需要确认登录态或抓登录后的页面时,自主用 inspect_page 验证（把 perform_login 返回的 storageState 传进去）——登录态属于可自查的事实,不必请示用户。',
         '要登某个具名 web 服务时，perform_login 传 webRef=<服务名>（可用服务名见 get_login_credentials 返回的 webServices）。',
       ],
       execute: async (input) => {
