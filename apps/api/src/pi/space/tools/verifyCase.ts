@@ -12,7 +12,12 @@ import { Type } from '@earendil-works/pi-ai';
 // 步骤/元哈希已移 verifyTrace.ts（solidify 轨迹新鲜度与 verify 前缀确认共用同一套哈希）
 import { hashEffectiveSteps, hashVerifyMeta, traceKey, saveVerifiedTrace, clearVerifiedTrace } from './verifyTrace.js';
 import { chromium } from 'playwright-core';
-import type { Browser, Page } from 'playwright-core';
+import type { Browser, BrowserContext, Page } from 'playwright-core';
+import {
+  acquire as acquireBrowserSession,
+  commit as commitBrowserSession,
+  invalidate as invalidateBrowserSession,
+} from './browserSessions.js';
 import { asc, eq, and } from 'drizzle-orm';
 import { db } from '../../../db/client.js';
 import { testCases, testSteps, aiStageCaseOps, aiStageCases } from '../../../db/schema.js';
@@ -24,7 +29,7 @@ import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from '../../../execut
 import { buildCandidates } from '../../../execute/locator-resolver.js';
 import type { Locator, ConsoleLogEntry } from '@itest/shared';
 import { runCaseVisionAssert } from '../../../execute/visionAssert.js';
-import { createConsoleCapture } from '../../../execute/consoleCapture.js';
+import { createConsoleCapture, drainConsoleForPage } from '../../../execute/consoleCapture.js';
 import { resolveEnv } from '../../../execute/envContext.js';
 import { resolveCaseUrl } from '../../../lib/resolve-url.js';
 import { decrypt } from '../../../lib/secret-crypto.js';
@@ -686,8 +691,24 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
 
         // ── 浏览器 + watchdog → 逐步骤 AI 驱动执行（fail-stop）──
         let browser: Browser | undefined;
+        let context: BrowserContext | undefined;
+        let page: Page | undefined;
         let live: ReturnType<typeof registerLiveView> | undefined;
         let timedOut = false;
+        // 保活状态机：registryOwned=浏览器归注册表（命中轮）；completed=走到正常完成发射点；
+        // zombie=在途异步仍在驱动浏览器（runAiTask/restore/replay 均无 AbortSignal 可抢占，
+        // 只能弃守）。finally 凭 completed&&!zombie&&!timedOut+连通性决定 commit 保活 /
+        // invalidate 销毁 / 照旧即用即关。
+        const sessKey = roundKey(ctx.threadId, caseId);
+        let registryOwned = false;
+        let completed = false;
+        let zombie = false;
+        let reused = false;
+        let appliedCount = 0;
+        let reuseApplied = 0;
+        // 结尾机械干跑的终态页（finally 关闭防 kept context 页积累；声明在 try 外供 finally 可见。
+        // 断言初始化：赋值发生在 onPageReady 回调里，CFA 不可见——裸 null 初始化会让 finally 收窄成 never）
+        let replayPage = null as Page | null;
         const timer = setTimeout(() => {
           timedOut = true;
           if (browser) void browser.close().catch(() => undefined);
@@ -716,18 +737,37 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           try { caseWebOrigin = envCtx.resolveWebOrigin(effectiveCase.webServiceRef ?? null); } catch { caseWebOrigin = null; }
           // 停止检查点：起浏览器前再探一次（上面的 DB/静态分析期间用户可能已点停止）。
           if (signal?.aborted) return { ok: false, error: '已停止：用户中断了本次验证' };
-          browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
-          // 命中登录态缓存则注入 context:同环境重试轮/后续用例免登录（过期自愈,见 loginStateCache）
+          // ── 保活复用尝试（mechanical 终端验收轮不进注册表，保持即用即关）──
+          // 命中：browser/context/page 停在上一轮终态，前缀零重放零 restore，AI 相从 appliedCount
+          // 直接续跑；未命中：fresh launch，轮末 finally 视结果上册供下轮复用。注册表任何失效
+          // 条件（过期/断连/前缀步被编辑/换环境）由 acquire 内部销毁降级到本路径。
+          const acquired =
+            mode !== 'mechanical' ? acquireBrowserSession(sessKey, curMetaHash, curStepsHash) : null;
+          // 命中登录态缓存则注入 context:同环境重试轮/后续用例免登录（过期自愈,见 loginStateCache）；
+          // 复用轮登录态天然在 kept context 里，不注入（loginKey 仍要算——轮末 storageState 回写用）
           const loginKey = loginStateKey(envCtx.envId, envCtx.login?.user);
-          const cachedState = getLoginState(loginKey);
-          const context = await browser.newContext({
-            ignoreHTTPSErrors: true,
-            viewport: { width: 1280, height: 800 },
-            ...(cachedState ? { storageState: cachedState } : {}),
-          });
-          let page = await context.newPage();
+          const cachedState = acquired ? null : getLoginState(loginKey);
+          if (acquired) {
+            reused = true;
+            registryOwned = true;
+            browser = acquired.browser;
+            context = acquired.context;
+            page = acquired.page;
+            appliedCount = acquired.appliedCount;
+            reuseApplied = acquired.appliedCount;
+          } else {
+            browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
+            context = await browser.newContext({
+              ignoreHTTPSErrors: true,
+              viewport: { width: 1280, height: 800 },
+              ...(cachedState ? { storageState: cachedState } : {}),
+            });
+            page = await context.newPage();
+          }
           // 浏览器 console error / pageerror 采集：AI 相自管 page（不经 runStepsInContext），
           // 自挂订阅；失败收尾时 drain 进归因证据（缓冲上限 10 条，典型即失败步的报错）。
+          // 同页幂等（WeakMap 返回同实例）：复用轮拿到既有实例，先 drain 清隔轮残留。
+          drainConsoleForPage(page);
           const consoleCapture = createConsoleCapture(page);
           // playground 实时画面：注册页面源，start 事件把流地址带给前端进度卡；finally close 结束流
           // （ctx.liveView === false 为批量后台链路：不注册画面源，省 0.5fps 截图轮询开销）
@@ -788,8 +828,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // executeCaseInBrowser 内部自建 page 并 goto(targetUrl)，成功/失败都把它交还（onPageReady /
           // onFailurePage），后续 AI 相与证据采集继续用该 page。restore 失败 → 收敛到失败步由 AI 接管
           // （机械回放失败不判死：AI 临场可能自适应绕过）。
-          let resumeIndex = validPrefixLen;
-          if (validPrefixLen > 0) {
+          // 保活命中轮整段跳过：浏览器停在上一轮终态，前缀已生效，AI 相从 reuseApplied 直接续跑。
+          let resumeIndex = reused ? reuseApplied : validPrefixLen;
+          if (validPrefixLen > 0 && !reused) {
             let restoredPage: Page | null = null;
             const restoreSlice = effectiveSteps.slice(0, validPrefixLen);
             // 停止可抢占 restore：在途回放随 finally 关浏览器终止，异常吞掉不上抛。
@@ -819,17 +860,28 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               async (p, j) => { restoredPage = p; resumeIndex = j; },
             );
             void restorePromise.catch(() => undefined);
-            const restoreRes = await Promise.race([restorePromise, stopGuard]);
+            let restoreRes: Awaited<typeof restorePromise>;
+            try {
+              restoreRes = await Promise.race([restorePromise, stopGuard]);
+            } catch (e) {
+              // stopGuard 抢占：在途 restore 无 signal 可停，弃守关浏览器后仍会继续改页面——
+              // 命中轮标记 zombie 让 finally 销毁注册表浏览器，下轮降级 fresh 路径。
+              zombie = true;
+              throw e;
+            }
             if (restoreRes.some((r) => r.status === 'failed')) {
               const j = restoreRes.findIndex((r) => r.status === 'failed');
               resumeIndex = j < 0 ? validPrefixLen : j;
             }
             if (restoredPage) page = restoredPage;
           }
+          // restore 落定后的已生效前缀（完全恢复=validPrefixLen；收敛=失败步 j），轮末 commit 口径
+          appliedCount = resumeIndex;
 
           // 初始导航（仅非 resume：resume 时 restore 已完成导航；mechanical 跳过——干跑
-          // executeCaseInBrowser 自带 goto，预导航只是多一次页面加载与副作用）
-          if (mode !== 'mechanical' && validPrefixLen === 0 && targetUrl) {
+          // executeCaseInBrowser 自带 goto，预导航只是多一次页面加载与副作用。保活命中轮
+          // appliedCount=0 时页面状态未知（上轮可能停在首步失败现场），goto 重置到已知态）
+          if (mode !== 'mechanical' && (validPrefixLen === 0 || (reused && appliedCount === 0)) && targetUrl) {
             const firstCompiled = effectiveSteps[0]?.compiled;
             const firstAction = (Array.isArray(firstCompiled) && firstCompiled.length > 0
               ? firstCompiled[0]
@@ -897,9 +949,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // loginCache/loginUser：登录态缓存命中与凭据用户直显对话框，无需翻服务端日志即可确认复用生效。
           ctx.emit({
             type: 'verify_progress', phase: 'start', caseId, total: effectiveSteps.length, targetUrl: targetUrl ?? null,
-            resumeFrom: validPrefixLen,
+            resumeFrom: reused ? reuseApplied : validPrefixLen,
+            ...(reused ? { browserReused: true as const } : {}),
             ...(mode === 'mechanical' ? { mode: 'mechanical' as const } : {}),
-            loginCache: cachedState ? ('hit' as const) : ('miss' as const),
+            loginCache: reused || cachedState ? ('hit' as const) : ('miss' as const),
             loginUser: envCtx.login?.user ?? null,
             stagedOps: opsApplied,
             ...(staticNote ? { staticNote } : {}),
@@ -910,7 +963,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             const s = effectiveSteps[i]!;
             const started = Date.now();
             // 停止检查点：每步开始前探测（机械等待/上一步收尾期间用户可能已点停止）。
+            // 步边界取消无在途异步：浏览器状态 = 已生效前缀，属可保活的干净断点。
             if (signal?.aborted) {
+              completed = true;
               ctx.emit({ type: 'verify_progress', phase: 'end', result: 'cancelled' });
               return { ok: false, error: '已停止：用户中断了本次验证' };
             }
@@ -1076,10 +1131,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 ...(typeof parsed?.login === 'string' ? { login: parsed.login } : {}),
                 ...(parsed ? {} : { reason: summary.slice(0, 120) }),
               });
+              // 该步副作用已落到 page：保活 commit 口径的已生效前缀推进一位
+              appliedCount = i + 1;
             } catch (e) {
               clearTimeout(guardTimer);
               // 用户停止：丢弃在途 aiRun（finally 关浏览器令其终止），进度卡收尾为 cancelled。
+              // runAiTask 无 AbortSignal，弃守后仍会继续驱动页面——标记 zombie 禁止保活。
               if (signal?.aborted) {
+                zombie = true;
                 void aiRun?.catch(() => undefined);
                 ctx.emit({ type: 'verify_progress', phase: 'end', result: 'cancelled' });
                 return { ok: false, error: '已停止：用户中断了本次验证' };
@@ -1092,6 +1151,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               const eMsg = (e as Error).message ?? '';
               if (eMsg.startsWith('STEP_TIMEOUT:')) {
                 // 单步 AI 相超过 STEP_AI_TIMEOUT_MS：fail-stop 该步而非整轮超时（在途 aiRun 放弃）
+                zombie = true;
                 void aiRun?.catch(() => undefined);
                 stepResults.push({
                   order: s.order, status: 'failed', durationMs: Date.now() - started,
@@ -1202,7 +1262,6 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           const allVisual = isAllVisualSteps(effectiveSteps);
           let replayFailure: ExecStepResult | null = null;
           let replaySteps: ExecStepResult[] = [];
-          let replayPage: Page | null = null;
           let replayStartedAt = 0;
           if (failedIndex < 0 && !visionFailure && (mode === 'mechanical' || !allVisual)) {
             ctx.emit({ type: 'verify_progress', phase: 'replay_start' });
@@ -1246,13 +1305,17 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               replayFailure = replaySteps.find((r) => r.status === 'failed') ?? null;
             } catch (e) {
               if (signal?.aborted) {
+                // 在途 replay（runStepsInContext）无 signal 可停，弃守后仍继续跑——禁止保活
+                zombie = true;
                 ctx.emit({ type: 'verify_progress', phase: 'end', result: 'cancelled' });
                 return { ok: false, error: '已停止：用户中断了本次验证' };
               }
               if (timedOut) return commitTimeoutPrefix('机械回放中');
+              zombie = true; // 非预期异常：在途回放状态未知，禁止保活
               throw e;
             }
             if (signal?.aborted) {
+              zombie = true;
               ctx.emit({ type: 'verify_progress', phase: 'end', result: 'cancelled' });
               return { ok: false, error: '已停止：用户中断了本次验证' };
             }
@@ -1355,7 +1418,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                     // 轨迹已缓存 → 紧接着的 solidify_case 可零执行秒级固化（agent 据此引导用户）
                     traceSaved: traceSavedNow,
                   }),
-              resumeFrom: validPrefixLen,
+              resumeFrom: reused ? reuseApplied : validPrefixLen,
+              ...(reused ? { browserReused: true as const } : {}),
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
@@ -1370,6 +1434,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 ? { replay: { result: 'passed' as const, durationMs: Date.now() - replayStartedAt, steps: replaySummary } }
                 : {}),
             });
+            completed = true; // 正常完成发射点：在途异步均已收敛，浏览器状态可保活
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
             return { ok: true, data: rdata };
           }
@@ -1403,7 +1468,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
               ...(mode === 'mechanical' ? { mode: 'mechanical' as const } : { login }),
-              resumeFrom: validPrefixLen,
+              resumeFrom: reused ? reuseApplied : validPrefixLen,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
@@ -1421,6 +1486,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 note: `vision 终态判定失败：${mode === 'mechanical' ? '机械步骤全部执行通过后' : '全部步骤执行通过后'}，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。${mode === 'mechanical' ? '（机械验收模式：步骤语义未经 AI 相复核、描述性断言按上一轮判定或字面处理——修正后重跑 mechanical，拿不准改 mode=full 复核。）' : ''}${emptyDataHint ? ` ⚠ 失败页检出空数据信号「${emptyDataHint}」：被测环境当前没有可供断言的数据，这通常是环境前置数据缺失，而非选择器/步骤写错。正确做法是让用例先创建出满足 expectedOutcome 的数据（例如造一条会自动触发处置的事件），或如实向用户汇报环境缺数据——严禁通过弱化 expectedOutcome（如把"自动启动处置成功"改成"页面正常加载"）把失败蒙成通过。` : ''}${visionDiag ? ` ⚠ 归因:${visionDiag.note}` : ''}`,
               },
             });
+            completed = true; // 正常完成发射点：在途异步均已收敛，浏览器状态可保活
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
             return { ok: true, data: rdata };
           }
@@ -1455,7 +1521,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
               ...(mode === 'mechanical' ? { mode: 'mechanical' as const } : { login }),
-              resumeFrom: validPrefixLen,
+              resumeFrom: reused ? reuseApplied : validPrefixLen,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
@@ -1486,6 +1552,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 note: `${mode === 'mechanical' ? '机械验收模式（无 AI 相对照）下 compiled 机械逐字执行失败' : 'AI 临场执行能通过，但与正式回放同引擎的 compiled 机械逐字执行失败（回放分叉）'}——典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突二次执行必挂。请用 failure.page.elements 中真实存在的选择器把该步 compiled 改成更精确的可操作目标（组件内部真实接收点击/输入的元素），或修正测试数据策略（时间戳命名）后重验。${mode === 'mechanical' ? '（机械模式无自动登录：若失败页是登录页，多为登录态缓存失效/副本重启——改 mode=full 重新实测登录即可；同因连续两轮失败或归因不明也建议改 full 复核。）' : ''}${replayDiag ? ` ⚠ 归因:${replayDiag.note}` : ''}${replayHint ? ` 源码静态提示:${replayHint}` : ''}`,
               },
             });
+            completed = true; // 正常完成发射点：在途异步均已收敛，浏览器状态可保活
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
             return { ok: true, data: rdata };
           }
@@ -1542,7 +1609,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             envId: envCtx.envId,
             targetUrl: targetUrl ?? null,
             login,
-            resumeFrom: validPrefixLen,
+            resumeFrom: reused ? reuseApplied : validPrefixLen,
             basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
             stagedOpsApplied: opsApplied,
             ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
@@ -1568,7 +1635,31 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         } finally {
           clearTimeout(timer);
           live?.close();
-          if (browser) await browser.close().catch(() => undefined);
+          // ── 保活决策：正常完成（completed）+ 无在途僵尸（zombie）+ 未超时 + 浏览器连通
+          // → commit 上册供下轮零重放续跑；zombie/超时/断连时命中轮 invalidate 销毁、
+          // 新建轮照旧即用即关。replayPage 不是保活口径的终态页（下轮续跑从 AI 相 page 起），关掉。
+          if (
+            mode !== 'mechanical' &&
+            browser !== undefined && context !== undefined && page !== undefined &&
+            completed && !zombie && !timedOut &&
+            // 可选调用 + 严格等值：Browser/Page 接口恒有这两方法，缺方法只出现在测试桩——
+            // 视为不可保活（注册表在桩环境下惰性，既有测试语义不变），真实浏览器不受影响。
+            browser.isConnected?.() === true && page.isClosed?.() === false
+          ) {
+            if (replayPage && replayPage !== page && replayPage.isClosed?.() !== true) {
+              await replayPage.close().catch(() => undefined);
+            }
+            commitBrowserSession(
+              sessKey,
+              { browser, context, page },
+              curMetaHash,
+              curStepsHash.slice(0, appliedCount),
+            );
+          } else if (registryOwned) {
+            invalidateBrowserSession(sessKey);
+          } else if (browser) {
+            await browser.close().catch(() => undefined);
+          }
           await envCtx.close().catch(() => undefined);
         }
       } catch (e) {

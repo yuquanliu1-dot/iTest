@@ -93,6 +93,7 @@ vi.mock('playwright-core', () => {
               goto: async (u: string) => { state.gotos.push(u); },
               waitForLoadState: async () => {},
               waitForTimeout: async () => {},
+              on: () => {}, // consoleCapture 订阅（console/pageerror），桩页无需采集
               close: async () => {},
               screenshot: async () => Buffer.from('fake-png'),
               // pageSettle 的像素指纹取数字；断言文本体检取 innerText 字符串。
