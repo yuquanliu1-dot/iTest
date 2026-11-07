@@ -7,6 +7,7 @@ import type { AiUsageAddend } from './aiUsage.js';
 import { logger } from '../logger.js';
 import { annotateAction, clearAnnotation } from './liveView.js';
 import { waitForPageSettled } from './pageSettle.js';
+import { isOpenDropdownFilter } from './dropdownFilter.js';
 
 /** 单条指令的最大对话轮数（每轮一次 LLM 调用）。 */
 const MAX_TURNS = 8;
@@ -389,6 +390,8 @@ interface PointTarget {
   text?: string;
   /** input/textarea 的当前值（fill 回读用）。 */
   value?: string;
+  /** 该元素是「已展开下拉」的过滤输入框（Element UI / Ant Design）——fill 收尾不得 blur。 */
+  dropdownFilter?: boolean;
   box: { x: number; y: number; width: number; height: number };
 }
 
@@ -456,6 +459,23 @@ async function resolveAtPoint(
         if (text) out.text = text;
         const v = (target as HTMLInputElement).value;
         if (typeof v === 'string') out.value = v;
+        // 「已展开下拉的过滤输入框」判定（Element UI / Ant Design）：这类控件在 blur 时会
+        // 清空查询词、关掉候选面板——fill 收尾必须跳过 Tab，否则远程搜索下拉永远选不中。
+        // 判据与 dropdownFilter.ts 同款（宿主 + 是否已展开），此处内联是因为 page.evaluate
+        // 不能引用模块作用域标识符。
+        let dropdownFilter = false;
+        {
+          // closest 不可用时不抛（探测是可选增强，抛了会连带丢掉 selector 富化）
+          const host = typeof target.closest === 'function'
+            ? (target.closest('.el-select, .el-autocomplete, .ant-select') as HTMLElement | null)
+            : null;
+          if (host) {
+            const vm = (host as unknown as { __vue__?: { visible?: unknown; suggestionsVisible?: unknown } }).__vue__;
+            if (vm) dropdownFilter = vm.visible === true || vm.suggestionsVisible === true;
+            else dropdownFilter = /(^|\s)\S*-open(\s|$)/.test(host.className);
+          }
+        }
+        if (dropdownFilter) out.dropdownFilter = true;
         return out;
       },
       { pt: [px, py] as [number, number], src: SYNTH_SELECTOR_SRC, it: intent },
@@ -549,10 +569,17 @@ async function execAction(page: Page, action: AiAction, valueSub?: (v: string) =
         await page.mouse.click(px, py);
         await page.keyboard.press('ControlOrMeta+A').catch(() => undefined);
         await page.keyboard.type(realValue, { delay: 20 });
-        // React 受控表单常在 blur 时才提交 state / 触发校验；与 selector 路径保持一致。
-        await page.keyboard.press('Tab').catch(() => undefined);
-        await page.waitForTimeout(80);
-        const after = await resolveAtPoint(page, px, py, 'fill');
+        // 打字后、blur 前探测：远程搜索下拉（Element UI remote+filterable）在 blur 时会清空
+        // 查询词、关掉候选面板，输入值被抹成 ""——这类控件必须跳过 Tab，且回读取 blur 前的值
+        // （blur 之后读到的必然是空，AI 会误判"填不进去"并反复重试）。
+        const typed = await resolveAtPoint(page, px, py, 'fill');
+        const keepOpen = typed?.dropdownFilter === true;
+        if (!keepOpen) {
+          // React 受控表单常在 blur 时才提交 state / 触发校验；与 selector 路径保持一致。
+          await page.keyboard.press('Tab').catch(() => undefined);
+          await page.waitForTimeout(80);
+        }
+        const after = keepOpen ? typed : await resolveAtPoint(page, px, py, 'fill');
         const actual = typeof after?.value === 'string' ? after.value : null;
         const label = before?.selector ? `@${action.x},${action.y}（${before.selector}）` : `@${action.x},${action.y}`;
         const resolvedSel = before && before.unique !== false ? before.selector : null;
@@ -569,10 +596,15 @@ async function execAction(page: Page, action: AiAction, valueSub?: (v: string) =
       const loc = page.locator(selector).first();
       await loc.fill('', { timeout: 5000 });
       await loc.pressSequentially(realValue, { delay: 20 });
-      // React 受控表单常在 blur 时才提交 state / 触发校验；与 cdp.ts dispatch fill 保持一致。
-      await page.keyboard.press('Tab').catch(() => undefined);
-      // 简短停顿让 onChange/blur 事件落地（Antd 等库在 blur 后异步校验）。
-      await page.waitForTimeout(80);
+      // 已展开下拉的过滤输入框不能 blur：blur 会清空查询词、关掉候选面板（远程搜索下拉致命，
+      // 后续步骤就点不到候选了）。判定在打字之后——此时面板才可能处于展开态。
+      const keepOpen = await isOpenDropdownFilter(loc);
+      if (!keepOpen) {
+        // React 受控表单常在 blur 时才提交 state / 触发校验；与 cdp.ts dispatch fill 保持一致。
+        await page.keyboard.press('Tab').catch(() => undefined);
+        // 简短停顿让 onChange/blur 事件落地（Antd 等库在 blur 后异步校验）。
+        await page.waitForTimeout(80);
+      }
       // 回读确认：若 DOM value 与目标不一致，把实际值反馈给 LLM 以便下轮修正。
       const actual = await loc.inputValue({ timeout: 3000 }).catch(() => '');
       if (actual !== realValue) {

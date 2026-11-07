@@ -28,6 +28,7 @@ import { waitForStable, ElementNotStable, waitForDomQuiet } from './stability.js
 import { classify } from './failureClassifier.js';
 import { preflight } from './preflight.js';
 import { domClick, domFill, domCheck, domSelect } from './domFallback.js';
+import { isOpenDropdownFilter } from './dropdownFilter.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
 import { runAiTask, solveCaptchaOnce, isCaptchaFailed, CAPTCHA_TASK_RE, SECRET_PH, makeCredentialValueSub, parseCredentialPlaceholder, CREDENTIAL_PLACEHOLDER_SCAN, referencesCredential, buildDegradeContext, type AiAction } from './aiTask.js';
 import { buildCredentialSource, renderWebResourceManifest } from './credentialSource.js';
@@ -505,7 +506,11 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         await fillLoc.fill('', { timeout: 5000 });
         await fillLoc.pressSequentially(value, { delay: 20 });
         // 触发 blur 让 onChange 提交（Antd 等库在 blur 时同步校验/格式化）
-        await page.keyboard.press('Tab').catch(() => undefined);
+        // 但目标是「已展开下拉的过滤框」时不能失焦：blur 会清空查询词、关掉候选列表
+        // （远程搜索下拉致命），保持焦点与面板，后续步骤才能点中候选。
+        if (!(await isOpenDropdownFilter(fillLoc))) {
+          await page.keyboard.press('Tab').catch(() => undefined);
+        }
       } catch (e) {
         // strict-mode violation（getByRole 命中多个同名元素）→ 退到可见匹配的 first()
         // （visible 过滤防隐藏克隆劫持，同 click 兜底）
