@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 /**
  * 工作台面板：与主体卡片同款（bg-card + border + radius-md）。
  * header 区为「标题 + 右侧副标题」两栏，副标题用 muted 小字。
+ * 标题层级靠字号与颜色，不靠加粗：14px / 500，前景色。
  */
 export function Panel({
   title,
@@ -19,8 +20,8 @@ export function Panel({
 }) {
   return (
     <section className={`bg-card border rounded-[var(--radius-md)] p-4 ${className}`}>
-      <div className="mb-3 flex items-baseline justify-between gap-3">
-        <h3 className="text-[14px] font-semibold" style={{ color: 'var(--foreground)' }}>
+      <div className="mb-4 flex items-baseline justify-between gap-3">
+        <h3 className="text-[14px] font-medium" style={{ color: 'var(--foreground)' }}>
           {title}
         </h3>
         {subtitle != null && (

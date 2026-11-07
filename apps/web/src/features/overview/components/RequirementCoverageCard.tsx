@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { COVERAGE_TYPE_KEYS } from '@itest/shared';
 import { formatPct } from '../format';
 import { Panel } from './Panel';
 import MeterBar from './MeterBar';
@@ -6,19 +7,14 @@ import type { OverviewResponse } from '../api';
 
 type Coverage = OverviewResponse['coverage'];
 
-/** 需求覆盖：用例需求关联率大数 + 进度条 + coverageTypes 分布 chips + 未覆盖脚注。 */
+/**
+ * 需求覆盖：需求被用例覆盖的比例（大数 + 进度条）+ 用例覆盖类型分布。
+ * 分布列出全部已知类型（含计数为 0 的），因为「一个类型都没声明」本身就是信号。
+ */
 export default function RequirementCoverageCard({ coverage }: { coverage: Coverage }) {
   const { t } = useTranslation();
-  const rate = coverage.totalCases === 0 ? 0 : coverage.linkedCases / coverage.totalCases;
-
-  const chips = Object.entries(coverage.byCoverageType)
-    .filter(([, count]) => count > 0)
-    .map(([type, count]) => ({
-      type,
-      count,
-      label: t(`overview:coverageType_${type}`, { defaultValue: type }),
-      pct: coverage.totalCases === 0 ? '0' : formatPct(count / coverage.totalCases),
-    }));
+  const rate = coverage.totalRequirements === 0 ? 0 : coverage.linkedRequirements / coverage.totalRequirements;
+  const maxType = Math.max(...COVERAGE_TYPE_KEYS.map((k) => coverage.byCoverageType[k] ?? 0), 1);
 
   return (
     <Panel
@@ -29,44 +25,44 @@ export default function RequirementCoverageCard({ coverage }: { coverage: Covera
         linked: coverage.linkedRequirements,
       })}
     >
-      <div className="flex items-baseline gap-2.5">
+      <div className="flex items-baseline gap-2">
         <span
           className="font-semibold tabular-nums leading-none"
           style={{ fontSize: 28, color: 'var(--foreground)' }}
         >
           {formatPct(rate)}%
         </span>
-        <span className="text-[12.5px]" style={{ color: 'var(--muted-foreground)' }}>
-          {t('overview:coverageRateLabel', {
-            linked: coverage.linkedCases.toLocaleString(),
-            total: coverage.totalCases.toLocaleString(),
-          })}
+        <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+          {t('overview:coverageRateLabel')}
         </span>
       </div>
       <div className="mt-3">
-        <MeterBar pct={rate * 100} color="var(--success)" />
+        <MeterBar pct={rate * 100} color="var(--muted-foreground)" />
       </div>
-      {chips.length > 0 && (
-        <div className="mt-4 flex flex-wrap gap-1.5">
-          {chips.map((c) => (
-            <span
-              key={c.type}
-              className="inline-flex items-center rounded-full px-2.5 py-0.5 text-[12px] font-medium"
-              style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
-            >
-              {c.label}
-              <b className="tabular-nums" style={{ color: 'var(--foreground)', marginLeft: 4 }}>
-                {c.pct}%
-              </b>
-            </span>
-          ))}
+
+      <div className="mt-4 border-t pt-3">
+        <div className="mb-2 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+          {t('overview:coverageTypeTitle')}
         </div>
-      )}
-      <div
-        className="mt-3.5 border-t pt-3 text-[12px]"
-        style={{ borderColor: 'var(--border)', color: 'var(--muted-foreground)' }}
-      >
-        {t('overview:coverageFootUncovered', { count: coverage.uncoveredRequirements })}
+        <div className="flex flex-col gap-2">
+          {COVERAGE_TYPE_KEYS.map((type) => {
+            const count = coverage.byCoverageType[type] ?? 0;
+            return (
+              <div key={type} className="grid grid-cols-[72px_minmax(0,1fr)_32px] items-center gap-2">
+                <span className="truncate text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+                  {t(`overview:coverageType_${type}`, { defaultValue: type })}
+                </span>
+                <MeterBar pct={(count / maxType) * 100} color="var(--muted-foreground)" size="sm" />
+                <span
+                  className="text-right text-[12px] font-semibold tabular-nums"
+                  style={{ color: count > 0 ? 'var(--foreground)' : 'var(--muted-foreground)' }}
+                >
+                  {count}
+                </span>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </Panel>
   );

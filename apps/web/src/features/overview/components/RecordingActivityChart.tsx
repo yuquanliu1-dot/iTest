@@ -1,7 +1,6 @@
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useTranslation } from 'react-i18next';
-import { chartColors, tooltipContentStyle } from '../chartTheme';
 import { Panel } from './Panel';
+import MeterBar from './MeterBar';
 import type { OverviewResponse } from '../api';
 
 type Rec = OverviewResponse['recordingActivity'];
@@ -25,44 +24,39 @@ const KIND_I18N: Record<string, string> = {
   extract: 'recordingKindExtract',
   queryDb: 'recordingKindQueryDb',
   observeLog: 'recordingKindObserveLog',
+  httpRequest: 'recordingKindHttpRequest',
 };
 
+/** 录制活动：按次数排序的排名清单 + 细条。主图（通过率趋势）之外的数据一律降级为清单，不再开第二张大图。 */
 export default function RecordingActivityChart({ data }: { data: Rec }) {
   const { t } = useTranslation();
-  if (data.length === 0) {
-    return (
-      <Panel title={t('overview:recordingTitle')}>
-        <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-          {t('overview:recordingEmpty')}
-        </p>
-      </Panel>
-    );
-  }
-
-  const chartData = data.map((d) => ({
-    name: KIND_I18N[d.kind] ? t(`overview:${KIND_I18N[d.kind]}`) : d.kind,
-    value: d.count,
-  }));
+  const sorted = [...data].sort((a, b) => b.count - a.count);
+  const max = Math.max(...sorted.map((d) => d.count), 1);
 
   return (
     <Panel title={t('overview:recordingTitle')}>
-      <div style={{ width: '100%', height: 200 }}>
-        <ResponsiveContainer>
-          <BarChart data={chartData}>
-            <CartesianGrid stroke={chartColors.border} strokeDasharray="3 3" />
-            <XAxis
-              dataKey="name"
-              tick={{ fontSize: 11, fill: chartColors.foregroundMuted }}
-            />
-            <YAxis
-              tick={{ fontSize: 11, fill: chartColors.foregroundMuted }}
-              allowDecimals={false}
-            />
-            <Tooltip contentStyle={tooltipContentStyle} />
-            <Bar dataKey="value" fill={chartColors.chart2} radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+      {sorted.length === 0 ? (
+        <p className="py-8 text-center text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+          {t('overview:recordingEmpty')}
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {sorted.map((d) => (
+            <div key={d.kind} className="grid grid-cols-[72px_minmax(0,1fr)_32px] items-center gap-2">
+              <span className="truncate text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+                {KIND_I18N[d.kind] ? t(`overview:${KIND_I18N[d.kind]}`) : d.kind}
+              </span>
+              <MeterBar pct={(d.count / max) * 100} color="var(--muted-foreground)" size="sm" />
+              <span
+                className="text-right text-[12px] font-semibold tabular-nums"
+                style={{ color: 'var(--foreground)' }}
+              >
+                {d.count}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </Panel>
   );
 }

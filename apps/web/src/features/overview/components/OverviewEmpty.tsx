@@ -11,9 +11,9 @@ export default function OverviewEmpty({ projectId }: { projectId: string }) {
     <div className="flex flex-1 items-center justify-center">
       <div className="text-center max-w-md">
         <div className="flex justify-center">
-          <Icon name="beaker" size={48} style={{ color: 'var(--muted-foreground)' }} />
+          <Icon name="beaker" size={24} style={{ color: 'var(--muted-foreground)' }} />
         </div>
-        <h3 className="text-[16px] font-semibold mt-3" style={{ color: 'var(--foreground)' }}>
+        <h3 className="text-[16px] font-medium mt-3" style={{ color: 'var(--foreground)' }}>
           {t('overview:emptyTitle')}
         </h3>
         <p className="text-[12px] mt-1" style={{ color: 'var(--muted-foreground)' }}>

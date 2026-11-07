@@ -342,9 +342,6 @@ select:focus-visible {
 .zoom-nav-btn:active:not(:disabled) { transform: scale(0.94); }
 .zoom-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
-.kpi-icon { transition: transform 180ms ease; display: inline-flex; }
-.hover-card:hover .kpi-icon { transform: scale(1.08); }
-
 /* ── 工作台内容区作用域 ──────────────────────────────────────────────
    总览内容区包在 .workbench 里，明暗跟随全局 html.dark 主题。
    这里只做「内容区铺底」，不再覆盖任何语义色 —— 工作台与产品其他

@@ -4,25 +4,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import StatusPill from '../../../components/ui/StatusPill';
 import { Panel } from './Panel';
 import MeterBar from './MeterBar';
+import { RCA_CATEGORY_COLOR, RCA_CATEGORY_BG } from '../chartTheme';
 import { formatPct } from '../format';
 import type { OverviewResponse } from '../api';
 
 type Plan = OverviewResponse['plans'][number];
-
-// RCA 徽章配色与主体 RCA 展示一致（RcaBlock.tsx）。
-const RCA_COLOR: Record<string, string> = {
-  system_defect: 'var(--destructive)',
-  environment: 'var(--warning)',
-  case_issue: 'var(--muted-foreground)',
-  other: 'var(--muted-foreground)',
-};
-
-const RCA_BG: Record<string, string> = {
-  system_defect: 'var(--destructive-soft)',
-  environment: 'var(--warning-soft)',
-  case_issue: 'var(--muted)',
-  other: 'var(--muted)',
-};
 
 const RCA_LABEL: Record<string, string> = {
   case_issue: 'overview:rcaCaseIssue',
@@ -47,7 +33,7 @@ const COLUMNS = [
   'planColTrigger',
 ];
 
-/** 计划概览表：状态徽标 + 通过率进度条 + 最近 RCA 徽标 + 触发方式。行点击进计划详情。 */
+/** 计划概览表：状态徽标 + 通过率（绿=判定，0% 不画空条）+ 最近 RCA 徽标 + 触发方式。行点击进计划详情。 */
 export default function PlanOverviewTable({
   plans,
   schedulesCount,
@@ -77,7 +63,7 @@ export default function PlanOverviewTable({
       bodyClassName="-mx-1"
     >
       {plans.length === 0 ? (
-        <p className="py-6 text-center text-[12.5px]" style={{ color: 'var(--muted-foreground)' }}>
+        <p className="py-6 text-center text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
           {t('overview:planEmpty')}
         </p>
       ) : (
@@ -96,7 +82,7 @@ export default function PlanOverviewTable({
                 onClick={() => navigate(`/p/${projectId}/v/${versionId}/plans/${p.id}`)}
                 className="cursor-pointer"
               >
-                <TableCell className="max-w-[220px] truncate font-semibold">{p.name}</TableCell>
+                <TableCell className="max-w-[220px] truncate font-medium">{p.name}</TableCell>
                 <TableCell>
                   {p.lastStatus ? (
                     <StatusPill status={p.lastStatus} pulse={p.lastStatus === 'running'}>
@@ -112,9 +98,7 @@ export default function PlanOverviewTable({
                       <span className="inline-block w-20">
                         <MeterBar pct={p.passRate * 100} color="var(--chart-1)" size="sm" />
                       </span>
-                      <span className="text-[12.5px] font-semibold tabular-nums">
-                        {formatPct(p.passRate)}%
-                      </span>
+                      <span className="text-[12px] font-semibold tabular-nums">{formatPct(p.passRate)}%</span>
                     </span>
                   ) : (
                     <span style={{ color: 'var(--muted-foreground)' }}>—</span>
@@ -129,8 +113,8 @@ export default function PlanOverviewTable({
                     <span
                       className="inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium"
                       style={{
-                        color: RCA_COLOR[p.lastRcaCategory] ?? 'var(--muted-foreground)',
-                        background: RCA_BG[p.lastRcaCategory] ?? 'var(--muted)',
+                        color: RCA_CATEGORY_COLOR[p.lastRcaCategory] ?? 'var(--muted-foreground)',
+                        background: RCA_CATEGORY_BG[p.lastRcaCategory] ?? 'var(--muted)',
                       }}
                     >
                       {t(RCA_LABEL[p.lastRcaCategory] ?? 'overview:rcaOther')}
@@ -141,10 +125,7 @@ export default function PlanOverviewTable({
                 </TableCell>
                 <TableCell>
                   {p.triggeredBy ? (
-                    <span
-                      className="inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium"
-                      style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
-                    >
+                    <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
                       {t(p.triggeredBy === 'schedule' ? 'overview:triggerSchedule' : 'overview:triggerManual')}
                     </span>
                   ) : (

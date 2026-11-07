@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
-import { useAuthStore } from '../stores/auth';
 import { useOverviewQuery, overviewQueryKey, type Range } from '../features/overview/api';
 import { formatDuration, formatPct } from '../features/overview/format';
 import OverviewHeader from '../features/overview/components/OverviewHeader';
@@ -27,7 +26,6 @@ export default function Dashboard() {
   const versionId = vidParam ?? null;
   const [range, setRange] = useState<Range>('7d');
   const { data, isLoading, isError } = useOverviewQuery(projectId, range);
-  const user = useAuthStore((s) => s.user);
 
   if (!projectId) return null;
 
@@ -84,27 +82,14 @@ export default function Dashboard() {
   return (
     <WorkbenchShell>
       <PageShell>
-        <OverviewHeader
-          range={range}
-          onRangeChange={setRange}
-          onRefresh={refresh}
-          summary={{
-            name: user?.displayName || user?.username || 'admin',
-            days,
-            runs: data.kpi.totalRuns7d,
-            passRate: formatPct(data.kpi.passRate),
-            firstPassRate: formatPct(data.kpi.firstPassRate),
-            healed: data.kpi.aiHealedReports7d,
-          }}
-        />
+        <OverviewHeader range={range} onRangeChange={setRange} onRefresh={refresh} />
 
-        {/* KPI strip — 5 cards */}
-        <div className="grid grid-cols-5 gap-4 fade-up" data-stagger>
+        {/* KPI strip — 5 张等宽卡；窄屏折叠为 2/3 列 */}
+        <div className="grid grid-cols-2 gap-4 fade-up md:grid-cols-3 lg:grid-cols-5" data-stagger>
           <KpiStripCard
             label={t('overview:kpiTotalCases')}
             value={data.kpi.totalCases.toLocaleString()}
             iconName="beaker"
-            tone="var(--primary)"
             to={link('/groups')}
             footLabel={t('overview:kpiFootReqLinked', {
               linked: data.coverage.linkedCases,
@@ -116,7 +101,6 @@ export default function Dashboard() {
             value={formatPct(data.kpi.solidifyRate)}
             suffix="%"
             iconName="bolt"
-            tone="var(--info)"
             to={link('/groups')}
             footLabel={t('overview:kpiFootPendingSteps', { count: data.kpi.solidifyPendingSteps })}
           />
@@ -125,7 +109,6 @@ export default function Dashboard() {
             value={formatPct(data.kpi.passRate)}
             suffix="%"
             iconName="checkCircle"
-            tone="var(--success)"
             to={link('/reports?filter=passed-7d')}
             footLabel={t('overview:kpiFootFirstPass', { value: formatPct(data.kpi.firstPassRate) })}
           />
@@ -133,7 +116,6 @@ export default function Dashboard() {
             label={t('overview:kpiRuns')}
             value={data.kpi.totalRuns7d.toLocaleString()}
             iconName="activity"
-            tone="var(--chart-4)"
             to={link('/reports')}
             footLabel={t('overview:kpiFootP95', { value: formatDuration(data.kpi.p95DurationMs) })}
           />
@@ -141,18 +123,17 @@ export default function Dashboard() {
             label={t('overview:kpiAiCalls')}
             value={data.kpi.aiCalls7d.toLocaleString()}
             iconName="sparkles"
-            tone="var(--chart-3)"
             to={link('/reports')}
             footLabel={t('overview:kpiFootHealed', { count: data.kpi.aiHealedReports7d })}
           />
         </div>
 
-        {/* Row: trend (8) + execution overview (4) */}
-        <div className="grid grid-cols-12 gap-4 fade-up">
-          <div className="col-span-8">
+        {/* Row: trend (8) + execution overview (4)——同排等高，执行概览的关注块钉底 */}
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+          <div className="xl:col-span-8">
             <PassRateTrendChart data={data.trend} />
           </div>
-          <div className="col-span-4">
+          <div className="xl:col-span-4">
             <ExecutionOverviewCard
               days={days}
               executions={data.executions}
@@ -160,22 +141,20 @@ export default function Dashboard() {
               p95DurationMs={data.kpi.p95DurationMs}
               solidifyPendingSteps={data.kpi.solidifyPendingSteps}
               solidifyPendingAiTasks={data.kpi.solidifyPendingAiTasks}
-              topFailures={data.topFailures}
               rca={data.rca}
             />
           </div>
         </div>
 
-        {/* Row: RCA / coverage / top failures —— 三张卡片等高（底部对齐）：各卡片 Panel 自带 h-full，
-            短内容卡片（RCA 空态/Top 失败用例）拉伸到与最高一张同高，避免底部留白。 */}
-        <div className="grid grid-cols-12 gap-4 fade-up">
-          <div className="col-span-4">
+        {/* Row: RCA / coverage / top failures——同排等高，底部对齐 */}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12">
+          <div className="xl:col-span-4">
             <RcaDistributionCard days={days} rca={data.rca} />
           </div>
-          <div className="col-span-4">
+          <div className="xl:col-span-4">
             <RequirementCoverageCard coverage={data.coverage} />
           </div>
-          <div className="col-span-4">
+          <div className="md:col-span-2 xl:col-span-4">
             <TopFailuresChart
               data={data.topFailures}
               days={days}
@@ -186,7 +165,7 @@ export default function Dashboard() {
         </div>
 
         {/* Row: plans table */}
-        <div className="fade-up">
+        <div>
           <PlanOverviewTable
             plans={data.plans}
             schedulesCount={data.schedules.enabledCount}
@@ -195,11 +174,11 @@ export default function Dashboard() {
         </div>
 
         {/* Row: recording + AI usage */}
-        <div className="grid grid-cols-12 gap-4 fade-up">
-          <div className="col-span-6">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+          <div className="xl:col-span-6">
             <RecordingActivityChart data={data.recordingActivity} />
           </div>
-          <div className="col-span-6">
+          <div className="xl:col-span-6">
             <AiUsageChart data={data.aiUsage} days={days} />
           </div>
         </div>
