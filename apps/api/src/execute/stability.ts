@@ -1,4 +1,4 @@
-import type { Page } from 'playwright-core';
+import type { Page, Frame } from 'playwright-core';
 
 export type StabilityReason = 'disabled' | 'loading' | 'overlay' | 'hidden';
 
@@ -69,12 +69,12 @@ export function stabilityProbeFn(): StabilityReport {
   return { ready: true };
 }
 
-async function probe(page: Page): Promise<StabilityReport> {
+async function probe(page: Page | Frame): Promise<StabilityReport> {
   return page.evaluate(stabilityProbeFn);
 }
 
 export async function waitForStable(
-  page: Page,
+  page: Page | Frame,
   _locator: ReturnType<Page['locator']>,
   opts: StabilityOptions = {},
 ): Promise<StabilityReport> {

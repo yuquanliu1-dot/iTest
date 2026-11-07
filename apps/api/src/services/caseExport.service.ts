@@ -45,6 +45,8 @@ interface KnownAction {
   kind?: string;
   locator?: Array<{ strategy?: string; value?: string }>;
   intentLocator?: { contextText?: string };
+  /** iframe 帧链（录制器产物）：非空时目标在 iframe 里，摘要加 [iframe] 前缀。 */
+  frameChain?: Array<{ locator?: unknown }>;
   url?: unknown;
   value?: unknown;
   sensitive?: boolean;
@@ -62,9 +64,10 @@ interface KnownAction {
 }
 
 function targetText(a: KnownAction): string {
-  if (a.intentLocator?.contextText) return a.intentLocator.contextText;
+  const prefix = Array.isArray(a.frameChain) && a.frameChain.length > 0 ? '[iframe] ' : '';
+  if (a.intentLocator?.contextText) return `${prefix}${a.intentLocator.contextText}`;
   const first = Array.isArray(a.locator) ? a.locator[0] : undefined;
-  if (first?.value) return `${first.strategy || 'css'}=${first.value}`;
+  if (first?.value) return `${prefix}${first.strategy || 'css'}=${first.value}`;
   return '';
 }
 

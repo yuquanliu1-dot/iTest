@@ -1,6 +1,10 @@
 import { generateLocators, deriveSemantic, type Locator } from './selector-core.js';
 import { detectComponent } from './component-detector.js';
 
+// re-export 给 content/recorder.js 的 locate-frame 用：selector-core.js 含裸模块说明符
+// （@medv/finder），浏览器里动态 import() 解析不了，只有这份 esbuild 打包产物可用。
+export { generateLocators };
+
 /** 录制选项：popup / panel 配置后通过 start({...}) 传入。空 options 等价于历史默认行为。 */
 export interface RecorderOptions {
   /** 优先 data-* 属性名（finder 会把整条父链的 `[name=...]` 都用上）。默认 `data-testid`。 */

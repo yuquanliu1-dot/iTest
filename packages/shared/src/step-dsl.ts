@@ -26,6 +26,12 @@ export const IntentLocator = z.object({
 });
 export type IntentLocator = z.infer<typeof IntentLocator>;
 
+/** iframe 帧链（录制器产物）：自顶向下，每级是该 iframe 元素自身的候选链。
+ *  回放按序解析 elementHandle.contentFrame() 逐级下钻；页级断言（target=page/url/errorMessage）
+ *  与非 DOM 动作不带。录制侧同源约束：跨源 frame 解析不出链，步骤照录但无链。 */
+export const FrameChain = z.array(z.object({ locator: z.array(Locator).min(1) }));
+export type FrameChain = z.infer<typeof FrameChain>;
+
 export const ValueGenerator = z
   .discriminatedUnion('mode', [
     z.object({ mode: z.literal('randomString'), length: z.number().int().min(1).max(200).default(12) }),
@@ -42,6 +48,7 @@ export const ClickAction = z.object({
   intentLocator: IntentLocator.optional(),
   /** 2=双击 3=三连击；缺省 1（单击）。录制器捕获原生 dblclick 时置 2。 */
   clickCount: z.number().int().min(2).max(3).optional(),
+  frameChain: FrameChain.optional(),
 });
 
 /** 滚动：绝对位置滚动（非增量 delta——回放与起点无关，浏览器自动钳到内容边界）。
@@ -52,6 +59,7 @@ export const ScrollAction = z.object({
   intentLocator: IntentLocator.optional(),
   scrollTop: z.number().int().min(0),
   scrollLeft: z.number().int().min(0).default(0),
+  frameChain: FrameChain.optional(),
 });
 
 /** 单段 CompositeValue 的可能形态；按顺序拼接生成最终输入。 */
@@ -105,14 +113,16 @@ export const FillAction = z.object({
   intentLocator: IntentLocator.optional(),
   value: FillValue,
   sensitive: z.boolean().optional(),
+  frameChain: FrameChain.optional(),
 });
-export const HoverAction = z.object({ kind: z.literal('hover'), locator: z.array(Locator).min(1) });
+export const HoverAction = z.object({ kind: z.literal('hover'), locator: z.array(Locator).min(1), frameChain: FrameChain.optional() });
 export const WaitForAction = z.object({
   kind: z.literal('waitFor'),
   /** 空数组 = 固定时长等待（不等待具体元素），睡 timeoutMs（默认 5000）。 */
   locator: z.array(Locator),
   intentLocator: IntentLocator.optional(),
   timeoutMs: z.number().int().positive().optional(),
+  frameChain: FrameChain.optional(),
 });
 export const AssertTextAction = z.object({
   kind: z.literal('assertText'),
@@ -121,11 +131,14 @@ export const AssertTextAction = z.object({
   target: z.enum(['specifiedElement', 'page', 'errorMessage', 'url']).default('specifiedElement'),
   match: z.enum(['equals', 'contains', 'notContains', 'regex']).default('equals'),
   equals: z.string(),
+  /** 仅 target=specifiedElement 时携带。 */
+  frameChain: FrameChain.optional(),
 });
 export const AssertVisibleAction = z.object({
   kind: z.literal('assertVisible'),
   locator: z.array(Locator).min(1),
   intentLocator: IntentLocator.optional(),
+  frameChain: FrameChain.optional(),
 });
 export const ScreenshotAction = z.object({ kind: z.literal('screenshot'), name: z.string() });
 
@@ -134,12 +147,14 @@ export const CheckAction = z.object({
   locator: z.array(Locator).min(1),
   intentLocator: IntentLocator.optional(),
   checked: z.boolean(),
+  frameChain: FrameChain.optional(),
 });
 export const SelectAction = z.object({
   kind: z.literal('select'),
   locator: z.array(Locator).min(1),
   intentLocator: IntentLocator.optional(),
   value: z.string().min(1),
+  frameChain: FrameChain.optional(),
 });
 /** 2026-11-04: press 步骤——在定位元素上按单个键（录制器捕获输入框内 Enter 提交等键盘动作）。
  *  key 用 Playwright 键名（如 "Enter" / "Tab"），回放映射 locator.press(key)。 */
@@ -148,12 +163,14 @@ export const PressAction = z.object({
   locator: z.array(Locator).min(1),
   intentLocator: IntentLocator.optional(),
   key: z.string().min(1).max(30),
+  frameChain: FrameChain.optional(),
 });
 export const UploadAction = z.object({
   kind: z.literal('upload'),
   locator: z.array(Locator).min(1),
   intentLocator: IntentLocator.optional(),
   fileId: z.string().min(1),
+  frameChain: FrameChain.optional(),
 });
 export const SwitchTabAction = z.object({
   kind: z.literal('switchTab'),
@@ -171,6 +188,7 @@ export const AssertJsonAction = z.object({
   locator: z.array(Locator).min(1),
   intentLocator: IntentLocator.optional(),
   equals: z.unknown(),
+  frameChain: FrameChain.optional(),
 });
 export const ExtractMode = z.enum(['completeValue', 'smartExtract', 'regex']);
 export type ExtractMode = z.infer<typeof ExtractMode>;
@@ -187,6 +205,7 @@ export const ExtractAction = z.object({
   group: z.number().int().min(0).max(10).optional(),
   /** smartExtract 模式用户输入的自然语言描述，仅 UI 展示。 */
   description: z.string().max(500).optional(),
+  frameChain: FrameChain.optional(),
 });
 export type ExtractAction = z.infer<typeof ExtractAction>;
 

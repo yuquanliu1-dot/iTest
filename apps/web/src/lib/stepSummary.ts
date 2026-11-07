@@ -6,6 +6,8 @@ interface KnownAction {
   kind?: string;
   locator?: Array<{ strategy?: string; value?: string }>;
   intentLocator?: { semanticRole?: string; contextText?: string };
+  /** iframe 帧链（录制器产物）：非空时目标在 iframe 里，摘要加 [iframe] 前缀。 */
+  frameChain?: Array<{ locator?: unknown }>;
   value?: unknown;
   sensitive?: boolean;
   url?: unknown;
@@ -55,12 +57,13 @@ export function isUncompiled(row: StepRowLike): boolean {
   return !Array.isArray(row.compiled) || row.compiled.length === 0;
 }
 
-/** 定位对象描述：优先语义文案，否则首个 locator 的 strategy=value。 */
+/** 定位对象描述：优先语义文案，否则首个 locator 的 strategy=value；带帧链时加 [iframe] 前缀。 */
 function targetText(action: KnownAction): string {
+  const prefix = Array.isArray(action.frameChain) && action.frameChain.length > 0 ? '[iframe] ' : '';
   const ctx = action.intentLocator?.contextText;
-  if (ctx) return ctx;
+  if (ctx) return `${prefix}${ctx}`;
   const first = Array.isArray(action.locator) ? action.locator[0] : undefined;
-  if (first && first.value) return `${str(first.strategy) || 'css'}=${first.value}`;
+  if (first && first.value) return `${prefix}${str(first.strategy) || 'css'}=${first.value}`;
   return '';
 }
 

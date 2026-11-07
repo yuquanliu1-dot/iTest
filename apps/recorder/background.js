@@ -15,6 +15,20 @@ let webTabId = null;
 const recordingTabs = new Map(); // tabId -> tabIndex
 let nextTabIndex = 1;
 
+// ---- iframe 帧链（同源 iframe 录制，0.1.0）----
+// 帧映射：tabId → Map<token, {frameId, parentToken}>。帧脚本 announce 时登记；
+// SW 复活后按会话内 tab 重探全帧重建（reprobeFrames，DOM 令牌属性各 world 共享读得到）。
+const frameMap = new Map();
+/** 帧链解析缓存：`${tabId}:${token}` → FrameChain|null。null = 跨源/shadow 内嵌 iframe 等
+ *  结构性失败，缓存避免每步重试；帧导航换文档会换新 token，缓存天然失效。 */
+const chainCache = new Map();
+const FRAME_TOKEN_ATTR = 'data-ita-frame-token';
+const CHAIN_MAX_DEPTH = 5;
+const FRAME_SCRIPT_ID = 'ita-recorder-frames';
+/** 在途的元素拾取（panel pick-start 起一处）：{pickId, resolved, panelTabId}。首个 pick-result 竞胜。 */
+let pickState = null;
+let pickSeq = 0;
+
 // ---- 录制会话持久化（MV3 的 service worker 会被 Chrome 回收）----
 // 回收后上面这些内存全局全部清零，而页面里的面板还活着 → 后续步骤全落在 WS 闸门上被丢弃，
 // 面板计数器冻在最后一步，用户看着像「在录」实则全丢（b0dbb886 同族症状）。
@@ -60,7 +74,9 @@ function intentField(step) {
 
 // ---- 会话持久化 ----
 
-/** 当前会话快照：SW 被回收后据此恢复（不含 ws 实例本身）。 */
+/** 当前会话快照：SW 被回收后据此恢复（不含 ws 实例本身）。
+ *  帧映射不入快照：restoreSession 后 reprobeFrames 全帧重探重建，比持久化快照更权威
+ *  （SW 死亡期间导航过的帧 token 已换新，持久化条目反而是陈旧的）。 */
 function sessionSnapshot() {
   return {
     wsUrl,
@@ -132,8 +148,104 @@ async function restoreSession() {
     return;
   }
   sessionLive = true;
+  void reprobeFrames(); // SW 复活：重探会话内所有 tab 的全帧重建帧映射（导航过期帧自然缺席）
   await openSocket();
   syncStepCount();
+}
+
+/**
+ * SW 复活后重探会话内所有 tab 的全帧，重建帧映射。
+ * executeScript allFrames 在各帧 isolated world 里读 DOM 令牌属性（各 world 共享 DOM），
+ * 父令牌一并取回。announce 与重探的竞态按合并口径处理——两边条目都来自活帧。
+ */
+async function reprobeFrames() {
+  const tabIds = [recordingTabId, ...recordingTabs.keys()].filter((id) => id !== null);
+  for (const tabId of tabIds) {
+    let results;
+    try {
+      results = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: (attr) => {
+          let parentToken = null;
+          try { parentToken = window.parent === window ? null : window.parent.document.documentElement.getAttribute(attr); } catch { /* 跨源 */ }
+          return { token: document.documentElement.getAttribute(attr), parentToken };
+        },
+        args: [FRAME_TOKEN_ATTR],
+      });
+    } catch {
+      continue; // tab 已关/无法注入：跳过
+    }
+    const frames = frameMap.get(tabId) ?? new Map();
+    for (const r of results ?? []) {
+      if (r.result?.token) frames.set(r.result.token, { frameId: r.frameId, parentToken: r.result.parentToken ?? null });
+    }
+    if (frames.size > 0) frameMap.set(tabId, frames);
+  }
+}
+
+// ---- 帧链解析：步骤所在帧 → 完整 FrameChain（自顶向下，最外层 iframe 在前）----
+
+/**
+ * 向子帧（frameId）要「本帧的宿主 iframe 元素」候选定位链。recorder.js 在子帧里扫父文档、
+ * 按 contentWindow 身份认领自己（详见 locate-frame 处理器）。3s 超时按失败计。
+ */
+function locateFrameElement(tabId, frameId) {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      resolve(null);
+    }, 3000);
+    chrome.tabs.sendMessage(
+      tabId,
+      { type: 'locate-frame' },
+      { frameId },
+      (resp) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(chrome.runtime.lastError ? null : resp?.locators ?? null);
+      },
+    );
+  });
+}
+
+/**
+ * 解析某帧的完整帧链。自底向上逐级向父帧要「该 iframe 元素在父帧中的候选」，走满到顶层后反转。
+ * 任一级失败/超过深度上限 → 整链放弃返回 null（宁失败不误定位：错误帧链会把回放打进错误的文档）。
+ */
+async function resolveFrameChain(tabId, token) {
+  const cacheKey = `${tabId}:${token}`;
+  if (chainCache.has(cacheKey)) return chainCache.get(cacheKey);
+  const frames = frameMap.get(tabId);
+  const start = frames?.get(token);
+  if (!frames || !start) return null;
+  const levels = [];
+  let cur = start;
+  let curToken = token;
+  let failed = false;
+  let depth = 0;
+  while (cur.parentToken && depth < CHAIN_MAX_DEPTH) {
+    const parent = frames.get(cur.parentToken);
+    if (!parent) { failed = true; break; }
+    // 问本帧（cur）要它的宿主 iframe 元素候选（recorder.js 在子帧里扫父文档按
+    // contentWindow 认领自己；隔离世界跨帧读元素的两条路——父读子 contentDocument、
+    // 子读父 frameElement——都走不通，实测确认）。
+    const locs = await locateFrameElement(tabId, cur.frameId);
+    if (!locs || locs.length === 0) { failed = true; break; }
+    levels.push({ locator: locs });
+    curToken = cur.parentToken;
+    cur = parent;
+    depth += 1;
+  }
+  if (failed || (cur.parentToken && depth >= CHAIN_MAX_DEPTH)) {
+    chainCache.set(cacheKey, null);
+    return null;
+  }
+  const chain = levels.length > 0 ? levels.reverse() : null;
+  chainCache.set(cacheKey, chain);
+  return chain;
 }
 
 // ---- WS 连接：断开不丢步（入队 → 补发），会话存续期内自动重连 ----
@@ -240,13 +352,22 @@ function syncStepCount() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 恢复完成前所有依赖会话状态的分支都要先等它——否则恢复窗口内的消息会打到空的全局上。
-const ready = restoreSession().catch((err) => {
-  console.warn('restoreSession failed', err);
-});
+// 无会话时的注册清理必须 await 在链内：fire-and-forget 的注销会和 start 的 registerFrameScript
+// 竞态（注销回调晚读到已注册好的表项，把新会话的帧脚本注册删掉——diag2 实测踩中）。
+const ready = restoreSession()
+  .catch((err) => {
+    console.warn('restoreSession failed', err);
+  })
+  .then(async () => {
+    // 会话不存在（或已失效）：清掉残留的帧脚本注册。休眠帧脚本无害，但没必要常驻全浏览器。
+    if (!sessionId) await unregisterFrameScript();
+  });
 
-// 录制中的 tab（主 tab 或接管的派生 tab）每次页面加载完成后重注入 recorder/panel：
-// 同 tab 跳转新页面时内容脚本随文档销毁，不重注入则录制与面板都会丢失。
-// 注入后重发 start 握手，并把当前步数/暂停态同步给全新的面板实例。
+// 录制中的 tab（主 tab 或接管的派生 tab）每次页面加载完成后重注入 panel：
+// 同 tab 跳转新页面时内容脚本随文档销毁，不重注入面板会丢失。
+// recorder.js 不在这里注入——它由 FRAME_SCRIPT_ID 注册式全帧注入（含 iframe/about:blank），
+// 装载后自行 announce，回执 recording:true 即启动；这里的 start 广播只是错过 announce
+// 重试窗口的帧的兜底握手（广播到全帧，每帧各自响应），并把当前步数/暂停态同步给新面板实例。
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status !== 'complete') return;
   void (async () => {
@@ -258,7 +379,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (!isMain && !recordingTabs.has(tabId)) return;
     const tabIndex = isMain ? 0 : recordingTabs.get(tabId);
     chrome.scripting
-      .executeScript({ target: { tabId }, files: ['content/recorder.js', 'content/panel.js'] })
+      .executeScript({ target: { tabId }, files: ['content/panel.js'] })
       .then(() => {
         chrome.tabs.sendMessage(tabId, { type: 'start', mode: sessionMode, tabRef: `${sessionId}|tab#${tabIndex}` });
         chrome.tabs.sendMessage(tabId, { type: 'step-count', count: stepCount }, () => void chrome.runtime.lastError);
@@ -336,7 +457,60 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 syncBridgeRegistration();
 
+// ---- 录制帧脚本注册：会话期间对 <all_urls> 全帧注入 recorder.js ----
+// 命令式 executeScript 只能打顶层文档，iframe 内的录制只能靠注册式全帧注入；
+// about:blank/srcdoc 由 matchAboutBlank 覆盖（webNavigation 对它们不触发且带安装警告，弃用）。
+// 装进来的 recorder.js 是休眠态的：announce 回执 recording:false 就不装载重模块，
+// 残留注册本身无害，但仍按会话生命周期注册/注销，不让全浏览器平白多注入一份脚本。
+async function registerFrameScript() {
+  try {
+    const existing = await chrome.scripting.getRegisteredContentScripts();
+    if (existing.some((s) => s.id === FRAME_SCRIPT_ID)) return;
+    await chrome.scripting.registerContentScripts([{
+      id: FRAME_SCRIPT_ID,
+      matches: ['<all_urls>'],
+      js: ['content/recorder.js'],
+      allFrames: true,
+      // matchOriginAsFallback（119+）：about:blank/srcdoc 等不透明源帧也注入
+      // （registerContentScripts 没有 matchAboutBlank 这个键——传了会整条注册报错）
+      matchOriginAsFallback: true,
+      runAt: 'document_idle',
+    }]);
+  } catch (err) {
+    console.warn('registerFrameScript failed', err);
+  }
+}
+
+async function unregisterFrameScript() {
+  try {
+    const existing = await chrome.scripting.getRegisteredContentScripts();
+    if (existing.some((s) => s.id === FRAME_SCRIPT_ID)) {
+      await chrome.scripting.unregisterContentScripts({ ids: [FRAME_SCRIPT_ID] });
+    }
+  } catch (err) {
+    console.warn('unregisterFrameScript failed', err);
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // 帧脚本 announce 握手：登记帧映射，回执会话态；recording:false 的帧保持休眠不装载重模块。
+  if (msg.type === 'frame-announce') {
+    void (async () => {
+      await ready;
+      const tabId = sender.tab?.id;
+      const frameId = sender.frameId ?? 0;
+      if (tabId === undefined || !sessionId) { sendResponse({ recording: false }); return; }
+      const isMain = tabId === recordingTabId;
+      if (!isMain && !recordingTabs.has(tabId)) { sendResponse({ recording: false }); return; }
+      let frames = frameMap.get(tabId);
+      if (!frames) { frames = new Map(); frameMap.set(tabId, frames); }
+      frames.set(msg.token, { frameId, parentToken: msg.parentToken ?? null });
+      const tabIndex = isMain ? 0 : recordingTabs.get(tabId);
+      sendResponse({ recording: true, mode: sessionMode, tabRef: `${sessionId}|tab#${tabIndex}`, paused, stepCount });
+    })();
+    return true;
+  }
+
   if (msg.type === 'start' && msg.session) {
     void (async () => {
       await ready;
@@ -357,6 +531,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       pendingSteps = [];
       sessionLive = false;
       webTabId = sender.tab?.id ?? null;
+      frameMap.clear();
+      chainCache.clear();
+      pickState = null;
       await persistSession();
       const ok = await openSocket();
       if (!ok) {
@@ -369,6 +546,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
       sessionLive = true;
+      // 先落帧脚本注册再开页：目标页的帧从加载起就能注入并 announce
+      await registerFrameScript();
       await persistSession();
       const createOpts = { url: msg.targetUrl };
       if (sessionIncognito) createOpts.incognito = true;
@@ -391,6 +570,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
       const dsl = msg.dsl ?? toDSL(msg.step);
+      // iframe 帧链：步骤来自帧脚本时带 token，解析该帧的完整链附进 DSL；
+      // 解析失败（跨源/超深/未登记）按无链政策照录——宁失败不误定位。
+      if (msg.token && sender?.tab && !('frameChain' in dsl)) {
+        const chain = await resolveFrameChain(sender.tab.id, msg.token);
+        if (chain) dsl.frameChain = chain;
+      }
       const url = msg.step?.url ?? msg.url ?? null;
       const tabRef = msg.step?.tabRef ?? msg.tabRef ?? `${sessionId}|tab#0`;
       const componentKind = msg.step?.componentKind ?? null;
@@ -398,6 +583,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       stepCount++;
       await persistSession();
       syncStepCount();
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  if (msg.type === 'emit-step') {
+    void (async () => {
+      await ready;
+      if (!sessionId) {
+        sendResponse({ ok: false, error: chrome.i18n.getMessage('notRecording') });
+        return;
+      }
+      // 面板内联生成的步骤（断言/存变量/AI/悬停）：frameChain 已在拾取竞胜时由 bg 附进 dsl，
+      // 这里不再解析；panel 只在主 tab 存在，tabRef 固定 tab#0。
+      sendOrQueue({ type: 'step', step: { action: msg.dsl, url: msg.url ?? null, tabRef: `${sessionId}|tab#0`, componentKind: null } });
+      stepCount++;
+      await persistSession();
+      syncStepCount();
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  if (msg.type === 'set-options') {
+    void (async () => {
+      await ready;
+      if (recordingTabId === null) { sendResponse({ ok: false, error: chrome.i18n.getMessage('notRecordingTab') }); return; }
+      // 广播到会话内所有 tab：每个帧的 manager 都要拿到最新录制选项
+      for (const tid of [recordingTabId, ...recordingTabs.keys()]) {
+        chrome.tabs.sendMessage(tid, { type: 'set-options', options: msg.options ?? {} }, () => void chrome.runtime.lastError);
+      }
       sendResponse({ ok: true });
     })();
     return true;
@@ -432,6 +648,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         pendingSteps = [];
         sessionLive = false;
         stepCount = 0;
+        frameMap.clear();
+        chainCache.clear();
+        pickState = null;
+        await unregisterFrameScript(); // 会话结束：撤掉全帧脚本注册（休眠脚本无害，但不常驻；await 防与下次 start 的注册竞态）
         await persistSession(); // sessionId 已清 → 顺带清掉 storage.session 里的会话记录
         // 面板/弹窗发起的停止：通知 web 中台收尾（finish 会话、复位状态）
         if (msg.from === 'panel' && webTabId !== null) {
@@ -520,11 +740,45 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === 'pick' || msg.type === 'emit-step' || msg.type === 'set-options') {
+  if (msg.type === 'pick-start' || msg.type === 'pick-result' || msg.type === 'pick-cancel') {
     void (async () => {
       await ready;
-      if (recordingTabId === null) { sendResponse({ ok: false, error: chrome.i18n.getMessage('notRecordingTab') }); return; }
-      chrome.tabs.sendMessage(recordingTabId, msg, (resp) => sendResponse(resp ?? { ok: false }));
+      // 元素拾取（事件驱动，0.1.0）：panel 发 pick-start{pickId} → bg 广播全帧 pick-start，
+      // 被点击帧回 pick-result{pickId, token, result}，首个竞胜：bg 附帧链、广播 pick-stop
+      // 收尾其余帧、把结果转发给面板；其余帧的迟到结果按已竞胜吞掉。
+      if (msg.type === 'pick-start') {
+        if (recordingTabId === null) { sendResponse({ ok: false, error: chrome.i18n.getMessage('notRecordingTab') }); return; }
+        const pickId = ++pickSeq;
+        pickState = { pickId, resolved: false, panelTabId: sender.tab?.id ?? recordingTabId };
+        for (const tid of [recordingTabId, ...recordingTabs.keys()]) {
+          chrome.tabs.sendMessage(tid, { type: 'pick-start', pickId }, () => void chrome.runtime.lastError);
+        }
+        sendResponse({ ok: true, pickId });
+        return;
+      }
+      if (msg.type === 'pick-result') {
+        if (!pickState || pickState.resolved || msg.pickId !== pickState.pickId) return; // 败者/过期结果：吞掉
+        pickState.resolved = true;
+        const result = msg.result ?? { canceled: true };
+        // 先广播收尾（其余帧退出拾取、恢复捕获），再解析帧链（与帧拾取状态无关），最后转发面板
+        for (const tid of [recordingTabId, ...recordingTabs.keys()].filter((id) => id !== null)) {
+          chrome.tabs.sendMessage(tid, { type: 'pick-stop' }, () => void chrome.runtime.lastError);
+        }
+        if (!result.canceled && msg.token && sender.tab) {
+          const chain = await resolveFrameChain(sender.tab.id, msg.token);
+          if (chain) result.frameChain = chain;
+        }
+        const panelTabId = pickState.panelTabId;
+        pickState = null;
+        chrome.tabs.sendMessage(panelTabId, { type: 'pick-result', pickId: msg.pickId, result }, () => void chrome.runtime.lastError);
+        return;
+      }
+      // pick-cancel：面板超时兜底（bg 零响应/用户一直不点），按取消收场
+      pickState = null;
+      for (const tid of [recordingTabId, ...recordingTabs.keys()].filter((id) => id !== null)) {
+        chrome.tabs.sendMessage(tid, { type: 'pick-stop' }, () => void chrome.runtime.lastError);
+      }
+      sendResponse({ ok: true });
     })();
     return true;
   }

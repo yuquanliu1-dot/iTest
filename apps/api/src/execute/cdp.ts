@@ -1,8 +1,9 @@
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
+import { chromium, type Browser, type BrowserContext, type Page, type Frame } from 'playwright-core';
 import type {
   StepAction,
   Locator,
   IntentLocator,
+  FrameChain,
   FailureReason,
   PreflightReport,
   HitLocator,
@@ -202,9 +203,10 @@ const DOM_FALLBACK_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 
  *  结构上无解，故 AI 降级路径跳过，避免白烧 LLM 轮次。 */
 const NON_BROWSER_KINDS: ReadonlySet<string> = new Set(['httpRequest', 'queryDb', 'sql', 'observeLog', 'sendSyslog']);
 
-/** DOM 降级：元素不稳定时绕过 playwright 直接在页面里派发事件。仅支持 click/fill/check/select。 */
-async function tryDomFallback(action: StepAction, opts: DispatchOpts): Promise<{ ok: boolean; error?: string }> {
-  const { page, vars } = opts;
+/** DOM 降级：元素不稳定时绕过 playwright 直接在页面里派发事件。仅支持 click/fill/check/select。
+ *  root 可为 Frame（带 frameChain 的步骤在帧上下文降级派发）。 */
+async function tryDomFallback(action: StepAction, opts: DispatchOpts, root: Page | Frame): Promise<{ ok: boolean; error?: string }> {
+  const { vars } = opts;
   // 与 playwright 路径一致：fill/select 的字符串值先过 substituteVars，缺变量直接失败，避免把 {{var}} 原样写进表单。
   if (action.kind === 'fill' || action.kind === 'select') {
     const tpl = typeof action.value === 'string' ? action.value : '';
@@ -215,23 +217,24 @@ async function tryDomFallback(action: StepAction, opts: DispatchOpts): Promise<{
   }
   switch (action.kind) {
     case 'click':
-      return domClick(page, action.locator);
+      return domClick(root, action.locator);
     case 'fill':
-      return domFill(page, action.locator, resolveEnvCredential(materializeValue(action.value ?? '', vars), opts.ctx));
+      return domFill(root, action.locator, resolveEnvCredential(materializeValue(action.value ?? '', vars), opts.ctx));
     case 'check':
-      return domCheck(page, action.locator, action.checked);
+      return domCheck(root, action.locator, action.checked);
     case 'select':
-      return domSelect(page, action.locator, materializeValue(action.value, vars));
+      return domSelect(root, action.locator, materializeValue(action.value, vars));
     default:
       return { ok: false, error: 'unsupported' };
   }
 }
 
 /** 交互动作前置稳定性检查；不稳定时尝试 DOM 降级，降级也失败则抛 ElementNotStable。 */
-async function ensureStable(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
+async function ensureStable(action: StepAction, opts: DispatchOpts, root: Page | Frame): Promise<string | undefined> {
   try {
-    // waitForStable 的 locator 参数当前未使用；不传 page.locator('body') 以避免多余的探测调用。
-    await waitForStable(opts.page, undefined as never, { timeoutMs: 2000, pollMs: 100 });
+    // waitForStable 的 locator 参数当前未使用；不传 root.locator('body') 以避免多余的探测调用。
+    // 帧步骤探针 scoped 到帧文档（Frame.evaluate 同签名）；顶层步骤与旧行为一致。
+    await waitForStable(root, undefined as never, { timeoutMs: 2000, pollMs: 100 });
     return undefined;
   } catch (e) {
     if (!(e instanceof ElementNotStable)) {
@@ -243,7 +246,7 @@ async function ensureStable(action: StepAction, opts: DispatchOpts): Promise<str
       // 敏感填充的明文只有 secretResolver 能解，DOM 降级会写入占位符，故跳过降级。
       !(action.kind === 'fill' && action.sensitive)
     ) {
-      const r = await tryDomFallback(action, opts);
+      const r = await tryDomFallback(action, opts, root);
       if (r.ok) return 'dom-fallback';
     }
     throw e;
@@ -413,9 +416,15 @@ async function waitTargetEnabled(
 
 async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
   const { page, vars } = opts;
+  // 帧链解析：带 frameChain 的步骤在目标 frame 上下文执行；解析失败宁失败不误定位
+  // （无链回落顶层文档会在错误目标上执行）。页级语义（navigate/switchTab/页级断言）不带链，恒为 page。
+  // 'in' 守卫：13 个 DOM 动作声明了 frameChain（可选），navigate/switchTab 等无此字段。
+  const root: Page | Frame = 'frameChain' in action && action.frameChain?.length
+    ? await resolveFrameRoot(page, action.frameChain)
+    : page;
   // 交互动作前置稳定性检查；不稳定且 DOM 降级成功时以 warning 短路返回。
   if (INTERACTIVE_KINDS.includes(action.kind)) {
-    const stableWarning = await ensureStable(action, opts);
+    const stableWarning = await ensureStable(action, opts, root);
     if (stableWarning) return stableWarning;
   }
   switch (action.kind) {
@@ -440,7 +449,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         // 这里用 force: true 跳过 enabled 检查直接 click（按钮在 click 时只要 password state 非空就能触发 submit）。
         // 但抢跑真实加载态会丢点击（见 waitTargetEnabled 注释）——先有界等目标恢复；
         // 到点仍禁用则抛错放弃：对禁用元素强点是无效操作，宁失败不误做（5b86de6e 实录）。
-        const clickLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+        const clickLoc = await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
         if (!(await waitTargetEnabled(page, clickLoc))) {
           throw new Error(`target-disabled: 目标等待 ${WAIT_TARGET_ENABLED_MS}ms 仍处禁用/加载态，拒绝无效强点`);
         }
@@ -448,7 +457,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         await clickLoc.click({ timeout: 5000, force: true, clickCount: action.clickCount ?? 1 });
       } catch (e) {
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
-          const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+          const loc = await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
           // 不能裸 first()：Element-UI 在 .el-table 首子节点渲染 display:none 的 .hidden-columns
           // 模板克隆（.el-table__fixed 里还有隐藏克隆），DOM 顺序早于真实元素，first() 会抓到
           // 不可见副本等 5s 超时（规则查看 回测根因）。与 assertVisible 兜底同款 visible 过滤。
@@ -462,7 +471,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       // 绝对位置滚动：locator 指实际滚动容器（窗口级滚动录的是 document.scrollingElement）。
       // evaluate 设 scrollTop/scrollLeft，浏览器自动钳到内容边界 → 回放与起点无关、确定性。
       // 只读位置写入，不需要稳定性检查/strict 兜底。
-      const scrollLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+      const scrollLoc = await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
       await scrollLoc.evaluate(
         (el, [top, left]) => { el.scrollTop = top; el.scrollLeft = left; },
         [action.scrollTop, action.scrollLeft] as [number, number],
@@ -486,7 +495,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         }
         value = resolveEnvCredential(materializeValue(action.value, vars), opts.ctx);
       }
-      const fillLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+      const fillLoc = await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
       if (!(await waitTargetEnabled(page, fillLoc))) {
         throw new Error(`target-disabled: 输入框等待 ${WAIT_TARGET_ENABLED_MS}ms 仍处禁用/加载态，无法填入`);
       }
@@ -512,7 +521,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       // 2026-11-04: 录制器捕获的输入框内按键（Enter 提交等）。与 fill 同构：
       // tryFirstMatch → 禁用态有界等待 → strict violation 兜底 visible first()。
       // 不进 DOM_FALLBACK_KINDS：合成 KeyboardEvent 触发不了浏览器原生表单提交，降级不可靠。
-      const pressLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+      const pressLoc = await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
       if (!(await waitTargetEnabled(page, pressLoc))) {
         throw new Error(`target-disabled: 目标等待 ${WAIT_TARGET_ENABLED_MS}ms 仍处禁用/加载态，无法按键`);
       }
@@ -528,7 +537,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       return;
     }
     case 'hover': {
-      const hoverLoc = await tryFirstMatch(page, action.locator, undefined, opts.hitSink, repairFor(opts, action));
+      const hoverLoc = await tryFirstMatch(page, root, action.locator, undefined, opts.hitSink, repairFor(opts, action));
       try {
         await hoverLoc.hover({ timeout: 5000 });
       } catch (e) {
@@ -560,7 +569,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       let lastErr: unknown;
       while (Date.now() < deadline) {
         try {
-          const loc = await tryFirstMatch(page, waitLoc, action.intentLocator, opts.hitSink, repairFor(opts, action));
+          const loc = await tryFirstMatch(page, root, waitLoc, action.intentLocator, opts.hitSink, repairFor(opts, action));
           await loc.waitFor({ state: 'visible', timeout: Math.max(100, deadline - Date.now()) });
           return;
         } catch (e) {
@@ -575,7 +584,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       if (assertMissing.length > 0) {
         throw new Error(`var-missing: {{${assertMissing[0]!}}} (locator="${action.locator[0]?.value}")`);
       }
-      const assertLoc = await tryFirstMatch(page, assertLocArr, action.intentLocator, opts.hitSink, repairFor(opts, action));
+      const assertLoc = await tryFirstMatch(page, root, assertLocArr, action.intentLocator, opts.hitSink, repairFor(opts, action));
       try {
         if (!(await assertLoc.isVisible({ timeout: 5000 }))) {
           throw new Error(`assertVisible failed: ${assertLocArr[0]?.value}`);
@@ -604,7 +613,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       if (locMissing.length > 0) {
         throw new Error(`var-missing: {{${locMissing[0]!}}} (locator="${a.locator[0]?.value}")`);
       }
-      const actual = await resolveAssertTextActual(page, { ...a, locator: assertLocArr }, opts.hitSink, repairFor(opts, a));
+      const actual = await resolveAssertTextActual(page, root, { ...a, locator: assertLocArr }, opts.hitSink, repairFor(opts, a));
       const ok = matchAssertText(actual, value, a.match ?? 'equals');
       if (!ok) {
         throw new Error(`assertText failed (${a.target ?? 'specifiedElement'}/${a.match ?? 'equals'}): expected ${JSON.stringify(value)}, actual ${JSON.stringify(actual.slice(0, 100))}`);
@@ -623,7 +632,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       if (jsonLocMissing.length > 0) {
         throw new Error(`var-missing: {{${jsonLocMissing[0]!}}} (locator="${action.locator[0]?.value}")`);
       }
-      const text = (await (await tryFirstMatch(page, jsonLocArr, action.intentLocator, opts.hitSink, repairFor(opts, action))).innerText({ timeout: 5000 })).trim();
+      const text = (await (await tryFirstMatch(page, root, jsonLocArr, action.intentLocator, opts.hitSink, repairFor(opts, action))).innerText({ timeout: 5000 })).trim();
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -648,7 +657,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       return;
     }
     case 'check': {
-      const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+      const loc = await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
       const current = await loc.isChecked({ timeout: 5000 });
       if (current !== action.checked) {
         if (action.checked) await loc.check({ timeout: 5000 });
@@ -659,7 +668,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
     case 'select': {
       const { value, missing } = substituteVars(action.value, vars);
       if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.value}")`);
-      const selectLoc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+      const selectLoc = await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
       if (!(await waitTargetEnabled(page, selectLoc))) {
         throw new Error(`target-disabled: 下拉框等待 ${WAIT_TARGET_ENABLED_MS}ms 仍处禁用/加载态，无法选择`);
       }
@@ -671,7 +680,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         ? await opts.ctx.attachmentResolver(action.fileId)
         : await defaultAttachmentResolver(action.fileId, opts.ctx.projectId);
       if (!meta) throw new Error(`attachment-missing: ${action.fileId}`);
-      await (await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action))).setInputFiles(meta.storedPath, { timeout: 5000 });
+      await (await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action))).setInputFiles(meta.storedPath, { timeout: 5000 });
       return;
     }
     case 'switchTab': {
@@ -697,7 +706,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       return;
     }
     case 'extract': {
-      const loc = await tryFirstMatch(page, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
+      const loc = await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
       let text: string;
       try {
         text = await loc.inputValue({ timeout: 5000 });
@@ -919,6 +928,7 @@ interface ProbeLocator {
  */
 async function tryFirstMatch(
   page: Page,
+  root: Page | Frame,
   locator: Locator[],
   intentLocator?: IntentLocator,
   hitSink?: { current: HitLocator | null },
@@ -933,7 +943,7 @@ async function tryFirstMatch(
       throw new Error(`locator strategy '${l.strategy}' is mobile-only; cannot run on web engine`);
     }
   }
-  const cands = buildCandidates(page, { locator, intentLocator, repair: repairLoc });
+  const cands = buildCandidates(root, { locator, intentLocator, repair: repairLoc });
   // hitSink 展示值：修复缓存候选不在作者 locator 数组里，直接用其 DSL value；其余反查。
   const hitFor = (c: { kind: string; src?: string }): HitLocator => ({
     kind: c.kind,
@@ -990,9 +1000,47 @@ async function tryFirstMatch(
   throw lastErr instanceof Error ? lastErr : new Error('all locator candidates failed');
 }
 
-/** resolveAssertTextActual: 根据 action.target 决定 actual 字符串的来源。 */
+/** 解析帧链单级：候选逐个探测（count→elementHandle→contentFrame），返回该 iframe 的 Frame。
+ *  用 buildCandidates 复用候选构造（Frame 与 Page 的 locator/getBy* 同签名）。
+ *  不用 FrameLocator：它无 count()/evaluate，strict 多匹配要等动作期才炸，且做不了逐候选探测。 */
+async function resolveFrameLevel(root: Page | Frame, candidates: Locator[]): Promise<Frame | null> {
+  const cands = buildCandidates(root, { locator: candidates });
+  let lastErr: unknown;
+  for (let round = 0; round < LOCATOR_PROBE_ROUNDS; round++) {
+    if (round > 0) await root.waitForTimeout(LOCATOR_PROBE_INTERVAL_MS);
+    for (const c of cands) {
+      const n = await c.loc.count().catch((e) => { lastErr = e; return 0; });
+      if (n <= 0) continue;
+      const handle = await c.loc.first().elementHandle().catch(() => null);
+      const frame = handle ? await handle.contentFrame().catch(() => null) : null;
+      await handle?.dispose().catch(() => undefined);
+      if (frame) return frame;
+    }
+  }
+  if (lastErr) logger.debug({ err: lastErr }, 'resolveFrameLevel probe error');
+  return null;
+}
+
+/** 解析步骤的 iframe 帧链 → 最内层 Frame（无链返回原 page）。逐级下钻；任一级候选全落空抛
+ *  frame-unresolved——帧链是录制器对帧结构的确定性描述，落空说明页面结构已变，宁失败不误定位。
+ *  导出供单测（mock root 注入）。 */
+export async function resolveFrameRoot(page: Page, chain: FrameChain): Promise<Page | Frame> {
+  let root: Page | Frame = page;
+  for (let level = 0; level < chain.length; level++) {
+    const frame = await resolveFrameLevel(root, chain[level]!.locator);
+    if (!frame) {
+      throw new Error(`frame-unresolved: 帧链第 ${level + 1}/${chain.length} 级候选全部落空（iframe 未挂载或结构已变）`);
+    }
+    root = frame;
+  }
+  return root;
+}
+
+/** resolveAssertTextActual: 根据 action.target 决定 actual 字符串的来源。
+ *  root 仅 specifiedElement 分支使用（帧链解析出的 Frame）；page/url/errorMessage 是页级语义，恒看顶层 page。 */
 async function resolveAssertTextActual(
   page: Page,
+  root: Page | Frame,
   action: StepAction & { kind: 'assertText' },
   hitSink?: { current: HitLocator | null },
   repairLoc?: Locator | null,
@@ -1012,7 +1060,7 @@ async function resolveAssertTextActual(
   }
   // specifiedElement（默认）
   if (action.locator.length === 0) throw new Error('assertText: specifiedElement 模式需要 locator');
-  const loc = await tryFirstMatch(page, action.locator, action.intentLocator, hitSink, repairLoc);
+  const loc = await tryFirstMatch(page, root, action.locator, action.intentLocator, hitSink, repairLoc);
   return (await loc.innerText({ timeout: 5000 })).trim();
 }
 

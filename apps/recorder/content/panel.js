@@ -226,8 +226,9 @@
 
   // 断言/悬停/存变量/AI 全部在面板内完成：扩展弹窗在用户点选被测页面后失焦被盖
   // （v0.0.4 置顶、v0.0.5 alwaysOnTop 两轮均失效），本面板是页面的一部分，盖不住。
+  // dsl 带上 bg 附在拾取结果里的 frameChain（iframe 帧链，0.1.0）；emit-step 直发 bg。
   const emitInline = (dsl) => {
-    chrome.runtime.sendMessage({ type: 'emit-step', dsl }, (resp) => {
+    chrome.runtime.sendMessage({ type: 'emit-step', dsl, url: location.href }, (resp) => {
       if (resp?.ok) showStatus(t('stepGenerated'), 'ok');
       else showStatus(t('failStatus', [resp?.error ?? t('unknownError')]), 'err');
     });
@@ -286,7 +287,7 @@
       if (!value) { showStatus(t('enterVarName'), 'err'); return; }
       const r = pendingPick;
       closeForm();
-      if (r) emitInline({ kind: 'extract', locator: r.locators, varName: value });
+      if (r) emitInline({ kind: 'extract', locator: r.locators, varName: value, ...chainField(r) });
     } else if (formMode === 'ai') {
       if (!value) { showStatus(t('enterInstruction'), 'err'); return; }
       closeForm();
@@ -302,7 +303,7 @@
         if (target === 'specifiedElement' && match === 'equals') {
           const r = pendingPick;
           closeForm();
-          if (r) emitInline({ kind: 'assertVisible', locator: assertLocators(r) });
+          if (r) emitInline({ kind: 'assertVisible', locator: assertLocators(r), ...chainField(r) });
           return;
         }
         showStatus(t('assertValueNeeded'), 'err');
@@ -310,8 +311,16 @@
       }
       const r = pendingPick;
       closeForm();
-      // locator 只在元素对象时携带；page/errorMessage/url 由回放端从页面整体取值，不需要候选
-      emitInline({ kind: 'assertText', locator: target === 'specifiedElement' && r ? assertLocators(r) : [], target, match, equals: value });
+      // locator 只在元素对象时携带；page/errorMessage/url 由回放端从页面整体取值，不需要候选，
+      // 也不带帧链（页级断言的语义就是顶层文档）
+      emitInline({
+        kind: 'assertText',
+        locator: target === 'specifiedElement' && r ? assertLocators(r) : [],
+        target,
+        match,
+        equals: value,
+        ...(target === 'specifiedElement' ? chainField(r) : {}),
+      });
     }
   };
   formOk.addEventListener('click', submitForm);
@@ -339,31 +348,54 @@
     return locs;
   };
 
+  // ---- 元素拾取（事件驱动，0.1.0）----
+  // pick-start 带自增 pickId 发 bg → bg 广播全帧拾取 → 被点击帧回 pick-result →
+  // bg 竞胜（首个）、附帧链、广播 pick-stop、把结果转发回本面板。pickActive 守卫防重入
+  // （拾取中连点功能按钮会开两个拾取），90s 超时兜底（bg 零响应/用户一直不点）。
+  // 过期结果（新一轮拾取已开/已超时收场）按 pickId 校验丢弃，不落进新表单。
+  const chainField = (r) => (Array.isArray(r?.frameChain) && r.frameChain.length > 0 ? { frameChain: r.frameChain } : {});
+  let pickSeq = 0;
+  let pickActive = null; // { pickId, mode, timer }
+  const finishPick = (result, pickId) => {
+    if (!pickActive || pickActive.pickId !== pickId) return;
+    clearTimeout(pickActive.timer);
+    const mode = pickActive.mode;
+    pickActive = null;
+    if (!result || result.canceled) {
+      showStatus(t('canceled'));
+      return;
+    }
+    if (mode === 'hover') {
+      emitInline({ kind: 'hover', locator: result.locators, ...chainField(result) });
+      return;
+    }
+    if (mode === 'variable') {
+      openVarForm(result);
+      return;
+    }
+    if (mode === 'assert') {
+      // 拾取后先进断言表单：对象/匹配方式/期望值都可改，确定才生成（v0.0.9 起，
+      // 旧行为「选中即生成」只能录元素文本等于，录不了 contains/页面断言/URL 断言）
+      openAssertForm(result);
+    }
+  };
   const startInlinePick = (mode) => {
+    if (pickActive) return;
     closeForm();
     showStatus(t('pickHint'));
-    chrome.runtime.sendMessage({ type: 'pick' }, (r) => {
+    const pickId = ++pickSeq;
+    pickActive = { pickId, mode, timer: null };
+    chrome.runtime.sendMessage({ type: 'pick-start', pickId }, (r) => {
+      if (!pickActive || pickActive.pickId !== pickId) return; // 已被超时收场：忽略迟到的错误
       if (!r || r.ok === false) {
+        pickActive = null;
         showStatus(t('pickFailed', [r?.error ?? t('notRecording')]), 'err');
         return;
       }
-      if (r.canceled) {
-        showStatus(t('canceled'));
-        return;
-      }
-      if (mode === 'hover') {
-        emitInline({ kind: 'hover', locator: r.locators });
-        return;
-      }
-      if (mode === 'variable') {
-        openVarForm(r);
-        return;
-      }
-      if (mode === 'assert') {
-        // 拾取后先进断言表单：对象/匹配方式/期望值都可改，确定才生成（v0.0.9 起，
-        // 旧行为「选中即生成」只能录元素文本等于，录不了 contains/页面断言/URL 断言）
-        openAssertForm(r);
-      }
+      pickActive.timer = setTimeout(() => {
+        chrome.runtime.sendMessage({ type: 'pick-cancel' });
+        finishPick({ canceled: true }, pickId);
+      }, 90000);
     });
   };
 
@@ -475,7 +507,18 @@
       render();
     } else if (msg?.type === 'stop') {
       host.remove();
+    } else if (msg?.type === 'pick-result') {
+      // bg 竞胜后转发的拾取结果（已附 frameChain，如有）；过期 pickId 在 finishPick 里丢弃
+      finishPick(msg.result, msg.pickId);
     }
+  });
+
+  // 重注入/SW 复活后兜底拉一次会话态：onUpdated 的 step-count/pause 推送若因时序丢失，这里拉平
+  chrome.runtime.sendMessage({ type: 'get-state' }, (s) => {
+    if (!s || !s.recording) return;
+    count = s.stepCount ?? count;
+    paused = !!s.paused;
+    render();
   });
 
   (document.body || document.documentElement).appendChild(host);

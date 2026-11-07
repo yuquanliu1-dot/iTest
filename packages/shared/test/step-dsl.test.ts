@@ -426,3 +426,105 @@ describe('httpRequest 断言扩展', () => {
     expect(r.success).toBe(false);
   });
 });
+
+describe('step-dsl — frameChain（iframe 帧链）', () => {
+  const chain = [
+    { locator: [{ strategy: 'css' as const, value: '#outer-frame' }] },
+    { locator: [{ strategy: 'css' as const, value: '.inner-frame' }, { strategy: 'testId' as const, value: 'pane-b' }] },
+  ];
+
+  it('click 带 frameChain round-trip 保留（自顶向下顺序）', () => {
+    const r = StepAction.safeParse({
+      kind: 'click',
+      locator: [{ strategy: 'testId', value: 'btn-in-frame' }],
+      frameChain: chain,
+    });
+    expect(r.success).toBe(true);
+    if (r.success && r.data.kind === 'click') {
+      expect(r.data.frameChain).toEqual(chain);
+    }
+  });
+
+  it('fill 带 frameChain 合法', () => {
+    const r = StepAction.safeParse({
+      kind: 'fill',
+      locator: [{ strategy: 'testId', value: 'kw' }],
+      value: 'x',
+      frameChain: chain,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('scroll 带 frameChain 合法', () => {
+    const r = StepAction.safeParse({
+      kind: 'scroll',
+      locator: [{ strategy: 'css', value: 'html' }],
+      scrollTop: 100,
+      frameChain: chain,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('assertText 指定元素带 frameChain 合法', () => {
+    const r = StepAction.safeParse({
+      kind: 'assertText',
+      locator: [{ strategy: 'text', value: '主识别IP' }],
+      target: 'specifiedElement',
+      match: 'equals',
+      equals: '主识别IP',
+      frameChain: chain,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('frameChain 缺省 = 不带（历史步骤零影响）', () => {
+    const r = StepAction.safeParse({
+      kind: 'click',
+      locator: [{ strategy: 'css', value: '#btn' }],
+    });
+    expect(r.success).toBe(true);
+    if (r.success && r.data.kind === 'click') {
+      expect(r.data.frameChain).toBeUndefined();
+    }
+  });
+
+  it('frameChain 级 locator 为空被拒', () => {
+    const r = StepAction.safeParse({
+      kind: 'click',
+      locator: [{ strategy: 'css', value: '#btn' }],
+      frameChain: [{ locator: [] }],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('frameChain 空数组合法（等价不带）', () => {
+    const r = StepAction.safeParse({
+      kind: 'click',
+      locator: [{ strategy: 'css', value: '#btn' }],
+      frameChain: [],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('13 个 locator 动作全部接受 frameChain', () => {
+    const kinds: Array<Record<string, unknown>> = [
+      { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] },
+      { kind: 'fill', locator: [{ strategy: 'css', value: '#a' }], value: 'v' },
+      { kind: 'scroll', locator: [{ strategy: 'css', value: 'html' }], scrollTop: 0 },
+      { kind: 'hover', locator: [{ strategy: 'css', value: '#a' }] },
+      { kind: 'waitFor', locator: [{ strategy: 'css', value: '#a' }] },
+      { kind: 'assertText', locator: [{ strategy: 'css', value: '#a' }], equals: 'x' },
+      { kind: 'assertVisible', locator: [{ strategy: 'css', value: '#a' }] },
+      { kind: 'check', locator: [{ strategy: 'css', value: '#a' }], checked: true },
+      { kind: 'select', locator: [{ strategy: 'css', value: '#a' }], value: 'v' },
+      { kind: 'press', locator: [{ strategy: 'css', value: '#a' }], key: 'Enter' },
+      { kind: 'upload', locator: [{ strategy: 'css', value: '#a' }], fileId: 'f1' },
+      { kind: 'assertJson', locator: [{ strategy: 'css', value: '#a' }], equals: 1 },
+      { kind: 'extract', locator: [{ strategy: 'css', value: '#a' }], varName: 'v1' },
+    ];
+    for (const base of kinds) {
+      const r = StepAction.safeParse({ ...base, frameChain: chain });
+      expect(r.success).toBe(true);
+    }
+  });
+});

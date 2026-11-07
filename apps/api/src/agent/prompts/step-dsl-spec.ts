@@ -30,6 +30,9 @@ export const STEP_DSL_SPEC = `StepAction 按 kind 区分（discriminated union�
 - {"kind":"sendSyslog","protocol":"udp"|"tcp","host":"syslog服务器地址(支持{{变量}})","port":514,"facility":"user","severity":"info","message":"日志内容","timeoutMs":5000}（向 syslog 服务器发送一条 RFC3164 日志；facility 常用 user/daemon/local0~local7，severity emerg~debug；用于触发被测系统日志采集。message 不做变量替换，只有 host 支持）
 Locator = {"strategy":"role"|"text"|"testId"|"css"|"xpath","value":"定位值"}（xpath 仅用于读取历史数据;新生成的用例应优先 css / role / text / testId，结构鲁棒性差的位置不要选 xpath）
 （mobile-only："accessibilityId"|"label"|"predicate"，仅在 platform=mobile 用例中可产出；web 用例不得使用）
+frameChain（可选字段，13 个含 locator 的 web 动作均可携带，录制器产物）：
+- 形状：[{"locator":[Locator,...]},...]——自顶向下的 iframe 帧链，每级是该层 iframe 元素自身的候选定位；最内级的目标元素定位在动作自身的 locator 里。
+- 目标元素在 iframe 里时步骤才带此字段。AI 编译/改写步骤时【绝不发明 frameChain】：输入步骤带了就原样保留，没带就不要加。
 mobile-only action（仅 platform=mobile 时产出）：
 - {"kind":"tap","locator":[Locator,...]}（首选 tap；click 在 mobile 也可用但会映射为 tap）
 - {"kind":"swipe","from":[Locator,...],"to":[Locator,...],"durationMs":300（默认）}

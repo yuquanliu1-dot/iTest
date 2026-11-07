@@ -1,9 +1,12 @@
-import type { Page } from 'playwright-core';
+import type { Page, Frame } from 'playwright-core';
 import type { Locator } from '@itest/shared';
 
 export type DomFallbackResult = { ok: true } | { ok: false; error: string };
 
-function locatorToCss(page: Page, locators: Locator[]): string | null {
+// 帧链步骤的 DOM 降级在 Frame 上下文派发（Frame.evaluate 与 Page 同签名）。
+type DomRoot = Page | Frame;
+
+function locatorToCss(page: DomRoot, locators: Locator[]): string | null {
   for (const l of locators) {
     if (l.strategy === 'css') return l.value;
     if (l.strategy === 'testId') return l.value.startsWith('[') ? l.value : `[data-testid="${l.value}"]`;
@@ -18,7 +21,7 @@ interface ScriptArg {
 }
 
 async function runDomAction(
-  page: Page,
+  page: DomRoot,
   locators: Locator[],
   arg: ScriptArg,
   _script: (a: ScriptArg) => { ok: boolean; error?: string },
@@ -32,7 +35,7 @@ async function runDomAction(
   return (res as DomFallbackResult) ?? { ok: false, error: 'no-result' };
 }
 
-export async function domClick(page: Page, locators: Locator[]): Promise<DomFallbackResult> {
+export async function domClick(page: DomRoot, locators: Locator[]): Promise<DomFallbackResult> {
   const sel = locatorToCss(page, locators);
   if (!sel) return { ok: false, error: 'no-css-locator' };
   const r = await page.evaluate((selector: string) => {
@@ -45,7 +48,7 @@ export async function domClick(page: Page, locators: Locator[]): Promise<DomFall
   return r as DomFallbackResult;
 }
 
-export async function domFill(page: Page, locators: Locator[], value: string): Promise<DomFallbackResult> {
+export async function domFill(page: DomRoot, locators: Locator[], value: string): Promise<DomFallbackResult> {
   const sel = locatorToCss(page, locators);
   if (!sel) return { ok: false, error: 'no-css-locator' };
   const r = await page.evaluate(({ selector, value }: ScriptArg) => {
@@ -61,7 +64,7 @@ export async function domFill(page: Page, locators: Locator[], value: string): P
   return r as DomFallbackResult;
 }
 
-export async function domCheck(page: Page, locators: Locator[], checked: boolean): Promise<DomFallbackResult> {
+export async function domCheck(page: DomRoot, locators: Locator[], checked: boolean): Promise<DomFallbackResult> {
   const sel = locatorToCss(page, locators);
   if (!sel) return { ok: false, error: 'no-css-locator' };
   const r = await page.evaluate(({ selector, checked }: { selector: string; checked: boolean }) => {
@@ -76,7 +79,7 @@ export async function domCheck(page: Page, locators: Locator[], checked: boolean
   return r as DomFallbackResult;
 }
 
-export async function domSelect(page: Page, locators: Locator[], value: string): Promise<DomFallbackResult> {
+export async function domSelect(page: DomRoot, locators: Locator[], value: string): Promise<DomFallbackResult> {
   const sel = locatorToCss(page, locators);
   if (!sel) return { ok: false, error: 'no-css-locator' };
   const r = await page.evaluate(({ selector, value }: { selector: string; value: string }) => {
@@ -89,7 +92,7 @@ export async function domSelect(page: Page, locators: Locator[], value: string):
   return r as DomFallbackResult;
 }
 
-export async function domUpload(_page: Page, _locators: Locator[], _storedPath: string): Promise<DomFallbackResult> {
+export async function domUpload(_page: DomRoot, _locators: Locator[], _storedPath: string): Promise<DomFallbackResult> {
   // upload 仍走真实 setInputFiles；DOM 路径无需额外实现
   return { ok: false, error: 'upload-not-supported-in-dom-fallback' };
 }

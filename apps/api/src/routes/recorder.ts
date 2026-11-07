@@ -115,9 +115,11 @@ recorderRoute.post('/sessions', async (req, res) => {
 // 连续同 locator 的 fill 合并：React controlled input 在输入过程中 remount / 用户中途停顿时，
 // recorder 会产多条 fill（值为累计值，回放时逐条执行结果等价但噪音大）。合并保留最后一条的值，
 // 位置取第一条。其他 kind 或 locator 不同不合并（切走再回来填是合法的两步，中间必有其他步骤隔开）。
-type RecordedStepItem = { action?: { kind?: string; locator?: unknown; value?: unknown; sensitive?: unknown } };
+// frameChain 参与合并键：不同帧的同 locator 是不同目标，合并把值写错帧。
+type RecordedStepItem = { action?: { kind?: string; locator?: unknown; value?: unknown; sensitive?: unknown; frameChain?: unknown } };
 
-function mergeConsecutiveFills(steps: unknown[]): unknown[] {
+/** 导出供单测（跨帧 fill 不合并的回归锚）。 */
+export function mergeConsecutiveFills(steps: unknown[]): unknown[] {
   const out: unknown[] = [];
   for (const step of steps) {
     const prev = out[out.length - 1] as RecordedStepItem | undefined;
@@ -125,6 +127,7 @@ function mergeConsecutiveFills(steps: unknown[]): unknown[] {
     if (
       prev && cur.action?.kind === 'fill' && prev.action?.kind === 'fill'
       && JSON.stringify(prev.action.locator) === JSON.stringify(cur.action.locator)
+      && JSON.stringify(prev.action.frameChain ?? null) === JSON.stringify(cur.action.frameChain ?? null)
     ) {
       prev.action.value = cur.action.value;
       prev.action.sensitive = cur.action.sensitive ?? prev.action.sensitive;
