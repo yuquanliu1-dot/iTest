@@ -109,6 +109,33 @@ describe('cases.service', () => {
     expect(updated.tags).toEqual([]);
   }, 30_000);
 
+  it('searchCasesInVersion:召回面含步骤指令/标签/预期结果/描述;列表项形状不含这两个匹配字段', async () => {
+    const seed = await seedProject(pool);
+    const svc = await import('../src/services/cases.service.js');
+    // 标题不带关键词,靠步骤指令命中
+    const byStep = await svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: '用例A' });
+    await svc.insertCaseStep(byStep.id, { instruction: '在号码管理页点击导出按钮并等待列表刷新' });
+    // 靠标签名命中
+    const byTag = await svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: '用例B' });
+    const tagId = (await pool.query(`INSERT INTO tags(organization_id, name, color) VALUES ($1,'导出回归','34c759') RETURNING id`, [seed.orgId])).rows[0]!.id as string;
+    await pool.query(`INSERT INTO case_tags(case_id, tag_id) VALUES ($1,$2)`, [byTag.id, tagId]);
+    // 靠预期结果命中
+    const byOutcome = await svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: '用例C', expectedOutcome: '页面提示导出成功' });
+    // 靠描述命中
+    const byDesc = await svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: '用例D', description: '验证批量导出功能可用性' });
+    // 控制组:标题/描述/预期/步骤/标签都不含关键词
+    await svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: '登录成功跳转首页' });
+
+    const hits = await svc.searchCasesInVersion(seed.versionId, { keyword: '导出' });
+    expect(hits.map((r) => r.id).sort()).toEqual([byStep.id, byTag.id, byOutcome.id, byDesc.id].sort());
+    // 列表项不携带 description/expectedOutcome(看全文走 get)
+    expect(hits[0]).not.toHaveProperty('description');
+    expect(hits[0]).not.toHaveProperty('expectedOutcome');
+    // 标题命中路径不回归
+    const byTitle = await svc.searchCasesInVersion(seed.versionId, { keyword: '登录成功' });
+    expect(byTitle).toHaveLength(1);
+  }, 30_000);
+
   it('createGroup:项目不存在 → 404;成功后 groupProjectId 可解析', async () => {
     const { projectId } = await seedProject(pool);
     const svc = await import('../src/services/cases.service.js');

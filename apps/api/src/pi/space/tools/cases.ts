@@ -53,7 +53,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
     {
       name: 'manage_cases',
       description:
-        '用例只读操作 + 分组管理 + 跨版本复制。action=search(检索用例,缺省当前版本,可传 versionId 检索同项目其它版本)| get(caseId,含步骤与标签,同项目内可跨版本读)| list_versions(项目版本列表,标出当前版本)| copy_to_version(caseId + targetGroupId,可传 versionId 指定目标版本,缺省复制到当前版本;实时落库)| create_group(groupName,可带 groupDefaultUrl)| rename_group(groupId+name,需用户确认)| delete_group(groupId,仅空分组可删,需用户确认)。数据集的读/改/删走 manage_datasets(行值敏感格脱敏)。用例/步骤的增删改一律走 stage_case(全新用例)或 stage_case_op(已有用例)—— 用户在右侧 StagePanel 勾选 → 落库。',
+        '用例只读操作 + 分组管理 + 跨版本复制。action=search(关键词检索用例,匹配标题/描述/预期结果/步骤文本/标签名;缺省当前版本,可传 versionId 检索同项目其它版本)| get(caseId,含步骤与标签,同项目内可跨版本读)| list_versions(项目版本列表,标出当前版本)| copy_to_version(caseId + targetGroupId,可传 versionId 指定目标版本,缺省复制到当前版本;实时落库)| create_group(groupName,可带 groupDefaultUrl)| rename_group(groupId+name,需用户确认)| delete_group(groupId,仅空分组可删,需用户确认)。数据集的读/改/删走 manage_datasets(行值敏感格脱敏)。用例/步骤的增删改一律走 stage_case(全新用例)或 stage_case_op(已有用例)—— 用户在右侧 StagePanel 勾选 → 落库。',
       parameters: Type.Object({
         action: Type.Union([
           Type.Literal('search'),
@@ -78,6 +78,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
         '编辑步骤(重编译 instruction、改 compiled、插入/删除/排序)走 stage_case_op(action=update_step/insert_step/delete_step/move_step)。',
         '跨版本复制用例的标准流程:list_versions 拿版本 id → search(versionId=源版本, keyword=...) 找到源 caseId(可 get 核对步骤) → 确认目标分组存在(不存在先 create_group) → copy_to_version(caseId, targetGroupId, versionId=目标版本)。目标版本缺省为当前版本。',
         '创建 group 后返回 groupId；下一步创建用例时把 groupId 喂给 stage_case。delete_group 仅限空分组(分组下还有用例会被拒绝)。',
+        '设计新用例前先检索同类已有用例：用 search 按业务对象/动作词检索(关键词可多试几个:功能名、页面名、操作动词),对最相关的 1~3 条 get 看步骤与断言——参考其覆盖点、步骤写法与命名风格;与本次需求重叠的覆盖点要点明「已由哪条已有用例覆盖」。已有用例的锚点/URL/账号等线内事实不得照抄,一律以当前应用实测为准。',
         'search 返回的列表项不含步骤全文,要看完整步骤/expectedOutcome 用 get。',
         '数据集列名即回放初始变量 {{列名}}：看项目数据集(含行值,敏感格脱敏)用 manage_datasets get;看某用例可用变量用 get 返回的 dataset.columns。行间差异（输入值/断言文本/预期描述）应写成 {{var}}，让每行数据驱动出不同验证。项目里没有合适数据集时用 stage_dataset 生成（配套新用例用 stage_case 的 datasetLocalId 绑定）；给已有用例绑定/解绑已落库数据集走 stage_case_op update_case(patch.datasetId)。修改已有数据集走 manage_datasets update。',
       ],

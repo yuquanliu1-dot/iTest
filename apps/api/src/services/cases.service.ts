@@ -362,6 +362,8 @@ export async function searchCasesInVersion(versionId: string, o: { keyword?: str
     .select({
       id: testCases.id,
       title: testCases.title,
+      description: testCases.description,
+      expectedOutcome: testCases.expectedOutcome,
       priority: testCases.priority,
       status: testCases.status,
       groupId: testCases.groupId,
@@ -377,12 +379,45 @@ export async function searchCasesInVersion(versionId: string, o: { keyword?: str
   let out = rows;
   if (o.groupId) out = out.filter((r) => r.groupId === o.groupId);
   const kw = o.keyword?.trim().toLowerCase();
-  if (kw) out = out.filter((r) => r.title.toLowerCase().includes(kw));
+  if (kw) {
+    // 召回面不止标题：AI 建例前检索同类用例时,业务对象/动作词常落在步骤指令、预期结果与标签里。
+    // 一次把本版本用例的步骤文本与标签名拉回来在内存匹配,返回形状不变(列表项仍不含步骤全文)。
+    const ids = out.map((r) => r.id);
+    const [stepRows, tagRows] = await Promise.all([
+      ids.length
+        ? db.select({ caseId: testSteps.caseId, instruction: testSteps.instruction }).from(testSteps).where(inArray(testSteps.caseId, ids))
+        : Promise.resolve([] as Array<{ caseId: string; instruction: string | null }>),
+      ids.length
+        ? db.select({ caseId: caseTags.caseId, name: tags.name }).from(caseTags).innerJoin(tags, eq(tags.id, caseTags.tagId)).where(inArray(caseTags.caseId, ids))
+        : Promise.resolve([] as Array<{ caseId: string; name: string }>),
+    ]);
+    const stepText = new Map<string, string>();
+    for (const s of stepRows) stepText.set(s.caseId, `${stepText.get(s.caseId) ?? ''}\n${s.instruction ?? ''}`);
+    const tagText = new Map<string, string>();
+    for (const t of tagRows) tagText.set(t.caseId, `${tagText.get(t.caseId) ?? ''}\n${t.name}`);
+    out = out.filter(
+      (r) =>
+        r.title.toLowerCase().includes(kw) ||
+        (r.description ?? '').toLowerCase().includes(kw) ||
+        (r.expectedOutcome ?? '').toLowerCase().includes(kw) ||
+        (stepText.get(r.id) ?? '').includes(kw) ||
+        (tagText.get(r.id) ?? '').includes(kw),
+    );
+  }
   const limited = out.slice(0, o.limit ?? 50);
   return await Promise.all(
     limited.map(async (r) => ({
-      ...r,
+      // description/expectedOutcome 只参与召回匹配,不进列表项(看全文走 get,列表形状保持不变)
+      id: r.id,
+      title: r.title,
+      priority: r.priority,
+      status: r.status,
+      groupId: r.groupId,
+      scenarioId: r.scenarioId,
+      url: r.url,
       webServiceRef: r.webServiceRef ?? null,
+      defaultEnvId: r.defaultEnvId,
+      updatedAt: r.updatedAt,
       resolvedUrl: await resolveCaseUrl(r, { defaultEnvFallback: true }),
     })),
   );
