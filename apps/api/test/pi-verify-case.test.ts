@@ -67,6 +67,9 @@ vi.mock('playwright-core', () => {
     gotos: [] as string[], ctxOpts: [] as unknown[], zeroLocators: [] as string[], multiLocators: [] as string[],
     // SPA 挂载滞后模拟：sel → 第 N 次 count() 起返回 1（之前返回 0）
     mountAfter: {} as Record<string, number>, countCalls: {} as Record<string, number>,
+    // 保活桩开关：false 时浏览器报 isConnected=false / 页面 isClosed=true（= 不可保活，与真实浏览器
+    // 断开同形）→ finally 判定不成立，走即用即关；true 时报连通且页面未关 → 轮末 commit 上册。
+    browserAlive: false,
   };
   const makeLoc = (sel: string) => ({
     count: async () => {
@@ -85,6 +88,8 @@ vi.mock('playwright-core', () => {
   return {
     chromium: {
       launch: vi.fn(async () => ({
+        // 保活判定读它（finally：browser.isConnected?.() === true）
+        isConnected: () => state.browserAlive,
         newContext: vi.fn(async (opts?: unknown) => {
           state.ctxOpts.push(opts);
           return {
@@ -95,6 +100,8 @@ vi.mock('playwright-core', () => {
               waitForTimeout: async () => {},
               on: () => {}, // consoleCapture 订阅（console/pageerror），桩页无需采集
               close: async () => {},
+              // 保活判定读它（finally：page.isClosed?.() === false）
+              isClosed: () => !state.browserAlive,
               screenshot: async () => Buffer.from('fake-png'),
               // pageSettle 的像素指纹取数字；断言文本体检取 innerText 字符串。
               // 恒返回 0：连续两次相同 → 页面已静止；innerText 场景恒为空串，judge 仍按语义判。
@@ -176,7 +183,7 @@ afterAll(async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   const { __testState } = (await import('playwright-core')) as unknown as {
-    __testState: { gotos: string[]; ctxOpts: unknown[]; zeroLocators: string[]; multiLocators: string[]; mountAfter: Record<string, number>; countCalls: Record<string, number> };
+    __testState: { gotos: string[]; ctxOpts: unknown[]; zeroLocators: string[]; multiLocators: string[]; mountAfter: Record<string, number>; countCalls: Record<string, number>; browserAlive: boolean };
   };
   __testState.gotos.length = 0;
   __testState.ctxOpts.length = 0;
@@ -184,6 +191,10 @@ beforeEach(async () => {
   __testState.multiLocators.length = 0;
   __testState.mountAfter = {};
   __testState.countCalls = {};
+  __testState.browserAlive = false;
+  // 保活注册表是进程内状态：跨用例残留会让后一轮意外命中复用，掩盖真实行为
+  const { resetForTest } = await import('../src/pi/space/tools/browserSessions.js');
+  resetForTest();
   await pool.query(`TRUNCATE test_steps, test_cases, test_environments, environment_objects,
     requirements, "groups", projects, project_versions, ai_threads, ai_stage_case_ops, ai_stage_cases
     RESTART IDENTITY CASCADE`);
@@ -270,6 +281,32 @@ async function seedLoginObject(): Promise<void> {
     `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', '默认', $2::jsonb, true)`,
     [env.rows[0]!.id, JSON.stringify(payload)],
   );
+}
+
+/** 视觉模式用例：instruction-only 步骤（compiled NULL）——轨迹收集与保活续跑的目标形态。返回逐步 step id。 */
+async function seedVisualCase(stepCount: number, opts?: { sensitiveFirst?: boolean }): Promise<{ caseId: string; stepIds: string[] }> {
+  const id = randomUUID();
+  await pool.query(
+    `INSERT INTO test_cases(id, group_id, version_id, title, url, platform) VALUES ($1, $2, $3, '视觉用例', 'http://env.example/page', 'web')`,
+    [id, groupId, versionId],
+  );
+  for (let i = 0; i < stepCount; i++) {
+    await pool.query(
+      `INSERT INTO test_steps(case_id, "order", source, instruction) VALUES ($1, $2, 'ai', $3)`,
+      [id, i + 1, `第${i + 1}步：完成操作${i + 1}`],
+    );
+  }
+  if (opts?.sensitiveFirst) {
+    const { encrypt } = await import('../src/lib/secret-crypto.js');
+    const enc = encrypt('StepSecret!9');
+    await pool.query(
+      `UPDATE test_steps SET sensitive = true, secret_ciphertext = $2, secret_iv = $3, secret_tag = $4
+       WHERE case_id = $1 AND "order" = 1`,
+      [id, enc.ciphertext.toString('base64'), enc.iv.toString('base64'), enc.tag.toString('base64')],
+    );
+  }
+  const r = await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [id]);
+  return { caseId: id, stepIds: r.rows.map((row) => row.id as string) };
 }
 
 function toolCtx(emitLog?: unknown[]) {
@@ -1345,32 +1382,6 @@ describe('verify_case 超时预算', () => {
 });
 
 describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', () => {
-  /** 视觉模式用例：instruction-only 步骤（compiled NULL）——轨迹收集的目标形态。返回逐步 step id。 */
-  async function seedVisualCase(stepCount: number, opts?: { sensitiveFirst?: boolean }): Promise<{ caseId: string; stepIds: string[] }> {
-    const id = randomUUID();
-    await pool.query(
-      `INSERT INTO test_cases(id, group_id, version_id, title, url, platform) VALUES ($1, $2, $3, '视觉用例', 'http://env.example/page', 'web')`,
-      [id, groupId, versionId],
-    );
-    for (let i = 0; i < stepCount; i++) {
-      await pool.query(
-        `INSERT INTO test_steps(case_id, "order", source, instruction) VALUES ($1, $2, 'ai', $3)`,
-        [id, i + 1, `第${i + 1}步：完成操作${i + 1}`],
-      );
-    }
-    if (opts?.sensitiveFirst) {
-      const { encrypt } = await import('../src/lib/secret-crypto.js');
-      const enc = encrypt('StepSecret!9');
-      await pool.query(
-        `UPDATE test_steps SET sensitive = true, secret_ciphertext = $2, secret_iv = $3, secret_tag = $4
-         WHERE case_id = $1 AND "order" = 1`,
-        [id, enc.ciphertext.toString('base64'), enc.iv.toString('base64'), enc.tag.toString('base64')],
-      );
-    }
-    const r = await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [id]);
-    return { caseId: id, stepIds: r.rows.map((row) => row.id as string) };
-  }
-
   it('整轮全过：视觉步轨迹入册（动作原样），traceSaved=true', async () => {
     const { caseId, stepIds } = await seedVisualCase(2);
     const { runAiTask } = await import('../src/execute/aiTask.js');
@@ -1481,7 +1492,7 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     expect(runAiTask).toHaveBeenCalledTimes(3);
   });
 
-  it('确认轨迹映射失败（坐标动作未解析回 selector）→ restore 步保持无 compiled，AI 相照旧接管', async () => {
+  it('确认轨迹映射失败（坐标动作未解析回 selector）→ 该前缀步不可机械恢复 → 跳过注定断链的回放', async () => {
     const { caseId } = await seedVisualCase(2);
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask)
@@ -1493,11 +1504,13 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"完成","login":"not-needed"}');
-    await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
-    const restoreSteps = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ compiled: unknown }>;
-    // 保守回退：映射不出机械动作就不硬喂（坐标动作机械回放无从派发），保持 null 交 AI 接管
-    expect(restoreSteps[0]!.compiled).toBeNull();
+    const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    const data2 = JSON.parse((r2 as { data: string }).data);
+    // 坐标动作机械回放无从派发 → 前缀步不可恢复 → 不喂进回放切片（否则必 compile-missing 断链、
+    // 白跑一次注定失败的回放还把恢复收敛点打回该步）：AI 相从第 1 步接管。
+    expect(executeCaseInBrowser).not.toHaveBeenCalled();
+    expect(data2.resumeFrom).toBe(0);
   });
 
   it('混合前缀：机械步保留原 compiled 不吃轨迹；视觉步吃轨迹——结尾干跑不受影响', async () => {
@@ -1962,5 +1975,96 @@ describe('verify_case 机械执行步（不经浏览器）', () => {
     const guidelines = buildVerifyCaseTool(toolCtx()).promptGuidelines.join('\n');
     expect(guidelines).toContain('replay.steps[].sql');
     expect(guidelines).toContain('不要建探针用例');
+  });
+});
+
+describe('verify_case 跨轮保活（浏览器注册表接线）', () => {
+  /** 让 playwright 桩的浏览器报「连通且页面未关」→ finally 判定成立，轮末 commit 上册 */
+  async function alive(): Promise<void> {
+    const { __testState } = (await import('playwright-core')) as unknown as { __testState: { browserAlive: boolean } };
+    __testState.browserAlive = true;
+  }
+  /** 注册表里该用例的保活会话（键 = threadId::caseId，与 verifyCase 同口径） */
+  async function session(caseId: string): Promise<{ appliedHashes: string[] } | null> {
+    const { peekSession } = await import('../src/pi/space/tools/browserSessions.js');
+    return peekSession(`t1::${caseId}`);
+  }
+
+  it('失败轮也保活：浏览器留在失败现场，下轮从失败步续跑（前缀零重演）', async () => {
+    const { caseId } = await seedVisualCase(2);
+    await alive();
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    // 轮 1：步 1 过（收集 click 轨迹），步 2 失败 → 失败轮也必须把浏览器留在现场
+    vi.mocked(runAiTask)
+      .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
+        opts?.onAction?.({ type: 'click', selector: '#btn-1' }, true);
+        return '{"status":"passed","reason":"完成","login":"not-needed"}';
+      })
+      .mockResolvedValueOnce('{"status":"failed","reason":"失败","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r1 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(JSON.parse((r1 as { data: string }).data).result).toBe('failed');
+    // 失败轮 = 干净断点：浏览器上册，已生效前缀 = 失败步之前的步数
+    const s1 = await session(caseId);
+    expect(s1).not.toBeNull();
+    expect(s1!.appliedHashes.length).toBe(1);
+
+    // 轮 2：命中保活 → 不开新浏览器、不做前缀回放、AI 相只跑失败的那一步
+    vi.mocked(runAiTask).mockResolvedValueOnce('{"status":"passed","reason":"完成","login":"not-needed"}');
+    const { chromium } = await import('playwright-core');
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    const data2 = JSON.parse((r2 as { data: string }).data);
+    expect(data2.result).toBe('passed');
+    expect(data2.browserReused).toBe(true);
+    expect(data2.resumeFrom).toBe(1); // AI 相从失败步续跑
+    expect(runAiTask).toHaveBeenCalledTimes(3); // 轮1×2 + 轮2×1（前缀步不重烧）
+    expect(executeCaseInBrowser).not.toHaveBeenCalled(); // 保活命中 → 零回放
+    expect(chromium.launch).toHaveBeenCalledTimes(1); // 复用同一浏览器
+  });
+
+  it('保活未命中（浏览器断开）→ 降级既有 fresh+restore 路径，行为不变', async () => {
+    const { caseId } = await seedVisualCase(2);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask)
+      .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
+        opts?.onAction?.({ type: 'click', selector: '#btn-1' }, true);
+        return '{"status":"passed","reason":"完成","login":"not-needed"}';
+      })
+      .mockResolvedValueOnce('{"status":"failed","reason":"失败","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    // 浏览器不可保活（默认桩状态）→ 不入注册表
+    expect(await session(caseId)).toBeNull();
+  });
+
+  it('混合前缀：可恢复段照常回放，其后的不可恢复步交 AI 相（回放切片截到可恢复前缀）', async () => {
+    const { caseId } = await seedVisualCase(3);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    // 轮 1：步 1 轨迹可映射（selector）；步 2 轨迹映射不出（坐标）；步 3 失败
+    vi.mocked(runAiTask)
+      .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
+        opts?.onAction?.({ type: 'click', selector: '#btn-1' }, true);
+        return '{"status":"passed","reason":"完成","login":"not-needed"}';
+      })
+      .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
+        opts?.onAction?.({ type: 'click', x: 500, y: 400 }, true);
+        return '{"status":"passed","reason":"完成","login":"not-needed"}';
+      })
+      .mockResolvedValueOnce('{"status":"failed","reason":"失败","login":"not-needed"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    // 轮 2：回放切片 = 最长可恢复前缀（1 步）→ AI 相从步 2 接管
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"完成","login":"not-needed"}');
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    const data2 = JSON.parse((r2 as { data: string }).data);
+    expect(data2.result).toBe('passed');
+    expect(data2.resumeFrom).toBe(1);
+    const restoreSteps = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ order: number; compiled: unknown }>;
+    expect(restoreSteps.length).toBe(1); // 不可恢复的步 2 不进回放切片
+    expect(restoreSteps[0]!.compiled).toEqual([
+      { kind: 'click', locator: [{ strategy: 'css', value: '#btn-1' }] },
+    ]);
   });
 });

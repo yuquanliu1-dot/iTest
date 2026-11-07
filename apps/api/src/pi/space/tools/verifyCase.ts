@@ -27,7 +27,7 @@ import { isVisualStep, mapAiActionsToCompiled } from '../../../execute/aiActionM
 import { writeStepScreenshot, executeCaseInBrowser, gotoWithLandedRetry, type ExecStepResult } from '../../../execute/cdp.js';
 import { LOCATOR_PROBE_ROUNDS, LOCATOR_PROBE_INTERVAL_MS } from '../../../execute/locator-probe.js';
 import { buildCandidates } from '../../../execute/locator-resolver.js';
-import type { Locator, ConsoleLogEntry } from '@itest/shared';
+import type { Locator, StepAction, ConsoleLogEntry } from '@itest/shared';
 import { runCaseVisionAssert } from '../../../execute/visionAssert.js';
 import { createConsoleCapture, drainConsoleForPage } from '../../../execute/consoleCapture.js';
 import { resolveEnv } from '../../../execute/envContext.js';
@@ -807,19 +807,31 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             sensitive: s.sensitive,
             compiled: Array.isArray(s.compiled) ? s.compiled : null,
           });
-          /** restore 专用映射：视觉步（纯 NL / 纯 aiTask）经 mapForReplay 后无机械语义——纯 NL 连
-           *  instruction 都不带，机械引擎直接 compile-missing，前缀里第一个这样的步就会打断 restore、
-           *  AI 相从那里整体重跑（重新截图识别），「已确认步骤不再烧 LLM 轮次」对视觉用例落空。
-           *  改喂上一轮确认轨迹（confirmedTraces，与 solidify 同源）映射出的机械动作重建状态——
-           *  零 LLM/零截图。映射不出（坐标形态/凭据/裸标签被拒）保守回退原形态：机械引擎照旧
-           *  compile-missing/执行失败收敛该步，AI 相接管，语义与未接轨迹前完全一致。 */
+          /** restore 可派发的机械动作（按步 id 缓存）：视觉步（纯 NL / 纯 aiTask）经 mapForReplay 后
+           *  无机械语义——纯 NL 连 instruction 都不带，机械引擎直接 compile-missing，前缀里第一个这样
+           *  的步就会打断 restore、AI 相从那里整体重跑（重新截图识别），「已确认步骤不再烧 LLM 轮次」
+           *  对视觉用例落空。改喂上一轮确认轨迹（confirmedTraces，与 solidify 同源）映射出的机械动作
+           *  重建状态——零 LLM/零截图。映射不出（坐标形态/凭据/裸标签被拒）→ null：该步无从派发机械
+           *  动作，机械引擎必在它上面 compile-missing 断链，故不把它喂进 restore 切片（见 restoreLen）。 */
+          const restoreCompiledByStepId = new Map<string, StepAction[] | null>();
+          const restoreCompiledFor = (s: EffectiveStep): StepAction[] | null => {
+            if (!isVisualStep(s)) return null; // 机械步保留原 compiled（回放保真），不需要轨迹映射
+            const cached = restoreCompiledByStepId.get(s.id);
+            if (cached !== undefined) return cached;
+            const carried = prevConfirm?.confirmedTraces.get(s.id);
+            const mapped = carried ? mapAiActionsToCompiled(carried) : null;
+            const compiled = mapped && mapped.ok ? mapped.compiled : null;
+            restoreCompiledByStepId.set(s.id, compiled);
+            return compiled;
+          };
+          /** 该步能否机械回放重建状态：机械步原样可放；视觉步须有可映射的确认轨迹。 */
+          const restorable = (s: EffectiveStep): boolean =>
+            !isVisualStep(s) || restoreCompiledFor(s) !== null;
           const mapForRestore = (s: EffectiveStep) => {
             const base = mapForReplay(s);
             if (!isVisualStep(s)) return base; // 机械步保留原 compiled（回放保真），敏感步无轨迹自然回退
-            const carried = prevConfirm?.confirmedTraces.get(s.id);
-            if (!carried) return base;
-            const mapped = mapAiActionsToCompiled(carried);
-            return mapped.ok ? { ...base, compiled: mapped.compiled } : base;
+            const compiled = restoreCompiledFor(s);
+            return compiled ? { ...base, compiled } : base;
           };
           // 敏感字段解密表：restore 与结尾完整回放共用（解密失败会抛，与原有最终回放语义一致）
           const replaySecrets = buildReplaySecrets(effectiveSteps);
@@ -830,9 +842,26 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // （机械回放失败不判死：AI 临场可能自适应绕过）。
           // 保活命中轮整段跳过：浏览器停在上一轮终态，前缀已生效，AI 相从 reuseApplied 直接续跑。
           let resumeIndex = reused ? reuseApplied : validPrefixLen;
+          // restore 切片 = 前缀的最长「可机械恢复」段：不可恢复的视觉步（无确认轨迹/映射被拒）
+          // 喂进机械引擎必然 compile-missing 断链，回放白跑一次注定失败的动作，还把恢复收敛点
+          // 打回该步——prod228 实测 46/46 轮带前缀的 verify 全部收敛到第 1 步重跑，且带前缀的轮
+          // 反而比全新轮慢（p50 112s vs 60s，多的就是这次注定失败的回放）。截断后：可恢复段由机械
+          // 回放重建状态，其后的步交 AI 相接管（与原「回放失败收敛到失败步」同口径），只是不再白跑。
+          let restoreLen = 0;
           if (validPrefixLen > 0 && !reused) {
+            for (const s of effectiveSteps.slice(0, validPrefixLen)) {
+              if (!restorable(s)) break;
+              restoreLen++;
+            }
+          }
+          if (validPrefixLen > 0 && !reused && restoreLen === 0) {
+            // 前缀整段无从机械恢复 → 不做回放，本轮等价全新轮：AI 相从第 1 步接管
+            // （页面导航由下方初始 goto 负责——不做回放就没有 executeCaseInBrowser 的导航）。
+            resumeIndex = 0;
+          }
+          if (validPrefixLen > 0 && !reused && restoreLen > 0) {
             let restoredPage: Page | null = null;
-            const restoreSlice = effectiveSteps.slice(0, validPrefixLen);
+            const restoreSlice = effectiveSteps.slice(0, restoreLen);
             // 停止可抢占 restore：在途回放随 finally 关浏览器终止，异常吞掉不上抛。
             const restorePromise = executeCaseInBrowser(
               caseId,
@@ -871,17 +900,22 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
             if (restoreRes.some((r) => r.status === 'failed')) {
               const j = restoreRes.findIndex((r) => r.status === 'failed');
-              resumeIndex = j < 0 ? validPrefixLen : j;
+              resumeIndex = j < 0 ? restoreLen : j;
+            } else {
+              // 回放全过：已生效前缀 = 实际回放的那一段（restoreLen，可能短于 validPrefixLen）
+              resumeIndex = restoreLen;
             }
             if (restoredPage) page = restoredPage;
           }
-          // restore 落定后的已生效前缀（完全恢复=validPrefixLen；收敛=失败步 j），轮末 commit 口径
+          // restore 落定后的已生效前缀（完全恢复=restoreLen；收敛=失败步 j），轮末 commit 口径
           appliedCount = resumeIndex;
 
-          // 初始导航（仅非 resume：resume 时 restore 已完成导航；mechanical 跳过——干跑
-          // executeCaseInBrowser 自带 goto，预导航只是多一次页面加载与副作用。保活命中轮
-          // appliedCount=0 时页面状态未知（上轮可能停在首步失败现场），goto 重置到已知态）
-          if (mode !== 'mechanical' && (validPrefixLen === 0 || (reused && appliedCount === 0)) && targetUrl) {
+          // 初始导航（页面尚未被导航过时）：restore 已完成导航（restoreRan）；保活命中轮浏览器停在
+          // 上一轮终态（appliedCount>0）也不需要；其余（全新轮 / 前缀整段不可恢复而跳过 restore /
+          // 命中轮 appliedCount=0 状态未知）都要 goto 到已知态。mechanical 跳过——干跑
+          // executeCaseInBrowser 自带 goto，预导航只是多一次页面加载与副作用。
+          const restoreRan = validPrefixLen > 0 && !reused && restoreLen > 0;
+          if (mode !== 'mechanical' && !restoreRan && !(reused && appliedCount > 0) && targetUrl) {
             const firstCompiled = effectiveSteps[0]?.compiled;
             const firstAction = (Array.isArray(firstCompiled) && firstCompiled.length > 0
               ? firstCompiled[0]
@@ -892,7 +926,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               // 落到登录页不告警——full 模式 AI 相会自助登录；其他落点差异在 roundNotes 提示 agent。
               const landed = await gotoWithLandedRetry(page, targetUrl);
               if (!landed.landed && !landed.finalUrl.includes('/login')) {
-                roundNotes.push(`入口深链 goto 后未落到目标页（当前在 ${landed.finalUrl}，目标 ${targetUrl}）——多为前端路由冷启动竞态（如 qiankun 兜底路由）或入口地址不对。后续步骤失败时先核对该信息：若失败页元素与目标页无关，属入口未达而非 locator 错，不要盲目改步骤 locator。`);
+                roundNotes.push(`入口深链 goto 后未落到目标页（当前在 ${landed.finalUrl}，目标 ${targetUrl}）——多为前端路由冷启动竞态（如 qiankun 兜底路由）或入口地址不对；若当前页是登录页/首页概览页，也可能是会话已过期（登录态缓存 30 分钟，人机间隔一长就过期），此时应先 get_login_credentials + perform_login 重新登录再重验，而不是把步骤判成写错。后续步骤失败时先核对该信息：若失败页元素与目标页无关，属入口未达而非 locator 错，不要盲目改步骤 locator。`);
               }
             }
           }
@@ -949,7 +983,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // loginCache/loginUser：登录态缓存命中与凭据用户直显对话框，无需翻服务端日志即可确认复用生效。
           ctx.emit({
             type: 'verify_progress', phase: 'start', caseId, total: effectiveSteps.length, targetUrl: targetUrl ?? null,
-            resumeFrom: reused ? reuseApplied : validPrefixLen,
+            resumeFrom: resumeIndex,
             ...(reused ? { browserReused: true as const } : {}),
             ...(mode === 'mechanical' ? { mode: 'mechanical' as const } : {}),
             loginCache: reused || cachedState ? ('hit' as const) : ('miss' as const),
@@ -1418,7 +1452,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                     // 轨迹已缓存 → 紧接着的 solidify_case 可零执行秒级固化（agent 据此引导用户）
                     traceSaved: traceSavedNow,
                   }),
-              resumeFrom: reused ? reuseApplied : validPrefixLen,
+              resumeFrom: resumeIndex,
               ...(reused ? { browserReused: true as const } : {}),
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
@@ -1468,7 +1502,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
               ...(mode === 'mechanical' ? { mode: 'mechanical' as const } : { login }),
-              resumeFrom: reused ? reuseApplied : validPrefixLen,
+              resumeFrom: resumeIndex,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
@@ -1521,7 +1555,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
               ...(mode === 'mechanical' ? { mode: 'mechanical' as const } : { login }),
-              resumeFrom: reused ? reuseApplied : validPrefixLen,
+              resumeFrom: resumeIndex,
               basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
               stagedOpsApplied: opsApplied,
               ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
@@ -1609,7 +1643,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             envId: envCtx.envId,
             targetUrl: targetUrl ?? null,
             login,
-            resumeFrom: reused ? reuseApplied : validPrefixLen,
+            resumeFrom: resumeIndex,
             basedOn: stagedCase || opsApplied > 0 ? ('staged' as const) : ('db' as const),
             stagedOpsApplied: opsApplied,
             ...(staticAnalysis.length > 0 ? { staticAnalysis } : {}),
@@ -1626,11 +1660,16 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               // 本轮窗口内浏览器 JS 报错原文：agent 修正步骤时可直接看到前端侧故障信号。
               ...(failedConsole.length ? { console: failedConsole } : {}),
               note: nlAiFail
-                ? `该步是自然语言步骤，由 AI 相（视觉执行）在真实页面上执行失败（${failed.failureReason ?? '未知'}）——大概率不是 locator 技术问题，而是步骤描述与页面实际不符：目标不存在/措辞歧义/前置状态没建立，也可能是前面某步的描述把页面带偏。这不是你能自行修复的错误：立即停止重跑与自诊，把失败详情反馈给用户（步骤 ${failed.order}「${failedStep.instruction ?? ''}」原文、failureReason、失败页 URL 与 page.elements/截图，必要时附前一步原文），请用户选择：a.调整该步或前面步骤的自然语言描述 b.补充入口/页面线索 c.确认环境/数据后重验。用户明确答复前不要再调用 verify_case——AI 相每步耗时 1~2 分钟，盲目重跑只烧时间与 token。${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`
+                ? `该步是自然语言步骤，由 AI 相（视觉执行）在真实页面上执行失败（${failed.failureReason ?? '未知'}）——大概率不是 locator 技术问题，而是步骤描述与页面实际不符：目标不存在/措辞歧义/前置状态没建立，也可能是前面某步的描述把页面带偏。这不是你能自行修复的错误：立即停止重跑与自诊，把失败详情反馈给用户（步骤 ${failed.order}「${failedStep.instruction ?? ''}」原文、failureReason、失败页 URL 与 page.elements/截图，必要时附前一步原文），请用户选择：a.调整该步或前面步骤的自然语言描述 b.补充入口/页面线索 c.确认环境/数据后重验。用户明确答复前不要再调用 verify_case——AI 相每步耗时 1~2 分钟，盲目重跑只烧时间与 token。**唯一例外：失败页是登录页或与目标业务页无关的首页/概览页时，先 get_login_credentials + perform_login 重新登录再重验本用例**——那是会话过期（登录态缓存 30 分钟）不是步骤写错，登录后可自愈，不必等用户答复。${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`
                 : `page.elements 为失败页当前可见的可交互元素；修正 locator 只能使用其中真实存在的选择器。快照不含操作后才出现的元素。${failedHint ? ` 源码静态提示:${failedHint}` : ''}${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`,
             },
           });
           updateRoundState(roundKey(ctx.threadId, caseId), rdata);
+          // 失败也是干净断点：浏览器停在失败现场（失败步之前的步已生效，appliedCount 即其条数），
+          // 下一轮从失败步续跑而不必重跑前缀。不置 completed → finally 判定不可保活 → 浏览器整个
+          // 丢掉，「失败→修正→重验」这条主循环（prod228 实测 74% 的轮次是失败轮）永远付一遍前缀
+          // 重演 + 重新登录的代价。
+          completed = true;
           return { ok: true, data: rdata };
         } finally {
           clearTimeout(timer);
