@@ -277,12 +277,12 @@ describe('stage_case 文案：DB/API 步例外 + sql 变量绑定规则', () => 
     const guidelines = tool.promptGuidelines.join('\n');
 
     // ① DB/API 例外：stage 阶段就必须带 compiled（它们不经浏览器执行）
-    expect(tool.description).toContain('查库/调接口的步——sql / queryDb / httpRequest——必须给出');
-    expect(guidelines).toContain('唯一例外：查库/调接口的步骤（sql / queryDb / httpRequest）必须在这一步就带上 compiled');
-    expect(guidelines).toContain('DB/API 步（sql / queryDb / httpRequest）不经浏览器执行');
+    expect(tool.description).toContain('查库/调接口的步——sql / httpRequest——必须给出');
+    expect(guidelines).toContain('唯一例外：查库/调接口的步骤（sql / httpRequest）必须在这一步就带上 compiled');
+    expect(guidelines).toContain('DB/API 步（sql / httpRequest）不经浏览器执行');
     // 原禁令仍存在（不得删成无条件放行），但紧跟例外
     const ban = guidelines.indexOf('stage_case 的 step 默认不输出 compiled 字段');
-    const exc = guidelines.indexOf('唯一例外：查库/调接口的步骤（sql / queryDb / httpRequest）必须在这一步就带上 compiled');
+    const exc = guidelines.indexOf('唯一例外：查库/调接口的步骤（sql / httpRequest）必须在这一步就带上 compiled');
     expect(ban).toBeGreaterThanOrEqual(0);
     expect(exc).toBeGreaterThan(ban);
 

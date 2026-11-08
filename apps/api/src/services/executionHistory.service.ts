@@ -260,6 +260,7 @@ function shapeAssertion(v: unknown): HistoryAssertion | undefined {
   };
 }
 
+/** 数据库查询结果的通用形状（sql 步的基形状；2026-11-08 queryDb 下线后不再有独立的 db 字段）。 */
 export interface HistoryStepDb {
   rowCount: number;
   durationMs: number;
@@ -304,28 +305,15 @@ export interface HistoryStepSyslog {
 }
 
 export interface HistoryStructured {
-  db?: HistoryStepDb;
   sql?: HistoryStepSql;
   log?: HistoryStepLog;
   http?: HistoryStepHttp;
   syslog?: HistoryStepSyslog;
 }
 
-/** 单步五类结构化结果整形(结果详情挑选+截断;screenshot 等大对象不透传)。老报告缺字段→对应 key 缺省。 */
+/** 单步结构化结果整形(结果详情挑选+截断;screenshot 等大对象不透传)。老报告缺字段→对应 key 缺省。 */
 export function shapeStructured(s: Record<string, unknown>): HistoryStructured {
   const out: HistoryStructured = {};
-  const db = asObj(s.db);
-  if (db) {
-    const rows = shapeRows(db);
-    const a = shapeAssertion(db.assertion);
-    out.db = {
-      rowCount: numOf(db.rowCount),
-      durationMs: numOf(db.durationMs),
-      ...rows,
-      ...shapeSqlText(db),
-      ...(a ? { assertion: a } : {}),
-    };
-  }
   const sq = asObj(s.sql);
   if (sq) {
     const rows = shapeRows(sq);
@@ -431,7 +419,6 @@ export interface HistoryStep {
   healed?: boolean;
   degraded?: boolean;
   cached?: boolean;
-  db?: HistoryStepDb;
   sql?: HistoryStepSql;
   log?: HistoryStepLog;
   http?: HistoryStepHttp;

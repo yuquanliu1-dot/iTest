@@ -63,7 +63,6 @@ export const STEP_KIND_LABELS: Record<string, string> = {
   aiTask: 'cases:stepKind.aiTask',
   switchTab: 'cases:stepKind.switchTab',
   screenshot: 'cases:stepKind.screenshot',
-  queryDb: 'cases:stepKind.queryDb',
   observeLog: 'cases:stepKind.observeLog',
   httpRequest: 'cases:stepKind.httpRequest',
   sendSyslog: 'cases:stepKind.sendSyslog',

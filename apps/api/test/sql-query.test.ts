@@ -196,7 +196,7 @@ describe('STEP_DSL_SPEC 与 sql 执行器语义一致', () => {
     }
   });
 
-  it('queryDb 用途收窄为平台自检（查被测系统业务数据一律用 sql）', () => {
-    expect(SPEC).toContain('查被测系统的业务数据一律用 sql，不是 queryDb');
+  it('queryDb 已下线：规格里不得再出现该 kind', () => {
+    expect(SPEC).not.toContain('queryDb');
   });
 });

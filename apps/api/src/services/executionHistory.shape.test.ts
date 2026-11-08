@@ -41,11 +41,12 @@ describe('clipDeep', () => {
 describe('shapeStructured (老报告缺字段容错)', () => {
   it('returns empty object for steps without structured results', () => {
     expect(shapeStructured({})).toEqual({});
-    expect(shapeStructured({ db: 'not-an-object', sql: 42, log: null })).toEqual({});
+    expect(shapeStructured({ sql: 42, log: null })).toEqual({});
   });
-  it('shapes db result: rows>10 → 10 rows + truncated, cell strings clipped', () => {
+  it('shapes sql result: rows>10 → 10 rows + truncated, cell strings clipped', () => {
     const s = {
-      db: {
+      sql: {
+        dbRef: 'main',
         rowCount: 15,
         durationMs: 120,
         rows: Array.from({ length: 15 }, (_, i) => ({ id: i, note: 'n'.repeat(1500) })),
@@ -53,13 +54,13 @@ describe('shapeStructured (老报告缺字段容错)', () => {
       },
     };
     const out = shapeStructured(s);
-    expect(out.db).toBeDefined();
-    expect(out.db!.rowCount).toBe(15);
-    expect(out.db!.rows).toHaveLength(10);
-    expect(out.db!.truncated).toBe(true);
-    expect((out.db!.rows[0] as { note: string }).note.endsWith('…')).toBe(true);
-    expect(out.db!.assertion!.matched).toBe(true);
-    expect(out.db!.assertion!.expected!.endsWith('…')).toBe(true);
+    expect(out.sql).toBeDefined();
+    expect(out.sql!.rowCount).toBe(15);
+    expect(out.sql!.rows).toHaveLength(10);
+    expect(out.sql!.truncated).toBe(true);
+    expect((out.sql!.rows[0] as { note: string }).note.endsWith('…')).toBe(true);
+    expect(out.sql!.assertion!.matched).toBe(true);
+    expect(out.sql!.assertion!.expected!.endsWith('…')).toBe(true);
   });
   it('shapes sql result with dbRef; non-array rows tolerated', () => {
     const out = shapeStructured({ sql: { dbRef: 'main', rowCount: 1, durationMs: 5, rows: 'garbage' } });
@@ -67,15 +68,12 @@ describe('shapeStructured (老报告缺字段容错)', () => {
     expect(out.sql!.rows).toEqual([]);
     expect(out.sql!.truncated).toBeUndefined();
   });
-  it('carries the executed SQL + bound params through for db/sql;老报告缺省则不带这两个键', () => {
+  it('carries the executed SQL + bound params through for sql;老报告缺省则不带这两个键', () => {
     const out = shapeStructured({
       sql: { dbRef: 'main', rowCount: 1, durationMs: 5, rows: [], sql: 'SELECT * FROM t WHERE u = $1', params: ['alice'] },
-      db: { rowCount: 1, durationMs: 5, rows: [], sql: 'SELECT "id" FROM "reports" LIMIT 10', params: [] },
     });
     expect(out.sql!.sql).toBe('SELECT * FROM t WHERE u = $1');
     expect(out.sql!.params).toEqual(['alice']);
-    expect(out.db!.sql).toBe('SELECT "id" FROM "reports" LIMIT 10');
-    expect(out.db!.params).toEqual([]);
     // 老报告无这两个字段 → 不产生空串/空数组（否则前端会渲染一个空的「实际执行的 SQL」块）
     const legacy = shapeStructured({ sql: { dbRef: 'main', rowCount: 1, durationMs: 5, rows: [] } });
     expect(legacy.sql!.sql).toBeUndefined();
@@ -160,8 +158,8 @@ describe('shapeStep', () => {
     expect('aiUsage' in noAu).toBe(false);
   });
   it('merges structured results via shapeStructured', () => {
-    const out = shapeStep({ order: 3, status: 'passed', durationMs: 10, db: { rowCount: 0, durationMs: 1, rows: [] } });
-    expect(out.db).toBeDefined();
-    expect(out.db!.rows).toEqual([]);
+    const out = shapeStep({ order: 3, status: 'passed', durationMs: 10, sql: { dbRef: 'main', rowCount: 0, durationMs: 1, rows: [] } });
+    expect(out.sql).toBeDefined();
+    expect(out.sql!.rows).toEqual([]);
   });
 });

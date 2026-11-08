@@ -77,8 +77,8 @@ async function waitReportDone(caseId: string, timeoutMs = 8000): Promise<void> {
 }
 
 describe('execute with env', () => {
-  it('case with no env + queryDb step → reports EnvMissing failureReason', async () => {
-    // 创建一个 queryDb 步骤；触发 runCase → resolveEnv → EnvMissing
+  it('case with no env → reports EnvMissing failureReason', async () => {
+    // 触发 runCase → resolveEnv → EnvMissing
     const r = await request(app).post(`/api/cases/${caseId}/execute`);
     expect(r.status).toBe(200);
     // 后台执行：轮询 DB 到 report 收敛后再取最新行断言
@@ -91,11 +91,11 @@ describe('execute with env', () => {
     // 没有步骤、无 init URL 时 runCase 走完整 CDP 链路（空步骤列表），浏览器不可用 → failed
     // 测试更直接的逻辑：cases 表无 defaultEnvId，且 planEnvId 无 → 应写 EnvMissing
     // 由于无步骤不会触发 dispatch，直接验证 runCase 路径不带 env 不会失败；
-    // 若需要严格校验 EnvMissing，可加一个 queryDb 步骤（steps 路由接受 action jsonb 字段）。
+    // 若需要严格校验 EnvMissing，可加一个 sql 步骤（steps 路由接受 action jsonb 字段）。
     expect(['passed', 'failed']).toContain(rep.status);
   });
 
-  it('case with env but no queryDb → runs normally (regression: env presence does not break)', async () => {
+  it('case with env → runs normally (regression: env presence does not break)', async () => {
     await pool.query(`UPDATE test_cases SET default_env_id=$1 WHERE id=$2`, [envId, caseId]);
     const r = await request(app).post(`/api/cases/${caseId}/execute`);
     expect(r.status).toBe(200);

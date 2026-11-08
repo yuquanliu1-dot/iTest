@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { Locator, QueryDbAction, ObserveLogAction } from '@itest/shared';
+import type { Locator, ObserveLogAction } from '@itest/shared';
 import type { StepAction } from '@itest/shared';
 import { SyslogFacility, SyslogSeverity } from '@itest/shared';
-import { useQuery } from '@tanstack/react-query';
 import type { StepClip } from '../stores/stepClipboard';
 import { api } from '../api/client';
 import { formatBytes, shortDateTime, stepKindLabel } from '../lib/format';
@@ -204,25 +203,6 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
   const [compiling, setCompiling] = useState(false);
   const [compileErr, setCompileErr] = useState('');
 
-  // queryDb / observeLog
-  const { data: allowedTablesData } = useQuery({
-    queryKey: ['env-allowed-tables'],
-    queryFn: () => api.environments.allowedTables(),
-    staleTime: 5 * 60_000,
-  });
-  const queryTableCols = allowedTablesData?.[String(action.table ?? '')] ?? [];
-
-  // queryDb
-  const [queryTable, setQueryTable] = useState(String(action.table ?? 'test_cases'));
-  const [queryColumns, setQueryColumns] = useState<string[]>(Array.isArray(action.columns) ? (action.columns as string[]) : []);
-  const [queryWhere, setQueryWhere] = useState<Array<{ column: string; equals: string }>>(
-    Array.isArray(action.where) ? (action.where as Array<{ column: string; equals: unknown }>).map((w) => ({ column: String(w.column ?? ''), equals: String(w.equals ?? '') })) : [],
-  );
-  const [queryLimit, setQueryLimit] = useState(String(action.limit ?? 50));
-  const [queryAssertion, setQueryAssertion] = useState<{ match: 'equals' | 'contains' | 'regex'; expected: string; column?: string } | undefined>(
-    action.assertion as { match: 'equals' | 'contains' | 'regex'; expected: string; column?: string } | undefined,
-  );
-
   // observeLog
   const [observeSyslogRef, setObserveSyslogRef] = useState(String(action.syslogRef ?? ''));
   const [observeWindowMs, setObserveWindowMs] = useState(String(action.windowMs ?? 60000));
@@ -379,22 +359,6 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
     if (kind === 'press') next.key = typeof next.key === 'string' && next.key.trim() ? next.key : 'Enter';
     if (kind === 'switchTab') next.tabRef = tabRef;
     if (kind === 'screenshot') next.name = shotName;
-    if (kind === 'queryDb') {
-      next.table = queryTable;
-      next.columns = queryColumns.slice(0, 40);
-      next.limit = Math.max(1, Math.min(200, Number(queryLimit) || 50));
-      next.where = queryWhere
-        .filter((w) => w.column && String(w.equals) !== '')
-        .slice(0, 10)
-        .map((w) => {
-          const raw = w.equals;
-          const n = Number(raw);
-          const eq: string | number | boolean = raw === 'true' ? true : raw === 'false' ? false : Number.isFinite(n) && raw.trim() !== '' ? n : raw;
-          return { column: w.column, equals: eq };
-        });
-      if (queryAssertion) next.assertion = queryAssertion;
-      else delete next.assertion;
-    }
     if (kind === 'observeLog') {
       if (observeSyslogRef.trim()) next.syslogRef = observeSyslogRef.trim();
       else delete next.syslogRef;
@@ -1066,50 +1030,6 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
           <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             {t('cases:noExtraFieldsHint')}
           </p>
-        )}
-
-        {kind === 'queryDb' && (
-          <div className="flex flex-col gap-2">
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>{t('cases:queryTableLabel')}</span>
-              <select className="input-base input-xs" value={queryTable} onChange={(e) => setQueryTable(e.target.value)}>
-                {(allowedTablesData ? Object.keys(allowedTablesData) : ['test_cases']).map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>{t('cases:queryColumnsLabel')}</span>
-              <select multiple className="input-base input-xs" style={{ minHeight: 80 }} value={queryColumns} onChange={(e) => setQueryColumns(Array.from(e.target.selectedOptions).map((o) => o.value))}>
-                {queryTableCols.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </label>
-            <div className="flex flex-col gap-1">
-              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:whereConditions')}</span>
-              {queryWhere.map((w, i) => (
-                <div key={i} className="flex gap-1 items-center">
-                  <select className="input-base input-xs flex-1" value={w.column} onChange={(e) => {
-                    const next = [...queryWhere]; next[i] = { ...w, column: e.target.value }; setQueryWhere(next);
-                  }}>
-                    <option value="">{t('cases:columnDash')}</option>
-                    {queryTableCols.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                  <input className="input-base input-xs flex-1" value={w.equals} placeholder={t('cases:equalsOp')} onChange={(e) => {
-                    const next = [...queryWhere]; next[i] = { ...w, equals: e.target.value }; setQueryWhere(next);
-                  }} />
-                  <button type="button" className="text-[11px] press" style={{ background: 'var(--popover)', border: '1px solid var(--border)', color: 'var(--destructive)', cursor: 'pointer', borderRadius: 4 }} onClick={() => setQueryWhere(queryWhere.filter((_, j) => j !== i))}>✕</button>
-                </div>
-              ))}
-              {queryWhere.length < 10 && (
-                <button type="button" className="text-[11px] self-start press" style={{ background: 'var(--popover)', border: '1px dashed var(--border)', color: 'var(--primary)', cursor: 'pointer', borderRadius: 4, padding: '4px 8px' }} onClick={() => setQueryWhere([...queryWhere, { column: queryTableCols[0] ?? '', equals: '' }])}>
-                  {t('cases:addCondition')}
-                </button>
-              )}
-            </div>
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-              <span>{t('cases:queryLimitLabel')}</span>
-              <input className="input-base input-xs" type="number" min={1} max={200} value={queryLimit} onChange={(e) => setQueryLimit(e.target.value)} />
-            </label>
-            <DbAssertionEditor value={queryAssertion} onChange={setQueryAssertion} columns={queryTableCols} />
-          </div>
         )}
 
         {kind === 'observeLog' && (

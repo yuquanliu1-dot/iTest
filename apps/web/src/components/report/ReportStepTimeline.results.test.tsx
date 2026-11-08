@@ -5,7 +5,7 @@ import '../../i18n';
 
 /**
  * 报告页要把「实际发出的请求」和「回来的结果」一起展示：
- * sql / queryDb 步 → 执行的 SQL + 绑定参数 + 返回行；httpRequest 步 → 请求行 + 请求头 + 响应体 + 响应头。
+ * sql 步 → 执行的 SQL + 绑定参数 + 返回行；httpRequest 步 → 请求行 + 请求头 + 响应体 + 响应头。
  * 老报告没有 sql/params 字段 → 不渲染空块（不能因为字段缺省就出现空白标题）。
  */
 const sqlStep: StepResult = {

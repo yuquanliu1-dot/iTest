@@ -61,11 +61,11 @@ describe('buildOutcomeNote · expectedOutcome 自洽体检', () => {
         stepCompileds: [[{ kind }]],
       })).toBeNull();
     }
-    // queryDb 查的是平台自己的库,与 SUT 业务状态无关 → 仍提示
+    // 不产生 SUT 状态的 kind（navigate）→ 仍提示
     expect(buildOutcomeNote({
       expectedOutcome: '自动启动处置成功',
-      stepActions: ['查询平台数据'],
-      stepCompileds: [[{ kind: 'queryDb' }]],
+      stepActions: ['打开处置页面'],
+      stepCompileds: [[{ kind: 'navigate', url: 'https://x/y' }]],
     })).toBeTruthy();
   });
 

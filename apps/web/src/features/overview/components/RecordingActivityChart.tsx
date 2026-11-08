@@ -22,7 +22,6 @@ const KIND_I18N: Record<string, string> = {
   aiTask: 'recordingKindAiTask',
   assertJson: 'recordingKindAssertJson',
   extract: 'recordingKindExtract',
-  queryDb: 'recordingKindQueryDb',
   observeLog: 'recordingKindObserveLog',
   httpRequest: 'recordingKindHttpRequest',
 };

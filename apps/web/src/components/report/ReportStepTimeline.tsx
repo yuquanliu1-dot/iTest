@@ -5,7 +5,7 @@ import EmptyState from '../ui/EmptyState';
 import { Dialog, DialogContent } from '../ui/Modal';
 import { clockTime, fullDateTime, stepKindLabel } from '../../lib/format';
 import { getKind, stepSummary, fullStepDescription } from '../../lib/stepSummary';
-import type { DbQueryRowResult, ObserveLogLineResult, HttpStepResult, SyslogStepResult, SqlStepResult, ConsoleLogEntry } from '@itest/shared';
+import type { ObserveLogLineResult, HttpStepResult, SyslogStepResult, SqlStepResult, ConsoleLogEntry } from '@itest/shared';
 
 /** 步骤级 LLM 用量（aiTask / 验证码 / vision 判定累加）；与 apps/api execute/aiUsage.ts 对齐。 */
 interface AiUsage {
@@ -40,8 +40,6 @@ export interface StepResult {
   hitLocator?: { kind: string; value: string };
   /** Track 1 用例级视觉判定结果（最后一步/失败追加步携带） */
   visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string; aiUsage?: AiUsage };
-  /** queryDb 步骤的结果（仅 queryDb 步携带） */
-  db?: DbQueryRowResult;
   /** sql 步骤的结果（仅 sql 步携带） */
   sql?: SqlStepResult;
   /** observeLog 步骤的结果（仅 observeLog 步携带） */
@@ -281,7 +279,6 @@ export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenC
               )}
             </div>
           )}
-          {s.db && <DbResultCell db={s.db} />}
           {s.sql && <SqlResultCell sql={s.sql} />}
           {s.log && <LogResultCell log={s.log} />}
           {s.http && <HttpResultCell http={s.http} />}
@@ -492,35 +489,6 @@ function SqlRequestBlock({ sql, params }: { sql?: string; params?: unknown[] }) 
         </div>
       )}
     </div>
-  );
-}
-
-function DbResultCell({ db }: { db: DbQueryRowResult }) {
-  const { t } = useTranslation();
-  return (
-    <details className="text-[11px]">
-      <summary
-        className="cursor-pointer"
-        style={{ color: 'var(--muted-foreground)' }}
-      >
-        {t('reports:db.summary', { count: db.rowCount })}{db.truncated ? t('reports:truncated') : ''}
-        {db.assertion && (
-          <span
-            style={{
-              color: db.assertion.matched ? 'var(--success)' : 'var(--destructive)',
-              marginLeft: 8,
-            }}
-          >
-            {t(db.assertion.matched ? 'reports:assertion.hit' : 'reports:assertion.miss')}{t('reports:assertion.quote', { expected: db.assertion.expected })}
-          </span>
-        )}
-      </summary>
-      <SqlRequestBlock sql={db.sql} params={db.params} />
-      <div className="mb-0.5" style={{ color: 'var(--muted-foreground)' }}>{t('reports:db.result')}</div>
-      <pre style={RESULT_PRE_STYLE}>
-        {JSON.stringify(db.rows.slice(0, 5), null, 2)}
-      </pre>
-    </details>
   );
 }
 

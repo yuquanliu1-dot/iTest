@@ -2,10 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { classify } from './failureClassifier.js';
 
 const newReasons = [
-  'QueryDbError',
-  'QueryDbTableNotAllowed',
-  'QueryDbColumnNotAllowed',
-  'QueryDbAssertionFailed',
   'EnvMissing',
   'EnvDbMissing',
   'EnvSyslogMissing',

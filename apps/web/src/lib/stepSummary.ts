@@ -147,8 +147,6 @@ function actionSummary(a: KnownAction, t: TFunction): string {
       return t('cases:stepSummary.act.extract', { name: `{{${clip(str(a.varName), 30)}}}` });
     case 'aiTask':
       return t('cases:stepSummary.act.aiTask', { instruction: clip(str(a.instruction), 40) });
-    case 'queryDb':
-      return t('cases:stepSummary.act.queryDb', { table: str(a.table) });
     case 'observeLog': {
       const kw = Array.isArray(a.keywords) ? (a.keywords as unknown[]).map((v) => str(v)).filter(Boolean) : [];
       const base = kw.length

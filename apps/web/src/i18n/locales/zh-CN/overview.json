@@ -96,7 +96,6 @@
   "recordingKindAiTask": "AI 任务",
   "recordingKindAssertJson": "断言JSON",
   "recordingKindExtract": "提取变量",
-  "recordingKindQueryDb": "查询数据库",
   "recordingKindObserveLog": "观察日志",
   "recordingKindHttpRequest": "HTTP 请求",
   "aiUsageTitle": "AI 用量",

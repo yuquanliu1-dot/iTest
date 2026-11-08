@@ -103,7 +103,6 @@
   "recordingKindAiTask": "AI task",
   "recordingKindAssertJson": "Assert JSON",
   "recordingKindExtract": "Extract variable",
-  "recordingKindQueryDb": "Query database",
   "recordingKindObserveLog": "Observe log",
   "recordingKindHttpRequest": "HTTP request",
   "aiUsageTitle": "AI usage",

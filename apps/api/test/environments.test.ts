@@ -157,14 +157,6 @@ describe('environments CRUD', () => {
     expect(check.rows[0]!.default_env_id).toBeNull();
   });
 
-  it('allowed-tables returns the whitelist incl. environment_objects (no payload column)', async () => {
-    const r = await request(app).get('/api/environments/allowed-tables');
-    expect(r.status).toBe(200);
-    expect(r.body).toHaveProperty('reports');
-    expect(r.body.reports).toContain('status');
-    expect(r.body.environment_objects).toContain('object_type');
-    expect(r.body.environment_objects).not.toContain('payload');
-  });
 });
 
 describe('POST /environments/test-db gauss100（经 JDBC 桥）', () => {

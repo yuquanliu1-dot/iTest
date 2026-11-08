@@ -131,7 +131,6 @@ function failureClassFromReason(reason: string | null | undefined): string {
  *  结尾的 compiled 机械干跑裁决（runSql/runHttpRequest 等不经 Playwright），AI 相不该掺和。 */
 const MECHANICAL_ONLY_KINDS: ReadonlySet<string> = new Set([
   'httpRequest',
-  'queryDb',
   'sql',
   'observeLog',
   'sendSyslog',
@@ -253,7 +252,7 @@ function hasNoCompiledSteps(steps: EffectiveStep[]): boolean {
  *        抛错 → replayFailure → 整例误判 ReplayDivergence（混合用例在旧口径下必假失败）；
  *    (b) 编译过的 UI 步在混合用例里同样不能单独回放——它的前置自然语言步状态不在干跑上下文里，
  *        单独派发必然误判。
- *    机械步（sql/queryDb/httpRequest/observeLog/sendSyslog）不依赖浏览器页面状态，是混合用例
+ *    机械步（sql/httpRequest/observeLog/sendSyslog）不依赖浏览器页面状态，是混合用例
  *    里唯一能被干跑真裁决的部分——讨论期写的查库/调接口步就靠它拿到断言结论。 */
 function pickReplayTargets(steps: EffectiveStep[], mode: 'full' | 'mechanical' | undefined): EffectiveStep[] {
   if (mode === 'mechanical') return steps;
@@ -477,7 +476,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       '终态判定失败(failureReason=VisionAssertionFailed)且 failure.note 含"空数据信号"时,说明被测环境里根本没有可供断言的数据——这是用例缺前置造数步骤,不是选择器写错。正确做法:给用例补上"先造出满足预期的数据"的步骤(如创建一条会触发自动处置的事件),或如实告诉用户环境缺数据。严禁弱化 expectedOutcome 把失败蒙成通过(例:把"自动启动处置成功"改成"页面正常加载"、删掉断言步骤)——那是把用例改得测不出东西,比失败更糟。',
       'result.staticAnalysis 与 failure.note 里的"源码无字面命中"只是排序参考,不是"这个选择器是假的"。选择器是否存在一律以 failure.page.elements 和运行时实测为准:框架运行时拼接的 id(如 Element-UI tab 的 #tab-autodo)源码里本就没有字面量,但运行时真实命中。sourceAnalysis 与运行时命中冲突时,信运行时。',
       'verify_case 最后一道关卡是与正式回放同引擎的 compiled 机械干跑(failureReason=ReplayDivergence):AI 临场能跑通但逐字派发 compiled 失败,典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突导致二次执行必挂。修正方式:用 failure.page.elements 里的真实选择器把失败步 compiled 改成更精确的可操作目标(点组件内部真实接收点击的元素),或修正测试数据策略(时间戳命名)后重验。',
-      '查库步骤(sql / queryDb / httpRequest / observeLog / sendSyslog)不经浏览器,由结尾的 compiled 干跑裁决——AI 相不掺和这类步(浏览器里没有 DB 工具,硬让它做只会白烧轮次)。干跑结果随响应带出：replay.steps[].sql 是该步实际查到的行(dbRef/rowCount/rows/assertion),失败时也在 failure.sql 里。**据此确认真值,不要建探针用例去摸表名/字段名/数据形态**——prod228 2026-10-28 实录:因看不到查库返回行,agent 连续建了 15 个 PROBE 探针用例(每次一整轮)才摸清一张表的形状。sql 步骤的形状是固定的,一次写对：{"kind":"sql","sql":"select * from t where u = {{变量}}","assertion":{...}},**{{变量}} 直接写在 sql 文本里**(平台按出现顺序替换成位置占位符并自动绑定值),**不要同时写 params 或自己写 ?/$n 占位符**(混用会被拒 sql-params-conflict);查被测系统的库用 sql,查平台自己的库用 queryDb(表名被枚举锁死,只查平台那 16 张元数据表)。表名不确定时用 repo_grep 搜 SUT 源码里的 SQL 字面量,或写只读发现查询 select table_name from information_schema.tables。**混合用例的结果分开看:自然语言 UI 步的结果在 steps[],DB/API 步的结果在 replay.steps[]——DB 步在 AI 相那轮记 passed 只是占位,真结论以干跑为准(断言不过即该例失败,按 ReplayDivergence 报出)。**',
+      '查库步骤(sql / httpRequest / observeLog / sendSyslog)不经浏览器,由结尾的 compiled 干跑裁决——AI 相不掺和这类步(浏览器里没有 DB 工具,硬让它做只会白烧轮次)。干跑结果随响应带出：replay.steps[].sql 是该步实际查到的行(dbRef/rowCount/rows/assertion),失败时也在 failure.sql 里。**据此确认真值,不要建探针用例去摸表名/字段名/数据形态**——prod228 2026-10-28 实录:因看不到查库返回行,agent 连续建了 15 个 PROBE 探针用例(每次一整轮)才摸清一张表的形状。sql 步骤的形状是固定的,一次写对：{"kind":"sql","sql":"select * from t where u = {{变量}}","assertion":{...}},**{{变量}} 直接写在 sql 文本里**(平台按出现顺序替换成位置占位符并自动绑定值),**不要同时写 params 或自己写 ?/$n 占位符**(混用会被拒 sql-params-conflict);查库只有 sql 这一个 kind。表名不确定时用 repo_grep 搜 SUT 源码里的 SQL 字面量,或写只读发现查询 select table_name from information_schema.tables。**混合用例的结果分开看:自然语言 UI 步的结果在 steps[],DB/API 步的结果在 replay.steps[]——DB 步在 AI 相那轮记 passed 只是占位,真结论以干跑为准(断言不过即该例失败,按 ReplayDivergence 报出)。**',
       'verify_case 失败反馈带 failure.evidence(可见浮层清单 overlays + 各 locator 候选实时命中数 probes)与 failure.note 里的「⚠ 归因:」段——归因由 LLM 依据形态无关证据判断,先按归因再动手,不要一律当选择器错:(1) 归因=「条件性浮层」:失败页有可见弹窗/抽屉/遮罩,属数据状态才弹的对话框(草稿恢复/权限确认),机械步骤处理不了「可能弹、可能不弹」的分支:在进该页步骤之后补 aiTask 条件兜底步骤(若页面出现浮层则按页面提示关闭或点『确定/继续』,没有则跳过),不要反复改选择器也不要弱化预期;(2) 归因=「位置/流程断裂」:该步全部候选命中 0 且失败页元素清单里也没有同类目标,说明界面根本没挂载,选择器无法命中不存在的元素:去核对导航/入口/向导步骤流程(草稿恢复把向导恢复到中间态即一例),修步骤顺序或补导航,不要改 locator;(3) 归因=「选择器/行为错」:页面状态到位仅该 locator 未命中,才用 failure.page.elements 里真实存在的选择器修正(可组多候选链);(4) 归因=「环境缺数据」:先让用例造出满足预期的数据,或如实汇报,严禁弱化 expectedOutcome。归因未产出(failure.note 无「⚠ 归因:」段)时按既有通用文案结合 failure.evidence 判断,不要臆测固定文案;证据解释不了失败时,自主用 repo_grep 查源码确认弹窗/向导条件,把结论带回归因再动手——查到即回,不要无限考古。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。护栏触发（返回 failureReason=StagnantRoundLimit）= 平台已判定重复实测无意义：必须立即停止所有工具调用（含读源码/查库/建探针用例「自诊」），按返回消息中的汇报模板直接向用户汇报，等用户明确指示后再行动。',
       '环境未配置登录凭据(默认 web 服务未填用户名/密码)而验证卡在登录页时，引导用户到项目环境页配置，不要伪造登录步骤。',
@@ -1080,7 +1079,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 droppedAssertions.set(s.id, s.assertion);
               }
             }
-            // 纯机械步（sql / httpRequest / queryDb / observeLog / sendSyslog）：不经浏览器，
+            // 纯机械步（sql / httpRequest / observeLog / sendSyslog）：不经浏览器，
             // 浏览器 AI 相结构上无法执行——让它试只会白烧轮次（prod228 2026-10-28 实录：
             // 「AI 相是浏览器执行器，无法执行 SQL 查询数据库」，超 5 轮未完成）。
             // 真值由结尾的 compiled 机械干跑裁决（runSql/runHttpRequest 不经 Playwright），

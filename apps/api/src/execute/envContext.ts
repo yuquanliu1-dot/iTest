@@ -33,7 +33,7 @@ export class WebServiceMissing extends Error {
 /** 库型：postgres / mysql。判定逻辑在 @itest/shared（探测与运行期共用同一份）。 */
 export type DbDialect = import('@itest/shared').DbDialect;
 
-/** 方言归一的查询池：queryDb 步骤与连接测试共用，屏蔽 pg / mysql2 的结果形状差异。 */
+/** 方言归一的查询池：sql 步骤与连接测试共用，屏蔽 pg / mysql2 的结果形状差异。 */
 export interface QueryPool {
   dialect: DbDialect;
   query(sql: string, params: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
@@ -449,7 +449,7 @@ export async function resolveEnv(
     resolveDb,
     resolveDbPool,
     get db() {
-      // 派生 getter：默认 db 的连接配置。未配置 db → undefined（queryDb 既有判死分支零改动）。
+      // 派生 getter：默认 db 的连接配置。未配置 db → undefined（判死分支）。
       const d = resolveDb();
       if (!d) return undefined;
       const { label: _l, isDefault: _def, dialect: _dia, ...rest } = d;

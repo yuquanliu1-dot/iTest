@@ -22,9 +22,7 @@ describe('sql 动作 DSL', () => {
     expect(() => StepAction.parse({ kind: 'sql', sql: 'SELECT 1', dbRef: 'x'.repeat(65) })).toThrow();
   });
 
-  it('既有 queryDb 语义不变', () => {
-    const a = StepAction.parse({ kind: 'queryDb', table: 'test_cases' });
-    expect(a).toMatchObject({ kind: 'queryDb', table: 'test_cases', limit: 50, columns: [] });
-    expect(() => StepAction.parse({ kind: 'queryDb', table: 'not_a_table' })).toThrow();
+  it('queryDb 已下线：不再被接受为合法 kind', () => {
+    expect(() => StepAction.parse({ kind: 'queryDb', table: 'test_cases' })).toThrow();
   });
 });

@@ -25,10 +25,6 @@ const HUMAN: Record<FailureReason, string> = {
   OverlayTimeout: '元素被遮罩覆盖，等待超时',
   LocatorAllFailed: '所有定位候选均未命中',
   CDPUnavailable: '真实浏览器不可用，已尝试 DOM 降级仍失败',
-  QueryDbError: '数据库查询失败',
-  QueryDbTableNotAllowed: '该表不在允许查询的列表中',
-  QueryDbColumnNotAllowed: '该列不在允许查询的列表中',
-  QueryDbAssertionFailed: '数据库断言未命中',
   SqlError: '只读 SQL 执行失败（连接或语句错误）',
   SqlReadOnlyViolation: 'SQL 非只读语句（仅允许单条 SELECT / WITH），已拒绝执行',
   SqlAssertionFailed: 'SQL 结果断言未命中',
@@ -91,10 +87,6 @@ export function classify(err: unknown, ctx: ClassifyCtx = {}): ClassifiedFailure
   if (msg.includes('all locator candidates failed') || msg.includes('count=0')) {
     return { reason: 'LocatorAllFailed', humanMessage: HUMAN.LocatorAllFailed };
   }
-  if (e?.name === 'QueryDbError') return { reason: 'QueryDbError', humanMessage: HUMAN.QueryDbError };
-  if (e?.name === 'QueryDbTableNotAllowed') return { reason: 'QueryDbTableNotAllowed', humanMessage: HUMAN.QueryDbTableNotAllowed };
-  if (e?.name === 'QueryDbColumnNotAllowed') return { reason: 'QueryDbColumnNotAllowed', humanMessage: HUMAN.QueryDbColumnNotAllowed };
-  if (e?.name === 'QueryDbAssertionFailed') return { reason: 'QueryDbAssertionFailed', humanMessage: HUMAN.QueryDbAssertionFailed };
   if (e?.name === 'SqlReadOnlyViolation') return { reason: 'SqlReadOnlyViolation', humanMessage: HUMAN.SqlReadOnlyViolation };
   if (e?.name === 'SqlAssertionFailed') return { reason: 'SqlAssertionFailed', humanMessage: HUMAN.SqlAssertionFailed };
   if (e?.name === 'SqlError') return { reason: 'SqlError', humanMessage: HUMAN.SqlError };

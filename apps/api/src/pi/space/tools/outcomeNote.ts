@@ -31,7 +31,7 @@ const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /** 会产生或取证 SUT 状态的 compiled 动作 kind：sendSyslog 向被测系统写事件（可触发 SIEM
  *  联动=业务结果本身）、sql 可写被测库、observeLog 验证 SUT 已发生的事实（事件由真实流量
- *  产生）。queryDb 刻意排除——它查的是平台自己的库，与被断言的 SUT 业务状态无关。
+ *  产生）。
  *  httpRequest 不在此列：mutating 与否按 method 判（GET 是读取，MUTATING_METHODS 已覆盖）。 */
 const EVIDENCE_KINDS: ReadonlySet<string> = new Set(['sendSyslog', 'sql', 'observeLog']);
 

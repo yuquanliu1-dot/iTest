@@ -212,27 +212,6 @@ export type ExtractAction = z.infer<typeof ExtractAction>;
 export const DbAssertionMatch = z.enum(['equals', 'contains', 'regex']);
 export type DbAssertionMatch = z.infer<typeof DbAssertionMatch>;
 
-export const QueryDbAction = z.object({
-  kind: z.literal('queryDb'),
-  table: z.enum([
-    'projects', 'groups', 'users', 'test_cases', 'test_steps', 'datasets',
-    'reports', 'execution_plans', 'plan_case_groups', 'plan_cases',
-    'plan_runs', 'plan_run_cases', 'plan_schedules', 'test_attachments',
-  ]),
-  where: z.array(z.object({
-    column: z.string().min(1).max(64),
-    equals: z.union([z.string().max(500), z.number(), z.boolean()]),
-  })).max(10).default([]),
-  columns: z.array(z.string().min(1).max(64)).max(40).default([]),
-  limit: z.number().int().min(1).max(200).default(50),
-  assertion: z.object({
-    match: DbAssertionMatch.default('contains'),
-    expected: z.string().max(2000),
-    column: z.string().max(64).optional(),
-  }).optional(),
-});
-export type QueryDbAction = z.infer<typeof QueryDbAction>;
-
 export const ObserveLogAction = z.object({
   kind: z.literal('observeLog'),
   /** 环境 syslog 对象的 label；缺省 = 环境默认 syslog 对象。 */
@@ -278,7 +257,8 @@ export const SendSyslogAction = z.object({
 export type SendSyslogAction = z.infer<typeof SendSyslogAction>;
 
 /** 2026-10-22: sql 步骤——对【被测系统自己的数据库】执行单条只读 SQL。
- *  与 queryDb 的区别：queryDb 只查平台自己的表（平台自检），sql 查 SUT 的库（关系库 / OLAP）。 */
+ *  2026-11-08: queryDb 已下线（它连的是环境默认 db 对象 = SUT 库，表名却锁死平台自己的表，
+ *  两侧对不上，恒定失败）。查库统一走 sql：dbRef 缺省 = 环境默认 db 对象。 */
 export const SqlAction = z.object({
   kind: z.literal('sql'),
   /** 环境 db 对象的 label；缺省 = 环境默认 db 对象。 */
@@ -296,8 +276,8 @@ export const SqlAction = z.object({
 });
 export type SqlAction = z.infer<typeof SqlAction>;
 
-/** httpRequest 的 body 匹配方式。独立于 DbAssertionMatch（那是被 queryDb/sql/observeLog 共用的，
- *  加枚举会波及三处的执行与 UI），此处多一个 notContains —— 安全类断言常要判「响应体不含注入串」。 */
+/** httpRequest 的 body 匹配方式。独立于 DbAssertionMatch（那是被 sql/observeLog 共用的，
+ *  加枚举会波及两处的执行与 UI），此处多一个 notContains —— 安全类断言常要判「响应体不含注入串」。 */
 export const HttpBodyMatch = z.enum(['equals', 'contains', 'notContains', 'regex']);
 export type HttpBodyMatch = z.infer<typeof HttpBodyMatch>;
 
@@ -395,7 +375,6 @@ export type StepAction =
   | z.infer<typeof AiTaskAction>
   | z.infer<typeof AssertJsonAction>
   | z.infer<typeof ExtractAction>
-  | z.infer<typeof QueryDbAction>
   | z.infer<typeof ObserveLogAction>
   | z.infer<typeof HttpRequestAction>
   | z.infer<typeof SendSyslogAction>
@@ -428,7 +407,6 @@ export const StepAction: z.ZodType<StepAction> = z.discriminatedUnion('kind', [
   AiTaskAction,
   AssertJsonAction,
   ExtractAction,
-  QueryDbAction,
   ObserveLogAction,
   HttpRequestAction,
   SendSyslogAction,

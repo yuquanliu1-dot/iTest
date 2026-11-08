@@ -8,7 +8,6 @@ import type {
   PreflightReport,
   HitLocator,
   WindowStrategy,
-  DbQueryRowResult,
   ObserveLogLineResult,
   SqlStepResult,
   ConsoleLogEntry,
@@ -37,7 +36,6 @@ import { readAiTaskCache, writeAiTaskCache, bumpAiTaskCacheHit } from './aiTaskC
 import { readLocatorCache, writeLocatorCache, bumpLocatorCacheHit } from './locatorCache.js';
 import type { EnvCtx } from './envContext.js';
 import type { AiFallbackSettings } from './aiFallback.js';
-import { runQueryDb } from './dbQuery.js';
 import { runSql } from './sqlQuery.js';
 import { runObserveLog } from './syslogReader.js';
 import { runHttpRequest, type HttpStepResult } from './httpRequest.js';
@@ -78,8 +76,6 @@ export interface ExecStepResult {
   hitLocator?: HitLocator;
   /** switchTab 目标页在 tabMap 中的序号；非 tab 步为 0 */
   tabIndex?: number;
-  /** queryDb 步骤的结果（仅 queryDb 步携带，其它步 undefined） */
-  db?: DbQueryRowResult;
   /** sql 步骤的结果（仅 sql 步携带，其它步 undefined） */
   sql?: SqlStepResult;
   /** observeLog 步骤的结果（仅 observeLog 步携带，其它步 undefined） */
@@ -167,8 +163,6 @@ interface DispatchOpts {
   caseId?: string;
   /** 记录本步命中的定位 kind/value（由 tryFirstMatch 写入） */
   hitSink?: { current: HitLocator | null };
-  /** 记录本步 queryDb 结果（由 queryDb 分支写入） */
-  dbSink?: { current: DbQueryRowResult | null };
   /** 记录本步 sql 结果（由 sql 分支写入） */
   sqlSink?: { current: SqlStepResult | null };
   /** 记录本步 observeLog 结果（由 observeLog 分支写入） */
@@ -202,7 +196,7 @@ const CAPTCHA_RETRY_ROUNDS = 2;
 const DOM_FALLBACK_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select'];
 /** 非浏览器步骤：不经 Playwright，直接发协议请求/查数据。AI 降级（浏览器内临场执行）对它们
  *  结构上无解，故 AI 降级路径跳过，避免白烧 LLM 轮次。 */
-const NON_BROWSER_KINDS: ReadonlySet<string> = new Set(['httpRequest', 'queryDb', 'sql', 'observeLog', 'sendSyslog']);
+const NON_BROWSER_KINDS: ReadonlySet<string> = new Set(['httpRequest', 'sql', 'observeLog', 'sendSyslog']);
 
 /** DOM 降级：元素不稳定时绕过 playwright 直接在页面里派发事件。仅支持 click/fill/check/select。
  *  root 可为 Frame（带 frameChain 的步骤在帧上下文降级派发）。 */
@@ -796,22 +790,8 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       }
       return summary ? `aiTask: ${summary}` : undefined;
     }
-    case 'queryDb': {
-      const envCtx = opts.ctx.envCtx;
-      if (!envCtx?.pool) {
-        const e = new Error('env db missing'); e.name = 'EnvDbMissing'; throw e;
-      }
-      const result = await runQueryDb({ pool: envCtx.pool, action });
-      if (result.assertion && !result.assertion.matched) {
-        // 先把结果写到 sink，调用方即便抛错也能在 step.result.db 里看到 rows
-        if (opts.dbSink) opts.dbSink.current = result;
-        const e = new Error('queryDb assertion failed'); e.name = 'QueryDbAssertionFailed'; throw e;
-      }
-      if (opts.dbSink) opts.dbSink.current = result;
-      return;
-    }
     case 'sql': {
-      // 查被测系统自己的库（与 queryDb 查平台自己的库不同）。dbRef 缺省 = 环境默认 db 对象。
+      // 查被测系统自己的库。dbRef 缺省 = 环境默认 db 对象。
       const envCtx = opts.ctx.envCtx;
       if (!envCtx) {
         const e = new Error('env-db-missing: 当前环境未配置数据库连接');
@@ -1349,7 +1329,6 @@ async function runStepsInContext(
     }
     opts.stepId = step.id;
     opts.hitSink = { current: null };
-    opts.dbSink = { current: null };
     opts.sqlSink = { current: null };
     opts.logSink = { current: null };
     opts.httpSink = { current: null };
@@ -1465,7 +1444,6 @@ async function runStepsInContext(
         screenshot,
         hitLocator: opts.hitSink.current ?? undefined,
         tabIndex: tabIndex >= 0 ? tabIndex : 0,
-        db: opts.dbSink.current ?? undefined,
         sql: opts.sqlSink.current ?? undefined,
         log: opts.logSink.current ?? undefined,
         http: opts.httpSink.current ?? undefined,
@@ -1592,8 +1570,7 @@ async function runStepsInContext(
                 screenshot: aiScreenshot,
                 hitLocator: opts.hitSink.current ?? undefined,
                 tabIndex: tabIndex >= 0 ? tabIndex : 0,
-                db: opts.dbSink.current ?? undefined,
-                sql: opts.sqlSink.current ?? undefined,
+                        sql: opts.sqlSink.current ?? undefined,
                 log: opts.logSink.current ?? undefined,
                 http: opts.httpSink.current ?? undefined,
                 syslog: opts.syslogSink.current ?? undefined,
@@ -1622,7 +1599,6 @@ async function runStepsInContext(
         humanMessage: classified.humanMessage,
         hitLocator: opts.hitSink.current ?? undefined,
         tabIndex: tabIndex >= 0 ? tabIndex : 0,
-        db: opts.dbSink.current ?? undefined,
         sql: opts.sqlSink.current ?? undefined,
         log: opts.logSink.current ?? undefined,
         http: opts.httpSink.current ?? undefined,

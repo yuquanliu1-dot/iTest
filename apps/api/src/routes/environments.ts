@@ -92,13 +92,6 @@ environmentsRoute.delete('/environment-objects/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-environmentsRoute.get('/environments/allowed-tables', async (_req, res) => {
-  const { ALLOWED_QUERY_COLUMNS } = await import('../execute/dbQuery.js');
-  const out: Record<string, string[]> = {};
-  for (const [k, v] of Object.entries(ALLOWED_QUERY_COLUMNS)) out[k] = Array.from(v);
-  res.json(out);
-});
-
 type SecretTriple = { c?: string; i?: string; t?: string } | null | undefined;
 
 /** objectId 回退：取该对象已存密文解出明文（凭据留空走旧密文，与保存语义一致）。

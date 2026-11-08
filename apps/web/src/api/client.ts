@@ -271,7 +271,6 @@ export const api = {
       request<EnvironmentObject>(`/environment-objects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     removeObject: (id: string) =>
       request<{ ok: boolean }>(`/environment-objects/${id}`, { method: 'DELETE' }),
-    allowedTables: () => request<Record<string, string[]>>('/environments/allowed-tables'),
     testDb: (body: { objectId?: string; dbType?: 'postgres' | 'mysql' | 'gauss100'; host: string; port?: number; dbName: string; user: string; password?: string }) =>
       request<{ ok: boolean; latencyMs?: number; error?: string }>('/environments/test-db', {
         method: 'POST',
