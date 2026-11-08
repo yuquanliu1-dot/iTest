@@ -161,12 +161,15 @@ describe('runAiTask 多轮累积（prompt cache 前缀）', () => {
     expect(calls[0]!.map((m) => m.role)).toEqual(['user']);
   });
 
-  it('maxTurns 用尽仍逐轮累积（第 5 轮请求带满前 4 轮历史）', async () => {
+  it('maxTurns 用尽仍逐轮累积（第 3 轮请求带满前 2 轮历史；兜底判定是独立单轮调用不进 agent 历史）', async () => {
     const { client, calls } = makeClient([JSON.stringify({ actions: [], done: false })]);
     await expect(runAiTask(mocked.__page, '做不完', client, false, { maxTurns: 3 })).rejects.toThrow(/超过 3 轮/);
-    expect(calls).toHaveLength(3);
+    // 3 轮 agent 回路 + 1 次轮数耗尽兜底判定（走 systemPrompt+userMessage 通道，不带回路历史）
+    expect(calls).toHaveLength(4);
     // 3 轮 = user1,a1,user2,a2,user3
     expect(calls[2]!.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user']);
+    // 兜底判定不携带 messages（零动作完成判定是回路外的独立视觉调用，不影响缓存前缀）
+    expect(calls[3]).toEqual([]);
   });
 
   it('onUsage 仍每轮回调一次（aiUsage 统计口径不变）', async () => {

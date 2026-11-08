@@ -290,6 +290,29 @@ describe('runAiTask', () => {
     await expect(runAiTask(page, '永远完不成的指令', llm)).rejects.toThrow(/超过 \d+ 轮未完成/);
   });
 
+  it('轮数耗尽兜底：末帧判定目标已达成 → 改判通过（零动作完成标记）', async () => {
+    const { page } = makeStubPage();
+    const { llm, requests, systems } = makeMockLlm([
+      { actions: [{ type: 'wait', ms: 1 }] },
+      { achieved: true, reason: '登录表单已完整展示，含用户名/密码输入框与登录按钮' },
+    ]);
+    const summary = await runAiTask(page, '确认登录表单正常展示', llm, false, { maxTurns: 1 });
+    expect(summary).toContain('目标已达成，零动作完成（轮数耗尽兜底判定）');
+    expect(summary).toContain('登录表单已完整展示');
+    // 兜底判定是独立的完成判定器提示词（非 agent 回路续轮），指令原文随 userMessage 带上
+    expect(systems[1]).toContain('完成判定器');
+    expect(requests[1]).toContain('确认登录表单正常展示');
+  });
+
+  it('轮数耗尽兜底：末帧判定未达成 → 照旧按超时抛错（严判防假阳性）', async () => {
+    const { page } = makeStubPage();
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'wait', ms: 1 }] },
+      { achieved: false, reason: '目标按钮不存在' },
+    ]);
+    await expect(runAiTask(page, '点不存在的按钮', llm, false, { maxTurns: 1 })).rejects.toThrow(/超过 1 轮未完成/);
+  });
+
   it('动作执行出错时把错误反馈给下一轮而不是中断', async () => {
     const { page } = makeStubPage();
     // click 抛错的桩

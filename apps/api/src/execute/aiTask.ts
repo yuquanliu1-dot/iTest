@@ -41,7 +41,8 @@ actions 元素类型：
 规则：
 - 指令忠实：指令给出明确操作时就只做这些操作，不加戏——「填写表单」只填不提交、「点击按钮」点击即止、「输入文本」不追加回车；只有指令是目标性描述（如「创建一个分类」）时才自行补全操作路径。
 - 持久变更走到底：创建/编辑/保存/提交/删除类指令必须走到保存/确认/提交生效才算完成，不能停在草稿或未保存的编辑态；反之，只要求中间态（填内容、选选项）的指令到态即停。
-- 完成判据要执行证据：输出 done 前逐条核对（有子目标清单时逐条核对清单）——每个操作都要有「动作结果 ok + 截图确认生效」的证据，不能只看终态截图像完成了就判定全部完成。
+- 目标已达成即完成：指令是确认式/条件式（如「确认 XX 正常展示」「若页面出现 XX 则继续」）且截图与元素清单已证实目标状态存在时，零动作直接输出 {"done": true, "summary": "目标已达成，无需操作：<引用截图/清单里的证据>"}——不要为「留下操作痕迹」画蛇添足地点击或重填。
+- 完成判据要执行证据：输出 done 前逐条核对（有子目标清单时逐条核对清单）——每个操作都要有「动作结果 ok + 截图确认生效」的证据，不能只看终态截图像完成了就判定全部完成。豁免：零动作完成（上一条）只要求目标状态的截图/清单证据，不要求动作证据。
 - 断言/校验类指令：条件确实不满足且无法满足时输出 fail 如实说明差异，不要绕过断言、放宽判据或改判通过。
 - 每轮最多 2 个动作，宁可多轮推进也不要连发——页面在动作间会变化，连发会让后续动作建立在过期认知上。每个动作的执行结果（ok / 错误信息）下轮反馈给你。
 - 同一目标连续 3 次失败就停止对它重试：先用截图核对当前页面是否还在指令期望的界面（弹窗/跳转/加载中都会让目标消失），页面不对先处理页面；确认页面正确而目标确实不存在 → 输出 fail 如实说明，不要换坐标/selector 空转。
@@ -93,6 +94,7 @@ actions 元素类型：
 - 无法完成：{"fail": "原因"}
 规则：
 - 节点中心坐标取 bounds 中心；不要做坐标绝对计算。
+- 目标已达成即完成：确认式/条件式指令且 accessibility tree 已证实目标状态存在时，零动作直接输出 {"done": true, "summary": "目标已达成，无需操作"}。
 - 每轮动作要保守，最多 6 个；每个动作结果下轮反馈给你，出错就换 accessibilityId / label 重试。
 - 屏幕中可能同时存在多个相同 label 的节点，命中歧义时优先选 accessibilityId。`;
 
@@ -1167,6 +1169,31 @@ export async function runAiTask(
       // 凭据替换留痕：报告里能看到「本步真的用了环境凭据」，便于事后判读。
       return `${s}${goalNote}${credNote}`;
     }
+  }
+  // 轮数耗尽兜底：零动作可完成的步骤（确认式/条件式指令，目标状态已在页面）曾是完成判据
+  // 规则下的分布外样本——模型不敢零动作 done，反复「找事做」空转到耗尽（2026-11-08 prod228
+  // 实录：登录用例的「检查输入框展示」步 5 轮 ×41s 全灭，事后归因 LLM 已判「目标已达成」
+  // 但归因只写 note 不改判定）。这里用当前页面截图问一次「目标是否已达成」，达成则改判通过。
+  // 严判防假阳性：非明确 achieved:true 一律照旧抛错；判定失败也照旧抛错（best-effort）。
+  try {
+    const shot = await page.screenshot({ timeout: 5000, type: 'jpeg', quality: 85 });
+    const r = await client.complete({
+      systemPrompt: `你是测试步骤完成判定器。给你一条测试指令和当前页面截图，判断该指令期望的目标状态是否已在当前页面达成。
+确认式/条件式指令（「确认…已…」「若…则…」「等待…出现」）在目标状态已存在、无需任何操作时也算达成。
+只输出 JSON：{"achieved":true,"reason":"<一句话证据>"} 或 {"achieved":false,"reason":"<缺什么>"}。页面处于加载中/骨架屏/目标状态不明确时输出 {"achieved":false}。`,
+      userMessage: `指令：${instruction}`,
+      image: { base64: shot.toString('base64'), mime: 'image/jpeg' },
+      lang,
+    });
+    opts?.onUsage?.(r);
+    const fp = tryParseJson(r.kind === 'json' ? JSON.stringify(r.value) : r.value);
+    if (fp?.achieved === true) {
+      const reason = typeof fp.reason === 'string' ? fp.reason.trim().slice(0, 120) : '';
+      logger.info({ instruction: instruction.slice(0, 80), reason }, 'aiTask zero-action fallback: goal achieved');
+      return `目标已达成，零动作完成（轮数耗尽兜底判定）：${reason}`;
+    }
+  } catch {
+    // 兜底判定失败照旧按超时抛错
   }
   throw new Error(`aiTask 超过 ${maxTurns} 轮未完成：${instruction.slice(0, 80)}`);
 }

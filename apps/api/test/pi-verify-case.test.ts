@@ -694,6 +694,37 @@ describe('verify_case 逐步 AI 执行编排', () => {
     expect(__testState.ctxOpts[0]).toMatchObject({ storageState: fakeState });
   });
 
+  it('登录类用例（步骤引用凭据占位符）：缓存里有登录态也不注入——干净会话起跑', async () => {
+    const localId = randomUUID();
+    await pool.query(
+      `INSERT INTO ai_stage_cases(thread_id, local_id, version_id, title, url, steps, staged_at)
+       VALUES ('t1', $1, $2, '登录用例', 'http://env.example/login', $3::jsonb, now())`,
+      [localId, versionId, JSON.stringify([
+        {
+          action: '在用户名输入框填入 __ITEST_USERNAME__，密码框填入 __ITEST_PASSWORD__，点击登录按钮',
+          compiled: CLICK_COMPILED,
+          assertion: null,
+        },
+      ])],
+    );
+    // 缓存里放一份暖登录态：若是普通用例会被注入（上一条用例已钉），登录用例必须跳过
+    const { saveLoginState } = await import('../src/pi/space/tools/loginStateCache.js');
+    saveLoginState(`${await defaultEnvId()}:`, { cookies: [{ name: 'sid', value: 'warm' }], origins: [] } as never);
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"logged-in"}');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId: localId });
+    expect(r.ok).toBe(true);
+    const { __testState } = (await import('playwright-core')) as unknown as {
+      __testState: { ctxOpts: Array<Record<string, unknown> | undefined> };
+    };
+    expect(__testState.ctxOpts[0]).not.toHaveProperty('storageState');
+    // STEP_SECRET 是步骤级敏感值（业务表单密码框），不构成登录信号——注入照旧
+    const { isLoginCaseSteps } = await import('../src/pi/space/tools/verifyCase.js');
+    expect(isLoginCaseSteps([{ instruction: '填入 __ITEST_STEP_SECRET__' }])).toBe(false);
+    expect(isLoginCaseSteps([{ instruction: '普通步' }, { compiled: [{ kind: 'fill', value: '__ITEST_PASSWORD@web__' }] }])).toBe(true);
+  });
+
   it('login logged-in：验证后回写 storageState 缓存（key 为 envId:user）', async () => {
     await seedLoginObject();
     const caseId = await seedCase({ steps: [CLICK_COMPILED] });

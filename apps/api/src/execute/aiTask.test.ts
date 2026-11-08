@@ -43,6 +43,17 @@ describe('assembleSystemPrompt - 凭据段门控', () => {
     const p = assembleSystemPrompt({ credEnabled: false, manifest: '' });
     expect(p).toContain('数据忠实');
   });
+
+  it('零动作完成守则：确认式步骤目标已达成即可 done（RC1 登录用例空转修复）', () => {
+    const p = assembleSystemPrompt({ credEnabled: false, manifest: '' });
+    expect(p).toContain('目标已达成即完成');
+    expect(p).toContain('零动作');
+    // 完成判据规则对零动作完成显式豁免——否则模型不敢零动作 done，空转到轮数耗尽
+    expect(/完成判据要执行证据[\s\S]*?零动作完成（上一条）/.test(p)).toBe(true);
+    // mobile 提示词同步（移动端确认式步骤同样存在）
+    const m = assembleSystemPrompt({ mobile: true, credEnabled: true, manifest: '' });
+    expect(m).toContain('目标已达成即完成');
+  });
 });
 
 describe('referencesCredential - 占位符形态识别', () => {

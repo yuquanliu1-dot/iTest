@@ -253,6 +253,14 @@ describe('space session supervisor', () => {
     expect(CASE_AUTHORING_FLOW_EN).toContain('manage_environments/manage_datasets (config & data)');
   });
 
+  it('登录类用例干净会话文案：guide 0002/0003 标明 verify 自动干净会话起跑（11-08 prod228 登录用例 3 轮全灭修复）', async () => {
+    const { CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN } = await import('../src/pi/space/reqDesign.js');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('例外:测登录本身的用例');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('干净会话');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('cases that test login itself');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('clean session');
+  });
+
   it('buildSpaceSystemPrompt(…,en-US):英文风格段,不含简体中文约束', async () => {
     const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
     const en = buildSpaceSystemPrompt(null, 'en-US');

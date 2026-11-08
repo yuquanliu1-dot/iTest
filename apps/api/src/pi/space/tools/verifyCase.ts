@@ -151,6 +151,18 @@ function hasMechanicalStep(compiled: unknown): boolean {
   return actions.some((a) => MECHANICAL_ONLY_KINDS.has(a?.kind ?? ''));
 }
 
+/** 登录类用例判定（导出供单测）：步骤引用了用户名/密码凭据占位符 = 测的是登录/登出这类
+ *  会话行为本身。这类用例必须从干净会话起跑——此前 perform_login/其他用例留下的登录态会把
+ *  goto 弹回首页，登录页根本到不了（2026-11-08 prod228 实录：登录用例 3 轮 verify 全灭于
+ *  「页面已是登录后状态」）。instruction 与 compiled 的 fill value 都要扫（占位符可能在任一
+ *  处）；STEP_SECRET 是步骤级敏感值（业务表单密码框），不是登录信号，不参与判定。 */
+export function isLoginCaseSteps(steps: Array<{ instruction?: unknown; compiled?: unknown }>): boolean {
+  const re = /ITEST_(?:USERNAME|PASSWORD)/;
+  return steps.some(
+    (s) => re.test(String(s.instruction ?? '')) || re.test(JSON.stringify(s.compiled ?? '')),
+  );
+}
+
 /** 从 verify_case 响应 data JSON 解析出"失败签名"（失败大类）；passed 或解析失败 → null（清计数）。 */
 function failureSignatureFromData(data: string): string | null {
   try {
@@ -758,6 +770,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         const effectiveCase = { ...caseMeta, ...overlayPatches };
         // 全局看门狗预算随有效步数缩放：慢 SUT 上每步 AI 相渐进累计，固定预算装不下多步用例
         const verifyTimeoutMs = computeVerifyTimeoutMs(effectiveSteps.length);
+        // 登录类用例 → 三处干净会话门槛（acquire / cachedState / commit），见 isLoginCaseSteps
+        const loginCase = isLoginCaseSteps(effectiveSteps);
 
         // ── 前缀确认决策（Problem 1：跨轮砍 AI 相前缀重跑，保留结尾完整机械回放）──
         // validPrefixLen>0 表示上轮已确认、且本步骤未变/环境未换的前缀条数。本轮用机械回放重建
@@ -908,12 +922,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // 命中：browser/context/page 停在上一轮终态，前缀零重放零 restore，AI 相从 appliedCount
           // 直接续跑；未命中：fresh launch，轮末 finally 视结果上册供下轮复用。注册表任何失效
           // 条件（过期/断连/前缀步被编辑/换环境）由 acquire 内部销毁降级到本路径。
+          // 登录用例同样跳过：kept context 停在上一轮的登录后状态，登录页到不了。
           const acquired =
-            mode !== 'mechanical' ? acquireBrowserSession(sessKey, curMetaHash, curStepsHash) : null;
+            mode !== 'mechanical' && !loginCase ? acquireBrowserSession(sessKey, curMetaHash, curStepsHash) : null;
           // 命中登录态缓存则注入 context:同环境重试轮/后续用例免登录（过期自愈,见 loginStateCache）；
-          // 复用轮登录态天然在 kept context 里，不注入（loginKey 仍要算——轮末 storageState 回写用）
+          // 复用轮登录态天然在 kept context 里，不注入（loginKey 仍要算——轮末 storageState 回写用）；
+          // 登录用例两者都不允许（缓存/kept 会话都会把 goto 弹回登录后首页）——干净会话是前提
           const loginKey = loginStateKey(envCtx.envId, envCtx.login?.user);
-          const cachedState = acquired ? null : getLoginState(loginKey);
+          const cachedState = acquired || loginCase ? null : getLoginState(loginKey);
           if (acquired) {
             reused = true;
             registryOwned = true;
@@ -1847,8 +1863,10 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // ── 保活决策：正常完成（completed）+ 无在途僵尸（zombie）+ 未超时 + 浏览器连通
           // → commit 上册供下轮零重放续跑；zombie/超时/断连时命中轮 invalidate 销毁、
           // 新建轮照旧即用即关。replayPage 不是保活口径的终态页（下轮续跑从 AI 相 page 起），关掉。
+          // 登录用例永不上册：它停在本轮自己的登录后状态，下轮要的恰是干净会话。
           if (
             mode !== 'mechanical' &&
+            !loginCase &&
             browser !== undefined && context !== undefined && page !== undefined &&
             completed && !zombie && !timedOut &&
             // 可选调用 + 严格等值：Browser/Page 接口恒有这两方法，缺方法只出现在测试桩——
