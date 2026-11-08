@@ -409,7 +409,9 @@ async function anchorResolvesAmbiguity(
  *  校验不通过必须在验证阶段就判失败，逼 AI 用真实选择器修正，而不是"AI 能过=用例能跑"。
  *  **闸门口径必须不严于回放**（回放口径见 cdp.ts tryFirstMatch）：闸门比回放严 = 把回放能过的步判死
  *  （2026-11-07 prod228 实录：级联选择「XX」被同前缀的「XX（本级）」撞成假歧义，回放实际点得对）。
- *  时机：click/hover 在步骤前校验（元素此时就该在页面上）；断言类、fill、check、select、extract 在 AI 通过后校验
+ *  时机：click/hover 在步骤前校验，但**只判步内第一个动作**（回放第一步面对的正是步首 DOM）；
+ *  步内后续动作面对的是前序动作执行后的 DOM，此刻探测结构性不可靠（详见 judgeIdxs 处的两条理由），
+ *  交结尾的 compiled 机械干跑裁决。断言类、fill、check、select、extract 在 AI 通过后校验
  *  （这些动作结束时元素理应仍在）。navigate/aiTask/waitFor 无从或不必校验，跳过。
  *  候选探测直接复用回放的 buildCandidates + count()：候选展开（纯 #id 提升、role 拆 name、testId 包
  *  data-testid）与探测顺序跟 tryFirstMatch 完全一致——verify 的「首命中候选」就是回放实际会采用的候选。
@@ -432,14 +434,10 @@ export async function checkCompiledLocators(
     locator?: Array<{ strategy?: string; value?: string }>;
   }>;
   // 状态跳变点：navigate/aiTask 会把 DOM 上下文整个换掉，跨跳变的动作不能对着别的时刻的 DOM 判。
-  let firstJump = -1;
   let lastJump = -1;
   for (let i = 0; i < actions.length; i++) {
     const k = actions[i]?.kind;
-    if (k === 'navigate' || k === 'aiTask') {
-      if (firstJump < 0) firstJump = i;
-      lastJump = i;
-    }
+    if (k === 'navigate' || k === 'aiTask') lastJump = i;
   }
   // 结构性错误与命中无关，直接判失败（web 回放遇 mobile-only strategy 必抛）。
   // 按 mode 分族（click/hover 属 pre、其余属 post），与命中探测分开——命中探测只看待判动作。
@@ -458,19 +456,20 @@ export async function checkCompiledLocators(
     }
   }
   // 待判动作下标：
-  //  - pre：只判第一个 click/hover，且它之前不能有状态跳变。同一步里后续 click/hover 的目标此刻
-  //    还不在 DOM 里（开面板 → 展开级联，后续点击的目标要到前一个动作执行后才出现）——判它们
-  //    只会得出回放其实能过的 LocatorMismatch（2026-11-07 prod228 实录：4 连击的级联步，第 2~4 个
-  //    动作的候选在第 1 个动作执行前命中 0，闸门把回放能走通的步判死）。这类动作交给结尾的
-  //    compiled 机械干跑裁决（干跑逐字派发，与正式回放同引擎）。
+  //  - pre：只判步内【第一个】动作，且仅当它是 click/hover。理由是「闸门不能比回放严」：
+  //    回放逐字派发时，第一个动作面对的正是步首 DOM，它的命中与否就是回放第一步的成败；
+  //    步内后续动作面对的是【前序动作执行后】的 DOM，此刻探测结构性不可靠——
+  //      ① 目标此刻还不存在 → 判 LocatorMismatch，可回放其实走得通
+  //         （2026-11-07 prod228 实录：4 连击的级联步 [打开面板, 选三级] 的 [1][2][3] 在 [0] 执行前
+  //          命中 0；同理 fill 后点下拉建议项）；
+  //      ② 目标此刻存在但被前序动作改变了上下文 → 判「歧义」而回放此刻只有一个匹配
+  //         （级联 level-0 的 li 包着 level-1 的 li，可及名被子列文案污染 → count=2）。
+  //    后续动作的 locator 交给结尾的 compiled 机械干跑裁决（与正式回放同引擎、逐字派发）。
   //  - post：判最后一个状态跳变之后的动作（跳变之前的动作目标已被换掉的页面带走，判了必假失败）。
   const judgeIdxs: number[] = [];
   if (mode === 'pre') {
-    for (let i = 0; i < actions.length; i++) {
-      if (firstJump >= 0 && i >= firstJump) break;
-      const k = actions[i]?.kind;
-      if (k === 'click' || k === 'hover') { judgeIdxs.push(i); break; }
-    }
+    const first = actions[0];
+    if (first && (first.kind === 'click' || first.kind === 'hover')) judgeIdxs.push(0);
   } else {
     for (let i = lastJump + 1; i < actions.length; i++) {
       const k = actions[i]?.kind;

@@ -191,6 +191,24 @@ describe('checkCompiledLocators（闸门口径对齐回放）', () => {
     expect(await checkCompiledLocators(page as never, compiled, 'pre')).toBeNull();
   });
 
+  it('pre 首个动作是 fill → 不判后续 click（下拉建议项要到 fill 执行后才出现）', async () => {
+    const page = new FakePage([
+      { id: 'search', own: '请输入关键字', visible: true, children: [] },
+    ]);
+    const compiled = [
+      { kind: 'fill', locator: [{ strategy: 'text', value: '请输入关键字' }] },
+      { kind: 'click', locator: [{ strategy: 'text', value: '建议项A' }] },
+    ];
+    expect(await checkCompiledLocators(page as never, compiled, 'pre')).toBeNull();
+  });
+
+  it('pre 首动作不是 click/hover（如 fill）→ 不判该步的 pre 命中（fill 归 post 判）', async () => {
+    const page = new FakePage([]);
+    const compiled = [{ kind: 'fill', locator: [{ strategy: 'text', value: '单位名称' }] }];
+    expect(await checkCompiledLocators(page as never, compiled, 'pre')).toBeNull();
+    expect((await checkCompiledLocators(page as never, compiled, 'post'))?.reason).toBe('LocatorMismatch');
+  });
+
   it('pre 第一个动作本身缺失 → 判 LocatorMismatch', async () => {
     const page = new FakePage([]);
     const compiled = [{ kind: 'click', locator: [{ strategy: 'text', value: '打开面板' }] }];
