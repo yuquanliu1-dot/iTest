@@ -240,6 +240,19 @@ describe('space session supervisor', () => {
     expect(CASE_AUTHORING_FLOW_EN).toContain('except a database/API step, which must carry its compiled array');
   });
 
+  it('取证渠道只提真实注册的工具：不得出现不存在的 dbQuery', async () => {
+    const { CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN, REQ_DESIGN_METHOD } = await import('../src/pi/space/reqDesign.js');
+    const { STYLE_ZH_DEFAULT, STYLE_EN_DEFAULT } = await import('../src/pi/space/promptModules.js');
+    // dbQuery 从来不是已注册的工具（注册名是 query_stats / manage_environments / manage_datasets）。
+    // 写进「取证渠道」清单会让 AI 去调一个不存在的工具——必须只留真实工具名。
+    for (const text of [REQ_DESIGN_METHOD, CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN, STYLE_ZH_DEFAULT, STYLE_EN_DEFAULT]) {
+      expect(text).not.toContain('dbQuery');
+    }
+    expect(REQ_DESIGN_METHOD).toContain('manage_environments/manage_datasets');
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('manage_environments/manage_datasets(配置与数据)');
+    expect(CASE_AUTHORING_FLOW_EN).toContain('manage_environments/manage_datasets (config & data)');
+  });
+
   it('buildSpaceSystemPrompt(…,en-US):英文风格段,不含简体中文约束', async () => {
     const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
     const en = buildSpaceSystemPrompt(null, 'en-US');
