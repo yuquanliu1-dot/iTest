@@ -1513,8 +1513,8 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     expect(data2.resumeFrom).toBe(0);
   });
 
-  it('混合前缀：机械步保留原 compiled 不吃轨迹；视觉步吃轨迹——结尾干跑不受影响', async () => {
-    const caseId = await seedCase({ steps: [null, CLICK_COMPILED, null] }); // NL / 机械 / NL
+  it('混合前缀：编译过的 UI 步保留原 compiled 不吃轨迹；视觉步吃轨迹——结尾干跑只喂纯机械步（无纯机械步则整段跳过）', async () => {
+    const caseId = await seedCase({ steps: [null, CLICK_COMPILED, null] }); // NL / 编译过的 UI 步 / NL
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask)
       .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
@@ -1532,17 +1532,15 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     const data2 = JSON.parse((r2 as { data: string }).data);
     expect(data2.resumeFrom).toBe(2);
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
-    // 轮 2：restore（前缀 2 步）+ 结尾完整干跑（混合用例不跳过）
-    expect(executeCaseInBrowser).toHaveBeenCalledTimes(2);
+    // 轮 2：只有 restore（前缀 2 步）——结尾干跑只喂「纯机械步」，本例唯一的 compiled 是 click
+    // （编译过的 UI 步，脱离 NL 前置状态无法单独回放）→ 干跑整段跳过，不再以 NL 步 compile-missing 误报分叉
+    expect(executeCaseInBrowser).toHaveBeenCalledTimes(1);
     const restoreSteps = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ compiled: unknown }>;
     expect(restoreSteps[0]!.compiled).toEqual([
       { kind: 'click', locator: [{ strategy: 'css', value: '#btn-1' }] },
     ]);
-    expect(restoreSteps[1]!.compiled).toEqual(CLICK_COMPILED); // 机械步原样，不被轨迹覆盖
-    // 结尾干跑走 mapForReplay（保真语义）：NL 步不带轨迹映射产物
-    const replaySteps = vi.mocked(executeCaseInBrowser).mock.calls[1]![1] as Array<{ compiled: unknown }>;
-    expect(replaySteps[0]!.compiled).toBeNull();
-    expect(replaySteps[1]!.compiled).toEqual(CLICK_COMPILED);
+    expect(restoreSteps[1]!.compiled).toEqual(CLICK_COMPILED); // 编译过的 UI 步原样，不被轨迹覆盖
+    expect(data2.result).toBe('passed');
   });
 
   it('敏感步骤不入轨迹（凭据属于环境）', async () => {
@@ -1967,6 +1965,66 @@ describe('verify_case 机械执行步（不经浏览器）', () => {
     expect(data.result).toBe('failed');
     expect(data.failure.failureReason).toBe('ReplayDivergence');
     expect(data.failure.sql.dbRef).toBe('SIEM数据库');
+    expect(data.failure.sql.assertion.matched).toBe(false);
+  });
+
+  it('混合用例（自然语言步 + sql 步）：AI 相跳 sql 步，结尾干跑只喂 sql 步（不再误报 ReplayDivergence）', async () => {
+    // 回归点：讨论期给 DB/API 步带 compiled 后，「全编译」判定为假 → 干跑启动 →
+    // 自然语言步逐字派发必 compile-missing → 整例误判 ReplayDivergence（混合用例在旧口径下必假失败）。
+    // 新口径：full + 混合 → 干跑只喂纯机械步（DB/API 步不依赖浏览器页面状态，能被真裁决）。
+    const caseId = await seedCase({ steps: [null, SQL_COMPILED] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    // AI 相只跑自然语言步；sql 步被跳过（不经浏览器）
+    expect(vi.mocked(runAiTask)).toHaveBeenCalledTimes(1);
+    expect(data.steps[1].status).toBe('passed');
+    expect(String(data.steps[1].warning)).toContain('机械执行步');
+    // 结尾干跑只收到 sql 步——自然语言步不进干跑（逐字派发必 compile-missing）
+    expect(executeCaseInBrowser).toHaveBeenCalledTimes(1);
+    const dryRunSteps = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ compiled: unknown }>;
+    expect(dryRunSteps).toHaveLength(1);
+    expect(dryRunSteps[0]!.compiled).toEqual(SQL_COMPILED);
+    // 整例通过（不再以分叉误报失败）
+    expect(data.result).toBe('passed');
+    expect(data.replay.steps).toHaveLength(1);
+  });
+
+  it('混合用例里 sql 断言不成立：按 ReplayDivergence 报出且 failure.sql 带实际行', async () => {
+    const caseId = await seedCase({ steps: [null, SQL_COMPILED] });
+    const { runAiTask } = await import('../src/execute/aiTask.js');
+    vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
+    const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
+    vi.mocked(executeCaseInBrowser).mockImplementationOnce(
+      async (_cid: string, steps: Array<{ order: number }>) =>
+        steps.map((s) => ({
+          order: s.order,
+          status: 'failed' as const,
+          durationMs: 9,
+          error: 'sql assertion failed',
+          failureReason: 'SqlAssertionFailed' as const,
+          humanMessage: 'SQL 结果断言未命中',
+          sql: {
+            dbRef: 'SIEM数据库',
+            rowCount: 1,
+            durationMs: 5,
+            rows: [{ asset_name: 'paas-es-test-02' }],
+            assertion: { matched: false, expected: 'x', match: 'contains' as const },
+          },
+        })),
+    );
+    const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
+    const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    const data = JSON.parse((r as { data: string }).data);
+    expect(data.result).toBe('failed');
+    expect(data.failure.failureReason).toBe('ReplayDivergence');
+    expect(data.failure.stepOrder).toBe(2);
+    expect(data.failure.sql.rows).toEqual([{ asset_name: 'paas-es-test-02' }]);
     expect(data.failure.sql.assertion.matched).toBe(false);
   });
 

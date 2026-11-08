@@ -212,6 +212,33 @@ describe('space session supervisor', () => {
     expect(REQ_DESIGN_METHOD).not.toContain('断言前先触发对应操作:inspect_page');
   });
 
+  it('DB/API 步例外措辞：guide 0001/0002/0003 都放行 sql/httpRequest 带 compiled（原禁令仍在但已被限定）', async () => {
+    const { CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN, REQ_DESIGN_METHOD } = await import('../src/pi/space/reqDesign.js');
+
+    // 0001 REQ_DESIGN_METHOD：需要服务端真值时用 httpRequest / sql，且明确它们必须带 compiled
+    expect(REQ_DESIGN_METHOD).toContain('httpRequest/sql 这类步骤不经浏览器执行');
+    expect(REQ_DESIGN_METHOD).toContain('必须带上 compiled');
+    expect(REQ_DESIGN_METHOD).toContain('要直接查库就用 sql 步骤');
+    expect(REQ_DESIGN_METHOD).toContain('查 iTest 自己的库才用 queryDb');
+
+    // 0002 中文：第 3 步原禁令保留，但紧跟 DB/API 例外（例外在禁令之后 = 禁令被限定而非被删）
+    const zhBan = CASE_AUTHORING_FLOW_ZH.indexOf('不要急着生成 compiled');
+    const zhExc = CASE_AUTHORING_FLOW_ZH.indexOf('唯一例外：查库/调接口的步骤——sql / queryDb / httpRequest——在这一步就带上 compiled');
+    expect(zhBan).toBeGreaterThanOrEqual(0);
+    expect(zhExc).toBeGreaterThan(zhBan);
+    expect(zhExc - zhBan).toBeLessThan(600); // 例外紧跟禁令，不是散落在别处的另一句话
+    // 入口 B（暂存即实测）同样放行：每条新指令若是查库/调接口就带 compiled
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('本条若是查库/调接口的步骤,则带 compiled');
+
+    // 0003 英文镜像
+    const enBan = CASE_AUTHORING_FLOW_EN.indexOf('do NOT generate compiled mechanical DSL yet');
+    const enExc = CASE_AUTHORING_FLOW_EN.indexOf('exception: a database-lookup or API-call step — sql / queryDb / httpRequest — MUST carry its compiled array at this stage');
+    expect(enBan).toBeGreaterThanOrEqual(0);
+    expect(enExc).toBeGreaterThan(enBan);
+    expect(enExc - enBan).toBeLessThan(600);
+    expect(CASE_AUTHORING_FLOW_EN).toContain('except a database/API step, which must carry its compiled array');
+  });
+
   it('buildSpaceSystemPrompt(…,en-US):英文风格段,不含简体中文约束', async () => {
     const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
     const en = buildSpaceSystemPrompt(null, 'en-US');

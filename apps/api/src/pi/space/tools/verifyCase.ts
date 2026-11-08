@@ -243,6 +243,28 @@ function hasNoCompiledSteps(steps: EffectiveStep[]): boolean {
   });
 }
 
+/** 结尾干跑要喂哪些步。
+ *
+ *  - mechanical（固化验收）：全喂——严格语义，缺 compiled 即失败（compile-missing 是真缺陷）。
+ *  - full 且全 compiled（固化后重测）：全喂——逐字派发就是分叉检测的本体。
+ *  - full 且混合（自然语言步 + 带 compiled 的步，如讨论期手写的 sql/httpRequest 步）：
+ *    只喂**纯机械步**。两个理由，都与 isAllVisualSteps 的注释同源：
+ *    (a) 自然语言步已由 AI 相验证过，干跑逐字派发它没有 compiled，只会以 compile-missing
+ *        抛错 → replayFailure → 整例误判 ReplayDivergence（混合用例在旧口径下必假失败）；
+ *    (b) 编译过的 UI 步在混合用例里同样不能单独回放——它的前置自然语言步状态不在干跑上下文里，
+ *        单独派发必然误判。
+ *    机械步（sql/queryDb/httpRequest/observeLog/sendSyslog）不依赖浏览器页面状态，是混合用例
+ *    里唯一能被干跑真裁决的部分——讨论期写的查库/调接口步就靠它拿到断言结论。 */
+function pickReplayTargets(steps: EffectiveStep[], mode: 'full' | 'mechanical' | undefined): EffectiveStep[] {
+  if (mode === 'mechanical') return steps;
+  const dispatchable = steps.filter((s) => {
+    const c = (s as { compiled?: unknown }).compiled;
+    return Array.isArray(c) && c.length > 0;
+  });
+  if (dispatchable.length === steps.length) return steps; // 全 compiled：全喂
+  return dispatchable.filter((s) => isMechanicalOnlyStep(s.compiled));
+}
+
 /** 前缀确认状态：AI 相跨轮续跑的依据（Problem 1）。
  *  key = threadId::caseId（与停滞护栏同 key、同进程内内存生命周期）。
  *  stepsHash 按步存：某步的 instruction/compiled/assertion/sensitive/delayMs 任一变化即使
@@ -449,13 +471,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       'verify_case 全 AI 驱动：登录、验证码、改密弹窗等场景由模型自主判断处理；凭据以 __ITEST_USERNAME__ 等占位符注入执行，不会出现在任何输出中。',
       'verify_case 失败时：读取 failure.page.elements，只能用清单中真实存在的选择器修正对应步骤的 locator/动作，禁止臆造；修正走 stage_case_op 暂存后，直接再次调用 verify_case —— 本线程暂存的修改会自动叠加生效（响应 basedOn=staged），验证循环全程不要落库；全部步骤通过后,确认验证通过后再引导用户在右侧暂存区勾选统一保存。',
       'verify_case 成功响应里的 page 是本轮终态页面上真实存在的可交互元素清单（已去重降噪，另有 N 个同类元素折叠省略）。边跑边讨论提议下一步或讨论筛选项/按钮时，只能引用 page.elements（或 failure.page.elements）里真实存在的控件——清单里没有的输入框/下拉/筛选项（如「时间范围」「等级」）一律不得提议或断言其存在，页面事实以实测清单为准。',
-      '自然语言步骤的 AI 相失败分流（failureReason=AiTaskAborted/StepTimedOut/StepReportedFailed 且失败步无 compiled locator 可修，failure.note 会以「该步是自然语言步骤，由 AI 相」开头提示）：大概率是步骤描述与页面实际不符——目标不存在/措辞歧义/前置状态没建立，也可能是前面步骤的描述把页面带偏——这不是你能自行修复的技术错误，重跑不改变结果（AI 相每步 1~2 分钟纯烧时间与 token）。此时停止重跑与自诊，把失败步原文、failureReason、失败页 URL/截图反馈给用户，请用户选择：调整该步（或前面步骤）的自然语言描述 / 补充入口线索 / 确认环境数据后再验；用户明确答复前不再调用 verify_case。仅当你确有把握是措辞歧义（步骤原文与页面实际文案不一致）时，可修正描述重发 stage_case 后再验一次。',
+      '自然语言步骤的 AI 相失败分流（failureReason=AiTaskAborted/StepTimedOut/StepReportedFailed 且失败步无 compiled locator 可修，failure.note 会以「该步是自然语言步骤，由 AI 相」开头提示）：大概率是步骤描述与页面实际不符——目标不存在/措辞歧义/前置状态没建立，也可能是前面步骤的描述把页面带偏——这不是你能自行修复的技术错误，重跑不改变结果（AI 相每步 1~2 分钟纯烧时间与 token）。此时停止重跑与自诊，把失败步原文、failureReason、失败页 URL/截图反馈给用户，请用户选择：调整该步（或前面步骤）的自然语言描述 / 补充入口线索 / 确认环境数据后再验；用户明确答复前不再调用 verify_case。仅当你确有把握是措辞歧义（步骤原文与页面实际文案不一致）时，可修正描述重发 stage_case 后再验一次。**例外一（不要问用户）：失败步的语义是「查库/调接口确认」（步骤原文含查库/落库/接口/请求/状态校验之类）时，这不是描述与页面不符，而是这一步形态错了——浏览器里没有 DB 工具，AI 相永远跑不了它：把它改写成带 compiled 的 sql（查被测系统的库）/ httpRequest（调接口）步，同 localId 重发 stage_case 再验，断言结论由结尾干跑给出，不要为此向用户要页面线索。**',
       'stage_case 新建的纯草稿用例（未落库）也可直接 verify_case：caseId 传 stage_case 时声明的 localId；修正循环 = 同 localId 重发 stage_case（幂等覆盖）后再次 verify_case，全程不落库，通过后引导用户在暂存区勾选保存。注意：暂存草稿的 defaultEnvId 只能绑定已落库环境或留空走默认链（暂存环境不支持）。',
       'verify_case 会校验 compiled 选择器能真实命中页面（AI 临场绕开坏 locator 不算通过，回放逐字执行 compiled 会失败）:失败原因含"定位校验不通过"时,必须用 failure.page.elements 里的真实选择器替换原 locator(严禁留着坏 locator 只靠 AI 硬跑)。候选命中多个元素(AmbiguousLocator)同样判失败——回放会静默操作第一个匹配元素,必须给该候选加属性过滤(如 [placeholder=...])或把唯一命中的候选提到首位。verify_case 还会做用例级终态判定(失败原因含 VisionAssertionFailed):步骤都通过但最终页面不符 expectedOutcome 时,修正步骤行为或调整 expectedOutcome 后再验。',
       '终态判定失败(failureReason=VisionAssertionFailed)且 failure.note 含"空数据信号"时,说明被测环境里根本没有可供断言的数据——这是用例缺前置造数步骤,不是选择器写错。正确做法:给用例补上"先造出满足预期的数据"的步骤(如创建一条会触发自动处置的事件),或如实告诉用户环境缺数据。严禁弱化 expectedOutcome 把失败蒙成通过(例:把"自动启动处置成功"改成"页面正常加载"、删掉断言步骤)——那是把用例改得测不出东西,比失败更糟。',
       'result.staticAnalysis 与 failure.note 里的"源码无字面命中"只是排序参考,不是"这个选择器是假的"。选择器是否存在一律以 failure.page.elements 和运行时实测为准:框架运行时拼接的 id(如 Element-UI tab 的 #tab-autodo)源码里本就没有字面量,但运行时真实命中。sourceAnalysis 与运行时命中冲突时,信运行时。',
       'verify_case 最后一道关卡是与正式回放同引擎的 compiled 机械干跑(failureReason=ReplayDivergence):AI 临场能跑通但逐字派发 compiled 失败,典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突导致二次执行必挂。修正方式:用 failure.page.elements 里的真实选择器把失败步 compiled 改成更精确的可操作目标(点组件内部真实接收点击的元素),或修正测试数据策略(时间戳命名)后重验。',
-      '查库步骤(sql / queryDb / httpRequest / observeLog / sendSyslog)不经浏览器,由结尾的 compiled 干跑裁决——AI 相不掺和这类步(浏览器里没有 DB 工具,硬让它做只会白烧轮次)。干跑结果随响应带出：replay.steps[].sql 是该步实际查到的行(dbRef/rowCount/rows/assertion),失败时也在 failure.sql 里。**据此确认真值,不要建探针用例去摸表名/字段名/数据形态**——prod228 2026-10-28 实录:因看不到查库返回行,agent 连续建了 15 个 PROBE 探针用例(每次一整轮)才摸清一张表的形状。sql 步骤的形状是固定的,一次写对：{"kind":"sql","sql":"select ... from ...","params":["{{变量}}"],"assertion":{...}},变量走 params 配 ? 占位符、别写进 sql 文本;查被测系统的库用 sql,查平台自己的库用 queryDb(表名被枚举锁死)。',
+      '查库步骤(sql / queryDb / httpRequest / observeLog / sendSyslog)不经浏览器,由结尾的 compiled 干跑裁决——AI 相不掺和这类步(浏览器里没有 DB 工具,硬让它做只会白烧轮次)。干跑结果随响应带出：replay.steps[].sql 是该步实际查到的行(dbRef/rowCount/rows/assertion),失败时也在 failure.sql 里。**据此确认真值,不要建探针用例去摸表名/字段名/数据形态**——prod228 2026-10-28 实录:因看不到查库返回行,agent 连续建了 15 个 PROBE 探针用例(每次一整轮)才摸清一张表的形状。sql 步骤的形状是固定的,一次写对：{"kind":"sql","sql":"select * from t where u = {{变量}}","assertion":{...}},**{{变量}} 直接写在 sql 文本里**(平台按出现顺序替换成位置占位符并自动绑定值),**不要同时写 params 或自己写 ?/$n 占位符**(混用会被拒 sql-params-conflict);查被测系统的库用 sql,查平台自己的库用 queryDb(表名被枚举锁死,只查平台那 16 张元数据表)。表名不确定时用 repo_grep 搜 SUT 源码里的 SQL 字面量,或写只读发现查询 select table_name from information_schema.tables。**混合用例的结果分开看:自然语言 UI 步的结果在 steps[],DB/API 步的结果在 replay.steps[]——DB 步在 AI 相那轮记 passed 只是占位,真结论以干跑为准(断言不过即该例失败,按 ReplayDivergence 报出)。**',
       'verify_case 失败反馈带 failure.evidence(可见浮层清单 overlays + 各 locator 候选实时命中数 probes)与 failure.note 里的「⚠ 归因:」段——归因由 LLM 依据形态无关证据判断,先按归因再动手,不要一律当选择器错:(1) 归因=「条件性浮层」:失败页有可见弹窗/抽屉/遮罩,属数据状态才弹的对话框(草稿恢复/权限确认),机械步骤处理不了「可能弹、可能不弹」的分支:在进该页步骤之后补 aiTask 条件兜底步骤(若页面出现浮层则按页面提示关闭或点『确定/继续』,没有则跳过),不要反复改选择器也不要弱化预期;(2) 归因=「位置/流程断裂」:该步全部候选命中 0 且失败页元素清单里也没有同类目标,说明界面根本没挂载,选择器无法命中不存在的元素:去核对导航/入口/向导步骤流程(草稿恢复把向导恢复到中间态即一例),修步骤顺序或补导航,不要改 locator;(3) 归因=「选择器/行为错」:页面状态到位仅该 locator 未命中,才用 failure.page.elements 里真实存在的选择器修正(可组多候选链);(4) 归因=「环境缺数据」:先让用例造出满足预期的数据,或如实汇报,严禁弱化 expectedOutcome。归因未产出(failure.note 无「⚠ 归因:」段)时按既有通用文案结合 failure.evidence 判断,不要臆测固定文案;证据解释不了失败时,自主用 repo_grep 查源码确认弹窗/向导条件,把结论带回归因再动手——查到即回,不要无限考古。',
       '同一用例验证最多重试 3 轮；仍失败则保留用例，如实向用户说明失败步骤与原因，不要无限循环。护栏触发（返回 failureReason=StagnantRoundLimit）= 平台已判定重复实测无意义：必须立即停止所有工具调用（含读源码/查库/建探针用例「自诊」），按返回消息中的汇报模板直接向用户汇报，等用户明确指示后再行动。',
       '环境未配置登录凭据(默认 web 服务未填用户名/密码)而验证卡在登录页时，引导用户到项目环境页配置，不要伪造登录步骤。',
@@ -1294,10 +1316,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           // full 模式下纯 aiTask（视觉模式）同样跳过；但 mechanical 模式必须干跑：aiTask 是正式
           // 可派发动作（dispatch 由 AI 真实执行），solidify 产出全 aiTask 固化结果的验收正落在这一轮。
           const allVisual = isAllVisualSteps(effectiveSteps);
+          // 干跑步集：混合用例只喂纯机械步（自然语言步逐字派发必 compile-missing 误报分叉，
+          // 编译过的 UI 步缺前置状态也必然误判）——见 pickReplayTargets 注释。
+          const replayTargets = pickReplayTargets(effectiveSteps, mode);
           let replayFailure: ExecStepResult | null = null;
           let replaySteps: ExecStepResult[] = [];
           let replayStartedAt = 0;
-          if (failedIndex < 0 && !visionFailure && (mode === 'mechanical' || !allVisual)) {
+          if (failedIndex < 0 && !visionFailure && (mode === 'mechanical' || !allVisual) && replayTargets.length > 0) {
             ctx.emit({ type: 'verify_progress', phase: 'replay_start' });
             replayStartedAt = Date.now();
             try {
@@ -1305,7 +1330,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               // 停止可抢占干跑：在途回放随 finally 关浏览器终止，异常吞掉不上抛。
               const replayPromise = executeCaseInBrowser(
                 caseId,
-                effectiveSteps.map(mapForReplay),
+                replayTargets.map(mapForReplay),
                 {
                   reportId: `${reportId}-replay`,
                   envCtx,
@@ -1660,7 +1685,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               // 本轮窗口内浏览器 JS 报错原文：agent 修正步骤时可直接看到前端侧故障信号。
               ...(failedConsole.length ? { console: failedConsole } : {}),
               note: nlAiFail
-                ? `该步是自然语言步骤，由 AI 相（视觉执行）在真实页面上执行失败（${failed.failureReason ?? '未知'}）——大概率不是 locator 技术问题，而是步骤描述与页面实际不符：目标不存在/措辞歧义/前置状态没建立，也可能是前面某步的描述把页面带偏。这不是你能自行修复的错误：立即停止重跑与自诊，把失败详情反馈给用户（步骤 ${failed.order}「${failedStep.instruction ?? ''}」原文、failureReason、失败页 URL 与 page.elements/截图，必要时附前一步原文），请用户选择：a.调整该步或前面步骤的自然语言描述 b.补充入口/页面线索 c.确认环境/数据后重验。用户明确答复前不要再调用 verify_case——AI 相每步耗时 1~2 分钟，盲目重跑只烧时间与 token。**唯一例外：失败页是登录页或与目标业务页无关的首页/概览页时，先 get_login_credentials + perform_login 重新登录再重验本用例**——那是会话过期（登录态缓存 30 分钟）不是步骤写错，登录后可自愈，不必等用户答复。${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`
+                ? `该步是自然语言步骤，由 AI 相（视觉执行）在真实页面上执行失败（${failed.failureReason ?? '未知'}）——大概率不是 locator 技术问题，而是步骤描述与页面实际不符：目标不存在/措辞歧义/前置状态没建立，也可能是前面某步的描述把页面带偏。这不是你能自行修复的错误：立即停止重跑与自诊，把失败详情反馈给用户（步骤 ${failed.order}「${failedStep.instruction ?? ''}」原文、failureReason、失败页 URL 与 page.elements/截图，必要时附前一步原文），请用户选择：a.调整该步或前面步骤的自然语言描述 b.补充入口/页面线索 c.确认环境/数据后重验。用户明确答复前不要再调用 verify_case——AI 相每步耗时 1~2 分钟，盲目重跑只烧时间与 token。**唯一例外：失败页是登录页或与目标业务页无关的首页/概览页时，先 get_login_credentials + perform_login 重新登录再重验本用例**——那是会话过期（登录态缓存 30 分钟）不是步骤写错，登录后可自愈，不必等用户答复。**另一条例外（不要问用户）：失败步语义是查库/调接口确认（原文含查库/落库/接口/请求/状态校验之类）时，这是步骤形态错而非描述错——浏览器里没有 DB 工具，AI 相永远跑不了它：把该步改写成带 compiled 的 sql（查被测系统的库）/ httpRequest（调接口）步，同 localId 重发 stage_case 再验，断言结论由结尾干跑给出。**${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`
                 : `page.elements 为失败页当前可见的可交互元素；修正 locator 只能使用其中真实存在的选择器。快照不含操作后才出现的元素。${failedHint ? ` 源码静态提示:${failedHint}` : ''}${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`,
             },
           });

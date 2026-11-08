@@ -268,6 +268,34 @@ describe('stage_case 覆盖类型(coverageTypes)', () => {
   });
 });
 
+describe('stage_case 文案：DB/API 步例外 + sql 变量绑定规则', () => {
+  it('stage_case 描述与 promptGuidelines 放行 DB/API 步带 compiled;sql 绑定规则与执行器一致', async () => {
+    // 工具层文案是 AI 真正读到的那一份——与 reqDesign 的 guide 平行，两处都不能漏。
+    const { STAGE_PROMPT_GUIDELINES } = await import('../src/pi/space/tools/stage-tools.js');
+    const { ctx } = makeCtx();
+    const tool = await toolOf(ctx, 'stage_case');
+    const guidelines = tool.promptGuidelines.join('\n');
+
+    // ① DB/API 例外：stage 阶段就必须带 compiled（它们不经浏览器执行）
+    expect(tool.description).toContain('查库/调接口的步——sql / queryDb / httpRequest——必须给出');
+    expect(guidelines).toContain('唯一例外：查库/调接口的步骤（sql / queryDb / httpRequest）必须在这一步就带上 compiled');
+    expect(guidelines).toContain('DB/API 步（sql / queryDb / httpRequest）不经浏览器执行');
+    // 原禁令仍存在（不得删成无条件放行），但紧跟例外
+    const ban = guidelines.indexOf('stage_case 的 step 默认不输出 compiled 字段');
+    const exc = guidelines.indexOf('唯一例外：查库/调接口的步骤（sql / queryDb / httpRequest）必须在这一步就带上 compiled');
+    expect(ban).toBeGreaterThanOrEqual(0);
+    expect(exc).toBeGreaterThan(ban);
+
+    // ② sql 变量绑定规则与 runSql 的真实语义一致（{{变量}} 写在文本里；不与 params/占位符混用）
+    expect(guidelines).toContain('{{变量}} 直接写在 sql 文本里即可');
+    expect(guidelines).toContain('sql-params-conflict');
+    expect(guidelines).toContain('select table_name from information_schema.tables');
+    // 旧的错误规则（与代码相反）不得回潮
+    expect(guidelines).not.toContain('必须写在 params 里配 ? 占位符');
+    expect(guidelines).not.toContain('不能写进 sql 文本');
+  });
+});
+
 describe('stage_case localId 契约', () => {
   it('非 UUID localId（如自造短名）→ 拒绝并点名 UUID,不入暂存区;UUID 照常暂存', async () => {
     const seed = await seedProject(pool);

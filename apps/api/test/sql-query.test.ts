@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { QueryPool } from '../src/execute/envContext.js';
 import { runSql } from '../src/execute/sqlQuery.js';
+import { STEP_DSL_SPEC } from '../src/agent/prompts/step-dsl-spec.js';
 
 /** 假池：记录被执行的 sql / params，按需抛错。 */
 function fakePool(
@@ -167,5 +168,35 @@ describe('runSql', () => {
     });
     expect(r.sql).toBe('SELECT * FROM dw WHERE u = ?');
     expect(r.params).toEqual(['alice']);
+  });
+});
+
+/**
+ * 文档-代码一致性守卫：STEP_DSL_SPEC 是给 LLM 看的 sql 步规格，
+ * 它的绑定规则必须与 runSql 的真实语义一致。
+ *
+ * 旧文案说「{{变量}} 必须写在 params 里配 ? 占位符，不能写进 sql 文本」——与代码相反：
+ * runSql 的受测主路径就是「{{var}} 直接写在 sql 文本里」，按出现顺序替换成位置占位符并绑定值
+ * （sql-query.test.ts 已钉）；被拒的只是两种写法混用（sql-params-conflict）。
+ * 文案错了 AI 就永远写不出带变量的 sql 步。
+ */
+describe('STEP_DSL_SPEC 与 sql 执行器语义一致', () => {
+  const SPEC = STEP_DSL_SPEC;
+  const sqlLine = SPEC.split('\n').find((l) => l.startsWith('- {"kind":"sql"')) ?? '';
+
+  it('sql 规格写成「变量直接写在 sql 文本里」，形状里不出现 params 字段', () => {
+    expect(sqlLine).toContain('{{变量}} 直接写在 sql 文本里');
+    expect(sqlLine).toContain('sql-params-conflict');
+    expect(sqlLine).not.toContain('"params"');
+  });
+
+  it('旧错误措辞不得回潮（与代码相反的旧规则）', () => {
+    for (const bad of ['不能写在 sql 文本', '不能写进 sql 文本', '必须写在 params', '变量一律走 params']) {
+      expect(SPEC).not.toContain(bad);
+    }
+  });
+
+  it('queryDb 用途收窄为平台自检（查被测系统业务数据一律用 sql）', () => {
+    expect(SPEC).toContain('查被测系统的业务数据一律用 sql，不是 queryDb');
   });
 });
