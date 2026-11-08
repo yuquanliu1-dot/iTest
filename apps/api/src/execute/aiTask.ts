@@ -46,6 +46,7 @@ actions 元素类型：
 - 每轮最多 2 个动作，宁可多轮推进也不要连发——页面在动作间会变化，连发会让后续动作建立在过期认知上。每个动作的执行结果（ok / 错误信息）下轮反馈给你。
 - 同一目标连续 3 次失败就停止对它重试：先用截图核对当前页面是否还在指令期望的界面（弹窗/跳转/加载中都会让目标消失），页面不对先处理页面；确认页面正确而目标确实不存在 → 输出 fail 如实说明，不要换坐标/selector 空转。
 - fill 后动作结果没报 error，就不要因为「页面上看得见的文本与目标不一致」（窄输入框截断、掩码显示、格式化渲染）清空重输——以执行结果为准，重输会破坏已生效的输入。
+- 下拉/级联/单选行语义：很多组件「点行文字只展开下一级，选中必须点行首的圆形单选点」；操作是否生效以元素清单里 input 的 value 为准（级联选中后 value=完整路径；截图窄框只截断显示前缀，别据前缀判「选错」反复重选）。
 - 页面处于加载中/骨架屏时不做判断，先 wait 或留到下一轮观察。
 - 在长列表/下拉框里找目标时小步滚动（每次位移 50~150px 后再观察），不要大幅跳跃以免错过。
 - 元素清单只覆盖视口内元素：目标既不在清单也不在截图里时，先滚动找到它再操作。
@@ -103,6 +104,9 @@ interface ElementInfo {
   text?: string;
   placeholder?: string;
   inputType?: string;
+  /** input 当前值（密码型不打）——级联选中后 value=完整路径，是截图截断显示之外
+   *  唯一可验证选中结果的通道。 */
+  value?: string;
   disabled?: boolean;
 }
 
@@ -171,7 +175,20 @@ async function dumpElements(page: Page): Promise<ElementInfo[]> {
       const style = window.getComputedStyle(he);
       if (style.visibility === 'hidden' || style.display === 'none') continue;
       const s = synth(he);
-      const text = (he.textContent ?? '').trim().slice(0, 40);
+      let text = (he.textContent ?? '').trim().slice(0, 40);
+      // 行首单选/复选 input 自身无文本（Element-UI 级联 checkStrictly 下 radio 是唯一
+      // 选中路径），清单里有坐标却无从指认是哪一行——取所在行容器的行文字。
+      // 级联的下级列嵌套在父 li 内（子面板是 li 的子节点），不能用整行 textContent，
+      // 只取行自己的标签 span。
+      if (!text && he.tagName === 'INPUT') {
+        const row = he.closest('li.el-cascader-node, tr, label');
+        if (row) {
+          const t = row.matches('li.el-cascader-node')
+            ? ((row.querySelector(':scope > .el-cascader-node__label') as HTMLElement | null)?.textContent ?? '')
+            : (row.textContent ?? '');
+          text = t.trim().slice(0, 40);
+        }
+      }
       const item: Record<string, unknown> = {
         selector: s.selector,
         tag: he.tagName.toLowerCase(),
@@ -182,6 +199,13 @@ async function dumpElements(page: Page): Promise<ElementInfo[]> {
       if (ph) item.placeholder = ph;
       const it = (he as HTMLInputElement).type;
       if (he.tagName === 'INPUT' && it) item.inputType = it;
+      // 选中/填写结果的验证通道：级联选中后 value 是完整路径，截图窄框截断显示
+      // 前缀会让模型误判「选错单位」而空转到轮次耗尽（prod228 11-08 实录：radio 已
+      // 选上、abort 时值是对的，模型因截图只见前缀始终不敢判 done）。密码型不外泄。
+      if (he.tagName === 'INPUT' && it !== 'password') {
+        const v = (he as HTMLInputElement).value;
+        if (v) item.value = v.slice(0, 60);
+      }
       if ((he as HTMLButtonElement).disabled) item.disabled = true;
       out.push(item);
       if (out.length >= 60) break;
