@@ -64,6 +64,27 @@ export async function probeLocatorHits(page: Page, locators: Locator[]): Promise
   return out;
 }
 
+/** 运行时实例 id 形态：id 片段里带 3 位以上连续数字（如 Element-UI 级联的 #cascader-menu-502-0-0）。
+ *  这类 id 由前端运行时分配（浮层/级联面板每次挂载都换号），当唯一锚点必然下一轮命中 0。 */
+const RUNTIME_ID_RE = /#[^\s"'()]*\d{3,}/;
+
+/** 本步 compiled 里用了运行时实例 id 的 locator（供证据行提醒 LLM 别再建议这类 id）。 */
+export function runtimeIdLocators(step: EffectiveStep | null): string[] {
+  const out: string[] = [];
+  const actions = (Array.isArray(step?.compiled) ? step.compiled : []) as Array<{
+    kind?: string;
+    locator?: Array<{ strategy?: string; value?: string }>;
+  }>;
+  for (const a of actions) {
+    for (const l of a?.locator ?? []) {
+      if (typeof l?.value === 'string' && RUNTIME_ID_RE.test(l.value)) {
+        out.push(`${l.strategy}=${l.value}`);
+      }
+    }
+  }
+  return out;
+}
+
 export type FailureDiagnosisKind = 'position-fracture' | 'conditional-overlay' | 'locator-fix' | 'other';
 
 export interface FailureDiagnosis {
@@ -80,6 +101,7 @@ const DIAG_PROMPT = `你是 Web 测试用例失败诊断员。测试用例某一
 4. 若页面状态正常（目标容器/同类目标在清单里、页面到位）但具体 locator 命中 0 → 选择器写错或行为语义错。正确做法：用可交互元素清单中真实存在的选择器修正 locator（可组多候选链），不要在清单外臆造选择器。
 5. 附加信号如果说明「环境缺数据」：正确做法是让用例先造出能满足预期的数据，或如实向用户汇报环境缺数据——严禁弱化 expectedOutcome 把失败蒙成通过。
 6. 浏览器 JS 错误（console.error / 未捕获异常）指向页面脚本侧的问题：若报错与本步操作对象/页面功能相关，多半是被测系统前端缺陷或环境脚本冲突，改用例的 locator/流程修不好——note 应引导核实页面自身是否报错（必要时换浏览器控制台确认），而不是继续调选择器。
+7. 绝不把「运行时生成的实例 id」（形如 #cascader-menu-502-0-0，id 片段里带 3 位以上连续数字）作为修正建议：这类 id 由前端运行时分配（级联面板/浮层每次挂载都换号），本轮能用下一轮必然命中 0，只是把一类失败换成另一类失败。改用：目标文案一字不差的精确文本、稳定的属性选择器（[placeholder=...]、data-testid、aria-label）、或结构化选择器（父容器 + 精确文本子节点）。
 
 ## 输出
 只输出 JSON，不要 markdown 包裹：{"diagnosis":"position-fracture"|"conditional-overlay"|"locator-fix"|"other","note":"≤150字中文修正指引，引用具体证据"}
@@ -98,6 +120,10 @@ function buildEvidenceText(o: {
   const lines: string[] = [];
   lines.push(`步骤意图(instruction): ${o.step?.instruction ?? '（无，以 compiled 为准）'}`);
   lines.push(`步骤 compiled: ${JSON.stringify(o.step?.compiled ?? null).slice(0, 800)}`);
+  const runtimeIds = runtimeIdLocators(o.step);
+  if (runtimeIds.length > 0) {
+    lines.push(`⚠ 运行时实例 id 警告: 本步 locator 用了 ${runtimeIds.join('、')} —— 这类 id 由前端运行时分配，每次页面加载都会变，不能当唯一锚点，重验必然命中 0；修正时不要再建议同类 id。`);
+  }
   if (o.assertion != null) lines.push(`步骤断言: ${JSON.stringify(o.assertion).slice(0, 300)}`);
   if (o.extraHint) lines.push(`附加信号: ${o.extraHint}`);
   if (o.consoleErrors?.length) {

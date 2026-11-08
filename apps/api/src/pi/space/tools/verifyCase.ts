@@ -12,7 +12,7 @@ import { Type } from '@earendil-works/pi-ai';
 // 步骤/元哈希已移 verifyTrace.ts（solidify 轨迹新鲜度与 verify 前缀确认共用同一套哈希）
 import { hashEffectiveSteps, hashVerifyMeta, traceKey, saveVerifiedTrace, clearVerifiedTrace } from './verifyTrace.js';
 import { chromium } from 'playwright-core';
-import type { Browser, BrowserContext, Page } from 'playwright-core';
+import type { Browser, BrowserContext, Page, Locator as PwLocator } from 'playwright-core';
 import {
   acquire as acquireBrowserSession,
   commit as commitBrowserSession,
@@ -91,6 +91,8 @@ interface AiStepResult {
 interface RoundState {
   lastSignature: string;
   consecutive: number;
+  /** 上一轮「已通过步骤数」——停滞判据的进展信号。 */
+  lastPassed: number;
   /** 熔断后下一次调用是护栏放行的最后一轮（note 会显式警告该轮结束后必须汇报）。入口消费即清。 */
   escapedAfter?: boolean;
 }
@@ -164,18 +166,41 @@ function failureSignatureFromData(data: string): string | null {
   }
 }
 
-/** 更新按 thread×case 的失败签名轮次：通过 → 清除；签名变更 → 重置计数；同签名 → 累加。 */
+/** 从 verify_case 响应 data JSON 数出「已通过步骤数」——停滞护栏的进展判据。
+ *  steps 里含上一轮已确认的前缀结果（resume 轮合并），所以该数就是本例已确认到第几步。 */
+function passedCountFromData(data: string): number {
+  try {
+    const j = JSON.parse(data) as { steps?: Array<{ status?: string }> };
+    if (!Array.isArray(j.steps)) return 0;
+    return j.steps.filter((s) => s?.status === 'passed').length;
+  } catch {
+    return 0;
+  }
+}
+
+/** 更新按 thread×case 的失败签名轮次：通过 → 清除；签名变更 → 重置计数；同签名 → 累加。
+ *  但「同签名 + 已确认前缀变长」= 失败点后移（有进展）→ 不计为空转，重置连续计数。
+ *  2026-11-07 prod228 实录：同一用例连续 3 轮都是 execution 大类，但失败步从第 1 步挪到第 2 步
+ *  （前缀每轮都在变长），旧口径把这种「在推进」的失败也判成停滞并熔断，agent 拿不到继续的机会。 */
 function updateRoundState(key: string, data: string): void {
   const sig = failureSignatureFromData(data);
   if (sig === null) {
     verifyRoundState.delete(key);
     return;
   }
-  const prev = verifyRoundState.get(key);
-  verifyRoundState.set(key, {
-    lastSignature: sig,
-    consecutive: prev && prev.lastSignature === sig ? prev.consecutive + 1 : 1,
-  });
+  verifyRoundState.set(key, nextRoundState(verifyRoundState.get(key), sig, passedCountFromData(data)));
+}
+
+/** 停滞护栏状态推进（纯函数，便于单测）：签名变 → 重置；同签名但已确认前缀变长（有进展）→ 重置；
+ *  同签名且无进展 → 连续计数 +1。 */
+export function nextRoundState(
+  prev: RoundState | undefined,
+  sig: string,
+  passed: number,
+): RoundState {
+  if (!prev || prev.lastSignature !== sig) return { lastSignature: sig, consecutive: 1, lastPassed: passed };
+  if (passed > prev.lastPassed) return { lastSignature: sig, consecutive: 1, lastPassed: passed };
+  return { lastSignature: sig, consecutive: prev.consecutive + 1, lastPassed: passed };
 }
 
 /**
@@ -304,8 +329,86 @@ function buildReplaySecrets(steps: EffectiveStep[]): Map<string, string> {
   return m;
 }
 
+/** 闸门用的候选形状（与 buildCandidates 输出一致）。 */
+type GateCandidate = { kind: string; loc: PwLocator; src?: string };
+/** 闸门用的 locator 形状（@itest/shared Locator 的结构子集）。 */
+type GateLocatorSpec = { strategy?: string; value?: string };
+
+/** locator 的「锚点文案」：作者想点的那个元素的文字。
+ *  text 策略 = value 本身；role 策略 = role[name="X"] 里的 name（或 "role 文案" 形态的后半段）。
+ *  没有文案锚点的（css/xpath/testId）不做歧义消解——那类选择器本就该由作者写精确。 */
+export function locatorAnchorName(l: GateLocatorSpec): string | null {
+  const v = typeof l?.value === 'string' ? l.value.trim() : '';
+  if (!v) return null;
+  if (l.strategy === 'text') return v;
+  if (l.strategy === 'role') {
+    const m = v.match(/^([\w-]+)(?:\[name="([^"]*)"\]|\[name='([^']*)'\])$/);
+    if (m) return (m[2] ?? m[3] ?? '').trim() || null;
+    if (v.includes(' ')) return v.split(/\s+/).slice(1).join(' ').trim() || null;
+  }
+  return null;
+}
+
+/** 唯一「精确文案」锚点：作者原意就是这一段文字。
+ *  Playwright 的 getByRole/getByText 默认子串匹配（「XX（本级）」也算命中「XX」），
+ *  子串候选数天然偏大；exact 才是作者意图的唯一锚点。命中数必须恰好 1。 */
+async function probeUniqueAnchor(page: Page, spec: GateLocatorSpec, name: string): Promise<PwLocator | null> {
+  const tries: PwLocator[] = [];
+  if (spec.strategy === 'role') {
+    const m = spec.value!.match(/^([\w-]+)(?:\[name="([^"]*)"\]|\[name='([^']*)'\])$/);
+    // role 的可及名会被嵌套内容污染（级联 li 的可及名含子列文字）→ exact 常为 0，再退到 exact 文本。
+    if (m) tries.push(page.getByRole(m[1] as never, { name, exact: true }));
+    tries.push(page.getByText(name, { exact: true }));
+  } else if (spec.strategy === 'text') {
+    tries.push(page.getByText(name, { exact: true }));
+  }
+  for (const t of tries) {
+    const n = await t.count().catch(() => 0);
+    if (n === 1) return t;
+  }
+  return null;
+}
+
+/** 命中候选的「DOM 序第一个可见匹配」——回放 strict 兜底实际会点的那个元素。 */
+async function visibleFirstMatch(cand: GateCandidate): Promise<PwLocator | null> {
+  try {
+    const filtered = cand.loc.filter({ visible: true });
+    if ((await filtered.count()) === 0) return null;
+    return filtered.first();
+  } catch {
+    return null;
+  }
+}
+
+/** 假歧义消解：命中多个时，证明「回放实际会点的那个元素」就是目标 → 不判歧义。
+ *  回放口径（cdp.ts tryFirstMatch 的 strict 兜底）：命中多元素 → filter({visible:true}).first()。
+ *  两种「点得对」形态：
+ *   ① 回放点的元素自身文案一字不差（text 策略：精确文案元素本身）；
+ *   ② 回放点的元素包含目标（role 策略：级联节点 li 包裹同名 label 子节点）。
+ *  否则（回放会点到「XX（本级）」这类另一个条目）→ 保留 AmbiguousLocator。 */
+async function anchorResolvesAmbiguity(
+  page: Page,
+  locs: GateLocatorSpec[],
+  cand: GateCandidate,
+): Promise<boolean> {
+  const spec = locs.find((l) => l.value === cand.src);
+  if (!spec) return false;
+  const name = locatorAnchorName(spec);
+  if (!name) return false;
+  const anchor = await probeUniqueAnchor(page, spec, name);
+  if (!anchor) return false;
+  const visFirst = await visibleFirstMatch(cand);
+  if (!visFirst) return false;
+  const own = await visFirst.innerText().catch(() => '');
+  if (own.trim() === name) return true;
+  const contained = await visFirst.filter({ has: anchor }).count().catch(() => 0);
+  return contained > 0;
+}
+
 /** compiled 保真校验：verify_case 的 AI 可以临场绕开坏 locator，但正式回放是逐字执行 compiled 的——
  *  校验不通过必须在验证阶段就判失败，逼 AI 用真实选择器修正，而不是"AI 能过=用例能跑"。
+ *  **闸门口径必须不严于回放**（回放口径见 cdp.ts tryFirstMatch）：闸门比回放严 = 把回放能过的步判死
+ *  （2026-11-07 prod228 实录：级联选择「XX」被同前缀的「XX（本级）」撞成假歧义，回放实际点得对）。
  *  时机：click/hover 在步骤前校验（元素此时就该在页面上）；断言类、fill、check、select、extract 在 AI 通过后校验
  *  （这些动作结束时元素理应仍在）。navigate/aiTask/waitFor 无从或不必校验，跳过。
  *  候选探测直接复用回放的 buildCandidates + count()：候选展开（纯 #id 提升、role 拆 name、testId 包
@@ -315,10 +418,12 @@ function buildReplaySecrets(steps: EffectiveStep[]): Map<string, string> {
  *  2) 首命中候选命中多个元素（count>1）且动作是 click/fill/hover → AmbiguousLocator——这三类在回放里
  *     命中多元素会静默退到 .first() 操作 DOM 序第一个（check/select 是显式抛错，无静默风险），
  *     verify 只测 count>0 会放行"碰巧对"的选择器（目标恰好是第一个匹配），表单加字段/调序即静默错元素。
+ *     但「回放退到 first()」不等于「回放点错」：若第一个可见匹配正是目标（精确文案锚点），
+ *     回放点得对 → 不判歧义（见 anchorResolvesAmbiguity）。
  *  探测窗口与回放对齐（LOCATOR_PROBE_ROUNDS 轮 × 250ms ≈3s，首轮立即）：SPA 深链挂载滞后可达秒级、
  *  networkidle 不可靠，verify 预检窗口若短于回放会误判回放能过的 locator。 */
-async function checkCompiledLocators(
-  page: import('playwright-core').Page,
+export async function checkCompiledLocators(
+  page: Page,
   compiled: unknown,
   mode: 'pre' | 'post',
 ): Promise<{ reason: 'LocatorMismatch' | 'AmbiguousLocator'; message: string } | null> {
@@ -326,15 +431,24 @@ async function checkCompiledLocators(
     kind?: string;
     locator?: Array<{ strategy?: string; value?: string }>;
   }>;
+  // 状态跳变点：navigate/aiTask 会把 DOM 上下文整个换掉，跨跳变的动作不能对着别的时刻的 DOM 判。
+  let firstJump = -1;
+  let lastJump = -1;
+  for (let i = 0; i < actions.length; i++) {
+    const k = actions[i]?.kind;
+    if (k === 'navigate' || k === 'aiTask') {
+      if (firstJump < 0) firstJump = i;
+      lastJump = i;
+    }
+  }
+  // 结构性错误与命中无关，直接判失败（web 回放遇 mobile-only strategy 必抛）。
+  // 按 mode 分族（click/hover 属 pre、其余属 post），与命中探测分开——命中探测只看待判动作。
   for (const a of actions) {
     if (!a.kind) continue;
     const timing = a.kind === 'click' || a.kind === 'hover' ? 'pre' : 'post';
     if (a.kind === 'navigate' || a.kind === 'aiTask' || a.kind === 'waitFor') continue;
     if (timing !== mode) continue;
-    const locs = Array.isArray(a.locator) ? a.locator : [];
-    if (locs.length === 0) continue;
-    // 结构性错误与命中无关，直接判失败
-    for (const l of locs) {
+    for (const l of Array.isArray(a.locator) ? a.locator : []) {
       if (l.strategy === 'accessibilityId' || l.strategy === 'label' || l.strategy === 'predicate') {
         return { reason: 'LocatorMismatch', message: `compiled 定位校验不通过: strategy '${l.strategy}' 为移动端专用，web 回放不支持` };
       }
@@ -342,11 +456,39 @@ async function checkCompiledLocators(
         return { reason: 'LocatorMismatch', message: `compiled 定位校验不通过: ${a.kind} 的 locator 缺少 value` };
       }
     }
+  }
+  // 待判动作下标：
+  //  - pre：只判第一个 click/hover，且它之前不能有状态跳变。同一步里后续 click/hover 的目标此刻
+  //    还不在 DOM 里（开面板 → 展开级联，后续点击的目标要到前一个动作执行后才出现）——判它们
+  //    只会得出回放其实能过的 LocatorMismatch（2026-11-07 prod228 实录：4 连击的级联步，第 2~4 个
+  //    动作的候选在第 1 个动作执行前命中 0，闸门把回放能走通的步判死）。这类动作交给结尾的
+  //    compiled 机械干跑裁决（干跑逐字派发，与正式回放同引擎）。
+  //  - post：判最后一个状态跳变之后的动作（跳变之前的动作目标已被换掉的页面带走，判了必假失败）。
+  const judgeIdxs: number[] = [];
+  if (mode === 'pre') {
+    for (let i = 0; i < actions.length; i++) {
+      if (firstJump >= 0 && i >= firstJump) break;
+      const k = actions[i]?.kind;
+      if (k === 'click' || k === 'hover') { judgeIdxs.push(i); break; }
+    }
+  } else {
+    for (let i = lastJump + 1; i < actions.length; i++) {
+      const k = actions[i]?.kind;
+      if (!k) continue;
+      if (k === 'navigate' || k === 'aiTask' || k === 'waitFor' || k === 'click' || k === 'hover') continue;
+      judgeIdxs.push(i);
+    }
+  }
+  for (const idx of judgeIdxs) {
+    const a = actions[idx]!;
+    const locs = Array.isArray(a.locator) ? a.locator : [];
+    if (locs.length === 0) continue;
     // 与回放同一候选构造 + count 探测：任一候选命中即停（回放同款短路）；全部落空才判 LocatorMismatch。
     const cands = buildCandidates(page, { locator: locs as unknown as Locator[] });
     if (cands.length > 0) {
       let hitCount = 0;
       let hitDesc = '';
+      let hitCand: GateCandidate | null = null;
       const misses: string[] = [];
       const missSeen = new Set<string>();
       poll: for (let round = 0; round < LOCATOR_PROBE_ROUNDS; round++) {
@@ -358,6 +500,7 @@ async function checkCompiledLocators(
             // 没有 count() 的候选直接接受（与回放 tryFirstMatch 一致）
             hitCount = 1;
             hitDesc = `${c.kind} ${desc}`;
+            hitCand = c;
             break poll;
           }
           try {
@@ -365,6 +508,7 @@ async function checkCompiledLocators(
             if (n > 0) {
               hitCount = n;
               hitDesc = `${c.kind} ${desc}`;
+              hitCand = c;
               break poll;
             }
             const msg = `${c.kind}=${desc} 命中 0 个元素`;
@@ -380,9 +524,11 @@ async function checkCompiledLocators(
         return { reason: 'LocatorMismatch', message: `compiled 定位校验不通过（回放将失败）: ${a.kind} 全部 ${cands.length} 个候选均未命中 — ${misses.join('；')}` };
       }
       if ((a.kind === 'click' || a.kind === 'fill' || a.kind === 'hover') && hitCount > 1) {
+        // 假歧义消解：回放命中多元素会退到「可见匹配的第一个」，若那正是目标 → 回放点得对，不判歧义。
+        if (hitCand && (await anchorResolvesAmbiguity(page, locs, hitCand))) continue;
         return {
           reason: 'AmbiguousLocator',
-          message: `compiled 定位校验不通过（候选命中多个元素）: ${a.kind} 候选 ${hitDesc} 命中 ${hitCount} 个元素，回放将静默操作其中第一个——请给该候选加属性过滤（如 [placeholder=...]）或把唯一命中的候选提到首位后重验`,
+          message: `compiled 定位校验不通过（候选命中多个元素）: ${a.kind} 候选 ${hitDesc} 命中 ${hitCount} 个元素，回放将静默操作其中第一个——请给该候选加属性过滤（如 [placeholder=...]）或把唯一命中的候选提到首位后重验。**不要用形如 #cascader-menu-<数字>-… 的运行时实例 id 作锚点**：该 id 由前端运行时分配、每次页面加载都变（实测同一控件两轮 id 不同），用它重验必然命中 0；改用目标文案一字不差的精确文本或稳定属性（[placeholder=...]、data-testid、aria-label）`,
         };
       }
     }
@@ -472,7 +618,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       'verify_case 成功响应里的 page 是本轮终态页面上真实存在的可交互元素清单（已去重降噪，另有 N 个同类元素折叠省略）。边跑边讨论提议下一步或讨论筛选项/按钮时，只能引用 page.elements（或 failure.page.elements）里真实存在的控件——清单里没有的输入框/下拉/筛选项（如「时间范围」「等级」）一律不得提议或断言其存在，页面事实以实测清单为准。',
       '自然语言步骤的 AI 相失败分流（failureReason=AiTaskAborted/StepTimedOut/StepReportedFailed 且失败步无 compiled locator 可修，failure.note 会以「该步是自然语言步骤，由 AI 相」开头提示）：大概率是步骤描述与页面实际不符——目标不存在/措辞歧义/前置状态没建立，也可能是前面步骤的描述把页面带偏——这不是你能自行修复的技术错误，重跑不改变结果（AI 相每步 1~2 分钟纯烧时间与 token）。此时停止重跑与自诊，把失败步原文、failureReason、失败页 URL/截图反馈给用户，请用户选择：调整该步（或前面步骤）的自然语言描述 / 补充入口线索 / 确认环境数据后再验；用户明确答复前不再调用 verify_case。仅当你确有把握是措辞歧义（步骤原文与页面实际文案不一致）时，可修正描述重发 stage_case 后再验一次。**例外一（不要问用户）：失败步的语义是「查库/调接口确认」（步骤原文含查库/落库/接口/请求/状态校验之类）时，这不是描述与页面不符，而是这一步形态错了——浏览器里没有 DB 工具，AI 相永远跑不了它：把它改写成带 compiled 的 sql（查被测系统的库）/ httpRequest（调接口）步，同 localId 重发 stage_case 再验，断言结论由结尾干跑给出，不要为此向用户要页面线索。**',
       'stage_case 新建的纯草稿用例（未落库）也可直接 verify_case：caseId 传 stage_case 时声明的 localId；修正循环 = 同 localId 重发 stage_case（幂等覆盖）后再次 verify_case，全程不落库，通过后引导用户在暂存区勾选保存。注意：暂存草稿的 defaultEnvId 只能绑定已落库环境或留空走默认链（暂存环境不支持）。',
-      'verify_case 会校验 compiled 选择器能真实命中页面（AI 临场绕开坏 locator 不算通过，回放逐字执行 compiled 会失败）:失败原因含"定位校验不通过"时,必须用 failure.page.elements 里的真实选择器替换原 locator(严禁留着坏 locator 只靠 AI 硬跑)。候选命中多个元素(AmbiguousLocator)同样判失败——回放会静默操作第一个匹配元素,必须给该候选加属性过滤(如 [placeholder=...])或把唯一命中的候选提到首位。verify_case 还会做用例级终态判定(失败原因含 VisionAssertionFailed):步骤都通过但最终页面不符 expectedOutcome 时,修正步骤行为或调整 expectedOutcome 后再验。',
+      'verify_case 会校验 compiled 选择器能真实命中页面（AI 临场绕开坏 locator 不算通过，回放逐字执行 compiled 会失败）:失败原因含"定位校验不通过"时,必须用 failure.page.elements 里的真实选择器替换原 locator(严禁留着坏 locator 只靠 AI 硬跑)。候选命中多个元素(AmbiguousLocator)同样判失败——回放会静默操作第一个匹配元素,必须给该候选加属性过滤(如 [placeholder=...])或把唯一命中的候选提到首位。**禁止把形如 #cascader-menu-<数字>-… 的运行时实例 id 当唯一锚点**:该 id 由前端运行时分配、每次页面加载都变(实测同一控件两轮 id 不同),用它重验必然命中 0,只是把一类失败换成另一类失败。改用目标文案一字不差的精确文本或稳定属性([placeholder=...]、data-testid、aria-label)——Playwright 的 role/text 匹配是子串语义,「XX」会连带命中「XX（本级）」这类同名条目,精确文案才是唯一锚点。verify_case 还会做用例级终态判定(失败原因含 VisionAssertionFailed):步骤都通过但最终页面不符 expectedOutcome 时,修正步骤行为或调整 expectedOutcome 后再验。',
       '终态判定失败(failureReason=VisionAssertionFailed)且 failure.note 含"空数据信号"时,说明被测环境里根本没有可供断言的数据——这是用例缺前置造数步骤,不是选择器写错。正确做法:给用例补上"先造出满足预期的数据"的步骤(如创建一条会触发自动处置的事件),或如实告诉用户环境缺数据。严禁弱化 expectedOutcome 把失败蒙成通过(例:把"自动启动处置成功"改成"页面正常加载"、删掉断言步骤)——那是把用例改得测不出东西,比失败更糟。',
       'result.staticAnalysis 与 failure.note 里的"源码无字面命中"只是排序参考,不是"这个选择器是假的"。选择器是否存在一律以 failure.page.elements 和运行时实测为准:框架运行时拼接的 id(如 Element-UI tab 的 #tab-autodo)源码里本就没有字面量,但运行时真实命中。sourceAnalysis 与运行时命中冲突时,信运行时。',
       'verify_case 最后一道关卡是与正式回放同引擎的 compiled 机械干跑(failureReason=ReplayDivergence):AI 临场能跑通但逐字派发 compiled 失败,典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突导致二次执行必挂。修正方式:用 failure.page.elements 里的真实选择器把失败步 compiled 改成更精确的可操作目标(点组件内部真实接收点击的元素),或修正测试数据策略(时间戳命名)后重验。',
@@ -495,6 +641,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         verifyRoundState.set(roundKey(ctx.threadId, caseId), {
           lastSignature: roundState.lastSignature,
           consecutive: VERIFY_MAX_STAGNANT_ROUNDS - 1,
+          lastPassed: roundState.lastPassed,
           escapedAfter: true,
         });
         return {
