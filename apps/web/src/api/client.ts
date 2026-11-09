@@ -739,17 +739,17 @@ export const api = {
       listProjects: () =>
         request<Array<{ id: string; name: string }>>('/assistant/feedback/projects'),
     },
-    /** 系统设置：助手短期记忆（只读+软删；写入唯一入口是助手 save_memory 工具）。 */
+    /** 系统设置：助手短期记忆（只读+软删；写入唯一入口是助手 save_memory 工具）。服务端分页。 */
     memories: {
-      list: (params?: { productLineId?: string; status?: string }) =>
-        request<AssistantMemory[]>(`/assistant/memories${qs(params ?? {})}`),
+      list: (params?: { productLineId?: string; status?: string; scope?: 'global' | 'product_line'; page?: number; limit?: number }) =>
+        request<Paged<AssistantMemory>>(`/assistant/memories${qs(params ?? {})}`),
       remove: (id: string) =>
         request<void>(`/assistant/memories/${id}`, { method: 'DELETE' }),
     },
-    /** 系统设置：助手轨迹（只读+软删；写入唯一入口是落库钩子→蒸馏 worker）。 */
+    /** 系统设置：助手轨迹（只读+软删；写入唯一入口是落库钩子→蒸馏 worker）。服务端分页。 */
     trajectories: {
-      list: (params?: { productLineId?: string; status?: string }) =>
-        request<AssistantTrajectory[]>(`/assistant/trajectories${qs(params ?? {})}`),
+      list: (params?: { productLineId?: string; status?: string; page?: number; limit?: number }) =>
+        request<Paged<AssistantTrajectory>>(`/assistant/trajectories${qs(params ?? {})}`),
       remove: (id: string) =>
         request<void>(`/assistant/trajectories/${id}`, { method: 'DELETE' }),
     },
@@ -763,12 +763,13 @@ export const api = {
           method: 'POST', body: JSON.stringify(body),
         }),
     },
-    /** 系统设置：固化盘点（R3）。LLM 只产提案，应用一律经人工批准。 */
+    /** 系统设置：固化盘点（R3）。LLM 只产提案，应用一律经人工批准。批次/提案均服务端分页。 */
     solidify: {
       scan: () => request<{ id: string }>('/assistant/solidify/scan', { method: 'POST', body: '{}' }),
-      batches: () => request<SolidifyBatch[]>('/assistant/solidify/batches'),
-      proposals: (params?: { batchId?: string; status?: string }) =>
-        request<SolidifyProposal[]>(`/assistant/solidify/proposals${qs(params ?? {})}`),
+      batches: (params?: { status?: string; page?: number; limit?: number }) =>
+        request<Paged<SolidifyBatch>>(`/assistant/solidify/batches${qs(params ?? {})}`),
+      proposals: (params?: { batchId?: string; status?: string; page?: number; limit?: number }) =>
+        request<Paged<SolidifyProposal>>(`/assistant/solidify/proposals${qs(params ?? {})}`),
       proposal: (id: string) => request<SolidifyProposal>(`/assistant/solidify/proposals/${id}`),
       approve: (id: string, retireIds: string[]) =>
         request<{ ok: boolean }>(`/assistant/solidify/proposals/${id}/approve`, {

@@ -3,8 +3,9 @@
  * 蒸馏 inline 跑（R2 trajectoryQueue 同款），前端轮询批次状态；错误记在批次上不进响应。
  */
 import { Router } from 'express';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, count, desc, eq, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
+import { parsePaging } from '../../lib/pagination.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import type { AuthUser } from '../../services/auth.service.js';
 import { db } from '../../db/client.js';
@@ -21,21 +22,44 @@ router.post('/scan', async (req, res) => {
   res.status(202).json({ id });
 });
 
-router.get('/batches', async (_req, res) => {
-  const rows = await db.select().from(assistantSolidifyBatches)
-    .orderBy(desc(assistantSolidifyBatches.createdAt)).limit(50);
-  res.json(rows);
+router.get('/batches', async (req, res) => {
+  const q = req.query;
+  const { page, limit } = parsePaging(q as Record<string, unknown>);
+  const conds: SQL[] = [];
+  if (typeof q.status === 'string' && q.status) conds.push(eq(assistantSolidifyBatches.status, q.status));
+  const where = conds.length > 0 ? and(...conds) : undefined;
+  const [rows, totalRows] = await Promise.all([
+    db.select().from(assistantSolidifyBatches)
+      .where(where)
+      // createdAt 非唯一 → 追加 id 作 tiebreaker，否则跨页会重复/漏行
+      .orderBy(desc(assistantSolidifyBatches.createdAt), desc(assistantSolidifyBatches.id))
+      .limit(limit).offset((page - 1) * limit),
+    db.select({ count: count() }).from(assistantSolidifyBatches).where(where),
+  ]);
+  res.json({ items: rows, total: Number(totalRows[0]?.count ?? 0), page, limit });
 });
 
 router.get('/proposals', async (req, res) => {
-  const { batchId, status } = req.query as { batchId?: string; status?: string };
-  const conds = [];
+  const q = req.query;
+  const { batchId, status } = q as { batchId?: string; status?: string };
+  const { page, limit } = parsePaging(q as Record<string, unknown>);
+  const conds: SQL[] = [];
   if (batchId) conds.push(eq(assistantSolidifyProposals.batchId, batchId));
   if (status) conds.push(eq(assistantSolidifyProposals.status, status));
-  const rows = await db.select().from(assistantSolidifyProposals)
-    .where(conds.length > 0 ? and(...conds) : undefined)
-    .orderBy(desc(assistantSolidifyProposals.createdAt)).limit(200);
-  res.json(rows);
+  const where = conds.length > 0 ? and(...conds) : undefined;
+  const [rows, totalRows] = await Promise.all([
+    db.select().from(assistantSolidifyProposals)
+      .where(where)
+      // 待审优先（人工审批面）：pending 在前，其余按创建时间倒序；id 兜底防跨页重复
+      .orderBy(
+        sql`CASE WHEN ${assistantSolidifyProposals.status} = 'pending' THEN 0 ELSE 1 END`,
+        desc(assistantSolidifyProposals.createdAt),
+        desc(assistantSolidifyProposals.id),
+      )
+      .limit(limit).offset((page - 1) * limit),
+    db.select({ count: count() }).from(assistantSolidifyProposals).where(where),
+  ]);
+  res.json({ items: rows, total: Number(totalRows[0]?.count ?? 0), page, limit });
 });
 
 router.get('/proposals/:id', async (req, res) => {

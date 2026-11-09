@@ -222,15 +222,63 @@ describe('R2 trajectories：管理路由', () => {
       ($1,$2,'本线轨迹','k','d','C','m'), ($3,$4,'他组织线轨迹','k','d','C','m')`, [randomUUID(), line1, randomUUID(), line2]);
     const res = await request(managerApp).get('/api/assistant/trajectories');
     expect(res.status).toBe(200);
-    const titles = (res.body as Array<{ taskTitle: string; productLineName: string | null }>).map((r) => r.taskTitle);
+    const titles = (res.body.items as Array<{ taskTitle: string; productLineName: string | null }>).map((r) => r.taskTitle);
     expect(titles).toContain('本线轨迹');
     expect(titles).not.toContain('他组织线轨迹');
-    expect((res.body as Array<{ productLineName: string | null }>).find((r) => r.productLineName)).toBeTruthy();
+    expect((res.body.items as Array<{ productLineName: string | null }>).find((r) => r.productLineName)).toBeTruthy();
     await pool.query(`UPDATE assistant_trajectories SET status='deleted' WHERE task_title='本线轨迹'`);
     const activeRes = await request(managerApp).get('/api/assistant/trajectories');
-    expect((activeRes.body as Array<{ taskTitle: string }>).some((r) => r.taskTitle === '本线轨迹')).toBe(false);
+    expect((activeRes.body.items as Array<{ taskTitle: string }>).some((r) => r.taskTitle === '本线轨迹')).toBe(false);
     const auditRes = await request(managerApp).get('/api/assistant/trajectories?status=deleted');
-    expect((auditRes.body as Array<{ taskTitle: string }>).some((r) => r.taskTitle === '本线轨迹')).toBe(true);
+    expect((auditRes.body.items as Array<{ taskTitle: string }>).some((r) => r.taskTitle === '本线轨迹')).toBe(true);
+  });
+
+  it('GET：分页（page/limit/total）+ 跨页不重不漏 + 不可见线不进 total', async () => {
+    const org1 = await seedOrg(pool);
+    const line1 = await seedProductLineInOrg(pool, org1.orgId, `本线-${randomUUID().slice(0, 8)}`);
+    const org2Id = randomUUID();
+    await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1,$2,$3)`, [org2Id, `他组织-${org2Id.slice(0, 8)}`, `/${org2Id}/`]);
+    const line2 = await seedProductLineInOrg(pool, org2Id, `他线-${randomUUID().slice(0, 8)}`);
+    for (let i = 0; i < 5; i++) {
+      await pool.query(
+        `INSERT INTO assistant_trajectories (id, product_line_id, task_title, task_keywords, digest, case_title, distill_model) VALUES ($1,$2,$3,'k','d','C','m')`,
+        [randomUUID(), line1, `本线轨迹-${i}`],
+      );
+    }
+    await pool.query(
+      `INSERT INTO assistant_trajectories (id, product_line_id, task_title, task_keywords, digest, case_title, distill_model) VALUES ($1,$2,'他组织线轨迹','k','d','C','m')`,
+      [randomUUID(), line2],
+    );
+
+    const p1 = await request(managerApp).get('/api/assistant/trajectories?page=1&limit=2').expect(200);
+    expect(p1.body.items).toHaveLength(2);
+    expect(p1.body.total).toBe(5); // 他组织线轨迹不可见，不计入
+    expect(p1.body.page).toBe(1);
+    expect(p1.body.limit).toBe(2);
+
+    const p3 = await request(managerApp).get('/api/assistant/trajectories?page=3&limit=2').expect(200);
+    expect(p3.body.items).toHaveLength(1);
+
+    const seen = new Set<string>();
+    for (const p of [1, 2, 3]) {
+      const r = await request(managerApp).get(`/api/assistant/trajectories?page=${p}&limit=2`).expect(200);
+      for (const it of r.body.items as Array<{ id: string }>) seen.add(it.id);
+    }
+    expect(seen.size).toBe(5);
+
+    // 筛某条可见线 → 只回该线
+    const one = await request(managerApp).get(`/api/assistant/trajectories?productLineId=${line1}`).expect(200);
+    expect(one.body.total).toBe(5);
+
+    // 筛不可见线 → 空
+    const other = await request(managerApp).get(`/api/assistant/trajectories?productLineId=${line2}`).expect(200);
+    expect(other.body.total).toBe(0);
+    expect(other.body.items).toHaveLength(0);
+
+    // 非法分页参数被钳制
+    const bad = await request(managerApp).get('/api/assistant/trajectories?page=0&limit=0').expect(200);
+    expect(bad.body.page).toBe(1);
+    expect(bad.body.limit).toBe(1);
   });
 
   it('DELETE：软删 status=deleted；member 403；不存在 404', async () => {

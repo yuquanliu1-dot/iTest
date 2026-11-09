@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { localizeApiError } from '../../i18n';
@@ -7,7 +7,10 @@ import { useUIStore } from '../../stores/ui';
 import Icon from '../Icon';
 import Button from '../ui/Button';
 import EmptyState from '../ui/EmptyState';
+import Pagination from '../ui/Pagination';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
+
+const PAGE_SIZE = 20;
 
 const BATCH_STATUS_KEY: Record<SolidifyBatch['status'], string> = {
   running: 'solidifyBatchRunning', done: 'solidifyBatchDone', failed: 'solidifyBatchFailed',
@@ -42,19 +45,49 @@ export default function SolidifySection() {
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
 
-  const batchesQ = useQuery({
-    queryKey: ['solidify-batches'],
-    queryFn: () => api.assistant.solidify.batches(),
-    // running 存在时 3s 轮询；终态停表（refetchInterval 函数式，v5 语义）
-    refetchInterval: (query) => ((query.state.data ?? []).some((b) => b.status === 'running') ? 3000 : false),
+  const [batchPage, setBatchPage] = useState(1);
+  const [batchPageSize, setBatchPageSize] = useState(PAGE_SIZE);
+  const [propPage, setPropPage] = useState(1);
+  const [propPageSize, setPropPageSize] = useState(PAGE_SIZE);
+  // 「扫描中」检测独立于当前页：running 批次必是最新一条，但用户可能停在第 2 页，
+  // 不能靠批次列表当前页里有无 running 行来判断。
+  const runningQ = useQuery({
+    queryKey: ['solidify-batches', 'running'],
+    queryFn: () => api.assistant.solidify.batches({ status: 'running', limit: 1 }),
+    // 有 running 才轮询；终态停表（refetchInterval 函数式，v5 语义）
+    refetchInterval: (query) => ((query.state.data?.total ?? 0) > 0 ? 3000 : false),
   });
-  const hasRunning = (batchesQ.data ?? []).some((b) => b.status === 'running');
+  const hasRunning = (runningQ.data?.total ?? 0) > 0;
+
+  const batchesQ = useQuery({
+    queryKey: ['solidify-batches', batchPage, batchPageSize],
+    queryFn: () => api.assistant.solidify.batches({ page: batchPage, limit: batchPageSize }),
+    refetchInterval: hasRunning ? 3000 : false, // running 期间刷新批次行状态
+  });
+  const prevRunning = useRef(false);
+  useEffect(() => {
+    const was = prevRunning.current;
+    prevRunning.current = hasRunning;
+    // running 收口（批次转终态）后补刷一次批次列表，避免最后一行停在 running
+    if (was && !hasRunning) qc.invalidateQueries({ queryKey: ['solidify-batches'] });
+  }, [hasRunning]);
 
   const proposalsQ = useQuery({
-    queryKey: ['solidify-proposals'],
-    queryFn: () => api.assistant.solidify.proposals(),
+    queryKey: ['solidify-proposals', propPage, propPageSize],
+    queryFn: () => api.assistant.solidify.proposals({ page: propPage, limit: propPageSize }),
     refetchInterval: hasRunning ? 5000 : false, // 批次 running 期间顺带刷新提案；done 后由 invalidate 收口
   });
+  // 删除/筛选后当前页可能已越界——钳回最后一页（数据到达后才判，避免翻页途中误钳）
+  useEffect(() => {
+    if (!batchesQ.data) return;
+    const tp = Math.max(1, Math.ceil(batchesQ.data.total / batchPageSize));
+    if (batchPage > tp) setBatchPage(tp);
+  }, [batchesQ.data, batchPage, batchPageSize]);
+  useEffect(() => {
+    if (!proposalsQ.data) return;
+    const tp = Math.max(1, Math.ceil(proposalsQ.data.total / propPageSize));
+    if (propPage > tp) setPropPage(tp);
+  }, [proposalsQ.data, propPage, propPageSize]);
   // 当前值来源（叠加预览/skill 对照左栏）：复用 prompt 模块列表
   const modulesQ = useQuery({
     queryKey: ['prompt-modules'],
@@ -125,10 +158,8 @@ export default function SolidifySection() {
     setOpenId(p.id);
   };
 
-  const proposals = useMemo(
-    () => [...(proposalsQ.data ?? [])].sort((a, b) => (a.status === 'pending' ? -1 : 0) - (b.status === 'pending' ? -1 : 0)),
-    [proposalsQ.data],
-  );
+  // 待审优先排序已下推服务端（SQL CASE WHEN status='pending'），此处不再客户端排
+  const proposals = proposalsQ.data?.items ?? [];
   const currentText = useMemo(() => {
     if (!detail) return '';
     const key = detail.kind === 'skill_revision' ? `skill.${detail.target}` : detail.target;
@@ -180,11 +211,11 @@ export default function SolidifySection() {
         </div>
         {/* 批次历史：最新在前；running 转终态由轮询+invalidate 收口 */}
         <div className="flex flex-col gap-1">
-          {(batchesQ.data ?? []).length === 0 ? (
+          {(batchesQ.data?.items ?? []).length === 0 ? (
             <div className="px-2 py-1 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
               {t('settings:solidifyBatchEmpty')}
             </div>
-          ) : (batchesQ.data ?? []).slice(0, 5).map((b) => {
+          ) : (batchesQ.data?.items ?? []).map((b) => {
             const s = batchSummary(b.inputSummary);
             const text = b.error
               ?? (s
@@ -202,6 +233,17 @@ export default function SolidifySection() {
               </div>
             );
           })}
+          {(batchesQ.data?.total ?? 0) > 0 && (
+            <div className="hairline-top" style={{ borderColor: 'var(--border)' }}>
+              <Pagination
+                page={batchPage}
+                pageSize={batchPageSize}
+                total={batchesQ.data?.total ?? 0}
+                onPageChange={setBatchPage}
+                onPageSizeChange={(size) => { setBatchPageSize(size); setBatchPage(1); }}
+              />
+            </div>
+          )}
         </div>
         {/* 提案列表 */}
         {proposalsQ.isLoading ? (
@@ -228,6 +270,17 @@ export default function SolidifySection() {
             </span>
           </button>
         ))}
+        {(proposalsQ.data?.total ?? 0) > 0 && (
+          <div className="hairline-top" style={{ borderColor: 'var(--border)' }}>
+            <Pagination
+              page={propPage}
+              pageSize={propPageSize}
+              total={proposalsQ.data?.total ?? 0}
+              onPageChange={setPropPage}
+              onPageSizeChange={(size) => { setPropPageSize(size); setPropPage(1); }}
+            />
+          </div>
+        )}
       </div>
 
       {/* 提案详情：diff 双栏 + 来源退役勾选 + 批准/驳回 */}

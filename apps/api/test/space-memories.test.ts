@@ -208,12 +208,74 @@ describe('R1 memories：管理路由', () => {
       [randomUUID(), line1, randomUUID(), randomUUID(), line2]);
     const res = await request(managerApp).get('/api/assistant/memories');
     expect(res.status).toBe(200);
-    const titles = (res.body as Array<{ title: string; productLineName: string | null }>).map((r) => r.title);
+    const titles = (res.body.items as Array<{ title: string; productLineName: string | null }>).map((r) => r.title);
     expect(titles).toContain('本线记忆');
     expect(titles).toContain('全局记忆');
     expect(titles).not.toContain('他组织线记忆');
-    const mine = (res.body as Array<{ title: string; productLineName: string | null }>).find((r) => r.title === '本线记忆');
+    const mine = (res.body.items as Array<{ title: string; productLineName: string | null }>).find((r) => r.title === '本线记忆');
     expect(mine!.productLineName).toBeTruthy();
+  });
+
+  it('GET：分页（page/limit/total）+ scope 筛选 + 不可见线过滤', async () => {
+    const org1 = await seedOrg(pool);
+    const line1 = await seedProductLineInOrg(pool, org1.orgId, `本线-${randomUUID().slice(0, 8)}`);
+    const org2Id = randomUUID();
+    await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1,$2,$3)`, [org2Id, `他组织-${org2Id.slice(0, 8)}`, `/${org2Id}/`]);
+    const line2 = await seedProductLineInOrg(pool, org2Id, `他线-${randomUUID().slice(0, 8)}`);
+    // 5 条本线记忆 + 1 条全局 + 1 条他组织线
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const id = randomUUID();
+      ids.push(id);
+      await pool.query(
+        `INSERT INTO assistant_memories (id, scope, product_line_id, title, hook, provenance) VALUES ($1,'product_line',$2,$3,'h','user_stated')`,
+        [id, line1, `本线-${i}`],
+      );
+    }
+    await pool.query(`INSERT INTO assistant_memories (id, scope, title, hook, provenance) VALUES ($1,'global','全局记忆','h','user_stated')`, [randomUUID()]);
+    await pool.query(
+      `INSERT INTO assistant_memories (id, scope, product_line_id, title, hook, provenance) VALUES ($1,'product_line',$2,'他组织线记忆','h','user_stated')`,
+      [randomUUID(), line2],
+    );
+
+    const p1 = await request(managerApp).get('/api/assistant/memories?page=1&limit=2').expect(200);
+    expect(p1.body.items).toHaveLength(2);
+    expect(p1.body.total).toBe(6); // 5 本线 + 1 全局；他组织线不可见，不计入
+    expect(p1.body.page).toBe(1);
+    expect(p1.body.limit).toBe(2);
+
+    const p3 = await request(managerApp).get('/api/assistant/memories?page=3&limit=2').expect(200);
+    expect(p3.body.items).toHaveLength(2); // 6 行 / 每页 2 → 第 3 页满页
+    const p4 = await request(managerApp).get('/api/assistant/memories?page=4&limit=2').expect(200);
+    expect(p4.body.items).toHaveLength(0);
+
+    // 跨页不重不漏：把三页的 id 拼起来 = 全部可见 id
+    const seen = new Set<string>();
+    for (const p of [1, 2, 3]) {
+      const r = await request(managerApp).get(`/api/assistant/memories?page=${p}&limit=2`).expect(200);
+      for (const it of r.body.items as Array<{ id: string }>) seen.add(it.id);
+    }
+    expect(seen.size).toBe(6);
+    expect(seen.has(ids[0]!)).toBe(true);
+
+    // scope=global 只回全局行
+    const g = await request(managerApp).get('/api/assistant/memories?scope=global').expect(200);
+    expect(g.body.total).toBe(1);
+    expect(g.body.items[0].title).toBe('全局记忆');
+
+    // 筛某条可见线 → 只回该线
+    const one = await request(managerApp).get(`/api/assistant/memories?productLineId=${line1}`).expect(200);
+    expect(one.body.total).toBe(5);
+
+    // 筛不可见线 → 空（可见性在 SQL 里过滤，不是查完再 JS filter）
+    const other = await request(managerApp).get(`/api/assistant/memories?productLineId=${line2}`).expect(200);
+    expect(other.body.total).toBe(0);
+    expect(other.body.items).toHaveLength(0);
+
+    // 非法分页参数被钳制（不 500、不 OFFSET 负数）
+    const bad = await request(managerApp).get('/api/assistant/memories?page=0&limit=-5').expect(200);
+    expect(bad.body.page).toBe(1);
+    expect(bad.body.limit).toBe(1);
   });
 
   it('DELETE：软删（行保留 status=deleted），loadActiveMemories 不再返回；member 403', async () => {
@@ -235,6 +297,6 @@ describe('R1 memories：管理路由', () => {
     await pool.query(`INSERT INTO assistant_memories (id, scope, title, hook, provenance, status) VALUES ($1,'global','已删','h','user_stated','deleted')`, [randomUUID()]);
     const res = await request(managerApp).get('/api/assistant/memories?status=deleted');
     expect(res.status).toBe(200);
-    expect((res.body as Array<{ title: string }>).some((r) => r.title === '已删')).toBe(true);
+    expect((res.body.items as Array<{ title: string }>).some((r) => r.title === '已删')).toBe(true);
   });
 });

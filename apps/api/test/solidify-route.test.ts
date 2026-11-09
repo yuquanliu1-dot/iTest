@@ -99,26 +99,74 @@ describe('solidify 路由', () => {
     await request(app).post('/api/assistant/solidify/scan').expect(409);
   });
 
-  it('GET /batches：批次历史（含 error）', async () => {
+  it('GET /batches：批次历史（含 error）+ 分页 + status 过滤', async () => {
     const app = await mount('manager');
     await pool.query(`INSERT INTO assistant_solidify_batches (status, input_summary) VALUES ('done', '{}')`);
     const res = await request(app).get('/api/assistant/solidify/batches').expect(200);
-    expect(res.body.length).toBeGreaterThanOrEqual(1);
-    expect(res.body[0].status).toBeTruthy();
+    expect(res.body.items.length).toBeGreaterThanOrEqual(1);
+    expect(res.body.items[0].status).toBeTruthy();
+    expect(res.body.total).toBeGreaterThanOrEqual(1);
+    expect(res.body.page).toBe(1);
+    expect(res.body.limit).toBe(20);
+
+    // 分页：3 条 running → limit=2 时 page1 两页、page2 一条，跨页不重不漏
+    for (let i = 0; i < 3; i++) {
+      await pool.query(`INSERT INTO assistant_solidify_batches (status, input_summary) VALUES ('running', '{}')`);
+    }
+    const p1 = await request(app).get('/api/assistant/solidify/batches?page=1&limit=2').expect(200);
+    expect(p1.body.items).toHaveLength(2);
+    expect(p1.body.total).toBe(4);
+    const p2 = await request(app).get('/api/assistant/solidify/batches?page=2&limit=2').expect(200);
+    expect(p2.body.items).toHaveLength(2);
+    const p3 = await request(app).get('/api/assistant/solidify/batches?page=3&limit=2').expect(200);
+    expect(p3.body.items).toHaveLength(0);
+
+    // status 过滤（前端「扫描中」检测走这个）
+    const running = await request(app).get('/api/assistant/solidify/batches?status=running&limit=1').expect(200);
+    expect(running.body.total).toBe(3);
+    expect(running.body.items).toHaveLength(1);
+    expect(running.body.items[0].status).toBe('running');
   });
 
   it('GET /proposals：batchId/status 过滤；GET /proposals/:id 详情含 sources', async () => {
     const app = await mount('manager');
     const { id, batchId } = await seedPendingProposal();
     const all = await request(app).get('/api/assistant/solidify/proposals').expect(200);
-    expect(all.body.length).toBe(1);
+    expect(all.body.items).toHaveLength(1);
+    expect(all.body.total).toBe(1);
     const byBatch = await request(app).get(`/api/assistant/solidify/proposals?batchId=${batchId}`).expect(200);
-    expect(byBatch.body.length).toBe(1);
+    expect(byBatch.body.items).toHaveLength(1);
     const byStatus = await request(app).get('/api/assistant/solidify/proposals?status=rejected').expect(200);
-    expect(byStatus.body.length).toBe(0);
+    expect(byStatus.body.items).toHaveLength(0);
+    expect(byStatus.body.total).toBe(0);
     const detail = await request(app).get(`/api/assistant/solidify/proposals/${id}`).expect(200);
     expect(detail.body.sources[0].type).toBe('memory');
     await request(app).get(`/api/assistant/solidify/proposals/${randomUUID()}`).expect(404);
+  });
+
+  it('GET /proposals：分页 + 待审优先排序（pending 排在已审之前）', async () => {
+    const app = await mount('manager');
+    // 造 3 条：1 条已驳回 + 2 条待审（待审更早创建，仍须排在前面）
+    const batchId = (await pool.query(`INSERT INTO assistant_solidify_batches (status) VALUES ('done') RETURNING id`)).rows[0]!.id as string;
+    const insert = async (title: string, status: string) => {
+      await pool.query(
+        `INSERT INTO assistant_solidify_proposals (batch_id, kind, target, title, body, rationale, sources, distill_model, status, created_at)
+         VALUES ($1, 'prompt_amendment', 'space.style.zh', $2, 'b', 'r', '[]'::jsonb, 'm', $3, now())`,
+        [batchId, title, status],
+      );
+    };
+    await insert('已驳回', 'rejected');
+    await insert('待审-1', 'pending');
+    await insert('待审-2', 'pending');
+
+    const p1 = await request(app).get('/api/assistant/solidify/proposals?page=1&limit=2').expect(200);
+    expect(p1.body.total).toBe(3);
+    expect(p1.body.items).toHaveLength(2);
+    expect(p1.body.items[0].status).toBe('pending');
+    expect(p1.body.items[1].status).toBe('pending');
+    const p2 = await request(app).get('/api/assistant/solidify/proposals?page=2&limit=2').expect(200);
+    expect(p2.body.items).toHaveLength(1);
+    expect(p2.body.items[0].status).toBe('rejected');
   });
 
   it('POST /proposals/:id/approve：默认不退役；retireIds 退役来源', async () => {

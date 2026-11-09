@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { localizeApiError } from '../../i18n';
@@ -8,16 +8,37 @@ import Icon from '../Icon';
 import Button from '../ui/Button';
 import IconButton from '../ui/IconButton';
 import EmptyState from '../ui/EmptyState';
+import Pagination from '../ui/Pagination';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 
-/** 设置页「助手记忆」：只读列表 + 软删（写入唯一入口是助手的 save_memory 工具）。 */
+const PAGE_SIZE = 20;
+
+/** 设置页「助手记忆」：只读列表 + 软删（写入唯一入口是助手的 save_memory 工具）。服务端分页。 */
 export default function MemoriesSection() {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
   const qc = useQueryClient();
-  // 默认只看 active：软删/退役即从界面消失（与注入、工具读路径同口径）；审计走 API status 参数。
-  const listQ = useQuery({ queryKey: ['assistant-memories'], queryFn: () => api.assistant.memories.list({ status: 'active' }) });
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const [lineFilter, setLineFilter] = useState('all');
+  // 产品线下拉的候选来自产品线表（不能从已加载行推——分页后只剩当页的线）。
+  const linesQ = useQuery({ queryKey: ['productLines'], queryFn: () => api.productLines.list(), staleTime: 60_000 });
+  const lineOptions = useMemo(() => (linesQ.data ?? []).map((l) => [l.id, l.name] as const), [linesQ.data]);
+  // 筛选的线被删空后 lineId 失配——钳回 all，避免 select 悬空+假「暂无记忆」。
+  const effectiveFilter = lineFilter !== 'all' && lineFilter !== 'global' && !lineOptions.some(([id]) => id === lineFilter)
+    ? 'all'
+    : lineFilter;
+  // 默认只看 active：软删/退役即从界面消失（与注入、工具读路径同口径）；审计走 API status 参数。
+  // 筛选下推服务端（scope / productLineId），总量与列表同口径。
+  const listQ = useQuery({
+    queryKey: ['assistant-memories', page, pageSize, effectiveFilter],
+    queryFn: () => api.assistant.memories.list({
+      status: 'active',
+      page,
+      limit: pageSize,
+      ...(effectiveFilter === 'global' ? { scope: 'global' as const } : effectiveFilter === 'all' ? {} : { productLineId: effectiveFilter }),
+    }),
+  });
   const [detailing, setDetailing] = useState<AssistantMemory | null>(null);
   const [deleting, setDeleting] = useState<AssistantMemory | null>(null);
 
@@ -31,21 +52,14 @@ export default function MemoriesSection() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  const rows = listQ.data ?? [];
-  const lineOptions = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const r of rows) if (r.scope === 'product_line' && r.productLineId) m.set(r.productLineId, r.productLineName ?? r.productLineId);
-    return Array.from(m.entries());
-  }, [rows]);
-  // 筛选的线被删空后 lineId 失配——钳回 all，避免 select 悬空+假「暂无记忆」。
-  const effectiveFilter = lineFilter !== 'all' && lineFilter !== 'global' && !lineOptions.some(([id]) => id === lineFilter)
-    ? 'all'
-    : lineFilter;
-  const filtered = effectiveFilter === 'all'
-    ? rows
-    : effectiveFilter === 'global'
-      ? rows.filter((r) => r.scope === 'global')
-      : rows.filter((r) => r.productLineId === effectiveFilter);
+  const rows = listQ.data?.items ?? [];
+  const total = listQ.data?.total ?? 0;
+  // 删除/筛选后当前页可能已越界——钳回最后一页（数据到达后才判，避免翻页途中误钳）。
+  useEffect(() => {
+    if (!listQ.data) return;
+    const totalPages = Math.max(1, Math.ceil(listQ.data.total / pageSize));
+    if (page > totalPages) setPage(totalPages);
+  }, [listQ.data, page, pageSize]);
 
   return (
     <div className="bg-card border rounded-[var(--radius-sm)]">
@@ -59,7 +73,7 @@ export default function MemoriesSection() {
           style={{ width: 'auto', fontSize: 12 }}
           aria-label={t('settings:memoryFilterAll')}
           value={effectiveFilter}
-          onChange={(e) => setLineFilter(e.target.value)}
+          onChange={(e) => { setLineFilter(e.target.value); setPage(1); }}
         >
           <option value="all">{t('settings:memoryFilterAll')}</option>
           <option value="global">{t('settings:memoryScopeGlobal')}</option>
@@ -75,10 +89,10 @@ export default function MemoriesSection() {
             <Icon name="loader" size={14} className="animate-spin" />
             {t('common:loading')}
           </div>
-        ) : filtered.length === 0 ? (
+        ) : rows.length === 0 ? (
           <EmptyState icon="bookOpen" title={t('settings:memoryNone')} compact />
         ) : (
-          filtered.map((m) => (
+          rows.map((m) => (
             <div key={m.id} className="flex items-center gap-3 px-2 py-2">
               <div
                 className="flex flex-col min-w-0 flex-1 cursor-pointer text-left"
@@ -105,6 +119,17 @@ export default function MemoriesSection() {
           ))
         )}
       </div>
+      {total > 0 && (
+        <div className="hairline-top" style={{ borderColor: 'var(--border)' }}>
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+          />
+        </div>
+      )}
 
       <Dialog open={!!detailing} onOpenChange={(open) => { if (!open) setDetailing(null); }}>
         <DialogContent>
