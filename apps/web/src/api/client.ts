@@ -195,6 +195,29 @@ export const api = {
         body: JSON.stringify({ planRunIds: ids }),
       }),
   },
+  explorations: {
+    list: (params: { versionId?: string; projectId?: string; page?: number; limit?: number }) =>
+      request<Paged<ExplorationSession>>(`/explorations${qs(params)}`),
+    create: (body: { versionId: string; charter: string; persona?: string; title?: string; startUrl?: string }) =>
+      request<ExplorationSession>('/explorations', { method: 'POST', body: JSON.stringify(body) }),
+    get: (id: string) => request<ExplorationSession>(`/explorations/${id}`),
+    cancel: (id: string) => request<{ ok: boolean }>(`/explorations/${id}/cancel`, { method: 'POST' }),
+    remove: (id: string) => request<{ ok: boolean }>(`/explorations/${id}`, { method: 'DELETE' }),
+    review: (sessionId: string, findingId: string, decision: 'confirmed' | 'dismissed') =>
+      request<ExplorationFinding>(`/explorations/${sessionId}/findings/${findingId}/review`, {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+      }),
+    promote: (sessionId: string, findingId: string, body: { groupId: string; title?: string; priority?: string }) =>
+      request<{ caseId: string; findingId: string }>(`/explorations/${sessionId}/findings/${findingId}/promote`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    liveUrl: (id: string) => `${BASE}/explorations/${id}/live`,
+    replayUrl: (id: string, speed?: number) =>
+      speed && speed !== 1 ? `${BASE}/explorations/${id}/live?replay=1&speed=${speed}` : `${BASE}/explorations/${id}/live?replay=1`,
+    replayMetaUrl: (id: string) => `${BASE}/explorations/${id}/live?replay=meta`,
+  },
   planSchedules: {
     list: (planId: string) => request<PlanSchedule[]>(`/plans/${planId}/schedules`),
     create: (planId: string, body: PlanScheduleCreateInput) =>
@@ -1117,6 +1140,57 @@ export interface PlanRunDetail {
   }>;
   /** 触发人（=计划运行的执行人）。 */
   triggeredBy?: Creator | null;
+}
+
+/** 探索会话状态机：pending → running → completed | failed | cancelled。 */
+export type ExplorationStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+/** finding 审阅状态机：pending → confirmed | dismissed；confirmed → promoted。 */
+export type ExplorationFindingStatus = 'pending' | 'confirmed' | 'dismissed' | 'promoted';
+
+export interface ExplorationSession {
+  id: string;
+  projectId: string;
+  versionId: string;
+  title: string;
+  charter: string;
+  /** 人格 key（qa/novice/power/accessibility），单一真源在 @itest/shared。 */
+  persona: string;
+  startUrl: string | null;
+  status: ExplorationStatus;
+  cancelRequested: boolean;
+  summary: string | null;
+  error: string | null;
+  turnsUsed: number;
+  usage: { calls?: number; promptTokens?: number; completionTokens?: number; durationMs?: number; model?: string } | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: Creator | null;
+  /** 详情接口才带（列表接口不带）。 */
+  findings?: ExplorationFinding[];
+}
+
+export interface ExplorationFinding {
+  id: string;
+  sessionId: string;
+  order: number;
+  title: string;
+  description: string;
+  /** 复用用例优先级词表 P0-P3。 */
+  severity: 'P0' | 'P1' | 'P2' | 'P3';
+  /** 模型给的复现步骤（可能脑补）；为空时后端用 actionsTrail 文本化兜底。 */
+  reproSteps: Array<{ action: string; expected?: string }>;
+  /** 平台记录的实际动作留痕（ground truth）。 */
+  actionsTrail: Array<{ type: string; target: string; ok: boolean }> | null;
+  /** /screenshots/<sessionId>/finding-<order>.png（express.static 提供）。 */
+  screenshotPath: string | null;
+  pageUrl: string | null;
+  status: ExplorationFindingStatus;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  promotedCaseId: string | null;
+  createdAt: string;
 }
 export interface PlanSchedule {
   id: string;

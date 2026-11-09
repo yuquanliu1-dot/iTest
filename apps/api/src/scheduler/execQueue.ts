@@ -12,7 +12,8 @@ export type ExecJob =
   | { kind: 'case'; caseId: string; preseed: Array<{ reportId: string; rowIndex: number | null }>;
       /** 预检时冻结的数据集行下标集合（启用行下标）。worker 按它过滤，保证与 preseed 行集一致。 */
       datasetRowIndexes?: number[]; createdByUserId?: string | null }
-  | { kind: 'solidify'; batchId: string; caseId: string };
+  | { kind: 'solidify'; batchId: string; caseId: string }
+  | { kind: 'exploration'; sessionId: string };
 
 let _queue: Queue<ExecJob> | null = null;
 

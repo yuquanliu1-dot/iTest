@@ -64,9 +64,10 @@ const CREDENTIAL_RULE = `- 凭据（用户名/密码）：fill 的 value 用字�
  *  （2026-10-26 prod228 实测：含凭据段时 AI 会主动 fill __ITEST_USERNAME@web__；不含则只填字面量）。
  *  mobile 版不拼凭据段（移动端无 web 凭据语义）。
  */
-export function assembleSystemPrompt(opts: { mobile?: boolean; credEnabled: boolean; manifest: string }): string {
+export function assembleSystemPrompt(opts: { mobile?: boolean; credEnabled: boolean; manifest: string; base?: string }): string {
   if (opts.mobile) return MOBILE_SYSTEM_PROMPT;
-  const base = SYSTEM_PROMPT_BASE;
+  // base 覆盖点：探索式会话传探索提示词（执行忠实规则对探索是错误模式）；凭据段拼装逻辑不变。
+  const base = opts.base ?? SYSTEM_PROMPT_BASE;
   if (!opts.credEnabled) return base;
   const manifest = opts.manifest.trim();
   const credentialHint = manifest
@@ -164,7 +165,6 @@ async function dumpElements(page: Page): Promise<ElementInfo[]> {
     const out: Array<Record<string, unknown>> = [];
     const vw = window.innerWidth || 1;
     const vh = window.innerHeight || 1;
-    const norm = (v: number, size: number): number => Math.round(Math.min(1000, Math.max(0, (v / size) * 1000)));
     const els = document.querySelectorAll(
       'button, input, textarea, select, a[href], [role="button"], [role="link"], [role="textbox"], [role="combobox"], [tabindex]:not([tabindex="-1"])',
     );
@@ -194,7 +194,15 @@ async function dumpElements(page: Page): Promise<ElementInfo[]> {
       const item: Record<string, unknown> = {
         selector: s.selector,
         tag: he.tagName.toLowerCase(),
-        box: [norm(r.left, vw), norm(r.top, vh), norm(r.right, vw), norm(r.bottom, vh)],
+        // 归一化不用具名箭头函数赋值：tsx/esbuild 的 keepNames 会给它注入 __name 助手，
+        // 而 evaluate 的函数体被序列化到浏览器上下文执行，那里没有 __name → 整个
+        // evaluate 抛 ReferenceError，元素清单整体失效（dev/tsx 独有，tsc 产物无此注入）。
+        box: [
+          Math.round(Math.min(1000, Math.max(0, (r.left / vw) * 1000))),
+          Math.round(Math.min(1000, Math.max(0, (r.top / vh) * 1000))),
+          Math.round(Math.min(1000, Math.max(0, (r.right / vw) * 1000))),
+          Math.round(Math.min(1000, Math.max(0, (r.bottom / vh) * 1000))),
+        ],
       };
       if (text) item.text = text;
       const ph = he.getAttribute('placeholder');
@@ -966,6 +974,13 @@ export interface RunAiTaskOpts {
   degradeContext?: string;
   /** 终止检查点（计划运行取消）：每轮对话开始前轮询，命中即抛错中断 AI 步骤。 */
   shouldAbort?: () => boolean | Promise<boolean>;
+  /** 系统提示词基底覆盖：探索式会话传探索提示词（执行提示词的「忠实/不加戏」规则对探索是错误模式）。
+   *  只换基底，凭据段/资源清单拼装逻辑不变。 */
+  systemPromptBase?: string;
+  /** 模型当轮输出 findings 数组时的回调（探索式会话收集缺陷候选）。
+   *  调用时机 = fail 检查之后、本轮动作解析执行之前；await 语义——回调内可截当前页截图，
+   *  取到的是模型作证时的页面状态（动作尚未改变页面）。 */
+  onFindings?: (raw: unknown[]) => Promise<void>;
 }
 
 /**
@@ -990,7 +1005,7 @@ export async function runAiTask(
   // AI 看不到占位符形态，就不会拿凭据去重填账号/密码框（2026-10-26 prod228 实测：
   // 含凭据段时 AI 会主动 fill __ITEST_USERNAME@web__，不含则只填字面量）。
   const credEnabled = !!opts?.valueSub;
-  const systemPrompt = assembleSystemPrompt({ mobile, credEnabled, manifest });
+  const systemPrompt = assembleSystemPrompt({ mobile, credEnabled, manifest, base: opts?.systemPromptBase });
   // 凭据替换留痕：只记次数、不记真值（真值绝不回显给 LLM/日志）。
   let credSubCount = 0;
   const valueSub = opts?.valueSub
@@ -1094,6 +1109,10 @@ export async function runAiTask(
     }
     if (typeof parsed.fail === 'string' && parsed.fail.trim()) {
       throw new Error(`aiTask 放弃：${parsed.fail.trim()}`);
+    }
+    // 探索式会话：模型本轮报告的缺陷候选。在动作执行前回调——回调内截图取的是作证时的页面状态。
+    if (opts?.onFindings && Array.isArray(parsed.findings) && parsed.findings.length > 0) {
+      await opts.onFindings(parsed.findings);
     }
     // 子目标清单整段替换（done 响应里的最终状态也先落到 subGoals 再结算进度）
     const planNow = parseSubGoals(parsed.plan);

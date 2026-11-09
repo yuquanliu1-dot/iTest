@@ -52,11 +52,14 @@ async function processExecJob(data: ExecJob): Promise<void> {
     } else if (data.kind === 'solidify') {
       const { runSolidifyBatchCaseJob } = await import('../execute/batchSolidify.js');
       await runSolidifyBatchCaseJob({ batchId: data.batchId, caseId: data.caseId });
+    } else if (data.kind === 'exploration') {
+      const { runExplorationSession } = await import('../execute/exploration.js');
+      await runExplorationSession({ sessionId: data.sessionId });
     } else {
       await runCaseJob({ caseId: data.caseId, preseed: data.preseed, datasetRowIndexes: data.datasetRowIndexes, createdByUserId: data.createdByUserId });
     }
   } catch (e) {
-    logger.error({ err: e, kind: data.kind, runId: 'planRunId' in data ? data.planRunId : data.caseId }, 'exec job crashed');
+    logger.error({ err: e, kind: data.kind }, 'exec job crashed');
   }
 }
 

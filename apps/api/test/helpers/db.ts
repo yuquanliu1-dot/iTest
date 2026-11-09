@@ -229,6 +229,12 @@ CREATE INDEX assistant_failure_signals_created_idx ON assistant_failure_signals(
 CREATE TABLE assistant_failure_lessons (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), status varchar(16) NOT NULL DEFAULT 'active', attribution varchar(20) NOT NULL, title varchar(200) NOT NULL, lesson text NOT NULL, signals jsonb NOT NULL, resolved_by_proposal uuid, distill_model varchar(64) NOT NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 CREATE INDEX assistant_failure_lessons_status_idx ON assistant_failure_lessons(status, created_at);
 ALTER TABLE assistant_solidify_proposals ADD COLUMN base_seq integer;
+-- 探索式测试会话（探索产物 + 缺陷候选）
+CREATE TABLE exploration_sessions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid REFERENCES projects(id) ON DELETE CASCADE NOT NULL, version_id uuid REFERENCES project_versions(id) ON DELETE CASCADE NOT NULL, title varchar(200) NOT NULL, charter text NOT NULL, persona varchar(32) NOT NULL DEFAULT 'qa', start_url text, status varchar(20) NOT NULL DEFAULT 'pending', cancel_requested boolean NOT NULL DEFAULT false, summary text, error text, turns_used integer NOT NULL DEFAULT 0, usage jsonb, env_id uuid, started_at timestamp, finished_at timestamp, created_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
+CREATE INDEX exploration_sessions_project_idx ON exploration_sessions(project_id, created_at);
+CREATE INDEX exploration_sessions_version_idx ON exploration_sessions(version_id);
+CREATE TABLE exploration_findings (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), session_id uuid REFERENCES exploration_sessions(id) ON DELETE CASCADE NOT NULL, "order" integer NOT NULL, title varchar(200) NOT NULL, description text NOT NULL, severity varchar(8) NOT NULL DEFAULT 'P2', repro_steps jsonb NOT NULL DEFAULT '[]', actions_trail jsonb, screenshot_path text, page_url text, status varchar(16) NOT NULL DEFAULT 'pending', reviewed_by uuid REFERENCES users(id) ON DELETE SET NULL, reviewed_at timestamp, promoted_case_id uuid, created_at timestamp NOT NULL DEFAULT now());
+CREATE INDEX exploration_findings_session_idx ON exploration_findings(session_id, status);
 `;
 
 export interface SeedOrg {

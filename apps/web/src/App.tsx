@@ -20,6 +20,8 @@ import CaseDetail from './pages/CaseDetail';
 import Plans from './pages/Plans';
 import PlanDetail from './pages/PlanDetail';
 import PlanRunDetail from './pages/PlanRunDetail';
+import Explorations from './pages/Explorations';
+import ExplorationDetail from './pages/ExplorationDetail';
 import Executions from './pages/Reports';
 import ReportDetail from './pages/ReportDetail';
 import MembersPage from './pages/MembersPage';
@@ -71,6 +73,8 @@ export default function App() {
             <Route path="plans/:id/runs/:runId" element={<PlanRunDetail />} />
             <Route path="reports" element={<Executions />} />
             <Route path="reports/:id" element={<ReportDetail />} />
+            <Route path="explorations" element={<Explorations />} />
+            <Route path="explorations/:id" element={<ExplorationDetail />} />
           </Route>
           {/* 旧路径兼容：未带版本号 → 回首页选项目 */}
           <Route index element={<Navigate to="/" replace />} />

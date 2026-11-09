@@ -37,14 +37,16 @@ import zhErrors from './locales/zh-CN/errors.json';
 import enErrors from './locales/en-US/errors.json';
 import zhLanding from './locales/zh-CN/landing.json';
 import enLanding from './locales/en-US/landing.json';
+import zhExplorations from './locales/zh-CN/explorations.json';
+import enExplorations from './locales/en-US/explorations.json';
 
 export type Lang = 'zh-CN' | 'en-US';
 
 export const LANG_STORAGE_KEY = 'itest-lang';
 
 const resources = {
-  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, productLines: zhProductLines, members: zhMembers, cases: zhCases, groups: zhGroups, plans: zhPlans, reports: zhReports, overview: zhOverview, assistant: zhAssistant, environments: zhEnvironments, datasets: zhDatasets, device: zhDevice, mobile: zhMobile, errors: zhErrors, landing: zhLanding },
-  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, productLines: enProductLines, members: enMembers, cases: enCases, groups: enGroups, plans: enPlans, reports: enReports, overview: enOverview, assistant: enAssistant, environments: enEnvironments, datasets: enDatasets, device: enDevice, mobile: enMobile, errors: enErrors, landing: enLanding },
+  'zh-CN': { common: zhCommon, auth: zhAuth, settings: zhSettings, projects: zhProjects, productLines: zhProductLines, members: zhMembers, cases: zhCases, groups: zhGroups, plans: zhPlans, reports: zhReports, overview: zhOverview, assistant: zhAssistant, environments: zhEnvironments, datasets: zhDatasets, device: zhDevice, mobile: zhMobile, errors: zhErrors, landing: zhLanding, explorations: zhExplorations },
+  'en-US': { common: enCommon, auth: enAuth, settings: enSettings, projects: enProjects, productLines: enProductLines, members: enMembers, cases: enCases, groups: enGroups, plans: enPlans, reports: enReports, overview: enOverview, assistant: enAssistant, environments: enEnvironments, datasets: enDatasets, device: enDevice, mobile: enMobile, errors: enErrors, landing: enLanding, explorations: enExplorations },
 };
 
 void i18n.use(initReactI18next).init({

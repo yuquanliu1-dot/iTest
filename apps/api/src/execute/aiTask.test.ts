@@ -39,6 +39,28 @@ describe('assembleSystemPrompt - 凭据段门控', () => {
     expect(p).not.toContain('凭据');
   });
 
+  it('base 覆盖 → 换基底但保留凭据段拼装（探索式会话路径）', () => {
+    const p = assembleSystemPrompt({
+      credEnabled: true,
+      manifest: '- web（默认） https://x 已配置凭据',
+      base: '你是探索型测试员。',
+    });
+    expect(p.startsWith('你是探索型测试员。')).toBe(true);
+    expect(p).not.toContain('指令忠实');
+    expect(p).toContain('ITEST_');
+    expect(p).toContain('@服务名');
+  });
+
+  it('base 覆盖 + credEnabled=false → 纯基底无凭据段', () => {
+    const p = assembleSystemPrompt({ credEnabled: false, manifest: '', base: '你是探索型测试员。' });
+    expect(p).toBe('你是探索型测试员。');
+  });
+
+  it('不传 base → 行为不变（执行提示词）', () => {
+    const p = assembleSystemPrompt({ credEnabled: false, manifest: '' });
+    expect(p).toContain('指令忠实');
+  });
+
   it('数据忠实守则恒在（负向用例不被 AI 改写表单值）', () => {
     const p = assembleSystemPrompt({ credEnabled: false, manifest: '' });
     expect(p).toContain('数据忠实');

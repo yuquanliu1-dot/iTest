@@ -4,3 +4,4 @@ export { evaluateGenerator, materializeValue, randomInt, randomString, deepEqual
 export * from './variable.js';
 export * from './playback.js';
 export * from './db-dialect.js';
+export * from './exploration.js';

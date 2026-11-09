@@ -1104,3 +1104,64 @@ export const solidifyBatchCases = pgTable('solidify_batch_cases', {
   batchIdx: index('solidify_batch_cases_batch_idx').on(t.batchId),
   caseIdx: index('solidify_batch_cases_case_idx').on(t.caseId),
 }));
+
+// ── 探索式测试会话（charter 驱动的 AI 找茬，产出 findings 缺陷候选）──
+// 与用例执行（reports）不同：会话不绑定 case/步骤，产物是"发现"而非 pass/fail。
+// 确认后的 finding 经 promote 升格为用例草稿（test_cases），会话本身是一次性审计产物。
+export const explorationSessions = pgTable('exploration_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  // projectId 冗余列 = plan_runs 同款：列表/鉴权直查，免 groups→cases join 链。
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  // cascade（非 restrict）：会话是探索产物非核心资产，不阻塞版本删除（判据同 ai_threads）。
+  versionId: uuid('version_id').notNull().references(() => projectVersions.id, { onDelete: 'cascade' }),
+  title: varchar('title', { length: 200 }).notNull(),
+  charter: text('charter').notNull(),
+  persona: varchar('persona', { length: 32 }).notNull().default('qa'),
+  startUrl: text('start_url'),
+  /** pending → running → completed | failed | cancelled */
+  status: varchar('status', { length: 20 }).notNull().default('pending'),
+  /** 取消通道：纯 DB 列跨副本天然正确，worker 每轮轮询一次；终态后置位无效果（幂等）。 */
+  cancelRequested: boolean('cancel_requested').notNull().default(false),
+  summary: text('summary'),
+  error: text('error'),
+  turnsUsed: integer('turns_used').notNull().default(0),
+  /** LLM 用量累计（calls/promptTokens/completionTokens/durationMs/model），onUsage 累加。 */
+  usage: jsonb('usage'),
+  /** 运行时环境快照 id。裸 uuid 无 FK：删环境不应牵连历史探索记录（审计惯例）。 */
+  envId: uuid('env_id'),
+  startedAt: timestamp('started_at'),
+  finishedAt: timestamp('finished_at'),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  projectIdx: index('exploration_sessions_project_idx').on(t.projectId, t.createdAt),
+  versionIdx: index('exploration_sessions_version_idx').on(t.versionId),
+}));
+
+export const explorationFindings = pgTable('exploration_findings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => explorationSessions.id, { onDelete: 'cascade' }),
+  order: integer('order').notNull(),
+  title: varchar('title', { length: 200 }).notNull(),
+  description: text('description').notNull(),
+  /** 复用 test_cases.priority 的 P0-P3 词表，promote 时零转换。 */
+  severity: varchar('severity', { length: 8 }).notNull().default('P2'),
+  /** LLM 给出的复现步骤（可能脑补）；reproSteps 为空时 promote 以 actionsTrail 文本化兜底。 */
+  reproSteps: jsonb('repro_steps').$type<Array<{ action: string; expected?: string }>>().notNull().default([]),
+  /** 平台记录的实际动作留痕（onAction 自上一条 finding 起累积）——动作序列的 ground truth。 */
+  actionsTrail: jsonb('actions_trail').$type<Array<{ type: string; target: string; ok: boolean }>>(),
+  /** web 路径 /screenshots/<sessionId>/finding-<order>.png，由 express.static('/screenshots') 服务。 */
+  screenshotPath: text('screenshot_path'),
+  pageUrl: text('page_url'),
+  /** pending → confirmed | dismissed；confirmed → promoted（写 promotedCaseId）。 */
+  status: varchar('status', { length: 16 }).notNull().default('pending'),
+  /** 审阅三件套 = assistant_solidify_proposals 同款。 */
+  reviewedBy: uuid('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+  reviewedAt: timestamp('reviewed_at'),
+  /** 裸 uuid：用例可删，溯源记录不消失（同 resolved_by_proposal 惯例）。 */
+  promotedCaseId: uuid('promoted_case_id'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  sessionIdx: index('exploration_findings_session_idx').on(t.sessionId, t.status),
+}));

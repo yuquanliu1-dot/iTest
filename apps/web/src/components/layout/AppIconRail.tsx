@@ -38,6 +38,7 @@ const PROJECT_ITEMS: ProjectNavItem[] = [
   { titleKey: 'common:navCases', path: 'groups', icon: 'beaker', related: ['cases', 'ai'] },
   { titleKey: 'common:navPlans', path: 'plans', icon: 'play' },
   { titleKey: 'common:navReports', path: 'reports', icon: 'flag' },
+  { titleKey: 'common:navExplorations', path: 'explorations', icon: 'search' },
 ];
 
 function isActive(item: RailItem, pathname: string): boolean {
