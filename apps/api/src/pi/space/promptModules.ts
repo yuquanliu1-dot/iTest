@@ -12,7 +12,7 @@
  * buildSpaceTools（tools/index.js 的导出，session.ts 并未再导出）→ 动态 import
  * 引用（调用时模块已就绪，不形成静态环；tools/index 也不回引本模块）。
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { and, desc, eq } from 'drizzle-orm';
@@ -125,6 +125,8 @@ export interface PromptModuleVersionRow {
   sourceRef: string | null;
   createdByUserId: string | null;
   createdAt: Date;
+  /** 写入该行时的代码默认基线指纹；null = 旧版本写入，无指纹（drift 检测判 unknown）。 */
+  baseHash: string | null;
 }
 
 /** 当前值索引：全表 seq 降序，首见即当前（表只被人工低频写，量级小）。 */
@@ -169,20 +171,39 @@ export function applyToolTextOverrides(
   }
 }
 
-/** 追加版本行。sourceRef 命中 partial unique（重放）→ 不落行，返回 null。 */
+/** 代码默认基线指纹（sha256 hex）：版本行写入时记录，drift 检测据此判断「覆盖值基于旧基线」。 */
+export function hashBaseline(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/** 追加版本行。sourceRef 命中 partial unique（重放）→ 不落行，返回 null。
+ *  baseHash（写入时的代码基线指纹）：undefined = 未指定 → 自动取当前代码默认指纹
+ *  （manual_edit / solidify_apply / baseline 快照都是「对当前基线重申」语义）；
+ *  显式传 null = 无指纹（如回滚继承的无指纹历史行），不自动补。 */
 export async function insertPromptModuleVersion(row: {
   moduleKey: string;
   value: string | null;
   source: string;
   sourceRef?: string | null;
   createdByUserId?: string | null;
+  baseHash?: string | null;
 }): Promise<number | null> {
+  let baseHash: string | null;
+  if (row.baseHash !== undefined) {
+    baseHash = row.baseHash;
+  } else if (row.value != null) {
+    const def = (await listPromptModuleDefs()).find((d) => d.key === row.moduleKey);
+    baseHash = def ? hashBaseline(await def.defaultValue()) : null;
+  } else {
+    baseHash = null;
+  }
   const r = await db.insert(assistantPromptModuleVersions).values({
     moduleKey: row.moduleKey,
     value: row.value,
     source: row.source,
     ...(row.sourceRef != null ? { sourceRef: row.sourceRef } : {}),
     ...(row.createdByUserId != null ? { createdByUserId: row.createdByUserId } : {}),
+    ...(baseHash != null ? { baseHash } : {}),
   }).onConflictDoNothing().returning({ seq: assistantPromptModuleVersions.seq });
   return r[0]?.seq ?? null;
 }
@@ -216,4 +237,53 @@ export async function readSkillMeta(slug: string): Promise<{ name: string; descr
 export async function writeSkillBodyFromDb(name: string, description: string, body: string): Promise<void> {
   const { writeSkillMd } = await import('./skillsService.js');
   writeSkillMd(skillDirOf(name), name, description, body);
+}
+
+// ── 基线漂移（drift）检测 ──
+// 动机：覆盖行 shadow 代码默认值——代码基线演进后，旧行仍在生效且无人知道
+// （改了代码默认值「发版不生效」的暗坑）。判据 = 行写入时记录的 base_hash ≠ 当前代码默认指纹。
+
+export type PromptDriftStatus = 'drift' | 'unknown';
+
+export interface PromptDrift {
+  key: string;
+  label: string;
+  group: PromptModuleGroup;
+  /** 覆盖行 seq 与写入来源/时间（溯源用）。 */
+  seq: number;
+  source: string;
+  writtenAt: string;
+  status: PromptDriftStatus;
+  /** 行写入时的基线指纹；unknown 状态下为 null。 */
+  baseHash: string | null;
+  currentHash: string;
+}
+
+/** 基线漂移检测：覆盖行（value 非 NULL）的 base_hash ≠ 当前代码默认指纹 → drift；
+ *  无指纹（旧版写入的行）→ unknown（不可判漂移，但不隐藏）。仅 main/tool 组参与——
+ *  skill 行值与磁盘正文由固化管线同步维护，不存在「旧行 shadow 新默认」的语义。
+ *  运营面板消费（设置页告警），不在会话热路径上调用。 */
+export async function computePromptDrifts(defs?: PromptModuleDef[]): Promise<PromptDrift[]> {
+  const list = defs ?? await listPromptModuleDefs();
+  const overrides = await loadPromptModuleOverrides();
+  const out: PromptDrift[] = [];
+  for (const def of list) {
+    if (def.group === 'skill') continue;
+    const row = overrides.get(def.key);
+    if (!row || row.value == null) continue;
+    const currentHash = hashBaseline(await def.defaultValue());
+    if (row.baseHash != null && row.baseHash === currentHash) continue;
+    out.push({
+      key: def.key,
+      label: def.label,
+      group: def.group,
+      seq: row.seq,
+      source: row.source,
+      writtenAt: row.createdAt.toISOString(),
+      status: row.baseHash == null ? 'unknown' : 'drift',
+      baseHash: row.baseHash,
+      currentHash,
+    });
+  }
+  return out;
 }

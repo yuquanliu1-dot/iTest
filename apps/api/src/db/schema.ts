@@ -872,6 +872,10 @@ export const assistantPromptModuleVersions = pgTable('assistant_prompt_module_ve
   value: text('value'),
   source: varchar('source', { length: 20 }).notNull(),
   sourceRef: uuid('source_ref'),
+  // 写入该行时「代码默认基线」的指纹（sha256）：覆盖值基于哪一版基线写的。
+  // 与当前代码默认指纹不等 = 基线已变更、覆盖值未同步（drift 告警的判据）。
+  // NULL = 旧版本写入的行，无指纹 → 状态 unknown（不可判漂移，但不隐藏）。
+  baseHash: text('base_hash'),
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({

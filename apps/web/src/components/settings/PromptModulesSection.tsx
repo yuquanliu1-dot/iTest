@@ -55,6 +55,7 @@ export default function PromptModulesSection() {
   const modules = listQ.data ?? [];
   const versions = versionsQ.data ?? [];
   const picked = versions.find((v) => v.seq === pickedSeq) ?? null;
+  const drifts = modules.filter((m) => m.drift != null);
 
   return (
     <div className="bg-card border rounded-[var(--radius-sm)]">
@@ -67,6 +68,18 @@ export default function PromptModulesSection() {
       <div className="px-4 pt-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
         {t('settings:promptIntro')}
       </div>
+      {drifts.length > 0 && (
+        <div className="mx-4 mt-2 mb-1 px-3 py-2 rounded-[var(--radius-sm)] text-[12px]"
+          style={{ border: '1px solid var(--warning-soft-border)', background: 'var(--warning-soft)', color: 'var(--warning)' }}>
+          <div className="flex items-center gap-2 font-medium">
+            <Icon name="warning" size={13} />
+            {t('settings:promptDriftBanner', { count: drifts.length })}
+          </div>
+          <div className="mt-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+            {t('settings:promptDriftHint')}
+          </div>
+        </div>
+      )}
       <div className="p-2">
         {listQ.isLoading ? (
           <div className="flex items-center gap-2 px-2 py-4 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
@@ -92,6 +105,15 @@ export default function PromptModulesSection() {
                         <span className="text-[10px] px-1.5 py-[1px] rounded shrink-0" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>
                           {sourceBadgeKey(t, m)}
                         </span>
+                        {m.drift && (
+                          <span
+                            className="text-[10px] px-1.5 py-[1px] rounded shrink-0 font-medium"
+                            title={t(m.drift.status === 'unknown' ? 'settings:promptDriftUnknownHint' : 'settings:promptDriftHint')}
+                            style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}
+                          >
+                            {t(m.drift.status === 'unknown' ? 'settings:promptDriftUnknownBadge' : 'settings:promptDriftBadge')}
+                          </span>
+                        )}
                       </div>
                       <span className="text-[11px] truncate" style={{ color: 'var(--muted-foreground)' }}>{m.key}</span>
                     </div>

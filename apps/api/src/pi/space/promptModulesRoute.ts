@@ -10,7 +10,7 @@ import type { AuthUser } from '../../services/auth.service.js';
 import { db } from '../../db/client.js';
 import { assistantPromptModuleVersions } from '../../db/schema.js';
 import {
-  insertPromptModuleVersion, listPromptModuleDefs, loadPromptModuleOverrides,
+  computePromptDrifts, insertPromptModuleVersion, listPromptModuleDefs, loadPromptModuleOverrides,
   readSkillMeta, resolvePromptModule, writeSkillBodyFromDb,
 } from './promptModules.js';
 
@@ -24,6 +24,7 @@ const SetValueBody = z.object({
 router.get('/', async (_req, res) => {
   const defs = await listPromptModuleDefs();
   const overrides = await loadPromptModuleOverrides();
+  const driftByKey = new Map((await computePromptDrifts(defs)).map((d) => [d.key, d]));
   const rows = await Promise.all(defs.map(async (def) => {
     const ov = overrides.get(def.key);
     return {
@@ -37,6 +38,7 @@ router.get('/', async (_req, res) => {
       value: ov?.value ?? null,
       isDefault: ov == null || ov.value == null,
       text: ov?.value ?? await def.defaultValue(),
+      drift: driftByKey.get(def.key) ?? null,
     };
   }));
   res.json(rows);
@@ -60,7 +62,8 @@ router.post('/:key/value', async (req, res) => {
   if (!resolved) throw new HttpError(404, 'module_not_found', '提示词模块不存在');
 
   if (fromSeq != null) {
-    // 回滚 = 复制历史行 value 追加新行（回滚也留痕）
+    // 回滚 = 复制历史行 value 追加新行（回滚也留痕）；base_hash 继承历史行——
+    // 恢复的旧值基于它当初写入时的基线，不能伪装成对当前基线的重申。
     const row = (await db.select().from(assistantPromptModuleVersions)
       .where(and(
         eq(assistantPromptModuleVersions.moduleKey, key),
@@ -73,7 +76,7 @@ router.post('/:key/value', async (req, res) => {
       if (!meta) throw new HttpError(409, 'skill_missing', 'skill 不存在或未启用');
       await writeSkillBodyFromDb(meta.name, meta.description, row.value);
     }
-    const seq = await insertPromptModuleVersion({ moduleKey: key, value: row.value, source: 'rollback', createdByUserId: user.userId });
+    const seq = await insertPromptModuleVersion({ moduleKey: key, value: row.value, source: 'rollback', createdByUserId: user.userId, baseHash: row.baseHash ?? null });
     res.json({ seq });
     return;
   }

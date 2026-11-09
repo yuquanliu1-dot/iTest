@@ -1316,6 +1316,19 @@ export interface AssistantTrajectory {
   createdAt: string;
   updatedAt: string;
 }
+/** 覆盖值基线漂移：代码默认演进后，覆盖行仍基于旧基线（drift）或无指纹（unknown）。 */
+export interface PromptDrift {
+  key: string;
+  label: string;
+  group: 'main' | 'tool' | 'skill';
+  seq: number;
+  source: string;
+  writtenAt: string;
+  status: 'drift' | 'unknown';
+  baseHash: string | null;
+  currentHash: string;
+}
+
 /** R3 prompt 模块（设置页系统提示词）。isDefault=true 表示当前用代码默认值。 */
 export interface PromptModule {
   key: string;
@@ -1328,6 +1341,7 @@ export interface PromptModule {
   value: string | null;
   isDefault: boolean;
   text: string;
+  drift: PromptDrift | null;
 }
 
 export interface PromptModuleVersion {
