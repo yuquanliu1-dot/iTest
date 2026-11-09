@@ -16,6 +16,11 @@ describe('EXPLORATION_SYSTEM_PROMPT_BASE - 协议与安全规则', () => {
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('同一缺陷只报一次');
   });
 
+  it('findings 字段名写死（description 不许改名 + severity 只 P0-P3）', () => {
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('不能写成 evidence/detail/desc');
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('不能写「高/中/低」');
+  });
+
   it('安全底线在提示词层（不可逆操作禁止 + 二次确认弹窗一律取消）', () => {
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('一律不执行');
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('二次确认弹窗一律取消');
@@ -67,9 +72,10 @@ describe('coerceFindings', () => {
   const ok = { title: '删除按钮无二次确认', description: '点击删除直接生效', severity: 'P1', reproSteps: [{ action: '点击删除' }] };
 
   it('合法条目通过；severity 缺失/脏值 → P2 兜底', () => {
-    const r = coerceFindings([ok, { title: 'B', description: 'b', severity: '高' }, { title: 'C', description: 'c' }]);
+    const r = coerceFindings([ok, { title: 'B', description: 'b', severity: '未知' }, { title: 'C', description: 'c' }]);
     expect(r.accepted.map((f) => f.severity)).toEqual(['P1', 'P2', 'P2']);
     expect(r.dropped).toBe(0);
+    expect(r.invalid).toBe(0);
   });
 
   it('空标题/空描述判非法丢弃；字段超长截断不丢条', () => {
@@ -77,6 +83,7 @@ describe('coerceFindings', () => {
     expect(r.accepted).toHaveLength(1);
     expect(r.accepted[0]!.description).toHaveLength(4000);
     expect(r.dropped).toBe(2);
+    expect(r.invalid).toBe(2);
   });
 
   it('超配额截断：保留前 max 条，余者计 dropped', () => {
@@ -101,5 +108,46 @@ describe('coerceFindings', () => {
     expect(r.accepted).toHaveLength(1);
     expect(r.accepted[0]!.reproSteps).toHaveLength(10);
     expect(r.dropped).toBe(2);
+    expect(r.invalid).toBe(2);
+  });
+
+  // 2026-11-10 prod 实录：模型输出 {title,severity:"中",location,evidence}，
+  // 旧实现只认 description → 全员静默丢弃（摘要说 5 条、库里 0 条）。
+  it('字段别名容错：description ← evidence/detail/desc，location 并入描述', () => {
+    const r = coerceFindings([
+      { title: '责任人显示 undefined', severity: '中', location: '列表第2行「责任人」列', evidence: '单元格渲染为 undefined' },
+      { title: 'IP 未校验', detail: '非法 IP 被接受' },
+      { title: '名称未校验', desc: '空名称可提交' },
+    ]);
+    expect(r.accepted).toHaveLength(3);
+    expect(r.accepted[0]!.description).toContain('渲染为 undefined');
+    expect(r.accepted[0]!.description).toContain('列表第2行');
+    expect(r.dropped).toBe(0);
+  });
+
+  it('中文判级映射：高→P1 / 中→P2 / 低→P3 / 致命→P0', () => {
+    const r = coerceFindings([
+      { title: 'A', description: 'a', severity: '高' },
+      { title: 'B', description: 'b', severity: '中' },
+      { title: 'C', description: 'c', severity: '低' },
+      { title: 'D', description: 'd', severity: '致命' },
+    ]);
+    expect(r.accepted.map((f) => f.severity)).toEqual(['P1', 'P2', 'P3', 'P0']);
+  });
+
+  it('步骤别名容错：steps/repro 数组 + 字符串步骤', () => {
+    const r = coerceFindings([
+      { title: 'A', description: 'a', steps: ['打开列表', '点击新增'] },
+      { title: 'B', description: 'b', repro: [{ step: '填非法 IP', expect: '应提示格式错误' }] },
+    ]);
+    expect(r.accepted[0]!.reproSteps).toEqual([{ action: '打开列表' }, { action: '点击新增' }]);
+    expect(r.accepted[1]!.reproSteps).toEqual([{ action: '填非法 IP', expected: '应提示格式错误' }]);
+  });
+
+  it('标题与描述双缺才算废条目（invalid 计数与 dropped 分开）', () => {
+    const r = coerceFindings([{ severity: 'P1' }, { title: 'T' }, { description: 'd' }]);
+    expect(r.accepted).toHaveLength(0);
+    expect(r.invalid).toBe(3);
+    expect(r.dropped).toBe(3);
   });
 });

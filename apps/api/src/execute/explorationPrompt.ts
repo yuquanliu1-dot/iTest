@@ -21,8 +21,9 @@ actions 元素类型（坐标按视口归一化 0-1000，指在目标本体中�
 - {"type":"wait","ms":<毫秒>}
 - {"type":"navigate","url":"<绝对地址>"}（仅 http/https 绝对地址，且不得离开被测站点）
 - {"type":"screenshot","selector":"<css>"} / {"type":"screenshot","x":..,"y":..}　请求放大截图，下轮附图后仍按全页坐标输出动作
-findings 契约：当轮发现了疑似缺陷/异常，就在本轮的 JSON 里带 "findings" 数组（没发现就省略该字段），每个元素：
+findings 契约：当轮发现了疑似缺陷/异常，就在本轮的 JSON 里带 "findings" 数组（没发现就省略该字段），每个元素**严格用下面这四个字段名**，不要改名、不要加自创字段：
 {"title":"<不超过50字概括>","description":"<现象、期望 vs 实际、影响面>","severity":"P0"|"P1"|"P2"|"P3","reproSteps":[{"action":"<操作步骤>","expected":"<该步预期>"}]}
+- description 就叫 description（不能写成 evidence/detail/desc）；severity 只能是 P0/P1/P2/P3（不能写「高/中/低」）；要补充缺陷位置就写进 description 里
 - severity 判级：P0=崩溃/数据丢失/安全漏洞；P1=主流程阻断；P2=功能异常但有绕行；P3=轻微/体验问题
 - 只报你在截图或元素清单里亲眼证实的现象，不臆测；同一缺陷只报一次，不要多轮重报
 - **自己造出来的异常也要报**：你提交表单后，若系统接受了空值/非法值/重复值并把脏数据写进列表，那本身就是缺陷证据（缺校验/缺去重）——不要因为「是我自己填的」就不报；这类缺陷只能在动手试出来，所以更该报
@@ -97,24 +98,96 @@ function normalizeTitle(title: string): string {
   return title.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+// —— 形状容错：真实模型常把字段写成别的名字/别的判级词，形状漂移不该让整条 finding 消失 ——
+// 2026-11-10 prod 实录：模型输出 {title,severity:"中",location,evidence}，
+// 旧实现只认 description → 5 条全被 safeParse 静默丢弃（摘要说 5 条、库里 0 条）。
+const DESCRIPTION_KEYS = ['description', 'evidence', 'detail', 'details', 'desc', 'analysis', 'content'];
+const TITLE_KEYS = ['title', 'name', 'issue', 'bug', 'summary'];
+const LOCATION_KEYS = ['location', 'position', 'where', 'page'];
+const STEPS_KEYS = ['reproSteps', 'repro', 'steps', 'reproduceSteps'];
+const SEVERITY_KEYS = ['severity', 'priority', 'level'];
+
+/** 中文/英文判级词 → P0-P3（未知判级 → P2 兜底）。 */
+const SEVERITY_ALIASES: Record<string, 'P0' | 'P1' | 'P2' | 'P3'> = {
+  p0: 'P0', blocker: 'P0', critical: 'P0', 致命: 'P0', 阻塞: 'P0',
+  p1: 'P1', high: 'P1', 高: 'P1', 严重: 'P1', 高危: 'P1',
+  p2: 'P2', medium: 'P2', 中: 'P2', 中危: 'P2', 一般: 'P2', 普通: 'P2',
+  p3: 'P3', low: 'P3', 低: 'P3', 低危: 'P3', 轻微: 'P3', 次要: 'P3',
+};
+
+function pickString(obj: Record<string, unknown>, keys: string[]): string {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+}
+
+function normalizeSeverity(raw: unknown): 'P0' | 'P1' | 'P2' | 'P3' {
+  if (typeof raw !== 'string') return 'P2';
+  return SEVERITY_ALIASES[raw.trim().toLowerCase()] ?? 'P2';
+}
+
+function normalizeSteps(raw: unknown): ExplorationReproStep[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ExplorationReproStep[] = [];
+  for (const s of raw) {
+    if (typeof s === 'string') {
+      const t = s.trim();
+      if (t) out.push({ action: t.slice(0, 500) });
+    } else if (s && typeof s === 'object') {
+      const o = s as Record<string, unknown>;
+      const action = pickString(o, ['action', 'step', 'instruction', 'text', '操作']);
+      if (!action) continue;
+      const expected = pickString(o, ['expected', 'expect', 'result', '预期']);
+      out.push({ action: action.slice(0, 500), ...(expected ? { expected: expected.slice(0, 500) } : {}) });
+    }
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
+/** 原始条目 → 契约形状；标题或描述双缺（或非对象）判废条目返回 null。 */
+function canonicalizeFinding(raw: unknown): CoercedFinding | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const title = pickString(o, TITLE_KEYS);
+  const description = pickString(o, DESCRIPTION_KEYS);
+  if (!title || !description) return null;
+  const location = pickString(o, LOCATION_KEYS);
+  const desc = location && !description.includes(location) ? `${description}\n位置：${location}` : description;
+  const severityRaw = SEVERITY_KEYS.map((k) => o[k]).find((v) => typeof v === 'string' && v.trim());
+  const stepsRaw = STEPS_KEYS.map((k) => o[k]).find((v) => Array.isArray(v));
+  return { title, description: desc, severity: normalizeSeverity(severityRaw), reproSteps: normalizeSteps(stepsRaw) };
+}
+
 /** 模型 findings 原始数组 → 可落库形态：字段截断兜底（脏 severity→P2/超长→slice）、
- *  仅空标题/空描述判非法丢弃、剩余配额截断、跨轮按标题去重。 */
+ *  仅空标题/空描述判非法丢弃、剩余配额截断、跨轮按标题去重。
+ *  dropped = 被拒总数（重复/超配额/非法）；invalid = 其中字段实在不可救的非法条数。 */
 export function coerceFindings(
   raw: unknown[],
   opts?: { existingTitles?: string[]; max?: number },
-): { accepted: CoercedFinding[]; dropped: number } {
+): { accepted: CoercedFinding[]; dropped: number; invalid: number } {
   const seen = new Set((opts?.existingTitles ?? []).map(normalizeTitle));
   const max = opts?.max ?? EXPLORATION_MAX_FINDINGS;
   const accepted: CoercedFinding[] = [];
   let dropped = 0;
+  let invalid = 0;
   for (const item of raw) {
     if (accepted.length >= max) {
       dropped += 1;
       continue;
     }
-    const parsed = FindingSchema.safeParse(item);
+    const canon = canonicalizeFinding(item);
+    if (!canon) {
+      dropped += 1;
+      invalid += 1;
+      continue;
+    }
+    const parsed = FindingSchema.safeParse(canon);
     if (!parsed.success) {
       dropped += 1;
+      invalid += 1;
       continue;
     }
     const key = normalizeTitle(parsed.data.title);
@@ -125,5 +198,5 @@ export function coerceFindings(
     seen.add(key);
     accepted.push(parsed.data);
   }
-  return { accepted, dropped };
+  return { accepted, dropped, invalid };
 }

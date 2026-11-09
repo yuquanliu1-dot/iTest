@@ -9,6 +9,7 @@ import { and, eq } from 'drizzle-orm';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium, type Page } from 'playwright-core';
+import type { ExplorationReproStep } from '@itest/shared';
 import { db } from '../db/client.js';
 import { explorationSessions, explorationFindings } from '../db/schema.js';
 import { resolveEnv } from './envContext.js';
@@ -33,6 +34,21 @@ export const EXPLORATION_WALL_CLOCK_MS = 15 * 60_000;
 
 function screenshotDiskPath(sessionId: string, order: number): string {
   return join(process.cwd(), 'screenshots', sessionId, `finding-${order}.png`);
+}
+
+/** 模型没给复现步骤时，用平台自己的动作留痕兜底（真实动作序列比模型现编的更可信）。 */
+function stepsFromTrail(trail: Array<{ type: string; target: string; ok: boolean }>): ExplorationReproStep[] {
+  const succeeded = trail.filter((a) => a.ok);
+  const use = succeeded.length > 0 ? succeeded : trail;
+  return use.slice(0, 10).map((a) => ({ action: `${a.type} ${a.target}`.trim() }));
+}
+
+/** 会话总结补「模型报 N 条 / 落库 M 条」——避免摘要说几条、库里 0 条的自相矛盾。 */
+function withFindingCounts(summary: string | null | undefined, modelReported: number, savedCount: number): string | null {
+  const base = (summary ?? '').trim();
+  if (modelReported === 0) return base || null;
+  const note = `模型报告 ${modelReported} 条，落库 ${savedCount} 条`;
+  return base ? `${base}（${note}）` : `（${note}）`;
 }
 
 async function isSessionCancelRequested(sessionId: string): Promise<boolean> {
@@ -67,6 +83,9 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
   let turnCount = 0;
   let userCancelled = false;
   let budgetExceeded = false;
+  /** findings 计数（函数作用域：catch 分支也要用来说明「模型报 N 条、落库 M 条」）。 */
+  let savedCount = 0;
+  let modelReported = 0;
   const deadline = Date.now() + EXPLORATION_WALL_CLOCK_MS;
 
   try {
@@ -93,7 +112,6 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
 
       // findings 收集闭包：seenTitles 跨轮去重、trail 自上一条 finding 起累积、order 递增
       const seenTitles = new Set<string>();
-      let savedCount = 0;
       const trail: Array<{ type: string; target: string; ok: boolean }> = [];
       const onAction = (a: AiAction, ok: boolean): void => {
         let target = '-';
@@ -106,10 +124,14 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
         trail.push({ type: a.type, target, ok });
       };
       const onFindings = async (raw: unknown[]): Promise<void> => {
-        const { accepted } = coerceFindings(raw, {
+        modelReported += raw.length;
+        const { accepted, dropped, invalid } = coerceFindings(raw, {
           existingTitles: [...seenTitles],
           max: Math.max(0, EXPLORATION_MAX_FINDINGS - savedCount),
         });
+        if (dropped > 0) {
+          logger.warn({ sessionId, reported: raw.length, dropped, invalid }, 'exploration findings dropped');
+        }
         for (const f of accepted) {
           savedCount += 1;
           const order = savedCount;
@@ -130,7 +152,7 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
               title: f.title,
               description: f.description,
               severity: f.severity,
-              reproSteps: f.reproSteps,
+              reproSteps: f.reproSteps.length > 0 ? f.reproSteps : stepsFromTrail(trail),
               actionsTrail: [...trail],
               screenshotPath,
               pageUrl: page.url(),
@@ -182,11 +204,15 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
       );
       await finishSession(sessionId, {
         status: userCancelled ? 'cancelled' : 'completed',
-        summary: userCancelled
-          ? summary
-          : budgetExceeded
-            ? `${summary || '探索结束'}（预算耗尽，${turnCount} 轮后停止）`.trim()
-            : summary,
+        summary: withFindingCounts(
+          userCancelled
+            ? summary
+            : budgetExceeded
+              ? `${summary || '探索结束'}（预算耗尽，${turnCount} 轮后停止）`.trim()
+              : summary,
+          modelReported,
+          savedCount,
+        ),
         turnsUsed: turnCount,
         usage: usage.stat,
       }).catch(() => undefined);
@@ -205,7 +231,9 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
     await finishSession(sessionId, {
       status: userCancelled ? 'cancelled' : budgetExceeded ? 'completed' : 'failed',
       error: userCancelled || budgetExceeded ? null : msg,
-      summary: budgetExceeded ? `探索结束（预算耗尽，${turnCount} 轮后停止）` : null,
+      summary: budgetExceeded
+        ? withFindingCounts(`探索结束（预算耗尽，${turnCount} 轮后停止）`, modelReported, savedCount)
+        : null,
       turnsUsed: turnCount,
       usage: usage.stat,
     }).catch(() => undefined);
