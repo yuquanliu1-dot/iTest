@@ -241,6 +241,41 @@ export interface SeedOrg {
 /** 测试管理员账号的明文密码（符合密码策略；登录类测试可直接用它走 /api/auth/login）。 */
 export const SEED_USER_PASSWORD = 'Test1234!@#$';
 
+/**
+ * 写入一条 LLM 渠道（settings 新结构：llm_channels + llm_default_channel）。
+ * 旧版 5 个 llm_* 单键已废弃，测试一律走这个 helper。
+ */
+export async function seedLlmChannel(
+  pool: Pool,
+  ch: {
+    id?: string;
+    name?: string;
+    provider: string;
+    apiKey: string;
+    model: string;
+    baseUrl?: string;
+    maxTokens?: number;
+  },
+  opts: { defaultId?: string } = {},
+): Promise<string> {
+  const id = ch.id ?? randomUUID();
+  const channel = {
+    id,
+    name: ch.name ?? ch.provider,
+    provider: ch.provider,
+    apiKey: ch.apiKey,
+    model: ch.model,
+    ...(ch.baseUrl ? { baseUrl: ch.baseUrl } : {}),
+    ...(ch.maxTokens !== undefined ? { maxTokens: ch.maxTokens } : {}),
+  };
+  await pool.query(
+    `INSERT INTO settings(key, value) VALUES ('llm_channels', $1), ('llm_default_channel', $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [JSON.stringify([channel]), JSON.stringify(opts.defaultId ?? id)],
+  );
+  return id;
+}
+
 const seedOrgCache = new WeakMap<Pool, Promise<SeedOrg>>();
 
 /** 清空缓存（TRUNCATE 后必须重置，避免 nextSeed 复用已被删的 orgId 触发 FK 违反）。 */

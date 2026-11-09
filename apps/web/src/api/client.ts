@@ -56,7 +56,10 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ key, value }),
       }),
-    testConnection: (body: { provider: string; apiKey: string; model: string; baseUrl: string }) =>
+    llm: () => request<LlmSettingsView>('/settings/llm'),
+    putLlm: (body: LlmSettingsPut) =>
+      request<{ ok: boolean }>('/settings/llm', { method: 'PUT', body: JSON.stringify(body) }),
+    testConnection: (body: { channelId?: string; provider: string; apiKey?: string; model?: string; baseUrl?: string }) =>
       request<LlmTestResult>('/settings/llm/test', { method: 'POST', body: JSON.stringify(body) }),
   },
   projects: {
@@ -875,6 +878,39 @@ export interface LlmTestResult {
   provider: string;
   latencyMs?: number;
   error?: string;
+}
+
+/** GET /api/settings/llm 渠道视图：apiKey 只回掩码，hasApiKey 标志位（对齐 environments 掩码模式）。 */
+export interface LlmChannelView {
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+  baseUrl: string | null;
+  maxTokens: number | null;
+  apiKeyMasked: string;
+  hasApiKey: boolean;
+}
+
+export interface LlmSettingsView {
+  defaultChannelId: string;
+  visionChannelId: string | null;
+  channels: LlmChannelView[];
+}
+
+/** PUT /api/settings/llm：apiKey 留空/缺省 = 服务端按 id 保留存量原值。 */
+export interface LlmSettingsPut {
+  defaultChannelId: string;
+  visionChannelId?: string | null;
+  channels: Array<{
+    id?: string;
+    name: string;
+    provider: string;
+    apiKey?: string;
+    model: string;
+    baseUrl?: string;
+    maxTokens?: number | null;
+  }>;
 }
 
 /** 创建人/执行人摘要：后端各 list/detail 序列化统一追加；历史存量或用户已删时为 null。 */

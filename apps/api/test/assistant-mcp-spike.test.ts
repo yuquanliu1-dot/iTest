@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
-import { SCHEMA_SQL } from './helpers/db.js';
+import { SCHEMA_SQL, seedLlmChannel } from './helpers/db.js';
 import { emptyRepoState } from '../src/pi/space/tools/context.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/mcp-echo-server.mjs', import.meta.url));
@@ -16,10 +16,7 @@ beforeAll(async () => {
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   // LLM settings：工厂要求 readLlmConfig 非空（spike 不触发任何 LLM 调用，只建会话 + 断言工具注册）
-  await pool.query(`INSERT INTO settings(key, value) VALUES
-    ('llm_provider','"openai"'),
-    ('llm_api_key','"sk-test"'),
-    ('llm_model','"gpt-4o-mini"')`);
+  await seedLlmChannel(pool, { provider: 'openai', apiKey: 'sk-test', model: 'gpt-4o-mini' });
 }, 60_000);
 
 afterAll(async () => {

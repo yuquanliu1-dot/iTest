@@ -22,7 +22,7 @@ import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
-import { SCHEMA_SQL, seedProject } from './helpers/db.js';
+import { SCHEMA_SQL, seedLlmChannel, seedProject } from './helpers/db.js';
 
 let pool: Pool;
 /** 隔离的 .data 根：必须在任何动态 import session.js（连带 repo.ts 的模块级 DATA_DIR/SESSIONS_ROOT）之前设好。 */
@@ -50,11 +50,12 @@ beforeAll(async () => {
   // 合成模型联系桩即拿到 400（非可重试错误，无退避重试，prompt 快速失败）。
   // 失败不影响本文件断言——用户消息在联系 provider 之前就已 flush 进 JSONL，"文件落盘"正是要钉的那个点。
   // 桩的 400 文案刻意避开 pi 的重试/溢出正则关键词（server/internal/timeout/limit/exceeds…）。
-  await pool.query(`INSERT INTO settings(key, value) VALUES
-    ('llm_provider','"openai"'),
-    ('llm_api_key','"sk-test"'),
-    ('llm_model','"gpt-4o-mini"'),
-    ('llm_base_url','"http://127.0.0.1:${port}/v1"')`);
+  await seedLlmChannel(pool, {
+    provider: 'openai',
+    apiKey: 'sk-test',
+    model: 'gpt-4o-mini',
+    baseUrl: `http://127.0.0.1:${port}/v1`,
+  });
 });
 
 afterAll(async () => {

@@ -1,6 +1,7 @@
 import { inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { settings } from '../db/schema.js';
+import { CHANNEL_KEYS, parseChannels } from '../agent/llmSettings.js';
 
 export type LlmProvider = 'openai' | 'anthropic' | 'google';
 
@@ -9,41 +10,30 @@ export interface LlmConfig {
   apiKey: string;
   model: string;
   baseUrl: string | null;
-  /** 单次回复最大输出 token（llm_max_tokens）；未配置/非法 → undefined，client 用自己的默认。 */
+  /** 单次回复最大输出 token（渠道 maxTokens）；未配置/非法 → undefined，client 用自己的默认。 */
   maxTokens?: number;
 }
 
-const KEYS = {
-  provider: 'llm_provider',
-  apiKey: 'llm_api_key',
-  model: 'llm_model',
-  baseUrl: 'llm_base_url',
-  maxTokens: 'llm_max_tokens',
-} as const;
-
-const VALID: readonly LlmProvider[] = ['openai', 'anthropic', 'google'];
-
-/** 读取 LLM 配置；provider 未配置/无效或 apiKey 为空 → null。 */
+/** 读取 LLM 配置（只认 llm_channels 多渠道结构，取默认渠道）；
+ *  未配置渠道或渠道缺 apiKey/model → null。pi 路径只承载聊天/蒸馏纯文本调用，不接视觉渠道。 */
 export async function readLlmConfig(): Promise<LlmConfig | null> {
   const all = await db
     .select()
     .from(settings)
-    .where(inArray(settings.key, [KEYS.provider, KEYS.apiKey, KEYS.model, KEYS.baseUrl, KEYS.maxTokens]));
+    .where(inArray(settings.key, [CHANNEL_KEYS.channels, CHANNEL_KEYS.defaultChannel]));
   const map = new Map(all.map((r) => [r.key, r.value as unknown]));
-  const rawProvider = String(map.get(KEYS.provider) ?? '');
-  if (!(VALID as readonly string[]).includes(rawProvider)) return null;
-  const provider = rawProvider as LlmProvider;
-  const apiKey = String(map.get(KEYS.apiKey) ?? '');
-  const model = String(map.get(KEYS.model) ?? '');
-  const rawBase = String(map.get(KEYS.baseUrl) ?? '');
-  if (!apiKey || !model) return null;
-  const n = Number(String(map.get(KEYS.maxTokens) ?? '').trim());
+
+  const channels = parseChannels(map.get(CHANNEL_KEYS.channels));
+  if (channels.length === 0) return null;
+  const defaultId = String(map.get(CHANNEL_KEYS.defaultChannel) ?? '');
+  const c = channels.find((ch) => ch.id === defaultId) ?? channels[0]!;
+  if (!c.apiKey || !c.model) return null;
   return {
-    provider,
-    apiKey,
-    model,
-    baseUrl: rawBase || null,
-    ...(Number.isInteger(n) && n > 0 ? { maxTokens: n } : {}),
+    provider: c.provider,
+    apiKey: c.apiKey,
+    model: c.model,
+    baseUrl: c.baseUrl ?? null,
+    ...(c.maxTokens !== undefined ? { maxTokens: c.maxTokens } : {}),
   };
 }
 

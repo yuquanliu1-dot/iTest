@@ -6,29 +6,15 @@ import { api } from '../api/client';
 import { useUIStore } from '../stores/ui';
 import { useThemeStore } from '../stores/theme';
 import Icon from '../components/Icon';
-import Button from '../components/ui/Button';
-import Input from '../components/ui/Input';
 import Toggle from '../components/ui/Toggle';
 import AssistantPanel, { type AssistantSectionKey } from '../components/settings/AssistantPanel';
+import LlmChannelsPanel from '../components/settings/LlmChannelsPanel';
 import {
   PageShell,
   PageShellDescription,
   PageShellHeader,
   PageShellTitle,
 } from '../components/layout/PageShell';
-
-const PROVIDERS = [
-  { value: 'openai', label: 'openai' },
-  { value: 'anthropic', label: 'anthropic' },
-  { value: 'google', label: 'google' },
-];
-
-/** 与 apps/api/src/agent/llm-client.ts 中的服务端回退默认值保持一致。 */
-const DEFAULT_MODELS: Record<string, string> = {
-  openai: 'gpt-4o-mini',
-  anthropic: 'claude-sonnet-4-6',
-  google: 'gemini-2.0-flash',
-};
 
 // 与 apps/api/src/execute/aiFallback.ts 的 AI_FALLBACK_KEYS 互为镜像。
 // （compile-missing 开关已移除：NL 视觉步骤的 AI 临场执行是正式执行语义，不再可关。）
@@ -77,13 +63,6 @@ export default function Settings() {
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
   const [panel, setPanel] = useState<Panel>('general');
 
-  // LLM form
-  const [provider, setProvider] = useState('openai');
-  const [apiKey, setApiKey] = useState('');
-  const [model, setModel] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [maxTokens, setMaxTokens] = useState('');
-
   // 回放 AI 重做开关（机械失败降级）
   const [locatorFailedFallback, setLocatorFailedFallback] = useState(false);
 
@@ -91,39 +70,8 @@ export default function Settings() {
 
   useEffect(() => {
     if (!data) return;
-    setProvider((data.llm_provider as string) ?? 'openai');
-    setApiKey((data.llm_api_key as string) ?? '');
-    setModel((data.llm_model as string) ?? '');
-    setBaseUrl((data.llm_base_url as string) ?? '');
-    setMaxTokens(data.llm_max_tokens != null ? String(data.llm_max_tokens) : '');
     setLocatorFailedFallback(data[AI_FALLBACK_LOCATOR_FAILED_KEY] === true);
   }, [data]);
-
-  const save = useMutation({
-    mutationFn: async () => {
-      await api.settings.put('llm_provider', provider);
-      await api.settings.put('llm_api_key', apiKey);
-      await api.settings.put('llm_model', model);
-      await api.settings.put('llm_base_url', baseUrl);
-      await api.settings.put('llm_max_tokens', maxTokens.trim());
-    },
-    onSuccess: () => toast(t('settings:saved'), 'success'),
-    onError: (e: Error) => toast(localizeApiError(e), 'error'),
-  });
-
-  // 最大输出 Tokens 保存前校验：非法值服务端会静默忽略回退默认，这里拦在前端给明确反馈
-  const saveLlm = () => {
-    const mt = maxTokens.trim();
-    if (mt !== '' && (!/^\d+$/.test(mt) || Number(mt) < 1)) {
-      toast(t('settings:maxTokensInvalid'), 'error');
-      return;
-    }
-    save.mutate();
-  };
-
-  const test = useMutation({
-    mutationFn: () => api.settings.testConnection({ provider, apiKey, model, baseUrl }),
-  });
 
   // 回放降级开关即时保存
   const saveFallback = useMutation({
@@ -201,97 +149,7 @@ export default function Settings() {
         </div>
 
         <div className="bg-card border flex-1 min-w-0 overflow-y-auto" style={{ padding: 20 }}>
-          {panel === 'llm' && (
-            <div className="flex flex-col gap-4 max-w-xl">
-              <div>
-                <h3 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--foreground)' }}>
-                  LLM Provider
-                </h3>
-                <p className="text-[12px] mb-3" style={{ color: 'var(--muted-foreground)' }}>
-                  {t('settings:llmIntro')}
-                </p>
-                <select className="input-base" value={provider} onChange={(e) => setProvider(e.target.value)}>
-                  {PROVIDERS.map((p) => (
-                    <option key={p.value} value={p.value}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <Input
-                type="password"
-                label="API Key"
-                placeholder="sk-..."
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
-              <div>
-                <Input
-                  label={t('settings:baseUrlLabel')}
-                  placeholder={t('settings:baseUrlPlaceholder')}
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                />
-                <p className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
-                  {t('settings:baseUrlHelp')}
-                </p>
-              </div>
-              <div>
-                <Input
-                  label="Model"
-                  placeholder={t('settings:modelPlaceholder')}
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                />
-                {DEFAULT_MODELS[provider] && (
-                  <p className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
-                    {t('settings:defaultModel', { model: DEFAULT_MODELS[provider] })}
-                  </p>
-                )}
-              </div>
-              <div>
-                <Input
-                  label={t('settings:maxTokensLabel')}
-                  placeholder={t('settings:maxTokensPlaceholder')}
-                  type="number"
-                  min={1}
-                  value={maxTokens}
-                  onChange={(e) => setMaxTokens(e.target.value)}
-                />
-                <p className="text-[11px] mt-1" style={{ color: 'var(--muted-foreground)' }}>
-                  {t('settings:maxTokensHelp')}
-                </p>
-              </div>
-              <div className="flex items-center gap-3">
-                <Button disabled={save.isPending} onClick={saveLlm}>
-                  {save.isPending ? t('settings:saving') : t('common:save')}
-                </Button>
-                <Button variant="ghost" disabled={test.isPending} onClick={() => test.mutate()}>
-                  {test.isPending ? t('settings:testing') : t('settings:testConnection')}
-                </Button>
-                {test.isPending && (
-                  <span className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
-                    {t('settings:testingProbe')}
-                  </span>
-                )}
-                {test.isSuccess && test.data.ok && (
-                  <span className="text-[12px]" style={{ color: 'var(--success)' }}>
-                    {t('settings:testOk', { latencyMs: test.data.latencyMs })}
-                  </span>
-                )}
-                {test.isSuccess && !test.data.ok && (
-                  <span className="text-[12px]" style={{ color: 'var(--destructive)' }}>
-                    {t('settings:testFail', { error: test.data.error })}
-                  </span>
-                )}
-                {test.isError && (
-                  <span className="text-[12px]" style={{ color: 'var(--destructive)' }}>
-                    {t('settings:testFail', { error: localizeApiError(test.error as { code?: string; message?: string }) })}
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
+          {panel === 'llm' && <LlmChannelsPanel />}
 
           {panel === 'general' && (
             <div className="flex flex-col gap-8 max-w-xl">

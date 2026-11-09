@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
-import { SCHEMA_SQL } from './helpers/db.js';
+import { SCHEMA_SQL, seedLlmChannel } from './helpers/db.js';
 
 let pool: Pool;
 
@@ -25,17 +25,15 @@ beforeEach(async () => {
 });
 
 describe('readLlmConfig', () => {
-  it('returns null when provider not configured', async () => {
+  it('returns null when no channel configured', async () => {
     const { readLlmConfig } = await import('../src/pi/modelBridge.js');
     expect(await readLlmConfig()).toBeNull();
   });
 
   it('returns parsed config when fully configured', async () => {
-    await pool.query(`INSERT INTO settings(key, value) VALUES
-      ('llm_provider','"openai"'),
-      ('llm_api_key','"sk-test"'),
-      ('llm_model','"gpt-4o-mini"'),
-      ('llm_base_url','"https://api.openai.com/v1"')`);
+    await seedLlmChannel(pool, {
+      provider: 'openai', apiKey: 'sk-test', model: 'gpt-4o-mini', baseUrl: 'https://api.openai.com/v1',
+    });
     const { readLlmConfig } = await import('../src/pi/modelBridge.js');
     expect(await readLlmConfig()).toEqual({
       provider: 'openai',
@@ -46,26 +44,21 @@ describe('readLlmConfig', () => {
   });
 
   it('treats invalid provider as unconfigured', async () => {
-    await pool.query(`INSERT INTO settings(key, value) VALUES ('llm_provider','"bogus"')`);
+    await pool.query(`INSERT INTO settings(key, value) VALUES ('llm_channels', $1)`, [
+      JSON.stringify([{ id: 'a', name: 'A', provider: 'bogus', apiKey: 'sk-test', model: 'm' }]),
+    ]);
     const { readLlmConfig } = await import('../src/pi/modelBridge.js');
     expect(await readLlmConfig()).toBeNull();
   });
 
   it('treats empty apiKey as unconfigured', async () => {
-    await pool.query(`INSERT INTO settings(key, value) VALUES
-      ('llm_provider','"openai"'),
-      ('llm_api_key','""'),
-      ('llm_model','"gpt-4o-mini"')`);
+    await seedLlmChannel(pool, { provider: 'openai', apiKey: '', model: 'gpt-4o-mini' });
     const { readLlmConfig } = await import('../src/pi/modelBridge.js');
     expect(await readLlmConfig()).toBeNull();
   });
 
-  it('parses llm_max_tokens（正整数字符串）into maxTokens', async () => {
-    await pool.query(`INSERT INTO settings(key, value) VALUES
-      ('llm_provider','"anthropic"'),
-      ('llm_api_key','"sk-test"'),
-      ('llm_model','"Auto"'),
-      ('llm_max_tokens','"16384"')`);
+  it('parses channel maxTokens into maxTokens', async () => {
+    await seedLlmChannel(pool, { provider: 'anthropic', apiKey: 'sk-test', model: 'Auto', maxTokens: 16384 });
     const { readLlmConfig } = await import('../src/pi/modelBridge.js');
     expect(await readLlmConfig()).toEqual({
       provider: 'anthropic',
@@ -76,12 +69,10 @@ describe('readLlmConfig', () => {
     });
   });
 
-  it('ignores invalid llm_max_tokens（乱码/非正数）→ 无 maxTokens 字段', async () => {
-    await pool.query(`INSERT INTO settings(key, value) VALUES
-      ('llm_provider','"anthropic"'),
-      ('llm_api_key','"sk-test"'),
-      ('llm_model','"Auto"'),
-      ('llm_max_tokens','"abc"')`);
+  it('ignores invalid channel maxTokens（乱码/非正数）→ 无 maxTokens 字段', async () => {
+    await pool.query(`INSERT INTO settings(key, value) VALUES ('llm_channels', $1)`, [
+      JSON.stringify([{ id: 'a', name: 'A', provider: 'anthropic', apiKey: 'sk-test', model: 'Auto', maxTokens: 'abc' }]),
+    ]);
     const { readLlmConfig } = await import('../src/pi/modelBridge.js');
     const cfg = await readLlmConfig();
     expect(cfg).not.toBeNull();
@@ -89,24 +80,58 @@ describe('readLlmConfig', () => {
   });
 });
 
-describe('resolveLlmClient', () => {
-  it('reads llm_max_tokens into config.maxTokens', async () => {
+describe('readLlmConfig 多渠道结构', () => {
+  async function insertChannels(channels: unknown[], defaultId: string) {
+    await pool.query(`INSERT INTO settings(key, value) VALUES ($1, $2), ($3, $4)`, [
+      'llm_channels', JSON.stringify(channels), 'llm_default_channel', JSON.stringify(defaultId),
+    ]);
+  }
+
+  it('新结构生效：返回默认渠道 config（baseUrl null/maxTokens 透传）', async () => {
+    await insertChannels(
+      [
+        { id: 'a', name: 'A', provider: 'anthropic', apiKey: 'sk-a', model: 'Auto', maxTokens: 4096 },
+        { id: 'b', name: 'B', provider: 'openai', apiKey: 'sk-b', model: 'm', baseUrl: 'https://gw.example.com' },
+      ],
+      'b',
+    );
+    const { readLlmConfig } = await import('../src/pi/modelBridge.js');
+    expect(await readLlmConfig()).toEqual({
+      provider: 'openai',
+      apiKey: 'sk-b',
+      model: 'm',
+      baseUrl: 'https://gw.example.com',
+    });
+  });
+
+  it('默认渠道缺 apiKey/model → null', async () => {
+    await insertChannels([{ id: 'a', name: 'A', provider: 'anthropic', apiKey: '', model: 'Auto' }], 'a');
+    const { readLlmConfig } = await import('../src/pi/modelBridge.js');
+    expect(await readLlmConfig()).toBeNull();
+  });
+
+  it('旧版 5 个单键不再被读取 → null（已由启动迁移折成渠道）', async () => {
     await pool.query(`INSERT INTO settings(key, value) VALUES
       ('llm_provider','"anthropic"'),
-      ('llm_api_key','"sk-test"'),
-      ('llm_model','"Auto"'),
-      ('llm_max_tokens','"16384"')`);
+      ('llm_api_key','"sk-legacy"'),
+      ('llm_model','"old"')`);
+    const { readLlmConfig } = await import('../src/pi/modelBridge.js');
+    expect(await readLlmConfig()).toBeNull();
+  });
+});
+
+describe('resolveLlmClient', () => {
+  it('reads channel maxTokens into config.maxTokens', async () => {
+    await seedLlmChannel(pool, { provider: 'anthropic', apiKey: 'sk-test', model: 'Auto', maxTokens: 16384 });
     const { resolveLlmClient } = await import('../src/agent/llmSettings.js');
     const { config } = await resolveLlmClient();
     expect(config.maxTokens).toBe(16384);
   });
 
-  it('invalid llm_max_tokens → config.maxTokens undefined（回退 client 默认）', async () => {
-    await pool.query(`INSERT INTO settings(key, value) VALUES
-      ('llm_provider','"anthropic"'),
-      ('llm_api_key','"sk-test"'),
-      ('llm_model','"Auto"'),
-      ('llm_max_tokens','"0"')`);
+  it('invalid channel maxTokens → config.maxTokens undefined（回退 client 默认）', async () => {
+    await pool.query(`INSERT INTO settings(key, value) VALUES ('llm_channels', $1)`, [
+      JSON.stringify([{ id: 'a', name: 'A', provider: 'anthropic', apiKey: 'sk-test', model: 'Auto', maxTokens: 0 }]),
+    ]);
     const { resolveLlmClient } = await import('../src/agent/llmSettings.js');
     const { config } = await resolveLlmClient();
     expect(config.maxTokens).toBeUndefined();

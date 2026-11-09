@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SCHEMA_SQL, seedProject } from './helpers/db.js';
+import { SCHEMA_SQL, seedLlmChannel, seedProject } from './helpers/db.js';
 
 // 仅被「内部建 client」用例触达（其余用例全部 DI 注入 stub，不碰真 SDK）。
 const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
@@ -461,17 +461,13 @@ describe('runSolidifyScan：R3.6 会话信号', () => {
   });
 });
 
-// ── llm_max_tokens 接线（2026-11-01 prod228 实测回归锚）──
+// ── 渠道 maxTokens 接线（2026-11-01 prod228 实测回归锚）──
 // 生产 bug：内部建 client 手搓字段丢掉 cfg.maxTokens → 网关思考模型在默认 4096 里烧光
 // 预算 → 空文本，蒸馏必败；设置页配 16384 也不生效。锚定：不注入 deps.client、走
 // readLlmConfig → getLlmClient 的真实路径，请求体必须透传配置的 max_tokens。
-describe('runSolidifyScan：内部建 client 透传 llm_max_tokens', () => {
-  it('settings 配 max_tokens=16384 → Anthropic 请求体 max_tokens=16384（而非默认 4096）', async () => {
-    await pool.query(`INSERT INTO settings(key, value) VALUES
-      ('llm_provider','"anthropic"'),
-      ('llm_api_key','"sk-test"'),
-      ('llm_model','"m"'),
-      ('llm_max_tokens','"16384"')`);
+describe('runSolidifyScan：内部建 client 透传渠道 maxTokens', () => {
+  it('渠道配 maxTokens=16384 → Anthropic 请求体 max_tokens=16384（而非默认 4096）', async () => {
+    await seedLlmChannel(pool, { provider: 'anthropic', apiKey: 'sk-test', model: 'm', maxTokens: 16384 });
     createMock.mockResolvedValueOnce({
       id: 'msg_1', type: 'message', role: 'assistant', model: 'm',
       content: [{ type: 'text', text: JSON.stringify({ proposals: [], notes: [] }) }],

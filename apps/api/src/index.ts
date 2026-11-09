@@ -35,6 +35,7 @@ import usersRoute from './routes/users.js';
 import assignmentsRoute from './routes/assignments.js';
 import { spaceRoute, ASSISTANT_JSON_BODY_LIMIT } from './pi/space/router.js';
 import { requireAuth } from './middleware/auth.js';
+import { migrateLegacyLlmChannels } from './db/migrateLlmChannels.js';
 
 const app = express();
 app.use(express.raw({ type: 'application/octet-stream', limit: '60mb' }));
@@ -82,11 +83,27 @@ app.use(errorHandler);
 
 const port = Number(process.env.API_PORT ?? 54321);
 const host = process.env.API_HOST ?? '127.0.0.1';
-const server = app.listen(port, host, () => {
-  logger.info({ port, host }, 'api listening');
-  void startExecutionWorker();
-  void startRcaWorker();
-  void startTrajectoryWorker();
-  void startScheduler();
-});
-attachRecorderWs(server);
+
+async function bootstrap() {
+  // 旧版单渠道（5 个 llm_* 单键）→ 多渠道结构：发版即自动迁移，旧键随后删除。
+  // 失败不阻断启动：LLM 相关调用会各自报「尚未配置 LLM 渠道」，下次启动重试。
+  try {
+    const r = await migrateLegacyLlmChannels();
+    if (r.migrated || r.legacyRemoved) {
+      logger.info({ ...r }, 'LLM 渠道迁移完成');
+    }
+  } catch (e) {
+    logger.error({ err: e }, 'LLM 渠道迁移失败（不影响启动，下次启动重试）');
+  }
+
+  const server = app.listen(port, host, () => {
+    logger.info({ port, host }, 'api listening');
+    void startExecutionWorker();
+    void startRcaWorker();
+    void startTrajectoryWorker();
+    void startScheduler();
+  });
+  attachRecorderWs(server);
+}
+
+void bootstrap();
