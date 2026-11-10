@@ -98,3 +98,14 @@ describe('mapAiActionsToCompiled 坐标动作（未解析回 selector）', () =>
     expect(r.ok).toBe(true);
   });
 });
+
+describe('mapAiActionsToCompiled 取证动作（探索会话专用）', () => {
+  it('sql 动作无对应机械 DSL → 整步保持 aiTask（不静默跳过）', () => {
+    const r = mapAiActionsToCompiled([
+      { type: 'click', selector: '#submit' },
+      { type: 'sql', query: 'SELECT id FROM assets' },
+    ]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('数据库取证动作');
+  });
+});

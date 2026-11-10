@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assembleSystemPrompt, referencesCredential, buildDegradeContext, classifyDegradeStep, brittleSelectorReason, originOf, scopeViolationReason } from './aiTask.js';
+import { assembleSystemPrompt, referencesCredential, buildDegradeContext, classifyDegradeStep, brittleSelectorReason, originOf, scopeViolationReason, renderSqlProbeRows } from './aiTask.js';
 
 describe('assembleSystemPrompt - 凭据段门控', () => {
   it('credEnabled=false → 提示词不含任何凭据形态', () => {
@@ -237,6 +237,59 @@ describe('scopeViolationReason / originOf - 探索范围闸（2026-11-10 prod �
     const allow = ['http://127.0.0.1:56100', 'https://sso.example.com'];
     expect(scopeViolationReason('http://127.0.0.1:56101/defect.html', allow)).not.toBeNull();
     expect(scopeViolationReason('https://sso.example.com/login', allow)).toBeNull();
+  });
+});
+
+describe('renderSqlProbeRows - 取证结果回灌渲染（四级封顶，防撑爆下一轮上下文）', () => {
+  it('空结果 → 「（无结果行）」', () => {
+    expect(renderSqlProbeRows([], 0, false)).toBe('（无结果行）');
+  });
+
+  it('最多显示 5 行，余量以注记说明（不静默丢行）', () => {
+    const rows = Array.from({ length: 8 }, (_, i) => ({ id: i }));
+    const out = renderSqlProbeRows(rows, 8, false);
+    expect(out.match(/^- id=/gm)).toHaveLength(5);
+    expect(out).toContain('共 8 行，仅显示前 5 行');
+  });
+
+  it('limit 截断有注记', () => {
+    const out = renderSqlProbeRows([{ id: 1 }], 20, true);
+    expect(out).toContain('结果已按 limit 截断');
+  });
+
+  it('单元格超 60 字符截断加省略号；null → NULL；对象 → JSON', () => {
+    const out = renderSqlProbeRows([{ long: 'x'.repeat(100), nul: null, obj: { a: 1 } }], 1, false);
+    expect(out).toContain(`long=${'x'.repeat(60)}…`);
+    expect(out).toContain('nul=NULL');
+    expect(out).toContain('obj={"a":1}');
+  });
+
+  it('单行超 160 字符截断加省略号', () => {
+    const out = renderSqlProbeRows([{ a: 'x'.repeat(200) }], 1, false);
+    // 单元格自身已截到 60，行长 = "- a=" + 60 + 1 → 未超 160；换多列触发行截断
+    const wide = renderSqlProbeRows(
+      [Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`c${i}`, 'x'.repeat(60)]))],
+      1,
+      false,
+    );
+    expect(wide.split('\n')[0]!.length).toBe(161);
+    expect(wide.split('\n')[0]!.endsWith('…')).toBe(true);
+    // 单列 200 字符：先被单元格 60 封顶截断，行本身未超 160
+    expect(out).toContain('a=');
+  });
+
+  it('整块超 700 字符截断并标注已截断', () => {
+    const rows = Array.from({ length: 5 }, (_, i) =>
+      Object.fromEntries(Array.from({ length: 6 }, (_, j) => [`c${j}`, `${i}-${'x'.repeat(50)}`])),
+    );
+    const out = renderSqlProbeRows(rows, 5, false);
+    expect(out).toContain('（已截断）');
+    expect(out.length).toBeLessThan(800);
+  });
+
+  it('空白压成空格（多行值不撑破行结构）', () => {
+    const out = renderSqlProbeRows([{ note: 'a\n  b' }], 1, false);
+    expect(out).toContain('note=a b');
   });
 });
 

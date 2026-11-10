@@ -13,7 +13,16 @@ import type { ExplorationReproStep } from '@itest/shared';
 import { db } from '../db/client.js';
 import { explorationSessions, explorationFindings } from '../db/schema.js';
 import { resolveEnv } from './envContext.js';
-import { runAiTask, credentialPlaceholder, makeCredentialValueSub, originOf, type AiAction } from './aiTask.js';
+import {
+  runAiTask,
+  credentialPlaceholder,
+  makeCredentialValueSub,
+  originOf,
+  SQL_PROBE_MAX_ROWS,
+  type AiAction,
+  type SqlProbeResult,
+} from './aiTask.js';
+import { runSql } from './sqlQuery.js';
 import { buildCredentialSource, renderWebResourceManifest, defaultWebRef } from './credentialSource.js';
 import { waitForPageSettled } from './pageSettle.js';
 import { registerLiveView } from './liveView.js';
@@ -24,6 +33,7 @@ import {
   trailToSteps,
   EXPLORATION_SYSTEM_PROMPT_BASE,
   EXPLORATION_MAX_FINDINGS,
+  EXPLORATION_MAX_SQL_PROBES,
 } from './explorationPrompt.js';
 import { logger } from '../logger.js';
 import { loginStateKey, getLoginState, saveLoginState, type LoginStorageState } from '../pi/space/tools/loginStateCache.js';
@@ -32,6 +42,23 @@ import { resolveLlmClient } from '../agent/llmSettings.js';
 /** 软预算：超界走 shouldAbort 优雅收尾（findings 全保留）。runAiTask maxTurns=40 仅 runaway 兜底。 */
 export const EXPLORATION_MAX_TURNS = 24;
 export const EXPLORATION_WALL_CLOCK_MS = 15 * 60_000;
+
+/** 单次只读取证的等待侧超时（只截断等待，不取消底层查询——只读查询代价可接受）。 */
+const SQL_PROBE_TIMEOUT_MS = 10_000;
+
+/** 等待侧超时：竞速到点即抛错。底层 promise 迟到 settle 不会变 unhandledRejection
+ *  （Promise.race 对两个 promise 都挂了处理器）。 */
+async function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 function screenshotDiskPath(sessionId: string, order: number): string {
   return join(process.cwd(), 'screenshots', sessionId, `finding-${order}.png`);
@@ -80,10 +107,16 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
   /** findings 计数（函数作用域：catch 分支也要用来说明「模型报 N 条、落库 M 条」）。 */
   let savedCount = 0;
   let modelReported = 0;
+  /** 数据库取证次数（会话级配额，防模型把预算烧在扫库上）。 */
+  let sqlProbeCount = 0;
+  /** 最近一次查库的结果摘要（平台侧记录的行数/首行）——挂进动作留痕，findings 的复现步骤据此可见取证内容。 */
+  let lastSqlDetail = '';
   const deadline = Date.now() + EXPLORATION_WALL_CLOCK_MS;
 
   try {
     envCtx = await resolveEnv({ versionId: session.versionId }, { expectedProjectId: session.projectId });
+    // 探针闭包里要用 env（envCtx 是 let，闭包内 TS 不做窄化）
+    const env = envCtx;
     const client = (await resolveLlmClientForExploration()).client;
     const webRef = defaultWebRef({ envCtx });
     const cred = webRef ? envCtx.resolveLogin(webRef) : null;
@@ -97,6 +130,9 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
     // 起点 origin 不可解析 → 白名单为空数组 = navigate 全拒（保守收口，模型输出 fail）。
     const startOrigin = originOf(startUrl);
     const scopeOrigins = startOrigin ? [startOrigin] : [];
+    // 数据库取证通道：环境配了 db 对象才有（label 即 ref；提示词里逐个列出，模型可点名查哪个库）。
+    // 通道本身是只读的——只读守卫在 aiTask 侧先过一道，runSql 内部再兜一道。
+    const dbRefs = envCtx.dbs.map((d) => ({ label: d.label, dialect: d.dialect }));
 
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
     try {
@@ -114,16 +150,20 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
 
       // findings 收集闭包：seenTitles 跨轮去重、trail 自上一条 finding 起累积、order 递增
       const seenTitles = new Set<string>();
-      const trail: Array<{ type: string; target: string; ok: boolean }> = [];
+      const trail: Array<{ type: string; target: string; ok: boolean; detail?: string }> = [];
       const onAction = (a: AiAction, ok: boolean): void => {
         let target = '-';
+        let detail: string | undefined;
         if (a.type === 'click' || a.type === 'fill') {
           if (typeof a.selector === 'string' && a.selector) target = a.selector;
           else if (typeof a.x === 'number' && typeof a.y === 'number') target = `(${a.x},${a.y})`;
         } else if (a.type === 'navigate') {
           target = a.url;
+        } else if (a.type === 'sql') {
+          target = a.query.replace(/\s+/g, ' ').slice(0, 60);
+          detail = lastSqlDetail || undefined;
         }
-        trail.push({ type: a.type, target, ok });
+        trail.push({ type: a.type, target, ok, ...(detail ? { detail } : {}) });
       };
       const onFindings = async (raw: unknown[]): Promise<void> => {
         modelReported += raw.length;
@@ -170,6 +210,49 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
         if (accepted.length > 0) trail.length = 0;
       };
 
+      /** 数据库取证探针：模型给一条只读查询 → 对被测库执行 → 行摘要回灌下一轮。
+       *  只读守卫在 aiTask 侧先过一道（守卫不过绝不调到这里），runSql 内部再兜一道。
+       *  配额按会话计：查库是取证手段不是探索主路径，超额即拒。 */
+      const runSqlProbe = async (query: string, opts: { limit: number; db?: string }): Promise<SqlProbeResult> => {
+        if (sqlProbeCount >= EXPLORATION_MAX_SQL_PROBES) {
+          lastSqlDetail = '取证次数已用尽';
+          return { ok: false, error: `本会话数据库取证次数已用尽（上限 ${EXPLORATION_MAX_SQL_PROBES} 次）` };
+        }
+        sqlProbeCount += 1;
+        const entry = env.resolveDb(opts.db ?? null);
+        if (!entry) {
+          const names = dbRefs.map((d) => d.label);
+          lastSqlDetail = '库未命中';
+          return {
+            ok: false,
+            error: `数据库对象未命中${opts.db ? `「${opts.db}」` : '（未指定 db，走环境默认库）'}，可用:${names.join('、') || '(无)'}`,
+          };
+        }
+        try {
+          const pool = await env.resolveDbPool(entry.label);
+          const limit = Math.min(Math.max(1, opts.limit), SQL_PROBE_MAX_ROWS);
+          const r = await withTimeout(
+            runSql({ pool, action: { kind: 'sql', sql: query, params: [], limit }, dbRef: entry.label }),
+            SQL_PROBE_TIMEOUT_MS,
+            `查询超时（${SQL_PROBE_TIMEOUT_MS / 1000}s 未返回）`,
+          );
+          const head = r.rows.length > 0
+            ? Object.entries(r.rows[0]!)
+                .map(([k, v]) => `${k}=${v == null ? 'NULL' : String(v).slice(0, 30)}`)
+                .join(' | ')
+                .slice(0, 160)
+            : '（无行）';
+          lastSqlDetail = `${r.rowCount} 行${r.truncated ? '（已按 limit 截断）' : ''}｜首行：${head}`;
+          return { ok: true, rowCount: r.rowCount, truncated: !!r.truncated, rows: r.rows };
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          lastSqlDetail = `失败：${msg.slice(0, 120)}`;
+          return { ok: false, error: msg.slice(0, 200) };
+        }
+      };
+
+      logger.info({ sessionId, promptBase: 'exploration', dbCount: dbRefs.length }, 'exploration system prompt base applied');
+
       const summary = await runAiTask(
         page,
         composeExplorationInstruction({
@@ -181,6 +264,7 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
             ? { user: credentialPlaceholder('user', webRef), password: credentialPlaceholder('password', webRef) }
             : undefined,
           manifest: renderWebResourceManifest({ envCtx }),
+          dbs: dbRefs,
         }),
         client,
         false,
@@ -190,6 +274,8 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
           valueSub: cred ? makeCredentialValueSub(buildCredentialSource({ envCtx })) : undefined,
           resourceManifest: renderWebResourceManifest({ envCtx }),
           scopeOrigins,
+          systemPromptBase: EXPLORATION_SYSTEM_PROMPT_BASE,
+          runSqlProbe: dbRefs.length > 0 ? runSqlProbe : undefined,
           onUsage: (r) => usage.add(r),
           onAction,
           onFindings,

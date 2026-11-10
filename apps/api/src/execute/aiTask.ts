@@ -9,6 +9,7 @@ import { annotateAction, clearAnnotation } from './liveView.js';
 import { waitForPageSettled, pageFingerprint } from './pageSettle.js';
 import { captureLiveRegionMessages, diffNewMessages, hasObservableChange, type ChangeSnapshot } from './liveRegion.js';
 import { isOpenDropdownFilter } from './dropdownFilter.js';
+import { assertReadOnlySql } from './sqlGuard.js';
 
 /** 单条指令的最大对话轮数（每轮一次 LLM 调用）。 */
 const MAX_TURNS = 8;
@@ -234,7 +235,14 @@ export type AiAction =
   | { type: 'press'; key: string }
   | { type: 'wait'; ms: number }
   | { type: 'navigate'; url: string }
-  | { type: 'screenshot'; selector?: string; x?: number; y?: number };
+  | { type: 'screenshot'; selector?: string; x?: number; y?: number }
+  /** 数据库取证（探索会话专用通道）：对被测系统自己的库跑一条只读查询。
+   *  db = 环境 db 对象的 label（缺省 = 环境默认库）；limit = 取回行数上限。 */
+  | { type: 'sql'; query: string; limit?: number; db?: string };
+
+/** sql 取证的单次回灌上限：行数 / 单元格 / 单行 / 整块四级封顶（反馈进下一轮 userMessage，不能无限膨胀）。 */
+export const SQL_PROBE_MAX_ROWS = 20;
+export const SQL_PROBE_DEFAULT_ROWS = 20;
 
 // AI 相凭据占位符协议：verify_case / solidify_case 的提示词要求 LLM 把用户名/密码/
 // 敏感字段 fill 成这三个字面量，执行时刻由 valueSub 替换为真实值。协议常量定义在
@@ -413,6 +421,20 @@ function parseAction(a: unknown): AiAction | null {
     if (clampCoord(o.x) !== null && clampCoord(o.y) !== null) return { type, x: clampCoord(o.x)!, y: clampCoord(o.y)! };
     return null;
   }
+  if (type === 'sql') {
+    // 只做形状校验：长度与只读判定留给动作循环里的守卫——那里能给出可行动的错误行，
+    // 在这里判死会让动作被静默丢弃、模型学不到原因。
+    // 键名容忍：模型可能写 query/sql、db/dbRef。
+    const raw = typeof o.query === 'string' ? o.query : typeof o.sql === 'string' ? o.sql : null;
+    if (typeof raw !== 'string' || !raw.trim()) return null;
+    const dbRaw = typeof o.db === 'string' ? o.db : typeof o.dbRef === 'string' ? o.dbRef : null;
+    const db = dbRaw?.trim() ? dbRaw.trim().slice(0, 64) : undefined;
+    const limit =
+      typeof o.limit === 'number' && Number.isFinite(o.limit)
+        ? Math.min(Math.max(Math.round(o.limit), 1), SQL_PROBE_MAX_ROWS)
+        : SQL_PROBE_DEFAULT_ROWS;
+    return { type: 'sql', query: raw.trim(), limit, ...(db ? { db } : {}) };
+  }
   return null;
 }
 
@@ -437,6 +459,48 @@ export function brittleSelectorReason(selector: string): string | null {
   return null;
 }
 
+// —— 数据库取证（sql 动作）的结果回灌渲染 ——
+// 查回的行走的是模型的下一轮输入，必须封顶：行数 5、单元格 60、单行 160、整块 700。
+
+const SQL_ROW_PREVIEW_MAX = 5;
+const SQL_CELL_MAX = 60;
+const SQL_LINE_MAX = 160;
+const SQL_BLOCK_MAX = 700;
+
+/** 单元格取值 → 单行文本（换行压成空格，免得撑破行的结构；null → NULL）。 */
+function renderSqlCell(v: unknown): string {
+  let s: string;
+  if (v === null || v === undefined) s = 'NULL';
+  else if (typeof v === 'string') s = v;
+  else if (typeof v === 'object') {
+    try { s = JSON.stringify(v) ?? String(v); } catch { s = String(v); }
+  } else s = String(v);
+  s = s.replace(/\s+/g, ' ').trim();
+  return s.length > SQL_CELL_MAX ? `${s.slice(0, SQL_CELL_MAX)}…` : s;
+}
+
+/** 取证结果 → 回灌给模型的文本块（行数/单元格/单行/整块四级封顶）。 */
+export function renderSqlProbeRows(
+  rows: Array<Record<string, unknown>>,
+  rowCount: number,
+  truncated: boolean,
+): string {
+  if (!Array.isArray(rows) || rows.length === 0) return '（无结果行）';
+  const lines: string[] = [];
+  for (const row of rows.slice(0, SQL_ROW_PREVIEW_MAX)) {
+    const cells = Object.entries(row).map(([k, v]) => `${k}=${renderSqlCell(v)}`);
+    let line = `- ${cells.join(' | ')}`;
+    if (line.length > SQL_LINE_MAX) line = `${line.slice(0, SQL_LINE_MAX)}…`;
+    lines.push(line);
+  }
+  let block = lines.join('\n');
+  if (block.length > SQL_BLOCK_MAX) block = `${block.slice(0, SQL_BLOCK_MAX)}…（已截断）`;
+  const notes: string[] = [];
+  if (rows.length > SQL_ROW_PREVIEW_MAX) notes.push(`共 ${rowCount} 行，仅显示前 ${SQL_ROW_PREVIEW_MAX} 行`);
+  if (truncated) notes.push('结果已按 limit 截断');
+  return notes.length > 0 ? `${block}\n（${notes.join('；')}）` : block;
+}
+
 /** URL → origin（http/https 之外或解析失败 → null）。 */
 export function originOf(url: string): string | null {
   try {
@@ -455,14 +519,17 @@ export function scopeViolationReason(url: string, allowedOrigins: string[]): str
   return `越界（目标 origin ${o ?? '不可解析'} 不在允许范围 ${allowedOrigins.join('、')} 内）`;
 }
 
-/** 记一次同目标失败；连续 ≥3 次时返回自检注入行并清零（与既有 3 连错语义一致），否则 null。 */
-function noteStreakFailure(errStreak: Map<string, number>, key: string | null): string | null {
+/** 记一次同目标失败；连续 ≥3 次时返回自检注入行并清零（与既有 3 连错语义一致），否则 null。
+ *  customMessage：非页面类目标（sql 取证）自检文案与页面自检不同，措辞错会把模型带偏。 */
+function noteStreakFailure(errStreak: Map<string, number>, key: string | null, customMessage?: string): string | null {
   if (key == null) return null;
   const streak = (errStreak.get(key) ?? 0) + 1;
   errStreak.set(key, streak);
   if (streak < 3) return null;
   errStreak.set(key, 0);
-  return `[system] 目标 ${key} 已连续 3 次失败：停止对它重试。先用截图核对当前页面是否在指令期望的界面（弹窗/跳转/加载中都会让目标消失），页面不对先处理页面；确认页面正确而目标确实不存在，则输出 fail 如实说明。`;
+  return customMessage
+    ? customMessage
+    : `[system] 目标 ${key} 已连续 3 次失败：停止对它重试。先用截图核对当前页面是否在指令期望的界面（弹窗/跳转/加载中都会让目标消失），页面不对先处理页面；确认页面正确而目标确实不存在，则输出 fail 如实说明。`;
 }
 
 /** 坐标动作的解析结果：该点命中的元素（selector 合成与 dumpElements 共用 SYNTH_SELECTOR_SRC）。 */
@@ -715,6 +782,10 @@ async function execAction(page: Page, action: AiAction, valueSub?: (v: string) =
       // 不在这里截图：标记后由主循环在下一轮开头截 4x 白底图（selector）/ 坐标裁剪放大图（x,y）
       const label = action.selector ?? `@${action.x},${action.y}`;
       return { report: `screenshot ${label}: 已接受，下轮附图` };
+    }
+    case 'sql': {
+      // sql 动作由主循环单独处理（不进浏览器执行器）；走到这里说明有漏网路径——判死而非静默无返回。
+      throw new Error('sql 动作不应进入浏览器动作执行器');
     }
   }
 }
@@ -1006,6 +1077,11 @@ export function buildDegradeContext(input: {
   ].join('\n');
 }
 
+/** 数据库取证的探针结果（调用方提供实现；平台只喂只读查询）。 */
+export type SqlProbeResult =
+  | { ok: true; rowCount: number; truncated: boolean; rows: Array<Record<string, unknown>> }
+  | { ok: false; error: string };
+
 /** runAiTask 可选项。 */
 export interface RunAiTaskOpts {
   /** 对话轮数上限（缺省 MAX_TURNS=8）。 */
@@ -1037,6 +1113,10 @@ export interface RunAiTaskOpts {
    *  2026-11-10 prod 实证：SUT 端点挂掉后模型按「页面自检」自主导航到了项目默认环境
    *  的真实系统并用真凭据登录、写入了数据；charter 的「禁止离开」纯提示词约束无人执行。 */
   scopeOrigins?: string[];
+  /** 数据库取证通道：挂上才允许 sql 动作（未挂 = 通道不存在，sql 动作被机械拒收）。
+   *  探索会话传（环境配了 db 对象时）；verify/登录/solidify 路径不传 → 行为零变化。
+   *  平台侧只喂只读查询：写语句在调用探针前就被 sqlGuard 的只读守卫拦下。 */
+  runSqlProbe?: (query: string, opts: { limit: number; db?: string }) => Promise<SqlProbeResult>;
 }
 
 /**
@@ -1202,6 +1282,48 @@ export async function runAiTask(
         else if (typeof a.x === 'number' && typeof a.y === 'number') pendingShot = { kind: 'crop', x: a.x, y: a.y };
         lastResults.push(`screenshot ${a.selector ?? `@${a.x},${a.y}`}: 已接受，下轮附图`);
         opts?.onAction?.(a, true);
+        continue;
+      }
+      // 数据库取证（sql）：只挂 runSqlProbe 的会话才有这个通道（探索）。
+      // 只读守卫先行——写语句在触库前被拒，守卫不通过时绝不调用探针。
+      if (a.type === 'sql') {
+        const probe = opts?.runSqlProbe;
+        const sqlKey = `sql:${a.query.replace(/\s+/g, ' ').slice(0, 40)}`;
+        const sqlSelfCheck = `[system] 数据库查询 ${sqlKey} 已连续 3 次失败：不要再用同一条查询重试。换一条更简单的查询（先确认表名/字段名），确实查不到就如实说明，不要反复试。`;
+        if (!probe) {
+          lastResults.push('sql: error 本会话未开通数据库取证通道（环境未配置可用数据库），不要输出 sql 动作。');
+          opts?.onAction?.(a, false);
+          const selfCheck = noteStreakFailure(errStreak, sqlKey, sqlSelfCheck);
+          if (selfCheck) lastResults.push(selfCheck);
+          continue;
+        }
+        try {
+          assertReadOnlySql(a.query);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          lastResults.push(`sql: error 只读守卫拒绝（${msg.slice(0, 200)}）。只能跑 SELECT / WITH 开头的只读查询。`);
+          opts?.onAction?.(a, false);
+          const selfCheck = noteStreakFailure(errStreak, sqlKey, sqlSelfCheck);
+          if (selfCheck) lastResults.push(selfCheck);
+          logger.info({ query: a.query.slice(0, 120), error: msg.slice(0, 200) }, 'aiTask sql rejected by read-only guard');
+          continue;
+        }
+        try {
+          const res = await probe(a.query, { limit: a.limit ?? SQL_PROBE_DEFAULT_ROWS, ...(a.db ? { db: a.db } : {}) });
+          if (!res.ok) throw new Error(res.error);
+          lastResults.push(
+            `sql ok（${res.rowCount} 行${res.truncated ? '，已按 limit 截断' : ''}）：\n${renderSqlProbeRows(res.rows, res.rowCount, res.truncated)}`,
+          );
+          opts?.onAction?.(a, true);
+          errStreak.delete(sqlKey);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          lastResults.push(`sql: error ${msg.slice(0, 200)}`);
+          opts?.onAction?.(a, false);
+          const selfCheck = noteStreakFailure(errStreak, sqlKey, sqlSelfCheck);
+          if (selfCheck) lastResults.push(selfCheck);
+          logger.info({ query: a.query.slice(0, 120), error: msg.slice(0, 200) }, 'aiTask sql probe failed');
+        }
         continue;
       }
       // 同目标连续失败计数（坐标按 ~25‰ 粗桶聚合）：3 连错注入强制自检指令，砍 selector/坐标空转。

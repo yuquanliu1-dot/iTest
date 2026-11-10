@@ -9,6 +9,9 @@ import { getExplorationPersona, type ExplorationReproStep } from '@itest/shared'
 /** 单会话 findings 封顶：超出的丢弃（成本与审阅负担的双保险）。 */
 export const EXPLORATION_MAX_FINDINGS = 20;
 
+/** 单会话数据库取证次数封顶：查库是取证手段不是探索主路径，超额即拒（防模型把预算烧在扫库上）。 */
+export const EXPLORATION_MAX_SQL_PROBES = 20;
+
 export const EXPLORATION_SYSTEM_PROMPT_BASE = `你是 Web 探索式测试智能体，在真实浏览器里按章程（charter）主动找茬：发现行为异常、校验缺失、状态错乱、体验破绽并如实报告。
 每轮你会收到：当前页面 URL、视口尺寸、一张视口截图、可交互元素清单（含与截图对齐的归一化坐标框）。
 只输出 JSON，不要输出其他内容。格式：
@@ -21,6 +24,11 @@ actions 元素类型（坐标按视口归一化 0-1000，指在目标本体中�
 - {"type":"wait","ms":<毫秒>}
 - {"type":"navigate","url":"<绝对地址>"}（仅 http/https 绝对地址，且不得离开被测站点）
 - {"type":"screenshot","selector":"<css>"} / {"type":"screenshot","x":..,"y":..}　请求放大截图，下轮附图后仍按全页坐标输出动作
+- {"type":"sql","query":"<只读 SELECT/WITH 语句>","limit":<行数>,"db":"<库名，可选>"}　对被测系统的数据库跑一条只读查询取证（可选通道：环境配了数据库才有；不写 db 就查环境默认库）
+子目标清单（可选，章程可分解为 2 条以上子操作时使用；简单章程不需要）：
+- 第 1 轮随 actions 一起输出 "plan": [{"text":"打开新增对话框"},{"text":"填写名称"},{"text":"保存并确认"}]
+- 之后每轮输出更新后的完整清单：截图确认已生效的条目加 "done":true（预期下一步才会完成的不算提前标），可按页面实际增删改条目
+- 每轮的当前进度会回显给你——用它保持方向感，不要重复已完成的目标
 findings 契约：当轮发现了疑似缺陷/异常，就在本轮的 JSON 里带 "findings" 数组（没发现就省略该字段），每个元素**严格用下面这四个字段名**，不要改名、不要加自创字段：
 {"title":"<不超过50字概括>","description":"<现象、期望 vs 实际、影响面>","severity":"P0"|"P1"|"P2"|"P3","reproSteps":[{"action":"<操作步骤>","expected":"<该步预期>"}]}
 - description 就叫 description（不能写成 evidence/detail/desc）；severity 只能是 P0/P1/P2/P3（不能写「高/中/低」）；要补充缺陷位置就写进 description 里
@@ -39,7 +47,8 @@ findings 契约：当轮发现了疑似缺陷/异常，就在本轮的 JSON 里�
 - 别用整页滚动代替探索：元素清单已给出全部可交互控件的坐标框，直接对目标下手；确要看下方内容才滚一次，滚动后下一轮就动手。
 - 每轮最多 2 个动作，宁可多轮推进；每个动作的执行结果（ok/错误）下轮反馈给你。
 - 反馈里的「页面消息: "…"」是应用 toast/提示（aria-live 区域）的一手文本——写 findings 的 description 时以此为准，截图读不清不成为漏报理由。
-- 反馈里的「页面无观测变化」= 该点击没有产生任何效果（目标被遮挡/禁用/命中非交互元素）——不要原样重试同一目标，换用元素清单坐标或换目标。`;
+- 反馈里的「页面无观测变化」= 该点击没有产生任何效果（目标被遮挡/禁用/命中非交互元素）——不要原样重试同一目标，换用元素清单坐标或换目标。
+- 数据库取证（可选通道）：环境配了数据库时可用 sql 动作查证「前端没显示但库里写进去了」「列表少了一条但库里有」这类只在数据层可见的现象。只允许 SELECT / WITH 开头的只读查询（写语句会被平台机械拒收并计为一次失败）；一次最多回 20 行；先有具体假设再查，别反复扫全库；查到的行里若有手机号/身份证/密码哈希这类敏感值，不要写进 findings。`;
 
 export interface ComposeExplorationArgs {
   startUrl: string;
@@ -51,6 +60,8 @@ export interface ComposeExplorationArgs {
   loginPlaceholders?: { user: string; password: string };
   /** web 资源清单文本（renderWebResourceManifest 产物），可空。 */
   manifest?: string;
+  /** 环境里的数据库对象（label + 方言）；非空则拼「## 数据库取证」段（sql 动作的可用库清单）。 */
+  dbs?: Array<{ label: string; dialect: string }>;
 }
 
 /** 组装探索指令（runAiTask 的 instruction 参数，每轮随 user message 携带）。 */
@@ -64,6 +75,12 @@ export function composeExplorationInstruction(args: ComposeExplorationArgs): str
   }
   if (args.manifest?.trim()) {
     sections.push(`## 可选 web 服务\n${args.manifest.trim()}`);
+  }
+  if (args.dbs && args.dbs.length > 0) {
+    const list = args.dbs.map((d) => `${d.label}（${d.dialect}）`).join('、');
+    sections.push(
+      `## 数据库取证\n环境配了数据库，你可以用 {"type":"sql","query":"<只读 SELECT/WITH>","limit":<行数>} 直接查库取证——这是拿到「前端没显示但库里写进去了」这类数据层证据的唯一手段。\n可用数据库：${list}；要查指定库就在 sql 动作里加 "db":"<库名>"（库名照抄上面的清单），不写 db 就查环境默认库。\n约束：只允许 SELECT / WITH 开头的只读查询（写语句会被平台机械拒收）；一次最多回 20 行；查库不改变页面状态。\n用法：先有具体假设再查（例如「新增后列表没显示」→ 查对应表的最新一条）；表名/字段名不确定时先查元数据 SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema')；行里的手机号/身份证/密码哈希等敏感值不要写进 findings。`,
+    );
   }
   sections.push(`## 起点\n从 ${args.startUrl} 开始，按章程在站点内导航探索。`);
   sections.push('## 输出契约\n发现疑似缺陷当轮输出 findings 数组；结束时 done.summary = 本次探索总结（覆盖了什么、发现几条）。');
@@ -102,11 +119,12 @@ function normalizeTitle(title: string): string {
 
 /** 动作留痕 → 复现步骤文本：平台自己记的动作序列 = ground truth（模型脑补的步骤靠不住）。
  *  升格用例与详情展示共用这一份口径。 */
-export function trailToSteps(trail: Array<{ type?: unknown; target?: unknown }>): ExplorationReproStep[] {
+export function trailToSteps(trail: Array<{ type?: unknown; target?: unknown; detail?: unknown }>): ExplorationReproStep[] {
   const steps: ExplorationReproStep[] = [];
   for (const a of trail) {
     const type = typeof a.type === 'string' ? a.type : '';
     const target = typeof a.target === 'string' ? a.target : '';
+    const detail = typeof a.detail === 'string' ? a.detail : '';
     switch (type) {
       case 'click': steps.push({ action: `点击 ${target}` }); break;
       case 'fill': steps.push({ action: `在 ${target} 输入内容` }); break;
@@ -114,6 +132,8 @@ export function trailToSteps(trail: Array<{ type?: unknown; target?: unknown }>)
       case 'wait': steps.push({ action: `等待 ${target} 毫秒` }); break;
       case 'navigate': steps.push({ action: `访问 ${target}` }); break;
       case 'screenshot': steps.push({ action: `截图 ${target}` }); break;
+      // 查库取证：expected 带平台记录的行数/摘要——reviewer 不用再自己去查一遍库。
+      case 'sql': steps.push({ action: `查库 ${target}`, ...(detail ? { expected: detail } : {}) }); break;
       default:
         if (target) steps.push({ action: `${type} ${target}`.trim() });
         break;

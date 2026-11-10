@@ -748,6 +748,152 @@ describe('runAiTask 步内子目标清单（plan 协议，对标 midscene sub-go
   });
 });
 
+describe('runAiTask 数据库取证通道（sql 动作，探索会话专用）', () => {
+  it('未挂 runSqlProbe → 机械拒收（不静默忽略），反馈可行动', async () => {
+    const { page } = makeStubPage();
+    const reported: Array<{ ok: boolean }> = [];
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'sql', query: 'SELECT id FROM assets' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '查库', llm, false, {
+      onAction: (a, ok) => reported.push({ ok }),
+    });
+    expect(requests[1]).toContain('未开通数据库取证通道');
+    expect(reported).toEqual([{ ok: false }]);
+  });
+
+  it('只读守卫拒绝写语句 → probe 根本不被调用（不触库）+ 反馈点名原因', async () => {
+    const { page } = makeStubPage();
+    let probeCalls = 0;
+    const reported: Array<{ ok: boolean }> = [];
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'sql', query: 'DELETE FROM assets' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '删库里的记录', llm, false, {
+      runSqlProbe: async () => {
+        probeCalls += 1;
+        return { ok: true, rowCount: 0, truncated: false, rows: [] };
+      },
+      onAction: (a, ok) => reported.push({ ok }),
+    });
+    expect(probeCalls).toBe(0);
+    expect(requests[1]).toContain('只读守卫拒绝');
+    expect(requests[1]).toContain('SELECT / WITH');
+    expect(reported).toEqual([{ ok: false }]);
+  });
+
+  it('取证成功 → 回灌行内容 + onAction ok=true + 不产生任何页面动作（查库不改页面）', async () => {
+    const { page, calls } = makeStubPage();
+    const reported: Array<{ ok: boolean; type: string }> = [];
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'sql', query: 'SELECT id,name FROM assets', limit: 5 }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '查库取证', llm, false, {
+      runSqlProbe: async (query, opts) => {
+        expect(query).toBe('SELECT id,name FROM assets');
+        expect(opts.limit).toBe(5);
+        return { ok: true, rowCount: 2, truncated: false, rows: [{ id: 1, name: '资产A' }, { id: 2, name: '资产B' }] };
+      },
+      onAction: (a, ok) => reported.push({ ok, type: a.type }),
+    });
+    expect(requests[1]).toContain('sql ok（2 行）');
+    expect(requests[1]).toContain('id=1 | name=资产A');
+    expect(reported).toEqual([{ ok: true, type: 'sql' }]);
+    // sql 不进浏览器执行器：无 goto / 无 settle 等待
+    expect(actionCalls(calls)).toEqual([]);
+  });
+
+  it('取证失败 → 反馈错误行 + onAction ok=false（不中断会话）', async () => {
+    const { page } = makeStubPage();
+    const reported: Array<{ ok: boolean }> = [];
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'sql', query: 'SELECT * FROM nope' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '查库', llm, false, {
+      runSqlProbe: async () => ({ ok: false, error: 'relation "nope" does not exist' }),
+      onAction: (a, ok) => reported.push({ ok }),
+    });
+    expect(requests[1]).toContain('sql: error');
+    expect(requests[1]).toContain('does not exist');
+    expect(reported).toEqual([{ ok: false }]);
+  });
+
+  it('同一查询连续 3 次失败 → 注入「不要再用同一条查询重试」自检行；成功后 streak 清零', async () => {
+    const { page } = makeStubPage();
+    const fail = async () => ({ ok: false as const, error: 'syntax error' });
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'sql', query: 'SELECT bad FROM t' }] },
+      { actions: [{ type: 'sql', query: 'SELECT bad FROM t' }] },
+      { actions: [{ type: 'sql', query: 'SELECT bad FROM t' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '查库', llm, false, { runSqlProbe: fail });
+    expect(requests[2]).not.toContain('已连续 3 次失败');
+    expect(requests[3]).toContain('已连续 3 次失败');
+    expect(requests[3]).toContain('不要再用同一条查询重试');
+    // 自检文案是查库口径（不是页面自检口径——那会把模型引向“看截图核对页面”）
+    expect(requests[3]).not.toContain('先用截图核对当前页面');
+  });
+
+  it('成功一次后 streak 清零（不累计到 3 连错）', async () => {
+    const { page } = makeStubPage();
+    let n = 0;
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'sql', query: 'SELECT x FROM t' }] },
+      { actions: [{ type: 'sql', query: 'SELECT x FROM t' }] },
+      { actions: [{ type: 'sql', query: 'SELECT x FROM t' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '查库', llm, false, {
+      runSqlProbe: async () => {
+        n += 1;
+        return n === 2
+          ? { ok: true, rowCount: 1, truncated: false, rows: [{ x: 1 }] }
+          : { ok: false, error: 'syntax error' };
+      },
+    });
+    // 第 2 次成功清零 → 第 3 次失败只是 1 连错，不触发自检
+    expect(requests[3]).not.toContain('已连续 3 次失败');
+  });
+
+  it('畸形 sql 动作（空 query）被丢弃：不调 probe、反馈「没有可执行的动作」', async () => {
+    const { page } = makeStubPage();
+    let probeCalls = 0;
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'sql', query: '' }, { type: 'sql' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '查库', llm, false, {
+      runSqlProbe: async () => {
+        probeCalls += 1;
+        return { ok: true, rowCount: 0, truncated: false, rows: [] };
+      },
+    });
+    expect(probeCalls).toBe(0);
+    expect(requests[1]).toContain('没有可执行的动作');
+  });
+
+  it('db 归属透传：模型点名库名 → probe 收到该 db', async () => {
+    const { page } = makeStubPage();
+    let gotDb: string | undefined;
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'sql', query: 'SELECT 1', db: 'SIEM数据库' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '查库', llm, false, {
+      runSqlProbe: async (_q, opts) => {
+        gotDb = opts.db;
+        return { ok: true, rowCount: 1, truncated: false, rows: [{ '1': 1 }] };
+      },
+    });
+    expect(gotDb).toBe('SIEM数据库');
+  });
+});
+
 describe('凭据占位符协议（credentialPlaceholderKind / makeCredentialValueSub）', () => {
   it('识别哨兵与花括号变体，裸名与普通文本不认', () => {
     // 哨兵精确形态

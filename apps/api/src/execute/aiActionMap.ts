@@ -123,6 +123,9 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
       case 'press':
         // AI 的 press 是页面级键盘动作（page.keyboard.press，无元素定位），映射不了带 locator 的 press DSL。
         return { ok: false, reason: `含键盘动作 press(${a.key})（页面级键盘、无元素定位），整步保持 aiTask` };
+      case 'sql':
+        // 数据库取证动作（探索会话专用通道）没有对应的机械 DSL：不能固化成回放步骤。
+        return { ok: false, reason: '含数据库取证动作（只读查询），无对应机械 DSL，整步保持 aiTask' };
       case 'wait':
         // AI 相的页面稳定等待映射为固定时长 waitFor（空 locator = 不等元素，睡满 timeoutMs）
         compiled.push({ kind: 'waitFor', locator: [], timeoutMs: a.ms });

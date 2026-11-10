@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { composeExplorationInstruction, coerceFindings, EXPLORATION_MAX_FINDINGS } from './explorationPrompt.js';
+import { composeExplorationInstruction, coerceFindings, trailToSteps, EXPLORATION_MAX_FINDINGS, EXPLORATION_MAX_SQL_PROBES } from './explorationPrompt.js';
 import { EXPLORATION_SYSTEM_PROMPT_BASE } from './explorationPrompt.js';
 import { EXPLORATION_PERSONA_KEYS } from '@itest/shared';
 
@@ -41,6 +41,25 @@ describe('EXPLORATION_SYSTEM_PROMPT_BASE - 协议与安全规则', () => {
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('机械拒收');
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('直接输出 fail 如实说明，不要改去任何其它站点');
   });
+
+  it('数据库取证协议：sql 动作形状 + 只读约束 + 行数上限', () => {
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('"sql"');
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('"query"');
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('只读');
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('写语句会被平台机械拒收');
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('一次最多回 20 行');
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('不要写进 findings');
+  });
+
+  it('子目标清单（plan）协议在探索基底里也在（执行基底有、探索基底曾漏）', () => {
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('"plan"');
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('子目标清单');
+  });
+
+  it('取证配额常量与 findings 配额并列（成本双保险）', () => {
+    expect(EXPLORATION_MAX_SQL_PROBES).toBeGreaterThan(0);
+    expect(EXPLORATION_MAX_SQL_PROBES).toBeLessThanOrEqual(EXPLORATION_MAX_FINDINGS);
+  });
 });
 
 describe('composeExplorationInstruction', () => {
@@ -76,6 +95,41 @@ describe('composeExplorationInstruction', () => {
     const s = composeExplorationInstruction({ ...base, personaKey: 'nope' });
     expect(s).toContain('通用测试员视角');
     expect(EXPLORATION_PERSONA_KEYS).toContain('qa');
+  });
+
+  it('dbs 非空 → 含「## 数据库取证」段（库名/方言 + 只读约束 + 默认库约定）', () => {
+    const s = composeExplorationInstruction({
+      ...base,
+      dbs: [{ label: 'SIEM数据库', dialect: 'mysql' }],
+    });
+    expect(s).toContain('## 数据库取证');
+    expect(s).toContain('SIEM数据库（mysql）');
+    expect(s).toContain('只允许 SELECT / WITH 开头的只读查询');
+    expect(s).toContain('不写 db 就查环境默认库');
+    expect(s).toContain('information_schema.tables');
+  });
+
+  it('dbs 缺省/空数组 → 无「## 数据库取证」段（通道不存在就不在提示词里露头）', () => {
+    expect(composeExplorationInstruction(base)).not.toContain('## 数据库取证');
+    expect(composeExplorationInstruction({ ...base, dbs: [] })).not.toContain('## 数据库取证');
+  });
+});
+
+describe('trailToSteps - 动作留痕转复现步骤', () => {
+  it('查库动作 → 「查库 <query>」+ expected 摘要（评审界面直接可见取证内容）', () => {
+    const steps = trailToSteps([
+      { type: 'click', target: '#submit' },
+      { type: 'sql', target: 'SELECT id,name FROM assets', detail: '2 行｜首行：id=1 | name=资产A' },
+    ]);
+    expect(steps).toEqual([
+      { action: '点击 #submit' },
+      { action: '查库 SELECT id,name FROM assets', expected: '2 行｜首行：id=1 | name=资产A' },
+    ]);
+  });
+
+  it('查库动作无 detail（失败/未回填）→ 只有 action，不带空 expected', () => {
+    const steps = trailToSteps([{ type: 'sql', target: 'SELECT 1' }]);
+    expect(steps).toEqual([{ action: '查库 SELECT 1' }]);
   });
 });
 
