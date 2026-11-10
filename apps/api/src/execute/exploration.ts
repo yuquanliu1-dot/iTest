@@ -119,12 +119,12 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
       };
       const onFindings = async (raw: unknown[]): Promise<void> => {
         modelReported += raw.length;
-        const { accepted, dropped, invalid } = coerceFindings(raw, {
+        const { accepted, dropped, invalid, invalidShapes } = coerceFindings(raw, {
           existingTitles: [...seenTitles],
           max: Math.max(0, EXPLORATION_MAX_FINDINGS - savedCount),
         });
         if (dropped > 0) {
-          logger.warn({ sessionId, reported: raw.length, dropped, invalid }, 'exploration findings dropped');
+          logger.warn({ sessionId, reported: raw.length, dropped, invalid, invalidShapes }, 'exploration findings dropped');
         }
         for (const f of accepted) {
           savedCount += 1;

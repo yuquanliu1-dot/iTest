@@ -123,11 +123,11 @@ export function trailToSteps(trail: Array<{ type?: unknown; target?: unknown }>)
 // —— 形状容错：真实模型常把字段写成别的名字/别的判级词，形状漂移不该让整条 finding 消失 ——
 // 2026-11-10 prod 实录：模型输出 {title,severity:"中",location,evidence}，
 // 旧实现只认 description → 5 条全被 safeParse 静默丢弃（摘要说 5 条、库里 0 条）。
-const DESCRIPTION_KEYS = ['description', 'evidence', 'detail', 'details', 'desc', 'analysis', 'content'];
-const TITLE_KEYS = ['title', 'name', 'issue', 'bug', 'summary'];
-const LOCATION_KEYS = ['location', 'position', 'where', 'page'];
-const STEPS_KEYS = ['reproSteps', 'repro', 'steps', 'reproduceSteps'];
-const SEVERITY_KEYS = ['severity', 'priority', 'level'];
+const DESCRIPTION_KEYS = ['description', 'evidence', 'detail', 'details', 'desc', 'analysis', 'content', '描述', '现象', '详情', '说明'];
+const TITLE_KEYS = ['title', 'name', 'issue', 'bug', 'summary', '标题', '缺陷', '问题'];
+const LOCATION_KEYS = ['location', 'position', 'where', 'page', '位置', '所在位置', '页面'];
+const STEPS_KEYS = ['reproSteps', 'repro', 'steps', 'reproduceSteps', '复现步骤', '操作步骤', '步骤'];
+const SEVERITY_KEYS = ['severity', 'priority', 'level', '严重程度', '级别', '优先级'];
 
 /** 中文/英文判级词 → P0-P3（未知判级 → P2 兜底）。 */
 const SEVERITY_ALIASES: Record<string, 'P0' | 'P1' | 'P2' | 'P3'> = {
@@ -214,6 +214,14 @@ function diceSimilarity(a: string, b: string): number {
   return (2 * inter) / (A.size + B.size);
 }
 
+/** 形状指纹：被拒条目的键名/类型——形状漂移时一眼看出模型写了什么（不落全文）。 */
+export function shapeFingerprint(item: unknown): string {
+  if (typeof item === 'string') return `string:${item.slice(0, 40)}`;
+  if (Array.isArray(item)) return `array:${item.length}`;
+  if (item && typeof item === 'object') return `keys:${Object.keys(item as object).join(',')}`;
+  return `type:${typeof item}`;
+}
+
 /** 两条标题是否同一缺陷（近义重报）。 */
 function isNearDuplicate(a: string, b: string): boolean {
   if (a === b) return true;
@@ -224,8 +232,14 @@ function isNearDuplicate(a: string, b: string): boolean {
   return diceSimilarity(a, b) >= SIMILARITY_MERGE_THRESHOLD;
 }
 
-/** 原始条目 → 契约形状；标题或描述双缺（或非对象）判废条目返回 null。 */
+/** 原始条目 → 契约形状；标题或描述双缺（或非对象）判废条目返回 null。
+ *  字符串条目也收：模型有时直接把缺陷写成一句话（当标题兼描述）。 */
 function canonicalizeFinding(raw: unknown): CoercedFinding | null {
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (!text) return null;
+    return { title: text.slice(0, 200), description: text.slice(0, 4000), severity: 'P2', reproSteps: [] };
+  }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const o = raw as Record<string, unknown>;
   const title = pickString(o, TITLE_KEYS);
@@ -244,10 +258,11 @@ function canonicalizeFinding(raw: unknown): CoercedFinding | null {
 export function coerceFindings(
   raw: unknown[],
   opts?: { existingTitles?: string[]; max?: number },
-): { accepted: CoercedFinding[]; dropped: number; invalid: number } {
+): { accepted: CoercedFinding[]; dropped: number; invalid: number; invalidShapes: string[] } {
   const seen: string[] = (opts?.existingTitles ?? []).map(normalizeTitle);
   const max = opts?.max ?? EXPLORATION_MAX_FINDINGS;
   const accepted: CoercedFinding[] = [];
+  const invalidShapes: string[] = [];
   let dropped = 0;
   let invalid = 0;
   for (const item of raw) {
@@ -259,12 +274,14 @@ export function coerceFindings(
     if (!canon) {
       dropped += 1;
       invalid += 1;
+      if (invalidShapes.length < 5) invalidShapes.push(shapeFingerprint(item));
       continue;
     }
     const parsed = FindingSchema.safeParse(canon);
     if (!parsed.success) {
       dropped += 1;
       invalid += 1;
+      if (invalidShapes.length < 5) invalidShapes.push(shapeFingerprint(item));
       continue;
     }
     const key = normalizeTitle(parsed.data.title);
@@ -276,5 +293,5 @@ export function coerceFindings(
     seen.push(key);
     accepted.push(parsed.data);
   }
-  return { accepted, dropped, invalid };
+  return { accepted, dropped, invalid, invalidShapes };
 }

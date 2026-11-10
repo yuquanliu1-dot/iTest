@@ -102,9 +102,9 @@ describe('coerceFindings', () => {
     expect(r2.dropped).toBe(1);
   });
 
-  it('reproSteps 超 10 条截断；非法非对象条目丢弃', () => {
+  it('reproSteps 超 10 条截断；非法非对象条目丢弃（字符串一句话条目除外）', () => {
     const steps = Array.from({ length: 15 }, (_, i) => ({ action: `步骤${i}` }));
-    const r = coerceFindings([{ title: 'T', description: 'd', reproSteps: steps }, 'not-an-object', null]);
+    const r = coerceFindings([{ title: 'T', description: 'd', reproSteps: steps }, 42, null]);
     expect(r.accepted).toHaveLength(1);
     expect(r.accepted[0]!.reproSteps).toHaveLength(10);
     expect(r.dropped).toBe(2);
@@ -203,5 +203,42 @@ describe('coerceFindings 近义标题合并', () => {
     const r = coerceFindings([f('列表页分页控件点击无响应'), f('列表页分页控件点了没反应')]);
     expect(r.accepted).toHaveLength(1);
     expect(r.dropped).toBe(1);
+  });
+});
+
+describe('coerceFindings 再容错（11-10 prod 二次形状漂移：6 条全 invalid）', () => {
+  it('字符串条目也收：一句话当标题兼描述', () => {
+    const r = coerceFindings(['表格第2行金额列显示 undefined', '  ', '保存后提示不消失']);
+    expect(r.accepted).toHaveLength(2);
+    expect(r.accepted[0]!.title).toBe('表格第2行金额列显示 undefined');
+    expect(r.accepted[0]!.description).toBe('表格第2行金额列显示 undefined');
+    expect(r.accepted[0]!.severity).toBe('P2');
+    expect(r.dropped).toBe(1);
+    expect(r.invalid).toBe(1);
+  });
+
+  it('中文字段名容错：标题/描述/严重程度/复现步骤', () => {
+    const r = coerceFindings([
+      {
+        标题: '资产列表金额列显示 NaN',
+        描述: '第3行金额列渲染为 NaN',
+        严重程度: '高',
+        位置: '资产列表第3行',
+        复现步骤: [{ 操作: '打开列表', 预期: '金额为数字' }],
+      },
+    ]);
+    expect(r.accepted).toHaveLength(1);
+    expect(r.accepted[0]!.title).toBe('资产列表金额列显示 NaN');
+    expect(r.accepted[0]!.description).toContain('第3行金额列');
+    expect(r.accepted[0]!.description).toContain('位置：资产列表第3行');
+    expect(r.accepted[0]!.severity).toBe('P1');
+    expect(r.accepted[0]!.reproSteps).toEqual([{ action: '打开列表', expected: '金额为数字' }]);
+  });
+
+  it('被拒条目返回形状指纹（keys:/string:/array:）供日志归因', () => {
+    const r = coerceFindings([{ 别名: 'x' }, ['a', 'b'], { title: '', description: 'd' }]);
+    expect(r.accepted).toHaveLength(0);
+    expect(r.invalid).toBe(3);
+    expect(r.invalidShapes).toEqual(['keys:别名', 'array:2', 'keys:title,description']);
   });
 });
