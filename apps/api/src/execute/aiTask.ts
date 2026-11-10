@@ -1032,7 +1032,8 @@ export interface RunAiTaskOpts {
    *  取到的是模型作证时的页面状态（动作尚未改变页面）。 */
   onFindings?: (raw: unknown[]) => Promise<void>;
   /** 探索范围白名单（origin 列表）：navigate 只允许落在这些 origin 内，越界事前拒收。
-   *  缺省不传 = 不设限（verify/登录路径行为不变）。探索式会话传起点 origin——
+   *  缺省不传 = 不设限（verify/登录路径行为不变）；传空数组 = 全拒（起点 origin 不可解析时的保守口径）。
+   *  探索式会话传起点 origin——
    *  2026-11-10 prod 实证：SUT 端点挂掉后模型按「页面自检」自主导航到了项目默认环境
    *  的真实系统并用真凭据登录、写入了数据；charter 的「禁止离开」纯提示词约束无人执行。 */
   scopeOrigins?: string[];
@@ -1223,7 +1224,7 @@ export async function runAiTask(
       }
       // 探索范围闸：navigate 越界事前拒收（不 goto）。与脆弱 selector 硬闸同法——拒收也是一次
       // 失败，计入 errStreak，同一越界目标反复尝试 3 次触发自检注入。
-      if (a.type === 'navigate' && opts?.scopeOrigins && opts.scopeOrigins.length > 0) {
+      if (a.type === 'navigate' && opts?.scopeOrigins) {
         const reason = scopeViolationReason(a.url, opts.scopeOrigins);
         if (reason) {
           lastResults.push(`navigate ${a.url}: error 探索范围被拒（${reason}）。只能在起点站点的域名内探索；若起点页面打不开，直接输出 fail 如实说明，不要改去其它站点。`);

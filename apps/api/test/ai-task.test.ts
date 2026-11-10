@@ -517,6 +517,17 @@ describe('runAiTask', () => {
     expect(rejected?.ok).toBe(false);
   });
 
+  it('opts.scopeOrigins 空数组 = 全拒（起点 origin 不可解析时的保守口径）', async () => {
+    const { page, calls } = makeStubPage();
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'navigate', url: 'https://sut.example/home' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '探索', llm, false, { scopeOrigins: [] });
+    expect(calls).not.toContain('goto:https://sut.example/home');
+    expect(requests[1]).toContain('探索范围被拒');
+  });
+
   it('opts.maxTurns 覆盖轮数上限并出现在报错文案', async () => {
     const { page } = makeStubPage();
     const { llm } = makeMockLlm(Array.from({ length: 3 }, () => ({ actions: [{ type: 'wait', ms: 1 }] })));

@@ -89,12 +89,14 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
     const cred = webRef ? envCtx.resolveLogin(webRef) : null;
     const startUrl = session.startUrl?.trim() || envCtx.baseUrl || cred?.loginUrl || '';
     if (!startUrl) throw new Error('缺少探索起点 URL（会话未填 startUrl，且环境未配置 baseUrl/loginUrl）');
-    // 探索范围白名单：navigate 只允许落在起点站点（+ 登录页站点，覆盖 SSO 跨域登录）。
+    // 探索范围白名单 = 起点 origin（唯一）。
     // runAiTask 侧对越界 navigate 事前拒收——charter 的「禁止离开」只是提示词约束，
     // 2026-11-10 prod 实证过它拦不住模型（SUT 挂掉 → 自主导航到真实系统 + 真凭据登录 + 写数据）。
-    const scopeOrigins = Array.from(
-      new Set([originOf(startUrl), originOf(cred?.loginUrl ?? '')].filter((o): o is string => !!o)),
-    );
+    // 刻意不加「环境 web 资源的 loginUrl origin」：那个 origin 往往正是真实被测系统本身
+    // （prod 的 SOC 192.168.30.123:1688），加进白名单等于把上面那条越界写数据路径重新打开。
+    // 起点 origin 不可解析 → 白名单为空数组 = navigate 全拒（保守收口，模型输出 fail）。
+    const startOrigin = originOf(startUrl);
+    const scopeOrigins = startOrigin ? [startOrigin] : [];
 
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
     try {

@@ -226,6 +226,13 @@ describe('scopeViolationReason / originOf - 探索范围闸（2026-11-10 prod �
     expect(r).toContain('http://127.0.0.1:56100');
   });
 
+  it('空白名单 = 全拒（起点 origin 不可解析时的保守口径）', () => {
+    expect(scopeViolationReason('http://127.0.0.1:56100/defect.html', [])).toContain('越界');
+    expect(scopeViolationReason('http://127.0.0.1:56100/defect.html', [])).toContain('http://127.0.0.1:56100');
+    // URL 不可解析 → 原因点名「不可解析」（不静默放行）
+    expect(scopeViolationReason('not a url', ['https://sut.example'])).toContain('不可解析');
+  });
+
   it('端口不同即跨 origin（56100 vs 56101 不放行）；多 origin 白名单任一命中即放行', () => {
     const allow = ['http://127.0.0.1:56100', 'https://sso.example.com'];
     expect(scopeViolationReason('http://127.0.0.1:56101/defect.html', allow)).not.toBeNull();
