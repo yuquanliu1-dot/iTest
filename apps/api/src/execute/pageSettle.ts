@@ -22,8 +22,9 @@ export interface PageSettleOptions {
 }
 
 /** 页内采样像素指纹：把 viewport 缩到 160x100 画布，逐行 hash 像素，返回稳定整数值。
- *  与 DPR 无关（固定采样格数），对纯文字/静态布局变化敏感，对持续动画永不收敛。 */
-async function pageFingerprint(page: Page): Promise<number> {
+ *  与 DPR 无关（固定采样格数），对纯文字/静态布局变化敏感，对持续动画永不收敛。
+ *  waitForPageSettled 用它判「渲染已静默」；aiTask 的可观测变化闸用它判「点击是否真的改变了画面」。 */
+export async function pageFingerprint(page: Page): Promise<number> {
   return page.evaluate(() => {
     const canvas = document.createElement('canvas');
     const W = 160;

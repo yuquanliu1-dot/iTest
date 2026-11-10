@@ -6,7 +6,8 @@ import { VAR_NAME_RE, type StepAction } from '@itest/shared';
 import type { AiUsageAddend } from './aiUsage.js';
 import { logger } from '../logger.js';
 import { annotateAction, clearAnnotation } from './liveView.js';
-import { waitForPageSettled } from './pageSettle.js';
+import { waitForPageSettled, pageFingerprint } from './pageSettle.js';
+import { captureLiveRegionMessages, diffNewMessages, hasObservableChange, type ChangeSnapshot } from './liveRegion.js';
 import { isOpenDropdownFilter } from './dropdownFilter.js';
 
 /** 单条指令的最大对话轮数（每轮一次 LLM 调用）。 */
@@ -413,6 +414,37 @@ function parseAction(a: unknown): AiAction | null {
     return null;
   }
   return null;
+}
+
+/** 脆弱 selector 硬闸（借 srbarrios agentic-test-explorer engine.py _BRITTLE_SELECTOR_PATTERNS）：
+ *  XPath / :nth-child / :nth-of-type / 裸标签位置链在微小布局变化下即漂移，运行时事前拒收
+ *  （提示词禁令的 enforcement；:has-text 另为子串匹配易歧义）。只作用于模型动作通道——
+ *  平台自产 selector（SYNTH_SELECTOR_SRC，固化回放/上报链）不经此处，不受影响。 */
+const BRITTLE_SELECTOR_PATTERNS: Array<{ re: RegExp; why: string }> = [
+  { re: /^\//, why: 'XPath 绝对路径' },
+  { re: /\/\//, why: 'XPath（//）' },
+  { re: /:nth-child\s*\(/i, why: ':nth-child() 位置选择' },
+  { re: /:nth-of-type\s*\(/i, why: ':nth-of-type() 位置选择' },
+  { re: />\s*(?:div|span|li|ul|ol|td|tr|th)\s*[\s>+~[{,]/i, why: '裸标签位置链' },
+  { re: /:has-text\s*\(/i, why: ':has-text()' },
+];
+
+/** 脆弱 selector 检查：命中返回原因，null = 放行。 */
+export function brittleSelectorReason(selector: string): string | null {
+  for (const p of BRITTLE_SELECTOR_PATTERNS) {
+    if (p.re.test(selector)) return p.why;
+  }
+  return null;
+}
+
+/** 记一次同目标失败；连续 ≥3 次时返回自检注入行并清零（与既有 3 连错语义一致），否则 null。 */
+function noteStreakFailure(errStreak: Map<string, number>, key: string | null): string | null {
+  if (key == null) return null;
+  const streak = (errStreak.get(key) ?? 0) + 1;
+  errStreak.set(key, streak);
+  if (streak < 3) return null;
+  errStreak.set(key, 0);
+  return `[system] 目标 ${key} 已连续 3 次失败：停止对它重试。先用截图核对当前页面是否在指令期望的界面（弹窗/跳转/加载中都会让目标消失），页面不对先处理页面；确认页面正确而目标确实不存在，则输出 fail 如实说明。`;
 }
 
 /** 坐标动作的解析结果：该点命中的元素（selector 合成与 dumpElements 共用 SYNTH_SELECTOR_SRC）。 */
@@ -1027,6 +1059,15 @@ export async function runAiTask(
   const history: LLMMessage[] = [];
   // 步内子目标滚动清单（模型自维护，平台整段替换+回显；无清单的简单指令恒为 null）
   let subGoals: SubGoal[] | null = null;
+  // 网络请求累计计数（可观测变化闸信号之一，liveRegion.hasObservableChange）：每个 click 动作
+  // 窗口取 delta。不做 removeListener——verify 会在同一 page 上多次 runAiTask，各 run 闭包独立
+  // 计数（旧监听器只 bump 旧闭包），delta 语义仍正确；泄漏量 = 每 run 一个闭包，可忽略。
+  // 可选调用：prod Page 恒有 on；测试桩 page 没有也不拦主流程（console-capture 批次教训：
+  // 对 mock 缺的方法不设防 = 新增一批永久基线红）。
+  let requestCount = 0;
+  page.on?.('request', () => {
+    requestCount += 1;
+  });
   for (let turn = 1; turn <= maxTurns; turn++) {
     if (opts?.shouldAbort && (await opts.shouldAbort())) {
       throw new Error('计划运行已终止，AI 步骤中断');
@@ -1124,6 +1165,15 @@ export async function runAiTask(
     lastResults = [];
     for (const a of actions) {
       if (a.type === 'screenshot') {
+        // screenshot 的 selector 同样拿 locator 查询——同过硬闸，拒绝时不接受截图请求。
+        if (a.selector) {
+          const reason = brittleSelectorReason(a.selector);
+          if (reason) {
+            lastResults.push(`screenshot ${a.selector}: error 脆弱 selector 被拒（${reason}）。改用坐标形态 screenshot @x,y。`);
+            opts?.onAction?.(a, false);
+            continue;
+          }
+        }
         if (a.selector) pendingShot = { kind: 'element', selector: a.selector };
         else if (typeof a.x === 'number' && typeof a.y === 'number') pendingShot = { kind: 'crop', x: a.x, y: a.y };
         lastResults.push(`screenshot ${a.selector ?? `@${a.x},${a.y}`}: 已接受，下轮附图`);
@@ -1135,6 +1185,19 @@ export async function runAiTask(
         ? (a.selector ?? (typeof a.x === 'number' && typeof a.y === 'number' ? `@${Math.round(a.x / 25)},${Math.round(a.y / 25)}` : null))
         : null;
       const sel = 'selector' in a ? a.selector : null;
+      // 脆弱 selector 硬闸：XPath/位置链事前拒收（srbarrios 口径），错误行计入 errStreak——
+      // 同一死目标换着花样写脆弱 selector 也拦得住，3 连触发自检注入。
+      if (sel) {
+        const reason = brittleSelectorReason(sel);
+        if (reason) {
+          lastResults.push(`${a.type} ${sel}: error 脆弱 selector 被拒（${reason}在微小布局变化下即漂移）。改用坐标主通道（元素清单含与截图对齐的归一化坐标框）或 text=文本 selector。`);
+          opts?.onAction?.(toReportAction(a, null), false);
+          const selfCheck = noteStreakFailure(errStreak, streakKey);
+          if (selfCheck) lastResults.push(selfCheck);
+          logger.info({ type: a.type, selector: sel.slice(0, 80), reason }, 'aiTask brittle selector rejected');
+          continue;
+        }
+      }
       const coordPt = typeof (a as { x?: number }).x === 'number' && typeof (a as { y?: number }).y === 'number'
         ? toViewportPt(a as { x?: number; y?: number }, page)
         : null;
@@ -1149,6 +1212,13 @@ export async function runAiTask(
       } else if (sel) {
         await annotateAction(page, () => page.locator(sel).first().boundingBox().catch(() => null));
       }
+      // 可观测变化采样：click/fill/press 动作前抓 live-region 基线（toast/提示一手证据），
+      // click 另存变化闸快照（URL/视觉指纹/请求数）。
+      const observe = a.type === 'click' || a.type === 'fill' || a.type === 'press';
+      const beforeMsgs = observe ? await captureLiveRegionMessages(page) : [];
+      const clickBefore: ChangeSnapshot | null = a.type === 'click'
+        ? { url: page.url(), fingerprint: await pageFingerprint(page), requests: requestCount, messages: beforeMsgs }
+        : null;
       try {
         const outcome = await execAction(page, a, valueSub);
         lastResults.push(outcome.report);
@@ -1156,20 +1226,41 @@ export async function runAiTask(
         opts?.onAction?.(toReportAction(a, outcome.resolvedSelector), true);
         if (streakKey != null) errStreak.delete(streakKey);
         // 会改页面的动作后短暂稳定，下一个动作不建立在过期认知上（对标 midscene）。
-        if (a.type === 'click' || a.type === 'fill' || a.type === 'navigate') await settleAfterAction(page);
+        // press 纳入：Enter/Escape 常触发提交/关弹窗，消息提取需要稳定窗口。
+        if (a.type === 'click' || a.type === 'fill' || a.type === 'press' || a.type === 'navigate') await settleAfterAction(page);
+        if (observe) {
+          const afterMsgs = await captureLiveRegionMessages(page);
+          const newMsgs = diffNewMessages(beforeMsgs, afterMsgs);
+          if (newMsgs.length > 0) {
+            // 应用自己吐的 toast/提示文本（aria-live 区域），一手证据回喂——截图读不清不成为漏报理由。
+            lastResults.push(`页面消息: ${newMsgs.slice(0, 3).map((m) => `"${m.slice(0, 160)}"`).join('、')}`);
+          }
+          // 可观测变化闸（explorbot hasObservablePageChange 口径）：点击四路信号全无变化 = 无效
+          // 点击（目标被遮挡/禁用/命中非交互元素）。计入 errStreak——同一死目标 3 连触发自检，砍空转。
+          if (clickBefore) {
+            const clickAfter: ChangeSnapshot = {
+              url: page.url(),
+              fingerprint: await pageFingerprint(page),
+              requests: requestCount,
+              messages: afterMsgs,
+            };
+            if (!hasObservableChange(clickBefore, clickAfter, newMsgs)) {
+              lastResults.push('[system] 页面无观测变化：点击已执行但 URL/画面/网络请求/消息区域均未变——目标可能被遮挡、禁用或命中了非交互元素。不要原样重试同一目标；换用元素清单坐标或换目标。');
+              const selfCheck = noteStreakFailure(errStreak, streakKey);
+              if (selfCheck) lastResults.push(selfCheck);
+              logger.info({ target: sel ?? `@${(a as { x?: number }).x},${(a as { y?: number }).y}`, instruction: instruction.slice(0, 80) }, 'aiTask click no observable change');
+            }
+          }
+        }
       } catch (e) {
         // 凭据缺失是环境级硬错误：反馈给 LLM 只会让它换 selector 空转烧调用，直接终止本步
         // （EnvMissing/SecretMissing 由 valueSub 抛出，携带可行动的配置指引）。
         if (e instanceof Error && (e.name === 'EnvMissing' || e.name === 'SecretMissing')) throw e;
         opts?.onAction?.(toReportAction(a, null), false);
-        const streak = streakKey != null ? (errStreak.get(streakKey) ?? 0) + 1 : 0;
-        if (streakKey != null) errStreak.set(streakKey, streak);
         const target = sel ?? (coordPt ? `@${(a as { x?: number }).x},${(a as { y?: number }).y}` : ('url' in a ? a.url : a.type));
         lastResults.push(`${a.type} ${target}: error ${e instanceof Error ? e.message.slice(0, 150) : String(e)}`);
-        if (streak >= 3) {
-          errStreak.set(streakKey!, 0);
-          lastResults.push(`[system] 目标 ${target} 已连续 3 次失败：停止对它重试。先用截图核对当前页面是否在指令期望的界面（弹窗/跳转/加载中都会让目标消失），页面不对先处理页面；确认页面正确而目标确实不存在，则输出 fail 如实说明。`);
-        }
+        const selfCheck = noteStreakFailure(errStreak, streakKey);
+        if (selfCheck) lastResults.push(selfCheck);
       } finally {
         await clearAnnotation(page);
       }

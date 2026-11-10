@@ -30,6 +30,12 @@ describe('EXPLORATION_SYSTEM_PROMPT_BASE - 协议与安全规则', () => {
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('不得离开被测站点');
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('主动找茬');
   });
+
+  it('反馈协议说明（页面消息=一手证据 + 无观测变化=点击无效换目标）', () => {
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('页面消息');
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('页面无观测变化');
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('不成为漏报理由');
+  });
 });
 
 describe('composeExplorationInstruction', () => {

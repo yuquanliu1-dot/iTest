@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assembleSystemPrompt, referencesCredential, buildDegradeContext, classifyDegradeStep } from './aiTask.js';
+import { assembleSystemPrompt, referencesCredential, buildDegradeContext, classifyDegradeStep, brittleSelectorReason } from './aiTask.js';
 
 describe('assembleSystemPrompt - 凭据段门控', () => {
   it('credEnabled=false → 提示词不含任何凭据形态', () => {
@@ -177,6 +177,34 @@ describe('classifyDegradeStep - 按机械语义分类', () => {
   it('无机械动作 → unknown', () => {
     expect(classifyDegradeStep({ compiled: null })).toBe('unknown');
     expect(classifyDegradeStep({ compiled: [] })).toBe('unknown');
+  });
+});
+
+describe('brittleSelectorReason - 脆弱 selector 硬闸（借 srbarrios 口径）', () => {
+  it('普通 CSS / text= / 属性 / id 子选择器放行', () => {
+    for (const s of ['#app', '.btn', "[data-test='x']", 'text=登录', 'button.primary', '#save > i', 'input[name="username"]']) {
+      expect(brittleSelectorReason(s), s).toBeNull();
+    }
+  });
+
+  it('XPath（绝对路径与 //）拒绝', () => {
+    expect(brittleSelectorReason('/html/body/div[2]')).toContain('XPath');
+    expect(brittleSelectorReason('//div[@class="x"]')).toContain('XPath');
+    expect(brittleSelectorReason('.//span')).toContain('XPath');
+  });
+
+  it(':nth-child / :nth-of-type 位置选择拒绝', () => {
+    expect(brittleSelectorReason('ul > li:nth-child(2)')).toContain('nth-child');
+    expect(brittleSelectorReason('span:nth-of-type(3)')).toContain('nth-of-type');
+  });
+
+  it('裸标签位置链拒绝（> div/span/li/… 后接组合器）', () => {
+    expect(brittleSelectorReason('body > div > span')).toContain('位置链');
+    expect(brittleSelectorReason('ul > li > a')).toContain('位置链');
+  });
+
+  it(':has-text（提示词禁令的运行时 enforcement）拒绝', () => {
+    expect(brittleSelectorReason('button:has-text("保存")')).toContain('has-text');
   });
 });
 
