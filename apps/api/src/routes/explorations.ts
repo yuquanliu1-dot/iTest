@@ -15,6 +15,7 @@ import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '.
 import { handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf } from '../execute/liveView.js';
 import { getExecutionQueue, isExecutionQueueReady, EXEC_QUEUE_NAME } from '../scheduler/execQueue.js';
 import { runExplorationSession, removeExplorationScreenshots } from '../execute/exploration.js';
+import { trailToSteps } from '../execute/explorationPrompt.js';
 import { parsePaging } from '../lib/pagination.js';
 import { createCaseWithSteps } from '../services/cases.service.js';
 import { attachCreators } from '../lib/creator.js';
@@ -222,21 +223,7 @@ function reproStepsOf(finding: { reproSteps: unknown; actionsTrail: unknown }): 
     .filter(Boolean);
   if (fromModel.length > 0) return fromModel;
   const trail = Array.isArray(finding.actionsTrail) ? finding.actionsTrail : [];
-  return trail
-    .map((a) => {
-      const t = a as { type?: string; target?: string };
-      const target = typeof t.target === 'string' ? t.target : '';
-      switch (t.type) {
-        case 'click': return `点击 ${target}`;
-        case 'fill': return `在 ${target} 输入内容`;
-        case 'press': return `按键 ${target}`;
-        case 'wait': return `等待 ${target} 毫秒`;
-        case 'navigate': return `访问 ${target}`;
-        case 'screenshot': return `截图 ${target}`;
-        default: return target ? `${t.type ?? ''} ${target}`.trim() : '';
-      }
-    })
-    .filter(Boolean);
+  return trailToSteps(trail).map((s) => s.action);
 }
 
 /**

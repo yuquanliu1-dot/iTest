@@ -21,6 +21,7 @@ import { newAiUsage } from './aiUsage.js';
 import {
   composeExplorationInstruction,
   coerceFindings,
+  trailToSteps,
   EXPLORATION_SYSTEM_PROMPT_BASE,
   EXPLORATION_MAX_FINDINGS,
 } from './explorationPrompt.js';
@@ -34,13 +35,6 @@ export const EXPLORATION_WALL_CLOCK_MS = 15 * 60_000;
 
 function screenshotDiskPath(sessionId: string, order: number): string {
   return join(process.cwd(), 'screenshots', sessionId, `finding-${order}.png`);
-}
-
-/** 模型没给复现步骤时，用平台自己的动作留痕兜底（真实动作序列比模型现编的更可信）。 */
-function stepsFromTrail(trail: Array<{ type: string; target: string; ok: boolean }>): ExplorationReproStep[] {
-  const succeeded = trail.filter((a) => a.ok);
-  const use = succeeded.length > 0 ? succeeded : trail;
-  return use.slice(0, 10).map((a) => ({ action: `${a.type} ${a.target}`.trim() }));
 }
 
 /** 会话总结补「模型报 N 条 / 落库 M 条」——避免摘要说几条、库里 0 条的自相矛盾。 */
@@ -152,7 +146,7 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
               title: f.title,
               description: f.description,
               severity: f.severity,
-              reproSteps: f.reproSteps.length > 0 ? f.reproSteps : stepsFromTrail(trail),
+              reproSteps: f.reproSteps.length > 0 ? f.reproSteps : trailToSteps(trail),
               actionsTrail: [...trail],
               screenshotPath,
               pageUrl: page.url(),

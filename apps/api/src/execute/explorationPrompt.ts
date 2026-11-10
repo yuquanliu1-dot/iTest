@@ -98,6 +98,28 @@ function normalizeTitle(title: string): string {
   return title.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+/** 动作留痕 → 复现步骤文本：平台自己记的动作序列 = ground truth（模型脑补的步骤靠不住）。
+ *  升格用例与详情展示共用这一份口径。 */
+export function trailToSteps(trail: Array<{ type?: unknown; target?: unknown }>): ExplorationReproStep[] {
+  const steps: ExplorationReproStep[] = [];
+  for (const a of trail) {
+    const type = typeof a.type === 'string' ? a.type : '';
+    const target = typeof a.target === 'string' ? a.target : '';
+    switch (type) {
+      case 'click': steps.push({ action: `点击 ${target}` }); break;
+      case 'fill': steps.push({ action: `在 ${target} 输入内容` }); break;
+      case 'press': steps.push({ action: `按键 ${target}` }); break;
+      case 'wait': steps.push({ action: `等待 ${target} 毫秒` }); break;
+      case 'navigate': steps.push({ action: `访问 ${target}` }); break;
+      case 'screenshot': steps.push({ action: `截图 ${target}` }); break;
+      default:
+        if (target) steps.push({ action: `${type} ${target}`.trim() });
+        break;
+    }
+  }
+  return steps;
+}
+
 // —— 形状容错：真实模型常把字段写成别的名字/别的判级词，形状漂移不该让整条 finding 消失 ——
 // 2026-11-10 prod 实录：模型输出 {title,severity:"中",location,evidence}，
 // 旧实现只认 description → 5 条全被 safeParse 静默丢弃（摘要说 5 条、库里 0 条）。
