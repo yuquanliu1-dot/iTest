@@ -437,6 +437,24 @@ export function brittleSelectorReason(selector: string): string | null {
   return null;
 }
 
+/** URL → origin（http/https 之外或解析失败 → null）。 */
+export function originOf(url: string): string | null {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 探索范围闸：navigate 目标 origin 不在白名单 → 拒收原因，null = 放行。
+ *  URL 解析不出 origin（理论上 parseAction 已滤成 http/https）也按越界处理。 */
+export function scopeViolationReason(url: string, allowedOrigins: string[]): string | null {
+  const o = originOf(url);
+  if (o && allowedOrigins.includes(o)) return null;
+  return `越界（目标 origin ${o ?? '不可解析'} 不在允许范围 ${allowedOrigins.join('、')} 内）`;
+}
+
 /** 记一次同目标失败；连续 ≥3 次时返回自检注入行并清零（与既有 3 连错语义一致），否则 null。 */
 function noteStreakFailure(errStreak: Map<string, number>, key: string | null): string | null {
   if (key == null) return null;
@@ -1013,6 +1031,11 @@ export interface RunAiTaskOpts {
    *  调用时机 = fail 检查之后、本轮动作解析执行之前；await 语义——回调内可截当前页截图，
    *  取到的是模型作证时的页面状态（动作尚未改变页面）。 */
   onFindings?: (raw: unknown[]) => Promise<void>;
+  /** 探索范围白名单（origin 列表）：navigate 只允许落在这些 origin 内，越界事前拒收。
+   *  缺省不传 = 不设限（verify/登录路径行为不变）。探索式会话传起点 origin——
+   *  2026-11-10 prod 实证：SUT 端点挂掉后模型按「页面自检」自主导航到了项目默认环境
+   *  的真实系统并用真凭据登录、写入了数据；charter 的「禁止离开」纯提示词约束无人执行。 */
+  scopeOrigins?: string[];
 }
 
 /**
@@ -1195,6 +1218,19 @@ export async function runAiTask(
           const selfCheck = noteStreakFailure(errStreak, streakKey);
           if (selfCheck) lastResults.push(selfCheck);
           logger.info({ type: a.type, selector: sel.slice(0, 80), reason }, 'aiTask brittle selector rejected');
+          continue;
+        }
+      }
+      // 探索范围闸：navigate 越界事前拒收（不 goto）。与脆弱 selector 硬闸同法——拒收也是一次
+      // 失败，计入 errStreak，同一越界目标反复尝试 3 次触发自检注入。
+      if (a.type === 'navigate' && opts?.scopeOrigins && opts.scopeOrigins.length > 0) {
+        const reason = scopeViolationReason(a.url, opts.scopeOrigins);
+        if (reason) {
+          lastResults.push(`navigate ${a.url}: error 探索范围被拒（${reason}）。只能在起点站点的域名内探索；若起点页面打不开，直接输出 fail 如实说明，不要改去其它站点。`);
+          opts?.onAction?.(a, false);
+          const selfCheck = noteStreakFailure(errStreak, `navigate:${originOf(a.url) ?? a.url}`);
+          if (selfCheck) lastResults.push(selfCheck);
+          logger.info({ url: a.url.slice(0, 120), scope: opts.scopeOrigins, reason }, 'aiTask navigate out of scope rejected');
           continue;
         }
       }

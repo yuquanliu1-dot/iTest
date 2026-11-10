@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assembleSystemPrompt, referencesCredential, buildDegradeContext, classifyDegradeStep, brittleSelectorReason } from './aiTask.js';
+import { assembleSystemPrompt, referencesCredential, buildDegradeContext, classifyDegradeStep, brittleSelectorReason, originOf, scopeViolationReason } from './aiTask.js';
 
 describe('assembleSystemPrompt - 凭据段门控', () => {
   it('credEnabled=false → 提示词不含任何凭据形态', () => {
@@ -205,6 +205,31 @@ describe('brittleSelectorReason - 脆弱 selector 硬闸（借 srbarrios 口径�
 
   it(':has-text（提示词禁令的运行时 enforcement）拒绝', () => {
     expect(brittleSelectorReason('button:has-text("保存")')).toContain('has-text');
+  });
+});
+
+describe('scopeViolationReason / originOf - 探索范围闸（2026-11-10 prod 越界写数据实证）', () => {
+  it('originOf 归一化：端口/路径/大小写差异同 origin；非 http(s) 与非 URL → null', () => {
+    expect(originOf('http://127.0.0.1:56100/defect.html')).toBe('http://127.0.0.1:56100');
+    expect(originOf('https://SUT.example.com/app?x=1')).toBe('https://sut.example.com');
+    expect(originOf('javascript:alert(1)')).toBeNull();
+    expect(originOf('not a url')).toBeNull();
+  });
+
+  it('同 origin 放行；跨 origin 拒收且原因点名目标与被允许范围', () => {
+    const allow = ['http://127.0.0.1:56100'];
+    expect(scopeViolationReason('http://127.0.0.1:56100/other.html', allow)).toBeNull();
+    expect(scopeViolationReason('http://127.0.0.1:56100', allow)).toBeNull();
+    const r = scopeViolationReason('https://192.168.30.123:1688/login', allow);
+    expect(r).toContain('越界');
+    expect(r).toContain('https://192.168.30.123:1688');
+    expect(r).toContain('http://127.0.0.1:56100');
+  });
+
+  it('端口不同即跨 origin（56100 vs 56101 不放行）；多 origin 白名单任一命中即放行', () => {
+    const allow = ['http://127.0.0.1:56100', 'https://sso.example.com'];
+    expect(scopeViolationReason('http://127.0.0.1:56101/defect.html', allow)).not.toBeNull();
+    expect(scopeViolationReason('https://sso.example.com/login', allow)).toBeNull();
   });
 });
 

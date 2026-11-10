@@ -36,6 +36,11 @@ describe('EXPLORATION_SYSTEM_PROMPT_BASE - 协议与安全规则', () => {
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('页面无观测变化');
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('不成为漏报理由');
   });
+
+  it('范围约束写明机械拒收 + 起点不可达输出 fail（2026-11-10 越界写数据实证）', () => {
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('机械拒收');
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('直接输出 fail 如实说明，不要改去任何其它站点');
+  });
 });
 
 describe('composeExplorationInstruction', () => {

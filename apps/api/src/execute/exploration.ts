@@ -13,7 +13,7 @@ import type { ExplorationReproStep } from '@itest/shared';
 import { db } from '../db/client.js';
 import { explorationSessions, explorationFindings } from '../db/schema.js';
 import { resolveEnv } from './envContext.js';
-import { runAiTask, credentialPlaceholder, makeCredentialValueSub, type AiAction } from './aiTask.js';
+import { runAiTask, credentialPlaceholder, makeCredentialValueSub, originOf, type AiAction } from './aiTask.js';
 import { buildCredentialSource, renderWebResourceManifest, defaultWebRef } from './credentialSource.js';
 import { waitForPageSettled } from './pageSettle.js';
 import { registerLiveView } from './liveView.js';
@@ -89,6 +89,12 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
     const cred = webRef ? envCtx.resolveLogin(webRef) : null;
     const startUrl = session.startUrl?.trim() || envCtx.baseUrl || cred?.loginUrl || '';
     if (!startUrl) throw new Error('缺少探索起点 URL（会话未填 startUrl，且环境未配置 baseUrl/loginUrl）');
+    // 探索范围白名单：navigate 只允许落在起点站点（+ 登录页站点，覆盖 SSO 跨域登录）。
+    // runAiTask 侧对越界 navigate 事前拒收——charter 的「禁止离开」只是提示词约束，
+    // 2026-11-10 prod 实证过它拦不住模型（SUT 挂掉 → 自主导航到真实系统 + 真凭据登录 + 写数据）。
+    const scopeOrigins = Array.from(
+      new Set([originOf(startUrl), originOf(cred?.loginUrl ?? '')].filter((o): o is string => !!o)),
+    );
 
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
     try {
@@ -181,6 +187,7 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
           maxTurns: 40,
           valueSub: cred ? makeCredentialValueSub(buildCredentialSource({ envCtx })) : undefined,
           resourceManifest: renderWebResourceManifest({ envCtx }),
+          scopeOrigins,
           onUsage: (r) => usage.add(r),
           onAction,
           onFindings,

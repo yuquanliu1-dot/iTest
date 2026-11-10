@@ -489,6 +489,34 @@ describe('runAiTask', () => {
     expect(requests[1]).toContain('navigate https://sut.example/home: ok');
   });
 
+  it('opts.scopeOrigins 范围闸：白名单内 goto 放行；越界事前拒收（不 goto）且反馈行点名允许范围', async () => {
+    const { page, calls } = makeStubPage();
+    const reported: Array<{ ok: boolean; url?: string }> = [];
+    const { llm, requests } = makeMockLlm([
+      {
+        actions: [
+          { type: 'navigate', url: 'https://sut.example/home' },
+          { type: 'navigate', url: 'https://192.168.30.123:1688/login' },
+        ],
+      },
+      { done: true, summary: '结束' },
+    ]);
+    await runAiTask(page, '探索', llm, false, {
+      scopeOrigins: ['https://sut.example'],
+      onAction: (a, ok) => reported.push({ ok, url: (a as { url?: string }).url }),
+    });
+    // 白名单内照常执行
+    expect(calls).toContain('goto:https://sut.example/home');
+    // 越界未执行（不产生 goto），反馈行可行动
+    expect(calls).not.toContain('goto:https://192.168.30.123:1688/login');
+    expect(requests[1]).toContain('探索范围被拒');
+    expect(requests[1]).toContain('https://sut.example');
+    expect(requests[1]).toContain('输出 fail 如实说明');
+    // 上报链如实记 fail（trail/reports 可见拒绝痕迹）
+    const rejected = reported.find((r) => r.url === 'https://192.168.30.123:1688/login');
+    expect(rejected?.ok).toBe(false);
+  });
+
   it('opts.maxTurns 覆盖轮数上限并出现在报错文案', async () => {
     const { page } = makeStubPage();
     const { llm } = makeMockLlm(Array.from({ length: 3 }, () => ({ actions: [{ type: 'wait', ms: 1 }] })));
