@@ -373,6 +373,7 @@
   "live": "Live",
   "ended": "Ended",
   "zoomStage": "Enlarge view",
+  "liveViewUnavailable": "View unavailable",
   "labelEdit": {
     "titleEdit": "Edit tag",
     "titleCreate": "New tag",

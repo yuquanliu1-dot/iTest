@@ -361,6 +361,7 @@
   "live": "实时",
   "ended": "已结束",
   "zoomStage": "放大画面",
+  "liveViewUnavailable": "画面不可用",
   "labelEdit": {
     "titleEdit": "编辑标签",
     "titleCreate": "新建标签",
