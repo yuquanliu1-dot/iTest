@@ -71,6 +71,19 @@ function probeBody(d: ChannelDraft) {
     : { channelId: d.id, provider: d.provider, model: d.model.trim(), baseUrl: d.baseUrl.trim() };
 }
 
+/** maxTokens 校验：空=不限制；须为正整数（与服务端 zod positive 一致，否则 PUT 必 400）。 */
+function maxTokensInvalid(v: string): boolean {
+  const s = v.trim();
+  return s !== '' && (!/^\d+$/.test(s) || Number(s) < 1);
+}
+
+/** 保存载荷：渠道列表 + 默认/视觉指派（编辑弹窗保存与面板底部保存共用一份）。 */
+interface ChannelsPayload {
+  channels: ChannelDraft[];
+  defaultChannelId: string;
+  visionChannelId: string | null;
+}
+
 export default function LlmChannelsPanel() {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
@@ -93,11 +106,11 @@ export default function LlmChannelsPanel() {
   }, [viewQ.data]);
 
   const save = useMutation({
-    mutationFn: () =>
+    mutationFn: (p: ChannelsPayload) =>
       api.settings.putLlm({
-        defaultChannelId: defaultId,
-        visionChannelId: visionId || null,
-        channels: channels.map((c) => ({
+        defaultChannelId: p.defaultChannelId,
+        visionChannelId: p.visionChannelId,
+        channels: p.channels.map((c) => ({
           id: c.id,
           name: c.name.trim(),
           provider: c.provider,
@@ -132,18 +145,28 @@ export default function LlmChannelsPanel() {
   const openCreate = () => setForm({ open: true, draft: newDraft() });
   const openEdit = (c: ChannelDraft) => setForm({ open: true, draft: { ...c } });
 
+  // 弹窗保存 = 立即落库：此前只改本地草稿列表不发请求，刷新后还原，用户看列表已变名以为存了。
+  // 本地列表在 PUT 成功后才同步（失败时列表保持旧值，不显示未落库的改动）。
   const applyForm = () => {
     const d = form.draft;
     if (!d) return;
     if (!d.name.trim() || !d.model.trim()) return;
     if (d.isNew && !d.apiKey.trim()) return;
-    setChannels((prev) => {
-      const exists = prev.some((c) => c.id === d.id);
-      const next = exists ? prev.map((c) => (c.id === d.id ? d : c)) : [...prev, d];
-      return next;
-    });
-    if (!defaultId) setDefaultId(d.id);
+    if (maxTokensInvalid(d.maxTokens)) return;
+    const next = channels.some((c) => c.id === d.id)
+      ? channels.map((c) => (c.id === d.id ? d : c))
+      : [...channels, d];
+    const nextDefaultId = defaultId || d.id;
     setForm({ open: false, draft: null });
+    save.mutate(
+      { channels: next, defaultChannelId: nextDefaultId, visionChannelId: visionId || null },
+      {
+        onSuccess: () => {
+          setChannels(next);
+          setDefaultId(nextDefaultId);
+        },
+      },
+    );
   };
 
   const removeDraft = (d: ChannelDraft) => {
@@ -163,10 +186,7 @@ export default function LlmChannelsPanel() {
     setDeleting(c);
   };
 
-  const maxTokensInvalid = channels.some((c) => {
-    const v = c.maxTokens.trim();
-    return v !== '' && (!/^\d+$/.test(v) || Number(v) < 1);
-  });
+  const anyMaxTokensInvalid = channels.some((c) => maxTokensInvalid(c.maxTokens));
 
   const draft = form.draft;
 
@@ -286,10 +306,15 @@ export default function LlmChannelsPanel() {
       </div>
 
       <div className="flex items-center gap-3">
-        <Button disabled={save.isPending || channels.length === 0 || maxTokensInvalid} onClick={() => save.mutate()}>
+        <Button
+          disabled={save.isPending || channels.length === 0 || anyMaxTokensInvalid}
+          onClick={() =>
+            save.mutate({ channels, defaultChannelId: defaultId, visionChannelId: visionId || null })
+          }
+        >
           {save.isPending ? t('settings:saving') : t('common:save')}
         </Button>
-        {maxTokensInvalid && (
+        {anyMaxTokensInvalid && (
           <span className="text-[12px]" style={{ color: 'var(--destructive)' }}>
             {t('settings:maxTokensInvalid')}
           </span>
@@ -411,7 +436,7 @@ export default function LlmChannelsPanel() {
                 !draft.name.trim() ||
                 !draft.model.trim() ||
                 (draft.isNew && !draft.apiKey.trim()) ||
-                (draft.maxTokens.trim() !== '' && !/^\d+$/.test(draft.maxTokens.trim()))
+                maxTokensInvalid(draft.maxTokens)
               }
               onClick={applyForm}
             >
