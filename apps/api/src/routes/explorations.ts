@@ -15,7 +15,7 @@ import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '.
 import { handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf } from '../execute/liveView.js';
 import { getExecutionQueue, isExecutionQueueReady, EXEC_QUEUE_NAME } from '../scheduler/execQueue.js';
 import { runExplorationSession, removeExplorationScreenshots } from '../execute/exploration.js';
-import { trailToSteps } from '../execute/explorationPrompt.js';
+import { trailToSteps, mergeExplorationTrails } from '../execute/explorationPrompt.js';
 import { parsePaging } from '../lib/pagination.js';
 import { createCaseWithSteps } from '../services/cases.service.js';
 import { attachCreators } from '../lib/creator.js';
@@ -117,7 +117,7 @@ explorationsRoute.get('/', async (req, res) => {
   res.json({ items: await attachCreators(items), total: totalRows[0]?.count ?? 0, page, limit });
 });
 
-/** 详情：会话 + findings（按 order 升序）+ 创建人。 */
+/** 详情：会话 + findings（按 order 升序）+ 创建人 + 会话过程（每一步动作留痕）。 */
 explorationsRoute.get('/:id', async (req, res) => {
   const session = await loadSession(req.params.id!, req.user!);
   const findings = await db
@@ -126,7 +126,9 @@ explorationsRoute.get('/:id', async (req, res) => {
     .where(eq(explorationFindings.sessionId, session.id))
     .orderBy(asc(explorationFindings.order));
   const [withCreator] = await attachCreators([session]);
-  res.json({ ...withCreator, findings });
+  // 会话级留痕列是整场动作序列；老会话没有这列数据，回落合并各 finding 的片段。
+  const steps = session.actionsTrail?.length ? session.actionsTrail : mergeExplorationTrails(findings);
+  res.json({ ...withCreator, findings, steps });
 });
 
 /**

@@ -34,6 +34,7 @@ import {
   EXPLORATION_SYSTEM_PROMPT_BASE,
   EXPLORATION_MAX_FINDINGS,
   EXPLORATION_MAX_SQL_PROBES,
+  type ExplorationStep,
 } from './explorationPrompt.js';
 import { logger } from '../logger.js';
 import { loginStateKey, getLoginState, saveLoginState, type LoginStorageState } from '../pi/space/tools/loginStateCache.js';
@@ -45,6 +46,9 @@ export const EXPLORATION_WALL_CLOCK_MS = 15 * 60_000;
 
 /** 单次只读取证的等待侧超时（只截断等待，不取消底层查询——只读查询代价可接受）。 */
 const SQL_PROBE_TIMEOUT_MS = 10_000;
+
+/** 留痕里单条 SQL 的最长文本：审计要看"查了什么"，但模型可以吐出超长 query（守卫虽拒，留痕不能膨胀）。 */
+const SQL_STEP_TARGET_MAX = 1000;
 
 /** 等待侧超时：竞速到点即抛错。底层 promise 迟到 settle 不会变 unhandledRejection
  *  （Promise.race 对两个 promise 都挂了处理器）。 */
@@ -111,6 +115,21 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
   let sqlProbeCount = 0;
   /** 最近一次查库的结果摘要（平台侧记录的行数/首行）——挂进动作留痕，findings 的复现步骤据此可见取证内容。 */
   let lastSqlDetail = '';
+  /** 会话级动作留痕（整场动作序列，永不重置）——详情页「会话过程」的逐步视图。
+   *  与 finding 级 trail 的差别：finding 级是"自上一条 finding 起"的片段，
+   *  这里连最后一条 finding 之后的尾段也留住（否则收尾前的动作无处可查）。 */
+  const sessionSteps: ExplorationStep[] = [];
+  /** 会话级动作留痕落库。失败只记日志——留痕是审计辅助，不能因此掀翻整场会话。 */
+  const persistSessionSteps = async (): Promise<void> => {
+    try {
+      await db
+        .update(explorationSessions)
+        .set({ actionsTrail: sessionSteps, updatedAt: new Date() })
+        .where(eq(explorationSessions.id, sessionId));
+    } catch (e) {
+      logger.warn({ err: e, sessionId }, 'exploration session steps persist failed');
+    }
+  };
   const deadline = Date.now() + EXPLORATION_WALL_CLOCK_MS;
 
   try {
@@ -150,7 +169,7 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
 
       // findings 收集闭包：seenTitles 跨轮去重、trail 自上一条 finding 起累积、order 递增
       const seenTitles = new Set<string>();
-      const trail: Array<{ type: string; target: string; ok: boolean; detail?: string }> = [];
+      const trail: ExplorationStep[] = [];
       const onAction = (a: AiAction, ok: boolean): void => {
         let target = '-';
         let detail: string | undefined;
@@ -160,10 +179,14 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
         } else if (a.type === 'navigate') {
           target = a.url;
         } else if (a.type === 'sql') {
-          target = a.query.replace(/\s+/g, ' ').slice(0, 60);
+          // 留完整 SQL（审计要看到"到底查了什么"），只归一空白并限长——
+          // 模型可以吐出超长 query，守卫虽会拒，但留痕不能因此膨胀。
+          target = a.query.replace(/\s+/g, ' ').slice(0, SQL_STEP_TARGET_MAX);
           detail = lastSqlDetail || undefined;
         }
-        trail.push({ type: a.type, target, ok, ...(detail ? { detail } : {}) });
+        const step: ExplorationStep = { type: a.type, target, ok, ...(detail ? { detail } : {}) };
+        trail.push(step);
+        sessionSteps.push(step);
       };
       const onFindings = async (raw: unknown[]): Promise<void> => {
         modelReported += raw.length;
@@ -208,6 +231,8 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
         // 只有落了 finding 才重置留痕：整批被去重丢弃时，动作序列要留给下一条 finding，
         // 否则「自上一条 finding 起累积」的语义会被丢弃批次截断。
         if (accepted.length > 0) trail.length = 0;
+        // 会话级留痕同步落库（跑动中就能在详情页看到进度，不等会话结束）
+        await persistSessionSteps();
       };
 
       /** 数据库取证探针：模型给一条只读查询 → 对被测库执行 → 行摘要回灌下一轮。
@@ -329,6 +354,8 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
       usage: usage.stat,
     }).catch(() => undefined);
   } finally {
+    // 收尾留痕：最后一条 finding 之后的动作（尾段）在这里才落库——否则详情页看不到过程末尾。
+    await persistSessionSteps();
     if (envCtx) await envCtx.close().catch(() => {});
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { composeExplorationInstruction, coerceFindings, trailToSteps, EXPLORATION_MAX_FINDINGS, EXPLORATION_MAX_SQL_PROBES } from './explorationPrompt.js';
+import { composeExplorationInstruction, coerceFindings, trailToSteps, mergeExplorationTrails, EXPLORATION_MAX_FINDINGS, EXPLORATION_MAX_SQL_PROBES } from './explorationPrompt.js';
 import { EXPLORATION_SYSTEM_PROMPT_BASE } from './explorationPrompt.js';
 import { EXPLORATION_PERSONA_KEYS } from '@itest/shared';
 
@@ -332,5 +332,26 @@ describe('coerceFindings 再容错（11-10 prod 二次形状漂移：6 条全 in
     expect(r.accepted).toHaveLength(0);
     expect(r.invalid).toBe(3);
     expect(r.invalidShapes).toEqual(['keys:别名', 'array:2', 'keys:title,description']);
+  });
+});
+
+describe('mergeExplorationTrails - 老会话回落合并', () => {
+  it('按 finding 顺序拼接各片段，保留 detail', () => {
+    const steps = mergeExplorationTrails([
+      { actionsTrail: [{ type: 'click', target: '#save', ok: true }, { type: 'sql', target: 'SELECT 1', ok: true, detail: '1 行' }] },
+      { actionsTrail: [{ type: 'navigate', target: 'http://x/', ok: false }] },
+    ]);
+    expect(steps.map((s) => s.type)).toEqual(['click', 'sql', 'navigate']);
+    expect(steps[1]!.detail).toBe('1 行');
+    expect(steps[2]!.ok).toBe(false);
+  });
+
+  it('脏留痕兜底：缺字段补默认值，空片段跳过', () => {
+    const steps = mergeExplorationTrails([
+      { actionsTrail: null },
+      { actionsTrail: [{ type: 'sql' } as never] },
+      { actionsTrail: [] },
+    ]);
+    expect(steps).toEqual([{ type: 'sql', target: '', ok: false }]);
   });
 });

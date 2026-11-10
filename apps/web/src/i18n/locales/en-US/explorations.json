@@ -35,6 +35,18 @@
     "promoted": "Promoted"
   },
   "severity": "Severity",
+  "sessionSteps": "Session trace",
+  "stepOk": "OK",
+  "stepFail": "Failed",
+  "actionTypes": {
+    "navigate": "Visit",
+    "click": "Click",
+    "fill": "Fill",
+    "press": "Key",
+    "wait": "Wait",
+    "screenshot": "Screenshot",
+    "sql": "Query"
+  },
   "reproSteps": "Reproduction steps",
   "evidence": "Evidence screenshot",
   "noEvidence": "No screenshot",

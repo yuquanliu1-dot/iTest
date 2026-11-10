@@ -1127,6 +1127,12 @@ export const explorationSessions = pgTable('exploration_sessions', {
   turnsUsed: integer('turns_used').notNull().default(0),
   /** LLM 用量累计（calls/promptTokens/completionTokens/durationMs/model），onUsage 累加。 */
   usage: jsonb('usage'),
+  /**
+   * 会话级动作留痕（全部步骤，含最后一条 finding 之后的尾段）——详情页「会话过程」逐步查看。
+   * 与 findings.actionsTrail 的关系：finding 存的是"自上一条 finding 起"的片段（面包屑），
+   * 这里存的是整场会话的完整动作序列（审计视角：跑了什么 SQL、点了什么、成没成）。
+   */
+  actionsTrail: jsonb('actions_trail').$type<Array<{ type: string; target: string; ok: boolean; detail?: string }>>(),
   /** 运行时环境快照 id。裸 uuid 无 FK：删环境不应牵连历史探索记录（审计惯例）。 */
   envId: uuid('env_id'),
   startedAt: timestamp('started_at'),

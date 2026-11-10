@@ -1147,6 +1147,15 @@ export type ExplorationStatus = 'pending' | 'running' | 'completed' | 'failed' |
 /** finding 审阅状态机：pending → confirmed | dismissed；confirmed → promoted。 */
 export type ExplorationFindingStatus = 'pending' | 'confirmed' | 'dismissed' | 'promoted';
 
+/** 一条动作留痕（平台记录的 ground truth，非模型自述）。 */
+export interface ExplorationStep {
+  type: string;
+  target: string;
+  ok: boolean;
+  /** sql 步骤的结果摘要（行数 + 首行）。 */
+  detail?: string;
+}
+
 export interface ExplorationSession {
   id: string;
   projectId: string;
@@ -1169,6 +1178,8 @@ export interface ExplorationSession {
   createdBy?: Creator | null;
   /** 详情接口才带（列表接口不带）。 */
   findings?: ExplorationFinding[];
+  /** 详情接口才带：会话过程——平台记录的每一步动作（老会话由各 finding 的留痕合并而来）。 */
+  steps?: ExplorationStep[];
 }
 
 export interface ExplorationFinding {
@@ -1182,7 +1193,7 @@ export interface ExplorationFinding {
   /** 模型给的复现步骤（可能脑补）；为空时后端用 actionsTrail 文本化兜底。 */
   reproSteps: Array<{ action: string; expected?: string }>;
   /** 平台记录的实际动作留痕（ground truth）。 */
-  actionsTrail: Array<{ type: string; target: string; ok: boolean }> | null;
+  actionsTrail: Array<{ type: string; target: string; ok: boolean; detail?: string }> | null;
   /** /screenshots/<sessionId>/finding-<order>.png（express.static 提供）。 */
   screenshotPath: string | null;
   pageUrl: string | null;

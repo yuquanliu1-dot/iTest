@@ -117,6 +117,36 @@ function normalizeTitle(title: string): string {
   return title.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+/** 一条动作留痕（平台记录的 ground truth，非模型自述）。
+ *  会话级（exploration_sessions.actions_trail）存整场动作序列；
+ *  缺陷级（exploration_findings.actions_trail）存"自上一条 finding 起"的片段。 */
+export interface ExplorationStep {
+  type: string;
+  target: string;
+  ok: boolean;
+  /** sql 步骤的结果摘要（行数 + 首行）；其余动作无。 */
+  detail?: string;
+}
+
+/** 老会话回落：会话级留痕列为空时，把各 finding 的片段按 order 拼回整场动作序列。 */
+export function mergeExplorationTrails(
+  findings: Array<{ actionsTrail?: Array<Partial<ExplorationStep>> | null }>,
+): ExplorationStep[] {
+  const out: ExplorationStep[] = [];
+  for (const f of findings) {
+    for (const s of f.actionsTrail ?? []) {
+      if (!s || typeof s !== 'object') continue;
+      out.push({
+        type: typeof s.type === 'string' ? s.type : '',
+        target: typeof s.target === 'string' ? s.target : '',
+        ok: s.ok === true,
+        ...(typeof s.detail === 'string' && s.detail ? { detail: s.detail } : {}),
+      });
+    }
+  }
+  return out;
+}
+
 /** 动作留痕 → 复现步骤文本：平台自己记的动作序列 = ground truth（模型脑补的步骤靠不住）。
  *  升格用例与详情展示共用这一份口径。 */
 export function trailToSteps(trail: Array<{ type?: unknown; target?: unknown; detail?: unknown }>): ExplorationReproStep[] {

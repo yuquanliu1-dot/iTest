@@ -35,6 +35,18 @@
     "promoted": "已升格"
   },
   "severity": "严重级别",
+  "sessionSteps": "会话过程",
+  "stepOk": "成功",
+  "stepFail": "失败",
+  "actionTypes": {
+    "navigate": "访问",
+    "click": "点击",
+    "fill": "填写",
+    "press": "按键",
+    "wait": "等待",
+    "screenshot": "截图",
+    "sql": "查库"
+  },
   "reproSteps": "复现步骤",
   "evidence": "证据截图",
   "noEvidence": "无截图",

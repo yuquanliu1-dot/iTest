@@ -135,6 +135,47 @@ describe('GET /api/explorations - 列表与详情', () => {
     expect(r.body.findings.map((f: { title: string }) => f.title)).toEqual(['第一条', '第二条']);
   });
 
+  it('详情返回会话过程 steps（会话级留痕列，含查库摘要）', async () => {
+    const id = await insertSession();
+    await pool.query(`UPDATE exploration_sessions SET actions_trail=$2 WHERE id=$1`, [
+      id,
+      JSON.stringify([
+        { type: 'navigate', target: 'http://127.0.0.1:56100/', ok: true },
+        { type: 'sql', target: 'SELECT COUNT(*) FROM sa_asset', ok: true, detail: '1 行｜首行：cnt=20' },
+        { type: 'sql', target: 'DELETE FROM sa_asset', ok: false, detail: '失败：只读守卫拒绝' },
+      ]),
+    ]);
+    const r = await request(app).get(`/api/explorations/${id}`);
+    expect(r.status).toBe(200);
+    expect(r.body.steps).toHaveLength(3);
+    expect(r.body.steps[1]).toEqual({
+      type: 'sql',
+      target: 'SELECT COUNT(*) FROM sa_asset',
+      ok: true,
+      detail: '1 行｜首行：cnt=20',
+    });
+    expect(r.body.steps[2].ok).toBe(false);
+  });
+
+  it('老会话（无会话级留痕）→ steps 回落为各 finding 留痕的合并', async () => {
+    const id = await insertSession();
+    await insertFinding(id, {
+      order: 1,
+      actionsTrail: [
+        { type: 'click', target: '#save', ok: true },
+        { type: 'sql', target: 'SELECT 1', ok: true, detail: '1 行' },
+      ],
+    });
+    await insertFinding(id, {
+      order: 2,
+      actionsTrail: [{ type: 'navigate', target: 'http://127.0.0.1:56100/', ok: true }],
+    });
+    const r = await request(app).get(`/api/explorations/${id}`);
+    expect(r.status).toBe(200);
+    expect(r.body.steps.map((s: { type: string }) => s.type)).toEqual(['click', 'sql', 'navigate']);
+    expect(r.body.steps[1].detail).toBe('1 行');
+  });
+
   it('跨组织用户看详情 → 404', async () => {
     const id = await insertSession();
     const outsiderOrgId = randomUUID();

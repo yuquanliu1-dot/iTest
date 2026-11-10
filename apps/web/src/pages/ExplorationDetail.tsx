@@ -44,6 +44,7 @@ export default function ExplorationDetail() {
   });
 
   const findings = session?.findings ?? [];
+  const steps = session?.steps ?? [];
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['exploration', id] });
@@ -200,6 +201,46 @@ export default function ExplorationDetail() {
             )}
           </div>
         </div>
+
+        {/* 会话过程：平台记录的每一步动作（点/填/访问/查库），含查库结果摘要 */}
+        {steps.length > 0 && (
+          <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4 flex flex-col gap-2">
+            <div className="flex items-baseline gap-2">
+              <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
+                {t('explorations:sessionSteps')}
+              </div>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{steps.length}</span>
+            </div>
+            <ol className="flex flex-col gap-1">
+              {steps.map((s, i) => (
+                <li key={i} className="flex flex-col gap-0.5">
+                  <div className="flex items-start gap-2 text-[12px]">
+                    <span className="font-mono shrink-0" style={{ color: 'var(--muted-foreground)' }}>
+                      {String(i + 1).padStart(2, '0')}
+                    </span>
+                    <span
+                      className="shrink-0 px-1 rounded text-[11px]"
+                      style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
+                    >
+                      {t(`explorations:actionTypes.${s.type}`, { defaultValue: s.type })}
+                    </span>
+                    <span className="font-mono break-all flex-1" style={{ color: 'var(--foreground)' }}>
+                      {s.target}
+                    </span>
+                    <span className="shrink-0" style={{ color: s.ok ? 'var(--success)' : 'var(--destructive)' }}>
+                      {s.ok ? t('explorations:stepOk') : t('explorations:stepFail')}
+                    </span>
+                  </div>
+                  {s.detail && (
+                    <div className="font-mono text-[11px] break-all pl-[76px]" style={{ color: 'var(--muted-foreground)' }}>
+                      {s.detail}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
 
         {/* 缺陷候选：每条一张全宽卡片 */}
         <div className="shrink-0 flex flex-col gap-3">
