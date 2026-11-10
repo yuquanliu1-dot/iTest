@@ -157,7 +157,9 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
             logger.warn({ err: e, sessionId }, 'exploration finding insert failed');
           }
         }
-        trail.length = 0;
+        // 只有落了 finding 才重置留痕：整批被去重丢弃时，动作序列要留给下一条 finding，
+        // 否则「自上一条 finding 起累积」的语义会被丢弃批次截断。
+        if (accepted.length > 0) trail.length = 0;
       };
 
       const summary = await runAiTask(
