@@ -151,3 +151,57 @@ describe('coerceFindings', () => {
     expect(r.dropped).toBe(3);
   });
 });
+
+// 2026-11-10 prod 实录：一次探索落了 7 条 ≈ 3 个真缺陷（标题逐字去重挡不住近义重报）。
+describe('coerceFindings 近义标题合并', () => {
+  const f = (title: string) => ({ title, description: 'd' });
+  /** prod 实录的 7 条标题，期望聚成 3 组。 */
+  const PROD7 = [
+    '资产表格出现 undefined 与 NaN 展示',
+    '资产列表出现 undefined / NaN 展示',
+    '页面中文全部渲染为方框（字体缺失）',
+    '页面所有中文渲染为方框（字体缺失）',
+    '名称已填合法值时保存仍显示错误提示（疑似误报/提示未清除）',
+    '页面全部中文渲染为方框（字体加载失败）',
+    '名称填入合法值后保存，错误提示仍残留（疑似校验误报/提示未清除）',
+  ];
+
+  it('prod 7 条近义标题合并成 3 条', () => {
+    const r = coerceFindings(PROD7.map(f));
+    expect(r.accepted).toHaveLength(3);
+    expect(r.dropped).toBe(4);
+    expect(r.invalid).toBe(0);
+    // 保留的是每组首条
+    expect(r.accepted.map((x) => x.title)).toEqual([PROD7[0]!, PROD7[2]!, PROD7[4]!]);
+  });
+
+  it('跨轮近义重报也合并（existingTitles 命中）', () => {
+    const r = coerceFindings([f('资产列表出现 undefined / NaN 展示')], {
+      existingTitles: ['资产表格出现 undefined 与 NaN 展示'],
+    });
+    expect(r.accepted).toHaveLength(0);
+    expect(r.dropped).toBe(1);
+    expect(r.invalid).toBe(0);
+  });
+
+  it('指代不同对象的相似标题必须分开（行号/输入值/按钮/字段/校验项）', () => {
+    const mustSplit: [string, string][] = [
+      ['资产列表第2行责任人显示 undefined', '资产列表第3行责任人显示 undefined'],
+      ['填写 999.999.999.999 后提示格式错误', '填写 192.168.1.1 后仍提示格式错误'],
+      ['保存按钮点击后无响应', '删除按钮点击后无响应'],
+      ['登录页用户名为空时也能提交', '登录页密码为空时也能提交'],
+      ['金额输入负数后校验通过', '金额输入超大值后校验通过'],
+      ['名称必填校验缺失', '名称长度上限未校验'],
+    ];
+    for (const [a, b] of mustSplit) {
+      const r = coerceFindings([f(a), f(b)]);
+      expect(r.accepted, `${a} || ${b}`).toHaveLength(2);
+    }
+  });
+
+  it('措辞差异较大的同缺陷仍合并（点击无响应 vs 点了没反应）', () => {
+    const r = coerceFindings([f('列表页分页控件点击无响应'), f('列表页分页控件点了没反应')]);
+    expect(r.accepted).toHaveLength(1);
+    expect(r.dropped).toBe(1);
+  });
+});

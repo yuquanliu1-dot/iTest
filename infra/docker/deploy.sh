@@ -342,6 +342,14 @@ if ! docker exec "$(api_replica)" node -e "fetch('http://gauss-bridge:8080/healt
   SMOKE_FAIL=1
 fi
 
+# (i) 中文字体：探索式测试的证据截图由容器内 chromium 渲染，缺 CJK 字体时中文全是方框，
+#     AI 会把「字体缺失」当缺陷报出来（2026-11-10 prod228 实录）。容器内须能查到 zh 字体。
+if ! docker exec "$(api_replica)" sh -c "fc-list :lang=zh 2>/dev/null | head -1" | grep -q .; then
+  SMOKE_WARN="$SMOKE_WARN
+  - api 容器缺中文字体 FAIL（fc-list :lang=zh 为空：探索会话证据截图中文会渲染成方框，AI 会误报「字体缺失」。检查 api.Dockerfile 是否装了 fonts-wqy-zenhei / fontconfig）"
+  SMOKE_FAIL=1
+fi
+
 if [ "$SMOKE_FAIL" = "1" ]; then
   echo "⚠️  smoke 未全过:$SMOKE_WARN"
   echo "  容器仍在跑,需手动排错或回滚。"

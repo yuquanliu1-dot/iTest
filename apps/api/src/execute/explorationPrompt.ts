@@ -169,6 +169,61 @@ function normalizeSteps(raw: unknown): ExplorationReproStep[] {
   return out;
 }
 
+// —— 近义标题合并：同一缺陷被模型换措辞重报，只留第一条 ——
+// 2026-11-10 prod 实录：一次探索落了 7 条 ≈ 3 个真缺陷（字体方框 ×3、名称误报 ×2、undefined/NaN ×2）。
+// 口径 = 字符集 Dice 相似度（借 explorbot similarityScore 的集合交并）≥ 阈值，
+// 且「定位细节 / 主体词」不冲突——相似度高但指代不同对象的（不同行/不同按钮/不同字段）必须分开。
+
+/** 相似度阈值：标定自 prod 7 条近义标题（聚成 3 组）+ 合成必须分开的对（0 误并）。 */
+const SIMILARITY_MERGE_THRESHOLD = 0.72;
+
+/** 定位细节：数字 / 第N行列项页条 / 引号内文本——指代不同对象即视为不同缺陷。 */
+function positionTokens(title: string): string[] {
+  const out = new Set<string>();
+  for (const m of title.matchAll(/\d+(?:\.\d+)*/g)) out.add(m[0]);
+  for (const m of title.matchAll(/第.{1,3}?[行列项页条]/g)) out.add(m[0]);
+  for (const m of title.matchAll(/[「『“"']([^」』”"']{1,12})[」』”"']/g)) if (m[1]) out.add(m[1]);
+  return [...out].sort();
+}
+
+/** 主体词：字段名 / 操作对象 / 值特征——同句式换主体词 = 另一个缺陷（保存按钮 vs 删除按钮、用户名 vs 密码）。 */
+const SUBJECT_TOKENS = [
+  // 字段
+  '用户名', '密码', '手机号', '手机', '邮箱', '验证码', '姓名', '名称', '标题', '金额', '价格', '数量',
+  '日期', '时间', '地址', '备注', '描述', '类型', '状态', '编号', '角色', '部门', '文件', '图片',
+  // 操作对象
+  '保存', '删除', '提交', '导出', '导入', '上传', '下载', '搜索', '筛选', '排序', '分页', '新增',
+  '编辑', '复制', '粘贴', '撤销', '重置', '刷新', '登录', '退出', '注册', '勾选', '全选', '展开',
+  '折叠', '切换', '关闭', '打开', '确认', '取消', '审批', '支付', '打印',
+  // 值特征
+  '负数', '正数', '小数', '整数', '超大值', '超长', '为空', '空值', '边界值', '特殊字符',
+  '中文', '英文', '重复值', '空格', '全角', '半角',
+];
+
+function subjectTokens(title: string): string[] {
+  return SUBJECT_TOKENS.filter((t) => title.includes(t)).sort();
+}
+
+/** 字符集 Dice 相似度。 */
+function diceSimilarity(a: string, b: string): number {
+  const A = new Set([...a.replace(/\s/g, '')]);
+  const B = new Set([...b.replace(/\s/g, '')]);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const c of A) if (B.has(c)) inter += 1;
+  return (2 * inter) / (A.size + B.size);
+}
+
+/** 两条标题是否同一缺陷（近义重报）。 */
+function isNearDuplicate(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (positionTokens(a).join(' ') !== positionTokens(b).join(' ')) return false;
+  const sa = subjectTokens(a);
+  const sb = subjectTokens(b);
+  if (sa.length && sb.length && sa.join(' ') !== sb.join(' ')) return false;
+  return diceSimilarity(a, b) >= SIMILARITY_MERGE_THRESHOLD;
+}
+
 /** 原始条目 → 契约形状；标题或描述双缺（或非对象）判废条目返回 null。 */
 function canonicalizeFinding(raw: unknown): CoercedFinding | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -184,13 +239,13 @@ function canonicalizeFinding(raw: unknown): CoercedFinding | null {
 }
 
 /** 模型 findings 原始数组 → 可落库形态：字段截断兜底（脏 severity→P2/超长→slice）、
- *  仅空标题/空描述判非法丢弃、剩余配额截断、跨轮按标题去重。
+ *  仅空标题/空描述判非法丢弃、剩余配额截断、跨轮按标题去重（逐字 + 近义）。
  *  dropped = 被拒总数（重复/超配额/非法）；invalid = 其中字段实在不可救的非法条数。 */
 export function coerceFindings(
   raw: unknown[],
   opts?: { existingTitles?: string[]; max?: number },
 ): { accepted: CoercedFinding[]; dropped: number; invalid: number } {
-  const seen = new Set((opts?.existingTitles ?? []).map(normalizeTitle));
+  const seen: string[] = (opts?.existingTitles ?? []).map(normalizeTitle);
   const max = opts?.max ?? EXPLORATION_MAX_FINDINGS;
   const accepted: CoercedFinding[] = [];
   let dropped = 0;
@@ -213,11 +268,12 @@ export function coerceFindings(
       continue;
     }
     const key = normalizeTitle(parsed.data.title);
-    if (seen.has(key)) {
+    // 逐字重复 + 近义重报（同一缺陷换措辞）都算重复
+    if (seen.some((t) => isNearDuplicate(t, key))) {
       dropped += 1;
       continue;
     }
-    seen.add(key);
+    seen.push(key);
     accepted.push(parsed.data);
   }
   return { accepted, dropped, invalid };

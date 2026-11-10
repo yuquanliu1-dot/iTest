@@ -51,11 +51,15 @@ ENV NODE_ENV=production \
 # python3-docx:word-test-report skill 生成 .docx 用(2026-10-28);缺失时该 skill 会
 #   自动降级为标准库 zipfile 手写 OOXML,装上只为报告样式更好,不构成硬依赖。
 # bookworm-slim 不带任何系统二进制,apt-get 必须。详见 infra/docker/certs/README.md。
+# 字体:探索式测试的证据截图由容器内 chromium 渲染,缺 CJK 字体时中文全是方框——
+#   AI 会把「字体缺失」当成缺陷报出来(2026-11-10 prod228 实录:一次探索报了 3 条伪缺陷),
+#   证据截图也不可读。fonts-wqy-zenhei 是 Playwright 官方 Debian 依赖清单里的 CJK 字体(体积小)。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates ripgrep unzip python3 python3-yaml python3-docx \
       libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
       libxkbcommon0 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
       libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 \
+      fontconfig fonts-liberation fonts-wqy-zenhei fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
 # 2026-10-09: 内网 GitLab 部署的证书仅签到 IP,无 SAN 匹配,git 默认会拒;
