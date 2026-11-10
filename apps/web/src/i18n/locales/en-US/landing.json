@@ -5,21 +5,23 @@
     "pains": "Pain points",
     "features": "Features",
     "workflow": "Workflow",
-    "screenshots": "Preview"
+    "screenshots": "Preview",
+    "menu": "Menu"
   },
   "hero": {
-    "badge": "AI-powered test automation platform",
-    "titleLead": "Hand your regression testing to an",
-    "titleAccent": "agent you control",
-    "titleTail": ".",
-    "subtitle": "An AI-native testing platform: generate cases from requirements in one click, replay in dual mode — AI-driven and mechanical DSL, self-healing cases that evolve with every release, and change coverage auto-selected from source diffs.",
+    "badge": "Regression test automation",
+    "titleLead": "Give your regression to an",
+    "titleAccent": "agent that shows its work",
+    "titleTail": "",
+    "subtitle": "Requirements in, cases and reports out. Every step keeps its evidence, so a failure points at the exact action that broke.",
     "primaryCta": "Get started",
-    "secondaryCta": "Learn more"
+    "secondaryCta": "See the workflow",
+    "shotCaption": "Case editor · every AGENT step is inspectable"
   },
   "pains": {
     "eyebrow": "Pain points",
     "title": "Regression automation hits three walls",
-    "subtitle": "Automation matters — it's the two available paths that don't work.",
+    "subtitle": "Scripts break when the page changes, agents drift when the context shifts, coverage lags once releases speed up.",
     "items": [
       { "title": "Recorded scripts break on every change", "desc": "Traditional recordings bind to page structure and locators, so a single version change invalidates whole batches of cases. Repairing them often takes longer than re-recording." },
       { "title": "Intent-driven testing: slow and unpredictable", "desc": "Having an agent reason through every step is slow and token-heavy — and the same case can behave differently under a different model or context." },
@@ -31,18 +33,18 @@
     "title": "One platform across the testing lifecycle",
     "subtitle": "Real iTest UI captured from everyday usage in production.",
     "shots": [
+      { "title": "Reports & root-cause", "desc": "Per-step screenshots, failure attribution and historical trends at a glance" },
       { "title": "AI assistant workspace", "desc": "Generate and debug cases conversationally — natural language straight to execution" },
-      { "title": "Case editing & replay", "desc": "Browser recordings become editable steps with assertions, parameters and AI steps" },
-      { "title": "Reports & root-cause", "desc": "Per-step screenshots, failure attribution and historical trends at a glance" }
+      { "title": "Case editing & replay", "desc": "Browser recordings become editable steps with assertions, parameters and AI steps" }
     ]
   },
   "features": {
     "eyebrow": "Features",
     "title": "Built for QA teams",
-    "subtitle": "Not another record-and-replay tool — an AI-native testing productivity platform.",
+    "subtitle": "Six capabilities, from generating a case to running the regression.",
     "items": [
       { "title": "Dual-mode replay", "desc": "Two engines in one case: AI-driven replay generalizes across page changes, while mechanical DSL replays run fast and precise — coverage and efficiency, no trade-off." },
-      { "title": "AI-native workspace", "desc": "An AI assistant carries you through case authoring, debugging, execution and root-cause analysis — plain language, end to end." },
+      { "title": "AI assistant workspace", "desc": "An AI assistant carries you through case authoring, debugging, execution and root-cause analysis — plain language, end to end." },
       { "title": "Data-driven testing", "desc": "Bind datasets to case parameters — one row, one scenario. Supports multi-turn interaction data such as agent conversations." },
       { "title": "Self-healing cases", "desc": "Cases evolve with the version: mechanical DSL updates itself as the page structure changes. No more manual upkeep." },
       { "title": "Change coverage plans", "desc": "Diff the source, assess the blast radius of each version change, and auto-select cases to cover what changed — no blind regression on new builds." },
@@ -66,8 +68,8 @@
     "button": "Sign in now"
   },
   "footer": {
-    "tagline": "AI-powered test automation platform",
+    "tagline": "Regression test automation",
     "backToTop": "Back to top",
-    "copyright": "iTest · All rights reserved"
+    "copyright": "© 2026 iTest. All rights reserved"
   }
 }
