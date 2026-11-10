@@ -125,8 +125,9 @@ export function trailToSteps(trail: Array<{ type?: unknown; target?: unknown }>)
 // —— 形状容错：真实模型常把字段写成别的名字/别的判级词，形状漂移不该让整条 finding 消失 ——
 // 2026-11-10 prod 实录：模型输出 {title,severity:"中",location,evidence}，
 // 旧实现只认 description → 5 条全被 safeParse 静默丢弃（摘要说 5 条、库里 0 条）。
-const DESCRIPTION_KEYS = ['description', 'evidence', 'detail', 'details', 'desc', 'analysis', 'content', '描述', '现象', '详情', '说明'];
-const TITLE_KEYS = ['title', 'name', 'issue', 'bug', 'summary', '标题', '缺陷', '问题'];
+// 同日二次实录：另一模型输出 {type,描述,证据} → title/description 双缺全灭（8 条 0 落库）。
+const DESCRIPTION_KEYS = ['description', 'evidence', 'detail', 'details', 'desc', 'analysis', 'content', '描述', '现象', '详情', '说明', '证据'];
+const TITLE_KEYS = ['title', 'name', 'issue', 'bug', 'summary', '标题', '缺陷', '问题', 'type'];
 const LOCATION_KEYS = ['location', 'position', 'where', 'page', '位置', '所在位置', '页面'];
 const STEPS_KEYS = ['reproSteps', 'repro', 'steps', 'reproduceSteps', '复现步骤', '操作步骤', '步骤'];
 const SEVERITY_KEYS = ['severity', 'priority', 'level', '严重程度', '级别', '优先级'];
@@ -248,7 +249,10 @@ function canonicalizeFinding(raw: unknown): CoercedFinding | null {
   const description = pickString(o, DESCRIPTION_KEYS);
   if (!title || !description) return null;
   const location = pickString(o, LOCATION_KEYS);
-  const desc = location && !description.includes(location) ? `${description}\n位置：${location}` : description;
+  let desc = location && !description.includes(location) ? `${description}\n位置：${location}` : description;
+  // 高优先级描述键（如 描述）赢了位次时，证据文本不能丢——并作补充段（同 location 合并法）。
+  const evidence = pickString(o, ['证据']);
+  if (evidence && !desc.includes(evidence)) desc = `${desc}\n证据：${evidence}`;
   const severityRaw = SEVERITY_KEYS.map((k) => o[k]).find((v) => typeof v === 'string' && v.trim());
   const stepsRaw = STEPS_KEYS.map((k) => o[k]).find((v) => Array.isArray(v));
   return { title, description: desc, severity: normalizeSeverity(severityRaw), reproSteps: normalizeSteps(stepsRaw) };

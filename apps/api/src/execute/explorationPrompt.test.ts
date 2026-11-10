@@ -212,6 +212,33 @@ describe('coerceFindings 近义标题合并', () => {
   });
 });
 
+// 2026-11-10 prod 实录（会话 988ef20c）：模型输出 {type,描述,证据} 三轮共 8 条全 invalid
+// （type 不在 title 别名表、证据不在 description 别名表）→ 库 0 行、摘要说 3 条。
+describe('coerceFindings 再容错之三：{type,描述,证据} 形状', () => {
+  it('type 当标题兼分类词；描述为主描述、证据并作补充段', () => {
+    const r = coerceFindings([
+      { type: '表格数据展示异常', 描述: '金额列显示 undefined', 证据: '第2行金额单元格文本为 undefined' },
+    ]);
+    expect(r.accepted).toHaveLength(1);
+    expect(r.accepted[0]!.title).toBe('表格数据展示异常');
+    expect(r.accepted[0]!.description).toContain('金额列显示 undefined');
+    expect(r.accepted[0]!.description).toContain('证据：第2行金额单元格文本为 undefined');
+    expect(r.invalid).toBe(0);
+  });
+
+  it('只有 type+证据（无描述）也能成条：证据升格为主描述且不重复拼接', () => {
+    const r = coerceFindings([{ type: '校验缺失', 证据: '名称留空点击保存直接提交成功' }]);
+    expect(r.accepted).toHaveLength(1);
+    expect(r.accepted[0]!.title).toBe('校验缺失');
+    expect(r.accepted[0]!.description).toBe('名称留空点击保存直接提交成功');
+  });
+
+  it('既有 title 与 type 并存时 title 优先（type 不抢位）', () => {
+    const r = coerceFindings([{ title: '金额列显示 undefined', type: '数据展示', 描述: '第2行金额为 undefined' }]);
+    expect(r.accepted[0]!.title).toBe('金额列显示 undefined');
+  });
+});
+
 describe('coerceFindings 再容错（11-10 prod 二次形状漂移：6 条全 invalid）', () => {
   it('字符串条目也收：一句话当标题兼描述', () => {
     const r = coerceFindings(['表格第2行金额列显示 undefined', '  ', '保存后提示不消失']);
