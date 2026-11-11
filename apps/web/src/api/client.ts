@@ -1162,6 +1162,29 @@ export interface ExplorationStep {
   key?: string;
 }
 
+/** 代码提交范围（charter 自然语言解析产物）：提交窗口 + 改动文件 + 候选起点。
+ *  范围是焦点信号不是围栏——探索照常全站跑，范围只用于定向。 */
+export interface CodeScope {
+  kind: 'time_window' | 'commit_range' | 'single_commit';
+  /** 给人看的一行标签（卡片标题）。 */
+  label: string;
+  since?: string;
+  until?: string;
+  fromSha?: string;
+  toSha?: string;
+  commitSha?: string;
+  headSha?: string;
+  commits: Array<{ sha: string; subject: string; date: string }>;
+  files: Array<{ path: string; status: string; additions: number; deletions: number }>;
+  /** 候选起点（从改动文件源码里抽的以 / 开头的字面量路径串）——启发式，可能不准。 */
+  hintUrls: string[];
+  confidence: number;
+  reason: string;
+}
+
+/** 代码范围解析状态：pending（解析中）→ resolved（已解析）| none（章程无提交语义）| failed（解析失败）。 */
+export type CodeScopeStatus = 'pending' | 'resolved' | 'none' | 'failed';
+
 export interface ExplorationSession {
   id: string;
   projectId: string;
@@ -1177,6 +1200,9 @@ export interface ExplorationSession {
   allowDestructive: boolean;
   /** 负面结果账本：模型申报的「已排除的假设 + 依据」（外化记忆最小切片）。 */
   excludedLedger?: Array<{ claim: string; evidence: string }> | null;
+  /** 代码提交范围（runner 后台解析，前端轮询可见；详情/列表接口都带）。 */
+  codeScope?: CodeScope | null;
+  codeScopeStatus?: CodeScopeStatus | null;
   summary: string | null;
   error: string | null;
   turnsUsed: number;

@@ -238,11 +238,25 @@ export type AiAction =
   | { type: 'screenshot'; selector?: string; x?: number; y?: number }
   /** 数据库取证（探索会话专用通道）：对被测系统自己的库跑一条只读查询。
    *  db = 环境 db 对象的 label（缺省 = 环境默认库）；limit = 取回行数上限。 */
-  | { type: 'sql'; query: string; limit?: number; db?: string };
+  | { type: 'sql'; query: string; limit?: number; db?: string }
+  /** 仓库读码（探索会话专用通道，有代码提交范围时开通）：只读查看改动代码。
+   *  read=读文件（offset 起始行 + maxLines 行数上限，大文件读改动段用）；
+   *  grep=按正则/字面量搜码；ls=列目录；
+   *  diff=看范围改动（无 path 时整范围，带 path 时限单文件）。 */
+  | { type: 'repo'; op: 'read' | 'grep' | 'ls' | 'diff'; path?: string; pattern?: string; offset?: number; maxLines?: number };
 
 /** sql 取证的单次回灌上限：行数 / 单元格 / 单行 / 整块四级封顶（反馈进下一轮 userMessage，不能无限膨胀）。 */
 export const SQL_PROBE_MAX_ROWS = 20;
 export const SQL_PROBE_DEFAULT_ROWS = 20;
+
+/** repo 读码的回灌封顶：整块字符数（防御性截断；行数/匹配数的语义封顶在通道实现里做）。 */
+export const REPO_OUTPUT_MAX_CHARS = 6000;
+/** repo read 单次最大行数（parseAction 钳制 + 通道实现共用同一口径）。 */
+export const REPO_READ_MAX_LINES = 200;
+/** repo grep 单次最大命中条数。 */
+export const REPO_GREP_MAX_MATCHES = 60;
+/** repo path/pattern 字段长度上限（parseAction 截断——模型可能吐超长串）。 */
+const REPO_FIELD_MAX = 200;
 
 // AI 相凭据占位符协议：verify_case / solidify_case 的提示词要求 LLM 把用户名/密码/
 // 敏感字段 fill 成这三个字面量，执行时刻由 valueSub 替换为真实值。协议常量定义在
@@ -434,6 +448,35 @@ function parseAction(a: unknown): AiAction | null {
         ? Math.min(Math.max(Math.round(o.limit), 1), SQL_PROBE_MAX_ROWS)
         : SQL_PROBE_DEFAULT_ROWS;
     return { type: 'sql', query: raw.trim(), limit, ...(db ? { db } : {}) };
+  }
+  if (type === 'repo') {
+    // 只做形状校验与截断：路径存在性/沙箱/配额留给动作循环里的通道守卫——
+    // 在这里判死会让动作被静默丢弃、模型学不到原因。
+    // 键名容忍：模型可能写 op/action、pattern/q、path/file。
+    const op = String(o.op ?? o.action ?? '');
+    const pathRaw = typeof o.path === 'string' ? o.path : typeof o.file === 'string' ? o.file : null;
+    const patternRaw = typeof o.pattern === 'string' ? o.pattern : typeof o.q === 'string' ? o.q : null;
+    const cleanPath = pathRaw?.trim() ? pathRaw.trim().slice(0, REPO_FIELD_MAX) : undefined;
+    const cleanPattern = patternRaw?.trim() ? patternRaw.trim().slice(0, REPO_FIELD_MAX) : undefined;
+    const maxLines =
+      typeof o.maxLines === 'number' && Number.isFinite(o.maxLines)
+        ? Math.min(Math.max(Math.round(o.maxLines), 1), REPO_READ_MAX_LINES)
+        : REPO_READ_MAX_LINES;
+    const offset =
+      typeof o.offset === 'number' && Number.isFinite(o.offset)
+        ? Math.max(Math.round(o.offset), 0)
+        : 0;
+    if (op === 'read') {
+      if (!cleanPath) return null;
+      return { type: 'repo', op: 'read', path: cleanPath, offset, maxLines };
+    }
+    if (op === 'grep') {
+      if (!cleanPattern) return null;
+      return { type: 'repo', op: 'grep', pattern: cleanPattern, ...(cleanPath ? { path: cleanPath } : {}), maxLines };
+    }
+    if (op === 'ls') return { type: 'repo', op: 'ls', ...(cleanPath ? { path: cleanPath } : {}) };
+    if (op === 'diff') return { type: 'repo', op: 'diff', ...(cleanPath ? { path: cleanPath } : {}) };
+    return null;
   }
   return null;
 }
@@ -880,6 +923,10 @@ async function execAction(page: Page, action: AiAction, valueSub?: (v: string) =
       // sql 动作由主循环单独处理（不进浏览器执行器）；走到这里说明有漏网路径——判死而非静默无返回。
       throw new Error('sql 动作不应进入浏览器动作执行器');
     }
+    case 'repo': {
+      // repo 动作同 sql：由主循环单独处理，漏网路径判死。
+      throw new Error('repo 动作不应进入浏览器动作执行器');
+    }
   }
 }
 
@@ -1175,6 +1222,18 @@ export type SqlProbeResult =
   | { ok: true; rowCount: number; truncated: boolean; rows: Array<Record<string, unknown>> }
   | { ok: false; error: string };
 
+/** 仓库读码请求（repo 动作的平台侧形状；调用方实现只读访问 + 沙箱限仓库根）。 */
+export type RepoReadRequest =
+  | { op: 'read'; path: string; offset: number; maxLines: number }
+  | { op: 'grep'; pattern: string; path?: string; maxLines: number }
+  | { op: 'ls'; path?: string }
+  | { op: 'diff'; path?: string };
+
+/** 仓库读码结果：content 由调用方按语义封顶（行数/匹配数），aiTask 侧再防御性截整块。 */
+export type RepoReadResult =
+  | { ok: true; content: string }
+  | { ok: false; error: string };
+
 /** runAiTask 可选项。 */
 export interface RunAiTaskOpts {
   /** 对话轮数上限（缺省 MAX_TURNS=8）。 */
@@ -1210,6 +1269,9 @@ export interface RunAiTaskOpts {
    *  探索会话传（环境配了 db 对象时）；verify/登录/solidify 路径不传 → 行为零变化。
    *  平台侧只喂只读查询：写语句在调用探针前就被 sqlGuard 的只读守卫拦下。 */
   runSqlProbe?: (query: string, opts: { limit: number; db?: string }) => Promise<SqlProbeResult>;
+  /** 仓库读码通道：挂上才允许 repo 动作（有代码提交范围的探索会话）。
+   *  只读 + 沙箱限仓库工作树内（assertInCwd）；路径越界/配额耗尽在通道实现里转成 ok:false。 */
+  runRepoRead?: (req: RepoReadRequest) => Promise<RepoReadResult>;
   /** 破坏性动作闸策略：传了才启用（verify/登录/solidify 路径不传 → 行为零变化）。
    *  allow=false = 点击可见文本命中破坏性关键词一律拒收；allow=true = 用户在建会话时
    *  显式授权（探索会话的 allow_destructive 列），放行但仍写日志与留痕。 */
@@ -1436,6 +1498,44 @@ export async function runAiTask(
           const selfCheck = noteStreakFailure(errStreak, sqlKey, sqlSelfCheck);
           if (selfCheck) lastResults.push(selfCheck);
           logger.info({ query: a.query.slice(0, 120), error: msg.slice(0, 200) }, 'aiTask sql probe failed');
+        }
+        continue;
+      }
+      // 仓库读码（repo）：只挂 runRepoRead 的会话才有这个通道（有代码提交范围的探索会话）。
+      // 沙箱/配额在通道实现里——越界与超额都转成 ok:false 的错误反馈，这里不再重复守卫。
+      if (a.type === 'repo') {
+        const read = opts?.runRepoRead;
+        const repoKey = `repo:${a.op}:${(a.path ?? a.pattern ?? '').slice(0, 40)}`;
+        const repoSelfCheck = `[system] 仓库读取 ${repoKey} 已连续 3 次失败：不要原样重试。不确定路径时先 ls 上级目录，或用 grep 搜代码里的关键词定位文件；确实读不到就如实说明，不要反复猜。`;
+        if (!read) {
+          lastResults.push('repo: error 本会话未开通仓库读码通道（章程未指定代码提交范围），不要输出 repo 动作。');
+          opts?.onAction?.(a, false);
+          const selfCheck = noteStreakFailure(errStreak, repoKey, repoSelfCheck);
+          if (selfCheck) lastResults.push(selfCheck);
+          continue;
+        }
+        try {
+          const req: RepoReadRequest =
+            a.op === 'read'
+              ? { op: 'read', path: a.path!, offset: a.offset ?? 0, maxLines: a.maxLines ?? REPO_READ_MAX_LINES }
+              : a.op === 'grep'
+                ? { op: 'grep', pattern: a.pattern!, path: a.path, maxLines: a.maxLines ?? REPO_READ_MAX_LINES }
+                : a.op === 'ls'
+                  ? { op: 'ls', path: a.path }
+                  : { op: 'diff', path: a.path };
+          const res = await read(req);
+          if (!res.ok) throw new Error(res.error);
+          const head = a.op === 'read' ? (a.path ?? '') : a.op === 'grep' ? (a.pattern ?? '') : (a.path ?? '(仓库根)');
+          lastResults.push(`repo ${a.op} ${head} ok：\n${res.content.slice(0, REPO_OUTPUT_MAX_CHARS)}`);
+          opts?.onAction?.(a, true);
+          errStreak.delete(repoKey);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          lastResults.push(`repo ${a.op} ${a.path ?? a.pattern ?? ''}: error ${msg.slice(0, 200)}`);
+          opts?.onAction?.(a, false);
+          const selfCheck = noteStreakFailure(errStreak, repoKey, repoSelfCheck);
+          if (selfCheck) lastResults.push(selfCheck);
+          logger.info({ op: a.op, path: a.path?.slice(0, 120), error: msg.slice(0, 200) }, 'aiTask repo read failed');
         }
         continue;
       }

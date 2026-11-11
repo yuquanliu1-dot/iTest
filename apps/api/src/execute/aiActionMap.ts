@@ -126,6 +126,9 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
       case 'sql':
         // 数据库取证动作（探索会话专用通道）没有对应的机械 DSL：不能固化成回放步骤。
         return { ok: false, reason: '含数据库取证动作（只读查询），无对应机械 DSL，整步保持 aiTask' };
+      case 'repo':
+        // 仓库读码动作（探索会话专用通道）同理：取证性质，无对应机械 DSL，整步保持 aiTask。
+        return { ok: false, reason: '含仓库读码动作（只读取证），无对应机械 DSL，整步保持 aiTask' };
       case 'wait':
         // AI 相的页面稳定等待映射为固定时长 waitFor（空 locator = 不等元素，睡满 timeoutMs）
         compiled.push({ kind: 'waitFor', locator: [], timeoutMs: a.ms });

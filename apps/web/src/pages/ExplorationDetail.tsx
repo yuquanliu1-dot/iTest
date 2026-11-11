@@ -49,6 +49,7 @@ export default function ExplorationDetail() {
   const findings = session?.findings ?? [];
   const steps = session?.steps ?? [];
   const excluded = session?.excludedLedger ?? [];
+  const codeScope = session?.codeScope ?? null;
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['exploration', id] });
@@ -233,6 +234,73 @@ export default function ExplorationDetail() {
             )}
           </div>
         </div>
+
+        {/* 代码提交范围：charter 自然语言解析产物（runner 后台解析，轮询可见）。
+            范围是焦点不是围栏——卡片只作定向参考；none（章程与提交历史无关）不渲染卡片。 */}
+        {(session.codeScopeStatus === 'pending' || codeScope || session.codeScopeStatus === 'failed') && (
+          <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4 flex flex-col gap-2">
+            <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
+              {t('explorations:codeScopeTitle')}
+            </div>
+            {session.codeScopeStatus === 'pending' && !codeScope && (
+              <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+                {t('explorations:codeScopeStatus.pending')}…
+              </div>
+            )}
+            {session.codeScopeStatus === 'failed' && !codeScope && (
+              <div className="text-[12px]" style={{ color: 'var(--destructive)' }}>
+                {t('explorations:codeScopeStatus.failed')}
+              </div>
+            )}
+            {codeScope && (
+              <>
+                <div className="text-[13px] font-medium" style={{ color: 'var(--foreground)' }}>
+                  {codeScope.label}
+                  <span className="ml-2 text-[11px] font-normal" style={{ color: 'var(--muted-foreground)' }}>
+                    {codeScope.commits.length} {t('explorations:codeScopeCommits')} · {codeScope.files.length} {t('explorations:codeScopeFiles')}
+                  </span>
+                </div>
+                {codeScope.commits.length > 0 && (
+                  <div className="flex flex-col gap-0.5">
+                    {codeScope.commits.slice(0, 10).map((c) => (
+                      <div key={c.sha} className="text-[12px] font-mono truncate" title={c.subject}>
+                        <span style={{ color: 'var(--muted-foreground)' }}>{c.sha.slice(0, 8)}</span>
+                        <span className="mx-1" style={{ color: 'var(--muted-foreground)' }}>{c.date.slice(0, 10)}</span>
+                        <span style={{ color: 'var(--foreground)' }}>{c.subject}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {codeScope.files.length > 0 && (
+                  <div className="flex flex-col gap-0.5">
+                    {codeScope.files.slice(0, 20).map((f) => (
+                      <div key={f.path} className="text-[12px] font-mono flex items-baseline gap-2 min-w-0">
+                        <span className="truncate flex-1" style={{ color: 'var(--foreground)' }} title={f.path}>{f.path}</span>
+                        <span className="shrink-0" style={{ color: 'var(--success)' }}>+{f.additions}</span>
+                        <span className="shrink-0" style={{ color: 'var(--destructive)' }}>-{f.deletions}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {codeScope.hintUrls.length > 0 && (
+                  <div className="flex flex-col gap-1">
+                    <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('explorations:codeScopeHintUrls')}</div>
+                    <div className="flex flex-wrap gap-1">
+                      {codeScope.hintUrls.map((u) => (
+                        <span key={u} className="px-1.5 py-0.5 rounded text-[11px] font-mono" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>{u}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {codeScope.reason && (
+                  <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                    {t('explorations:codeScopeReason')}：{codeScope.reason}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
         {/* 会话过程：平台记录的每一步动作（点/填/访问/查库），含查库结果摘要 */}
         {steps.length > 0 && (

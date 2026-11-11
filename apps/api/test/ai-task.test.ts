@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Page } from 'playwright-core';
 import type { LLMClient, LLMMessage, LLMResult } from '../src/agent/llm-client.js';
-import { runAiTask, solveCaptchaOnce, credentialPlaceholderKind, makeCredentialValueSub, referencesCredential, parseCredentialPlaceholder, credentialPlaceholder, isValidCredentialRef } from '../src/execute/aiTask.js';
+import { runAiTask, solveCaptchaOnce, credentialPlaceholderKind, makeCredentialValueSub, referencesCredential, parseCredentialPlaceholder, credentialPlaceholder, isValidCredentialRef, type RepoReadRequest, type RepoReadResult } from '../src/execute/aiTask.js';
 
 /** 记录调用顺序的桩 Page：screenshot/evaluate/url 走默认值，locator 动作全部记录。
  *  evaluate 按 evaluatee 源码分发：elementFromPoint（坐标解析）默认无目标、canvas（指纹）恒稳定、
@@ -940,6 +940,125 @@ describe('runAiTask 数据库取证通道（sql 动作，探索会话专用）',
       },
     });
     expect(gotDb).toBe('SIEM数据库');
+  });
+});
+
+describe('runAiTask 仓库读码通道（repo 动作，有代码提交范围的探索会话专用）', () => {
+  it('未挂 runRepoRead → 机械拒收（不静默忽略），反馈可行动', async () => {
+    const { page } = makeStubPage();
+    const reported: Array<{ ok: boolean }> = [];
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'repo', op: 'read', path: 'src/routes.ts' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '读码', llm, false, {
+      onAction: (a, ok) => reported.push({ ok }),
+    });
+    expect(requests[1]).toContain('未开通仓库读码通道');
+    expect(reported).toEqual([{ ok: false }]);
+  });
+
+  it('read op：默认 offset=0 / maxLines=200 透传，内容回灌 + onAction ok=true + 不进浏览器执行器', async () => {
+    const { page, calls } = makeStubPage();
+    let got: RepoReadRequest | undefined;
+    const reported: Array<{ ok: boolean; type: string }> = [];
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'repo', op: 'read', path: 'src/routes.ts' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '读码', llm, false, {
+      runRepoRead: async (req) => {
+        got = req;
+        return { ok: true, content: "1 path:'/asset/list'" };
+      },
+      onAction: (a, ok) => reported.push({ ok, type: a.type }),
+    });
+    expect(got).toEqual({ op: 'read', path: 'src/routes.ts', offset: 0, maxLines: 200 });
+    expect(requests[1]).toContain('repo read src/routes.ts ok');
+    expect(requests[1]).toContain("path:'/asset/list'");
+    expect(reported).toEqual([{ ok: true, type: 'repo' }]);
+    expect(actionCalls(calls)).toEqual([]);
+  });
+
+  it('maxLines 超限钳到 200；offset 透传', async () => {
+    const { page } = makeStubPage();
+    const got: RepoReadRequest[] = [];
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'repo', op: 'read', path: 'a.ts', offset: 50, maxLines: 9999 }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '读码', llm, false, {
+      runRepoRead: async (req) => {
+        got.push(req);
+        return { ok: true, content: 'x' };
+      },
+    });
+    expect(got[0]).toMatchObject({ op: 'read', offset: 50, maxLines: 200 });
+  });
+
+  it('path 超长截断到 200（通道拿到的是截断后的 path）', async () => {
+    const { page } = makeStubPage();
+    let got: RepoReadRequest | undefined;
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'repo', op: 'ls', path: 'x'.repeat(500) }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '列目录', llm, false, {
+      runRepoRead: async (req) => {
+        got = req;
+        return { ok: true, content: 'src/' };
+      },
+    });
+    expect(got?.op).toBe('ls');
+    expect(got && 'path' in got ? (got.path ?? '').length : -1).toBe(200);
+  });
+
+  it('通道失败 → 错误反馈 + onAction ok=false（不中断会话）', async () => {
+    const { page } = makeStubPage();
+    const reported: Array<{ ok: boolean }> = [];
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'repo', op: 'grep', pattern: 'login' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '搜码', llm, false, {
+      runRepoRead: async () => ({ ok: false, error: 'path escapes cwd: /etc/passwd' }),
+      onAction: (a, ok) => reported.push({ ok }),
+    });
+    expect(requests[1]).toContain('repo grep');
+    expect(requests[1]).toContain('path escapes cwd');
+    expect(reported).toEqual([{ ok: false }]);
+  });
+
+  it('同一目标连续 3 次失败 → 注入 repo 口径自检行（先 ls/grep 定位，不原样重试）', async () => {
+    const { page } = makeStubPage();
+    const fail = async (): Promise<RepoReadResult> => ({ ok: false, error: 'no such file' });
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'repo', op: 'read', path: 'nope.ts' }] },
+      { actions: [{ type: 'repo', op: 'read', path: 'nope.ts' }] },
+      { actions: [{ type: 'repo', op: 'read', path: 'nope.ts' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '读码', llm, false, { runRepoRead: fail });
+    expect(requests[2]).not.toContain('已连续 3 次失败');
+    expect(requests[3]).toContain('已连续 3 次失败');
+    expect(requests[3]).toContain('先 ls 上级目录');
+  });
+
+  it('畸形 repo 动作（op 非法/缺 pattern）被丢弃：不调通道，反馈「没有可执行的动作」', async () => {
+    const { page } = makeStubPage();
+    let channelCalls = 0;
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'repo', op: 'wget', path: 'x' }, { type: 'repo', op: 'grep' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '读码', llm, false, {
+      runRepoRead: async () => {
+        channelCalls += 1;
+        return { ok: true, content: 'x' };
+      },
+    });
+    expect(channelCalls).toBe(0);
+    expect(requests[1]).toContain('没有可执行的动作');
   });
 });
 

@@ -1142,6 +1142,14 @@ export const explorationSessions = pgTable('exploration_sessions', {
    * 只存排除项、不存信念——黑板存信念会把观察冻成结论、自我印证。
    */
   excludedLedger: jsonb('excluded_ledger').$type<Array<{ claim: string; evidence: string }>>(),
+  /**
+   * 代码提交范围（charter 自然语言解析产物）：提交窗口 + 改动文件 + 候选起点。
+   * 范围是焦点信号不是围栏——探索照常全站跑，范围只用于定向（增量回归/新功能探索）。
+   * 解析在 runner 后台做（LLM + git fetch 可能数十秒），结果落库后前端轮询可见。
+   */
+  codeScope: jsonb('code_scope'),
+  /** pending → resolved | none | failed：none=charter 无提交语义（不碰 git）；failed=解析失败（不掀翻会话）。 */
+  codeScopeStatus: varchar('code_scope_status', { length: 16 }),
   summary: text('summary'),
   error: text('error'),
   turnsUsed: integer('turns_used').notNull().default(0),

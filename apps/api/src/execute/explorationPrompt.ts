@@ -7,12 +7,16 @@ import { z } from 'zod';
 import { getExplorationPersona, type ExplorationReproStep, type StepAction } from '@itest/shared';
 import { mapAiActionsToCompiled } from './aiActionMap.js';
 import type { AiAction } from './aiTask.js';
+import type { CodeScope } from './codeScope.js';
 
 /** 单会话 findings 封顶：超出的丢弃（成本与审阅负担的双保险）。 */
 export const EXPLORATION_MAX_FINDINGS = 20;
 
 /** 单会话数据库取证次数封顶：查库是取证手段不是探索主路径，超额即拒（防模型把预算烧在扫库上）。 */
 export const EXPLORATION_MAX_SQL_PROBES = 20;
+
+/** 单会话仓库读码次数封顶：读码同样是取证手段（对照 EXPLORATION_MAX_SQL_PROBES 同形态）。 */
+export const EXPLORATION_MAX_REPO_READS = 30;
 
 /** 单会话负面结果账本条数封顶：排除项是给模型的方向感，不是无限膨胀的记忆体。 */
 export const EXPLORATION_MAX_EXCLUDED = 20;
@@ -69,6 +73,47 @@ export interface ComposeExplorationArgs {
   manifest?: string;
   /** 环境里的数据库对象（label + 方言）；非空则拼「## 数据库取证」段（sql 动作的可用库清单）。 */
   dbs?: Array<{ label: string; dialect: string }>;
+  /** 代码提交范围（resolveCodeScope 产物）；非空则拼「## 代码范围」段。范围是焦点不是围栏。 */
+  codeScope?: CodeScope;
+}
+
+/** 代码范围段（指令常量段，每轮随 instruction 携带——范围是会话级常量，缓存前缀稳定）。 */
+const SCOPE_COMMITS_TO_PROMPT_MAX = 20;
+const SCOPE_FILES_TO_PROMPT_MAX = 40;
+
+/** CodeScope → 「## 代码范围」段：范围标签 + 提交清单 + 改动文件 + 候选起点 + 纪律句。 */
+export function renderCodeScopeSection(scope: CodeScope): string {
+  const lines: string[] = [`## 代码范围\n${scope.label}`];
+  if (scope.commits.length > 0) {
+    lines.push(
+      '提交清单（新→旧）：',
+      ...scope.commits.slice(0, SCOPE_COMMITS_TO_PROMPT_MAX).map((c) => `- ${c.sha.slice(0, 10)} ${c.date.slice(0, 10)} ${c.subject}`),
+    );
+  }
+  if (scope.files.length > 0) {
+    lines.push(
+      '改动文件：',
+      ...scope.files.slice(0, SCOPE_FILES_TO_PROMPT_MAX).map((f) => `- ${f.path}（${f.status} +${f.additions}/-${f.deletions}）`),
+    );
+  }
+  if (scope.hintUrls.length > 0) {
+    lines.push(`候选起点（从改动代码里机械抽取的路由字面量，启发式、可能不准，以实际页面为准）：${scope.hintUrls.join('、')}`);
+  }
+  lines.push(
+    '纪律：先看清单再动手——改动文件与候选起点只是「该重点看哪里」的线索，不是围栏；探索仍覆盖全站，最终一切以页面实际表现为准，发现与范围无关的缺陷照常报告。',
+  );
+  return lines.join('\n');
+}
+
+/** repo 读码动作协议（追加进系统提示词基底，只在有代码提交范围的会话出现）。 */
+export function renderRepoActionProtocol(): string {
+  return `## 仓库读码（可选取证通道）
+需要代码佐证页面现象时，可输出 repo 动作直接读被测系统的源码（只读，路径相对仓库根）：
+- {"type":"repo","op":"read","path":"src/routes.ts","offset":0,"maxLines":200}　读文件片段（offset/maxLines 可省略）
+- {"type":"repo","op":"grep","pattern":"关键词","path":"src/","maxLines":60}　搜代码（先 grep 定位再 read，别按目录乱翻）
+- {"type":"repo","op":"ls","path":"src/"}　列目录
+- {"type":"repo","op":"diff","path":"src/routes.ts"}　看本次代码范围某文件的 diff（不传 path 看全部改动）
+约束：读码是取证手段不是探索主路径（本会话有次数上限）；源码里的密钥/凭据/内部地址不要写进 findings；改动的代码 ≠ 页面的实际行为，结论仍以页面验证为准。`;
 }
 
 /** 组装探索指令（runAiTask 的 instruction 参数，每轮随 user message 携带）。 */
@@ -88,6 +133,9 @@ export function composeExplorationInstruction(args: ComposeExplorationArgs): str
     sections.push(
       `## 数据库取证\n环境配了数据库，你可以用 {"type":"sql","query":"<只读 SELECT/WITH>","limit":<行数>} 直接查库取证——这是拿到「前端没显示但库里写进去了」这类数据层证据的唯一手段。\n可用数据库：${list}；要查指定库就在 sql 动作里加 "db":"<库名>"（库名照抄上面的清单），不写 db 就查环境默认库。\n约束：只允许 SELECT / WITH 开头的只读查询（写语句会被平台机械拒收）；一次最多回 20 行；查库不改变页面状态。\n用法：先有具体假设再查（例如「新增后列表没显示」→ 查对应表的最新一条）；表名/字段名不确定时先查元数据 SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema')；行里的手机号/身份证/密码哈希等敏感值不要写进 findings。`,
     );
+  }
+  if (args.codeScope) {
+    sections.push(renderCodeScopeSection(args.codeScope));
   }
   sections.push(`## 起点\n从 ${args.startUrl} 开始，按章程在站点内导航探索。`);
   sections.push('## 输出契约\n发现疑似缺陷当轮输出 findings 数组；结束时 done.summary = 本次探索总结（覆盖了什么、发现几条）。');

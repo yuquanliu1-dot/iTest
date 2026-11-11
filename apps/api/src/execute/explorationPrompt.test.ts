@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { composeExplorationInstruction, coerceFindings, trailToSteps, trailToCaseSteps, mergeExplorationTrails, EXPLORATION_MAX_FINDINGS, EXPLORATION_MAX_SQL_PROBES } from './explorationPrompt.js';
+import { composeExplorationInstruction, coerceFindings, trailToSteps, trailToCaseSteps, mergeExplorationTrails, EXPLORATION_SYSTEM_PROMPT_BASE, EXPLORATION_MAX_FINDINGS, EXPLORATION_MAX_SQL_PROBES, renderRepoActionProtocol } from './explorationPrompt.js';
 import { EXPLORATION_SYSTEM_PROMPT_BASE } from './explorationPrompt.js';
 import { EXPLORATION_PERSONA_KEYS } from '@itest/shared';
 
@@ -122,6 +122,47 @@ describe('composeExplorationInstruction', () => {
   it('dbs 缺省/空数组 → 无「## 数据库取证」段（通道不存在就不在提示词里露头）', () => {
     expect(composeExplorationInstruction(base)).not.toContain('## 数据库取证');
     expect(composeExplorationInstruction({ ...base, dbs: [] })).not.toContain('## 数据库取证');
+  });
+
+  it('codeScope 非空 → 含「## 代码范围」段（提交/文件/候选起点 + 焦点不是围栏纪律句）', () => {
+    const s = composeExplorationInstruction({
+      ...base,
+      codeScope: {
+        kind: 'time_window',
+        label: '最近 30 天',
+        since: '2026-10-12',
+        until: '2026-11-11',
+        fromSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        toSha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        headSha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        commits: [{ sha: 'cccccccccccccccccccccccccccccccccccccccc', subject: 'c2 资产详情路由', date: '2026-11-01T10:00:00' }],
+        files: [{ path: 'src/routes.ts', status: 'M', additions: 1, deletions: 0 }],
+        hintUrls: ['/asset/detail'],
+        confidence: 0.9,
+        reason: '章程要求最近 30 天',
+      },
+    });
+    expect(s).toContain('## 代码范围');
+    expect(s).toContain('最近 30 天');
+    expect(s).toContain('c2 资产详情路由');
+    expect(s).toContain('src/routes.ts（M +1/-0）');
+    expect(s).toContain('/asset/detail');
+    expect(s).toContain('启发式、可能不准');
+    expect(s).toContain('不是围栏');
+  });
+
+  it('codeScope 缺省 → 无「## 代码范围」段（无范围会话行为零变化）', () => {
+    expect(composeExplorationInstruction(base)).not.toContain('## 代码范围');
+  });
+
+  it('renderRepoActionProtocol：repo 动作形状 + 只读约束；基底本身不含 repo 协议（条件追加由 runner 拼）', () => {
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).not.toContain('## 仓库读码');
+    const proto = renderRepoActionProtocol();
+    expect(proto).toContain('## 仓库读码');
+    expect(proto).toContain('"type":"repo","op":"read"');
+    expect(proto).toContain('"op":"grep"');
+    expect(proto).toContain('"op":"diff"');
+    expect(proto).toContain('先 grep 定位再 read');
   });
 });
 

@@ -406,24 +406,33 @@ async function dirExists(p: string): Promise<boolean> {
   return fs.stat(p).then((s) => s.isDirectory()).catch(() => false);
 }
 
-function runGit(args: string[], cwdArg: string = process.cwd()): Promise<string> {
+function runGit(args: string[], cwdArg: string = process.cwd(), timeoutMs?: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, { cwd: cwdArg, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
+    // 超时只用于读侧调用（gitRead）：检出/加深是长操作，刻意不限时；读命令挂死必须能断。
+    let timer: NodeJS.Timeout | undefined;
+    if (timeoutMs) {
+      timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`git timeout after ${timeoutMs}ms`)); }, timeoutMs);
+    }
     child.stdout.on('data', (d) => { out += d.toString(); });
     child.stderr.on('data', (d) => { err += d.toString(); });
     child.on('error', (e) => {
       const errNo = e as NodeJS.ErrnoException;
       // 容器镜像没装 git 时 spawn 即 ENOENT;原文「spawn git ENOENT」对运维没指导意义,
       // 转成可执行的修复建议,checkoutInBackground 会再透到 repo.issue。
+      if (timer) clearTimeout(timer);
       if (errNo.code === 'ENOENT' && errNo.message.includes('git')) {
         reject(new Error('git binary missing in runtime image; rebuild infra/docker/api.Dockerfile with git installed'));
       } else {
         reject(errNo);
       }
     });
-    child.on('close', (code) => code === 0 ? resolve(out) : reject(new Error(err.trim() || `git exit ${code}`)));
+    child.on('close', (code) => {
+      if (timer) clearTimeout(timer);
+      code === 0 ? resolve(out) : reject(new Error(err.trim() || `git exit ${code}`));
+    });
   });
 }
 
@@ -431,9 +440,38 @@ function runGitIn(cwdArg: string, args: string[]): Promise<string> {
   return runGit(args, cwdArg);
 }
 
-async function cloneFirst(target: string, info: ProjectRepo): Promise<void> {
+/** 只读用途的 git 调用入口（探索的「代码提交范围」解析 + 读码通道共用）。
+ *  调用方负责保证子命令只读（log/diff/show/rev-list…），这里不做白名单。
+ *  带 30s 超时（读命令挂死必须能断；检出/加深走内部 runGit，不限时）。 */
+export async function gitRead(cwdArg: string, args: string[]): Promise<string> {
+  return runGit(args, cwdArg, REPO_RUN_TIMEOUT_MS);
+}
+
+/** 浅克隆边界：depth 按提交条数，since 按日期（两者互斥——git 拒绝同时给出）。
+ *  默认 depth=1 → 助手路径行为零变化。
+ *  since 必须是显式时间戳（YYYY-MM-DDTHH:MM:SS）：实测裸日期「2026-01-01」与
+ *  「2026-01-01T00:00:00」的边界判定不同（后者才严格含当日提交），调用方统一给显式时间戳。
+ *  注意 fetch --shallow-since 在「对象已在本地（上一次加深过又被助手截回 depth 1）」时
+ *  可能不重写浅边界——调用方要自行核验覆盖度，不足时改用 depth 重试（depth 恒生效）。 */
+export interface ShallowBounds {
+  /** 深度（提交条数）。 */
+  depth?: number;
+  /** 浅克隆边界时间戳（显式 YYYY-MM-DDTHH:MM:SS）：拉取该时刻之后的历史。 */
+  since?: string;
+}
+
+const DEFAULT_SHALLOW_DEPTH = 1;
+
+/** git clone/fetch 的浅克隆参数组：since 优先于 depth（git 不允许两者同时出现）。 */
+function shallowArgs(bounds: ShallowBounds): string[] {
+  return bounds.since
+    ? ['--shallow-since', bounds.since]
+    : ['--depth', String(bounds.depth ?? DEFAULT_SHALLOW_DEPTH)];
+}
+
+async function cloneFirst(target: string, info: ProjectRepo, bounds: ShallowBounds): Promise<void> {
   try {
-    await runGit(['clone', '--depth', '1', '--branch', info.branch, injectPat(info.repoUrl, info.provider, info.pat, info.gitlabOverride), target]);
+    await runGit(['clone', ...shallowArgs(bounds), '--branch', info.branch, injectPat(info.repoUrl, info.provider, info.pat, info.gitlabOverride), target]);
   } catch (e) {
     await fs.rm(target, { recursive: true, force: true }).catch(() => {});
     const msg = (e as Error).message;
@@ -442,7 +480,7 @@ async function cloneFirst(target: string, info: ProjectRepo): Promise<void> {
   }
 }
 
-async function fetchAndReset(target: string, info: ProjectRepo, ref: string): Promise<string> {
+async function fetchAndReset(target: string, info: ProjectRepo, ref: string, bounds: ShallowBounds = {}): Promise<string> {
   // 1. dirty 检查：tracked 修改 / untracked 文件 → stash
   const status = await runGitIn(target, ['status', '--porcelain']).catch(() => '');
   let stashRef: string | null = null;
@@ -452,7 +490,7 @@ async function fetchAndReset(target: string, info: ProjectRepo, ref: string): Pr
   }
   // 2. fetch + reset（FETCH_HEAD 对 branch / tag 通用）
   try {
-    await runGitIn(target, ['fetch', '--depth', '1', 'origin', ref]);
+    await runGitIn(target, ['fetch', ...shallowArgs(bounds), 'origin', ref]);
     await runGitIn(target, ['reset', '--hard', 'FETCH_HEAD']);
   } catch (e) {
     const msg = (e as Error).message;
@@ -470,13 +508,9 @@ async function fetchAndReset(target: string, info: ProjectRepo, ref: string): Pr
   return target;
 }
 
-/** 检出/更新临界区：先锁后检。锁在目录存在性判断之前拿，冷热两路同锁——3 副本共享
- *  .data 卷时，旧实现冷路径 `.catch(() => null)` 吞掉 ELOCKED 后裸克隆、且 rm 发生在拿
- *  锁之前（会删掉他副本正在 fetch 的目录），两个副本同时冷克隆同一版本即互相践踏。
- *  锁内二次检查 .git：等锁期间赢家可能已建好仓库，直接走热路径 fetchAndReset。
- *  重试 5×200ms（指数退避）：短暂等待通常比立刻 LockTimeoutError（调用方有上层重试）
- *  体验好；锁文件是 `<target>.lock` 兄弟路径，锁内 rm -rf target 不破坏锁本身。 */
-async function withCheckoutLock(target: string, info: ProjectRepo, branch: string): Promise<string> {
+/** 目录锁：同一 target 目录 → 同一把锁（proper-lockfile 锁文件是 `<target>.lock` 兄弟路径，
+ *  锁内 rm -rf target 不破坏锁本身）。检出与「加深浅克隆」共用它 → 两把动作不会互踩。 */
+async function withRepoLock<T>(target: string, fn: () => Promise<T>): Promise<T> {
   // proper-lockfile 加锁前会 lstat 目标路径，冷路径目标还不存在 → 先保证目录在（幂等）
   await fs.mkdir(target, { recursive: true });
   let release: () => Promise<void>;
@@ -487,16 +521,28 @@ async function withCheckoutLock(target: string, info: ProjectRepo, branch: strin
     throw e;
   }
   try {
-    if (await dirExists(target) && await dirExists(path.join(target, '.git'))) {
-      return await fetchAndReset(target, info, branch);
-    }
-    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
-    await fs.mkdir(target, { recursive: true });
-    await cloneFirst(target, info);
-    return await fetchAndReset(target, info, branch);
+    return await fn();
   } finally {
     await release().catch(() => {});
   }
+}
+
+/** 检出/更新临界区：先锁后检。锁在目录存在性判断之前拿，冷热两路同锁——3 副本共享
+ *  .data 卷时，旧实现冷路径 `.catch(() => null)` 吞掉 ELOCKED 后裸克隆、且 rm 发生在拿
+ *  锁之前（会删掉他副本正在 fetch 的目录），两个副本同时冷克隆同一版本即互相践踏。
+ *  锁内二次检查 .git：等锁期间赢家可能已建好仓库，直接走热路径 fetchAndReset。
+ *  重试 5×200ms（指数退避）：短暂等待通常比立刻 LockTimeoutError（调用方有上层重试）
+ *  体验好。 */
+async function withCheckoutLock(target: string, info: ProjectRepo, branch: string, bounds: ShallowBounds = {}): Promise<string> {
+  return withRepoLock(target, async () => {
+    if (await dirExists(target) && await dirExists(path.join(target, '.git'))) {
+      return await fetchAndReset(target, info, branch, bounds);
+    }
+    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
+    await fs.mkdir(target, { recursive: true });
+    await cloneFirst(target, info, bounds);
+    return await fetchAndReset(target, info, branch, bounds);
+  });
 }
 
 /** 第一阶段：先实现 no_repo / 锁 / 目录骨架。clone / fetch / stash 后补。 */
@@ -529,11 +575,40 @@ async function loadVersionRepo(versionId: string): Promise<ProjectRepo | null> {
 
 /** 版本级 checkout：沙箱目录 v-<versionId> 与需求级隔离；ref 取 version.ref，缺省回落项目默认分支。tag 亦可用（fetch FETCH_HEAD）。
  *  可通过 targetDir 指定检出目录，未指定时沿用 .data/repos/v-<versionId>。 */
-export async function checkoutRepoForVersion(versionId: string, targetDir?: string): Promise<string> {
+export async function checkoutRepoForVersion(versionId: string, targetDir?: string, bounds: ShallowBounds = {}): Promise<string> {
   const info = await loadVersionRepo(versionId);
   if (!info) throw new RepoUnavailableError('no_repo', 'project has no repoUrl configured');
 
   const target = targetDir ?? path.join(REPOS_ROOT, `v-${versionId}`);
   await fs.mkdir(path.dirname(target), { recursive: true });
-  return withCheckoutLock(target, info, info.branch);
+  return withCheckoutLock(target, info, info.branch, bounds);
+}
+
+/** 版本工作树目录：.data/workspaces/v-<versionId>/repo。
+ *  助手会话与探索范围解析共用此目录 → 共享同一把检出锁（`<dir>.lock`），互不践踏。 */
+export function versionWorkspaceDir(versionId: string): string {
+  return path.join(WORKSPACES_ROOT, `v-${versionId}`, 'repo');
+}
+
+/** 把版本工作树的浅克隆「加深」到足以覆盖目标范围（探索式测试的代码提交范围用）。
+ *  助手侧固定 fetch --depth 1 → 浅克隆里没有历史，加深必须在同一把锁内做，
+ *  否则两个动作会互相把对方加深出来的历史抹掉。
+ *  冷路径（工作树还没有 .git）直接按目标边界检出。
+ *  返回 HEAD sha。 */
+export async function deepenVersionRepo(versionId: string, bounds: ShallowBounds): Promise<string> {
+  const info = await loadVersionRepo(versionId);
+  if (!info) throw new RepoUnavailableError('no_repo', 'project has no repoUrl configured');
+
+  const target = versionWorkspaceDir(versionId);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  return withRepoLock(target, async () => {
+    const hasRepo = await dirExists(path.join(target, '.git'));
+    if (!hasRepo) {
+      await fs.rm(target, { recursive: true, force: true }).catch(() => {});
+      await fs.mkdir(target, { recursive: true });
+      await cloneFirst(target, info, bounds);
+    }
+    await fetchAndReset(target, info, info.branch, bounds);
+    return (await runGitIn(target, ['rev-parse', 'HEAD'])).trim();
+  });
 }
