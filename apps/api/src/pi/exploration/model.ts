@@ -93,7 +93,8 @@ export async function visionProbeFailure(page: Page, model: Record<string, unkno
       `data:text/html,<body style="margin:0"><div style="font:700 64px monospace;color:#000;background:#fff;padding:40px">${VISION_PROBE_CODE}</div></body>`,
       { timeout: 10_000 },
     );
-    const buf = await page.screenshot({ timeout: 5000, type: 'png' });
+    // 15s：冷启动 headless 首张截图可能远慢于 5s（prod228 实证 5s 超时误降级纯文本）。
+    const buf = await page.screenshot({ timeout: 15_000, type: 'png' });
     const r = await complete(
       model as never,
       {

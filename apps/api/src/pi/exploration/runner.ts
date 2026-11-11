@@ -193,19 +193,22 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
         ...(cachedState ? { storageState: cachedState } : {}),
       });
       const page = await context.newPage();
+
+      // —— 视觉探针（浏览器内渲染唯一码读回）：失败不掀翻会话，降级纯文本模式 ——
+      //    必须在 registerLiveView 之前：live view 会对同一 page 起 CDP screencast 镜像，
+      //    prod228 实证镜像活跃时探针截图 5s 超时 → 会话被误降级为纯文本模式。
+      const visionProbe = await visionProbeFailure(page, model);
+      const vision = visionProbe === null;
+      if (visionProbe) {
+        logger.warn({ sessionId, channelName, reason: visionProbe }, 'exploration vision probe failed; text-only mode');
+      }
+
       live = registerLiveView(`exploration:${sessionId}`);
       live.setPage(page);
 
       // —— D2 故障注入控制器：控制器始终创建（收尾 finally 要能复位），
       //    但工具**只在会话带显式授权位时装配**（未授权 = 工具不出现）。——
       fault = createFaultController(context, page);
-
-      // —— 视觉探针（浏览器内渲染唯一码读回）：失败不掀翻会话，降级纯文本模式 ——
-      const visionProbe = await visionProbeFailure(page, model);
-      const vision = visionProbe === null;
-      if (visionProbe) {
-        logger.warn({ sessionId, channelName, reason: visionProbe }, 'exploration vision probe failed; text-only mode');
-      }
 
       // —— C1 覆盖账本 + D3 错误信号采集（observe 回灌 + 终态落库）——
       const coverage = createCoverageTracker();
