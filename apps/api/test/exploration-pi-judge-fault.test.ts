@@ -1,0 +1,362 @@
+/**
+ * P5 单测：A3 独立评审（judge）+ D2 故障注入（fault）。
+ *
+ * A3 验收项：
+ *  - 判定形状容错：中英别名、百分数置信度、形状不可解析 → unclear；
+ *  - **绝不改 findings.status**（人工审阅才是权威）——评审只写 findings.judge；
+ *  - 评审调用失败 → 该条 unclear（不是「不成立」），会话 judge_status=failed；
+ *  - 幂等：judge_status=done 的会话再评审不重复调模型；
+ *  - 无 findings → judge_status=skipped；
+ *  - 只喂材料（描述 + 平台动作留痕 + 证据帧元数据），不喂探索者的推理。
+ *
+ * D2 验收项：
+ *  - 模式名归一（中英别名）；
+ *  - 施加/切换/复原：切换模式先复原上一个（不叠加）；复原清掉离线/慢网路由/CPU 节流；
+ *  - 慢网只拖 GET（写请求照常放行）；
+ *  - 工具永不 throw（非法 mode → isError + 可行动文案）。
+ */
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { Pool } from 'pg';
+import { createTestDatabase } from './helpers/pg.js';
+import { SCHEMA_SQL, seedProject } from './helpers/db.js';
+import type { LLMClient, LLMRequest } from '../src/agent/llm-client.js';
+
+let pool: Pool;
+let projectId: string;
+let versionId: string;
+let userId: string;
+let sessionCounter = 0;
+
+beforeAll(async () => {
+  const pgDb = await createTestDatabase();
+  process.env.DATABASE_URL = pgDb.uri;
+  process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
+  pool = new Pool({ connectionString: pgDb.uri });
+  await pool.query(SCHEMA_SQL);
+  const seed = await seedProject(pool);
+  projectId = seed.projectId;
+  versionId = seed.versionId;
+  userId = seed.userId;
+}, 60000);
+
+afterAll(async () => {
+  const { pool: p } = await import('../src/db/client.js');
+  await p.end().catch(() => undefined);
+  await pool.end();
+});
+
+/** 建一条会话行。 */
+async function insertSession(opts: { judgeStatus?: string } = {}): Promise<string> {
+  sessionCounter += 1;
+  const r = await pool.query(
+    `INSERT INTO exploration_sessions(project_id, version_id, title, charter, persona, status, judge_status, created_by_user_id)
+     VALUES ($1,$2,$3,'探索用户管理页','qa','completed',$4,$5) RETURNING id`,
+    [projectId, versionId, `P5 单测 ${sessionCounter}`, opts.judgeStatus ?? 'pending', userId],
+  );
+  return r.rows[0]!.id as string;
+}
+
+/** 建一条 finding（可选平台留痕）。 */
+async function insertFinding(
+  sessionId: string,
+  opts: { title?: string; trail?: unknown; status?: string } = {},
+): Promise<string> {
+  sessionCounter += 1;
+  const r = await pool.query(
+    `INSERT INTO exploration_findings(session_id, "order", title, description, severity, actions_trail, status)
+     VALUES ($1,$2,$3,'预期：删除后列表少一行；实际：仍显示旧数据','P1',$4,$5) RETURNING id`,
+    [
+      sessionId,
+      sessionCounter,
+      opts.title ?? '删除后列表未刷新',
+      JSON.stringify(
+        opts.trail ?? [
+          { type: 'navigate', target: 'http://sut.example.com/app', ok: true },
+          { type: 'click', target: '#del', ok: true },
+        ],
+      ),
+      opts.status ?? 'pending',
+    ],
+  );
+  return r.rows[0]!.id as string;
+}
+
+/** 假 LLM 客户端：按脚本回 JSON，或抛错。记录收到的请求（验「只喂材料」）。 */
+function makeLlm(
+  reply: (req: LLMRequest, call: number) => Record<string, unknown>,
+): { client: LLMClient; calls: LLMRequest[] } {
+  const calls: LLMRequest[] = [];
+  const client: LLMClient = {
+    provider: 'openai',
+    complete: async (req) => {
+      calls.push(req);
+      return { kind: 'json', value: reply(req, calls.length), provider: 'openai', vision: false, model: 'judge-model' };
+    },
+  };
+  return { client, calls };
+}
+
+describe('A3 独立评审（judge）', () => {
+  it('判定解析：中英别名 + 百分数置信度 + 形状不可解析 → null', async () => {
+    const { parseVerdict } = await import('../src/pi/exploration/judge.js');
+    expect(parseVerdict({ verdict: 'confirmed', reason: '材料支撑', confidence: 0.8 })).toEqual({
+      verdict: 'confirmed',
+      reason: '材料支撑',
+      confidence: 0.8,
+    });
+    // 中文别名。
+    expect(parseVerdict({ verdict: '不成立', reason: '预期行为', confidence: 0.2 })?.verdict).toBe('dismissed');
+    expect(parseVerdict({ verdict: '存疑', reason: '看不清', confidence: 0.2 })?.verdict).toBe('unclear');
+    // 0~100 的百分数折算。
+    expect(parseVerdict({ verdict: 'confirmed', reason: 'x', confidence: 80 })?.confidence).toBeCloseTo(0.8);
+    // 形状不可解析 / >1 的数值一律按百分数折算（代码口径：0~100 折到 0~1，超界钳到 1）。
+    expect(parseVerdict({ verdict: 'whatever' })).toBeNull();
+    expect(parseVerdict(null)).toBeNull();
+    expect(parseVerdict({ verdict: 'confirmed', reason: 'x', confidence: 5 })?.confidence).toBeCloseTo(0.05);
+    expect(parseVerdict({ verdict: 'confirmed', reason: 'x', confidence: 250 })?.confidence).toBe(1);
+    expect(parseVerdict({ verdict: 'confirmed', reason: 'x', confidence: -3 })?.confidence).toBe(0);
+  }, 20000);
+
+  it('评审成立 → 写 findings.judge，**不改 findings.status**（人工才是权威）', async () => {
+    const sessionId = await insertSession();
+    const findingId = await insertFinding(sessionId);
+    const { client, calls } = makeLlm(() => ({
+      verdict: 'confirmed',
+      reason: '留痕显示点击删除后列表未刷新',
+      confidence: 0.9,
+    }));
+
+    const { judgeExplorationSession } = await import('../src/pi/exploration/judge.js');
+    await judgeExplorationSession(sessionId, { llm: client, vision: false });
+
+    const f = await pool.query(`SELECT status, judge FROM exploration_findings WHERE id=$1`, [findingId]);
+    // 人工审阅状态仍是 pending——评审只标注，不越权。
+    expect(f.rows[0]!.status).toBe('pending');
+    const judge = f.rows[0]!.judge as { verdict: string; reason: string; confidence: number; model: string };
+    expect(judge.verdict).toBe('confirmed');
+    expect(judge.reason).toContain('未刷新');
+    expect(judge.confidence).toBeCloseTo(0.9);
+    expect(judge.model).toBe('judge-model');
+
+    const s = await pool.query(`SELECT judge_status, judge_result FROM exploration_sessions WHERE id=$1`, [sessionId]);
+    expect(s.rows[0]!.judge_status).toBe('done');
+    const result = s.rows[0]!.judge_result as { summary: string; findings: Array<{ id: string }> };
+    expect(result.summary).toContain('评审 1 条');
+    expect(result.summary).toContain('成立 1');
+    expect(result.findings[0]!.id).toBe(findingId);
+
+    // 只喂材料：描述 + 平台动作留痕 + 页面 URL，不含探索者推理。
+    const body = calls[0]!.userMessage;
+    expect(body).toContain('删除后列表未刷新');
+    expect(body).toContain('平台动作留痕');
+    expect(body).toContain('#del');
+    expect(calls[0]!.image).toBeUndefined();
+  }, 30000);
+
+  it('评审调用失败 → 该条判 unclear（不是「不成立」），会话 judge_status=failed', async () => {
+    const sessionId = await insertSession();
+    const findingId = await insertFinding(sessionId);
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async () => {
+        throw new Error('网关 502');
+      },
+    };
+
+    const { judgeExplorationSession } = await import('../src/pi/exploration/judge.js');
+    await judgeExplorationSession(sessionId, { llm: client, vision: false });
+
+    const f = await pool.query(`SELECT status, judge FROM exploration_findings WHERE id=$1`, [findingId]);
+    expect(f.rows[0]!.status).toBe('pending');
+    const judge = f.rows[0]!.judge as { verdict: string; reason: string };
+    expect(judge.verdict).toBe('unclear');
+    expect(judge.reason).toContain('网关 502');
+
+    const s = await pool.query(`SELECT judge_status FROM exploration_sessions WHERE id=$1`, [sessionId]);
+    expect(s.rows[0]!.judge_status).toBe('failed');
+  }, 30000);
+
+  it('幂等：judge_status=done 再评审不重复调模型；无 findings → skipped', async () => {
+    const doneSession = await insertSession({ judgeStatus: 'done' });
+    await insertFinding(doneSession);
+    const { client, calls } = makeLlm(() => ({ verdict: 'confirmed', reason: 'x', confidence: 1 }));
+
+    const { judgeExplorationSession } = await import('../src/pi/exploration/judge.js');
+    await judgeExplorationSession(doneSession, { llm: client, vision: false });
+    expect(calls).toHaveLength(0);
+
+    const emptySession = await insertSession();
+    await judgeExplorationSession(emptySession, { llm: client, vision: false });
+    const s = await pool.query(`SELECT judge_status FROM exploration_sessions WHERE id=$1`, [emptySession]);
+    expect(s.rows[0]!.judge_status).toBe('skipped');
+    expect(calls).toHaveLength(0);
+  }, 30000);
+});
+
+describe('D2 故障注入（fault）', () => {
+  it('模式名归一：中英别名 + 不认识 → null', async () => {
+    const { normalizeFaultMode } = await import('../src/pi/exploration/tools/fault.js');
+    expect(normalizeFaultMode('offline')).toBe('offline');
+    expect(normalizeFaultMode('断网')).toBe('offline');
+    expect(normalizeFaultMode('slow_network')).toBe('slow_network');
+    expect(normalizeFaultMode('慢网')).toBe('slow_network');
+    expect(normalizeFaultMode('cpu_throttle')).toBe('cpu_throttle');
+    expect(normalizeFaultMode('节流')).toBe('cpu_throttle');
+    expect(normalizeFaultMode('none')).toBe('none');
+    expect(normalizeFaultMode('复原')).toBe('none');
+    expect(normalizeFaultMode('banana')).toBeNull();
+    expect(normalizeFaultMode(undefined)).toBeNull();
+  }, 20000);
+
+  it('控制器：断网施加/复原；切换模式先复原上一个（不叠加）', async () => {
+    const { createFaultController } = await import('../src/pi/exploration/tools/fault.js');
+    const offline: boolean[] = [];
+    const unrouted: string[] = [];
+    const context = {
+      setOffline: async (v: boolean) => {
+        offline.push(v);
+      },
+      route: async () => undefined,
+      unroute: async (pattern: string) => {
+        unrouted.push(pattern);
+      },
+      newCDPSession: async () => ({
+        send: async () => undefined,
+        detach: async () => undefined,
+      }),
+    };
+    const fault = createFaultController(context as never, {} as never);
+
+    await fault.apply('offline');
+    expect(fault.current()).toBe('offline');
+    expect(offline.at(-1)).toBe(true);
+
+    // 切到慢网：先复原断网（setOffline(false)）再挂路由，不叠加。
+    await fault.apply('slow_network');
+    expect(fault.current()).toBe('slow_network');
+    expect(offline.at(-1)).toBe(false);
+    expect(unrouted).toContain('**/*');
+
+    await fault.reset();
+    expect(fault.current()).toBe('none');
+    expect(offline.at(-1)).toBe(false);
+  }, 20000);
+
+  it('CPU 节流：CDP 设倍率；复原时倍率回 1 且 detach', async () => {
+    const { createFaultController } = await import('../src/pi/exploration/tools/fault.js');
+    const sent: Array<{ method: string; params: unknown }> = [];
+    let detached = 0;
+    const context = {
+      setOffline: async () => undefined,
+      route: async () => undefined,
+      unroute: async () => undefined,
+      newCDPSession: async () => ({
+        send: async (method: string, params?: unknown) => {
+          sent.push({ method, params });
+        },
+        detach: async () => {
+          detached += 1;
+        },
+      }),
+    };
+    const fault = createFaultController(context as never, {} as never);
+
+    await fault.apply('cpu_throttle', { rate: 8 });
+    expect(fault.current()).toBe('cpu_throttle');
+    expect(sent[0]).toEqual({ method: 'Emulation.setCPUThrottlingRate', params: { rate: 8 } });
+
+    await fault.reset();
+    expect(sent.at(-1)).toEqual({ method: 'Emulation.setCPUThrottlingRate', params: { rate: 1 } });
+    expect(detached).toBe(1);
+    expect(fault.current()).toBe('none');
+  }, 20000);
+
+  it('慢网只拖 GET：写请求照常放行', async () => {
+    const { createFaultController } = await import('../src/pi/exploration/tools/fault.js');
+    let handler: ((route: unknown) => Promise<void>) | null = null;
+    const context = {
+      setOffline: async () => undefined,
+      route: async (_pattern: string, h: (route: unknown) => Promise<void>) => {
+        handler = h;
+      },
+      unroute: async () => {
+        handler = null;
+      },
+      newCDPSession: async () => ({ send: async () => undefined, detach: async () => undefined }),
+    };
+    const fault = createFaultController(context as never, {} as never);
+    await fault.apply('slow_network', { delayMs: 1 });
+
+    const continued: string[] = [];
+    const makeRoute = (method: string) => ({
+      request: () => ({ method: () => method }),
+      continue: async () => {
+        continued.push(method);
+      },
+    });
+    await handler?.(makeRoute('GET'));
+    await handler?.(makeRoute('POST'));
+
+    // 两个都放行（GET 只是被延迟过，不是被拦）。
+    expect(continued).toEqual(['GET', 'POST']);
+  }, 20000);
+
+  it('inject_fault 工具：非法 mode → isError（工具不 throw）；合法 mode → 施加并回报', async () => {
+    const { createInjectFaultTool } = await import('../src/pi/exploration/tools/fault.js');
+    const applied: string[] = [];
+    const tool = createInjectFaultTool({
+      fault: {
+        apply: async (mode) => {
+          applied.push(mode);
+        },
+        reset: async () => undefined,
+        current: () => 'none',
+      },
+    });
+
+    const bad = await tool.execute('f1', { mode: 'banana' });
+    expect(bad.isError).toBe(true);
+    expect(JSON.stringify(bad.content)).toContain('offline');
+    expect(applied).toHaveLength(0);
+
+    const ok = await tool.execute('f2', { mode: 'offline' });
+    expect(ok.isError).toBeFalsy();
+    expect(applied).toEqual(['offline']);
+    expect(JSON.stringify(ok.content)).toContain('observe');
+  }, 20000);
+
+  it('工具装配：未授权故障注入 → 工具不出现；授权 → 挂载 inject_fault', async () => {
+    const { createExplorationTools } = await import('../src/pi/exploration/tools/index.js');
+    const base = {
+      page: {} as never,
+      vision: true,
+      scopeOrigins: ['http://sut.example.com'],
+      findings: {} as never,
+      noteExcluded: () => 0,
+      onFinish: () => undefined,
+    };
+    const withoutAuth = createExplorationTools(base).map((t) => t.name);
+    expect(withoutAuth).not.toContain('inject_fault');
+
+    const withAuth = createExplorationTools({
+      ...base,
+      fault: {
+        apply: async () => undefined,
+        reset: async () => undefined,
+        current: () => 'none',
+      },
+    }).map((t) => t.name);
+    expect(withAuth).toContain('inject_fault');
+  }, 20000);
+
+  it('评审与故障注入的会话列存在（schema 锁步）', async () => {
+    const cols = await pool.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name='exploration_sessions' AND column_name IN ('allow_fault_injection','judge_status','judge_result')`,
+    );
+    expect(cols.rows.map((r) => r.column_name).sort()).toEqual(['allow_fault_injection', 'judge_result', 'judge_status']);
+    const fcols = await pool.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name='exploration_findings' AND column_name='judge'`,
+    );
+    expect(fcols.rows).toHaveLength(1);
+  }, 20000);
+});

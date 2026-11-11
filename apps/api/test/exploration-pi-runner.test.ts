@@ -32,6 +32,7 @@ const {
   envCfg,
   scopeCfg,
   decomposeCfg,
+  judgeMock,
 } = vi.hoisted(() => {
   const sessionSubscribers: Array<(ev: unknown) => void> = [];
   const promptCalls: string[] = [];
@@ -58,6 +59,8 @@ const {
     scopeCfg: { scope: null as unknown },
     /** 章程分解产物（C2）：默认无子目标（分解软失败口径），各测试自设。 */
     decomposeCfg: { goals: [] as Array<{ id: string; text: string }> },
+    /** A3 评审打桩：记录被评审的会话 id（评审是 fire-and-forget，runner 不等它）。 */
+    judgeMock: vi.fn(async () => undefined),
   };
 });
 
@@ -78,6 +81,11 @@ vi.mock('playwright-core', () => ({
               off: () => undefined,
             }),
             storageState: async () => ({}),
+            // 故障注入控制器（D2）用的 context 能力（施加/复原走这几条）。
+            setOffline: async () => undefined,
+            route: async () => undefined,
+            unroute: async () => undefined,
+            newCDPSession: async () => ({ send: async () => undefined, detach: async () => undefined }),
           };
         },
         close: async () => undefined,
@@ -125,6 +133,11 @@ vi.mock('../src/pi/exploration/session.js', async (importOriginal) => {
 // 章程分解打桩（C2）：默认无子目标；需要时各测试设 decomposeCfg.goals（不打真网络）。
 vi.mock('../src/pi/exploration/decompose.js', () => ({
   decomposeCharter: async () => decomposeCfg.goals,
+}));
+
+// A3 评审打桩：真评审要打模型（网关上不了），这里只验「runner 收尾后触发了评审」。
+vi.mock('../src/pi/exploration/judge.js', () => ({
+  judgeExplorationSession: judgeMock,
 }));
 
 // 环境解析打桩：默认无凭据、无 db（startUrl 回落到 baseUrl）；各测试可改 envCfg。
@@ -205,14 +218,23 @@ beforeEach(() => {
   envCfg.dbs = [];
   scopeCfg.scope = null;
   decomposeCfg.goals = [];
+  judgeMock.mockClear();
 });
 
-/** 建一条待执行会话。可带轮次预算（预算耗尽路径用）。 */
-async function insertSession(opts: { budgetTurns?: number } = {}): Promise<string> {
+/** 建一条待执行会话。可带轮次预算（预算耗尽路径用）与故障注入授权位。 */
+async function insertSession(opts: { budgetTurns?: number; allowFaultInjection?: boolean } = {}): Promise<string> {
   const r = await pool.query(
-    `INSERT INTO exploration_sessions(project_id, version_id, title, charter, persona, status, created_by_user_id, budget_turns)
-     VALUES ($1,$2,$3,$4,'qa','pending',$5,$6) RETURNING id`,
-    [projectId, versionId, 'pi 链路回归用例', CHARTER, userId, opts.budgetTurns ?? null],
+    `INSERT INTO exploration_sessions(project_id, version_id, title, charter, persona, status, created_by_user_id, budget_turns, allow_fault_injection)
+     VALUES ($1,$2,$3,$4,'qa','pending',$5,$6,$7) RETURNING id`,
+    [
+      projectId,
+      versionId,
+      'pi 链路回归用例',
+      CHARTER,
+      userId,
+      opts.budgetTurns ?? null,
+      opts.allowFaultInjection ?? false,
+    ],
   );
   return r.rows[0]!.id as string;
 }
@@ -455,6 +477,48 @@ describe('探索 runner pi 链路', () => {
     expect(ledger.goals.map((g) => g.id)).toEqual(['g1', 'g2']);
     expect(ledger.goals[0]!.done).toBe(true);
     expect(ledger.goals[1]!.done).toBe(false);
+  }, 30000);
+
+  it('故障注入授权位：未授权 → inject_fault 工具不出现；授权 → 挂载并可施加', async () => {
+    const denied = await insertSession();
+    await runExplorationSession({ sessionId: denied });
+    const deniedTools = (sessionArgs.at(-1)!.tools as Array<{ name: string }>).map((t) => t.name);
+    expect(deniedTools).not.toContain('inject_fault');
+
+    const allowed = await insertSession({ allowFaultInjection: true });
+    promptDriver.fn = async () => {
+      const fault = sessionArgs.at(-1)!.tools.find((t) => (t as { name: string }).name === 'inject_fault') as {
+        execute: (id: string, p: unknown) => Promise<{ isError?: boolean; content: unknown }>;
+      };
+      emit({ type: 'tool_execution_start', toolCallId: 'x1', toolName: 'inject_fault', args: { mode: 'offline' } });
+      const r = await fault.execute('x1', { mode: 'offline' });
+      expect(r.isError).toBeFalsy();
+      emit({ type: 'tool_execution_end', toolCallId: 'x1', toolName: 'inject_fault', isError: false });
+    };
+
+    await runExplorationSession({ sessionId: allowed });
+    const allowedTools = (sessionArgs.at(-1)!.tools as Array<{ name: string }>).map((t) => t.name);
+    expect(allowedTools).toContain('inject_fault');
+    // 授权位落库（UI 开关与执行口径同源）。
+    const row = await pool.query(`SELECT allow_fault_injection FROM exploration_sessions WHERE id=$1`, [allowed]);
+    expect(row.rows[0]!.allow_fault_injection).toBe(true);
+  }, 30000);
+
+  it('收尾触发 A3 独立评审（fire-and-forget，不改会话终态）', async () => {
+    judgeMock.mockClear();
+    const sessionId = await insertSession();
+    promptDriver.fn = async () => {
+      emit({
+        type: 'message_end',
+        message: { role: 'assistant', content: [{ type: 'text', text: '探索完成。' }], usage: { input: 1, output: 1 } },
+      });
+    };
+
+    await runExplorationSession({ sessionId });
+
+    expect(judgeMock).toHaveBeenCalledWith(sessionId);
+    const row = await pool.query(`SELECT status FROM exploration_sessions WHERE id=$1`, [sessionId]);
+    expect(row.rows[0]!.status).toBe('completed');
   }, 30000);
 
   it('fill 凭据缺失 → 终止会话按 failed 收尾（可行动报错）+ 挂载 sql_probe（有 db）', async () => {

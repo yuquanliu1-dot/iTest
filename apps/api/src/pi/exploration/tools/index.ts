@@ -5,8 +5,9 @@
  * 不复用仓库自有 pi/tools.ts 的 ToolExecutor——后者纯文本、无图像通道、缺 label。
  * 工具经工厂注入依赖，便于测试替换 page 桩。
  *
- * 装配清单（16）：navigate/observe/screenshot/read_text/click/fill/press/select/scroll/
- * back/wait/evaluate/report_finding/note_excluded/finish + 条件挂载 sql_probe（有数据库）/repo_read（有代码范围）。
+ * 装配清单（15 常驻）：navigate/observe/screenshot/read_text/click/fill/press/select/scroll/
+ * back/wait/evaluate/report_finding/note_excluded/finish + 条件挂载 sql_probe（有数据库）/
+ * repo_read（有代码范围）/inject_fault（有故障注入授权位）。
  */
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { ExplorationStep } from '../../../execute/explorationPrompt.js';
@@ -30,6 +31,7 @@ import {
 import { createEvaluateTool } from './evaluate.js';
 import { createFinishTool, createNoteExcludedTool, createReportFindingTool } from './finding.js';
 import { createRepoReadTool, createSqlProbeTool, type SqlProbeEnv } from './forensics.js';
+import { createInjectFaultTool, type FaultController } from './fault.js';
 import type { FindingStore } from '../findings.js';
 
 export type { ToolDeps };
@@ -45,6 +47,11 @@ export interface ExplorationDeps extends ToolDeps {
   sql?: { env: SqlProbeEnv; dbRefs: Array<{ label: string; dialect: string }> };
   /** 有代码提交范围才装配 repo_read。 */
   repo?: { channel: (req: RepoReadRequest) => Promise<RepoReadResult>; hasDiff: boolean };
+  /**
+   * 故障注入控制器（D2）：**只在会话带 allow_fault_injection 显式授权位时装配**——
+   * 未授权 = 工具根本不出现（机械拒，不是靠提示词劝）。
+   */
+  fault?: FaultController;
 }
 
 export function createExplorationTools(deps: ExplorationDeps): ToolDefinition[] {
@@ -67,6 +74,7 @@ export function createExplorationTools(deps: ExplorationDeps): ToolDefinition[] 
   ];
   if (deps.sql) tools.push(createSqlProbeTool(deps.sql));
   if (deps.repo) tools.push(createRepoReadTool(deps.repo));
+  if (deps.fault) tools.push(createInjectFaultTool({ fault: deps.fault }));
   return tools;
 }
 

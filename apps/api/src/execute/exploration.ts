@@ -23,6 +23,7 @@ import {
   EXPLORATION_WALL_CLOCK_MS,
 } from './explorationShared.js';
 import { runExplorationSessionPi } from '../pi/exploration/runner.js';
+import { judgeExplorationSession } from '../pi/exploration/judge.js';
 import { resolveEnv } from './envContext.js';
 import {
   runAiTask,
@@ -429,6 +430,8 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
         turnsUsed: turnCount,
         usage: usage.stat,
       }).catch(() => undefined);
+      // A3 独立评审（fire-and-forget：评审不改终态，失败也不影响会话）。
+      void judgeExplorationSession(sessionId).catch(() => undefined);
       // 暖登录态缓存回馈 verify_case/perform_login（fire-and-forget，失败不影响会话终态）
       if (loginKey) void context.storageState().then((s) => saveLoginStateFor(loginKey, s)).catch(() => {});
     } finally {
@@ -452,6 +455,7 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
       turnsUsed: turnCount,
       usage: usage.stat,
     }).catch(() => undefined);
+    void judgeExplorationSession(sessionId).catch(() => undefined);
   } finally {
     // 兜底落库：正常/失败路径都已在置终态前 flush 过，这里只防意外漏写。
     await flushTrailPersist();

@@ -1129,6 +1129,12 @@ export const explorationSessions = pgTable('exploration_sessions', {
    */
   allowDestructive: boolean('allow_destructive').notNull().default(false),
   /**
+   * 故障注入授权位（默认拒）：勾了才允许探索注入断网/慢网/CPU 节流去验证错误处理与降级路径。
+   * 与 allow_destructive 同款口径——charter 说辞不算授权，机械闸只认这个显式开关。
+   * 理由：故障会污染被测系统会话状态（SUT 自身轮询/心跳被打断），必须由人点头。
+   */
+  allowFaultInjection: boolean('allow_fault_injection').notNull().default(false),
+  /**
    * 轮次预算（null=代码默认 EXPLORATION_MAX_TURNS）：软预算，超界 shouldAbort 优雅收尾
    * （已发现的 findings 全保留）。runaway 硬闸随它放大（+16），否则用户配大轮次会被
    * 固定硬闸先拦，可配置形同虚设。墙钟不随它放大——防的是单轮卡死，与探索深度无关。
@@ -1180,6 +1186,20 @@ export const explorationSessions = pgTable('exploration_sessions', {
   matrixLabel: text('matrix_label'),
   /** 该会话在矩阵中的角色 = persona key（EXPLORATION_PERSONA_KEYS 之一）。 */
   matrixRole: varchar('matrix_role', { length: 32 }),
+  /**
+   * 独立评审（A3）状态：pending（未评审）| done（评审完成）| failed（评审失败）| skipped（无 findings）。
+   * 评审是标注不是裁决——findings.status 永远由人工审阅决定。
+   */
+  judgeStatus: varchar('judge_status', { length: 16 }).notNull().default('pending'),
+  /** 评审汇总：{model, channelName, judgedAt, summary, findings:[{id, verdict, reason, confidence}]}。 */
+  judgeResult: jsonb('judge_result').$type<{
+    model?: string;
+    channelName?: string;
+    judgedAt: string;
+    summary?: string;
+    error?: string;
+    findings: Array<{ id: string; verdict: string; reason: string; confidence: number }>;
+  }>(),
   /**
    * 代码提交范围（charter 自然语言解析产物）：提交窗口 + 改动文件 + 候选起点。
    * 范围是焦点信号不是围栏——探索照常全站跑，范围只用于定向（增量回归/新功能探索）。
@@ -1249,6 +1269,17 @@ export const explorationFindings = pgTable('exploration_findings', {
    * 非矩阵会话恒为 1。
    */
   crossSessionCount: integer('cross_session_count').notNull().default(1),
+  /**
+   * 独立评审结论（A3）：{verdict: confirmed|dismissed|unclear, reason, confidence, model, judgedAt}。
+   * **只标注不改 status**——评审是第二个视角，权威仍是人工审阅。
+   */
+  judge: jsonb('judge').$type<{
+    verdict: 'confirmed' | 'dismissed' | 'unclear';
+    reason: string;
+    confidence: number;
+    model?: string;
+    judgedAt: string;
+  }>(),
   /** pending → confirmed | dismissed；confirmed → promoted（写 promotedCaseId）。 */
   status: varchar('status', { length: 16 }).notNull().default('pending'),
   /** 审阅三件套 = assistant_solidify_proposals 同款。 */

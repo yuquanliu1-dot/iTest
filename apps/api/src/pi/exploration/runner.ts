@@ -37,7 +37,9 @@ import { loginStateKey, getLoginState, saveLoginState } from '../space/tools/log
 import { logger } from '../../logger.js';
 import { resolveExplorationModel, toolCallingProbeFailure, visionProbeFailure } from './model.js';
 import { decomposeCharter } from './decompose.js';
+import { judgeExplorationSession } from './judge.js';
 import { createExplorationTools, trailStepOf } from './tools/index.js';
+import { createFaultController, type FaultController } from './tools/fault.js';
 import { composeExplorationPrompt, createExplorationSession } from './session.js';
 import { createFindingStore, type FindingStore } from './findings.js';
 import { createCoverageTracker } from './coverage.js';
@@ -65,6 +67,8 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
 
   let envCtx: Awaited<ReturnType<typeof resolveEnv>> | undefined;
   let live: ReturnType<typeof registerLiveView> | undefined;
+  /** D2 故障控制器（声明在 try 外——收尾 finally 要能复位）。 */
+  let fault: FaultController | undefined;
   const maxTurns = sessionRow.budgetTurns ?? EXPLORATION_MAX_TURNS;
   const usage = newAiUsage();
   let turnCount = 0;
@@ -192,6 +196,10 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
       live = registerLiveView(`exploration:${sessionId}`);
       live.setPage(page);
 
+      // —— D2 故障注入控制器：控制器始终创建（收尾 finally 要能复位），
+      //    但工具**只在会话带显式授权位时装配**（未授权 = 工具不出现）。——
+      fault = createFaultController(context, page);
+
       // —— 视觉探针（浏览器内渲染唯一码读回）：失败不掀翻会话，降级纯文本模式 ——
       const visionProbe = await visionProbeFailure(page, model);
       const vision = visionProbe === null;
@@ -272,6 +280,7 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
         },
         ...(dbRefs.length > 0 ? { sql: { env: envCtx, dbRefs } } : {}),
         ...(repoChannel ? { repo: { channel: repoChannel, hasDiff: !!(codeScope?.fromSha && codeScope?.toSha) } } : {}),
+        ...(sessionRow.allowFaultInjection === true ? { fault } : {}),
       });
       const piSession = await createExplorationSession({
         cwd: versionWorkspaceDir(sessionRow.versionId),
@@ -401,7 +410,11 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
         turnsUsed: turnCount,
         usage: usage.stat,
       }).catch(() => undefined);
+      // A3 独立评审（fire-and-forget：评审不改终态，失败也不影响会话）。
+      void judgeExplorationSession(sessionId).catch(() => undefined);
     } finally {
+      // D2 故障必须复原——不给被测系统留污染（先复位再关浏览器）。
+      await fault?.reset();
       live?.close();
       await browser.close().catch(() => {});
     }
@@ -417,6 +430,7 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
       turnsUsed: turnCount,
       usage: usage.stat,
     }).catch(() => undefined);
+    void judgeExplorationSession(sessionId).catch(() => undefined);
   } finally {
     // 兜底落库：正常/失败路径都已在置终态前 flush 过，这里只防意外漏写。
     await flushTrailPersist();

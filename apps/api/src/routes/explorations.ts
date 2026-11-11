@@ -39,6 +39,11 @@ const CreateBody = z.object({
    */
   allowDestructive: z.boolean().default(false),
   /**
+   * 故障注入授权（默认拒）：勾了才允许探索注入断网/慢网/CPU 节流去验证错误处理与降级路径。
+   * 与 allowDestructive 同款口径——章程说辞不算授权（故障会污染被测系统会话状态）。
+   */
+  allowFaultInjection: z.boolean().default(false),
+  /**
    * 浏览器视口宽高（两态：缺省=默认 1280×800；同给=自定义）。只给一个 → 400 window_required
    * （复用用例窗口校验的 i18n 文案）。
    */
@@ -68,6 +73,8 @@ const CreateMatrixBody = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   startUrl: z.string().trim().max(2000).optional(),
   allowDestructive: z.boolean().default(false),
+  /** 故障注入授权（默认拒）：矩阵内每个会话同款显式开关——章程说辞不算授权。 */
+  allowFaultInjection: z.boolean().default(false),
   windowWidth: z.number().int().positive().optional(),
   windowHeight: z.number().int().positive().optional(),
   budgetTurns: z.number().int().min(4).max(60).optional(),
@@ -120,6 +127,7 @@ explorationsRoute.post('/', async (req, res) => {
       persona: body.persona,
       startUrl: body.startUrl?.trim() || null,
       allowDestructive: body.allowDestructive,
+      allowFaultInjection: body.allowFaultInjection,
       windowWidth: body.windowWidth ?? null,
       windowHeight: body.windowHeight ?? null,
       budgetTurns: body.budgetTurns ?? null,
@@ -195,6 +203,7 @@ explorationsRoute.post('/matrix', async (req, res) => {
         persona,
         startUrl: body.startUrl?.trim() || null,
         allowDestructive: body.allowDestructive,
+        allowFaultInjection: body.allowFaultInjection,
         windowWidth: body.windowWidth ?? null,
         windowHeight: body.windowHeight ?? null,
         budgetTurns: body.budgetTurns ?? null,

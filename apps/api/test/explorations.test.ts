@@ -128,6 +128,22 @@ describe('POST /api/explorations - 建会话', () => {
     expect(row2.allow_destructive).toBe(true);
   });
 
+  it('故障注入授权位：缺省 false（默认拒），显式 true 才落库', async () => {
+    const dflt = await request(app).post('/api/explorations').send({ versionId, charter: CHARTER });
+    expect(dflt.status).toBe(201);
+    expect(dflt.body.allowFaultInjection).toBe(false);
+    const row = (await pool.query(`SELECT allow_fault_injection FROM exploration_sessions WHERE id=$1`, [dflt.body.id])).rows[0]!;
+    expect(row.allow_fault_injection).toBe(false);
+
+    const granted = await request(app)
+      .post('/api/explorations')
+      .send({ versionId, charter: CHARTER, allowFaultInjection: true });
+    expect(granted.status).toBe(201);
+    expect(granted.body.allowFaultInjection).toBe(true);
+    const row2 = (await pool.query(`SELECT allow_fault_injection FROM exploration_sessions WHERE id=$1`, [granted.body.id])).rows[0]!;
+    expect(row2.allow_fault_injection).toBe(true);
+  });
+
   it('测试窗口两态：缺省 → null/null；成对给 → 落库；只给一个 → 400 window_required', async () => {
     const dflt = await request(app).post('/api/explorations').send({ versionId, charter: CHARTER });
     expect(dflt.status).toBe(201);
