@@ -253,8 +253,6 @@ export const SQL_PROBE_DEFAULT_ROWS = 20;
 export const REPO_OUTPUT_MAX_CHARS = 6000;
 /** repo read 单次最大行数（parseAction 钳制 + 通道实现共用同一口径）。 */
 export const REPO_READ_MAX_LINES = 200;
-/** repo grep 单次最大命中条数。 */
-export const REPO_GREP_MAX_MATCHES = 60;
 /** repo path/pattern 字段长度上限（parseAction 截断——模型可能吐超长串）。 */
 const REPO_FIELD_MAX = 200;
 

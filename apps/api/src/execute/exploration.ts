@@ -6,9 +6,8 @@
  * 预算耗尽 → completed+注记），绝不解析 runAiTask 的错误文案（文案是执行语境的，不可靠）。
  */
 import { and, eq } from 'drizzle-orm';
-import { rm, stat, readdir, open, realpath } from 'node:fs/promises';
-import { join, relative } from 'node:path';
-import { spawn } from 'node:child_process';
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { chromium, type Page } from 'playwright-core';
 import type { ExplorationReproStep } from '@itest/shared';
 import { db } from '../db/client.js';
@@ -20,8 +19,6 @@ import {
   makeCredentialValueSub,
   originOf,
   SQL_PROBE_MAX_ROWS,
-  REPO_READ_MAX_LINES,
-  REPO_GREP_MAX_MATCHES,
   type AiAction,
   type SqlProbeResult,
   type RepoReadRequest,
@@ -33,7 +30,8 @@ import { waitForPageSettled } from './pageSettle.js';
 import { registerLiveView } from './liveView.js';
 import { newAiUsage } from './aiUsage.js';
 import { resolveCodeScope } from './codeScope.js';
-import { versionWorkspaceDir, assertInCwd, gitRead } from '../pi/repo.js';
+import { createRepoReadChannel } from './repoRead.js';
+import { versionWorkspaceDir } from '../pi/repo.js';
 import {
   composeExplorationInstruction,
   coerceFindings,
@@ -61,36 +59,6 @@ const SQL_PROBE_TIMEOUT_MS = 10_000;
 
 /** 留痕里单条 SQL 的最长文本：审计要看"查了什么"，但模型可以吐出超长 query（守卫虽拒，留痕不能膨胀）。 */
 const SQL_STEP_TARGET_MAX = 1000;
-
-/** repo read 单次读进内存的字节上限（截断大文件，行级切片在其后进行）。 */
-const REPO_READ_MAX_BYTES = 512 * 1024;
-/** repo ls 单次列出的条目上限。 */
-const REPO_LS_MAX_ENTRIES = 200;
-
-/** rg 只读搜索（仓库读码 grep op 用；沙箱由 cwd + 显式目标路径保证）。
- *  code=1 是 rg 的「无匹配」约定，算成功。 */
-function runRgForRepo(cwd: string, args: string[]): Promise<{ stdout: string; code: number }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('rg', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error('搜索超时'));
-    }, 30_000);
-    child.stdout.on('data', (d) => {
-      out += d.toString();
-    });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0 || code === 1) resolve({ stdout: out, code });
-      else reject(new Error(`rg 退出码 ${code}`));
-    });
-  });
-}
 
 /** 等待侧超时：竞速到点即抛错。底层 promise 迟到 settle 不会变 unhandledRejection
  *  （Promise.race 对两个 promise 都挂了处理器）。 */
@@ -409,78 +377,22 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
         }
       };
 
-      /** 仓库读码通道（只在有代码提交范围的会话挂上）：四 op 全只读，
-       *  沙箱 assertInCwd 限版本工作树内；配额按会话计（读码是取证手段不是探索主路径）。
-       *  任何失败（越界/超额/文件不存在/二进制）都转成 ok:false 的错误反馈，不抛错。 */
-      const repoRoot = versionWorkspaceDir(session.versionId);
-      const repoReadRoot = await realpath(repoRoot).catch(() => repoRoot); // relative 计算要对齐 realpath 口径
-      let repoReadCount = 0;
+      /** 仓库读码通道（只在有代码提交范围的会话挂上）：read/grep/ls/diff 四 op 全只读，
+       *  沙箱限版本工作树内 + 会话级配额 + 输出封顶都收口在 createRepoReadChannel。
+       *  这里只包一层留痕摘要——「会话过程」每条 repo 动作要带一行结果摘要。 */
       let lastRepoDetail = '';
+      const repoReadChannel = createRepoReadChannel({
+        repoDir: versionWorkspaceDir(session.versionId),
+        fromSha: codeScope?.fromSha ?? null,
+        toSha: codeScope?.toSha ?? null,
+        maxCalls: EXPLORATION_MAX_REPO_READS,
+      });
       const runRepoRead = async (req: RepoReadRequest): Promise<RepoReadResult> => {
-        if (repoReadCount >= EXPLORATION_MAX_REPO_READS) {
-          lastRepoDetail = '读码次数已用尽';
-          return { ok: false, error: `本会话仓库读码次数已用尽（上限 ${EXPLORATION_MAX_REPO_READS} 次）` };
-        }
-        repoReadCount += 1;
-        try {
-          if (req.op === 'read') {
-            const real = await assertInCwd(repoReadRoot, req.path);
-            const st = await stat(real);
-            if (st.isDirectory()) {
-              lastRepoDetail = '目标是目录';
-              return { ok: false, error: `${req.path} 是目录；先 ls 列目录，或用 grep 按关键词定位文件` };
-            }
-            const fh = await open(real, 'r');
-            try {
-              const len = Math.min(st.size, REPO_READ_MAX_BYTES);
-              const buf = Buffer.alloc(len);
-              await fh.read(buf, 0, len, 0);
-              if (buf.includes(0)) {
-                lastRepoDetail = '二进制文件';
-                return { ok: false, error: `${req.path} 是二进制文件，读码通道只支持文本` };
-              }
-              const all = buf.toString('utf8').split('\n');
-              const shown = all.slice(Math.max(0, req.offset), Math.max(0, req.offset) + Math.max(1, req.maxLines));
-              lastRepoDetail = `共 ${all.length} 行，返回 ${shown.length} 行`;
-              return { ok: true, content: shown.join('\n') };
-            } finally {
-              await fh.close();
-            }
-          }
-          if (req.op === 'grep') {
-            const target = req.path ? await assertInCwd(repoReadRoot, req.path) : repoReadRoot;
-            const { stdout, code } = await runRgForRepo(repoReadRoot, ['--no-heading', '--line-number', '-S', '--max-count=20', '--', req.pattern, target]);
-            const lines = stdout.split('\n').filter(Boolean);
-            const capped = lines.slice(0, REPO_GREP_MAX_MATCHES);
-            lastRepoDetail = lines.length === 0 ? '无匹配' : `${lines.length} 处命中${lines.length > capped.length ? '（已截断）' : ''}`;
-            if (lines.length === 0) return { ok: true, content: '（无匹配）' };
-            return { ok: true, content: capped.join('\n') + (lines.length > capped.length ? `\n…（共 ${lines.length} 处命中，已截断）` : '') };
-          }
-          if (req.op === 'ls') {
-            const real = await assertInCwd(repoReadRoot, req.path ?? '.');
-            const ents = await readdir(real, { withFileTypes: true });
-            ents.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
-            const shown = ents.slice(0, REPO_LS_MAX_ENTRIES);
-            lastRepoDetail = `${ents.length} 项${ents.length > shown.length ? '（已截断）' : ''}`;
-            return { ok: true, content: shown.map((e) => (e.isDirectory() ? `${e.name}/` : e.name)).join('\n') || '（空目录）' };
-          }
-          // diff：看本次代码范围的改动（基线不可得的聚合范围没有 diff 基线，如实告知）
-          if (!codeScope?.fromSha || !codeScope?.toSha) {
-            lastRepoDetail = '无 diff 基线';
-            return { ok: false, error: '当前代码范围没有 diff 基线；改动清单已在指令的「代码范围」段里，diff 动作只对有基线的范围可用' };
-          }
-          const args = ['diff', codeScope.fromSha, codeScope.toSha];
-          if (req.path) args.push('--', relative(repoReadRoot, await assertInCwd(repoReadRoot, req.path)) || '.');
-          const out = await gitRead(repoReadRoot, args);
-          const lines = out.split('\n');
-          const capped = lines.slice(0, REPO_READ_MAX_LINES);
-          lastRepoDetail = `${lines.length} 行${lines.length > capped.length ? '（已截断）' : ''}`;
-          return { ok: true, content: capped.join('\n') };
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          lastRepoDetail = `失败：${msg.slice(0, 120)}`;
-          return { ok: false, error: msg.slice(0, 200) };
-        }
+        const r = await repoReadChannel(req);
+        lastRepoDetail = r.ok
+          ? `${r.content.split('\n').filter(Boolean).length} 行`
+          : `失败：${r.error.slice(0, 120)}`;
+        return r;
       };
 
       logger.info({ sessionId, promptBase: 'exploration', dbCount: dbRefs.length }, 'exploration system prompt base applied');
