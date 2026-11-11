@@ -235,8 +235,24 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
           // 模型可以吐出超长 query，守卫虽会拒，但留痕不能因此膨胀。
           target = a.query.replace(/\s+/g, ' ').slice(0, SQL_STEP_TARGET_MAX);
           detail = lastSqlDetail || undefined;
+        } else if (a.type === 'press') {
+          target = a.key;
+        } else if (a.type === 'wait') {
+          target = String(a.ms);
+        } else if (a.type === 'screenshot') {
+          target = a.selector ?? (typeof a.x === 'number' && typeof a.y === 'number' ? `@${a.x},${a.y}` : '-');
         }
-        const step: ExplorationStep = { type: a.type, target, ok, ...(detail ? { detail } : {}) };
+        const step: ExplorationStep = {
+          type: a.type,
+          target,
+          ok,
+          ...(detail ? { detail } : {}),
+          // 原形字段（升格用例的机械映射需要；onAction 收到的动作 value 仍是模型输出的
+          // 占位符字面量/普通文本，绝不是替换后的真实凭据——替换发生在执行器内部）。
+          ...(a.type === 'fill' ? { value: a.value } : {}),
+          ...(a.type === 'wait' ? { ms: a.ms } : {}),
+          ...(a.type === 'press' ? { key: a.key } : {}),
+        };
         trail.push(step);
         sessionSteps.push(step);
         // 动作级增量落库（防抖）：跑动中详情页就能看到步骤逐条长出来，

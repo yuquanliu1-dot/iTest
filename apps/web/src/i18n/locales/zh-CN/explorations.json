@@ -61,7 +61,7 @@
   "dismissFinding": "驳回",
   "promote": "转为用例",
   "promoteTitle": "升格为用例",
-  "promoteHint": "用例会以「未编译」状态创建，步骤可在用例详情里用 AI 补全 DSL 后再执行。",
+  "promoteHint": "步骤取自平台记录的真实操作留痕：能机械映射的步骤直接带 DSL（升格即可机械回放），其余保持自然语言（可在用例详情用 AI 补全）。",
   "group": "目标分组",
   "groupPlaceholder": "选择用例所属分组",
   "noGroups": "该项目下还没有分组",

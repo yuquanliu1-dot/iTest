@@ -1,6 +1,6 @@
 /**
  * 探索式测试会话路由：章程驱动 → AI 在真实浏览器主动找茬 → findings（缺陷候选 + 证据截图）
- * → 人工确认/驳回 → 确认项可升格为用例草稿（未编译，走既有 AI 编译流）。
+ * → 人工确认/驳回 → 确认项可升格为用例草稿（平台留痕 best-effort 机械出 DSL，余下走既有 AI 编译流）。
  *
  * 会话执行走 exec 队列（kind:'exploration'），与计划运行/单用例同一 chromium 并发闸门。
  * 取消用 DB 列 cancel_requested（跨副本天然正确），worker 每轮轮询一次。
@@ -15,7 +15,7 @@ import { assertProjectVisible, assertVersionVisible, visibleProjectIds } from '.
 import { handleLiveView, handleLiveReplay, handleLiveReplayMeta, replaySpeedOf } from '../execute/liveView.js';
 import { getExecutionQueue, isExecutionQueueReady, EXEC_QUEUE_NAME } from '../scheduler/execQueue.js';
 import { runExplorationSession, removeExplorationScreenshots } from '../execute/exploration.js';
-import { trailToSteps, mergeExplorationTrails } from '../execute/explorationPrompt.js';
+import { trailToCaseSteps, mergeExplorationTrails } from '../execute/explorationPrompt.js';
 import { parsePaging } from '../lib/pagination.js';
 import { createCaseWithSteps } from '../services/cases.service.js';
 import { attachCreators } from '../lib/creator.js';
@@ -72,6 +72,8 @@ explorationsRoute.post('/', async (req, res) => {
       startUrl: body.startUrl?.trim() || null,
       allowDestructive: body.allowDestructive,
       status: 'pending',
+      // 范围解析在 runner 后台做（LLM+git 可能数十秒）——先落 pending，前端轮询详情页看结果。
+      codeScopeStatus: 'pending',
       createdByUserId: req.user!.userId,
     })
     .returning())[0]!;
@@ -219,10 +221,16 @@ explorationsRoute.post('/:id/findings/:fid/review', async (req, res) => {
 });
 
 /**
- * 复现步骤文本：优先模型给的 reproSteps（可能脑补）；空则用平台记录的动作留痕文本化兜底
- * （留痕是实际发生过的动作序列，是 ground truth）。
+ * 升格步骤源（2026-11-11 口径）：优先平台留痕（ground truth，best-effort 机械 DSL——
+ * click/fill/navigate 映射 compiled，映射不了的动作保持纯 NL），留痕不可用（老会话无
+ * value/ms/key 字段、全部动作失败或取证类被滤）回落模型 reproSteps（纯 NL，待 AI 编译），
+ * 双空返回 []（路由据此 400）。此前模型 reproSteps 优先——但它可能脑补，且与机械动作
+ * 数量对不上，出不了 DSL。
  */
-function reproStepsOf(finding: { reproSteps: unknown; actionsTrail: unknown }): string[] {
+function promoteStepsOf(finding: { reproSteps: unknown; actionsTrail: unknown }): Array<{ instruction: string; compiled: unknown[] | null }> {
+  const trail = Array.isArray(finding.actionsTrail) ? finding.actionsTrail : [];
+  const fromTrail = trailToCaseSteps(trail);
+  if (fromTrail.length > 0) return fromTrail;
   const repro = Array.isArray(finding.reproSteps) ? finding.reproSteps : [];
   const fromModel = repro
     .map((s) => {
@@ -230,14 +238,14 @@ function reproStepsOf(finding: { reproSteps: unknown; actionsTrail: unknown }): 
       return typeof action === 'string' ? action.trim() : '';
     })
     .filter(Boolean);
-  if (fromModel.length > 0) return fromModel;
-  const trail = Array.isArray(finding.actionsTrail) ? finding.actionsTrail : [];
-  return trailToSteps(trail).map((s) => s.action);
+  return fromModel.map((instruction) => ({ instruction, compiled: null }));
 }
 
 /**
- * 确认后的 finding 升格为用例草稿：步骤来自复现步骤，compiled=null（未编译）——
- * 复用既有「compile-missing 阻塞 + UI AI 编译」流程，探索侧绝不编译。
+ * 确认后的 finding 升格为用例草稿：步骤优先取平台动作留痕做 best-effort 机械映射
+ * （click/fill/navigate → compiled DSL，回放不走 AI）；映射不了的动作保持
+ * instruction + compiled=null，复用既有「compile-missing 阻塞 + UI AI 编译」流程补齐。
+ * 探索侧不做 AI 编译（不真跑不验收）——机械映射是零成本转换，不是编译。
  */
 explorationsRoute.post('/:id/findings/:fid/promote', async (req, res) => {
   const session = await loadSession(req.params.id!, req.user!);
@@ -254,7 +262,7 @@ explorationsRoute.post('/:id/findings/:fid/promote', async (req, res) => {
   if (groupRow.projectId !== session.projectId) {
     throw new HttpError(400, 'group_project_mismatch', 'group does not belong to this project');
   }
-  const steps = reproStepsOf(finding);
+  const steps = promoteStepsOf(finding);
   if (steps.length === 0) {
     throw new HttpError(400, 'no_repro_steps', 'finding has no reproducible steps');
   }
@@ -264,7 +272,7 @@ explorationsRoute.post('/:id/findings/:fid/promote', async (req, res) => {
     title: body.title?.trim() || finding.title,
     description: finding.description,
     priority: body.priority ?? finding.severity,
-    steps: steps.map((instruction) => ({ instruction, compiled: null })),
+    steps,
   });
   await db
     .update(explorationFindings)

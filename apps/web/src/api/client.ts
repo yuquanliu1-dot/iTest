@@ -1154,6 +1154,12 @@ export interface ExplorationStep {
   ok: boolean;
   /** sql 步骤的结果摘要（行数 + 首行）。 */
   detail?: string;
+  /** fill 的输入值（占位符字面量或普通文本）。 */
+  value?: string;
+  /** wait 的毫秒数。 */
+  ms?: number;
+  /** press 的键名。 */
+  key?: string;
 }
 
 export interface ExplorationSession {

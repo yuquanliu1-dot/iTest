@@ -61,7 +61,7 @@
   "dismissFinding": "Dismiss",
   "promote": "Turn into a case",
   "promoteTitle": "Promote to test case",
-  "promoteHint": "The case is created as uncompiled — fill in the step DSL with AI on the case detail page before running it.",
+  "promoteHint": "Steps come from the platform-recorded action trail: steps that map mechanically carry DSL out of the box; the rest stay as natural language (compile with AI on the case detail page).",
   "group": "Target group",
   "groupPlaceholder": "Choose the group for the case",
   "noGroups": "This project has no groups yet",

@@ -4,7 +4,9 @@
  * 动作 JSON 协议与 runAiTask 的解析器保持一致（坐标主通道 + selector 兜底）。
  */
 import { z } from 'zod';
-import { getExplorationPersona, type ExplorationReproStep } from '@itest/shared';
+import { getExplorationPersona, type ExplorationReproStep, type StepAction } from '@itest/shared';
+import { mapAiActionsToCompiled } from './aiActionMap.js';
+import type { AiAction } from './aiTask.js';
 
 /** 单会话 findings 封顶：超出的丢弃（成本与审阅负担的双保险）。 */
 export const EXPLORATION_MAX_FINDINGS = 20;
@@ -131,6 +133,13 @@ export interface ExplorationStep {
   ok: boolean;
   /** sql 步骤的结果摘要（行数 + 首行）；其余动作无。 */
   detail?: string;
+  /** fill 的输入值（模型输出的原值：占位符字面量或普通文本，绝不是替换后的真实凭据——
+   *  valueSub 替换发生在执行器内部，onAction 收到的动作仍是原值）。升格用例时机械映射需要。 */
+  value?: string;
+  /** wait 的毫秒数（升格时折进前一步 waitFor）。 */
+  ms?: number;
+  /** press 的键名（无对应机械 DSL，升格时该步回落自然语言）。 */
+  key?: string;
 }
 
 /** 老会话回落：会话级留痕列为空时，把各 finding 的片段按 order 拼回整场动作序列。 */
@@ -169,12 +178,79 @@ export function trailToSteps(trail: Array<{ type?: unknown; target?: unknown; de
       case 'screenshot': steps.push({ action: `截图 ${target}` }); break;
       // 查库取证：expected 带平台记录的行数/摘要——reviewer 不用再自己去查一遍库。
       case 'sql': steps.push({ action: `查库 ${target}`, ...(detail ? { expected: detail } : {}) }); break;
+      // 读码取证：expected 带平台记录的结果摘要（命中数/文件行数）。
+      case 'repo': steps.push({ action: `读代码 ${target}`, ...(detail ? { expected: detail } : {}) }); break;
       default:
         if (target) steps.push({ action: `${type} ${target}`.trim() });
         break;
     }
   }
   return steps;
+}
+
+/** 升格用例的步骤草稿：instruction 恒为人话文本；compiled 非空 = 机械 DSL（回放不走 AI）。 */
+export interface ExplorationCaseStep {
+  instruction: string;
+  compiled: StepAction[] | null;
+}
+
+/** 坐标形态 target（"(320,180)"）——坐标动作未解析回唯一 selector，不可机械映射。 */
+const COORD_TARGET_RE = /^\(\d+,\d+\)$/;
+
+/**
+ * finding 级动作留痕 → 升格用例步骤（best-effort DSL，2026-11-11 与用户确认的口径）：
+ *  - 步骤源 = 平台留痕（ground truth），一条动作一个用例步骤；模型 reproSteps 不再参与
+ *    步骤构造（可能脑补，且与机械动作数量对不上）——它只在整条留痕不可用时兜底（路由侧）。
+ *  - click/fill/navigate 逐条喂 mapAiActionsToCompiled（单动作数组）复用固化管线全部防线
+ *    （唯一 selector / 激活态 class / 裸标签 / Playwright 专有语法 / 凭据占位符），任一命中即该步回落 NL。
+ *  - wait 折进前一步 compiled 尾部（waitFor 空 locator = 睡满时长，与固化管线同形态）。
+ *  - press 回落 NL（平台 press DSL 是带 locator 的元素级动作，探索的 press 是页面级键盘）。
+ *  - sql/repo 取证与 screenshot 观察动作不进用例（证据留在 finding 详情页）。
+ *  - ok=false 的动作被滤掉：用例步骤 = 实际成功走过的路径，失败重试的探路动作不是复现路径。
+ *  - **不保证回放必绿**：机械失效的步骤由人工在用例详情页重新编译——best-effort 的既定取舍。
+ * instruction 文本复用 trailToSteps（详情页展示同一口径）。
+ */
+export function trailToCaseSteps(
+  trail: Array<{ type?: unknown; target?: unknown; ok?: unknown; detail?: unknown; value?: unknown; ms?: unknown; key?: unknown }>,
+): ExplorationCaseStep[] {
+  const out: ExplorationCaseStep[] = [];
+  for (const raw of trail) {
+    if (!raw || typeof raw !== 'object') continue;
+    const o = raw as Record<string, unknown>;
+    const type = typeof o.type === 'string' ? o.type : '';
+    const target = typeof o.target === 'string' ? o.target : '';
+    if (!type || o.ok !== true) continue;
+    if (type === 'sql' || type === 'repo' || type === 'screenshot') continue;
+    const detail = typeof o.detail === 'string' && o.detail ? o.detail : undefined;
+    const text = trailToSteps([{ type, target, ...(detail ? { detail } : {}) }])[0]?.action;
+    if (!text) continue;
+    // 逐条构造单动作数组喂机械映射；坐标形态 target / fill 缺 value（老会话数据）不喂，直接回落。
+    let action: AiAction | null = null;
+    if ((type === 'click' || type === 'fill') && target && target !== '-' && !COORD_TARGET_RE.test(target)) {
+      if (type === 'fill') {
+        if (typeof o.value === 'string') action = { type: 'fill', selector: target, value: o.value };
+      } else {
+        action = { type: 'click', selector: target };
+      }
+    } else if (type === 'navigate' && target && target !== '-') {
+      action = { type: 'navigate', url: target };
+    }
+    const mapped = action ? mapAiActionsToCompiled([action]) : null;
+    if (mapped?.ok) {
+      out.push({ instruction: text, compiled: mapped.compiled });
+      continue;
+    }
+    // wait 且上一步是机械步 → 折进尾部（dispatch 对 compiled 数组按序执行）
+    if (type === 'wait' && typeof o.ms === 'number' && o.ms > 0 && out.length > 0) {
+      const prev = out[out.length - 1]!;
+      if (prev.compiled) {
+        prev.compiled.push({ kind: 'waitFor', locator: [], timeoutMs: Math.round(o.ms) });
+        continue;
+      }
+    }
+    out.push({ instruction: text, compiled: null });
+  }
+  return out;
 }
 
 // —— 形状容错：真实模型常把字段写成别的名字/别的判级词，形状漂移不该让整条 finding 消失 ——

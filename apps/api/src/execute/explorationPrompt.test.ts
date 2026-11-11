@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { composeExplorationInstruction, coerceFindings, trailToSteps, mergeExplorationTrails, EXPLORATION_MAX_FINDINGS, EXPLORATION_MAX_SQL_PROBES } from './explorationPrompt.js';
+import { composeExplorationInstruction, coerceFindings, trailToSteps, trailToCaseSteps, mergeExplorationTrails, EXPLORATION_MAX_FINDINGS, EXPLORATION_MAX_SQL_PROBES } from './explorationPrompt.js';
 import { EXPLORATION_SYSTEM_PROMPT_BASE } from './explorationPrompt.js';
 import { EXPLORATION_PERSONA_KEYS } from '@itest/shared';
 
@@ -363,5 +363,88 @@ describe('mergeExplorationTrails - 老会话回落合并', () => {
       { actionsTrail: [] },
     ]);
     expect(steps).toEqual([{ type: 'sql', target: '', ok: false }]);
+  });
+});
+
+// 升格用例的 best-effort 机械映射（2026-11-11 口径）：平台留痕 → {instruction, compiled|null}[]。
+describe('trailToCaseSteps - 留痕升格用例步骤', () => {
+  it('click/fill/navigate 映射机械 DSL；instruction 与 trailToSteps 同口径', () => {
+    const steps = trailToCaseSteps([
+      { type: 'navigate', target: 'https://sut.example.com/app', ok: true },
+      { type: 'fill', target: 'input[name="username"]', value: '测试数据', ok: true },
+      { type: 'click', target: 'button.el-button--primary', ok: true },
+    ]);
+    expect(steps).toHaveLength(3);
+    expect(steps[0]).toEqual({
+      instruction: '访问 https://sut.example.com/app',
+      compiled: [{ kind: 'navigate', url: 'https://sut.example.com/app' }],
+    });
+    expect(steps[1]!.compiled).toEqual([
+      { kind: 'fill', locator: [{ strategy: 'css', value: 'input[name="username"]' }], value: '测试数据' },
+    ]);
+    expect(steps[1]!.instruction).toBe('在 input[name="username"] 输入内容');
+    expect(steps[2]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: 'button.el-button--primary' }] }]);
+  });
+
+  it('text= 形态 selector 映射为 text 策略 locator', () => {
+    const steps = trailToCaseSteps([{ type: 'click', target: 'text=查询', ok: true }]);
+    expect(steps[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'text', value: '查询' }] }]);
+  });
+
+  it('坐标形态 target / fill 缺 value（老会话数据）→ 该步回落 NL', () => {
+    const steps = trailToCaseSteps([
+      { type: 'click', target: '(320,180)', ok: true },
+      { type: 'fill', target: 'input[name="q"]', ok: true },
+    ]);
+    expect(steps).toHaveLength(2);
+    expect(steps[0]!.compiled).toBeNull();
+    expect(steps[1]!.compiled).toBeNull();
+  });
+
+  it('固化防线逐条生效：凭据占位符 / 激活态 class / 裸标签 / Playwright 专有语法 → 回落 NL', () => {
+    const steps = trailToCaseSteps([
+      { type: 'fill', target: 'input[name="user"]', value: '__ITEST_USERNAME@web__', ok: true },
+      { type: 'click', target: 'a.router-link-active', ok: true },
+      { type: 'click', target: 'button', ok: true },
+      { type: 'click', target: 'div:has-text("查询") span', ok: true },
+    ]);
+    expect(steps).toHaveLength(4);
+    for (const s of steps) expect(s.compiled).toBeNull();
+  });
+
+  it('press 回落 NL（页面级键盘无对应 DSL）；instruction 带真实键名', () => {
+    const steps = trailToCaseSteps([{ type: 'press', target: 'Enter', key: 'Enter', ok: true }]);
+    expect(steps).toEqual([{ instruction: '按键 Enter', compiled: null }]);
+  });
+
+  it('wait 折进前一步 compiled 尾部（waitFor 空 locator）；无前步时回落 NL', () => {
+    const folded = trailToCaseSteps([
+      { type: 'click', target: '#submit', ok: true },
+      { type: 'wait', target: '1500', ms: 1500, ok: true },
+    ]);
+    expect(folded).toHaveLength(1);
+    expect(folded[0]!.compiled).toEqual([
+      { kind: 'click', locator: [{ strategy: 'css', value: '#submit' }] },
+      { kind: 'waitFor', locator: [], timeoutMs: 1500 },
+    ]);
+    const orphan = trailToCaseSteps([{ type: 'wait', target: '500', ms: 500, ok: true }]);
+    expect(orphan).toEqual([{ instruction: '等待 500 毫秒', compiled: null }]);
+  });
+
+  it('失败动作 / sql / repo / screenshot 取证观察动作被滤掉（不进用例步骤）', () => {
+    const steps = trailToCaseSteps([
+      { type: 'click', target: '#wrong', ok: false },
+      { type: 'click', target: '#save', ok: true },
+      { type: 'sql', target: 'SELECT 1', ok: true, detail: '1 行' },
+      { type: 'repo', target: 'src/a.ts', ok: true },
+      { type: 'screenshot', target: '@100,200', ok: true },
+    ]);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.instruction).toBe('点击 #save');
+  });
+
+  it('脏形状兜底：空数组 / 非对象条目 / 缺 type 全滤；全滤后返回空（路由据此回落模型步骤）', () => {
+    expect(trailToCaseSteps([])).toEqual([]);
+    expect(trailToCaseSteps([null as never, 42 as never, { target: '#x', ok: true }, { type: '', target: '#x', ok: true }])).toEqual([]);
   });
 });
