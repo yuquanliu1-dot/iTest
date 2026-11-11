@@ -241,6 +241,10 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
             });
         });
       }
+      // 取消/预算检查是事件驱动的异步链（链上心跳 SQL 在途时 prompt 可能已 resolve）——
+      // 收尾读标志前等最后一拍落定，否则终态分类（cancelled / completed+预算注记）
+      // 与 turns_used 会漏掉最后一轮的判定。
+      await abortCheckChain;
 
       // 先落留痕再置终态（详情页一看到终态就停轮询，顺序反了尾段永远拉不到）。
       await flushTrailPersist();
