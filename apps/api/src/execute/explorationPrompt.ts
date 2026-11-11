@@ -168,7 +168,8 @@ export interface CoercedFinding {
   reproSteps: ExplorationReproStep[];
 }
 
-function normalizeTitle(title: string): string {
+/** 标题归一（会话内去重与跨会话交集共用的同一份口径）。 */
+export function normalizeTitle(title: string): string {
   return title.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 

@@ -1172,6 +1172,15 @@ export const explorationSessions = pgTable('exploration_sessions', {
    */
   errorSignals: jsonb('error_signals').$type<Array<{ at: string; kind: string; text: string; url?: string }>>(),
   /**
+   * 人格矩阵分组（C3）：同一 matrix_id 的会话 = 同一章程的多个视角并行探索。
+   * 不新建表——分组键 + 展示名 + 角色三列足够（矩阵视图按 matrix_id 聚合）。
+   * 单会话（非矩阵）三列均为 null。
+   */
+  matrixId: uuid('matrix_id'),
+  matrixLabel: text('matrix_label'),
+  /** 该会话在矩阵中的角色 = persona key（EXPLORATION_PERSONA_KEYS 之一）。 */
+  matrixRole: varchar('matrix_role', { length: 32 }),
+  /**
    * 代码提交范围（charter 自然语言解析产物）：提交窗口 + 改动文件 + 候选起点。
    * 范围是焦点信号不是围栏——探索照常全站跑，范围只用于定向（增量回归/新功能探索）。
    * 解析在 runner 后台做（LLM + git fetch 可能数十秒），结果落库后前端轮询可见。
@@ -1202,6 +1211,7 @@ export const explorationSessions = pgTable('exploration_sessions', {
 }, (t) => ({
   projectIdx: index('exploration_sessions_project_idx').on(t.projectId, t.createdAt),
   versionIdx: index('exploration_sessions_version_idx').on(t.versionId),
+  matrixIdx: index('exploration_sessions_matrix_idx').on(t.matrixId),
 }));
 
 export const explorationFindings = pgTable('exploration_findings', {
@@ -1233,6 +1243,12 @@ export const explorationFindings = pgTable('exploration_findings', {
     trailIndex: number;
     screenshotPath?: string;
   }>(),
+  /**
+   * 跨会话交集（S2）：几个会话报了同一缺陷（近义判定口径与会话内去重一致）。
+   * ≥2 = 多视角共同发现。**纯标注**——不改 status（人工审阅才是权威）。
+   * 非矩阵会话恒为 1。
+   */
+  crossSessionCount: integer('cross_session_count').notNull().default(1),
   /** pending → confirmed | dismissed；confirmed → promoted（写 promotedCaseId）。 */
   status: varchar('status', { length: 16 }).notNull().default('pending'),
   /** 审阅三件套 = assistant_solidify_proposals 同款。 */

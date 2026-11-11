@@ -39,7 +39,8 @@ export interface ExplorationDeps extends ToolDeps {
   findings: FindingStore;
   /** 申报排除项 → 实际入账条数（去重/封顶在 runner 侧账本）。 */
   noteExcluded(items: Array<{ claim: string; evidence?: string }>): number;
-  onFinish(summary: string): void;
+  /** 收尾：总结 + 模型回告的子目标完成情况（无子目标时 goals 为 undefined）。 */
+  onFinish(summary: string, goals?: Array<{ id: string; done: boolean }>): void;
   /** dbRefs 非空才装配 sql_probe。 */
   sql?: { env: SqlProbeEnv; dbRefs: Array<{ label: string; dialect: string }> };
   /** 有代码提交范围才装配 repo_read。 */

@@ -7,6 +7,7 @@
  */
 import { Router } from 'express';
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { explorationFindings, explorationSessions, groups } from '../db/schema.js';
@@ -52,12 +53,48 @@ const ListQuery = z.object({
   projectId: z.string().uuid().optional(),
 });
 
+/**
+ * 人格矩阵建组（C3）：同一章程起 N 个人格会话并行跑（同一 matrix_id 分组）。
+ * 不新建表——分组键/展示名/角色三列挂在 exploration_sessions 上。
+ * personas 去重后逐个建会话；每个会话 = 一次独立探索（各自章程分解、各自留痕）。
+ */
+const CreateMatrixBody = z.object({
+  versionId: z.string().uuid(),
+  charter: z.string().trim().min(10).max(4000),
+  /** 人格列表（1~6 个，重复的自动去重）：每个 persona 一个会话。 */
+  personas: z.array(z.enum(EXPLORATION_PERSONA_KEYS as [string, ...string[]])).min(1).max(6),
+  /** 矩阵展示名（缺省按人格数生成）。 */
+  label: z.string().trim().min(1).max(120).optional(),
+  title: z.string().trim().min(1).max(200).optional(),
+  startUrl: z.string().trim().max(2000).optional(),
+  allowDestructive: z.boolean().default(false),
+  windowWidth: z.number().int().positive().optional(),
+  windowHeight: z.number().int().positive().optional(),
+  budgetTurns: z.number().int().min(4).max(60).optional(),
+});
+
 /** 会话可见性断言：经 session.projectId 判定，不存在与不可见统一 404。 */
 async function loadSession(sessionId: string, user: { userId: string }) {
   const row = (await db.select().from(explorationSessions).where(eq(explorationSessions.id, sessionId)))[0];
   if (!row) throw new HttpError(404, 'not_found', 'exploration session not found');
   await assertProjectVisible(row.projectId, user as never);
   return row;
+}
+
+/**
+ * 派发探索会话：redis 就绪入队；add 失败回落 inline；无 redis 直接 inline。
+ * 单建与矩阵建组共用这一处——两条路径的派发语义必须一致（否则矩阵会话的排队/内联行为与单建不同）。
+ */
+async function dispatchExploration(sessionId: string): Promise<void> {
+  if (isExecutionQueueReady()) {
+    try {
+      await getExecutionQueue().add(EXEC_QUEUE_NAME, { kind: 'exploration', sessionId });
+      return;
+    } catch (e) {
+      logger.warn({ err: e, sessionId }, 'exec queue add failed; running exploration inline');
+    }
+  }
+  void runExplorationSession({ sessionId });
 }
 
 /**
@@ -94,16 +131,7 @@ explorationsRoute.post('/', async (req, res) => {
     .returning())[0]!;
   const sessionId = inserted.id;
 
-  if (isExecutionQueueReady()) {
-    try {
-      await getExecutionQueue().add(EXEC_QUEUE_NAME, { kind: 'exploration', sessionId });
-    } catch (e) {
-      logger.warn({ err: e, sessionId }, 'exec queue add failed; running exploration inline');
-      void runExplorationSession({ sessionId });
-    }
-  } else {
-    void runExplorationSession({ sessionId });
-  }
+  await dispatchExploration(sessionId);
 
   res.status(201).json(inserted);
 });
@@ -139,6 +167,99 @@ explorationsRoute.get('/', async (req, res) => {
     db.select({ count: sql<number>`count(*)::int` }).from(explorationSessions).where(where),
   ]);
   res.json({ items: await attachCreators(items), total: totalRows[0]?.count ?? 0, page, limit });
+});
+
+/**
+ * 建人格矩阵（C3）：同一章程 + 多个 persona → 多个并行探索会话（同一 matrix_id）。
+ * 一次性返回 matrixId 与全部会话（前端跳到矩阵视图看各会话进度）。
+ * 路由必须注册在 `/:id/live` 之前——否则 `/matrix/:id` 会被 `/:id/live` 抢走。
+ */
+explorationsRoute.post('/matrix', async (req, res) => {
+  const body = CreateMatrixBody.parse(req.body);
+  if ((body.windowWidth === undefined) !== (body.windowHeight === undefined)) {
+    throw new HttpError(400, 'window_required', 'windowWidth and windowHeight must be provided together');
+  }
+  const { projectId } = await assertVersionVisible(body.versionId, req.user!);
+  const personas = [...new Set(body.personas)];
+  const matrixId = randomUUID();
+  const label = body.label?.trim() || `${personas.length} 人格矩阵`;
+  const title = body.title?.trim() || body.charter.slice(0, 80);
+  const inserted = await db
+    .insert(explorationSessions)
+    .values(
+      personas.map((persona) => ({
+        projectId,
+        versionId: body.versionId,
+        title,
+        charter: body.charter,
+        persona,
+        startUrl: body.startUrl?.trim() || null,
+        allowDestructive: body.allowDestructive,
+        windowWidth: body.windowWidth ?? null,
+        windowHeight: body.windowHeight ?? null,
+        budgetTurns: body.budgetTurns ?? null,
+        status: 'pending' as const,
+        codeScopeStatus: 'pending' as const,
+        matrixId,
+        matrixLabel: label,
+        matrixRole: persona,
+        createdByUserId: req.user!.userId,
+      })),
+    )
+    .returning();
+  for (const row of inserted) await dispatchExploration(row.id);
+  res.status(201).json({ matrixId, label, sessions: inserted });
+});
+
+/**
+ * 矩阵视图：矩阵内全部会话 + 它们的 findings（finding 带 crossSessionCount —— ≥2 = 多视角共同发现）。
+ * 交集数字由收尾时重算（S2），此处只读。
+ */
+explorationsRoute.get('/matrix/:matrixId', async (req, res) => {
+  const matrixId = req.params.matrixId!;
+  const sessions = await db
+    .select()
+    .from(explorationSessions)
+    .where(eq(explorationSessions.matrixId, matrixId))
+    .orderBy(asc(explorationSessions.createdAt));
+  if (sessions.length === 0) throw new HttpError(404, 'not_found', 'matrix not found');
+  await assertProjectVisible(sessions[0]!.projectId, req.user!);
+  const findings = await db
+    .select()
+    .from(explorationFindings)
+    .where(inArray(explorationFindings.sessionId, sessions.map((s) => s.id)))
+    .orderBy(asc(explorationFindings.order));
+  res.json({
+    matrixId,
+    label: sessions[0]!.matrixLabel,
+    sessions: await attachCreators(sessions),
+    findings,
+  });
+});
+
+/**
+ * 取消矩阵：给矩阵内**未终态**的会话置 cancel_requested（与单会话取消同款语义）。
+ * 已终态的会话不再改（幂等：重复调用返回 ok）。
+ */
+explorationsRoute.post('/matrix/:matrixId/cancel', async (req, res) => {
+  const matrixId = req.params.matrixId!;
+  const sessions = await db
+    .select({ id: explorationSessions.id, projectId: explorationSessions.projectId })
+    .from(explorationSessions)
+    .where(eq(explorationSessions.matrixId, matrixId));
+  if (sessions.length === 0) throw new HttpError(404, 'not_found', 'matrix not found');
+  await assertProjectVisible(sessions[0]!.projectId, req.user!);
+  const cancelled = await db
+    .update(explorationSessions)
+    .set({ cancelRequested: true, updatedAt: new Date() })
+    .where(
+      and(
+        eq(explorationSessions.matrixId, matrixId),
+        inArray(explorationSessions.status, ['pending', 'running']),
+      ),
+    )
+    .returning({ id: explorationSessions.id });
+  res.json({ ok: true, cancelled: cancelled.length });
 });
 
 /** 详情：会话 + findings（按 order 升序）+ 创建人 + 会话过程（每一步动作留痕）。 */

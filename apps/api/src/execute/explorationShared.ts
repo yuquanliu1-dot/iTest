@@ -9,6 +9,8 @@ import { and, eq } from 'drizzle-orm';
 import { join } from 'node:path';
 import { db } from '../db/client.js';
 import { explorationSessions } from '../db/schema.js';
+import { recomputeMatrixIntersection } from '../pi/exploration/matrix.js';
+import { logger } from '../logger.js';
 
 /** 轮次预算默认值（用户可在创建会话时覆盖，4~60；null=用这里）：超界走 shouldAbort 优雅收尾
  *  （findings 全保留）。runAiTask 硬闸 = 预算 +16 仅 runaway 兜底——硬闸随预算放大，
@@ -83,4 +85,13 @@ export async function finishSession(
       updatedAt: new Date(),
     })
     .where(eq(explorationSessions.id, sessionId));
+  // S2 跨会话交集：矩阵会话置终态后重算（fire-and-forget，best-effort；recompute 自身永不抛错）。
+  // 单会话 matrixId 为 null → 一次轻查询后返回。两链路共用这一处：交集随任一成员收尾即刻更新。
+  const mid = (
+    await db
+      .select({ matrixId: explorationSessions.matrixId })
+      .from(explorationSessions)
+      .where(eq(explorationSessions.id, sessionId))
+  )[0]?.matrixId;
+  if (mid) void recomputeMatrixIntersection(mid).catch((e) => logger.warn({ err: e, matrixId: mid }, 'matrix recompute failed'));
 }

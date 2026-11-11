@@ -45,6 +45,8 @@ export function composeExplorationPrompt(args: {
   codeScope?: CodeScope | null;
   /** 环境里的数据库对象（label + 方言）；非空则拼「## 数据库取证」段（sql_probe 的可用库清单）。 */
   dbs?: Array<{ label: string; dialect: string }>;
+  /** 章程分解出的子目标（C2）；非空则拼「## 子目标」段——探索的推进方向清单。 */
+  goals?: Array<{ id: string; text: string }>;
 }): string {
   const sections: string[] = [`## 章程（charter）\n${args.charter.trim()}`, `## 视角\n${args.persona}`];
   if (!args.vision) {
@@ -61,6 +63,11 @@ export function composeExplorationPrompt(args: {
   if (args.dbs && args.dbs.length > 0) {
     sections.push(
       `## 数据库取证\n可用库：${args.dbs.map((d) => `${d.label}（${d.dialect}）`).join('、')}。sql_probe 可查证「前端没显示但库里写进去了」「列表少了一条但库里有」这类只在数据层可见的现象；先有具体假设再查，表名不确定先查 information_schema。`,
+    );
+  }
+  if (args.goals && args.goals.length > 0) {
+    sections.push(
+      `## 子目标（章程分解）\n按顺序推进，每条都要在页面上实际验证过（看到证据才算做到）：\n${args.goals.map((g) => `- ${g.id}: ${g.text}`).join('\n')}\n收尾时用 finish 工具的 goals 参数回告各子目标完成情况（id + done）。`,
     );
   }
   sections.push(`## 起点\n从 ${args.startUrl} 开始：先 navigate 到起点，再 observe 获取截图与元素清单，之后按章程在站点内导航探索。`);

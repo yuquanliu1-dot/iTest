@@ -31,6 +31,7 @@ const {
   visionProbeMock,
   envCfg,
   scopeCfg,
+  decomposeCfg,
 } = vi.hoisted(() => {
   const sessionSubscribers: Array<(ev: unknown) => void> = [];
   const promptCalls: string[] = [];
@@ -55,6 +56,8 @@ const {
     },
     /** 代码提交范围解析结果（null = none/failed 软失败）。 */
     scopeCfg: { scope: null as unknown },
+    /** 章程分解产物（C2）：默认无子目标（分解软失败口径），各测试自设。 */
+    decomposeCfg: { goals: [] as Array<{ id: string; text: string }> },
   };
 });
 
@@ -118,6 +121,11 @@ vi.mock('../src/pi/exploration/session.js', async (importOriginal) => {
     },
   };
 });
+
+// 章程分解打桩（C2）：默认无子目标；需要时各测试设 decomposeCfg.goals（不打真网络）。
+vi.mock('../src/pi/exploration/decompose.js', () => ({
+  decomposeCharter: async () => decomposeCfg.goals,
+}));
 
 // 环境解析打桩：默认无凭据、无 db（startUrl 回落到 baseUrl）；各测试可改 envCfg。
 vi.mock('../src/execute/envContext.js', () => ({
@@ -196,6 +204,7 @@ beforeEach(() => {
   envCfg.cred = null;
   envCfg.dbs = [];
   scopeCfg.scope = null;
+  decomposeCfg.goals = [];
 });
 
 /** 建一条待执行会话。可带轮次预算（预算耗尽路径用）。 */
@@ -410,6 +419,42 @@ describe('探索 runner pi 链路', () => {
     expect(ledger[0]!.claim).toBe('登录页缺少验证码');
     const trail = (row.rows[0]!.actions_trail ?? []) as Array<{ type: string; ok: boolean }>;
     expect(trail.map((t) => t.type)).toEqual(['note_excluded', 'finish']);
+  }, 30000);
+
+  it('章程分解（C2）→ 子目标进系统提示词 + 覆盖账本；finish 回告 goals → 账本标记完成', async () => {
+    decomposeCfg.goals = [
+      { id: 'g1', text: '打开新增对话框' },
+      { id: 'g2', text: '空值提交看是否被拒' },
+    ];
+    const sessionId = await insertSession();
+    promptDriver.fn = async () => {
+      const finish = sessionArgs.at(-1)!.tools.find((t) => (t as { name: string }).name === 'finish') as {
+        execute: (id: string, p: unknown) => Promise<unknown>;
+      };
+      emit({ type: 'tool_execution_start', toolCallId: 'f1', toolName: 'finish', args: {} });
+      await finish.execute('f1', {
+        summary: '覆盖了新增对话框与空值提交。',
+        goals: [{ id: 'g1', done: true }, { id: 'g2', done: false }],
+      });
+      emit({ type: 'tool_execution_end', toolCallId: 'f1', toolName: 'finish', isError: false });
+    };
+
+    await runExplorationSession({ sessionId });
+
+    // 子目标进 system prompt（压缩安全路径：appendSystemPromptOverride）。
+    const prompt = String(sessionArgs.at(-1)!.explorationPrompt);
+    expect(prompt).toContain('## 子目标（章程分解）');
+    expect(prompt).toContain('g1: 打开新增对话框');
+    expect(prompt).toContain('g2: 空值提交看是否被拒');
+
+    // 覆盖账本：子目标落库，完成情况按模型回告（平台不猜「做没做到」）。
+    const row = await pool.query(`SELECT coverage_ledger FROM exploration_sessions WHERE id=$1`, [sessionId]);
+    const ledger = row.rows[0]!.coverage_ledger as {
+      goals: Array<{ id: string; text: string; done: boolean }>;
+    };
+    expect(ledger.goals.map((g) => g.id)).toEqual(['g1', 'g2']);
+    expect(ledger.goals[0]!.done).toBe(true);
+    expect(ledger.goals[1]!.done).toBe(false);
   }, 30000);
 
   it('fill 凭据缺失 → 终止会话按 failed 收尾（可行动报错）+ 挂载 sql_probe（有 db）', async () => {

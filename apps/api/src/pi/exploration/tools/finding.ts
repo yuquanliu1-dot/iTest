@@ -84,17 +84,31 @@ export function createNoteExcludedTool(deps: ExplorationDeps) {
   });
 }
 
-export function createFinishTool(deps: ExplorationDeps & { onFinish(summary: string): void }) {
+export function createFinishTool(deps: ExplorationDeps & { onFinish(summary: string, goals?: Array<{ id: string; done: boolean }>): void }) {
   return defineTool({
     name: 'finish',
     label: 'finish',
     description: '结束探索并提交总结。主要路径都看过、或被卡住无法继续时调用。总结写：覆盖了什么、发现几条缺陷、无法继续的原因（如有）。',
     promptGuidelines: ['调用 finish 后不要再调用其它工具'],
-    parameters: Type.Object({ summary: Type.String({ description: '本次探索总结' }) }),
+    parameters: Type.Object({
+      summary: Type.String({ description: '本次探索总结' }),
+      goals: Type.Optional(
+        Type.Array(
+          Type.Object({
+            id: Type.String({ description: '子目标 id（如 g1）' }),
+            done: Type.Boolean({ description: '该子目标是否已在页面上验证完成' }),
+          }),
+          { description: '子目标完成情况（章程分解出的子目标逐条回告，没验证过的别标 done）', maxItems: 10 },
+        ),
+      ),
+    }),
     executionMode: 'sequential',
     execute: async (_toolCallId, params) => {
       const summary = params.summary.trim().slice(0, 4000);
-      deps.onFinish(summary || '探索结束');
+      const goals = (params.goals ?? [])
+        .filter((g): g is { id: string; done: boolean } => typeof g?.id === 'string' && g.id.trim() !== '')
+        .map((g) => ({ id: g.id.trim().slice(0, 16), done: g.done === true }));
+      deps.onFinish(summary || '探索结束', goals.length > 0 ? goals : undefined);
       return { content: [{ type: 'text', text: '收到，正在收尾会话。' }], details: undefined };
     },
   });

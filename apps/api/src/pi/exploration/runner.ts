@@ -36,6 +36,7 @@ import { versionWorkspaceDir } from '../repo.js';
 import { loginStateKey, getLoginState, saveLoginState } from '../space/tools/loginStateCache.js';
 import { logger } from '../../logger.js';
 import { resolveExplorationModel, toolCallingProbeFailure, visionProbeFailure } from './model.js';
+import { decomposeCharter } from './decompose.js';
 import { createExplorationTools, trailStepOf } from './tools/index.js';
 import { composeExplorationPrompt, createExplorationSession } from './session.js';
 import { createFindingStore, type FindingStore } from './findings.js';
@@ -161,7 +162,17 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
       await finishSession(sessionId, { status: 'cancelled', turnsUsed: 0, usage: usage.stat }).catch(() => undefined);
       return;
     }
-    // 探索墙钟从范围解析 + 探针后起算——预算全部留给智能体阶段。
+
+    // —— C2 章程分解（开跑前 1 次 LLM 调用 → 2~6 条子目标；软失败 = 无子目标，探索照常跑）——
+    //  子目标进 system prompt（压缩安全）并落 coverage_ledger.goals（终态快照供人工评估覆盖度）。
+    //  放在探针之后：探针不过这场会话直接失败，没必要再烧一次分解调用。
+    const persona = getExplorationPersona(sessionRow.persona);
+    const goals = await decomposeCharter({ charter: sessionRow.charter, persona: persona.directive });
+    if (await heartbeat(sessionId)) {
+      await finishSession(sessionId, { status: 'cancelled', turnsUsed: 0, usage: usage.stat }).catch(() => undefined);
+      return;
+    }
+    // 探索墙钟从范围解析 + 探针 + 章程分解后起算——预算全部留给智能体阶段。
     const deadline = Date.now() + EXPLORATION_WALL_CLOCK_MS;
 
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
@@ -190,6 +201,7 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
 
       // —— C1 覆盖账本 + D3 错误信号采集（observe 回灌 + 终态落库）——
       const coverage = createCoverageTracker();
+      coverage.setGoals(goals);
       coverageLedger = coverage;
       const collector = createErrorSignalCollector(page);
       errorSignals = collector;
@@ -224,7 +236,6 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
           })
         : undefined;
 
-      const persona = getExplorationPersona(sessionRow.persona);
       const tools = createExplorationTools({
         page,
         vision,
@@ -250,8 +261,13 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
           if (accepted > 0) void persistSessionState();
           return accepted;
         },
-        onFinish: (summary) => {
+        onFinish: (summary, goalUpdates) => {
           finishSummary = summary;
+          // 模型回告的子目标完成情况 → 账本（终态快照随之落库）。
+          if (goalUpdates && goalUpdates.length > 0) {
+            coverage.markGoals(goalUpdates);
+            void persistSessionState();
+          }
           piSession.abort();
         },
         ...(dbRefs.length > 0 ? { sql: { env: envCtx, dbRefs } } : {}),
@@ -272,6 +288,7 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
               : null,
           codeScope,
           dbs: dbRefs,
+          goals,
         }),
       });
 
