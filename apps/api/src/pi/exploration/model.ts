@@ -89,9 +89,11 @@ const VISION_PROBE_CODE = 'PX-7349';
 export async function visionProbeFailure(page: Page, model: Record<string, unknown>): Promise<string | null> {
   const { complete } = await import('@earendil-works/pi-ai/compat');
   try {
-    await page.goto(
-      `data:text/html,<body style="margin:0"><div style="font:700 64px monospace;color:#000;background:#fff;padding:40px">${VISION_PROBE_CODE}</div></body>`,
-      { timeout: 10_000 },
+    // setContent 而非 data: URL——未转义的 data URL（裸空格/引号）在 chromium 里渲染成
+    // 空白文档，prod228 实证：截图全白 → 模型如实读出空码 → 会话被误降级为纯文本模式。
+    await page.setContent(
+      `<body style="margin:0"><div style="font:700 64px monospace;color:#000;background:#fff;padding:40px">${VISION_PROBE_CODE}</div></body>`,
+      { timeout: 10_000, waitUntil: 'load' },
     );
     // 15s：冷启动 headless 首张截图可能远慢于 5s（prod228 实证 5s 超时误降级纯文本）。
     const buf = await page.screenshot({ timeout: 15_000, type: 'png' });
@@ -110,7 +112,9 @@ export async function visionProbeFailure(page: Page, model: Record<string, unkno
           },
         ],
       },
-      { maxTokens: 100 },
+      // 500：推理型模型在图上犹豫时会先烧 thinking 预算，100 会顶到 length 上限、
+      // 回复为空 → 探针误判「无视觉」。多几百 token 的代价远低于一次误降级。
+      { maxTokens: 500 },
     );
     if (r.stopReason === 'error') return `视觉探针调用失败：${r.errorMessage ?? '未知错误'}`;
     const text = r.content.filter((b) => b.type === 'text').map((b) => b.text).join(' ');

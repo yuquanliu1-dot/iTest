@@ -72,7 +72,8 @@ export function createObserveTool(deps: ToolDeps) {
         };
       }
       // 主截图 JPEG q85：坐标指认不需要无损精度（与 legacy aiTask 同取舍）
-      const buf = await deps.page.screenshot({ timeout: 5000, type: 'jpeg', quality: 85 }).catch(() => null);
+      // 15s：截图超时静默退化成「本轮无图」，宁长勿短（prod228 实证 5s 偶发超时）。
+      const buf = await deps.page.screenshot({ timeout: 15_000, type: 'jpeg', quality: 85 }).catch(() => null);
       if (!buf) {
         return { content: [{ type: 'text', text: `${text}\n（本轮截图失败，请依据元素清单操作）` }], details: undefined };
       }
@@ -152,7 +153,7 @@ export function createScreenshotTool(deps: ToolDeps) {
           details: undefined,
         };
       }
-      const buf = await deps.page.screenshot({ timeout: 5000, type: 'png' }).catch(() => null);
+      const buf = await deps.page.screenshot({ timeout: 15_000, type: 'png' }).catch(() => null);
       if (!buf) {
         return { content: [{ type: 'text', text: 'screenshot: error 全页截图失败（页面可能在持续重绘）。先 wait 几秒再试。' }], details: undefined, isError: true };
       }
