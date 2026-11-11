@@ -61,10 +61,19 @@ export default function LiveViewImg({
   url,
   mode = 'live',
   retry = false,
+  frameHeight,
+  onFrameHeightChange,
+  onFrameVisibleChange,
 }: {
   url: string;
   mode?: LiveViewMode;
   retry?: boolean;
+  /** 受控画面高度（详情页并排布局用）：传入后高度恒定、宽度按画面比例自适应；
+   *  不传保持旧行为（w-full 占满列宽、maxHeight 封顶）。拖拽把手把新高度经回调交还页面。 */
+  frameHeight?: number;
+  onFrameHeightChange?: (h: number) => void;
+  /** 画面窗口在不在（挂载即 true、流断撤框即 false）——并排布局据此决定是否并排。 */
+  onFrameVisibleChange?: (visible: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [broken, setBroken] = useState(false);
@@ -75,7 +84,13 @@ export default function LiveViewImg({
   const [zoomFailed, setZoomFailed] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
   // 画面高度可拖拽调整：默认 220（同改版前 maxHeight），把手在画面下方。
-  const [height, setHeight] = useState(DEFAULT_H);
+  // frameHeight 受控时以此为准，内部状态仅作非受控回退。
+  const [innerHeight, setInnerHeight] = useState(DEFAULT_H);
+  const height = frameHeight ?? innerHeight;
+  const applyHeight = (h: number) => {
+    setInnerHeight(h);
+    onFrameHeightChange?.(h);
+  };
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
   useEffect(() => {
     if (!broken || !retry) return;
@@ -85,6 +100,12 @@ export default function LiveViewImg({
     }, 2000);
     return () => clearTimeout(timer);
   }, [broken, retry]);
+  // 画面窗口可见性上报：挂载/换源即有框，断流撤框报 false；卸载（含切会话撤框）cleanup 报 false——
+  // 真相由本组件负责到底，页面不需要在切会话时自行归零（父级 effect 晚于子级跑，归零会吃掉上报）。
+  useEffect(() => {
+    onFrameVisibleChange?.(!broken);
+    return () => onFrameVisibleChange?.(false);
+  }, [broken, url, onFrameVisibleChange]);
   if (broken) return null;
   // 重试后重挂 <img>：URL 加 r= 参数绕开缓存，保证真的重新发起流请求
   const src = attempt === 0 ? url : `${url}${url.includes('?') ? '&' : '?'}r=${attempt}`;
@@ -114,7 +135,7 @@ export default function LiveViewImg({
   const onHandleMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     const d = dragRef.current;
     if (!d) return;
-    setHeight(Math.min(MAX_H, Math.max(MIN_H, d.startH + (e.clientY - d.startY))));
+    applyHeight(Math.min(MAX_H, Math.max(MIN_H, d.startH + (e.clientY - d.startY))));
   };
   const onHandleUp = (e: ReactPointerEvent<HTMLDivElement>) => {
     dragRef.current = null;
@@ -138,8 +159,8 @@ export default function LiveViewImg({
           src={src}
           onError={() => setBroken(true)}
           alt={t(BADGE[mode].text)}
-          className="block w-full object-contain"
-          style={{ maxHeight: height }}
+          className={frameHeight != null ? 'block object-contain' : 'block w-full object-contain'}
+          style={frameHeight != null ? { height, width: 'auto', maxWidth: '100%' } : { maxHeight: height }}
         />
         <ModeBadge mode={mode} />
         <span

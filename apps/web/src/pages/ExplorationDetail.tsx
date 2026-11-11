@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -51,19 +51,13 @@ export default function ExplorationDetail() {
   const excluded = session?.excludedLedger ?? [];
   const codeScope = session?.codeScope ?? null;
 
-  // 画面在不在（有无真实帧）：会话过程并排的前提是有画面可并。
-  // 录制只在服务端内存里（TTL 30min），过期后回看没画面；流断掉时 LiveViewImg 也会撤掉 img。
-  // 用 ResizeObserver 量画面列的实际高度，不改共享组件、不让页面猜。
-  const liveColRef = useRef<HTMLDivElement>(null);
+  // 画面在不在（有框可看）：LiveViewImg 挂载即上报 true、流断撤框/卸载（含切会话）上报 false
+  // （录制只在服务端内存里 TTL 30min，过期后回看没框，会话过程回落整宽卡片）。
+  // 切会话的归零由组件卸载 cleanup 负责，页面不自己归零（父级 effect 晚于子级跑，会吃掉上报）。
   const [hasLiveFrame, setHasLiveFrame] = useState(false);
-  useEffect(() => {
-    const el = liveColRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => setHasLiveFrame((entries[0]?.contentRect.height ?? 0) > 8));
-    ro.observe(el);
-    return () => ro.disconnect();
-    // 会话数据到达前组件走 loading 早返回、画面列尚未挂载 → 观察器要等会话就位后再建。
-  }, [session?.id]);
+  // 画面高度由页面持有（受控传给 LiveViewImg）：会话过程卡取同一高度 → 两窗顶部同起点、底部恒对齐；
+  // 画面宽度按高度等比自适应（grid auto 轨道），拖高变宽，剩余宽度全部让给会话过程。
+  const [liveH, setLiveH] = useState(220);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['exploration', id] });
@@ -349,30 +343,35 @@ export default function ExplorationDetail() {
           </div>
         )}
 
-        {/* 实时画面 + 会话过程 并排：右边是平台记录的每一步动作（点/填/访问/查库），含查库结果摘要。
-            画面高度可拖拽（120~640px），右栏用绝对定位填满 grid 行高 → 与画面等高且跟随拖拽，
-            步骤多时在窗口内滚动，不把整页撑长。
+        {/* 实时画面 + 会话过程 并排：画面宽度按高度等比自适应（auto 轨道），剩余宽度全给会话过程。
+            会话过程卡定高 = 画面框高（liveH + 上下边框 2px）→ 两窗顶部同起点、底部恒对齐，
+            步骤多时在窗口内滚动，不把整页撑长；拖拽把手调画面高度时两窗同步变高变宽。
+            画面框下方还有拖拽把手/回放按钮行，属于「窗口外」的部分，不参与对齐。
             没有画面时（录制已过 TTL / 从未跑过 / 流断掉）不并排：右侧留白是死区，
             此时会话过程回到整宽卡片（与改版前一致）。 */}
         <div
           className="shrink-0 grid gap-4"
-          style={{ gridTemplateColumns: steps.length > 0 && hasLiveFrame ? 'minmax(0, 1fr) 420px' : 'minmax(0, 1fr)' }}
+          style={{ gridTemplateColumns: steps.length > 0 && hasLiveFrame ? 'auto minmax(0, 1fr)' : 'minmax(0, 1fr)' }}
         >
-          <div className="min-w-0" ref={liveColRef}>
+          <div className="min-w-0">
             <LiveViewCard
               liveUrl={api.explorations.liveUrl(session.id)}
               replayUrl={(speed) => api.explorations.replayUrl(session.id, speed)}
               replayMetaUrl={api.explorations.replayMetaUrl(session.id)}
               running={session.status === 'running'}
+              frameHeight={liveH}
+              onFrameHeightChange={setLiveH}
+              onFrameVisibleChange={setHasLiveFrame}
             />
           </div>
           {steps.length > 0 &&
             (hasLiveFrame ? (
-              <div className="relative min-w-0">
-                <div className="absolute inset-0 flex flex-col gap-2 overflow-hidden bg-card border rounded-[var(--radius-md)] p-4">
-                  {stepsHeader}
-                  {stepsBody}
-                </div>
+              <div
+                className="min-w-0 flex flex-col gap-2 overflow-hidden bg-card border rounded-[var(--radius-md)] p-4"
+                style={{ height: liveH + 2 }}
+              >
+                {stepsHeader}
+                {stepsBody}
               </div>
             ) : (
               <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4 flex flex-col gap-2">

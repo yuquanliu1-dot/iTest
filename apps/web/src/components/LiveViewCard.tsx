@@ -21,6 +21,9 @@ export default function LiveViewCard({
   replayUrl,
   replayMetaUrl,
   running,
+  frameHeight,
+  onFrameHeightChange,
+  onFrameVisibleChange,
 }: {
   liveUrl: string;
   /** 带倍速的回放 URL（speed=1 时即普通 replayUrl）。 */
@@ -28,6 +31,10 @@ export default function LiveViewCard({
   /** 录制可用性探测 URL（?replay=meta）。 */
   replayMetaUrl: string;
   running: boolean;
+  /** 受控画面高度 + 回调：透传 LiveViewImg（详情页并排布局用），其余用法不传保持旧行为。 */
+  frameHeight?: number;
+  onFrameHeightChange?: (h: number) => void;
+  onFrameVisibleChange?: (visible: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [replaying, setReplaying] = useState(false);
@@ -70,7 +77,17 @@ export default function LiveViewCard({
 
   return (
     <div className="mb-1.5">
-      {showImg && <LiveViewImg key={session} url={src} mode={mode} retry={running} />}
+      {showImg && (
+        <LiveViewImg
+          key={session}
+          url={src}
+          mode={mode}
+          retry={running}
+          frameHeight={frameHeight}
+          onFrameHeightChange={onFrameHeightChange}
+          onFrameVisibleChange={onFrameVisibleChange}
+        />
+      )}
       {!running && replayable && (
         <div className="flex items-center justify-end gap-1.5">
           {replaying && (

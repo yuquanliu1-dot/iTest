@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useEffect } from 'react';
 
 // api 只 mock 用到的端点（详情 + 分组列表）。
 const { explorationGet, groupList } = vi.hoisted(() => ({
@@ -21,17 +22,13 @@ vi.mock('../api/client', async (importOriginal) => {
 });
 
 // 实时画面重组件 stub 掉：MJPEG/录像与本用例无关。
-vi.mock('../components/LiveViewCard', () => ({ default: () => null }));
-
-// jsdom 没有 ResizeObserver（页面用它量画面列高度，决定会话过程是否与画面并排）。
-class ROStub {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-if (typeof (globalThis as { ResizeObserver?: unknown }).ResizeObserver === 'undefined') {
-  (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ROStub;
-}
+// stub 模拟「画面就位」：挂载后上报 onFrameVisibleChange(true)，驱动并排分支（真组件由 LiveViewImg 上报）。
+vi.mock('../components/LiveViewCard', () => ({
+  default: function LiveViewCardStub(props: { onFrameVisibleChange?: (v: boolean) => void }) {
+    useEffect(() => props.onFrameVisibleChange?.(true), [props.onFrameVisibleChange]);
+    return null;
+  },
+}));
 
 import ExplorationDetail from './ExplorationDetail';
 import '../i18n';
@@ -101,6 +98,20 @@ describe('ExplorationDetail 会话过程', () => {
     expect(screen.getByText('失败：只读守卫拒绝')).toBeTruthy();
     expect(screen.getAllByText('成功')).toHaveLength(2);
     expect(screen.getAllByText('失败')).toHaveLength(1);
+  });
+
+  it('并排布局契约：会话过程卡定高=画面框高（220+2 边框）、画面列 auto 轨道宽度自适应、剩余宽度给会话过程', async () => {
+    renderDetail();
+    await waitFor(() => expect(explorationGet).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText('会话过程')).toBeTruthy());
+    // 上报「有画面」走一次 effect + 重渲染后才切到并排分支（此前渲染的是整宽回落卡）
+    await waitFor(() => {
+      const c = screen.getByText('会话过程').closest('.bg-card') as HTMLElement;
+      expect(c.style.height).toBe('222px');
+    });
+    const card = screen.getByText('会话过程').closest('.bg-card') as HTMLElement;
+    const grid = card.parentElement as HTMLElement;
+    expect(grid.style.gridTemplateColumns).toBe('auto minmax(0, 1fr)');
   });
 
   it('无留痕（老会话）→ 不渲染会话过程卡片', async () => {
