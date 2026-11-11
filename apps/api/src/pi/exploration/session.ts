@@ -4,8 +4,9 @@
  * 提示词分层（压缩安全是硬约束）：
  * - 章程/人格/起点/降级说明 → appendSystemPromptOverride（<addendum> 段）——
  *   pi 压缩只摘要旧消息、不动 system prompt；放首条 user message 会在长会话压缩后丢失。
- * - pi 默认的「编码助手」preamble → before_agent_start 里替换 sections.preamble 并删 docs 段
- *   （不能走 customPrompt——那会连 tools/rules 段一起丢掉，工具 promptGuidelines 就没了）。
+ * - pi 默认的「编码助手」preamble → before_agent_start 里整份渲染后字符串替换默认句子（forceSystemPrompt）并删 docs 段
+ *   （不能走 customPrompt——那会连 tools/rules 段一起丢掉，工具 promptGuidelines 就没了；
+ *    也不能写 sections.preamble——pi 校验段名直接抛错）。
  * - 工具使用纪律 → 各工具的 description + promptGuidelines（pi 原生 rules 段机制）。
  */
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
@@ -15,6 +16,11 @@ import { logger } from '../../logger.js';
 
 /** 替换 pi 默认编码助手 preamble 的探索身份段（保留 tools/rules 段不动）。 */
 const EXPLORATION_PREAMBLE = `你是 iTest 平台的 Web 探索式测试智能体，通过浏览器工具对被测系统做探索式测试：按章程主动找茬，发现行为异常、校验缺失、状态错乱、体验破绽。遵守下方工具使用规则。`;
+
+/** pi 默认 preamble 原文（pi-coding-agent dist/core/system-prompt.js）。整份渲染后做字符串替换。 */
+const PI_DEFAULT_PREAMBLE =
+  'You are an expert coding assistant operating inside pi, a coding agent harness. '
+  + 'You help users by reading files, executing commands, editing code, and writing new files.';
 
 /** 探索系统提示词基底（pi 版）：工具循环的工作纪律。与 legacy JSON 协议版（execute/explorationPrompt.ts）
  *  方向一致（主动找茬），但协议载体不同——pi 用原生工具调用，不再有 {"actions":[...]} 大包。
@@ -101,9 +107,17 @@ export async function createExplorationSession(args: CreateExplorationSessionArg
         hidden: true,
         factory: (pi) => {
           pi.on('before_agent_start', (event) => {
-            // 只换 preamble、删 docs 段；tools/rules 段保留（工具 promptGuidelines 在那里）。
-            event.systemPromptOptions.sections.preamble = EXPLORATION_PREAMBLE;
+            // docs 段删掉（cwd 是被测仓库，别把仓库自身的 AGENTS.md 喂进探索身份）。
+            // 必须在渲染 event.systemPrompt 之前——返回 {systemPrompt} 会冻结后续 section 变更。
             delete event.systemPromptOptions.sections.docs;
+            // preamble 不能走 sections.preamble——pi 校验段名直接抛
+            // "Invalid system prompt section name: preamble"（prod228 实证）。
+            // 与 space 路径同款做法：渲染整份 system prompt，把默认编码助手句子替换成
+            // 探索身份，以 forceSystemPrompt 返回（不进 transcript，sections 记录保持完整）。
+            const rendered = event.systemPrompt;
+            if (typeof rendered === 'string' && rendered.includes(PI_DEFAULT_PREAMBLE)) {
+              return { systemPrompt: rendered.replace(PI_DEFAULT_PREAMBLE, EXPLORATION_PREAMBLE) };
+            }
             return undefined;
           });
         },
