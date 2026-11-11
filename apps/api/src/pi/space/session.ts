@@ -28,7 +28,7 @@ import { readLlmConfig, synthesizeModel, ENV_BY_PROVIDER } from '../modelBridge.
 import { HttpError } from '../../middleware/errorHandler.js';
 import { defineTool, sessionEntryToContextMessages, type CompactionEntry, type SessionEntry } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
-import { checkoutRepoForVersion, LockTimeoutError, RepoUnavailableError, DATA_DIR, REPOS_ROOT, WORKSPACES_ROOT } from '../repo.js';
+import { checkoutRepoForVersion, LockTimeoutError, RepoUnavailableError, DATA_DIR, REPOS_ROOT, versionWorkspaceDir } from '../repo.js';
 import { emptyRepoState, type RepoState } from './tools/context.js';
 import { pendingConfirmPayloads } from './confirm.js';
 import { tryAcquireLock, type RedisLock } from '../../lib/redisLock.js';
@@ -264,9 +264,9 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
   const unsub = session.subscribe((event) => fanOut(rec, event));
   rec.unsub = unsub;
   records.set(threadId, rec);
-  // 后台检出：repo 目录位于版本工作空间的 repo/ 子目录。
-  const workspaceDir = path.join(WORKSPACES_ROOT, `v-${row.versionId}`);
-  const repoDir = path.join(workspaceDir, 'repo');
+  // 后台检出：repo 目录位于版本工作空间的 repo/ 子目录（路径收口在 versionWorkspaceDir，
+  // 探索式测试的「代码提交范围」解析复用同一目录 → 共享同一把检出锁）。
+  const repoDir = versionWorkspaceDir(row.versionId);
   void checkoutInBackground(row.versionId, repoDir, repo);
   return rec;
 }
@@ -669,8 +669,8 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   const { getBuiltinModel } = await import('@earendil-works/pi-ai/providers/all');
   // 每个版本会话拥有独立工作空间：.data/workspaces/v-<versionId>，项目仓库检出在该空间下的 repo/ 子目录。
   // Agent 的 cwd 指向工作空间（避免写入污染仓库），repo 工具仍操作 repo/ 子目录。
-  const workspaceDir = path.join(WORKSPACES_ROOT, `v-${ctx.versionId}`);
-  const repoDir = path.join(workspaceDir, 'repo');
+  const repoDir = versionWorkspaceDir(ctx.versionId);
+  const workspaceDir = path.dirname(repoDir);
   await fs.mkdir(workspaceDir, { recursive: true });
   await fs.mkdir(repoDir, { recursive: true });
   // Skills 物化为全局共享目录（.data/skills），由系统设置页管理；会话建立时物化 DB 快照。

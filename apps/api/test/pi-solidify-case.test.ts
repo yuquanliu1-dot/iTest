@@ -66,6 +66,8 @@ vi.mock('playwright-core', () => {
               close: async () => {},
               screenshot: async () => Buffer.from('fake-png'),
               locator: (sel: string) => makeLoc(sel),
+              // 固化链路会挂 console/pageerror 采集（createConsoleCapture）——mock 缺 on 会整链报错
+              on: vi.fn(),
             }),
             storageState: async () => ({ cookies: [{ name: 'sid', value: 'cached' }], origins: [] }),
             close: async () => {},
@@ -771,6 +773,55 @@ describe('solidify_case 编排', () => {
     const ops = await stageOps();
     expect(ops).toHaveLength(2);
     expect(ops.map((o) => o.local_id)).toContain(`solidify-${stepId}`);
+  });
+
+  it('叠加态插入步（暂存 insert_step 未落库）固化 → compiled 写回该 insert 暂存行，不产出指向占位 stepId 的 update_step', async () => {
+    // 回归动机：prod228 2026-11-11——固化把叠加态步骤（id 形如 staged:<localId>，DB 里还不存在）
+    // 暂成 update_step(stepId='staged:1')，落库时 stepId 非 uuid → ZodError → 前端只见
+    // 「参数校验失败，请检查输入」；且失败不回滚，用户重试把同一条步骤重复插了 3 份。
+    const caseId = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
+    const stepRows = await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
+    const dbStepId = stepRows.rows[0]!.id as string;
+    // 暂存里已插入、还没落库的新步骤（叠加态 id = staged:<insert op 的 localId>）
+    const insertLocalId = 'ins-local-1';
+    await pool.query(
+      `INSERT INTO ai_stage_case_ops(thread_id, local_id, version_id, case_id, op, payload, summary, staged_at)
+       VALUES ('t1', $1, $2, $3, 'insert_step', $4::jsonb, '插入新步骤', now())`,
+      [insertLocalId, versionId, caseId, JSON.stringify({ action: 'insert_step', caseId, instruction: '填写规则名称', compiled: null })],
+    );
+    stepQueue = [
+      { actions: [[{ type: 'click', selector: '#del' }, true]] },
+      { actions: [[{ type: 'fill', selector: 'input[name="ruleName"]', value: '规则A' }, true]] },
+    ];
+    const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
+    const r = await buildSolidifyCaseTool(toolCtx()).execute({ caseId });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = JSON.parse(r.data!);
+      expect(data.result).toBe('solidified');
+      expect(data.basedOn).toBe('staged');
+      expect(data.steps).toHaveLength(2);
+      expect(data.steps[1]).toMatchObject({ order: 2, status: 'solidified' });
+    }
+    const ops = await stageOps();
+    // 关键不变式：没有任何 update_step 指向还没落库的叠加态步骤
+    for (const o of ops) {
+      const p = o.payload as { action?: string; stepId?: string };
+      if (p.action === 'update_step') expect(String(p.stepId)).not.toMatch(/^staged:/);
+    }
+    // 叠加态步骤的 compiled 写回它自己的 insert 暂存行（同 localId 覆盖，不新增行）
+    const insertOp = ops.find((o) => o.local_id === insertLocalId)!;
+    expect(insertOp).toBeDefined();
+    expect(insertOp.op).toBe('insert_step');
+    expect(insertOp.payload).toMatchObject({
+      action: 'insert_step', caseId, instruction: '填写规则名称',
+      compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: 'input[name="ruleName"]' }], value: '规则A' }],
+    });
+    // DB 步骤仍是普通 update_step 暂存（确定性 localId）
+    const dbOp = ops.find((o) => o.local_id === `solidify-${dbStepId}`)!;
+    expect(dbOp).toBeDefined();
+    expect(dbOp.op).toBe('update_step');
+    expect(ops).toHaveLength(2);
   });
 
   it('ctx.liveView=false：不注册实时画面且 start 无 liveUrl（批量后台链路）；缺省会话行为不变', async () => {

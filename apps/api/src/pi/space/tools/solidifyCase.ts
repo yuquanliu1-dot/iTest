@@ -32,7 +32,7 @@ import { resolveLlmClient } from '../../../agent/llmSettings.js';
 import { tryParseJson } from '../../../agent/llm-client.js';
 import { extractPageElements, extractPageEvidence } from '../../inspectPage.js';
 import { probeLocatorHits, diagnoseFailure } from './failureDiagnosis.js';
-import { computeCaseOverlay, stageCaseOp, type EffectiveStep } from './case-ops-tools.js';
+import { computeCaseOverlay, overlayInsertLocalId, stageCaseOp, type EffectiveStep } from './case-ops-tools.js';
 import { stageCase } from './stage-tools.js';
 import { emitStage } from './stage.js';
 import { diffText } from './diff.js';
@@ -108,6 +108,8 @@ async function mapAndStageSteps(
     lang: StLang;
     /** 用例有效 url（叠加暂存后）：首步导航冗余探测用。 */
     caseUrl?: string | null;
+    /** 本线程该用例的暂存 op（含 localId）：叠加态步骤要把 compiled 写回对应的 insert 行。 */
+    stagedOps?: Array<{ localId: string; op: string; payload: unknown }>;
   },
 ): Promise<{ stepReports: Array<Record<string, unknown>>; solidifiedCount: number; keptCount: number }> {
   const { stagedCase, lang } = opts;
@@ -176,20 +178,47 @@ async function mapAndStageSteps(
             ...(warning ? { warning } : {}),
           },
     );
-    // 暂存写：DB 用例逐步骤 update_step（确定性 localId，重复固化幂等覆盖）；草稿整例重暂存
+    // 暂存写：DB 用例逐步骤 update_step（确定性 localId，重复固化幂等覆盖）；草稿整例重暂存。
+    //
+    // 叠加态步骤（id 形如 staged:<insertLocalId>，即「暂存里已插入、还没落库」的步骤）：
+    // 机械 compiled 写回那一条 insert 暂存行，不暂存 update_step——合成 stepId 不是 uuid，
+    // 落库时的 uuid 校验会把整条 op 拒掉，用户点保存只看到「参数校验失败，请检查输入」
+    // （prod228 2026-11-11 实测）。
     if (dbCase) {
-      const localId = `solidify-${s.id}`;
-      const doc = {
-        localId,
-        caseId,
-        op: 'update_step',
-        payload: { action: 'update_step', caseId, stepId: s.id, compiled: finalCompiled },
-        summary: st(lang, 'step.solidified', { order: s.order, count: finalCompiled.length }),
-        diff: diffText({ compiled: s.compiled ?? null }, { compiled: finalCompiled }),
-        stagedAt: new Date().toISOString(),
-      };
-      await stageCaseOp(ctx.threadId, ctx.versionId, doc);
-      emitStage(ctx, { kind: 'case_op' as const, id: localId, action: 'stage', payload: doc });
+      const insertLocalId = overlayInsertLocalId(s.id);
+      if (insertLocalId) {
+        const pending = opts.stagedOps?.find((o) => o.localId === insertLocalId);
+        if (!pending || pending.op !== 'insert_step') {
+          // 找不到对应的 insert 暂存行（不该发生）→ 不产出非法 op，报告里点名。
+          stepReports.push({ ...base, status: 'skipped-overlay', reason: '叠加态步骤找不到对应的暂存插入行，未暂存修改' });
+          continue;
+        }
+        const prevCompiled = (pending.payload as { compiled?: unknown }).compiled ?? null;
+        const doc = {
+          localId: insertLocalId,
+          caseId,
+          op: 'insert_step',
+          payload: { ...(pending.payload as object), compiled: finalCompiled },
+          summary: st(lang, 'step.solidified', { order: s.order, count: finalCompiled.length }),
+          diff: diffText({ compiled: prevCompiled }, { compiled: finalCompiled }),
+          stagedAt: new Date().toISOString(),
+        };
+        await stageCaseOp(ctx.threadId, ctx.versionId, doc);
+        emitStage(ctx, { kind: 'case_op' as const, id: insertLocalId, action: 'stage', payload: doc });
+      } else {
+        const localId = `solidify-${s.id}`;
+        const doc = {
+          localId,
+          caseId,
+          op: 'update_step',
+          payload: { action: 'update_step', caseId, stepId: s.id, compiled: finalCompiled },
+          summary: st(lang, 'step.solidified', { order: s.order, count: finalCompiled.length }),
+          diff: diffText({ compiled: s.compiled ?? null }, { compiled: finalCompiled }),
+          stagedAt: new Date().toISOString(),
+        };
+        await stageCaseOp(ctx.threadId, ctx.versionId, doc);
+        emitStage(ctx, { kind: 'case_op' as const, id: localId, action: 'stage', payload: doc });
+      }
     } else if (draftSteps) {
       const idx = Number(/^staged-(\d+)$/.exec(s.id)?.[1] ?? 0) - 1;
       if (idx >= 0 && idx < draftSteps.length) {
@@ -297,9 +326,12 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         let effectiveSteps = steps;
         const overlayPatches: { url?: string | null; defaultEnvId?: string | null } = {};
         let opsApplied = 0;
+        // 暂存 op 清单带 localId：叠加态步骤的合成 id 是 staged:<insert op 的 localId>，
+        // 固化要把机械 compiled 写回那一条 insert 暂存行——没有 localId 就定位不到目标行。
+        let stagedOps: Array<{ localId: string; op: string; payload: unknown }> = [];
         if (dbCase) {
-          const stagedOps = await db
-            .select({ op: aiStageCaseOps.op, payload: aiStageCaseOps.payload })
+          stagedOps = await db
+            .select({ localId: aiStageCaseOps.localId, op: aiStageCaseOps.op, payload: aiStageCaseOps.payload })
             .from(aiStageCaseOps)
             .where(and(eq(aiStageCaseOps.threadId, ctx.threadId), eq(aiStageCaseOps.caseId, caseId)))
             .orderBy(asc(aiStageCaseOps.stagedAt));
@@ -337,7 +369,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             solidifiable: visualSteps.length, targetUrl: effectiveCase.url ?? null, traceReused: true,
           });
           const { stepReports, solidifiedCount, keptCount } = await mapAndStageSteps(
-            ctx, effectiveSteps, cachedTrace, { dbCase, stagedCase, lang, caseUrl: effectiveCase.url },
+            ctx, effectiveSteps, cachedTrace, { dbCase, stagedCase, lang, caseUrl: effectiveCase.url, stagedOps },
           );
           const result = solidifiedCount > 0 ? 'solidified' : 'nothing-solidified';
           ctx.emit({ type: 'solidify_progress', phase: 'end', result, solidified: solidifiedCount, kept: keptCount });
@@ -580,7 +612,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
 
           // ── 映射 + 暂存：全部步骤执行通过，逐视觉步骤把收集到的动作映射为 compiled ──
           const { stepReports, solidifiedCount, keptCount } = await mapAndStageSteps(
-            ctx, effectiveSteps, collected, { dbCase, stagedCase, lang, caseUrl: effectiveCase.url },
+            ctx, effectiveSteps, collected, { dbCase, stagedCase, lang, caseUrl: effectiveCase.url, stagedOps },
           );
 
           const result = solidifiedCount > 0 ? 'solidified' : 'nothing-solidified';

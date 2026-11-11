@@ -752,8 +752,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         const overlayPatches: { url?: string | null; defaultEnvId?: string | null } = {};
         let opsApplied = 0;
         if (dbCase) {
+          // 带上 localId：叠加态插入步的合成 id 是 staged:<insert op 的 localId>（固化/验证同源）。
           const stagedOps = await db
-            .select({ op: aiStageCaseOps.op, payload: aiStageCaseOps.payload })
+            .select({ localId: aiStageCaseOps.localId, op: aiStageCaseOps.op, payload: aiStageCaseOps.payload })
             .from(aiStageCaseOps)
             .where(and(eq(aiStageCaseOps.threadId, ctx.threadId), eq(aiStageCaseOps.caseId, caseId)))
             .orderBy(asc(aiStageCaseOps.stagedAt));

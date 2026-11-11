@@ -24,7 +24,7 @@ import { emitThreadEvent } from './session.js';
 import {
   deleteStaged, listStage, type StageDoc, type StageKind, type StagedCaseOp,
 } from './tools/stage-tools.js';
-import { applyCaseOp, type SpaceToolsContext } from './tools/case-ops-tools.js';
+import { applyCaseOp, preflightCaseOps, type SpaceToolsContext } from './tools/case-ops-tools.js';
 import { emptyRepoState } from './tools/context.js';
 import { assertSpaceThreadVisible } from './router.js';
 
@@ -69,6 +69,25 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
   // 1. 先在事务外解析所有局部映射；失败立即抛错、不删 stage 行（用户可重选）。
   const pid = await resolveVersionProjectId(versionId);
   if (!pid) throw new HttpError(500, 'invariant', 'version project missing');
+
+  // 1z. caseOps 预检（只读）：勾选的 op 先整批过一遍「形状 + 引用存在性」，全过才允许写。
+  //  必须在任何写之前——一条必然失败的 op 排在批次中段时，前面的 insert 已落库、
+  //  stage 行又不删（失败不回滚），用户重试就重复插入（prod228 2026-11-11 实测：3 份重复步骤）。
+  const stageCaseOpRows = caseOps.length
+    ? (await db.select().from(aiStageCaseOps)
+        .where(and(eq(aiStageCaseOps.threadId, threadId), inArray(aiStageCaseOps.localId, caseOps.map((c) => c.localId))))
+        .orderBy(asc(aiStageCaseOps.stagedAt))) as unknown as Array<StagedCaseOp & { stagedAt: string }>
+    : [];
+  const opCtx: SpaceToolsContext = {
+    threadId,
+    versionId,
+    projectId: pid,
+    repo: emptyRepoState(),
+    emit: (e: unknown) => emitThreadEvent(threadId, e as Record<string, unknown>),
+    createdByUserId: creatorId,
+    manager: false, // stage 落库不涉及管理类工具
+  };
+  await preflightCaseOps(stageCaseOpRows, opCtx);
 
   // 1a. datasets: 先于 cases 落库（stage_case.datasetLocalId 需要真实 datasetId 回填）。
   //  rows 是明文草稿（含 sensitive 列）→ createDataset/normalizeDataset 在这里完成加密。
@@ -240,23 +259,8 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
   //  - 步骤级 op（update_step/insert_step/delete_step/move_step）天然在同一 case 内,顺序按 stagedAt 即可;
   //    跨 case 不保证事务(失败回退不跨用例)—— 单 case 内 insert/delete/move_step 由 case-ops-tools.applyCaseOp 包 transaction。
   //  - 用例级 op(update_case/delete_case/move_case):delete 会级联删 steps,后续对已删 case 的 step op 会失败(用户应在前置勾选里把 step op 一起勾)—— 不做复杂重排。
-  const stageCaseOpRows = caseOps.length
-    ? (await db.select().from(aiStageCaseOps)
-        .where(and(eq(aiStageCaseOps.threadId, threadId), inArray(aiStageCaseOps.localId, caseOps.map((c) => c.localId))))
-        .orderBy(asc(aiStageCaseOps.stagedAt))) as unknown as Array<StagedCaseOp & { stagedAt: string }>
-    : [];
-  const projectId = pid; // for applyCaseOp ctx
   for (const row of stageCaseOpRows) {
-    const ctx: SpaceToolsContext = {
-      threadId,
-      versionId,
-      projectId,
-      repo: emptyRepoState(),
-      emit: (e: unknown) => emitThreadEvent(threadId, e as Record<string, unknown>),
-      createdByUserId: creatorId,
-      manager: false, // stage 落库不涉及管理类工具
-    };
-    await applyCaseOp(row.op, row.payload, ctx);
+    await applyCaseOp(row.op, row.payload, opCtx);
   }
 
   // 2. 全部成功后删 stage 行 + 广播 remove 事件（前端清空勾选状态）

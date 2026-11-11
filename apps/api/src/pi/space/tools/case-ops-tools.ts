@@ -350,7 +350,14 @@ export function buildCaseOpsTools(ctx: SpaceToolsContext): ToolExecutor[] {
 }
 
 /** 给 stageRoute.s / 落库时复用：按 ai_stage_case_ops 行执行真实写。op 与 buildCaseOpsTools 一一对应。 */
-export async function applyCaseOp(op: string, payload: unknown, ctx: SpaceToolsContext): Promise<void> {  const v = StageCaseOpInput.parse(payload);
+export async function applyCaseOp(op: string, payload: unknown, ctx: SpaceToolsContext): Promise<void> {
+  // 载荷形状非法 → 可读 HttpError（不是裸 ZodError：ZodError 会落成 400 validation_failed，
+  // 响应体无 message，前端只能显示「参数校验失败，请检查输入」——prod228 2026-11-11 实测）。
+  const parsed = StageCaseOpInput.safeParse(payload);
+  if (!parsed.success) {
+    throw new HttpError(400, 'staged_op_invalid', `暂存修改参数不合法：${parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'} ${i.message}`).join('；')}`);
+  }
+  const v = parsed.data;
   const caseId = v.caseId;
   // 二次校验：落库前再确认归属（与创建时一致）
   const before = await loadCaseOrThrow(ctx, caseId);
@@ -423,6 +430,58 @@ export async function applyCaseOp(op: string, payload: unknown, ctx: SpaceToolsC
   throw new HttpError(500, 'invariant', `unknown op ${op}`);
 }
 
+/** 落库前预检：勾选的 op 先整批过一遍「形状 + 引用存在性」，全过才允许写。
+ *
+ *  为什么必须先预检（prod228 2026-11-11 实测）：op 是逐条应用的，非法 op 排在批次中段时，
+ *  前面的 insert_step 已经落库、stage 行又不删（失败不回滚）→ 用户重试 → 同一条步骤被重复
+ *  插入（实测重复 3 次）。预检把「必然失败」的 op 拦在第一次写入之前。
+ *
+ *  只读：预检只查 DB，不写任何行。 */
+export async function preflightCaseOps(
+  rows: Array<{ localId: string; op: string; payload: unknown; summary?: string | null }>,
+  ctx: SpaceToolsContext,
+): Promise<void> {
+  const stepIdsByCase = new Map<string, Set<string>>();
+  const loadStepIds = async (caseId: string): Promise<Set<string>> => {
+    let ids = stepIdsByCase.get(caseId);
+    if (!ids) {
+      const detail = await svc.getCaseDetail(caseId);
+      if (!detail) {
+        throw new HttpError(404, 'not_found', `用例 ${caseId} 不存在或已被删除——请在暂存区取消相关修改后重试`);
+      }
+      if (detail.versionId !== ctx.versionId) {
+        throw new HttpError(404, 'not_found', `用例 ${caseId} 不属于当前版本——请在暂存区取消相关修改后重试`);
+      }
+      ids = new Set(detail.steps.map((s) => s.id));
+      stepIdsByCase.set(caseId, ids);
+    }
+    return ids;
+  };
+
+  for (const row of rows) {
+    const parsed = StageCaseOpInput.safeParse(row.payload);
+    if (!parsed.success) {
+      throw new HttpError(400, 'staged_op_invalid', `暂存修改「${row.summary ?? row.localId}」参数不合法：${parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'} ${i.message}`).join('；')}`);
+    }
+    const v = parsed.data;
+    if (v.action === 'update_step' || v.action === 'delete_step') {
+      const ids = await loadStepIds(v.caseId);
+      if (!ids.has(v.stepId)) {
+        throw new HttpError(400, 'staged_op_invalid', `暂存修改「${row.summary ?? row.localId}」引用的步骤不存在（${v.stepId}）——它可能已被删除，或属于另一条还没保存的暂存插入。请在暂存区取消这条修改后重试。`);
+      }
+    }
+    // move_step 必须恰好覆盖全部步骤（applyCaseOp 同款判定）——不覆盖必然在落库中段失败，
+    // 提前拦下可避免同批次里排在它前面的 op 已经写进库（重复插入那一类脏数据）。
+    if (v.action === 'move_step') {
+      const ids = await loadStepIds(v.caseId);
+      const incoming = new Set(v.stepIds);
+      if (ids.size !== v.stepIds.length || ![...ids].every((id) => incoming.has(id))) {
+        throw new HttpError(400, 'staged_op_invalid', `暂存修改「${row.summary ?? row.localId}」的 move_step 必须恰好覆盖该用例全部步骤（当前 ${ids.size} 步）——请在暂存区取消这条修改后重试。`);
+      }
+    }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 虚拟应用（不落库）：把暂存的 caseOps 叠加到 DB 用例上,供 verify_case 基于暂存继续验证。
 // 语义与 applyCaseOp 对齐,但只计算生效后的 steps / casePatch,不做任何写。
@@ -454,15 +513,30 @@ export interface CaseOverlay {
   opsApplied: number;
 }
 
+/** overlay 里「暂存已插入、但还没落库」的步骤的合成 id 前缀。真实 step id 是 uuid，不会撞。 */
+export const OVERLAY_STEP_PREFIX = 'staged:';
+
+/** 叠加态插入步的合成 id = staged:<插入 op 的 localId>。
+ *  用 localId 而非数组下标：固化要把机械 compiled 写回那一条 insert 暂存行，
+ *  下标会随「勾了哪些 op / 排序」漂移，localId 才是那行的稳定身份。 */
+export function overlayStepId(insertLocalId: string | undefined, idx: number): string {
+  return `${OVERLAY_STEP_PREFIX}${insertLocalId ?? idx}`;
+}
+
+/** 合成 id → 它对应的 insert op localId；不是叠加态步骤返回 null。 */
+export function overlayInsertLocalId(stepId: string): string | null {
+  return stepId.startsWith(OVERLAY_STEP_PREFIX) ? stepId.slice(OVERLAY_STEP_PREFIX.length) : null;
+}
+
 export function computeCaseOverlay(
   dbSteps: EffectiveStep[],
-  ops: Array<{ payload: unknown }>,
+  ops: Array<{ payload: unknown; localId?: string }>,
 ): CaseOverlay {
   const overlay: CaseOverlay = { steps: null, deleteStaged: false, opsApplied: 0 };
   let steps: EffectiveStep[] | null = null;
   const ensure = (): EffectiveStep[] => (steps ??= dbSteps.map((s) => ({ ...s })));
   const normalize = (): void => steps!.forEach((s, i) => { s.order = i + 1; });
-  ops.forEach(({ payload }, idx) => {
+  ops.forEach(({ payload, localId }, idx) => {
     const parsed = StageCaseOpInput.safeParse(payload);
     if (!parsed.success) return;
     const v = parsed.data;
@@ -489,7 +563,7 @@ export function computeCaseOverlay(
       case 'insert_step': {
         const list = ensure();
         const st: EffectiveStep = {
-          id: `staged:${idx}`,
+          id: overlayStepId(localId, idx),
           order: 0,
           instruction: v.instruction,
           compiled: v.compiled ?? null,
