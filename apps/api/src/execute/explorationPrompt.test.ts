@@ -56,6 +56,16 @@ describe('EXPLORATION_SYSTEM_PROMPT_BASE - 协议与安全规则', () => {
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('子目标清单');
   });
 
+  // 2026-11-11 prod 实录：excluded 形状原先排在「actions 元素类型」列表里，
+  // 模型把它当成一种 action → 整场探索零申报，账本恒空。必须显式声明为顶层字段。
+  it('负面结果账本：excluded 是顶层字段（与 actions/findings 同级，不在 actions 里）', () => {
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('顶层字段 "excluded"');
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('与 actions / findings 同级');
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('"excluded": [...]');
+    // 不得再以 actions 元素类型的形态出现（那是模型误读的根源）
+    expect(EXPLORATION_SYSTEM_PROMPT_BASE).not.toContain('- {"excluded"');
+  });
+
   it('取证配额常量与 findings 配额并列（成本双保险）', () => {
     expect(EXPLORATION_MAX_SQL_PROBES).toBeGreaterThan(0);
     expect(EXPLORATION_MAX_SQL_PROBES).toBeLessThanOrEqual(EXPLORATION_MAX_FINDINGS);
