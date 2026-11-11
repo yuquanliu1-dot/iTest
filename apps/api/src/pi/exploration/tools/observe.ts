@@ -1,12 +1,10 @@
 /**
  * 观察类工具（只读）：observe（截图+元素清单）、screenshot（放大取证）、read_text（文本取证）。
  *
- * 铁律（pi 工具层通用，P3 的交互工具同守）：
+ * 铁律（pi 工具层通用，交互工具同守）：
  * - 工具永不 throw——抛异常会打断 pi agent 循环；失败一律 isError:true + 可行动中文说明。
  * - 全部 executionMode:'sequential'——证据帧竞态防线（观察/动作交错并行会让「截图=决策那一刻」失效）。
  * - vision=false（渠道剥图降级）时不附图，文本里显式说明——绝不静默剥图。
- *
- * P3 待补：click/fill（破坏性闸 + 凭据替换 + 脆弱 selector 闸移植）。
  */
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
@@ -24,6 +22,16 @@ export interface ToolDeps {
   vision: boolean;
   /** 探索范围白名单（起点 origin 唯一；空数组 = navigate 全拒）。 */
   scopeOrigins: string[];
+  /** 凭据占位符替换（fill 用）；缺省时占位符原样填入。 */
+  valueSub?: (value: string) => string;
+  /** 终止性错误回调（fill 凭据缺失 EnvMissing/SecretMissing → runner 终止会话）。 */
+  onFatal?: (err: Error) => void;
+  /** 破坏性操作显式授权位（false/缺省 = click 判中即拒；章程说辞不算授权）。 */
+  allowDestructive?: boolean;
+  /** 错误信号增量（observe 回灌：自上次 drain 起 console/pageerror/HTTP 4xx-5xx）。 */
+  errorSignals?: () => string;
+  /** 覆盖账本摘要（observe 回灌：已覆盖路径/交互，别重复）。 */
+  coverageSummary?: () => string;
 }
 
 /** 元素清单 → 模型文本（与 legacy aiTask 的 userMessage 同口径：box 与截图对齐）。 */
@@ -53,7 +61,10 @@ export function createObserveTool(deps: ToolDeps) {
       } catch (e) {
         logger.warn({ err: e }, 'exploration observe dumpElements failed');
       }
-      const text = [`当前 URL：${deps.page.url()}`, `视口：${vp.width}x${vp.height}`, renderElements(elements)].join('\n');
+      // 回灌块：覆盖账本（已覆盖别重复）+ 错误信号增量（console/pageerror/HTTP 4xx-5xx）。
+      // 错误信号放最前——「页面报错了」比「页面长什么样」优先级更高。
+      const blocks = [deps.errorSignals?.() ?? '', deps.coverageSummary?.() ?? ''].filter(Boolean);
+      const text = [...blocks, `当前 URL：${deps.page.url()}`, `视口：${vp.width}x${vp.height}`, renderElements(elements)].join('\n');
       if (!deps.vision) {
         return {
           content: [{ type: 'text', text: `${text}\n（当前渠道无视觉通道：无截图附图，请依据元素清单的 selector/tag/text/value 操作）` }],

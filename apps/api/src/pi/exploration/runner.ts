@@ -23,20 +23,31 @@ import {
   EXPLORATION_MAX_TURNS,
   EXPLORATION_WALL_CLOCK_MS,
 } from '../../execute/explorationShared.js';
+import { EXPLORATION_MAX_EXCLUDED, EXPLORATION_MAX_REPO_READS, type ExplorationStep } from '../../execute/explorationPrompt.js';
 import { resolveEnv } from '../../execute/envContext.js';
-import { defaultWebRef } from '../../execute/credentialSource.js';
+import { resolveCodeScope, type CodeScope } from '../../execute/codeScope.js';
+import { buildCredentialSource, defaultWebRef } from '../../execute/credentialSource.js';
+import { credentialPlaceholder, makeCredentialValueSub } from '../../execute/aiTask.js';
+import { createRepoReadChannel } from '../../execute/repoRead.js';
 import { originOf } from '../../execute/gates.js';
 import { registerLiveView } from '../../execute/liveView.js';
 import { newAiUsage } from '../../execute/aiUsage.js';
 import { versionWorkspaceDir } from '../repo.js';
-import { loginStateKey, getLoginState, saveLoginState, type LoginStorageState } from '../space/tools/loginStateCache.js';
+import { loginStateKey, getLoginState, saveLoginState } from '../space/tools/loginStateCache.js';
 import { logger } from '../../logger.js';
 import { resolveExplorationModel, toolCallingProbeFailure, visionProbeFailure } from './model.js';
 import { createExplorationTools, trailStepOf } from './tools/index.js';
 import { composeExplorationPrompt, createExplorationSession } from './session.js';
-import type { ExplorationStep } from '../../execute/explorationPrompt.js';
+import { createFindingStore, type FindingStore } from './findings.js';
+import { createCoverageTracker } from './coverage.js';
+import { createErrorSignalCollector } from './observation.js';
 
-/** 探索式测试会话 runner（pi 链路）入口：EXPLORATION_RUNTIME=pi 时由 execute/exploration.ts 分派到这里。 */
+/** 覆盖账本计数的交互动作类型（观察/判定类动作不算交互——账本回答「动过哪些地方」）。 */
+const INTERACTION_KINDS = new Set(['click', 'fill', 'press', 'select', 'scroll', 'back', 'navigate']);
+
+/**
+ * 探索式测试会话 runner（pi 链路）入口：EXPLORATION_RUNTIME=pi 时由 execute/exploration.ts 分派到这里。
+ */
 export async function runExplorationSessionPi(input: { sessionId: string }): Promise<void> {
   const { sessionId } = input;
   const sessionRow = (await db.select().from(explorationSessions).where(eq(explorationSessions.id, sessionId)))[0];
@@ -60,16 +71,34 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
   let budgetExceeded = false;
   /** 最后一条 assistant 文本（done summary：pi 循环自然结束时的总结）。 */
   let summaryText = '';
+  /** finish 工具提交的总结（finish 后 abort，正常/异常路径都以它为终态总结）。 */
+  let finishSummary: string | null = null;
+  /** 终止性错误（fill 凭据缺失等）：终止会话并按 failed 收尾。 */
+  let fatalErr: Error | undefined;
+  /** finding store（页内创建；catch 路径读 savedCount 拼总结用）。 */
+  let findingStore: FindingStore | undefined;
   /** 会话级动作留痕（工具事件 → ExplorationStep），落库防抖同 legacy。 */
   const sessionSteps: ExplorationStep[] = [];
+  /** 自上一条 finding 起的留痕片段（finding 落库成功时清空，进 finding.actions_trail）。 */
+  let trailSince: ExplorationStep[] = [];
+  /** 负面结果账本（同 legacy：只存排除项不存信念，dedup + 封顶）。 */
+  const excludedLedger: Array<{ claim: string; evidence: string }> = [];
   const pendingTrail = new Map<string, ExplorationStep>();
+  let coverageLedger: ReturnType<typeof createCoverageTracker> | undefined;
+  let errorSignals: ReturnType<typeof createErrorSignalCollector> | undefined;
   let persistChain: Promise<void> = Promise.resolve();
   const persistSessionState = async (): Promise<void> => {
     persistChain = persistChain
       .then(async () => {
         await db
           .update(explorationSessions)
-          .set({ actionsTrail: sessionSteps, excludedLedger: [], updatedAt: new Date() })
+          .set({
+            actionsTrail: sessionSteps,
+            excludedLedger: [...excludedLedger],
+            coverageLedger: coverageLedger?.snapshot() ?? null,
+            errorSignals: errorSignals?.all() ?? [],
+            updatedAt: new Date(),
+          })
           .where(eq(explorationSessions.id, sessionId));
       })
       .catch((e) => {
@@ -94,10 +123,16 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
     }
     await persistSessionState();
   };
+  /** 终态总结：finish 提交 > 预算注记 > 最后一条 assistant 文本；缺陷计数注记两路径都带。 */
+  const terminalSummary = (): string | null => {
+    const countsNote = (findingStore?.savedCount ?? 0) > 0 ? `（报告缺陷 ${findingStore!.savedCount} 条）` : '';
+    if (finishSummary) return `${finishSummary}${countsNote}`.trim();
+    if (budgetExceeded) return `${summaryText || '探索结束'}（预算耗尽，${turnCount} 轮后停止）${countsNote}`.trim();
+    return summaryText ? `${summaryText}${countsNote}`.trim() : null;
+  };
 
   try {
     await heartbeat(sessionId);
-    // P2 不挂 repo_read（工具不存在）→ 不解析代码范围；P3 加 repo_read 时与 legacy 同法接 resolveCodeScope。
     envCtx = await resolveEnv({ versionId: sessionRow.versionId }, { expectedProjectId: sessionRow.projectId });
     const webRef = defaultWebRef({ envCtx });
     const cred = webRef ? envCtx.resolveLogin(webRef) : null;
@@ -106,6 +141,16 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
     // 范围白名单 = 起点 origin 唯一（口径与 legacy 一致；不可解析 → 空数组 = navigate 全拒）。
     const startOrigin = originOf(startUrl);
     const scopeOrigins = startOrigin ? [startOrigin] : [];
+
+    // —— 代码提交范围（charter 自然语言 → git 范围；前后各一次心跳：解析期间看门狗不误杀、
+    // 顺带捕捉取消。none/failed → codeScope null，探索照常全站跑，repo_read 不挂载）——
+    await heartbeat(sessionId);
+    const { scope } = await resolveCodeScope({ sessionId, charter: sessionRow.charter, versionId: sessionRow.versionId });
+    const codeScope: CodeScope | null = scope ?? null;
+    if (await heartbeat(sessionId)) {
+      await finishSession(sessionId, { status: 'cancelled', turnsUsed: 0, usage: usage.stat }).catch(() => undefined);
+      return;
+    }
 
     // —— 模型解析 + 工具调用探针（浏览器启动前：渠道不行立刻失败，不空跑轮次预算）——
     const { model, channelName } = await resolveExplorationModel();
@@ -116,7 +161,7 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
       await finishSession(sessionId, { status: 'cancelled', turnsUsed: 0, usage: usage.stat }).catch(() => undefined);
       return;
     }
-    // 探索墙钟从探针后起算——预算全部留给智能体阶段。
+    // 探索墙钟从范围解析 + 探针后起算——预算全部留给智能体阶段。
     const deadline = Date.now() + EXPLORATION_WALL_CLOCK_MS;
 
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
@@ -143,8 +188,75 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
         logger.warn({ sessionId, channelName, reason: visionProbe }, 'exploration vision probe failed; text-only mode');
       }
 
+      // —— C1 覆盖账本 + D3 错误信号采集（observe 回灌 + 终态落库）——
+      const coverage = createCoverageTracker();
+      coverageLedger = coverage;
+      const collector = createErrorSignalCollector(page);
+      errorSignals = collector;
+
+      // —— A1 证据帧：finding 落库（决策帧截图 + 自上一条 finding 起的留痕片段）——
+      const store = createFindingStore({
+        sessionId,
+        page,
+        getTrailSince: () => trailSince,
+        resetTrailSince: () => {
+          trailSince = [];
+        },
+        sessionStepsLength: () => sessionSteps.length,
+        onPersist: async () => {
+          await flushTrailPersist();
+        },
+      });
+      findingStore = store;
+
+      // 凭据占位符替换器（fill 用）；替换失败（EnvMissing/SecretMissing）= 终止性错误 → onFatal。
+      const valueSub = cred ? makeCredentialValueSub(buildCredentialSource({ envCtx })) : undefined;
+
+      // 数据库取证通道（环境配了 db 对象才有；SqlProbeEnv 结构子集由 envCtx 直接满足）。
+      const dbRefs = envCtx.dbs.map((d) => ({ label: d.label, dialect: d.dialect }));
+      // 仓库读码通道（有代码提交范围才挂载；diff op 需要 from→to 基线）。
+      const repoChannel = codeScope
+        ? createRepoReadChannel({
+            repoDir: versionWorkspaceDir(sessionRow.versionId),
+            fromSha: codeScope.fromSha ?? null,
+            toSha: codeScope.toSha ?? null,
+            maxCalls: EXPLORATION_MAX_REPO_READS,
+          })
+        : undefined;
+
       const persona = getExplorationPersona(sessionRow.persona);
-      const tools = createExplorationTools({ page, vision, scopeOrigins });
+      const tools = createExplorationTools({
+        page,
+        vision,
+        scopeOrigins,
+        ...(valueSub ? { valueSub } : {}),
+        onFatal: (err) => {
+          fatalErr = err;
+          piSession.abort();
+        },
+        allowDestructive: sessionRow.allowDestructive === true,
+        errorSignals: () => collector.drainRendered(),
+        coverageSummary: () => coverage.render(),
+        findings: store,
+        noteExcluded: (items) => {
+          let accepted = 0;
+          for (const item of items ?? []) {
+            const claim = typeof item?.claim === 'string' ? item.claim.trim() : '';
+            if (!claim || excludedLedger.length >= EXPLORATION_MAX_EXCLUDED) continue;
+            if (excludedLedger.some((x) => x.claim === claim)) continue;
+            excludedLedger.push({ claim, evidence: typeof item?.evidence === 'string' ? item.evidence.trim().slice(0, 500) : '' });
+            accepted += 1;
+          }
+          if (accepted > 0) void persistSessionState();
+          return accepted;
+        },
+        onFinish: (summary) => {
+          finishSummary = summary;
+          piSession.abort();
+        },
+        ...(dbRefs.length > 0 ? { sql: { env: envCtx, dbRefs } } : {}),
+        ...(repoChannel ? { repo: { channel: repoChannel, hasDiff: !!(codeScope?.fromSha && codeScope?.toSha) } } : {}),
+      });
       const piSession = await createExplorationSession({
         cwd: versionWorkspaceDir(sessionRow.versionId),
         tools,
@@ -154,7 +266,12 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
           startUrl,
           persona: persona.directive,
           vision,
-          needsLoginButNoTools: !cachedState && !!cred,
+          login:
+            !cachedState && cred
+              ? { userPlaceholder: credentialPlaceholder('user', webRef), passwordPlaceholder: credentialPlaceholder('password', webRef) }
+              : null,
+          codeScope,
+          dbs: dbRefs,
         }),
       });
 
@@ -192,7 +309,16 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
           pendingTrail.delete(ev.toolCallId);
           if (step) {
             step.ok = !ev.isError;
+            // sql/repo 取证的结果摘要进留痕 detail（trailToSteps 的 expected 用；截 first text 块）。
+            if (ev.toolName === 'sql_probe' || ev.toolName === 'repo_read') {
+              const content = ev.result?.content as Array<{ type: string; text?: string }> | undefined;
+              const firstText = content?.find((b) => b.type === 'text' && typeof b.text === 'string');
+              if (firstText?.text) step.detail = firstText.text.replace(/\s+/g, ' ').slice(0, 200);
+            }
             sessionSteps.push(step);
+            trailSince.push(step);
+            coverage.recordUrl(page);
+            if (INTERACTION_KINDS.has(step.type)) coverage.recordInteraction(step.type);
             scheduleTrailPersist();
           }
           scheduleAbortCheck(false);
@@ -245,6 +371,8 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
       // 收尾读标志前等最后一拍落定，否则终态分类（cancelled / completed+预算注记）
       // 与 turns_used 会漏掉最后一轮的判定。
       await abortCheckChain;
+      // fill 凭据缺失等终止性错误 → 按失败收尾（重试只会烧轮次，可行动指引在 message 里）。
+      if (fatalErr) throw fatalErr;
 
       // 先落留痕再置终态（详情页一看到终态就停轮询，顺序反了尾段永远拉不到）。
       await flushTrailPersist();
@@ -252,9 +380,7 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
       if (loginKey) void context.storageState().then((s) => saveLoginState(loginKey, s)).catch(() => {});
       await finishSession(sessionId, {
         status: userCancelled ? 'cancelled' : 'completed',
-        summary: budgetExceeded
-          ? `${summaryText || '探索结束'}（预算耗尽，${turnCount} 轮后停止）`.trim()
-          : summaryText || null,
+        summary: terminalSummary(),
         turnsUsed: turnCount,
         usage: usage.stat,
       }).catch(() => undefined);
@@ -267,15 +393,17 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
     logger.warn({ err: e, sessionId, userCancelled, budgetExceeded }, 'exploration pi session failed');
     await flushTrailPersist();
     await finishSession(sessionId, {
-      status: userCancelled ? 'cancelled' : budgetExceeded ? 'completed' : 'failed',
-      error: userCancelled || budgetExceeded ? null : msg,
-      summary: budgetExceeded ? `探索结束（预算耗尽，${turnCount} 轮后停止）` : null,
+      // finish 已提交总结的会话即使收尾链路抛错也按 completed 落终态（模型明确说完了）。
+      status: finishSummary ? 'completed' : userCancelled ? 'cancelled' : budgetExceeded ? 'completed' : 'failed',
+      error: finishSummary || userCancelled || budgetExceeded ? null : msg,
+      summary: terminalSummary(),
       turnsUsed: turnCount,
       usage: usage.stat,
     }).catch(() => undefined);
   } finally {
     // 兜底落库：正常/失败路径都已在置终态前 flush 过，这里只防意外漏写。
     await flushTrailPersist();
+    errorSignals?.close();
     if (envCtx) await envCtx.close().catch(() => {});
   }
 }

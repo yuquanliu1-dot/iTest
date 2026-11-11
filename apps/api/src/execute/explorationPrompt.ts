@@ -245,6 +245,19 @@ export interface ExplorationCaseStep {
 /** 坐标形态 target（"(320,180)"）——坐标动作未解析回唯一 selector，不可机械映射。 */
 const COORD_TARGET_RE = /^\(\d+,\d+\)$/;
 
+/** 升格用例时跳过的动作类型（取证与观察/判定记账——证据在详情页，复现路径不含它们）。 */
+const SKIP_CASE_STEP_TYPES = new Set([
+  'sql',
+  'repo',
+  'screenshot',
+  'observe',
+  'read_text',
+  'evaluate',
+  'report_finding',
+  'note_excluded',
+  'finish',
+]);
+
 /**
  * finding 级动作留痕 → 升格用例步骤（best-effort DSL，2026-11-11 与用户确认的口径）：
  *  - 步骤源 = 平台留痕（ground truth），一条动作一个用例步骤；模型 reproSteps 不再参与
@@ -268,7 +281,10 @@ export function trailToCaseSteps(
     const type = typeof o.type === 'string' ? o.type : '';
     const target = typeof o.target === 'string' ? o.target : '';
     if (!type || o.ok !== true) continue;
-    if (type === 'sql' || type === 'repo' || type === 'screenshot') continue;
+    // 不进用例的动作：取证（sql/repo/evaluate/screenshot）与观察/判定记账（pi 链路的
+    // observe/read_text/report_finding/note_excluded/finish）——证据留在 finding 详情页，
+    // 复现路径只需要会改变页面状态的动作。
+    if (SKIP_CASE_STEP_TYPES.has(type)) continue;
     const detail = typeof o.detail === 'string' && o.detail ? o.detail : undefined;
     const text = trailToSteps([{ type, target, ...(detail ? { detail } : {}) }])[0]?.action;
     if (!text) continue;

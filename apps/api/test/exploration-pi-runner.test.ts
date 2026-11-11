@@ -29,6 +29,8 @@ const {
   promptDriver,
   toolProbeMock,
   visionProbeMock,
+  envCfg,
+  scopeCfg,
 } = vi.hoisted(() => {
   const sessionSubscribers: Array<(ev: unknown) => void> = [];
   const promptCalls: string[] = [];
@@ -45,6 +47,14 @@ const {
     promptDriver: { fn: null as null | ((text: string) => Promise<void>) },
     toolProbeMock: vi.fn(),
     visionProbeMock: vi.fn(),
+    /** 环境供数配置（各测试自设；beforeEach 复位）：web 服务/凭据/db 清单。 */
+    envCfg: {
+      webServices: [] as Array<{ name: string; isDefault: boolean }>,
+      cred: null as null | { user: string; password: string },
+      dbs: [] as Array<{ label: string; dialect: string }>,
+    },
+    /** 代码提交范围解析结果（null = none/failed 软失败）。 */
+    scopeCfg: { scope: null as unknown },
   };
 });
 
@@ -57,7 +67,13 @@ vi.mock('playwright-core', () => ({
         newContext: async (opts?: Record<string, unknown>) => {
           newContextCalls.push(opts ?? {});
           return {
-            newPage: async () => ({ url: () => BASE, viewportSize: () => ({ width: 1280, height: 800 }) }),
+            newPage: async () => ({
+              url: () => BASE,
+              viewportSize: () => ({ width: 1280, height: 800 }),
+              // 错误信号采集器在 page 上挂 console/pageerror/response 监听（打桩只需 no-op）。
+              on: () => undefined,
+              off: () => undefined,
+            }),
             storageState: async () => ({}),
           };
         },
@@ -72,6 +88,11 @@ vi.mock('../src/pi/exploration/model.js', () => ({
   resolveExplorationModel: async () => ({ model: { id: 'probe-model' }, channelName: 'probe-channel' }),
   toolCallingProbeFailure: toolProbeMock,
   visionProbeFailure: visionProbeMock,
+}));
+
+// 代码提交范围打桩：默认 none（软失败，不挂 repo_read）；需要时各测试设 scopeCfg.scope。
+vi.mock('../src/execute/codeScope.js', () => ({
+  resolveCodeScope: async () => ({ scope: scopeCfg.scope }),
 }));
 
 // pi 会话打桩：composeExplorationPrompt 保持真实现（要验纯文本降级的提示词接线），
@@ -98,14 +119,18 @@ vi.mock('../src/pi/exploration/session.js', async (importOriginal) => {
   };
 });
 
-// 环境解析打桩：无凭据、无 db（startUrl 回落到 baseUrl）。
+// 环境解析打桩：默认无凭据、无 db（startUrl 回落到 baseUrl）；各测试可改 envCfg。
 vi.mock('../src/execute/envContext.js', () => ({
   resolveEnv: async () => ({
     envId: 'env-test',
     baseUrl: BASE,
-    webServices: [],
-    dbs: [],
-    resolveLogin: () => null,
+    webServices: envCfg.webServices,
+    dbs: envCfg.dbs,
+    // 无 ref = 默认 web 服务；带 ref 的服务名不匹配 → null（严格 ref 判定 = 缺凭据 → EnvMissing）。
+    resolveLogin: (ref?: string | null) => {
+      if (ref === undefined || ref === null) return envCfg.cred;
+      return ref === envCfg.webServices[0]?.name ? envCfg.cred : null;
+    },
     resolveDb: () => null,
     resolveDbPool: async () => {
       throw new Error('本用例不查库');
@@ -167,6 +192,10 @@ beforeEach(() => {
   toolProbeMock.mockReset().mockResolvedValue(null);
   visionProbeMock.mockReset().mockResolvedValue(null);
   promptDriver.fn = null;
+  envCfg.webServices = [];
+  envCfg.cred = null;
+  envCfg.dbs = [];
+  scopeCfg.scope = null;
 });
 
 /** 建一条待执行会话。可带轮次预算（预算耗尽路径用）。 */
@@ -255,9 +284,25 @@ describe('探索 runner pi 链路', () => {
       { type: 'observe', target: '-', ok: false },
     ]);
 
-    // ④ P2 只读工具集封顶：没有任何交互类工具（click/fill 属 P3，缺位是安全断言）。
+    // ④ P3 工具全集：交互/取证/判定类工具齐备；无 db 与代码范围 → sql_probe/repo_read 不挂载。
     const tools = sessionArgs[0]!.tools as Array<{ name: string }>;
-    expect(tools.map((t) => t.name)).toEqual(['navigate', 'observe', 'screenshot', 'read_text']);
+    expect(tools.map((t) => t.name)).toEqual([
+      'navigate',
+      'observe',
+      'screenshot',
+      'read_text',
+      'click',
+      'fill',
+      'press',
+      'select',
+      'scroll',
+      'back',
+      'wait',
+      'evaluate',
+      'report_finding',
+      'note_excluded',
+      'finish',
+    ]);
 
     // ⑤ 起始指令带起点 URL 与章程；缺省视口 1280×800。
     expect(promptCalls[0]).toContain(BASE);
@@ -321,5 +366,90 @@ describe('探索 runner pi 链路', () => {
     expect(String(row.rows[0]!.summary)).toContain('2 轮');
     expect(Number(row.rows[0]!.turns_used)).toBe(2);
     expect((row.rows[0]!.usage as Record<string, unknown>).calls).toBe(2);
+  }, 30000);
+
+  it('finish 工具 → 终态总结取 finish 提交（不是末条 assistant 文本）+ 排除账本落库', async () => {
+    const sessionId = await insertSession();
+    promptDriver.fn = async () => {
+      // 排除项申报（重复项只入账一条）。
+      const note = sessionArgs.at(-1)!.tools.find((t) => (t as { name: string }).name === 'note_excluded') as {
+        execute: (id: string, p: unknown) => Promise<unknown>;
+      };
+      emit({ type: 'tool_execution_start', toolCallId: 'n1', toolName: 'note_excluded', args: {} });
+      await note.execute('n1', {
+        items: [
+          { claim: '登录页缺少验证码', evidence: 'observe 确认无验证码元素' },
+          { claim: '登录页缺少验证码', evidence: '重复申报' },
+        ],
+      });
+      emit({ type: 'tool_execution_end', toolCallId: 'n1', toolName: 'note_excluded', isError: false });
+      // finish 提交总结。
+      const finish = sessionArgs.at(-1)!.tools.find((t) => (t as { name: string }).name === 'finish') as {
+        execute: (id: string, p: unknown) => Promise<unknown>;
+      };
+      emit({ type: 'tool_execution_start', toolCallId: 'f1', toolName: 'finish', args: { summary: 'x' } });
+      await finish.execute('f1', { summary: '覆盖了登录页与资产列表页，未发现越权缺陷。' });
+      emit({ type: 'tool_execution_end', toolCallId: 'f1', toolName: 'finish', isError: false });
+      // finish 之后模型又说了别的（末条 assistant 文本不得覆盖 finish 提交的总结）。
+      emit({
+        type: 'message_end',
+        message: { role: 'assistant', content: [{ type: 'text', text: '（结束语）' }], usage: { input: 1, output: 1 } },
+      });
+    };
+
+    await runExplorationSession({ sessionId });
+
+    const row = await pool.query(`SELECT status, summary, excluded_ledger, actions_trail FROM exploration_sessions WHERE id=$1`, [
+      sessionId,
+    ]);
+    expect(row.rows[0]!.status).toBe('completed');
+    expect(String(row.rows[0]!.summary)).toContain('覆盖了登录页与资产列表页');
+    expect(String(row.rows[0]!.summary)).not.toContain('（结束语）');
+    const ledger = row.rows[0]!.excluded_ledger as Array<{ claim: string; evidence: string }>;
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]!.claim).toBe('登录页缺少验证码');
+    const trail = (row.rows[0]!.actions_trail ?? []) as Array<{ type: string; ok: boolean }>;
+    expect(trail.map((t) => t.type)).toEqual(['note_excluded', 'finish']);
+  }, 30000);
+
+  it('fill 凭据缺失 → 终止会话按 failed 收尾（可行动报错）+ 挂载 sql_probe（有 db）', async () => {
+    const sessionId = await insertSession();
+    envCfg.webServices = [{ name: 'web', isDefault: true }];
+    envCfg.cred = { user: 'wy', password: 'pw' };
+    envCfg.dbs = [{ label: '主库', dialect: 'postgresql' }];
+    promptDriver.fn = async () => {
+      const fill = sessionArgs.at(-1)!.tools.find((t) => (t as { name: string }).name === 'fill') as {
+        execute: (id: string, p: unknown) => Promise<unknown>;
+      };
+      emit({
+        type: 'tool_execution_start',
+        toolCallId: 'x1',
+        toolName: 'fill',
+        args: { target: '#user', value: '__ITEST_USERNAME@ghost__' },
+      });
+      const r = (await fill.execute('x1', { target: '#user', value: '__ITEST_USERNAME@ghost__' })) as { isError?: boolean };
+      expect(r.isError).toBe(true);
+      emit({
+        type: 'tool_execution_end',
+        toolCallId: 'x1',
+        toolName: 'fill',
+        isError: true,
+        result: { content: [{ type: 'text', text: 'fill #user: error env-missing' }] },
+      });
+    };
+
+    await runExplorationSession({ sessionId });
+
+    const row = await pool.query(`SELECT status, error, actions_trail FROM exploration_sessions WHERE id=$1`, [sessionId]);
+    expect(row.rows[0]!.status).toBe('failed');
+    expect(String(row.rows[0]!.error)).toContain('env-missing');
+    expect(String(row.rows[0]!.error)).toContain('ghost');
+    // 留痕保留失败动作，且 value 是替换前的占位符字面量（绝不含真实凭据）。
+    const trail = (row.rows[0]!.actions_trail ?? []) as Array<{ type: string; ok: boolean; value?: string }>;
+    expect(trail).toEqual([{ type: 'fill', target: '#user', value: '__ITEST_USERNAME@ghost__', ok: false }]);
+    // 有 db → sql_probe 挂载；无代码范围 → repo_read 不挂载。
+    const toolNames = (sessionArgs.at(-1)!.tools as Array<{ name: string }>).map((t) => t.name);
+    expect(toolNames).toContain('sql_probe');
+    expect(toolNames).not.toContain('repo_read');
   }, 30000);
 });

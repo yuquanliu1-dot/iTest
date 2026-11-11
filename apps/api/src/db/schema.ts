@@ -1156,6 +1156,22 @@ export const explorationSessions = pgTable('exploration_sessions', {
    */
   excludedLedger: jsonb('excluded_ledger').$type<Array<{ claim: string; evidence: string }>>(),
   /**
+   * 覆盖账本（pi 链路 C1）：{paths[], interactions[], updatedAt}——已走路径与交互计数机械累计，
+   * 随 observe 回灌「已覆盖、别重复」，终态留快照供人工评估覆盖度。
+   */
+  coverageLedger: jsonb('coverage_ledger').$type<{
+    paths: string[];
+    interactions: Array<{ kind: string; count: number }>;
+    /** 子目标进度（P4 章程分解后填充；此前恒为空数组）。 */
+    goals: Array<{ id: string; text: string; done: boolean }>;
+    updatedAt: string;
+  }>(),
+  /**
+   * 错误信号（pi 链路 D3）：console error / pageerror / HTTP 4xx-5xx 采集，封顶 200 条。
+   * observe 增量回灌给模型（drain），这里是全量留档——「模型没报但页面在报错」可据此审计。
+   */
+  errorSignals: jsonb('error_signals').$type<Array<{ at: string; kind: string; text: string; url?: string }>>(),
+  /**
    * 代码提交范围（charter 自然语言解析产物）：提交窗口 + 改动文件 + 候选起点。
    * 范围是焦点信号不是围栏——探索照常全站跑，范围只用于定向（增量回归/新功能探索）。
    * 解析在 runner 后台做（LLM + git fetch 可能数十秒），结果落库后前端轮询可见。
@@ -1206,6 +1222,17 @@ export const explorationFindings = pgTable('exploration_findings', {
   /** web 路径 /screenshots/<sessionId>/finding-<order>.png，由 express.static('/screenshots') 服务。 */
   screenshotPath: text('screenshot_path'),
   pageUrl: text('page_url'),
+  /**
+   * 证据帧元数据（pi 链路 A1）：finding 报告工具在「决策那一刻」先截图再落库，
+   * 这里钉住帧的页面状态——与 actionsTrail（片段）互补：trail 是怎么走到这的，frame 是看到什么。
+   */
+  evidenceFrame: jsonb('evidence_frame').$type<{
+    url: string;
+    viewport: { width: number; height: number } | null;
+    capturedAt: string;
+    trailIndex: number;
+    screenshotPath?: string;
+  }>(),
   /** pending → confirmed | dismissed；confirmed → promoted（写 promotedCaseId）。 */
   status: varchar('status', { length: 16 }).notNull().default('pending'),
   /** 审阅三件套 = assistant_solidify_proposals 同款。 */
