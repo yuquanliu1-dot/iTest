@@ -10,6 +10,19 @@ import { waitForPageSettled, pageFingerprint } from './pageSettle.js';
 import { captureLiveRegionMessages, diffNewMessages, hasObservableChange, type ChangeSnapshot } from './liveRegion.js';
 import { isOpenDropdownFilter } from './dropdownFilter.js';
 import { assertReadOnlySql } from './sqlGuard.js';
+import { dumpElements, SYNTH_SELECTOR_SRC, type ElementInfo } from './elementDump.js';
+import {
+  destructiveActionReason,
+  destructiveTextOf,
+  noteStreakFailure,
+  originOf,
+  renderSqlProbeRows,
+  scopeViolationReason,
+} from './gates.js';
+
+// 闸门与元素抽取已抽到共享模块（探索走 pi 工具链后要复用同一份口径）。
+// 这里原样再导出，aiTask 的既有对外表面（测试与 exploration.ts 的 import 路径）不变。
+export { destructiveActionReason, originOf, renderSqlProbeRows, scopeViolationReason };
 
 /** 单条指令的最大对话轮数（每轮一次 LLM 调用）。 */
 const MAX_TURNS = 8;
@@ -100,132 +113,6 @@ actions 元素类型：
 - 目标已达成即完成：确认式/条件式指令且 accessibility tree 已证实目标状态存在时，零动作直接输出 {"done": true, "summary": "目标已达成，无需操作"}。
 - 每轮动作要保守，最多 6 个；每个动作结果下轮反馈给你，出错就换 accessibilityId / label 重试。
 - 屏幕中可能同时存在多个相同 label 的节点，命中歧义时优先选 accessibilityId。`;
-
-interface ElementInfo {
-  selector: string;
-  tag: string;
-  /** 视口归一化 0-1000 坐标框 [x1,y1,x2,y2]——与截图对齐，模型据此指认目标。 */
-  box: [number, number, number, number];
-  text?: string;
-  placeholder?: string;
-  inputType?: string;
-  /** input 当前值（密码型不打）——级联选中后 value=完整路径，是截图截断显示之外
-   *  唯一可验证选中结果的通道。 */
-  value?: string;
-  disabled?: boolean;
-}
-
-/** 页面上下文内执行的选择器合成源码（函数表达式字符串）——dumpElements 与 resolveAtPoint
- *  经 evaluate 参数传入并在页面内 eval 还原，共用同一份（此前两处手抄副本，prod228 10-27
- *  实测 button>span 命中产出裸 span 即手抄链无上浮/无唯一性校验的后果）。
- *  基础优先级不变：#id → tag[name] → tag[placeholder] → [role] → tag.cls1.cls2 → 裸 tag；
- *  class 候选剔除激活态 class（router-link-active/is-active 由路由状态动态加减，固化后回放
- *  会因菜单未激活而落空——2026-10-28 prod228 实录 a.router-link-exact-active.router-link-active）。
- *  多命中时依次富化，保证机械回放命中唯一：
- *    1. 短文本（≤30 字符）尾缀 :has-text("…")——非标准 CSS，唯一性按「基础命中中
- *       textContent 含该文本」的个数模拟计数（与回放侧 getByText 的包含语义同向）；
- *    2. 父内同 tag 序号 :nth-of-type(k)——标准 CSS，可直接 querySelectorAll 验证。
- *  仍不唯一 → unique:false（上报链据此保持坐标形态，固化管线保守拒绝该步）。
- *  字符串源码对 tsx/esbuild 的 evaluate 嵌套函数 keepNames 陷阱免疫；Playwright evaluate
- *  走 DevTools 通道，不受页面 CSP 的 eval 限制。 */
-const SYNTH_SELECTOR_SRC = `function (el) {
-  var tag = el.tagName.toLowerCase();
-  var name = el.getAttribute('name');
-  var ph = el.getAttribute('placeholder');
-  var role = el.getAttribute('role');
-  var selector = el.id ? '#' + CSS.escape(el.id) : '';
-  if (!selector && name) selector = tag + '[name="' + name + '"]';
-  if (!selector && ph) selector = tag + '[placeholder="' + ph + '"]';
-  if (!selector && role) selector = '[role="' + role + '"]';
-  if (!selector) {
-    var cls = (el.className || '').toString().trim().split(/\\s+/).filter(Boolean)
-      .filter(function (c) { return !/^(router-link-(exact-)?active|is-active)$/i.test(c); })
-      .slice(0, 2).join('.');
-    selector = cls ? tag + '.' + cls : tag;
-  }
-  function count(s) { try { return document.querySelectorAll(s).length; } catch (e) { return -1; } }
-  if (count(selector) === 1) return { selector: selector, unique: true };
-  var text = (el.textContent || '').trim().replace(/["\\\\]/g, '').slice(0, 30);
-  if (text) {
-    var hits = document.querySelectorAll(selector);
-    var m = 0;
-    for (var i = 0; i < hits.length; i++) if ((hits[i].textContent || '').indexOf(text) >= 0) m++;
-    if (m === 1) return { selector: selector + ':has-text("' + text + '")', unique: true };
-  }
-  var k = 1;
-  for (var sib = el.previousElementSibling; sib; sib = sib.previousElementSibling) if (sib.tagName === el.tagName) k++;
-  var nth = selector + ':nth-of-type(' + k + ')';
-  if (count(nth) === 1) return { selector: nth, unique: true };
-  return { selector: selector, unique: false };
-}`;
-
-/** 提取视口内可交互元素清单（selector + 与截图对齐的归一化坐标框）。
- *  坐标协议下清单的定位职能降为「对齐锚点 + selector 兜底」，box 才是主要信息。 */
-async function dumpElements(page: Page): Promise<ElementInfo[]> {
-  const raw = (await page.evaluate((src: string) => {
-    const synth = eval('(' + src + ')') as (el: HTMLElement) => { selector: string; unique: boolean };
-    const out: Array<Record<string, unknown>> = [];
-    const vw = window.innerWidth || 1;
-    const vh = window.innerHeight || 1;
-    const els = document.querySelectorAll(
-      'button, input, textarea, select, a[href], [role="button"], [role="link"], [role="textbox"], [role="combobox"], [tabindex]:not([tabindex="-1"])',
-    );
-    for (const el of Array.from(els).slice(0, 200)) {
-      const he = el as HTMLElement;
-      const r = he.getBoundingClientRect();
-      if (r.width < 2 || r.height < 2) continue;
-      // 只保留与视口相交的元素：截图只有视口，清单与截图不对齐会误导坐标指认。
-      if (r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) continue;
-      const style = window.getComputedStyle(he);
-      if (style.visibility === 'hidden' || style.display === 'none') continue;
-      const s = synth(he);
-      let text = (he.textContent ?? '').trim().slice(0, 40);
-      // 行首单选/复选 input 自身无文本（Element-UI 级联 checkStrictly 下 radio 是唯一
-      // 选中路径），清单里有坐标却无从指认是哪一行——取所在行容器的行文字。
-      // 级联的下级列嵌套在父 li 内（子面板是 li 的子节点），不能用整行 textContent，
-      // 只取行自己的标签 span。
-      if (!text && he.tagName === 'INPUT') {
-        const row = he.closest('li.el-cascader-node, tr, label');
-        if (row) {
-          const t = row.matches('li.el-cascader-node')
-            ? ((row.querySelector(':scope > .el-cascader-node__label') as HTMLElement | null)?.textContent ?? '')
-            : (row.textContent ?? '');
-          text = t.trim().slice(0, 40);
-        }
-      }
-      const item: Record<string, unknown> = {
-        selector: s.selector,
-        tag: he.tagName.toLowerCase(),
-        // 归一化不用具名箭头函数赋值：tsx/esbuild 的 keepNames 会给它注入 __name 助手，
-        // 而 evaluate 的函数体被序列化到浏览器上下文执行，那里没有 __name → 整个
-        // evaluate 抛 ReferenceError，元素清单整体失效（dev/tsx 独有，tsc 产物无此注入）。
-        box: [
-          Math.round(Math.min(1000, Math.max(0, (r.left / vw) * 1000))),
-          Math.round(Math.min(1000, Math.max(0, (r.top / vh) * 1000))),
-          Math.round(Math.min(1000, Math.max(0, (r.right / vw) * 1000))),
-          Math.round(Math.min(1000, Math.max(0, (r.bottom / vh) * 1000))),
-        ],
-      };
-      if (text) item.text = text;
-      const ph = he.getAttribute('placeholder');
-      if (ph) item.placeholder = ph;
-      const it = (he as HTMLInputElement).type;
-      if (he.tagName === 'INPUT' && it) item.inputType = it;
-      // 选中/填写结果的验证通道：级联选中后 value 是完整路径，截图窄框截断显示
-      // 前缀会让模型误判「选错单位」而空转到轮次耗尽（prod228 11-08 实录：radio 已
-      // 选上、abort 时值是对的，模型因截图只见前缀始终不敢判 done）。密码型不外泄。
-      if (he.tagName === 'INPUT' && it !== 'password') {
-        const v = (he as HTMLInputElement).value;
-        if (v) item.value = v.slice(0, 60);
-      }
-      if ((he as HTMLButtonElement).disabled) item.disabled = true;
-      out.push(item);
-      if (out.length >= 60) break;
-    }
-    return out;
-  }, SYNTH_SELECTOR_SRC)) as Array<Record<string, unknown>>;
-  return raw as unknown as ElementInfo[];
-}
 
 /** click/fill 双形态：坐标（模型主通道，视口归一化 0-1000）或 selector（兜底/解析回填）。
  *  onAction 对外尽量上报 selector 形态（坐标解析回元素后回填），固化/缓存管线形状不变。 */
@@ -500,43 +387,6 @@ export function brittleSelectorReason(selector: string): string | null {
   return null;
 }
 
-/**
- * 破坏性动作关键词表：命中即机械拒收（默认拒，用户在会话里显式授权才放行）。
- *
- * 判定对象 = **被点击元素的可见文本**（text + placeholder + value + selector 拼接），
- * 不是模型输出——闸必须确定性、可复现、可审计。charter 是自然语言，模型会拿它当借口
- * （2026-11-10 prod 实录：章程要求核查删除是否真落库 → 模型点了删除 → 资产真被删）。
- *
- * 刻意不收「清除 / 重置 / 取消 / 确认 / 保存 / 提交 / 导出 / 导入」：这些在探索里是正常
- * 观测动作（探索基底本就允许用测试语义内容提交表单观察校验行为）。误伤方向一律选
- * 「拦住而非执行」，会话级授权开关是兜底。
- */
-const DESTRUCTIVE_PATTERNS: Array<{ re: RegExp; why: string }> = [
-  { re: /删除|销毁|格式化/, why: '删除/销毁' },
-  { re: /清空数据|清空全部|一键清空|批量清空/, why: '清空数据' },
-  { re: /移除/, why: '移除' },
-  { re: /注销|销户|停用|禁用|下线|封禁|解绑|解约|退订|终止服务/, why: '停用/注销/解绑' },
-  { re: /支付|付款|结算|扣款|转账|提现|下单|购买|充值/, why: '支付/出账' },
-  { re: /发送|发布|群发|外发|寄出|提交订单/, why: '外发' },
-  { re: /审批|核准|驳回|授权|放行|授予/, why: '审批/授权' },
-  { re: /恢复出厂|重置密码|初始化数据/, why: '重置/初始化数据' },
-  { re: /delete|remove|destroy|purge|wipe|erase|deprovision/i, why: 'delete/remove' },
-  { re: /deactivate|disable|terminate|revoke|unbind|unsubscribe|offboard/i, why: 'deactivate/revoke' },
-  { re: /pay|checkout|settle|purchase|buy|place order|withdraw|top up/i, why: 'payment' },
-  { re: /send|publish|dispatch|broadcast|submit order/i, why: 'send/publish' },
-  { re: /approve|reject|authorize|grant/i, why: 'approve/authorize' },
-  { re: /factory reset|reset password|wipe data|clear all/i, why: 'factory reset' },
-];
-
-/** 破坏性判定：目标可见文本命中关键词返回原因，null = 放行。 */
-export function destructiveActionReason(targetText: string): string | null {
-  if (!targetText) return null;
-  for (const p of DESTRUCTIVE_PATTERNS) {
-    if (p.re.test(targetText)) return p.why;
-  }
-  return null;
-}
-
 /** 点击目标 → 元素清单里的可见文本（坐标按归一化框包含判定；selector 按等值匹配）。
  *  清单里找不到 → 返回空串 = 放行：清单只收可交互元素且上限 60，模型可能点在清单外，
  *  宁可漏判也不误杀正常探索（真正的防线仍是给被测环境配可丢弃的数据）。 */
@@ -546,81 +396,7 @@ function clickTargetText(a: AiAction, elements: ElementInfo[]): string {
     typeof a.x === 'number' && typeof a.y === 'number'
       ? elements.find((e) => a.x! >= e.box[0] && a.x! <= e.box[2] && a.y! >= e.box[1] && a.y! <= e.box[3])
       : elements.find((e) => e.selector === a.selector);
-  if (!hit) return typeof a.selector === 'string' ? a.selector : '';
-  return [hit.text, hit.placeholder, hit.value, hit.selector].filter(Boolean).join(' ');
-}
-
-// —— 数据库取证（sql 动作）的结果回灌渲染 ——
-// 查回的行走的是模型的下一轮输入，必须封顶：行数 5、单元格 60、单行 160、整块 700。
-
-const SQL_ROW_PREVIEW_MAX = 5;
-const SQL_CELL_MAX = 60;
-const SQL_LINE_MAX = 160;
-const SQL_BLOCK_MAX = 700;
-
-/** 单元格取值 → 单行文本（换行压成空格，免得撑破行的结构；null → NULL）。 */
-function renderSqlCell(v: unknown): string {
-  let s: string;
-  if (v === null || v === undefined) s = 'NULL';
-  else if (typeof v === 'string') s = v;
-  else if (typeof v === 'object') {
-    try { s = JSON.stringify(v) ?? String(v); } catch { s = String(v); }
-  } else s = String(v);
-  s = s.replace(/\s+/g, ' ').trim();
-  return s.length > SQL_CELL_MAX ? `${s.slice(0, SQL_CELL_MAX)}…` : s;
-}
-
-/** 取证结果 → 回灌给模型的文本块（行数/单元格/单行/整块四级封顶）。 */
-export function renderSqlProbeRows(
-  rows: Array<Record<string, unknown>>,
-  rowCount: number,
-  truncated: boolean,
-): string {
-  if (!Array.isArray(rows) || rows.length === 0) return '（无结果行）';
-  const lines: string[] = [];
-  for (const row of rows.slice(0, SQL_ROW_PREVIEW_MAX)) {
-    const cells = Object.entries(row).map(([k, v]) => `${k}=${renderSqlCell(v)}`);
-    let line = `- ${cells.join(' | ')}`;
-    if (line.length > SQL_LINE_MAX) line = `${line.slice(0, SQL_LINE_MAX)}…`;
-    lines.push(line);
-  }
-  let block = lines.join('\n');
-  if (block.length > SQL_BLOCK_MAX) block = `${block.slice(0, SQL_BLOCK_MAX)}…（已截断）`;
-  const notes: string[] = [];
-  if (rows.length > SQL_ROW_PREVIEW_MAX) notes.push(`共 ${rowCount} 行，仅显示前 ${SQL_ROW_PREVIEW_MAX} 行`);
-  if (truncated) notes.push('结果已按 limit 截断');
-  return notes.length > 0 ? `${block}\n（${notes.join('；')}）` : block;
-}
-
-/** URL → origin（http/https 之外或解析失败 → null）。 */
-export function originOf(url: string): string | null {
-  try {
-    const u = new URL(url);
-    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : null;
-  } catch {
-    return null;
-  }
-}
-
-/** 探索范围闸：navigate 目标 origin 不在白名单 → 拒收原因，null = 放行。
- *  URL 解析不出 origin（理论上 parseAction 已滤成 http/https）也按越界处理。 */
-export function scopeViolationReason(url: string, allowedOrigins: string[]): string | null {
-  const o = originOf(url);
-  if (o && allowedOrigins.includes(o)) return null;
-  return `越界（目标 origin ${o ?? '不可解析'} 不在允许范围 ${allowedOrigins.join('、')} 内）`;
-}
-
-/** 记一次同目标失败；连续 ≥3 次时返回自检注入行并清零（与既有 3 连错语义一致），否则 null。
- *  customMessage：非页面类目标（sql 取证）自检文案与页面自检不同，措辞错会把模型带偏。 */
-function noteStreakFailure(errStreak: Map<string, number>, key: string | null, customMessage?: string): string | null {
-  if (key == null) return null;
-  const streak = (errStreak.get(key) ?? 0) + 1;
-  errStreak.set(key, streak);
-  if (streak < 3) return null;
-  errStreak.set(key, 0);
-  return customMessage
-    ? customMessage
-    : `[system] 目标 ${key} 已连续 3 次失败：停止对它重试。先用截图核对当前页面是否在指令期望的界面（弹窗/跳转/加载中都会让目标消失），页面不对先处理页面；确认页面正确而目标确实不存在，则输出 fail 如实说明。`;
+  return destructiveTextOf(hit, typeof a.selector === 'string' ? a.selector : '');
 }
 
 /** 坐标动作的解析结果：该点命中的元素（selector 合成与 dumpElements 共用 SYNTH_SELECTOR_SRC）。 */

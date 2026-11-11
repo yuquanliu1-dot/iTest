@@ -404,8 +404,9 @@ export function shapeFingerprint(item: unknown): string {
   return `type:${typeof item}`;
 }
 
-/** 两条标题是否同一缺陷（近义重报）。 */
-function isNearDuplicate(a: string, b: string): boolean {
+/** 两条标题是否同一缺陷（近义重报）。跨会话交集判定复用这一份口径——两处漂移会让
+ *  「多视角共同发现」的数字对不上会话内去重的结果。 */
+export function isNearDuplicate(a: string, b: string): boolean {
   if (a === b) return true;
   if (positionTokens(a).join(' ') !== positionTokens(b).join(' ')) return false;
   const sa = subjectTokens(a);
