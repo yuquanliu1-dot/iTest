@@ -174,6 +174,20 @@ describe('GET /api/explorations - 列表与详情', () => {
     expect(r.body.total).toBeGreaterThan(0);
   });
 
+  it('列表附缺陷候选数（findingsCount）：有 findings 记数，无则 0', async () => {
+    const withFindings = await insertSession({ title: '有缺陷候选的会话' });
+    await insertFinding(withFindings);
+    await insertFinding(withFindings, { order: 2 });
+    const without = await insertSession({ title: '无缺陷候选的会话' });
+    const r = await request(app).get(`/api/explorations?versionId=${versionId}`);
+    expect(r.status).toBe(200);
+    const counts = new Map<string, number>(
+      r.body.items.map((s: { id: string; findingsCount: number }) => [s.id, s.findingsCount]),
+    );
+    expect(counts.get(withFindings)).toBe(2);
+    expect(counts.get(without)).toBe(0);
+  });
+
   it('详情返回会话 + findings（按 order 升序）', async () => {
     const id = await insertSession();
     await pool.query(

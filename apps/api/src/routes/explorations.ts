@@ -174,7 +174,21 @@ explorationsRoute.get('/', async (req, res) => {
       .offset((page - 1) * limit),
     db.select({ count: sql<number>`count(*)::int` }).from(explorationSessions).where(where),
   ]);
-  res.json({ items: await attachCreators(items), total: totalRows[0]?.count ?? 0, page, limit });
+  // 缺陷候选数（列表页卡片徽标）：一次分组查询挂到各行——不做逐会话详情请求（N+1）。
+  const countRows = items.length
+    ? await db
+        .select({ sessionId: explorationFindings.sessionId, count: sql<number>`count(*)::int` })
+        .from(explorationFindings)
+        .where(inArray(explorationFindings.sessionId, items.map((i) => i.id)))
+        .groupBy(explorationFindings.sessionId)
+    : [];
+  const countMap = new Map(countRows.map((r) => [r.sessionId, r.count]));
+  res.json({
+    items: await attachCreators(items.map((i) => ({ ...i, findingsCount: countMap.get(i.id) ?? 0 }))),
+    total: totalRows[0]?.count ?? 0,
+    page,
+    limit,
+  });
 });
 
 /**

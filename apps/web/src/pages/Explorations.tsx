@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { EXPLORATION_PERSONAS } from '@itest/shared';
 import { localizeApiError } from '../i18n';
-import { api } from '../api/client';
+import { api, type ExplorationSession } from '../api/client';
 import { useUIStore } from '../stores/ui';
 import Icon from '../components/Icon';
 import Button from '../components/ui/Button';
@@ -118,6 +118,50 @@ export default function Explorations() {
 
   const openDetail = (id: string) => navigate(`/p/${projectId}/v/${versionId}/explorations/${id}`);
 
+  // ── 卡片行内操作：取消 / 重跑 / 删除（语义与可见条件同详情页） ──────────
+  // 不进详情页就能处置会话：取消=跑得快停；重跑=同章程开新会话；删除=不可逆，走确认弹窗。
+  const listKey = ['explorations', projectId, versionId] as const;
+  const cancelOne = useMutation({
+    mutationFn: (id: string) => api.explorations.cancel(id),
+    onSuccess: () => {
+      toast(t('explorations:cancelRequested'), 'success');
+      qc.invalidateQueries({ queryKey: listKey });
+    },
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
+  });
+
+  const rerunOne = useMutation({
+    mutationFn: (s: ExplorationSession) =>
+      api.explorations.create({
+        versionId: versionId!,
+        charter: s.charter,
+        persona: s.persona,
+        allowDestructive: s.allowDestructive,
+        allowFaultInjection: s.allowFaultInjection,
+        ...(s.startUrl ? { startUrl: s.startUrl } : {}),
+        ...(s.windowWidth && s.windowHeight
+          ? { windowWidth: s.windowWidth, windowHeight: s.windowHeight }
+          : {}),
+      }),
+    onSuccess: () => {
+      toast(t('explorations:rerunCreated'), 'success');
+      qc.invalidateQueries({ queryKey: listKey });
+    },
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
+  });
+
+  // 删除不可逆（连带缺陷候选与证据截图）→ 卡片上先确认，不做一键即删。
+  const [deleteTarget, setDeleteTarget] = useState<ExplorationSession | null>(null);
+  const removeOne = useMutation({
+    mutationFn: (id: string) => api.explorations.remove(id),
+    onSuccess: () => {
+      toast(t('explorations:deletedToast'), 'success');
+      setDeleteTarget(null);
+      qc.invalidateQueries({ queryKey: listKey });
+    },
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
+  });
+
   return (
     <PageShell>
       <PageShellHeader>
@@ -154,64 +198,116 @@ export default function Explorations() {
           />
         ) : (
           <div className="flex flex-col gap-3">
-            {sessions.map((s) => (
-              <div
-                key={s.id}
-                onClick={() => openDetail(s.id)}
-                className="bg-card border rounded-[var(--radius-md)] p-4 cursor-pointer hover-card"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[14px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>
-                        {s.title || t('explorations:emptySession')}
-                      </span>
-                      <StatusPill status={s.status} pulse={s.status === 'running'}>
-                        {t(`cases:status.${s.status}`)}
-                      </StatusPill>
-                      {s.matrixId && (
-                        <span
-                          className="px-1.5 py-0.5 rounded text-[10px]"
-                          style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
-                          title={s.matrixLabel ?? s.matrixId}
-                        >
-                          {s.matrixLabel || t('explorations:newMatrix')}
-                          {s.matrixRole ? ` · ${personaLabel(s.matrixRole, i18n.language)}` : ''}
+            {sessions.map((s) => {
+              const live = s.status === 'running' || s.status === 'pending';
+              return (
+                <div
+                  key={s.id}
+                  onClick={() => openDetail(s.id)}
+                  className="bg-card border rounded-[var(--radius-md)] p-4 cursor-pointer hover-card"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[14px] font-semibold truncate" style={{ color: 'var(--foreground)' }}>
+                          {s.title || t('explorations:emptySession')}
                         </span>
+                        <StatusPill status={s.status} pulse={s.status === 'running'}>
+                          {t(`cases:status.${s.status}`)}
+                        </StatusPill>
+                        {s.matrixId && (
+                          <span
+                            className="px-1.5 py-0.5 rounded text-[10px]"
+                            style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
+                            title={s.matrixLabel ?? s.matrixId}
+                          >
+                            {s.matrixLabel || t('explorations:newMatrix')}
+                            {s.matrixRole ? ` · ${personaLabel(s.matrixRole, i18n.language)}` : ''}
+                          </span>
+                        )}
+                        {/* 缺陷候选数：列表页一眼看出这轮探出了几个疑点 */}
+                        <span
+                          className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px]"
+                          style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
+                          title={t('explorations:findings')}
+                        >
+                          <Icon name="beaker" size={10} />
+                          {t('explorations:findings')} {s.findingsCount ?? 0}
+                        </span>
+                      </div>
+                      <div className="text-[12px] mt-1.5 line-clamp-2" style={{ color: 'var(--muted-foreground)' }}>
+                        {s.charter}
+                      </div>
+                      <div className="text-[11px] mt-2 flex items-center gap-2 flex-wrap" style={{ color: 'var(--muted-foreground)' }}>
+                        <span>{t('explorations:personaLabel')}：{personaLabel(s.persona, i18n.language)}</span>
+                        <span>·</span>
+                        <span>{fullDateTime(s.createdAt)}</span>
+                        <span>·</span>
+                        <span>{t('explorations:createdBy')}：{creatorName(s.createdBy)}</span>
+                      </div>
+                    </div>
+                    {/* 行内操作：进详情页之外的快捷处置。按钮区 stopPropagation，点击不触发开详情。 */}
+                    <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                      {live ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => cancelOne.mutate(s.id)}
+                          disabled={cancelOne.isPending || s.cancelRequested}
+                          title={s.cancelRequested ? t('explorations:cancelRequested') : t('explorations:cancel')}
+                          aria-label={t('explorations:cancel')}
+                        >
+                          <Icon name="pause" size={12} />
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => rerunOne.mutate(s)}
+                          disabled={rerunOne.isPending}
+                          title={t('explorations:rerun')}
+                          aria-label={t('explorations:rerun')}
+                        >
+                          <Icon name="renew" size={12} />
+                        </Button>
                       )}
-                    </div>
-                    <div className="text-[12px] mt-1.5 line-clamp-2" style={{ color: 'var(--muted-foreground)' }}>
-                      {s.charter}
-                    </div>
-                    <div className="text-[11px] mt-2 flex items-center gap-2 flex-wrap" style={{ color: 'var(--muted-foreground)' }}>
-                      <span>{t('explorations:personaLabel')}：{personaLabel(s.persona, i18n.language)}</span>
-                      <span>·</span>
-                      <span>{fullDateTime(s.createdAt)}</span>
-                      <span>·</span>
-                      <span>{t('explorations:createdBy')}：{creatorName(s.createdBy)}</span>
+                      {/* 运行中的会话禁删（执行器还在往里写）；已请求取消的放行。 */}
+                      {(!live || s.cancelRequested) && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setDeleteTarget(s)}
+                          style={{ color: 'var(--destructive)' }}
+                          title={t('explorations:deleteSession')}
+                          aria-label={t('explorations:deleteSession')}
+                        >
+                          <Icon name="trash" size={12} />
+                        </Button>
+                      )}
+                      <Icon name="chevronRight" size={14} className="shrink-0 mt-1" />
                     </div>
                   </div>
-                  <Icon name="chevronRight" size={14} className="shrink-0 mt-1" />
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </PageShellContent>
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        <DialogContent>
+        {/* 两列栅格 + 收敛后的提示文案：常见视口（含 1280×720）下一屏装下，不用滚动 */}
+        <DialogContent className="sm:max-w-2xl p-3 gap-3">
           <DialogHeader>
             <DialogTitle>{t('explorations:newSession')}</DialogTitle>
           </DialogHeader>
-          <div className="flex flex-col gap-3 px-5 py-4">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2 px-1 py-1">
+            <div className="col-span-2 flex flex-col gap-1">
               <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>
                 {t('explorations:charter')}
               </label>
               <textarea
                 className="input-base"
-                rows={5}
+                rows={3}
                 value={charter}
                 placeholder={t('explorations:charterPlaceholder')}
                 onChange={(e) => setCharter(e.target.value)}
@@ -221,7 +317,7 @@ export default function Explorations() {
               </span>
             </div>
             {/* 人格多选（单入口）：1 个=单会话；≥2 个=矩阵并行——提交行为随选择数分叉 */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div className="col-span-2 flex flex-col gap-1">
               <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>
                 {t('explorations:matrixPersonas')}
               </label>
@@ -270,40 +366,8 @@ export default function Explorations() {
                 onChange={(e) => setMatrixLabel(e.target.value)}
               />
             )}
-            {/* 测试窗口：默认 1280×800 / 自定义宽高（同用例详情的窗口策略，两态版） */}
-            <div className="flex flex-col gap-2">
-              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:windowStrategy')}</span>
-              <Segmented
-                value={windowMode}
-                onChange={setWindowMode}
-                options={[
-                  { label: t('explorations:windowDefault'), value: 'default' },
-                  { label: t('cases:windowCustom'), value: 'custom' },
-                ]}
-              />
-              {windowMode === 'custom' && (
-                <div className="flex gap-3">
-                  <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                    {t('cases:width')}
-                    <Input
-                      type="number"
-                      value={windowWidth ?? ''}
-                      onChange={(e) => setWindowWidth(e.target.value === '' ? undefined : Number(e.target.value))}
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                    {t('cases:height')}
-                    <Input
-                      type="number"
-                      value={windowHeight ?? ''}
-                      onChange={(e) => setWindowHeight(e.target.value === '' ? undefined : Number(e.target.value))}
-                    />
-                  </label>
-                </div>
-              )}
-            </div>
             {/* 轮次预算：软预算，超界优雅收尾（已发现的 findings 全保留） */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div className="flex flex-col gap-1">
               <Input
                 label={t('explorations:budgetTurns')}
                 type="number"
@@ -316,33 +380,64 @@ export default function Explorations() {
                 {t('explorations:budgetTurnsHint')}
               </span>
             </div>
-            {/* 破坏性操作授权：默认拒。勾了才允许探索点删除/支付/发送这类不可逆入口——
-                章程说辞不算授权（机械闸只认这个开关）。 */}
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-3">
+            {/* 测试窗口：默认 1280×800 / 自定义宽高（同用例详情的窗口策略，两态版） */}
+            <div className="col-span-2 flex items-end gap-3">
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:windowStrategy')}</span>
+                <Segmented
+                  value={windowMode}
+                  onChange={setWindowMode}
+                  options={[
+                    { label: t('explorations:windowDefault'), value: 'default' },
+                    { label: t('cases:windowCustom'), value: 'custom' },
+                  ]}
+                />
+              </div>
+              {windowMode === 'custom' && (
+                <>
+                  <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                    {t('cases:width')}
+                    <Input
+                      size="sm"
+                      type="number"
+                      value={windowWidth ?? ''}
+                      onChange={(e) => setWindowWidth(e.target.value === '' ? undefined : Number(e.target.value))}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                    {t('cases:height')}
+                    <Input
+                      size="sm"
+                      type="number"
+                      value={windowHeight ?? ''}
+                      onChange={(e) => setWindowHeight(e.target.value === '' ? undefined : Number(e.target.value))}
+                    />
+                  </label>
+                </>
+              )}
+            </div>
+            {/* 两个授权开关并排：默认拒。章程说辞不算授权（机械闸只认这两个开关）。 */}
+            <div className="col-span-2 grid grid-cols-2 gap-x-3 gap-y-1">
+              <div className="flex flex-col gap-1">
                 <Toggle
                   checked={allowDestructive}
                   onChange={setAllowDestructive}
                   label={t('explorations:allowDestructive')}
                 />
+                <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
+                  {t('explorations:allowDestructiveHint')}
+                </span>
               </div>
-              <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
-                {t('explorations:allowDestructiveHint')}
-              </span>
-            </div>
-            {/* 故障注入授权：默认拒。勾了才允许探索注入断网/慢网/CPU 节流验证错误处理与降级——
-                故障会打断被测系统自身轮询/心跳，章程说辞不算授权；会话结束自动复原。 */}
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-1">
                 <Toggle
                   checked={allowFaultInjection}
                   onChange={setAllowFaultInjection}
                   label={t('explorations:allowFaultInjection')}
                 />
+                <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
+                  {t('explorations:allowFaultInjectionHint')}
+                </span>
               </div>
-              <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
-                {t('explorations:allowFaultInjectionHint')}
-              </span>
             </div>
           </div>
           <DialogFooter>
@@ -356,6 +451,28 @@ export default function Explorations() {
                 : personas.length >= 2
                   ? `${t('explorations:matrixCreate')}（${personas.length}）`
                   : t('explorations:newSession')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 删除会话确认：不可逆（连带缺陷候选与证据截图） */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('explorations:deleteSession')}</DialogTitle>
+          </DialogHeader>
+          <div className="px-5 py-2 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+            {t('explorations:deleteConfirm')}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>{t('common:cancel')}</Button>
+            <Button
+              variant="danger"
+              disabled={removeOne.isPending}
+              onClick={() => deleteTarget && removeOne.mutate(deleteTarget.id)}
+            >
+              {removeOne.isPending ? t('common:loading') : t('common:delete')}
             </Button>
           </DialogFooter>
         </DialogContent>

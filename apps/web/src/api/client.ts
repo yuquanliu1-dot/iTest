@@ -1263,6 +1263,8 @@ export interface ExplorationSession {
   createdAt: string;
   updatedAt: string;
   createdBy?: Creator | null;
+  /** 缺陷候选数：列表接口按会话分组统计后附上（卡片徽标用）；详情接口不带此字段。 */
+  findingsCount?: number;
   /** 详情接口才带（列表接口不带）。 */
   findings?: ExplorationFinding[];
   /** 详情接口才带：会话过程——平台记录的每一步动作（老会话由各 finding 的留痕合并而来）。 */
