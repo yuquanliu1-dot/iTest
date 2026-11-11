@@ -43,6 +43,28 @@ export function destructiveActionReason(targetText: string): string | null {
   return null;
 }
 
+/** 脆弱 selector 硬闸（借 srbarrios agentic-test-explorer engine.py _BRITTLE_SELECTOR_PATTERNS）：
+ *  XPath / :nth-child / :nth-of-type / 裸标签位置链在微小布局变化下即漂移，运行时事前拒收
+ *  （提示词禁令的 enforcement；:has-text 另为子串匹配易歧义）。只作用于模型动作通道——
+ *  平台自产 selector（SYNTH_SELECTOR_SRC，固化回放/上报链）不经此处，不受影响。
+ *  抽自 aiTask.ts：pi 工具链的模型 selector 通道（screenshot/click/fill）同用这份口径。 */
+const BRITTLE_SELECTOR_PATTERNS: Array<{ re: RegExp; why: string }> = [
+  { re: /^\//, why: 'XPath 绝对路径' },
+  { re: /\/\//, why: 'XPath（//）' },
+  { re: /:nth-child\s*\(/i, why: ':nth-child() 位置选择' },
+  { re: /:nth-of-type\s*\(/i, why: ':nth-of-type() 位置选择' },
+  { re: />\s*(?:div|span|li|ul|ol|td|tr|th)\s*[\s>+~[{,]/i, why: '裸标签位置链' },
+  { re: /:has-text\s*\(/i, why: ':has-text()' },
+];
+
+/** 脆弱 selector 检查：命中返回原因，null = 放行。 */
+export function brittleSelectorReason(selector: string): string | null {
+  for (const p of BRITTLE_SELECTOR_PATTERNS) {
+    if (p.re.test(selector)) return p.why;
+  }
+  return null;
+}
+
 /** 元素 → 破坏性判定用的可见文本（text+placeholder+value+selector 拼接）。
  *  元素找不到 → 返回 fallback（通常是 selector 本身）；都没有 → 空串 = 放行。 */
 export function destructiveTextOf(

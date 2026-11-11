@@ -5,13 +5,24 @@
  * 终止语义：正常 done → completed；shouldAbort 闭包标志分类（用户取消 → cancelled、
  * 预算耗尽 → completed+注记），绝不解析 runAiTask 的错误文案（文案是执行语境的，不可靠）。
  */
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium, type Page } from 'playwright-core';
 import type { ExplorationReproStep } from '@itest/shared';
 import { db } from '../db/client.js';
 import { explorationSessions, explorationFindings } from '../db/schema.js';
+import {
+  claimSession,
+  finishSession,
+  heartbeat,
+  screenshotDiskPath,
+  withFindingCounts,
+  withTimeout,
+  EXPLORATION_MAX_TURNS,
+  EXPLORATION_WALL_CLOCK_MS,
+} from './explorationShared.js';
+import { runExplorationSessionPi } from '../pi/exploration/runner.js';
 import { resolveEnv } from './envContext.js';
 import {
   runAiTask,
@@ -48,69 +59,26 @@ import { logger } from '../logger.js';
 import { loginStateKey, getLoginState, saveLoginState, type LoginStorageState } from '../pi/space/tools/loginStateCache.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
 
-/** 轮次预算默认值（用户可在创建会话时覆盖，4~60；null=用这里）：超界走 shouldAbort 优雅收尾
- *  （findings 全保留）。runAiTask 硬闸 = 预算 +16 仅 runaway 兜底——硬闸随预算放大，
- *  否则用户配大轮次会被固定硬闸先拦，可配置形同虚设。 */
-export const EXPLORATION_MAX_TURNS = 24;
-export const EXPLORATION_WALL_CLOCK_MS = 15 * 60_000;
+// 轮次预算/墙钟常量移至 explorationShared.ts（pi 链路 runner 同用一份），按既有对外表面再导出。
+export { EXPLORATION_MAX_TURNS, EXPLORATION_WALL_CLOCK_MS } from './explorationShared.js';
 
 /** 单次只读取证的等待侧超时（只截断等待，不取消底层查询——只读查询代价可接受）。 */
 const SQL_PROBE_TIMEOUT_MS = 10_000;
 
-/** 留痕里单条 SQL 的最长文本：审计要看"查了什么"，但模型可以吐出超长 query（守卫虽拒，留痕不能膨胀）。 */
+/** 留痕里单条 SQL 的最长文本：审计要看"查了什么"，但超长 query 不该让留痕膨胀。 */
 const SQL_STEP_TARGET_MAX = 1000;
 
-/** 等待侧超时：竞速到点即抛错。底层 promise 迟到 settle 不会变 unhandledRejection
- *  （Promise.race 对两个 promise 都挂了处理器）。 */
-async function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), ms);
-  });
-  try {
-    return await Promise.race([p, timeout]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-function screenshotDiskPath(sessionId: string, order: number): string {
-  return join(process.cwd(), 'screenshots', sessionId, `finding-${order}.png`);
-}
-
-/** 会话总结补「模型报 N 条 / 落库 M 条」——避免摘要说几条、库里 0 条的自相矛盾。 */
-function withFindingCounts(summary: string | null | undefined, modelReported: number, savedCount: number): string | null {
-  const base = (summary ?? '').trim();
-  if (modelReported === 0) return base || null;
-  const note = `模型报告 ${modelReported} 条，落库 ${savedCount} 条`;
-  return base ? `${base}（${note}）` : `（${note}）`;
-}
-
-/**
- * 每轮心跳：刷新 heartbeat_at（看门狗据此判死僵死会话——发版重建容器 → 进程被杀 →
- * status 永远 running → 删除永远 409），顺带读取消标志（同一句 SQL 省一次往返）。
- */
-async function heartbeat(sessionId: string): Promise<boolean> {
-  const row = (await db
-    .update(explorationSessions)
-    .set({ heartbeatAt: new Date(), updatedAt: new Date() })
-    .where(eq(explorationSessions.id, sessionId))
-    .returning({ cancelRequested: explorationSessions.cancelRequested }))[0];
-  return row?.cancelRequested ?? false;
-}
-
-/** 幂等认领：pending → running（原子条件更新），输家（重复 job/已删）直接 bail。 */
-async function claimSession(sessionId: string): Promise<boolean> {
-  const now = new Date();
-  const claimed = await db
-    .update(explorationSessions)
-    .set({ status: 'running', startedAt: now, heartbeatAt: now, updatedAt: now })
-    .where(and(eq(explorationSessions.id, sessionId), eq(explorationSessions.status, 'pending')))
-    .returning({ id: explorationSessions.id });
-  return claimed.length > 0;
-}
-
+/** 运行时分派开关：EXPLORATION_RUNTIME=pi 走新链路（pi agent + Playwright 工具集），
+ *  其余值走 legacy（runAiTask JSON 动作协议，完整保留可随时回退）。默认 legacy。 */
 export async function runExplorationSession(input: { sessionId: string }): Promise<void> {
+  if ((process.env.EXPLORATION_RUNTIME ?? 'legacy').trim().toLowerCase() === 'pi') {
+    return runExplorationSessionPi(input);
+  }
+  return runLegacyExplorationSession(input);
+}
+
+/** legacy runner（2026-11-11 前的执行核心，保留为回退链路；新链路见 pi/exploration/runner.ts）。 */
+async function runLegacyExplorationSession(input: { sessionId: string }): Promise<void> {
   const { sessionId } = input;
   const session = (await db.select().from(explorationSessions).where(eq(explorationSessions.id, sessionId)))[0];
   if (!session) return;
@@ -489,24 +457,6 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
     await flushTrailPersist();
     if (envCtx) await envCtx.close().catch(() => {});
   }
-}
-
-async function finishSession(
-  sessionId: string,
-  patch: { status: string; summary?: string | null; error?: string | null; turnsUsed: number; usage: unknown },
-): Promise<void> {
-  await db
-    .update(explorationSessions)
-    .set({
-      status: patch.status,
-      ...(patch.summary !== undefined ? { summary: patch.summary } : {}),
-      ...(patch.error !== undefined ? { error: patch.error } : {}),
-      turnsUsed: patch.turnsUsed,
-      usage: patch.usage as object,
-      finishedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(explorationSessions.id, sessionId));
 }
 
 /** 删除会话时清理证据截图目录（reports.unlinkReportScreenshots 同约定）。 */

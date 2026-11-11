@@ -12,6 +12,7 @@ import { isOpenDropdownFilter } from './dropdownFilter.js';
 import { assertReadOnlySql } from './sqlGuard.js';
 import { dumpElements, SYNTH_SELECTOR_SRC, type ElementInfo } from './elementDump.js';
 import {
+  brittleSelectorReason,
   destructiveActionReason,
   destructiveTextOf,
   noteStreakFailure,
@@ -22,7 +23,7 @@ import {
 
 // 闸门与元素抽取已抽到共享模块（探索走 pi 工具链后要复用同一份口径）。
 // 这里原样再导出，aiTask 的既有对外表面（测试与 exploration.ts 的 import 路径）不变。
-export { destructiveActionReason, originOf, renderSqlProbeRows, scopeViolationReason };
+export { brittleSelectorReason, destructiveActionReason, originOf, renderSqlProbeRows, scopeViolationReason };
 
 /** 单条指令的最大对话轮数（每轮一次 LLM 调用）。 */
 const MAX_TURNS = 8;
@@ -362,27 +363,6 @@ function parseAction(a: unknown): AiAction | null {
     if (op === 'ls') return { type: 'repo', op: 'ls', ...(cleanPath ? { path: cleanPath } : {}) };
     if (op === 'diff') return { type: 'repo', op: 'diff', ...(cleanPath ? { path: cleanPath } : {}) };
     return null;
-  }
-  return null;
-}
-
-/** 脆弱 selector 硬闸（借 srbarrios agentic-test-explorer engine.py _BRITTLE_SELECTOR_PATTERNS）：
- *  XPath / :nth-child / :nth-of-type / 裸标签位置链在微小布局变化下即漂移，运行时事前拒收
- *  （提示词禁令的 enforcement；:has-text 另为子串匹配易歧义）。只作用于模型动作通道——
- *  平台自产 selector（SYNTH_SELECTOR_SRC，固化回放/上报链）不经此处，不受影响。 */
-const BRITTLE_SELECTOR_PATTERNS: Array<{ re: RegExp; why: string }> = [
-  { re: /^\//, why: 'XPath 绝对路径' },
-  { re: /\/\//, why: 'XPath（//）' },
-  { re: /:nth-child\s*\(/i, why: ':nth-child() 位置选择' },
-  { re: /:nth-of-type\s*\(/i, why: ':nth-of-type() 位置选择' },
-  { re: />\s*(?:div|span|li|ul|ol|td|tr|th)\s*[\s>+~[{,]/i, why: '裸标签位置链' },
-  { re: /:has-text\s*\(/i, why: ':has-text()' },
-];
-
-/** 脆弱 selector 检查：命中返回原因，null = 放行。 */
-export function brittleSelectorReason(selector: string): string | null {
-  for (const p of BRITTLE_SELECTOR_PATTERNS) {
-    if (p.re.test(selector)) return p.why;
   }
   return null;
 }
