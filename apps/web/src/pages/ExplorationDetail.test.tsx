@@ -23,6 +23,16 @@ vi.mock('../api/client', async (importOriginal) => {
 // 实时画面重组件 stub 掉：MJPEG/录像与本用例无关。
 vi.mock('../components/LiveViewCard', () => ({ default: () => null }));
 
+// jsdom 没有 ResizeObserver（页面用它量画面列高度，决定会话过程是否与画面并排）。
+class ROStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+if (typeof (globalThis as { ResizeObserver?: unknown }).ResizeObserver === 'undefined') {
+  (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ROStub;
+}
+
 import ExplorationDetail from './ExplorationDetail';
 import '../i18n';
 

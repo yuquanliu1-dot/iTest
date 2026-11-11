@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -50,6 +50,20 @@ export default function ExplorationDetail() {
   const steps = session?.steps ?? [];
   const excluded = session?.excludedLedger ?? [];
   const codeScope = session?.codeScope ?? null;
+
+  // 画面在不在（有无真实帧）：会话过程并排的前提是有画面可并。
+  // 录制只在服务端内存里（TTL 30min），过期后回看没画面；流断掉时 LiveViewImg 也会撤掉 img。
+  // 用 ResizeObserver 量画面列的实际高度，不改共享组件、不让页面猜。
+  const liveColRef = useRef<HTMLDivElement>(null);
+  const [hasLiveFrame, setHasLiveFrame] = useState(false);
+  useEffect(() => {
+    const el = liveColRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => setHasLiveFrame((entries[0]?.contentRect.height ?? 0) > 8));
+    ro.observe(el);
+    return () => ro.disconnect();
+    // 会话数据到达前组件走 loading 早返回、画面列尚未挂载 → 观察器要等会话就位后再建。
+  }, [session?.id]);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['exploration', id] });
@@ -127,6 +141,46 @@ export default function ExplorationDetail() {
   // 证据截图放大
   const [zoom, setZoom] = useState<string | null>(null);
 
+  // 会话过程：并排（右栏）与整宽两种摆法共用同一份标题/列表
+  const stepsHeader = (
+    <div className="flex items-baseline gap-2 shrink-0">
+      <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
+        {t('explorations:sessionSteps')}
+      </div>
+      <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{steps.length}</span>
+    </div>
+  );
+  const stepsBody = (
+    <ol className="flex flex-col gap-1 overflow-y-auto min-h-0 flex-1">
+      {steps.map((s, i) => (
+        <li key={i} className="flex flex-col gap-0.5">
+          <div className="flex items-start gap-2 text-[12px]">
+            <span className="font-mono shrink-0" style={{ color: 'var(--muted-foreground)' }}>
+              {String(i + 1).padStart(2, '0')}
+            </span>
+            <span
+              className="shrink-0 px-1 rounded text-[11px]"
+              style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
+            >
+              {t(`explorations:actionTypes.${s.type}`, { defaultValue: s.type })}
+            </span>
+            <span className="font-mono break-all flex-1" style={{ color: 'var(--foreground)' }}>
+              {s.target}
+            </span>
+            <span className="shrink-0" style={{ color: s.ok ? 'var(--success)' : 'var(--destructive)' }}>
+              {s.ok ? t('explorations:stepOk') : t('explorations:stepFail')}
+            </span>
+          </div>
+          {s.detail && (
+            <div className="font-mono text-[11px] break-all pl-[76px]" style={{ color: 'var(--muted-foreground)' }}>
+              {s.detail}
+            </div>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+
   if (isError) {
     return (
       <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>
@@ -191,31 +245,7 @@ export default function ExplorationDetail() {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-4">
-        {/* 实时画面：running 走 MJPEG 实时流；结束后定格 + 回放（同计划运行）。 */}
-        <div className="shrink-0">
-          <LiveViewCard
-            liveUrl={api.explorations.liveUrl(session.id)}
-            replayUrl={(speed) => api.explorations.replayUrl(session.id, speed)}
-            replayMetaUrl={api.explorations.replayMetaUrl(session.id)}
-            running={session.status === 'running'}
-          />
-        </div>
-
-        {session.error && (
-          <div
-            className="shrink-0 text-[12px] px-3 py-2 rounded-[var(--radius-sm)]"
-            style={{ background: 'var(--destructive-soft-strong)', color: 'var(--destructive)' }}
-          >
-            {session.error}
-          </div>
-        )}
-        {session.summary && (
-          <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            {session.summary}
-          </div>
-        )}
-
-        {/* 章程与运行元信息 */}
+        {/* 章程与运行元信息：置顶——先看「这次在测什么」，再看画面与过程。 */}
         <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4 flex flex-col gap-2">
           <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
             {t('explorations:charterTitle')}
@@ -237,6 +267,20 @@ export default function ExplorationDetail() {
             )}
           </div>
         </div>
+
+        {session.error && (
+          <div
+            className="shrink-0 text-[12px] px-3 py-2 rounded-[var(--radius-sm)]"
+            style={{ background: 'var(--destructive-soft-strong)', color: 'var(--destructive)' }}
+          >
+            {session.error}
+          </div>
+        )}
+        {session.summary && (
+          <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
+            {session.summary}
+          </div>
+        )}
 
         {/* 代码提交范围：charter 自然语言解析产物（runner 后台解析，轮询可见）。
             范围是焦点不是围栏——卡片只作定向参考；none（章程与提交历史无关）不渲染卡片。 */}
@@ -305,45 +349,38 @@ export default function ExplorationDetail() {
           </div>
         )}
 
-        {/* 会话过程：平台记录的每一步动作（点/填/访问/查库），含查库结果摘要 */}
-        {steps.length > 0 && (
-          <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4 flex flex-col gap-2">
-            <div className="flex items-baseline gap-2">
-              <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
-                {t('explorations:sessionSteps')}
-              </div>
-              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{steps.length}</span>
-            </div>
-            <ol className="flex flex-col gap-1">
-              {steps.map((s, i) => (
-                <li key={i} className="flex flex-col gap-0.5">
-                  <div className="flex items-start gap-2 text-[12px]">
-                    <span className="font-mono shrink-0" style={{ color: 'var(--muted-foreground)' }}>
-                      {String(i + 1).padStart(2, '0')}
-                    </span>
-                    <span
-                      className="shrink-0 px-1 rounded text-[11px]"
-                      style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
-                    >
-                      {t(`explorations:actionTypes.${s.type}`, { defaultValue: s.type })}
-                    </span>
-                    <span className="font-mono break-all flex-1" style={{ color: 'var(--foreground)' }}>
-                      {s.target}
-                    </span>
-                    <span className="shrink-0" style={{ color: s.ok ? 'var(--success)' : 'var(--destructive)' }}>
-                      {s.ok ? t('explorations:stepOk') : t('explorations:stepFail')}
-                    </span>
-                  </div>
-                  {s.detail && (
-                    <div className="font-mono text-[11px] break-all pl-[76px]" style={{ color: 'var(--muted-foreground)' }}>
-                      {s.detail}
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ol>
+        {/* 实时画面 + 会话过程 并排：右边是平台记录的每一步动作（点/填/访问/查库），含查库结果摘要。
+            画面高度可拖拽（120~640px），右栏用绝对定位填满 grid 行高 → 与画面等高且跟随拖拽，
+            步骤多时在窗口内滚动，不把整页撑长。
+            没有画面时（录制已过 TTL / 从未跑过 / 流断掉）不并排：右侧留白是死区，
+            此时会话过程回到整宽卡片（与改版前一致）。 */}
+        <div
+          className="shrink-0 grid gap-4"
+          style={{ gridTemplateColumns: steps.length > 0 && hasLiveFrame ? 'minmax(0, 1fr) 420px' : 'minmax(0, 1fr)' }}
+        >
+          <div className="min-w-0" ref={liveColRef}>
+            <LiveViewCard
+              liveUrl={api.explorations.liveUrl(session.id)}
+              replayUrl={(speed) => api.explorations.replayUrl(session.id, speed)}
+              replayMetaUrl={api.explorations.replayMetaUrl(session.id)}
+              running={session.status === 'running'}
+            />
           </div>
-        )}
+          {steps.length > 0 &&
+            (hasLiveFrame ? (
+              <div className="relative min-w-0">
+                <div className="absolute inset-0 flex flex-col gap-2 overflow-hidden bg-card border rounded-[var(--radius-md)] p-4">
+                  {stepsHeader}
+                  {stepsBody}
+                </div>
+              </div>
+            ) : (
+              <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4 flex flex-col gap-2">
+                {stepsHeader}
+                {stepsBody}
+              </div>
+            ))}
+        </div>
 
         {/* 负面结果账本：模型申报的「已排除的假设 + 依据」。只存排除项、不存信念——
             黑板存信念会把观察冻成结论、自我印证。 */}
