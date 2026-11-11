@@ -127,6 +127,25 @@ describe('POST /api/explorations - 建会话', () => {
     const row2 = (await pool.query(`SELECT allow_destructive FROM exploration_sessions WHERE id=$1`, [granted.body.id])).rows[0]!;
     expect(row2.allow_destructive).toBe(true);
   });
+
+  it('测试窗口两态：缺省 → null/null；成对给 → 落库；只给一个 → 400 window_required', async () => {
+    const dflt = await request(app).post('/api/explorations').send({ versionId, charter: CHARTER });
+    expect(dflt.status).toBe(201);
+    const row = (await pool.query(`SELECT window_width, window_height FROM exploration_sessions WHERE id=$1`, [dflt.body.id])).rows[0]!;
+    expect(row.window_width).toBeNull();
+    expect(row.window_height).toBeNull();
+
+    const custom = await request(app)
+      .post('/api/explorations')
+      .send({ versionId, charter: CHARTER, windowWidth: 1600, windowHeight: 900 });
+    expect(custom.status).toBe(201);
+    expect(custom.body.windowWidth).toBe(1600);
+    expect(custom.body.windowHeight).toBe(900);
+
+    const half = await request(app).post('/api/explorations').send({ versionId, charter: CHARTER, windowWidth: 1600 });
+    expect(half.status).toBe(400);
+    expect(half.body.error).toBe('window_required');
+  });
 });
 
 describe('GET /api/explorations - 列表与详情', () => {
@@ -345,7 +364,7 @@ describe('升格为用例', () => {
     expect(r.body.error).toBe('not_confirmed');
   });
 
-  it('已确认 → 建未编译用例（compiled=null）+ 回写 promoted', async () => {
+  it('已确认 → 建用例（步骤取动作留痕，带机械 DSL）+ 回写 promoted', async () => {
     const sessionId = await insertSession({ status: 'completed' });
     const fid = await insertFinding(sessionId, {
       status: 'confirmed',
@@ -361,14 +380,15 @@ describe('升格为用例', () => {
     expect(c.title).toBe('删除无二次确认');
     expect(c.priority).toBe('P1');
     const steps = (await pool.query(`SELECT instruction, compiled FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [caseId])).rows;
-    expect(steps.map((s: { instruction: string }) => s.instruction)).toEqual(['点击删除', '确认删除']);
-    expect(steps.every((s: { compiled: unknown }) => s.compiled === null)).toBe(true);
+    // 留痕优先（模型自述可能脑补）→ 步骤取平台记录的 click .del，并带机械 DSL。
+    expect(steps.map((s: { instruction: string }) => s.instruction)).toEqual(['点击 .del']);
+    expect(steps[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '.del' }] }]);
     const f = (await pool.query(`SELECT status, promoted_case_id FROM exploration_findings WHERE id=$1`, [fid])).rows[0]!;
     expect(f.status).toBe('promoted');
     expect(f.promoted_case_id).toBe(caseId);
   });
 
-  it('reproSteps 空 → 用动作留痕兜底', async () => {
+  it('留痕非空 → 步骤取留痕（reproSteps 不参与）', async () => {
     const sessionId = await insertSession({ status: 'completed' });
     const fid = await insertFinding(sessionId, {
       status: 'confirmed',
@@ -377,8 +397,24 @@ describe('升格为用例', () => {
     });
     const r = await request(app).post(`/api/explorations/${sessionId}/findings/${fid}/promote`).send({ groupId });
     expect(r.status).toBe(201);
-    const steps = (await pool.query(`SELECT instruction FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [r.body.caseId])).rows;
+    const steps = (await pool.query(`SELECT instruction, compiled FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [r.body.caseId])).rows;
     expect(steps.map((s: { instruction: string }) => s.instruction)).toEqual(['点击 .del', '访问 https://x/list']);
+    expect(steps[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '.del' }] }]);
+    expect(steps[1]!.compiled).toEqual([{ kind: 'navigate', url: 'https://x/list' }]);
+  });
+
+  it('留痕空 → 回落模型 reproSteps（自然语言，compiled=null）', async () => {
+    const sessionId = await insertSession({ status: 'completed' });
+    const fid = await insertFinding(sessionId, {
+      status: 'confirmed',
+      reproSteps: [{ action: '点击删除' }, { action: '确认删除' }],
+      actionsTrail: [],
+    });
+    const r = await request(app).post(`/api/explorations/${sessionId}/findings/${fid}/promote`).send({ groupId });
+    expect(r.status).toBe(201);
+    const steps = (await pool.query(`SELECT instruction, compiled FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [r.body.caseId])).rows;
+    expect(steps.map((s: { instruction: string }) => s.instruction)).toEqual(['点击删除', '确认删除']);
+    expect(steps.every((s: { compiled: unknown }) => s.compiled === null)).toBe(true);
   });
 
   it('两者都空 → 400 no_repro_steps', async () => {

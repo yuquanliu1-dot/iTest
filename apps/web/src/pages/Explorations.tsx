@@ -13,6 +13,7 @@ import EmptyState from '../components/ui/EmptyState';
 import StatusPill from '../components/ui/StatusPill';
 import Toggle from '../components/ui/Toggle';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
+import Segmented from '../components/ui/Segmented';
 import { fullDateTime } from '../lib/format';
 import { creatorName } from '../lib/creatorName';
 import {
@@ -51,6 +52,13 @@ export default function Explorations() {
   const [persona, setPersona] = useState('qa');
   const [startUrl, setStartUrl] = useState('');
   const [allowDestructive, setAllowDestructive] = useState(false);
+  // 轮次预算：默认 24（后端同默认，范围 4~60）；清空=不传=后端默认。
+  const [budgetTurns, setBudgetTurns] = useState<number | undefined>(24);
+  // 测试窗口两态：默认 1280×800 / 自定义宽高（对齐用例详情的窗口策略；探索 headless 无「当前窗口」态）。
+  const [windowMode, setWindowMode] = useState<'default' | 'custom'>('default');
+  const [windowWidth, setWindowWidth] = useState<number | undefined>();
+  const [windowHeight, setWindowHeight] = useState<number | undefined>();
+  const windowCustomReady = windowMode !== 'custom' || ((windowWidth ?? 0) > 0 && (windowHeight ?? 0) > 0);
 
   const create = useMutation({
     mutationFn: () =>
@@ -59,8 +67,10 @@ export default function Explorations() {
         charter: charter.trim(),
         persona,
         allowDestructive,
+        budgetTurns,
         ...(title.trim() ? { title: title.trim() } : {}),
         ...(startUrl.trim() ? { startUrl: startUrl.trim() } : {}),
+        ...(windowMode === 'custom' && windowCustomReady ? { windowWidth, windowHeight } : {}),
       }),
     onSuccess: (s) => {
       setCharter('');
@@ -68,6 +78,10 @@ export default function Explorations() {
       setStartUrl('');
       setPersona('qa');
       setAllowDestructive(false);
+      setBudgetTurns(24);
+      setWindowMode('default');
+      setWindowWidth(undefined);
+      setWindowHeight(undefined);
       setShowCreate(false);
       toast(t('explorations:createdToast'), 'success');
       qc.invalidateQueries({ queryKey: ['explorations'] });
@@ -194,6 +208,52 @@ export default function Explorations() {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
+            {/* 测试窗口：默认 1280×800 / 自定义宽高（同用例详情的窗口策略，两态版） */}
+            <div className="flex flex-col gap-2">
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:windowStrategy')}</span>
+              <Segmented
+                value={windowMode}
+                onChange={setWindowMode}
+                options={[
+                  { label: t('explorations:windowDefault'), value: 'default' },
+                  { label: t('cases:windowCustom'), value: 'custom' },
+                ]}
+              />
+              {windowMode === 'custom' && (
+                <div className="flex gap-3">
+                  <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                    {t('cases:width')}
+                    <Input
+                      type="number"
+                      value={windowWidth ?? ''}
+                      onChange={(e) => setWindowWidth(e.target.value === '' ? undefined : Number(e.target.value))}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                    {t('cases:height')}
+                    <Input
+                      type="number"
+                      value={windowHeight ?? ''}
+                      onChange={(e) => setWindowHeight(e.target.value === '' ? undefined : Number(e.target.value))}
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+            {/* 轮次预算：软预算，超界优雅收尾（已发现的 findings 全保留） */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <Input
+                label={t('explorations:budgetTurns')}
+                type="number"
+                min={4}
+                max={60}
+                value={budgetTurns ?? ''}
+                onChange={(e) => setBudgetTurns(e.target.value === '' ? undefined : Number(e.target.value))}
+              />
+              <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
+                {t('explorations:budgetTurnsHint')}
+              </span>
+            </div>
             {/* 破坏性操作授权：默认拒。勾了才允许探索点删除/支付/发送这类不可逆入口——
                 章程说辞不算授权（机械闸只认这个开关）。 */}
             <div className="flex flex-col gap-1">
@@ -211,7 +271,7 @@ export default function Explorations() {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setShowCreate(false)}>{t('common:cancel')}</Button>
-            <Button disabled={charter.trim().length < 10 || create.isPending} onClick={() => create.mutate()}>
+            <Button disabled={charter.trim().length < 10 || !windowCustomReady || create.isPending} onClick={() => create.mutate()}>
               {create.isPending ? t('common:loading') : t('explorations:newSession')}
             </Button>
           </DialogFooter>

@@ -92,6 +92,9 @@ export default function ExplorationDetail() {
         persona: session!.persona,
         allowDestructive: session!.allowDestructive,
         ...(session!.startUrl ? { startUrl: session!.startUrl } : {}),
+        ...(session!.windowWidth && session!.windowHeight
+          ? { windowWidth: session!.windowWidth, windowHeight: session!.windowHeight }
+          : {}),
       }),
     onSuccess: (s) => {
       toast(t('explorations:rerunCreated'), 'success');

@@ -1129,6 +1129,19 @@ export const explorationSessions = pgTable('exploration_sessions', {
    */
   allowDestructive: boolean('allow_destructive').notNull().default(false),
   /**
+   * 轮次预算（null=代码默认 EXPLORATION_MAX_TURNS）：软预算，超界 shouldAbort 优雅收尾
+   * （已发现的 findings 全保留）。runaway 硬闸随它放大（+16），否则用户配大轮次会被
+   * 固定硬闸先拦，可配置形同虚设。墙钟不随它放大——防的是单轮卡死，与探索深度无关。
+   */
+  budgetTurns: integer('budget_turns'),
+  /**
+   * 浏览器视口宽高（两态：null=默认 1280×800，同用例「默认最大化」headless 近似值；
+   * 同给才生效=自定义）。语义对齐 cases.window_strategy，但不设 strategy 列——
+   * 探索是 headless，用例的「当前窗口」态没有对应物。
+   */
+  windowWidth: integer('window_width'),
+  windowHeight: integer('window_height'),
+  /**
    * 执行器心跳：每轮对话前刷新一次。看门狗据此判死僵死会话（发版重建容器 → 进程被杀 →
    * status 永远 running → 删除永远 409）。5 分钟无心跳即判死。
    *
@@ -1160,7 +1173,9 @@ export const explorationSessions = pgTable('exploration_sessions', {
    * 与 findings.actionsTrail 的关系：finding 存的是"自上一条 finding 起"的片段（面包屑），
    * 这里存的是整场会话的完整动作序列（审计视角：跑了什么 SQL、点了什么、成没成）。
    */
-  actionsTrail: jsonb('actions_trail').$type<Array<{ type: string; target: string; ok: boolean; detail?: string }>>(),
+  actionsTrail: jsonb('actions_trail').$type<
+    Array<{ type: string; target: string; ok: boolean; detail?: string; value?: string; ms?: number; key?: string }>
+  >(),
   /** 运行时环境快照 id。裸 uuid 无 FK：删环境不应牵连历史探索记录（审计惯例）。 */
   envId: uuid('env_id'),
   startedAt: timestamp('started_at'),
@@ -1183,8 +1198,11 @@ export const explorationFindings = pgTable('exploration_findings', {
   severity: varchar('severity', { length: 8 }).notNull().default('P2'),
   /** LLM 给出的复现步骤（可能脑补）；reproSteps 为空时 promote 以 actionsTrail 文本化兜底。 */
   reproSteps: jsonb('repro_steps').$type<Array<{ action: string; expected?: string }>>().notNull().default([]),
-  /** 平台记录的实际动作留痕（onAction 自上一条 finding 起累积）——动作序列的 ground truth。 */
-  actionsTrail: jsonb('actions_trail').$type<Array<{ type: string; target: string; ok: boolean }>>(),
+  /** 平台记录的实际动作留痕（onAction 自上一条 finding 起累积）——动作序列的 ground truth。
+   *  value/ms/key 是升格用例机械映射所需的原形字段（fill 输入值 / wait 毫秒 / press 键名）。 */
+  actionsTrail: jsonb('actions_trail').$type<
+    Array<{ type: string; target: string; ok: boolean; detail?: string; value?: string; ms?: number; key?: string }>
+  >(),
   /** web 路径 /screenshots/<sessionId>/finding-<order>.png，由 express.static('/screenshots') 服务。 */
   screenshotPath: text('screenshot_path'),
   pageUrl: text('page_url'),

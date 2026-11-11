@@ -50,7 +50,9 @@ import { logger } from '../logger.js';
 import { loginStateKey, getLoginState, saveLoginState, type LoginStorageState } from '../pi/space/tools/loginStateCache.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
 
-/** 软预算：超界走 shouldAbort 优雅收尾（findings 全保留）。runAiTask maxTurns=40 仅 runaway 兜底。 */
+/** 轮次预算默认值（用户可在创建会话时覆盖，4~60；null=用这里）：超界走 shouldAbort 优雅收尾
+ *  （findings 全保留）。runAiTask 硬闸 = 预算 +16 仅 runaway 兜底——硬闸随预算放大，
+ *  否则用户配大轮次会被固定硬闸先拦，可配置形同虚设。 */
 export const EXPLORATION_MAX_TURNS = 24;
 export const EXPLORATION_WALL_CLOCK_MS = 15 * 60_000;
 
@@ -153,6 +155,8 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
 
   let envCtx: Awaited<ReturnType<typeof resolveEnv>> | undefined;
   let live: ReturnType<typeof registerLiveView> | undefined;
+  // 轮次预算：用户创建会话时可配（null=默认）。墙钟不随它放大（防单轮卡死与探索深度无关）。
+  const maxTurns = session.budgetTurns ?? EXPLORATION_MAX_TURNS;
   const usage = newAiUsage();
   let turnCount = 0;
   let userCancelled = false;
@@ -261,7 +265,12 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
       const cachedState = loginKey ? getLoginStateFor(loginKey) : null;
       const context = await browser.newContext({
         ignoreHTTPSErrors: true,
-        viewport: { width: 1280, height: 800 },
+        // 两态视口：会话建时给了成对宽高=自定义；缺省 1280×800（与用例「默认最大化」headless
+        // 近似值一致）。aiTask 坐标系按视口归一化 0-1000 动态读 viewportSize，任意尺寸兼容。
+        viewport:
+          session.windowWidth && session.windowHeight
+            ? { width: session.windowWidth, height: session.windowHeight }
+            : { width: 1280, height: 800 },
         ...(cachedState ? { storageState: cachedState } : {}),
       });
       const page = await context.newPage();
@@ -493,8 +502,8 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
         client,
         false,
         {
-          // 24 轮软预算由 shouldAbort 先触发；40 仅 runaway 兜底
-          maxTurns: 40,
+          // 轮次软预算由 shouldAbort 先触发；+16 硬闸仅 runaway 兜底（随预算放大）
+          maxTurns: maxTurns + 16,
           valueSub: cred ? makeCredentialValueSub(buildCredentialSource({ envCtx })) : undefined,
           resourceManifest: renderWebResourceManifest({ envCtx }),
           scopeOrigins,
@@ -515,7 +524,7 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
               return true;
             }
             turnCount += 1;
-            if (turnCount > EXPLORATION_MAX_TURNS || Date.now() > deadline) {
+            if (turnCount > maxTurns || Date.now() > deadline) {
               budgetExceeded = true;
               return true;
             }

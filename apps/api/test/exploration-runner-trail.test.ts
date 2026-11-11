@@ -17,23 +17,27 @@ import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 // 类型导入编译期擦除（不触发模块加载）；aiTask 被 mock，运行时形状由下面的 mock 提供。
 import type { AiAction, RunAiTaskOpts } from '../src/execute/aiTask.js';
 
-const { runMock, pageMock } = vi.hoisted(() => {
+const { runMock, pageMock, newContextCalls } = vi.hoisted(() => {
   const page = {
     screenshot: async (): Promise<Buffer> => Buffer.from('fake-png'),
     url: () => 'http://127.0.0.1:56100/',
     viewportSize: () => ({ width: 1280, height: 800 }),
   };
-  return { runMock: vi.fn(), pageMock: page };
+  const newContextCalls: Array<Record<string, unknown>> = [];
+  return { runMock: vi.fn(), pageMock: page, newContextCalls };
 });
 
-// 浏览器打桩：runner 真实起 chromium，这里只给一个最小 page 形状。
+// 浏览器打桩：runner 真实起 chromium，这里只给一个最小 page 形状；记录 newContext 入参验视口。
 vi.mock('playwright-core', () => ({
   chromium: {
     launch: async () => ({
-      newContext: async () => ({
-        newPage: async () => pageMock,
-        storageState: async () => ({}),
-      }),
+      newContext: async (opts?: Record<string, unknown>) => {
+        newContextCalls.push(opts ?? {});
+        return {
+          newPage: async () => pageMock,
+          storageState: async () => ({}),
+        };
+      },
       close: async () => undefined,
     }),
   },
@@ -44,6 +48,11 @@ vi.mock('../src/execute/aiTask.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/execute/aiTask.js')>();
   return { ...actual, runAiTask: runMock };
 });
+
+// 代码范围解析打桩：真实实现走 LLM+git（与本测试无关），短路返回无范围。
+vi.mock('../src/execute/codeScope.js', () => ({
+  resolveCodeScope: async () => ({ status: 'none' as const }),
+}));
 
 // 环境解析打桩：给一个无凭据、无 db 的环境（探索只读范围闸只认起点 origin）。
 vi.mock('../src/execute/envContext.js', () => ({
@@ -120,12 +129,12 @@ afterAll(async () => {
 
 const CHARTER = '探索用户管理页面的增删改查，报告所有异常行为与校验缺失。';
 
-/** 建一条待执行会话（pending，runner 会原子认领成 running）。 */
-async function insertSession(): Promise<string> {
+/** 建一条待执行会话（pending，runner 会原子认领成 running）。可带自定义视口宽高。 */
+async function insertSession(opts: { windowWidth?: number; windowHeight?: number } = {}): Promise<string> {
   const r = await pool.query(
-    `INSERT INTO exploration_sessions(project_id, version_id, title, charter, persona, status, created_by_user_id)
-     VALUES ($1,$2,$3,$4,$5,'pending',$6) RETURNING id`,
-    [projectId, versionId, '轨迹回归用例', CHARTER, 'qa', userId],
+    `INSERT INTO exploration_sessions(project_id, version_id, title, charter, persona, status, created_by_user_id, window_width, window_height)
+     VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8) RETURNING id`,
+    [projectId, versionId, '轨迹回归用例', CHARTER, 'qa', userId, opts.windowWidth ?? null, opts.windowHeight ?? null],
   );
   return r.rows[0]!.id as string;
 }
@@ -188,5 +197,17 @@ describe('探索 runner 会话过程落库节奏', () => {
     const trail = (row.rows[0]!.actions_trail ?? []) as Array<{ type: string; target: string; ok: boolean }>;
     expect(trail.map((s) => s.target)).toEqual(['http://127.0.0.1:56100/', '#save', '#tail']);
     expect(trail.every((s) => s.ok)).toBe(true);
+
+    // ④ 缺省视口 = 1280×800（与用例「默认最大化」headless 近似值一致）。
+    expect(newContextCalls[0]?.viewport).toEqual({ width: 1280, height: 800 });
+  }, 30000);
+
+  it('会话带成对 window_width/window_height → newContext 用自定义视口', async () => {
+    const sessionId = await insertSession({ windowWidth: 1600, windowHeight: 900 });
+    runMock.mockImplementation(async () => '探索完成');
+    await runExplorationSession({ sessionId });
+    expect(newContextCalls[newContextCalls.length - 1]?.viewport).toEqual({ width: 1600, height: 900 });
+    const row = await pool.query(`SELECT status FROM exploration_sessions WHERE id=$1`, [sessionId]);
+    expect(row.rows[0]!.status).toBe('completed');
   }, 30000);
 });

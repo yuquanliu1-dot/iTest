@@ -37,6 +37,14 @@ const CreateBody = z.object({
    * 删除是否真落库 → 模型点了删除 → 资产真被删）。
    */
   allowDestructive: z.boolean().default(false),
+  /**
+   * 浏览器视口宽高（两态：缺省=默认 1280×800；同给=自定义）。只给一个 → 400 window_required
+   * （复用用例窗口校验的 i18n 文案）。
+   */
+  windowWidth: z.number().int().positive().optional(),
+  windowHeight: z.number().int().positive().optional(),
+  /** 轮次预算（默认 24，4~60）：软预算，超界优雅收尾，已发现的 findings 全保留。 */
+  budgetTurns: z.number().int().min(4).max(60).optional(),
 });
 
 const ListQuery = z.object({
@@ -59,6 +67,10 @@ async function loadSession(sessionId: string, user: { userId: string }) {
  */
 explorationsRoute.post('/', async (req, res) => {
   const body = CreateBody.parse(req.body);
+  // 两态校验：要么都不给（默认 1280×800），要么成对给（自定义）；只给一个 = 参数不完整。
+  if ((body.windowWidth === undefined) !== (body.windowHeight === undefined)) {
+    throw new HttpError(400, 'window_required', 'windowWidth and windowHeight must be provided together');
+  }
   const { projectId } = await assertVersionVisible(body.versionId, req.user!);
   const title = body.title?.trim() || body.charter.slice(0, 80);
   const inserted = (await db
@@ -71,6 +83,9 @@ explorationsRoute.post('/', async (req, res) => {
       persona: body.persona,
       startUrl: body.startUrl?.trim() || null,
       allowDestructive: body.allowDestructive,
+      windowWidth: body.windowWidth ?? null,
+      windowHeight: body.windowHeight ?? null,
+      budgetTurns: body.budgetTurns ?? null,
       status: 'pending',
       // 范围解析在 runner 后台做（LLM+git 可能数十秒）——先落 pending，前端轮询详情页看结果。
       codeScopeStatus: 'pending',
