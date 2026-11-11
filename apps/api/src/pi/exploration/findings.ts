@@ -9,6 +9,7 @@
  * 去重/配额/形状容错复用 coerceFindings 同一份口径（跨轮 near-dup、近义合并、脏 severity 兜底）。
  */
 import fs from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { Page } from 'playwright-core';
 import { db } from '../../db/client.js';
 import { explorationFindings } from '../../db/schema.js';
@@ -82,14 +83,22 @@ export function createFindingStore(args: {
         /* settle 尽力而为：失败也截图 */
       }
       let buf: Buffer | null = null;
+      let frameWritten = false;
       try {
-        buf = await args.page.screenshot({ timeout: 5000, type: 'png' });
-        await fs.writeFile(screenshotDiskPath(args.sessionId, order), buf);
+        buf = await args.page.screenshot({ timeout: 15_000, type: 'png' });
+        // 目录必须自建：legacy 走 page.screenshot({path}) 时 Playwright 会顺带建目录，
+        // pi 链路改成 buffer + fs.writeFile 后没有这一步 → ENOENT，决策帧从未落盘
+        // （prod228 实证：库里记了路径、文件不存在，前端证据图必然 404）。
+        const diskPath = screenshotDiskPath(args.sessionId, order);
+        await fs.mkdir(dirname(diskPath), { recursive: true });
+        await fs.writeFile(diskPath, buf);
+        frameWritten = true;
       } catch (e) {
         logger.warn({ err: e, sessionId: args.sessionId, order }, 'exploration pi finding screenshot failed');
       }
       const trailSince = args.getTrailSince();
-      const screenshotPath = buf ? `/screenshots/${args.sessionId}/finding-${order}.png` : null;
+      // 只有真落盘才记路径：写失败还记路径 = 前端一张必然裂开的图。
+      const screenshotPath = frameWritten ? `/screenshots/${args.sessionId}/finding-${order}.png` : null;
       try {
         await db.insert(explorationFindings).values({
           sessionId: args.sessionId,
