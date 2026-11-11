@@ -40,7 +40,10 @@ export default function ExplorationDetail() {
     queryKey: ['exploration', id],
     queryFn: () => api.explorations.get(id!),
     enabled: !!id,
-    refetchInterval: (q) => (q.state.data?.status === 'running' ? 2000 : false),
+    // pending 也要轮询：会话刚建时是排队态，不轮询的话页面永远停在 pending
+    // （不会自己知道开始跑了，也就没有「会话过程」可看）。终态即停。
+    refetchInterval: (q) =>
+      q.state.data?.status === 'running' || q.state.data?.status === 'pending' ? 2000 : false,
   });
 
   const findings = session?.findings ?? [];

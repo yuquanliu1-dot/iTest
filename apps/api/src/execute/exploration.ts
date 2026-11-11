@@ -129,16 +129,44 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
    *  与 finding 级 trail 的差别：finding 级是"自上一条 finding 起"的片段，
    *  这里连最后一条 finding 之后的尾段也留住（否则收尾前的动作无处可查）。 */
   const sessionSteps: ExplorationStep[] = [];
+  /** 落库串行链：并发写同一行时后发请求可能先落库，旧快照覆盖新快照会丢步。 */
+  let persistChain: Promise<void> = Promise.resolve();
   /** 会话级动作留痕 + 负面结果账本落库。失败只记日志——留痕是审计辅助，不能因此掀翻整场会话。 */
   const persistSessionState = async (): Promise<void> => {
-    try {
-      await db
-        .update(explorationSessions)
-        .set({ actionsTrail: sessionSteps, excludedLedger, updatedAt: new Date() })
-        .where(eq(explorationSessions.id, sessionId));
-    } catch (e) {
-      logger.warn({ err: e, sessionId }, 'exploration session state persist failed');
+    persistChain = persistChain
+      .then(async () => {
+        await db
+          .update(explorationSessions)
+          .set({ actionsTrail: sessionSteps, excludedLedger, updatedAt: new Date() })
+          .where(eq(explorationSessions.id, sessionId));
+      })
+      .catch((e) => {
+        logger.warn({ err: e, sessionId }, 'exploration session state persist failed');
+      });
+    return persistChain;
+  };
+  /**
+   * 动作级落库防抖：onAction 是同步回调（不能 await），连续动作合并成一次写。
+   * 窗口 1s——详情页 2s 轮询一次，1s 足够让步骤在跑动中逐条长出来；
+   * 不做防抖的话每个动作一次 UPDATE，长会话把库打爆。
+   * 定时器不续期（第一个待写动作起算）：动作流不断时也不会饿死这次写。
+   */
+  const TRAIL_PERSIST_DEBOUNCE_MS = 1000;
+  let trailTimer: NodeJS.Timeout | undefined;
+  const scheduleTrailPersist = (): void => {
+    if (trailTimer) return;
+    trailTimer = setTimeout(() => {
+      trailTimer = undefined;
+      void persistSessionState();
+    }, TRAIL_PERSIST_DEBOUNCE_MS);
+  };
+  /** 立刻落库（收尾用）：清掉待触发的防抖写，保证此刻库里的留痕是全的。 */
+  const flushTrailPersist = async (): Promise<void> => {
+    if (trailTimer) {
+      clearTimeout(trailTimer);
+      trailTimer = undefined;
     }
+    await persistSessionState();
   };
   /**
    * 负面结果账本（外化记忆最小切片）：模型申报的「已排除的假设 + 依据」。
@@ -152,7 +180,7 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
       if (excludedLedger.some((x) => x.claim === e.claim)) continue;
       excludedLedger.push(e);
     }
-    void persistSessionState();
+    void flushTrailPersist();
   };
   const deadline = Date.now() + EXPLORATION_WALL_CLOCK_MS;
 
@@ -211,6 +239,9 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
         const step: ExplorationStep = { type: a.type, target, ok, ...(detail ? { detail } : {}) };
         trail.push(step);
         sessionSteps.push(step);
+        // 动作级增量落库（防抖）：跑动中详情页就能看到步骤逐条长出来，
+        // 而不是攒到下一条 finding 才整块跳一次（甚至全程不报 finding 时拖到收尾才出现）。
+        scheduleTrailPersist();
       };
       const onFindings = async (raw: unknown[]): Promise<void> => {
         modelReported += raw.length;
@@ -256,7 +287,7 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
         // 否则「自上一条 finding 起累积」的语义会被丢弃批次截断。
         if (accepted.length > 0) trail.length = 0;
         // 会话级留痕同步落库（跑动中就能在详情页看到进度，不等会话结束）
-        await persistSessionState();
+        await flushTrailPersist();
       };
 
       /** 数据库取证探针：模型给一条只读查询 → 对被测库执行 → 行摘要回灌下一轮。
@@ -346,6 +377,9 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
           },
         },
       );
+      // 先落留痕再置终态：详情页一看到终态就停轮询（前端只在 running 时轮询），
+      // 顺序反了则「最后一条 finding 之后的尾段」永远拉不到，得手动刷新才看得到。
+      await flushTrailPersist();
       await finishSession(sessionId, {
         status: userCancelled ? 'cancelled' : 'completed',
         summary: withFindingCounts(
@@ -372,6 +406,8 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
     // 用户取消/预算耗尽不算失败（ findings 已捕获的都保留）；其余真异常 → failed
     // 预算耗尽走的是 shouldAbort 抛出的中断（runAiTask 抛错而非正常返回），
     // 所以总结只能在这里补——否则会话以「completed 但无总结」收尾，看不出为何停下。
+    // 同上：置终态前先落留痕，终态那一刻库里的步骤序列必须是全的。
+    await flushTrailPersist();
     await finishSession(sessionId, {
       status: userCancelled ? 'cancelled' : budgetExceeded ? 'completed' : 'failed',
       error: userCancelled || budgetExceeded ? null : msg,
@@ -382,8 +418,8 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
       usage: usage.stat,
     }).catch(() => undefined);
   } finally {
-    // 收尾留痕：最后一条 finding 之后的动作（尾段）在这里才落库——否则详情页看不到过程末尾。
-    await persistSessionState();
+    // 兜底落库：正常/失败路径都已在置终态前 flush 过，这里只防意外漏写。
+    await flushTrailPersist();
     if (envCtx) await envCtx.close().catch(() => {});
   }
 }

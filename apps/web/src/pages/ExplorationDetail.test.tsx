@@ -100,4 +100,32 @@ describe('ExplorationDetail 会话过程', () => {
     await waitFor(() => expect(screen.getByText('资产页探索')).toBeTruthy());
     expect(screen.queryByText('会话过程')).toBeNull();
   });
+
+  it('排队中（pending）也持续轮询——否则页面永远停在 pending，不会自己动', async () => {
+    vi.useFakeTimers();
+    try {
+      explorationGet.mockResolvedValue({ ...session, status: 'pending' });
+      renderDetail();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(explorationGet).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(explorationGet.mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('终态会话不轮询——没有新东西可拉', async () => {
+    vi.useFakeTimers();
+    try {
+      explorationGet.mockResolvedValue({ ...session, status: 'completed' });
+      renderDetail();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(explorationGet).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(explorationGet).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
