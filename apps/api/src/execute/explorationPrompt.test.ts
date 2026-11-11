@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { composeExplorationInstruction, coerceFindings, trailToSteps, trailToCaseSteps, mergeExplorationTrails, EXPLORATION_SYSTEM_PROMPT_BASE, EXPLORATION_MAX_FINDINGS, EXPLORATION_MAX_SQL_PROBES, renderRepoActionProtocol } from './explorationPrompt.js';
-import { EXPLORATION_SYSTEM_PROMPT_BASE } from './explorationPrompt.js';
 import { EXPLORATION_PERSONA_KEYS } from '@itest/shared';
 
 describe('EXPLORATION_SYSTEM_PROMPT_BASE - 协议与安全规则', () => {
