@@ -50,6 +50,8 @@ export default function ExplorationDetail() {
   const steps = session?.steps ?? [];
   const excluded = session?.excludedLedger ?? [];
   const codeScope = session?.codeScope ?? null;
+  const coverage = session?.coverageLedger ?? null;
+  const errorSignals = session?.errorSignals ?? [];
 
   // 画面在不在（有框可看）：LiveViewImg 挂载即上报 true、流断撤框/卸载（含切会话）上报 false
   // （录制只在服务端内存里 TTL 30min，过期后回看没框，会话过程回落整宽卡片）。
@@ -99,6 +101,7 @@ export default function ExplorationDetail() {
         charter: session!.charter,
         persona: session!.persona,
         allowDestructive: session!.allowDestructive,
+        allowFaultInjection: session!.allowFaultInjection,
         ...(session!.startUrl ? { startUrl: session!.startUrl } : {}),
         ...(session!.windowWidth && session!.windowHeight
           ? { windowWidth: session!.windowWidth, windowHeight: session!.windowHeight }
@@ -407,6 +410,83 @@ export default function ExplorationDetail() {
           </div>
         )}
 
+        {/* 覆盖账本（C1）：平台机械维护的「去过哪些页面/动过哪些控件/子目标完成情况」——
+            回答「探测覆盖度」，模型只回告子目标完成与否，路径与交互是动作留痕的客观聚合。 */}
+        {coverage && (coverage.paths.length > 0 || coverage.interactions.length > 0 || coverage.goals.length > 0) && (
+          <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4 flex flex-col gap-2">
+            <div className="flex items-baseline gap-2">
+              <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
+                {t('explorations:coverageTitle')}
+              </div>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                {coverage.paths.length} {t('explorations:coveragePaths')}
+              </span>
+            </div>
+            {coverage.paths.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {coverage.paths.slice(-20).map((p) => (
+                  <span
+                    key={p}
+                    className="px-1.5 py-0.5 rounded text-[11px] font-mono truncate max-w-[360px]"
+                    style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
+                    title={p}
+                  >
+                    {p}
+                  </span>
+                ))}
+              </div>
+            )}
+            {coverage.interactions.length > 0 && (
+              <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+                {t('explorations:coverageInteractions')}：
+                {coverage.interactions.map((it) => `${it.kind}×${it.count}`).join('、')}
+              </div>
+            )}
+            {coverage.goals.length > 0 && (
+              <div className="flex flex-col gap-1">
+                {coverage.goals.map((g) => (
+                  <div key={g.id} className="flex items-start gap-2 text-[12px]">
+                    <Icon
+                      name={g.done ? 'check' : 'circleDot'}
+                      size={12}
+                      className="shrink-0 mt-0.5"
+                      style={{ color: g.done ? 'var(--success)' : 'var(--muted-foreground)' }}
+                    />
+                    <span style={{ color: g.done ? 'var(--foreground)' : 'var(--muted-foreground)' }}>{g.text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 错误信号（D3）：探索期间页面自己冒出的 console/pageerror/HTTP 4xx-5xx——
+            缺陷的一手旁证，与 findings 相互印证。 */}
+        {errorSignals.length > 0 && (
+          <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4 flex flex-col gap-2">
+            <div className="flex items-baseline gap-2">
+              <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
+                {t('explorations:errorSignalsTitle')}
+              </div>
+              <span className="text-[11px]" style={{ color: 'var(--destructive)' }}>{errorSignals.length}</span>
+            </div>
+            <ul className="flex flex-col gap-1">
+              {errorSignals.slice(-30).reverse().map((sig, i) => (
+                <li key={i} className="font-mono text-[11px] break-all" style={{ color: 'var(--muted-foreground)' }}>
+                  <span
+                    className="px-1 rounded mr-1"
+                    style={{ background: 'var(--muted)', color: sig.kind === 'http' ? 'var(--destructive)' : 'var(--muted-foreground)' }}
+                  >
+                    {sig.kind}
+                  </span>
+                  {sig.text}
+                  {sig.url && <span className="ml-1 opacity-70">({sig.url})</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {/* 缺陷候选：每条一张全宽卡片 */}
         <div className="shrink-0 flex flex-col gap-3">
           <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
@@ -430,6 +510,35 @@ export default function ExplorationDetail() {
                     <StatusPill status={f.status === 'promoted' ? 'passed' : f.status === 'confirmed' ? 'passed' : f.status === 'dismissed' ? 'draft' : 'pending'}>
                       {t(`explorations:findingStatus.${f.status}`)}
                     </StatusPill>
+                    {/* 多视角共同发现（S2）：≥2 个人格会话独立撞上同一缺陷（近义判定），比单人报更可信。 */}
+                    {(f.crossSessionCount ?? 1) >= 2 && (
+                      <span
+                        className="px-1.5 py-0.5 rounded text-[11px]"
+                        style={{ background: 'var(--primary-soft, var(--muted))', color: 'var(--primary)' }}
+                        title={t('explorations:multiViewHint')}
+                      >
+                        {t('explorations:multiViewTag', { count: f.crossSessionCount })}
+                      </span>
+                    )}
+                    {/* 独立评审徽标（A3）：只标注不裁决（人工审阅才是权威）；悬停看评审理由。 */}
+                    {f.judge && (
+                      <span
+                        className="px-1.5 py-0.5 rounded text-[11px]"
+                        title={f.judge.reason}
+                        style={{
+                          color:
+                            f.judge.verdict === 'confirmed'
+                              ? 'var(--success)'
+                              : f.judge.verdict === 'dismissed'
+                                ? 'var(--destructive)'
+                                : 'var(--muted-foreground)',
+                          background: 'var(--muted)',
+                        }}
+                      >
+                        {t('explorations:judgeLabel')}：{t(`explorations:judgeVerdict.${f.judge.verdict}`)}
+                        {` · ${Math.round(f.judge.confidence * 100)}%`}
+                      </span>
+                    )}
                   </div>
                   <div className="text-[13px] whitespace-pre-wrap" style={{ color: 'var(--muted-foreground)' }}>
                     {f.description}
@@ -458,15 +567,27 @@ export default function ExplorationDetail() {
                   )}
 
                   {img ? (
-                    <button
-                      type="button"
-                      onClick={() => setZoom(img)}
-                      className="self-start"
-                      title={t('explorations:zoomImage')}
-                      style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', lineHeight: 0 }}
-                    >
-                      <img src={img} alt={f.title} style={{ maxHeight: 180, display: 'block' }} />
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setZoom(img)}
+                        className="self-start"
+                        title={t('explorations:zoomImage')}
+                        style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', lineHeight: 0 }}
+                      >
+                        <img src={img} alt={f.title} style={{ maxHeight: 180, display: 'block' }} />
+                      </button>
+                      {/* 决策帧（A1）：截图在「模型判断那一刻」先拍后落库（非事后补拍）——元数据钉住帧状态。 */}
+                      {f.evidenceFrame && (
+                        <div className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
+                          {t('explorations:evidenceFrame')}
+                          {f.evidenceFrame.viewport
+                            ? ` · ${f.evidenceFrame.viewport.width}×${f.evidenceFrame.viewport.height}`
+                            : ''}
+                          {` · ${fullDateTime(f.evidenceFrame.capturedAt)}`}
+                        </div>
+                      )}
+                    </>
                   ) : (
                     <div className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                       {t('explorations:noEvidence')}

@@ -52,6 +52,7 @@ export default function Explorations() {
   const [persona, setPersona] = useState('qa');
   const [startUrl, setStartUrl] = useState('');
   const [allowDestructive, setAllowDestructive] = useState(false);
+  const [allowFaultInjection, setAllowFaultInjection] = useState(false);
   // 轮次预算：默认 24（后端同默认，范围 4~60）；清空=不传=后端默认。
   const [budgetTurns, setBudgetTurns] = useState<number | undefined>(24);
   // 测试窗口两态：默认 1280×800 / 自定义宽高（对齐用例详情的窗口策略；探索 headless 无「当前窗口」态）。
@@ -67,6 +68,7 @@ export default function Explorations() {
         charter: charter.trim(),
         persona,
         allowDestructive,
+        allowFaultInjection,
         budgetTurns,
         ...(title.trim() ? { title: title.trim() } : {}),
         ...(startUrl.trim() ? { startUrl: startUrl.trim() } : {}),
@@ -78,6 +80,7 @@ export default function Explorations() {
       setStartUrl('');
       setPersona('qa');
       setAllowDestructive(false);
+      setAllowFaultInjection(false);
       setBudgetTurns(24);
       setWindowMode('default');
       setWindowWidth(undefined);
@@ -90,6 +93,41 @@ export default function Explorations() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
+  // ── 人格矩阵（C3）：同一章程起 N 个人格会话并行跑，建组后跳矩阵视图看各会话进度 ──
+  const [showMatrix, setShowMatrix] = useState(false);
+  const [matrixPersonas, setMatrixPersonas] = useState<string[]>(['qa']);
+  const [matrixLabel, setMatrixLabel] = useState('');
+  const togglePersona = (key: string) =>
+    setMatrixPersonas((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+
+  const createMatrix = useMutation({
+    mutationFn: () =>
+      api.explorations.createMatrix({
+        versionId: versionId!,
+        charter: charter.trim(),
+        personas: matrixPersonas,
+        allowDestructive,
+        allowFaultInjection,
+        ...(startUrl.trim() ? { startUrl: startUrl.trim() } : {}),
+        ...(title.trim() ? { title: title.trim() } : {}),
+        ...(matrixLabel.trim() ? { label: matrixLabel.trim() } : {}),
+      }),
+    onSuccess: (m) => {
+      setCharter('');
+      setTitle('');
+      setStartUrl('');
+      setMatrixPersonas(['qa']);
+      setMatrixLabel('');
+      setAllowDestructive(false);
+      setAllowFaultInjection(false);
+      setShowMatrix(false);
+      toast(t('explorations:matrixCreatedToast'), 'success');
+      qc.invalidateQueries({ queryKey: ['explorations'] });
+      navigate(`/p/${projectId}/v/${versionId}/explorations/matrix/${m.matrixId}`);
+    },
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
+  });
+
   const openDetail = (id: string) => navigate(`/p/${projectId}/v/${versionId}/explorations/${id}`);
 
   return (
@@ -97,6 +135,10 @@ export default function Explorations() {
       <PageShellHeader>
         <PageShellTitle>{t('explorations:title')}</PageShellTitle>
         <PageShellActions>
+          <Button variant="ghost" onClick={() => setShowMatrix(true)}>
+            <Icon name="grid" size={14} />
+            {t('explorations:newMatrix')}
+          </Button>
           <Button onClick={() => setShowCreate(true)}>
             <Icon name="plus" size={14} />
             {t('explorations:newSession')}
@@ -143,6 +185,16 @@ export default function Explorations() {
                       <StatusPill status={s.status} pulse={s.status === 'running'}>
                         {t(`cases:status.${s.status}`)}
                       </StatusPill>
+                      {s.matrixId && (
+                        <span
+                          className="px-1.5 py-0.5 rounded text-[10px]"
+                          style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
+                          title={s.matrixLabel ?? s.matrixId}
+                        >
+                          {s.matrixLabel || t('explorations:newMatrix')}
+                          {s.matrixRole ? ` · ${personaLabel(s.matrixRole, i18n.language)}` : ''}
+                        </span>
+                      )}
                     </div>
                     <div className="text-[12px] mt-1.5 line-clamp-2" style={{ color: 'var(--muted-foreground)' }}>
                       {s.charter}
@@ -268,11 +320,125 @@ export default function Explorations() {
                 {t('explorations:allowDestructiveHint')}
               </span>
             </div>
+            {/* 故障注入授权：默认拒。勾了才允许探索注入断网/慢网/CPU 节流验证错误处理与降级——
+                故障会打断被测系统自身轮询/心跳，章程说辞不算授权；会话结束自动复原。 */}
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-3">
+                <Toggle
+                  checked={allowFaultInjection}
+                  onChange={setAllowFaultInjection}
+                  label={t('explorations:allowFaultInjection')}
+                />
+              </div>
+              <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
+                {t('explorations:allowFaultInjectionHint')}
+              </span>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setShowCreate(false)}>{t('common:cancel')}</Button>
             <Button disabled={charter.trim().length < 10 || !windowCustomReady || create.isPending} onClick={() => create.mutate()}>
               {create.isPending ? t('common:loading') : t('explorations:newSession')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 人格矩阵（C3）：同一章程复用单建弹窗的章程/标题/起始 URL/授权位，
+          差异只在「选多个 persona 各起一个会话」。矩阵精简掉窗口/预算自定义（用默认值）。 */}
+      <Dialog open={showMatrix} onOpenChange={setShowMatrix}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('explorations:newMatrix')}</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 px-5 py-4">
+            <div className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+              {t('explorations:matrixHint')}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>
+                {t('explorations:charter')}
+              </label>
+              <textarea
+                className="input-base"
+                rows={5}
+                value={charter}
+                placeholder={t('explorations:charterPlaceholder')}
+                onChange={(e) => setCharter(e.target.value)}
+              />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>
+                {t('explorations:matrixPersonas')}
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {EXPLORATION_PERSONAS.map((p) => {
+                  const selected = matrixPersonas.includes(p.key);
+                  return (
+                    <button
+                      key={p.key}
+                      type="button"
+                      onClick={() => togglePersona(p.key)}
+                      className="px-2.5 py-1 rounded-full text-[12px] border transition-colors"
+                      style={{
+                        borderColor: selected ? 'var(--primary)' : 'var(--border)',
+                        background: selected ? 'var(--primary-soft, var(--muted))' : 'transparent',
+                        color: selected ? 'var(--primary)' : 'var(--muted-foreground)',
+                      }}
+                    >
+                      {personaLabel(p.key, i18n.language)}
+                    </button>
+                  );
+                })}
+              </div>
+              <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
+                {t('explorations:matrixPersonasHint')}
+              </span>
+            </div>
+            <Input
+              label={t('explorations:startUrl')}
+              placeholder={t('explorations:startUrlPlaceholder')}
+              value={startUrl}
+              onChange={(e) => setStartUrl(e.target.value)}
+            />
+            <Input
+              label={t('explorations:sessionName')}
+              placeholder={t('explorations:sessionNamePlaceholder')}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <Input
+              label={t('explorations:matrixLabel')}
+              placeholder={t('explorations:matrixLabelPlaceholder')}
+              value={matrixLabel}
+              onChange={(e) => setMatrixLabel(e.target.value)}
+            />
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-3">
+                <Toggle checked={allowDestructive} onChange={setAllowDestructive} label={t('explorations:allowDestructive')} />
+              </div>
+              <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{t('explorations:allowDestructiveHint')}</span>
+            </div>
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-3">
+                <Toggle
+                  checked={allowFaultInjection}
+                  onChange={setAllowFaultInjection}
+                  label={t('explorations:allowFaultInjection')}
+                />
+              </div>
+              <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{t('explorations:allowFaultInjectionHint')}</span>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowMatrix(false)}>{t('common:cancel')}</Button>
+            <Button
+              disabled={charter.trim().length < 10 || matrixPersonas.length === 0 || createMatrix.isPending}
+              onClick={() => createMatrix.mutate()}
+            >
+              {createMatrix.isPending
+                ? t('common:loading')
+                : `${t('explorations:matrixCreate')}（${matrixPersonas.length}）`}
             </Button>
           </DialogFooter>
         </DialogContent>

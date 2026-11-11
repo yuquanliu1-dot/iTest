@@ -198,8 +198,35 @@ export const api = {
   explorations: {
     list: (params: { versionId?: string; projectId?: string; page?: number; limit?: number }) =>
       request<Paged<ExplorationSession>>(`/explorations${qs(params)}`),
-    create: (body: { versionId: string; charter: string; persona?: string; title?: string; startUrl?: string; allowDestructive?: boolean; windowWidth?: number; windowHeight?: number; budgetTurns?: number }) =>
-      request<ExplorationSession>('/explorations', { method: 'POST', body: JSON.stringify(body) }),
+    create: (body: {
+      versionId: string;
+      charter: string;
+      persona?: string;
+      title?: string;
+      startUrl?: string;
+      allowDestructive?: boolean;
+      allowFaultInjection?: boolean;
+      windowWidth?: number;
+      windowHeight?: number;
+      budgetTurns?: number;
+    }) => request<ExplorationSession>('/explorations', { method: 'POST', body: JSON.stringify(body) }),
+    /** 人格矩阵建组（C3）：同一章程起 N 个人格会话并行跑（同一 matrix_id 分组）。 */
+    createMatrix: (body: {
+      versionId: string;
+      charter: string;
+      personas: string[];
+      label?: string;
+      title?: string;
+      startUrl?: string;
+      allowDestructive?: boolean;
+      allowFaultInjection?: boolean;
+      windowWidth?: number;
+      windowHeight?: number;
+      budgetTurns?: number;
+    }) => request<ExplorationMatrix>('/explorations/matrix', { method: 'POST', body: JSON.stringify(body) }),
+    getMatrix: (matrixId: string) => request<ExplorationMatrix>(`/explorations/matrix/${matrixId}`),
+    cancelMatrix: (matrixId: string) =>
+      request<{ ok: boolean; cancelled: number }>(`/explorations/matrix/${matrixId}/cancel`, { method: 'POST' }),
     get: (id: string) => request<ExplorationSession>(`/explorations/${id}`),
     cancel: (id: string) => request<{ ok: boolean }>(`/explorations/${id}/cancel`, { method: 'POST' }),
     remove: (id: string) => request<{ ok: boolean }>(`/explorations/${id}`, { method: 'DELETE' }),
@@ -1198,6 +1225,8 @@ export interface ExplorationSession {
   cancelRequested: boolean;
   /** 破坏性操作授权（默认 false）：勾了才允许探索点删除/支付/发送这类不可逆入口。 */
   allowDestructive: boolean;
+  /** 故障注入授权（默认 false）：勾了才允许探索注入断网/慢网/CPU 节流验证错误处理与降级。 */
+  allowFaultInjection: boolean;
   /** 浏览器视口宽高（两态：null=默认 1280×800；成对给=自定义，对齐用例自定义窗口）。 */
   windowWidth: number | null;
   windowHeight: number | null;
@@ -1205,6 +1234,23 @@ export interface ExplorationSession {
   budgetTurns?: number | null;
   /** 负面结果账本：模型申报的「已排除的假设 + 依据」（外化记忆最小切片）。 */
   excludedLedger?: Array<{ claim: string; evidence: string }> | null;
+  /** 覆盖账本（C1）：机械维护的已覆盖路径/交互计数/子目标完成情况。 */
+  coverageLedger?: CoverageLedger | null;
+  /** 错误信号（D3）：探索期间捕获的 console/pageerror/HTTP 4xx-5xx。 */
+  errorSignals?: Array<{ at: string; kind: 'console' | 'pageerror' | 'http'; text: string; url?: string }> | null;
+  /** 独立评审（A3）状态：pending（未评审）| done | failed | skipped（无 findings）。 */
+  judgeStatus?: 'pending' | 'done' | 'failed' | 'skipped';
+  /** 评审汇总（A3）：各 finding 判定 + 置信度。评审只标注，不改 findings.status。 */
+  judgeResult?: {
+    judgedAt: string;
+    summary?: string;
+    error?: string;
+    findings: Array<{ id: string; verdict: 'confirmed' | 'dismissed' | 'unclear'; reason: string; confidence: number }>;
+  } | null;
+  /** 人格矩阵（C3）：同 matrix_id 的会话分组展示。 */
+  matrixId?: string | null;
+  matrixLabel?: string | null;
+  matrixRole?: string | null;
   /** 代码提交范围（runner 后台解析，前端轮询可见；详情/列表接口都带）。 */
   codeScope?: CodeScope | null;
   codeScopeStatus?: CodeScopeStatus | null;
@@ -1223,6 +1269,21 @@ export interface ExplorationSession {
   steps?: ExplorationStep[];
 }
 
+/** 覆盖账本快照（C1）：路径去重 + 交互计数 + 子目标完成情况（平台不猜「做没做到」）。 */
+export interface CoverageLedger {
+  paths: string[];
+  interactions: Array<{ kind: string; count: number }>;
+  goals: Array<{ id: string; text: string; done: boolean }>;
+}
+
+/** 矩阵视图（C3/S2）：矩阵内全部会话 + 它们的 findings（finding 带 crossSessionCount）。 */
+export interface ExplorationMatrix {
+  matrixId: string;
+  label: string | null;
+  sessions: ExplorationSession[];
+  findings: ExplorationFinding[];
+}
+
 export interface ExplorationFinding {
   id: string;
   sessionId: string;
@@ -1238,6 +1299,24 @@ export interface ExplorationFinding {
   /** /screenshots/<sessionId>/finding-<order>.png（express.static 提供）。 */
   screenshotPath: string | null;
   pageUrl: string | null;
+  /** 决策帧元数据（A1）：finding 报告工具在「决策那一刻」截图后钉住的页面状态。 */
+  evidenceFrame?: {
+    url: string;
+    viewport: { width: number; height: number } | null;
+    capturedAt: string;
+    trailIndex: number;
+    screenshotPath?: string;
+  } | null;
+  /** 跨会话交集（S2）：几个会话报了同一缺陷；≥2 = 多视角共同发现。 */
+  crossSessionCount: number;
+  /** 独立评审结论（A3）：只标注不改 status——人工审阅才是权威。 */
+  judge?: {
+    verdict: 'confirmed' | 'dismissed' | 'unclear';
+    reason: string;
+    confidence: number;
+    model?: string;
+    judgedAt: string;
+  } | null;
   status: ExplorationFindingStatus;
   reviewedBy: string | null;
   reviewedAt: string | null;
