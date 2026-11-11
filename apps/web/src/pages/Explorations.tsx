@@ -11,6 +11,7 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import EmptyState from '../components/ui/EmptyState';
 import StatusPill from '../components/ui/StatusPill';
+import Toggle from '../components/ui/Toggle';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
 import { fullDateTime } from '../lib/format';
 import { creatorName } from '../lib/creatorName';
@@ -49,6 +50,7 @@ export default function Explorations() {
   const [title, setTitle] = useState('');
   const [persona, setPersona] = useState('qa');
   const [startUrl, setStartUrl] = useState('');
+  const [allowDestructive, setAllowDestructive] = useState(false);
 
   const create = useMutation({
     mutationFn: () =>
@@ -56,6 +58,7 @@ export default function Explorations() {
         versionId: versionId!,
         charter: charter.trim(),
         persona,
+        allowDestructive,
         ...(title.trim() ? { title: title.trim() } : {}),
         ...(startUrl.trim() ? { startUrl: startUrl.trim() } : {}),
       }),
@@ -64,6 +67,7 @@ export default function Explorations() {
       setTitle('');
       setStartUrl('');
       setPersona('qa');
+      setAllowDestructive(false);
       setShowCreate(false);
       toast(t('explorations:createdToast'), 'success');
       qc.invalidateQueries({ queryKey: ['explorations'] });
@@ -190,6 +194,20 @@ export default function Explorations() {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
+            {/* 破坏性操作授权：默认拒。勾了才允许探索点删除/支付/发送这类不可逆入口——
+                章程说辞不算授权（机械闸只认这个开关）。 */}
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-3">
+                <Toggle
+                  checked={allowDestructive}
+                  onChange={setAllowDestructive}
+                  label={t('explorations:allowDestructive')}
+                />
+              </div>
+              <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
+                {t('explorations:allowDestructiveHint')}
+              </span>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setShowCreate(false)}>{t('common:cancel')}</Button>

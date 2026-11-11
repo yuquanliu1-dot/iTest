@@ -111,6 +111,22 @@ describe('POST /api/explorations - 建会话', () => {
     const r = await request(app).post('/api/explorations').send({ versionId: randomUUID(), charter: CHARTER });
     expect(r.status).toBe(404);
   });
+
+  it('破坏性操作授权位：缺省 false（默认拒），显式 true 才落库', async () => {
+    const dflt = await request(app).post('/api/explorations').send({ versionId, charter: CHARTER });
+    expect(dflt.status).toBe(201);
+    expect(dflt.body.allowDestructive).toBe(false);
+    const row = (await pool.query(`SELECT allow_destructive FROM exploration_sessions WHERE id=$1`, [dflt.body.id])).rows[0]!;
+    expect(row.allow_destructive).toBe(false);
+
+    const granted = await request(app)
+      .post('/api/explorations')
+      .send({ versionId, charter: CHARTER, allowDestructive: true });
+    expect(granted.status).toBe(201);
+    expect(granted.body.allowDestructive).toBe(true);
+    const row2 = (await pool.query(`SELECT allow_destructive FROM exploration_sessions WHERE id=$1`, [granted.body.id])).rows[0]!;
+    expect(row2.allow_destructive).toBe(true);
+  });
 });
 
 describe('GET /api/explorations - 列表与详情', () => {
@@ -174,6 +190,17 @@ describe('GET /api/explorations - 列表与详情', () => {
     expect(r.status).toBe(200);
     expect(r.body.steps.map((s: { type: string }) => s.type)).toEqual(['click', 'sql', 'navigate']);
     expect(r.body.steps[1].detail).toBe('1 行');
+  });
+
+  it('详情返回负面结果账本（已排除项 + 依据）', async () => {
+    const id = await insertSession();
+    await pool.query(`UPDATE exploration_sessions SET excluded_ledger=$2 WHERE id=$1`, [
+      id,
+      JSON.stringify([{ claim: '列表页无越权', evidence: '切用户后仍见自己数据' }]),
+    ]);
+    const r = await request(app).get(`/api/explorations/${id}`);
+    expect(r.status).toBe(200);
+    expect(r.body.excludedLedger).toEqual([{ claim: '列表页无越权', evidence: '切用户后仍见自己数据' }]);
   });
 
   it('跨组织用户看详情 → 404', async () => {

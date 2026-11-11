@@ -198,7 +198,7 @@ export const api = {
   explorations: {
     list: (params: { versionId?: string; projectId?: string; page?: number; limit?: number }) =>
       request<Paged<ExplorationSession>>(`/explorations${qs(params)}`),
-    create: (body: { versionId: string; charter: string; persona?: string; title?: string; startUrl?: string }) =>
+    create: (body: { versionId: string; charter: string; persona?: string; title?: string; startUrl?: string; allowDestructive?: boolean }) =>
       request<ExplorationSession>('/explorations', { method: 'POST', body: JSON.stringify(body) }),
     get: (id: string) => request<ExplorationSession>(`/explorations/${id}`),
     cancel: (id: string) => request<{ ok: boolean }>(`/explorations/${id}/cancel`, { method: 'POST' }),
@@ -1167,6 +1167,10 @@ export interface ExplorationSession {
   startUrl: string | null;
   status: ExplorationStatus;
   cancelRequested: boolean;
+  /** 破坏性操作授权（默认 false）：勾了才允许探索点删除/支付/发送这类不可逆入口。 */
+  allowDestructive: boolean;
+  /** 负面结果账本：模型申报的「已排除的假设 + 依据」（外化记忆最小切片）。 */
+  excludedLedger?: Array<{ claim: string; evidence: string }> | null;
   summary: string | null;
   error: string | null;
   turnsUsed: number;

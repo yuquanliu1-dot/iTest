@@ -28,6 +28,7 @@ import { startExecutionWorker } from './scheduler/execWorker.js';
 import { startRcaWorker } from './scheduler/rcaWorker.js';
 import { startTrajectoryWorker } from './scheduler/trajectoryWorker.js';
 import { startScheduler } from './scheduler/index.js';
+import { startExplorationSweeper } from './scheduler/explorationSweeper.js';
 import { authRoute } from './routes/auth.js';
 import { organizationsRoute } from './routes/organizations.js';
 import { scenariosRoute } from './routes/scenarios.js';
@@ -104,6 +105,8 @@ async function bootstrap() {
     void startRcaWorker();
     void startTrajectoryWorker();
     void startScheduler();
+    // 探索会话看门狗：判死「执行器已死但状态还停在 running」的僵死会话
+    void startExplorationSweeper();
   });
   attachRecorderWs(server);
 }

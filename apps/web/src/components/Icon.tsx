@@ -109,6 +109,7 @@ const iconMap: Record<string, CarbonIconType> = {
   list: List,
   listChecks: Task,
   loader: Renew,
+  renew: Renew,
   logOut: Logout,
   maximize: Maximize,
   message: Chat,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assembleSystemPrompt, referencesCredential, buildDegradeContext, classifyDegradeStep, brittleSelectorReason, originOf, scopeViolationReason, renderSqlProbeRows } from './aiTask.js';
+import { assembleSystemPrompt, referencesCredential, buildDegradeContext, classifyDegradeStep, brittleSelectorReason, originOf, scopeViolationReason, renderSqlProbeRows, destructiveActionReason, parseExcluded, renderExcluded } from './aiTask.js';
 
 describe('assembleSystemPrompt - 凭据段门控', () => {
   it('credEnabled=false → 提示词不含任何凭据形态', () => {
@@ -290,6 +290,93 @@ describe('renderSqlProbeRows - 取证结果回灌渲染（四级封顶，防撑�
   it('空白压成空格（多行值不撑破行结构）', () => {
     const out = renderSqlProbeRows([{ note: 'a\n  b' }], 1, false);
     expect(out).toContain('note=a b');
+  });
+});
+
+describe('destructiveActionReason - 破坏性动作机械闸（默认拒）', () => {
+  it('中文破坏性词命中', () => {
+    expect(destructiveActionReason('删除')).toContain('删除');
+    expect(destructiveActionReason('批量删除')).toContain('删除');
+    expect(destructiveActionReason('立即支付')).toContain('支付');
+    expect(destructiveActionReason('审批通过')).toContain('审批');
+    expect(destructiveActionReason('发送')).toContain('外发');
+    expect(destructiveActionReason('注销账号')).toContain('停用');
+    expect(destructiveActionReason('移除成员')).toContain('移除');
+    expect(destructiveActionReason('清空数据')).toContain('清空数据');
+  });
+
+  it('英文破坏性词命中（不区分大小写）', () => {
+    expect(destructiveActionReason('Delete')).toContain('delete');
+    expect(destructiveActionReason('REMOVE USER')).toContain('delete');
+    expect(destructiveActionReason('Approve')).toContain('approve');
+    expect(destructiveActionReason('Pay Now')).toContain('payment');
+    expect(destructiveActionReason('Send message')).toContain('send');
+    expect(destructiveActionReason('Publish')).toContain('send');
+  });
+
+  it('正常探索动作放行（清除/重置/取消/确认/保存/提交/导出/导入 刻意不收）', () => {
+    for (const s of [
+      '保存', '查询', '筛选', '编辑', '搜索', '导出', '导入', '提交',
+      '清除筛选', '重置筛选条件', '取消', '确认',
+      'Save', 'Search', 'Edit', 'Export', 'Cancel',
+    ]) {
+      expect(destructiveActionReason(s), s).toBeNull();
+    }
+  });
+
+  it('空文本放行（清单里找不到目标时不该误杀）', () => {
+    expect(destructiveActionReason('')).toBeNull();
+  });
+});
+
+describe('parseExcluded - 负面结果账本解析（宽容、不纠错）', () => {
+  it('标准形状 [{claim,evidence}]', () => {
+    expect(parseExcluded([{ claim: '登录页无越权', evidence: '切换用户后仍见自己数据' }])).toEqual([
+      { claim: '登录页无越权', evidence: '切换用户后仍见自己数据' },
+    ]);
+  });
+
+  it('字符串条目 → evidence 留空', () => {
+    expect(parseExcluded(['已排除项'])).toEqual([{ claim: '已排除项', evidence: '' }]);
+  });
+
+  it('非数组 → 空', () => {
+    expect(parseExcluded('x')).toEqual([]);
+    expect(parseExcluded(null)).toEqual([]);
+    expect(parseExcluded({ claim: 'x' })).toEqual([]);
+  });
+
+  it('缺 claim / 空 claim / 非对象条目丢弃；缺 evidence 不丢条目', () => {
+    expect(parseExcluded([{ evidence: 'x' }, { claim: '  ' }, null, 42])).toEqual([]);
+    expect(parseExcluded([{ claim: 'a' }])).toEqual([{ claim: 'a', evidence: '' }]);
+  });
+
+  it('每轮上限 5 条', () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({ claim: `c${i}`, evidence: 'e' }));
+    expect(parseExcluded(many)).toHaveLength(5);
+  });
+
+  it('单条 claim/evidence 截断到 120 字', () => {
+    const out = parseExcluded([{ claim: 'x'.repeat(300), evidence: 'y'.repeat(300) }]);
+    expect(out[0]!.claim.length).toBe(120);
+    expect(out[0]!.evidence.length).toBe(120);
+  });
+});
+
+describe('renderExcluded - 排除账本回灌渲染', () => {
+  it('空账本 → 空串（不出现在 userMessage 里）', () => {
+    expect(renderExcluded([])).toBe('');
+  });
+
+  it('条目渲染成「- claim（依据：evidence）」', () => {
+    const out = renderExcluded([{ claim: 'A', evidence: 'B' }]);
+    expect(out).toContain('已排除');
+    expect(out).toContain('- A（依据：B）');
+  });
+
+  it('无 evidence 时不写依据段', () => {
+    expect(renderExcluded([{ claim: 'A', evidence: '' }])).toContain('- A');
+    expect(renderExcluded([{ claim: 'A', evidence: '' }])).not.toContain('依据');
   });
 });
 

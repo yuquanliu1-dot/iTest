@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Page } from 'playwright-core';
-import type { LLMClient, LLMResult } from '../src/agent/llm-client.js';
+import type { LLMClient, LLMMessage, LLMResult } from '../src/agent/llm-client.js';
 import { runAiTask, solveCaptchaOnce, credentialPlaceholderKind, makeCredentialValueSub, referencesCredential, parseCredentialPlaceholder, credentialPlaceholder, isValidCredentialRef } from '../src/execute/aiTask.js';
 
 /** 记录调用顺序的桩 Page：screenshot/evaluate/url 走默认值，locator 动作全部记录。
@@ -173,17 +173,66 @@ function makeTreeStubPage(
   return { page: page as unknown as Page, calls, shots, state };
 }
 
-/** 按轮次脚本化回复的 mock LLM；每轮收到完整 userMessage。 */
+/** 元素清单桩：dumpElements 的 evaluate 返回给定清单（其余 evaluate 走默认）。
+ *  破坏性闸判定的是「被点击元素的可见文本」，必须能造出带文本的元素才测得到。 */
+interface StubElement {
+  selector: string;
+  tag?: string;
+  box: [number, number, number, number];
+  text?: string;
+  placeholder?: string;
+  value?: string;
+}
+
+function makeElementListStubPage(elements: StubElement[]) {
+  const calls: string[] = [];
+  const page = {
+    url: () => 'https://sut.example/list',
+    viewportSize: () => ({ width: 1000, height: 800 }),
+    screenshot: async () => Buffer.from('jpg'),
+    evaluate: async (fn: unknown) => {
+      const src = String(fn);
+      if (src.includes('getComputedStyle')) return elements;
+      if (src.includes('elementFromPoint')) return null;
+      if (src.includes('canvas')) return 0;
+      return [];
+    },
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    keyboard: {
+      press: async (key: string) => { calls.push(`press:${key}`); },
+      type: async (v: string) => { calls.push(`type:${v}`); },
+    },
+    mouse: { click: async (x: number, y: number) => { calls.push(`mouse:click:${x},${y}`); } },
+    waitForTimeout: async (ms: number) => { calls.push(`wait:${ms}`); },
+    locator: (selector: string) => ({
+      first: () => ({
+        click: async () => { calls.push(`click:${selector}`); },
+        fill: async (v: string) => { calls.push(`fill:${selector}:${v}`); },
+        pressSequentially: async (v: string) => { calls.push(`type:${selector}:${v}`); },
+        inputValue: async () => '',
+        waitFor: async () => undefined,
+        evaluate: async () => undefined,
+        screenshot: async () => Buffer.from('zoomed'),
+      }),
+    }),
+  };
+  return { page: page as unknown as Page, calls };
+}
+
+/** 按轮次脚本化回复的 mock LLM；每轮收到完整 userMessage + 完整 messages 历史。 */
 function makeMockLlm(script: Array<Record<string, unknown> | string>) {
   const requests: string[] = [];
   const systems: string[] = [];
   const langs: Array<string | undefined> = [];
+  const histories: Array<LLMMessage[] | undefined> = [];
   const llm: LLMClient = {
     provider: 'anthropic',
     async complete(req): Promise<LLMResult> {
       requests.push(req.userMessage);
       systems.push(req.systemPrompt);
       langs.push(req.lang);
+      histories.push(req.messages);
       const raw = script.shift();
       if (raw === undefined) throw new Error('mock script exhausted');
       return typeof raw === 'string'
@@ -191,7 +240,7 @@ function makeMockLlm(script: Array<Record<string, unknown> | string>) {
         : { kind: 'json', value: raw, provider: 'anthropic', vision: true };
     },
   };
-  return { llm, requests, systems, langs };
+  return { llm, requests, systems, langs, histories };
 }
 
 describe('solveCaptchaOnce / detectCaptchaFailure（多轮验证）', () => {
@@ -1016,5 +1065,121 @@ describe('makeCredentialValueSub byRef（@ref 归属解析）', () => {
       byRef: () => ({ user: 'x', password: 'y' }),
     });
     expect(sub('__ITEST_STEP_SECRET@anything__')).toBe('step-secret');
+  });
+});
+
+/**
+ * 破坏性动作机械闸（默认拒）。真源：11-10 prod 实录——章程要求核查删除是否真落库 →
+ * 模型点了删除 → 资产真被删。charter 说辞不算授权，闸只认会话级显式开关。
+ */
+describe('破坏性动作闸（destructivePolicy）', () => {
+  /** 元素清单里放一个 text=「删除」的按钮；模型按坐标点它。 */
+  const delButton = [{ selector: 'button.del', tag: 'button', box: [100, 200, 300, 260] as [number, number, number, number], text: '删除' }];
+
+  it('默认拒：命中破坏性词 → click 未执行 + 反馈含「破坏性」+ onAction ok=false', async () => {
+    const { page, calls } = makeElementListStubPage(delButton);
+    const reported: Array<{ a: unknown; ok: boolean }> = [];
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'click', x: 200, y: 230 }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '核查删除是否真落库', llm, false, {
+      destructivePolicy: { allow: false },
+      onAction: (a, ok) => { reported.push({ a, ok }); },
+    });
+    // 闸在执行之前：页面上一次点击都没发生
+    expect(calls.filter((c) => c.startsWith('mouse:click') || c.startsWith('click:'))).toEqual([]);
+    expect(reported).toEqual([{ a: { type: 'click', x: 200, y: 230 }, ok: false }]);
+    // 反馈告诉模型「这是机械拒收、别改措辞绕」
+    expect(requests[1]).toContain('破坏性');
+    expect(requests[1]).toContain('已机械拒收');
+  });
+
+  it('授权放行：destructivePolicy.allow=true → click 真执行', async () => {
+    const { page, calls } = makeElementListStubPage(delButton);
+    const reported: Array<{ a: unknown; ok: boolean }> = [];
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'click', x: 200, y: 230 }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '核查删除是否真落库', llm, false, {
+      destructivePolicy: { allow: true },
+      onAction: (a, ok) => { reported.push({ a, ok }); },
+    });
+    expect(calls.some((c) => c.startsWith('mouse:click'))).toBe(true);
+    expect(reported).toHaveLength(1);
+    expect(reported[0]!.ok).toBe(true);
+  });
+
+  it('未挂 destructivePolicy → 行为不变（verify / 登录 / 固化路径零回归）', async () => {
+    const { page, calls } = makeElementListStubPage(delButton);
+    const reported: Array<{ a: unknown; ok: boolean }> = [];
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'click', x: 200, y: 230 }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '点删除', llm, false, {
+      onAction: (a, ok) => { reported.push({ a, ok }); },
+    });
+    expect(calls.some((c) => c.startsWith('mouse:click'))).toBe(true);
+    expect(reported[0]!.ok).toBe(true);
+  });
+
+  it('非破坏性目标不受影响（保存按钮照常点）', async () => {
+    const { page, calls } = makeElementListStubPage([
+      { selector: 'button.save', tag: 'button', box: [100, 200, 300, 260], text: '保存' },
+    ]);
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'click', x: 200, y: 230 }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '保存', llm, false, { destructivePolicy: { allow: false } });
+    expect(calls.some((c) => c.startsWith('mouse:click'))).toBe(true);
+  });
+
+  it('清单里找不到目标 → 放行（宁可漏判不误杀正常探索）', async () => {
+    const { page, calls } = makeElementListStubPage([]);
+    const { llm } = makeMockLlm([
+      { actions: [{ type: 'click', selector: '#unknown' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '点一个清单外的目标', llm, false, { destructivePolicy: { allow: false } });
+    expect(calls.some((c) => c.startsWith('click:#unknown'))).toBe(true);
+  });
+});
+
+/** 负面结果账本（外化记忆最小切片）：模型申报 → 平台跨轮累计 → 回灌进下一轮。 */
+describe('负面结果账本（excluded）', () => {
+  it('模型申报的排除项在下一轮 userMessage 回灌，且历史轮次字节不变', async () => {
+    const { page } = makeStubPage();
+    const collected: Array<{ claim: string; evidence: string }> = [];
+    const { llm, requests, histories } = makeMockLlm([
+      { actions: [{ type: 'wait', ms: 1 }], excluded: [{ claim: '列表页无越权', evidence: '切用户后仍见自己数据' }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '探索列表页', llm, false, {
+      onExcluded: (items) => { collected.push(...items); },
+    });
+    // 平台侧收到申报
+    expect(collected).toEqual([{ claim: '列表页无越权', evidence: '切用户后仍见自己数据' }]);
+    // 第 2 轮 userMessage 含回灌块
+    expect(requests[1]).toContain('已排除');
+    expect(requests[1]).toContain('列表页无越权');
+    expect(requests[1]).toContain('切用户后仍见自己数据');
+    // 缓存前缀安全：历史轮次的 user 文本逐字节不变（回灌只进当轮）
+    const hist = histories[1]!;
+    const firstUserText = hist[0]!.content.map((c) => (c.type === 'text' ? c.text : '')).join('');
+    expect(firstUserText).toBe(requests[0]);
+    expect(firstUserText).not.toContain('已排除');
+  });
+
+  it('未申报 excluded → userMessage 不含回灌块', async () => {
+    const { page } = makeStubPage();
+    const { llm, requests } = makeMockLlm([
+      { actions: [{ type: 'wait', ms: 1 }] },
+      { done: true, summary: 'ok' },
+    ]);
+    await runAiTask(page, '探索列表页', llm, false);
+    expect(requests[1]).not.toContain('已排除');
   });
 });

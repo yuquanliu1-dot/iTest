@@ -31,6 +31,12 @@ const CreateBody = z.object({
   persona: z.enum(EXPLORATION_PERSONA_KEYS as [string, ...string[]]).default('qa'),
   title: z.string().trim().min(1).max(200).optional(),
   startUrl: z.string().trim().max(2000).optional(),
+  /**
+   * 破坏性操作授权（默认拒）：勾了才允许探索点击删除/支付/发送这类不可逆入口。
+   * charter 说辞不算授权——机械闸只认这个显式开关（2026-11-10 prod 实录：章程要求核查
+   * 删除是否真落库 → 模型点了删除 → 资产真被删）。
+   */
+  allowDestructive: z.boolean().default(false),
 });
 
 const ListQuery = z.object({
@@ -64,6 +70,7 @@ explorationsRoute.post('/', async (req, res) => {
       charter: body.charter,
       persona: body.persona,
       startUrl: body.startUrl?.trim() || null,
+      allowDestructive: body.allowDestructive,
       status: 'pending',
       createdByUserId: req.user!.userId,
     })

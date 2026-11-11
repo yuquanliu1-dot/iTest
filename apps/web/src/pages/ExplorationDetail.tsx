@@ -45,6 +45,7 @@ export default function ExplorationDetail() {
 
   const findings = session?.findings ?? [];
   const steps = session?.steps ?? [];
+  const excluded = session?.excludedLedger ?? [];
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['exploration', id] });
@@ -74,6 +75,25 @@ export default function ExplorationDetail() {
     mutationFn: (v: { findingId: string; decision: 'confirmed' | 'dismissed' }) =>
       api.explorations.review(id!, v.findingId, v.decision),
     onSuccess: invalidate,
+    onError: (e: Error) => toast(localizeApiError(e), 'error'),
+  });
+
+  // 以此章程重跑：自动续跑要复原 LLM 历史/浏览器上下文/页面栈，不在本批范围——
+  // 终态会话给一个同章程重开入口，比让用户照抄章程强。
+  const rerun = useMutation({
+    mutationFn: () =>
+      api.explorations.create({
+        versionId: versionId!,
+        charter: session!.charter,
+        persona: session!.persona,
+        allowDestructive: session!.allowDestructive,
+        ...(session!.startUrl ? { startUrl: session!.startUrl } : {}),
+      }),
+    onSuccess: (s) => {
+      toast(t('explorations:rerunCreated'), 'success');
+      qc.invalidateQueries({ queryKey: ['explorations'] });
+      navigate(`/p/${projectId}/v/${versionId}/explorations/${s.id}`);
+    },
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
@@ -140,17 +160,26 @@ export default function ExplorationDetail() {
             {session.cancelRequested ? t('explorations:cancelRequested') : t('explorations:cancel')}
           </Button>
         )}
-        {(!running || session.cancelRequested) && (
-          <Button
-            variant="ghost"
-            onClick={() => remove.mutate()}
-            disabled={remove.isPending}
-            style={{ color: 'var(--destructive)' }}
-            aria-label={t('explorations:deleteSession')}
-            title={t('explorations:deleteSession')}
-          >
-            <Icon name="trash" size={12} />
+        {/* 重跑入口只给终态会话：running 的会话还在写 findings，重开等于并行两场。 */}
+        {!running && (
+          <Button variant="ghost" onClick={() => rerun.mutate()} disabled={rerun.isPending}>
+            <Icon name="renew" size={12} />
+            {t('explorations:rerun')}
           </Button>
+        )}
+        {(!running || session.cancelRequested) && (
+          <>
+            <Button
+              variant="ghost"
+              onClick={() => remove.mutate()}
+              disabled={remove.isPending}
+              style={{ color: 'var(--destructive)' }}
+              aria-label={t('explorations:deleteSession')}
+              title={t('explorations:deleteSession')}
+            >
+              <Icon name="trash" size={12} />
+            </Button>
+          </>
         )}
       </div>
 
@@ -239,6 +268,32 @@ export default function ExplorationDetail() {
                 </li>
               ))}
             </ol>
+          </div>
+        )}
+
+        {/* 负面结果账本：模型申报的「已排除的假设 + 依据」。只存排除项、不存信念——
+            黑板存信念会把观察冻成结论、自我印证。 */}
+        {excluded.length > 0 && (
+          <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4 flex flex-col gap-2">
+            <div className="flex items-baseline gap-2">
+              <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
+                {t('explorations:excludedTitle')}
+              </div>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{excluded.length}</span>
+            </div>
+            <ul className="flex flex-col gap-1.5">
+              {excluded.map((e, i) => (
+                <li key={i} className="flex flex-col gap-0.5">
+                  <div className="flex items-start gap-2 text-[12px]">
+                    <Icon name="check" size={12} className="shrink-0 mt-0.5" style={{ color: 'var(--success)' }} />
+                    <span className="flex-1" style={{ color: 'var(--foreground)' }}>{e.claim}</span>
+                  </div>
+                  <div className="text-[11px] pl-6" style={{ color: 'var(--muted-foreground)' }}>
+                    {t('explorations:excludedEvidence')}：{e.evidence}
+                  </div>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 

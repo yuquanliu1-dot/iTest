@@ -459,6 +459,56 @@ export function brittleSelectorReason(selector: string): string | null {
   return null;
 }
 
+/**
+ * 破坏性动作关键词表：命中即机械拒收（默认拒，用户在会话里显式授权才放行）。
+ *
+ * 判定对象 = **被点击元素的可见文本**（text + placeholder + value + selector 拼接），
+ * 不是模型输出——闸必须确定性、可复现、可审计。charter 是自然语言，模型会拿它当借口
+ * （2026-11-10 prod 实录：章程要求核查删除是否真落库 → 模型点了删除 → 资产真被删）。
+ *
+ * 刻意不收「清除 / 重置 / 取消 / 确认 / 保存 / 提交 / 导出 / 导入」：这些在探索里是正常
+ * 观测动作（探索基底本就允许用测试语义内容提交表单观察校验行为）。误伤方向一律选
+ * 「拦住而非执行」，会话级授权开关是兜底。
+ */
+const DESTRUCTIVE_PATTERNS: Array<{ re: RegExp; why: string }> = [
+  { re: /删除|销毁|格式化/, why: '删除/销毁' },
+  { re: /清空数据|清空全部|一键清空|批量清空/, why: '清空数据' },
+  { re: /移除/, why: '移除' },
+  { re: /注销|销户|停用|禁用|下线|封禁|解绑|解约|退订|终止服务/, why: '停用/注销/解绑' },
+  { re: /支付|付款|结算|扣款|转账|提现|下单|购买|充值/, why: '支付/出账' },
+  { re: /发送|发布|群发|外发|寄出|提交订单/, why: '外发' },
+  { re: /审批|核准|驳回|授权|放行|授予/, why: '审批/授权' },
+  { re: /恢复出厂|重置密码|初始化数据/, why: '重置/初始化数据' },
+  { re: /delete|remove|destroy|purge|wipe|erase|deprovision/i, why: 'delete/remove' },
+  { re: /deactivate|disable|terminate|revoke|unbind|unsubscribe|offboard/i, why: 'deactivate/revoke' },
+  { re: /pay|checkout|settle|purchase|buy|place order|withdraw|top up/i, why: 'payment' },
+  { re: /send|publish|dispatch|broadcast|submit order/i, why: 'send/publish' },
+  { re: /approve|reject|authorize|grant/i, why: 'approve/authorize' },
+  { re: /factory reset|reset password|wipe data|clear all/i, why: 'factory reset' },
+];
+
+/** 破坏性判定：目标可见文本命中关键词返回原因，null = 放行。 */
+export function destructiveActionReason(targetText: string): string | null {
+  if (!targetText) return null;
+  for (const p of DESTRUCTIVE_PATTERNS) {
+    if (p.re.test(targetText)) return p.why;
+  }
+  return null;
+}
+
+/** 点击目标 → 元素清单里的可见文本（坐标按归一化框包含判定；selector 按等值匹配）。
+ *  清单里找不到 → 返回空串 = 放行：清单只收可交互元素且上限 60，模型可能点在清单外，
+ *  宁可漏判也不误杀正常探索（真正的防线仍是给被测环境配可丢弃的数据）。 */
+function clickTargetText(a: AiAction, elements: ElementInfo[]): string {
+  if (a.type !== 'click') return '';
+  const hit =
+    typeof a.x === 'number' && typeof a.y === 'number'
+      ? elements.find((e) => a.x! >= e.box[0] && a.x! <= e.box[2] && a.y! >= e.box[1] && a.y! <= e.box[3])
+      : elements.find((e) => e.selector === a.selector);
+  if (!hit) return typeof a.selector === 'string' ? a.selector : '';
+  return [hit.text, hit.placeholder, hit.value, hit.selector].filter(Boolean).join(' ');
+}
+
 // —— 数据库取证（sql 动作）的结果回灌渲染 ——
 // 查回的行走的是模型的下一轮输入，必须封顶：行数 5、单元格 60、单行 160、整块 700。
 
@@ -680,6 +730,49 @@ function parseSubGoals(v: unknown): SubGoal[] | null {
 function renderSubGoals(goals: SubGoal[]): string {
   const lines = goals.map((g, i) => `${i + 1}. [${g.done ? '完成' : '进行中'}] ${g.text}`);
   return `子目标进度（你维护的清单，截图确认生效后标 done:true）：\n${lines.join('\n')}`;
+}
+
+// —— 负面结果账本（外化记忆的最小切片）——
+// 只存「已排除的假设」，不存信念：黑板存信念会把观察冻成结论、自我印证，
+// 而探索测试的产出是信息（哪些路径已排除），不是结论。
+// 平台不猜负面结果（失败动作、无观测变化都是过程噪音），由模型申报、平台持久化并回灌。
+
+/** 单轮申报条数上限 / 单条文本上限 / 会话累计上限（回灌块不能无限膨胀）。 */
+const EXCLUDED_PER_TURN_MAX = 5;
+const EXCLUDED_ITEM_MAX = 120;
+const EXCLUDED_TOTAL_MAX = 20;
+
+/** 模型申报的排除项。 */
+export interface ExcludedItem {
+  claim: string;
+  evidence: string;
+}
+
+/** 宽容解析：接受 [{claim,evidence}] / [字符串]；无效条目丢弃（best-effort，不纠错不反馈）。 */
+export function parseExcluded(v: unknown): ExcludedItem[] {
+  if (!Array.isArray(v)) return [];
+  const out: ExcludedItem[] = [];
+  for (const item of v.slice(0, EXCLUDED_PER_TURN_MAX)) {
+    if (typeof item === 'string') {
+      const t = item.trim();
+      if (t) out.push({ claim: t.slice(0, EXCLUDED_ITEM_MAX), evidence: '' });
+      continue;
+    }
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const claim = typeof o.claim === 'string' ? o.claim.trim() : '';
+    if (!claim) continue;
+    const evidence = typeof o.evidence === 'string' ? o.evidence.trim().slice(0, EXCLUDED_ITEM_MAX) : '';
+    out.push({ claim: claim.slice(0, EXCLUDED_ITEM_MAX), evidence });
+  }
+  return out;
+}
+
+/** 回灌进 userMessage 的排除块（空账本不出现在 userMessage 里）。 */
+export function renderExcluded(items: ExcludedItem[]): string {
+  if (items.length === 0) return '';
+  const lines = items.map((e) => `- ${e.claim}${e.evidence ? `（依据：${e.evidence}）` : ''}`);
+  return `已排除（你申报并已验证过的路径，不要重复探索）：\n${lines.join('\n')}`;
 }
 
 /** 动作后短暂稳定（对标 midscene 300ms + networkIdle）：导航/重渲染落地后再进下一个动作。 */
@@ -1117,6 +1210,12 @@ export interface RunAiTaskOpts {
    *  探索会话传（环境配了 db 对象时）；verify/登录/solidify 路径不传 → 行为零变化。
    *  平台侧只喂只读查询：写语句在调用探针前就被 sqlGuard 的只读守卫拦下。 */
   runSqlProbe?: (query: string, opts: { limit: number; db?: string }) => Promise<SqlProbeResult>;
+  /** 破坏性动作闸策略：传了才启用（verify/登录/solidify 路径不传 → 行为零变化）。
+   *  allow=false = 点击可见文本命中破坏性关键词一律拒收；allow=true = 用户在建会话时
+   *  显式授权（探索会话的 allow_destructive 列），放行但仍写日志与留痕。 */
+  destructivePolicy?: { allow: boolean };
+  /** 模型本轮申报的「已排除的假设」（负面结果账本）——平台侧据此落库。 */
+  onExcluded?: (items: Array<{ claim: string; evidence: string }>) => void;
 }
 
 /**
@@ -1163,6 +1262,9 @@ export async function runAiTask(
   const history: LLMMessage[] = [];
   // 步内子目标滚动清单（模型自维护，平台整段替换+回显；无清单的简单指令恒为 null）
   let subGoals: SubGoal[] | null = null;
+  // 负面结果账本（模型申报的「已排除的假设」）：跨轮累计、逐轮回灌。
+  // 只进当轮 user message —— history 逐字节重发（缓存按前缀匹配），动历史会让命中率崩掉。
+  const excluded: ExcludedItem[] = [];
   // 网络请求累计计数（可观测变化闸信号之一，liveRegion.hasObservableChange）：每个 click 动作
   // 窗口取 delta。不做 removeListener——verify 会在同一 page 上多次 runAiTask，各 run 闭包独立
   // 计数（旧监听器只 bump 旧闭包），delta 语义仍正确；泄漏量 = 每 run 一个闭包，可忽略。
@@ -1224,6 +1326,7 @@ export async function runAiTask(
       subGoals ? renderSubGoals(subGoals) : '',
       opts?.degradeContext ? opts.degradeContext : '',
       lastResults.length > 0 ? `上轮动作结果：\n${lastResults.join('\n')}` : '（首轮，无历史动作）',
+      renderExcluded(excluded),
       `第 ${turn}/${maxTurns} 轮。`,
     ].filter(Boolean).join('\n');
     // 截图放在文本之前：与单轮形态的历史顺序保持一致，且首轮前缀稳定。
@@ -1262,6 +1365,16 @@ export async function runAiTask(
     // 子目标清单整段替换（done 响应里的最终状态也先落到 subGoals 再结算进度）
     const planNow = parseSubGoals(parsed.plan);
     if (planNow) subGoals = planNow;
+    // 负面结果账本：模型申报本轮已验证过的「排除项」——跨轮累计 + 去重 + 通知平台落库。
+    const excludedNow = parseExcluded(parsed.excluded);
+    if (excludedNow.length > 0) {
+      for (const e of excludedNow) {
+        if (excluded.length >= EXCLUDED_TOTAL_MAX) break;
+        if (excluded.some((x) => x.claim === e.claim)) continue;
+        excluded.push(e);
+      }
+      opts?.onExcluded?.(excludedNow);
+    }
     const actions = (Array.isArray(parsed.actions) ? parsed.actions : [])
       .map(parseAction)
       .filter((a): a is AiAction => a !== null)
@@ -1355,6 +1468,25 @@ export async function runAiTask(
           if (selfCheck) lastResults.push(selfCheck);
           logger.info({ url: a.url.slice(0, 120), scope: opts.scopeOrigins, reason }, 'aiTask navigate out of scope rejected');
           continue;
+        }
+      }
+      // 破坏性动作闸：点击可见文本命中破坏性关键词（删除/支付/发送/审批/注销…）一律拒收。
+      // 默认拒；会话显式授权（allow_destructive）才放行。charter 说辞不算授权——
+      // 2026-11-10 prod 实录正是"章程要求核查删除"→ 模型点了删除 → 资产真被删。
+      if (a.type === 'click' && opts?.destructivePolicy) {
+        const targetText = clickTargetText(a, elements);
+        const reason = destructiveActionReason(targetText);
+        if (reason) {
+          if (opts.destructivePolicy.allow) {
+            logger.info({ type: a.type, target: targetText.slice(0, 80), why: reason }, 'aiTask destructive action allowed by session grant');
+          } else {
+            lastResults.push(`click ${targetText.slice(0, 60)}: error 该目标被平台判为破坏性/不可逆操作（${reason}），已机械拒收。不要重试或改写措辞绕过；改为输出 finding 描述该入口的风险与缺失的确认机制。`);
+            opts?.onAction?.(toReportAction(a, null), false);
+            const selfCheck = noteStreakFailure(errStreak, streakKey);
+            if (selfCheck) lastResults.push(selfCheck);
+            logger.info({ type: a.type, target: targetText.slice(0, 80), why: reason }, 'aiTask destructive action rejected');
+            continue;
+          }
         }
       }
       const coordPt = typeof (a as { x?: number }).x === 'number' && typeof (a as { y?: number }).y === 'number'

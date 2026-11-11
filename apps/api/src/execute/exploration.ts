@@ -34,6 +34,7 @@ import {
   EXPLORATION_SYSTEM_PROMPT_BASE,
   EXPLORATION_MAX_FINDINGS,
   EXPLORATION_MAX_SQL_PROBES,
+  EXPLORATION_MAX_EXCLUDED,
   type ExplorationStep,
 } from './explorationPrompt.js';
 import { logger } from '../logger.js';
@@ -76,16 +77,25 @@ function withFindingCounts(summary: string | null | undefined, modelReported: nu
   return base ? `${base}（${note}）` : `（${note}）`;
 }
 
-async function isSessionCancelRequested(sessionId: string): Promise<boolean> {
-  const row = (await db.select({ cancelRequested: explorationSessions.cancelRequested }).from(explorationSessions).where(eq(explorationSessions.id, sessionId)))[0];
+/**
+ * 每轮心跳：刷新 heartbeat_at（看门狗据此判死僵死会话——发版重建容器 → 进程被杀 →
+ * status 永远 running → 删除永远 409），顺带读取消标志（同一句 SQL 省一次往返）。
+ */
+async function heartbeat(sessionId: string): Promise<boolean> {
+  const row = (await db
+    .update(explorationSessions)
+    .set({ heartbeatAt: new Date(), updatedAt: new Date() })
+    .where(eq(explorationSessions.id, sessionId))
+    .returning({ cancelRequested: explorationSessions.cancelRequested }))[0];
   return row?.cancelRequested ?? false;
 }
 
 /** 幂等认领：pending → running（原子条件更新），输家（重复 job/已删）直接 bail。 */
 async function claimSession(sessionId: string): Promise<boolean> {
+  const now = new Date();
   const claimed = await db
     .update(explorationSessions)
-    .set({ status: 'running', startedAt: new Date(), updatedAt: new Date() })
+    .set({ status: 'running', startedAt: now, heartbeatAt: now, updatedAt: now })
     .where(and(eq(explorationSessions.id, sessionId), eq(explorationSessions.status, 'pending')))
     .returning({ id: explorationSessions.id });
   return claimed.length > 0;
@@ -119,16 +129,30 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
    *  与 finding 级 trail 的差别：finding 级是"自上一条 finding 起"的片段，
    *  这里连最后一条 finding 之后的尾段也留住（否则收尾前的动作无处可查）。 */
   const sessionSteps: ExplorationStep[] = [];
-  /** 会话级动作留痕落库。失败只记日志——留痕是审计辅助，不能因此掀翻整场会话。 */
-  const persistSessionSteps = async (): Promise<void> => {
+  /** 会话级动作留痕 + 负面结果账本落库。失败只记日志——留痕是审计辅助，不能因此掀翻整场会话。 */
+  const persistSessionState = async (): Promise<void> => {
     try {
       await db
         .update(explorationSessions)
-        .set({ actionsTrail: sessionSteps, updatedAt: new Date() })
+        .set({ actionsTrail: sessionSteps, excludedLedger, updatedAt: new Date() })
         .where(eq(explorationSessions.id, sessionId));
     } catch (e) {
-      logger.warn({ err: e, sessionId }, 'exploration session steps persist failed');
+      logger.warn({ err: e, sessionId }, 'exploration session state persist failed');
     }
+  };
+  /**
+   * 负面结果账本（外化记忆最小切片）：模型申报的「已排除的假设 + 依据」。
+   * 只存排除项不存信念——黑板存信念会把观察冻成结论、自我印证。
+   */
+  const excludedLedger: Array<{ claim: string; evidence: string }> = [];
+  /** 模型申报排除项 → 累加去重 + 落库（跑动中详情页即可见）。 */
+  const onExcluded = (items: Array<{ claim: string; evidence: string }>): void => {
+    for (const e of items) {
+      if (excludedLedger.length >= EXPLORATION_MAX_EXCLUDED) break;
+      if (excludedLedger.some((x) => x.claim === e.claim)) continue;
+      excludedLedger.push(e);
+    }
+    void persistSessionState();
   };
   const deadline = Date.now() + EXPLORATION_WALL_CLOCK_MS;
 
@@ -232,7 +256,7 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
         // 否则「自上一条 finding 起累积」的语义会被丢弃批次截断。
         if (accepted.length > 0) trail.length = 0;
         // 会话级留痕同步落库（跑动中就能在详情页看到进度，不等会话结束）
-        await persistSessionSteps();
+        await persistSessionState();
       };
 
       /** 数据库取证探针：模型给一条只读查询 → 对被测库执行 → 行摘要回灌下一轮。
@@ -301,11 +325,15 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
           scopeOrigins,
           systemPromptBase: EXPLORATION_SYSTEM_PROMPT_BASE,
           runSqlProbe: dbRefs.length > 0 ? runSqlProbe : undefined,
+          // 破坏性动作闸：默认拒（会话建时显式授权才放行）。charter 说辞不算授权。
+          destructivePolicy: { allow: !!session.allowDestructive },
           onUsage: (r) => usage.add(r),
           onAction,
           onFindings,
+          onExcluded,
           shouldAbort: async () => {
-            if (await isSessionCancelRequested(sessionId)) {
+            // 心跳 + 取消标志同一条 SQL（每轮一次）：看门狗据此判死僵死会话。
+            if (await heartbeat(sessionId)) {
               userCancelled = true;
               return true;
             }
@@ -355,7 +383,7 @@ export async function runExplorationSession(input: { sessionId: string }): Promi
     }).catch(() => undefined);
   } finally {
     // 收尾留痕：最后一条 finding 之后的动作（尾段）在这里才落库——否则详情页看不到过程末尾。
-    await persistSessionSteps();
+    await persistSessionState();
     if (envCtx) await envCtx.close().catch(() => {});
   }
 }

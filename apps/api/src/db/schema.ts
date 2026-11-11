@@ -1122,6 +1122,26 @@ export const explorationSessions = pgTable('exploration_sessions', {
   status: varchar('status', { length: 20 }).notNull().default('pending'),
   /** 取消通道：纯 DB 列跨副本天然正确，worker 每轮轮询一次；终态后置位无效果（幂等）。 */
   cancelRequested: boolean('cancel_requested').notNull().default(false),
+  /**
+   * 破坏性操作授权位（默认拒）：用户在建会话时显式勾选，才允许探索点击删除/支付/发送这类
+   * 不可逆入口。charter 是自然语言、模型会拿它当借口（2026-11-10 prod 实录真删了一条资产），
+   * 机械闸在 aiTask 侧按可见文本关键词拒收，授权只来自这个显式开关。
+   */
+  allowDestructive: boolean('allow_destructive').notNull().default(false),
+  /**
+   * 执行器心跳：每轮对话前刷新一次。看门狗据此判死僵死会话（发版重建容器 → 进程被杀 →
+   * status 永远 running → 删除永远 409）。5 分钟无心跳即判死。
+   *
+   * 用 timestamptz（带时区）：这一列要被「与 cutoff 比较」，必须是无歧义的绝对时刻。
+   * 普通 timestamp 存的是「墙钟」——drizzle 写入按 UTC 墙钟、原生 SQL 按本地墙钟，
+   * 两者混写会让比较结果偏掉整个时区差（11-11 本地实测：判死条件永不成立）。
+   */
+  heartbeatAt: timestamp('heartbeat_at', { withTimezone: true }),
+  /**
+   * 负面结果账本（外化记忆最小切片）：模型申报的「已排除的假设 + 依据」。
+   * 只存排除项、不存信念——黑板存信念会把观察冻成结论、自我印证。
+   */
+  excludedLedger: jsonb('excluded_ledger').$type<Array<{ claim: string; evidence: string }>>(),
   summary: text('summary'),
   error: text('error'),
   turnsUsed: integer('turns_used').notNull().default(0),
