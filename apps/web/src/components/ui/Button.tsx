@@ -9,7 +9,7 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   size?: ButtonSize;
 }
 
-// iTest 语义 → CRM shadcn 变体：primary→default(实心主色)、ghost→outline(描边次操作)、danger/destructive→destructive(实心危险)
+// iTest semantics → CRM shadcn variants: primary→default (solid primary), ghost→outline (outlined secondary), danger/destructive→destructive (solid danger)
 const variantMap = {
   primary: 'default',
   ghost: 'outline',
@@ -17,7 +17,7 @@ const variantMap = {
   destructive: 'destructive',
 } as const;
 
-// 尺寸对齐 CRM：sm→h-7(28) / md→default(h-8, 32) / lg→h-9(36)
+// Sizes aligned with CRM: sm→h-7(28) / md→default(h-8, 32) / lg→h-9(36)
 const sizeMap = {
   sm: 'sm',
   md: 'default',

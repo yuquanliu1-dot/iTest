@@ -12,8 +12,8 @@ const toneStyles: Record<StatusTone, { background: string; color: string }> = {
 };
 
 /**
- * iTest 状态 → 语义色。
- * passed/completed/ready=success，running=accent（配 pulse 点），queued/pending/review=warning，failed=destructive，其余（draft/deprecated）=muted。
+ * iTest status → semantic color.
+ * passed/completed/ready=success, running=accent (with a pulse dot), queued/pending/review=warning, failed=destructive, the rest (draft/deprecated)=muted.
  */
 export function statusTone(status: string): StatusTone {
   switch (status) {
@@ -25,7 +25,7 @@ export function statusTone(status: string): StatusTone {
   }
 }
 
-/** 标准 light-bg 状态 pill（复刻 iDO StatusPill 写法）；文案由调用方传入。 */
+/** Standard light-bg status pill (mirrors the iDO StatusPill implementation); the label is passed in by the caller. */
 export default function StatusPill({
   status,
   tone,
@@ -34,7 +34,7 @@ export default function StatusPill({
 }: {
   status?: string;
   tone?: StatusTone;
-  /** running 类状态在文字前加脉冲圆点 */
+  /** Running-like statuses get a pulsing dot before the text */
   pulse?: boolean;
   children: ReactNode;
 }) {

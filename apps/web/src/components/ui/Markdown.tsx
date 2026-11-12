@@ -2,7 +2,7 @@ import { memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-/** AI 消息 markdown 渲染：GFM（表格/删除线/任务列表），排版走 .md-body；默认不渲染内嵌 HTML。 */
+/** Markdown rendering for AI messages: GFM (tables/strikethrough/task lists), typography via .md-body; embedded HTML is not rendered by default. */
 const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="md-body">

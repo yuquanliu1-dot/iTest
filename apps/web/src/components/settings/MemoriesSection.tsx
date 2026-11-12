@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 
 const PAGE_SIZE = 20;
 
-/** 设置页「助手记忆」：只读列表 + 软删（写入唯一入口是助手的 save_memory 工具）。服务端分页。 */
+/** Settings page "assistant memories": read-only list + soft delete (the assistant's save_memory tool is the only write path). Server-side pagination. */
 export default function MemoriesSection() {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
@@ -21,15 +21,15 @@ export default function MemoriesSection() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const [lineFilter, setLineFilter] = useState('all');
-  // 产品线下拉的候选来自产品线表（不能从已加载行推——分页后只剩当页的线）。
+  // The product line dropdown's candidates come from the product line table (can't be derived from loaded rows — pagination leaves only the current page's lines).
   const linesQ = useQuery({ queryKey: ['productLines'], queryFn: () => api.productLines.list(), staleTime: 60_000 });
   const lineOptions = useMemo(() => (linesQ.data ?? []).map((l) => [l.id, l.name] as const), [linesQ.data]);
-  // 筛选的线被删空后 lineId 失配——钳回 all，避免 select 悬空+假「暂无记忆」。
+  // When the filtered line is deleted, lineId no longer matches — clamp back to all to avoid a dangling select + a fake "no memories" state.
   const effectiveFilter = lineFilter !== 'all' && lineFilter !== 'global' && !lineOptions.some(([id]) => id === lineFilter)
     ? 'all'
     : lineFilter;
-  // 默认只看 active：软删/退役即从界面消失（与注入、工具读路径同口径）；审计走 API status 参数。
-  // 筛选下推服务端（scope / productLineId），总量与列表同口径。
+  // Default to active only: soft-deleted/retired memories vanish from the UI (same semantics as injection and the tool read path); audits go through the API status parameter.
+  // Filtering is pushed down to the server (scope / productLineId); the total uses the same semantics as the list.
   const listQ = useQuery({
     queryKey: ['assistant-memories', page, pageSize, effectiveFilter],
     queryFn: () => api.assistant.memories.list({
@@ -54,7 +54,7 @@ export default function MemoriesSection() {
 
   const rows = listQ.data?.items ?? [];
   const total = listQ.data?.total ?? 0;
-  // 删除/筛选后当前页可能已越界——钳回最后一页（数据到达后才判，避免翻页途中误钳）。
+  // After delete/filter the current page may be out of bounds — clamp back to the last page (judged only once data arrives, to avoid clamping mid-paging).
   useEffect(() => {
     if (!listQ.data) return;
     const totalPages = Math.max(1, Math.ceil(listQ.data.total / pageSize));

@@ -19,19 +19,19 @@ interface AccessibilityNode {
 export interface MobileRecorderProps {
   caseId: string;
   defaultTargetId?: string;
-  /** 当前用户在 ProjectsHome 已选 projectId（用于 deviceTargets.list）。Caller 负责从 store 取。 */
+  /** The projectId currently selected by the user in ProjectsHome (used for deviceTargets.list). The caller fetches it from the store. */
   projectId: string;
   onClose: () => void;
 }
 
-/** 移动端录制 UI（占位实现）：
- *  - 顶部 toolbar：设备目标下拉 + 启动/完成/关闭按钮
- *  - 中央：iframe 嵌入 viewerUrl（占位文本，目前 viewerUrl 由后端接口提供）
- *  - 右侧：accessibility tree 列表（占位 mock 数据；真实 snapshot 由后端 WS 推送）
- *  - 点选节点 → 把 step push 到 onRecordedSteps，调用方收到后写入 case.steps
+/** Mobile recording UI (placeholder implementation):
+ *  - Top toolbar: device target dropdown + start/finish/close buttons
+ *  - Center: iframe embedding viewerUrl (placeholder text; viewerUrl is currently provided by the backend API)
+ *  - Right: accessibility tree list (placeholder mock data; the real snapshot is pushed by the backend over WS)
+ *  - Tapping a node → pushes a step to onRecordedSteps; the caller writes it into case.steps
  *
- * 后端 REST/WS 协议在 commit 落地后由 device-targets service 层对接；
- * 此组件只负责「呈现 + 事件流」，不直连协议。 */
+ * The backend REST/WS protocol will be wired through the device-targets service layer once that commit lands;
+ * this component only handles "presentation + event flow" and doesn't talk to the protocol directly. */
 export default function MobileRecorder({ caseId, defaultTargetId, projectId, onClose }: MobileRecorderProps) {
   const toast = useUIStore((s) => s.showToast);
   const { t } = useTranslation();
@@ -47,7 +47,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
     enabled: !!projectId,
   });
 
-  // 启动 mobile recording 会话（占位实现：用 fetch 直连后端，后续与 ws 协议合并）
+  // Start a mobile recording session (placeholder: fetch directly to the backend; will merge with the ws protocol later)
   const start = async () => {
     if (!targetId) { toast(t('mobile:pleaseSelectTarget'), 'error'); return; }
     try {
@@ -63,7 +63,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
       const data = await r.json() as { sessionId: string; viewerUrl: string; wsToken: string };
       setSessionId(data.sessionId);
       setViewerUrl(data.viewerUrl);
-      // 占位 mock tree — 真实 snapshot 由后端 WS 推送
+      // Placeholder mock tree — the real snapshot is pushed by the backend over WS
       setTree([
         { accessibilityId: 'login_button', label: '登录', role: 'Button', bounds: { x: 100, y: 200, width: 200, height: 48 } },
         { accessibilityId: 'username_field', label: '用户名', role: 'TextField', bounds: { x: 50, y: 100, width: 300, height: 40 } },
@@ -105,7 +105,7 @@ export default function MobileRecorder({ caseId, defaultTargetId, projectId, onC
     setRecordedSteps((prev) => [...prev, step]);
   };
 
-  /** 把已记录的步骤批量追加到用例（走 replaceSteps 是与既有 UI 入口对齐的统一方式）。 */
+  /** Append the recorded steps to the case in batch (replaceSteps is the unified way, aligned with the existing UI entry point). */
   const flushToCase = async () => {
     if (recordedSteps.length === 0) { toast(t('mobile:noStepsRecorded'), 'info'); return; }
     try {

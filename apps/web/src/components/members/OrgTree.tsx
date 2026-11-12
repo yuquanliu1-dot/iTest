@@ -16,7 +16,7 @@ interface Props {
   onSelect: (org: OrgTreeNode) => void;
   canManage: boolean;
   onCreate: (parentId: string | null) => void;
-  /** 外部触发刷新（建/删组织后）。 */
+  /** External refresh trigger (after creating/deleting an org). */
   reloadToken?: number;
 }
 

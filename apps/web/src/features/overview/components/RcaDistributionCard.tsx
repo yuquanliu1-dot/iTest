@@ -7,9 +7,9 @@ import type { OverviewResponse } from '../api';
 type Rca = OverviewResponse['rca'];
 
 /**
- * RCA 根因分布：4 类横条 + 高置信度脚注。无分析结果时展示空态。
- * 配色取自共享的 RCA 分类表（与主体 RCA 徽章 RcaBlock.tsx 同源）：
- * 系统缺陷红 / 环境黄 / 用例问题与其他灰。零计数的类别不画空条。
+ * RCA root-cause distribution: 4 horizontal category bars + a high-confidence footnote. Shows the empty state when no analysis results exist.
+ * Colors come from the shared RCA category table (same source as the main RCA badge RcaBlock.tsx):
+ * system defect red / environment yellow / case issue and other gray. Zero-count categories draw no empty bar.
  */
 const CATEGORY_META: Array<{
   key: 'case_issue' | 'environment' | 'system_defect' | 'other';

@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
-// api 只 mock 用到的端点（详情 + 分组列表）。
+// api mocks only the endpoints used here (detail + group list).
 const { explorationGet, groupList } = vi.hoisted(() => ({
   explorationGet: vi.fn(),
   groupList: vi.fn(),
@@ -21,9 +21,9 @@ vi.mock('../api/client', async (importOriginal) => {
   };
 });
 
-// 实时画面重组件 stub 掉：MJPEG/录像与本用例无关。
-// stub 模拟「画面就位」：挂载后上报 onFrameVisibleChange(true) + onFrameHeightChange(300)
-// （真组件由 LiveViewImg 按列宽等比撑高后回报实际高度），驱动并排分支与高度对齐契约。
+// Stub out the heavy live-view component: MJPEG/recording are irrelevant to this suite.
+// The stub simulates "frame in place": on mount it reports onFrameVisibleChange(true) + onFrameHeightChange(300)
+// (the real component is stretched proportionally by LiveViewImg per column width and then reports the actual height), driving the side-by-side branch and height-alignment contract.
 vi.mock('../components/LiveViewCard', () => ({
   default: function LiveViewCardStub(props: {
     onFrameHeightChange?: (h: number) => void;
@@ -92,15 +92,15 @@ describe('ExplorationDetail 会话过程', () => {
     await waitFor(() => expect(explorationGet).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText('会话过程')).toBeTruthy());
 
-    // 步骤序号与动作类型标签
+    // Step number and action-type labels
     expect(screen.getByText('访问')).toBeTruthy();
     expect(screen.getAllByText('查库')).toHaveLength(2);
 
-    // 查库步骤：SQL 原文完整可见（不截断）
+    // SQL step: the raw SQL is fully visible (not truncated)
     expect(screen.getByText('SELECT COUNT(*) AS cnt FROM sa_asset')).toBeTruthy();
-    // 结果摘要（平台记录的行数/首行）
+    // Result summary (rows/first row as recorded by the platform)
     expect(screen.getByText('1 行｜首行：cnt=20')).toBeTruthy();
-    // 被守卫拒收的写语句：原文与失败原因都在
+    // Write statement rejected by the guard: both the original text and the failure reason are rendered
     expect(screen.getByText('DELETE FROM sa_asset WHERE assetid=999999')).toBeTruthy();
     expect(screen.getByText('失败：只读守卫拒绝')).toBeTruthy();
     expect(screen.getAllByText('成功')).toHaveLength(2);
@@ -125,7 +125,7 @@ describe('ExplorationDetail 会话过程', () => {
 
     expect(screen.getByText('URL http://127.0.0.1:56100/defect.html｜视口 1280x800｜可交互元素 12 个')).toBeTruthy();
     expect(screen.getByText('失败：目标不可见')).toBeTruthy();
-    // target 为 "-" 的步骤不渲染空占位（原来是一行孤零零的 "-"）。
+    // Steps with target "-" render no empty placeholder (it used to be a lone "-" line).
     const ol = document.querySelector('ol')!;
     const dashes = Array.from(ol.querySelectorAll('span')).filter((el) => el.textContent?.trim() === '-');
     expect(dashes).toHaveLength(0);
@@ -135,7 +135,7 @@ describe('ExplorationDetail 会话过程', () => {
     renderDetail();
     await waitFor(() => expect(explorationGet).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText('会话过程')).toBeTruthy());
-    // 上报「有画面 + 画面高 300」走一次 effect + 重渲染后才切到并排分支（此前渲染的是整宽回落卡）
+    // Reporting "frame present + frame height 300" takes one effect + re-render before the side-by-side branch kicks in (before that the full-width fallback card renders)
     await waitFor(() => {
       const c = screen.getByText('会话过程').closest('.bg-card') as HTMLElement;
       expect(c.style.height).toBe('302px');

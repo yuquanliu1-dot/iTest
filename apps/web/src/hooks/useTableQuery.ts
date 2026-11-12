@@ -8,15 +8,15 @@ import {
 } from "nuqs";
 
 /**
- * CRM 风格 `useTableQuery` 的本地版：把 nuqs 批量查询状态聚合成 DataTable 用的
- * `TableQueryState` + `input`（用于实际查询的入参）。比 crm 那份更轻：
+ * Local version of the CRM-style `useTableQuery`: aggregates nuqs batch query state into
+ * a `TableQueryState` + `input` (the params used for the actual query) for DataTable. Lighter than the crm one:
  *
- * - 不引 zod，不做 catch-all；filters 直接 `Record<string, string[]>`
- * - 没有 saved view / field 过滤（iTest 用例表、报告表够用）
- * - 排序与翻页等 setter 行为与 CRM 一致：`toggleSort(id)` 切方向、`setSort(id)` 直接设
+ * - No zod, no catch-all; filters are directly `Record<string, string[]>`
+ * - No saved view / field filtering (enough for iTest's case and report tables)
+ * - Sort/pagination setter behavior matches CRM: `toggleSort(id)` flips direction, `setSort(id)` sets directly
  *
- * 用法：调用方定义 parsers（含 `sort`、`dir`、`page`、`tab` 可选、各 facet 可选），
- * 拿到的 `query` 给 DataTable 用、`input` 给后端列表 API 用。
+ * Usage: the caller defines parsers (with optional `sort`, `dir`, `page`, `tab`, and optional facets);
+ * the resulting `query` feeds DataTable and `input` feeds the backend list API.
  */
 
 export type SortDirection = "asc" | "desc";
@@ -52,7 +52,7 @@ export interface ListInput {
 export interface TableQueryConfig {
 	pageSize?: number;
 	defaultDir?: SortDirection;
-	/** 若 parsers 里有 "tab" key，DataTable 会显示 tabs；这里冗余存 id 方便直接读 */
+	/** If parsers contain a "tab" key, DataTable shows tabs; the id is redundantly stored here for direct reading */
 	tabId?: string;
 }
 
@@ -63,16 +63,16 @@ export interface UseTableQuery {
 	input: ListInput;
 }
 
-/** 默认 pageSize；调用方可在 parsers 里提供 `pageSize` key 覆盖（URL 同步）。 */
+/** Default pageSize; the caller may override by providing a `pageSize` key in parsers (URL-synced). */
 const DEFAULT_PAGE_SIZE = 20;
 
-/** 常用 pageSize 选项；调用方可通过 setPageSize 自由切。 */
+/** Common pageSize options; the caller can switch freely via setPageSize. */
 export const DEFAULT_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
 
 /**
- * 传入 nuqs parser map 与配置，输出 DataTable 用的 `query` + 列表查询用的 `input`。
- * - parsers 必须包含 `sort` / `dir` / `page`，可选 `pageSize` / `q` / `tab` / 任意 facet。
- *   facet 的 key 名建议与 parsers 一致；多选 facet 用 `parseAsArrayOf(parseAsString)`。
+ * Takes a nuqs parser map and config, outputs the `query` for DataTable + the `input` for list queries.
+ * - parsers must include `sort` / `dir` / `page`, optionally `pageSize` / `q` / `tab` / any facet.
+ *   Facet key names should match the parsers; multi-select facets use `parseAsArrayOf(parseAsString)`.
  */
 export function useTableQuery(
 	parsers: TableParsers,
@@ -102,7 +102,7 @@ export function useTableQuery(
 		const out: Record<string, string[]> = {};
 		for (const k of Object.keys(parsers)) {
 			if (k === "sort" || k === "dir" || k === "page" || k === "q") continue;
-			if (k === config.tabId) continue; // tab 不进 filters
+			if (k === config.tabId) continue; // tab doesn't go into filters
 			const v = (raw as Record<string, unknown>)[k];
 			if (Array.isArray(v)) out[k] = v.filter((x): x is string => typeof x === "string");
 			else if (typeof v === "string" && v) out[k] = [v];
@@ -194,13 +194,13 @@ export function useTableQuery(
 	return { query, input };
 }
 
-/** 给常用名（priority/scenario/status/tag...）提供默认 array parser。 */
+/** Provides a default array parser for common names (priority/scenario/status/tag...). */
 export const facetArrayParser = () => parseAsArrayOf(parseAsString).withDefault([]);
 
-/** 默认 pageSize parser；调用方 merge 进自己的 parsers map。 */
+/** Default pageSize parser; the caller merges it into their own parsers map. */
 export const pageSizeParser = () => parseAsInteger.withDefault(DEFAULT_PAGE_SIZE);
 
-/** 把 `parsers` 转成 nuqs 需要的 `urlKeys` 形状——本项目 key 名与 url 一致，直接透传即可。 */
+/** Convert `parsers` into the `urlKeys` shape nuqs needs — in this project key names equal the url ones, pass through directly. */
 function extractUrlKeys(parsers: TableParsers): Record<string, string> {
 	const out: Record<string, string> = {};
 	for (const k of Object.keys(parsers)) out[k] = k;

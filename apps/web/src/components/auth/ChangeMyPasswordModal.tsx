@@ -17,8 +17,8 @@ interface Props {
 const MIN_LENGTH = 10;
 const MAX_LENGTH = 64;
 
-/** 自助改密弹窗：走 PATCH /api/auth/me_password。
- *  后端成功后 tokenVersion+1 + clearAuthCookie，所以前端必须清本地会话并跳登录页。 */
+/** Self-service password change dialog: goes through PATCH /api/auth/me_password.
+ *  On success the backend bumps tokenVersion+1 and calls clearAuthCookie, so the frontend must clear the local session and redirect to the login page. */
 export default function ChangeMyPasswordModal({ open, onOpenChange }: Props) {
   const { t } = useTranslation();
   const navigate = useNavigate();

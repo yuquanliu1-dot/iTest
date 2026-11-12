@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
 
 /**
- * 工作台面板：与主体卡片同款（bg-card + border + radius-md）。
- * header 区为「标题 + 右侧副标题」两栏，副标题用 muted 小字。
- * 标题层级靠字号与颜色，不靠加粗：14px / 500，前景色。
+ * Workbench panel: same styling as the main cards (bg-card + border + radius-md).
+ * The header area is a two-column "title + right-side subtitle" layout, with the subtitle in small muted text.
+ * Title hierarchy comes from font size and color, not bolding: 14px / 500, foreground color.
  */
 export function Panel({
   title,

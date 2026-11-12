@@ -19,8 +19,8 @@ interface LabelsManagerDialogProps {
   onClose: () => void;
 }
 
-/** 项目内标签管理弹窗：列表 + 搜索 + 新建/编辑/删除。
- * 从 GroupsPage 标签过滤下拉里的「管理标签 →」按钮打开，取代原先的独立 /labels 页面。 */
+/** In-project label management dialog: list + search + create/edit/delete.
+ * Opened from the "Manage labels →" button in the GroupsPage label filter dropdown; replaces the former standalone /labels page. */
 export default function LabelsManagerDialog({ open, projectId, onClose }: LabelsManagerDialogProps) {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
@@ -37,7 +37,7 @@ export default function LabelsManagerDialog({ open, projectId, onClose }: Labels
     enabled: open && !!projectId,
   });
 
-  // 统计每个 tag 用在多少 case 上 - 复用 cases 接口做批查
+  // Count how many cases each tag is used on - batch-looked up via the cases API
   const { data: cases } = useQuery({
     queryKey: ['cases-for-tag-count', projectId],
     queryFn: () => api.cases.list({ projectId: projectId! }),

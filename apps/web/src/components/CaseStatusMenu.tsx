@@ -10,7 +10,7 @@ import StatusPill from './ui/StatusPill';
 
 const STATUSES: CaseStatus[] = ['draft', 'review', 'ready', 'deprecated'];
 
-/** 可点击的状态 pill：弹出单选菜单改用例状态。详情页头部与用例列表行复用。 */
+/** Clickable status pill: opens a single-select menu to change the case status. Reused by the detail page header and case list rows. */
 export default function CaseStatusMenu({
   caseId,
   status,
@@ -19,7 +19,7 @@ export default function CaseStatusMenu({
 }: {
   caseId: string;
   status: string;
-  /** 传入则同时 invalidate 该项目的用例列表（列表行内场景） */
+  /** When provided, also invalidate this project's case list (inline row scenario) */
   projectId?: string;
   onChanged?: (next: CaseStatus) => void;
 }) {

@@ -7,8 +7,8 @@ import type { OverviewResponse } from '../api';
 type Top = OverviewResponse['topFailures'];
 
 /**
- * Top 失败用例：名称 + 失败占比条（红=判定）+ 次数 + 证据坐标。
- * 证据坐标（# + 报告 id 前 4 位，等宽）是全页唯一的签名细节：每条失败都能点回那次执行。
+ * Top failing cases: name + failure-share bar (red = verdict) + count + evidence anchor.
+ * The evidence anchor (# + first 4 chars of the report id, monospace) is the page's only signature detail: every failure links back to that run.
  */
 export default function TopFailuresChart({
   data,

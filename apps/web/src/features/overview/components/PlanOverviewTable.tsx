@@ -33,7 +33,7 @@ const COLUMNS = [
   'planColTrigger',
 ];
 
-/** 计划概览表：状态徽标 + 通过率（绿=判定，0% 不画空条）+ 最近 RCA 徽标 + 触发方式。行点击进计划详情。 */
+/** Plan overview table: status badge + pass rate (green = verdict; 0% draws no empty bar) + latest RCA badge + trigger method. Clicking a row opens the plan detail. */
 export default function PlanOverviewTable({
   plans,
   schedulesCount,

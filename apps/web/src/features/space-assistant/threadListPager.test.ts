@@ -8,7 +8,7 @@ const row = (id: string, updatedAt: string, title = `t-${id}`): ThreadRow => ({
   updatedAt,
 });
 
-/** 按页序依次返回的 fetchPage:无 cursor 取 pages[0],带 cursor 顺序前进,越界复用末页。 */
+/** A fetchPage returning pages in sequence: no cursor takes pages[0], with a cursor advances in order, out-of-range reuses the last page. */
 function pageSource(...pages: { threads: ThreadRow[]; hasMore: boolean }[]): {
   fetchPage: FetchPage;
   calls: { limit: number; cursor?: string }[];
@@ -40,11 +40,11 @@ describe('ThreadListPager.refreshForRuntime', () => {
     await pager.refreshForRuntime();
     await pager.loadMore();
     expect(pager.getSnapshot().rows.map((r) => r.id)).toEqual(['n1', 'a', 'b', 'c', 'd']);
-    // 新会话 n2 出现:新鲜第 1 页胜出,缓存里的 a/b 保留
+    // New thread n2 appeared: the fresh page 1 wins, cached a/b are kept
     const { fetchPage: fp2 } = pageSource({ threads: [row('n2', 'dx'), row('n1', 'd0'), row('a', 'd1')], hasMore: false });
     (pager as unknown as { opts: { fetchPage: FetchPage } }).opts.fetchPage = fp2;
     const merged = await pager.refreshForRuntime();
-    // b 不在新鲜第 1 页窗口 → 缓存副本保留;合并序 = 新鲜页在前、缓存旧页按原序在后
+    // b is not in the fresh page 1 window → cached copy kept; merge order = fresh page first, cached old pages in original order after
     expect(merged.map((r) => r.id)).toEqual(['n2', 'n1', 'a', 'b', 'c', 'd']);
   });
 
@@ -64,8 +64,8 @@ describe('ThreadListPager.refreshForRuntime', () => {
   });
 
   it('keyset 耗尽后 reload 不复活 hasMore(防哨兵死循环)', async () => {
-    // 服务端第 1 页满页时 hasMore 恒为 true(剩余行已在缓存);reload 照抄会把已熄灭的
-    // 哨兵复活 → 底部 observe 立即命中 → 空翻页 + reload 死循环。
+    // When the server's page 1 is a full page, hasMore is always true (remaining rows are already in cache); copying it verbatim on reload would
+    // revive the extinguished sentinel → bottom observe fires immediately → empty paging + reload infinite loop.
     const { fetchPage } = pageSource(
       { threads: [row('a', 'd1'), row('b', 'd2')], hasMore: true },
       { threads: [row('c', 'd3')], hasMore: false },
@@ -74,7 +74,7 @@ describe('ThreadListPager.refreshForRuntime', () => {
     await pager.refreshForRuntime();
     await pager.loadMore();
     expect(pager.getSnapshot().hasMore).toBe(false);
-    // reload:新鲜第 1 页仍报 hasMore=true → 压制为 false
+    // reload: fresh page 1 still reports hasMore=true → suppressed to false
     const { fetchPage: fp2 } = pageSource({ threads: [row('a', 'd1'), row('b', 'd2')], hasMore: true });
     (pager as unknown as { opts: { fetchPage: FetchPage } }).opts.fetchPage = fp2;
     await pager.refreshForRuntime();
@@ -135,7 +135,7 @@ describe('ThreadListPager.loadMore', () => {
     await expect(pager.loadMore()).rejects.toThrow('boom');
     expect(pager.getSnapshot().loadingMore).toBe(false);
     expect(pager.getSnapshot().rows.map((r) => r.id)).toEqual(['a']);
-    // 失败后可重试(loadMorePromise 已清)
+    // Retryable after failure (loadMorePromise already cleared)
     await expect(pager.loadMore()).rejects.toThrow('boom');
   });
 });

@@ -1,13 +1,13 @@
-/** 列表分组键。顺序即展示顺序。 */
+/** List bucket keys. Order is the display order. */
 export const BUCKET_KEYS = ['today', 'yesterday', 'week', 'month', 'older'] as const;
 export type BucketKey = (typeof BUCKET_KEYS)[number];
 
-/** 本地自然日零点(非 24h 滚动)——「昨天」须与日历日对齐,才符合 DeepSeek 语义。 */
+/** Local calendar-day midnight (not a rolling 24h) — "yesterday" must align with calendar days to match DeepSeek semantics. */
 function startOfLocalDay(d: Date): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
-/** 按 createdAt 落到五段之一。缺失/非法时间归「更早」。 */
+/** Map createdAt into one of the five buckets. Missing/invalid times fall to "older". */
 export function bucketOf(createdAt: string | undefined, now: Date = new Date()): BucketKey {
   if (!createdAt) return 'older';
   const t = new Date(createdAt);
@@ -20,8 +20,8 @@ export function bucketOf(createdAt: string | undefined, now: Date = new Date()):
   return 'older';
 }
 
-/** 把线程按桶分组,桶内按 createdAt 降序,桶序按 BUCKET_KEYS。空桶不产出。
- *  锚点=创建时间(列表排序口径):updatedAt 会被改名/新消息顶起,老会话不该因此换桶上浮。 */
+/** Group threads by bucket, descending by createdAt within a bucket, bucket order per BUCKET_KEYS. Empty buckets produce nothing.
+ *  Anchor = creation time (the list's sort key): updatedAt gets bumped by renames/new messages, old threads shouldn't float buckets because of it. */
 export function groupByBucket<T extends { id: string; createdAt?: string | null }>(
   items: readonly T[],
   now: Date = new Date(),

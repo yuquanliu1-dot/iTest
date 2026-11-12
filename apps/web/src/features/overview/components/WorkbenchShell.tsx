@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 
 /**
- * 工作台内容区外壳：铺底 + 参与 AppShell 的 flex 高度链。
- * 明暗跟随全局 html.dark 主题，语义色与产品其他页面共用同一套 token。
+ * Workbench content-area shell: the base layer + participates in AppShell's flex height chain.
+ * Light/dark follows the global html.dark theme; semantic colors share the same token set as the rest of the product.
  */
 export default function WorkbenchShell({ children }: { children: ReactNode }) {
   return (

@@ -1,6 +1,6 @@
 /**
- * 计划详情页：调度列表卡 + 新增/启停/删除按钮。
- * iDO AutomationListItem 风格：avatar + cron 描述 + 下次执行时间 + 启停开关。
+ * Plan detail page: schedule list card + create / enable-disable / delete buttons.
+ * iDO AutomationListItem style: avatar + cron description + next run time + enable toggle.
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';

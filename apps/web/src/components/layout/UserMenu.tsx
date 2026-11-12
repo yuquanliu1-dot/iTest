@@ -24,9 +24,9 @@ import ChangeMyPasswordModal from '../auth/ChangeMyPasswordModal';
 import Icon from '../Icon';
 
 /**
- * 顶栏头像菜单（CRM app-header UserMenu 模式）：
- * 头像触发 → 用户信息 / 切换组织 / 主题切换 / 退出登录。
- * 系统配置与成员管理入口已上移到 icon rail。
+ * Top-bar avatar menu (CRM app-header UserMenu pattern):
+ * avatar-triggered → user info / switch organization / theme toggle / logout.
+ * System settings and member management entries have moved up to the icon rail.
  */
 export default function UserMenu() {
   const navigate = useNavigate();
@@ -97,7 +97,7 @@ export default function UserMenu() {
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
 
-        {/* 切换组织（多组织时显示） */}
+        {/* Switch organization (shown when multiple orgs) */}
         {showOrgList && (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
@@ -115,7 +115,7 @@ export default function UserMenu() {
           </DropdownMenuSub>
         )}
 
-        {/* 主题切换（CRM：单击切换，图标随状态变化） */}
+        {/* Theme toggle (CRM: single-click toggle, icon reflects state) */}
         <DropdownMenuItem
           onSelect={(event) => {
             event.preventDefault();
@@ -126,7 +126,7 @@ export default function UserMenu() {
           {theme === 'dark' ? t('common:lightTheme') : t('common:darkTheme')}
         </DropdownMenuItem>
 
-        {/* 语言切换（单击切换，图标为地球） */}
+        {/* Language toggle (single-click toggle, globe icon) */}
         <DropdownMenuItem
           onSelect={(event) => {
             event.preventDefault();
@@ -134,7 +134,7 @@ export default function UserMenu() {
             applyLang(next);
             if (user?.id) {
               void api.users.update(user.id, { languagePreference: next }).catch(() => {
-                // 后端持久化失败不阻断切换;下次登录恢复原语言。
+                // Backend persistence failure doesn't block the switch; the original language is restored on next login.
               });
             }
             try { localStorage.setItem('itest-lang', next); } catch { /* no-op */ }

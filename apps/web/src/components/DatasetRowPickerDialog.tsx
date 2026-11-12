@@ -13,18 +13,18 @@ interface DatasetRowPickerDialogProps {
   onOpenChange: (open: boolean) => void;
   projectId: string | undefined;
   datasetId: string | null;
-  /** 当前已选（启用行下标，0 基）。[] = 全部启用行（打开即全选）。 */
+  /** Currently selected (enabled-row indexes, 0-based). [] = all enabled rows (all selected on open). */
   value: number[];
-  /** 确认回传：勾满全部启用行 → []；部分勾选 → 升序下标；未勾任何行时确认禁用。 */
+  /** Confirmed callback: all enabled rows checked → []; partial selection → ascending indexes; confirm disabled when nothing is checked. */
   onConfirm: (indexes: number[]) => void;
-  /** 计划级专用：传了才显示「跟随用例」按钮——清计划级覆盖（置 null），执行回落用例级配置。 */
+  /** Plan-level only: the "follow case" button shows only when passed — clears the plan-level override (sets null) so execution falls back to case-level config. */
   onFollowCase?: () => void;
 }
 
 /**
- * 数据集行选择弹窗（统一多选，不分单行/多行模式）：只渲染「启用行」，
- * 编号用启用行下标 + 1（与执行器同一编号空间）。只在打开时拉数据集（页面加载零额外请求）；
- * 敏感格显示 ••••••。
+ * Dataset row selection dialog (unified multi-select, no single-row/multi-row modes): renders only "enabled rows",
+ * numbered by enabled-row index + 1 (same numbering space as the executor). Fetches the dataset only when opened (zero extra requests on page load);
+ * sensitive cells show ••••••.
  */
 export default function DatasetRowPickerDialog({
   open,
@@ -36,7 +36,7 @@ export default function DatasetRowPickerDialog({
   onFollowCase,
 }: DatasetRowPickerDialogProps) {
   const { t } = useTranslation();
-  /** 用户交互后的选择；null = 尚未交互，按 value 派生（[] = 全选）。每次打开重置。 */
+  /** Selection after user interaction; null = not yet interacted, derived from value ([] = all selected). Reset on each open. */
   const [pickedOverride, setPickedOverride] = useState<number[] | null>(null);
 
   useEffect(() => {
@@ -49,13 +49,13 @@ export default function DatasetRowPickerDialog({
     enabled: open && !!datasetId && !!projectId,
   });
 
-  // 启用行（剔除 disabled），编号 = 启用行下标 + 1
+  // Enabled rows (disabled ones removed); number = enabled-row index + 1
   const enabledRows = (data?.rows ?? [])
     .map((r, i) => ({ r, enabledIndex: i }))
     .filter(({ r }) => !r.disabled);
   const enabledIndexes = enabledRows.map((_, i) => i);
 
-  // 未交互时按 value 派生：[] = 全部启用行；非空 = 子集
+  // Derived from value before interaction: [] = all enabled rows; non-empty = subset
   const picked = pickedOverride ?? (value.length === 0 ? enabledIndexes : value);
 
   const toggle = (idx: number) => {
@@ -67,7 +67,7 @@ export default function DatasetRowPickerDialog({
   };
 
   const confirm = () => {
-    // 勾满全部启用行 → 存 []（语义=全部行）；部分勾选 → 升序下标
+    // All enabled rows checked → store [] (semantics = all rows); partial selection → ascending indexes
     const all = picked.length === enabledIndexes.length;
     onConfirm(all ? [] : [...picked].sort((a, b) => a - b));
     onOpenChange(false);
@@ -86,7 +86,7 @@ export default function DatasetRowPickerDialog({
           <p className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:datasetRowEmpty')}</p>
         ) : (
           <div className="max-h-[50vh] overflow-y-auto">
-            {/* table-fixed：勾选/序号列固定，数据列均分剩余宽度——auto 布局下长描述列会被挤成 1 字宽竖条 */}
+            {/* table-fixed: checkbox/# columns fixed, data columns share the remaining width evenly — under auto layout a long description column gets squeezed into a 1-char-wide vertical strip */}
             <table className="w-full table-fixed">
               <thead>
                 <tr>
@@ -111,7 +111,7 @@ export default function DatasetRowPickerDialog({
               </thead>
               <tbody>
                 {enabledRows.map(({ r }, displayIdx) => {
-                  // 执行器用的下标空间：剔除禁用行后重新编号
+                  // The executor's index space: renumbered after removing disabled rows
                   const enabledIndex = displayIdx;
                   return (
                     <tr key={displayIdx} className="hairline-bottom">

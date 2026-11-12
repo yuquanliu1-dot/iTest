@@ -6,7 +6,7 @@ import { api } from '../../api/client';
 import { localizeApiError } from '../../i18n';
 import { useUIStore } from '../../stores/ui';
 
-/** Carbon 图标库无拇指图标，本地内联两个 16px 路径，避免为两个字形去改共享 Icon map。 */
+/** The Carbon icon library has no thumb icons; two 16px paths are inlined locally to avoid touching the shared Icon map for two glyphs. */
 function ThumbUp({ filled }: { filled: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden focusable="false"
@@ -25,21 +25,21 @@ function ThumbDown({ filled }: { filled: boolean }) {
   );
 }
 
-/** 从投影后的 message.parts 里抽出纯文本（工具调用 part 不含可读正文，跳过）。 */
+/** Extract plain text from the projected message.parts (tool-call parts carry no readable body and are skipped). */
 function excerptOf(parts: readonly { type: string; text?: string }[]): string {
   return parts.filter((p) => p.type === 'text' && p.text).map((p) => p.text).join('\n').slice(0, 500);
 }
 
 /**
- * AI 回复上的反馈入口（Phase 1 只收集，不消费）。
+ * Feedback entry on AI replies (Phase 1 only collects; nothing consumes it yet).
  *
- * 刻意不用框架的 ActionBarPrimitive.FeedbackPositive/Negative：其 submit 来自 runtime
- * 的 useActionBarFeedback*，而 react-pi 的 dist 里没有任何 feedback 实现 → 按钮恒 disabled。
- * 这里自建按钮 + 直接调本项目 API。
+ * Deliberately not using the framework's ActionBarPrimitive.FeedbackPositive/Negative: its submit comes from the runtime's
+ * useActionBarFeedback*, and react-pi's dist contains no feedback implementation at all → the buttons would be permanently disabled.
+ * Here we build our own buttons + call this project's API directly.
  *
- * 锚点说明：message.id 只是投影层的位置索引（pi-msg:<index>），流式中会漂移、
- * 进程重启后也无法复现。所以提交时一律带上 messageExcerpt 正文快照——那才是回溯的唯一
- * 可靠依据；id 仅作线索，供「已提交」标记在本次会话内做去重匹配。
+ * Anchor notes: message.id is only a positional index in the projection layer (pi-msg:<index>); it drifts during streaming
+ * and can't be reproduced after a process restart. So the submission always carries the messageExcerpt body snapshot — that is the
+ * only reliable basis for tracing back; the id is just a clue, used by the "submitted" marker for dedupe matching within the current session.
  */
 export default function FeedbackActions({ threadId }: { threadId: string }) {
   const { t } = useTranslation();
@@ -53,7 +53,7 @@ export default function FeedbackActions({ threadId }: { threadId: string }) {
   const { data: mine } = useQuery({
     queryKey,
     queryFn: () => api.assistant.feedback.mine(threadId),
-    // 反馈是个人标记，线程切换时重新拉即可；不参与窗口聚焦重取，避免无谓轮询。
+    // Feedback is a personal marker; re-fetch on thread switch is enough. Excluded from refetch-on-focus to avoid pointless polling.
     staleTime: 30_000,
   });
   const submitted = mine?.find((f) => f.messageAnchor === message.id);
@@ -127,8 +127,8 @@ export default function FeedbackActions({ threadId }: { threadId: string }) {
             onChange={(e) => setComment(e.target.value)}
             placeholder={t('assistant:feedback.commentPlaceholder')}
             rows={2}
-            // 纯本地输入框：整轮对话都在同一个 origin 下，关闭自动补全/纠错/拼写检查，
-            // 否则浏览器会把「这里选错了 locator」当人名纠错划红线，反而干扰填写。
+            // Purely local input: the whole conversation lives under one origin, so autocomplete/autocorrect/spellcheck are off,
+            // otherwise the browser would red-squiggle "you picked the wrong locator here" as a person's name and interfere with typing.
             autoComplete="off"
             autoCorrect="off"
             spellCheck={false}

@@ -5,8 +5,8 @@ import { Button } from './shadcn/button';
 type Tone = 'muted' | 'accent' | 'destructive';
 type Size = 'sm' | 'md';
 
-// 必须透传原生 button 属性：Radix 的 <DropdownMenuTrigger asChild> 会把触发器的
-// onPointerDown / aria-haspopup / data-state 合并进子组件，丢了这些下拉菜单就永远打不开。
+// Must forward native button props: Radix's <DropdownMenuTrigger asChild> merges the trigger's
+// onPointerDown / aria-haspopup / data-state into the child; without them the dropdown never opens.
 interface IconButtonProps extends ComponentProps<'button'> {
   icon: IconName;
   /** Tooltip + aria-label. Falls back to the icon name. */
@@ -21,15 +21,15 @@ const toneClass: Record<Tone, string> = {
   destructive: 'text-[var(--destructive)] hover:text-[var(--destructive)] hover:bg-[var(--destructive)]/10',
 };
 
-// 尺寸对齐 CRM icon 档：sm→icon-xs(24px/12px 图标)、md→icon-sm(28px/14px 图标)
+// Size aligned with CRM icon tiers: sm→icon-xs (24px / 12px icon), md→icon-sm (28px / 14px icon)
 const sizeMap: Record<Size, { shadcn: 'icon-xs' | 'icon-sm'; icon: number }> = {
   sm: { shadcn: 'icon-xs', icon: 12 },
   md: { shadcn: 'icon-sm', icon: 14 },
 };
 
 /**
- * Tiny icon-only action: 面板内迁 / 上 / 下 / 编辑 / 删除等行内按钮的唯一规范。
- * 内核为 CRM shadcn ghost icon button（hover bg-muted），tone 只决定文字色。
+ * Tiny icon-only action: the single canonical inline button for in-panel move / up / down / edit / delete actions.
+ * Core is the CRM shadcn ghost icon button (hover bg-muted); tone only decides the text color.
  */
 export default function IconButton({
   icon,

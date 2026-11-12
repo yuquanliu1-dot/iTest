@@ -7,7 +7,7 @@ import { clockTime, fullDateTime, stepKindLabel } from '../../lib/format';
 import { getKind, stepSummary, fullStepDescription } from '../../lib/stepSummary';
 import type { ObserveLogLineResult, HttpStepResult, SyslogStepResult, SqlStepResult, ConsoleLogEntry } from '@itest/shared';
 
-/** 步骤级 LLM 用量（aiTask / 验证码 / vision 判定累加）；与 apps/api execute/aiUsage.ts 对齐。 */
+/** Step-level LLM usage (aiTask / captcha / vision judgment accumulated); aligned with apps/api execute/aiUsage.ts. */
 interface AiUsage {
   calls: number;
   promptTokens: number;
@@ -15,9 +15,9 @@ interface AiUsage {
   modelCallMs: number;
   retries: number;
   model?: string;
-  /** 命中缓存的 prompt token 数（不含在 promptTokens 内）；老报告无此字段。 */
+  /** Cached prompt token count (not included in promptTokens); absent on legacy reports. */
   cacheReadTokens?: number;
-  /** 为建立缓存新写入的 token 数；老报告无此字段。 */
+  /** Tokens newly written to establish the cache; absent on legacy reports. */
   cacheCreationTokens?: number;
 }
 
@@ -25,11 +25,11 @@ export interface StepResult {
   order: number;
   status: string;
   durationMs: number;
-  /** 本步开始时刻（ISO）；老报告缺失，此时不展示「开始」标签 */
+  /** Step start time (ISO); missing on legacy reports, in which case the "started" label is not shown */
   startedAt?: string;
-  /** 行级自然语言说明快照（执行时步骤的 instruction；历史报告/录制用例可能缺省） */
+  /** Row-level natural-language description snapshot (the step's instruction at execution time; historical reports / recorded cases may lack it) */
   instruction?: string;
-  /** compiled DSL 快照；无 instruction 时报告页据此生成动作摘要（与用例页同一套 stepSummary） */
+  /** compiled DSL snapshot; when there is no instruction the report page builds the action summary from it (same stepSummary as the case page) */
   compiled?: unknown[];
   error?: string;
   warning?: string;
@@ -38,34 +38,34 @@ export interface StepResult {
   failureReason?: string;
   humanMessage?: string;
   hitLocator?: { kind: string; value: string };
-  /** Track 1 用例级视觉判定结果（最后一步/失败追加步携带） */
+  /** Track 1 case-level vision assertion result (carried by the last step / the appended step after a failure) */
   visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string; aiUsage?: AiUsage };
-  /** sql 步骤的结果（仅 sql 步携带） */
+  /** Result of the sql step (carried by sql steps only) */
   sql?: SqlStepResult;
-  /** observeLog 步骤的结果（仅 observeLog 步携带） */
+  /** Result of the observeLog step (carried by observeLog steps only) */
   log?: ObserveLogLineResult;
-  /** httpRequest 步骤的结果（仅 httpRequest 步携带） */
+  /** Result of the httpRequest step (carried by httpRequest steps only) */
   http?: HttpStepResult;
-  /** sendSyslog 步骤的结果（仅 sendSyslog 步携带） */
+  /** Result of the sendSyslog step (carried by sendSyslog steps only) */
   syslog?: SyslogStepResult;
-  /** 本步窗口内浏览器 console error / JS 未捕获异常（老报告/无报错步缺省） */
+  /** Browser console errors / uncaught JS exceptions within this step's window (absent on legacy reports / steps without errors) */
   console?: ConsoleLogEntry[];
-  /** aiTask 步骤本轮回放走了动作缓存（机械执行，零 LLM） */
+  /** The aiTask step's replay this round went through the action cache (mechanical execution, zero LLM) */
   cached?: boolean;
-  /** 缓存条目存在但重放分叉、AI 自愈通过（仅 passed 步携带） */
+  /** A cache entry existed but the replay diverged, and AI self-heal passed (carried by passed steps only) */
   healed?: boolean;
-  /** 机械执行受阻，由 AI 按步骤指令临场执行通过（回放 AI 降级，仅 passed 步携带） */
+  /** Mechanical execution was blocked and the AI executed live per the step instruction (replay AI fallback, carried by passed steps only) */
   degraded?: boolean;
-  /** 本步 LLM 用量；零调用步缺省 */
+  /** This step's LLM usage; absent on zero-call steps */
   aiUsage?: AiUsage;
 }
 
-/** tokens 千位缩写：1234 → 1.2k */
+/** Thousand-scale token abbreviation: 1234 → 1.2k */
 export function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
-/** 缓存命中率：命中 / (本次新计算 + 命中)。分母为 0 时返回 null（老报告无缓存字段）。 */
+/** Cache hit rate: hits / (newly computed + hits). Returns null when the denominator is 0 (legacy reports lack cache fields). */
 export function cacheHitRate(u: AiUsage): number | null {
   const read = u.cacheReadTokens ?? 0;
   const total = read + u.promptTokens;
@@ -79,7 +79,7 @@ export function aiUsageText(t: ReturnType<typeof useTranslation>['t'], u: AiUsag
     count: u.calls,
     tokens: fmtTokens(u.promptTokens + u.completionTokens),
     seconds: (u.modelCallMs / 1000).toFixed(1),
-    // 无缓存数据时必须给空串：undefined 会让 i18next 把 {{cacheHitSuffix}} 占位符原样留在输出里
+    // Must pass an empty string when there is no cache data: undefined makes i18next leave the {{cacheHitSuffix}} placeholder verbatim in the output
     cacheHitSuffix: rate != null ? t('reports:aiCacheHit', { rate }) : '',
   });
 }
@@ -103,9 +103,9 @@ function Meta({ label, value, mono, muted, title }: { label: string; value: stri
 }
 
 /**
- * 报告步骤时间线（ReportDetail 与 PlanRunDetail 内嵌详情共用）。
- * 只渲染步骤行列表 + 截图灯箱；外层卡片边框与标题头由调用方包。
- * 灯箱打开时经 onZoomOpenChange 通知调用方（ReportDetail 的行切换方向键要让路，避免灯箱开着切行）。
+ * Report step timeline (shared by ReportDetail and the PlanRunDetail embedded detail).
+ * Renders only the step row list + screenshot lightbox; the outer card border and title header are the caller's job.
+ * When the lightbox opens, the caller is notified via onZoomOpenChange (ReportDetail's row-switching arrow keys must yield, so rows don't switch while the lightbox is open).
  */
 export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenChange }: {
   stepResults: StepResult[];
@@ -120,7 +120,7 @@ export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenC
   }, [zoomIndex, onZoomOpenChange]);
 
   const hasTabs = stepResults.some((s) => typeof s.tabIndex === 'number');
-  // 按 tabIndex 分组：未设置 tabIndex 的步骤归入 tab #0 组（向后兼容 phase1 报告）
+  // Group by tabIndex: steps without a tabIndex go into tab group #0 (backward compatible with phase1 reports)
   const grouped: Array<{ tabIndex: number; steps: StepResult[] }> = [];
   if (hasTabs) {
     const map = new Map<number, StepResult[]>();
@@ -136,8 +136,8 @@ export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenC
   } else {
     grouped.push({ tabIndex: 0, steps: stepResults });
   }
-  // 放大灯箱按「图片」而非「步骤」建索引：一步可能有「执行截图」+「视觉判定截图」两张，
-  // 若按步骤索引，点第二张缩略图会定位到该步、再渲染出第一张（被盖住的那张永远放大不出来）。
+  // The lightbox is indexed by "image" rather than "step": one step may carry both an execution screenshot and a vision-assertion screenshot.
+  // Indexed by step, clicking the second thumbnail would land on that step and re-render the first image (the covered one could never be zoomed).
   const shots = stepResults.flatMap((s) => [
     ...(s.screenshot ? [{ s, url: s.screenshot, label: t('reports:shots.stepShot', { order: s.order }) }] : []),
     ...(s.visionAssert?.screenshot && s.visionAssert.screenshot !== s.screenshot
@@ -165,7 +165,7 @@ export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenC
           {passed ? '✓' : '✕'} #{s.order}
         </span>
         <div className="flex-1 min-w-0 flex flex-col gap-1.5">
-          {/* 步骤说明：与用例详情页步骤列表同构——类型标签 + instruction，无 instruction 用动作摘要；历史报告缺快照则不渲染 */}
+          {/* Step description: isomorphic with the case detail page's step list — kind label + instruction; falls back to the action summary when there is no instruction; not rendered when a historical report lacks the snapshot */}
           {(s.instruction?.trim() || (Array.isArray(s.compiled) && s.compiled.length > 0)) && (
             <div className="flex items-baseline gap-1.5 min-w-0" title={fullStepDescription(s, t)}>
               <span className="shrink-0 font-semibold" style={{ color: 'var(--primary)', fontSize: 10 }}>
@@ -176,7 +176,7 @@ export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenC
               </span>
             </div>
           )}
-          {/* 元信息：耗时 / 定位策略 / 标签页 —— 标签在前、值在后，分项独立，可读 */}
+          {/* Meta info: duration / locator strategy / tab — label first, value after, separate items for readability */}
           <div className="flex items-center gap-2 flex-wrap text-[11px]">
             <Meta label={t('reports:meta.duration')} value={`${s.durationMs} ms`} mono />
             {s.startedAt && (
@@ -211,7 +211,7 @@ export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenC
               />
             )}
           </div>
-          {/* 错误 / 警告 / 变量提示 —— 用色块+图标直接说明这是什么类型的提示 */}
+          {/* Error / warning / variable hints — colored blocks + icons say outright what kind of notice this is */}
           {s.error && (
             <div
               className="flex gap-2 items-start text-[12px] px-2 py-1 rounded-[4px]"
@@ -328,7 +328,7 @@ export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenC
   return (
     <>
       {stepResults.length === 0 ? (
-        // 执行中且首步尚未落库：说明是「还没开始出结果」，不是「没结果」——别误导成空报告。
+        // Running and the first step hasn't landed yet: that's "no results yet", not "no results" — don't mislead into an empty report.
         isRunning ? (
           <div
             className="flex flex-col items-center justify-center gap-2 px-5 py-14"
@@ -362,8 +362,8 @@ export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenC
         </div>
       )}
 
-      {/* Lightbox — 全屏放大截图（复用 Dialog 提供焦点陷阱 + Esc）。
-          左侧/右侧浮层按钮 + 键盘 ← / → 在所有带截图的步骤之间翻页；底部显示当前位置。 */}
+      {/* Lightbox — fullscreen screenshot zoom (reuses Dialog for the focus trap + Esc).
+          Left/right floating buttons + keyboard ← / → page through every step that has a screenshot; the footer shows the current position. */}
       <Dialog open={zoomed !== null} onOpenChange={(o) => !o && setZoomIndex(null)}>
         <DialogContent
           style={{
@@ -378,7 +378,7 @@ export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenC
         >
           {zoomed && (
             <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-              {/* 顶部一行：步骤 ID（左）+ 翻页计数（右），独立于图片容器，避免被 DialogContent overflow 裁剪 */}
+              {/* Top row: step id (left) + page counter (right), independent of the image container so DialogContent overflow doesn't clip it */}
               <div
                 style={{
                   width: 'calc(100vw - 168px)',
@@ -453,7 +453,7 @@ export default function ReportStepTimeline({ stepResults, isRunning, onZoomOpenC
   );
 }
 
-/** 结果块统一样式：等宽、可换行、可滚动（SQL / 响应体都可能很长）。 */
+/** Shared result-block style: monospace, wrappable, scrollable (SQL / response bodies can both be long). */
 const RESULT_PRE_STYLE: React.CSSProperties = {
   maxHeight: 240,
   overflow: 'auto',
@@ -469,8 +469,8 @@ const RESULT_PRE_STYLE: React.CSSProperties = {
   fontFamily: 'var(--font-mono, ui-monospace, monospace)',
 };
 
-/** 「请求」块：实际执行的 SQL（占位符形态）+ 绑定参数值。
- *  老报告没有 sql/params 字段 → 不渲染（不显示空块）。 */
+/** "Request" block: the SQL actually executed (placeholder form) + bound parameter values.
+ *  Legacy reports lack sql/params fields → not rendered (no empty block shown). */
 function SqlRequestBlock({ sql, params }: { sql?: string; params?: unknown[] }) {
   const { t } = useTranslation();
   if (!sql && (!params || params.length === 0)) return null;
@@ -523,7 +523,7 @@ function SqlResultCell({ sql }: { sql: SqlStepResult }) {
   );
 }
 
-/** 浏览器 console error / JS 未捕获异常（本步窗口）。老报告与无报错步缺字段 → 不渲染。 */
+/** Browser console errors / uncaught JS exceptions (this step's window). Legacy reports and error-free steps lack the field → not rendered. */
 function ConsoleResultCell({ entries }: { entries: ConsoleLogEntry[] }) {
   const { t } = useTranslation();
   return (

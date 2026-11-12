@@ -23,7 +23,7 @@ function sourceBadgeKey(t: ReturnType<typeof useTranslation>['t'], m: PromptModu
   return t(`settings:${map[m.source ?? ''] ?? 'promptSourceManual'}`);
 }
 
-/** 设置页「系统提示词」：模块分组列表 + 编辑抽屉（仅 main/tool 组）+ 版本历史抽屉（回滚/恢复默认；skill 组只做版本审计，正文管理归技能页）。 */
+/** Settings page "system prompts": module group list + edit drawer (main/tool groups only) + version history drawer (rollback / restore default; the skill group is version-audit only, body management belongs to the skills page). */
 export default function PromptModulesSection() {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
@@ -133,7 +133,7 @@ export default function PromptModulesSection() {
         )}
       </div>
 
-      {/* 编辑抽屉（仅 main/tool 组可进；skill 正文管理归技能页）；代码默认组可恢复默认（写 NULL 行） */}
+      {/* Edit drawer (main/tool groups only; skill body management belongs to the skills page); code-default groups can restore the default (writes a NULL row) */}
       <Dialog open={!!editing} onOpenChange={(open) => { if (!open) setEditing(null); }}>
         <DialogContent>
           <DialogHeader>
@@ -169,7 +169,7 @@ export default function PromptModulesSection() {
         </DialogContent>
       </Dialog>
 
-      {/* 版本历史抽屉：选中行与当前值并排对照（全文 diff）；回滚=fromSeq（skill 组同时写回磁盘） */}
+      {/* Version history drawer: the selected row and the current value side by side (full-text diff); rollback = fromSeq (skill groups also write back to disk) */}
       <Dialog open={!!versionsOf} onOpenChange={(open) => { if (!open) setVersionsOf(null); }}>
         <DialogContent>
           <DialogHeader>

@@ -52,8 +52,8 @@ export default function MembersPage() {
   }, [setSearchParams]);
 
   const handleSelectOrg = useCallback((org: OrgTreeNode) => {
-    // 必须走 navigate 而不是只改 searchParams：详情页（/members/:kind/:id）会一直占着路径，
-    // 而渲染分支里 detailKind 优先于 orgId——只改 query 的话点了左树没反应，右边仍停在详情页。
+    // Must navigate rather than only changing searchParams: the detail page (/members/:kind/:id) keeps holding the path,
+    // and in the render branch detailKind takes priority over orgId — changing only the query makes left-tree clicks do nothing, with the right side still on the detail page.
     const next = new URLSearchParams();
     next.set('org', org.id);
     next.set('tab', 'users');
@@ -61,7 +61,7 @@ export default function MembersPage() {
     navigate(`/members?${next.toString()}`);
   }, [navigate, includeSubtree]);
 
-  /** 当前组织上下文的查询串（org/tab/subtree），无组织时为空串。 */
+  /** Query string of the current org context (org/tab/subtree); empty string when no org. */
   const orgContext = useCallback(() => {
     if (!orgId) return '';
     const next = new URLSearchParams();
@@ -71,7 +71,7 @@ export default function MembersPage() {
     return `?${next.toString()}`;
   }, [orgId, tab, includeSubtree]);
 
-  // 进详情时把当前组织带在 query 里，否则「返回」无从知道该回到哪个组织。
+  // Carry the current org in the query when entering a detail, otherwise "back" has no way to know which org to return to.
   const openDetail = useCallback((kind: 'user' | 'project' | 'productline', id: string) => {
     navigate(`/members/${kind}/${id}${orgContext()}`);
   }, [navigate, orgContext]);

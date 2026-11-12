@@ -19,13 +19,13 @@ import { cn } from '../lib/cn';
 
 interface Props {
   initial: StepClip;
-  /** 'edit' = 修改已有步骤；'create' = 新增未编译空白步骤（首屏带 click 默认 action）。
-   *  仅影响标题文案 + 保存按钮文案 + 默认 source；保存数据流不变。 */
+  /** 'edit' = modify an existing step; 'create' = add a new uncompiled blank step (first render carries a default click action).
+   *  Only affects the title copy + save button copy + default source; the save data flow is unchanged. */
   mode?: 'edit' | 'create';
   availableVars?: string[];
   datasetVars?: string[];
   caseId?: string;
-  /** 移动端用例时启用 mobile 步骤种类 + 隐藏 web-only kind；同步影响 kind 下拉与表单字段。 */
+  /** For mobile cases, enables mobile step kinds + hides web-only kinds; also affects the kind dropdown and form fields. */
   platform?: 'web' | 'mobile';
   onSave: (next: StepClip) => void;
   onClose: () => void;
@@ -36,12 +36,12 @@ function FieldError({ msg }: { msg?: string }) {
   return <span className="text-[11px]" style={{ color: 'var(--destructive)' }}>{msg}</span>;
 }
 
-/** 步骤编辑抽屉：外壳管类型切换 + 通用字段；DrawerForm 按 kind 重挂载管差异字段。 */
+/** Step edit drawer: the shell handles type switching + common fields; DrawerForm remounts per kind to handle the differing fields. */
 export default function StepEditDrawer({ initial, mode = 'edit', availableVars = [], datasetVars = [], caseId, platform = 'web', onSave, onClose }: Props) {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { projectId: routeProjectId, versionId: routeVersionId } = useParams<{ projectId: string; versionId: string }>();
-  // 移动端可见 kind = 移动 9 + 跨平台可用 6（click/fill/assertVisible/assertText/screenshot/aiTask）
+  // Mobile-visible kinds = 9 mobile + 6 cross-platform (click/fill/assertVisible/assertText/screenshot/aiTask)
   const MOBILE_ALLOWED_KINDS: ReadonlySet<string> = new Set([
     'tap', 'swipe', 'setAppearance', 'setNetwork', 'setLocation',
     'appOpen', 'appBack', 'appRestart', 'home',
@@ -50,11 +50,11 @@ export default function StepEditDrawer({ initial, mode = 'edit', availableVars =
   const isMobile = platform === 'mobile';
   const availableKinds = (isMobile ? STEP_KINDS.filter((k) => MOBILE_ALLOWED_KINDS.has(k)) : STEP_KINDS) as StepKind[];
   const [draft, setDraft] = useState<StepClip>(initial);
-  // 通用字段放外壳：类型切换（DrawerForm 重挂载）不丢用户已输入的延迟
-  // 2026-10-07 移除 name 输入框：name 列已退役，行级自然语言全部由 rowInstruction 承担。
+  // Common fields live in the shell so type switching (DrawerForm remount) doesn't lose the user-entered delay
+  // 2026-10-07 removed the name input: the name column is retired; row-level natural language is carried entirely by rowInstruction.
   const [delayMs, setDelayMs] = useState(initial.delayMs ? String(initial.delayMs) : '');
   const kind = ((draft.action as { kind?: string })?.kind ?? (isMobile ? 'tap' : 'click')) as StepKind;
-  // DrawerForm 每次渲染注册最新的 buildAction；类型切换前用它把未保存的字段编辑同步进 draft
+  // DrawerForm registers the latest buildAction on every render; before switching type, use it to sync unsaved field edits into the draft
   const buildActionRef = useRef<(() => Record<string, unknown> | null) | null>(null);
 
   return (
@@ -70,7 +70,7 @@ export default function StepEditDrawer({ initial, mode = 'edit', availableVars =
           <select
             value={kind}
             onChange={(e) => {
-              // 先取 DrawerForm 当前表单状态（含未保存编辑），再切换；避免切换丢编辑
+              // Grab DrawerForm's current form state (including unsaved edits) first, then switch; avoids losing edits on switch
               const current = buildActionRef.current?.() ?? draft.action;
               setDraft(switchAction({ ...draft, action: current }, e.target.value as StepKind));
             }}
@@ -110,7 +110,7 @@ export default function StepEditDrawer({ initial, mode = 'edit', availableVars =
   );
 }
 
-/* ---------------- DrawerForm：kind 差异字段 + 保存校验 ---------------- */
+/* ---------------- DrawerForm: per-kind differing fields + save validation ---------------- */
 
 interface FormProps {
   clip: StepClip;
@@ -131,7 +131,7 @@ interface FormProps {
 function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars = [], caseId, platform = 'web', buildActionRef, onCancel, onSave, saveLabel, saveMode }: FormProps) {
   const navigate = useNavigate();
   const { t } = useTranslation();
-  // validateStepEdit 返回 i18n token → 当前语言文案；定位候选序号从字段路径推得。
+  // validateStepEdit returns i18n tokens → copy in the current language; locator candidate index is derived from the field path.
   const errText = (token: string, path: string): string =>
     token === 'stepLocatorValueEmpty'
       ? t('cases:stepLocatorValueEmpty', { n: Number(/^action\.locator\.(\d+)\.value$/.exec(path)?.[1] ?? 0) + 1 })
@@ -140,12 +140,12 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
   const action = clip.action as Record<string, unknown>;
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  // locator（需要定位的类型可编辑）
+  // locator (editable for kinds that need locating)
   const [locators, setLocators] = useState<Locator[]>(() =>
     Array.isArray(action.locator) ? (action.locator as Locator[]) : kindNeedsLocator(kind) ? [{ strategy: 'css', value: '' }] : [],
   );
 
-  // fill 敏感值（自 Modal 迁移：占位 '__sensitive__' 必须重输）
+  // fill sensitive value (migrated from Modal: the '__sensitive__' placeholder must be re-entered)
   const [sensitive, setSensitive] = useState(!!(action as { sensitive?: boolean }).sensitive);
   const [pwdDraft, setPwdDraft] = useState('');
   const [fillValue, setFillValue] = useState<unknown>(
@@ -153,7 +153,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
   );
   const [selectValue, setSelectValue] = useState(typeof action.value === 'string' ? action.value : '');
 
-  // upload（自 Modal 迁移）
+  // upload (migrated from Modal)
   const [fileId, setFileId] = useState<string | undefined>(action.fileId as string | undefined);
   const [attachments, setAttachments] = useState<Array<{ id: string; originalName: string; size: number; mime: string | null; sha256: string; createdAt: string }>>([]);
 
@@ -168,7 +168,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
     (action.match as 'equals') ?? 'equals',
   );
 
-  // extract（自 Modal 迁移，含智能抽取编译）
+  // extract (migrated from Modal, includes smart-extract compilation)
   const [varName, setVarName] = useState(String(action.varName ?? ''));
   const [extractMode, setExtractMode] = useState<'completeValue' | 'smartExtract' | 'regex'>(
     (action.mode as 'completeValue') ?? 'completeValue',
@@ -177,9 +177,9 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
   const [extractGroup, setExtractGroup] = useState(String(action.group ?? '1'));
   const [extractDescription, setExtractDescription] = useState(String(action.description ?? ''));
 
-  // aiTask 子步 instruction(LLM 多轮读) 与行级 instruction(人看/给 LLM 起手,回放不读)。
-  // 行级 instruction 走 rowInstruction state;aiTask 这块独立用 aiInstruction。
-  // 两字段在 DB 是不同列(行 instruction + compiled[i].instruction),勿混。
+  // aiTask sub-step instruction (read by the LLM across turns) vs row-level instruction (for humans / LLM kick-off, not read at replay).
+  // Row-level instruction uses rowInstruction state; this aiTask block uses aiInstruction independently.
+  // The two fields are different DB columns (row instruction + compiled[i].instruction); don't mix them.
   const [rowInstruction, setRowInstruction] = useState(String(clip.instruction ?? ''));
   const [aiInstruction, setAiInstruction] = useState(String(action.instruction ?? ''));
   const [url, setUrl] = useState(String(action.url ?? ''));
@@ -188,18 +188,18 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
   const [tabRef, setTabRef] = useState(String(action.tabRef ?? ''));
   const [shotName, setShotName] = useState(String(action.name ?? ''));
 
-  // scroll 绝对位置（字符串态便于输入框编辑，buildAction 归一为非负整数）
+  // scroll absolute positions (kept as strings for easy input editing; buildAction normalizes to non-negative integers)
   const [scrollTopInput, setScrollTopInput] = useState(String(action.scrollTop ?? 0));
   const [scrollLeftInput, setScrollLeftInput] = useState(String(action.scrollLeft ?? 0));
 
-  // 2026-10-06：行级 compiled 数组（aiTask 用得到）。其余 kind
-  //   由 buildAction 自然回填到 compiled=[action]，与 dispatcher 走同一条路径。
-  // 2026-10-07：aiTask 编译改为跳 AI 助手走 stage_case_op(action=update_step / insert_step),
-  //   这里只读 display — 落库完全由助手在 StagePanel 勾选后回写。
+  // 2026-10-06: row-level compiled array (used by aiTask). Other kinds
+  //   get compiled=[action] naturally backfilled by buildAction, sharing the same path as the dispatcher.
+  // 2026-10-07: aiTask compilation changed to jump to the AI assistant via stage_case_op(action=update_step / insert_step);
+  //   here it's display-only — persistence is written back entirely by the assistant after the user checks items in StagePanel.
   const initialDraftCompiled: unknown[] | null = Array.isArray(clip.compiled) ? clip.compiled : null;
   const [compiled] = useState<unknown[] | null>(initialDraftCompiled);
 
-  // extract 智能抽取编译（沿用历史变量名 compiling/compileErr）
+  // extract smart-extract compilation (keeps the historical variable names compiling/compileErr)
   const [compiling, setCompiling] = useState(false);
   const [compileErr, setCompileErr] = useState('');
 
@@ -245,7 +245,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
   const [syslogMessage, setSyslogMessage] = useState(String(action.message ?? ''));
   const [syslogTimeout, setSyslogTimeout] = useState(String(action.timeoutMs ?? 5000));
 
-  // sql（查被测系统自己的库）
+  // sql (query the SUT's own database)
   const [sqlText, setSqlText] = useState(typeof action.sql === 'string' ? action.sql : '');
   const [sqlParams, setSqlParams] = useState<string[]>(
     Array.isArray(action.params) ? (action.params as unknown[]).map((p) => String(p ?? '')) : [],
@@ -283,12 +283,12 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
     return () => { cancelled = true; };
   }, [kind, caseId]);
 
-  /** 把当前表单状态构建为 action（含未保存编辑）；assertJson 解析失败返回 null。类型切换与保存共用。 */
+  /** Builds the current form state into an action (including unsaved edits); returns null on assertJson parse failure. Shared by type switching and saving. */
   const buildAction = (): Record<string, unknown> | null => {
     const next: Record<string, unknown> = { ...action };
 
-    // waitFor 定位可选：滤掉没填值的候选，全空 → locator:[] = 固定时长等待；
-    // 其他类型原样透传，空值候选仍由 zod 逐个拦截。
+    // waitFor locating is optional: filter out candidates with no value; all empty → locator:[] = fixed-duration wait;
+    // other kinds pass through as-is; empty-value candidates are still caught one by one by zod.
     if (kindNeedsLocator(kind)) {
       next.locator = kind === 'waitFor'
         ? locators.filter((l) => String(l.value ?? '').trim())
@@ -355,7 +355,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       next.scrollTop = Math.max(0, Math.round(Number(scrollTopInput) || 0));
       next.scrollLeft = Math.max(0, Math.round(Number(scrollLeftInput) || 0));
     }
-    // press 的 key 必填（zod）；无值/丢字段时兜底 Enter（录制器只产 Enter press）
+    // press requires a key (zod); fallback to Enter when missing/lost (the recorder only produces Enter presses)
     if (kind === 'press') next.key = typeof next.key === 'string' && next.key.trim() ? next.key : 'Enter';
     if (kind === 'switchTab') next.tabRef = tabRef;
     if (kind === 'screenshot') next.name = shotName;
@@ -389,7 +389,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       } else {
         delete next.saveAs;
       }
-      // allowTransportFailure 单独成立也算一条断言（传输层失败即通过，无需 status/expected）。
+      // allowTransportFailure alone counts as an assertion (transport-layer failure passes, no status/expected needed).
       if (httpAssertion && (httpAssertion.status.trim() !== '' || httpAssertion.expected !== '' || httpAssertion.allowTransportFailure)) {
         const statusNum = Number(httpAssertion.status);
         next.assertion = {
@@ -414,7 +414,7 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
     if (kind === 'sql') {
       next.sql = sqlText;
       next.limit = Math.max(1, Math.min(200, Number(sqlLimit) || 50));
-      // params 保留原文（"{{var}}" 交给执行期替换）；这里只做类型归一与空串剔除。
+      // params keep the raw text ("{{var}}" is replaced at execution time); here we only normalize types and drop empty strings.
       next.params = sqlParams
         .map((p) => p.trim())
         .filter((p) => p !== '')
@@ -448,18 +448,18 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
     return next;
   };
 
-  // 每次渲染注册最新闭包（不设依赖数组）；卸载时清空，外壳只在表单挂载时取得到
+  // Register the latest closure on every render (no dependency array); clear on unmount — the shell can only grab it while the form is mounted
   useEffect(() => {
     buildActionRef.current = buildAction;
     return () => { buildActionRef.current = null; };
   });
 
-  /** 保存：先做交互级 gate，再构建 + zod 校验（自 StepEditModal.handleSave 迁移）。
-   *  2026-10-06：aiTask 强制要求 compiled 非空（未编译不允许保存），dispatcher 阻塞执行。
-   *  其他 kind 的 compiled 由 buildAction 自然回填为 [action]，与 dispatcher 走同一条路径。
-   *  2026-10-07：放宽 row 位置校验——create 模式允许空 locator/空 compiled 占位保存：
-   *    用户手填了 enableAutoCompile = true 时,直接走 {kind:'click', locator:[]}, compiled:[] 占位入栈,
-   *    顶部"执行"按 dispatcher compile-missing 抛错阻塞,行级「AI 智能任务」按钮一键回填。 */
+  /** Save: first the interaction-level gate, then build + zod validation (migrated from StepEditModal.handleSave).
+   *  2026-10-06: aiTask requires compiled to be non-empty (uncompiled steps can't be saved); the dispatcher blocks execution.
+   *  Other kinds get compiled backfilled to [action] naturally by buildAction, sharing the same path as the dispatcher.
+   *  2026-10-07: relaxed row placement validation — create mode allows placeholder saves with empty locator/empty compiled:
+   *    when the user manually sets enableAutoCompile = true, it goes straight to {kind:'click', locator:[]} with compiled:[] pushed as placeholder;
+   *    the top "Run" is blocked by the dispatcher's compile-missing error, and the row-level "AI smart task" button backfills in one click. */
   const handleSave = () => {
     if (kind === 'fill' && sensitive && !pwdDraft) {
       setFieldErrors({ sensitive: t('cases:sensitiveNeeded') });
@@ -473,8 +473,8 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       setFieldErrors({ 'action.instruction': t('cases:instructionRequired') });
       return;
     }
-    // 自然语言描述里填 DSL JSON 是常见误操作（参数应填下方表单字段）——拦截并指路，
-    // 否则保存后 AI 编译拿到的"指令"是一段 JSON，无从编译。
+    // Putting DSL JSON into the natural-language description is a common mistake (parameters belong in the form fields below) — intercept and redirect,
+    // otherwise after saving the AI compiler receives a "instruction" that is just JSON and has nothing to compile.
     {
       const inst = rowInstruction.trim();
       if (/^[[{]/.test(inst)) {
@@ -482,10 +482,10 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
           JSON.parse(inst);
           setFieldErrors({ instruction: t('cases:dslJsonNotAllowed') });
           return;
-        } catch { /* 不是合法 JSON，按普通文本放行 */ }
+        } catch { /* not valid JSON; let it through as plain text */ }
       }
     }
-    // 占位保存分支：create 模式下 locator 全空时跳过 zod 校验,直接入库 compiled:[]
+    // Placeholder save branch: in create mode with all locators empty, skip zod validation and persist compiled:[] directly
     if (saveAsPlaceholder) {
       const placeholderAction: Record<string, unknown> = { kind, locator: [] };
       onSave({
@@ -508,9 +508,9 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
       setFieldErrors(translated);
       return;
     }
-    // aiTask 必须先 AI 编译出 compiled：空数组 = dispatcher 抛 compile-missing。
-    // 非 aiTask 编辑只改 compiled[0]：保存时保留其余动作（AI 可能一次产出一串 DSL），
-    // 否则会把整条链覆盖成 [next]，静默丢掉后续动作。create 模式无 compiled，自然为 [next]。
+    // aiTask must first have compiled produced by AI compilation: an empty array = the dispatcher throws compile-missing.
+    // Non-aiTask edits only change compiled[0]: keep the other actions on save (the AI may produce a chain of DSL in one shot),
+    // otherwise the whole chain would be overwritten with [next], silently dropping later actions. Create mode has no compiled, so it's naturally [next].
     const compiledTail = Array.isArray(compiled) ? compiled.slice(1) : [];
     const compiledOut: unknown[] = kind === 'aiTask' ? (compiled ?? []) : [next, ...compiledTail];
     if (kind === 'aiTask' && compiledOut.length === 0) {
@@ -526,14 +526,14 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
   };
 
   const showLocator = kindNeedsLocator(kind) && !(kind === 'assertText' && assertTarget !== 'specifiedElement');
-  // create 模式下用户没填 locator 时给一条「存为未编译占位」出口 —— 抽屉关闭后顶部执行仍置灰,
-  //   行级「AI 智能任务」按钮把 compiled 填回来。waitFor 例外：不填定位 = 合法空等待，正常保存。
+  // In create mode when the user left locator empty, offer a "save as uncompiled placeholder" exit — after the drawer closes, top-level Run stays disabled,
+  //   and the row-level "AI smart task" button fills compiled back in. waitFor is the exception: no locator = a legal empty wait, save normally.
   const saveAsPlaceholder = saveMode === 'create' && kindNeedsLocator(kind) && kind !== 'waitFor' && locators.every((l) => !String(l.value ?? '').trim());
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3">
-        {/* 2026-10-07：移除「步骤名称」input —— name 列已退役,自然语言完整说明统一存到行级 instruction。 */}
+        {/* 2026-10-07: removed the "step name" input — the name column is retired; full natural-language descriptions are stored uniformly in the row-level instruction. */}
         <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
           <span>{t('cases:naturalLanguageDesc')}</span>
           <textarea
@@ -829,8 +829,8 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
               disabled={!aiInstruction.trim() || !caseId}
               onClick={() => {
                 if (!caseId || !routeProjectId || !routeVersionId) return;
-                // 2026-10-07：aiTask 子步的「AI 编译」改为跳 AI 助手走 stage_case_op(action=update_step / insert_step)。
-                // 助手能 inspect_page 抓真实元素 + 让用户在 StagePanel 勾选 → 落库。
+                // 2026-10-07: "AI compile" for aiTask sub-steps now jumps to the AI assistant via stage_case_op(action=update_step / insert_step).
+                // The assistant can inspect_page to grab real elements + let the user check items in StagePanel → persisted.
                 navigate(
                   `/p/${routeProjectId}/v/${routeVersionId}/assistant`,
                   {
@@ -1255,8 +1255,8 @@ function DrawerForm({ clip, kind, delayMs, onDelayMs, availableVars, datasetVars
           </div>
         )}
 
-        {/* compiled 动作链（只读）：AI 一次产出一串 DSL 时（如登录+操作+断言合并成一步），
-            上方表单只镜像 compiled[0]；这里枚举整条链提示用户保存不会丢尾部动作。 */}
+        {/* compiled action chain (read-only): when the AI produces a chain of DSL in one shot (e.g. login + operation + assertion merged into one step),
+            the form above only mirrors compiled[0]; enumerating the whole chain here tells the user that saving won't drop the tail actions. */}
         {Array.isArray(compiled) && compiled.length > 1 && (
           <div className="flex flex-col gap-1.5 rounded-[var(--radius-sm)] border border-dashed p-2" style={{ borderColor: 'var(--border)' }}>
             <span className="text-[11px] font-semibold" style={{ color: 'var(--muted-foreground)' }}>

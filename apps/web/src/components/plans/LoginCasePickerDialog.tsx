@@ -1,6 +1,6 @@
 /**
- * 登录用例选择弹窗：搜索 + 单选列表（点行即选定并关闭），风格对齐计划详情「添加用例」弹窗。
- * 候选由页面级 /plans/:id/login-cases 查询下发（本计划项目内的全部用例）。
+ * Login case picker dialog: search + single-select list (click a row to pick and close), styled after the plan detail "add case" dialog.
+ * Candidates come from the page-level /plans/:id/login-cases query (all cases in this plan's project).
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,9 +13,9 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   cases: LoginCaseOption[];
-  /** 当前组已选登录用例 id（未选为 null）：列表高亮 + 清除按钮出现条件。 */
+  /** Currently selected login case id for this group (null when none): drives list highlight + clear button visibility. */
   selectedId: string | null;
-  /** 选定回传（点行即触发并关闭）；null = 清除选择。 */
+  /** Pick callback (fires on row click and closes); null = clear the selection. */
   onPick: (caseId: string | null) => void;
 }
 

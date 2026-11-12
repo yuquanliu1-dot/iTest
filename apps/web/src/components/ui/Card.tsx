@@ -5,7 +5,7 @@ interface CardProps {
   className?: string;
   style?: CSSProperties;
   padding?: 'none' | 'sm' | 'md' | 'lg';
-  /** 当为 true 或提供 onClick 时，应用 .hover-card 提升悬停态。 */
+  /** When true or onClick is provided, applies .hover-card to elevate the hover state. */
   hoverable?: boolean;
   onClick?: () => void;
 }

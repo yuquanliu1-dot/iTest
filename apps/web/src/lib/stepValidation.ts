@@ -8,11 +8,11 @@ export interface StepEditInput {
 
 export interface StepValidationResult {
   ok: boolean;
-  /** key 为字段路径，如 'delayMs' | 'action.url' | 'action.locator.0.value' */
+  /** Key is a field path, e.g. 'delayMs' | 'action.url' | 'action.locator.0.value' */
   errors: Record<string, string>;
 }
 
-/** zod 报错路径 → i18n token（渲染层经 `t('cases:' + token)` 翻译；未知路径回落 zod 原文）。 */
+/** zod error path → i18n token (the render layer translates via `t('cases:' + token)`; unknown paths fall back to the raw zod message). */
 function messageFor(path: string, raw: string): string {
   if (path === 'delayMs') return 'stepDelayRange';
   if (path === 'action' || path === 'action.kind') return 'stepActionInvalid';

@@ -39,29 +39,29 @@ export default function App() {
 
   return (
     <>
-      {/* 全局 toast 容器：必须挂在 Routes 之外，登录页（无 AppShell）也能显示错误提示 */}
+      {/* Global toast container: must be mounted outside Routes so the login page (no AppShell) can also show error toasts */}
       <Toaster />
       <Routes>
-      {/* 公开路由：登录（含首登强制改密） */}
+      {/* Public routes: login (including first-login forced password change) */}
       <Route path="/login" element={<LoginPage />} />
-      {/* 公开路由：产品对外介绍页 */}
+      {/* Public route: product marketing page */}
       <Route path="/landing" element={<LandingPage />} />
-      {/* 受保护路由：AuthGuard 探测会话后经 AppShell 渲染 */}
+      {/* Protected routes: AuthGuard probes the session, then rendering goes through AppShell */}
       <Route element={<AppShell><AuthGuard /></AppShell>}>
         <Route path="/" element={<ProjectsHome />} />
         <Route path="/members" element={<MembersPage />} />
         <Route path="/members/*" element={<MembersPage />} />
-        {/* 产品线独立页已并入首页「项目与产品线」；旧链接重定向 */}
+        {/* The standalone product-lines page has been merged into the home "Projects & product lines" page; old links redirect */}
         <Route path="/product-lines" element={<Navigate to="/" replace />} />
         <Route path="/settings" element={<Settings />} />
-        {/* 项目级环境维护：不依赖版本上下文，也不要求「进入」过项目（ProjectGuard 校验 store.current） */}
+        {/* Project-level environment maintenance: no version context needed, and no requirement to have "entered" the project (ProjectGuard validates store.current) */}
         <Route path="/p/:projectId/environments" element={<EnvironmentsPage />} />
-        {/* 项目级数据集维护：与环境页同层级，不依赖版本上下文 */}
+        {/* Project-level dataset maintenance: same level as the environments page, no version context needed */}
         <Route path="/p/:projectId/datasets" element={<DatasetsPage />} />
-        {/* 项目级设备目标维护：移动端用例的 simulator/emulator 配置 */}
+        {/* Project-level device target maintenance: simulator/emulator config for mobile cases */}
         <Route path="/p/:projectId/device-targets" element={<DeviceTargetsPage />} />
         <Route path="/p/:projectId" element={<ProjectGuard />}>
-          {/* 版本化二级路径 /v/:versionId/...：版本号由 ProjectsHome 行「进入」写入 store */}
+          {/* Versioned nested path /v/:versionId/...: the version is written to the store when "entering" from the ProjectsHome row */}
           <Route path="v/:versionId">
             <Route index element={<Navigate to="assistant" replace />} />
             <Route path="assistant" element={<AssistantPage />} />
@@ -78,7 +78,7 @@ export default function App() {
             <Route path="explorations/matrix/:matrixId" element={<ExplorationMatrix />} />
             <Route path="explorations/:id" element={<ExplorationDetail />} />
           </Route>
-          {/* 旧路径兼容：未带版本号 → 回首页选项目 */}
+          {/* Legacy path compatibility: no version number → back to the home page to pick a project */}
           <Route index element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

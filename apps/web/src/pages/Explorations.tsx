@@ -25,7 +25,7 @@ import {
   PageShellTitle,
 } from '../components/layout/PageShell';
 
-/** 人格下拉的文案：单一真源在 @itest/shared（labelZh/labelEn），此处按当前语言取一侧。 */
+/** Persona dropdown copy: the single source of truth lives in @itest/shared (labelZh/labelEn); pick a side by current language here. */
 function personaLabel(key: string, lang: string): string {
   const p = EXPLORATION_PERSONAS.find((x) => x.key === key);
   if (!p) return key;
@@ -48,32 +48,32 @@ export default function Explorations() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [charter, setCharter] = useState('');
-  // 人格多选：选 1 个=单会话；选 ≥2 个=人格矩阵（同一章程并行起多路，建组跳矩阵视图）。
-  // 单入口不拆两个弹窗——同能力不做双入口。
-  // 不收会话标题/矩阵名：api 侧有默认（title=章程前 80 字、label=N 人格矩阵），少填两项少一道坎。
+  // Persona multi-select: 1 picked = single session; ≥2 picked = persona matrix (multiple parallel runs on the same charter, grouped, jumps to matrix view).
+  // One entry, not two dialogs — no dual entry points for the same capability.
+  // No session-title/matrix-name input: the api side has defaults (title = first 80 chars of the charter, label = N-persona matrix); two fewer fields, one fewer hurdle.
   const [personas, setPersonas] = useState<string[]>(['qa']);
   const [startUrl, setStartUrl] = useState('');
   const [allowDestructive, setAllowDestructive] = useState(false);
   const [allowFaultInjection, setAllowFaultInjection] = useState(false);
-  // 轮次预算：默认 60（后端同默认，范围 4~240）；清空=不传=后端默认。
+  // Turn budget: default 60 (same default backend-side, range 4~240); clearing = not sending = backend default.
   const [budgetTurns, setBudgetTurns] = useState<number | undefined>(60);
-  // 测试窗口两态：默认 1280×800 / 自定义宽高（对齐用例详情的窗口策略；探索 headless 无「当前窗口」态）。
+  // Test window, two states: default 1280×800 / custom width×height (aligned with the case detail window strategy; exploration runs headless so there is no "current window" state).
   const [windowMode, setWindowMode] = useState<'default' | 'custom'>('default');
   const [windowWidth, setWindowWidth] = useState<number | undefined>();
   const [windowHeight, setWindowHeight] = useState<number | undefined>();
   const windowCustomReady = windowMode !== 'custom' || ((windowWidth ?? 0) > 0 && (windowHeight ?? 0) > 0);
-  // 高级选项默认收起：章程 + 视角两件事就能开跑，起始页/轮次/窗口是调节项，
-  // 平铺在首屏会把「这次要探什么」这条主线挤没。
+  // Advanced options collapsed by default: charter + persona are enough to start a run; start page/turns/window are tuning knobs,
+  // and flattening them onto the first screen would crowd out the "what are we exploring this time" main line.
   const [showAdvanced, setShowAdvanced] = useState(false);
-  // 章程字数实时显示：未达下限（10 字）时提示转琥珀色——按钮禁用但把原因说清楚。
+  // Charter length shown live: below the minimum (10 chars) the hint turns amber — the button is disabled but the reason is spelled out.
   const charterLen = charter.trim().length;
   const charterTooShort = charterLen < 10;
 
   const togglePersona = (key: string) =>
     setPersonas((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
 
-  // 单入口提交：选 1 个人格=单会话（进详情页）；≥2=矩阵建组（进矩阵视图）。
-  // 窗口/预算对矩阵同样生效（后端矩阵接口逐字段透传给每个会话）。
+  // Single-entry submit: 1 persona picked = single session (into the detail page); ≥2 = matrix group (into matrix view).
+  // Window/budget apply to the matrix too (the backend matrix endpoint passes every field through to each session).
   const create = useMutation({
     mutationFn: async () => {
       const shared = {
@@ -120,8 +120,8 @@ export default function Explorations() {
 
   const openDetail = (id: string) => navigate(`/p/${projectId}/v/${versionId}/explorations/${id}`);
 
-  // ── 卡片行内操作：取消 / 重跑 / 删除（语义与可见条件同详情页） ──────────
-  // 不进详情页就能处置会话：取消=跑得快停；重跑=同章程开新会话；删除=不可逆，走确认弹窗。
+  // ── Card inline actions: cancel / rerun / delete (same semantics and visibility conditions as the detail page) ──────────
+  // Handle a session without entering the detail page: cancel = stop quickly; rerun = new session on the same charter; delete = irreversible, via confirm dialog.
   const listKey = ['explorations', projectId, versionId] as const;
   const cancelOne = useMutation({
     mutationFn: (id: string) => api.explorations.cancel(id),
@@ -152,7 +152,7 @@ export default function Explorations() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  // 删除不可逆（连带缺陷候选与证据截图）→ 卡片上先确认，不做一键即删。
+  // Delete is irreversible (defect candidates and evidence screenshots go with it) → confirm on the card first, no one-click delete.
   const [deleteTarget, setDeleteTarget] = useState<ExplorationSession | null>(null);
   const removeOne = useMutation({
     mutationFn: (id: string) => api.explorations.remove(id),
@@ -227,9 +227,9 @@ export default function Explorations() {
                             {s.matrixRole ? ` · ${personaLabel(s.matrixRole, i18n.language)}` : ''}
                           </span>
                         )}
-                        {/* 缺陷候选数：列表页一眼看出这轮探出了几个疑点——
-                            有候选时用警示色显性标出（数字放大加粗），0 个弱化成灰底，
-                            不与真有疑点的卡片抢眼。 */}
+                        {/* Defect candidate count: on the list page you can tell at a glance how many suspects this run produced —
+                            when candidates exist they are prominently marked in warning color (number enlarged and bolded), 0 is muted to a grey chip,
+                            so it never competes for attention with cards that genuinely have suspects. */}
                         <span
                           className="flex items-center gap-1 rounded-full px-2 py-0.5"
                           style={
@@ -261,7 +261,7 @@ export default function Explorations() {
                         <span>{t('explorations:createdBy')}：{creatorName(s.createdBy)}</span>
                       </div>
                     </div>
-                    {/* 行内操作：进详情页之外的快捷处置。按钮区 stopPropagation，点击不触发开详情。 */}
+                    {/* Inline actions: quick handling without entering the detail page. The button area stopPropagation so clicks do not trigger opening the detail. */}
                     <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                       {live ? (
                         <Button
@@ -286,7 +286,7 @@ export default function Explorations() {
                           <Icon name="renew" size={12} />
                         </Button>
                       )}
-                      {/* 运行中的会话禁删（执行器还在往里写）；已请求取消的放行。 */}
+                      {/* Running sessions cannot be deleted (the executor is still writing into them); cancel-requested ones are allowed through. */}
                       {(!live || s.cancelRequested) && (
                         <Button
                           variant="ghost"
@@ -309,8 +309,8 @@ export default function Explorations() {
         )}
       </PageShellContent>
 
-      {/* 新建探索会话：单列主线（章程 → 视角），调节项收进「高级选项」，权限单列一组。
-          唯一必填是章程——字数实时显示，不达标时提示转琥珀色（按钮禁用但把原因说清楚）。 */}
+      {/* New exploration session: single-column main line (charter → persona), tuning knobs tucked into "Advanced options", permissions as their own group.
+          The only required field is the charter — length shown live, hint turns amber when below minimum (button disabled but the reason is spelled out). */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent className="sm:max-w-xl p-0 gap-0">
           <DialogHeader className="px-5 pt-4 pb-3 gap-1.5 pr-8">
@@ -321,7 +321,7 @@ export default function Explorations() {
           </DialogHeader>
 
           <div className="flex flex-col gap-4 px-5 pb-4">
-            {/* ① 探索章程（必填）：整个会话的目标与边界，写得越具体 AI 越敢往深处钻。 */}
+            {/* ① Exploration charter (required): the goal and boundaries of the whole session; the more specific it is, the deeper the AI dares to dig. */}
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center gap-2">
                 <label htmlFor="exploration-charter" className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
@@ -348,7 +348,7 @@ export default function Explorations() {
               </span>
             </div>
 
-            {/* ② 探索视角：选 1 个跑一场，选多个则同一章程并行多路（互相印证，缺陷更可信）。 */}
+            {/* ② Exploration personas: pick 1 to run a single session, pick multiple for parallel runs on the same charter (cross-validating each other, making defects more credible). */}
             <div className="flex flex-col gap-1.5">
               <label className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
                 {t('explorations:matrixPersonas')}
@@ -378,8 +378,8 @@ export default function Explorations() {
               </span>
             </div>
 
-            {/* ③ 探索轮次：深度的唯一旋钮，放主线上不折叠。定宽输入 + 提示同行，软预算
-                超界优雅收尾（已发现的 findings 全保留）。 */}
+            {/* ③ Exploration turns: the only knob for depth, on the main line and not collapsed. Fixed-width input + hint on the same line; a soft budget
+                overrun winds down gracefully (all findings made so far are kept). */}
             <div className="flex flex-col gap-1.5">
               <label className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
                 {t('explorations:budgetTurns')}
@@ -399,7 +399,7 @@ export default function Explorations() {
               </div>
             </div>
 
-            {/* ④ 高级选项：起始页/窗口是调节项，默认收起——不影响开跑。 */}
+            {/* ④ Advanced options: start page/window are tuning knobs, collapsed by default — does not affect starting a run. */}
             <div className="flex flex-col gap-3">
               <button
                 type="button"
@@ -428,7 +428,7 @@ export default function Explorations() {
                     value={startUrl}
                     onChange={(e) => setStartUrl(e.target.value)}
                   />
-                  {/* 测试窗口：默认 1280×800 / 自定义宽高（同用例详情的窗口策略，两态版） */}
+                  {/* Test window: default 1280×800 / custom width×height (same window strategy as case detail, two-state version) */}
                   <div className="flex flex-col gap-1.5">
                     <span className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
                       {t('explorations:windowSize')}
@@ -470,7 +470,7 @@ export default function Explorations() {
               )}
             </div>
 
-            {/* ⑤ 权限（默认全关）：平台只认这两个授权位——章程里说辞不算授权。 */}
+            {/* ⑤ Permissions (all off by default): the platform only honors these two authorization bits — charter wording does not count as authorization. */}
             <div className="flex flex-col gap-1.5">
               <span className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
                 {t('explorations:permissionsTitle')}
@@ -519,7 +519,7 @@ export default function Explorations() {
         </DialogContent>
       </Dialog>
 
-      {/* 删除会话确认：不可逆（连带缺陷候选与证据截图） */}
+      {/* Delete session confirm: irreversible (defect candidates and evidence screenshots go with it) */}
       <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
         <DialogContent>
           <DialogHeader>

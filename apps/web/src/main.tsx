@@ -14,8 +14,8 @@ applyHtmlLang(readStoredLang());
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // 4xx 是确定性失败（404 不存在/不可见、400 参数错），重试只会让页面白转圈；
-      // 5xx 与网络错误保留默认 3 次重试
+      // 4xx are deterministic failures (404 missing/invisible, 400 bad params); retrying just spins the page for nothing;
+      // 5xx and network errors keep the default 3 retries
       retry: (failureCount, error) => {
         if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false;
         return failureCount < 3;

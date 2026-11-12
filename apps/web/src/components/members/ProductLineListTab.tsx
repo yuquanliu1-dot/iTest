@@ -9,15 +9,15 @@ interface Props {
   q: string;
   page: number;
   pageSize: number;
-  /** 递增即触发重取（新建产品线后用）。 */
+  /** Increment to trigger a re-fetch (used after creating a product line). */
   reloadToken: number;
   onTotal: (n: number) => void;
   onOpen: (productLineId: string) => void;
 }
 
 /**
- * 组织下的产品线列表。成员管理界面里产品线完全替代项目——项目不再直接挂组织，
- * 归属由产品线决定，所以组织视图给的是「这个组织下有哪些产品线」。
+ * Product lines under an organization. In the member management UI product lines have fully replaced projects — projects no longer attach
+ * directly to organizations; ownership is decided by the product line, so the org view shows "which product lines exist under this organization".
  */
 export default function ProductLineListTab({ orgId, includeSubtree, q, page, pageSize, reloadToken, onTotal, onOpen }: Props) {
   const { t } = useTranslation();

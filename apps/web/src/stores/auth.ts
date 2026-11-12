@@ -7,7 +7,7 @@ interface AuthState {
   organizations: OrgMembership[];
   activeOrgId: string | null;
   isAuthenticated: boolean;
-  /** 首次 /me 探测进行中（AuthGuard 据此显示 loading，避免未探测完就误跳登录页） */
+  /** First /me probe in progress (AuthGuard shows loading based on this, avoiding a premature jump to the login page before probing finishes) */
   isLoading: boolean;
   initialize: () => Promise<void>;
   applyLogin: (r: Extract<LoginResponse, { status: 'ok' }>) => Promise<void>;
@@ -24,10 +24,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isAuthenticated: false,
   isLoading: true,
 
-  // 启动时用 /me 探测会话；401 → 清空会话（client 层对 /auth/me 豁免跳转）
+  // On startup, probe the session with /me; 401 → clear the session (the client layer exempts /auth/me from the redirect)
   initialize: async () => {
-    // applyLogin 已置 isAuthenticated 时（/login 直登后跳转 /）也要清掉初始 isLoading，
-    // 否则 AuthGuard 永远停在加载态（早返回不走 finally）。
+    // When applyLogin has already set isAuthenticated (redirect to / after direct /login sign-in), the initial isLoading must also be cleared,
+    // otherwise AuthGuard stays in the loading state forever (the early return skips the finally).
     if (get().isAuthenticated) {
       set({ isLoading: false });
       return;
@@ -49,17 +49,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       isAuthenticated: true,
     }),
 
-  // 登录响应只带激活组织，再拉一次 /me 补全组织列表（组织切换器用）
+  // The login response only carries the active organization; fetch /me once more to complete the organization list (used by the org switcher)
   applyLogin: async (r) => {
     set({ user: r.user, activeOrgId: r.organization.id, isAuthenticated: true });
     try {
       get().applyMe(await api.auth.me());
     } catch {
-      // /me 失败不阻塞登录；组织列表留空
+      // A /me failure must not block login; the organization list stays empty
     }
   },
 
-  // 切换组织 = 服务端重铸 cookie；必须清项目上下文，防止 localStorage 残留指向不可见项目
+  // Switching org = the server re-mints the cookie; the project context must be cleared so localStorage does not keep pointing at invisible projects
   switchOrg: async (orgId) => {
     await api.auth.switchOrg(orgId);
     useProjectStore.getState().exit();

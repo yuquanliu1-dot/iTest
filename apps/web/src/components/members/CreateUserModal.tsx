@@ -19,7 +19,7 @@ interface Form {
 }
 
 /**
- * 创建用户（manager）。后端生成临时密码并强制首登改密，密码只在这个弹窗里出现一次。
+ * Create a user (manager). The backend generates a temporary password and forces a first-login password change; the password appears only once in this dialog.
  */
 export default function CreateUserModal({ visible, orgId, orgName, onClose, onCreated }: Props) {
   const { t } = useTranslation();

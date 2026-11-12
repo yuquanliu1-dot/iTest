@@ -6,9 +6,9 @@ import { api } from '../../api/client';
 import { useProjectStore } from '../../stores/project';
 import Icon from '../Icon';
 
-/** ProjectGuard 仅校验项目可见性（与 store.id 一致 + 服务端存在）。
- *  版本上下文由 ProjectsHome 版本行「进入」时写入 store；版本化二级路径由 /v/:versionId 段负责。
- *  与 ProjectsHome 共用 ['projects'] 缓存，常规导航命中缓存不会多发请求。 */
+/** ProjectGuard only validates project visibility (matches store.id + exists on the server).
+ *  Version context is written to the store when "entering" from the ProjectsHome version row; versioned nested paths are handled by the /v/:versionId segment.
+ *  Shares the ['projects'] cache with ProjectsHome, so regular navigation hits the cache without extra requests. */
 export default function ProjectGuard() {
   const { t } = useTranslation();
   const { projectId } = useParams<{ projectId: string }>();
@@ -41,7 +41,7 @@ export default function ProjectGuard() {
   }
 
   if (!data?.some((p) => p.id === projectId)) {
-    // localStorage 残留的无效项目：清掉再弹回，避免下次深链又被放行
+    // Invalid project left over in localStorage: clear it and bounce back so the next deep link isn't waved through again
     return <InvalidProject onExit={exit} />;
   }
 

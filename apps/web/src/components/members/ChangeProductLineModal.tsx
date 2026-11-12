@@ -6,7 +6,7 @@ interface Props {
   visible: boolean;
   projectId: string;
   projectName: string;
-  /** null = 未归线。 */
+  /** null = not assigned to a line. */
   currentProductLineId: string | null;
   choices: ProductLine[];
   onClose: () => void;
@@ -14,8 +14,9 @@ interface Props {
 }
 
 /**
- * 变更产品线（manager）。走产品线的挂载接口——挂载即搬家：项目会迁到该产品线所属组织，
- * 项目的标签一并迁移（源组织的旧标签留在原处，目标组织按同名新建/复用）。
+ * Change product line (manager). Goes through the product line's attach API — attaching is moving house:
+ * the project migrates to the organization owning the target line, and the project's labels migrate with it
+ * (the source org's old labels stay in place; the target org creates/reuses labels with the same name).
  */
 export default function ChangeProductLineModal({
   visible,

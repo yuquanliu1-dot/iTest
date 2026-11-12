@@ -16,13 +16,13 @@ interface AssistantInitialMessageState {
 }
 
 /**
- * 版本空间 AI 助手(AI-First 主入口):进入版本空间落地即对话。
- * 线程管理(列表/切换/改名/删除)全部下沉到 SpaceWorkspace 内的 ThreadList 原语,
- * 页面层只剩横幅:创建/发送失败(initError,阻断引导)与按线程的 lastError 警告。
+ * Version-space AI assistant (the AI-First main entry): landing in a version space means landing in a conversation.
+ * Thread management (list/switch/rename/delete) is fully delegated to the ThreadList primitives inside SpaceWorkspace;
+ * the page layer keeps only banners: create/send failure (initError, blocking guidance) and per-thread lastError warnings.
  *
- * 首条消息支持:从用例管理「AI 创建用例」/其他入口带 location.state.initialMessage 跳来时,
- * 在初始草稿上自动注入首条 prompt(注入器在 SpaceWorkspace 内,aui 必须在
- * AssistantRuntimeProvider 内使用,页面不持有 runtime)。
+ * First-message support: when jumping in from case management's "AI create case"/other entries carrying location.state.initialMessage,
+ * the first prompt is auto-injected onto the initial draft (the injector lives inside SpaceWorkspace; aui must be used
+ * inside AssistantRuntimeProvider, the page holds no runtime).
  */
 export default function AssistantPage() {
   const { t } = useTranslation();
@@ -30,18 +30,18 @@ export default function AssistantPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [initError, setInitError] = useState<string | null>(null);
-  // 非阻断警告(repo 不可用等,建线程时后端经快照 lastError 透出):按线程 id 记,对话仍可用
+  // Non-blocking warnings (repo unavailable etc., surfaced by the backend via snapshot lastError at thread creation): recorded by thread id, conversation still usable
   const [warnings, setWarnings] = useState<Record<string, string>>({});
   const [activeThreadId, setActiveThreadId] = useState('');
-  // 上一跳 location.state 携带的首条 prompt:捕获进组件 state,
-  // 因为 SpaceWorkspace 挂载后 location.state 会被 effect 清空。
+  // First prompt carried by the previous hop's location.state: captured into component state,
+  // because location.state is cleared by an effect after SpaceWorkspace mounts.
   const [initialMessage] = useState(((location.state ?? {}) as AssistantInitialMessageState).initialMessage);
 
-  // mount 时清掉 location.state,避免用户再次进入同名路径又带回 stale initialMessage
+  // Clear location.state on mount, so re-entering the same path doesn't bring back a stale initialMessage
   useEffect(() => {
     if (!initialMessage) return;
     navigate(location.pathname, { replace: true });
-    // 仅在 mount 时清 stale state,不依赖 navigate/location(否则每次导航都会触发)
+    // Clear stale state only on mount, not dependent on navigate/location (otherwise every navigation would trigger)
   }, []);
 
   const llmMissing = initError?.includes('LLM 未配置') ?? false;
@@ -63,7 +63,7 @@ export default function AssistantPage() {
             {initError}
             <div className="flex gap-2 mt-2">
               {llmMissing && <Button size="sm" onClick={() => navigate('/settings')}>{t('assistant:goConfigureModel')}</Button>}
-              {/* 阻断错误只影响当次发送:收掉横幅即可重发,无需整页重试 */}
+              {/* Blocking errors only affect that one send: dismissing the banner allows re-sending, no full-page retry needed */}
               <Button size="sm" variant="ghost" onClick={() => setInitError(null)}>{t('common:close')}</Button>
             </div>
           </div>

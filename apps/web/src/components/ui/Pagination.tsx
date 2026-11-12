@@ -5,10 +5,10 @@ import Icon from '../Icon';
 import { paginationRange } from '../../lib/paginationRange';
 
 /**
- * 表格页脚分页器：共 N 条 + 每页条数 + 页码 + 前往第 N 页。
+ * Table footer paginator: total N items + page size + page numbers + go to page N.
  *
- * 控件高度统一取 32px —— Button `md` 档的高度。`.input-sm` 是 36px，与页码按钮
- * 并排会差 4px，故这里显式覆盖 select/input 的高度对齐到 md 档。
+ * Control heights are uniformly 32px — the height of the Button `md` tier. `.input-sm` is 36px and would
+ * differ by 4px next to the page buttons, so select/input heights are explicitly overridden to align with the md tier.
  */
 const CONTROL_H = 32;
 
@@ -17,12 +17,12 @@ const DEFAULT_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 interface Props {
   page: number;
   pageSize: number;
-  /** 当前筛选条件下的总行数（不是当前页行数）。 */
+  /** Total rows under the current filter (not the current page's row count). */
   total: number;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
   pageSizeOptions?: number[];
-  /** 页脚左侧插槽（如状态统计）；控件本体始终右对齐。 */
+  /** Left slot of the footer (e.g. status stats); the controls themselves stay right-aligned. */
   left?: ReactNode;
 }
 
@@ -39,7 +39,7 @@ export default function Pagination({
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const [jumpInput, setJumpInput] = useState('');
 
-  // 翻页/改每页条数后把跳页框清空，避免残留上一次的输入。
+  // Clear the jump box after paging/changing page size to avoid leftover input from last time.
   useEffect(() => { setJumpInput(''); }, [page, pageSize, totalPages]);
 
   const commitJump = () => {
@@ -74,7 +74,7 @@ export default function Pagination({
         value={pageSize}
         onChange={(e) => onPageSizeChange(Number(e.target.value))}
         aria-label={t('common:paginationPageSizeAria')}
-        // CRM 风格：去掉 input-base 的边框 + 浅底色，hover 加深。
+        // CRM style: drop input-base's border + light background; darken on hover.
         className="border-0 hover:bg-[var(--muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         style={{ height: CONTROL_H, padding: '0 8px', fontSize: 12, borderRadius: 'var(--radius-md)', cursor: 'pointer', background: 'var(--muted)/40', backgroundColor: 'color-mix(in oklch, var(--muted) 40%, transparent)' }}
       >

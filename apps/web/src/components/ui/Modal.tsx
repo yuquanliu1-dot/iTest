@@ -4,7 +4,7 @@ import { Dialog as DialogPrimitive } from 'radix-ui';
 import { cn } from '../../lib/cn';
 import { Button } from './shadcn/button';
 
-// 直接以 CRM shadcn dialog 为内核（bg-popover + ring + 动效），保持 iTest 既有 6 个导出名与 max-w-lg 默认宽度。
+// Uses the CRM shadcn dialog directly as the core (bg-popover + ring + animation), keeping iTest's existing 6 export names and the max-w-lg default width.
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />;
 }
@@ -62,11 +62,11 @@ function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivEleme
   );
 }
 
-// sticky 常驻 footer:DialogContent 是单个 overflow-y-auto 滚动容器,内容超高时
-// footer 会随内容滚出视口(小屏实测主操作按钮完全不可见)。sticky bottom-0 让它在
-// 超限时钉在滚动区底部:短内容时容器无滚动,sticky 不激活,表现与从前一致。
-// bg-popover 不透明底是 sticky footer 的标配(内容从其下滑过),rounded-b-lg 对齐
-// DialogContent 的圆角避免钉底时方角出血到遮罩上。
+// Sticky always-present footer: DialogContent is a single overflow-y-auto scrolling container, and when content is taller
+// than the viewport the footer scrolls out of view (on small screens the primary action button is completely invisible in practice). sticky bottom-0 pins it
+// to the bottom of the scroll area when overflowing: with short content the container doesn't scroll, sticky doesn't activate, and behavior matches before.
+// An opaque bg-popover background is required for a sticky footer (content slides underneath it), and rounded-b-lg matches
+// DialogContent's corner radius to avoid square corners bleeding onto the overlay when pinned.
 function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div

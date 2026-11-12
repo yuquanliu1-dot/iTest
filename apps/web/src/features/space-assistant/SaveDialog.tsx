@@ -8,20 +8,20 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   groups: Array<{ id: string; name: string }>;
   saving: boolean;
-  /** 概览：每 Tab 选中数（让用户在选择分组时看到要保存的内容）。 */
+  /** Overview: selected count per tab (lets the user see what will be saved while picking a group). */
   partitioned: { case: unknown[]; case_op: unknown[]; scenario: unknown[]; environment: unknown[]; plan: unknown[]; dataset: unknown[] };
   selection: Set<string>;
-  /** 用户点保存：传入选中的目标 groupId；空串 = "暂存到不指定"（仅 environment/scenario 适用）。 */
+  /** User clicks save: receives the selected target groupId; empty string = "stage without a group" (only applies to environment/scenario). */
   onSave: (groupId: string) => void;
-  /** 当前 Tab 标签，仅做展示。 */
+  /** Current tab label, display only. */
   kindLabel: string;
 }
 
 const LAST_GROUP_KEY = 'space-assistant-last-group';
 
 /**
- * 暂存对象落库对话框：选目标分组 → 调用 /stage/save。
- * 选中条目包含用例/计划时必选 group；纯 environment/scenario 时允许空（落库到项目下默认）。
+ * Staged-objects persistence dialog: pick the target group → call /stage/save.
+ * When the selection includes cases/plans a group is required; pure environment/scenario may be empty (persists to the project default).
  */
 export default function SaveDialog({ open, onOpenChange, groups, saving, partitioned, selection, onSave, kindLabel }: Props) {
   const { t } = useTranslation();
@@ -45,9 +45,9 @@ export default function SaveDialog({ open, onOpenChange, groups, saving, partiti
       selection.has(`dataset:${(x as { localId: string }).localId}`),
     ).length,
   };
-  // 只有用例在保存时需要 groupId（落 groups 关系）。其他对象走 project/version 默认落点：
-  //   - scenario → requirement；environment → project 下默认；plan → version + project；dataset → project
-  // 计划历史上传过 groupId 是误用，service 端 createPlan 不读也不存，分组选择是 UI 噪音。
+  // Only cases need a groupId at save time (lands in the groups relation). Other objects use the project/version default landing spots:
+  //   - scenario → requirement; environment → project default; plan → version + project; dataset → project
+  // Plans historically carrying a groupId was a misuse; the service-side createPlan neither reads nor stores it, so the group picker is UI noise.
   const needGroup = selectedCounts.case > 0;
   const totalSelected =
     selectedCounts.case +

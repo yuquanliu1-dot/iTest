@@ -3,14 +3,14 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import LiveViewImg from './LiveViewImg';
 import '../i18n';
 
-/** 放大弹窗里的 <img>（与缩略图 <img> 区分：弹窗那份在 dialog 里）。 */
+/** The <img> in the zoom dialog (distinguished from the thumbnail <img>: that one lives inside the dialog). */
 function zoomImage(): HTMLImageElement {
   const dialog = document.querySelector('[role="dialog"]');
   const imgs = Array.from(dialog?.querySelectorAll('img') ?? []) as HTMLImageElement[];
   return imgs[0]!;
 }
 
-/** 卡片里的缩略图 <img>（不在弹窗内的那张）。 */
+/** The thumbnail <img> in the card (the one not inside the dialog). */
 function thumbImage(): HTMLImageElement {
   const all = Array.from(document.querySelectorAll('img')) as HTMLImageElement[];
   return all.find((el) => !el.closest('[role="dialog"]'))!;
@@ -18,8 +18,8 @@ function thumbImage(): HTMLImageElement {
 
 describe('LiveViewImg 放大画面', () => {
   beforeEach(() => {
-    // jsdom 无 canvas 实现：兜底快照走不通 → 只断言「提示不可用」那条路径。
-    // （真实浏览器 canvas 可用，快照兜底另有 headless 实测。）
+    // jsdom has no canvas implementation: the snapshot fallback can't work → only assert the "unavailable hint" path.
+    // (Real browsers have canvas; the snapshot fallback is separately verified in a headless run.)
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
   });
   afterEach(() => {
@@ -32,7 +32,7 @@ describe('LiveViewImg 放大画面', () => {
     expect(thumb.getAttribute('src')).toBe('/api/explorations/s1/live');
 
     fireEvent.click(thumb);
-    // 弹窗里的画面与缩略图同 URL → 浏览器复用同一路资源（内存缓存/在途响应）
+    // The dialog's frame shares the thumbnail's URL → the browser reuses the same resource (memory cache / in-flight response)
     expect(zoomImage().getAttribute('src')).toBe(thumb.getAttribute('src'));
   });
 
@@ -41,7 +41,7 @@ describe('LiveViewImg 放大画面', () => {
     fireEvent.click(thumbImage());
     fireEvent.error(zoomImage());
     await waitFor(() => expect(screen.getByText('画面不可用')).toBeTruthy());
-    // 失败后不再渲染 <img>（不会有浏览器默认的裂图图标）
+    // After failure no <img> is rendered anymore (no browser default broken-image icon)
     expect(zoomImage()).toBeUndefined();
   });
 
@@ -50,9 +50,9 @@ describe('LiveViewImg 放大画面', () => {
     try {
       render(<LiveViewImg url="/api/explorations/s1/live" mode="live" retry />);
       const first = thumbImage();
-      fireEvent.error(first); // 断流 → 隐藏
+      fireEvent.error(first); // stream broke → hidden
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(2000); // 2s 后重挂重连
+        await vi.advanceTimersByTimeAsync(2000); // remount + reconnect after 2s
       });
       const retried = thumbImage();
       expect(retried.getAttribute('src')).toBe('/api/explorations/s1/live?r=1');

@@ -1,7 +1,7 @@
 /**
- * iTest 前端的组织物化路径工具（与后端 services/orgTree.ts / org-path.ts 同源）。
- * 仅做前端派生计算：子树判定、深度、排序、回退组织选择等。后端仍以
- * path 字段为唯一真相，前端不能依赖本模块做权威判定。
+ * Organization materialized-path utilities for the iTest frontend (same source as the backend services/orgTree.ts / org-path.ts).
+ * Only frontend-derived computation: subtree checks, depth, sorting, fallback org selection, etc. The backend still treats
+ * the path field as the single source of truth; the frontend must not rely on this module for authoritative decisions.
  */
 
 export interface PathedOrg {
@@ -9,22 +9,22 @@ export interface PathedOrg {
   path?: string | null;
 }
 
-/** 物化路径深度：/a/ → 1，/a/b/ → 2；空 path 兜底为 0。 */
+/** Materialized-path depth: /a/ → 1, /a/b/ → 2; an empty path falls back to 0. */
 export const orgDepth = (path?: string | null): number =>
   path ? path.split('/').filter(Boolean).length : 0;
 
-/** 由物化路径推出直接父节点的路径：'/a/b/c/' → '/a/b/'；顶级节点返回 null。 */
+/** Derives the direct parent's path from the materialized path: '/a/b/c/' → '/a/b/'; top-level nodes return null. */
 export const parentPathOf = (path: string): string | null => {
   const segs = path.split('/').filter(Boolean);
   if (segs.length <= 1) return null;
   return `/${segs.slice(0, -1).join('/')}/`;
 };
 
-/** 按物化路径排序形成树形（父前子后），返回新数组；无 path 兜底排最前。 */
+/** Sorts by materialized path into tree shape (parents before children), returning a new array; entries without a path sort to the front. */
 export const sortByPath = <T extends PathedOrg>(orgs: readonly T[]): T[] =>
   [...orgs].sort((a, b) => (a.path || '').localeCompare(b.path || ''));
 
-/** candidate 是否位于 ancestor 子树内（含自身）；与后端 isPathInSubtree 同源。 */
+/** Whether candidate lies within ancestor's subtree (self included); same source as the backend isPathInSubtree. */
 export const isPathInSubtree = (candidatePath: string, ancestorPath: string): boolean => {
   const cand = candidatePath.endsWith('/') ? candidatePath : candidatePath + '/';
   const anc = ancestorPath.endsWith('/') ? ancestorPath : ancestorPath + '/';
@@ -34,9 +34,9 @@ export const isPathInSubtree = (candidatePath: string, ancestorPath: string): bo
 const normPath = (p: string): string => (p.endsWith('/') ? p : `${p}/`);
 
 /**
- * 组织被删除后挑选接替的激活组织：从被删组织的父路径逐级上溯，命中第一个仍是
- * 本人成员关系的祖先；都不命中则取任一剩余组织。
- * 无剩余组织时返回 null —— 调用方不得据此登出。
+ * Picks the replacement active org after an organization is deleted: walk up from the deleted org's parent path,
+ * hitting the first ancestor that is still a membership of the current user; if none hits, take any remaining org.
+ * Returns null when no orgs remain — the caller must not log out based on this.
  */
 export const pickFallbackOrg = <T extends PathedOrg>(
   deleted: { id: string; path?: string | null },
@@ -60,9 +60,9 @@ export interface OrgRoleMembership {
 }
 
 /**
- * 祖先链有效 manager（与后端 isEffectiveManager 对齐）：
- * 激活组织行级 manager，或任一 manager 组织的 path 是激活组织的祖先。
- * membership path 集合本地推导，等价于 JWT managerOrgPaths。
+ * Effective manager along the ancestor chain (aligned with the backend isEffectiveManager):
+ * row-level manager of the active org, or the path of any manager org is an ancestor of the active org.
+ * The membership path set is derived locally, equivalent to JWT managerOrgPaths.
  */
 export const isEffectiveManagerOf = (
   active: OrgRoleMembership | undefined,
@@ -77,8 +77,8 @@ export const isEffectiveManagerOf = (
 };
 
 /**
- * 目标组织授权（与后端 isManagerOfOrg 对齐）：targetOrgPath 落在任一 manager 组织 path 的子树内。
- * 空 path 视为不可达。
+ * Target org authorization (aligned with the backend isManagerOfOrg): targetOrgPath falls inside the subtree of any manager org's path.
+ * An empty path counts as unreachable.
  */
 export const isManagerOfOrgPath = (
   memberships: readonly OrgRoleMembership[],

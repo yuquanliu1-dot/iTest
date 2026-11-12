@@ -6,8 +6,8 @@ import Input from './Input';
 import Button from './Button';
 import Icon from '../Icon';
 
-/** 仓库配置折叠区：provider / repoUrl / gitlabUrlOverride / PAT / 测试连接。
- *  与项目表单同构——既用于 ProjectsHome 新建/编辑弹窗，也用于 ProjectVersionsPage。 */
+/** Repo config collapsible section: provider / repoUrl / gitlabUrlOverride / PAT / test connection.
+ *  Isomorphic with the project form — used both by the ProjectsHome create/edit dialog and by ProjectVersionsPage. */
 export interface RepoFieldsValue {
   repoUrl: string;
   provider: 'github' | 'gitee' | 'gitlab';
@@ -29,7 +29,7 @@ export const EMPTY_REPO: RepoFieldsValue = {
 interface Props {
   value: RepoFieldsValue;
   onChange: (v: RepoFieldsValue) => void;
-  /** 编辑已有项目时传入：表单 PAT 留空时后端回落库中已存 PAT 做真实探测（GET 从不回传 PAT）。 */
+  /** Pass in when editing an existing project: when the form PAT is left empty, the backend falls back to the stored PAT for real probing (GET never returns the PAT). */
   projectId?: string;
 }
 

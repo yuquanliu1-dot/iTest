@@ -21,27 +21,27 @@ export function kindNeedsLocator(kind: string): boolean {
   return WITH_LOCATOR.has(kind);
 }
 
-/** 声明 frameChain 的 web 动作（录制器 iframe 帧链产物）；tap/swipe 等移动端动作不带。 */
+/** Web actions that declare frameChain (a product of the recorder's iframe frame chain); mobile actions like tap/swipe don't carry it. */
 const WITH_FRAME_CHAIN: ReadonlySet<string> = new Set([
   'click', 'fill', 'scroll', 'hover', 'waitFor', 'assertText', 'assertVisible',
   'check', 'select', 'press', 'upload', 'assertJson', 'extract',
 ]);
 
-/** 类型切换：保留 locator/intentLocator/frameChain/instruction/source 等兼容字段；敏感值与不兼容字段丢弃。
- *  2026-10-07：name 列退役,switchAction 不再读写 name。 */
+/** Type switch: keeps compatible fields like locator/intentLocator/frameChain/instruction/source; sensitive values and incompatible fields are dropped.
+ *  2026-10-07: the name column is retired; switchAction no longer reads or writes name. */
 export function switchAction(clip: StepClip, to: StepKind): StepClip {
   const src = (clip.action ?? {}) as Record<string, unknown>;
   const srcLocator = Array.isArray(src.locator) && src.locator.length > 0 ? src.locator : undefined;
   const locator = kindNeedsLocator(to) ? (srcLocator ?? [{ strategy: 'css', value: '' }]) : undefined;
   const intentLocator = locator && src.intentLocator ? src.intentLocator : undefined;
-  // 帧链只在目标 kind 也声明 frameChain 时透传（tap/swipe 切换静默丢链是正确语义）。
+  // The frame chain passes through only when the target kind also declares frameChain (silently dropping the chain on a tap/swipe switch is the correct semantics).
   const srcFrameChain = Array.isArray(src.frameChain) && src.frameChain.length > 0 ? src.frameChain : undefined;
   const base = () => ({
     ...(intentLocator ? { intentLocator } : {}),
     ...(srcFrameChain && WITH_FRAME_CHAIN.has(to) ? { frameChain: srcFrameChain } : {}),
   });
 
-  // 敏感 fill 的值是 '__sensitive__' 占位，任何切换都不携带
+  // A sensitive fill's value is the '__sensitive__' placeholder; no switch ever carries it
   const srcValue =
     typeof src.value === 'string' && !(src.sensitive || src.value === '__sensitive__') ? src.value : '';
 

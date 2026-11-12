@@ -48,9 +48,9 @@ function draftFromValue(v: unknown): FragmentDraft[] {
 }
 
 /**
- * fill/select 值编辑器：固定值 / 生成器 / 组合片段。受控组件，draft 只在内部做输入缓冲。
- * 内部 state 仅在挂载时从 value 初始化一次，不响应后续 value prop 变化——
- * 当 value 身份变化（切换步骤/类型）时父组件必须通过 key 重挂载本组件。
+ * fill/select value editor: fixed value / generator / fragment composition. Controlled component; the draft buffers input internally only.
+ * Internal state is initialized from value once at mount and does not respond to later value prop changes —
+ * when the value identity changes (switching step/type), the parent must remount this component via key.
  */
 export default function FillValueEditor({ value, onChange, availableVars = [], datasetVars = [] }: Props) {
   const { t } = useTranslation();
@@ -66,7 +66,7 @@ export default function FillValueEditor({ value, onChange, availableVars = [], d
   const [genPrefix, setGenPrefix] = useState(isObj ? String((value as { prefix?: string }).prefix ?? '') : '');
   const [fragments, setFragments] = useState<FragmentDraft[]>(() => draftFromValue(value));
 
-  /** 片段 → 存储 shape（与 StepEditModal handleSave 的映射一致） */
+  /** Fragment → stored shape (mapping consistent with StepEditModal handleSave) */
   const buildFragment = (f: FragmentDraft): Record<string, unknown> => {
     if (f.mode === 'fixed') return { mode: 'fixed', value: f.value ?? '' };
     if (f.mode === 'date') return { mode: 'date', format: f.format ?? 'YYYYMMDD' };

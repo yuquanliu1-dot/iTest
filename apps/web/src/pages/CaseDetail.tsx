@@ -35,7 +35,7 @@ import { creatorName } from '../lib/creatorName';
 
 type Tab = 'description' | 'reports';
 
-/** 步骤身份快照比较：用于检测并发 mutation 是否动了我们正在编辑的那一行。 */
+/** Step identity snapshot comparison: detects whether a concurrent mutation touched the row we are editing. */
 function sameStep(a: StepClip, b: StepClip): boolean {
   return JSON.stringify(a.action) === JSON.stringify(b.action);
 }
@@ -53,27 +53,27 @@ export default function CaseDetail() {
   const [mode, setMode] = useState<'fresh' | 'append' | 'resume' | 'incognito'>('fresh');
   const [resumeTarget, setResumeTarget] = useState<{ stepId: string; order: number } | null>(null);
   const [confirmResume, setConfirmResume] = useState<{ stepId: string; order: number } | null>(null);
-  /** 删除步骤前一律先弹 modal —— 步骤误删需重新录制或编辑回填。 */
+  /** Always show a confirm modal before deleting a step — an accidental delete requires re-recording or manual re-entry. */
   const [confirmDeleteStep, setConfirmDeleteStep] = useState<{ stepId: string; order: number; instruction: string } | null>(null);
-  /** 批量删除确认（与单删同款防误点；走 mutateSteps 全量替换，可撤销）。 */
+  /** Bulk delete confirm (same anti-mistouch as single delete; goes through mutateSteps full replacement, undoable). */
   const [confirmDeleteSelected, setConfirmDeleteSelected] = useState(false);
-  /** Track 1：用例级预期描述（自然语言）。回放结束由 vision LLM 拿最终截图比对。
-   *  编辑与保存走 caseDetail.expectedOutcome 同步；用 ref 跟踪 serverKey 避免 refetch 静默覆盖未保存编辑。 */
+  /** Track 1: case-level expected outcome (natural language). After replay the vision LLM compares it against the final screenshot.
+   *  Edit and save sync through caseDetail.expectedOutcome; a ref tracks the serverKey so a refetch never silently overwrites unsaved edits. */
   const [expectedOutcome, setExpectedOutcome] = useState('');
   const expectedOutcomeSyncRef = useRef<string | null>(null);
-  /** 用例描述：textarea 编辑 + 显式保存；syncRef 防 refetch 覆盖未保存编辑（同 expectedOutcome 模式）。 */
+  /** Case description: textarea editing + explicit save; syncRef prevents refetch from overwriting unsaved edits (same pattern as expectedOutcome). */
   const [description, setDescription] = useState('');
   const descriptionSyncRef = useRef<string | null>(null);
-  /** 需求编号：输入框 blur/Enter 提交（可清空→null）；syncRef 同上。 */
+  /** Requirement no.: committed on input blur/Enter (clearable → null); syncRef same as above. */
   const [requirementNo, setRequirementNo] = useState('');
   const requirementNoSyncRef = useRef<string | null>(null);
   const clipboard = useStepClipboard();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<StepClip | null>(null);
   const [editingIdx, setEditingIdx] = useState(-1);
-  /** 2026-10-06：手工新增步骤 — editingMode = 'create' 时 StepEditDrawer 展示不同标题/按钮。
-   *  初始 StepClip = { source:'manual', action:{kind:'click', locator:[{strategy:'css', value:''}]}, instruction:'', compiled:[] }
-   *  —— compiled=[] 是未编译信号,dispatcher 抛 compile-missing；无指令的未编译步骤阻塞执行(按钮置灰 + 行内"未编译"徽章),有指令的由 AI 临场执行。 */
+  /** 2026-10-06: manually adding a step — with editingMode = 'create' StepEditDrawer shows a different title/buttons.
+   *  Initial StepClip = { source:'manual', action:{kind:'click', locator:[{strategy:'css', value:''}]}, instruction:'', compiled:[] }
+   *  — compiled=[] is the uncompiled signal, dispatcher throws compile-missing; uncompiled steps without instruction block execution (button greyed out + inline "uncompiled" badge), ones with instruction are executed live by AI. */
   const [editingMode, setEditingMode] = useState<'edit' | 'create'>('edit');
   const [varReport, setVarReport] = useState<VariableReport | null>(null);
   const [windowStrategy, setWindowStrategy] = useState<'maximize' | 'current' | 'custom'>('maximize');
@@ -82,27 +82,27 @@ export default function CaseDetail() {
   const [incognito, setIncognito] = useState(false);
   const [defaultEnvId, setDefaultEnvId] = useState<string | null>(null);
   const [datasetId, setDatasetId] = useState<string | null>(null);
-  /** 数据集行选择：启用行下标数组。[] = 所有启用行（= 服务端 test_cases.dataset_row_indexes 同语义）。 */
+  /** Dataset row selection: array of enabled row indexes. [] = all enabled rows (= same semantics as server-side test_cases.dataset_row_indexes). */
   const [datasetRowIndexes, setDatasetRowIndexes] = useState<number[]>([]);
   const [datasetRowPickerOpen, setDatasetRowPickerOpen] = useState(false);
   const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [urlDraft, setUrlDraft] = useState('');
-  /** 初始化导航 URL 弹窗里选中的 web 服务（环境 web 对象 payload.name；空 → 默认服务）。 */
+  /** Web service selected in the init-nav-URL dialog (environment web object payload.name; empty → default service). */
   const [webRefDraft, setWebRefDraft] = useState('');
   const [urlSaving, setUrlSaving] = useState(false);
-  /** 2026-10-07：移动端录制弹窗开关（仅 platform === 'mobile' 时显示入口）。 */
+  /** 2026-10-07: mobile recording dialog switch (entry shown only when platform === 'mobile'). */
   const [mobileRecorderOpen, setMobileRecorderOpen] = useState(false);
-  /** 2026-10-07：AI 补充步骤弹窗输入。让用户写一句补充意图,再跳助手 + 带着意图进 initialMessage。
-   *  不让助手"猜",与行级重编对齐——AI 看快照前先有明确补什么的目标。 */
+  /** 2026-10-07: AI add-steps dialog input. The user writes a one-line supplemental intent, then we jump to the assistant carrying it as the initialMessage.
+   *  No letting the assistant "guess"; aligned with row-level recompile — the AI has a concrete target before looking at snapshots. */
   const [genStepsDialogOpen, setGenStepsDialogOpen] = useState(false);
   const [genStepsIntent, setGenStepsIntent] = useState('');
-  /** 行级 AI 重新编译：跟踪当前正在编译的 stepId，避免重复点击。 */
+  /** Row-level AI recompile: tracks the stepId currently being compiled to prevent duplicate clicks. */
   const editingIdxRef = useRef<number>(-1);
   const editingSnapshotRef = useRef<StepClip | null>(null);
   const historyRef = useRef<StepClip[][]>([]);
 
-  /** StepClip.action 是 compiled[0] 的客户端镜像（服务端 action 列已 DROP，不再下发）。
-   *  compiled 非空 → action = compiled[0]；空/缺失 → 占位 {}，DrawerForm 靠 buildAction 兜底。 */
+  /** StepClip.action is the client-side mirror of compiled[0] (the server-side action column was DROPped, no longer sent down).
+   *  Non-empty compiled → action = compiled[0]; empty/missing → placeholder {}, DrawerForm falls back via buildAction. */
   const toClip = (s: { source: string; delayMs?: number | null; instruction?: string | null; compiled?: unknown[] | null }): StepClip => {
     const compiledFirst = Array.isArray(s.compiled) && s.compiled.length > 0 ? s.compiled[0] : null;
     return {
@@ -114,20 +114,20 @@ export default function CaseDetail() {
     };
   };
 
-  /** 行级未编译检测：与 dispatcher 对齐 —— compiled 非空数组才放行，null/undefined/[] 都视为未编译。 */
+  /** Row-level uncompiled check: aligned with the dispatcher — only a non-empty compiled array passes; null/undefined/[] all count as uncompiled. */
   const isUncompiledStep = (s: { compiled?: unknown[] | null }): boolean => {
     return !Array.isArray(s.compiled) || s.compiled.length === 0;
   };
 
-  /** 跳转到 AI 助手,带 initialMessage 自动起新线程注入首条 prompt。
-   *  跳前 invalidate 用例查询,回 CaseDetail 时数据新鲜(助手对话里完成的修改经 StagePanel 落库后会反映到 ['case', id])。 */
+  /** Jump to the AI assistant with an initialMessage that auto-starts a new thread injecting the first prompt.
+   *  Invalidate the case query before jumping so data is fresh when returning to CaseDetail (changes completed in the assistant conversation land via StagePanel and reflect into ['case', id]). */
   const openAssistantWithMessage = (initialMessage: string) => {
     if (!caseDetail || !projectId || !versionId) return;
     void qc.invalidateQueries({ queryKey: ['case', id] });
     navigate(`/p/${projectId}/v/${versionId}/assistant`, { state: { initialMessage } });
   };
 
-  /** 行级「去助手重编译」：跳 AI 助手,首条 prompt 写明 stepId/order/instruction,引导助手走 stage_case_op(update_step) */
+  /** Row-level "recompile via assistant": jumps to the AI assistant, first prompt states stepId/order/instruction and steers it through stage_case_op(update_step) */
   const askAssistantToRecompile = (stepId: string) => {
     if (!caseDetail) return;
     const target = caseDetail.steps.find((x) => x.id === stepId);
@@ -144,14 +144,14 @@ export default function CaseDetail() {
     );
   };
 
-  /** 行级未固化检测：与用例列表「固化」列/批量固化筛选同口径 —— 只有 compiled 为 NULL
-   *  （纯自然语言指令步骤）才算未固化；aiTask 视觉步骤 compiled 非空，列表计为已固化，
-   *  这里不再重复计数，避免列表 n/n 全绿而详情横幅仍报「存在未固化步骤」的口径打架。 */
+  /** Row-level unsolidified check: same standard as the case list "solidify" column / bulk-solidify filter — only NULL compiled
+   *  (pure natural-language instruction steps) counts as unsolidified; aiTask visual steps have non-empty compiled and the list counts them as solidified,
+   *  so no double counting here, avoiding a mismatch where the list shows n/n all green while the detail banner still reports unsolidified steps. */
   const isUnsolidifiedStep = (s: { instruction?: string | null; compiled?: unknown[] | null }): boolean => {
     return s.compiled == null && typeof s.instruction === 'string' && s.instruction.trim().length > 0;
   };
 
-  /** 跳 AI 助手固化：未固化步骤 → solidify_case 机械化为 compiled。首条 prompt 点名用例与未固化步骤清单。 */
+  /** Jump to the AI assistant to solidify: unsolidified steps → solidify_case mechanized into compiled. The first prompt names the case and the unsolidified step list. */
   const askAssistantToSolidify = () => {
     if (!caseDetail) return;
     const visuals = caseDetail.steps
@@ -178,7 +178,7 @@ export default function CaseDetail() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  /** 所有步骤变更统一入口：先记撤销快照，再全量替换。 */
+  /** Single entry point for all step changes: push an undo snapshot first, then full replacement. */
   const mutateSteps = (updater: (steps: StepClip[]) => StepClip[]) => {
     if (!caseDetail) return;
     const current = caseDetail.steps.map(toClip);
@@ -187,8 +187,8 @@ export default function CaseDetail() {
     replaceSteps.mutate(updater(current));
   };
 
-  /** 拆分：一行多动作（AI 一次产出的 compiled 链）拆成 N 行单动作，每行可独立编辑。
-   *  第 1 行保留原行级 instruction 与 delayMs；其余行 instruction 用动作摘要、delayMs 清空。 */
+  /** Split: a multi-action row (a compiled chain AI produced in one shot) is split into N single-action rows, each independently editable.
+   *  Row 1 keeps the original row-level instruction and delayMs; other rows get the action summary as instruction and an empty delayMs. */
   const splitStep = (idx: number) => {
     mutateSteps((cur) => {
       const clip = cur[idx];
@@ -207,7 +207,7 @@ export default function CaseDetail() {
   };
 
   const undo = () => {
-    // 抽屉打开时步骤列表可能已被并发变更（行号会错位），先关抽屉再撤销
+    // While the drawer is open the step list may have changed concurrently (row indexes would misalign); close the drawer before undoing
     if (editing) {
       toast(t('cases:closeDrawerBeforeUndo'), 'info');
       return;
@@ -239,8 +239,8 @@ export default function CaseDetail() {
     enabled: !!id,
   });
 
-  // 录制目标 URL 实时跟随"初始化导航 URL"（用例相对路径 + 环境 web 服务解析结果）。
-  // 用户手动改过之后不再被 caseDetail refetch 静默覆盖；点输入框右侧"↺"可恢复解析结果。
+  // Recording target URL live-follows the "init nav URL" (case relative path + environment web service resolution).
+  // After the user edits it manually it is no longer silently overwritten by caseDetail refetch; the "↺" on the right of the input restores the resolved value.
   const targetUrlDirtyRef = useRef(false);
   useEffect(() => {
     if (!caseDetail?.resolvedUrl) return;
@@ -248,7 +248,7 @@ export default function CaseDetail() {
     setTargetUrl(caseDetail.resolvedUrl);
   }, [caseDetail?.resolvedUrl]);
 
-  // 执行设置有未保存的本地编辑时，避免被 caseDetail refetch 静默覆盖
+  // When execution settings have unsaved local edits, keep them from being silently overwritten by caseDetail refetch
   const runtimeSyncRef = useRef<string | null>(null);
   useEffect(() => {
     if (!caseDetail) return;
@@ -270,12 +270,12 @@ export default function CaseDetail() {
     setIncognito(!!caseDetail.incognito);
     setDefaultEnvId(caseDetail.defaultEnvId ?? null);
     setDatasetId(caseDetail.datasetId ?? null);
-    // 保持引用不变，避免每次同步都产生新数组（防重渲染循环）
+    // Keep the reference stable so each sync does not produce a new array (prevents a re-render loop)
     const srvRows = caseDetail.datasetRowIndexes ?? [];
     setDatasetRowIndexes((prev) => (JSON.stringify(prev) === JSON.stringify(srvRows) ? prev : srvRows));
   }, [caseDetail, windowStrategy, windowWidth, windowHeight, incognito, defaultEnvId, datasetId, datasetRowIndexes]);
 
-  // expectedOutcome 与服务端同步：与 runtimeSyncRef 同源模式(serverKey 比对,未保存编辑不覆盖)
+  // expectedOutcome server sync: same pattern as runtimeSyncRef (serverKey comparison, unsaved edits never overwritten)
   useEffect(() => {
     if (!caseDetail) return;
     const serverValue = caseDetail.expectedOutcome ?? '';
@@ -284,7 +284,7 @@ export default function CaseDetail() {
     setExpectedOutcome(serverValue);
   }, [caseDetail, expectedOutcome]);
 
-  // 用例描述与服务端同步（同 expectedOutcome 模式）
+  // Case description server sync (same pattern as expectedOutcome)
   useEffect(() => {
     if (!caseDetail) return;
     const serverValue = caseDetail.description ?? '';
@@ -293,7 +293,7 @@ export default function CaseDetail() {
     setDescription(serverValue);
   }, [caseDetail, description]);
 
-  // 需求编号与服务端同步（同 expectedOutcome 模式）
+  // Requirement no. server sync (same pattern as expectedOutcome)
   useEffect(() => {
     if (!caseDetail) return;
     const serverValue = caseDetail.requirementNo ?? '';
@@ -327,10 +327,10 @@ export default function CaseDetail() {
     enabled: !!projectId,
   });
 
-  // 初始化导航的 web 服务候选 = 用例所处环境（用例.defaultEnvId → 项目默认）里的具名 web 对象。
-  // 用本地 defaultEnvId state（非 caseDetail.defaultEnvId）：环境下拉改过而未保存的窗口内，
-  // 弹窗选出的 web 服务与即将落库的环境保持一致，避免存下孤儿 ref。
-  // 下拉不选 → 用该环境默认 web 服务（后端 resolve 处理）。
+  // Web service candidates for init nav = named web objects in the case's environment (case.defaultEnvId → project default).
+  // Uses the local defaultEnvId state (not caseDetail.defaultEnvId): within the window where the env dropdown was changed but not saved,
+  // the web service picked in the dialog stays consistent with the environment about to be persisted, avoiding orphan refs.
+  // Leaving the dropdown unselected → uses that environment's default web service (handled by backend resolve).
   const caseEnvId = defaultEnvId ?? environments?.find((e) => e.isDefault)?.id ?? null;
   const webOptions = useMemo(() => {
     const env = environments?.find((e) => e.id === caseEnvId);
@@ -350,13 +350,13 @@ export default function CaseDetail() {
     enabled: !!projectId,
   });
 
-  /** 数据集列名（绑定的数据集）—— 与前置 extract 变量合并供 FillValueEditor 选择。 */
+  /** Dataset column names (the bound dataset) — merged with preceding extract variables for FillValueEditor. */
   const datasetVars = useMemo(() => {
     const ds = (datasetList ?? []).find((d) => d.id === datasetId);
     return ds ? ds.columns.map((c) => c.name) : [];
   }, [datasetList, datasetId]);
 
-  /** 绑定数据集的启用行数（用于「所有行」提示文案）。 */
+  /** Enabled row count of the bound dataset (for the "all rows" hint text). */
   const datasetEnabledRowCount = (datasetList ?? []).find((d) => d.id === datasetId)?.enabledRowCount ?? 0;
 
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
@@ -396,7 +396,7 @@ export default function CaseDetail() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  // 用例名称行内编辑：改用例本身（PATCH /cases/:id { title }），用例库/助手/历史报告同步生效。
+  // Inline case-name edit: changes the case itself (PATCH /cases/:id { title }), effective everywhere at once (case library/assistant/historical reports).
   const rename = useMutation({
     mutationFn: (title: string) => api.cases.patch(id!, { title }),
     onSuccess: () => {
@@ -446,7 +446,7 @@ export default function CaseDetail() {
             source: 'ita-web',
             type: 'start-recording',
             session: { wsUrl: session.wsUrl, sessionId: session.sessionId, token: session.wsToken, mode: opts.mode, ...(opts.incognito ? { incognito: true } : {}) },
-            // 字段为空时回退到服务端解析的继承 URL；setTargetUrl 是异步的，不能依赖本次闭包里的 state
+            // Fall back to the server-resolved inherited URL when the field is empty; setTargetUrl is async, cannot rely on state captured in this closure
             targetUrl: targetUrl || session.resolvedUrl || '',
           },
           '*',
@@ -467,8 +467,8 @@ export default function CaseDetail() {
     mutationFn: async () => {
       const sessionId = recorder.sessionId;
       if (!sessionId) throw new Error('no active session');
-      // 先走扩展的 flush 握手：等 background 把队列里的 step 发完、服务端关闭 WS，
-      // 再调 finish HTTP——否则尾部步骤可能还在 WS 飞行中，finish 会漏写。
+      // First do the extension's flush handshake: wait for the background to send out all queued steps and the server to close the WS,
+      // then call the finish HTTP — otherwise trailing steps may still be in flight over WS and finish would miss them.
       await new Promise<boolean>((resolve) => {
         let settled = false;
         const finish = (v: boolean) => {
@@ -494,7 +494,7 @@ export default function CaseDetail() {
     },
   });
 
-  // 面板/弹窗里点「停止录制」时，扩展会通知本页收尾（与 stopRecording 的尾部逻辑一致）
+  // When "stop recording" is clicked in the panel/dialog, the extension notifies this page to wrap up (same tail logic as stopRecording)
   useEffect(() => {
     const onStopped = (e: MessageEvent) => {
       if (e.data?.source !== 'ita-ext' || e.data?.type !== 'recording-stopped') return;
@@ -518,9 +518,9 @@ export default function CaseDetail() {
     mutationFn: async (intent: string) => {
       if (!caseDetail || !projectId || !versionId) throw new Error('case/project/version missing');
       const trimmed = intent.trim();
-      // 2026-10-07：「AI 补充步骤」改为跳 AI 助手 → stage_case_op(action=insert_step)。
-      // AI 在对话里能看到真实页面快照、能选择具体位置与 locator,用户在 StagePanel 勾选确认。
-      // 弹窗让用户写一句"补什么意图",与行级重编对齐:让 AI 看快照前先有明确目标。
+      // 2026-10-07: "AI add steps" now jumps to the AI assistant → stage_case_op(action=insert_step).
+      // AI sees real page snapshots in the conversation and can pick the exact position and locator; the user confirms via StagePanel checkboxes.
+      // The dialog lets the user write one line of "what to add", aligned with row-level recompile: the AI gets a concrete target before seeing snapshots.
       const intentLine = trimmed ? `补充意图:${trimmed}\n` : '补充意图:由 AI 自行判断用例缺什么步骤。\n';
       openAssistantWithMessage(
         `对用例「${caseDetail.title}」(caseId=${id}, versionId=${versionId}) 补充脚本步骤。\n` +
@@ -561,8 +561,8 @@ export default function CaseDetail() {
   const execute = useMutation({
     mutationFn: () => api.cases.execute(id!),
     onSuccess: (r) => {
-      // 执行已异步化：点击执行立即落到报告页（running 中实时画面 + 跑完原地出报告）。
-      // 数据集多行 → 落到第 1 份报告，报告页顶部数据行切换器可翻行。
+      // Execution is async: clicking Execute lands on the report page immediately (live view while running + report appears in place when done).
+      // Multiple dataset rows → lands on the first report; the row switcher at the top of the report page flips rows.
       qc.invalidateQueries({ queryKey: ['reports'] });
       navigate(`/p/${projectId}/v/${versionId}/reports/${r.reportId}`);
     },
@@ -573,7 +573,7 @@ export default function CaseDetail() {
     mutationFn: (stepId: string) => api.cases.deleteStep(id!, stepId),
     onSuccess: (_r, stepId) => {
       setConfirmDeleteStep(null);
-      // 勾选后单删：不清会把已删 stepId 留在 selected，复制所选计数虚高、点了复制不到东西
+      // Single delete after selection: without cleanup the deleted stepId stays in selected, inflating the copy-selected count and copying nothing
       setSelected((prev) => {
         if (!prev.has(stepId)) return prev;
         const next = new Set(prev);
@@ -603,7 +603,7 @@ export default function CaseDetail() {
   });
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
-  // 拖拽预压入、尚未被服务端确认的撤销快照；reorder 失败时按引用撤出，避免污染撤销栈
+  // Undo snapshots optimistically pushed by drag before server confirmation; on reorder failure they are removed by reference to avoid polluting the undo stack
   const pendingDragSnapshotsRef = useRef<StepClip[][] | null>(null);
 
   const dragReorder = useMutation({
@@ -630,7 +630,7 @@ export default function CaseDetail() {
     const oldIdx = caseDetail.steps.findIndex((s) => s.id === active.id);
     const newIdx = caseDetail.steps.findIndex((s) => s.id === over.id);
     if (oldIdx < 0 || newIdx < 0) return;
-    // 拖拽走 reorder（保 step id）；撤销快照手动入栈，undo 用 replaceSteps 恢复
+    // Drag goes through reorder (keeps step ids); undo snapshot is pushed manually, undo restores via replaceSteps
     const snapshot = caseDetail.steps.map(toClip);
     historyRef.current.push(snapshot);
     if (historyRef.current.length > 20) historyRef.current.shift();
@@ -647,9 +647,9 @@ export default function CaseDetail() {
         incognito,
         defaultEnvId,
         datasetId,
-        // 数据集行选择：恒带（[] 也发 —— 服务端以 undefined=不动 / []=全选 区分）
+        // Dataset row selection: always sent ([] sent too — the server distinguishes undefined=no change / []=all rows)
         datasetRowIndexes,
-        // Track 1：与运行设置一并保存；空字符串视作清空（传 null）
+        // Track 1: saved together with run settings; empty string counts as clearing (send null)
         expectedOutcome: expectedOutcome.trim() ? expectedOutcome : null,
       }),
     onSuccess: () => {
@@ -660,7 +660,7 @@ export default function CaseDetail() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  // 用例描述：显式保存；空 = 清空（传 null）
+  // Case description: explicit save; empty = clear (send null)
   const saveDescription = useMutation({
     mutationFn: () => api.cases.patch(id!, { description: description.trim() ? description : null }),
     onSuccess: () => {
@@ -671,8 +671,8 @@ export default function CaseDetail() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  // 需求编号：blur/Enter 提交；空 = 清空（传 null）。与 description/expectedOutcome 不同步进 saveRuntime——
-  // 输入框在右侧栏，独立即时提交更符合「填完就走」的用法。
+  // Requirement no.: committed on blur/Enter; empty = clear (send null). Not folded into saveRuntime like description/expectedOutcome —
+  // the input sits in the right rail, and standalone immediate submission better fits the "fill and move on" usage.
   const saveRequirementNo = useMutation({
     mutationFn: (value: string | null) => api.cases.patch(id!, { requirementNo: value }),
     onSuccess: (_r, value) => {
@@ -724,7 +724,7 @@ export default function CaseDetail() {
     })
     .filter((v): v is string => !!v);
 
-  /** 未固化（无机械 compiled：纯 AI 视觉执行 / 仅自然语言指令）步骤数,顶部横幅用。 */
+  /** Count of unsolidified (no mechanical compiled: pure AI visual execution / natural-language-only instruction) steps, for the top banner. */
   const unsolidifiedStepCount = caseDetail.steps.filter(isUnsolidifiedStep).length;
 
   return (
@@ -740,7 +740,7 @@ export default function CaseDetail() {
           {group?.name ?? t('cases:caseList')}
         </Button>
         <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
-        {/* 用例名称行内可编辑：点标题改，走 PATCH /cases/:id { title } */}
+        {/* Case name inline-editable: click the title to edit, goes through PATCH /cases/:id { title } */}
         <InlineEdit
           value={caseDetail.title}
           disabled={rename.isPending}
@@ -764,8 +764,8 @@ export default function CaseDetail() {
           {t('cases:viewReport')}
         </Button>
         {(() => {
-          // 未编译步骤分两态：有自然语言指令 = 视觉模式步骤，回放时 AI 按指令临场执行（固化可选）；
-          // 无 compiled 且无 instruction = 录制产物未编译，AI 无从执行 → 仍阻塞（dispatcher 抛 compile-missing）。
+          // Uncompiled steps come in two states: with a natural-language instruction = visual-mode step, AI executes it live per instruction during replay (solidify optional);
+          // no compiled and no instruction = recording artifact never compiled, AI has nothing to execute → still blocking (dispatcher throws compile-missing).
           const unexecutable = caseDetail.steps.filter((s) => isUncompiledStep(s) && !s.instruction?.trim());
           const blocked = unexecutable.length > 0;
           return (
@@ -797,7 +797,7 @@ export default function CaseDetail() {
         />
       </div>
 
-      {/* Body — 主区 + 右侧操作侧栏 */}
+      {/* Body — main area + right action sidebar */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="flex gap-5 px-6 pb-6">
           <div className="flex-1 min-w-0 flex flex-col gap-4">
@@ -859,8 +859,8 @@ export default function CaseDetail() {
                       ))}
                     </select>
                   </label>
-                  {/* 数据集与行范围并一行：左侧数据集下拉（label 在上），绑定后右侧同排「选择数据」入口 + 条数（与下拉底对齐）。
-                      运行时替换提示全文收进 hover，不再单独铺一行灰字。 */}
+                  {/* Dataset and row range on one line: dataset dropdown on the left (label on top), once bound a "choose rows" entry + count on the same row to the right (bottom-aligned with the dropdown).
+                      The runtime-replacement hint's full text is folded into hover, no longer its own grey line. */}
                   <div className="flex flex-wrap items-end gap-2">
                     <label
                       className="flex flex-col gap-1"
@@ -872,7 +872,7 @@ export default function CaseDetail() {
                         value={datasetId ?? ''}
                         onChange={(e) => {
                           const next = e.target.value || null;
-                          // 换数据集 → 清空行选择（下标空间属于旧数据集）
+                          // Dataset switched → clear row selection (the index space belongs to the old dataset)
                           if (next !== datasetId) setDatasetRowIndexes([]);
                           setDatasetId(next);
                         }}
@@ -901,8 +901,8 @@ export default function CaseDetail() {
                       </div>
                     )}
                   </div>
-                  {/* Track 1：用例级预期描述。回放结束后由 vision LLM 拿最终截图比对；
-                      步骤级 assertion 在回放层已被收紧为「指定元素可见」才生效，整页模糊断言一律跳过。 */}
+                  {/* Track 1: case-level expected outcome. After replay the vision LLM compares it against the final screenshot;
+                      step-level assertions were tightened at the replay layer to only take effect as "specified element visible"; whole-page fuzzy assertions are always skipped. */}
                   <label className="flex flex-col gap-1">
                     <span className="text-[11px] flex items-center gap-1" style={{ color: 'var(--muted-foreground)' }}>
                       {t('cases:expectedOutcome')}
@@ -1302,7 +1302,7 @@ export default function CaseDetail() {
             )}
           </div>
 
-          {/* Right rail — 操作面板 */}
+          {/* Right rail — action panel */}
           <div className="w-[280px] shrink-0 flex flex-col gap-3">
             <div className="bg-card border rounded-[var(--radius-md)] p-4 relative" ref={tagPickerRef} style={{ overflow: 'visible', zIndex: tagPickerOpen ? 30 : 'auto' }}>
               <div
@@ -1551,11 +1551,11 @@ export default function CaseDetail() {
           onSave={(next) => {
             let applied = false;
             if (editingMode === 'create') {
-              // 新增：append 到末尾,沿用 replaceSteps 入口(全量替换最简单且满足 undo)。
+              // Create: append to the end, reusing the replaceSteps entry (full replacement is simplest and satisfies undo).
               mutateSteps((cur) => {
                 applied = true;
-                // 保存时 action 必须与 compiled[0] 一致：action 占位与新规范冲突,服务端不再写 action 列。
-                // 对非 aiTask 等单元素 compiled,直接同步过来;多元素/空则保留 next.action 让 buildAction 兜底。
+                // On save action must match compiled[0]: a stale action placeholder conflicts with the new convention, the server no longer writes the action column.
+                // For single-element compiled (non-aiTask etc.) sync it directly; for multi-element/empty keep next.action and let buildAction fall back.
                 const head = Array.isArray(next.compiled) && next.compiled.length > 0 ? next.compiled[0] : null;
                 return [...cur, head ? { ...next, action: head } : next];
               });
@@ -1588,7 +1588,7 @@ export default function CaseDetail() {
         />
       )}
 
-      {/* 编辑初始化导航 URL */}
+      {/* Edit init nav URL */}
       <Dialog open={urlDialogOpen} onOpenChange={setUrlDialogOpen}>
         <DialogContent style={{ maxWidth: 420 }}>
           <DialogHeader><DialogTitle>{t('cases:initNavUrl')}</DialogTitle></DialogHeader>
@@ -1644,7 +1644,7 @@ export default function CaseDetail() {
         </DialogContent>
       </Dialog>
 
-      {/* 录制前确认：是否先回放前置步骤 */}
+      {/* Pre-recording confirm: whether to replay preceding steps first */}
       <Dialog open={!!confirmResume} onOpenChange={(o) => !o && setConfirmResume(null)}>
         <DialogContent style={{ maxWidth: 420 }}>
           <DialogHeader><DialogTitle>{t('cases:replayPrecedingTitle')}</DialogTitle></DialogHeader>
@@ -1680,7 +1680,7 @@ export default function CaseDetail() {
         </DialogContent>
       </Dialog>
 
-      {/* 删除步骤确认:误删需重新录制或编辑回填,前端一律先弹再发请求 */}
+      {/* Delete step confirm: accidental deletes need re-recording or manual re-entry; the frontend always confirms before sending the request */}
       <Dialog open={!!confirmDeleteStep} onOpenChange={(o) => !o && setConfirmDeleteStep(null)}>
         <DialogContent style={{ maxWidth: 420 }}>
           <DialogHeader><DialogTitle>{t('cases:deleteStep')}</DialogTitle></DialogHeader>
@@ -1700,7 +1700,7 @@ export default function CaseDetail() {
         </DialogContent>
       </Dialog>
 
-      {/* 批量删除确认：走 mutateSteps 全量替换（自动入撤销栈，可用「撤销」恢复） */}
+      {/* Bulk delete confirm: goes through mutateSteps full replacement (auto-pushed to the undo stack, recoverable via "Undo") */}
       <Dialog open={confirmDeleteSelected} onOpenChange={setConfirmDeleteSelected}>
         <DialogContent style={{ maxWidth: 420 }}>
           <DialogHeader><DialogTitle>{t('cases:deleteSelectedTitle')}</DialogTitle></DialogHeader>
@@ -1754,7 +1754,7 @@ export default function CaseDetail() {
         </DialogContent>
       </Dialog>
 
-      {/* 数据集行选择弹窗：执行时只跑勾选的行。 */}
+      {/* Dataset row picker dialog: only checked rows run at execution time. */}
       <DatasetRowPickerDialog
         open={datasetRowPickerOpen}
         onOpenChange={setDatasetRowPickerOpen}
@@ -1764,7 +1764,7 @@ export default function CaseDetail() {
         onConfirm={(indexes) => setDatasetRowIndexes(indexes)}
       />
 
-      {/* 移动录制弹窗：仅 platform === 'mobile' 时启用（按钮在上方右侧栏）。onClose 时刷新用例以拉回新步骤。 */}
+      {/* Mobile recording dialog: enabled only when platform === 'mobile' (button in the right sidebar above). onClose refreshes the case to pull back new steps. */}
       {mobileRecorderOpen && projectId && (
         <Dialog open={mobileRecorderOpen} onOpenChange={(o) => !o && setMobileRecorderOpen(false)}>
           <DialogContent style={{ maxWidth: 960, height: '70vh', padding: 0 }}>

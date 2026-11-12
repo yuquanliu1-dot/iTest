@@ -1,9 +1,9 @@
 import { useState, type ReactNode } from 'react';
 import Icon from '../Icon';
 
-/** 可折叠区块：标题行常驻（chevron + 文案），内容区可收起。默认展开。
- *  右侧栏用它把「实时画面」/「暂存对象」两块独立折叠，互不影响。
- *  divider=false 去掉底部分隔线——列内最后一个区块传 false，否则会在空白区拉一道无意义的横线。 */
+/** Collapsible panel: the title row is always visible (chevron + label); the content area can collapse. Expanded by default.
+ *  The right rail uses it to collapse "live view" / "staged objects" independently of each other.
+ *  divider=false removes the bottom divider — pass false for the last panel in a column, otherwise it draws a meaningless line across blank space. */
 export default function CollapsiblePanel({
   title,
   defaultOpen = true,

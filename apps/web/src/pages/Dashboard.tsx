@@ -75,7 +75,7 @@ export default function Dashboard() {
     }
   }
 
-  // 内部链接在带版本上下文时使用版本化路由，否则回退到首页选项目
+  // Internal links use the versioned route when version context exists, otherwise fall back to the home page for project selection
   const link = (path: string) =>
     versionId ? `/p/${projectId}/v/${versionId}${path}` : `/`;
 
@@ -84,7 +84,7 @@ export default function Dashboard() {
       <PageShell>
         <OverviewHeader range={range} onRangeChange={setRange} onRefresh={refresh} />
 
-        {/* KPI strip — 5 张等宽卡；窄屏折叠为 2/3 列 */}
+        {/* KPI strip — 5 equal-width cards; collapse to 2/3 columns on narrow screens */}
         <div className="grid grid-cols-2 gap-4 fade-up md:grid-cols-3 lg:grid-cols-5" data-stagger>
           <KpiStripCard
             label={t('overview:kpiTotalCases')}
@@ -128,7 +128,7 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* Row: trend (8) + execution overview (4)——同排等高，执行概览的关注块钉底 */}
+        {/* Row: trend (8) + execution overview (4) — same row, equal height; the execution overview's focus block is pinned to the bottom */}
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
           <div className="xl:col-span-8">
             <PassRateTrendChart data={data.trend} />
@@ -146,7 +146,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Row: RCA / coverage / top failures——同排等高，底部对齐 */}
+        {/* Row: RCA / coverage / top failures — same row, equal height, bottom-aligned */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12">
           <div className="xl:col-span-4">
             <RcaDistributionCard days={days} rca={data.rca} />

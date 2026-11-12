@@ -13,14 +13,14 @@ import { groupByBucket, type BucketKey } from './threadBuckets';
 import { useThreadPager, type ThreadListPager } from './threadListPager';
 
 /**
- * 助手左侧线程列表(ThreadList 原语):「新对话」按钮 + 历史线程(切换/改名/删除)。
- * 非受控:当前线程由 runtime 持有,这里只读 main item 的 remoteId 做高亮——
- * undefined 即草稿(新线程首条消息发出前),高亮落到「新对话」上。
- * 草稿不进 Items(底层 threadIds 只收 regular/archived),后端也只返回有消息的线程。
- * 可收缩:collapsed 时只剩窄条(展开按钮 + 新对话图标),宽度切换由父级容器驱动。
- * 分页:列表数据由 ThreadListPager 供给(react-pi 适配层封死内建分页),滚动近底部
- * 经哨兵自动翻页 + aui.threads.reload() 把缓存灌回 runtime store;时间表直接读
- * pager 行(react-pi 的 mapThreadMetadata 丢弃时间字段,store 里拿不到)。
+ * Assistant left-side thread list (ThreadList primitives): "New chat" button + history threads (switch/rename/delete).
+ * Uncontrolled: the current thread is held by the runtime; here we only read the main item's remoteId for highlighting —
+ * undefined means draft (before the new thread's first message is sent), highlight falls on "New chat".
+ * Drafts don't enter Items (underlying threadIds only takes regular/archived), and the backend only returns threads with messages.
+ * Collapsible: when collapsed only a narrow strip remains (expand button + new-chat icon); width switching is driven by the parent container.
+ * Pagination: list data is supplied by ThreadListPager (react-pi adapter layer disables built-in pagination); scrolling near the bottom
+ * auto-pages via the sentinel + aui.threads.reload() hydrates the cache back into the runtime store; timestamps read
+ * pager rows directly (react-pi's mapThreadMetadata drops time fields, unavailable from the store).
  */
 export default function SpaceThreadList({ pager, collapsed, onToggleCollapsed }: {
   pager: ThreadListPager;
@@ -31,9 +31,9 @@ export default function SpaceThreadList({ pager, collapsed, onToggleCollapsed }:
   const activeRemoteId = useAuiState((s) => s.optional.threadListItem?.remoteId);
   const isLoading = useAuiState((s) => s.threads.isLoading);
   const threadIds = useAuiState((s) => s.threads.threadIds);
-  // 分页快照(store 侧不可变对象,commit 时换新):行数据即时间表,对话 settle 时
-  // SuggestionWatcher 的 aui.threads.reload() → runtime list() → pager.refreshForRuntime()
-  // → commit 通知,时间表随之刷新,无需这里自拉。
+  // Pagination snapshot (immutable store-side object, replaced on commit): rows are the timestamps; on thread settle
+  // SuggestionWatcher's aui.threads.reload() → runtime list() → pager.refreshForRuntime()
+  // → commit notification refreshes the timestamps; no need to fetch here.
   const snap = useSyncExternalStore(pager.subscribe, pager.getSnapshot);
   const createdAtById = useMemo(
     () => Object.fromEntries(snap.rows.map((r) => [r.id, r.createdAt])),
@@ -98,10 +98,10 @@ export default function SpaceThreadList({ pager, collapsed, onToggleCollapsed }:
   );
 }
 
-/** 单条线程:整行 Trigger 切换;悬停出改名/删除。改名走 item.rename(PATCH),
- *  删除走 item.delete(DELETE)——删的是当前线程时核心会自动切到新草稿。 */
-/** render 回调给的 item 是 store 的 ThreadListItemState;这里只声明用到的字段,
- *  避开 @assistant-ui/react 同时导出的同名 runtime 类型(isMain 等运行时态字段)。 */
+/** Single thread: the whole row's Trigger switches; hover reveals rename/delete. Rename goes through item.rename(PATCH),
+ *  delete through item.delete(DELETE) — deleting the current thread auto-switches the core to a new draft. */
+/** The item given by the render callback is the store's ThreadListItemState; only the used fields are declared here,
+ *  avoiding @assistant-ui/react's simultaneously exported same-named runtime type (isMain and other runtime-state fields). */
 interface RailItemData {
   id: string;
   remoteId: string | undefined;
@@ -127,7 +127,7 @@ function RailItem({ item, active }: { item: RailItemData; active: boolean }) {
             const v = e.currentTarget.value.trim();
             if (v) {
               aui.threadListItem.rename(v);
-              // 分页缓存同步改名:深页行不必等下一次新鲜第 1 页才见到新标题
+              // Sync rename into the pagination cache: deep-page rows don't have to wait for the next fresh page 1 to see the new title
               if (item.remoteId) pager.renameLocal(item.remoteId, v);
             }
             setEditing(false);
@@ -156,7 +156,7 @@ function RailItem({ item, active }: { item: RailItemData; active: boolean }) {
         )}
         <span className="truncate">{item.title || t('assistant:threadList.untitled')}</span>
       </ThreadListItemPrimitive.Trigger>
-      {/* 悬停操作:盖在行尾,背景与行底色对齐避免穿帮 */}
+      {/* Hover actions: overlaid on the row end, background aligned with the row background to avoid seams */}
       <div
         className="absolute right-1 hidden group-hover:flex items-center gap-0.5 rounded px-1"
         style={{ background: active ? 'var(--muted)' : 'var(--popover)' }}
@@ -180,8 +180,8 @@ function RailItem({ item, active }: { item: RailItemData; active: boolean }) {
           <Trash2 size={13} />
         </button>
       </div>
-      {/* 删除确认:与用例/数据集等删除同款 Dialog(shadcn),替代原生 window.confirm。
-          挂在 RailItem 内是为让确认按钮的 aui.threadListItem.delete() 仍命中本行 item 作用域。 */}
+      {/* Delete confirmation: same Dialog(shadcn) as case/dataset deletions, replacing native window.confirm.
+          Mounted inside RailItem so the confirm button's aui.threadListItem.delete() still hits this row's item scope. */}
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>{t('assistant:threadList.delete')}</DialogTitle></DialogHeader>
@@ -194,8 +194,8 @@ function RailItem({ item, active }: { item: RailItemData; active: boolean }) {
               variant="destructive"
               onClick={() => {
                 setConfirmOpen(false);
-                // 分页缓存同步清行(与 store 的乐观删除同拍):不清则下次 reload 从缓存复活。
-                // 删除失败属网络边角,行仍在库,下次新鲜第 1 页自愈。
+                // Sync row removal into the pagination cache (in step with the store's optimistic delete): without clearing, the row revives from cache on next reload.
+                // Delete failure is a network edge case; the row is still in the DB and the next fresh page 1 self-heals.
                 if (item.remoteId) pager.removeLocal(item.remoteId);
                 aui.threadListItem.delete();
               }}
@@ -209,25 +209,25 @@ function RailItem({ item, active }: { item: RailItemData; active: boolean }) {
   );
 }
 
-/** 段标题的 i18n key：groupToday / groupYesterday / groupWeek / groupMonth / groupOlder */
+/** i18n keys for section headings: groupToday / groupYesterday / groupWeek / groupMonth / groupOlder */
 function bucketLabelKey(k: BucketKey): string {
   return `assistant:threadList.group${k[0]!.toUpperCase()}${k.slice(1)}`;
 }
 
-/** ItemByIndex 作用域内的条目。必须是独立组件——components.ThreadListItem 里
- *  不能内联调 useAuiState（违反 Hooks 规则，且组件身份不稳定会反复重挂载）。
- *  active 在组件内部订阅:store 侧对 store 侧比较,且引用稳定才能过 ItemByIndex 的 memo。 */
+/** Entry within the ItemByIndex scope. Must be a standalone component — inside components.ThreadListItem
+ *  useAuiState cannot be called inline (violates the Hooks rule, and unstable component identity causes repeated remounts).
+ *  active is subscribed inside the component: store-side vs store-side comparison, and the reference must be stable to pass ItemByIndex's memo. */
 function IndexedRailItem() {
   const item = useAuiState((s) => s.optional.threadListItem);
-  // store 侧对 store 侧:mainThreadId 与 threadListItem.id 同域,不受本地 __LOCALID_ 与后端 uuid 混用影响
+  // Store-side vs store-side: mainThreadId and threadListItem.id are in the same domain, unaffected by mixing local __LOCALID_ with backend uuid
   const active = useAuiState((s) => s.threads.mainThreadId === s.optional.threadListItem?.id);
   if (!item) return null;
   return <RailItem item={item as unknown as RailItemData} active={active} />;
 }
 
-/** 按五段分组渲染。Items 原语内部是 threadIds.map 死平铺、插不进段标题,
- *  故用 ItemByIndex 按 index 自行排版,保留 item scope 的 switchTo/rename/delete。
- *  末尾挂无限滚动哨兵:hasMore 时滚动近底部自动翻页。 */
+/** Render grouped into five sections. The Items primitive is a flat threadIds.map internally with no way to insert section headings,
+ *  so ItemByIndex lays out by index, keeping the item scope's switchTo/rename/delete.
+ *  An infinite-scroll sentinel hangs at the end: when hasMore, scrolling near the bottom auto-pages. */
 function GroupedItems({ createdAtById, pager, scrollRef }: {
   createdAtById: Record<string, string | undefined>;
   pager: ThreadListPager;
@@ -236,8 +236,8 @@ function GroupedItems({ createdAtById, pager, scrollRef }: {
   const { t } = useTranslation();
   const threadIds = useAuiState((s) => s.threads.threadIds);
   const threadItems = useAuiState((s) => s.threads.threadItems);
-  // 本地新建的会话在 store 里永久保留 __LOCALID_ 前缀的 store id(reconcile 后 survivor=本地槽位),
-  // 时间表按后端 uuid 键入 → 须经 threadItems 把 store id 解析成 remoteId 再查。
+  // Locally created threads keep the __LOCALID_-prefixed store id in the store permanently (after reconcile the survivor = local slot),
+  // timestamps are keyed by backend uuid → must resolve the store id into remoteId via threadItems before lookup.
   const remoteIdById = useMemo(
     () => new Map(threadItems.map((i) => [i.id, i.remoteId])),
     [threadItems],
@@ -246,7 +246,7 @@ function GroupedItems({ createdAtById, pager, scrollRef }: {
     () => groupByBucket(threadIds.map((id) => ({ id, createdAt: createdAtById[remoteIdById.get(id) ?? id] }))),
     [threadIds, createdAtById, remoteIdById],
   );
-  // ItemByIndex 的 index 必须是 threadIds 里的原始下标,不能用分组后的序号
+  // ItemByIndex's index must be the original index in threadIds, not the post-grouping sequence number
   const indexById = useMemo(() => new Map(threadIds.map((id, i) => [id, i])), [threadIds]);
   return (
     <>
@@ -269,10 +269,10 @@ function GroupedItems({ createdAtById, pager, scrollRef }: {
   );
 }
 
-/** 无限滚动哨兵:IntersectionObserver 盯滚动容器底部(rootMargin 提前 200px 预取),
- *  命中即 pager.loadMore() 翻页 + aui.threads.reload() 把缓存灌回 runtime store
- *  (分页器只是数据源,store 才是渲染真相)。busyRef 防重入(翻页+reload 在途时
- *  布局变化会再次触发 observer)。hasMore=false 时不渲染,停止观察。 */
+/** Infinite-scroll sentinel: IntersectionObserver watches the scroll container's bottom (rootMargin prefetches 200px early),
+ *  on hit pager.loadMore() pages + aui.threads.reload() hydrates the cache back into the runtime store
+ *  (the pager is only the data source, the store is the render source of truth). busyRef guards re-entry (layout changes while
+ *  paging+reload are in flight re-trigger the observer). Not rendered when hasMore=false, stopping observation. */
 function LoadMoreSentinel({ pager, scrollRef }: {
   pager: ThreadListPager;
   scrollRef: React.RefObject<HTMLDivElement | null>;

@@ -10,7 +10,7 @@ import Button from '../components/ui/Button';
 import BrandGlyph from '../components/BrandGlyph';
 import Icon from '../components/Icon';
 
-/** 密码提示文案与后端 PASSWORD_POLICY 一致（auth.service.ts），见 i18n auth:passwordHint。 */
+/** Password hint copy matches the backend PASSWORD_POLICY (auth.service.ts); see the i18n auth:passwordHint key. */
 export default function LoginPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -23,7 +23,7 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // 首登强制改密阶段（passwordChangeToken 一次性、5 分钟有效）
+  // First-login forced password change phase (passwordChangeToken is one-time, valid for 5 minutes)
   const [changeToken, setChangeToken] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -59,7 +59,7 @@ export default function LoginPage() {
     }
     setSubmitting(true);
     try {
-      // 改密成功即自动登录（响应同登录 ok 分支，并种下新会话 cookie）
+      // A successful change logs the user in automatically (response identical to the login ok branch, and plants the new session cookie)
       const r = await api.auth.changePassword(changeToken!, newPassword);
       await applyLogin(r);
       toast(t('auth:passwordUpdated'), 'success');
@@ -197,7 +197,7 @@ export default function LoginPage() {
             gap: 18,
             boxShadow: 'var(--shadow-2xl)',
             animationDelay: '0.1s',
-            // 不随 grid 行拉伸（左侧 hero 更高）：按内容自适应并垂直居中
+            // Does not stretch with the grid row (the left hero is taller): fit content and center vertically
             alignSelf: 'center',
           }}
         >

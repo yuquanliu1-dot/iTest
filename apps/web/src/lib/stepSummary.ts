@@ -1,12 +1,12 @@
 // apps/web/src/lib/stepSummary.ts
 import type { TFunction } from 'i18next';
-/** 步骤一览（列表/抽屉预览/悬浮卡）—— 人读摘要，纯函数，文案走 i18n key。 */
+/** Step overview (list/drawer preview/hover card) — human-readable summary, pure function, text via i18n keys. */
 
 interface KnownAction {
   kind?: string;
   locator?: Array<{ strategy?: string; value?: string }>;
   intentLocator?: { semanticRole?: string; contextText?: string };
-  /** iframe 帧链（录制器产物）：非空时目标在 iframe 里，摘要加 [iframe] 前缀。 */
+  /** iframe frame chain (recorder artifact): when non-empty the target is inside an iframe; the summary gets an [iframe] prefix. */
   frameChain?: Array<{ locator?: unknown }>;
   value?: unknown;
   sensitive?: boolean;
@@ -24,19 +24,19 @@ interface KnownAction {
   [k: string]: unknown;
 }
 
-/** step 行形状：dispatcher 唯一读 compiled（action 列已 DROP），UI 摘要与 kind 推断沿用同一路径。
- *  compiled 用 unknown[] 对齐 TestStep；具体 dispatcher/AI 编译按 StepAction[] 解析。 */
+/** Step row shape: the dispatcher reads only compiled (the action column was DROPped); UI summary and kind inference share the same path.
+ *  compiled is unknown[] to align with TestStep; the concrete dispatcher/AI compilation parses as StepAction[]. */
 export interface StepRowLike {
-  /** 行级自然语言。 */
+  /** Row-level natural language. */
   instruction?: string | null;
-  /** 可执行 DSL 数组；空数组/null/undefined 表示未编译。 */
+  /** Executable DSL array; empty array/null/undefined means uncompiled. */
   compiled?: unknown[] | null;
 }
 
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
-/** kind 推断路径：compiled[0]?.kind → ''。 */
+/** Kind inference path: compiled[0]?.kind → ''. */
 export function getKind(row: StepRowLike): string {
   const c = Array.isArray(row.compiled) ? row.compiled[0] : undefined;
   if (c && typeof c === 'object' && typeof (c as { kind?: string }).kind === 'string') {
@@ -45,19 +45,19 @@ export function getKind(row: StepRowLike): string {
   return '';
 }
 
-/** 选择 summary 用的 payload 数组：dispatcher 依序执行 compiled[0..n]。 */
+/** Payload array chosen for the summary: the dispatcher executes compiled[0..n] in order. */
 function pickAllActions(row: StepRowLike): KnownAction[] {
   if (!Array.isArray(row.compiled)) return [];
   return row.compiled.filter((c) => c && typeof c === 'object') as KnownAction[];
 }
 
-/** 是否未编译：与 dispatcher 对齐 —— compiled 非空数组才视为已编译；
- *  空数组 / null / undefined（老数据 action 列已 DROP，无 compiled 即无法回放）都算未编译。 */
+/** Whether uncompiled: aligned with the dispatcher — only a non-empty compiled array counts as compiled;
+ *  empty array / null / undefined (legacy data's action column was DROPped; without compiled there is no replay) all count as uncompiled. */
 export function isUncompiled(row: StepRowLike): boolean {
   return !Array.isArray(row.compiled) || row.compiled.length === 0;
 }
 
-/** 定位对象描述：优先语义文案，否则首个 locator 的 strategy=value；带帧链时加 [iframe] 前缀。 */
+/** Target description: semantic text first, else the first locator's strategy=value; with a frame chain adds an [iframe] prefix. */
 function targetText(action: KnownAction): string {
   const prefix = Array.isArray(action.frameChain) && action.frameChain.length > 0 ? '[iframe] ' : '';
   const ctx = action.intentLocator?.contextText;
@@ -67,7 +67,7 @@ function targetText(action: KnownAction): string {
   return '';
 }
 
-/** 生成器值/匹配方式/字段标签统一走 i18n key（由 t() 渲染）。 */
+/** Generator values/match modes/field labels all go through i18n keys (rendered by t()). */
 const GEN_LABELS: Record<string, string> = {
   randomString: 'cases:stepSummary.gen.randomString',
   randomNumber: 'cases:stepSummary.gen.randomNumber',
@@ -88,7 +88,7 @@ function valueText(action: KnownAction, t: TFunction): string {
   return '';
 }
 
-/** 匹配方式展示 key（未知 match 返回 ''）。 */
+/** Match mode display key (unknown match returns ''). */
 const MATCH_LABELS: Record<string, string> = {
   equals: 'cases:equalsOp',
   contains: 'cases:matchContains',
@@ -100,7 +100,7 @@ function matchLabelKey(action: KnownAction): string {
   return MATCH_LABELS[str(action.match)] ?? '';
 }
 
-/** 单个动作的简短摘要（已 clip），不带未编译前缀。 */
+/** Short summary of a single action (clipped), without the uncompiled prefix. */
 function actionSummary(a: KnownAction, t: TFunction): string {
   const target = targetText(a);
   switch (a.kind) {
@@ -121,7 +121,7 @@ function actionSummary(a: KnownAction, t: TFunction): string {
     case 'check':
       return a.checked === false ? t('cases:stepSummary.act.uncheck') : t('cases:stepSummary.act.check');
     case 'waitFor':
-      // 空定位 = 固定时长等待；有定位 = 等待元素出现
+      // Empty locator = fixed-duration wait; with locator = wait for the element to appear
       if (!target) return t('cases:stepSummary.act.waitFixed', { ms: typeof a.timeoutMs === 'number' ? a.timeoutMs : 5000 });
       return t('cases:stepSummary.act.waitElement', { target: clip(target, 20) });
     case 'assertVisible':
@@ -183,9 +183,9 @@ function actionSummary(a: KnownAction, t: TFunction): string {
   }
 }
 
-/** 列表/悬浮卡片用的简短摘要（已 clip）。
- *  接收整 step 行（instruction + compiled）。多动作行（AI 一次产出一串 DSL）枚举整条链：
- *  「共 N 步：a → b → …」；单动作行保持历史输出不变。 */
+/** Short summary for lists/hover cards (clipped).
+ *  Takes the whole step row (instruction + compiled). Multi-action rows (AI emits a chain of DSL at once) enumerate the whole chain:
+ *  "N steps total: a → b → …"; single-action rows keep the historical output unchanged. */
 export function stepSummary(row: StepRowLike | unknown, t: TFunction): string {
   const r = (row ?? {}) as StepRowLike;
   const actions = pickAllActions(r);
@@ -195,12 +195,12 @@ export function stepSummary(row: StepRowLike | unknown, t: TFunction): string {
       chain: actions.map((a) => actionSummary(a, t)).join(' → '),
     });
   }
-  // 未编译（compiled 是 []）时 UI 前缀「⚠ 未编译 · 」
+  // Uncompiled (compiled is []) gets the UI prefix "⚠ uncompiled · "
   const uncompiledPrefix = isUncompiled(r) ? t('cases:stepSummary.uncompiledPrefix') : '';
   return uncompiledPrefix + actionSummary(actions[0] ?? {}, t);
 }
 
-/** 单个动作的完整字段行（fullStepDescription 复用；多动作行按块枚举）。 */
+/** Full field lines for a single action (reused by fullStepDescription; multi-action rows enumerated in blocks). */
 function describeAction(a: KnownAction, t: TFunction): string[] {
   const lines: string[] = [];
   const push = (labelKey: string, v: string) => { if (v) lines.push(`${t(labelKey)}${v}`); };
@@ -253,8 +253,8 @@ function describeAction(a: KnownAction, t: TFunction): string[] {
   return lines;
 }
 
-/** tooltip/抽屉预览用的完整描述：所有关键字段，不截断。带换行。
- *  多动作行按「【动作 i/N】」分块枚举整条 compiled 链，行级 instruction 附在末尾。 */
+/** Full description for tooltip/drawer preview: all key fields, unclipped. With line breaks.
+ *  Multi-action rows enumerate the whole compiled chain in "【action i/N】" blocks, with the row-level instruction appended at the end. */
 export function fullStepDescription(row: StepRowLike | unknown, t: TFunction): string {
   const r = (row ?? {}) as StepRowLike;
   const actions = pickAllActions(r);
@@ -274,7 +274,7 @@ export function fullStepDescription(row: StepRowLike | unknown, t: TFunction): s
   lines.push(...footer);
 
   if (lines.length === 0 || (lines.length === 1 && lines[0]?.startsWith(t('cases:stepSummary.fieldKind')))) {
-    // 兜底：JSON 序列化所有字段，便于调试未识别 kind
+    // Fallback: JSON-serialize all fields, convenient for debugging unrecognized kinds
     try { return JSON.stringify(row, null, 2); } catch { return String(row); }
   }
   return lines.join('\n');

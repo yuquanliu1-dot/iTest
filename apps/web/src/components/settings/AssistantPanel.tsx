@@ -18,7 +18,7 @@ import PromptModulesSection from './PromptModulesSection';
 import SolidifySection from './SolidifySection';
 import FeedbackSection from './FeedbackSection';
 
-/** MCP_EXPOSURES 与服务端 mcp.js 同源白名单（oauth 服务端不支持）。 */
+/** MCP_EXPOSURES — same-source whitelist as the server's mcp.js (the oauth server doesn't support it). */
 const EXPOSURES = ['codemode', 'deferred', 'direct', 'hidden'] as const;
 
 // ---------- MCP ----------
@@ -228,7 +228,7 @@ function McpServersSection() {
   );
 }
 
-/** AI 助手各 Section 的 key——设置页按子页拆分后由 Settings 传入要渲染哪些。 */
+/** Keys for the AI assistant's sections — after the settings page was split into subpages, Settings passes in which ones to render. */
 export type AssistantSectionKey =
   | 'mcp'
   | 'memories'

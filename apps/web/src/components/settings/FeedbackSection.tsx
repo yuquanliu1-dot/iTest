@@ -6,13 +6,13 @@ import Icon from '../Icon';
 import EmptyState from '../ui/EmptyState';
 
 /**
- * 设置页「用户反馈」只读列表。
+ * Settings page "user feedback" read-only list.
  *
- * 放在 AssistantPanel 里而不是独立路由：反馈本就属于助手域，且只读不审批，
- * 不值得单开一个侧边栏位置。等真要做审批/消费时再拆成独立页面。
+ * Lives inside AssistantPanel rather than a standalone route: feedback belongs to the assistant domain anyway, is read-only with no
+ * approval workflow, and doesn't merit its own sidebar slot. Split into a standalone page when approval/consumption actually happens.
  *
- * 列表展示 messageExcerpt（提交时截的正文快照）而非原对话跳转——thread 是内存态，
- * 进程重启后从 UI 就够不着了，excerpt 是回溯语境唯一可靠的依据。
+ * The list shows messageExcerpt (a body snapshot taken at submit time) instead of jumping into the original conversation — the thread
+ * is in-memory state, unreachable from the UI after a process restart; the excerpt is the only reliable anchor for recovering context.
  */
 const PAGE_SIZE = 20;
 
@@ -55,7 +55,7 @@ export default function FeedbackSection() {
         {t('settings:feedbackIntro')}
       </div>
 
-      {/* 筛选：态度 + 项目。切筛选一律回到第一页——否则停在第 3 页再看新筛选结果会空。 */}
+      {/* Filters: sentiment + project. Switching a filter always returns to page 1 — otherwise staying on page 3 with a new filter's results would come up empty. */}
       <div className="flex items-center gap-2 px-4 pt-3">
         <select
           value={sentiment}
@@ -109,7 +109,7 @@ export default function FeedbackSection() {
                   {f.createdAt ? new Date(f.createdAt).toLocaleString() : ''}
                 </span>
               </div>
-              {/* 用户意见在前（原话优先），原回复节选作为语境补充。 */}
+              {/* The user's comment first (verbatim, priority), with the original reply excerpt as context below. */}
               <div className="text-[12px] mt-1.5" style={{ color: 'var(--foreground)' }}>
                 {f.comment || t('settings:feedbackNoComment')}
               </div>

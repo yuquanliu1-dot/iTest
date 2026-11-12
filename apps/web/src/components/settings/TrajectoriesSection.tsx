@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 
 const PAGE_SIZE = 20;
 
-/** 设置页「助手轨迹」：只读列表 + 软删（写入唯一入口是落库钩子→蒸馏 worker）。服务端分页。 */
+/** Settings page "assistant trajectories": read-only list + soft delete (the only write entry point is the persistence hook → distillation worker). Server-side pagination. */
 export default function TrajectoriesSection() {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
@@ -21,13 +21,13 @@ export default function TrajectoriesSection() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const [lineFilter, setLineFilter] = useState('all');
-  // 产品线下拉的候选来自产品线表（不能从已加载行推——分页后只剩当页的线）。
+  // The product line dropdown's candidates come from the product line table (can't infer from loaded rows — after pagination only the current page's lines remain).
   const linesQ = useQuery({ queryKey: ['productLines'], queryFn: () => api.productLines.list(), staleTime: 60_000 });
   const lineOptions = useMemo(() => (linesQ.data ?? []).map((l) => [l.id, l.name] as const), [linesQ.data]);
-  // 筛选的线被删空后 lineId 失配——钳回 all，避免 select 悬空+假「暂无轨迹」。
+  // If the filtered line is deleted, lineId no longer matches — clamp back to all to avoid a dangling select + a fake "no trajectories".
   const effectiveFilter = lineFilter !== 'all' && !lineOptions.some(([id]) => id === lineFilter) ? 'all' : lineFilter;
-  // 默认只看 active：软删即从界面消失（与注入、检索路径同口径）；审计走 API status 参数。
-  // 按线筛选下推服务端，总量与列表同口径。
+  // Default to active only: soft-deleted rows vanish from the UI (same scope as injection and retrieval); auditing goes through the API status parameter.
+  // Line filtering is pushed down to the server so total count and list share the same scope.
   const listQ = useQuery({
     queryKey: ['assistant-trajectories', page, pageSize, effectiveFilter],
     queryFn: () => api.assistant.trajectories.list({
@@ -52,7 +52,7 @@ export default function TrajectoriesSection() {
 
   const rows = listQ.data?.items ?? [];
   const total = listQ.data?.total ?? 0;
-  // 删除/筛选后当前页可能已越界——钳回最后一页（数据到达后才判，避免翻页途中误钳）。
+  // After deletion/filtering the current page may be out of bounds — clamp to the last page (judge only after data arrives, to avoid clamping mid-pagination).
   useEffect(() => {
     if (!listQ.data) return;
     const totalPages = Math.max(1, Math.ceil(listQ.data.total / pageSize));

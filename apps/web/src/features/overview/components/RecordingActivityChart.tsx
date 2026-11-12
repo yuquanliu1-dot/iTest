@@ -5,7 +5,7 @@ import type { OverviewResponse } from '../api';
 
 type Rec = OverviewResponse['recordingActivity'];
 
-// 与 packages/shared step-dsl.ts 的 StepAction kind 对齐;未列出的 kind 回退显示原始值。
+// Aligned with the StepAction kinds in packages/shared step-dsl.ts; kinds not listed fall back to the raw value.
 const KIND_I18N: Record<string, string> = {
   navigate: 'recordingKindNavigate',
   click: 'recordingKindClick',
@@ -26,7 +26,7 @@ const KIND_I18N: Record<string, string> = {
   httpRequest: 'recordingKindHttpRequest',
 };
 
-/** 录制活动：按次数排序的排名清单 + 细条。主图（通过率趋势）之外的数据一律降级为清单，不再开第二张大图。 */
+/** Recording activity: a count-ranked list + thin bars. Anything besides the main chart (pass-rate trend) is demoted to a list; no second big chart. */
 export default function RecordingActivityChart({ data }: { data: Rec }) {
   const { t } = useTranslation();
   const sorted = [...data].sort((a, b) => b.count - a.count);

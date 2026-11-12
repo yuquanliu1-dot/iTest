@@ -1,7 +1,7 @@
-/** 复制文本到系统剪贴板，返回是否成功（调用方据此 toast）。
- *  navigator.clipboard 仅安全上下文（https / localhost）可用：经 http://局域网IP 访问时
- *  它是 undefined，且属性访问同步抛 TypeError——发生在 .catch 挂上前，表现为「点击无反应」。
- *  这里先试 clipboard API，不可用/被拒时回落 execCommand 临时 textarea 方案。 */
+/** Copy text to the system clipboard, returning success (callers toast based on it).
+ *  navigator.clipboard is only available in secure contexts (https / localhost): when accessed over http://LAN-IP
+ *  it is undefined, and the property access throws a TypeError synchronously — before .catch is attached, presenting as "click does nothing".
+ *  Try the clipboard API first; fall back to the execCommand temporary-textarea approach when unavailable/rejected. */
 export async function copyTextToClipboard(text: string): Promise<boolean> {
   try {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -9,7 +9,7 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
       return true;
     }
   } catch {
-    // 权限被拒等 → 走 execCommand 回退
+    // Permission denied etc. → fall back to execCommand
   }
   try {
     const ta = document.createElement('textarea');

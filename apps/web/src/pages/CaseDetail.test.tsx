@@ -3,7 +3,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-// api 全量替换：CaseDetail 拉的数据多，逐个 mock 噪声大 —— 这里只保留用到的 6 个端点。
+// Replace the api wholesale: CaseDetail pulls a lot of data and mocking each method is noisy — keep only the 6 endpoints used here.
 const { caseGet, casePatch, datasetList, projectGroups, tagList, envList } = vi.hoisted(() => ({
   caseGet: vi.fn(),
   casePatch: vi.fn(),
@@ -27,7 +27,7 @@ vi.mock('../api/client', async (importOriginal) => {
   };
 });
 
-// 重组件 stub 掉：与本用例无关，避免拖进 dnd-kit / 移动端录制依赖。
+// Stub out heavy components: unrelated to this suite, avoids dragging in dnd-kit / mobile-recorder dependencies.
 vi.mock('../components/StepEditDrawer', () => ({ default: () => null }));
 vi.mock('../components/labels/LabelsManagerDialog', () => ({ default: () => null }));
 vi.mock('../features/mobile-recorder', () => ({ MobileRecorder: () => null }));
@@ -87,7 +87,7 @@ function renderCase() {
   );
 }
 
-/** 数据集下拉（label 里还包着 select 本身，getByLabelText 取不到 → 按选项值认）。 */
+/** Dataset dropdown (the label wraps the select itself, getByLabelText can't find it → identify by option value). */
 function datasetSelect(): HTMLSelectElement {
   const sel = Array.from(document.querySelectorAll('select')).find((s) =>
     Array.from(s.options).some((o) => o.value === 'ds-1'),
@@ -96,7 +96,7 @@ function datasetSelect(): HTMLSelectElement {
   return sel as HTMLSelectElement;
 }
 
-/** 执行设置卡片的保存按钮（页面上有多个「保存」，第一个是运行设置那个）。 */
+/** The execution-settings card's save button (multiple "Save" buttons on the page; the first is the run-settings one). */
 function saveButton(): HTMLElement {
   return screen.getAllByRole('button', { name: '保存' })[0]!;
 }
@@ -122,7 +122,7 @@ describe('CaseDetail 数据集行选择', () => {
     await waitFor(() => expect(caseGet).toHaveBeenCalled());
     expect(screen.queryByText('数据集行范围')).toBeNull();
 
-    // 选一个数据集 → 行范围控件出现
+    // Select a dataset → row-range controls appear
     await waitFor(() => expect(datasetSelect()).toBeTruthy());
     await act(async () => {
       const sel = datasetSelect();

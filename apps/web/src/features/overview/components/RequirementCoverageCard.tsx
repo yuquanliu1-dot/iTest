@@ -8,8 +8,8 @@ import type { OverviewResponse } from '../api';
 type Coverage = OverviewResponse['coverage'];
 
 /**
- * 需求覆盖：需求被用例覆盖的比例（大数 + 进度条）+ 用例覆盖类型分布。
- * 分布列出全部已知类型（含计数为 0 的），因为「一个类型都没声明」本身就是信号。
+ * Requirement coverage: the share of requirements covered by cases (big number + meter bar) + the distribution of case coverage types.
+ * The distribution lists all known types (including zero-count ones), because "not a single type declared" is itself a signal.
  */
 export default function RequirementCoverageCard({ coverage }: { coverage: Coverage }) {
   const { t } = useTranslation();

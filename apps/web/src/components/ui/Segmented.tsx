@@ -16,8 +16,8 @@ interface SegmentedProps<T extends string> {
 }
 
 /**
- * 分段控件：shadcn toggle-group 单选内核（spacing=0 连体 outline 样式）。
- * CRM 对齐；调用点 API（options/value/onChange）不变。
+ * Segmented control: shadcn toggle-group single-select core (spacing=0 joined outline styling).
+ * CRM aligned; the call-site API (options/value/onChange) is unchanged.
  */
 export default function Segmented<T extends string>({ options, value, onChange }: SegmentedProps<T>) {
   return (
@@ -28,7 +28,7 @@ export default function Segmented<T extends string>({ options, value, onChange }
       spacing={0}
       value={value}
       onValueChange={(v) => {
-        // 单选 toggle-group 清空选中时返回 ''，忽略以保持受控值
+        // A single-select toggle-group returns '' when the selection is cleared; ignore to keep the controlled value
         if (v) onChange(v as T);
       }}
     >

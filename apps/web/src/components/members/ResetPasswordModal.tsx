@@ -12,7 +12,7 @@ interface Props {
 }
 
 /**
- * 重置用户密码弹窗。管理员 / 管理者发起，后端生成一次性临时密码 + 强制首登改密。
+ * Reset user password dialog. Initiated by an admin/manager; the backend generates a one-time temporary password + forces a first-login password change.
  */
 export default function ResetPasswordModal({ visible, userId, userName, onClose }: Props) {
   const { t } = useTranslation();

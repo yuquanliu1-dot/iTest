@@ -13,14 +13,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/Modal';
 
 const PROVIDERS = ['openai', 'anthropic', 'google'];
 
-/** 与 apps/api/src/agent/llm-client.ts 中的服务端回退默认值保持一致。 */
+/** Kept in sync with the server-side fallback defaults in apps/api/src/agent/llm-client.ts. */
 const DEFAULT_MODELS: Record<string, string> = {
   openai: 'gpt-4o-mini',
   anthropic: 'claude-sonnet-4-6',
   google: 'gemini-2.0-flash',
 };
 
-/** 本地渠道草稿：apiKey 为空表示沿用服务端已存值（服务端按 id 合并保留）。 */
+/** Local channel draft: empty apiKey means keep the server's stored value (the server merges and preserves by id). */
 interface ChannelDraft {
   id: string;
   name: string;
@@ -64,20 +64,20 @@ function newDraft(): ChannelDraft {
   };
 }
 
-/** 探测请求体：已存渠道不传 apiKey（服务端按 channelId 取真值）；新渠道用表单里的 key。 */
+/** Probe request body: existing channels omit apiKey (the server resolves the real value by channelId); new channels use the key from the form. */
 function probeBody(d: ChannelDraft) {
   return d.apiKey.trim()
     ? { provider: d.provider, apiKey: d.apiKey.trim(), model: d.model.trim(), baseUrl: d.baseUrl.trim() }
     : { channelId: d.id, provider: d.provider, model: d.model.trim(), baseUrl: d.baseUrl.trim() };
 }
 
-/** maxTokens 校验：空=不限制；须为正整数（与服务端 zod positive 一致，否则 PUT 必 400）。 */
+/** maxTokens validation: empty = unlimited; must be a positive integer (matches the server's zod positive, otherwise PUT always 400s). */
 function maxTokensInvalid(v: string): boolean {
   const s = v.trim();
   return s !== '' && (!/^\d+$/.test(s) || Number(s) < 1);
 }
 
-/** 保存载荷：渠道列表 + 默认/视觉指派（编辑弹窗保存与面板底部保存共用一份）。 */
+/** Save payload: channel list + default/vision assignment (shared by the edit dialog save and the panel-bottom save). */
 interface ChannelsPayload {
   channels: ChannelDraft[];
   defaultChannelId: string;
@@ -97,7 +97,7 @@ export default function LlmChannelsPanel() {
   const [form, setForm] = useState<{ open: boolean; draft: ChannelDraft | null }>({ open: false, draft: null });
   const [deleting, setDeleting] = useState<ChannelDraft | null>(null);
 
-  // 服务端数据 → 本地草稿（保存成功后 invalidate 会重新同步；masked 的 apiKey 不回填为明文）
+  // Server data → local drafts (invalidate re-syncs after a successful save; the masked apiKey is never backfilled as plaintext)
   useEffect(() => {
     if (!viewQ.data) return;
     setChannels(viewQ.data.channels.map(toDraft));
@@ -127,7 +127,7 @@ export default function LlmChannelsPanel() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  // 列表行的测试连接：结果走 toast
+  // Row-level test connection: the result goes through a toast
   const rowTest = useMutation({
     mutationFn: (d: ChannelDraft) => api.settings.testConnection(probeBody(d)),
     onSuccess: (r) => {
@@ -137,7 +137,7 @@ export default function LlmChannelsPanel() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  // 编辑弹窗内的测试连接：结果就地显示
+  // Test connection inside the edit dialog: the result shows in place
   const formTest = useMutation({
     mutationFn: (d: ChannelDraft) => api.settings.testConnection(probeBody(d)),
   });
@@ -145,8 +145,8 @@ export default function LlmChannelsPanel() {
   const openCreate = () => setForm({ open: true, draft: newDraft() });
   const openEdit = (c: ChannelDraft) => setForm({ open: true, draft: { ...c } });
 
-  // 弹窗保存 = 立即落库：此前只改本地草稿列表不发请求，刷新后还原，用户看列表已变名以为存了。
-  // 本地列表在 PUT 成功后才同步（失败时列表保持旧值，不显示未落库的改动）。
+  // Dialog save = persist immediately: previously it only mutated the local draft list without a request; after a refresh everything reverted, and the renamed list made users believe it had saved.
+  // The local list syncs only after the PUT succeeds (on failure the list keeps its old values and never shows unpersisted changes).
   const applyForm = () => {
     const d = form.draft;
     if (!d) return;
@@ -201,7 +201,7 @@ export default function LlmChannelsPanel() {
         </p>
       </div>
 
-      {/* 默认渠道 / 视觉渠道指派 */}
+      {/* Default / vision channel assignment */}
       <div className="bg-card border rounded-[var(--radius-sm)] p-3 flex flex-col gap-3">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>
@@ -247,7 +247,7 @@ export default function LlmChannelsPanel() {
         </div>
       </div>
 
-      {/* 渠道列表 */}
+      {/* Channel list */}
       <div className="bg-card border rounded-[var(--radius-sm)]">
         <div className="flex items-center gap-2 px-4 py-3 hairline-bottom" style={{ borderColor: 'var(--border)' }}>
           <Icon name="beaker" size={14} style={{ color: 'var(--primary)' }} />
@@ -321,7 +321,7 @@ export default function LlmChannelsPanel() {
         )}
       </div>
 
-      {/* 渠道编辑弹窗 */}
+      {/* Channel edit dialog */}
       <Dialog open={form.open} onOpenChange={(open) => setForm((f) => ({ ...f, open }))}>
         <DialogContent>
           <DialogHeader>
@@ -446,7 +446,7 @@ export default function LlmChannelsPanel() {
         </DialogContent>
       </Dialog>
 
-      {/* 删除确认 */}
+      {/* Delete confirmation */}
       <Dialog open={!!deleting} onOpenChange={(open) => { if (!open) setDeleting(null); }}>
         <DialogContent>
           <DialogHeader>

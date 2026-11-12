@@ -26,7 +26,7 @@ h1, h2, h3, h4, h5, h6 {
 
 #root { width: 100%; height: 100dvh; }
 
-/* Scrollbar — CRM thin 风格（细轨道圆角滑块，颜色随主题令牌） */
+/* Scrollbar — CRM thin style (thin track, rounded thumb, colors follow theme tokens) */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
@@ -51,7 +51,7 @@ h1, h2, h3, h4, h5, h6 {
   background: transparent;
 }
 
-/* ── Inputs — 全站唯一输入框规范（对齐 CRM shadcn input：h-8 白底 border-input，focus 主色 ring） ── */
+/* ── Inputs — the one site-wide input spec (aligned with CRM shadcn input: h-8 white bg border-input, focus primary ring) ── */
 .input-wrap { position: relative; }
 .input-base {
   width: 100%;
@@ -114,7 +114,7 @@ select.input-xs { padding-right: 28px; }
 }
 .input-with-leading { padding-left: 32px; }
 
-/* ── Sidebar nav hover（active 项通过 :not([data-active]) 避免被覆盖） ──────── */
+/* ── Sidebar nav hover (active items are protected via :not([data-active]) from being overridden) ──────── */
 .group-nav-item:not([data-active]):hover { background: var(--accent); }
 .group-nav-item { transition: background-color 0.16s ease-out; }
 
@@ -133,7 +133,7 @@ select:focus-visible {
 .list-row-clickable { transition: background 0.15s ease; }
 .list-row-clickable:hover { background: var(--muted); }
 
-/* ── Card hover lift（幅度收敛，与 CRM 克制的阴影一致） ───────────────────── */
+/* ── Card hover lift (restrained magnitude, matching CRM's subtle shadow) ───────────────────── */
 .hover-card {
   transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -143,22 +143,22 @@ select:focus-visible {
   transform: translateY(-1px);
 }
 
-/* ── Press affordance（按钮/可点行按下微缩） ─────────────────────────────── */
+/* ── Press affordance (slight shrink on press for buttons/clickable rows) ─────────────────────────────── */
 .press {
   transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
 }
 .press:active { transform: scale(0.97); }
 
-/* ── 按钮悬浮/按下反馈 ───────────────────────────────────────────────────────
-   两类按钮需要两种反馈方式：
-   - .btn-feedback   实心底按钮（发送/停止/确认执行）。背景是设计指定的实色，悬浮时
-     用 filter 提亮——filter 只作用于已渲染像素，不动元素自己的 background，
-     所以选中态/危险色都不会被冲掉。
-   - .btn-tint       透明底按钮（图标、Tab、链接式操作）。悬浮垫一层 muted 底 +
-     前景色转深。这类按钮的背景必须走 class，不能写在 inline style 上——行内样式
-     优先级高于任何 Tailwind hover:bg-*，写了就等于没有悬浮反馈。
-   .btn-sel 是配套的选中态修饰类（bg-[var(--muted)] 之类写在行内或 class 都行，
-   但它必须在 DOM 里作为独立 class 出现，不能只靠 Tailwind 动态拼接生成）。 */
+/* ── Button hover/press feedback ───────────────────────────────────────────────────────
+   Two button classes need two feedback styles:
+   - .btn-feedback   solid-background buttons (send/stop/confirm-execute). Background is a design-specified solid color; on hover
+     brighten with filter — filter acts only on rendered pixels, not the element's own background,
+     so selected states/danger colors are never washed out.
+   - .btn-tint       transparent-background buttons (icons, tabs, link-like actions). On hover lay down a muted base +
+     darken the foreground color. These buttons' background must go through class, never inline style — inline styles
+     outrank any Tailwind hover:bg-*, writing it there means no hover feedback at all.
+   .btn-sel is the companion selected-state modifier class (bg-[var(--muted)] etc. may be written inline or as class,
+   but it must appear in the DOM as a standalone class, not be generated via Tailwind dynamic concatenation). */
 .btn-feedback,
 .btn-tint {
   cursor: pointer;
@@ -173,13 +173,13 @@ select:focus-visible {
 .btn-tint:hover:not(:disabled) { background-color: var(--muted); color: var(--foreground); }
 .btn-tint:active:not(:disabled) { background-color: var(--accent); transform: scale(0.97); }
 
-/* 选中态底色。声明成普通类而非 Tailwind 任意值 bg-[…]：后者依赖 JIT 扫描到源码里的
-   完整字面量，动态拼接的 class 扫不到就会静默失效（选中态底色消失且无任何报错）。
-   .btn-sel 必须压过 .btn-tint:hover（悬浮态），否则鼠标扫过已选中的 Tab/线程
-   会把它的高亮冲成普通灰——两条规则同权重，靠源码里 .btn-sel 写在后面定序。 */
+/* Selected-state base color. Declared as a plain class rather than a Tailwind arbitrary value bg-[…]: the latter relies on the JIT
+   scanning the full literal in source; dynamically concatenated classes won't be scanned and silently fail (selected-state background vanishes with no error).
+   .btn-sel must outrank .btn-tint:hover (hover state), otherwise mousing over a selected tab/thread
+   washes its highlight into plain gray — the two rules share specificity, ordered by .btn-sel coming later in source. */
 .btn-sel { background-color: var(--primary-soft); color: var(--primary); }
 .btn-sel.btn-tint:hover:not(:disabled) { background-color: var(--primary-soft); }
-/* 新对话按钮的选中态用 muted（与 StagePanel 的 primary-soft tab 区分开） */
+/* The new-chat button's selected state uses muted (kept distinct from StagePanel's primary-soft tabs) */
 .btn-sel-muted { background-color: var(--muted); }
 
 /* ── Hairline dividers ───────────────────────────────────────────────────── */
@@ -190,16 +190,16 @@ select:focus-visible {
   border-top: 1px solid var(--border);
 }
 
-/* ── Status pulse（running 状态点） ───────────────────────────────────────── */
+/* ── Status pulse (running status dot) ───────────────────────────────────────── */
 @keyframes status-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
 .status-pulse { animation: status-pulse 2s ease-in-out infinite; }
 
-/* ── 数据集行切换器 chip（ReportDetail） ───────────────────────────────────
-   悬浮边框转 primary：背景/边框走 class 而非 inline style（行内样式会压过任何
-   hover 规则，见 .btn-tint 注释）；选中态由调用方 inline 覆盖边框与投影。 */
+/* ── Dataset row switcher chip (ReportDetail) ───────────────────────────────────
+   Hover border turns primary: background/border go through class, not inline style (inline styles outrank any
+   hover rule, see the .btn-tint comment); the selected state is overridden inline by the caller for border and shadow. */
 .rowchip {
   display: inline-flex;
   align-items: center;
@@ -220,7 +220,7 @@ select:focus-visible {
 .rowchip:hover:not(:disabled) { border-color: var(--primary); }
 .rowchip:active:not(:disabled) { transform: scale(0.95); }
 
-/* ── Brand glyph — beam（登录页 / 侧边栏 logo 用） ──────────────────────── */
+/* ── Brand glyph — beam (login page / sidebar logo) ──────────────────────── */
 @keyframes beam-rotate {
   0%   { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
@@ -259,7 +259,7 @@ select:focus-visible {
 }
 .popover-in { animation: popover-in 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
 
-/* ── AI 消息 markdown 排版（.md-body × react-markdown + gfm） ─────────────── */
+/* ── AI message markdown typography (.md-body × react-markdown + gfm) ─────────────── */
 .md-body { font-size: 13px; line-height: 1.65; color: var(--foreground); overflow-wrap: break-word; }
 .md-body > :first-child { margin-top: 0; }
 .md-body > :last-child { margin-bottom: 0; }
@@ -292,7 +292,7 @@ select:focus-visible {
 .md-body th { background: var(--muted); font-weight: 600; }
 .md-body img { max-width: 100%; border-radius: var(--radius-md); }
 
-/* ── 思考中三点（.thinking-dot，currentColor 着色） ────────────────────────── */
+/* ── Thinking dots (.thinking-dot, colored by currentColor) ────────────────────────── */
 @keyframes thinking-dot {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
   30% { transform: translateY(-3px); opacity: 1; }
@@ -318,7 +318,7 @@ select:focus-visible {
   }
 }
 
-/* ── Lightbox nav buttons (ReportDetail 截图放大) ─────────────────────────── */
+/* ── Lightbox nav buttons (ReportDetail screenshot zoom) ─────────────────────────── */
 .zoom-nav-btn {
   width: 40px;
   height: 40px;
@@ -342,8 +342,8 @@ select:focus-visible {
 .zoom-nav-btn:active:not(:disabled) { transform: scale(0.94); }
 .zoom-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
-/* ── 工作台内容区作用域 ──────────────────────────────────────────────
-   总览内容区包在 .workbench 里，明暗跟随全局 html.dark 主题。
-   这里只做「内容区铺底」，不再覆盖任何语义色 —— 工作台与产品其他
-   页面共用同一套 token（绿 --primary / --chart-*），避免出现「只有
-   工作台是橙色」的割裂感。 */
+/* ── Workbench content area scope ──────────────────────────────────────────────
+   The overview content area is wrapped in .workbench; light/dark follows the global html.dark theme.
+   This only does "content area base", no longer overriding any semantic colors — the workbench shares
+   the same token set as the product's other pages (green --primary / --chart-*), avoiding the
+   disjointed feel of "only the workbench is orange". */

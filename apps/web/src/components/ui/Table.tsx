@@ -1,9 +1,9 @@
 import { cn } from "../../lib/cn";
 import type * as React from "react";
 
-// CRM shadcn table primitive（crm/packages/ui/src/components/table.tsx 移植）。
-// `data-slot` 与样式类串完全对齐 CRM；DataTable / Reports / PlansTable 等上层
-// 表格组件以本文件为内核。
+// CRM shadcn table primitive (ported from crm/packages/ui/src/components/table.tsx).
+// `data-slot` and the style class strings fully align with CRM; upper-level table
+// components such as DataTable / Reports / PlansTable use this file as their core.
 
 function Table({
 	className,
@@ -85,7 +85,7 @@ function TableCaption({ className, ...props }: React.ComponentProps<"caption">) 
 	);
 }
 
-/** CRM EmptyCellValue：单元格空值占位「—」。 */
+/** CRM EmptyCellValue: em-dash placeholder for empty cell values. */
 function EmptyCellValue({ className }: { className?: string }) {
 	return <span className={cn("text-muted-foreground", className)}>—</span>;
 }

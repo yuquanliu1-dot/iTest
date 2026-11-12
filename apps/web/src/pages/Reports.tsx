@@ -40,11 +40,11 @@ const executionsParsers = {
 	statuses: parseAsArrayOf(parseAsString).withDefault([]),
 	versions: parseAsArrayOf(parseAsString).withDefault([]),
 	tab: parseAsStringEnum([...TAB_VALUES]).withDefault('all'),
-	// 范围切换：当前版本 / 产品线执行库（与用例列表页同款）；项目挂在产品线下才展示
+	// Scope switch: current version / product line execution library (same as the case list page); shown only when the project hangs under a product line
 	scope: parseAsStringEnum(['version', 'line']).withDefault('version'),
-	// 单用例深链：来自 GroupsPage「查看报告」按钮 → 把 q 固定为标题词
+	// Single-case deep link: from the GroupsPage "view report" button → pins q to the title word
 	caseId: parseAsString.withDefault(''),
-	// 单计划深链：来自 Plans「查看报告」按钮 → 把 tab 固定为 plan
+	// Single-plan deep link: from the Plans "view report" button → pins tab to plan
 	planId: parseAsString.withDefault(''),
 };
 
@@ -63,7 +63,7 @@ export default function Executions() {
 	const page = Math.max(1, Number(raw.page) || 1);
 	const pageSizeRaw = Number(raw.pageSize);
 	const pageSize = [10, 20, 50, 100].includes(pageSizeRaw) ? pageSizeRaw : 20;
-	/** 待确认删除的行（行内删除入口）；null = 未打开确认弹窗。batchCount：数据集批次行代表的报告数。 */
+	/** Row pending delete confirmation (inline delete entry); null = confirm dialog not open. batchCount: number of reports a dataset batch row stands for. */
 	const [confirmDelete, setConfirmDelete] = useState<{
 		kind: 'case' | 'plan';
 		id: string;
@@ -71,7 +71,7 @@ export default function Executions() {
 		batchCount?: number;
 	} | null>(null);
 
-	// 产品线归属：项目挂在某条产品线下时，头部出「当前版本 / 产品线执行库」范围切换
+	// Product line membership: when the project hangs under a product line, the header shows the "current version / product line execution library" scope switch
 	const { data: scopeProject } = useQuery({
 		queryKey: ['project', projectId],
 		queryFn: () => api.projects.get(projectId!),
@@ -89,7 +89,7 @@ export default function Executions() {
 				caseId: raw.caseId || undefined,
 				planId: raw.planId || undefined,
 			};
-			// 产品线执行库：跨项目拉整条线的执行历史（不传 projectId）；线 id 未加载前先按当前版本拉
+			// Product line execution library: fetch the whole line's execution history across projects (no projectId); before the line id loads, fetch by current version
 			if (onLineScope && productLineId) {
 				return api.executions.list({
 					...base,
@@ -97,22 +97,22 @@ export default function Executions() {
 					versionIds: raw.versions.length ? raw.versions : undefined,
 				});
 			}
-			// 「当前版本」范围恒定锁死当前版本（与用例列表页同款口径）——否则这里返回的是整个项目的
-			// 执行历史，「当前版本」这个开关形同虚设。
+			// The "current version" scope is always pinned to the current version (same convention as the case list page) — otherwise this returns the whole
+			// project's execution history and the "current version" switch becomes a no-op.
 			return api.executions.list({ ...base, projectId, versionIds: versionId ? [versionId] : undefined });
 		},
 		enabled: !!projectId,
 	});
 
-	// 产品线范围：版本 facet 换成整条线的版本集合
+	// Line scope: the version facet switches to the whole line's version set
 	const { data: lineVersionList } = useQuery({
 		queryKey: ['versions', 'line', productLineId],
 		queryFn: () => api.projects.versionsByProductLine(productLineId!),
 		enabled: !!productLineId && onLineScope,
 	});
 
-	// caseId 深链的标题：chip 上要显示用例名（否则用户只看到一个裸 UUID，
-	// 无从确认"正在看的是哪个用例"）。取不到就退回短 id，不阻塞列表渲染。
+	// Title for the caseId deep link: the chip must show the case name (otherwise the user sees only a bare UUID
+	// and cannot tell "which case is being viewed"). Fall back to the short id when unavailable, without blocking list rendering.
 	const { data: deepLinkedCase } = useQuery({
 		queryKey: ['case', raw.caseId],
 		queryFn: () => api.cases.get(raw.caseId!),
@@ -120,7 +120,7 @@ export default function Executions() {
 		retry: false,
 	});
 
-	// planId 深链同理：chip 显示计划名而非裸 UUID（计划被删时 404，退回短 id）。
+	// Same for the planId deep link: the chip shows the plan name instead of a bare UUID (plan deleted → 404, fall back to the short id).
 	const { data: deepLinkedPlan } = useQuery({
 		queryKey: ['plan', raw.planId],
 		queryFn: () => api.plans.get(raw.planId!),
@@ -128,9 +128,9 @@ export default function Executions() {
 		retry: false,
 	});
 
-	// case / plan 行均参与勾选；提交时按行类型分流到不同接口
+	// Both case and plan rows participate in selection; on submit, rows are routed by kind to different endpoints
 	const allRows = useMemo(() => data ?? [], [data]);
-	// 服务端一次返回所有行；这里在客户端按 page/pageSize 切片（与 GroupsPage 一致）。
+	// The server returns all rows at once; slicing by page/pageSize happens client-side here (consistent with GroupsPage).
 	const rows = useMemo(
 		() => allRows.slice((page - 1) * pageSize, page * pageSize),
 		[allRows, page, pageSize],
@@ -144,13 +144,13 @@ export default function Executions() {
 	const setVersionsFilter = (next: string[]) => void setRaw({ versions: next, page: '1' });
 	const setSearch = (next: string) => void setRaw({ q: next, page: '1' });
 	const setScope = (next: typeof scope) => void setRaw({ scope: next, page: '1' });
-	// 清除用例深链时连带清掉 q —— 旧深链会把标题塞进 q，两者与 caseId 是 AND 关系，
-	// 留着 q 会让"取消筛选"看起来没生效（搜索词仍在悄悄收窄结果）。
+	// Clearing the case deep link also clears q — old deep links stuffed the title into q, and both AND with caseId;
+	// keeping q makes "clear filter" look ineffective (the search term keeps quietly narrowing results).
 	const clearCaseFilter = () => void setRaw({ caseId: null, q: null, page: '1' });
 	const clearPlanFilter = () => void setRaw({ planId: null, page: '1' });
 
-	// 深链 chip：URL 里带了 caseId / planId 但页面上看不见的过滤器是最难查的一类问题——
-	// 用户改搜索词命中 0 条，却不知道有个看不见的条件在夹着。
+	// Deep link chip: filters present in the URL via caseId / planId but invisible on the page are the hardest class of bug to diagnose —
+	// the user changes the search term, hits 0 rows, and does not know an invisible condition is interfering.
 	const activeDeepLinkChip = raw.caseId ? (
 		<span
 			className="inline-flex max-w-[280px] items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
@@ -187,8 +187,8 @@ export default function Executions() {
 		</span>
 	) : null;
 
-	// 按行 kind 分桶后并行提交：case → /reports/batch-delete，plan → /plan-runs/batch-delete
-	// 数据集批次的单条记录代表 N 条 report：勾选一条即删整批（展开 memberReportIds）。
+	// Bucket by row kind then submit in parallel: case → /reports/batch-delete, plan → /plan-runs/batch-delete
+	// A single dataset batch record stands for N reports: checking one deletes the whole batch (memberReportIds expanded).
 	const batchDeleteReports = useMutation({
 		mutationFn: async (ids: string[]) => {
 			const idByKind = new Map<string, Set<string>>();
@@ -229,13 +229,13 @@ export default function Executions() {
 		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
-	// 单条删除计划运行：连带成员报告一起删（后端语义），删完刷新执行历史与统计
+	// Single delete of a plan run: member reports are deleted along with it (backend semantics); execution history and stats refresh afterwards
 	const deleteRun = useMutation({
 		mutationFn: (id: string) => api.planRuns.remove(id),
 		onSuccess: () => {
 			toast(t('plans:runDeletedToast'), 'success');
 			setConfirmDelete(null);
-			// 行勾选后单删：不清会把已删 id 留在 selection 里，批量栏一直显示残留勾选
+			// Single delete after row selection: without clearing, the deleted id stays in selection and the bulk bar keeps showing a stale check
 			selection.clear();
 			qc.invalidateQueries({ queryKey: ['executions'] });
 			qc.invalidateQueries({ queryKey: ['reports'] });
@@ -263,7 +263,7 @@ export default function Executions() {
 				{ value: 'running', label: t('reports:list.statusRunning') },
 			],
 		},
-		// 「当前版本」范围恒定锁死版本，这一维无意义；产品线范围才用来跨版本挑基线
+		// The "current version" scope is always pinned to the version, making this dimension meaningless; only line scope is used to pick baselines across versions
 		...(onLineScope
 			? [{
 				id: 'version',
@@ -349,8 +349,8 @@ export default function Executions() {
 			hideBelow: 'lg',
 			cellClassName: 'text-xs text-muted-foreground',
 			cell: (r) => {
-				// 用例行 = vision 断言 reason / 失败步 error；计划行 = 运行结论（N 通过 / M 失败）。
-				// 数据集批次（一条记录代表 N 行）= 批内通过 / 失败计数（单行断言对整批无意义）。
+				// Case row = vision assertion reason / failed step error; plan row = run conclusion (N passed / M failed).
+				// Dataset batch (one record stands for N rows) = within-batch passed / failed counts (a single-row assertion is meaningless for the whole batch).
 				const batchSize = (r as { batchSize?: number }).batchSize ?? 1;
 				if (r.kind === 'case' && batchSize > 1) {
 					const passed = (r as { batchPassed?: number }).batchPassed ?? 0;
@@ -406,15 +406,15 @@ export default function Executions() {
 			width: 'w-[44px]',
 			align: 'right',
 			hideable: false,
-			// 行内删除：计划运行连带成员报告删；用例报告（含数据集批次，确认弹窗里说明行数）
-			// 复用批量删除接口，与勾选删除同一套语义。
+			// Inline delete: plan runs delete member reports along; case reports (including dataset batches, row count explained in the confirm dialog)
+			// reuse the batch delete endpoint, same semantics as selection delete.
 			cell: (r) => (
 				<span className="flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
 					<IconButton
 						icon="trash"
 						title={r.kind === 'plan' ? t('plans:deleteRunTitle') : t('reports:delete.title')}
 						tone="destructive"
-						// 运行中禁止删除：执行器还在写成员表与报告表，删一半会留悬挂数据
+						// No delete while running: the executor is still writing the member and report tables; deleting halfway leaves dangling data
 						disabled={r.status === 'running'}
 						onClick={() => {
 							const batchSize = (r as { batchSize?: number }).batchSize ?? 1;
@@ -528,11 +528,11 @@ export default function Executions() {
 							</div>
 						)}
 						empty={
-							// 空态要说清"为什么空"。带 caseId 深链且停在单用例 tab 时，空列表最常见的
-							// 原因是：该用例只作为计划成员跑过（这批报告被 case 分支的 not exists 排除，
-							// 改从计划 tab 展示），而不是"这个用例从没执行过"。
-							// 只在 case tab 上引导——「所有」tab 本就含计划运行，为空说明真的什么都没有，
-							// 给一个跳去计划 tab 的按钮反而是死路。
+							// The empty state must explain "why it is empty". With a caseId deep link while on the case tab, the most common
+							// cause is: that case only ever ran as a plan member (those reports are excluded by the case branch's not exists
+							// and shown under the plan tab instead), not "this case never ran".
+							// Guide only on the case tab — the "all" tab already includes plan runs, so being empty there means truly nothing exists;
+							// a button jumping to the plan tab would be a dead end.
 							raw.caseId && tab === 'case' ? (
 								<EmptyState
 									icon="flag"

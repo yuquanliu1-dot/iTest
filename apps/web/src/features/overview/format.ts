@@ -1,6 +1,6 @@
-/** 工作台数字/时长格式化（纯函数，便于单测）。 */
+/** Workbench number/duration formatting (pure functions, easy to unit test). */
 
-/** ms → 「12m18s」/「42s」；null/undefined → '—' */
+/** ms → "12m18s" / "42s"; null/undefined → '—' */
 export function formatDuration(ms: number | null | undefined): string {
   if (ms == null) return '—';
   const totalSec = Math.round(ms / 1000);
@@ -10,7 +10,7 @@ export function formatDuration(ms: number | null | undefined): string {
   return s === 0 ? `${m}m` : `${m}m${s}s`;
 }
 
-/** 0..1 → 「86.4」（一位小数）；入参非有限数 → 0 */
+/** 0..1 → "86.4" (one decimal place); non-finite input → 0 */
 export function formatPct(rate: number): string {
   if (!Number.isFinite(rate)) return '0';
   return (rate * 100).toFixed(1).replace(/\.0$/, '');

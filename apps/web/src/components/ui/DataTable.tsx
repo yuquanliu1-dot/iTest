@@ -47,9 +47,9 @@ import {
 import type { TableQueryState } from "../../hooks/useTableQuery";
 import { cn } from "../../lib/cn";
 
-// ── 对齐 crm `@crm/ui/components/data-table` 的 API，但实现上少一些不必要的层
-//   （crm 还有 expandable/saved view 等高级特性，iTest 用例/报告表不需要）。
-//   样式类串 1:1 移植 crm，便于后续两边改动互相对齐。
+// ── Aligns with the crm `@crm/ui/components/data-table` API, but the implementation drops a few unnecessary layers
+//   (crm also has advanced features like expandable/saved views that iTest's case/report tables don't need).
+//   Style class strings are ported 1:1 from crm so future changes on both sides can stay aligned.
 
 export type DataTableColumn<TRow> = {
 	id: string;
@@ -113,7 +113,7 @@ export type DataTableProps<TRow> = {
 	empty?: ReactNode;
 	className?: string;
 	tableClassName?: string;
-	/** 容器：默认 CardPanel（CRM 风格）；调用方可传其他节点。 */
+	/** Container: CardPanel by default (CRM style); callers may pass another node. */
 	container?: ReactNode;
 };
 
@@ -129,8 +129,8 @@ const ALIGN_CLASS = {
 	center: "text-center",
 } as const;
 
-// 行高亮：与 crm `ROW_ACCENT` 等价（在 table 上靠 `hover:bg-muted/60`）。
-// 这里 TableRow 已自带 `hover:bg-muted/60`，不必再加。
+// Row highlight: equivalent to crm's `ROW_ACCENT` (on the table it relies on `hover:bg-muted/60`).
+// TableRow here already carries `hover:bg-muted/60`, so no need to add it again.
 
 function columnLabel<TRow>(column: DataTableColumn<TRow>): string {
 	if (column.label) return column.label;
@@ -166,7 +166,7 @@ function toggleArray(selected: string[], value: string, checked: boolean): strin
 	return checked ? [...selected, value] : selected.filter((v) => v !== value);
 }
 
-// ── 复刻 crm `FacetSubmenu`：无搜索 facet 走 DropdownMenuCheckboxItem 多选 ──
+// ── Mirrors crm's `FacetSubmenu`: search-less facets use DropdownMenuCheckboxItem multi-select ──
 function FacetSubmenu({
 	facet,
 	selected,
@@ -205,7 +205,7 @@ function FacetSubmenu({
 								<DropdownMenuCheckboxItem
 									key={opt.value}
 									checked={checked}
-									onSelect={(e) => e.preventDefault()} // 多选勾选不能关菜单（Radix 默认 select 即关）
+									onSelect={(e) => e.preventDefault()} // multi-select checks must not close the menu (Radix closes on select by default)
 										onCheckedChange={(next) => onChange(toggleArray(selected, opt.value, next === true))}
 								>
 									{opt.label}
@@ -219,13 +219,13 @@ function FacetSubmenu({
 	);
 }
 
-// ── 行选中上下文：DataTable 内层组件统一从同一 selection state 拿数据 ──
+// ── Row selection context: DataTable's inner components all read from the same selection state ──
 const SelectionContext = createContext<TableSelection | null>(null);
 function useSelection(): TableSelection | null {
 	return useContext(SelectionContext);
 }
 
-// ── 当前激活 Tab 单选下拉 ──
+// ── Active tab single-select dropdown ──
 function TabsMenu({ tabs, activeTab }: { tabs: DataTableTabs; activeTab: string }) {
 	const { setTab } = useQueryFromProps();
 	const opt = tabs.options.find((o) => o.value === activeTab);
@@ -254,8 +254,8 @@ function TabsMenu({ tabs, activeTab }: { tabs: DataTableTabs; activeTab: string 
 	);
 }
 
-// 用 module-level hook 引用 query state 的 setter。crm 用 prop drilling，这里走 context
-// 减少参数传递。DataTable 主组件用 Provider 注入 `{ setTab, setSort, setDir, ... }`。
+// Use module-level hooks to reference the query state setters. crm uses prop drilling; here we go through context
+// to reduce parameter passing. The DataTable main component injects `{ setTab, setSort, setDir, ... }` via Provider.
 type QueryActions = Pick<TableQueryState, "setTab" | "setSort" | "setDir" | "toggleSort">;
 const QueryActionsContext = createContext<QueryActions | null>(null);
 function useQueryFromProps(): QueryActions {
@@ -317,8 +317,8 @@ export function DataTable<TRow>({
 		[query.setTab, query.setSort, query.setDir, query.toggleSort],
 	);
 
-	// iTest `Pagination`：左槽显示 meta，共 N 条 + 每页条数 + 数字页码 + 跳页框，
-	// pageSize 走 nuqs URL 状态（query.setPageSize）。
+	// iTest `Pagination`: left slot shows meta — total N items + page size + numeric page buttons + jump box;
+	// pageSize lives in nuqs URL state (query.setPageSize).
 	const paginator = (
 		<Pagination
 			page={query.page}
@@ -566,7 +566,7 @@ export function DataTable<TRow>({
 				</div>
 			</div>
 
-			{/* 表格 + 容器：内层 flex 让表格占满剩余高度、分页器贴底不溢出 */}
+			{/* Table + container: the inner flex lets the table fill the remaining height and keeps the paginator pinned to the bottom without overflowing */}
 			{container ? (
 				<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
 					{container}
@@ -584,7 +584,7 @@ export function DataTable<TRow>({
 	);
 }
 
-// ── 选择 checkbox 内层组件：必填从 selection 拿数据 ──────────────────────
+// ── Selection checkbox inner components: required data comes from selection ──────────────────────
 function SelectionCheckboxHeader({ selection, rowCount }: { selection: DataTableSelection<never>; rowCount: number }) {
 	const s = selection.state;
 	const checked = s.allSelected ? true : s.someSelected ? "indeterminate" : false;
@@ -616,4 +616,4 @@ function SelectionCheckboxCell({ selection, rowId, rowLabel }: { selection: Data
 	);
 }
 
-// 旧的内嵌 Pagination 已由上方外部 Pagination 组件替代；此函数删除。
+// The old inline Pagination has been replaced by the external Pagination component above; that function was deleted.

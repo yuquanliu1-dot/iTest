@@ -28,9 +28,9 @@ import { splitUploadedFileTags, type UploadedFileMeta } from './uploadedFileTag'
 import { api, ApiError } from '../../api/client';
 
 /**
- * 空间助手对话流:只渲染 pi 契约的结构原语,运行时由 SpaceWorkspace 的
- * AssistantRuntimeProvider 提供。composer 上方为确认卡(confirm_request 事件驱动)。
- * 文本 part 走 markdown 渲染;工具调用渲染为图标 chip(进行中/完成/失败三态)。
+ * Space assistant conversation flow: renders only pi-contract structural primitives, runtime provided by
+ * SpaceWorkspace's AssistantRuntimeProvider. Above the composer sit confirm cards (confirm_request event driven).
+ * Text parts render as markdown; tool calls render as icon chips (running/done/failed three states).
  */
 export default function SpaceThreadPane({ threadId }: { threadId: string }) {
   const { t } = useTranslation();
@@ -40,12 +40,12 @@ export default function SpaceThreadPane({ threadId }: { threadId: string }) {
         <ThreadPrimitive.Viewport className="flex-1 min-h-0 overflow-y-auto px-4 py-5">
           <ThreadPrimitive.Messages components={{
             UserMessage,
-            // 反馈入口要拿到 threadId 才能提交，而 components 只能收组件类型（无 props 通道）
-            // —— 这里用闭包包一层把 threadId 注入进去。不接任何 props：消息正文由
-            // MessagePrimitive 通过 context 拿，wrapper 只负责注入 threadId。
+            // The feedback entry needs threadId to submit, while components only accept component types (no props channel)
+            // — so wrap with a closure to inject threadId. Takes no props: message body is fetched by
+            // MessagePrimitive through context, the wrapper only injects threadId.
             AssistantMessage: () => <AssistantMessage threadId={threadId} />,
           }} />
-          {/* 运行期常驻指示:工具间隙/模型静默期没有任何可见输出,靠底部三点动效提示会话仍在跑,避免"卡死"错觉 */}
+          {/* Always-visible running indicator: tool gaps/model silence periods have no visible output, bottom three-dot animation hints the thread is still alive, avoiding the "stuck" illusion */}
           <ThreadPrimitive.If running>
             <RunningIndicator />
           </ThreadPrimitive.If>
@@ -59,10 +59,10 @@ export default function SpaceThreadPane({ threadId }: { threadId: string }) {
           <ConfirmCard threadId={threadId} />
           <SuggestionRow />
           <ComposerPrimitive.Root className="flex items-end gap-2">
-            {/* 附件:AddAttachment 走 <input type=file>,Accept 由 CompositeAttachmentAdapter
-                把各 adapter(image/*、.docx/.xlsx+两 mime)的 accept 聚合后经 composer 状态读出,
-                这里不用再传 accept。图片在发送时转成 pi 的 ImageContent 随 input.attachments 上行;
-                文档(docx/xlsx)由 FileAttachmentAdapter 拼成 <uploaded-file/> 文本标签进正文。 */}
+            {/* Attachments: AddAttachment uses <input type=file>; Accept is aggregated by CompositeAttachmentAdapter
+                from each adapter's accept (image/*, .docx/.xlsx plus two mimes) and read via composer state,
+                no need to pass accept here. Images are converted to pi's ImageContent at send time, uploaded with input.attachments;
+                documents (docx/xlsx) are assembled by FileAttachmentAdapter into a <uploaded-file/> text tag into the body. */}
             <ComposerPrimitive.AttachmentDropzone className="flex min-w-0 flex-1 flex-col gap-1.5">
               <ComposerPrimitive.Attachments>
                 {({ attachment }) => <ComposerAttachment attachment={attachment} removeLabel={t('assistant:attachment.remove')} />}
@@ -108,10 +108,10 @@ export default function SpaceThreadPane({ threadId }: { threadId: string }) {
 }
 
 /**
- * 推荐追问 chip 行:AI 回答落定后由 SpaceWorkspace 的 SuggestionWatcher 拉取、经
- * runtime suggestions 通道下发(见该组件注释)。只在空闲态且有建议时渲染——空数组时
- * ThreadPrimitive.Suggestions 自身返回 null,但外层容器仍需靠 count 守卫,否则会留
- * 一个带 mb 的空 div 把 composer 顶下去。点一下即发送(send),对齐「追问」语义。
+ * Suggestion chip row: fetched by SpaceWorkspace's SuggestionWatcher after each AI answer settles, delivered via the
+ * runtime suggestions channel (see that component's comment). Rendered only when idle and suggestions exist —
+ * ThreadPrimitive.Suggestions itself returns null on empty arrays, but the outer container still needs the count guard,
+ * otherwise an empty div with mb remains and pushes the composer down. One click sends (send), matching the "follow-up" semantic.
  */
 function SuggestionRow() {
   const { t } = useTranslation();
@@ -130,7 +130,7 @@ function SuggestionRow() {
             className="btn-tint rounded-full border px-2.5 py-1 text-[12px] hover:border-[var(--muted-foreground)]"
             style={{ borderColor: 'var(--border)', background: 'var(--popover)', color: 'var(--foreground)' }}
           >
-            {/* 后端只给 prompt(ThreadSuggestion.title 可选),正文直接渲染 prompt 文本。 */}
+            {/* Backend only provides prompt (ThreadSuggestion.title optional); render the prompt text directly as the body. */}
             {suggestion.prompt}
           </SuggestionPrimitive.Trigger>
         )}
@@ -146,15 +146,15 @@ function UserMessage() {
         className="max-w-[85%] whitespace-pre-wrap rounded-[var(--radius-md)] rounded-br-sm px-3.5 py-2 text-[13px] leading-relaxed"
         style={{ background: 'var(--primary-soft)', color: 'var(--foreground)' }}
       >
-        {/* 附件必须给 Image 组件:assistant-ui 的默认 Image part 渲染是 null,
-            不覆盖的话用户发的截图在历史消息里完全不可见。 */}
+        {/* Attachments must be given the Image component: assistant-ui's default Image part renders null,
+            without this override user screenshots are completely invisible in history messages. */}
         <MessagePrimitive.Parts components={{ Image: UserImagePart, Text: UserTextPart }} />
       </div>
     </div>
   );
 }
 
-/** 用户消息里的图片 part。max-h 限制高度,避免一张竖长截图把整条消息撑到屏外。 */
+/** Image part in user messages. max-h caps height, keeping one tall screenshot from stretching the whole message off-screen. */
 function UserImagePart({ image }: { image: string }) {
   return (
     <img
@@ -165,8 +165,8 @@ function UserImagePart({ image }: { image: string }) {
   );
 }
 
-/** 用户消息文本 part：把 <uploaded-file …/> 引用标签折叠成附件 chip，其余原样。
- *  只做显示层变换——消息原文（含标签）保持原样进 pi 会话与对账 key。 */
+/** Text part in user messages: folds <uploaded-file …/> reference tags into attachment chips, rest unchanged.
+ *  Display-layer transform only — the message original (tags included) stays intact into the pi thread and the reconciliation key. */
 function UserTextPart({ text }: TextMessagePartProps) {
   const parts = splitUploadedFileTags(text);
   if (parts.length === 1 && typeof parts[0] === 'string') return <>{parts[0]}</>;
@@ -177,7 +177,7 @@ function UserTextPart({ text }: TextMessagePartProps) {
   );
 }
 
-/** 历史消息里的文档附件 chip：图标 + 文件名 + 字数。 */
+/** Document attachment chip in history messages: icon + filename + char count. */
 function UploadedFileChip({ meta }: { meta: UploadedFileMeta }) {
   const chars = meta.chars === 'unknown' ? '' : ` · ${Number(meta.chars).toLocaleString()} 字`;
   return (
@@ -192,19 +192,19 @@ function UploadedFileChip({ meta }: { meta: UploadedFileMeta }) {
   );
 }
 
-/** 文档附件判别（.docx/.xlsx）：contentType（浏览器给的 wordprocessingml/spreadsheetml mime）
- *  或扩展名兜底。不命中则按图片渲染（xlsx 落 img 分支会渲染空白框——这是最先暴露的回归点）。 */
+/** Document attachment detection (.docx/.xlsx): contentType (the browser-provided wordprocessingml/spreadsheetml mime)
+ *  or extension fallback. On no match renders as image (an xlsx falling into the img branch renders an empty box — the first regression to surface). */
 function isDocumentAttachment(a: Attachment): boolean {
   return /\.(docx|xlsx)$/i.test(a.name)
     || /wordprocessingml|spreadsheetml/i.test(a.contentType ?? '');
 }
 
-/** 输入框上方的待发送图片附件。
+/** Pending-send image attachments above the input box.
  *
- *  src 取两处：发送前 attachment 只有 File(adapter 的 add 阶段不读内容，状态是
- *  requires-action/composer-send)，走 objectURL；一旦进入提交/完成态就有了
- *  content 里的 dataURL，直接用。objectURL 必须随 file 变化重建并 revoke，
- *  放在渲染期调用会每次渲染泄漏一个 URL。 */
+ *  src comes from two places: before sending the attachment only has File (the adapter's add phase doesn't read content,
+ *  status is requires-action/composer-send), so use objectURL; once in submitted/done state there is a
+ *  dataURL in content, use it directly. objectURL must be rebuilt and revoked as file changes;
+ *  calling during render would leak one URL per render. */
 function ComposerAttachment({ attachment, removeLabel }: { attachment: Attachment; removeLabel: string }) {
   const dataUrl = (attachment.content as { image?: string }[] | undefined)?.[0]?.image;
   const objectUrl = useMemo(
@@ -252,12 +252,12 @@ function AssistantMessage({ threadId }: { threadId: string }) {
             Text: TextPart,
             Reasoning: ThinkingPart,
             tools: { Fallback: ToolActivity },
-            // pi 投影的压缩标记(role:'compactionSummary' 消息)落成该 data part,
-            // 不注册 renderer 就是空白块——注册后是可见的「上下文已压缩」分隔行。
+            // The compaction marker projected by pi (role:'compactionSummary' message) lands as this data part;
+            // without a registered renderer it's a blank block — registered it becomes the visible "context compacted" divider row.
             data: { by_name: { 'pi-compaction-summary': CompactionSummaryPart } },
           }}
         />
-        {/* LLM 失败(stopReason=error):错误原文必须可见,否则用户看到的是零反馈 */}
+        {/* LLM failure (stopReason=error): the raw error must be visible, otherwise the user sees zero feedback */}
         <ErrorPrimitive.Message
           className="mt-1.5 block w-fit max-w-full break-all rounded-[var(--radius-md)] px-2.5 py-1.5 text-[12px]"
           style={{
@@ -272,15 +272,15 @@ function AssistantMessage({ threadId }: { threadId: string }) {
   );
 }
 
-/** 运行指示:running=true 期间常驻消息列表底部(thinking-dot 三点动效,与思考中段同一视觉语言)。
- *  思考流期间隐藏本身:模型推理时消息内已渲染「思考中」,再叠一只底部三点动效就是两套同形动画。
- *  二者语义互补——思考中=模型在推理(跟着消息走),正在运行=工具调用间隙/模型静默期(线程整体存活)。 */
+/** Running indicator: pinned at the message list bottom while running=true (thinking-dot three-dot animation, same visual language as the thinking section).
+ *  Hides itself during thinking streams: while the model reasons the message already renders "thinking", stacking another bottom three-dot animation makes two same-shaped animations.
+ *  Semantics are complementary — thinking = the model is reasoning (follows the message), running = tool-call gaps/model silence (thread alive as a whole). */
 function RunningIndicator() {
   const { t } = useTranslation();
-  // 必须读 s.thread.messages[].parts（core 派生过 status 的 PartState），不能读
-  // message.content——那是 react-pi messageProjection 的原始投影，reasoning part 根本
-  // 没有 status 字段，p.status?.type==='running' 恒为 false，守卫形同虚设。
-  // ThinkingPart 显示的「思考中」正是同一份派生 status，两边口径一致才互斥。
+  // Must read s.thread.messages[].parts (PartState with status derived by core), not
+  // message.content — that is react-pi messageProjection's raw projection; the reasoning part has no
+  // status field at all, p.status?.type==='running' is always false, the guard would be useless.
+  // The "thinking" shown by ThinkingPart is exactly the same derived status; both sides must agree to be mutually exclusive.
   const thinkingActive = useAuiState((s) =>
     s.thread.messages.some((m) =>
       m.parts.some((p) => p.type === 'reasoning' && p.status.type === 'running'),
@@ -299,14 +299,14 @@ function RunningIndicator() {
   );
 }
 
-/** 文本 part → markdown 渲染（流式期间随文本增量重解析，量级可忽略）。 */
+/** Text part → markdown render (incrementally re-parsed as text streams in; magnitude negligible). */
 function TextPart({ text }: TextMessagePartProps) {
   return <Markdown text={text} />;
 }
 
-/** 压缩标记 part(pi 会话的 compaction entry 投影而来,快照合并后可能出现在流中部):
- *  居中分隔线 + token 数,摘要可折叠——它就是「这段之前的历史被压缩出模型上下文、
- *  由服务端按时间序拼回对话流」的原因注脚。 */
+/** Compaction marker part (projected from the pi thread's compaction entry, may appear mid-stream after snapshot merge):
+ *  centered divider + token count, summary collapsible — it is the reason footnote for "history before this point was compacted out of the
+ *  model context and stitched back into the conversation flow by the server in time order". */
 function CompactionSummaryPart({ data }: { data?: { summary?: string; tokensBefore?: number | null } }) {
   const { t } = useTranslation();
   return (
@@ -337,13 +337,13 @@ function CompactionSummaryPart({ data }: { data?: { summary?: string; tokensBefo
   );
 }
 
-/** 思考段：进行中给"思考中…"三点动画；完成后折叠成一行「已思考」，
- *  点击展开原始推理文本。推理文本是判断「模型为什么这么决策」的唯一信息源
- *  （尤其长任务失败时），不能像早期实现那样直接丢弃。 */
+/** Thinking section: while running shows a "thinking…" three-dot animation; when done collapses into a single "thought" row,
+ *  click to expand the raw reasoning text. The reasoning text is the only source for judging "why the model decided this way"
+ *  (especially for long-task failures), must not be discarded outright like the early implementation did. */
 function ThinkingPart({ status, text }: ReasoningMessagePartProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  // 折叠态下渲染 reasoning 全文代价高（大段思考可达数千 token），只在展开时挂载
+  // Rendering the full reasoning text in the collapsed state is costly (a large thought can reach thousands of tokens); mount only when expanded
   if (status.type !== 'running') {
     if (!text) return null;
     return (
@@ -381,13 +381,13 @@ function ThinkingPart({ status, text }: ReasoningMessagePartProps) {
   );
 }
 
-/** verify_case 实时进度卡：verify_progress SSE 事件驱动，逐条渲染步骤状态（运行中/通过/失败）。
- *  步骤明细可折叠：实测跑完会有十几步清单常驻输入框上方、挤占输入区——点标题行收起。 */
+/** verify_case live progress card: driven by verify_progress SSE events, renders step states one by one (running/passed/failed).
+ *  Step details are collapsible: a real run leaves a dozen-step list pinned above the input box, crowding the input area — click the title row to collapse. */
 function VerifyProgressCard() {
   const { t } = useTranslation();
   const vp = useSpaceEventsStore((s) => s.verifyProgress);
   const [open, setOpen] = useState(true);
-  // 新一轮实测（换用例）自动展开——上轮的折叠状态不该延续到新一轮。
+  // A new live run (different case) auto-expands — the previous round's collapsed state must not carry into the new round.
   const caseId = vp?.caseId;
   useEffect(() => { setOpen(true); }, [caseId]);
   if (!vp) return null;
@@ -397,7 +397,7 @@ function VerifyProgressCard() {
       className="fade-up mb-2 rounded-[var(--radius-md)] px-3 py-2 text-[12px]"
       style={{ background: 'var(--muted)', border: '1px solid var(--border)' }}
     >
-      {/* 实时画面已移到右侧栏（LiveViewRail），此处只留步骤进度 */}
+      {/* Live view moved to the right rail (LiveViewRail); only step progress remains here */}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -505,8 +505,8 @@ function VerifyProgressCard() {
   );
 }
 
-/** solidify_case 实时进度卡：solidify_progress SSE 事件驱动，单行指示（start/end 两相）。
- *  固化会真实再执行一遍用例，全程数分钟——单行 loader → 结果（固化数/保持数/失败原因）。 */
+/** solidify_case live progress card: driven by solidify_progress SSE events, single-line indicator (start/end phases).
+ *  Solidification actually re-executes the case, taking minutes — single-line loader → result (solidified count/kept count/failure reason). */
 function SolidifyProgressCard() {
   const { t } = useTranslation();
   const sp = useSpaceEventsStore((s) => s.solidifyProgress);
@@ -524,7 +524,7 @@ function SolidifyProgressCard() {
       className="fade-up mb-2 rounded-[var(--radius-md)] px-3 py-2 text-[12px]"
       style={{ background: 'var(--muted)', border: '1px solid var(--border)', color: 'var(--muted-foreground)' }}
     >
-      {/* 实时画面已移到右侧栏（LiveViewRail），此处只留单行状态 */}
+      {/* Live view moved to the right rail (LiveViewRail); only the single-line status remains here */}
       <div className="flex items-center gap-1.5">
       <Icon name="sparkles" size={12} style={{ flexShrink: 0 }} />
       <span className="truncate">
@@ -556,8 +556,8 @@ function SolidifyProgressCard() {
   );
 }
 
-/** AI 产出文件下载卡：artifact SSE 事件驱动，文件名+大小+下载按钮。
- *  不随新一轮对话清空——交付物常驻到线程结束/30min TTL 过后下载会 410（卡片仍在，点下载报错可感知）。 */
+/** AI-produced file download card: driven by artifact SSE events, filename+size+download button.
+ *  Not cleared when a new conversation round starts — deliverables persist until the thread ends/after the 30min TTL downloads 410 (card remains, clicking download errors visibly). */
 function ArtifactCards({ threadId }: { threadId: string }) {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
@@ -575,8 +575,8 @@ function ArtifactCards({ threadId }: { threadId: string }) {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
-      // 过期（410）/已被清扫（404）是被预期的失败态：token 30min TTL，给出含「让 AI 重新生成」的引导；
-      // 其余失败（网络断/500）走通用错误文案，避免把一切归因为过期。
+      // Expired (410)/already swept (404) are expected failure states: tokens have a 30min TTL, guide with "ask the AI to regenerate";
+      // other failures (network drop/500) use the generic error text, avoiding attributing everything to expiry.
       if (e instanceof ApiError && (e.status === 410 || e.status === 404)) {
         toast(t('assistant:artifact.expired'), 'error');
       } else {
@@ -611,12 +611,12 @@ function ArtifactCards({ threadId }: { threadId: string }) {
   );
 }
 
-/** 运行期状态提示：上下文压缩 / API 自动重试。
+/** Runtime status notice: context compaction / API auto-retry.
  *
- *  这两种状态在改之前都是「静默」的：压缩时模型突然沉默十几秒、自动重试时一段空白
- *  然后突然出结果——都表现为「界面卡住了」。数据全部来自 react-pi 已有的 PiThreadState
- *  （后端 mapSessionEvent 的 default 分支原样透传这些事件），此处只做展示。
- *  排队消息另有 QueuePanel（内容可见 + 可撤回），不在这里只报数量。 */
+ *  Both states were "silent" before this change: during compaction the model suddenly goes quiet for a dozen seconds, during auto-retry a blank
+ *  stretch then suddenly a result — both present as "the UI is stuck". Data comes entirely from react-pi's existing PiThreadState
+ *  (the backend's mapSessionEvent default branch passes these events through unchanged); this only displays.
+ *  Queued messages have their own QueuePanel (content visible + withdrawable); don't just report a count here. */
 function RuntimeNotice() {
   const { t } = useTranslation();
   const compaction = usePiThreadState((s) => s.compaction);
@@ -646,11 +646,11 @@ function RuntimeNotice() {
   );
 }
 
-/** 排队消息面板:运行中发送的消息先进 Pi 的服务端队列,不在对话流里。
- *  只显示「已排队 N 条」用户看不到自己刚发出去的话去了哪,也无从撤回——
- *  这里逐条列出原文,并提供「撤回」把内容还原回输入框。
- *  面板数据来自 ComposerPrimitive.Queue(react-pi 把 Pi 的 queue 适配到 composer.queue),
- *  撤回走 usePiRuntimeExtras().clearQueue → POST /queue/clear(见 router.ts)。 */
+/** Queued message panel: messages sent while running first enter Pi's server-side queue, not the conversation flow.
+ *  Showing only "N queued", the user can't see where their just-sent words went, nor withdraw them —
+ *  this lists each original text and provides "withdraw" to restore the content back into the input box.
+ *  Panel data comes from ComposerPrimitive.Queue (react-pi adapts Pi's queue to composer.queue);
+ *  withdraw goes through usePiRuntimeExtras().clearQueue → POST /queue/clear (see router.ts). */
 function QueuePanel() {
   const { t } = useTranslation();
   const extras = usePiRuntimeExtras();
@@ -663,7 +663,7 @@ function QueuePanel() {
     setBusy(true);
     try {
       const cleared = await extras.clearQueue();
-      // 还原文字:被撤回的排在输入框已有草稿之后,避免覆盖用户正在写的内容。
+      // Restore text: withdrawn content is appended after the existing draft in the input box, avoiding overwriting what the user is writing.
       const restored = [...cleared.steering, ...cleared.followUp].join('\n');
       aui.composer.setText([draft, restored].filter(Boolean).join('\n'));
     } finally {
@@ -718,9 +718,9 @@ function RuntimeNoticeRow({
   );
 }
 
-/** 工具调用 chip:进行中(loader 旋转)/完成(check)/失败(✗ destructive),让操作过程有渐进反馈。
- *  完成后可展开查看工具原始入参/出参——排查 isError 的工具时这是唯一信息源,
- *  chip 上的一行 summary 不足以定位问题(verify_case 的机械回放输出、repo_read 读到的代码都在这)。 */
+/** Tool call chip: running (loader spin)/done (check)/failed (✗ destructive), giving progressive feedback on the operation process.
+ *  After completion it expands to show the tool's raw input/output — when troubleshooting tools with isError this is the only source,
+ *  the one-line summary on the chip is not enough to locate the problem (verify_case's mechanical replay output, code read by repo_read are all here). */
 function ToolActivity(part: ToolCallMessagePartProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -768,22 +768,22 @@ function ToolActivity(part: ToolCallMessagePartProps) {
   );
 }
 
-/** 工具入参/出参的可读文本。空结果(ok/'' 之类)返回 null —— chip 保持不可展开,
- *  免得用户点开只看到一行 "ok"。 */
+/** Human-readable text for tool input/output. Empty results (ok/'' etc.) return null — the chip stays non-expandable,
+ *  so the user doesn't click open only to see a single line "ok". */
 function toolDetail(part: ToolCallMessagePartProps): string | null {
   const parts: string[] = [];
   const argsText = part.argsText?.trim();
   if (argsText && argsText !== '{}') parts.push(argsText);
   if (part.result !== undefined && !part.isPreliminary) {
-    // 工具结果统一是 { content: [{type:'text',text}], isError }（session.ts 的 defineTool 包装）
+    // Tool results are uniformly { content: [{type:'text',text}], isError } (session.ts's defineTool wrapper)
     const text = toolResultText(part.result);
     if (text && text !== 'ok') parts.push(text);
   }
   return parts.length > 0 ? parts.join('\n\n') : null;
 }
 
-/** 从工具出参里抽出人类可读正文。兼容两种形状：pi 的 { content:[{type:'text',text}] }
- *  和 reconcile 后 assistant-ui 可能给出的裸字符串。 */
+/** Extract human-readable body text from tool output. Handles two shapes: pi's { content:[{type:'text',text}] }
+ *  and the bare strings assistant-ui may give after reconcile. */
 function toolResultText(result: unknown): string {
   if (typeof result === 'string') return result.trim();
   if (result && typeof result === 'object' && 'content' in result) {

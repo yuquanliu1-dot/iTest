@@ -7,14 +7,14 @@ export interface KpiStripCardProps {
   iconName: string;
   to: string;
   suffix?: string;
-  /** 卡底分隔线下的脚注（如「待固化 214 步」） */
+  /** Footnote below the card's bottom divider (e.g. "214 steps pending solidify") */
   footLabel?: string;
 }
 
 /**
- * KPI 卡：图标章 + 大数值 + 可选脚注行。
- * 图标章统一中性底/中性色 —— 彩色留给判定（通过/失败），指标卡本身不表态。
- * 数值排版与主体一致（semibold + tabular-nums），脚注以 hairline 分隔。
+ * KPI card: icon chip + large value + optional footnote row.
+ * The icon chip is uniformly neutral bg/color — color is reserved for verdicts (pass/fail); the metric card itself takes no stance.
+ * Value typography matches the main body (semibold + tabular-nums); the footnote is separated by a hairline.
  */
 export default function KpiStripCard({ label, value, iconName, to, suffix, footLabel }: KpiStripCardProps) {
   const navigate = useNavigate();
@@ -53,7 +53,7 @@ export default function KpiStripCard({ label, value, iconName, to, suffix, footL
   );
 }
 
-/** 指标数值：等宽数字 + 可选百分号后缀 */
+/** Metric value: tabular numbers + optional percent suffix */
 function Value({ value, suffix }: { value: number | string; suffix?: string }) {
   return (
     <span

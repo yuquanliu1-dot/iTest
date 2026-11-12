@@ -1,6 +1,6 @@
 /**
- * 图表序列色与语义色集中导出,所有 recharts 组件必须从这里取色。
- * 颜色全部来自 design token(--chart-1..5),不在 TSX 写 hex。
+ * Central export of chart series and semantic colors; every recharts component must take colors from here.
+ * All colors come from design tokens (--chart-1..5); no hex literals in TSX.
  */
 export const chartColors = {
   chart1: 'var(--chart-1)',
@@ -20,14 +20,14 @@ export const chartColors = {
   foregroundSecondary: 'var(--muted-foreground)',
   foreground: 'var(--foreground)',
   border: 'var(--border)',
-  /** 中性序列色:只表示"有/无"这类事实,不承载判定语义 */
+  /** Neutral series color: expresses only "present/absent" facts, carries no verdict semantics */
   neutral: 'var(--muted-foreground)',
 } as const;
 
 /**
- * RCA 根因分类配色。与主体 RCA 徽章(RcaBlock.tsx)同源:
- * 系统缺陷红 / 环境黄 / 用例问题与其他灰。
- * 概览页的分布图与计划表徽标共用这一份,避免两处各写一套后漂移。
+ * RCA root-cause category colors. Same source as the main RCA badge (RcaBlock.tsx):
+ * system defect red / environment yellow / case issue and other gray.
+ * The overview distribution chart and plan table badges share this one table so the two don't drift apart.
  */
 export const RCA_CATEGORY_COLOR: Record<string, string> = {
   system_defect: 'var(--destructive)',
@@ -43,7 +43,7 @@ export const RCA_CATEGORY_BG: Record<string, string> = {
   other: 'var(--muted)',
 };
 
-/** recharts 通用 Tooltip 样式(由 chart 派生 ctx 组件使用)。 */
+/** Shared recharts tooltip styling (used by chart-derived ctx components). */
 export const tooltipContentStyle = {
   background: 'var(--popover)',
   border: '1px solid var(--border)',

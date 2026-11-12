@@ -15,7 +15,7 @@ import { LANG_STORAGE_KEY, readStoredLang, type Lang } from '../i18n';
 
 const FEATURE_ICONS = [Compass, Repeat, Bot, Database, Wrench, Bug, GitCompare, MonitorSmartphone];
 
-/** 特性卡在 12 栅格里的跨度：两张大卡 7+5，四张紧凑卡 3×4，两张中卡 6+6。避免等宽卡栅格的模板感 */
+/** Feature card spans on the 12-column grid: two large cards 7+5, four compact cards 3×4, two medium cards 6+6. Avoids the template feel of equal-width card grids */
 const FEATURE_SPANS = [
   'lg:col-span-7',
   'lg:col-span-5',
@@ -27,7 +27,7 @@ const FEATURE_SPANS = [
   'lg:col-span-6',
 ];
 
-/** 展示区四张真实界面截图，已按内容裁好取景：报告与探索两张全宽打头，两张并排垫底 */
+/** Four real UI screenshots for the showcase, framed per content: report and exploration lead full-width, two side-by-side ones close */
 const SHOT_IMAGES = [
   '/landing/showcase-report.png',
   '/landing/showcase-exploration.png',
@@ -35,16 +35,16 @@ const SHOT_IMAGES = [
   '/landing/showcase-case.png',
 ];
 
-/** 强调色文本：浅色用 --primary，深色换 --ring（浅绿），两者对底色均满足 4.5:1 */
+/** Accent-colored text: light mode uses --primary, dark mode switches to --ring (light green); both meet 4.5:1 against their background */
 const ACCENT_TEXT = 'text-[var(--primary)] dark:text-[var(--ring)]';
 
-/** 标题字号：英文是小写拉丁字母，字数与中文相当但字面宽，按小一号排才不会在窄栏里折行 */
+/** Headline font size: English uses lowercase Latin letters — similar character count to Chinese but wider glyphs, so one size smaller avoids wrapping in narrow columns */
 const HEADLINE_SIZE: Record<Lang, string> = {
   'zh-CN': 'text-[34px] lg:text-[44px]',
   'en-US': 'text-[28px] lg:text-[40px]',
 };
 
-/** 导航锚点，顺序与页面区块一致；桌面横排，窄屏收进菜单 */
+/** Nav anchors, in the same order as the page sections; horizontal on desktop, folded into the menu on narrow screens */
 const NAV_LINKS = [
   { href: '#pains', key: 'nav.pains' },
   { href: '#showcase', key: 'nav.screenshots' },
@@ -52,7 +52,7 @@ const NAV_LINKS = [
   { href: '#workflow', key: 'nav.workflow' },
 ];
 
-/** 产品对外介绍页（公开路由，无 AuthGuard）。截图区为真实界面素材。 */
+/** Product marketing page (public route, no AuthGuard). Screenshot area uses real UI material. */
 export default function LandingPage() {
   const { t } = useTranslation('landing');
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -64,7 +64,7 @@ export default function LandingPage() {
     try {
       localStorage.setItem(LANG_STORAGE_KEY, next);
     } catch {
-      /* private mode 等场景写不进去也无妨，当前会话语言已生效 */
+      /* Fine if the write fails (private mode etc.); the language is already in effect for this session */
     }
     applyLang(next);
   };
@@ -90,7 +90,7 @@ export default function LandingPage() {
 
 type T = ReturnType<typeof useTranslation>['t'];
 
-/* ---------- 吸顶导航 ---------- */
+/* ---------- Sticky nav ---------- */
 
 function Nav({ lang, onSwitchLang, ctaTarget, ctaLabel }: {
   lang: Lang;
@@ -160,7 +160,7 @@ function Nav({ lang, onSwitchLang, ctaTarget, ctaLabel }: {
   );
 }
 
-/* ---------- Hero：左文右产品界面 ---------- */
+/* ---------- Hero: text left, product UI right ---------- */
 
 function Hero({ t, ctaTarget, lang }: { t: T; ctaTarget: string; lang: Lang }) {
   return (
@@ -226,7 +226,7 @@ function Hero({ t, ctaTarget, lang }: { t: T; ctaTarget: string; lang: Lang }) {
   );
 }
 
-/* ---------- 痛点：左标题 + 右编号清单 ---------- */
+/* ---------- Pain points: title left + numbered list right ---------- */
 
 function PainPoints({ t }: { t: T }) {
   const items = t('pains.items', { returnObjects: true }) as { title: string; desc: string }[];
@@ -272,7 +272,7 @@ function PainPoints({ t }: { t: T }) {
   );
 }
 
-/* ---------- 产品预览：两张全宽旗舰图 + 两张并排 ---------- */
+/* ---------- Product preview: two full-width flagship shots + two side by side ---------- */
 
 function Showcase({ t }: { t: T }) {
   const shots = t('showcase.shots', { returnObjects: true }) as { title: string; desc: string }[];
@@ -287,7 +287,7 @@ function Showcase({ t }: { t: T }) {
           {t('showcase.subtitle')}
         </p>
       </header>
-      {/* 两张全宽：执行报告（页面签名元素）与探索式测试（新能力旗舰） */}
+      {/* Two full-width: execution report (the page's signature element) and exploratory testing (flagship new capability) */}
       {wide.map((shot, i) => (
         <figure key={shot.title} className={i === 0 ? 'mt-10' : 'mt-12'}>
           <div
@@ -336,7 +336,7 @@ function Showcase({ t }: { t: T }) {
   );
 }
 
-/* ---------- 特性：12 栅格大小混排 ---------- */
+/* ---------- Features: mixed sizes on a 12-column grid ---------- */
 
 function Features({ t }: { t: T }) {
   const items = t('features.items', { returnObjects: true }) as { title: string; desc: string }[];
@@ -377,7 +377,7 @@ function Features({ t }: { t: T }) {
   );
 }
 
-/* ---------- 工作流：一条轨迹线串四步 ---------- */
+/* ---------- Workflow: one trail line linking four steps ---------- */
 
 function Workflow({ t }: { t: T }) {
   const steps = t('workflow.steps', { returnObjects: true }) as { title: string; desc: string }[];
@@ -415,7 +415,7 @@ function Workflow({ t }: { t: T }) {
   );
 }
 
-/* ---------- 底部 CTA + 页脚 ---------- */
+/* ---------- Bottom CTA + footer ---------- */
 
 function FinalCta({ t, ctaTarget }: { t: T; ctaTarget: string }) {
   return (
@@ -474,7 +474,7 @@ function Footer({ t }: { t: T }) {
   );
 }
 
-/* ---------- 共用：区块标签（报告式证据编号） ---------- */
+/* ---------- Shared: section label (report-style evidence numbering) ---------- */
 
 function SectionLabel({ index, children }: { index: string; children: ReactNode }) {
   return (

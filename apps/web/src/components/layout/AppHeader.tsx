@@ -8,8 +8,8 @@ import RecorderExtensionBadge from './RecorderExtensionBadge';
 import { Separator } from '../ui/shadcn/separator';
 
 /**
- * 48px 顶栏（CRM app-header）：左 logo + 工作区名，右头像菜单。
- * 主题切换入口在 UserMenu 下拉里（CRM 模式）；返回项目选择页走左侧栏「项目」。
+ * 48px top bar (CRM app-header): logo + workspace name on the left, avatar menu on the right.
+ * The theme toggle lives in the UserMenu dropdown (CRM mode); returning to the project selection page goes through "Projects" in the left rail.
  */
 export default function AppHeader() {
   const { t } = useTranslation();
@@ -19,7 +19,7 @@ export default function AppHeader() {
   const activeOrgName = useAuthStore(
     (s) => s.organizations.find((o) => o.id === s.activeOrgId)?.name,
   );
-  // 组织级页面（成员/系统配置）URL 无项目段时回退 store 上下文，标题保持「项目 · 版本」
+  // Org-level pages (members/system settings) fall back to store context when the URL has no project segment, so the title keeps "Project · Version"
   const onAdminPage = pathname.startsWith('/members') || pathname.startsWith('/settings');
   const inProject = Boolean(projectId) || (onAdminPage && Boolean(current));
 

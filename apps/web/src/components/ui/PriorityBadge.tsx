@@ -1,4 +1,4 @@
-/** P0-P3 → iDO priority 徽章色（urgent/high/medium/low token 组） */
+/** P0-P3 → iDO priority badge colors (urgent/high/medium/low token groups) */
 const priorityStyle: Record<string, { bg: string; text: string }> = {
   P0: { bg: 'var(--priority-urgent-bg)', text: 'var(--priority-urgent-text)' },
   P1: { bg: 'var(--priority-high-bg)', text: 'var(--priority-high-text)' },

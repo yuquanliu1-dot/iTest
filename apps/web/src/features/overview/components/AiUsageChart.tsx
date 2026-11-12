@@ -6,12 +6,12 @@ import type { OverviewResponse } from '../api';
 
 type AiUsage = OverviewResponse['aiUsage'];
 
-/** 「2026-10-09」→「10-09」：轴上只留月日，全量日期留给 tooltip */
+/** "2026-10-09" → "10-09": the axis keeps only month-day; the full date goes to the tooltip */
 function shortDate(v: string): string {
   return v.length >= 10 ? v.slice(5) : v;
 }
 
-/** AI 用量：日灰柱 = AI 调用次数，绿线 = 自愈成功步数（绿=好结果，与通过率趋势同义）。 */
+/** AI usage: daily gray bars = AI call count, green line = self-healed step count (green = good outcome, same semantics as the pass-rate trend). */
 export default function AiUsageChart({ data, days }: { data: AiUsage; days: number }) {
   const { t } = useTranslation();
   return (

@@ -19,7 +19,7 @@ import { creatorName } from '../lib/creatorName';
 
 type Strategy = 'run_all' | 'fail_fast';
 
-/** 添加用例弹窗的过滤选中集：每维一组 value（多选并集）。 */
+/** Filter selection set for the add-cases dialog: one group of values per dimension (multi-select union). */
 type AddFilters = {
   groups: string[];
   versions: string[];
@@ -47,10 +47,10 @@ export default function PlanDetail() {
   const [showDelete, setShowDelete] = useState(false);
   const [selectedAdd, setSelectedAdd] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
-  /** 加用例弹窗的目标分组：由打开入口锁定（组卡按钮=本组；无组计划走顶部按钮=后端自动建默认分组）。 */
+  /** Target group of the add-cases dialog: locked by the opening entry (group-card button = this group; no-group plans use the top button = backend auto-creates a default group). */
   const [targetGroupId, setTargetGroupId] = useState('');
 
-  /** 计划所属项目的归属信息：决定用例池是否跨产品线取（未归线的项目池子与现状完全一致）。 */
+  /** Line-membership info of the plan's project: decides whether the case pool spans the product line (a non-line project's pool is exactly the same as today). */
   const { data: planProject } = useQuery({
     queryKey: ['project', plan?.projectId],
     queryFn: () => api.projects.get(plan!.projectId),
@@ -67,8 +67,8 @@ export default function PlanDetail() {
     enabled: !!projectId,
   });
 
-  /** 添加用例弹窗的过滤维度选项：分组名 / 版本名 / 标签名靠三处 GET 提供（值与选中集在前端本地筛）。
-   *  产品线项目下改取线内跨项目的分组/版本，否则筛选菜单只有本项目的选项。 */
+  /** Filter dimension options for the add-cases dialog: group names / version names / tag names come from three GETs (values and selection are filtered locally on the frontend).
+   *  Under line projects, switch to line-wide cross-project groups/versions, otherwise the filter menu only offers this project's options. */
   const { data: projectGroups } = useQuery({
     queryKey: ['groups', productLineId ?? projectId],
     queryFn: () =>
@@ -91,31 +91,31 @@ export default function PlanDetail() {
     enabled: !!projectId,
   });
 
-  /** 添加用例弹窗过滤：每维多选（并集），维度间取交集。弹窗每次打开重置为空。 */
+  /** Add-cases dialog filters: each dimension multi-select (union), dimensions intersected. Reset to empty each time the dialog opens. */
   const EMPTY_ADD_FILTERS: AddFilters = { groups: [], versions: [], statuses: [], priorities: [], tags: [], projects: [] };
   const [addFilters, setAddFilters] = useState<AddFilters>(EMPTY_ADD_FILTERS);
   const hasAddFilter = addFilters.groups.length > 0 || addFilters.versions.length > 0
     || addFilters.statuses.length > 0 || addFilters.priorities.length > 0 || addFilters.tags.length > 0
     || addFilters.projects.length > 0;
 
-  /** 已在计划的用例 id：候选不再过滤（跨组重复合法），仅在行尾标「已在计划」。 */
+  /** Case ids already in the plan: candidates are no longer filtered out (cross-group duplicates are legal), rows are just marked "already in plan" at the end. */
   const inPlanIds = useMemo(() => new Set((plan?.cases ?? []).map((c) => c.id)), [plan]);
   const candidates = useMemo(() => {
     let list = [...(allCases ?? [])];
-    // 状态/标签走前端本地筛（GET /cases 不接这两个参数，与 GroupsPage 一致）
+    // Status/tags are filtered locally on the frontend (GET /cases does not take these two params, consistent with GroupsPage)
     if (addFilters.groups.length) list = list.filter((c) => addFilters.groups.includes(c.groupId ?? ''));
     if (addFilters.versions.length) list = list.filter((c) => c.versionId != null && addFilters.versions.includes(c.versionId));
     if (addFilters.projects.length) list = list.filter((c) => addFilters.projects.includes(c.projectId ?? ''));
     if (addFilters.statuses.length) list = list.filter((c) => addFilters.statuses.includes(c.status));
     if (addFilters.priorities.length) list = list.filter((c) => addFilters.priorities.includes(c.priority));
     if (addFilters.tags.length) list = list.filter((c) => (c.tags ?? []).some((t) => addFilters.tags.includes(t.id)));
-    // 搜索：大小写不敏感，标题或标签名命中任一即保留
+    // Search: case-insensitive; a case survives if its title or any tag name matches
     const q = search.trim().toLowerCase();
     if (q) list = list.filter((c) => c.title.toLowerCase().includes(q) || (c.tags ?? []).some((tg) => tg.name.toLowerCase().includes(q)));
     return list;
   }, [allCases, addFilters, search]);
 
-  /** 产品线项目下的「项目」筛选项：从候选池反推，避免多发一次 GET。 */
+  /** "Project" filter options under line projects: reverse-derived from the candidate pool, avoiding one extra GET. */
   const projectOptions = useMemo(() => {
     const m = new Map<string, string>();
     for (const c of allCases ?? []) {
@@ -124,10 +124,10 @@ export default function PlanDetail() {
     return [...m.entries()].map(([value, label]) => ({ value, label }));
   }, [allCases]);
 
-  /** 筛选维度描述：维度按钮行与 chips 行共用一份（顺序即按钮顺序：分组/项目/版本/标签/优先级/状态）。 */
+  /** Filter dimension descriptors: shared by the dimension button row and the chips row (order = button order: group/project/version/tag/priority/status). */
   const filterDimensions: Array<{ key: keyof AddFilters; label: string; options: Array<{ value: string; label: string }> }> = [
     { key: 'groups', label: t('groups:group'), options: (projectGroups ?? []).map((g) => ({ value: g.id, label: g.name })) },
-    // 产品线项目才需要「项目」维度：未归线时池子里只有本项目用例，这一维恒为单值
+    // Only line projects need the "project" dimension: when not in a line the pool holds only this project's cases, so this dimension is always single-valued
     ...(productLineId && projectOptions.length > 1
       ? [{ key: 'projects' as const, label: t('productLines:project'), options: projectOptions }]
       : []),
@@ -137,7 +137,7 @@ export default function PlanDetail() {
     { key: 'statuses', label: t('groups:statusLabel'), options: (['draft', 'review', 'ready', 'deprecated'] as const).map((s) => ({ value: s, label: t(caseStatusLabel(s)) })) },
   ];
 
-  /** 全选筛选结果：勾=并入当前筛选命中的全部 id；取消=只移除可见 id（隐藏项的选择保留）。 */
+  /** Select all filtered results: check = merge in all ids hit by the current filter; uncheck = remove only visible ids (hidden items keep their selection). */
   const visibleSelectedCount = candidates.reduce((n, c) => n + (selectedAdd.has(c.id) ? 1 : 0), 0);
   const allCandidatesSelected = candidates.length > 0 && visibleSelectedCount === candidates.length;
   const someCandidatesSelected = visibleSelectedCount > 0 && !allCandidatesSelected;
@@ -148,7 +148,7 @@ export default function PlanDetail() {
     setSelectedAdd(next);
   };
 
-  /** 登录准备候选：任一组启用登录准备才需要（组卡内本地按标题过滤）。 */
+  /** Login-prepare candidates: needed when any group enables login prepare (filtered locally by title within the group card). */
   const { data: loginCases } = useQuery({
     queryKey: ['plan', id, 'login-cases'],
     queryFn: () => api.plans.loginCases(id!),
@@ -205,7 +205,7 @@ export default function PlanDetail() {
   const run = useMutation({
     mutationFn: () => api.plans.run(id!),
     onSuccess: (r) => {
-      // 执行即跳运行详情页：running 中实时画面 + 2s 轮询到完成，中止按钮在 PlanRunDetail 内。
+      // Run jumps to the run detail page: live view while running + 2s polling until done; the abort button lives in PlanRunDetail.
       qc.invalidateQueries({ queryKey: ['executions'] });
       navigate(versionId ? `/p/${projectId}/v/${versionId}/plans/${id}/runs/${r.runId}` : `/`);
     },
@@ -213,7 +213,7 @@ export default function PlanDetail() {
   });
 
   useEffect(() => {
-    // 目标分组由打开入口决定（组卡按钮=本组；无组计划走顶部按钮=后端自动建默认分组）
+    // Target group is decided by the opening entry (group-card button = this group; no-group plans use the top button = backend auto-creates a default group)
     if (showAdd) setSelectedAdd(new Set());
   }, [showAdd]);
 
@@ -248,7 +248,7 @@ export default function PlanDetail() {
           {t('plans:backToList')}
         </Button>
         <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
-        {/* 计划名称行内可编辑：点标题改，走 PATCH /plans/:id { name } */}
+        {/* Plan name inline-editable: click the title to edit, goes through PATCH /plans/:id { name } */}
         <InlineEdit
           value={plan.name}
           disabled={patchPlan.isPending}
@@ -272,7 +272,7 @@ export default function PlanDetail() {
           <Icon name="plus" size={12} />
           {t('plans:addGroup')}
         </Button>
-        {/* 有分组时添加入口在各组卡内；顶部按钮仅无组计划保留（后端自动建默认分组） */}
+        {/* With groups, the add entry lives in each group card; the top button remains only for no-group plans (backend auto-creates a default group) */}
         {plan.groups.length === 0 && (
           <Button variant="ghost" onClick={() => { setTargetGroupId(''); setAddFilters(EMPTY_ADD_FILTERS); setSearch(''); setShowAdd(true); }}>
             <Icon name="plus" size={12} />
@@ -294,12 +294,12 @@ export default function PlanDetail() {
         </Button>
       </div>
 
-      {/* 滚动容器全宽（滚动条贴视口右缘），clamp 限宽居中放内层——同 PageShell 的 scroll/clamp 两层结构，
-          clamp 放滚动层上会让滚动条悬在限宽容器边缘而不是屏幕最右 */}
+      {/* Scroll container full-width (scrollbar hugs the viewport's right edge), the clamp-width centered wrapper sits inside — same scroll/clamp two-layer structure as PageShell;
+          putting the clamp on the scroll layer would leave the scrollbar hanging at the clamped container's edge instead of the screen's far right */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="p-6 flex flex-col gap-4 mx-auto w-full max-w-[min(100%-2rem,100rem)]">
         <div className="bg-card border rounded-[var(--radius-md)] p-5">
-          {/* input-base 默认 width:100%，flex 行内会把标签挤到竖排；控件 flex-1 弹性填充 + 标签 shrink-0 */}
+          {/* input-base defaults to width:100%, which squeezes the label into vertical stacking inside a flex row; the control gets flex-1 elastic fill + the label shrink-0 */}
           <div className="flex items-center gap-4">
             <span className="text-[12px] shrink-0" style={{ color: 'var(--muted-foreground)' }}>{t('plans:strategy')}</span>
             <select
@@ -370,8 +370,8 @@ export default function PlanDetail() {
       </div>
 
       <Dialog open={showAdd} onOpenChange={setShowAdd}>
-        {/* flex 纵列改写默认 grid 单块滚动:弹窗贴 85vh 上限时只有用例列表内滚
-            (flex-1 min-h-0),搜索/筛选区与 footer 常驻,消除从前的双层滚动。 */}
+        {/* Flex column overrides the default grid single-block scrolling: when the dialog hits its 85vh cap, only the case list scrolls inside
+            (flex-1 min-h-0) while the search/filter area and footer stay put, eliminating the former double-layer scrolling. */}
         <DialogContent className="flex flex-col overflow-hidden" style={{ maxWidth: 720 }}>
           <DialogHeader>
             <DialogTitle>{t('plans:addCases')}</DialogTitle>
@@ -388,7 +388,7 @@ export default function PlanDetail() {
                 className="input-base input-sm input-with-leading"
               />
             </div>
-            {/* 维度按钮行：每个维度单击展开扁平多选，勾选不关弹层 */}
+            {/* Dimension button row: each dimension expands a flat multi-select on click; checking does not close the popover */}
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               {filterDimensions.map((d) => (
                 <DimensionPicker
@@ -400,7 +400,7 @@ export default function PlanDetail() {
                 />
               ))}
             </div>
-            {/* 激活条件 chips：一眼可见、逐个可删；搜索词也是一枚 chip */}
+            {/* Active filter chips: visible at a glance, removable one by one; the search term is also a chip */}
             {(hasAddFilter || search.trim()) && (
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 {filterDimensions.flatMap((d) =>
@@ -430,7 +430,7 @@ export default function PlanDetail() {
             )}
           </div>
           <div className="flex-1 min-h-0 px-5 pb-4 overflow-y-auto flex flex-col gap-1">
-            {/* 全选筛选结果：含「已在计划」/deprecated 行（跨组重复合法，与手点一致） */}
+            {/* Select all filtered results: includes "already in plan"/deprecated rows (cross-group duplicates are legal, same as clicking manually) */}
             {candidates.length > 0 && (
               <div
                 className="sticky top-0 z-10 flex items-center gap-2 px-3 py-2 hairline-bottom"
@@ -470,7 +470,7 @@ export default function PlanDetail() {
                   >
                     <input type="checkbox" readOnly checked={checked} />
                     <span className="text-[12px] flex-1 truncate" style={{ color: 'var(--foreground)' }}>{c.title}</span>
-                    {/* 跨组重复合法：已在计划的候选仍可勾选（加入其他分组），仅提示不拦 */}
+                    {/* Cross-group duplicates are legal: candidates already in the plan can still be checked (into another group), hint only, no blocking */}
                     {inPlan && (
                       <span
                         className="text-[10px] font-semibold px-1.5 py-[1px] rounded shrink-0"
@@ -479,7 +479,7 @@ export default function PlanDetail() {
                         {t('plans:alreadyInPlan')}
                       </span>
                     )}
-                    {/* 跨项目候选行标出来源项目，避免用户在计划里混进自己没注意的兄弟项目用例 */}
+                    {/* Cross-project candidate rows are marked with their source project, so users do not unknowingly mix sibling projects' cases into the plan */}
                     {productLineId && c.projectId && c.projectId !== projectId && (
                       <span
                         className="text-[10px] font-semibold px-1.5 py-[1px] rounded shrink-0"
@@ -501,7 +501,7 @@ export default function PlanDetail() {
           <DialogFooter className="shrink-0 px-5 py-4 hairline-top" style={{ borderColor: 'var(--border)' }}>
             <span className="text-[12px] mr-auto flex items-center gap-2" style={{ color: 'var(--muted-foreground)' }}>
               {t('plans:selectedCount', { count: selectedAdd.size })}
-              {/* 目标分组由打开入口锁定（组卡按钮），此处仅展示去向 */}
+              {/* Target group is locked by the opening entry (group-card button); this only shows where cases will land */}
               {t('plans:targetGroup')}
               <span className="font-semibold" style={{ color: 'var(--foreground)' }}>
                 {plan.groups.find((g) => g.id === targetGroupId)?.name ?? t('plans:newGroupName')}
@@ -549,8 +549,8 @@ export default function PlanDetail() {
   );
 }
 
-/** 添加用例弹窗的单维度筛选器：单击展开的扁平多选 Popover（勾选不关弹层；>8 项带迷你搜索）。
- *  触发器三态：未选=维度名；单选=「维度 · 选项名」；多选=「维度 · N 项」。 */
+/** Single-dimension filter for the add-cases dialog: a flat multi-select Popover that expands on click (checking does not close it; mini search when >8 options).
+ *  Trigger has three states: none selected = dimension name; single = "dimension · option name"; multiple = "dimension · N items". */
 function DimensionPicker({
   label,
   options,
@@ -639,7 +639,7 @@ function DimensionPicker({
   );
 }
 
-/** 激活筛选条件 chip：中性底色 + × 单击移除（镜像 TagChip 结构，但不绑定标签色）。 */
+/** Active filter chip: neutral background + a × that removes on click (mirrors TagChip's structure but not bound to tag colors). */
 function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
   const { t } = useTranslation();
   return (

@@ -51,7 +51,7 @@ const MAX_TAG_CHIPS = 3;
 const STATUS_FILTER_VALUES = ['', 'draft', 'review', 'ready', 'deprecated'] as const;
 const TAB_VALUES = ['all', 'draft', 'review', 'ready', 'deprecated'] as const;
 const PRIORITY_VALUES = ['', 'P0', 'P1', 'P2', 'P3'] as const;
-/** 用例池范围：当前版本 / 整条产品线（跨项目跨版本，作为共享用例库） */
+/** Case pool scope: current version / whole product line (cross-project cross-version, as a shared case library) */
 const SCOPE_VALUES = ['version', 'line'] as const;
 
 const caseParsers = {
@@ -65,10 +65,10 @@ const caseParsers = {
 	tag: parseAsArrayOf(parseAsString).withDefault([]),
 	versions: parseAsArrayOf(parseAsString).withDefault([]),
 	solidified: parseAsArrayOf(parseAsString).withDefault([]),
-	// 我触发的批次 id（离页/刷新回来仍能续上「这批已完成」的提示）
+	// Batch id I triggered (survives leaving the page/refreshing, so the "this batch finished" notice can still reconnect)
 	solidifyBatchId: parseAsString.withDefault(''),
 	tab: parseAsStringEnum([...TAB_VALUES]).withDefault('all'),
-	// tab 已被状态筛选占用，范围 tab 另起一个 key
+	// tab is already taken by status filtering, so the scope tab gets its own key
 	scope: parseAsStringEnum([...SCOPE_VALUES]).withDefault('version'),
 };
 
@@ -125,8 +125,8 @@ export default function GroupsPage() {
 	});
 	const productLineId = scopeProject?.productLineId ?? null;
 
-	// 分组计数随范围与版本筛选走：当前版本锁死当前版本，产品线范围计选中的版本集合（未选=全线）。
-	// 否则左栏数字跨范围不变，与右侧表格对不上。
+	// Group counts follow the scope and version filter: current version locks to the current version; line scope counts the selected version set (none selected = whole line).
+	// Otherwise the left rail's numbers would stay constant across scopes and mismatch the table on the right.
 	const groupCountVersionIds = onLineScope
 		? versionsSelected
 		: versionId
@@ -140,17 +140,17 @@ export default function GroupsPage() {
 	});
 
 	const effectiveGroupId = groupId ?? '';
-	// 拉列表时只透传后端支持的过滤（priority/scenarioId/versionIds），status/tags/分组下钻走前端本地筛。
-	// 「当前版本」范围恒定锁死当前版本、恒拉整版——queryKey 不含 groupId，分组下钻不缩数据面：
-	// 否则左栏「全部用例」计数会跟着缩成本组的数（实测踩过），且每次切分组都白等一次请求；
-	// 「产品线」范围跨项目跨版本拉全。
+	// When fetching the list, only pass through the filters the backend supports (priority/scenarioId/versionIds); status/tags/group drill-down are filtered locally on the frontend.
+	// The "current version" scope is always locked to the current version and always fetches the whole version — the queryKey excludes groupId, so group drill-down never shrinks the data plane:
+	// otherwise the left rail's "all cases" count would shrink to this group's count (hit in practice), and every group switch would burn a request wait;
+	// the "product line" scope fetches everything across projects and versions.
 	const { data: cases, isLoading: casesLoading, isError: casesError, error: casesErrorObj } = useQuery({
 		queryKey: ['cases', projectId, scope, priority, scenarioId, productLineId, onLineScope ? versionsSelected : [], solidifiedSelected],
 		queryFn: () => {
 			const base = {
 				priority: priority || undefined,
 				scenarioId: scenarioId || undefined,
-				// 仅看未固化（批量固化入口口径）：有步骤且全部 compiled 为空，由后端聚合过滤
+				// Unsolidified only (the bulk-solidify entry's standard): has steps and all compiled empty, aggregated and filtered by the backend
 				solidified: solidifiedSelected.length > 0 ? 'none' : undefined,
 			};
 			if (onLineScope && productLineId) {
@@ -177,15 +177,15 @@ export default function GroupsPage() {
 		enabled: !!projectId,
 	});
 
-	// 场景过滤下拉的选项来源 = 项目级全量场景（来自 /api/scenarios?projectId），
-	// 不再依赖当前 cases 列表 dedup，这样选中某个场景后其他选项不会消失。
+	// Scenario filter dropdown option source = project-level full scenario list (from /api/scenarios?projectId),
+	// no longer deduped from the current cases list, so picking one scenario does not make the other options disappear.
 	const { data: projectScenarios } = useQuery({
 		queryKey: ['scenarios', projectId],
 		queryFn: () => api.scenarios.listForProject(projectId!),
 		enabled: !!projectId,
 	});
 
-	// 产品线范围下列表跨项目混排，分组名要在线内全部分组里查，否则兄弟项目的行渲染成空。
+	// Under line scope the list mixes projects, so group names must be looked up across all groups in the line, otherwise sibling projects' rows render empty.
 	const { data: lineGroups } = useQuery({
 		queryKey: ['groups', 'line', productLineId],
 		queryFn: () => api.projects.groupsByProductLine(productLineId!),
@@ -202,8 +202,8 @@ export default function GroupsPage() {
 		[groups, lineGroups, onLineScope],
 	);
 
-	// 场景过滤下拉选项 = 项目下全部 scenario 去重 + 「无场景」sentinel。
-	// 「无场景」是否出现，看当前列表里有没有 scenarioId == null 的用例（仅首次观察一次）。
+	// Scenario filter dropdown options = all scenarios under the project deduped + a "no scenario" sentinel.
+	// Whether "no scenario" appears depends on whether the current list has a case with scenarioId == null (observed once on first load only).
 	const scenarioOptions = useMemo(() => {
 		const map = new Map<string, { id: string; title: string }>();
 		for (const s of projectScenarios ?? []) {
@@ -216,9 +216,9 @@ export default function GroupsPage() {
 		return opts;
 	}, [projectScenarios, cases, t]);
 
-	// 切换分组时：tab 跳回 all + 页码归 1（URL 同步）。
-	// 注：useTableSelection 在下方定义，跨 useEffect 引用会撞 "used before declaration"，
-	// 这里改由 DataTable 的 selection.actions.Clear 入口统一收口，避开早引用。
+	// On group switch: tab jumps back to all + page resets to 1 (URL sync).
+	// Note: useTableSelection is defined further below; a cross-useEffect reference would hit "used before declaration",
+	// so clearing is funneled through DataTable's selection.actions.Clear entry instead, avoiding the early reference.
 	useEffect(() => {
 		void setRaw({ tab: 'all', page: '1' });
 	}, [effectiveGroupId]);
@@ -259,7 +259,7 @@ export default function GroupsPage() {
 
 	const copyCases = useMutation({
 		mutationFn: async ({ caseIds, targetGroupId }: { caseIds: string[]; targetGroupId: string }) => {
-			// 复制时把当前版本带过去（同版本复制；切版本复制由用户在 VersionsSelectPage 重新进入）
+			// Copy carries the current version along (same-version copy; cross-version copy means the user re-enters via VersionsSelectPage)
 			if (caseIds.length === 1) return api.cases.copy(caseIds[0]!, targetGroupId, versionId ?? undefined);
 			return api.cases.copyBatch(caseIds, targetGroupId, versionId ?? undefined);
 		},
@@ -274,7 +274,7 @@ export default function GroupsPage() {
 
 	const addToPlan = useMutation({
 		mutationFn: async ({ caseIds, planId }: { caseIds: string[]; planId: string }) => {
-			// 追加语义：POST 落到第一个组（无组自动建默认分组），组内去重由服务端收口
+			// Append semantics: the POST lands in the first group (a default group is auto-created when there is none); in-group dedup is the server's job
 			return api.plans.addCases(planId, caseIds);
 		},
 		onSuccess: () => {
@@ -291,14 +291,14 @@ export default function GroupsPage() {
 		onSuccess: () => {
 			toast(t('groups:caseDeleted'), 'success');
 			setConfirmDeleteCase(null);
-			// 行勾选后单删：不清会把已删 id 留在 selection 里，工具栏一直显示「已选 1 项」
+			// Single delete after row selection: without cleanup the deleted id stays in selection and the toolbar keeps showing "1 selected"
 			selection.clear();
 			invalidate();
 		},
 		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
-	// 行内执行：成功后跳到报告详情，与 CaseDetail 行为一致
+	// Inline execute: jump to the report detail on success, consistent with CaseDetail
 	const executeCase = useMutation({
 		mutationFn: (id: string) => api.cases.execute(id),
 		onSuccess: (r) => {
@@ -333,15 +333,15 @@ export default function GroupsPage() {
 		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
-	// 批量后端固化：触发后轮询批次进度（2s），完成时汇总提示并刷列表。
-	// batchId 存 URL（nuqs）：离页/刷新后回来仍能续上「我触发的这批」的完成提示。
+	// Bulk backend solidify: after triggering, poll batch progress (2s); on completion show a summary toast and refresh the list.
+	// batchId is stored in the URL (nuqs): leaving the page/refreshing and coming back still reconnects the "my batch" completion notice.
 	const solidifyBatchId = raw.solidifyBatchId || null;
 	const batchSolidifyCases = useMutation({
 		mutationFn: (caseIds: string[]) => api.cases.batchSolidify(caseIds),
 		onSuccess: (r) => {
 			setConfirmBatchSolidify(false);
 			if (r.rejected.length > 0) {
-				// 部分被拒/全部被拒：给第一条人读原因（数量多时前端逐条提示会刷屏）
+				// Partially/all rejected: show the first human-readable reason (enumerating every item on the frontend would flood the screen when there are many)
 				toast(t('groups:batchSolidifyRejected', { count: r.rejected.length, reason: r.rejected[0]!.reason }), 'error');
 			}
 			if (r.batchId) {
@@ -355,8 +355,8 @@ export default function GroupsPage() {
 			setConfirmBatchSolidify(false);
 		},
 	});
-	// 在途批次总览（页顶横幅 + 行内「固化中」徽标的数据源）：覆盖全部可见项目，
-	// 含别人触发的批次；有在途批次时 2s 轮询，全部终态后停。
+	// In-flight batch overview (data source for the top banner + the inline "solidifying" badge): covers all visible projects,
+	// including batches triggered by others; poll at 2s while any batch is in flight, stop once all are terminal.
 	const { data: solidifyOverview } = useQuery({
 		queryKey: ['solidify-batches', projectId],
 		queryFn: () => api.cases.solidifyBatches(projectId!),
@@ -364,20 +364,20 @@ export default function GroupsPage() {
 		refetchInterval: (q) => (q.state.data?.batches.length ? 2000 : false),
 	});
 	const solidifyBatches = useMemo(() => solidifyOverview?.batches ?? [], [solidifyOverview]);
-	// 行内「固化中」徽标的数据源：所有在途批次里正在跑的用例 id（含别人触发的批次）
+	// Data source for the inline "solidifying" badge: case ids currently running in any in-flight batch (including batches triggered by others)
 	const solidifyRunningCaseIds = useMemo(() => runningCaseIds(solidifyBatches), [solidifyBatches]);
-	// 我触发的这批：完成后批次从总览里消失，用单批次端点取终态（总览只给在途批次）。
+	// The batch I triggered: after completion the batch disappears from the overview, so its terminal state comes from the single-batch endpoint (the overview only returns in-flight batches).
 	const { data: solidifyProgress } = useQuery({
 		queryKey: ['solidify-batch', solidifyBatchId],
 		queryFn: () => api.cases.solidifyBatch(solidifyBatchId!),
 		enabled: !!solidifyBatchId,
 		refetchInterval: (q) => (q.state.data?.status === 'running' ? 2000 : false),
 	});
-	// 批次到终态：汇总 toast（失败带第一条原因）+ 刷用例列表（固化列/stepsCompiled 已变化）
+	// Batch reaches terminal state: summary toast (failures include the first reason) + refresh the case list (solidify column/stepsCompiled have changed)
 	useEffect(() => {
 		const b = solidifyProgress;
 		if (!b || b.status === 'running') return;
-		// 离页/刷新回来不重复播报：已上报过的 batchId 记在 sessionStorage（跨刷新有效）。
+		// No repeat announcement after leaving the page/refreshing back: batchIds already reported are recorded in sessionStorage (survives refresh).
 		const reportedKey = `itest:solidify-reported:${b.batchId}`;
 		if (sessionStorage.getItem(reportedKey)) {
 			void setRaw({ solidifyBatchId: null });
@@ -394,15 +394,15 @@ export default function GroupsPage() {
 		void setRaw({ solidifyBatchId: null });
 	}, [solidifyProgress]);
 
-	// status / tag 在前端做本地筛（cases API 不接）；tab 与 status 等价语义，所以两者去重后取并集。
+	// status / tag are filtered locally on the frontend (the cases API does not take them); tab and status mean the same thing, so dedupe the two and take the union.
 	const filteredCases = useMemo(() => {
 		let list = cases ?? [];
-		// status 过滤：tab='all' 表示不过滤，其他 tab 等价 status 单选
+		// status filter: tab='all' means no filtering; other tabs are equivalent to a single status selection
 		if (tab !== 'all') list = list.filter((c) => c.status === tab);
 		if (statusSelected.length > 0) list = list.filter((c) => statusSelected.includes(c.status));
 		if (tagSelected.length > 0) list = list.filter((c) => (c.tags ?? []).some((t) => tagSelected.includes(t.id)));
 		if (projectsSelected.length > 0) list = list.filter((c) => projectsSelected.includes(c.projectId ?? ''));
-		// 分组下钻两个范围统一在前端收窄（cases 恒拉全量、不按 groupId 收窄，见上方 query 注释）
+		// Group drill-down narrows in the frontend uniformly for both scopes (cases always fetches the full set and never narrows by groupId; see the query comment above)
 		if (effectiveGroupId) list = list.filter((c) => c.groupId === effectiveGroupId);
 		if (q.trim()) {
 			const needle = q.trim().toLowerCase();
@@ -411,7 +411,7 @@ export default function GroupsPage() {
 		return list;
 	}, [cases, tab, statusSelected, tagSelected, projectsSelected, onLineScope, effectiveGroupId, q]);
 
-	// 「项目」筛选项从已加载的用例反推，避免为拿选项名再发一次请求
+	// "Project" filter options are reverse-derived from the loaded cases, avoiding another request just to get option names
 	const projectOptions = useMemo(() => {
 		const m = new Map<string, string>();
 		for (const c of cases ?? []) {
@@ -420,23 +420,23 @@ export default function GroupsPage() {
 		return [...m.entries()].map(([value, label]) => ({ value, label }));
 	}, [cases]);
 
-	// DataTable 默认 client-side 切页；每页条数由 URL `?pageSize=` 决定，rows 也用同一变量。
+	// DataTable paginates client-side by default; page size is decided by the URL `?pageSize=`, and rows use the same variable.
 	const rows = useMemo(
 		() => filteredCases.slice((page - 1) * pageSize, page * pageSize),
 		[filteredCases, page, pageSize],
 	);
 	const total = filteredCases.length;
 
-	// 表格批量选择：ids 用于批量操作；toggleAll 当前页全集 / clear 一键清空
+	// Table bulk selection: ids feed bulk operations; toggleAll = full current page / clear = clear all at once
 	const selection = useTableSelection(rows.map((r) => r.id));
 
-	// 切 tab 时清空勾选（避免跨 tab 误选），沿用旧 useEffect 行为
+	// Clear the selection when switching tabs (avoids cross-tab misselection), keeping the old useEffect behavior
 	useEffect(() => { selection.clear(); }, [tab]);
 
-	// 导出 XMind/Word：不再走 HTTP blob 下载，统一跳 AI 助手（export-cases 技能渲染，下载卡交付）。
-	// 勾选优先（≤500，与 dump_cases_payload 上限一致）；无勾选按分组筛选/当前版本全部描述范围。
+	// Export XMind/Word: no longer an HTTP blob download; uniformly jumps to the AI assistant (rendered by the export-cases skill, delivered as a download card).
+	// Selection takes priority (≤500, matching the dump_cases_payload cap); with no selection the scope is the group filter / all cases in the current version, as described.
 	const exportViaAssistant = (format: 'xmind' | 'docx') => {
-		if (!versionId) return; // 产品线 scope 无版本工作区，助手路由不存在（与 startAiCaseSession 同兜底）
+		if (!versionId) return; // line scope has no version workspace, the assistant route does not exist (same fallback as startAiCaseSession)
 		const fmt = format === 'xmind' ? 'XMind' : 'Word';
 		let initialMessage: string;
 		if (selection.ids.length > 0) {
@@ -460,12 +460,12 @@ export default function GroupsPage() {
 	const setTagFilter = (next: string[]) => void setRaw({ tag: next, page: '1' });
 	const setProjectsFilter = (next: string[]) => void setRaw({ projects: next, page: '1' });
 	const setScope = (next: typeof scope) => void setRaw({ scope: next, page: '1' });
-	// 分组树导航必须带上当前 query string：scope 等筛选状态全在 search 里，
-	// 裸路径 navigate 会把「产品线用例库」打回「当前版本」（实测踩过）。
-	// 读 window.location 而非 useLocation：nuqs 的 shallow 更新只裸调 history.replaceState、
-	// 不走 router navigate（nuqs dist react-router 适配层 updateUrl），useLocation 的 search
-	// 是陈旧的——点单选切到产品线库后点分组，读到的是空串，scope 照样丢。
-	// page 除外——分组收窄后旧页码可能超出范围，回到第 1 页。
+	// Group tree navigation must carry the current query string: scope and other filter state all live in the search,
+	// a bare-path navigate would knock the "product line case library" back to "current version" (hit in practice).
+	// Reads window.location instead of useLocation: nuqs shallow updates only call history.replaceState directly,
+	// they do not go through router navigate (nuqs dist react-router adapter's updateUrl), so useLocation's search
+	// is stale — after switching to the line library via the single-select, clicking a group reads an empty string and scope is still lost.
+	// page is the exception — after group narrowing the old page number may be out of range, so it goes back to page 1.
 	const goGroup = (gid: string | null) => {
 		const sp = new URLSearchParams(window.location.search);
 		sp.delete('page');
@@ -499,7 +499,7 @@ export default function GroupsPage() {
 			label: t('groups:priority'),
 			options: PRIORITY_VALUES.filter((p) => p !== '').map((p) => ({ value: p, label: p })),
 		},
-		// 「当前版本」范围恒定锁死版本，这一维无意义；产品线范围才用来跨版本挑基线用例
+		// The "current version" scope is always locked to one version, so this dimension is meaningless there; only line scope uses it to pick baseline cases across versions
 		...(onLineScope
 			? [{
 				id: 'version',
@@ -548,8 +548,8 @@ export default function GroupsPage() {
 				id: 'title',
 				header: t('groups:title'),
 				sortable: false,
-				// table-fixed 下其余列都是百分比/固定宽，title 不给宽度就只吃残余（~10%）被压扁；
-				// 显式给份额 + min-w 下限（table-fixed 下 min-width 生效），窄屏时挤压其他 truncate 列
+				// Under table-fixed every other column is percentage/fixed width; without an explicit width the title column only eats the remainder (~10%) and gets squashed;
+				// give it an explicit share + a min-w floor (min-width works under table-fixed) so narrow screens squeeze the other truncate columns instead
 				width: 'w-[30%] min-w-[240px]',
 				cell: (c) => (
 					<span className="font-semibold truncate" title={c.title}>{c.title}</span>
@@ -576,16 +576,16 @@ export default function GroupsPage() {
 					</span>
 				),
 			},
-			// 固化进度列：n/n = 已固化/总步骤；0/N 高亮「未固化」（批量固化入口口径）
+			// Solidify progress column: n/n = solidified/total steps; 0/N highlighted as "unsolidified" (the bulk-solidify entry's standard)
 			{
 				id: 'solidify',
 				header: t('groups:solidifyColumn'),
-				// 固定宽（不用 %）：「固化中」脉冲 pill 约 63px，百分比列会被标题列挤到 58px 截断
+				// Fixed width (not %): the "solidifying" pulse pill is ~63px; a percentage column would be squeezed by the title column down to 58px and truncated
 				width: 'w-[92px]',
 				hideBelow: 'md',
 				cellClassName: 'text-xs text-muted-foreground',
 				cell: (c) => {
-					// 在途（该行正被后台固化）→ 脉冲「固化中」；与「未固化」天然互斥（批次只接全未固化用例）
+					// In flight (this row is being solidified in the background) → pulsing "solidifying"; naturally mutually exclusive with "unsolidified" (batches only take fully-unsolidified cases)
 					if (solidifyRunningCaseIds.has(c.id)) {
 						return (
 							<StatusPill tone="accent" pulse>
@@ -610,7 +610,7 @@ export default function GroupsPage() {
 					return <span className="tabular-nums">{compiled}/{total}</span>;
 				},
 			},
-			// 产品线范围下列表跨项目混排，必须标出用例来自哪个项目，否则分不清哪些是兄弟项目的
+			// Under line scope the list mixes projects, so which project a case came from must be shown, otherwise sibling projects' rows are indistinguishable
 			...(onLineScope
 				? [{
 					id: 'project',
@@ -702,7 +702,7 @@ export default function GroupsPage() {
 							title={t('groups:viewReport')}
 							onClick={() => navigate(versionId ? `/p/${projectId}/v/${versionId}/reports?caseId=${c.id}&tab=case` : `/`)}
 						/>
-						{/* 产品线范围下已经在当前版本的用例无需再复制一份 */}
+						{/* Under line scope, cases already in the current version need no extra copy */}
 						{(!onLineScope || c.projectId !== projectId || c.versionId !== versionId) && (
 							<IconButton
 								icon="copy"
@@ -722,7 +722,7 @@ export default function GroupsPage() {
 		];
 
 	const startAiCaseSession = useMutation({
-		// 直接跳到空间级 AI 助手(/assistant);首条消息 = 需求正文 + 覆盖要求。
+		// Jump straight to the space-level AI assistant (/assistant); the first message = requirement body + coverage requirements.
 		mutationFn: () => Promise.resolve(),
 		onSuccess: () => {
 			const initialMessage = aiForm.content + coveragePrompt(aiForm.coverage);
@@ -734,7 +734,7 @@ export default function GroupsPage() {
 		onError: (e: Error) => toast(localizeApiError(e), 'error'),
 	});
 
-	// 手动新建用例：成功后跳到详情页继续编辑步骤
+	// Manual case creation: on success jump to the detail page to continue editing steps
 	const createCase = useMutation({
 		mutationFn: () =>
 			api.cases.create({
@@ -771,8 +771,8 @@ export default function GroupsPage() {
 							onChange={(v) => setScope(v)}
 						/>
 					)}
-					{/* 勾选优先：有勾选即可导（即使收窄筛选后列表空）；无勾选才看当前筛选结果是否为空。
-					    导出统一经 AI 助手（export-cases 技能），点击即跳助手页自动发送指令。 */}
+					{/* Selection takes priority: with a selection you can export even if the narrowed filter list is empty; without one, disabled only when the current filter result is empty.
+					    Export uniformly goes through the AI assistant (export-cases skill); clicking jumps to the assistant page and auto-sends the instruction. */}
 					<Button size="sm" variant="ghost" disabled={selection.ids.length === 0 && filteredCases.length === 0} onClick={() => exportViaAssistant('xmind')}>
 						<Icon name="download" size={12} />
 							{t('groups:exportXmind')}
@@ -798,7 +798,7 @@ export default function GroupsPage() {
 			</PageShellHeader>
 
 			<PageShellContent className={solidifyBatches.length > 0 ? 'gap-3' : undefined}>
-				{/* 在途批次横幅：每个在途批次一条（含他人触发的）；批次全部出终态后自动消失 */}
+				{/* In-flight batch banner: one per in-flight batch (including ones triggered by others); auto-disappears once the batch reaches a terminal state */}
 				{solidifyBatches.map((b) => (
 					<div
 						key={b.batchId}
@@ -828,7 +828,7 @@ export default function GroupsPage() {
 					</div>
 				))}
 				<div className="flex flex-1 min-h-0">
-					{/* 左侧分组树 */}
+					{/* Left group tree */}
 					<div
 						className="shrink-0 flex flex-col overflow-y-auto"
 						style={{ width: 216, borderRight: '1px solid var(--border)', padding: '10px 8px' }}
@@ -900,7 +900,7 @@ export default function GroupsPage() {
 						)}
 					</div>
 
-					{/* 右侧用例表 */}
+					{/* Right case table */}
 					<div className="flex-1 min-w-0 flex flex-col overflow-hidden p-3">
 						{casesError ? (
 							<div className="flex flex-1 items-center justify-center text-muted-foreground" style={{ fontSize: 13 }}>
@@ -1004,7 +1004,7 @@ export default function GroupsPage() {
 				</div>
 			</PageShellContent>
 
-			{/* 分组弹窗（新建/重命名） */}
+			{/* Group dialog (create/rename) */}
 			<Dialog open={groupForm.open} onOpenChange={(open) => setGroupForm((f) => ({ ...f, open }))}>
 				<DialogContent>
 					<DialogHeader>
@@ -1027,7 +1027,7 @@ export default function GroupsPage() {
 				</DialogContent>
 			</Dialog>
 
-			{/* 删除分组确认 */}
+			{/* Delete group confirm */}
 			<Dialog open={!!confirmDeleteGroup} onOpenChange={(open) => { if (!open) setConfirmDeleteGroup(null); }}>
 				<DialogContent>
 					<DialogHeader><DialogTitle>{t('groups:deleteGroup')}</DialogTitle></DialogHeader>
@@ -1043,7 +1043,7 @@ export default function GroupsPage() {
 				</DialogContent>
 			</Dialog>
 
-			{/* 删除用例确认 */}
+			{/* Delete case confirm */}
 			<Dialog open={!!confirmDeleteCase} onOpenChange={(open) => { if (!open) setConfirmDeleteCase(null); }}>
 				<DialogContent>
 					<DialogHeader><DialogTitle>{t('groups:deleteCase')}</DialogTitle></DialogHeader>
@@ -1059,7 +1059,7 @@ export default function GroupsPage() {
 				</DialogContent>
 			</Dialog>
 
-			{/* 批量删除确认 */}
+			{/* Bulk delete confirm */}
 			<Dialog open={confirmBatchDelete} onOpenChange={(open) => { if (!open) setConfirmBatchDelete(false); }}>
 				<DialogContent>
 					<DialogHeader><DialogTitle>{t('groups:batchDeleteCases')}</DialogTitle></DialogHeader>
@@ -1079,7 +1079,7 @@ export default function GroupsPage() {
 				</DialogContent>
 			</Dialog>
 
-			{/* 批量固化确认：AI 逐用例实测固化 + 机械验收，后台执行 */}
+			{/* Bulk solidify confirm: AI runs and solidifies case by case + mechanical acceptance, executed in the background */}
 			<Dialog open={confirmBatchSolidify} onOpenChange={(open) => { if (!open) setConfirmBatchSolidify(false); }}>
 				<DialogContent>
 					<DialogHeader><DialogTitle>{t('groups:batchSolidifyTitle')}</DialogTitle></DialogHeader>
@@ -1098,7 +1098,7 @@ export default function GroupsPage() {
 				</DialogContent>
 			</Dialog>
 
-			{/* 复制目标分组弹窗 */}
+			{/* Copy target group dialog */}
 			<Dialog open={!!copyModal} onOpenChange={(open) => { if (!open) setCopyModal(null); }}>
 				<DialogContent>
 					<DialogHeader><DialogTitle>{t('groups:copyCasesTitle', { count: copyModal?.caseIds.length ?? 0 })}</DialogTitle></DialogHeader>
@@ -1128,7 +1128,7 @@ export default function GroupsPage() {
 				</DialogContent>
 			</Dialog>
 
-			{/* 加入计划弹窗 */}
+			{/* Add-to-plan dialog */}
 			<Dialog open={!!planModal} onOpenChange={(open) => { if (!open) setPlanModal(null); }}>
 				<DialogContent>
 					<DialogHeader><DialogTitle>{t('groups:addToPlanTitle', { count: planModal?.caseIds.length ?? 0 })}</DialogTitle></DialogHeader>
@@ -1158,7 +1158,7 @@ export default function GroupsPage() {
 				</DialogContent>
 			</Dialog>
 
-			{/* AI 创建用例 — 收集需求标题/内容后跳到 AI 工作台 */}
+			{/* AI create case — collect the requirement title/content, then jump to the AI workbench */}
 			<Dialog open={aiForm.open} onOpenChange={(open) => setAiForm((f) => ({ ...f, open }))}>
 				<DialogContent>
 					<DialogHeader><DialogTitle>{t('groups:aiCreateCase')}</DialogTitle></DialogHeader>
@@ -1221,7 +1221,7 @@ export default function GroupsPage() {
 				</DialogContent>
 			</Dialog>
 
-			{/* 手动新建用例 */}
+			{/* Manual new case */}
 			<Dialog open={caseForm.open} onOpenChange={(open) => setCaseForm((f) => ({ ...f, open }))}>
 				<DialogContent>
 					<DialogHeader><DialogTitle>{t('groups:newCase')}</DialogTitle></DialogHeader>

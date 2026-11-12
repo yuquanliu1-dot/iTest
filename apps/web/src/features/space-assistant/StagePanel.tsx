@@ -42,7 +42,7 @@ interface Props {
   versionId: string;
 }
 
-/** 把 stagedByThread 的 Map<localId, StagedItem> 拆成六个 Tab 的列表。 */
+/** Split stagedByThread's Map<localId, StagedItem> into lists for the six tabs. */
 function partition(staged: Map<string, StagedItem> | undefined): Record<Tab, StagedItem[]> {
   const out: Record<Tab, StagedItem[]> = { case: [], case_op: [], scenario: [], environment: [], plan: [], dataset: [] };
   if (!staged) return out;
@@ -50,7 +50,7 @@ function partition(staged: Map<string, StagedItem> | undefined): Record<Tab, Sta
   return out;
 }
 
-/** cases 行的步骤渲染（折叠）。 */
+/** Step rendering for case rows (collapsed). */
 function CaseSteps({ steps }: { steps: StageDoc['cases'][number]['steps'] }) {
   const { t } = useTranslation();
   if (!steps.length) return null;
@@ -93,7 +93,7 @@ function CaseSteps({ steps }: { steps: StageDoc['cases'][number]['steps'] }) {
   );
 }
 
-/** 拉 stage list + 订阅 SSE stage 事件。SSE 即时更新 store，list 在 mount 与 SSE stage 事件时拉。 */
+/** Fetch stage list + subscribe to SSE stage events. SSE updates the store immediately; list is fetched on mount and on SSE stage events. */
 function useStageDoc(threadId: string): { refetch: () => void } {
   const qc = useQueryClient();
   const ingest = useSpaceEventsStore((s) => s.ingest);
@@ -115,7 +115,7 @@ function useStageDoc(threadId: string): { refetch: () => void } {
         const payload = JSON.parse(e.data);
         if (payload?.type === 'stage') {
           ingest(payload);
-          // SSE 收到 stage 事件就拉一次 list，覆盖 store 里可能缺失的暂存对象
+          // On SSE stage event, re-fetch the list once to cover staged objects possibly missing from the store
           void qc.invalidateQueries({ queryKey: ['stage-doc', threadId] });
         }
       } catch {
@@ -127,12 +127,12 @@ function useStageDoc(threadId: string): { refetch: () => void } {
   return { refetch: q.refetch };
 }
 
-/** 暂存面板：Tabs + 每行复选框 + 「保存选中」按钮。SSE 即时更新 + mount 时拉一次 list 兜底。 */
+/** Staged panel: Tabs + per-row checkboxes + "Save selected" button. SSE updates live + one list fetch on mount as fallback. */
 export default function StagePanel({ projectId, versionId }: Props) {
   const { t } = useTranslation();
-  void versionId; // 暂未用；保留为未来「在用例库打开」等跳转入参
+  void versionId; // unused for now; kept as a jump parameter for future "open in case library" etc.
   const qc = useQueryClient();
-  // threadId 存 spaceEventsStore,由 SpaceWorkspace mount 时写入;订阅同一 state 规避 window 全局的时序竞态
+  // threadId is stored in spaceEventsStore, written on SpaceWorkspace mount; subscribing to the same state avoids the timing race of window globals
   const activeThreadId = useSpaceEventsStore((s) => s.threadId);
   const stagedByThread = useSpaceEventsStore((s) =>
     activeThreadId ? s.stagedByThread.get(activeThreadId) : undefined,
@@ -165,7 +165,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
   const tabItems = partitioned[tab];
   const tabAllSelected = tabItems.length > 0 && tabItems.every((x) => selection?.has(`${tab}:${x.localId}`));
 
-  // 用例/计划需要选 group；environment/scenario 不需要
+  // case/plan need a group selected; environment/scenario don't
   const groupsQ = useQuery({
     queryKey: ['project', projectId, 'groups'],
     queryFn: () => api.projects.groups(projectId),
@@ -183,7 +183,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
         (res.savedPlans ?? 0) +
         (res.savedDatasets ?? 0);
       toast(t('assistant:stage.savedCount', { count: totalSaved }), 'success');
-      // 同步清空本地视图（SSE remove 事件会再刷一次兜底）
+      // Sync-clear the local view (the SSE remove event will refresh again as a fallback)
       removeStaged(activeThreadId, 'case', partitioned.case.map((x) => x.localId));
       removeStaged(activeThreadId, 'case_op', partitioned.case_op.map((x) => x.localId));
       removeStaged(activeThreadId, 'scenario', partitioned.scenario.map((x) => x.localId));
@@ -192,9 +192,9 @@ export default function StagePanel({ projectId, versionId }: Props) {
       removeStaged(activeThreadId, 'dataset', partitioned.dataset.map((x) => x.localId));
       setSaveOpen(false);
       void refetch();
-      // 让用户跳回 CaseDetail 时数据新鲜（修改类落库影响具体用例）
+      // Keep data fresh when the user jumps back to CaseDetail (modification-type persistence affects specific cases)
       qc.invalidateQueries({ queryKey: ['cases'] });
-      // 数据集管理页/绑定下拉需要新鲜数据
+      // Dataset management page/binding dropdowns need fresh data
       qc.invalidateQueries({ queryKey: ['datasets'] });
     },
     onError: (e: Error) => toast(localizeApiError(e) || t('assistant:stage.saveFailed'), 'error'),
@@ -470,7 +470,7 @@ export default function StagePanel({ projectId, versionId }: Props) {
               onClick={() => setTab(tabItem.key)}
               className={`btn-tint rounded px-2 py-1 text-[12px] ${active ? 'btn-sel' : ''}`}
               style={{
-                // 有暂存对象的 Tab 提亮（非 muted），配合计数徽章一眼可见；激活态仍由 btn-sel 主导
+                // Brighten tabs with staged items (not muted), paired with the count badge for at-a-glance visibility; the active state is still led by btn-sel
                 color: active ? 'var(--primary)' : count > 0 ? 'var(--foreground)' : 'var(--muted-foreground)',
                 fontWeight: active ? 600 : 400,
               }}

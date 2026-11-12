@@ -4,7 +4,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import Icon from './Icon';
 import { Dialog, DialogContent } from './ui/Modal';
 
-/** 画面形态：live=实时流、replay=录制回放、frozen=已结束定格。仅角标文案/色点不同。 */
+/** Frame form: live = real-time stream, replay = recording replay, frozen = ended and frozen. Only the badge text/dot color differ. */
 export type LiveViewMode = 'live' | 'replay' | 'frozen';
 
 const BADGE: Record<LiveViewMode, { text: string; dot: string }> = {
@@ -13,13 +13,13 @@ const BADGE: Record<LiveViewMode, { text: string; dot: string }> = {
   frozen: { text: 'cases:ended', dot: 'var(--muted-foreground)' },
 };
 
-/** 画面高度上下限（px）。默认 220 与改版前一致；拖拽把手在下方。 */
+/** Frame height bounds (px). The default 220 matches the pre-redesign value; the drag handle sits below. */
 const DEFAULT_H = 220;
 const MIN_H = 120;
 const MAX_H = 640;
 
-/** 把 <img> 当前那一帧搬进 canvas → dataURL（放大兜底用）。
- *  画面流与页面同域 → canvas 不被污染，可导出；失败（未解码/跨源/无 canvas）返回 null。 */
+/** Copy the <img>'s current frame into a canvas → dataURL (used as the zoom fallback).
+ *  The stream is same-origin with the page → the canvas isn't tainted and can be exported; returns null on failure (undecoded/cross-origin/no canvas). */
 function snapshotOf(img: HTMLImageElement | null): string | null {
   if (!img || !img.naturalWidth || !img.naturalHeight) return null;
   try {
@@ -49,14 +49,14 @@ function ModeBadge({ mode }: { mode: LiveViewMode }) {
   );
 }
 
-/** 浏览器实时画面（playground）：MJPEG multipart 流，<img> 原生解码逐帧渲染。
- *  流随执行结束由服务端收尾——浏览器保留最后帧（定格），新一轮/新执行开始时一并消失。
- *  replay 模式为录制回放（?replay=1），播完同定格。onError（流异常断开等）隐藏画面，周围进度文字不受影响。
- *  retry=true（运行中）时断流不永久隐藏：2s 后重挂 <img> 重连（跨副本排队延迟期的 404 只是暂时）。
- *  点画面（或右上角放大按钮）弹窗全屏查看：弹窗复用缩略图【同一路资源】（同一个 src，含重试后缀 ?r=N）——
- *  另开一个 <img src=url> 会发新请求，源已结束（执行收尾）时该请求必 404 → 裂图（prod228 实测）；
- *  同一 URL 由浏览器内存缓存/在途响应复用（MJPEG 在途响应也复用），弹窗里看到的就是缩略图那一帧。
- *  万一没命中缓存且源已死 → 退回调色板快照（缩略图当前帧），仍不裂图；快照也没有才提示不可用。 */
+/** Browser live view (playground): MJPEG multipart stream rendered frame by frame via native <img> decoding.
+ *  The server winds the stream down when the execution ends — the browser keeps the last frame (frozen), which disappears together when a new round/execution starts.
+ *  replay mode is recording replay (?replay=1), frozen the same way when finished. onError (stream broken etc.) hides the frame; surrounding progress text is unaffected.
+ *  With retry=true (while running), a broken stream isn't hidden permanently: <img> is remounted after 2s to reconnect (the 404 during cross-replica queuing is only temporary).
+ *  Clicking the frame (or the zoom button at top right) opens a fullscreen dialog: the dialog reuses the thumbnail's [same resource] (same src, including the retry suffix ?r=N) —
+ *  a separate <img src=url> issues a new request, and once the source has ended (execution wrapped up) that request 404s → broken image (observed on prod228);
+ *  the same URL is reused from browser memory cache/in-flight response (MJPEG in-flight responses are reused too), so the dialog shows exactly the thumbnail's frame.
+ *  If the cache misses and the source is dead → fall back to the palette snapshot (the thumbnail's current frame), still no broken image; only when there's no snapshot either do we show "unavailable". */
 export default function LiveViewImg({
   url,
   mode = 'live',
@@ -67,24 +67,24 @@ export default function LiveViewImg({
   url: string;
   mode?: LiveViewMode;
   retry?: boolean;
-  /** 自适应模式（详情页并排布局用）：传了 onFrameHeightChange 即进入——
-   *  画面按所在列宽等比撑高（w-full + height:auto），框内零留白零裁切；
-   *  实际渲染高度经回调交还页面（img 加载时 + 几何变化时 ResizeObserver 兜底，
-   *  并排栅格切换列宽不触发 window resize，必须靠 RO）。
-   *  不传保持旧行为（w-full 占满列宽、maxHeight 封顶 + 拖拽把手）。 */
+  /** Adaptive mode (used by the detail page's side-by-side layout): passing onFrameHeightChange enables it —
+   *  the frame stretches proportionally to its column width (w-full + height:auto), zero padding and zero cropping inside the box;
+   *  the actually rendered height is handed back to the page via callback (on img load + ResizeObserver as a fallback for geometry changes;
+   *  side-by-side grid column-width changes don't trigger window resize, so RO is required).
+   *  Omitting it keeps old behavior (w-full filling the column, maxHeight cap + drag handle). */
   onFrameHeightChange?: (h: number) => void;
-  /** 画面窗口在不在（挂载即 true、流断撤框即 false）——并排布局据此决定是否并排。 */
+  /** Whether the frame window exists (true on mount, false when the stream breaks and the frame is removed) — the side-by-side layout decides based on this. */
   onFrameVisibleChange?: (visible: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [broken, setBroken] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  // 放大弹窗兜底：加载失败时先退回调色板快照（缩略图当前帧），再退提示不可用。
+  // Zoom dialog fallback: on load failure first fall back to the palette snapshot (the thumbnail's current frame), then to the "unavailable" hint.
   const [zoomShot, setZoomShot] = useState<string | null>(null);
   const [zoomFailed, setZoomFailed] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
-  // 自适应 = 页面要拿画面真实高度对齐会话过程卡；固定高模式（默认 220 可拖拽）留给其余用法。
+  // Adaptive = the page needs the frame's true height to align with the session-process card; fixed-height mode (default 220, draggable) is for other usages.
   const adaptive = onFrameHeightChange != null;
   const [innerHeight, setInnerHeight] = useState(DEFAULT_H);
   const height = innerHeight;
@@ -93,8 +93,8 @@ export default function LiveViewImg({
     onFrameHeightChange?.(h);
   };
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
-  // 高度回报：取 img 渲染高度（width:100% + height:auto 下即列宽/画面比例）。
-  // onLoad 覆盖首次加载与断流重连（key=attempt 重挂后 load 再触发）；RO 覆盖后续几何变化。
+  // Height reporting: take the img's rendered height (under width:100% + height:auto that's column width / frame aspect ratio).
+  // onLoad covers first load and stream reconnect (load fires again after key=attempt remount); RO covers subsequent geometry changes.
   useEffect(() => {
     if (!adaptive || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
@@ -116,24 +116,24 @@ export default function LiveViewImg({
     }, 2000);
     return () => clearTimeout(timer);
   }, [broken, retry]);
-  // 画面窗口可见性上报：挂载/换源即有框，断流撤框报 false；卸载（含切会话撤框）cleanup 报 false——
-  // 真相由本组件负责到底，页面不需要在切会话时自行归零（父级 effect 晚于子级跑，归零会吃掉上报）。
+  // Frame-window visibility reporting: mounted/source switched → frame exists; stream broke, frame removed → false; unmount (including frame removal on session switch) cleanup → false —
+  // this component owns the truth end to end, so the page doesn't need to zero it itself on session switch (the parent effect runs later than the child's and would swallow the report).
   useEffect(() => {
     onFrameVisibleChange?.(!broken);
     return () => onFrameVisibleChange?.(false);
   }, [broken, url, onFrameVisibleChange]);
   if (broken) return null;
-  // 重试后重挂 <img>：URL 加 r= 参数绕开缓存，保证真的重新发起流请求
+  // Remount <img> after retry: append r= to the URL to bypass the cache, guaranteeing the stream request is genuinely re-issued
   const src = attempt === 0 ? url : `${url}${url.includes('?') ? '&' : '?'}r=${attempt}`;
 
-  /** 打开放大弹窗：重置兜底态，弹窗内用与缩略图同一路资源（src）。 */
+  /** Open the zoom dialog: reset fallback state; the dialog uses the same resource (src) as the thumbnail. */
   const openZoom = () => {
     setZoomShot(null);
     setZoomFailed(false);
     setZoomed(true);
   };
 
-  /** 放大画面加载失败（没命中缓存且源已死）→ 先退快照，再退提示，绝不裂图。 */
+  /** Zoomed frame load failure (cache missed and source dead) → fall back to the snapshot first, then to the hint; never a broken image. */
   const onZoomError = () => {
     const shot = snapshotOf(imgRef.current);
     if (shot) {
@@ -188,9 +188,9 @@ export default function LiveViewImg({
         </span>
       </div>
 
-      {/* 拖拽把手：调画面高度。放在画面外下方，避免与点画面放大冲突。
-          命中区 14px（细线只有 1px，用户看不见也点不中），中间一段短横做可视抓手。
-          自适应模式不渲染——高度由画面比例决定，手动调高会把留白重新请回来。 */}
+      {/* Drag handle: adjusts frame height. Placed below the frame to avoid conflicting with click-to-zoom.
+          Hit area 14px (the thin line is only 1px — invisible and unclickable for users), with a short dash in the middle as a visual grip.
+          Not rendered in adaptive mode — height is decided by the frame aspect ratio; manual resizing would invite the padding back. */}
       {!adaptive && (
         <div
           role="separator"

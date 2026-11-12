@@ -4,7 +4,7 @@ import Icon from './Icon';
 import Button from './ui/Button';
 import type { RcaResult } from '../api/client';
 
-/** RCA 分类徽章配色:系统缺陷红/环境黄/用例问题与其他灰。 */
+/** RCA category badge colors: system defect red / environment yellow / case issue and other gray. */
 const CATEGORY_STYLE: Record<RcaResult['category'], { bg: string; fg: string }> = {
   system_defect: { bg: 'var(--destructive-soft)', fg: 'var(--destructive)' },
   environment: { bg: 'var(--warning-soft)', fg: 'var(--warning)' },
@@ -12,8 +12,8 @@ const CATEGORY_STYLE: Record<RcaResult['category'], { bg: string; fg: string }> 
   other: { bg: 'var(--muted)', fg: 'var(--muted-foreground)' },
 };
 
-/** 根因分析展示块:PlanRunDetail 失败行与 ReportDetail 共用。
- *  timeout/error 只显示状态行;skipped 显示一句话结论;analyzed 全量(徽章/摘要/证据/建议/线程跳转)。 */
+/** Root-cause analysis display block: shared by PlanRunDetail failed rows and ReportDetail.
+ *  timeout/error show only the status line; skipped shows a one-line conclusion; analyzed shows everything (badge/summary/evidence/suggestion/thread jump). */
 export default function RcaBlock({ rca, threadJump, assistantPath }: { rca: RcaResult; threadJump?: boolean; assistantPath: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();

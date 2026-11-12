@@ -83,6 +83,6 @@ describe('FileAttachmentAdapter', () => {
     const pending = await ad.add({ file: makeFile() });
     await ad.remove(pending);
     await ad.send(pending);
-    expect(uploadAttachment).toHaveBeenCalledTimes(2); // add 一次 + send 兜底一次
+    expect(uploadAttachment).toHaveBeenCalledTimes(2); // once in add + once as the send fallback
   });
 });

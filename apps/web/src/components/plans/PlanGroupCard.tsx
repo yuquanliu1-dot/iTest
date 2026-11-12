@@ -16,11 +16,11 @@ import DatasetRowPickerDialog from '../DatasetRowPickerDialog';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '../ui/shadcn/dropdown-menu';
 import LoginCasePickerDialog from './LoginCasePickerDialog';
 
-/** 登录准备候选（/plans/:id/login-cases，页面级查询下发）。 */
+/** Login prepare candidates (/plans/:id/login-cases, delivered by the page-level query). */
 export type LoginCaseOption = { id: string; title: string; groupId: string };
 
-/** 计划分组卡：组名/顺序/环境/登录准备/failFast/浏览器上下文的组级配置 + 组内用例编排。
- *  所有写操作成功后由 onInvalidate 统一失效 ['plan', id]（含列表计数）。 */
+/** Plan group card: group-level config for name/order/environment/login prepare/failFast/browser context + in-group case ordering.
+ *  After every write succeeds, onInvalidate invalidates ['plan', id] in one place (list counts included). */
 export default function PlanGroupCard({
   plan,
   group,
@@ -36,7 +36,7 @@ export default function PlanGroupCard({
   environments: Environment[];
   loginCases: LoginCaseOption[];
   onInvalidate: () => void;
-  /** 打开添加用例弹窗并锁定目标为本组（弹窗内不再选组）。 */
+  /** Open the add-cases dialog locked to this group (no group picking inside the dialog). */
   onAddCases: () => void;
 }) {
   const { t } = useTranslation();
@@ -44,11 +44,11 @@ export default function PlanGroupCard({
   const navigate = useNavigate();
   const { projectId } = plan;
 
-  /** 组内行移除确认（与旧计划级列表同款防误点弹窗）。 */
+  /** In-group row removal confirm (same anti-misclick dialog as the old plan-level list). */
   const [confirmRemoveCase, setConfirmRemoveCase] = useState<{ id: string; title: string } | null>(null);
-  /** 行内「选择数据」弹窗目标行（null = 关闭）。存整行：projectId/datasetId/生效下标都从它取。 */
+  /** Target row of the inline "pick data" dialog (null = closed). Stores the whole row: projectId/datasetId/effective indexes all come from it. */
   const [datasetPickerCase, setDatasetPickerCase] = useState<PlanCaseGroup['cases'][number] | null>(null);
-  /** 登录用例选择弹窗 / 登录用例数据行弹窗。 */
+  /** Login case picker dialog / login case dataset row dialog. */
   const [loginPickerOpen, setLoginPickerOpen] = useState(false);
   const [loginRowPickerOpen, setLoginRowPickerOpen] = useState(false);
 
@@ -67,7 +67,7 @@ export default function PlanGroupCard({
       invalidate();
     },
     onError: (e: Error) => {
-      // 组内还有用例 → 后端 409 group_not_empty，给可操作指引而非原始报错
+      // Group still has cases → backend 409 group_not_empty; give an actionable hint instead of the raw error
       if (e instanceof ApiError && (e.status === 409 || e.code === 'group_not_empty')) {
         toast(t('plans:groupNotEmpty'), 'error');
         return;
@@ -102,7 +102,7 @@ export default function PlanGroupCard({
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  /** 行内数据选择状态文字三态：跟随用例 · N 行（N=用例级生效条数）/ 全部 N 行 / 已选 M 行。 */
+  /** Inline dataset-selection status label, three states: follow case · N rows (N = case-level effective count) / all N rows / M selected. */
   const datasetStatusLabel = (c: PlanCaseGroup['cases'][number]): string => {
     if (c.planRowIndexes !== null) {
       return c.planRowIndexes.length === 0
@@ -163,13 +163,13 @@ export default function PlanGroupCard({
         detectionUrl: next.detectionUrl === undefined ? group.detectionUrl : next.detectionUrl,
         successSelector: next.successSelector === undefined ? group.loginSuccessSelector : next.successSelector,
         unauthorizedKeywords: next.unauthorizedKeywords === undefined ? (group.loginUnauthorizedKeywords as string[] | null) : next.unauthorizedKeywords,
-        // 换用例 → 行覆盖一并清空（下标空间属于旧用例的数据集）；未换时显式传值或保持现值
+        // Case changed → clear the row override too (the index space belongs to the old case's dataset); when unchanged, pass explicitly or keep the current value
         datasetRowIndexes: caseChanged ? null : next.datasetRowIndexes === undefined ? group.loginDatasetRowIndexes : next.datasetRowIndexes,
       },
     });
   };
 
-  /** 登录用例数据行三态文案：跟随用例 · N 行 / 全部 N 行 / 已选 M 行（与组内用例同款）。 */
+  /** Login case dataset-row label, three states: follow case · N rows / all N rows / M selected (same as in-group cases). */
   const loginDatasetStatusLabel = (): string => {
     if (group.loginDatasetRowIndexes !== null) {
       return group.loginDatasetRowIndexes.length === 0
@@ -184,7 +184,7 @@ export default function PlanGroupCard({
 
   return (
     <div className="bg-card border rounded-[var(--radius-md)] p-5">
-      {/* 组头：名称行内编辑 + 组间排序 + 组级配置（环境/登录准备/failFast/浏览器上下文） */}
+      {/* Group header: inline name editing + group reordering + group-level config (environment / login prepare / failFast / browser context) */}
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-[11px] font-mono shrink-0" style={{ color: 'var(--muted-foreground)' }}>
           {t('plans:groupOrder', { index: groupIdx + 1 })}
@@ -250,7 +250,7 @@ export default function PlanGroupCard({
         />
       </div>
 
-      {/* 组级登录准备：环境凭据自动登录 / 登录用例前置（从计划级面板平移） */}
+      {/* Group-level login prepare: environment-credential auto login / login case pre-step (moved over from the plan-level panel) */}
       <div className="mt-3">
         <label className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
           <input
@@ -326,7 +326,7 @@ export default function PlanGroupCard({
         )}
       </div>
 
-      {/* 组内用例：拖拽/上下移组内重排，行尾可跨组移动（跨组重复合法，按 planCaseId 移动） */}
+      {/* In-group cases: drag / move up-down to reorder within the group; row tail can move across groups (cross-group duplicates are legal, moved by planCaseId) */}
       <div className="mt-4">
         <div className="flex items-center justify-between gap-2 mb-3 hairline-bottom pb-2">
           <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
@@ -392,7 +392,7 @@ export default function PlanGroupCard({
                       {c.versionName}
                     </span>
                   )}
-                  {/* 计划级数据行选择入口：仅绑了数据集才显示；点开多选弹窗，行内文字三态。 */}
+                  {/* Plan-level dataset row selection entry: shown only when a dataset is bound; opens the multi-select dialog, inline label has three states. */}
                   {c.datasetId && (
                     <button
                       type="button"
@@ -435,7 +435,7 @@ export default function PlanGroupCard({
         )}
       </div>
 
-      {/* 组内行移除确认：removeCases 按 caseId 删该计划所有行（跨组重复行一并删） */}
+      {/* In-group row removal confirm: removeCases deletes all rows of that case in the plan by caseId (cross-group duplicates removed too) */}
       <Dialog open={!!confirmRemoveCase} onOpenChange={(o) => !o && setConfirmRemoveCase(null)}>
         <DialogContent style={{ maxWidth: 420 }}>
           <DialogHeader><DialogTitle>{t('plans:removeCaseTitle')}</DialogTitle></DialogHeader>
@@ -455,8 +455,8 @@ export default function PlanGroupCard({
         </DialogContent>
       </Dialog>
 
-      {/* 计划级数据行选择弹窗：value=生效下标（计划覆盖值；未覆盖用用例级生效值）。
-          跨产品线共享用例拉数据集用用例自己的项目（projectId ?? plan.projectId）。 */}
+      {/* Plan-level dataset row picker: value = effective indexes (plan override; falls back to case-level effective values when uncovered).
+          Cross-line shared cases fetch the dataset from the case's own project (projectId ?? plan.projectId). */}
       {datasetPickerCase && (
         <DatasetRowPickerDialog
           open
@@ -475,7 +475,7 @@ export default function PlanGroupCard({
         />
       )}
 
-      {/* 登录用例选择弹窗：候选来自页面级 login-cases 查询；点行即选定。 */}
+      {/* Login case picker dialog: candidates come from the page-level login-cases query; clicking a row picks it. */}
       {loginPickerOpen && (
         <LoginCasePickerDialog
           open
@@ -486,8 +486,8 @@ export default function PlanGroupCard({
         />
       )}
 
-      {/* 登录用例数据行选择弹窗：三态同组内用例（跟随用例=清组级覆盖）。
-          登录用例候选限定本计划项目，数据集一定属于 plan.projectId。 */}
+      {/* Login case dataset row picker: same three states as in-group cases (follow case = clear the group-level override).
+          Login case candidates are limited to this plan's project; the dataset always belongs to plan.projectId. */}
       {loginRowPickerOpen && (
         <DatasetRowPickerDialog
           open

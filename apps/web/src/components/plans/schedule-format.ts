@@ -1,6 +1,6 @@
 /**
- * cron 表达式格式化与人机可读描述。
- * 参考 iDO Automation 的 schedule-format.ts：5 字段 cron ↔ preset（每小时 / 每天 / 工作日 / 每周 / 每月 / 自定义）。
+ * cron expression formatting and human-readable descriptions.
+ * Based on iDO Automation's schedule-format.ts: 5-field cron ↔ preset (hourly / daily / weekdays / weekly / monthly / custom).
  */
 import { parseExpression } from 'cron-parser';
 import type { TFunction } from 'i18next';
@@ -9,7 +9,7 @@ export type SchedulePreset = 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'month
 
 export const PRESET_VALUES: SchedulePreset[] = ['hourly', 'daily', 'weekdays', 'weekly', 'monthly', 'custom'];
 
-/** preset 展示名 = i18n key（由调用方组件 t() 渲染）。 */
+/** preset display name = i18n key (rendered by the caller's t()). */
 export const PRESET_LABELS: Record<SchedulePreset, string> = {
   hourly: 'plans:preset.hourly',
   daily: 'plans:preset.daily',
@@ -19,7 +19,7 @@ export const PRESET_LABELS: Record<SchedulePreset, string> = {
   custom: 'plans:preset.custom',
 };
 
-/** 星期选项（value = cron DOW；label = i18n key，由调用方组件 t() 渲染）。 */
+/** Weekday options (value = cron DOW; label = i18n key rendered by the caller's t()). */
 export const WEEKLY_DAY_VALUES: Array<{ value: string; label: string }> = [
   { value: '1', label: 'plans:weekday.1' },
   { value: '2', label: 'plans:weekday.2' },
@@ -32,7 +32,7 @@ export const WEEKLY_DAY_VALUES: Array<{ value: string; label: string }> = [
 
 const WEEKDAY_INDEX_BY_NUM = ['plans:weekday.0', 'plans:weekday.1', 'plans:weekday.2', 'plans:weekday.3', 'plans:weekday.4', 'plans:weekday.5', 'plans:weekday.6'];
 
-/** 把 cron 表达式映射到 preset；无法识别则返回 'custom'。 */
+/** Map a cron expression to a preset; 'custom' when unrecognized. */
 export function detectPreset(cron: string): SchedulePreset {
   const m = cron.trim().match(/^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
   if (!m) return 'custom';
@@ -45,7 +45,7 @@ export function detectPreset(cron: string): SchedulePreset {
   return 'custom';
 }
 
-/** 把 cron 转成当前语言的人机可读描述；无法解析时返回 null。 */
+/** Convert cron to a human-readable description in the current language; null when unparseable. */
 export function formatSchedule(cron: string, t: TFunction): string | null {
   const preset = detectPreset(cron);
   if (preset === 'custom') return null;
@@ -77,7 +77,7 @@ export function formatSchedule(cron: string, t: TFunction): string | null {
   }
 }
 
-/** preset → 默认 cron（time 为 HH:MM）。 */
+/** preset → default cron (time is HH:MM). */
 export function presetToCron(preset: Exclude<SchedulePreset, 'custom'>, time: string): string {
   const [h, m] = (time || '09:00').split(':').map((s) => (s ?? '').padStart(2, '0'));
   const hour = h || '09';
@@ -91,7 +91,7 @@ export function presetToCron(preset: Exclude<SchedulePreset, 'custom'>, time: st
   }
 }
 
-/** 从 cron 抽出 HH:MM（hourly 时返回分钟所在基准点，hourly 模式下时间选择隐藏）。 */
+/** Extract HH:MM from cron (hourly returns the minute's base point; the time picker is hidden in hourly mode). */
 export function extractTime(cron: string): string {
   const m = cron.trim().match(/^(\S+)\s+(\S+)\s/);
   if (!m) return '09:00';
@@ -102,7 +102,7 @@ export function extractTime(cron: string): string {
   return `${hour}:${min}`;
 }
 
-/** 校验 cron；返回 null 表示合法，否则返回错误描述。 */
+/** Validate cron; null = valid, otherwise an error description. */
 export function validateCron(cron: string, tz: string): string | null {
   try {
     parseExpression(cron, { tz });
@@ -112,7 +112,7 @@ export function validateCron(cron: string, tz: string): string | null {
   }
 }
 
-/** 计算下次运行时间；失败返回 null。 */
+/** Compute the next run time; null on failure. */
 export function nextRunAt(cron: string, tz: string, from: Date = new Date()): Date | null {
   try {
     return parseExpression(cron, { tz, currentDate: from }).next().toDate();

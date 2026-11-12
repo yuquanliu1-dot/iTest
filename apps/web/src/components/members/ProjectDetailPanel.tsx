@@ -107,11 +107,11 @@ export default function ProjectDetailPanel({ projectId, onBack }: Props) {
 
   const assignedPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  // 变更产品线的候选 = 可见产品线里、其所属组织我确实是 manager 的那些。
-  // 产品线只有 organizationId 没有 path，而 authStore.organizations 只含 /auth/me 的直接
-  // membership（不含后代组织），所以目标组织 path 从 managed-subtree 取——否则上级管理员
-  // 的候选列表为空。后端 POST /product-lines/:id/projects 同样要求「目标产品线所属组织的管理员」，
-  // 这里用 isManagerOfOrgPath 与后端 isManagerOfOrg 对齐，避免列出必然 403 的选项。
+  // Product line change candidates = the visible lines whose owning organization I am truly a manager of.
+  // A product line only has organizationId, no path, and authStore.organizations only contains the direct
+  // memberships from /auth/me (not descendant orgs), so the target org path is taken from managed-subtree — otherwise
+  // a higher-level manager's candidate list would be empty. The backend's POST /product-lines/:id/projects likewise requires
+  // "admin of the organization owning the target product line"; here isManagerOfOrgPath is aligned with the backend's isManagerOfOrg, avoiding listing options that would inevitably 403.
   useEffect(() => {
     if (!changing) return;
     let stale = false;
@@ -230,7 +230,7 @@ export default function ProjectDetailPanel({ projectId, onBack }: Props) {
         onClose={() => setChanging(false)}
         onChanged={() => {
           setChanging(false);
-          // 项目已迁到新产品线所属组织，可能离开当前可见范围——与原「移动到组织」行为一致。
+          // The project has migrated to the organization owning the new product line and may have left the current visible scope — same as the old "move to organization" behavior.
           const store = useProjectStore.getState();
           if (store.current?.id === projectId) store.exit();
           setProject(null);

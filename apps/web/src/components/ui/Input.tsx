@@ -2,21 +2,21 @@ import { forwardRef, type ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 import { Input as ShadcnInput } from './shadcn/input';
 
-// size 与原生 <input size:number> 属性冲突，Omit 后重声明为尺寸档位
+// size conflicts with the native <input size:number> attribute; Omit it and redeclare as size tiers
 interface InputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'size'> {
   label?: string;
   error?: string;
-  /** md = 32px 标准档（默认，表单/弹窗，对齐 CRM h-8）；sm = 28px 紧凑档（工具栏/筛选行/行内编辑） */
+  /** md = 32px standard tier (default, forms/dialogs, aligned with CRM h-8); sm = 28px compact tier (toolbars/filter rows/inline editing) */
   size?: 'md' | 'sm';
-  /** 左侧图标（搜索等），绝对定位在输入框内左侧 */
+  /** Left icon (search etc.), absolutely positioned inside the input on the left */
   leadingIcon?: ReactNode;
-  /** 右侧图标（密码 eye 等），绝对定位在输入框内右侧 */
+  /** Right icon (password eye etc.), absolutely positioned inside the input on the right */
   trailingIcon?: ReactNode;
 }
 
 const Input = forwardRef<HTMLInputElement, InputProps>(
   ({ label, error, size = 'md', leadingIcon, trailingIcon, className = '', style, ...props }, ref) => {
-    // 内核为 CRM shadcn Input（h-8 + border-input + focus ring）；sm 叠加 h-7 覆盖高度
+    // Core is the CRM shadcn Input (h-8 + border-input + focus ring); sm layers h-7 on top to override height
     const inputElement = (
       <ShadcnInput
         ref={ref}

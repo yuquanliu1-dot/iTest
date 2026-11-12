@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-/** 后端 confirm_request 事件(pick 相关字段;confirmId 去重用)。 */
+/** Backend confirm_request event (pick-related fields; used for confirmId dedup). */
 export interface SpaceConfirmRequest {
   confirmId: string;
   toolName: string;
@@ -26,14 +26,14 @@ export interface AnnounceState {
   done: number;
 }
 
-/** verify_case 实时进度（verify_progress SSE 事件驱动）：逐步渲染 AI 验证进展。 */
+/** verify_case live progress (driven by verify_progress SSE events): renders AI verification progress step by step. */
 export interface VerifyProgressStep {
   order: number;
   status: 'running' | 'passed' | 'failed';
   brief?: string;
   reason?: string;
   durationMs?: number;
-  /** LLM 当轮自报的登录行为（'logged-in' 在该步实际执行了登录填表）。 */
+  /** Login behavior self-reported by the LLM that round ('logged-in' = the step actually performed the login form fill). */
   login?: 'logged-in' | 'not-needed';
 }
 
@@ -41,57 +41,57 @@ export interface VerifyProgressState {
   caseId: string;
   total: number;
   targetUrl: string | null;
-  /** 登录态缓存命中与否（start 事件）；null=未上报。 */
+  /** Whether the login state cache was hit (start event); null = not reported. */
   loginCache: 'hit' | 'miss' | null;
-  /** 环境配置的登录用户名；null=未配置凭据。 */
+  /** Login username configured on the environment; null = no credentials configured. */
   loginUser: string | null;
   steps: VerifyProgressStep[];
-  /** compiled 机械回放干跑（replay_start/replay_done 事件）；null=未进入该阶段。 */
+  /** compiled mechanical replay dry run (replay_start/replay_done events); null = phase not entered. */
   replay: { status: 'running' | 'passed' | 'failed'; reason?: string } | null;
   result: 'passed' | 'failed' | 'cancelled' | null;
-  /** end 事件：本轮是否已回写登录态缓存。 */
+  /** end event: whether the login state cache was written back this round. */
   cacheSaved: boolean;
-  /** 本线程暂存的 caseOp 叠加数（>0 表示验证基于暂存修改，未落库）。 */
+  /** Number of staged caseOp overlays on this thread (>0 = verification based on staged changes not yet persisted). */
   stagedOps: number;
-  /** 浏览器实时画面流地址（MJPEG multipart，<img> 直接解码）；null=不可用。 */
+  /** Browser live view stream URL (MJPEG multipart, decoded directly by <img>); null = unavailable. */
   liveUrl: string | null;
-  /** 本轮 start 事件的 seq（后端全局单调）：多张卡都有 liveUrl 时据此挑「最新一轮」，
-   *  避免登录卡与上一轮已结束的 verify 卡抢同一块画面区（已结束的 liveUrl 再连即 404）。 */
+  /** seq of this round's start event (globally monotonic on the backend): when multiple cards have liveUrl, use it to pick the latest round,
+   *  so the login card and the previous round's finished verify card don't fight over the same view area (a finished liveUrl 404s on reconnect). */
   seq?: number;
 }
 
-/** solidify_case 实时进度（solidify_progress SSE 事件驱动）：单行指示（start/end 两相）。 */
+/** solidify_case live progress (driven by solidify_progress SSE events): single-line indicator (start/end phases). */
 export interface SolidifyProgressState {
   caseId: string;
   total: number;
-  /** 可固化（视觉模式）步骤数（start 事件）。 */
+  /** Number of solidifiable (visual-mode) steps (start event). */
   solidifiable: number;
   result: 'solidified' | 'failed' | 'nothing-solidified' | 'cancelled' | null;
-  /** end 事件：固化步骤数 / 保持视觉步骤数。 */
+  /** end event: solidified step count / steps kept as visual. */
   solidified: number | null;
   kept: number | null;
-  /** 失败原因（result='failed' 时）。 */
+  /** Failure reason (when result='failed'). */
   reason: string | null;
-  /** 浏览器实时画面流地址（MJPEG multipart，<img> 直接解码）；null=不可用。 */
+  /** Browser live view stream URL (MJPEG multipart, decoded directly by <img>); null = unavailable. */
   liveUrl: string | null;
-  /** 本轮 start 事件的 seq（后端全局单调）：多张卡都有 liveUrl 时据此挑「最新一轮」。 */
+  /** seq of this round's start event (globally monotonic on the backend): when multiple cards have liveUrl, use it to pick the latest round. */
   seq?: number;
 }
 
-/** perform_login 环境凭据登录进度（login_progress SSE 事件驱动）：右栏直播登录全过程。 */
+/** perform_login environment-credential login progress (driven by login_progress SSE events): live-streams the whole login in the right rail. */
 export interface LoginProgressState {
-  /** 环境配置的登录用户名；null=未知（批量链路/无凭据）。 */
+  /** Login username configured on the environment; null = unknown (batch path / no credentials). */
   user: string | null;
-  /** 登录目标 URL。 */
+  /** Login target URL. */
   targetUrl: string | null;
   result: 'passed' | 'failed' | null;
-  /** 浏览器实时画面流地址（MJPEG multipart，<img> 直接解码）；null=不可用。 */
+  /** Browser live view stream URL (MJPEG multipart, decoded directly by <img>); null = unavailable. */
   liveUrl: string | null;
-  /** 本轮 start 事件的 seq（后端全局单调）：多张卡都有 liveUrl 时据此挑「最新一轮」。 */
+  /** seq of this round's start event (globally monotonic on the backend): when multiple cards have liveUrl, use it to pick the latest round. */
   seq?: number;
 }
 
-/** artifact SSE 事件（AI 产出文件下载卡）。 */
+/** artifact SSE event (AI-produced file download card). */
 export interface ArtifactItem {
   token: string;
   name: string;
@@ -100,8 +100,8 @@ export interface ArtifactItem {
   at: string;
 }
 
-/** 暂存条目：stage_case / stage_scenario / stage_environment / stage_plan 写入。
- *  payload 是 StageDoc 中对应 kind 的单条对象,前端直接渲染预览/勾选。 */
+/** Staged entries: written by stage_case / stage_scenario / stage_environment / stage_plan.
+ *  payload is the single object of the corresponding kind in StageDoc; the frontend renders preview/checkboxes directly. */
 export interface StagedItem<TPayload = unknown> {
   localId: string;
   kind: Exclude<StageKind, 'group'>;
@@ -109,65 +109,65 @@ export interface StagedItem<TPayload = unknown> {
   stagedAt: string;
 }
 
-/** threadId → (localId → item)；后端 stage 事件 upsert；save 成功后 remove。 */
+/** threadId → (localId → item); upserted by backend stage events; removed after save succeeds. */
 export type StagedByThread = Map<string, Map<string, StagedItem>>;
 
-/** threadId → 选中的 `kind:localId` 集合。 */
+/** threadId → set of selected `kind:localId`. */
 export type StagedSelection = Map<string, Set<string>>;
 
 interface SpaceEventsState {
-  /** 当前激活线程 id；SpaceWorkspace mount 时写入,StagePanel 据此拉暂存列表。 */
+  /** Currently active thread id; written on SpaceWorkspace mount, StagePanel uses it to fetch the staged list. */
   threadId: string;
   confirms: SpaceConfirmRequest[];
-  /** stage 事件序号(仅前端 stageHistory 渲染局部 key,勿与后端 seq 混)。 */
+  /** stage event sequence (only a local render key for frontend stageHistory; do not confuse with the backend seq). */
   stageHistory: StageObject[];
-  /** 断线重连重放去重基线:threadId → 该线程已处理过的最大事件 seq。重放事件(快照后按原
-   *  seq 重发)与实时事件重叠时,seq ≤ 基线直接丢弃;漏掉的事件(seq > 基线)自然补上。 */
+  /** Replay-dedup baseline on reconnect: threadId → the max event seq already processed for that thread. When replayed events (re-sent
+   *  by original seq after the snapshot) overlap live events, seq ≤ baseline is dropped directly; missed events (seq > baseline) are naturally covered. */
   lastSeqByThread: Map<string, number>;
   announce: AnnounceState | null;
-  /** verify_case 实时进度卡数据（verify_progress 事件驱动）。已完成的卡不随 agent_start
-   *  清空——右栏 live view 定格帧/回放跨轮存活；新一轮事件整体覆盖。 */
+  /** verify_case live progress card data (driven by verify_progress events). Completed cards are not cleared on
+   *  agent_start — the right-rail live view frozen frame/replay survives across rounds; a new round's events overwrite wholesale. */
   verifyProgress: VerifyProgressState | null;
-  /** solidify_case 实时进度（solidify_progress 事件驱动）。生命周期同 verifyProgress。 */
+  /** solidify_case live progress (driven by solidify_progress events). Same lifecycle as verifyProgress. */
   solidifyProgress: SolidifyProgressState | null;
-  /** perform_login 环境凭据登录进度（login_progress 事件驱动）。生命周期同 verifyProgress。 */
+  /** perform_login environment-credential login progress (driven by login_progress events). Same lifecycle as verifyProgress. */
   loginProgress: LoginProgressState | null;
-  /** 暂存对象池：用户预览/勾选 → save 时入参的 source of truth。 */
+  /** Staged object pool: user preview/checkboxes → source of truth for the save payload. */
   stagedByThread: StagedByThread;
   stagedSelection: StagedSelection;
-  /** threadId → AI 产出文件列表（artifact 事件驱动；每线程上限 20，新的挤掉最旧的）。
-   *  不随 agent_start 清空——产出物是交付结果，不是进行时进度。 */
+  /** threadId → AI-produced file list (driven by artifact events; cap 20 per thread, newer evicts oldest).
+   *  Not cleared on agent_start — deliverables are results, not in-flight progress. */
   artifactsByThread: Map<string, ArtifactItem[]>;
-  /** Pi client 订阅分流入口:只认空间自定义事件,pi 契约事件忽略。 */
+  /** Pi client subscription dispatch entry: only accepts space custom events, ignores pi contract events. */
   ingest: (e: Record<string, unknown>) => void;
   setCurrentThreadId: (threadId: string) => void;
   removeConfirm: (confirmId: string) => void;
-  /** 整批替换(初次进入空间页 / 路由切换时由 listStage 拉取后塞入)。 */
+  /** Bulk replace (populated from listStage on first entering the space page / on route switch). */
   setStaged: (threadId: string, doc: { cases: unknown[]; scenarios: unknown[]; environments: unknown[]; plans: unknown[]; caseOps?: unknown[]; datasets?: unknown[] }) => void;
   toggleStaged: (threadId: string, kind: Exclude<StageKind, 'group'>, localId: string) => void;
   selectAllStaged: (threadId: string, kind: Exclude<StageKind, 'group'>, selected: boolean) => void;
-  /** save 后调用:从前端 view 清掉已落库条目 + 选中标记。 */
+  /** Called after save: clears persisted entries + selection marks from the frontend view. */
   removeStagedLocal: (threadId: string, kind: Exclude<StageKind, 'group'>, localIds: string[]) => void;
-  /** 切换会话后灌回持久产物(REST 列表与 SSE 事件合流,token 去重)。 */
+  /** Hydrates persisted artifacts after switching threads (merges REST list with SSE events, dedup by token). */
   hydrateArtifacts: (threadId: string, items: Array<{ token: string; name: string; size: number; count: number | null; createdAt: string }>) => void;
   reset: () => void;
 }
 
 const MAX_STAGE_HISTORY = 50;
 let stageSeq = 0;
-/** SSE 事件不携带 threadId(由后端 emitThreadEvent 添加但前端不读);
- *  暂存预览按当前激活线程写,threadId 存 store 由 SpaceWorkspace mount 时写入,
- *  StagePanel 订阅同一份 state,规避 window 全局变量的 mount 时序竞态。 */
+/** SSE events do not carry threadId (added by the backend's emitThreadEvent but not read by the frontend);
+ *  staged previews are written against the currently active thread; threadId lives in the store, written on SpaceWorkspace mount,
+ *  and StagePanel subscribes to the same state, avoiding the mount-timing race of window globals. */
 
 function keyOf(kind: Exclude<StageKind, 'group'>, localId: string): string {
   return `${kind}:${localId}`;
 }
 
 /**
- * 断线重连契约:react-pi 自动重连后,服务端在快照后按原序重放缓冲的会话内自定义事件
- * (verify_progress/announce/stage/solidify_progress,60min 内)与仍挂起的确认卡。
- * 本 store 按线程 seq 去重:已处理过的实时事件不因重放二次生效,漏掉的事件自然补上,
- * 因此重连期间的进度卡/确认卡/暂存预览不丢。快照帧(type='snapshot')不在分支内,天然忽略。
+ * Reconnect contract: after react-pi auto-reconnects, the server replays buffered in-session custom events
+ * (verify_progress/announce/stage/solidify_progress, within 60min) plus still-pending confirm cards in original order.
+ * This store dedups by thread seq: already-processed live events don't take effect twice on replay, missed events
+ * are covered naturally, so progress/confirm/staged previews survive reconnects. Snapshot frames (type='snapshot') hit no branch, naturally ignored.
  */
 export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
   threadId: '',
@@ -182,9 +182,9 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
   stagedSelection: new Map(),
   artifactsByThread: new Map(),
   ingest: (e) => {
-    // 断线重连重放去重:服务端在快照后按原 seq 重发缓冲的会话内事件,与已实时处理的可能重叠——
-    // seq <= 该线程已见最大值 = 已处理过,丢弃;首次见到的推进基线。快照帧不进本 store 的分支,
-    // 但携带更高的 seq,必须先排除,否则会把重放事件(seq < 快照 seq)一律滤掉。
+    // Reconnect replay dedup: after the snapshot the server re-sends buffered in-session events by original seq, which may
+    // overlap live events already processed — seq <= the thread's max seen seq = processed, drop; first sight advances the baseline.
+    // Snapshot frames don't hit this store's branches but carry a higher seq; exclude them first or replays (seq < snapshot seq) get filtered wholesale.
     if (e.type !== 'snapshot') {
       const seq = e.seq;
       if (typeof seq === 'number') {
@@ -209,8 +209,8 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
       const action = e.action as string;
       const id = e.id as string;
       const obj: StageObject = { key: `s${++stageSeq}`, kind: e.kind as StageKind, id, action, ...(typeof e.diff === 'string' ? { diff: e.diff } : {}) };
-      // action='stage' 且带 payload:upsert 到 stagedByThread(实时预览)
-      // action='remove':从 stagedByThread 删除(落库成功后清掉)
+      // action='stage' with payload: upsert into stagedByThread (live preview)
+      // action='remove': delete from stagedByThread (cleared after successful persistence)
       const patch = (s: SpaceEventsState): Partial<SpaceEventsState> => {
         const next = new Map(s.stagedByThread);
         const map = new Map(next.get(s.threadId) ?? []);
@@ -417,7 +417,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
       const tid = typeof e.threadId === 'string' && e.threadId ? e.threadId : get().threadId;
       set((s) => {
         const list = s.artifactsByThread.get(tid) ?? [];
-        if (list.some((x) => x.token === item.token)) return s; // 重放去重（token 天然幂等）
+        if (list.some((x) => x.token === item.token)) return s; // replay dedup (token is naturally idempotent)
         const next = new Map(s.artifactsByThread);
         next.set(tid, [...list.slice(-19), item]);
         return { artifactsByThread: next };
@@ -425,10 +425,10 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
       return;
     }
     if (e.type === 'agent_start') {
-      // 新一轮开始:清掉上一轮的 announce(舞台历史保留);verify/solidify/login 只清「没跑完的」
-      // (停跑/报错残留的 running 卡)。已完成的进度卡必须保留——右栏 live view 的定格帧与
-      // 回放按钮靠它存活,而已结束的 liveUrl 新连接会 404,卸载重挂就是黑屏:B 路径逐条
-      // 确认的讨论窗口里画面不能消失。新一轮执行的事件到达时自然整体覆盖。
+      // New round starts: clear the previous round's announce (stage history kept); verify/solidify/login only clear "unfinished"
+      // cards (running cards left behind by stopped runs/errors). Completed progress cards must be kept — the right-rail live view's
+      // frozen frame and replay button depend on them, and a finished liveUrl 404s on new connections, remount = black screen: the
+      // B-path per-item confirm discussion window must not lose its view. A new round's events overwrite wholesale when they arrive.
       set((s) => {
         const verifyStale = s.verifyProgress !== null && s.verifyProgress.result === null;
         const solidifyStale = s.solidifyProgress !== null && s.solidifyProgress.result === null;
@@ -510,7 +510,7 @@ export const useSpaceEventsStore = create<SpaceEventsState>((set, get) => ({
       seen.add(it.token);
       merged.push({ token: it.token, name: it.name, size: it.size, ...(it.count != null ? { count: it.count } : {}), at: it.createdAt });
     }
-    // 按时间升序对齐 SSE 追加序;上限 20 与 ingest 分支一致。
+    // Sort ascending by time to align with SSE append order; the cap of 20 matches the ingest branch.
     merged.sort((a, b) => a.at.localeCompare(b.at));
     const next = new Map(s.artifactsByThread);
     next.set(threadId, merged.slice(-20));

@@ -1,10 +1,10 @@
-/** 录制扩展徽标的版本比较与状态推导。 */
+/** Version comparison and state derivation for the recorder extension badge. */
 
-/** 徽标的五种状态。'ahead' = 已装版本比部署版本还新。 */
+/** The five badge states. 'ahead' = the installed version is newer than the deployed one. */
 export type RecorderExtState = 'unknown' | 'ready' | 'update' | 'ahead' | 'stale' | 'missing';
 
-/** 简单 semver 比较：0.0.1 < 0.0.2。manifest version 恒为 x.y.z，够用。
- *  返回负数表示 a < b，正数表示 a > b，0 表示相等。 */
+/** Simple semver comparison: 0.0.1 < 0.0.2. The manifest version is always x.y.z, so this suffices.
+ *  Returns a negative number for a < b, positive for a > b, 0 for equal. */
 export function compareVersion(a: string, b: string): number {
   const pa = a.split('.').map(Number);
   const pb = b.split('.').map(Number);
@@ -15,19 +15,20 @@ export function compareVersion(a: string, b: string): number {
   return 0;
 }
 
-/** 已装版本 vs 部署版本 → 徽标状态。
+/** Installed version vs deployed version → badge state.
  *
- *  三方比较，不是一维的「旧于/不旧于」：
- *   - installed < current → 'update'：装的旧了，提示可升级
- *   - installed > current → 'ahead'：装的比服务器还新（典型：本地开发装的是未发版的
- *     版本号）。此时**不能**给下载入口——下载会把新版本覆盖成旧版本，是降级。
- *   - 相等 → 'ready'
+ *  Three-way comparison, not the one-dimensional "older or not":
+ *   - installed < current → 'update': installed is older, prompt an upgrade
+ *   - installed > current → 'ahead': installed is newer than the server (typical: local dev has an
+ *     unreleased version number). In that case **no** download entry — downloading would overwrite
+ *     the new version with the old one, which is a downgrade.
+ *   - equal → 'ready'
  *
- *  'ahead' 这态是必需的：单向比较（只判 installed < current）会把「装的更新」
- *  误报成绿色 ready，用户以为已是最新，实际服务器那边还停在旧版。
+ *  The 'ahead' state is required: one-way comparison (only checking installed < current) would misreport
+ *  "installed is newer" as a green ready, making users think they are up to date while the server is still on the old version.
  *
- *  probe 是探测阶段的结果（unknown/missing/stale），不参与版本比较——
- *  没探测到扩展时没什么版本可比。
+ *  probe is the probing-phase result (unknown/missing/stale) and takes no part in version comparison —
+ *  when the extension wasn't detected there is no version to compare.
  */
 export function deriveExtState(
   probe: 'unknown' | 'ready' | 'stale' | 'missing',
@@ -35,16 +36,16 @@ export function deriveExtState(
   current: string | null,
 ): RecorderExtState {
   if (probe === 'missing' || probe === 'stale' || probe === 'unknown') return probe;
-  if (!installed || !current) return 'ready'; // 拿不到版本时不误报升级
+  if (!installed || !current) return 'ready'; // don't misreport an upgrade when versions are unavailable
   const cmp = compareVersion(installed, current);
   if (cmp < 0) return 'update';
   if (cmp > 0) return 'ahead';
   return 'ready';
 }
 
-/** 该状态下是否应提供「下载扩展 zip」入口。
- *  'ahead' 返回 false——下载的是部署版本，比已装的旧，覆盖即降级。
- *  其余非 ready 态（update/stale/missing/unknown）保持既有行为，都给下载入口。 */
+/** Whether this state should offer the "download extension zip" entry.
+ *  'ahead' returns false — the download is the deployed version, older than installed; overwriting is a downgrade.
+ *  The other non-ready states (update/stale/missing/unknown) keep existing behavior and all offer the download entry. */
 export function offersDownload(state: RecorderExtState): boolean {
   return state !== 'ready' && state !== 'ahead';
 }

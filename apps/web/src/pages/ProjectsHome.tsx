@@ -29,7 +29,7 @@ interface FormState {
   mode: 'create-project' | 'edit-project';
   id: string | null;
   name: string;
-  /** 归属产品线（仅新建时提交；改线走产品线的挂载接口）。 */
+  /** Owning product line (submitted on create only; changing lines goes through the product line's attach endpoint). */
   productLineId: string;
   description: string;
   repo: RepoFieldsValue;
@@ -42,12 +42,12 @@ interface VersionFormState {
   versionId: string | null;
   name: string;
   description: string;
-  /** 关联环境 id；空串 = 跟随项目默认环境 */
+  /** Associated environment id; empty string = follow the project's default environment */
   environmentId: string;
 }
 type LineDraft = { name: string; description: string };
 
-/** 按用户记忆的项目展开状态（localStorage）；AuthGuard 保证挂载时 user 已就绪。 */
+/** Project expand state remembered per user (localStorage); AuthGuard guarantees user is ready at mount. */
 function readExpandedProjects(userId: string | null): Set<string> {
   if (!userId) return new Set();
   try {
@@ -59,7 +59,7 @@ function readExpandedProjects(userId: string | null): Set<string> {
   }
 }
 
-/** 上次选中的产品线；空串/undefined = 没记忆过，首次进页面选第一条线。 */
+/** Last selected product line; empty/undefined = never remembered, first visit picks the first line. */
 function readSelectedLine(userId: string | null): string | null {
   if (!userId) return null;
   try {
@@ -90,7 +90,7 @@ const EMPTY_VERSION_FORM: VersionFormState = {
 };
 const EMPTY_LINE_DRAFT: LineDraft = { name: '', description: '' };
 
-/** 项目与产品线合并页（方案 C）：上方产品线卡片条 + 下方项目平铺表，行展开仍是版本管理。 */
+/** Merged projects + product lines page (plan C): product line card strip on top + flat project table below; row expansion is still version management. */
 export default function ProjectsHome() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -106,23 +106,23 @@ export default function ProjectsHome() {
   const [versionForm, setVersionForm] = useState<VersionFormState>(EMPTY_VERSION_FORM);
   const [refForm, setRefForm] = useState<RefFormState>(EMPTY_REF_FORM);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
-  /** 删除版本前一律先弹 modal —— 误点会丢该版本下所有用例、计划与历史报告。 */
+  /** Always show a confirm modal before deleting a version — a mis-click would lose all cases, plans and historical reports under that version. */
   const [confirmDeleteVersion, setConfirmDeleteVersion] = useState<{ projectId: string; versionId: string; versionName: string } | null>(null);
-  // 产品线弹窗状态：新建/编辑草稿、删除确认、成员管理（挂载/摘除同一弹窗）
+  // Product line dialog state: create/edit draft, delete confirm, member management (attach/detach share one dialog)
   const [lineDraft, setLineDraft] = useState<LineDraft | null>(null);
   const [lineEditingId, setLineEditingId] = useState<string | null>(null);
   const [confirmDeleteLine, setConfirmDeleteLine] = useState<ProductLine | null>(null);
   const [manageLine, setManageLine] = useState<ProductLine | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  // 卡片即过滤器：默认选第一条线；记住上次选择，lineId 为 null 表示"不过滤"
+  // Card-as-filter: defaults to the first line; remembers the last choice, lineId null means "no filter"
   const [filterLineId, setFilterLineId] = useState<string | null>(() => readSelectedLine(userId));
-  // 版本弹窗的环境下拉数据源：仅弹窗打开时拉取
+  // Environment dropdown data source for the version dialog: fetched only while the dialog is open
   const envsQ = useQuery({
     queryKey: ['environments', versionForm.projectId],
     queryFn: () => api.environments.list(versionForm.projectId),
     enabled: versionForm.open && !!versionForm.projectId,
   });
-  // 展开状态：默认全部收起，避免大量项目时首屏刷屏；展开过的项目按用户记忆
+  // Expand state: all collapsed by default to avoid flooding the first screen with many projects; expanded projects follow the user's memory
   const expandedKey = userId ? `itest-expanded-projects:${userId}` : null;
   const [expanded, setExpanded] = useState<Set<string>>(() => readExpandedProjects(userId));
   useEffect(() => {
@@ -130,7 +130,7 @@ export default function ProjectsHome() {
     try {
       localStorage.setItem(expandedKey, JSON.stringify([...expanded]));
     } catch {
-      // localStorage 不可用时展开状态仅内存有效。
+      // When localStorage is unavailable, expand state only lives in memory.
     }
   }, [expanded, expandedKey]);
   const toggleExpanded = (id: string) =>
@@ -147,10 +147,10 @@ export default function ProjectsHome() {
       if (id) localStorage.setItem(`itest-selected-line:${userId}`, id);
       else localStorage.removeItem(`itest-selected-line:${userId}`);
     } catch {
-      // localStorage 不可用时选择仅本次会话有效。
+      // When localStorage is unavailable, the selection only lasts this session.
     }
   };
-  // 首次进入（或记忆的线已不存在）默认选第一条线；用户主动取消过滤后不再被拉回
+  // On first entry (or when the remembered line no longer exists), default to the first line; after the user explicitly clears the filter it is not forced back
   const lineDefaultedRef = useRef(false);
   useEffect(() => {
     if (!lines || lines.length === 0) return;
@@ -279,12 +279,12 @@ export default function ProjectsHome() {
     onSuccess: (_r, line) => {
       toast(t('productLines:deleted'), 'success');
       setConfirmDeleteLine(null);
-      // 被删的线若正被选中，落到剩下的第一条线，别把用户留在空视图
+      // If the deleted line was the selected one, fall to the first remaining line so the user is not left on an empty view
       if (filterLineId === line.id) {
         const rest = (lines ?? []).filter((l) => l.id !== line.id);
         selectLine(rest[0]?.id ?? null);
       }
-      // 项目归属变了：项目表里的归属徽标需要重取
+      // Ownership changed: the ownership badge in the project table needs refetching
       qc.invalidateQueries({ queryKey: ['productLines'] });
       qc.invalidateQueries({ queryKey: ['projects'] });
     },
@@ -303,10 +303,10 @@ export default function ProjectsHome() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  /** 某条线内的项目（从 allProjects 的 productLineId 反查，避免为每条线发一次详情请求）。 */
+  /** Projects inside one line (reverse-derived from allProjects by productLineId, avoiding one detail request per line). */
   const projectsOf = (lineId: string) => (data ?? []).filter((p) => p.productLineId === lineId);
-  /** 可挂载候选：本线之外的全部项目——挂载即搬家（项目迁到本线所属组织，标签一并迁移），
-   *  所以「在别的线下」不再是障碍，只有「已在本线下」需要排除。 */
+  /** Attachable candidates: all projects outside this line — attaching means moving (the project migrates to the line's organization, labels migrate along),
+   *  so "being under another line" is no longer an obstacle; only "already under this line" needs excluding. */
   const attachable = (lineId: string) => (data ?? []).filter((p) => p.productLineId !== lineId);
   const attachableProjects = manageLine ? attachable(manageLine.id) : [];
   const manageLineMembers = manageLine ? projectsOf(manageLine.id) : [];
@@ -335,7 +335,7 @@ export default function ProjectsHome() {
           </div>
         ) : (
           <div className="flex flex-col gap-4">
-            {/* 产品线卡片条：既是归属一览，也当过滤器——选中后下方只列该线项目；再点一次取消 */}
+            {/* Product line card strip: both an ownership overview and a filter — when selected, only that line's projects are listed below; click again to cancel */}
             {((lines?.length ?? 0) > 0 || canManage) && (
               <div className="flex gap-3 overflow-x-auto pb-1" data-stagger>
                 {(lines ?? []).map((line) => {
@@ -459,7 +459,7 @@ export default function ProjectsHome() {
                       setForm({
                         ...EMPTY_FORM,
                         open: true,
-                        // 默认归属当前选中的产品线；没选线时用第一条，保证「必选」有初值。
+                        // Default to the currently selected product line; with no selected line, use the first one so the "required" field has an initial value.
                         productLineId: filterLineId ?? (lines ?? [])[0]?.id ?? '',
                       })
                     }
@@ -547,7 +547,7 @@ export default function ProjectsHome() {
         )}
       </PageShellContent>
 
-      {/* 项目新建/编辑弹窗 */}
+      {/* Project create/edit dialog */}
       <Dialog open={form.open} onOpenChange={(open) => setForm((f) => ({ ...f, open }))}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -605,7 +605,7 @@ export default function ProjectsHome() {
         </DialogContent>
       </Dialog>
 
-      {/* 版本新建/编辑弹窗 */}
+      {/* Version create/edit dialog */}
       <Dialog open={versionForm.open} onOpenChange={(open) => setVersionForm((f) => ({ ...f, open }))}>
         <DialogContent>
           <DialogHeader>
@@ -669,7 +669,7 @@ export default function ProjectsHome() {
         </DialogContent>
       </Dialog>
 
-      {/* 删除项目确认 */}
+      {/* Delete project confirm */}
       <Dialog open={!!confirmDelete} onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>{t('projects:deleteProject')}</DialogTitle></DialogHeader>
@@ -692,7 +692,7 @@ export default function ProjectsHome() {
         </DialogContent>
       </Dialog>
 
-      {/* 删除版本确认:数据丢失风险最大,前端一律先弹再发请求 */}
+      {/* Delete version confirm: highest data-loss risk; the frontend always shows the modal before sending the request */}
       <Dialog open={!!confirmDeleteVersion} onOpenChange={(open) => { if (!open) setConfirmDeleteVersion(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>{t('projects:deleteVersion')}</DialogTitle></DialogHeader>
@@ -715,7 +715,7 @@ export default function ProjectsHome() {
         </DialogContent>
       </Dialog>
 
-      {/* 产品线新建/编辑弹窗 */}
+      {/* Product line create/edit dialog */}
       <Dialog open={!!lineDraft} onOpenChange={(o) => !o && setLineDraft(null)}>
         <DialogContent style={{ maxWidth: 520 }}>
           <DialogHeader>
@@ -746,7 +746,7 @@ export default function ProjectsHome() {
         </DialogContent>
       </Dialog>
 
-      {/* 产品线成员管理：project_line_id 必填，项目必属一条线，所以只有「移入」没有「摘除」 */}
+      {/* Product line member management: project_line_id is required and a project must belong to one line, so there is only "move in", no "detach" */}
       <Dialog open={!!manageLine} onOpenChange={(o) => !o && setManageLine(null)}>
         <DialogContent style={{ maxWidth: 520 }}>
           <DialogHeader>
@@ -819,7 +819,7 @@ export default function ProjectsHome() {
         </DialogContent>
       </Dialog>
 
-      {/* 删除产品线确认：线内仍有项目时后端会 409 拒绝 */}
+      {/* Delete product line confirm: the backend rejects with 409 when the line still has projects */}
       <Dialog open={!!confirmDeleteLine} onOpenChange={(o) => !o && setConfirmDeleteLine(null)}>
         <DialogContent style={{ maxWidth: 420 }}>
           <DialogHeader><DialogTitle>{t('productLines:deleteTitle')}</DialogTitle></DialogHeader>
@@ -839,7 +839,7 @@ export default function ProjectsHome() {
         </DialogContent>
       </Dialog>
 
-      {/* 版本 ref 编辑弹窗 */}
+      {/* Version ref edit dialog */}
       <RefEditDialog
         state={refForm}
         onClose={() => setRefForm(EMPTY_REF_FORM)}
@@ -880,7 +880,7 @@ interface ProjectTableRowProps {
   onOpenDeviceTargets: () => void;
 }
 
-/** 平铺表的一行：主行（项目/归属/计数/操作）+ 展开行（版本管理面板）。 */
+/** One row of the flat table: main row (project/ownership/counts/actions) + expanded row (version management panel). */
 function ProjectTableRow({
   project: p,
   expanded,
@@ -983,7 +983,7 @@ interface VersionPanelProps {
   onEditVersionRef: (v: ProjectVersion) => void;
 }
 
-/** 展开行内的版本面板（沿用旧 ProjectRow 展开区：版本列表 + 进入/ref/增删）。 */
+/** Version panel inside the expanded row (carried over from the old ProjectRow expansion: version list + enter/ref/add-remove). */
 function VersionPanel({
   projectId,
   repoUrl,
@@ -998,7 +998,7 @@ function VersionPanel({
     queryKey: ['versions', projectId],
     queryFn: () => api.versions.list(projectId),
   });
-  // 版本行「打开环境域名」取自环境 web 服务 origin；展开时拉一次（与版本弹窗共享缓存）
+  // The version row's "open environment domain" comes from the environment's web service origin; fetched once on expand (cache shared with the version dialog)
   const envsQ = useQuery({
     queryKey: ['environments', projectId],
     queryFn: () => api.environments.list(projectId),
@@ -1027,10 +1027,10 @@ function VersionPanel({
           ) : (
             <ul>
               {(versionsQ.data ?? []).map((v) => {
-                // 版本显式绑定的环境优先，未绑定走项目默认环境（与执行期解析一致）
+                // The version's explicitly bound environment wins; when unbound, fall to the project default environment (consistent with execution-time resolution)
                 const envs = envsQ.data ?? [];
                 const env = envs.find((e) => e.id === v.environmentId) ?? envs.find((e) => e.isDefault);
-                // 「打开环境域名」取自环境 web 服务 origin（优先默认服务）
+                // The "open environment domain" comes from the environment's web service origin (default service preferred)
                 const envUrl = (() => {
                   const web = env?.objects.find((o) => o.objectType === 'web' && o.isDefault)
                     ?? env?.objects.find((o) => o.objectType === 'web');

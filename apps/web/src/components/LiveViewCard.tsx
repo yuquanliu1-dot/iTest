@@ -4,18 +4,18 @@ import LiveViewImg from './LiveViewImg';
 import Button from './ui/Button';
 import Segmented from './ui/Segmented';
 
-/** 回放倍速档位：1x 原速；2/4x 跳看；8x 快速过一遍长录制。 */
+/** Replay speed presets: 1x original speed; 2/4x skim; 8x to blow through a long recording quickly. */
 const SPEEDS = [1, 2, 4, 8] as const;
 
-/** 画面卡：live 实时流 + 结束后「回放」按钮（用户决策：不自动播）+ 回放倍速。
- *  运行中 → 实时画面（无按钮）；运行结束 → 定格最后一帧 + 「回放」按钮；
- *  点回放 → 换成录制回放（?replay=1，从头播一遍播完定格），按钮变「重新回放」，
- *  同时出现倍速档位；切档位 → 换 URL + key 自增，从头以新倍速重播。
- *  事后直接打开已结束的页面 → 没有冻帧，只显示「回放」按钮。
- *  key={session} 每次切换 src 都强制重挂 <img>，保证回放从头开始。
+/** Frame card: live real-time stream + a "replay" button after the run ends (user decision: no autoplay) + replay speed.
+ *  While running → live stream (no button); after the run ends → freeze the last frame + "replay" button;
+ *  clicking replay → switches to recording replay (?replay=1, plays once from the start then freezes), the button becomes "replay again",
+ *  and speed presets appear; switching preset → new URL + key increment, replaying from the start at the new speed.
+ *  Opening the already-ended page directly afterwards → no frozen frame, only the "replay" button shows.
+ *  key={session} forces <img> remount on every src switch, guaranteeing replay starts from the beginning.
  *
- *  录制只在服务端内存里（TTL 30min + LRU 6 份 + 进程重启即失），所以结束时先探一次
- *  ?replay=meta：探测中或不可回放就不显示「回放」按钮（避免点下去撞 404）。 */
+ *  The recording lives only in server memory (30min TTL + LRU 6 entries + lost on process restart), so on end we first probe
+ *  ?replay=meta: while probing or when not replayable, the "replay" button is hidden (avoiding a 404 on click). */
 export default function LiveViewCard({
   liveUrl,
   replayUrl,
@@ -25,12 +25,12 @@ export default function LiveViewCard({
   onFrameVisibleChange,
 }: {
   liveUrl: string;
-  /** 带倍速的回放 URL（speed=1 时即普通 replayUrl）。 */
+  /** Replay URL with speed (speed=1 is the plain replayUrl). */
   replayUrl: (speed: number) => string;
-  /** 录制可用性探测 URL（?replay=meta）。 */
+  /** Recording availability probe URL (?replay=meta). */
   replayMetaUrl: string;
   running: boolean;
-  /** 自适应高度回报：透传 LiveViewImg（详情页并排布局用），其余用法不传保持旧行为。 */
+  /** Adaptive height reporting: passed through to LiveViewImg (used by the detail page's side-by-side layout); other usages omit it to keep old behavior. */
   onFrameHeightChange?: (h: number) => void;
   onFrameVisibleChange?: (visible: boolean) => void;
 }) {
@@ -38,10 +38,10 @@ export default function LiveViewCard({
   const [replaying, setReplaying] = useState(false);
   const [speed, setSpeed] = useState<number>(1);
   const [session, setSession] = useState(0);
-  // live 期间挂载过画面，结束后才保留「定格帧」；从未 live（事后浏览）不显示冻帧。
+  // The stream mounted at least once during live; only then is the "frozen frame" kept after the run ends. Never-live (browsing afterwards) shows no frozen frame.
   const [everRan, setEverRan] = useState(running);
   if (running && !everRan) setEverRan(true);
-  // undefined=未探测（运行中/探测未回来）；true/false=服务端录制是否仍可回放。
+  // undefined = not probed (running / probe hasn't returned); true/false = whether the server-side recording can still be replayed.
   const [replayable, setReplayable] = useState<boolean | undefined>(undefined);
 
   useEffect(() => {

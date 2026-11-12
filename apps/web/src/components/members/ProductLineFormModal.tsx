@@ -4,18 +4,18 @@ import { api, type ProductLine } from '../../api/client';
 
 interface Props {
   visible: boolean;
-  /** null = 新建。 */
+  /** null = create. */
   line: ProductLine | null;
-  /** 新建时的归属组织；编辑时忽略——换组织走线详情页的「移动组织」，是另一个动作（会带着整条线搬家）。 */
+  /** Owning organization at creation; ignored when editing — moving orgs goes through the line detail page's "Move organization", a separate action (it moves the whole line with all its projects). */
   organizationId: string;
   onClose: () => void;
   onSaved: () => void;
 }
 
 /**
- * 产品线的创建/编辑弹窗（成员管理界面用）。
- * 产品线必属组织，但**这里只管名称与描述**——换组织走产品线详情页的「移动组织」，
- * 那是会带着线内全部项目一起搬家的动作，不能和改名混在一个表单里。
+ * Product line create/edit dialog (used by the member management UI).
+ * A product line must belong to an organization, but **this dialog only handles name and description** — moving orgs goes through
+ * the product line detail page's "Move organization", an action that relocates all projects in the line and must not be mixed into the rename form.
  */
 export default function ProductLineFormModal({ visible, line, organizationId, onClose, onSaved }: Props) {
   const { t } = useTranslation();

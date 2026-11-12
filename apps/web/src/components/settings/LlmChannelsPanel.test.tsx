@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-// api.settings.llm / putLlm 替换：其余走真实实现（i18n / stores 都从这里 import）。
+// api.settings.llm / putLlm are replaced: everything else uses the real implementation (i18n / stores all import from it).
 const llmGet = vi.fn();
 const llmPut = vi.fn();
 vi.mock('../../api/client', async (importOriginal) => {
@@ -42,7 +42,7 @@ function renderPanel() {
   );
 }
 
-/** 打开第 n 个渠道的编辑弹窗（0 起）。 */
+/** Open the edit dialog of the nth channel (0-based). */
 async function openEditDialog(index = 0) {
   fireEvent.click(screen.getAllByRole('button', { name: '编辑渠道' })[index]!);
   return screen.findByRole('dialog');
@@ -66,7 +66,7 @@ describe('LlmChannelsPanel 渠道编辑落库', () => {
 
     const dialog = await openEditDialog();
     fireEvent.change(within(dialog).getByDisplayValue('主渠道'), { target: { value: '改名后的渠道' } });
-    // 光改不发请求：落库发生在点「保存」时
+    // Changing the name alone sends no request: persistence happens when "Save" is clicked
     expect(llmPut).not.toHaveBeenCalled();
 
     fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
@@ -80,7 +80,7 @@ describe('LlmChannelsPanel 渠道编辑落库', () => {
         { id: 'ch-2', name: '视觉渠道', provider: 'openai', model: 'qwen-vl' },
       ],
     });
-    // apiKey 留空 = 服务端按 id 保留存量原值，不回传掩码
+    // Empty apiKey = the server keeps the stored original by id; the mask is not sent back
     expect(llmPut.mock.calls[0]![0].channels[0].apiKey).toBeUndefined();
   });
 

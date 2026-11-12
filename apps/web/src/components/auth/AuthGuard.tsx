@@ -3,7 +3,7 @@ import { Navigate, Outlet } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '../../stores/auth';
 
-/** 路由守卫：挂载时探测会话；未登录跳 /login，登录后渲染子路由。 */
+/** Route guard: probes the session on mount; redirects to /login if not logged in, renders child routes after login. */
 export default function AuthGuard() {
   const { t } = useTranslation();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);

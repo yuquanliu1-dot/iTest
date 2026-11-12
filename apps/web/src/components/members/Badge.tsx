@@ -1,6 +1,6 @@
 interface Props { label: string; accent?: boolean }
 
-/** 角色/计数角标：accent 用于强调（如「管理者」），否则为中性灰。 */
+/** Role/count badge: accent for emphasis (e.g. "Manager"), otherwise neutral gray. */
 export default function Badge({ label, accent }: Props) {
   return (
     <span style={{

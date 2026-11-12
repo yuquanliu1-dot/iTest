@@ -17,11 +17,11 @@ describe('localizeApiError', () => {
 });
 
 describe('locale 键集对齐', () => {
-  // 用 glob 枚举而非逐个 import：新增 namespace 时测试自动覆盖，
-  // 不必改测试本身（漏改才是这种漂移的根因）。
+  // Enumerate with glob instead of importing one by one: adding a namespace is automatically covered by the test,
+  // no test change needed (a missed change is the root cause of this kind of drift).
   const modules = import.meta.glob<Record<string, string>>('./locales/*/*.json', { eager: true });
-  // i18next 的复数形态后缀是语言特性而非缺失：en 需要 _one/_other，zh 只需 _other。
-  // 比对前剥掉后缀，两边折算成同一批「基础键」。
+  // i18next's plural suffixes are a language feature, not a missing key: en needs _one/_other, zh only needs _other.
+  // Strip the suffixes before comparing, folding both sides into the same set of "base keys".
   const PLURAL = /_(zero|one|two|few|many|other)$/;
   const baseKeys = (mod: Record<string, string>): string[] =>
     [...new Set(Object.keys(mod).map((k) => k.replace(PLURAL, '')))].sort();

@@ -9,7 +9,7 @@ function SkeletonBlock({ h = 92 }: { h?: number }) {
   );
 }
 
-/** 与实际页布局同构：5 张等宽 KPI、8+4 趋势排、3 张并排卡、计划表、6+6 尾排。 */
+/** Isomorphic with the actual page layout: 5 equal-width KPIs, an 8+4 trend row, 3 side-by-side cards, the plan table, a 6+6 tail row. */
 export default function OverviewSkeleton() {
   return (
     <PageShell>

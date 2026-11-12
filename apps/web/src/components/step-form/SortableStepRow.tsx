@@ -11,7 +11,7 @@ interface Props {
   children: ReactNode;
 }
 
-/** 可排序行容器：仅左侧手柄可发起拖拽（listeners 只绑在手柄上），行内容仍由父级渲染。 */
+/** Sortable row container: only the left handle can initiate dragging (listeners bind to the handle only); row content is still rendered by the parent. */
 export default function SortableStepRow({ id, disabled, isEditing, children }: Props) {
   const { t } = useTranslation();
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =

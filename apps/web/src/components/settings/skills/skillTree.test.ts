@@ -46,14 +46,14 @@ describe('buildTree', () => {
     ]);
     const ev = tree[0]!;
     expect(ev.path).toBe('eval-viewer');
-    // lib 目录排在 gen.py 前面
+    // lib dir sorts before gen.py
     expect(ev.kind === 'dir' && ev.children.map((c) => c.path)).toEqual(['eval-viewer/lib', 'eval-viewer/gen.py']);
     const lib = ev.kind === 'dir' ? ev.children[0] : null;
     expect(lib?.kind === 'dir' && lib.children[0]?.path).toBe('eval-viewer/lib/util.py');
   });
 
   it('父目录节点缺失时不丢文件（提升为顶层），而非整段消失', () => {
-    // 服务端总会先发 dir 节点；这里是防御：万一没有，文件也得看得见。
+    // The server always sends dir nodes first; this is defensive: in case it doesn't, files must still be visible.
     const tree = buildTree([n('scripts/run.py', 'file')]);
     expect(tree.map((x) => x.path)).toEqual(['scripts/run.py']);
   });

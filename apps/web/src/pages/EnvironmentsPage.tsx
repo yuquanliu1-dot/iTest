@@ -36,7 +36,7 @@ interface ObjFormState {
   envId: string;
   envName: string;
   objectType: ObjType;
-  /** null → 新建对象 */
+  /** null → new object */
   object: EnvironmentObject | null;
   dbType: 'postgres' | 'mysql' | 'gauss100';
   syslogAuth: 'key' | 'password';
@@ -49,7 +49,7 @@ interface ObjFormState {
   filePath: string;
   privateKey: string;
   loginUrl: string;
-  /** web 服务：payload.name（可空，空则视为默认服务）+ scheme + host + port(复用 host/port 字段)。 */
+  /** web service: payload.name (optional, empty means the default service) + scheme + host + port (reuses the host/port fields). */
   webName: string;
   webScheme: 'http' | 'https';
 }
@@ -61,7 +61,7 @@ const EMPTY_OBJ_FORM: ObjFormState = {
   webName: '', webScheme: 'http',
 };
 
-/** db 表单 → 连接参数：保存 payload 与「测试连接」共用同一映射。密码留空不上送（后端保留旧密文）。 */
+/** db form → connection params: save payload and "test connection" share the same mapping. An empty password is not sent (backend keeps the old ciphertext). */
 function dbFormConn(f: ObjFormState) {
   return {
     dbType: f.dbType,
@@ -73,7 +73,7 @@ function dbFormConn(f: ObjFormState) {
   };
 }
 
-/** syslog 表单 → 连接参数：保存 payload 与「测试连接」共用同一映射。凭据留空不上送（后端保留旧密文）。 */
+/** syslog form → connection params: save payload and "test connection" share the same mapping. Empty credentials are not sent (backend keeps the old ciphertext). */
 function syslogFormConn(f: ObjFormState) {
   return {
     host: f.host.trim(),
@@ -87,13 +87,13 @@ function syslogFormConn(f: ObjFormState) {
   };
 }
 
-/** 组装对象 payload：密码/私钥字段原样上送，留空由后端保留旧密文（不覆盖语义）。 */
+/** Assemble the object payload: password/private-key fields are sent as typed; leaving them empty means the backend keeps the old ciphertext (no-overwrite semantics). */
 function buildObjectPayload(f: ObjFormState): Record<string, unknown> {
   if (f.objectType === 'db') {
     return dbFormConn(f);
   }
   if (f.objectType === 'web') {
-    // 0041 起 web 内嵌应用登录凭据(user/loginUrl/password 留空由后端保留旧密文)
+    // Since 0041, web embedded-app login credentials (user/loginUrl left empty → backend keeps the old ciphertext)
     return {
       ...(f.webName.trim() ? { name: f.webName.trim() } : {}),
       scheme: f.webScheme,
@@ -118,7 +118,7 @@ function objectSummary(o: EnvironmentObject): string {
   return [p.host, p.filePath].filter(Boolean).join(' · ');
 }
 
-/** 该对象是否已配置访问凭据：以后端出参的 hasSecret 标志位为准（不再依赖反向解析被 mask 的 secret）。 */
+/** Whether the object has access credentials configured: go by the backend's hasSecret flag (no longer rely on reverse-parsing the masked secret). */
 function objectHasSecret(o: EnvironmentObject): boolean {
   return Boolean(o.hasSecret);
 }
@@ -139,7 +139,7 @@ export default function EnvironmentsPage() {
   const [envForm, setEnvForm] = useState<EnvFormState>(EMPTY_ENV_FORM);
   const [objForm, setObjForm] = useState<ObjFormState>(EMPTY_OBJ_FORM);
   const [confirmEnv, setConfirmEnv] = useState<{ env: Environment; caseCount: number; planCount: number } | null>(null);
-  /** 删除对象前一律先弹 modal —— 任何引用计数都是 0 也要点确认才走请求。 */
+  /** Always show a confirm modal before deleting an object — even at reference count 0 the request only goes out after confirmation. */
   const [confirmObj, setConfirmObj] = useState<{ id: string; label: string } | null>(null);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['environments', projectId] });
@@ -172,7 +172,7 @@ export default function EnvironmentsPage() {
     mutationFn: ({ id, confirm }: { id: string; confirm: boolean }) =>
       api.environments.remove(id, { confirm }),
     onSuccess: (r, vars) => {
-      // 后端返回 requiresConfirm 时,前端弹二次确认 modal 显示引用计数;否则 done。
+      // When the backend returns requiresConfirm, the frontend shows a second-confirm modal with reference counts; otherwise done.
       if (r.requiresConfirm) {
         const env = envsQ.data?.find((e) => e.id === vars.id);
         if (env) setConfirmEnv({ env, caseCount: r.caseCount ?? 0, planCount: r.planCount ?? 0 });
@@ -217,7 +217,7 @@ export default function EnvironmentsPage() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  // 连接测试：用表单当前值（未保存也可）；编辑态凭据留空由后端回退已存密文
+  // Connection test: uses the form's current values (works even unsaved); with edit-state credentials left empty, the backend falls back to the stored ciphertext
   const testConn = useMutation({
     mutationFn: () => {
       if (objForm.objectType === 'db') {
@@ -237,15 +237,15 @@ export default function EnvironmentsPage() {
       envName: env.name,
       objectType,
       object,
-      // 缺 dbType 时按 url 的 jdbc 前缀推断（与后端 resolveDbDialect 同一份逻辑）：
-      // 存量数据只有 jdbc:mysql:// 却没写 dbType，回填成 postgres 会把用户推向错误库型。
+      // When dbType is missing, infer it from the url's jdbc prefix (same logic as the backend's resolveDbDialect):
+      // legacy data has only jdbc:mysql:// with no dbType; backfilling it as postgres would push users to the wrong database type.
       dbType: resolveDbDialect(p),
       syslogAuth: p.authType === 'password' ? 'password' : 'key',
       host: String(p.host ?? ''),
       port: p.port != null ? String(p.port) : '',
       dbName: String(p.dbName ?? ''),
       user: String(p.user ?? ''),
-      // 密码/私钥永不回显：留空提交即保留旧密文
+      // Password/private key are never echoed back: submitting empty keeps the old ciphertext
       sshPort: p.sshPort != null ? String(p.sshPort) : '22',
       filePath: String(p.filePath ?? ''),
       loginUrl: String(p.loginUrl ?? ''),
@@ -436,7 +436,7 @@ export default function EnvironmentsPage() {
         )}
       </PageShellContent>
 
-      {/* 环境新建/重命名弹窗 */}
+      {/* Environment create/rename dialog */}
       <Dialog open={envForm.open} onOpenChange={(open) => setEnvForm((f) => ({ ...f, open }))}>
         <DialogContent>
           <DialogHeader>
@@ -459,7 +459,7 @@ export default function EnvironmentsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* 对象（DB / syslog）编辑弹窗 */}
+      {/* Object (DB / syslog) edit dialog */}
       <Dialog open={objForm.open} onOpenChange={(open) => setObjForm((f) => ({ ...f, open }))}>
         <DialogContent>
           <DialogHeader>
@@ -632,7 +632,7 @@ export default function EnvironmentsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* 删除环境确认:前端一律先弹 modal,再发请求;后端 requiresConfirm 作为双保险保留。 */}
+      {/* Delete environment confirm: the frontend always shows a modal first, then sends the request; backend requiresConfirm is kept as a double safeguard. */}
       <Dialog open={!!confirmEnv} onOpenChange={(open) => { if (!open) setConfirmEnv(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>{t('environments:deleteEnv')}</DialogTitle></DialogHeader>
@@ -653,7 +653,7 @@ export default function EnvironmentsPage() {
           </div>
         </DialogContent>
       </Dialog>
-    {/* 删除对象确认弹窗 —— 不论引用计数,先弹再发请求,避免误点。 */}
+    {/* Delete object confirm dialog — regardless of reference count, confirm first then send, avoiding accidental clicks. */}
       <Dialog open={!!confirmObj} onOpenChange={(open) => { if (!open) setConfirmObj(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>{t('environments:deleteObj')}</DialogTitle></DialogHeader>

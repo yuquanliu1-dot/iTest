@@ -7,7 +7,7 @@ interface ToggleProps {
   label?: string;
 }
 
-// 内核为 CRM shadcn Switch（32x18 主色滑块），保留 iTest 的 checked/onChange/label API
+// Core is the CRM shadcn Switch (32x18 primary-color slider), keeping iTest's checked/onChange/label API
 export default function Toggle({ checked, onChange, disabled = false, label }: ToggleProps) {
   return (
     <label

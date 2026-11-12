@@ -1,9 +1,9 @@
 /**
- * 执行计划调度 modal（iDO AutomationEditorDialog 风格）。
+ * Plan schedule modal (iDO AutomationEditorDialog style).
  *
- * 模型：cron 表达式 + IANA 时区，按固定时刻重复触发。
- * UI：preset Select（每小时 / 每天 / 工作日 / 每周 / 每月 / 自定义）
- *     + 条件性的周/时间 Select + 「自定义」模式下展开 5 字段 cron 输入面板。
+ * Model: cron expression + IANA timezone, triggered repeatedly at fixed times.
+ * UI: preset Select (hourly / daily / weekdays / weekly / monthly / custom)
+ *     + conditional weekday/time Selects + a 5-field cron input panel expanded in "custom" mode.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -29,7 +29,7 @@ const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, 
 const MINUTE_OPTIONS = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'));
 
 const FIELD_KEYS = ['minute', 'hour', 'day', 'month', 'weekday'] as const;
-/** cron 5 字段名 = i18n key（由组件 t() 渲染）。 */
+/** The cron's 5 field names = i18n keys (rendered by the component's t()). */
 const FIELD_LABELS: Record<typeof FIELD_KEYS[number], string> = {
   minute: 'plans:field.minute',
   hour: 'plans:field.hour',
@@ -134,7 +134,7 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
           <DialogTitle>{editing ? t('plans:editSchedule') : t('plans:addScheduleTitle')}</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-3 text-[13px] px-5 py-2">
-          {/* 频率 Select */}
+          {/* Frequency Select */}
           <div className="flex items-center gap-2">
             <FieldLabel className="shrink-0 w-16">{t('plans:frequency')}</FieldLabel>
             <select
@@ -148,7 +148,7 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
             </select>
           </div>
 
-          {/* 每周模式：星期 Select */}
+          {/* Weekly mode: weekday Select */}
           {preset === 'weekly' && (
             <div className="flex items-center gap-2">
               <FieldLabel className="shrink-0 w-16">{t('plans:weekdayLabel')}</FieldLabel>
@@ -164,7 +164,7 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
             </div>
           )}
 
-          {/* 时间 / 分钟 Select（hourly 仅显示分钟） */}
+          {/* Time / minute Selects (hourly shows the minute only) */}
           {preset !== 'custom' && preset !== 'hourly' && (
             <div className="flex items-center gap-2">
               <FieldLabel className="shrink-0 w-16">{t('plans:timeLabel')}</FieldLabel>
@@ -201,7 +201,7 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
             </div>
           )}
 
-          {/* 自定义 cron：5 字段卡 + 状态行 */}
+          {/* Custom cron: 5-field cards + status row */}
           {preset === 'custom' && (
             <div className="flex flex-col gap-1">
               <FieldLabel>{t('plans:cronExpr')}</FieldLabel>
@@ -243,7 +243,7 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
             </div>
           )}
 
-          {/* 时区（默认 Asia/Shanghai；开放编辑以便将来多区域场景） */}
+          {/* Timezone (defaults to Asia/Shanghai; editable for future multi-region scenarios) */}
           <div className="flex items-center gap-2">
             <FieldLabel className="shrink-0 w-16">{t('plans:timezone')}</FieldLabel>
             <input
@@ -255,7 +255,7 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
             />
           </div>
 
-          {/* 下次执行预览 */}
+          {/* Next run preview */}
           <div className="flex items-baseline justify-between gap-2 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
             <span className="truncate">{label}</span>
             {nextRun && <span>{t('plans:nextRunAt', { time: formatLocal(nextRun, timezone) })}</span>}
@@ -287,7 +287,7 @@ export default function ScheduleDialog({ editing, onClose, onCreate, onPatch }: 
   );
 }
 
-/** 把 Date 渲染成「YYYY-MM-DD HH:mm」并按 tz 校准；数字格式跟随当前界面语言。 */
+/** Render a Date as "YYYY-MM-DD HH:mm" aligned to tz; the digit format follows the current UI language. */
 function formatLocal(d: Date, tz: string): string {
   try {
     const fmt = new Intl.DateTimeFormat(i18n.language === 'en-US' ? 'en-US' : 'zh-CN', {

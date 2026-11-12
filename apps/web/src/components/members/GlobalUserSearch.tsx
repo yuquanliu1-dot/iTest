@@ -5,8 +5,8 @@ import { api, type UserSummary } from '../../api/client';
 interface Props { onPick: (userId: string) => void }
 
 /**
- * 跨组织搜人。左树固定后，找「不在当前树路径上的人」只能靠它兜底。
- * 命中后直接进用户详情。
+ * Cross-organization user search. Once the left tree is pinned, this is the only fallback for finding people
+ * not on the current tree path. A hit goes straight to the user detail.
  */
 export default function GlobalUserSearch({ onPick }: Props) {
   const { t } = useTranslation();

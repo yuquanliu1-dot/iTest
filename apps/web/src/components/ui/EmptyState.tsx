@@ -12,7 +12,7 @@ export default function EmptyState({
   title: string;
   description?: string;
   action?: ReactNode;
-  /** 卡片内的小空态（列表容器里的一行），收紧留白；整页空态保持默认的大留白。 */
+  /** Small empty state inside a card (one row within a list container); tightens whitespace; full-page empty states keep the default large padding. */
   compact?: boolean;
 }) {
   return (

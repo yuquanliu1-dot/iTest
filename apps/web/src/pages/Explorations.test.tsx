@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-// api 只 mock 列表与卡片行内操作用的端点（建会话/建矩阵不在本用例范围）。
+// api mocks only the endpoints used by the list and the card inline actions (creating a session/matrix is out of scope for this suite).
 const { explorationList, explorationCancel, explorationRemove, explorationCreate } = vi.hoisted(() => ({
   explorationList: vi.fn(),
   explorationCancel: vi.fn(),

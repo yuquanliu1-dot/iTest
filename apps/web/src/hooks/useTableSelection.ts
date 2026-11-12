@@ -1,23 +1,23 @@
 import { useCallback, useMemo, useState } from "react";
 
 /**
- * 表格批量选择的轻量 hook。
- * API 对齐 crm `@crm/ui/hooks/use-table-selection`（CRM 那个用 Set，状态稍重）。
+ * Lightweight hook for table batch selection.
+ * API aligned with crm `@crm/ui/hooks/use-table-selection` (the CRM one uses a Set, slightly heavier state).
  *
- * 输入：当前页所有可勾选行的 id；不强制——可以传 `ids.length === 0` 表示无行可勾。
+ * Input: ids of all selectable rows on the current page; not enforced — `ids.length === 0` may be passed meaning nothing to check.
  *
- * 输出：
- * - `ids` 当前已勾选的稳定数组（顺序不保证，便于传给后端 bulk API）
- * - `count` 已勾选数量
- * - `allSelected` 当前页所有 id 都已勾
- * - `someSelected` 当前页有部分已勾（不是全部、不是零）
- * - `has(id)` 是否已勾
- * - `toggle(id, v)` 单行 toggle；v 缺省按当前值取反
- * - `toggleAll(v)` 当前页全部 toggle；v 缺省按 allSelected 取反
- * - `clear()` 清空选择
+ * Output:
+ * - `ids` stable array of currently checked ids (order not guaranteed, convenient for backend bulk APIs)
+ * - `count` number checked
+ * - `allSelected` every id on the current page is checked
+ * - `someSelected` some (not all, not zero) of the current page are checked
+ * - `has(id)` whether checked
+ * - `toggle(id, v)` toggle one row; v defaults to inverting the current value
+ * - `toggleAll(v)` toggle the whole current page; v defaults to inverting allSelected
+ * - `clear()` clear the selection
  */
 export function useTableSelection(ids: string[]) {
-	// 用 Set 存已选 id，再以"输入 ids 的顺序"导出去重数组 → ids 顺序稳定，避免 React Query key 漂移
+	// Store selected ids in a Set, then export a deduped array in "input ids order" → stable ids order, avoiding React Query key drift
 	const [selected, setSelected] = useState<Set<string>>(() => new Set());
 
 	const orderedIds = useMemo(() => ids, [ids]);
@@ -40,7 +40,7 @@ export function useTableSelection(ids: string[]) {
 			setSelected((prev) => {
 				const v = value ?? !allSelected;
 				if (!v) {
-					// 清空只清当前页里的 id，跨页保持选择
+					// Clearing only clears ids on the current page; cross-page selections are kept
 					const next = new Set(prev);
 					for (const id of orderedIds) next.delete(id);
 					return next;
@@ -60,7 +60,7 @@ export function useTableSelection(ids: string[]) {
 	const has = useCallback((id: string) => selected.has(id), [selected]);
 
 	const outputIds = useMemo(() => {
-		// 优先用当前页 id 的顺序输出已选，便于和上呼交互保持视觉顺序一致
+		// Prefer current-page id order when exporting selections, keeping visual order consistent with the interaction above
 		const seen = new Set<string>();
 		const out: string[] = [];
 		for (const id of orderedIds) {

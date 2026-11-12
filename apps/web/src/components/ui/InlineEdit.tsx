@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/** 行内编辑文本：常态只渲染一段文字，点一下（或聚焦）变 input。
- *  Enter / blur 提交，Esc 还原。空串与未改动一律不提交（避免误触清空）。
- *  保存中禁用，失败时回到原值并把提示交给调用方的 onError。 */
+/** Inline text editing: normally renders a piece of text; a click (or focus) turns it into an input.
+ *  Enter / blur commits, Esc reverts. Empty strings and unchanged values are never committed (avoids accidental clearing).
+ *  Disabled while saving; on failure reverts to the original value and leaves the notice to the caller's onError. */
 export default function InlineEdit({
   value,
   onSave,
@@ -32,7 +32,7 @@ export default function InlineEdit({
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 服务端值变化时（他人改名 / 保存返回）同步退出编辑态，避免下次打开显示旧草稿
+  // When the server value changes (someone else renames / a save returns), exit editing in sync so the next open doesn't show a stale draft
   useEffect(() => {
     if (!editing) setDraft(value);
   }, [value, editing]);
@@ -53,7 +53,7 @@ export default function InlineEdit({
     try {
       await onSave(next);
     } catch {
-      // 失败提示由调用方 onError 负责（mutation 已 toast），这里只复原草稿
+      // Failure notice is the caller's onError responsibility (the mutation already toasts); here we only restore the draft
       setDraft(value);
     } finally {
       setSaving(false);

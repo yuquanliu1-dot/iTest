@@ -1,10 +1,10 @@
 import { cn } from '../../lib/cn';
 import type * as React from 'react';
 
-// CRM page-shell 移植：内容区 padding + clamp(100%-2rem,100rem) 容器 + 页标题族。
-// 各页面在 Phase 4 逐页接入；contained 用于全高应用型页面（不外滚）。
-// 容器宽度策略:小屏几乎贴边,大屏(≥1920)封顶 1600px,中间线性增长,
-// 减少宽屏左右大块留白。
+// CRM page-shell port: content-area padding + clamp(100%-2rem,100rem) container + page title family.
+// Pages adopt it one by one in Phase 4; contained is for full-height app-style pages (no outer scrolling).
+// Container width strategy: nearly edge-to-edge on small screens, capped at 1600px on large screens (≥1920),
+// growing linearly in between to reduce large blank margins on wide screens.
 
 function PageShell({
   className,
@@ -22,11 +22,11 @@ function PageShell({
       <div
         data-slot="page-shell"
         className={cn(
-          // 大屏自适应:clamp(可用宽度-2rem padding, 1600px)
-          // 1024 以下 ≈ 屏宽;1440 ≈ 1376;1920 拉满 1600 后停止增长,避免过宽
+          // Large-screen adaptive: clamp(available width - 2rem padding, 1600px)
+          // below 1024 ≈ screen width; 1440 ≈ 1376; growth stops at 1600 once 1920 is reached to avoid over-wide layouts
           'mx-auto flex w-full min-w-0 max-w-[min(100%-2rem,100rem)] flex-1 flex-col gap-6',
-          // contained 模式下必须允许收缩，否则 min-height:auto 使内容撑破
-          // overflow-hidden 的滚动容器，底部（如分页器）被裁掉且无法滚动。
+          // In contained mode shrinking must be allowed, otherwise min-height:auto makes the content overflow
+          // the overflow-hidden scroll container and the bottom (e.g. the paginator) gets clipped and unscrollable.
           contained && 'min-h-0',
           className,
         )}
@@ -93,8 +93,8 @@ function PageShellContent({ className, ...props }: React.ComponentProps<'div'>) 
   return (
     <div
       data-slot="page-shell-content"
-      // contained 模式下需要 min-h-0 + overflow-hidden 让 DataTable 的卡片
-      // 不撑破 PageShell，并把分页器钉在视口底部。
+      // In contained mode min-h-0 + overflow-hidden keep the DataTable card from
+      // overflowing PageShell and pin the paginator to the bottom of the viewport.
       className={cn('flex flex-1 flex-col gap-6 min-h-0', className)}
       {...props}
     />

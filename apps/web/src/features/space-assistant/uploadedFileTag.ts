@@ -1,7 +1,7 @@
 /**
- * <uploaded-file …/> 引用标签：构造（adapter send 用）与解析折叠（气泡渲染用）。
- * 标签以纯文本形态进消息正文——这是「乐观消息 == pi 记录 == 回放」一致性的载体，
- * 渲染层只做显示变换，绝不改消息原文。
+ * <uploaded-file …/> reference tag: construction (adapter send) and parsing/folding (bubble rendering).
+ * The tag enters the message body as plain text — it is the carrier of "optimistic message == pi record == replay" consistency;
+ * the render layer only does display transforms and never alters the message original.
  */
 export interface UploadedFileMeta {
   name: string;
@@ -9,9 +9,9 @@ export interface UploadedFileMeta {
   chars: string;
 }
 
-/** 属性顺序固定（name/path/chars），与解析正则互为镜像。
- *  前导 \s*：标签紧贴正文换行时（典型：正文\n<uploaded-file …/>），换行随标签一起吃掉，
- *  正文段不带尾随空白——round-trip 与折叠渲染都依赖这一语义。 */
+/** Attribute order fixed (name/path/chars), mirror of the parsing regex.
+ *  Leading \s*: when the tag hugs the body's newline (typical: body\n<uploaded-file …/>), the newline is consumed together with the tag,
+ *  so the body segment carries no trailing whitespace — both round-trip and folded rendering depend on this semantic. */
 export const UPLOADED_FILE_TAG_RE = /\s*<uploaded-file\s+name="([^"]*)"\s+path="([^"]*)"\s+chars="([^"]*)"\s*\/>/g;
 
 export function buildUploadedFileTag(name: string, path: string, chars: number | null): string {
@@ -20,9 +20,9 @@ export function buildUploadedFileTag(name: string, path: string, chars: number |
   return `<uploaded-file name="${n}" path="${path}" chars="${c}"/>`;
 }
 
-/** 把文本切成 [string | UploadedFileMeta, …] 段。纯函数。 */
+/** Split text into [string | UploadedFileMeta, …] segments. Pure function. */
 export function splitUploadedFileTags(text: string): (string | UploadedFileMeta)[] {
-  // 模块级 /g 正则被外部 .test() 用过后 lastIndex 残留——用前归零，matchAll 从头迭代。
+  // A module-level /g regex keeps a stale lastIndex after external .test() calls — reset before use, matchAll iterates from the start.
   UPLOADED_FILE_TAG_RE.lastIndex = 0;
   const out: (string | UploadedFileMeta)[] = [];
   let last = 0;

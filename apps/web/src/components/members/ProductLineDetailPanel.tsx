@@ -12,7 +12,7 @@ import ProductLineFormModal from './ProductLineFormModal';
 interface Props {
   productLineId: string;
   onBack: () => void;
-  /** 打开线内某个项目的详情（沿用项目详情面板：分配用户 / 变更产品线）。 */
+  /** Open a project's detail within the line (reuses the project detail panel: assign users / change product line). */
   onOpenProject: (projectId: string) => void;
 }
 
@@ -23,10 +23,10 @@ interface LineProject {
 }
 
 /**
- * 产品线详情。成员管理界面里产品线完全替代项目，所以这一层承接原「项目详情」的位置：
- * - 线内项目列表：点进去仍是项目详情（分配用户、变更产品线）
- * - 可挂载项目：项目必属一条线，挂到本线即换组织（标签一并迁移）
- * - 编辑 / 删除 / 移动产品线
+ * Product line detail. In the member management UI product lines have fully replaced projects, so this layer takes over the old "project detail" position:
+ * - In-line project list: clicking one still opens project detail (assign users, change product line)
+ * - Attachable projects: a project must belong to a line; attaching to this line switches its organization (labels migrate too)
+ * - Edit / delete / move product line
  */
 export default function ProductLineDetailPanel({ productLineId, onBack, onOpenProject }: Props) {
   const { t } = useTranslation();
@@ -40,19 +40,19 @@ export default function ProductLineDetailPanel({ productLineId, onBack, onOpenPr
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
-  // 「变更产品线」的目标候选：调用者可见的全部线。project_line_id 必填后不存在「移出线」，
-  // 换线只有一个方向——挂到另一条线（项目随之换组织）。
+  // "Change product line" target candidates: all lines visible to the caller. Since project_line_id became required there is no "remove from line";
+  // changing lines has only one direction — attach to another line (the project switches organization with it).
   const [visibleLines, setVisibleLines] = useState<ProductLine[]>([]);
   const [changeTarget, setChangeTarget] = useState<LineProject | null>(null);
-  // 产品线所属组织的管理员才可写（挂载/改/删/移动/换线）。产品线只有 organizationId 没有
-  // path，而 authStore.organizations 只含直接 membership → 目标组织 path 从 managed-subtree
-  // 取，与后端 isManagerOfOrg 对齐，避免展示必然 403 的按钮。
+  // Only admins of the organization owning the line may write (attach/edit/delete/move/line change). A product line only has organizationId, no
+  // path, and authStore.organizations only contains direct memberships → the target org path is taken from managed-subtree,
+  // aligned with the backend's isManagerOfOrg, avoiding showing buttons that would inevitably 403.
   const [orgPaths, setOrgPaths] = useState<Map<string, string>>(new Map());
-  // 「移动组织」的候选：调用者对其有管理员权限的子树节点。移动要双闸门（源 + 目标都管），
-  // 目标一侧的候选同样按 isManagerOfOrgPath 过滤，否则点下去必然 403。
+  // "Move organization" candidates: subtree nodes the caller has admin rights over. Moving needs a double gate (both source and target managed),
+  // and the target-side candidates are likewise filtered by isManagerOfOrgPath — otherwise clicking would inevitably 403.
   const [managedOrgs, setManagedOrgs] = useState<Array<{ id: string; name: string; path: string }>>([]);
 
-  // 切换产品线时旧的异步响应可能后到 → 用 ref 里的当前 id 判一次，避免写脏上一条线。
+  // When switching product lines, a stale async response may arrive late → check once against the current id in the ref to avoid polluting the previous line.
   const currentIdRef = useRef(productLineId);
   currentIdRef.current = productLineId;
 
@@ -102,7 +102,7 @@ export default function ProductLineDetailPanel({ productLineId, onBack, onOpenPr
   const moveOrgChoices = managedOrgs.filter((o) => isManagerOfOrgPath(organizations, o.path));
 
   const inLineIds = new Set(lineProjects.map((p) => p.id));
-  // 可挂载候选：本线之外的全部项目——挂载即搬家，所以「在别的线下」不再是障碍。
+  // Attachable candidates: all projects outside this line — attaching moves the project wholesale, so "already under another line" is no longer a blocker.
   const attachable = allProjects.filter((p) => !inLineIds.has(p.id));
 
   const togglePick = (id: string) => {

@@ -56,7 +56,7 @@ void i18n.use(initReactI18next).init({
   interpolation: { escapeValue: false },
 });
 
-/** 未登录 / 首次访问时先从 localStorage 读(登录后由 auth user 覆盖)。 */
+/** When logged out / first visit, read from localStorage first (overwritten by auth user after login). */
 export function readStoredLang(): Lang {
   try {
     const v = localStorage.getItem(LANG_STORAGE_KEY);
@@ -70,10 +70,10 @@ export function applyHtmlLang(lang: Lang): void {
   document.documentElement.lang = lang === 'en-US' ? 'en' : 'zh-CN';
 }
 
-/** API 错误 → 本地化文案。命中错误码目录用目录；未知 code 回落原始 message。 */
+/** API error → localized text. Errors in the error-code catalog use the catalog; unknown codes fall back to the raw message. */
 export function localizeApiError(err: { code?: string; message?: string } | null | undefined): string {
-  // bad_request 被后端复用：datasets.service.ts 用它回传「第 3 行列 x 回传了敏感占位符…请刷新后重试」等具体可执行文案，
-  // 目录里只有通用「请求参数错误，请检查输入」会误导用户去查输入而非刷新。有 message 时优先透传。
+  // bad_request is reused by the backend: datasets.service.ts uses it to return concrete actionable text like "row 3 column x sent back a sensitive placeholder… please refresh and retry",
+  // and the catalog only has the generic "invalid request parameters, please check your input", which would mislead users into checking input instead of refreshing. Pass through message first when present.
   if (err?.code === 'bad_request' && err.message) {
     return err.message;
   }

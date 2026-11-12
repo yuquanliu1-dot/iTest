@@ -1,18 +1,18 @@
 /**
- * 批量固化的「在途」判定与进度派生（纯函数，供分组页与单测共用）。
- * 在途状态集合与后端 apps/api/src/execute/batchSolidify.ts 的 RUNNING_BATCH_STATUSES 对齐。
+ * "In-flight" determination and progress derivation for batch solidification (pure functions, shared by the groups page and unit tests).
+ * The in-flight status set is aligned with the backend's RUNNING_BATCH_STATUSES in apps/api/src/execute/batchSolidify.ts.
  */
 
-/** 进行中的行状态（与后端 RUNNING_BATCH_STATUSES 一一对应）。 */
+/** In-progress row statuses (one-to-one with the backend's RUNNING_BATCH_STATUSES). */
 export const SOLIDIFY_RUNNING_STATUSES = ['queued', 'solidifying', 'verifying'] as const;
 
-/** 批次行最小形状。 */
+/** Minimal shape of a batch row. */
 export interface SolidifyCaseRef {
   caseId: string;
   status: string;
 }
 
-/** 批次最小形状（进度派生用）。 */
+/** Minimal shape of a batch (for progress derivation). */
 export interface SolidifyBatchRef {
   total: number;
   passed: number;
@@ -21,14 +21,14 @@ export interface SolidifyBatchRef {
   cases: SolidifyCaseRef[];
 }
 
-/** 该行状态是否在途（已固化完成的终态不算）。 */
+/** Whether the row status is in-flight (terminal states of completed solidification don't count). */
 export function isSolidifyRunning(status: string): boolean {
   return (SOLIDIFY_RUNNING_STATUSES as readonly string[]).includes(status);
 }
 
 /**
- * 在途批次里所有正在跑的用例 id 集合（行内「固化中」徽标用）。
- * 只认在途行——同批次里已 passed / failed 的用例不标。
+ * Set of case ids currently running within in-flight batches (for the in-row "solidifying" badge).
+ * Only in-flight rows count — cases already passed / failed in the same batch are not marked.
  */
 export function runningCaseIds(batches: SolidifyBatchRef[]): Set<string> {
   const ids = new Set<string>();
@@ -41,8 +41,8 @@ export function runningCaseIds(batches: SolidifyBatchRef[]): Set<string> {
 }
 
 /**
- * 批次完成百分比（已出终态的行 / 总行）。在途行还没出结果，不计入分子。
- * total 为 0 时返回 0。
+ * Batch completion percentage (rows with terminal states / total rows). In-flight rows have no result yet and don't enter the numerator.
+ * Returns 0 when total is 0.
  */
 export function batchProgressPercent(b: SolidifyBatchRef): number {
   if (b.total <= 0) return 0;

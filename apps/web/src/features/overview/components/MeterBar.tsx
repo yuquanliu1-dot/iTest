@@ -1,8 +1,8 @@
 /**
- * 进度条：细圆角条 + 语义色实心填充。
- * 轨道色 var(--border)，填充色由调用方给语义 var（success/destructive/muted-foreground）。
- * pct 为 0..100 的数值。pct 为 0 时轨道透明 —— 零不该画成一条空灰条，
- * 读数由调用方在数字里给出。
+ * Meter bar: thin rounded bar + solid semantic-color fill.
+ * Track color var(--border); the fill color is a semantic var given by the caller (success/destructive/muted-foreground).
+ * pct is a 0..100 number. When pct is 0 the track is transparent — zero should not be drawn as an empty gray bar;
+ * the reading is given by the caller as a number.
  */
 export default function MeterBar({
   pct,

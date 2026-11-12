@@ -8,7 +8,7 @@
   <body>
     <div id="root"></div>
     <script>
-      // 首帧前恢复主题，避免暗色用户看到亮色闪烁（与 stores/theme.ts 的存储键一致）
+      // Restore theme before first paint to avoid a light flash for dark-mode users (same storage key as stores/theme.ts)
       try {
         if (localStorage.getItem('itest-theme') === 'dark') {
           document.documentElement.classList.add('dark');

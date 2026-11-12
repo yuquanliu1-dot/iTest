@@ -37,10 +37,10 @@ function Meter({
 }
 
 /**
- * 执行概览：执行结果三分（成功 / 失败 / 其他）+ 计划跳过的旁注 +「需要关注」清单。
+ * Execution overview: execution outcomes split three ways (passed / failed / other) + a side note for plan-skipped + a "needs attention" list.
  *
- * 三条 meter 同属「用例报告」这一个人口，占比之和为 100%；
- * 阻塞（计划运行中被跳过的用例）来自另一口径，因此只给计数不给占比。
+ * The three meters all belong to the single "case report" population; their shares sum to 100%;
+ * blocked (cases skipped while a plan run was active) come from a different population, so only the count is shown, no share.
  */
 export default function ExecutionOverviewCard({
   days,
@@ -69,7 +69,7 @@ export default function ExecutionOverviewCard({
     { label: t('overview:execOther'), count: other, color: 'var(--muted-foreground)' },
   ];
 
-  // 需要关注：RCA 环境占比越线 / 待固化步骤。Top 失败与 flaky 已在相邻面板列明，此处不重复。
+  // Needs attention: RCA environment share over the line / pending-solidify steps. Top failures and flaky are already listed in adjacent panels; not repeated here.
   const attention: string[] = [];
   if (rca.analyzed > 0 && rca.byCategory.environment / rca.analyzed >= 0.2) {
     attention.push(t('overview:attentionRcaEnv', { value: formatPct(rca.byCategory.environment / rca.analyzed) }));

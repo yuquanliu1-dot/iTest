@@ -7,7 +7,7 @@ interface UIState {
   showToast: (message: string, kind?: ToastKind) => void;
 }
 
-// 渲染交给 shadcn/sonner Toaster（App.tsx 挂载）；store 只保留 showToast API。
+// Rendering is delegated to the shadcn/sonner Toaster (mounted in App.tsx); the store keeps only the showToast API.
 export const useUIStore = create<UIState>(() => ({
   showToast: (message, kind = 'info') => {
     if (kind === 'success') toast.success(message, { duration: 3500 });

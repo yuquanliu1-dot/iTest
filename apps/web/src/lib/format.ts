@@ -1,4 +1,4 @@
-/** 列表时间列：MM-DD HH:MM（完整时间放 title），与 iDO 表格同口径。 */
+/** List time column: MM-DD HH:MM (full time in title), same convention as iDO tables. */
 export function shortDateTime(iso: string): string {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -9,8 +9,8 @@ export function fullDateTime(iso: string): string {
   return new Date(iso).toLocaleString('zh-CN');
 }
 
-/** 时刻（HH:MM:SS）——步骤「开始时间」用；完整日期时间放 title。
- *  与 fullDateTime 同为本机时区口径，不做 UTC 偏移换算。非法日期回退 '—'。 */
+/** Clock time (HH:MM:SS) — used for step "start time"; full datetime in title.
+ *  Same local-timezone convention as fullDateTime, no UTC offset conversion. Invalid dates fall back to '—'. */
 export function clockTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
@@ -18,7 +18,7 @@ export function clockTime(iso: string): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/** 毫秒 → 人类可读时长（1.2s / 1m 23s / 1h 05m）。null/undefined → '—'。 */
+/** Milliseconds → human-readable duration (1.2s / 1m 23s / 1h 05m). null/undefined → '—'. */
 export function formatDuration(ms: number | null | undefined): string {
   if (ms == null) return '—';
   if (ms < 1000) return `${ms} ms`;
@@ -32,7 +32,7 @@ export function formatDuration(ms: number | null | undefined): string {
   return rm ? `${h}h ${rm}m` : `${h}h`;
 }
 
-/** 字节数 → 人类可读（1.2 KB / 3.4 MB）。与 iDO 文件大小同口径。 */
+/** Byte count → human-readable (1.2 KB / 3.4 MB). Same convention as iDO file sizes. */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const units = ['KB', 'MB', 'GB'];
@@ -45,7 +45,7 @@ export function formatBytes(bytes: number): string {
   return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`;
 }
 
-/** 步骤类型展示名 = i18n key（仅展示用，存储值仍为英文 kind；由调用方组件 t() 渲染）。 */
+/** Step kind display name = i18n key (display only; the stored value remains the English kind; rendered by the caller's t()). */
 export const STEP_KIND_LABELS: Record<string, string> = {
   click: 'cases:stepKind.click',
   press: 'cases:stepKind.press',
@@ -74,7 +74,7 @@ export function stepKindLabel(kind: string): string {
   return STEP_KIND_LABELS[kind] ?? kind;
 }
 
-/** 用例状态展示名 = i18n key（仅展示用，存储值仍为英文；由调用方组件 t() 渲染）。 */
+/** Case status display name = i18n key (display only; the stored value remains English; rendered by the caller's t()). */
 export const CASE_STATUS_LABELS: Record<string, string> = {
   draft: 'cases:status.draft',
   review: 'cases:status.review',

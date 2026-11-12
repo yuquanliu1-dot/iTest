@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react';
 import { api } from '../../api/client';
 
-/** 后端 /threads 行(分页契约)。title/时间可能缺键(JSON undefined),消费方按可缺省处理。 */
+/** Backend /threads row (pagination contract). title/time keys may be missing (JSON undefined); consumers must treat them as optional. */
 export interface ThreadRow {
   id: string;
   title?: string | null;
@@ -24,20 +24,20 @@ export type FetchPage = (
 export const THREAD_PAGE_SIZE = 50;
 
 /**
- * 历史会话列表分页器:react-pi 的 list 适配层封死了内建分页(list 丢弃 {after} 且不回
- * nextCursor),这里自建通道——runtime 的 list() 每次都新鲜拉第 1 页并与本地缓存旧页按
- * id 合并后整体返回,无限滚动只往后翻页、进缓存,再经 aui.threads.reload() 把缓存灌回
- * runtime store。必须新鲜拉第 1 页的原因:core 的 classifyThreads 只输出 list() 返回的
- * 线程,纯缓存会让 settle 重载时刚创建的会话从列表里丢失。
- * 实例与 SpaceWorkspace 挂载同生命周期(组件按 key=versionId 重挂载,实例随版本走)。
+ * History thread list pager: react-pi's list adapter disables built-in pagination (list drops {after} and returns no
+ * nextCursor), so this builds its own channel — the runtime's list() always fetches a fresh page 1 and merges it with
+ * cached old pages by id before returning the whole set; infinite scrolling only pages forward into the cache, then
+ * aui.threads.reload() hydrates the cache back into the runtime store. Why page 1 must be fresh: core's classifyThreads
+ * only outputs threads returned by list(); a pure cache would drop just-created threads from the list on settle reload.
+ * The instance shares SpaceWorkspace's mount lifecycle (the component remounts by key=versionId, the instance follows the version).
  */
 export class ThreadListPager {
   private state: PagerSnapshot = { rows: [], hasMore: false, loadingMore: false };
   private listeners = new Set<() => void>();
   private loadMorePromise: Promise<void> | null = null;
-  /** keyset 是否已耗尽:loadMore 拿到 hasMore=false 即置位,此后 reload 不得把 hasMore
-   *  复活(见 refreshForRuntime)。排序锚点是 createdAt(不可变),行位置永不移动;新会话
-   *  只会出现在第 1 页顶部,不会沉到游标之下,故置位后无需失效。 */
+  /** Whether the keyset is exhausted: set once loadMore gets hasMore=false; afterwards reload must not revive
+   *  hasMore (see refreshForRuntime). The sort anchor is createdAt (immutable), row positions never move; new threads
+   *  only appear at the top of page 1 and never sink below the cursor, so no invalidation is needed after setting. */
   private reachedEnd = false;
 
   constructor(
@@ -53,7 +53,7 @@ export class ThreadListPager {
     return this.opts.fetchPage ?? ((v, o) => api.assistant.listThreadsPaged(v, o));
   }
 
-  // useSyncExternalStore 要求 subscribe/getSnapshot 引用稳定,箭头属性绑定
+  // useSyncExternalStore requires stable subscribe/getSnapshot references; arrow property binding
   subscribe = (fn: () => void): (() => void) => {
     this.listeners.add(fn);
     return () => {
@@ -68,11 +68,12 @@ export class ThreadListPager {
     for (const l of this.listeners) l();
   }
 
-  /** runtime list() 入口:新鲜第 1 页 + 缓存旧页按 id 合并(新鲜副本胜出)。
-   *  位置漂移自愈:旧页行上浮进第 1 页窗口 → 去重掉缓存副本;没进窗口 → 缓存副本保留。
-   *  hasMore 用 reachedEnd 压制:第 1 页满页时 p1.hasMore 恒为 true(第 1 页外确实还有
-   *  行——就在缓存里),照抄会把已熄灭的哨兵复活;用户停在列表底部时哨兵一挂载 observe
-   *  立即命中,触发注定为空的翻页+reload 死循环。 */
+  /** runtime list() entry: fresh page 1 + cached old pages merged by id (fresh copy wins).
+   *  Position-drift self-heal: an old-page row floating into the page 1 window → its cached copy is deduped away;
+   *  not in the window → the cached copy is kept.
+   *  hasMore is suppressed via reachedEnd: when page 1 is a full page p1.hasMore is always true (there really are more
+   *  rows beyond page 1 — they're in the cache), copying verbatim would revive the extinguished sentinel; when the user sits at the list bottom the sentinel,
+   *  once mounted, fires observe immediately, triggering a doomed empty paging+reload infinite loop. */
   async refreshForRuntime(): Promise<ThreadRow[]> {
     const p1 = await this.fetchPage(this.versionId, { limit: this.pageSize });
     const freshIds = new Set(p1.threads.map((r) => r.id));
@@ -81,7 +82,7 @@ export class ThreadListPager {
     return rows;
   }
 
-  /** 无限滚动翻页:游标取缓存末行 id,追加去重。并发调用复用同一 in-flight promise。 */
+  /** Infinite-scroll paging: cursor takes the cached last row's id, append with dedup. Concurrent calls reuse the same in-flight promise. */
   loadMore(): Promise<void> {
     if (this.loadMorePromise) return this.loadMorePromise;
     if (!this.state.hasMore || this.state.loadingMore) return Promise.resolve();
@@ -105,20 +106,20 @@ export class ThreadListPager {
     return this.loadMorePromise;
   }
 
-  /** 删除后清缓存行:store 侧 delete 是乐观删除,不清的话下次 reload 会从缓存复活。 */
+  /** Clear the cache row after deletion: the store-side delete is optimistic; without clearing, the row revives from cache on next reload. */
   removeLocal(id: string): void {
     if (!this.state.rows.some((r) => r.id === id)) return;
     this.commit({ rows: this.state.rows.filter((r) => r.id !== id) });
   }
 
-  /** 改名同步缓存,深页行不必等下一次新鲜第 1 页才见到新标题。 */
+  /** Sync renames into the cache, so deep-page rows don't wait for the next fresh page 1 to see the new title. */
   renameLocal(id: string, title: string): void {
     if (!this.state.rows.some((r) => r.id === id)) return;
     this.commit({ rows: this.state.rows.map((r) => (r.id === id ? { ...r, title } : r)) });
   }
 }
 
-/** RailItem 等经 ItemByIndex components 槽位渲染的组件拿不到 props,经 Context 取 pager。 */
+/** Components rendered through ItemByIndex component slots like RailItem get no props; fetch the pager via Context. */
 export const ThreadPagerContext = createContext<ThreadListPager | null>(null);
 
 export function useThreadPager(): ThreadListPager {

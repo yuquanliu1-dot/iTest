@@ -7,17 +7,17 @@ interface Props {
   visible: boolean;
   productLineId: string;
   productLineName: string;
-  /** 线当前所属组织；候选里排除它（移动到自身没有意义，后端也会 409 same_org）。 */
+  /** The organization the line currently belongs to; excluded from candidates (moving to itself is meaningless, and the backend returns 409 same_org). */
   currentOrganizationId: string;
-  /** 候选组织（调用者对其有管理员权限的 managed-subtree 节点）。 */
+  /** Candidate organizations (managed-subtree nodes the caller has admin rights over). */
   choices: Array<{ id: string; name: string }>;
   onClose: () => void;
   onMoved: () => void;
 }
 
 /**
- * 移动产品线到另一个组织（manager）。走 product-lines/:id/move。
- * 后果是一次性的：线内全部项目跟着换组织，标签一并迁移——所以提示文案必须说清楚。
+ * Move a product line to another organization (manager). Goes through product-lines/:id/move.
+ * The consequence is one-shot: all projects in the line switch organization and labels migrate with them — so the confirm copy must spell this out.
  */
 export default function MoveProductLineModal({
   visible,

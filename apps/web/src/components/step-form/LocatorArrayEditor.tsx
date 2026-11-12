@@ -5,16 +5,16 @@ import IconButton from '../ui/IconButton';
 interface Props {
   locators: Locator[];
   onChange: (next: Locator[]) => void;
-  /** 以 action.locator 开头的错误，如 { 'action.locator.0.value': '…' } */
+  /** Errors keyed by action.locator prefix, e.g. { 'action.locator.0.value': '…' } */
   errors?: Record<string, string>;
-  /** 移动端用例：补全 accessibilityId/label/predicate 三个移动专用策略。 */
+  /** Mobile case: add the three mobile-only strategies accessibilityId/label/predicate. */
   mobile?: boolean;
 }
 
 const STRATEGIES_WEB: Locator['strategy'][] = ['role', 'text', 'testId', 'css', 'xpath'];
 const STRATEGIES_MOBILE_EXTRA: Locator['strategy'][] = ['accessibilityId', 'label', 'predicate'];
 
-/** locator 有序候选数组编辑器：录制会产生多个候选，顺序即回放优先级。 */
+/** Ordered locator candidate array editor: recording produces multiple candidates; the order is the replay priority. */
 export default function LocatorArrayEditor({ locators, onChange, errors = {}, mobile }: Props) {
   const { t } = useTranslation();
   const strategies = mobile ? [...STRATEGIES_WEB, ...STRATEGIES_MOBILE_EXTRA] : STRATEGIES_WEB;

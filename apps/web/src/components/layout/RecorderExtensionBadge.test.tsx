@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 
-// api client 只替换 extensionVersion，其余走真实实现（auth store 也从这里 import）。
+// Only extensionVersion on the api client is replaced; everything else uses the real implementation (the auth store is imported from there too).
 const extensionVersion = vi.fn<() => Promise<{ version: string }>>();
 vi.mock('../../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/client')>();
@@ -23,7 +23,7 @@ import { useAuthStore } from '../../stores/auth';
 const PING_SOURCE = 'ita-web';
 const PONG_SOURCE = 'ita-ext';
 
-/** 组件挂载后发出的 ping 带一个 id；pong 必须回同一个 id 才会被采纳。 */
+/** The ping sent after the component mounts carries an id; a pong must return the same id to be accepted. */
 function installPingSpy(): { respond: (version: string | null) => void } {
   let lastPingId: string | null = null;
   const orig = window.postMessage.bind(window);
@@ -48,7 +48,7 @@ function installPingSpy(): { respond: (version: string | null) => void } {
 async function renderBadge() {
   const ping = installPingSpy();
   render(<RecorderExtensionBadge />);
-  // 等 ping 发出（effect 跑完）再回 pong
+  // Wait for the ping to go out (effect has run) before responding with the pong
   await waitFor(() => expect(window.postMessage).toHaveBeenCalled());
   return ping;
 }
@@ -83,7 +83,7 @@ describe('RecorderExtensionBadge 版本方向', () => {
     await waitFor(() => expect(screen.getByText('录制扩展 v0.0.3')).toBeTruthy());
   });
 
-  // 修复前：单向比较把「装的更新」判成绿色 ready，用户以为已是最新。
+  // Before the fix: the one-directional comparison judged "installed is newer" as green ready, making users believe they were up to date.
   it('已装版本新于部署版本 → 明确提示更新，不谎报就绪', async () => {
     extensionVersion.mockResolvedValue({ version: '0.0.2' });
     const ping = await renderBadge();

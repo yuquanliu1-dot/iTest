@@ -12,9 +12,9 @@ interface Props {
 }
 
 /**
- * 组织的创建/编辑弹窗。
- * - Create：name 必填；parentId 由 props 指定；非平台管理员只看到当前激活组织及后代为可选 parent。
- * - Edit：name/description 可改；parentId 只读（避免误操作把子树搬成环）。
+ * Organization create/edit dialog.
+ * - Create: name is required; parentId comes from props; non-platform admins only see the active org and its descendants as selectable parents.
+ * - Edit: name/description editable; parentId read-only (avoids accidentally moving a subtree into a cycle).
  */
 export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose, onSaved }: Props) {
   const { t } = useTranslation();
@@ -24,7 +24,7 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const isEdit = org !== null;
-  // allOrgs 由调用方内联构造，每次渲染都是新引用；放进 effect 依赖会在每次输入时重跑并清空表单。
+  // allOrgs is constructed inline by the caller, a new reference on every render; putting it in the effect deps would re-run on every keystroke and clear the form.
   const allOrgsRef = useRef(allOrgs);
   allOrgsRef.current = allOrgs;
 
@@ -35,9 +35,9 @@ export default function OrgFormModal({ visible, org, parentId, allOrgs, onClose,
       setEditParentId(org.parentId ?? '');
     } else {
       setForm({ name: '', description: '' });
-      // 新建模式必须有上级组织（API 要求 parentId 为 uuid）：未指定时回落到最上层可见组织。
-      // 不设回落的话 editParentId=''，受控 select 会把选中态显示在第一项上而 state 仍为 ''，
-      // 提交时发出空串被 z.string().uuid() 拒成 400。
+      // Create mode requires a parent org (the API requires parentId to be a uuid): fall back to the topmost visible org when unspecified.
+      // Without the fallback, editParentId='' makes the controlled select show the first item as selected while state stays '',
+      // and submitting the empty string gets rejected as 400 by z.string().uuid().
       setEditParentId(parentId ?? allOrgsRef.current[0]?.id ?? '');
     }
     setError(null);

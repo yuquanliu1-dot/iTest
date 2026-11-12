@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-// api.datasets.get 替换：其余走真实实现（i18n / stores 都从这里 import）。
+// api.datasets.get is replaced: everything else uses the real implementation (i18n / stores all import from it).
 const datasetGet = vi.fn();
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>();
@@ -21,7 +21,7 @@ vi.mock('../api/client', async (importOriginal) => {
 import DatasetRowPickerDialog from './DatasetRowPickerDialog';
 import '../i18n';
 
-/** 3 行数据：第 2 行被禁用 → 启用行下标空间是 0、1（分别对应原始第 1、3 行）。 */
+/** 3 rows: row 2 is disabled → the enabled-row index space is 0, 1 (mapping to original rows 1 and 3). */
 const detail = {
   id: 'ds-1',
   projectId: 'p1',
@@ -60,7 +60,7 @@ function renderPicker(props: Partial<React.ComponentProps<typeof DatasetRowPicke
   return { onConfirm, onFollowCase };
 }
 
-/** 行表格 tbody 里的勾选框（表头全选框在 thead，不参与）。 */
+/** Checkboxes inside the row table's tbody (the header select-all box lives in thead and is excluded). */
 function rowCheckboxes(): HTMLInputElement[] {
   return Array.from(document.querySelectorAll('tbody input[type=checkbox]')) as HTMLInputElement[];
 }
@@ -90,7 +90,7 @@ describe('DatasetRowPickerDialog', () => {
 
   it('value=[]（全部行）→ 打开即全选；确认回传 []', async () => {
     const { onConfirm } = renderPicker({ value: [] });
-    // 先等行渲染出来再断言全选——空数组的 every() 恒真，会假通过
+    // Wait for rows to render before asserting select-all — every() on an empty array is always true and would falsely pass
     await waitFor(() => {
       const boxes = rowCheckboxes();
       expect(boxes).toHaveLength(2);
@@ -115,7 +115,7 @@ describe('DatasetRowPickerDialog', () => {
 
   it('全选状态取消一行 → 确认回传剩余下标', async () => {
     const { onConfirm } = renderPicker({ value: [] });
-    // 先等行渲染出来再断言全选——空数组的 every() 恒真，会假通过
+    // Wait for rows to render before asserting select-all — every() on an empty array is always true and would falsely pass
     await waitFor(() => {
       const boxes = rowCheckboxes();
       expect(boxes).toHaveLength(2);
@@ -132,7 +132,7 @@ describe('DatasetRowPickerDialog', () => {
 
   it('手动取消全部勾选 → 确认禁用；表头全选可恢复（回到全部的唯一入口）', async () => {
     renderPicker({ value: [] });
-    // 先等行渲染出来再断言全选——空数组的 every() 恒真，会假通过
+    // Wait for rows to render before asserting select-all — every() on an empty array is always true and would falsely pass
     await waitFor(() => {
       const boxes = rowCheckboxes();
       expect(boxes).toHaveLength(2);

@@ -1,6 +1,6 @@
 /**
- * 组织树左侧所需的数据获取封装：manager 取 managed-subtree（带计数），
- * 否则退化为直接 membership 列表（无计数）。
+ * Data-fetch wrapper for the left-side org tree: managers get managed-subtree (with counts),
+ * otherwise it falls back to the direct membership list (without counts).
  */
 import { api, type OrgManagedNode, type OrgSummary } from './client';
 
@@ -14,8 +14,8 @@ export type OrgTreeNode = {
 };
 
 export const orgTreeApi = {
-  /** 拉取组织树节点。canManage=true → managed-subtree（带计数）；否则用 memberships。
-   *  reloadToken/attempt 仅用于触发重拉。 */
+  /** Fetch org tree nodes. canManage=true → managed-subtree (with counts); otherwise memberships.
+   *  reloadToken/attempt are only used to trigger re-fetching. */
   async list(canManage: boolean, _reloadToken?: number, _attempt?: number): Promise<OrgTreeNode[]> {
     if (canManage) {
       const rows = await api.orgs.managedSubtree();

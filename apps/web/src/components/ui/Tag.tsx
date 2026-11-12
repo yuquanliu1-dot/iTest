@@ -15,9 +15,9 @@ interface TagChipProps {
 }
 
 /**
- * soft 风格 chip，与 StatusPill 的浅底深字语言一致：
- * 底色 = 标签色低比例混入 var(--card)（color-mix 随主题深浅自动适配），
- * 文字 = 标签色混入少量前景色保证对比度。
+ * Soft-style chip, consistent with StatusPill's light-bg/dark-text language:
+ * background = tag color mixed at a low ratio into var(--card) (color-mix adapts to light/dark theme automatically),
+ * text = tag color mixed with a bit of foreground color to guarantee contrast.
  */
 export default function TagChip({ tag, onRemove, size = 'sm', className }: TagChipProps) {
   const { t } = useTranslation();

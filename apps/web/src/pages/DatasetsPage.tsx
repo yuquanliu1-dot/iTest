@@ -72,7 +72,7 @@ export default function DatasetsPage() {
         description: d.description.trim() || null,
         columns: d.columns.map((c) => ({ name: c.name, sensitive: c.sensitive })),
         rows: d.rows.map((r) => ({ disabled: r.disabled, cells: { ...r.cells } })),
-        // 改名声明：编辑已有数据集时让服务端把旧列密文 re-key 到新列名（新建无旧密文，可省略）
+        // Rename declaration: when editing an existing dataset, tells the server to re-key the old column ciphertext to the new name (a new dataset has no old ciphertext, so it can be omitted)
         ...(d.id && Object.keys(renames).length > 0 ? { renames } : {}),
       };
       return d.id ? api.datasets.update(projectId!, d.id, body) : api.datasets.create(projectId!, body);
@@ -95,17 +95,17 @@ export default function DatasetsPage() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  // ---- 编辑器操作（全部是本地 draft 变更，保存时一次性 PUT） ----
+  // ---- Editor operations (all local draft changes, one PUT at save time) ----
   const mutate = (fn: (d: Draft) => Draft) => setDraft((prev) => (prev ? fn(prev) : prev));
 
   const renameColumn = (i: number, name: string) => mutate((d) => {
     const old = d.columns[i]!.name;
-    // 重名改名整步拒绝（连列名都不改）：撞名保存本就被 saveBlocked 拦住，若允许中间态，
-    // cells 重键会把同名旧列的值覆盖掉（敏感列等于在 draft 里丢密文，保存也救不回）。
+    // Reject a rename-to-duplicate for the whole step (column name untouched): a colliding save is already blocked by saveBlocked; if a mid-state were allowed,
+    // re-keying cells would overwrite the values of the same-named old column (a sensitive column would effectively lose its ciphertext in the draft, unrecoverable even at save).
     if (name && d.columns.some((c, j) => j !== i && c.name === name)) return d;
     const columns = [...d.columns];
-    // renamedFrom 记住本次编辑会话里最初的服务端列名（连续改名链式穿透），保存时据此生成 renames，
-    // 让服务端把旧列密文 re-key 到新列名 —— 否则敏感列改名会静默丢失密文。
+    // renamedFrom remembers the original server-side column name from this editing session (chains through consecutive renames); at save time renames are generated from it,
+    // letting the server re-key the old column ciphertext to the new name — otherwise renaming a sensitive column would silently lose its ciphertext.
     columns[i] = { ...columns[i]!, name, renamedFrom: d.columns[i]!.renamedFrom ?? old };
     const rows = d.rows.map((r) => {
       if (!(old in r.cells)) return r;
@@ -120,7 +120,7 @@ export default function DatasetsPage() {
   });
 
   const toggleSensitive = (i: number) => mutate((d) => {
-    // 敏感↔非敏感切换时清掉占位符（语义交给服务端 prev 规则处理不了本地 draft 的中间态）
+    // Clear the placeholder when toggling sensitive ↔ non-sensitive (the server-side prev rule cannot handle the mid-state of a local draft)
     const col = d.columns[i]!;
     const columns = [...d.columns];
     columns[i] = { ...col, sensitive: !col.sensitive };
@@ -157,7 +157,7 @@ export default function DatasetsPage() {
     return { ...d, rows };
   });
 
-  /** 下载导入模板：编辑已有数据集时把当前列名带给后端，模板表头即数据集现列。 */
+  /** Download import template: when editing an existing dataset, pass the current column names to the backend so the template header equals the dataset's current columns. */
   const downloadTemplate = async () => {
     try {
       const blob = await api.datasets.downloadTemplate(
@@ -177,7 +177,7 @@ export default function DatasetsPage() {
     }
   };
 
-  // Excel 导入：服务端解析 xlsx → 同名列复用（保留敏感标志），新列非敏感，行追加进 draft；保存时才落库。
+  // Excel import: server parses the xlsx → same-named columns are reused (sensitive flag kept), new columns are non-sensitive, rows are appended to the draft; only persisted at save.
   const doImport = useMutation({
     mutationFn: (file: File) => api.datasets.importFile(projectId!, file),
     onSuccess: (payload) => {
@@ -203,7 +203,7 @@ export default function DatasetsPage() {
 
   if (!projectId) return null;
 
-  // ---- 列表视图 ----
+  // ---- List view ----
   if (!draft) {
     return (
       <div className="flex flex-col h-full overflow-hidden">
@@ -291,7 +291,7 @@ export default function DatasetsPage() {
     );
   }
 
-  // ---- 编辑器视图 ----
+  // ---- Editor view ----
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>

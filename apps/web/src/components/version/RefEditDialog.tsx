@@ -13,8 +13,8 @@ export interface RefFormState {
 
 export const EMPTY_REF_FORM: RefFormState = { open: false, projectId: '', version: null };
 
-/** 版本 ref 编辑弹窗：refKind 单选 + ref 下拉（按 kind 调 /refs）。
- *  ProjectsHome 与 VersionsSelectPage 共用此弹窗。 */
+/** Version ref edit dialog: refKind single-select + ref dropdown (calls /refs per kind).
+ *  Shared by ProjectsHome and VersionsSelectPage. */
 export default function RefEditDialog({
   state,
   onClose,
@@ -33,15 +33,15 @@ export default function RefEditDialog({
   const [refs, setRefs] = useState<string[]>([]);
   const [refsError, setRefsError] = useState<string | null>(null);
   const [loadingRefs, setLoadingRefs] = useState(false);
-  // 「测试」：远端存在性校验（ls-remote / REST）。改 ref 或切 kind 后置回 idle。
+  // "Test": remote existence check (ls-remote / REST). Reset to idle after changing the ref or switching kind.
   const [testState, setTestState] = useState<
     { kind: 'idle' } | { kind: 'checking' } | { kind: 'ok' } | { kind: 'fail'; error: string }
   >({ kind: 'idle' });
 
-  // useState 初值只在首挂载取一次（那时 state.version 还是 null）——每次打开都从当前版本
-  // 回填，否则已保存的 ref 在重开的弹窗里显示为空，看着像没持久化。
-  // loadGenRef 是请求代数：关闭/重开（或切 kind 发起新请求）时自增，让在途请求的回填作废——
-  // ls-remote 最长 20s，关窗不终止 fetch，不守卫则「加载中…」挂死且旧响应污染新版本弹窗。
+  // useState initial values are only taken once at first mount (when state.version is still null) — backfill from the current version
+  // on every open; otherwise a saved ref shows as empty in the reopened dialog, looking like it wasn't persisted.
+  // loadGenRef is a request generation counter: incremented on close/reopen (or a kind switch starting a new request) so an in-flight request's backfill is invalidated —
+  // ls-remote can take up to 20s and closing the dialog doesn't abort the fetch; without this guard "loading…" hangs forever and a stale response pollutes the new version dialog.
   const loadGenRef = useRef(0);
   useEffect(() => {
     loadGenRef.current++;

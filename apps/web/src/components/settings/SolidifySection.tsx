@@ -26,7 +26,7 @@ const LESSON_ATTRIBUTION_KEY: Record<string, string> = {
   platform: 'lessonAttributionPlatform', sut: 'lessonAttributionSut',
 };
 
-/** inputSummary 是服务端 JSON.stringify 的 {memories,trajectories,lessons,signals,proposals,notes[]}；解析失败回 null（行内回退显示时间）。 */
+/** inputSummary is the server-side JSON.stringify of {memories,trajectories,lessons,signals,proposals,notes[]}; parse failure returns null (inline fallback shows the time). */
 function batchSummary(raw: string | null): { memories: number; trajectories: number; lessons: number; signals: number; proposals: number; notes: string[] } | null {
   if (!raw) return null;
   try {
@@ -39,7 +39,7 @@ function batchSummary(raw: string | null): { memories: number; trajectories: num
   } catch { return null; }
 }
 
-/** 设置页「固化盘点」：发起盘点（409 防重入 toast）→ 轮询批次 → 提案列表 → 详情 diff + 退役勾选 → 批准/驳回。 */
+/** Settings page "solidify inventory": start an inventory (409 re-entry-guard toast) → poll batches → proposal list → detail diff + retire checkboxes → approve/reject. */
 export default function SolidifySection() {
   const { t } = useTranslation();
   const toast = useUIStore((s) => s.showToast);
@@ -49,12 +49,12 @@ export default function SolidifySection() {
   const [batchPageSize, setBatchPageSize] = useState(PAGE_SIZE);
   const [propPage, setPropPage] = useState(1);
   const [propPageSize, setPropPageSize] = useState(PAGE_SIZE);
-  // 「扫描中」检测独立于当前页：running 批次必是最新一条，但用户可能停在第 2 页，
-  // 不能靠批次列表当前页里有无 running 行来判断。
+  // "Scanning" detection is independent of the current page: a running batch is always the latest one,
+  // but the user may be parked on page 2 — we can't rely on whether the batch list's current page has a running row.
   const runningQ = useQuery({
     queryKey: ['solidify-batches', 'running'],
     queryFn: () => api.assistant.solidify.batches({ status: 'running', limit: 1 }),
-    // 有 running 才轮询；终态停表（refetchInterval 函数式，v5 语义）
+    // Poll only while running; stop on terminal state (functional refetchInterval, v5 semantics)
     refetchInterval: (query) => ((query.state.data?.total ?? 0) > 0 ? 3000 : false),
   });
   const hasRunning = (runningQ.data?.total ?? 0) > 0;
@@ -62,22 +62,22 @@ export default function SolidifySection() {
   const batchesQ = useQuery({
     queryKey: ['solidify-batches', batchPage, batchPageSize],
     queryFn: () => api.assistant.solidify.batches({ page: batchPage, limit: batchPageSize }),
-    refetchInterval: hasRunning ? 3000 : false, // running 期间刷新批次行状态
+    refetchInterval: hasRunning ? 3000 : false, // refresh batch row status while running
   });
   const prevRunning = useRef(false);
   useEffect(() => {
     const was = prevRunning.current;
     prevRunning.current = hasRunning;
-    // running 收口（批次转终态）后补刷一次批次列表，避免最后一行停在 running
+    // After running settles (batch flips to terminal), refresh the batch list once so the last row doesn't stay on running
     if (was && !hasRunning) qc.invalidateQueries({ queryKey: ['solidify-batches'] });
   }, [hasRunning]);
 
   const proposalsQ = useQuery({
     queryKey: ['solidify-proposals', propPage, propPageSize],
     queryFn: () => api.assistant.solidify.proposals({ page: propPage, limit: propPageSize }),
-    refetchInterval: hasRunning ? 5000 : false, // 批次 running 期间顺带刷新提案；done 后由 invalidate 收口
+    refetchInterval: hasRunning ? 5000 : false, // refresh proposals alongside while a batch is running; after done, invalidate settles it
   });
-  // 删除/筛选后当前页可能已越界——钳回最后一页（数据到达后才判，避免翻页途中误钳）
+  // After deletion/filtering the current page may be out of bounds — clamp to the last page (judge only after data arrives, to avoid clamping mid-pagination)
   useEffect(() => {
     if (!batchesQ.data) return;
     const tp = Math.max(1, Math.ceil(batchesQ.data.total / batchPageSize));
@@ -88,13 +88,13 @@ export default function SolidifySection() {
     const tp = Math.max(1, Math.ceil(proposalsQ.data.total / propPageSize));
     if (propPage > tp) setPropPage(tp);
   }, [proposalsQ.data, propPage, propPageSize]);
-  // 当前值来源（叠加预览/skill 对照左栏）：复用 prompt 模块列表
+  // Source of the current values (overlay preview / skill comparison left column): reuse the prompt module list
   const modulesQ = useQuery({
     queryKey: ['prompt-modules'],
     queryFn: () => api.assistant.promptModules.list(),
     staleTime: 60_000,
   });
-  // R3.5 失败教训：三个状态并行拉，active 渲染列表，resolved/retired 折叠成计数
+  // R3.5 failure lessons: fetch the three statuses in parallel; active renders the list, resolved/retired collapse into counts
   const lessonsQ = useQuery({
     queryKey: ['failure-lessons'],
     queryFn: async () => {
@@ -141,12 +141,12 @@ export default function SolidifySection() {
       toast(t('settings:solidifyReviewed'), 'success');
       setOpenId(null);
       qc.invalidateQueries({ queryKey: ['solidify-proposals'] });
-      qc.invalidateQueries({ queryKey: ['prompt-modules'] }); // 应用会写版本行/改 skill
+      qc.invalidateQueries({ queryKey: ['prompt-modules'] }); // applying writes version rows / changes skills
       if (args.approve) {
-        // 退役发生在批准：记忆/轨迹列表里被勾选来源随之消失（active 口径）
+        // Retirement happens at approval: checked-off sources disappear from the memory/trajectory lists (active scope)
         qc.invalidateQueries({ queryKey: ['assistant-memories'] });
         qc.invalidateQueries({ queryKey: ['assistant-trajectories'] });
-        // correction 应用 → sources 内 lesson 自动 resolved → 教训块收口
+        // correction applied → lessons in sources auto-resolve → lesson block settles
         qc.invalidateQueries({ queryKey: ['failure-lessons'] });
       }
     },
@@ -154,11 +154,11 @@ export default function SolidifySection() {
   });
 
   const openProposal = (p: SolidifyProposal) => {
-    setRetireIds(p.sources.filter((s) => s.retireRecommended).map((s) => s.id)); // 预填建议值，人工可改
+    setRetireIds(p.sources.filter((s) => s.retireRecommended).map((s) => s.id)); // prefill recommended values; user can edit
     setOpenId(p.id);
   };
 
-  // 待审优先排序已下推服务端（SQL CASE WHEN status='pending'），此处不再客户端排
+  // Pending-first ordering has been pushed down to the server (SQL CASE WHEN status='pending'); no client-side sorting here
   const proposals = proposalsQ.data?.items ?? [];
   const currentText = useMemo(() => {
     if (!detail) return '';
@@ -181,7 +181,7 @@ export default function SolidifySection() {
         {t('settings:solidifyIntro')}
       </div>
       <div className="p-2 flex flex-col gap-3">
-        {/* R3.5 失败教训：active 列表（≤10）+ 折叠计数；retire=人工驳回（误报/不修） */}
+        {/* R3.5 failure lessons: active list (≤10) + collapsed counts; retire = manual rejection (false positive / won't fix) */}
         <div className="flex flex-col gap-1">
           <div className="text-[11px] font-medium px-2" style={{ color: 'var(--muted-foreground)' }}>
             {t('settings:lessonBlockTitle')}
@@ -209,7 +209,7 @@ export default function SolidifySection() {
             </div>
           ))}
         </div>
-        {/* 批次历史：最新在前；running 转终态由轮询+invalidate 收口 */}
+        {/* Batch history: newest first; running → terminal is settled by polling+invalidate */}
         <div className="flex flex-col gap-1">
           {(batchesQ.data?.items ?? []).length === 0 ? (
             <div className="px-2 py-1 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
@@ -245,7 +245,7 @@ export default function SolidifySection() {
             </div>
           )}
         </div>
-        {/* 提案列表 */}
+        {/* Proposal list */}
         {proposalsQ.isLoading ? (
           <div className="flex items-center gap-2 px-2 py-4 text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
             <Icon name="loader" size={14} className="animate-spin" />
@@ -283,10 +283,10 @@ export default function SolidifySection() {
         )}
       </div>
 
-      {/* 提案详情：diff 双栏 + 来源退役勾选 + 批准/驳回 */}
+      {/* Proposal detail: two-column diff + source retire checkboxes + approve/reject */}
       <Dialog open={!!openId} onOpenChange={(open) => { if (!open) setOpenId(null); }}>
-        {/* 隐式 grid 列 auto 取 items 的 min-content（truncate 来源行=全文宽）会把列撑到超框 →
-            显式 minmax(0,1fr) 钳到可用宽。加宽 sm:max-w-3xl 改善双栏 diff 可读性（须 sm: 变体，基础样式带 sm:max-w-lg 会盖掉裸 max-w）。 */}
+        {/* Implicit grid column auto takes the min-content of items (truncated source row = full-text width) and pushes the column past the frame →
+            explicit minmax(0,1fr) clamps it to the available width. Widening to sm:max-w-3xl improves two-column diff readability (sm: variant required; the base style's sm:max-w-lg would override a bare max-w). */}
         <DialogContent className="grid-cols-[minmax(0,1fr)] sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>{detail?.title ?? ''}</DialogTitle>

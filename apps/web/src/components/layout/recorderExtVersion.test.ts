@@ -20,8 +20,8 @@ describe('deriveExtState', () => {
     expect(deriveExtState('ready', '0.0.3', '0.0.3')).toBe('ready');
   });
 
-  // 这是本次修的核心：单向比较（只判 installed < current）会把「装的更新」误报成
-  // 绿色 ready，用户以为已是最新，实际服务器那边还停在旧版。
+  // This is the core of this fix: one-way comparison (only checking installed < current) would misreport "installed is newer" as
+  // a green ready, making users think they are up to date while the server is still on the old version.
   it('已装版本新于部署版本 → ahead（不是 ready）', () => {
     expect(deriveExtState('ready', '0.0.3', '0.0.2')).toBe('ahead');
   });
@@ -44,8 +44,8 @@ describe('offersDownload', () => {
     expect(offersDownload('missing')).toBe(true);
   });
 
-  // 下载的是部署版本，比已装的旧——在 ahead 态提供下载就是把新版本覆盖成旧版本，
-  // 属于降级，必须挡住。
+  // The download is the deployed version, older than installed — offering a download in the ahead state overwrites the new version with the old one,
+  // which is a downgrade and must be blocked.
   it('ahead 不给下载入口（下载即降级）', () => {
     expect(offersDownload('ahead')).toBe(false);
   });
@@ -54,7 +54,7 @@ describe('offersDownload', () => {
     expect(offersDownload('ready')).toBe(false);
   });
 
-  // stale / unknown 的下载入口是既有行为，本次不改。
+  // The download entry for stale / unknown is existing behavior; not changed this time.
   it('stale / unknown 保持既有行为（仍给下载入口）', () => {
     expect(offersDownload('stale')).toBe(true);
     expect(offersDownload('unknown')).toBe(true);

@@ -16,13 +16,13 @@ import {
   PageShellTitle,
 } from '../components/layout/PageShell';
 
-// 与 apps/api/src/execute/aiFallback.ts 的 AI_FALLBACK_KEYS 互为镜像。
-// （compile-missing 开关已移除：NL 视觉步骤的 AI 临场执行是正式执行语义，不再可关。）
+// Mirrors AI_FALLBACK_KEYS in apps/api/src/execute/aiFallback.ts.
+// (The compile-missing switch was removed: AI on-the-spot execution of NL visual steps is official execution semantics and can no longer be turned off.)
 const AI_FALLBACK_LOCATOR_FAILED_KEY = 'ai_fallback_locator_failed';
 
 type Panel = 'general' | 'llm' | 'assistant-tools' | 'assistant-memory' | 'assistant-prompt' | 'assistant-feedback';
 
-/** 左侧导航按域分组：通用（外观/回放/模型接入）+ AI 助手（按内容拆四个子页）。 */
+/** Left nav grouped by domain: general (appearance/replay/model access) + AI assistant (split into four subpages by content). */
 const NAV_GROUPS: Array<{
   labelKey: string;
   items: Array<{ key: Panel; labelKey: string; icon: 'sun' | 'beaker' | 'plug' | 'database' | 'terminal' | 'message' }>;
@@ -45,7 +45,7 @@ const NAV_GROUPS: Array<{
   },
 ];
 
-/** AI 助手子页 → 页头（标题+简介）与要渲染的 Section。单卡片页（用户反馈）卡片自带标题简介，页头省去免重复。 */
+/** AI assistant subpage → page header (title+intro) and the Sections to render. Single-card pages (user feedback) carry their own title/intro on the card, so the header is omitted to avoid duplication. */
 const ASSISTANT_PAGES: Record<
   Exclude<Panel, 'general' | 'llm'>,
   { titleKey: string; introKey: string; sections: AssistantSectionKey[]; hideHeader?: boolean }
@@ -63,7 +63,7 @@ export default function Settings() {
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
   const [panel, setPanel] = useState<Panel>('general');
 
-  // 回放 AI 重做开关（机械失败降级）
+  // Replay AI redo switch (mechanical failure fallback)
   const [locatorFailedFallback, setLocatorFailedFallback] = useState(false);
 
   const { data, isLoading } = useQuery({ queryKey: ['settings'], queryFn: api.settings.list });
@@ -73,7 +73,7 @@ export default function Settings() {
     setLocatorFailedFallback(data[AI_FALLBACK_LOCATOR_FAILED_KEY] === true);
   }, [data]);
 
-  // 回放降级开关即时保存
+  // Replay fallback switch saves immediately
   const saveFallback = useMutation({
     mutationFn: ({ key, value }: { key: string; value: boolean }) => api.settings.put(key, value),
     onError: (e: Error) => toast(localizeApiError(e as { code?: string; message?: string }) || t('settings:saveFailed'), 'error'),
@@ -95,7 +95,7 @@ export default function Settings() {
         <PageShellDescription>{t('settings:description')}</PageShellDescription>
       </PageShellHeader>
 
-      {/* Two-panel card（iDO 设置页规范） */}
+      {/* Two-panel card (iDO settings page convention) */}
       <div className="flex gap-3 flex-1 min-h-0">
         <div
           className="bg-card border shrink-0 flex flex-col"

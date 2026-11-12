@@ -4,9 +4,9 @@ import ReportStepTimeline, { type StepResult } from './ReportStepTimeline';
 import '../../i18n';
 
 /**
- * 报告页要把「实际发出的请求」和「回来的结果」一起展示：
- * sql 步 → 执行的 SQL + 绑定参数 + 返回行；httpRequest 步 → 请求行 + 请求头 + 响应体 + 响应头。
- * 老报告没有 sql/params 字段 → 不渲染空块（不能因为字段缺省就出现空白标题）。
+ * The report page must show the "actual request sent" together with "the result that came back":
+ * sql step → executed SQL + bound params + returned rows; httpRequest step → request line + request headers + response body + response headers.
+ * Legacy reports lack sql/params fields → don't render empty blocks (a missing field must not produce a blank heading).
  */
 const sqlStep: StepResult = {
   order: 2,

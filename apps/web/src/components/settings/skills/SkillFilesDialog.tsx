@@ -1,14 +1,14 @@
 /**
- * SkillFilesDialog：单个技能的文件树编辑器（左树右文）。
+ * SkillFilesDialog: a single skill's file tree editor (tree on the left, content on the right).
  *
- * 与旧「SKILL.md 正文 + 平级脚本列表」表单的本质差别：技能是一个真实的目录树
- * （官方 skill-creator 有 agents/ references/ assets/ eval-viewer/ scripts/ 五类），
- * 旧的扁平表单根本装不下它们。
+ * Essential difference from the old "SKILL.md body + flat script list" form: a skill is a real directory tree
+ * (the official skill-creator has five kinds: agents/ references/ assets/ eval-viewer/ scripts/),
+ * which the old flat form simply cannot hold.
  *
- * 三条硬约束（都来自服务端，不是这里发明的）：
- *  - **不提供新建目录**：上传只能落进【已存在】的目录，目录结构来自 import。
- *  - 所有路径以 skill id 定位，服务端从 DB 行解析目录名，客户端不传也不该传。
- *  - 内容以服务端磁盘为真源：保存只写单个文件，不整体覆盖目录。
+ * Three hard constraints (all from the server, not invented here):
+ *  - **No creating directories**: uploads can only land in [existing] directories; the directory structure comes from import.
+ *  - All paths are addressed by skill id; the server resolves the directory name from the DB row — the client doesn't pass it, and shouldn't.
+ *  - Server disk is the source of truth for content: saving writes a single file, never overwrites the directory wholesale.
  */
 import { useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -22,7 +22,7 @@ import IconButton from '../../ui/IconButton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../ui/Modal';
 import { buildTree, uploadDirOf, type SkillTreeNode } from './skillTree';
 
-/** 读文本：二进制/超大文件读不进 text 直接拒绝，不静默降级。 */
+/** Reading text: binary / oversized files that fail to read into text are rejected outright — no silent fallback. */
 function readFileAsText(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -102,7 +102,7 @@ export default function SkillFilesDialog({
     enabled: !!skillId,
   });
 
-  // 选中文件才拉正文；选中目录不拉（服务端只允许读文件）。
+  // Fetch the body only when a file is selected; not for directories (the server only allows reading files).
   const fileQ = useQuery({
     queryKey: ['assistant-skill-file', skillId, selected?.path],
     queryFn: () => api.assistant.skills.readFile(skillId!, selected!.path),
@@ -160,17 +160,17 @@ export default function SkillFilesDialog({
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      {/* DialogContent 基础样式带 sm:max-w-lg，只写 max-w-3xl 会被 sm 变体盖掉（512px），
-          必须显式覆盖 sm: 断点。文件树编辑器要左树+右文并排，按视口比例给宽；
-          高度锁 85vh 并用 grid 行把内容区压进剩余空间——否则固定 minHeight 会把底部
-          关闭栏挤出视口（弹窗自身滚动，用户看不到保存/关闭）。 */}
+      {/* DialogContent's base style carries sm:max-w-lg; writing only max-w-3xl gets overridden by the sm variant (512px),
+          so the sm: breakpoint must be overridden explicitly. The file tree editor needs tree-left + content-right side by side, width proportional to the viewport;
+          height locks at 85vh and grid rows squeeze the content area into the remaining space — otherwise a fixed minHeight pushes the footer
+          close bar out of the viewport (the dialog scrolls on its own and the user never sees save/close). */}
       <DialogContent className="w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] sm:max-w-[min(1200px,calc(100vw-2rem))] sm:h-[85vh] sm:grid-rows-[auto_minmax(0,1fr)_auto] sm:overflow-hidden">
         <DialogHeader>
           <DialogTitle>{t('settings:skillFiles', { name: skill.name })}</DialogTitle>
         </DialogHeader>
 
         <div className="flex gap-3 px-5 py-1 min-h-0">
-          {/* 左：文件树（高度跟随弹窗内容行，自身滚动） */}
+          {/* Left: file tree (height follows the dialog content row, scrolls itself) */}
           <div
             className="w-56 shrink-0 overflow-auto border rounded p-1 flex flex-col min-h-0"
             style={{ borderColor: 'var(--border)' }}
@@ -215,7 +215,7 @@ export default function SkillFilesDialog({
             </p>
           </div>
 
-          {/* 右：文件内容 */}
+          {/* Right: file content */}
           <div className="flex-1 min-w-0 flex flex-col gap-2">
             {!selected ? (
               <div
@@ -286,7 +286,7 @@ export default function SkillFilesDialog({
           </div>
         </div>
 
-        {/* 删除确认：删单个文件是不可逆的，且父目录不递归删 */}
+        {/* Delete confirmation: deleting a single file is irreversible, and parent directories are not deleted recursively */}
         <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
           <DialogContent>
             <DialogHeader>

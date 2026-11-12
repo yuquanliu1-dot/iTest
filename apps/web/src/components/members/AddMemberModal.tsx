@@ -12,8 +12,8 @@ interface Props {
 }
 
 /**
- * 把已有用户加入当前组织（manager）。
- * 候选清单：搜索用户名/displayName，结果用户列表（不含已是本组织成员的）。
+ * Add an existing user to the current organization (manager).
+ * Candidate list: search by username/displayName over the resulting user list (excluding those already members of this org).
  */
 export default function AddMemberModal({ visible, orgId, orgName, onClose, onAdded }: Props) {
   const { t } = useTranslation();

@@ -13,13 +13,13 @@ const PING_TIMEOUT_MS = 800;
 const PING_SOURCE = 'ita-web';
 const PONG_SOURCE = 'ita-ext';
 
-/** 顶栏常驻徽标 + 弹层：探测 Chrome 录制扩展、下载 zip、安装说明。
- *  探测机制：ping/pong。扩展的 content/bridge.js 在收到 ping 时回 {source:'ita-ext',type:'pong',id,version}。
- *  详见 apps/recorder/content/bridge.js。
- *  升级感知：pong 回报的已装版本与 /api/recorder/extension/version 的当前版本做**三方**比较
- *  （见 recorderExtVersion.ts）：已装较旧→'update' 琥珀态 + 下载按钮；已装更新→'ahead' 蓝态且
- *  **不给下载入口**（下载会把新版本覆盖成旧版本，是降级）；相等→'ready'。
- *  老用户无需留意版本号也能感知有新扩展可装。 */
+/** Persistent top-bar badge + popover: detects the Chrome recorder extension, downloads the zip, shows install instructions.
+ *  Detection mechanism: ping/pong. The extension's content/bridge.js replies to a ping with {source:'ita-ext',type:'pong',id,version}.
+ *  See apps/recorder/content/bridge.js for details.
+ *  Upgrade awareness: the installed version reported by pong is compared **three-way** against the current version from
+ *  /api/recorder/extension/version (see recorderExtVersion.ts): installed older → 'update' amber state + download button; installed newer → 'ahead' blue state
+ *  with **no download entry** (downloading would overwrite the new version with the old one — a downgrade); equal → 'ready'.
+ *  Existing users can sense a new extension without ever looking at version numbers. */
 export default function RecorderExtensionBadge() {
   const { t } = useTranslation();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -33,18 +33,18 @@ export default function RecorderExtensionBadge() {
   const [probeNonce, setProbeNonce] = useState(0);
   const pendingRef = useRef<{ id: string; timer: ReturnType<typeof setTimeout> } | null>(null);
 
-  // 拉取当前部署版本：pong 回来后好比较。与探测同一次挂载触发，重检测时一并刷新。
+  // Fetch the currently deployed version so it can be compared once the pong arrives. Triggered by the same mount as the probe; refreshed together on re-probe.
   useEffect(() => {
     if (!isAuthenticated) return;
     api.recorder
       .extensionVersion()
       .then((r) => setCurrent(r.version))
-      .catch(() => setCurrent(null)); // 拉不到就不比较，保持 ready 不误报升级
+      .catch(() => setCurrent(null)); // if the fetch fails, skip comparison and keep ready so no upgrade is misreported
   }, [isAuthenticated, probeNonce]);
 
   const sendPing = useCallback(() => {
     if (!isAuthenticated) return;
-    // 旧的还在等就清掉，避免并发 ping 串号
+    // Clear any still-pending old ping to avoid concurrent pings crossing ids
     if (pendingRef.current) {
       clearTimeout(pendingRef.current.timer);
       pendingRef.current = null;
@@ -59,7 +59,7 @@ export default function RecorderExtensionBadge() {
     window.postMessage({ source: PING_SOURCE, type: 'ping', id }, '*');
   }, [isAuthenticated]);
 
-  // mount 时 ping；probeNonce 变化时重 ping（弹层里「重新检测」按钮用）
+  // Ping on mount; re-ping when probeNonce changes (used by the "re-detect" button in the popover)
   useEffect(() => {
     if (!isAuthenticated) return;
     sendPing();
@@ -71,23 +71,23 @@ export default function RecorderExtensionBadge() {
     };
   }, [sendPing, isAuthenticated, probeNonce]);
 
-  // 常驻监听 pong。延迟注入（content script 还在 inject 中）也能兜住。
+  // Persistent pong listener. Also catches late injection (content script still injecting).
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.data?.source !== PONG_SOURCE || e.data?.type !== 'pong') return;
       const pending = pendingRef.current;
-      // 收到不属于自己的 pong（比如旧 ping 的延迟响应）直接忽略
+      // Ignore a pong that doesn't belong to us (e.g. a delayed response to an old ping)
       if (pending && e.data.id !== pending.id) return;
       if (pending) {
         clearTimeout(pending.timer);
         pendingRef.current = null;
       }
       if (e.data.version) {
-        // 已装版本是"探测到了扩展"的基态；最终 ready/update 由 effectiveState 按版本比较推出。
+        // The installed version is the baseline state of "extension detected"; the final ready/update is derived by effectiveState's version comparison.
         setVersion(e.data.version);
         setState('ready');
       } else {
-        // pong 收到但 version 为空 → 扩展刚被重载过，context invalidated
+        // Pong received but version empty → the extension was just reloaded, context invalidated
         setState('stale');
         setVersion(null);
       }
@@ -96,8 +96,8 @@ export default function RecorderExtensionBadge() {
     return () => window.removeEventListener('message', onMessage);
   }, []);
 
-  // 派生状态：pong 有版本 + 拉到了当前版本 → 比较出 ready / update / ahead。
-  // state 只存探测阶段的结果（unknown/missing/stale），版本相关的三态由比较推算。
+  // Derived state: pong has a version + the current version was fetched → compare into ready / update / ahead.
+  // state only stores the probing-phase result (unknown/missing/stale); the three version-related states are computed by comparison.
   const effectiveState: RecorderExtState = useMemo(
     () => deriveExtState(state, version, current),
     [state, version, current],
@@ -107,7 +107,7 @@ export default function RecorderExtensionBadge() {
     setDownloading(true);
     try {
       const blob = await api.downloadExtensionZip();
-      // 用 Content-Disposition 里的 itest-recorder-v0.0.1.zip；拿不到就回退到通用名
+      // Use the itest-recorder-v0.0.1.zip name from Content-Disposition; fall back to a generic name when unavailable
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -115,7 +115,7 @@ export default function RecorderExtensionBadge() {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      // 给浏览器一点时间触发下载再回收
+      // Give the browser a moment to trigger the download before reclaiming the URL
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
       toast(e instanceof Error ? localizeApiError(e) : String(e), 'error');

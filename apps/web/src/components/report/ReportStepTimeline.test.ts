@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { aiUsageText, cacheHitRate, fmtTokens } from './ReportStepTimeline';
 import i18n from '../../i18n';
 
-/** 真实 i18next 的 t（回归用：占位符残留只有真插值器能复现）。 */
+/** Real i18next t (regression: placeholder leftovers only reproduce with the real interpolator). */
 const t = i18n.t.bind(i18n) as Parameters<typeof aiUsageText>[0];
 
-/** 与 apps/api execute/aiUsage.ts 的 AiUsageStat 对齐（缓存字段老报告缺省）。 */
+/** Aligned with apps/api execute/aiUsage.ts AiUsageStat (cache fields absent on legacy reports). */
 function usage(over: Partial<{ promptTokens: number; completionTokens: number; cacheReadTokens?: number }>) {
   return {
     calls: 1,

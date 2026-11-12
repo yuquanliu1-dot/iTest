@@ -1,9 +1,9 @@
 const BASE = '/api';
 
-/** 带 HTTP 状态码的请求错误；调用方可据此区分 404（不存在/不可见）等确定性失败。 */
+/** Request error carrying the HTTP status code; callers can use it to distinguish deterministic failures such as 404 (not found / not visible). */
 export class ApiError extends Error {
   status: number;
-  /** 后端稳定错误码(errorHandler 里 HttpError.code / 校验与冲突兜底码)。无码时为 undefined。 */
+  /** Stable backend error code (HttpError.code in errorHandler / validation and conflict fallback codes). undefined when no code. */
   code?: string;
 
   constructor(status: number, message: string, code?: string) {
@@ -13,9 +13,9 @@ export class ApiError extends Error {
   }
 }
 
-/** 只拼接有值的参数：undefined / 空串 / false 一律跳过。
- *  空 q 会被后端当成「搜索空字符串」；false 也跳过是因为后端统一用 `=== 'true'`
- *  判定布尔参数，省略与 false 等价。 */
+/** Only joins params that carry a value: undefined / empty string / false are always skipped.
+ *  An empty q would be treated by the backend as "searching for an empty string"; false is skipped too because the backend uniformly uses
+ *  `=== 'true'` to decide boolean params, so omitting is equivalent to false. */
 export function qs(params: Record<string, string | number | boolean | undefined>): string {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -26,7 +26,7 @@ export function qs(params: Record<string, string | number | boolean | undefined>
   return s ? `?${s}` : '';
 }
 
-// 401 时跳登录页的豁免路径（登录/首登改密本身、/me 探测——这些 401 由调用方自行处理）
+// Exempt paths that skip the login redirect on 401 (login / first-login password change themselves, /me probing — these 401s are handled by the caller)
 const AUTH_EXEMPT_PATHS = new Set(['/auth/login', '/auth/change-password', '/auth/me']);
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -36,13 +36,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     if (res.status === 401 && !AUTH_EXEMPT_PATHS.has(path)) {
-      // 会话过期：整页跳登录（不 import authStore，避免循环依赖）
+      // Session expired: full-page redirect to login (no authStore import to avoid a circular dependency)
       window.location.assign('/login');
     }
     const body = await res.json().catch(() => ({}));
     throw new ApiError(res.status, body.message ?? `HTTP ${res.status}`, typeof body?.error === 'string' ? body.error : undefined);
   }
-  // 204 No Content：DELETE 等空响应直接返回 undefined，不尝试解析 JSON。
+  // 204 No Content: DELETE and other empty responses return undefined directly; no JSON parsing attempted.
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
@@ -86,12 +86,12 @@ export const api = {
       }),
     unassignUser: (id: string, userId: string) =>
       request<void>(`/projects/${id}/assignments/${userId}`, { method: 'DELETE' }),
-    /** versionIds = 当前范围内的版本集合（当前版本范围传 [versionId]，产品线范围传选中的版本），分组计数随之收窄。 */
+    /** versionIds = the set of versions in the current scope (pass [versionId] in current-version scope, selected versions in product-line scope); group counts narrow accordingly. */
     groups: (id: string, versionIds: string[] = []) =>
       request<GroupWithCount[]>(
         `/projects/${id}/groups${versionIds.length ? `?versionIds=${versionIds.join(',')}` : ''}`,
       ),
-    /** 产品线下的全部分组（跨项目选用例池按分组筛选用；一次请求覆盖线内所有项目）。 */
+    /** All groups under a product line (used to filter the cross-project case pool by group; one request covers all projects in the line). */
     groupsByProductLine: (productLineId: string) => request<GroupWithCount[]>(`/product-lines/${productLineId}/groups`),
     versionsByProductLine: (productLineId: string) => request<ProjectVersion[]>(`/product-lines/${productLineId}/versions`),
     createGroup: (id: string, body: { name: string }) =>
@@ -126,7 +126,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ projectIds }),
       }),
-    /** 移动产品线到另一个组织：线内全部项目跟着换组织，标签一并迁移。 */
+    /** Move a product line to another organization: all projects in the line switch organization along with it, and labels are migrated too. */
     move: (id: string, organizationId: string) =>
       request<{ ok: boolean; projectCount: number }>(`/product-lines/${id}/move`, {
         method: 'POST',
@@ -162,8 +162,8 @@ export const api = {
       request<{ ok: boolean }>(`/plans/${id}/cases/order`, { method: 'PUT', body: JSON.stringify({ groupId, caseIds }) }),
     moveCases: (id: string, planCaseIds: string[], toGroupId: string) =>
       request<{ ok: boolean }>(`/plans/${id}/cases/move`, { method: 'PUT', body: JSON.stringify({ planCaseIds, toGroupId }) }),
-    /** 计划级数据行选择（按 plan_cases.id 定位，跨组重复用例各行独立）：
-     *  null = 跟随用例级；[] = 全部启用行；非空 = 子集。 */
+    /** Plan-level dataset row selection (located by plan_cases.id; duplicate cases across groups have independent rows):
+     *  null = follow case-level; [] = all enabled rows; non-empty = subset. */
     patchPlanCase: (id: string, planCaseId: string, body: { datasetRowIndexes: number[] | null }) =>
       request<{ ok: boolean; datasetRowIndexes: number[] | null }>(`/plans/${id}/plan-cases/${planCaseId}`, {
         method: 'PATCH',
@@ -210,7 +210,7 @@ export const api = {
       windowHeight?: number;
       budgetTurns?: number;
     }) => request<ExplorationSession>('/explorations', { method: 'POST', body: JSON.stringify(body) }),
-    /** 人格矩阵建组（C3）：同一章程起 N 个人格会话并行跑（同一 matrix_id 分组）。 */
+    /** Persona matrix grouping (C3): N persona sessions run in parallel from one charter (grouped by the same matrix_id). */
     createMatrix: (body: {
       versionId: string;
       charter: string;
@@ -279,13 +279,13 @@ export const api = {
       request<{ kind: 'branch' | 'tag'; refs: string[]; error?: string }>(
         `/projects/${projectId}/refs?kind=${kind}`,
       ),
-    /** 校验远端 branch/tag 是否存在（ref 弹窗「测试」）。valid=false 时 error 给原因。 */
+    /** Check whether a remote branch/tag exists (the "Test" action in the ref dialog). When valid=false, error gives the reason. */
     verifyRef: (projectId: string, body: { ref: string; kind: 'branch' | 'tag' }) =>
       request<{ valid: boolean; error?: string }>(`/projects/${projectId}/verify-ref`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    /** 写入 ref/refKind（与 patch 分开，避免误改 name/description）。 */
+    /** Write ref/refKind (kept separate from patch to avoid accidentally changing name/description). */
     setRef: (id: string, body: { ref: string | null; refKind: 'branch' | 'tag' | null }) =>
       request<ProjectVersion>(`/project-versions/${id}`, {
         method: 'PATCH',
@@ -347,8 +347,8 @@ export const api = {
         `/projects/${projectId}/datasets/${id}${opts?.confirm ? '?confirm=true' : ''}`,
         { method: 'DELETE' },
       ),
-    /** 下载导入模板（fetch → blob，同 downloadExtensionZip 不走 JSON 解析；调用方 a[download] 落盘）。
-     *  columns：编辑已有数据集时带当前列名，模板表头即数据集现列。 */
+    /** Download the import template (fetch → blob, like downloadExtensionZip no JSON parsing; the caller persists it via a[download]).
+     *  columns: pass the current column names when editing an existing dataset so the template header matches the dataset's current columns. */
     downloadTemplate: async (projectId: string, columns?: string[]): Promise<Blob> => {
       const q = columns && columns.length > 0 ? `?columns=${encodeURIComponent(columns.join(','))}` : '';
       const r = await fetch(`${BASE}/projects/${projectId}/datasets/template${q}`, { credentials: 'same-origin' });
@@ -359,7 +359,7 @@ export const api = {
       }
       return r.blob();
     },
-    /** 上传 xlsx 解析为草稿载荷（octet-stream，同 attachments.upload）。只解析不入库。 */
+    /** Upload an xlsx and parse it into a draft payload (octet-stream, same as attachments.upload). Parse only; nothing persisted. */
     importFile: async (projectId: string, file: File): Promise<DatasetImportPayload> => {
       const buf = await file.arrayBuffer();
       const r = await fetch(`${BASE}/projects/${projectId}/datasets/import-parse`, {
@@ -377,15 +377,15 @@ export const api = {
   executions: {
     list: (params?: {
       projectId?: string;
-      /** 产品线执行库：跨项目拉整条线的用例报告 + 计划运行（与 projectId 二选一） */
+      /** Product-line execution library: pull case reports + plan runs across the whole line's projects (choose one of this or projectId) */
       productLineId?: string;
       kind?: 'case' | 'plan' | 'all';
       statuses?: string[];
       versionIds?: string[];
       q?: string;
-      /** 单用例深链：只看该用例的执行报告 */
+      /** Single-case deep link: only this case's execution reports */
       caseId?: string;
-      /** 单计划深链：只看该计划的运行历史 */
+      /** Single-plan deep link: only this plan's run history */
       planId?: string;
     }) => {
       const qs = new URLSearchParams();
@@ -443,11 +443,11 @@ export const api = {
         defaultEnvId: string | null;
         webServiceRef: string | null;
         datasetId: string | null;
-        /** 数据集行选择：启用行下标数组。[] = 所有启用行；null = 清空选择。 */
+        /** Dataset row selection: array of enabled-row indexes. [] = all enabled rows; null = clear the selection. */
         datasetRowIndexes?: number[] | null;
-        /** 需求编号（外部编号自由文本）。空字符串由调用方转 null。 */
+        /** Requirement number (free-text external number). Empty string is converted to null by the caller. */
         requirementNo: string | null;
-        /** Track 1：用例级预期描述。空字符串由调用方转 null。 */
+        /** Track 1: case-level expected outcome description. Empty string is converted to null by the caller. */
         expectedOutcome: string | null;
       }>,
     ) => request<TestCase>(`/cases/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
@@ -457,16 +457,16 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ caseIds }),
       }),
-    /** 批量后端固化（全未固化用例 NL→DSL + 机械验收）。全部被拒 → 422 {batchId:null, rejected}；
-     *  部分被拒 → 200 + rejected 清单（前端 toast）。 */
+    /** Batch server-side solidification (all unsolidified cases NL→DSL + mechanical acceptance). All rejected → 422 {batchId:null, rejected};
+     *  partially rejected → 200 + rejected list (frontend toast). */
     batchSolidify: (caseIds: string[]) =>
       request<{ batchId: string | null; accepted: string[]; rejected: Array<{ caseId: string; reason: string }> }>(
         '/cases/batch-solidify',
         { method: 'POST', body: JSON.stringify({ caseIds }) },
       ),
-    /** 批量固化进度轮询（行状态 + 读时派生的批量汇总）。 */
+    /** Batch solidification progress polling (row statuses + read-time derived batch summary). */
     solidifyBatch: (id: string) => request<SolidifyBatchStatus>(`/cases/solidify-batches/${id}`),
-    /** 在途批次列表（分组页顶部横幅 + 行内「固化中」徽标的数据源）。 */
+    /** In-flight batch list (data source for the top banner on the groups page and inline "solidifying" badges). */
     solidifyBatches: (projectId?: string) =>
       request<SolidifyBatchesOverview>(`/cases/solidify-batches${projectId ? `?projectId=${projectId}` : ''}`),
     updateStatusBatch: (caseIds: string[], status: CaseStatus) =>
@@ -504,9 +504,9 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ steps }),
       }),
-    /** 把自然语言 instruction 编译成 StepAction[] DSL。
-     *  返回 { compiled: null, error } 时表示放弃/失败,UI 应让用户重写 instruction。
-     *  轻量 LLM 单点调用,只用于 aiTask 子步抽出(走 inspection 不便的极简场景)。 */
+    /** Compile a natural-language instruction into StepAction[] DSL.
+     *  Returning { compiled: null, error } means give-up/failure; the UI should let the user rewrite the instruction.
+     *  Single lightweight LLM call, only for extracting aiTask sub-steps (minimal scenarios where inspection is awkward). */
     compileExtract: (caseId: string, body: { description: string; sampleText: string }) =>
       request<{ pattern: string | null; group: number; error?: string }>(
         `/cases/${caseId}/steps/extract/compile`,
@@ -556,7 +556,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ events }),
       }),
-    /** 当前部署的扩展版本：徽标拿它与「已装版本」对比，检测出可升级更新。 */
+    /** Currently deployed extension version: the badge compares it with the "installed version" to detect an available upgrade. */
     extensionVersion: () => request<{ version: string }>('/recorder/extension/version'),
   },
   attachments: {
@@ -579,8 +579,8 @@ export const api = {
       ),
   },
   assistantAttachments: {
-    /** 助手附件预上传（版本作用域，.docx/.xlsx）。X-Filename 走 encodeURIComponent：中文文件名
-     *  直塞 Headers 在部分浏览器抛 ByteString 错（cases 旧路径未处理，不动旧码，这里做对）。 */
+    /** Assistant attachment pre-upload (version-scoped, .docx/.xlsx). X-Filename goes through encodeURIComponent: Chinese filenames
+     *  set directly on Headers throw a ByteString error in some browsers (the legacy cases path doesn't handle it; leave old code alone, do it right here). */
     uploadAttachment: async (versionId: string, file: File) => {
       const buf = await file.arrayBuffer();
       const r = await fetch(`${BASE}/assistant/versions/${versionId}/attachments`, {
@@ -606,8 +606,8 @@ export const api = {
       }>;
     },
   },
-  /** 浏览器原生下载：fetch → blob → `<a download>`，不走 JSON 解析。
-   *  与 request() 不同：401 不会自动跳登录（保持与原始 `<a>` 一致），调用方按需处理。 */
+  /** Browser-native download: fetch → blob → `<a download>`; no JSON parsing.
+   *  Unlike request(): 401 does not auto-redirect to login (kept consistent with the original `<a>` behavior); the caller handles it as needed. */
   downloadExtensionZip: async (): Promise<Blob> => {
     const r = await fetch(`${BASE}/recorder/extension.zip`, { credentials: 'same-origin' });
     if (!r.ok) {
@@ -617,7 +617,7 @@ export const api = {
     }
     return r.blob();
   },
-  /** AI 产出文件下载（artifact 下载卡）：fetch → blob，request<T> 走 JSON 解析故二进制单独走 fetch。 */
+  /** AI artifact file download (artifact download card): fetch → blob; request<T> parses JSON, so binary goes through fetch separately. */
   downloadArtifact: async (threadId: string, token: string): Promise<{ blob: Blob; filename: string }> => {
     const r = await fetch(`${BASE}/assistant/threads/${threadId}/artifacts/${token}`, { credentials: 'same-origin' });
     if (!r.ok) {
@@ -630,7 +630,7 @@ export const api = {
     const filename = m ? decodeURIComponent(m[1]!) : 'artifact';
     return { blob: await r.blob(), filename };
   },
-  /** 某线程的持久产物列表（skill 生成文档等）。切换会话时拉取，把下载卡灌回界面。 */
+  /** Persistent artifact list for a thread (skill-generated documents etc.). Fetched when switching threads to refill the download cards. */
   listArtifacts: (threadId: string) =>
     request<Array<{ token: string; name: string; mime: string; size: number; count: number | null; createdAt: string }>>(
       `/assistant/threads/${threadId}/artifacts`,
@@ -638,14 +638,14 @@ export const api = {
   auth: {
     login: (username: string, password: string) =>
       request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
-    // 首登强制改密：成功即自动登录（响应同登录 ok 分支并种下新 cookie）
+    // First-login forced password change: success logs in automatically (same response as the login ok branch and plants the new cookie)
     changePassword: (passwordChangeToken: string, newPassword: string) =>
       request<Extract<LoginResponse, { status: 'ok' }>>('/auth/change-password', {
         method: 'POST',
         body: JSON.stringify({ passwordChangeToken, newPassword }),
       }),
     me: () => request<MeResponse>('/auth/me'),
-    // 切换组织：服务端重铸会话 cookie（新 JWT 携带新组织上下文）
+    // Switch organization: the server re-issues the session cookie (new JWT carries the new org context)
     switchOrg: (organizationId: string) =>
       request<{ organization: { id: string; name: string }; isManager: boolean; isUser: boolean }>('/auth/switch-org', {
         method: 'POST',
@@ -712,9 +712,9 @@ export const api = {
       }),
   },
   assistant: {
-    /** 线程列表(分页):后端按 (updatedAt,id) 全序 keyset 取数并过滤无 session 文件的草稿行,
-     *  cursor 回传上一页最后一行的线程 id。左栏分组与 react-pi runtime 的列表都走这份。
-     *  workspacePath ≡ versionId(见 SpaceWorkspace 的 Props 注释)。 */
+    /** Thread list (paged): the backend keysets in total order by (updatedAt,id) and filters out draft rows without a session file,
+     *  and cursor passes back the last thread id of the previous page. Both the left-rail grouping and the react-pi runtime list use this.
+     *  workspacePath ≡ versionId (see the Props comment in SpaceWorkspace). */
     listThreadsPaged: (
       versionId: string,
       opts: { limit: number; cursor?: string },
@@ -728,10 +728,10 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ confirmId, approved }),
       }),
-    /** 推荐追问:AI 回答落定后按需拉取(POST 触发一次轻量 LLM 调用,返回提示词字符串数组)。 */
+    /** Suggested follow-ups: fetched on demand after an AI answer settles (POST triggers one lightweight LLM call, returns an array of prompt strings). */
     suggestions: (threadId: string) =>
       request<string[]>(`/assistant/threads/${threadId}/suggestions`, { method: 'POST' }),
-    /** 版本空间助手「暂存 → 落库」 */
+    /** Version-space assistant "stage → persist" */
     stage: {
       list: (threadId: string) =>
         request<StageDoc>(`/assistant/threads/${threadId}/stage/list`, { method: 'POST' }),
@@ -750,8 +750,8 @@ export const api = {
           body: JSON.stringify(body),
         }),
     },
-    /** 用户对 AI 回复的反馈（Phase 1 只收集）。messageExcerpt 是回溯的唯一可靠依据，
-     *  messageAnchor 只是位置索引线索、会随流式漂移——消费反馈时别把 anchor 当主键。 */
+    /** User feedback on AI replies (Phase 1 only collects). messageExcerpt is the only reliable key for tracing back,
+     *  messageAnchor is just a positional index hint that drifts with streaming — don't treat anchor as the primary key when consuming feedback. */
     feedback: {
       create: (body: {
         threadId: string;
@@ -763,7 +763,7 @@ export const api = {
         messageAt?: string;
       }) =>
         request<void>('/assistant/feedback', { method: 'POST', body: JSON.stringify(body) }),
-      /** 当前用户在该线程下已提交的反馈，用于气泡「已提交」标记。 */
+      /** Feedback the current user has already submitted under this thread, used for the "submitted" marker on bubbles. */
       mine: (threadId: string) =>
         request<Array<{
           id: string;
@@ -772,7 +772,7 @@ export const api = {
           sentiment: 'positive' | 'negative';
           createdAt?: string;
         }>>(`/assistant/feedback${qs({ threadId })}`),
-      /** 管理端全量列表（requireManager）。messageExcerpt 是回溯的唯一可靠依据。 */
+      /** Admin full list (requireManager). messageExcerpt is the only reliable key for tracing back. */
       listAll: (params: { sentiment?: string; projectId?: string; limit?: number; offset?: number }) =>
         request<{
           total: number;
@@ -788,25 +788,25 @@ export const api = {
             createdAt?: string;
           }>;
         }>(`/assistant/feedback/all${qs(params)}`),
-      /** 筛选用的候选项目（与列表同可见性口径）。 */
+      /** Candidate projects for filtering (same visibility rules as the list). */
       listProjects: () =>
         request<Array<{ id: string; name: string }>>('/assistant/feedback/projects'),
     },
-    /** 系统设置：助手短期记忆（只读+软删；写入唯一入口是助手 save_memory 工具）。服务端分页。 */
+    /** System settings: assistant short-term memories (read-only + soft delete; the only write entry point is the assistant save_memory tool). Server-side pagination. */
     memories: {
       list: (params?: { productLineId?: string; status?: string; scope?: 'global' | 'product_line'; page?: number; limit?: number }) =>
         request<Paged<AssistantMemory>>(`/assistant/memories${qs(params ?? {})}`),
       remove: (id: string) =>
         request<void>(`/assistant/memories/${id}`, { method: 'DELETE' }),
     },
-    /** 系统设置：助手轨迹（只读+软删；写入唯一入口是落库钩子→蒸馏 worker）。服务端分页。 */
+    /** System settings: assistant trajectories (read-only + soft delete; the only write entry point is the persistence hook → distillation worker). Server-side pagination. */
     trajectories: {
       list: (params?: { productLineId?: string; status?: string; page?: number; limit?: number }) =>
         request<Paged<AssistantTrajectory>>(`/assistant/trajectories${qs(params ?? {})}`),
       remove: (id: string) =>
         request<void>(`/assistant/trajectories/${id}`, { method: 'DELETE' }),
     },
-    /** 系统设置：系统提示词模块（R3）。无行=代码默认；skill 组只读（仅 fromSeq 回滚）。 */
+    /** System settings: system prompt modules (R3). No row = code default; the skill group is read-only (only fromSeq rollback). */
     promptModules: {
       list: () => request<PromptModule[]>('/assistant/prompt-modules'),
       versions: (key: string) =>
@@ -816,7 +816,7 @@ export const api = {
           method: 'POST', body: JSON.stringify(body),
         }),
     },
-    /** 系统设置：固化盘点（R3）。LLM 只产提案，应用一律经人工批准。批次/提案均服务端分页。 */
+    /** System settings: solidification inventory (R3). The LLM only produces proposals; applying always requires human approval. Batches/proposals are both server-paginated. */
     solidify: {
       scan: () => request<{ id: string }>('/assistant/solidify/scan', { method: 'POST', body: '{}' }),
       batches: (params?: { status?: string; page?: number; limit?: number }) =>
@@ -833,14 +833,14 @@ export const api = {
           method: 'POST', body: '{}',
         }),
     },
-    /** 系统设置：失败教训（R3.5）。signals 采集表不外露。 */
+    /** System settings: failure lessons (R3.5). The signals collection table is not exposed. */
     failureLessons: {
       list: (status?: 'active' | 'resolved' | 'retired') =>
         request<FailureLesson[]>(`/assistant/failure-lessons${qs(status ? { status } : {})}`),
       retire: (id: string) =>
         request<{ ok: boolean }>(`/assistant/failure-lessons/${id}/retire`, { method: 'POST', body: '{}' }),
     },
-    /** 系统设置：全局共享 MCP server（scope 固定 global）。 */
+    /** System settings: globally shared MCP servers (scope fixed to global). */
     mcpServers: {
       list: () => request<AssistantMcpServer[]>('/assistant/mcp-servers'),
       create: (body: { name: string; kind: 'stdio' | 'http'; command?: string; args?: string[]; url?: string; exposure?: string; enabled?: boolean }) =>
@@ -850,9 +850,9 @@ export const api = {
       remove: (id: string) =>
         request<void>(`/assistant/mcp-servers/${id}`, { method: 'DELETE' }),
     },
-    /** 系统设置：全局共享 AI 技能。DB 存 name/description/enabled；内容在服务端目录树。
-     *  所有文件接口都以 skill id 定位（顶层路径段由服务端从 DB 行解析），且一律走服务端
-     *  resolveInSkill 守卫——客户端不传目录名，越界/软链在服务端拒。 */
+    /** System settings: globally shared AI skills. The DB stores name/description/enabled; content lives in the server-side directory tree.
+     *  Every file API is located by skill id (the top-level path segment is resolved from the DB row by the server), and all go through the server-side
+     *  resolveInSkill guard — the client doesn't pass directory names; path escapes/symlinks are rejected server-side. */
     skills: {
       list: () => request<AssistantSkill[]>('/assistant/skills'),
       create: (body: { name: string; description: string; enabled?: boolean }) =>
@@ -861,8 +861,8 @@ export const api = {
         request<AssistantSkill>(`/assistant/skills/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
       remove: (id: string) =>
         request<void>(`/assistant/skills/${id}`, { method: 'DELETE' }),
-      /** 删磁盘孤儿目录（id=null 的行够不着 :id 系列接口，只能按 name 删）。
-       *  已登记的技能走这条会 409——要删它们请用 remove(id)。 */
+      /** Delete a disk orphan directory (rows with id=null can't reach the :id API family; they can only be deleted by name).
+       *  Registered skills get 409 on this route — use remove(id) to delete them. */
       removeOrphan: (name: string) =>
         request<void>(`/assistant/skills/orphan/${encodeURIComponent(name)}`, { method: 'DELETE' }),
       tree: (id: string) => request<AssistantSkillFileNode[]>(`/assistant/skills/${id}/tree`),
@@ -875,7 +875,7 @@ export const api = {
         }),
       deleteFile: (id: string, path: string) =>
         request<void>(`/assistant/skills/${id}/file?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
-      /** 上传到【已存在】的目录 dir（传 '' 即技能根）。服务端不递归建目录。 */
+      /** Upload into an [existing] directory dir ('' means the skill root). The server does not create directories recursively. */
       uploadFiles: (id: string, dir: string, files: Array<{ path: string; content: string }>) =>
         request<{ ok: boolean; written: string[] }>(`/assistant/skills/${id}/files`, {
           method: 'POST', body: JSON.stringify({ dir, files }),
@@ -895,7 +895,7 @@ export const api = {
       ),
   },
   scenarios: {
-    // 项目下全部场景（跨需求汇总）。供用例页场景过滤下拉——列表不会随选中项收缩。
+    // All scenarios in a project (aggregated across requirements). Feeds the scenario filter dropdown on the cases page — the list doesn't shrink with the selection.
     listForProject: (projectId: string) =>
       request<Array<{ id: string; title: string; requirementId: string }>>(
         `/scenarios?projectId=${projectId}`,
@@ -930,7 +930,7 @@ export interface LlmTestResult {
   error?: string;
 }
 
-/** GET /api/settings/llm 渠道视图：apiKey 只回掩码，hasApiKey 标志位（对齐 environments 掩码模式）。 */
+/** GET /api/settings/llm channel view: apiKey returns a mask only, with a hasApiKey flag (mirrors the environments mask pattern). */
 export interface LlmChannelView {
   id: string;
   name: string;
@@ -948,7 +948,7 @@ export interface LlmSettingsView {
   channels: LlmChannelView[];
 }
 
-/** PUT /api/settings/llm：apiKey 留空/缺省 = 服务端按 id 保留存量原值。 */
+/** PUT /api/settings/llm: an empty/missing apiKey = the server keeps the stored original value by id. */
 export interface LlmSettingsPut {
   defaultChannelId: string;
   visionChannelId?: string | null;
@@ -963,7 +963,7 @@ export interface LlmSettingsPut {
   }>;
 }
 
-/** 创建人/执行人摘要：后端各 list/detail 序列化统一追加；历史存量或用户已删时为 null。 */
+/** Creator/executor summary: appended uniformly by the backend's list/detail serializations; null for legacy rows or deleted users. */
 export interface Creator {
   id: string;
   username: string;
@@ -975,11 +975,11 @@ export interface EnvironmentObject {
   environmentId: string;
   objectType: 'db' | 'syslog' | 'web';
   label: string;
-  /** db: { host, port, dbName, user, password?, secret? }；syslog: { host, user, sshPort, filePath, privateKey?, secret? }；
-   *  web: { name?, scheme, host, port?, user?, loginUrl?, password?, secret? }（0041 起 web 内嵌应用登录凭据）。
-   *  出参里 secret 为 '••••••••' 掩码；入参传明文 password/privateKey，留空不覆盖旧密文。 */
+  /** db: { host, port, dbName, user, password?, secret? }; syslog: { host, user, sshPort, filePath, privateKey?, secret? };
+   *  web: { name?, scheme, host, port?, user?, loginUrl?, password?, secret? } (since 0041, web embeds the application login credential).
+   *  In responses secret is the '••••••••' mask; requests pass plaintext password/privateKey; leaving them empty does not overwrite the stored ciphertext. */
   payload: Record<string, unknown>;
-  /** 后端基于 DB 行加上的标志：原 payload.secret 是否存在；前端用此判定"已配置凭据"，不依赖反向解析被 mask 的 secret。 */
+  /** Flag added by the backend from the DB row: whether the original payload.secret exists; the frontend uses it to decide "credentials configured", without reverse-parsing the masked secret. */
   hasSecret: boolean;
   isDefault: boolean;
   createdAt: string;
@@ -1002,7 +1002,7 @@ export interface Project {
   name: string;
   description: string | null;
   organizationId: string;
-  /** 归属产品线（可空 = 未归线）。产品线内项目之间可跨项目共享用例。 */
+  /** Owning product line (nullable = not assigned to a line). Projects within a product line can share cases across projects. */
   productLineId?: string | null;
   productLineName?: string | null;
   repoUrl: string | null;
@@ -1072,7 +1072,7 @@ export interface ExecutionPlan {
   versionId: string | null;
   versionName?: string | null;
   name: string;
-  /** 运行结束后对失败用例自动做 AI 根因分析 */
+  /** Automatically run AI root-cause analysis on failed cases after a run finishes */
   rcaEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -1081,7 +1081,7 @@ export interface ExecutionPlan {
 export interface PlanWithCount extends ExecutionPlan {
   caseCount: number;
 }
-/** 计划分组：每组独立配置环境/登录准备/failFast/浏览器上下文，组内用例有序。 */
+/** Plan groups: each group independently configures environment/login preparation/failFast/browser context; cases within a group are ordered. */
 export interface PlanCaseGroup {
   id: string;
   name: string;
@@ -1089,14 +1089,14 @@ export interface PlanCaseGroup {
   environmentId: string | null;
   loginPrepareEnabled: boolean;
   loginCaseId: string | null;
-  /** 选中登录用例的标题（未选为 null）——选择按钮回显用。 */
+  /** Title of the selected login case (null when none) — used for the select-button echo. */
   loginCaseTitle: string | null;
-  /** 选中登录用例绑定的数据集与用例级行选择（未绑数据集时 null/[]/0）。 */
+  /** Dataset bound to the selected login case and the case-level row selection (null/[]/0 when no dataset is bound). */
   loginCaseDatasetId: string | null;
   loginCaseRowIndexes: number[];
-  /** 登录用例数据集的启用行数——loginCaseRowIndexes 的下标上界。 */
+  /** Enabled row count of the login case's dataset — the index upper bound for loginCaseRowIndexes. */
   loginCaseEnabledRowCount: number;
-  /** 登录用例行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集。 */
+  /** Login case row override, three states: null = follow case-level; [] = all rows; non-empty = subset. */
   loginDatasetRowIndexes: number[] | null;
   detectionUrl: string | null;
   loginSuccessSelector: string | null;
@@ -1106,23 +1106,23 @@ export interface PlanCaseGroup {
   cases: Array<{
     planCaseId: string; id: string; order: number; title: string; url: string | null;
     versionId: string | null; versionName: string | null; projectId: string | null; projectName: string | null;
-    /** 绑定的数据集（未绑为 null）与名称/启用行数/用例级行选择。
-     *  未绑数据集时：datasetId=null、datasetName=null、datasetEnabledRowCount=0、caseRowIndexes=[]。
-     *  caseRowIndexes=[] 表示「全部启用行」（也含未绑数据集时的空集回退），
-     *  非空则为启用行下标子集（0 基，按启用行重新编号）。 */
+    /** Bound dataset (null when unbound) with name/enabled row count/case-level row selection.
+     *  When unbound: datasetId=null, datasetName=null, datasetEnabledRowCount=0, caseRowIndexes=[].
+     *  caseRowIndexes=[] means "all enabled rows" (also the empty-set fallback when no dataset is bound),
+     *  non-empty is a subset of enabled-row indexes (0-based, renumbered over enabled rows). */
     datasetId: string | null;
     datasetName: string | null;
-    /** 该数据集的启用行数（未绑数据集为 0）——caseRowIndexes 的下标上界。 */
+    /** Enabled row count of this dataset (0 when unbound) — the index upper bound for caseRowIndexes. */
     datasetEnabledRowCount: number;
-    /** 用例级行选择：[] = 全部启用行；未绑数据集时也是 []（此时 datasetEnabledRowCount=0）。 */
+    /** Case-level row selection: [] = all enabled rows; also [] when unbound (datasetEnabledRowCount=0 then). */
     caseRowIndexes: number[];
-    /** 计划行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集。 */
+    /** Plan-level row override, three states: null = follow case-level; [] = all rows; non-empty = subset. */
     planRowIndexes: number[] | null;
   }>;
 }
 export interface PlanDetail extends ExecutionPlan {
-  /** 平铺口径：按组序拼接（order=组内序、globalOrder=全局 1..N），供计数与跨组去重标显示。
-   *  字段与 groups[].cases 同形（服务端由组用例直接 flatMap 而来，含数据集三态字段）+ globalOrder。 */
+  /** Flattened view: concatenated by group order (order = within-group order, globalOrder = global 1..N), for counting and cross-group dedup badge display.
+   *  Fields are the same shape as groups[].cases (the server flatMaps directly from group cases, including the dataset three-state fields) + globalOrder. */
   cases: Array<PlanCaseGroup['cases'][number] & { globalOrder: number }>;
   groups: PlanCaseGroup[];
   strategy: 'run_all' | 'fail_fast';
@@ -1149,7 +1149,7 @@ export interface PlanRunDetail {
     reportId: string | null;
     reportIds?: string[] | null;
     rowStatuses?: string[];
-    /** 所属计划分组（老运行为 null）。 */
+    /** Owning plan group (null on legacy runs). */
     groupId: string | null;
     groupName: string | null;
     groupOrder: number | null;
@@ -1160,42 +1160,42 @@ export interface PlanRunDetail {
     finishedAt: string | null;
     durationMs: number | null;
     error: string | null;
-    /** AI 根因分析结果（仅失败行有值） */
+    /** AI root-cause analysis result (present only on failed rows) */
     rca?: RcaResult | null;
-    /** 最后断言结论：vision 判定 reason 或失败步 error；无报告/未断言为 null。 */
+    /** Final assertion conclusion: the vision verdict reason or the failed step's error; null when no report/not asserted. */
     lastAssertion?: string | null;
   }>;
-  /** 触发人（=计划运行的执行人）。 */
+  /** Triggered by (= the plan run's executor). */
   triggeredBy?: Creator | null;
 }
 
-/** 探索会话状态机：pending → running → completed | failed | cancelled。 */
+/** Exploration session state machine: pending → running → completed | failed | cancelled. */
 export type ExplorationStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
-/** finding 审阅状态机：pending → confirmed | dismissed；confirmed → promoted。 */
+/** Finding review state machine: pending → confirmed | dismissed; confirmed → promoted. */
 export type ExplorationFindingStatus = 'pending' | 'confirmed' | 'dismissed' | 'promoted';
 
-/** 一条动作留痕（平台记录的 ground truth，非模型自述）。 */
+/** One action trail entry (ground truth recorded by the platform, not the model's own account). */
 export interface ExplorationStep {
   type: string;
   target: string;
   ok: boolean;
-  /** sql 步骤的结果摘要（行数 + 首行）。 */
+  /** Result summary of a sql step (row count + first row). */
   detail?: string;
-  /** 这一步的结果摘要（人话：看到了什么 / 改变了什么 / 为什么失败）——「会话过程」列表的正文。 */
+  /** Result summary of this step (plain language: what was seen / what changed / why it failed) — the body of the "session process" list. */
   outcome?: string;
-  /** fill 的输入值（占位符字面量或普通文本）。 */
+  /** Input value for fill (placeholder literal or plain text). */
   value?: string;
-  /** wait 的毫秒数。 */
+  /** Milliseconds for wait. */
   ms?: number;
-  /** press 的键名。 */
+  /** Key name for press. */
   key?: string;
 }
 
-/** 代码提交范围（charter 自然语言解析产物）：提交窗口 + 改动文件 + 候选起点。
- *  范围是焦点信号不是围栏——探索照常全站跑，范围只用于定向。 */
+/** Code commit scope (parsed from the charter's natural language): commit window + changed files + candidate starting points.
+ *  Scope is a focus signal, not a fence — the exploration still crawls the whole site; scope only guides targeting. */
 export interface CodeScope {
   kind: 'time_window' | 'commit_range' | 'single_commit';
-  /** 给人看的一行标签（卡片标题）。 */
+  /** One-line human-readable label (card title). */
   label: string;
   since?: string;
   until?: string;
@@ -1205,13 +1205,13 @@ export interface CodeScope {
   headSha?: string;
   commits: Array<{ sha: string; subject: string; date: string }>;
   files: Array<{ path: string; status: string; additions: number; deletions: number }>;
-  /** 候选起点（从改动文件源码里抽的以 / 开头的字面量路径串）——启发式，可能不准。 */
+  /** Candidate starting points (literal path strings starting with / extracted from changed file sources) — heuristic, may be inaccurate. */
   hintUrls: string[];
   confidence: number;
   reason: string;
 }
 
-/** 代码范围解析状态：pending（解析中）→ resolved（已解析）| none（章程无提交语义）| failed（解析失败）。 */
+/** Code scope resolution status: pending (parsing) → resolved | none (charter has no commit semantics) | failed (parse failure). */
 export type CodeScopeStatus = 'pending' | 'resolved' | 'none' | 'failed';
 
 export interface ExplorationSession {
@@ -1220,40 +1220,40 @@ export interface ExplorationSession {
   versionId: string;
   title: string;
   charter: string;
-  /** 人格 key（qa/novice/power/accessibility），单一真源在 @itest/shared。 */
+  /** Persona key (qa/novice/power/accessibility); the single source of truth lives in @itest/shared. */
   persona: string;
   startUrl: string | null;
   status: ExplorationStatus;
   cancelRequested: boolean;
-  /** 破坏性操作授权（默认 false）：勾了才允许探索点删除/支付/发送这类不可逆入口。 */
+  /** Destructive-operation authorization (default false): the exploration may only click irreversible entries like delete/pay/send when checked. */
   allowDestructive: boolean;
-  /** 故障注入授权（默认 false）：勾了才允许探索注入断网/慢网/CPU 节流验证错误处理与降级。 */
+  /** Fault-injection authorization (default false): the exploration may only inject offline/slow network/CPU throttling to verify error handling and degradation when checked. */
   allowFaultInjection: boolean;
-  /** 浏览器视口宽高（两态：null=默认 1280×800；成对给=自定义，对齐用例自定义窗口）。 */
+  /** Browser viewport width/height (two states: null = default 1280×800; a pair = custom, aligned with the case's custom window). */
   windowWidth: number | null;
   windowHeight: number | null;
-  /** 轮次预算（null=后端默认 60）：软预算，超界优雅收尾，已发现的 findings 全保留。 */
+  /** Turn budget (null = backend default 60): a soft budget; past the limit it wraps up gracefully, and all findings discovered so far are kept. */
   budgetTurns?: number | null;
-  /** 负面结果账本：模型申报的「已排除的假设 + 依据」（外化记忆最小切片）。 */
+  /** Negative-result ledger: hypotheses the model declares "ruled out" plus evidence (a minimal slice of externalized memory). */
   excludedLedger?: Array<{ claim: string; evidence: string }> | null;
-  /** 覆盖账本（C1）：机械维护的已覆盖路径/交互计数/子目标完成情况。 */
+  /** Coverage ledger (C1): mechanically maintained covered paths / interaction counts / sub-goal completion. */
   coverageLedger?: CoverageLedger | null;
-  /** 错误信号（D3）：探索期间捕获的 console/pageerror/HTTP 4xx-5xx。 */
+  /** Error signals (D3): console/pageerror/HTTP 4xx-5xx captured during the exploration. */
   errorSignals?: Array<{ at: string; kind: 'console' | 'pageerror' | 'http'; text: string; url?: string }> | null;
-  /** 独立评审（A3）状态：pending（未评审）| done | failed | skipped（无 findings）。 */
+  /** Independent review (A3) status: pending (not reviewed) | done | failed | skipped (no findings). */
   judgeStatus?: 'pending' | 'done' | 'failed' | 'skipped';
-  /** 评审汇总（A3）：各 finding 判定 + 置信度。评审只标注，不改 findings.status。 */
+  /** Review summary (A3): verdict + confidence per finding. The review only annotates; it does not change findings.status. */
   judgeResult?: {
     judgedAt: string;
     summary?: string;
     error?: string;
     findings: Array<{ id: string; verdict: 'confirmed' | 'dismissed' | 'unclear'; reason: string; confidence: number }>;
   } | null;
-  /** 人格矩阵（C3）：同 matrix_id 的会话分组展示。 */
+  /** Persona matrix (C3): sessions grouped and displayed by the same matrix_id. */
   matrixId?: string | null;
   matrixLabel?: string | null;
   matrixRole?: string | null;
-  /** 代码提交范围（runner 后台解析，前端轮询可见；详情/列表接口都带）。 */
+  /** Code commit scope (parsed by the runner in the background, visible via frontend polling; carried by both detail and list APIs). */
   codeScope?: CodeScope | null;
   codeScopeStatus?: CodeScopeStatus | null;
   summary: string | null;
@@ -1265,22 +1265,22 @@ export interface ExplorationSession {
   createdAt: string;
   updatedAt: string;
   createdBy?: Creator | null;
-  /** 缺陷候选数：列表接口按会话分组统计后附上（卡片徽标用）；详情接口不带此字段。 */
+  /** Defect candidate count: the list API groups stats by session and attaches it (used for card badges); the detail API doesn't carry this field. */
   findingsCount?: number;
-  /** 详情接口才带（列表接口不带）。 */
+  /** Carried by the detail API only (not the list API). */
   findings?: ExplorationFinding[];
-  /** 详情接口才带：会话过程——平台记录的每一步动作（老会话由各 finding 的留痕合并而来）。 */
+  /** Detail API only: session process — every step action recorded by the platform (legacy sessions merge it from each finding's action trail). */
   steps?: ExplorationStep[];
 }
 
-/** 覆盖账本快照（C1）：路径去重 + 交互计数 + 子目标完成情况（平台不猜「做没做到」）。 */
+/** Coverage ledger snapshot (C1): path dedup + interaction counts + sub-goal completion (the platform doesn't guess "did it actually happen"). */
 export interface CoverageLedger {
   paths: string[];
   interactions: Array<{ kind: string; count: number }>;
   goals: Array<{ id: string; text: string; done: boolean }>;
 }
 
-/** 矩阵视图（C3/S2）：矩阵内全部会话 + 它们的 findings（finding 带 crossSessionCount）。 */
+/** Matrix view (C3/S2): all sessions in the matrix + their findings (findings carry crossSessionCount). */
 export interface ExplorationMatrix {
   matrixId: string;
   label: string | null;
@@ -1294,16 +1294,16 @@ export interface ExplorationFinding {
   order: number;
   title: string;
   description: string;
-  /** 复用用例优先级词表 P0-P3。 */
+  /** Reuses the case priority vocabulary P0-P3. */
   severity: 'P0' | 'P1' | 'P2' | 'P3';
-  /** 模型给的复现步骤（可能脑补）；为空时后端用 actionsTrail 文本化兜底。 */
+  /** Repro steps given by the model (may be hallucinated); when empty the backend falls back to textualized actionsTrail. */
   reproSteps: Array<{ action: string; expected?: string }>;
-  /** 平台记录的实际动作留痕（ground truth）。 */
+  /** Actual action trail recorded by the platform (ground truth). */
   actionsTrail: Array<{ type: string; target: string; ok: boolean; detail?: string }> | null;
-  /** /screenshots/<sessionId>/finding-<order>.png（express.static 提供）。 */
+  /** /screenshots/<sessionId>/finding-<order>.png (served by express.static). */
   screenshotPath: string | null;
   pageUrl: string | null;
-  /** 决策帧元数据（A1）：finding 报告工具在「决策那一刻」截图后钉住的页面状态。 */
+  /** Decision frame metadata (A1): the page state pinned after the finding report tool screenshotted "at the moment of decision". */
   evidenceFrame?: {
     url: string;
     viewport: { width: number; height: number } | null;
@@ -1311,9 +1311,9 @@ export interface ExplorationFinding {
     trailIndex: number;
     screenshotPath?: string;
   } | null;
-  /** 跨会话交集（S2）：几个会话报了同一缺陷；≥2 = 多视角共同发现。 */
+  /** Cross-session intersection (S2): how many sessions reported the same defect; ≥2 = jointly discovered from multiple perspectives. */
   crossSessionCount: number;
-  /** 独立评审结论（A3）：只标注不改 status——人工审阅才是权威。 */
+  /** Independent review verdict (A3): annotation only, status unchanged — human review is the authority. */
   judge?: {
     verdict: 'confirmed' | 'dismissed' | 'unclear';
     reason: string;
@@ -1359,28 +1359,28 @@ export type ExecutionEntry =
       status: string;
       durationMs: number | null;
       summary: string | null;
-      /** 最后断言信息：vision 判定 reason 或失败步 error；无断言为 null。 */
+      /** Final assertion info: the vision verdict reason or the failed step's error; null when nothing was asserted. */
       lastAssertion?: string | null;
-      /** 自愈通过标记：passed 且 aiTask 缓存分叉后 AI 自愈成功。 */
+      /** Self-heal passed flag: passed and the AI self-heal succeeded after the aiTask cache diverged. */
       healed?: boolean;
-      /** 数据集批次 id（同一次数据集执行的全部行共用）；非数据集执行为 null。 */
+      /** Dataset batch id (shared by all rows of one dataset execution); null for non-dataset executions. */
       datasetBatchId?: string | null;
-      /** 本条记录代表的批内成员数（非数据集执行 = 1）。 */
+      /** Number of batch members this record stands for (1 for non-dataset executions). */
       batchSize?: number;
-      /** 批内通过 / 失败成员数（按全批真实值算，不受筛选影响）。 */
+      /** Passed / failed members within the batch (computed from true full-batch values, unaffected by filtering). */
       batchPassed?: number;
       batchFailed?: number;
-      /** 批内全部成员报告 id（批量删除时展开成 N 条 report 删除）。 */
+      /** Report ids of all members in the batch (expanded into N report deletions on batch delete). */
       memberReportIds?: string[];
       createdAt: string;
-      /** 执行人（报告创建人 = 触发执行者）。 */
+      /** Executor (report creator = the one who triggered the run). */
       createdBy?: Creator | null;
     }
   | {
       kind: 'plan';
       id: string;
       planId: string;
-      /** 所属计划名（计划被删后 innerJoin 落空不会出现该行，理论非空）。 */
+      /** Owning plan name (the innerJoin misses once the plan is deleted so the row can't appear; theoretically non-null). */
       planName: string | null;
       versionId: string | null;
       versionName: string | null;
@@ -1411,14 +1411,14 @@ export interface TestCase {
   groupId?: string;
   url?: string | null;
   requirementId?: string | null;
-  /** 需求编号（外部编号自由文本，非 requirements FK）。 */
+  /** Requirement number (free-text external number, not a requirements FK). */
   requirementNo?: string | null;
   scenarioId?: string | null;
   scenarioTitle?: string | null;
   tags?: Tag[];
   versionId?: string;
   versionName?: string;
-  /** 所属项目（列表接口按产品线跨项目拉齐时回带，供「跨项目」徽标与按项目筛选）。 */
+  /** Owning project (attached when the list API pulls across projects under a product line; feeds the "cross-project" badge and per-project filtering). */
   projectId?: string | null;
   projectName?: string | null;
   createdAt?: string;
@@ -1428,25 +1428,25 @@ export interface TestCase {
   windowHeight?: number | null;
   incognito?: boolean;
   defaultEnvId?: string | null;
-  /** 环境 web 服务对象名（payload.name）；空 → 用环境默认 web 服务拼相对 URL。 */
+  /** Environment web service object name (payload.name); empty → build a relative URL from the environment's default web service. */
   webServiceRef?: string | null;
   datasetId?: string | null;
-  /** 数据集行选择：启用行下标数组（0 基，剔除禁用行后重新编号）。
-   *  [] = 所有启用行（= 服务端 test_cases.dataset_row_indexes 同语义）。 */
+  /** Dataset row selection: array of enabled-row indexes (0-based, renumbered after removing disabled rows).
+   *  [] = all enabled rows (same semantics as the server's test_cases.dataset_row_indexes). */
   datasetRowIndexes?: number[];
-  /** Track 1：用例级预期描述（自然语言）。回放结束后由 vision LLM 拿最终截图判定。 */
+  /** Track 1: case-level expected outcome description (natural language). After replay finishes, the vision LLM judges it against the final screenshot. */
   expectedOutcome?: string | null;
   platform?: 'web' | 'mobile';
   mobileOs?: 'ios' | 'android' | null;
   mobileDeviceTargetId?: string | null;
   appRef?: { bundleId: string; appPath?: string; launchArgs?: string[] } | null;
   createdBy?: Creator | null;
-  /** 步骤固化进度（列表接口回填）：total=步骤数，compiled=已固化步骤数。 */
+  /** Step solidification progress (backfilled by the list API): total = step count, compiled = solidified step count. */
   stepsTotal?: number;
   stepsCompiled?: number;
 }
-/** 批量固化批次进度（GET /cases/solidify-batches/:id）。status 读时派生：
- *  有 running 行 = running；否则全过 = passed、全败 = failed、混合 = partial。 */
+/** Batch solidification progress (GET /cases/solidify-batches/:id). status is derived at read time:
+ *  any running row = running; otherwise all passed = passed, all failed = failed, mixed = partial. */
 export interface SolidifyBatchStatus {
   batchId: string;
   status: 'running' | 'passed' | 'failed' | 'partial';
@@ -1456,8 +1456,8 @@ export interface SolidifyBatchStatus {
   running: number;
   cases: Array<{ caseId: string; title: string; status: string; error: string | null }>;
 }
-/** 在途批量固化批次（GET /cases/solidify-batches）：只返回还有 running 行的批次。
- *  批次全部出终态后自动从列表消失（横幅消失、徽标变回 n/N）。 */
+/** In-flight batch solidification batches (GET /cases/solidify-batches): only batches that still have running rows are returned.
+ *  Once a batch fully reaches terminal states it disappears from the list automatically (banner gone, badge back to n/N). */
 export interface SolidifyBatchesOverview {
   batches: Array<{
     batchId: string;
@@ -1479,7 +1479,7 @@ export interface Scenario {
   order: number;
   createdAt: string;
 }
-/** 系统设置里管理的全局共享 MCP server（平台级，scope=global）。 */
+/** Globally shared MCP servers managed in system settings (platform-level, scope=global). */
 export interface AssistantMcpServer {
   id: string;
   name: string;
@@ -1493,7 +1493,7 @@ export interface AssistantMcpServer {
   createdAt: string;
   updatedAt: string;
 }
-/** 助手短期记忆行（GET /assistant/memories；productLineName 由路由 join 带出）。 */
+/** Assistant short-term memory row (GET /assistant/memories; productLineName comes from the route's join). */
 export interface AssistantMemory {
   id: string;
   scope: 'product_line' | 'global';
@@ -1510,7 +1510,7 @@ export interface AssistantMemory {
   createdAt: string;
   updatedAt: string;
 }
-/** 助手轨迹行（GET /assistant/trajectories；productLineName 由路由 join 带出）。 */
+/** Assistant trajectory row (GET /assistant/trajectories; productLineName comes from the route's join). */
 export interface AssistantTrajectory {
   id: string;
   productLineId: string;
@@ -1525,7 +1525,7 @@ export interface AssistantTrajectory {
   createdAt: string;
   updatedAt: string;
 }
-/** 覆盖值基线漂移：代码默认演进后，覆盖行仍基于旧基线（drift）或无指纹（unknown）。 */
+/** Coverage value baseline drift: after code defaults evolve, an override row still rests on the old baseline (drift) or has no fingerprint (unknown). */
 export interface PromptDrift {
   key: string;
   label: string;
@@ -1538,7 +1538,7 @@ export interface PromptDrift {
   currentHash: string;
 }
 
-/** R3 prompt 模块（设置页系统提示词）。isDefault=true 表示当前用代码默认值。 */
+/** R3 prompt module (settings-page system prompts). isDefault=true means the code default is currently in use. */
 export interface PromptModule {
   key: string;
   group: 'main' | 'tool' | 'skill';
@@ -1576,10 +1576,10 @@ export interface SolidifyProposalSource {
   type: 'memory' | 'trajectory' | 'lesson';
   id: string;
   title: string;
-  /** 来源线名（创建时定格，'global'=全局记忆）。lesson 来源为空串。 */
+  /** Source line name (frozen at creation, 'global'=global memory). Empty string for lesson sources. */
   lineName: string;
   retireRecommended: boolean;
-  /** 仅 lesson：归因与信号数快照（审批详情展示）。 */
+  /** lesson only: snapshot of attribution and signal count (shown in the approval detail). */
   attribution?: 'prompt' | 'step_description';
   signalCount?: number;
 }
@@ -1599,12 +1599,12 @@ export interface SolidifyProposal {
   appliedAt: string | null;
   applyError: string | null;
   distillModel: string;
-  /** 仅 prompt_correction：盘点时的版本链头（应用时复查，被人工改过 → 拒绝）。 */
+  /** prompt_correction only: version chain head at inventory time (re-checked on apply; manually changed → reject). */
   baseSeq: number | null;
   createdAt: string;
 }
 
-/** 系统设置：失败教训（R3.5）。signals 采集表不外露。 */
+/** System settings: failure lessons (R3.5). The signals collection table is not exposed. */
 export interface FailureLesson {
   id: string;
   status: 'active' | 'resolved' | 'retired';
@@ -1617,32 +1617,32 @@ export interface FailureLesson {
   createdAt: string;
   updatedAt: string;
 }
-/** 系统设置里管理的全局共享 AI 技能（assistant_skills 表）。
- *  2026-10-19 存储翻转：DB 只留元数据，内容在服务端目录树 SKILLS_ROOT/<name>/，
- *  由下方 tree/readFile/writeFile/deleteFile/uploadFiles 操作。 */
+/** Globally shared AI skills managed in system settings (assistant_skills table).
+ *  2026-10-19 storage flip: the DB keeps only metadata; content lives in the server-side directory tree SKILLS_ROOT/<name>/,
+ *  operated via tree/readFile/writeFile/deleteFile/uploadFiles below. */
 export interface AssistantSkill {
-  /** 孤儿目录（磁盘有目录但 DB 无行）没有 id，仅供展示/删除，不允许改元数据。 */
+  /** Orphan directories (on disk but with no DB row) have no id; display/delete only, metadata changes not allowed. */
   id: string | null;
   name: string;
   description: string;
   enabled: boolean;
-  /** 磁盘统计（递归树数出来的文件数与字节数）。 */
+  /** Disk stats (file count and byte count counted by walking the tree recursively). */
   fileCount: number;
   totalBytes: number;
   onDisk: boolean;
-  /** true = 磁盘孤儿目录：未登记、无 description，入不了 catalog。 */
+  /** true = disk orphan directory: unregistered, no description, can't enter the catalog. */
   unregistered: boolean;
   createdAt: string | null;
   updatedAt: string | null;
 }
-/** 文件树节点（相对技能根，posix 分隔）。 */
+/** File tree node (relative to the skill root, posix separators). */
 export interface AssistantSkillFileNode {
   path: string;
   kind: 'file' | 'dir';
   size: number;
   runtime?: string;
 }
-// 版本空间助手暂存表（thread-scoped）单对象形态
+// Single-object form of the version-space assistant staging tables (thread-scoped)
 export interface StagedStageCase {
   localId: string;
   title: string;
@@ -1652,9 +1652,9 @@ export interface StagedStageCase {
   steps: Array<{ action: string; assertion?: string | null; compiled?: unknown[] | null }>;
   defaultEnvId: string | null;
   expectedOutcome: string | null;
-  /** 配套数据集 localId（同批 stage_dataset 生成；保存时数据集先落库并自动绑定）。 */
+  /** Companion dataset localId (generated by the same stage_dataset batch; on save the dataset is persisted first and auto-bound). */
   datasetLocalId: string | null;
-  /** 本条声明覆盖的测试类型（COVERAGE_TYPE_KEYS 子集）；暂存区用来一眼看覆盖分布。 */
+  /** Test types this entry claims to cover (a subset of COVERAGE_TYPE_KEYS); the staging area uses it to see coverage distribution at a glance. */
   coverageTypes: string[];
   stagedAt: string;
 }
@@ -1702,7 +1702,7 @@ export interface StageCaseOp {
   diff?: string;
   stagedAt: string;
 }
-/** AI 生成的数据集草稿：rows 为明文（敏感列落库时才加密），预览对用户可见。 */
+/** AI-generated dataset draft: rows are plaintext (sensitive columns are encrypted only when persisted); the preview is visible to users. */
 export interface StagedDataset {
   localId: string;
   name: string;
@@ -1744,11 +1744,11 @@ export interface TestStep {
   tabRef?: string | null;
   componentKind?: string | null;
   sensitive?: boolean;
-  /** 2026-10-06：行级自然语言；人看/给 LLM 起手；回放不读。
-   *  2026-10-07：取代旧 name 列(已彻底移除读写),自然语言完整说明都存这里。 */
+  /** 2026-10-06: row-level natural language; for humans / as the LLM's starting point; replay doesn't read it.
+   *  2026-10-07: replaced the old name column (read/write fully removed); the complete natural-language description lives here. */
   instruction?: string | null;
-  /** 2026-10-06：可执行 DSL 数组 StepAction[]；回放唯一依据。空数组/null = 未编译。
-   *  2026-10-07：老 action 列已 DROP,DSL 只住这里。 */
+  /** 2026-10-06: executable DSL array StepAction[]; the sole basis for replay. Empty array/null = not compiled.
+   *  2026-10-07: the old action column was DROPped; the DSL lives only here. */
   compiled?: unknown[] | null;
 }
 export interface TestCaseDetail extends TestCase {
@@ -1765,27 +1765,27 @@ export interface TestCaseDetail extends TestCase {
   summary: string | null;
   datasetRowIndex?: number | null;
   datasetSnapshot?: { rowIndex: number; totalRows: number; values: Record<string, string> } | null;
-  /** 数据集批次 id：同一次执行的 N 行共用；老报告为 null（行切换器不渲染）。 */
+  /** Dataset batch id: shared by the N rows of one execution; null on legacy reports (row switcher not rendered). */
   datasetBatchId?: string | null;
   platform?: 'web' | 'mobile';
   mobileOs?: 'ios' | 'android' | null;
   deviceName?: string | null;
   deviceTargetId?: string | null;
-  /** 自愈通过标记：passed 且 aiTask 缓存分叉后 AI 自愈成功；failed 恒 false。 */
+  /** Self-heal passed flag: passed and the AI self-heal succeeded after the aiTask cache diverged; always false for failed. */
   healed?: boolean;
-  /** 真实执行阶段起止时刻（老报告为 null）。startedAt = 开始跑步骤的时刻，与 durationMs 同基线。 */
+  /** Start/end times of the actual execution phase (null on legacy reports). startedAt = the moment steps started running, on the same baseline as durationMs. */
   startedAt?: string | null;
   finishedAt?: string | null;
   createdAt: string;
-  /** 计划运行成员报告：附带来源（后端从 plan_run_cases 查得）。返回按钮据此切到「返回计划运行」 */
+  /** Plan run member report: attached source (queried by the backend from plan_run_cases). The back button switches to "back to plan run" based on it */
   planRunId?: string | null;
   planId?: string | null;
-  /** AI 根因分析结果（属于 plan_run_cases 且已分析时有值） */
+  /** AI root-cause analysis result (present when the report belongs to plan_run_cases and has been analyzed) */
   rca?: RcaResult | null;
-  /** 执行人 = 报告创建人（触发执行者）。 */
+  /** Executor = report creator (the one who triggered the run). */
   createdBy?: Creator | null;
 }
-/** 数据集批次：同批兄弟行摘要（行切换器轮询用，不含步骤明细）。 */
+/** Dataset batch: sibling row summaries of the same batch (used by the row switcher's polling; no step details). */
 export interface DatasetBatch {
   batchId: string | null;
   rows: Array<{
@@ -1801,10 +1801,10 @@ export interface DatasetSaveBody {
   description?: string | null;
   columns: Array<{ name: string; sensitive?: boolean }>;
   rows: Array<{ disabled?: boolean; cells: Record<string, unknown> }>;
-  /** 列改名声明（旧列名 → 新列名）：让服务端把旧列密文 re-key 到新列名（编辑已有数据集时）。 */
+  /** Column rename declaration (old name → new name): makes the server re-key the old column's ciphertext to the new name (when editing an existing dataset). */
   renames?: Record<string, string>;
 }
-/** xlsx 导入解析出参（import-parse）：新列一律非敏感、行未禁用，合入 draft 后仍走普通保存。 */
+/** xlsx import parse output (import-parse): new columns are always non-sensitive and rows never disabled; after merging into the draft it still goes through the normal save. */
 export interface DatasetImportPayload {
   columns: Array<{ name: string; sensitive: false }>;
   rows: Array<{ disabled: false; cells: Record<string, string> }>;
@@ -1821,7 +1821,7 @@ export interface DatasetSummary {
   createdBy?: Creator | null;
 }
 export interface DatasetMaskedCell { __masked: true }
-/** 详情/新建/编辑出参：原始行字段 + 掩码 rows（与 Summary 不同，不含 rowCount/enabledRowCount 统计）。 */
+/** Detail/create/edit output: original row fields + masked rows (unlike Summary, it omits rowCount/enabledRowCount stats). */
 export interface DatasetDetail {
   id: string;
   projectId: string;
@@ -1853,20 +1853,20 @@ export interface VariableReport {
   invalidNames: Array<{ stepOrder: number; field: string; name: string; reason: string }>;
 }
 
-// ---------- 认证与组织 ----------
+// ---------- Auth & organizations ----------
 
-/** 脱敏后的当前用户（不含 passwordHash）。 */
+/** Current user with sensitive fields redacted (no passwordHash). */
 export interface SafeUser {
   id: string;
   username: string;
   displayName: string;
   createdAt: string;
   updatedAt: string;
-  /** UI 语言偏好;PATCH /users/:id 可写,当前 /auth/me 尚未返回时为 undefined。 */
+  /** UI language preference; writable via PATCH /users/:id, undefined when /auth/me doesn't return it yet. */
   languagePreference?: 'zh-CN' | 'en-US' | null;
 }
 
-/** 登录成功 → 自动已登录；否则进入首登强制改密流程（passwordChangeToken 一次性、5 分钟有效）。 */
+/** Login success → automatically logged in; otherwise enters the first-login forced password change flow (passwordChangeToken is single-use and valid for 5 minutes). */
 export type LoginResponse =
   | { status: 'ok'; user: SafeUser; organization: { id: string; name: string; isManager: boolean; isUser: boolean } }
   | { status: 'password_change_required'; passwordChangeToken: string; username: string };
@@ -1886,7 +1886,7 @@ export interface MeResponse {
   organizations: OrgMembership[];
 }
 
-/** 组织列表项（可见组织：自己加入的 ∪ 管理的子树）。 */
+/** Organization list item (visible orgs: those you joined ∪ subtrees you manage). */
 export interface OrgSummary extends OrgMembership {
   description: string | null;
   memberCount: number;
@@ -1902,7 +1902,7 @@ export interface Organization {
   updatedAt: string;
 }
 
-/** 分页返回形状，与后端 design-systems / users 等接口一致 */
+/** Paged response shape, consistent with the backend's design-systems / users and similar APIs */
 export interface Paged<T> { items: T[]; total: number; page: number; limit: number }
 
 export interface UserSummary {
@@ -1970,7 +1970,7 @@ export interface OrgMemberRow {
   joinedAt: string;
 }
 
-/** 组织视图下的产品线：产品线已完全替代「组织下的项目」这个位置。 */
+/** Product lines in the org view: product lines have fully replaced the "projects under an organization" position. */
 export interface OrgProductLineSummary {
   id: string;
   name: string;

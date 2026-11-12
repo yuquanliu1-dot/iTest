@@ -34,7 +34,7 @@ import {
 type ViewMode = 'card' | 'table';
 
 const VIEW_VALUES = ['card', 'table'] as const;
-/** 计划运行状态域：running 初始 + passed/failed/cancelled 终态；'never' = 从未运行（本地派生值）。 */
+/** Plan run status domain: running initial + passed/failed/cancelled terminal; 'never' = never run (locally derived). */
 const STATUS_FACET_VALUES = ['never', 'running', 'passed', 'failed', 'cancelled'] as const;
 
 const plansParsers = {
@@ -58,7 +58,7 @@ export default function Plans() {
     queryFn: () => api.projects.plans(projectId!),
     enabled: !!projectId,
   });
-  // 筛选/分页/视图全走 URL（nuqs），与用例列表、执行历史一致
+  // Filtering/pagination/view all live in the URL (nuqs), consistent with the case list and execution history
   const [raw, setRaw] = useQueryStates(plansParsers, { history: 'replace' });
   const view = raw.view as ViewMode;
   const page = Math.max(1, Number(raw.page) || 1);
@@ -73,7 +73,7 @@ export default function Plans() {
     void setRaw({ page: '1' });
   }, [versionId]);
 
-  // 按当前 versionId 过滤（NULL 版本 = 跨版本计划也展示，但用副标记）
+  // Filter by current versionId (NULL version = cross-version plans also shown, but with a secondary marker)
   const versionPlans = useMemo(
     () => (plans ?? []).filter((p) => !versionId || p.versionId == null || p.versionId === versionId),
     [plans, versionId],
@@ -92,7 +92,7 @@ export default function Plans() {
     return m;
   }, [planRuns]);
 
-  // 搜索（名称/版本/创建人，大小写不敏感）→ 状态/创建人 facet → 分页切片
+  // Search (name/version/creator, case-insensitive) → status/creator facets → pagination slice
   const statusOf = (p: PlanWithCount) => latestByPlan.get(p.id)?.status ?? 'never';
   const qLower = raw.q.trim().toLowerCase();
   const filteredPlans = useMemo(
@@ -137,7 +137,7 @@ export default function Plans() {
     },
   ];
 
-  // 批量选择（表格视图当前页行）
+  // Bulk selection (rows of the table view's current page)
   const selection = useTableSelection(visiblePlans.map((p) => p.id));
 
   const [showCreate, setShowCreate] = useState(false);
@@ -483,7 +483,7 @@ export default function Plans() {
         </DialogContent>
       </Dialog>
 
-      {/* 批量删除确认：运行历史与报告一并删除，与单删同语义 */}
+      {/* Bulk delete confirm: run history and reports deleted together, same semantics as single delete */}
       <Dialog open={confirmBatchDelete} onOpenChange={(open) => { if (!open) setConfirmBatchDelete(false); }}>
         <DialogContent style={{ maxWidth: 420 }}>
           <DialogHeader><DialogTitle>{t('plans:batchDeleteTitle')}</DialogTitle></DialogHeader>

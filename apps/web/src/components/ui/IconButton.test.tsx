@@ -3,8 +3,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './shadcn/dropdown-menu';
 import IconButton from './IconButton';
 
-// IconButton 必须透传原生 button 属性：Radix 的 <DropdownMenuTrigger asChild> 会把
-// onPointerDown / aria-haspopup / data-state 合并进子组件，丢了这些下拉菜单打不开。
+// IconButton must forward native button props: Radix's <DropdownMenuTrigger asChild> merges
+// onPointerDown / aria-haspopup / data-state into the child; without them the dropdown won't open.
 describe('IconButton', () => {
   it('作为 Radix 下拉触发器时能打开菜单', async () => {
     const onSelect = vi.fn();

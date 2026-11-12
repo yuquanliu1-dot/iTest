@@ -31,13 +31,13 @@ export default function ReportDetail() {
   const qc = useQueryClient();
   const toast = useUIStore((s) => s.showToast);
   const [showDelete, setShowDelete] = useState(false);
-  // 步骤灯箱开合（zoom 状态收在 ReportStepTimeline 内）：开着时数据集行切换的 ←/→ 要让路
+  // Step lightbox open/close (zoom state lives inside ReportStepTimeline): when open, the dataset row switcher's ←/→ must yield
   const [zoomOpen, setZoomOpen] = useState(false);
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['report', id],
     queryFn: () => api.reports.get(id!),
     enabled: !!id,
-    // 执行已异步化：running 期间 2s 轮询，报告从 running → passed/failed 时原地收敛
+    // Execution is async: poll every 2s while running; the report converges in place from running → passed/failed
     refetchInterval: (q) => (q.state.data?.status === 'running' ? 2000 : false),
   });
 
@@ -53,37 +53,37 @@ export default function ReportDetail() {
     onError: (e: Error) => toast(localizeApiError(e), 'error'),
   });
 
-  // ── 数据集行切换器（同批兄弟行 + 跟随执行） ────────────────────────────────
-  // 老报告无 datasetBatchId → 端点回空 → 切换器不渲染；行间切换复用本页（queryKey ['report', id] 原地换数据）。
+  // ── Dataset row switcher (sibling rows of the same batch + follow execution) ────────────────────────────────
+  // Old reports have no datasetBatchId → endpoint returns empty → switcher not rendered; row switching reuses this page (queryKey ['report', id] swaps data in place).
   const [follow, setFollow] = useState(true);
   const batchEnabled = !!data?.datasetBatchId && (data?.datasetSnapshot?.totalRows ?? 1) > 1;
   const batchQuery = useQuery({
     queryKey: ['dataset-batch', data?.datasetBatchId],
-    // 端点收报告 id（服务端从该行反查 batchId）；key 按 batchId，行间切换命中缓存不重取
+    // The endpoint takes the report id (the server reverse-derives the batchId from that row); key is the batchId, so switching rows hits cache without refetch
     queryFn: () => api.reports.datasetBatch(id!),
     enabled: batchEnabled,
-    // 批内仍有 running 行 → 2s 轮询（与报告本体同节奏）：行状态收敛 = chip 点色 + 跟随跳行的数据源
+    // Batch still has running rows → poll every 2s (same cadence as the report itself): row status convergence = chip dot color + the data source for follow jumping
     refetchInterval: (q) => (q.state.data?.rows.some((r) => r.status === 'running') ? 2000 : false),
   });
   const batchRows = useMemo(() => batchQuery.data?.rows ?? [], [batchQuery.data]);
-  // 活跃行 = rowIndex 最小的 running 行（行按 rowIndex 串行执行；rows 已按 rowIndex 升序）
+  // Active row = the running row with the smallest rowIndex (rows execute serially by rowIndex; rows are already sorted ascending by rowIndex)
   const activeRow = batchRows.find((r) => r.status === 'running') ?? null;
   const curRowIdx = batchRows.findIndex((r) => r.id === id);
 
-  // 手动切行（chip / ‹› / ←→）：暂停跟随（终端 auto-scroll 同款语义）
+  // Manual row switch (chip / ‹› / ←→): pause following (same semantics as terminal auto-scroll)
   const gotoRow = (rid: string) => {
     setFollow(false);
     if (rid !== id) navigate(`/p/${projectId}/v/${versionId}/reports/${rid}`);
   };
 
-  // 跟随执行：活跃行变化时自动切过去。replace 导航不污染历史；
-  // 手动切行走 gotoRow（follow=false 后本 effect 不再跳），「回到最新」置回 true 恢复。
+  // Follow execution: switch automatically when the active row changes. replace navigation keeps history clean;
+  // manual switching goes through gotoRow (after follow=false this effect no longer jumps); "back to latest" sets it back to true to restore.
   useEffect(() => {
     if (!follow || !activeRow || activeRow.id === id) return;
     navigate(`/p/${projectId}/v/${versionId}/reports/${activeRow.id}`, { replace: true });
   }, [follow, activeRow, id, navigate, projectId, versionId]);
 
-  // ←/→ 切行；灯箱打开或焦点在输入框时让路
+  // ←/→ switch rows; yield when the lightbox is open or focus is in an input
   useEffect(() => {
     if (batchRows.length <= 1) return;
     const onKey = (e: KeyboardEvent) => {
@@ -115,22 +115,22 @@ export default function ReportDetail() {
     );
   }
 
-  // 执行已异步化：running 期间报告页直连 MJPEG 实时画面，跑完原地出报告。
-  // 数据集运行整段共享一个流（key=case:<caseId>）：行 0 报告先行收尾但 run 仍在继续，
-  // 行 0 页面保持画面直到整个 run 结束。结束后面面定格最后一帧 + 「回放」按钮（录制回放）。
+  // Execution is async: while running the report page connects directly to the MJPEG live stream; when done, the report appears in place.
+  // A dataset run shares one stream end to end (key=case:<caseId>): row 0's report finishes first but the run keeps going,
+  // so the row 0 page keeps the picture until the whole run ends. When finished, the frame freezes on the last one + a "replay" button (recording replay).
   const isRunning = data.status === 'running';
-  // 数据集多行运行时，整段共享一个流（key=case:<caseId>）：非最后一行报告收尾后 run 仍在继续，
-  // 页面保持画面直到整个 run 结束。判定用「批内相对位置」而非 datasetRowIndex===0 ——
-  // 部分行选择时首个执行行的 datasetRowIndex 不一定是 0。
+  // In multi-row dataset runs, one stream is shared end to end (key=case:<caseId>): after a non-last row's report finishes, the run keeps going,
+  // and the page keeps the picture until the whole run ends. The check uses "position within the batch" rather than datasetRowIndex===0 —
+  // with partial row selection the first executed row's datasetRowIndex is not necessarily 0.
   const keepLiveForDataset =
     !!data.datasetBatchId && batchQuery.isSuccess && batchRows.length > 1 && curRowIdx < batchRows.length - 1;
-  // 失败根因分析结果（计划开启 rcaEnabled 时由 AI 异步产出；未分析/老报告为 null）
+  // Failure root cause analysis result (produced asynchronously by AI when the plan enables rcaEnabled; null when unanalyzed / old report)
   const rca = data.rca ?? null;
 
-  // 用例级「执行开始」三态：
-  //   有 startedAt → 正常展示（真实执行阶段起点，与 durationMs 同基线）
-  //   running 但无 startedAt → 还在排队/准备（worker 未接手或已挂），用 createdAt 兜底，标签换成「请求于」
-  //   非 running 且无 startedAt → 老报告（该字段后加），整行不显示
+  // Case-level "execution start" has three states:
+  //   has startedAt → display normally (true execution-phase start, same baseline as durationMs)
+  //   running but no startedAt → still queued/preparing (worker not picked up or hung); fall back to createdAt, label becomes "requested at"
+  //   not running and no startedAt → old report (field added later); the whole row is hidden
   const caseStartLabel = data.startedAt
     ? t('reports:meta.caseStartedAt')
     : isRunning ? t('reports:meta.queuedAt') : null;
@@ -141,7 +141,7 @@ export default function ReportDetail() {
   const stepResults = (data.stepResults as StepResult[]) ?? [];
   const passed = stepResults.filter((s) => s.status === 'passed').length;
   const failed = stepResults.filter((s) => s.status === 'failed').length;
-  // AI 调用汇总：步骤 aiUsage + visionAssert.aiUsage 全量求和
+  // AI call summary: full sum of step aiUsage + visionAssert.aiUsage
   const aiTotal = stepResults.reduce(
     (acc, s) => {
       for (const u of [s.aiUsage, s.visionAssert?.aiUsage]) {
@@ -156,7 +156,7 @@ export default function ReportDetail() {
     },
     { calls: 0, tokens: 0, prompt: 0, ms: 0, cacheRead: 0 },
   );
-  // 缓存命中率：命中 / (本次新计算的 prompt + 命中)。分母为 0（老报告无缓存字段）时不出示。
+  // Cache hit rate: hits / (newly computed prompt + hits). Hidden when the denominator is 0 (old reports have no cache fields).
   const aiCacheRate =
     aiTotal.cacheRead + aiTotal.prompt > 0 ? Math.round((aiTotal.cacheRead / (aiTotal.cacheRead + aiTotal.prompt)) * 100) : null;
 
@@ -164,7 +164,7 @@ export default function ReportDetail() {
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header bar */}
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        {/* 计划运行成员报告：返回到所属计划运行详情；普通报告回报告列表 */}
+        {/* Plan run member report: back to the owning plan run detail; a normal report goes back to the report list */}
         {data.planRunId && data.planId ? (
           <Button
             variant="ghost"
@@ -218,19 +218,19 @@ export default function ReportDetail() {
         </span>
       </div>
 
-      {/* Body — 步骤时间线 + 右侧 metadata。截图与明细合并为单一步骤列表，每行同时展示时长 / 命中 locator / tab / 失败原因 / 缩略图。 */}
+      {/* Body — step timeline + metadata on the right. Screenshot and details merged into a single step list; each row shows duration / hit locator / tab / failure reason / thumbnail together. */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="flex gap-5 p-6">
           <div className="flex-1 min-w-0 flex flex-col gap-3">
-            {/* running|数据集末尾期间实时画面；结束后定格 + 回放按钮 */}
+            {/* Live picture while running | at the dataset tail; freezes when done + replay button */}
             <LiveViewCard
               liveUrl={api.cases.liveUrl(data.caseId)}
               replayUrl={(speed) => api.cases.replayUrl(data.caseId, speed)}
               replayMetaUrl={api.cases.replayMetaUrl(data.caseId)}
               running={isRunning || keepLiveForDataset}
             />
-            {/* 数据集行切换器：同批 N 行的行号 chip（状态点随 2s 轮询收敛），
-                执行中自动跟随活跃行；点 chip/方向键手动切换并暂停跟随，「回到最新」恢复。 */}
+            {/* Dataset row switcher: row-number chips for the N rows of the batch (status dots converge via 2s polling);
+                auto-follows the active row while running; clicking a chip/arrow key switches manually and pauses following, "back to latest" restores. */}
             {batchRows.length > 1 && (
               <div className="flex items-center gap-2 flex-wrap bg-card border rounded-[var(--radius-md)] px-4 py-2">
                 <span className="text-[12px] font-medium shrink-0" style={{ color: 'var(--muted-foreground)' }}>
@@ -248,7 +248,7 @@ export default function ReportDetail() {
                     const vars = r.datasetSnapshot
                       ? Object.entries(r.datasetSnapshot.values).map(([k, v]) => `${k}=${v}`).join(' · ')
                       : '';
-                    // chip 序号 = 数据集行号（启用行下标 + 1），跨批次稳定；不是批内位置
+                    // Chip number = dataset row number (enabled-row index + 1), stable across batches; not the position within the batch
                     const rowNo = r.datasetRowIndex != null ? r.datasetRowIndex + 1 : i + 1;
                     return (
                       <button
@@ -313,7 +313,7 @@ export default function ReportDetail() {
             </div>
           </div>
 
-          {/* Right rail — 统计 */}
+          {/* Right rail — statistics */}
           <div className="w-[280px] shrink-0 flex flex-col gap-3">
             <div className="bg-card border rounded-[var(--radius-md)] p-4">
               <div className="text-[11px] font-medium uppercase tracking-[0.03em] mb-3" style={{ color: 'var(--muted-foreground)' }}>
@@ -337,7 +337,7 @@ export default function ReportDetail() {
                 label={t('reports:meta.caseName')}
                 value={
                   data.caseTitle ? (
-                    /* 用例名称跳用例详情：报告与用例是多对多，靠 caseId 定位 */
+                    /* Case name jumps to the case detail: report and case are many-to-many, located by caseId */
                     <button
                       type="button"
                       onClick={() => navigate(`/p/${projectId}/v/${versionId}/cases/${data.caseId}`)}
@@ -354,7 +354,7 @@ export default function ReportDetail() {
               />
               <MetaRow label={t('reports:meta.caseId')} value={<span className="font-mono text-[11px]">{data.caseId.slice(0, 8)}</span>} />
               <MetaRow label={t('reports:meta.reportId')} value={<span className="font-mono text-[11px]">{data.id.slice(0, 8)}</span>} />
-              {/* 执行起止：真实执行阶段时刻（不含排队/环境解析）。老报告无此数据则整行不显示。 */}
+              {/* Execution start: true execution-phase moment (excluding queuing/environment resolution). The whole row is hidden when old reports lack this data. */}
               {caseStartValue && caseStartLabel && (
                 <MetaRow label={caseStartLabel} value={<span className="font-mono text-[11px]">{caseStartValue}</span>} />
               )}
@@ -386,7 +386,7 @@ export default function ReportDetail() {
         </div>
       </div>
 
-      {/* 删除确认 */}
+      {/* Delete confirm */}
       <Dialog open={showDelete} onOpenChange={setShowDelete}>
         <DialogContent style={{ maxWidth: 420 }}>
           <DialogHeader>

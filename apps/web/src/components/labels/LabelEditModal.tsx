@@ -138,7 +138,7 @@ export default function LabelEditModal({ open, label, onClose, onSave }: LabelEd
               </Button>
             </div>
             <div className="flex items-center gap-2 mt-1">
-              {/* 预览直接复用 TagChip，保证与列表渲染所见即所得 */}
+              {/* Preview reuses TagChip directly to guarantee WYSIWYG with list rendering */}
               <TagChip tag={{ id: 'preview', name: name.trim() || t('cases:labelEdit.previewTagName'), color: color.replace('#', '') }} size="md" />
               <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                 {t('cases:labelEdit.preview')}

@@ -19,13 +19,13 @@ import type { OverviewResponse } from '../api';
 type Trend = OverviewResponse['trend'];
 
 /**
- * 通过率趋势：最终通过（chart-1 绿面积）/ 一次通过（chart-2 蓝虚线）/ 失败（destructive 红）。
+ * Pass-rate trend: final pass (chart-1 green area) / first-pass (chart-2 blue dashed) / failed (destructive red).
  *
- * 当日无执行（total=0）置 null 且**不跨接**：线段在空档处断开，
- * 免得把「没跑」画成一条 100% 的平台。空档本身由下方的每日执行量细柱交代。
+ * Days with no executions (total=0) are set to null and are **not bridged**: the line breaks at the gap,
+ * so "didn't run" is never drawn as a 100% plateau. The gap itself is explained by the daily volume bars below.
  */
 
-/** 每日执行量细柱：零执行日不是空白，而是一枚贴在基线上的发丝刻线 */
+/** Daily volume bars: a zero-execution day isn't blank but a hairline tick sitting on the baseline */
 function VolumeBar(props: BarShapeProps) {
   const { x, y, width, height, value } = props;
   const v = typeof value === 'number' ? value : 0;
@@ -43,7 +43,7 @@ function VolumeBar(props: BarShapeProps) {
   );
 }
 
-/** 静默图例：色块 + 文字，不带 recharts 默认图例的色块边框 */
+/** Silent legend: swatch + text, without the swatch border of recharts' default legend */
 function LegendItem({
   kind,
   color,
@@ -77,7 +77,7 @@ function LegendItem({
   );
 }
 
-/** 「2026-10-09」→「10-09」：轴上只留月日，全量日期留给 tooltip */
+/** "2026-10-09" → "10-09": the axis keeps only month-day; the full date goes to the tooltip */
 function shortDate(v: string): string {
   return v.length >= 10 ? v.slice(5) : v;
 }
@@ -86,7 +86,7 @@ export default function PassRateTrendChart({ data }: { data: Trend }) {
   const { t } = useTranslation();
   const rows = data.map((d) => ({
     date: d.date,
-    // 预先四舍五入到 1 位小数：Tooltip 直接展示，避免长小数
+    // Round to 1 decimal place up front: the tooltip displays it directly, avoiding long decimals
     passRate: d.total ? Math.round((d.passed / d.total) * 1000) / 10 : null,
     firstPassRate: d.total ? Math.round((d.firstPassed / d.total) * 1000) / 10 : null,
     failedRate: d.total ? Math.round((d.failed / d.total) * 1000) / 10 : null,
@@ -105,7 +105,7 @@ export default function PassRateTrendChart({ data }: { data: Trend }) {
         <LegendItem kind="bar" color={chartColors.neutral} label={t('overview:trendVolumeLabel')} />
       </div>
 
-      {/* 主图：0–100% 判定线。Y 轴固定 44px 宽，与下方执行量图共用同一绘图区左边界。 */}
+      {/* Main chart: the 0–100% verdict line. The Y axis is fixed at 44px wide, sharing the same plot-area left edge with the volume chart below. */}
       <div style={{ width: '100%', height: 208 }}>
         <ResponsiveContainer>
           <ComposedChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -157,7 +157,7 @@ export default function PassRateTrendChart({ data }: { data: Trend }) {
         </ResponsiveContainer>
       </div>
 
-      {/* 执行量层：与主图同一 x 刻度，零执行日只留基线刻线 */}
+      {/* Volume layer: same x scale as the main chart; zero-execution days leave only a baseline tick */}
       <div style={{ width: '100%', height: 62 }}>
         <ResponsiveContainer>
           <BarChart data={rows} margin={{ top: 4, right: 8, left: 44, bottom: 0 }}>

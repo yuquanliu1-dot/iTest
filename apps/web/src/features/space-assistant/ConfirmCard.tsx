@@ -7,13 +7,13 @@ import { useSpaceEventsStore, type SpaceConfirmRequest } from './spaceEventsStor
 
 const RISK_META: Record<SpaceConfirmRequest['risk'], { label: string; color: string; bg: string }> = {
   update: { label: 'assistant:confirm.risk.update', color: 'var(--primary)', bg: 'var(--primary-soft)' },
-  // 删除:用主题 destructive token(10% 淡出色,与 update/secret 的 10% 对齐)
+  // Delete: use the theme's destructive token (10% faded, aligned with update/secret's 10%)
   delete: { label: 'common:delete', color: 'var(--destructive)', bg: 'var(--destructive-soft-strong)' },
-  // 密钥:用主题 warning tokens(暗色模式自适配;硬编码琥珀色是 Task 2 评审否决的模式)
+  // Secret: use the theme's warning tokens (adapts to dark mode automatically; hard-coded amber was a pattern rejected in the Task 2 review)
   secret: { label: 'assistant:confirm.risk.secret', color: 'var(--warning)', bg: 'var(--warning-soft)' },
 };
 
-/** 确认卡:钉在 composer 上方;确认/取消 → POST /confirm;仅 404(确已过期)收卡,其余错误保留卡片供重试。 */
+/** Confirm card: pinned above the composer; confirm/cancel → POST /confirm; only 404 (truly expired) dismisses the card, other errors keep it for retry. */
 export default function ConfirmCard({ threadId }: { threadId: string }) {
   const { t } = useTranslation();
   const confirms = useSpaceEventsStore((s) => s.confirms);
@@ -24,7 +24,7 @@ export default function ConfirmCard({ threadId }: { threadId: string }) {
       api.assistant.confirm(threadId, v.confirmId, v.approved),
     onSuccess: (_r, v) => removeConfirm(v.confirmId),
     onError: (e: Error, v) => {
-      // 仅确认确已过期(404)才收卡;网络瞬断等保留卡片供重试(点了确认不该因挂起项超时被记为取消)
+      // Only dismiss the card when the confirm has truly expired (404); transient issues like network blips keep the card for retry (a clicked confirm must not be recorded as cancelled because a pending item timed out)
       if (e instanceof ApiError && e.status === 404) removeConfirm(v.confirmId);
       toast(localizeApiError(e), 'error');
     },

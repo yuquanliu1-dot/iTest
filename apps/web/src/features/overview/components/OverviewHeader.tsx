@@ -10,8 +10,8 @@ import {
 import type { Range } from '../api';
 
 /**
- * 页头：标题只交代页面语境（不做人名问候，数字都在下面的卡片里），
- * 时间范围由 Segmented 控件显式表达。
+ * Page header: the title only establishes page context (no personal greetings; all numbers live in the cards below);
+ * the time range is expressed explicitly by the Segmented control.
  */
 export default function OverviewHeader({
   range,

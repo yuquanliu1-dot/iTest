@@ -5,7 +5,7 @@ import type { TFunction } from 'i18next';
 import { stepSummary, fullStepDescription, getKind, isUncompiled, type StepRowLike } from './stepSummary';
 import zhCases from '../i18n/locales/zh-CN/cases.json';
 
-/** 测试桩 t：按 key 在 zh cases.json 里解析文案并做 {{}} 插值，使断言仍是真实 zh 输出。 */
+/** Test-stub t: resolves text by key in the zh cases.json with {{}} interpolation, so assertions remain real zh output. */
 function resolvePath(obj: Record<string, unknown>, path: string): unknown {
   let cur: unknown = obj;
   for (const seg of path.split('.')) {
@@ -108,9 +108,9 @@ describe('stepSummary', () => {
   });
 
   it('nullish 输入回退 JSON 字串化（default 分支）', () => {
-    // pickAction(nullish) → {} → default 分支返回 JSON.stringify({}) === "{}"
-    //   与历史 `String(action)` 行为不同；新签名接受 row（含 instruction/compiled），
-    //   nullish 是测试便利输入。这里断言「不抛错 + 返回纯字串」。
+    // pickAction(nullish) → {} → the default branch returns JSON.stringify({}) === "{}"
+    //   different from the historical `String(action)` behavior; the new signature takes a row (with instruction/compiled),
+    //   nullish is a test-convenience input. Here we assert "doesn't throw + returns a plain string".
     expect(typeof stepSummary(undefined, t)).toBe('string');
     expect(typeof stepSummary(null, t)).toBe('string');
   });
@@ -134,7 +134,7 @@ describe('stepSummary', () => {
     expect(isUncompiled({ compiled: null })).toBe(true);
     expect(isUncompiled({ compiled: undefined })).toBe(true);
     expect(isUncompiled({})).toBe(true);
-    // 未编译前缀同样适用于 null/undefined
+    // The uncompiled prefix applies equally to null/undefined
     expect(stepSummary({ compiled: null }, t)).toBe('⚠ 未编译 · {}');
   });
 

@@ -1,11 +1,11 @@
 /**
- * SkillsSection：全局技能列表 + 元数据编辑 + 文件树入口。
+ * SkillsSection: global skill list + metadata editing + file tree entry.
  *
- * 2026-10-19 存储翻转后这里【只管元数据】：正文与目录树在服务端 SKILLS_ROOT/<name>/，
- * 由 SkillFilesDialog 编辑，本组件不再有 body/scripts 表单。
+ * After the 2026-10-19 storage flip this component manages [metadata only]: the body and directory tree live on the server at
+ * SKILLS_ROOT/<name>/, edited by SkillFilesDialog; this component no longer has body/scripts forms.
  *
- * create 只产出 SKILL.md 骨架（空壳），真实内容走 import_skill 或文件树编辑器补齐——
- * 表单上明写这句，否则用户建完会以为技能装好了，实际新会话里是空的。
+ * create only produces a SKILL.md skeleton (empty shell); real content arrives via import_skill or the file tree editor —
+ * the form states this explicitly, otherwise users finish creating and believe the skill is installed when new sessions actually see it empty.
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -22,8 +22,8 @@ import EmptyState from '../../ui/EmptyState';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../ui/Modal';
 import SkillFilesDialog from './SkillFilesDialog';
 
-/** slug 校验与后端 isSafeSkillName 一致：仅小写字母/数字/连字符，不以 - 开头/结尾，无连续 --，≤64。
- *  服务端仍会校验（assertSkillName），这里只是提前给反馈。 */
+/** Slug validation mirrors the backend's isSafeSkillName: lowercase letters/digits/hyphens only, no leading/trailing -, no consecutive --, ≤64.
+ *  The server still validates (assertSkillName); this is just earlier feedback. */
 function isSafeSkillName(name: string): boolean {
   return (
     /^[a-z0-9-]+$/.test(name)
@@ -75,7 +75,7 @@ export default function SkillsSection() {
   });
 
   const remove = useMutation({
-    // 孤儿目录 id=null，:id 接口够不着；两条路合成一个 mutation，调用方不必关心。
+    // Orphan directories have id=null and can't reach the :id endpoint; the two paths merge into one mutation so callers needn't care.
     mutationFn: (s: AssistantSkill) =>
       s.id ? api.assistant.skills.remove(s.id) : api.assistant.skills.removeOrphan(s.name),
     onSuccess: () => {
@@ -123,14 +123,14 @@ export default function SkillsSection() {
           <EmptyState icon="terminal" title={t('settings:skillNone')} compact />
         ) : (
           rows.map((s) => {
-            // 取成局部 const 而非在 JSX 里 `s.id &&`：窄化结果无法带进闭包，TS 仍会报 string|null。
+            // Extract into a local const instead of `s.id &&` inline in JSX: the narrowed result can't be carried into the closure, TS still reports string|null.
             const id = s.unregistered ? null : s.id;
             return (
             <div key={s.id ?? s.name} className="flex items-center gap-3 px-2 py-2">
               <span className="text-[12px] font-medium min-w-0 truncate" style={{ color: 'var(--foreground)' }}>{s.name}</span>
               {s.unregistered ? (
-                // 孤儿目录：磁盘有、DB 无行。没有 description 也入不了 catalog，
-                // 只给删除——绝不在这里「收养」，否则会给无来源的目录凭空造元数据。
+                // Orphan directory: exists on disk, no DB row. Without a description it can't enter the catalog either,
+                // so only delete is offered — never "adopt" here, otherwise metadata would be fabricated for directories with no provenance.
                 <span className="text-[10px] px-1.5 py-[1px] rounded shrink-0" style={{ background: 'var(--destructive)', color: 'var(--background)' }}>
                   {t('settings:skillUnregistered')}
                 </span>
@@ -167,7 +167,7 @@ export default function SkillsSection() {
         )}
       </div>
 
-      {/* 元数据表单：只有 name/description/enabled，没有正文 */}
+      {/* Metadata form: name/description/enabled only, no body */}
       <Dialog open={form.open} onOpenChange={(open) => setForm((f) => ({ ...f, open }))}>
         <DialogContent>
           <DialogHeader>
@@ -208,7 +208,7 @@ export default function SkillsSection() {
         </DialogContent>
       </Dialog>
 
-      {/* 文件树编辑器 */}
+      {/* File tree editor */}
       {filesFor && <SkillFilesDialog skill={filesFor} onClose={() => setFilesFor(null)} />}
 
       <Dialog open={!!deleting} onOpenChange={(open) => { if (!open) setDeleting(null); }}>

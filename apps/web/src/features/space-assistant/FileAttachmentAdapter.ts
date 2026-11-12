@@ -1,14 +1,14 @@
 /**
- * 文档附件 adapter（.docx/.xlsx）：选文件即预上传（POST /assistant/versions/:id/attachments），
- * send() 把服务端签发的引用标签作为**文本部件**返回。
+ * Document attachment adapter (.docx/.xlsx): selecting a file pre-uploads it immediately (POST /assistant/versions/:id/attachments);
+ * send() returns the server-issued reference tag as a **text part**.
  *
- * 为什么是文本部件而不是 image 部件/dataURL：react-pi 的 ThreadController 会把附件的
- * 文本部件拍平进消息正文（buildPiSendInput，ThreadController.js:82-94），于是
- * 「乐观消息 == pi 会话记录 == SSE 回放」逐字一致——userContentKey 对账匹配、无重复
- * 气泡。后端任何对消息文本的改写都会破坏这一不变量，见 spec 2026-11-03。
+ * Why a text part instead of an image part/dataURL: react-pi's ThreadController flattens the attachment
+ * text part into the message body (buildPiSendInput, ThreadController.js:82-94), so
+ * "optimistic message == pi session record == SSE replay" match verbatim — userContentKey reconciliation matches and there are no
+ * duplicate bubbles. Any backend rewrite of message text would break this invariant; see spec 2026-11-03.
  *
- * 上传在 add() 即刻开始（后台 Promise）；失败在 send() 统一抛出——消息不发出、错误可见。
- * 服务端按 X-Filename 扩展名分派类型；本 adapter 不解析内容。
+ * The upload starts immediately in add() (a background Promise); failures are thrown uniformly in send() — the message isn't sent and the error is visible.
+ * The server dispatches the type by the X-Filename extension; this adapter doesn't parse content.
  */
 import type {
   Attachment,
@@ -23,7 +23,7 @@ const FILE_MAX_BYTES = 10 * 1024 * 1024;
 const WORDPROCESSINGML_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const SPREADSHEETML_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-/** accept 四值齐备：部分环境只认扩展名、部分只认 mime。 */
+/** All four accept values present: some environments only recognize the extension, some only the mime. */
 const FILE_ACCEPT = [
   '.docx', '.xlsx',
   WORDPROCESSINGML_MIME,
@@ -39,7 +39,7 @@ function genId(): string {
     ?? `att-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-/** 浏览器对拖拽/部分场景给空 file.type——按扩展名补 mime，兜底 octet-stream。 */
+/** Browsers give an empty file.type for drag-and-drop/some scenarios — fill in the mime by extension, falling back to octet-stream. */
 function mimeOf(name: string, type: string): string {
   if (type) return type;
   if (/\.docx$/i.test(name)) return WORDPROCESSINGML_MIME;
@@ -49,7 +49,7 @@ function mimeOf(name: string, type: string): string {
 
 export class FileAttachmentAdapter implements AttachmentAdapter {
   accept = FILE_ACCEPT;
-  /** attachmentId → 进行中的上传 Promise；remove() 时丢弃，send() 时 await。 */
+  /** attachmentId → in-flight upload Promise; discarded on remove(), awaited in send(). */
   private uploads = new Map<string, Promise<unknown>>();
 
   constructor(
@@ -69,7 +69,7 @@ export class FileAttachmentAdapter implements AttachmentAdapter {
       name: file.name,
       contentType: mimeOf(file.name, file.type),
       file,
-      // 与 SimpleImageAttachmentAdapter 同款状态：composer 直接可发送，send() 内 await 上传。
+      // Same state as SimpleImageAttachmentAdapter: the composer can send directly; send() awaits the upload.
       status: { type: 'requires-action', reason: 'composer-send' },
     };
   }
@@ -79,9 +79,9 @@ export class FileAttachmentAdapter implements AttachmentAdapter {
     let r: Awaited<ReturnType<typeof api.assistantAttachments.uploadAttachment>>;
     if (pending) {
       this.uploads.delete(attachment.id);
-      r = await pending as typeof r; // 上传失败在此抛出：消息不发出
+      r = await pending as typeof r; // an upload failure throws here: the message isn't sent
     } else {
-      // add 阶段的上传已被清理（remove 后仍发送等极端时序）——同步补传兜底。
+      // The add-phase upload was already cleaned up (extreme timings like send-after-remove) — synchronous re-upload fallback.
       r = await api.assistantAttachments.uploadAttachment(this.versionId, attachment.file!);
     }
     return {

@@ -1,7 +1,7 @@
 /**
- * 人格矩阵视图（C3/S2）：同一章程起 N 个人格会话并行跑（同一 matrix_id 分组）。
- * 上半：各会话卡片（人格/状态/发现数，运行中轮询）；下半：矩阵全部 findings——
- * cross_session_count ≥2 = 多视角共同发现（S2 交集标注，收尾时重算）。
+ * Persona matrix view (C3/S2): spin up N persona sessions on the same charter running in parallel (grouped by the same matrix_id).
+ * Top half: per-session cards (persona/status/finding count, polling while running); bottom half: all matrix findings —
+ * cross_session_count ≥2 = jointly discovered from multiple perspectives (S2 intersection mark, recomputed at wrap-up).
  */
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -35,7 +35,7 @@ export default function ExplorationMatrix() {
     queryKey: ['explorationMatrix', matrixId],
     queryFn: () => api.explorations.getMatrix(matrixId!),
     enabled: !!matrixId,
-    // 任一会话还在 pending/running 就轮询；全部终态即停。
+    // Poll while any session is still pending/running; stop once all are terminal.
     refetchInterval: (q) =>
       q.state.data?.sessions.some((s) => s.status === 'running' || s.status === 'pending') ? 2000 : false,
   });
@@ -68,7 +68,7 @@ export default function ExplorationMatrix() {
   }
 
   const live = data.sessions.some((s) => s.status === 'running' || s.status === 'pending');
-  // 每个会话的发现数从矩阵 findings 列表现算（接口不冗余给）。
+  // Each session's finding count is computed from the matrix findings list (the API does not hand it back redundantly).
   const countBySession = new Map<string, number>();
   for (const f of data.findings) countBySession.set(f.sessionId, (countBySession.get(f.sessionId) ?? 0) + 1);
   const sessionById = new Map(data.sessions.map((s) => [s.id, s]));
@@ -97,7 +97,7 @@ export default function ExplorationMatrix() {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-4">
-        {/* 各会话：人格/状态/发现数；点卡片进详情看过程与审阅 */}
+        {/* Per session: persona/status/finding count; click a card to enter the detail for the process and review */}
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
           {data.sessions.map((s) => (
             <div
@@ -133,7 +133,7 @@ export default function ExplorationMatrix() {
           ))}
         </div>
 
-        {/* 矩阵 findings：交集 ≥2 标「多视角共同发现」——多个人格独立撞上同一缺陷，比单人报更可信 */}
+        {/* Matrix findings: intersection ≥2 marked "discovered from multiple perspectives" — multiple personas independently hitting the same defect is more credible than a single report */}
         <div className="flex flex-col gap-3">
           <div className="text-[11px] font-medium uppercase tracking-[0.03em]" style={{ color: 'var(--muted-foreground)' }}>
             {t('explorations:findings')}（{data.findings.length}）

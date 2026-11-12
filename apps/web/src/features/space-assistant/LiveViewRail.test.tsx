@@ -8,8 +8,8 @@ beforeEach(() => {
   store().reset();
 });
 
-/** 直接调用 hook 需在 React 渲染上下文里；这里只取它内部的纯选择逻辑——
- *  用 renderHook（testing-library/react）避免复制实现。 */
+/** Calling the hook directly requires a React render context; here we only take its internal pure selection logic —
+ *  using renderHook (testing-library/react) avoids duplicating the implementation. */
 async function activeLiveView() {
   const { renderHook } = await import('@testing-library/react');
   return renderHook(() => useActiveLiveView()).result.current;
