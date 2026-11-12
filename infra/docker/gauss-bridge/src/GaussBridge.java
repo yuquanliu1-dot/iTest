@@ -25,29 +25,29 @@ import java.util.Properties;
 import java.util.concurrent.Executors;
 
 /**
- * GaussDB 100 (Zenith) JDBC 桥：Node 生态无驱动，api 通过 HTTP 把 SQL 转发给 JDBC。
+ * GaussDB 100 (Zenith) JDBC bridge: no driver exists in the Node ecosystem, so the api forwards SQL over HTTP to JDBC.
  *
- * 协议：
+ * Protocol:
  *   GET  /healthz            → 200 {"ok":true}
  *   POST /query              → 200 {"rows":[{...},...], "truncated":false}
  *        body {host, port, user, password, schema, sql, params:[]}
- *        失败：400 {"error":"..."}（SQLException，GS 码+SQLState 透传）
- *              401 token 不符 / 405 非 POST / 413 body 超限
- *              502 {"error":"..."}（连不上目标库，loginTimeout 兜底）
+ *        failures: 400 {"error":"..."} (SQLException, GS code + SQLState passed through)
+ *                  401 token mismatch / 405 non-POST / 413 body over limit
+ *                  502 {"error":"..."} (cannot reach the target database, loginTimeout fallback)
  *
- * 设计：每请求建连（目标按环境对象不同，不池化）；显式超时（驱动默认 0=无限等）；
- * 零第三方依赖（手写极简 JSON）。鉴权：GAUSS_BRIDGE_TOKEN 未设=不鉴权（仅 compose 内网可达）。
+ * Design: a connection per request (targets differ per environment object, no pooling); explicit timeouts (driver default 0 = wait forever);
+ * zero third-party dependencies (hand-written minimal JSON). Auth: GAUSS_BRIDGE_TOKEN unset = no auth (reachable only on the compose network).
  */
 public final class GaussBridge {
 
   private static final String DRIVER = "com.huawei.gauss.jdbc.ZenithDriver";
   private static final int PORT = envInt("GAUSS_BRIDGE_PORT", 8080);
-  private static final String TOKEN = System.getenv("GAUSS_BRIDGE_TOKEN"); // null/空 = 不鉴权
+  private static final String TOKEN = System.getenv("GAUSS_BRIDGE_TOKEN"); // null/empty = no auth
   private static final int LOGIN_TIMEOUT_SEC = 10;
-  private static final String SOCKET_TIMEOUT = "30"; // 秒（驱动属性；=0 会无限等）
+  private static final String SOCKET_TIMEOUT = "30"; // seconds (driver property; =0 waits forever)
   private static final int QUERY_TIMEOUT_SEC = 60;
   private static final int MAX_BODY = 1 << 20; // 1MB
-  private static final int MAX_ROWS = 10_000;  // 兜底截断（防无 LIMIT 大结果 OOM）
+  private static final int MAX_ROWS = 10_000;  // fallback truncation (guards against OOM on large results without LIMIT)
 
   public static void main(String[] args) throws Exception {
     try {
@@ -104,7 +104,7 @@ public final class GaussBridge {
       respond(ex, 400, err(e.getMessage()));
       System.out.println("query " + target + " bad-request: " + e.getMessage());
     } catch (SQLException e) {
-      // GS-xxxx + SQLState 原样透传，api 侧 probeErrorText 直接展示
+      // GS-xxxx + SQLState passed through as-is; the api-side probeErrorText displays them directly
       respond(ex, 400, err(e.getMessage() + " (SQLState=" + e.getSQLState() + ")"));
       System.out.println("query " + target + " sql-error: " + e.getMessage());
     } catch (ConnectException | SocketTimeoutException e) {
@@ -119,19 +119,19 @@ public final class GaussBridge {
     }
   }
 
-  /** 每请求建连 + 预处理语句执行；结果拼成 {"rows":[...],"truncated":bool}。 */
+  /** Connection + prepared-statement execution per request; the result is assembled into {"rows":[...],"truncated":bool}. */
   private static String queryToJson(String host, int port, String user, String password,
                                     String schema, String sql, List<Object> params) throws SQLException, IOException {
-    preflightTcp(host, port); // 驱动的 TCP 连接阶段可能无限等（实测 setLoginTimeout 管不住），先自兜底
+    preflightTcp(host, port); // the driver's TCP connect phase can wait forever (setLoginTimeout demonstrably doesn't govern it), so self-guard first
     Properties props = new Properties();
     props.setProperty("user", user);
     if (password != null) props.setProperty("password", password);
-    // GaussDB 100 的「库名」= schema；两个属性都设（驱动认哪个由版本决定，均无害）
+    // GaussDB 100's "database name" = schema; both properties are set (which one the driver honors depends on the version; either is harmless)
     if (schema != null && !schema.isEmpty()) {
       props.setProperty("databaseName", schema);
       props.setProperty("defaultSchema", schema);
     }
-    props.setProperty("loginTimeout", String.valueOf(LOGIN_TIMEOUT_SEC)); // 驱动只认 property 形式
+    props.setProperty("loginTimeout", String.valueOf(LOGIN_TIMEOUT_SEC)); // the driver only honors the property form
     props.setProperty("socketTimeout", SOCKET_TIMEOUT);
 
     StringBuilder out = new StringBuilder(1024);
@@ -167,9 +167,9 @@ public final class GaussBridge {
     return out.toString();
   }
 
-  // ---------- JDBC 值 → JSON 安全值 ----------
+  // ---------- JDBC values → JSON-safe values ----------
 
-  /** TCP 预连探针：5s 内连不上直接抛（ConnectException/SocketTimeoutException 均为 IOException 子类，handler 映射 502）。 */
+  /** TCP pre-connect probe: throws directly if the connection fails within 5s (ConnectException/SocketTimeoutException are both IOException subclasses; the handler maps them to 502). */
   private static void preflightTcp(String host, int port) throws IOException {
     try (java.net.Socket sock = new java.net.Socket()) {
       sock.connect(new InetSocketAddress(host, port), 5000);
@@ -177,7 +177,7 @@ public final class GaussBridge {
   }
 
   private static void setObject(PreparedStatement st, int idx, Object v) throws SQLException {
-    st.setObject(idx, v); // MiniJson 只产 String/Long/Double/Boolean/null，JDBC 均原生支持
+    st.setObject(idx, v); // MiniJson only produces String/Long/Double/Boolean/null, all natively supported by JDBC
   }
 
   private static void writeJsonValue(StringBuilder out, Object v) throws SQLException {
@@ -194,7 +194,7 @@ public final class GaussBridge {
     }
     if (v instanceof Long || v instanceof Integer || v instanceof Short || v instanceof Byte) {
       long l = ((Number) v).longValue();
-      if (l > 9007199254740991L || l < -9007199254740991L) { // 超 JS 2^53 → 字符串
+      if (l > 9007199254740991L || l < -9007199254740991L) { // beyond JS 2^53 → string
         out.append('"').append(l).append('"');
       } else {
         out.append(l);
@@ -230,7 +230,7 @@ public final class GaussBridge {
     return b.toString();
   }
 
-  // ---------- HTTP / 请求字段小工具 ----------
+  // ---------- HTTP / request-field helpers ----------
 
   private static byte[] readBody(InputStream in) throws IOException {
     ByteArrayOutputStream buf = new ByteArrayOutputStream();
@@ -279,7 +279,7 @@ public final class GaussBridge {
     try { return Integer.parseInt(v.trim()); } catch (NumberFormatException e) { return def; }
   }
 
-  // ---------- 极简 JSON parser（协议子集：对象/数组/字符串/数字/true/false/null） ----------
+  // ---------- Minimal JSON parser (protocol subset: object/array/string/number/true/false/null) ----------
 
   static final class MiniJson {
     private final String s;

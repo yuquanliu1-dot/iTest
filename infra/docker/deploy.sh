@@ -1,16 +1,17 @@
-# 服务器端部署脚本：preflight → build → (非首次先备库) → up + 等 healthcheck → smoke
-# 用法: ./deploy.sh [APP_ROOT]          APP_ROOT 默认 /home/wangb/itest
-#       BACKUP_KEEP=N                   数据库备份保留份数，默认 10
-# 前置：代码 tarball 需先解包到 APP_ROOT（一键入口见同目录 release.sh，它会先解包再调用本脚本；
-#       手动部署则 tar xzf <APP_ROOT>.tar.gz -C <APP_ROOT>）。不要在本脚本里解包——
-#       bash 按字节偏移读脚本，执行中自我覆盖会把后续行读成乱码。
+# Server-side deployment script: preflight → build → (backup first unless first deploy) → up + wait for healthcheck → smoke
+# Usage: ./deploy.sh [APP_ROOT]          APP_ROOT defaults to /home/wangb/itest
+#        BACKUP_KEEP=N                   number of database backups to retain, default 10
+# Prerequisite: the code tarball must be unpacked into APP_ROOT first (one-stop entry is release.sh in the same
+#       directory, which unpacks and then calls this script; for manual deploys run tar xzf <APP_ROOT>.tar.gz -C <APP_ROOT>).
+#       Never unpack inside this script — bash reads scripts by byte offset, and self-overwriting mid-execution
+#       turns the remaining lines into garbage.
 set -euo pipefail
 
 ROOT="${1:-/home/wangb/itest}"
 BACKUP_DIR="${ROOT}-backups"
 BACKUP_KEEP="${BACKUP_KEEP:-10}"
-# API 副本数(执行水平扩展):docker compose up -d --scale api=$API_REPLICAS;
-# 默认 1(单副本,行为与旧版 fire-and-forget 一致),部署到多副本机器再调大。
+# API replica count (horizontal scaling of execution): docker compose up -d --scale api=$API_REPLICAS;
+# default 1 (single replica, same behavior as the old fire-and-forget); raise it when deploying to multi-replica hosts.
 API_REPLICAS="${API_REPLICAS:-1}"
 
 if [ ! -d "$ROOT" ]; then
@@ -24,7 +25,8 @@ fi
 
 cd "$ROOT"
 
-# 多副本后容器名是 itest-api-1/2/3;镜像相同、健康即全部健康,smoke/迁移取任意一个即可。
+# With multiple replicas container names are itest-api-1/2/3; identical image + healthy means all healthy,
+# so smoke/migration can pick any one of them.
 api_replica() {
   docker ps --filter name=itest-api --format '{{.Names}}' | head -1
 }
@@ -33,7 +35,7 @@ api_replica() {
 command -v docker >/dev/null || { echo "docker 不可用"; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "需要 docker compose v2"; exit 1; }
 
-# --- 起依赖，pg 就绪后判断是否首次部署（users 表存在 = 非首次）---
+# --- start dependencies, then decide whether this is a first deploy once pg is ready (users table exists = not first) ---
 echo "== up deps (pg/redis) =="
 docker compose -p itest -f infra/docker/docker-compose.yml up -d postgres redis
 for i in $(seq 1 30); do
@@ -48,8 +50,9 @@ if docker exec itest-pg psql -U itest -d itest -tAc "SELECT to_regclass('public.
   FIRST_DEPLOY=0
 fi
 
-# --- 迁移历史 .data 到 itest-data 卷（仅首次切卷时执行）---
-# 旧 overlay 镜像层的 1.1GB 工作空间如果还在旧容器,需要带过去;之后由 itest-data 卷托管。
+# --- migrate the legacy .data into the itest-data volume (only on the first volume switch) ---
+# If the 1.1GB workspace from the old overlay image layers is still in the old container it must be carried over;
+# afterwards the itest-data volume owns it.
 if [ "$FIRST_DEPLOY" = "0" ] && ! docker volume inspect itest-data >/dev/null 2>&1; then
   echo "== 创建 itest-data 卷并迁移历史 .data =="
   docker volume create itest-data >/dev/null
@@ -77,19 +80,20 @@ if [ "$FIRST_DEPLOY" = "0" ]; then
   ls -1t "$BACKUP_DIR"/itest-db-*.sql.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) | xargs -r rm -f
   echo "回滚参考: docker compose -p itest stop api web && gunzip -c $BAK | docker exec -i itest-pg psql -U itest -d itest && docker compose -p itest up -d api web"
 
-  # --- 技能目录备份 ---
-  # 2026-10-19 起技能内容以文件系统为真源（DB 只存 name/description/enabled），
-  # skills/ 是内容【唯一副本】——卷损坏即全丢，且没有 pg_dump 那种 DB 兜底。
+  # --- skills directory backup ---
+  # Since 2026-10-19 skill content treats the filesystem as the source of truth (the DB stores only name/description/enabled);
+  # skills/ is the ONLY copy of the content — volume corruption loses everything, with no pg_dump-style DB fallback.
   #
-  # 卷名不能写死:compose 会加项目名前缀(项目名取 docker-compose.yml 所在目录名,
-  # 实测为 infra_itest-data,见 deploy.sh:57 的 docker volume create 也在建带前缀的名字)。
-  # 故从任一 api 副本的实际挂载反查。:ro 挂载保证不可能误改线上目录树。
+  # The volume name cannot be hardcoded: compose prefixes the project name (the project name comes from the directory
+  # containing docker-compose.yml — observed as infra_itest-data; the docker volume create at deploy.sh:57 also creates
+  # a prefixed name). So reverse-lookup from any api replica's actual mount. The :ro mount makes accidentally mutating
+  # the live directory tree impossible.
   SKILL_VOLUME="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/repo/apps/api/.data"}}{{.Name}}{{end}}{{end}}' "$(api_replica)" 2>/dev/null)"
   SKILL_BAK="$BACKUP_DIR/itest-skills-$STAMP.tar.gz"
   if [ -n "$SKILL_VOLUME" ]; then
-    # 失败时 tar 仍会留下一个 4KB 的空壳归档（gzip 头 + 补零），du 看着像"备份很小"——
-    # 实测 skills/ 不存在时 tar exit 1 却产出 4KB。所以必须判退出码并删掉残骸，
-    # 否则「技能备份成功但内容为空」会静默过几周才被发现。
+    # On failure tar still leaves a 4KB empty-shell archive (gzip header + zero padding) which du reads as "backup is tiny" —
+    # observed: with skills/ absent, tar exits 1 yet produces 4KB. So the exit code must be checked and the husk deleted,
+    # otherwise "skill backup succeeded but content is empty" stays silent for weeks before being noticed.
     if docker run --rm -v "$SKILL_VOLUME:/src:ro" -v "$BACKUP_DIR:/dst" alpine \
       sh -c "cd /src && tar czf /dst/itest-skills-$STAMP.tar.gz skills" 2>/dev/null; then
       echo "技能目录备份: $SKILL_BAK ($(du -h "$SKILL_BAK" | cut -f1))"
@@ -107,33 +111,34 @@ else
 fi
 
 echo "== 清理已删除文件的残留 =="
-# tar 解包是「覆盖」语义、不删旧文件：本地某次提交删掉的文件会永久留在 checkout 里，
-# 被 COPY 进镜像 build context → 编译报错（2026-10-26 实测：工作台 v2.1 删掉的 4 个旧
-# overview 组件残留，引用已改版的 OverviewResponse 字段，web 镜像构建失败）。
+# tar unpacking has "overwrite" semantics and never deletes old files: files removed by some local commit stay in the
+# checkout forever, get COPY'd into the image build context → compile errors (observed 2026-10-26: 4 stale overview
+# components deleted in workbench v2.1 lingered, referencing the redesigned OverviewResponse fields, breaking the web image build).
 #
-# 删除集合 = 「上一版清单 − 本版清单」= 本次发布中被删除的文件。
-# 不能用「服务器上所有不在本版清单里的文件」：.env / .data / screenshots / node_modules
-# 等被 tar exclude 的路径从来不在清单里，但服务器上必须保留（配置、数据、运行产物）。
+# Deletion set = "previous manifest − current manifest" = files deleted by this release.
+# Cannot use "everything on the server not in the current manifest": paths excluded by tar such as .env / .data /
+# screenshots / node_modules never appear in any manifest yet must be kept on the server (config, data, runtime artifacts).
 #
-# 清单文件放在 checkout 之外（/home/wangb/itest-files-manifest.txt）：既不进 build
-# context，也不会被 tar 解包覆盖。
+# The manifest files live outside the checkout (/home/wangb/itest-files-manifest.txt): neither in the build context
+# nor overwritable by tar unpacking.
 MANIFEST_CUR="${ROOT}.files-manifest.txt"
 MANIFEST_PREV="${MANIFEST_CUR}.prev"
 if [ -f "$MANIFEST_CUR" ] && [ -f "$MANIFEST_CUR.new" ]; then
   cp "$MANIFEST_CUR" "$MANIFEST_PREV"
   mv "$MANIFEST_CUR.new" "$MANIFEST_CUR"
 elif [ -f "$MANIFEST_CUR.new" ]; then
-  # 首次引入清单：没有上一版可比，不删任何东西（残留由本次人工清理兜住）
+  # Manifest introduced for the first time: no previous version to compare with, delete nothing (residue handled by manual cleanup this round)
   mv "$MANIFEST_CUR.new" "$MANIFEST_CUR"
   echo "首次引入文件清单，本次不清理残留"
 fi
 
 if [ -f "$MANIFEST_PREV" ] && [ -f "$MANIFEST_CUR" ]; then
-  # 相对路径 + 拒绝绝对路径与含 '..' 路径段：清单内容来自 tarball（受本地工作区控制），
-  # 但仍按「只删 checkout 内、不跳目录」的规则执行，避免路径注入删到别处。
+  # Relative paths only, with absolute paths and '..' path segments rejected: manifest content comes from the tarball
+  # (controlled by the local workspace), but deletion still follows the "inside the checkout only, no directory jumps"
+  # rule to prevent path injection from deleting elsewhere.
   #
-  # comm 要求输入已按同一 collation 排序——这里对两份清单各自重排（LC_ALL=C），
-  # 不依赖上传时排过序：排错一次就会把「本版仍存在的文件」误判成已删除并删掉。
+  # comm requires inputs sorted under the same collation — both manifests are re-sorted here (LC_ALL=C),
+  # not trusting the upload-time order: one wrong sort would misjudge a file still present in this release as deleted and remove it.
   LC_ALL=C sort "$MANIFEST_PREV" -o "$MANIFEST_PREV"
   LC_ALL=C sort "$MANIFEST_CUR" -o "$MANIFEST_CUR"
   REMOVED="$(LC_ALL=C comm -23 "$MANIFEST_PREV" "$MANIFEST_CUR")"
@@ -146,16 +151,16 @@ if [ -f "$MANIFEST_PREV" ] && [ -f "$MANIFEST_CUR" ]; then
         /*) echo "  跳过（绝对路径）：$f"; continue ;;
         ../*|*/../*|*/..) echo "  跳过（路径跳目录）：$f"; continue ;;
       esac
-      # 保护清单：release.sh 的 tar --exclude 同款模式。这些路径从来不由 tarball 管理，
-      # 是「服务器形态」而非「仓库形态」的产物（.env.production 是服务器上的密钥文件、
-      # .data 是运行数据、deploy.d 是部署配置），本地 checkout 里没有它们并不代表它们该被删。
+      # Protected list: same patterns as release.sh's tar --exclude. These paths are never managed by the tarball;
+      # they are "server shape" rather than "repo shape" artifacts (.env.production is the server-side secret file,
+      # .data is runtime data, deploy.d is deployment config) — their absence from the local checkout does not mean they should be deleted.
       #
-      # 2026-10-26 实测踩坑：13:02 那次发版用的旧 exclude（只排除 '.env'，不排除
-      # '.env.production'）把密钥文件打进了 tarball → 进了清单；随后从干净 worktree
-      # 发版（无该 gitignored 文件）时，清单差集把 .env.production 判成「本次删除」→
-      # deploy.sh 把服务器密钥删了 → compose 找不到 env_file → 整个 up 阶段失败。
+      # Gotcha observed 2026-10-26: the 13:02 release used the old exclude list (excluding '.env' but not
+      # '.env.production'), which packed the secret file into the tarball → into the manifest; a subsequent release
+      # from a clean worktree (without that gitignored file) made the manifest diff judge .env.production as
+      # "deleted this round" → deploy.sh deleted the server secret → compose could not find env_file → the whole up phase failed.
       #
-      # 逐条列出而非用 '.env.*'：后者会连带排除已跟踪的 .env.example（模板，需随包携带）。
+      # Listed item by item instead of using '.env.*': the latter would also exclude the tracked .env.example (template, must ship with the package).
       case "$f" in
         node_modules/*|.git/*|.worktrees/*|.superpowers/*|.claude/*|.turbo/*|.data/*|dist/*|coverage/*|screenshots/*|deploy.d/*|*.log|.env|.env.production|deploy.env|*/node_modules/*|*/.git/*|*/.worktrees/*|*/.superpowers/*|*/.claude/*|*/.turbo/*|*/.data/*|*/dist/*|*/coverage/*|*/screenshots/*|*/deploy.d/*|*/.env|*/.env.production|*/deploy.env)
           echo "  跳过（受保护路径）：$f"; continue ;;
@@ -166,17 +171,18 @@ if [ -f "$MANIFEST_PREV" ] && [ -f "$MANIFEST_CUR" ]; then
     done <<EOF
 $REMOVED
 EOF
-    # 不清理空目录：find -delete 会波及 .data 下的用户目录骨架等非本次发布的路径。
-    # git 不跟踪空目录，留着无害；残留文件被删后空壳目录留着也不影响镜像构建。
+    # Empty directories are not cleaned: find -delete would also hit non-release paths like the user directory
+    # skeletons under .data. Git does not track empty directories, so leaving them is harmless; husk directories
+    # left behind after their files are deleted do not affect image builds either.
   else
     echo "本次发布无文件删除"
   fi
   rm -f "$MANIFEST_PREV"
 fi
 
-# 清理之后再确认一次密钥文件还在：它必须在 compose up 之前存在，否则整个部署在
-# up 阶段失败（env file not found），镜像白建。2026-10-26 实测：清单差集把
-# .env.production 判成「已删除」并删掉，部署在这一步炸掉。
+# After cleanup, verify the secret file still exists: it must be present before compose up, otherwise the whole
+# deployment fails in the up phase (env file not found) after the image was built for nothing. Observed 2026-10-26:
+# the manifest diff judged .env.production as "deleted" and removed it; the deployment blew up at this exact step.
 if [ ! -f "$ROOT/infra/docker/.env.production" ]; then
   echo "❌ 清理后缺少 $ROOT/infra/docker/.env.production——中止部署（compose 拿不到 env_file）"
   exit 1
@@ -190,7 +196,7 @@ echo "== build gauss-bridge =="
 docker build -t itest-gauss-bridge:latest -f infra/docker/gauss-bridge.Dockerfile .
 
 echo "== up services =="
-# --wait 用 healthcheck 替代 pg_isready + curl 轮询；超 120s 仍未 healthy 抛错（set -e 触发）。
+# --wait replaces the pg_isready + curl polling with healthchecks; if still not healthy after 120s it errors (set -e fires).
 docker compose -p itest -f infra/docker/docker-compose.yml up -d --scale api="$API_REPLICAS" --wait --wait-timeout 120
 
 if [ "$FIRST_DEPLOY" = "1" ]; then
@@ -199,10 +205,12 @@ if [ "$FIRST_DEPLOY" = "1" ]; then
   echo "默认账号 admin/admin123，首登强制改密"
 fi
 
-# --- seed skill-creator 目录树 ---
-# 技能内容以文件系统为真源（DB 只留 name/description/enabled），故技能目录必须随发版保证存在。
-# 放在 up --wait 之后：api 容器启动时已跑完 drizzle-kit push，schema 才是新的。
-# 脚本自愈：目录缺失才铺（用户改过的内容不覆盖），旧 schema 下告警 exit 0 不阻断发版。
+# --- seed the skill-creator directory tree ---
+# Skill content treats the filesystem as the source of truth (the DB keeps only name/description/enabled), so the skill
+# directories must be guaranteed to exist with each release.
+# Placed after up --wait: the api container has finished drizzle-kit push by startup, so the schema is current.
+# Self-healing script: lays down content only when the directory is missing (user-modified content is not overwritten);
+# warns and exits 0 on an old schema without blocking the release.
 echo "== seed skill-creator =="
 docker exec "$(api_replica)" node /repo/apps/api/scripts/seed-skill-creator.mjs \
   || echo "WARN: skill-creator seed 失败，助手将看不到该技能（不影响其余功能）"
@@ -224,25 +232,26 @@ docker exec "$(api_replica)" node /repo/apps/api/scripts/seed-export-cases-skill
   || echo "WARN: export-cases seed 失败，助手将无法导出用例文件（不影响其余功能）"
 
 # --- post-deploy smoke ---
-# Warning 策略:任一 FAIL 输出原因但 exit 0;运维根据警告决定是否回滚。
+# Warning policy: any FAIL prints the reason but exits 0; ops decides whether to roll back based on the warnings.
 echo "== post-deploy smoke =="
 SMOKE_FAIL=0
 SMOKE_WARN=""
 
-# (a) api 健康
+# (a) api health
 if ! docker exec "$(api_replica)" node -e "fetch('http://127.0.0.1:54321/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
   SMOKE_WARN="$SMOKE_WARN
   - api /api/health FAIL（看 docker compose logs api）"
   SMOKE_FAIL=1
 fi
 
-# (b) admin 账号存在且密码可用:只验证「行存在 + bcrypt 哈希可校验」。
-#     这里刻意不比对 admin123——生产改过密码后比对必然失败,
-#     而旧实现在失败分支会把密码静默重置回 admin123 并置 must_change_password=true,
-#     等于每次发版都可能顶掉运维改过的密码。改密码是正常运维动作,不该被判成 smoke 失败。
-#     注:旧实现用 username=\"admin\" 查,双引号在 SQL 里是标识符而非字符串字面量,
-#     必然抛 "column admin does not exist" → 每次发版都误报 + 触发上面那条重置。
-#     参数化查询绕开嵌套 shell 转义。
+# (b) admin account exists and its password is usable: verifies only "row exists + bcrypt hash verifiable".
+#     Deliberately NOT comparing against admin123 — after production changes the password such a comparison
+#     always fails, and the old implementation's failure branch silently reset the password back to admin123
+#     with must_change_password=true, effectively clobbering the ops-changed password on every release.
+#     Changing the password is a normal ops action and must not be judged a smoke failure.
+#     Note: the old implementation queried with username=\"admin\" — double quotes in SQL denote an identifier,
+#     not a string literal, so it always threw "column admin does not exist" → false alarm on every release
+#     + triggered the reset above. A parameterized query sidesteps nested shell escaping.
 if ! docker exec "$(api_replica)" node -e "
   const run = async () => {
     const { default: pg } = await import('pg');
@@ -263,15 +272,16 @@ if ! docker exec "$(api_replica)" node -e "
   SMOKE_FAIL=1
 fi
 
-# (c) playwright/chromium 可启动（防镜像构建期 install 静默失败）
+# (c) playwright/chromium can launch (guards against the build-time install failing silently)
 if ! docker exec "$(api_replica)" node -e "import('playwright-core').then(({chromium}) => chromium.launch({headless:true}).then(async b => { const c = await b.newContext(); const p = await c.newPage(); await p.goto('about:blank'); console.log('chromium OK:', await p.title()); await b.close(); }))" >/dev/null 2>&1; then
   SMOKE_WARN="$SMOKE_WARN
   - chromium launch FAIL（重建 api 镜像或检查 PLAYWRIGHT_BROWSERS_PATH）"
   SMOKE_FAIL=1
 fi
 
-# (d) 录制回连地址 sanity：扩展跑在用户浏览器里，wsUrl 指回环=远程用户必挂(2026-10-09 prod228 踩过)；
-#     环境变量缺失时 api 回落 ws://127.0.0.1:54321/recorder，同样是回环，一并告警。
+# (d) Recorder callback address sanity: the extension runs in the user's browser, so a loopback wsUrl = guaranteed
+#     failure for remote users (bitten on prod228, 2026-10-09); when the env var is missing the api falls back to
+#     ws://127.0.0.1:54321/recorder, which is loopback too — warned together.
 WS_URL="$(docker exec "$(api_replica)" printenv RECORDER_PUBLIC_WS_URL 2>/dev/null || true)"
 if [ -z "$WS_URL" ] || echo "$WS_URL" | grep -qE '127\.0\.0\.1|localhost|::1'; then
   SMOKE_WARN="$SMOKE_WARN
@@ -279,10 +289,10 @@ if [ -z "$WS_URL" ] || echo "$WS_URL" | grep -qE '127\.0\.0\.1|localhost|::1'; t
   SMOKE_FAIL=1
 fi
 
-# (e) 录制 WS 握手链路：浏览器扩展 → nginx(/api/recorder 精确匹配) → api upgrade 处理器(只认 /recorder)。
-#     用假 token 探测：链路通时 api 校验失败即断连，nginx 立刻回 502 → PASS；
-#     路径不匹配(踩过：proxy_pass 不带 URI 未把 /api/recorder 改写成 /recorder)时 upgrade 无人处理、
-#     请求挂起到超时 → FAIL；401/404 = nginx 丢了 Upgrade 头或 location 误路由 → FAIL。
+# (e) Recorder WS handshake chain: browser extension → nginx (exact match /api/recorder) → api upgrade handler (accepts /recorder only).
+#     Probed with a fake token: when the chain is sound, the api fails token validation and disconnects, nginx immediately returns 502 → PASS;
+#     on a path mismatch (bitten before: proxy_pass without a URI failed to rewrite /api/recorder into /recorder) the upgrade has no
+#     handler and the request hangs until timeout → FAIL; 401/404 = nginx dropped the Upgrade header or misrouted the location → FAIL.
 if ! docker exec "$(api_replica)" node -e "
 const http = require('node:http');
 const req = http.request({
@@ -300,8 +310,8 @@ req.end();
   SMOKE_FAIL=1
 fi
 
-# (f) 录制 REST 路由：POST /api/recorder/sessions 无凭证应得到 401/400(证明打到 api 的路由层)；
-#     若 /api/recorder 前缀被整体改写(踩过)，api 会回 404 Cannot POST /recorder/sessions。
+# (f) Recorder REST route: POST /api/recorder/sessions without credentials should yield 401/400 (proof it reached the api routing layer);
+#     if the /api/recorder prefix was rewritten wholesale (bitten before), the api returns 404 Cannot POST /recorder/sessions.
 if ! docker exec "$(api_replica)" node -e "
 fetch('http://itest-web:80/api/recorder/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
   .then((r) => process.exit(r.status === 404 ? 1 : 0))
@@ -312,10 +322,10 @@ fetch('http://itest-web:80/api/recorder/sessions', { method: 'POST', headers: { 
   SMOKE_FAIL=1
 fi
 
-# (g) 录制扩展包完整性：manifest 声明 default_locale 时 _locales 子树必须随包存在，
-#     否则 Chrome 拒绝安装扩展（"Default locale was specified, but _locales subtree is missing"）。
-#     2026-10-20 prod228 实测踩过：api 镜像的 COPY 清单漏了 _locales → 用户装不上扩展。
-#     这里直接查容器内扩展根目录，缺 _locales/<default_locale>/messages.json 即 FAIL。
+# (g) Recorder extension package integrity: when the manifest declares default_locale, the _locales subtree must ship with the package,
+#     otherwise Chrome refuses to install the extension ("Default locale was specified, but _locales subtree is missing").
+#     Bitten on prod228, 2026-10-20: the api image's COPY list missed _locales → users could not install the extension.
+#     Checks the extension root inside the container directly; missing _locales/<default_locale>/messages.json = FAIL.
 if ! docker exec "$(api_replica)" node -e "
 const fs = require('node:fs');
 const path = require('node:path');
@@ -334,16 +344,17 @@ console.log('locales ok:', locale);
   SMOKE_FAIL=1
 fi
 
-# (h) gauss 桥健康：api → gauss-bridge 内网链路（gauss100 的 test-db / sql 步骤都经它）。
-#     api 不 depends_on 桥（懒失败设计），此处仅探测链路，失败进 smoke 告警不阻断容器运行。
+# (h) gauss bridge health: api → gauss-bridge internal link (gauss100's test-db / sql steps all go through it).
+#     api does not depends_on the bridge (lazy-failure design); this only probes the link — failure lands in smoke warnings without blocking the containers.
 if ! docker exec "$(api_replica)" node -e "fetch('http://gauss-bridge:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
   SMOKE_WARN="$SMOKE_WARN
   - gauss-bridge /healthz FAIL（gauss100 数据库将不可用：docker compose -p itest logs gauss-bridge 看桥日志；api 侧 GAUSS_BRIDGE_URL=http://gauss-bridge:8080）"
   SMOKE_FAIL=1
 fi
 
-# (i) 中文字体：探索式测试的证据截图由容器内 chromium 渲染，缺 CJK 字体时中文全是方框，
-#     AI 会把「字体缺失」当缺陷报出来（2026-11-10 prod228 实录）。容器内须能查到 zh 字体。
+# (i) Chinese fonts: exploratory-testing evidence screenshots are rendered by in-container chromium; without CJK fonts
+#     all Chinese text renders as boxes and the AI reports "missing fonts" as defects (prod228 record, 2026-11-10).
+#     The container must be able to find a zh font.
 if ! docker exec "$(api_replica)" sh -c "fc-list :lang=zh 2>/dev/null | head -1" | grep -q .; then
   SMOKE_WARN="$SMOKE_WARN
   - api 容器缺中文字体 FAIL（fc-list :lang=zh 为空：探索会话证据截图中文会渲染成方框，AI 会误报「字体缺失」。检查 api.Dockerfile 是否装了 fonts-wqy-zenhei / fontconfig）"

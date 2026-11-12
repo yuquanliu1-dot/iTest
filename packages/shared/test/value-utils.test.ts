@@ -91,9 +91,9 @@ describe('materializeValue', () => {
           mode: 'composite',
           fragments: [
             { mode: 'fixed', value: 'OK' },
-            // Zod 不会通过 refine 再来一次，运行时调用 evaluateGenerator 会抛
-            // 但当前 materializeValue 把 composite 各 fragment 当作 ValueGenerator 求值，
-            // max < min 不会到这里。先用 timestamp + 把 max 设为非法测：
+            // Zod will not re-run through refine; calling evaluateGenerator at runtime would throw,
+            // but the current materializeValue evaluates composite fragments as ValueGenerators,
+            // so max < min never reaches here. Testing with timestamp + an invalid max instead:
             { mode: 'randomNumber', min: 9, max: 2 },
           ],
         },

@@ -18,7 +18,7 @@ const RULES: Array<{ lib: ComponentLib; kind: ComponentKind; test: (cls: string)
   { lib: 'iview', kind: 'select', test: (c) => c.startsWith('ivu-select') },
 ];
 
-/** 沿父链向上搜索，直到命中任意一条规则或到根。 */
+/** Walks up the parent chain until any rule matches or the root is reached. */
 export function detectComponent(el: Element | null): ComponentInfo | null {
   let cur: Element | null = el;
   while (cur) {

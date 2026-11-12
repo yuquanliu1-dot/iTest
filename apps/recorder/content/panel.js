@@ -1,9 +1,10 @@
 /**
- * 页面内录制控制面板：录制启动时由 background 注入到录制标签页，
- * 默认固定在右下角的玻璃卡片，可通过标题栏拖动到任意位置（限制在视口内）。
- * 样式对齐 iTest 设计 tokens（packages/ui/src/tokens.css，CRM shadcn 风）：按钮圆角 5px、
- * 主操作绿色填充（#006b4f）、次操作 ghost、危险 destructive、间距 token 化。
- * Shadow DOM 隔离，避免与宿主页面样式互相污染。
+ * In-page recording control panel: injected by background into the recording tab when recording starts;
+ * by default pinned as a glass card at the bottom-right, draggable via the title bar to any position
+ * (clamped to the viewport).
+ * Styling aligns with iTest design tokens (packages/ui/src/tokens.css, CRM shadcn style): button radius 5px,
+ * primary action green fill (#006b4f), secondary ghost, danger destructive, spacing tokenized.
+ * Shadow DOM isolation to avoid style pollution between host page and panel.
  */
 (() => {
   const t = (k, s) => chrome.i18n.getMessage(k, s);
@@ -17,7 +18,7 @@
 
   const host = document.createElement('div');
   host.id = HOST_ID;
-  // all:initial 防止宿主页面的全局样式（font/line-height 等）渗入
+  // all:initial keeps the host page's global styles (font/line-height etc.) from bleeding in
   host.style.cssText = 'all:initial;position:fixed;bottom:16px;right:16px;z-index:2147483647;';
   const shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = `
@@ -70,13 +71,13 @@
         font-family: inherit; line-height: 1.4; text-align: center;
         transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
       }
-      /* 主操作：绿色填充（与中台按钮一致） */
+      /* Primary action: green fill (consistent with platform buttons) */
       .btn.primary { background: #006b4f; color: #fff; border: 1px solid #006b4f; font-weight: 500; }
       .btn.primary:hover { background: #025e46; border-color: #025e46; }
-      /* 次操作：ghost — 透明底 + 浅灰边 */
+      /* Secondary action: ghost — transparent background + light gray border */
       .btn.ghost { background: transparent; border: 1px solid #e2e2e2; color: #171717; }
       .btn.ghost:hover { background: #f4f4f4; border-color: #d0d0d0; }
-      /* 危险：透明 + 红边 */
+      /* Danger: transparent + red border */
       .btn.danger { background: transparent; border: 1px solid #ae2e24; color: #ae2e24; }
       .btn.danger:hover { background: rgba(174, 46, 36, 0.08); }
 
@@ -84,7 +85,7 @@
       .panel.collapsed .body { display: none; }
       .panel.collapsed .head { padding: 7px 10px; }
       .panel.collapsed .count { margin-right: 2px; }
-      /* 两个录制选项并排一行（英文标签过长时 wrap 兜底换行，不裁切） */
+      /* Two recording options side by side on one row (wraps as fallback when English labels get too long, no clipping) */
       .opts { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; padding: 2px 0; }
       .opts label {
         font-size: 11px; color: #6b6b6b; display: flex; align-items: center; gap: 6px;
@@ -96,7 +97,7 @@
       }
       .opts input[type=number]:focus { outline: none; border-color: #006b4f; }
       .opts input[type=checkbox] { accent-color: #006b4f; cursor: pointer; }
-      /* 断言/悬停内联拾取的状态行（v0.0.6：不再开扩展弹窗，结果直接显示在本面板） */
+      /* Status line for assertion/hover inline picking (v0.0.6: no longer opens the extension popup; results show directly in this panel) */
       .pick-status {
         display: none; font-size: 11px; line-height: 1.5; border-radius: 5px;
         padding: 6px 8px; word-break: break-all;
@@ -104,7 +105,7 @@
       .pick-status.info { display: block; background: #f4f4f4; color: #171717; }
       .pick-status.ok { display: block; background: rgba(0, 107, 79, 0.10); color: #006b4f; }
       .pick-status.err { display: block; background: rgba(174, 46, 36, 0.08); color: #ae2e24; }
-      /* 存变量/AI 内联表单：拾取完成后或 AI 指令直接在本面板填写（弹窗路径已整体退役） */
+      /* Save-variable/AI inline form: fill directly in this panel after picking or via AI instruction (the popup path has been fully retired) */
       .pick-form { display: none; flex-direction: column; gap: 4px; }
       .pick-form.open { display: flex; }
       .form-hint { font-size: 11px; color: #6b6b6b; line-height: 1.5; word-break: break-all; }
@@ -116,7 +117,7 @@
       }
       .form-input:focus { outline: none; border-color: #006b4f; }
       .form-cancel { flex: 0 0 auto; padding: 6px 8px; }
-      /* 断言表单：对象 + 匹配方式两个下拉（仅 assert 模式显示） */
+      /* Assertion form: two dropdowns for target + match mode (shown only in assert mode) */
       .assert-row { display: none; gap: 6px; }
       .pick-form.mode-assert .assert-row { display: flex; }
       .form-select {
@@ -219,14 +220,15 @@
     statusEl.textContent = text;
     statusEl.className = `pick-status ${kind}`;
     if (statusTimer) clearTimeout(statusTimer);
-    // 成功/失败提示 6s 后自动收起；拾取提示不自动收（由回调覆盖或超时前完成）
+    // Success/failure notices auto-hide after 6s; pick hints don't auto-hide (overridden by callback or resolved before timeout)
     if (kind !== 'info') statusTimer = setTimeout(hideStatus, 6000);
     fitViewport();
   };
 
-  // 断言/悬停/存变量/AI 全部在面板内完成：扩展弹窗在用户点选被测页面后失焦被盖
-  // （v0.0.4 置顶、v0.0.5 alwaysOnTop 两轮均失效），本面板是页面的一部分，盖不住。
-  // dsl 带上 bg 附在拾取结果里的 frameChain（iframe 帧链，0.1.0）；emit-step 直发 bg。
+  // Assertion/hover/save-variable/AI all complete inside the panel: the extension popup loses focus and gets covered
+  // when the user clicks the page under test (v0.0.4 always-on-top and v0.0.5 alwaysOnTop both failed); this panel is
+  // part of the page and cannot be covered.
+  // The dsl carries the frameChain bg attached to the pick result (iframe frame chain, 0.1.0); emit-step goes straight to bg.
   const emitInline = (dsl) => {
     chrome.runtime.sendMessage({ type: 'emit-step', dsl, url: location.href }, (resp) => {
       if (resp?.ok) showStatus(t('stepGenerated'), 'ok');
@@ -234,14 +236,14 @@
     });
   };
 
-  // ---- 内联表单（存变量/AI 共用）：填值后确定提交 ----
+  // ---- Inline forms (shared by save-variable/AI): submit after filling the value ----
   const suggestVarName = (r) => {
     const raw = r.id || r.nameAttr || '';
     if (!raw) return '';
     return raw.replace(/[^a-zA-Z0-9]+(.)/g, (_, c) => c.toUpperCase()).replace(/^[A-Z]/, (c) => c.toLowerCase());
   };
-  let formMode = null; // 'variable' | 'ai' | 'assert'：内联表单当前服务哪种步骤
-  let pendingPick = null; // variable/assert 模式暂存的拾取结果
+  let formMode = null; // 'variable' | 'ai' | 'assert': which step kind the inline form currently serves
+  let pendingPick = null; // pick result staged by variable/assert modes
   const closeForm = () => {
     formMode = null;
     pendingPick = null;
@@ -261,8 +263,9 @@
   };
   const openVarForm = (r) => { pendingPick = r; openForm('variable', t('elementText', [r.text.slice(0, 60) || r.inputValue.slice(0, 60) || t('emptyText')]), suggestVarName(r)); };
   const openAiForm = () => openForm('ai', t('aiHint'), '');
-  // 断言期望值建议：元素对象=元素当前文本/输入值；页面 URL=当前地址；页面文本/错误提示=空（用户自己写）。
-  // 切换对象时若期望值输入框仍是上一次的「原样预填」（用户没动过），跟着换成新对象的建议值。
+  // Expected-value suggestions for assertions: element target = the element's current text/input value; page URL = current address;
+  // page text/error message = empty (user writes it). When switching targets, if the expected input still holds the previous
+  // "as-suggested prefill" (user hasn't touched it), swap in the new target's suggestion.
   let pristine = '';
   const suggestExpected = (target, r) => {
     if (target === 'url') return location.href;
@@ -299,7 +302,7 @@
         try { new RegExp(value); } catch { showStatus(t('regexInvalid'), 'err'); return; }
       }
       if (!value) {
-        // 空期望 + 元素对象 + 等于 → 退化 assertVisible（元素在页面上=通过）；其余组合空值拦截
+        // Empty expected + element target + equals → degenerate to assertVisible (element on page = pass); other combos with empty values are blocked
         if (target === 'specifiedElement' && match === 'equals') {
           const r = pendingPick;
           closeForm();
@@ -311,8 +314,8 @@
       }
       const r = pendingPick;
       closeForm();
-      // locator 只在元素对象时携带；page/errorMessage/url 由回放端从页面整体取值，不需要候选，
-      // 也不带帧链（页级断言的语义就是顶层文档）
+      // locator only carried for the element target; page/errorMessage/url take values from the whole page at replay time — no candidates needed,
+      // and no frame chain either (a page-level assertion semantically targets the top-level document)
       emitInline({
         kind: 'assertText',
         locator: target === 'specifiedElement' && r ? assertLocators(r) : [],
@@ -327,12 +330,12 @@
   formCancel.addEventListener('click', () => { closeForm(); hideStatus(); });
   formInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitForm(); });
 
-  // 断言候选排序（资产管理-资产编辑 RCA：断言唯一候选 .has-gutter .el-table_1_column_4 > .cell 跨会话
-  // 漂移 count=0，而页面文本「主识别IP」明明在）：css 链含 Element-UI 运行时位置类
-  // （el-table_{实例号}[_column_{列序}] / has-gutter，口径同 modules/selector-filter.ts），
-  // 或链在当前页面就不唯一（多可排序列的表头剥掉运行时类后无法区分兄弟列）——这两种链当不了
-  // 首候选，text 放首位；链唯一且稳定则 css-first 保唯一性，text 排链尾兜底
-  // （链活时轮不到，链死时按文本命中）。
+  // Assertion candidate ordering (asset-management asset-edit RCA: the assertion's sole candidate .has-gutter .el-table_1_column_4 > .cell
+  // drifted across sessions to count=0, while the page text "主识别IP" was clearly there): css chains containing Element-UI runtime
+  // positional classes (el-table_{instance}[_column_{col}] / has-gutter, same convention as modules/selector-filter.ts),
+  // or chains not unique on the current page (headers of multi-sortable tables can't distinguish sibling columns once runtime classes
+  // are stripped) — such chains can't be the first candidate, so text goes first; if the chain is unique and stable, css-first keeps
+  // uniqueness with text as a tail fallback (unused while the chain is alive, matched by text when the chain dies).
   const assertLocators = (r) => {
     const locs = Array.isArray(r?.locators) ? r.locators.slice() : [];
     if (r?.text && !locs.some((l) => l.strategy === 'text' && l.value === r.text)) {
@@ -348,11 +351,11 @@
     return locs;
   };
 
-  // ---- 元素拾取（事件驱动，0.1.0）----
-  // pick-start 带自增 pickId 发 bg → bg 广播全帧拾取 → 被点击帧回 pick-result →
-  // bg 竞胜（首个）、附帧链、广播 pick-stop、把结果转发回本面板。pickActive 守卫防重入
-  // （拾取中连点功能按钮会开两个拾取），90s 超时兜底（bg 零响应/用户一直不点）。
-  // 过期结果（新一轮拾取已开/已超时收场）按 pickId 校验丢弃，不落进新表单。
+  // ---- Element pick (event-driven, 0.1.0) ----
+  // pick-start carries an auto-incrementing pickId to bg → bg broadcasts pick to all frames → the clicked frame replies pick-result →
+  // bg races (first wins), attaches the frame chain, broadcasts pick-stop, and forwards the result back to this panel. pickActive guards
+  // against re-entry (double-clicking feature buttons mid-pick would open two picks), with a 90s timeout fallback (bg silent / user never clicks).
+  // Stale results (a new pick round started / already timed out) are dropped by pickId check, never landing in the new form.
   const chainField = (r) => (Array.isArray(r?.frameChain) && r.frameChain.length > 0 ? { frameChain: r.frameChain } : {});
   let pickSeq = 0;
   let pickActive = null; // { pickId, mode, timer }
@@ -374,8 +377,8 @@
       return;
     }
     if (mode === 'assert') {
-      // 拾取后先进断言表单：对象/匹配方式/期望值都可改，确定才生成（v0.0.9 起，
-      // 旧行为「选中即生成」只能录元素文本等于，录不了 contains/页面断言/URL 断言）
+      // After picking, enter the assertion form first: target/match/expected all editable; generated only on submit (since v0.0.9,
+      // the old "select = generate" behavior could only record element-text equals, not contains/page/URL assertions)
       openAssertForm(result);
     }
   };
@@ -386,7 +389,7 @@
     const pickId = ++pickSeq;
     pickActive = { pickId, mode, timer: null };
     chrome.runtime.sendMessage({ type: 'pick-start', pickId }, (r) => {
-      if (!pickActive || pickActive.pickId !== pickId) return; // 已被超时收场：忽略迟到的错误
+      if (!pickActive || pickActive.pickId !== pickId) return; // already resolved by timeout: ignore the late error
       if (!r || r.ok === false) {
         pickActive = null;
         showStatus(t('pickFailed', [r?.error ?? t('notRecording')]), 'err');
@@ -409,7 +412,7 @@
     toggleBtn.title = collapsed ? t('expandPanel') : t('collapsePanel');
   };
 
-  // 选项变更 → 透传到 content/recorder.js 的 manager。用 set-options 消息实时生效。
+  // Option changes → pass through to content/recorder.js's manager. Sent via the set-options message for immediate effect.
   const sendOptions = () => {
     const fillMs = parseInt(fillMsInput.value, 10);
     chrome.runtime.sendMessage({
@@ -425,7 +428,7 @@
 
   toggleBtn.addEventListener('click', () => { collapsed = !collapsed; render(); });
 
-  // 标题栏拖拽：首次拖动把 bottom/right 锚点换算成 top/left，之后跟随鼠标并钳制在视口内
+  // Title-bar drag: the first drag converts the bottom/right anchor to top/left; afterwards follow the mouse, clamped to the viewport
   let dragging = false;
   let dragOffX = 0;
   let dragOffY = 0;
@@ -455,9 +458,9 @@
     panel.classList.remove('dragging');
   });
 
-  // 内容增高（拾取状态行/内联表单出现）后把面板钳回视口：拖动过锚点变 top/left，
-  // 向下生长会探出视口底把「回中台」裁掉；默认 bottom 锚定虽向上生长，但视口过矮时
-  // 顶边也可能越界，这里一并按实际尺寸收回。
+  // After content grows (pick status line / inline form appear), clamp the panel back into the viewport: once dragged, the anchor
+  // becomes top/left, and growing downward pokes past the viewport bottom, clipping "back to console"; the default bottom anchoring
+  // grows upward, but on very short viewports the top edge can also overflow — clamp by actual size here as well.
   const fitViewport = () => {
     const m = 8;
     const r = panel.getBoundingClientRect();
@@ -480,7 +483,7 @@
   };
 
   pauseBtn.addEventListener('click', () => chrome.runtime.sendMessage({ type: paused ? 'resume' : 'pause' }));
-  // 停止后顺手切回发起录制的用例详情页（步骤写入完成后自动跳转，免去用户手动找标签）
+  // After stopping, conveniently switch back to the case detail page that started the recording (auto-jump once steps are written, sparing the user from finding the tab)
   stopBtn.addEventListener('click', () => {
     chrome.runtime.sendMessage({ type: 'stop', from: 'panel' });
     chrome.runtime.sendMessage({ type: 'open-console' });
@@ -489,7 +492,7 @@
   featBtns.forEach((btn) => {
     const mode = btn.dataset.mode;
     btn.addEventListener('click', () => {
-      // 断言/悬停/存变量/AI 全部内联在本面板完成（AI 直接开表单，无拾取环节），不再开任何扩展弹窗
+      // Assertion/hover/save-variable/AI all complete inline in this panel (AI opens the form directly, no pick step); no extension popup anymore
       if (mode === 'ai') { openAiForm(); return; }
       startInlinePick(mode);
     });
@@ -508,12 +511,12 @@
     } else if (msg?.type === 'stop') {
       host.remove();
     } else if (msg?.type === 'pick-result') {
-      // bg 竞胜后转发的拾取结果（已附 frameChain，如有）；过期 pickId 在 finishPick 里丢弃
+      // Pick result forwarded after bg's race (frameChain already attached, if any); stale pickIds are dropped in finishPick
       finishPick(msg.result, msg.pickId);
     }
   });
 
-  // 重注入/SW 复活后兜底拉一次会话态：onUpdated 的 step-count/pause 推送若因时序丢失，这里拉平
+  // After re-injection / SW revival, pull the session state once as a fallback: if onUpdated's step-count/pause pushes were lost to timing, level off here
   chrome.runtime.sendMessage({ type: 'get-state' }, (s) => {
     if (!s || !s.recording) return;
     count = s.stepCount ?? count;

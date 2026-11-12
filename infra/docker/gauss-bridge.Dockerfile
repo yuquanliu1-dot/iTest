@@ -1,13 +1,13 @@
-# GaussDB 100 (Zenith) JDBC 桥：api 经 HTTP 转发 SQL（Node 生态无驱动，华为只发 JDBC）。
-# 构建上下文 = 仓库根（与 api.Dockerfile/web.Dockerfile 同约定，见 deploy.sh）。
-# 不在镜像里 javac：部署机拉不到 8-jdk（内网 registry 受限，prod228 只缓存了 8-jre），
-# .class 由开发机 javac --release 8 预编译进仓库（classes/，与 lib/ jar 同纪律）。
+# GaussDB 100 (Zenith) JDBC bridge: api forwards SQL over HTTP (no driver in the Node ecosystem; Huawei only ships JDBC).
+# Build context = repo root (same convention as api.Dockerfile/web.Dockerfile, see deploy.sh).
+# No javac inside the image: the deploy host cannot pull 8-jdk (internal registry is restricted; prod228 only cached 8-jre),
+# so .class files are precompiled on the dev machine with javac --release 8 into the repo (classes/, same discipline as the lib/ jars).
 FROM eclipse-temurin:8-jre
 WORKDIR /app
 COPY infra/docker/gauss-bridge/classes/ /app/classes/
 COPY infra/docker/gauss-bridge/lib/ /app/lib/
 ENV GAUSS_BRIDGE_PORT=8080
-# 桥只跑 compose 内网，不映射宿主端口（与 api 同纪律）
+# The bridge only runs on the compose internal network, no host port mapping (same discipline as api)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
 CMD ["java", "-cp", "/app/classes:/app/lib/*", "GaussBridge"]

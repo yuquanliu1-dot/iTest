@@ -1,17 +1,17 @@
 import { generateLocators, deriveSemantic, type Locator } from './selector-core.js';
 import { detectComponent } from './component-detector.js';
 
-// re-export 给 content/recorder.js 的 locate-frame 用：selector-core.js 含裸模块说明符
-// （@medv/finder），浏览器里动态 import() 解析不了，只有这份 esbuild 打包产物可用。
+// re-exported for content/recorder.js's locate-frame use: selector-core.js contains bare module specifiers
+// (@medv/finder) that the browser's dynamic import() cannot resolve — only this esbuild bundle is usable.
 export { generateLocators };
 
-/** 录制选项：popup / panel 配置后通过 start({...}) 传入。空 options 等价于历史默认行为。 */
+/** Recording options: configured by popup / panel and passed in via start({...}). Empty options equal the historical defaults. */
 export interface RecorderOptions {
-  /** 优先 data-* 属性名（finder 会把整条父链的 `[name=...]` 都用上）。默认 `data-testid`。 */
+  /** Preferred data-* attribute name (finder will use `[name=...]` from the whole parent chain). Default `data-testid`. */
   preferredDataAttribute?: string;
-  /** 是否录 hover 步骤。默认 false——hover 是最大的噪声源之一，调试时再开。 */
+  /** Whether to record hover steps. Default false — hover is one of the biggest noise sources; enable it when debugging. */
   recordHover?: boolean;
-  /** fill debounce 合并窗（ms）。用户连续输入超过这个时长才落库。默认 500。 */
+  /** fill debounce merge window (ms). Consecutive input only persists once the user pauses longer than this. Default 500. */
   fillFlushMs?: number;
 }
 
@@ -20,39 +20,39 @@ export type RecordedStepType = 'click' | 'fill' | 'press' | 'hover' | 'check' | 
 export interface RecordedStep {
   type: RecordedStepType;
   target: Locator[];
-  /** fill/select 的值；upload 的文件名 */
+  /** fill/select value; upload's file name */
   value?: string;
-  /** press 的键名（Playwright 键名，如 "Enter"） */
+  /** press key name (Playwright key name, e.g. "Enter") */
   key?: string;
-  /** click 的连击数：2=双击 3=三连击；缺省单击。来自原生 dblclick（e.detail）。 */
+  /** click multi-click count: 2=double 3=triple; plain click omits it. Comes from native dblclick (e.detail). */
   clickCount?: 2 | 3;
-  /** scroll 的绝对滚动位置（滚动容器 / 窗口级=scrollingElement）。 */
+  /** scroll's absolute scroll position (scroll container / window level = scrollingElement). */
   scrollTop?: number;
   scrollLeft?: number;
-  /** check 的目标状态 */
+  /** check's target state */
   checked?: boolean;
   url: string;
   timestamp: number;
-  /** 当前录制 tab 的标识符（由 content script 注入），用于回放时切换页面上下文。 */
+  /** Identifier of the currently recorded tab (injected by the content script), used to switch page context at replay. */
   tabRef?: string;
-  /** 嗅探到的组件类型；只有命中 select/treeSelect 时才有。 */
+  /** Sniffed component kind; only present when select/treeSelect matched. */
   componentKind?: 'select' | 'tree' | 'treeSelect';
-  /** 密码字段：true 时值会在 PUT 前由接口端加密存储。 */
+  /** Password field: when true, the value is stored encrypted by the API side before the PUT. */
   sensitive?: boolean;
-  /** upload 步骤对应的 test_attachments.id；录制时为空，由编辑器后绑定。 */
+  /** The test_attachments.id corresponding to an upload step; empty while recording, bound later by the editor. */
   fileId?: string;
-  /** 录制阶段确定的语义定位：semanticRole 复用 data-testid / name；contextText 取元素 innerText 第一段。 */
+  /** Semantic locator determined at recording time: semanticRole reuses data-testid / name; contextText takes the element's first innerText segment. */
   intentLocator?: { semanticRole: string; contextText?: string };
 }
 
 type StepHandler = (step: RecordedStep) => void;
 
-/** 委托给 selector-core.deriveSemantic：data-testid / name / 稳定语义 class / aria-label 四级回退。 */
+/** Delegates to selector-core.deriveSemantic: data-testid / name / stable semantic class / aria-label, four-level fallback. */
 function buildIntentLocator(el: Element): RecordedStep['intentLocator'] {
   return deriveSemantic(el);
 }
 
-/** 验证码特征：input 自身的 id/name/class/placeholder/aria-label 或关联 label 文案命中即认为是验证码输入框。 */
+/** Captcha signature: a hit on the input's own id/name/class/placeholder/aria-label or the associated label text marks it as a captcha input. */
 const CAPTCHA_RE = /captcha|验证码|校验码|validcode|verifycode|vercode|vcode/i;
 
 function isCaptchaInput(el: HTMLInputElement): boolean {
@@ -70,20 +70,20 @@ function isCaptchaInput(el: HTMLInputElement): boolean {
 }
 
 /**
- * 浏览器端录制协调器：
- *  - click / input / change / mouseover / dblclick / scroll 事件被捕获并生成多候选 locator。
- *  - change 细分：checkbox → check（带目标状态），select → select（带选中值），file → upload（只记文件名）。
- *  - click 延迟 250ms 发射：窗口内 dblclick 到达则升级为 clickCount=2/3（表格行双击进详情）；
- *    200ms 内同签名重复 click 去重（双击的第二击不产独立步骤）。
- *  - scroll 以事件流 debounce 记录：静止 350ms 后发射滚动容器的绝对位置（窗口级锚 'html'），
- *    净位移 <10px 的微动不产步骤。
- *  - 当 input 事件触发时，跳过紧随其后的 mouseover，避免「键入即 hover」噪声。
- *  - mouseover 需在同一元素停留 ≥500ms 才产出 hover（停留门槛）：光标移动路径上划过的元素不记录；
- *    已记录元素的内部微动不重复记录；click/input/离开元素会取消未到时的悬停。
- *  - 1.5s locator 签名去重窗：e.target 引用变了（React 重渲染 / 跨 DOM 树同名 hover）但 selector 不变时，
- *    第二次 hover 不发射——避免一组 hover 步骤里出现连续指向同一文本位置的重复步骤。
- *  - 输入框上 hover 不被发射（hover-when-input 抑制）；checkbox/radio/select/file 及无 value 目标的 input 不产 fill。
- *  - setPaused(true) 期间所有事件被忽略（录制面板「暂停」/元素拾取期间使用）。
+ * Browser-side recording coordinator:
+ *  - click / input / change / mouseover / dblclick / scroll events are captured and produce multi-candidate locators.
+ *  - change subtyping: checkbox → check (with target state), select → select (with selected value), file → upload (file name only).
+ *  - click is emitted after a 250ms delay: a dblclick arriving within the window upgrades it to clickCount=2/3 (table-row double-click into details);
+ *    repeated same-signature clicks within 200ms are deduped (a double-click's second press produces no separate step).
+ *  - scroll is recorded with an event-stream debounce: after 350ms of stillness the scroll container's absolute position is emitted
+ *    (window level anchors 'html'); net displacement <10px produces no step.
+ *  - When an input event fires, a mouseover immediately after is skipped to avoid "type = hover" noise.
+ *  - mouseover must dwell on the same element ≥500ms to produce a hover (dwell threshold): elements swept past on the cursor's
+ *    path are not recorded; internal micro-moves of an already-recorded element are not re-recorded; click/input/leaving cancels a dwell not yet due.
+ *  - 1.5s locator-signature dedupe window: when the e.target reference changed (React re-render / same-text hover across the DOM tree)
+ *    but the selector did not, the second hover is not emitted — avoiding consecutive duplicate steps pointing at the same text position.
+ *  - Hover over inputs is not emitted (hover-when-input suppression); checkbox/radio/select/file and value-less inputs produce no fill.
+ *  - During setPaused(true) all events are ignored (used by the panel's "pause" / element pick).
  */
 export class RecorderManager {
   private active = false;
@@ -97,50 +97,52 @@ export class RecorderManager {
   private listeners: Array<{ el: EventTarget; type: string; fn: EventListener }> = [];
   private lastClick: { signature: string; at: number } | null = null;
   private lastInputAt: number | null = null;
-  /** 停留门槛中的悬停：计时器到时才发射。 */
+  /** Hover in its dwell threshold: emitted only when the timer comes due. */
   private pendingHover: { el: Element; timer: ReturnType<typeof setTimeout> } | null = null;
-  /** 最近一次已发射 hover 的元素：其内部微动不再重复记录。 */
+  /** The last element whose hover was emitted: its internal micro-moves are not re-recorded. */
   private lastHoverEl: Element | null = null;
-  /** 最近一次已发射 hover 的 locator 签名 + 时间戳：
-   *  用于在 React 重渲染导致 e.target 引用变化（但 selector 不变）时挡掉重复 hover。
-   *  纯 reference 的 `lastHoverEl.contains()` 漏这种情况——同级 hover 文本相同的元素会被当作新目标。 */
+  /** The last emitted hover's locator signature + timestamp:
+   *  blocks duplicate hovers when React re-render changed the e.target reference (but not the selector).
+   *  A pure-reference `lastHoverEl.contains()` misses this case — sibling elements with identical hover text would be treated as new targets. */
   private lastHoverSig: { signature: string; at: number } | null = null;
   private static DEDUP_WINDOW_MS = 200;
   private static HOVER_SUPPRESS_AFTER_INPUT_MS = 300;
   private static HOVER_DWELL_MS = 500;
   private static HOVER_SIG_DEDUP_MS = 1500;
-  /** fill 步骤合并窗：连续 input 事件只在用户停顿超过这个时长后才落库。
-   *  250ms 是「快速打字停顿」的合理门槛——常见 IMEs / 自动填充以 200-300ms 节奏触发 input，
-   *  500ms 太长会让"输完一段等了很久"的中间步骤被吞掉。可通过 options.fillFlushMs 覆盖。 */
+  /** fill step merge window: consecutive input events persist only after the user pauses longer than this.
+   *  250ms is a reasonable threshold for "fast-typing pause" — common IMEs / autofill fire input at a 200-300ms rhythm,
+   *  500ms is too long and would swallow the intermediate step of "typed a segment then waited". Overridable via options.fillFlushMs. */
   private static FILL_FLUSH_MS_DEFAULT = 250;
-  /** aiTask（验证码）合并窗：captcha 输入框在 React 重渲染或后端定时刷新时会反复触发 input，
-   *  1.5s 内同 locator 只产一条 aiTask。 */
+  /** aiTask (captcha) merge window: captcha inputs repeatedly fire input on React re-render or backend timed refresh;
+   *  within 1.5s the same locator produces only one aiTask. */
   private static AITASK_DEDUP_MS = 1500;
-  /** 密码自动填充兜底去重窗：Chrome autofill / 1Password 在失焦+focus 反复时可能连续触发 change，
-   *  同一 locator 1s 内只产一条 fill,避免重复步骤。 */
+  /** Password autofill fallback dedupe window: Chrome autofill / 1Password may fire change repeatedly across blur+focus cycles;
+   *  the same locator produces only one fill per 1s to avoid duplicate steps. */
   private static SENSITIVE_CHANGE_DEDUP_MS = 1000;
-  /** click 发射延迟窗：窗口内来 dblclick 则把挂起的单击升级为双击。需略大于两次 click 间隔
-   *  （浏览器 dblclick 判定约 500ms 内），250ms 与 fill 合并窗同量级、交互上无感。 */
+  /** click emit delay window: a dblclick within the window upgrades the pending single click to double. Must be slightly larger
+   *  than the interval between two clicks (browsers judge dblclick within ~500ms); 250ms is the same order as the fill merge
+   *  window and imperceptible in interaction. */
   private static CLICK_FLUSH_MS = 250;
-  /** scroll 事件流静止判定窗：滚动期间持续重置，静止此时长后才发射最终位置。 */
+  /** scroll event-stream stillness window: reset continuously while scrolling; the final position is emitted only after still for this long. */
   private static SCROLL_SETTLE_MS = 350;
-  /** scroll 最小净位移（px）：起点到终点的 |Δtop|+|Δleft| 低于此值视为微动噪声不产步骤。 */
+  /** scroll minimum net displacement (px): |Δtop|+|Δleft| from start to end below this counts as micro-move noise and produces no step. */
   private static SCROLL_MIN_DELTA = 10;
-  /** 最近一次敏感字段 change 兜底发射的 locator 签名 + 时间戳:SENSITIVE_CHANGE_DEDUP_MS 窗内去重。 */
+  /** The last sensitive-field change fallback emission's locator signature + timestamp: deduped within the SENSITIVE_CHANGE_DEDUP_MS window. */
   private lastSensitiveChange: { signature: string; at: number } | null = null;
 
-  /** 待 flush 的 fill 步骤：input 事件累加 value，到点才 emit。 */
+  /** fill step awaiting flush: input events accumulate the value; emitted only when due. */
   private pendingFill: {
     target: HTMLInputElement;
     timer: ReturnType<typeof setTimeout>;
     intentLocator?: ReturnType<typeof buildIntentLocator>;
-    /** 挂起序列起点：与 pendingClick/pendingScroll 排序发射，保持用户动作时序。 */
+    /** Sequence start point: flushed in order with pendingClick/pendingScroll to preserve user action timing. */
     since: number;
   } | null = null;
-  /** 待 flush 的 click 步骤：click 延迟 CLICK_FLUSH_MS 发射，窗口内若来 dblclick 则升级为
-   *  clickCount=2（此前双击被压成 1 个 click——element-ui 表格行双击进详情是高频场景）。
-   *  sig 是该挂起的 locator 签名：不同目标的新 click 到达时旧挂起先落定，同目标的覆盖
-   *  （dblclick 第二击走 dedup return 或覆盖路径，升级语义不变）。 */
+  /** click step awaiting flush: emitted after CLICK_FLUSH_MS delay; a dblclick within the window upgrades it to
+   *  clickCount=2 (previously double-clicks were compressed into 1 click — element-ui table-row double-click into
+   *  details is a high-frequency scenario). sig is the pending locator signature: a new click on a different target
+   *  settles the old pending first; the same target overwrites it (the dblclick's second press goes through the dedupe
+   *  return or the overwrite path — upgrade semantics unchanged). */
   private pendingClick: {
     locs: Locator[];
     sig: string;
@@ -148,8 +150,8 @@ export class RecorderManager {
     intentLocator?: ReturnType<typeof buildIntentLocator>;
     since: number;
   } | null = null;
-  /** 待 flush 的 scroll 步骤：scroll 事件流 debounce，静止 SCROLL_SETTLE_MS 后发射绝对位置。
-   *  startTop/startLeft 是本次滚动序列的起点——净位移小于 SCROLL_MIN_DELTA 的微动不产步骤。 */
+  /** scroll step awaiting flush: scroll event-stream debounce; absolute position emitted after SCROLL_SETTLE_MS of stillness.
+   *  startTop/startLeft are the start of this scroll sequence — micro-moves with net displacement below SCROLL_MIN_DELTA produce no step. */
   private pendingScroll: {
     el: Element;
     windowScroll: boolean;
@@ -160,12 +162,13 @@ export class RecorderManager {
     timer: ReturnType<typeof setTimeout>;
     since: number;
   } | null = null;
-  /** 最近一次 aiTask 步骤的 locator 签名 + 时间戳：1.5s 窗内同签名去重。 */
+  /** The last aiTask step's locator signature + timestamp: same-signature dedupe within the 1.5s window. */
   private lastAiTaskSig: { signature: string; at: number } | null = null;
 
   start(handler: StepHandler, options: RecorderOptions = {}) {
-    // 幂等：同一副本可能在未 stop 的情况下收到多次 'start'（background 每次 complete 重发 start 广播到所有
-    // 存活的副本）。先卸掉旧监听再挂新监听，避免叠加 document 级 capture 监听导致一次点击被捕获多次。
+    // Idempotence: the same replica may receive 'start' multiple times without a stop in between (background re-sends
+    // the start broadcast to all living replicas on every complete). Detach the old listeners before attaching new ones,
+    // so stacked document-level capture listeners don't capture one click multiple times.
     this.detachListeners();
     this.active = true;
     this.paused = false;
@@ -189,8 +192,9 @@ export class RecorderManager {
   }
 
   stop() {
-    // 先落定挂起的 click / scroll（此刻 handler 还在、canRecord 还为真）：click 在引入延迟窗
-    // 之前是同步发射，「点完最后一个动作立即停止录制」从不丢步，这里保持该不变量。
+    // Settle pending click / scroll first (the handler is still attached and canRecord still true at this moment):
+    // click used to be emitted synchronously before the delay window existed, so "stop recording right after the last
+    // action" never lost steps — this preserves that invariant.
     this.flushPendingClick();
     this.flushPendingScroll();
     this.active = false;
@@ -214,7 +218,7 @@ export class RecorderManager {
     return this.paused;
   }
 
-  /** 更新录制选项（panel 里切换 hover / fillFlushMs 时调用）。录到一半改也能生效。 */
+  /** Updates recording options (called when the panel toggles hover / fillFlushMs). Takes effect even mid-recording. */
   setOptions(options: RecorderOptions) {
     this.options = {
       preferredDataAttribute: options.preferredDataAttribute ?? this.options.preferredDataAttribute,
@@ -238,7 +242,7 @@ export class RecorderManager {
     }
   }
 
-  /** flush 待处理的 fill：用户停打 500ms、blur 失焦、change 触发、或者 stop/start 之间切换时调用。 */
+  /** Flush the pending fill: user paused typing for 500ms, blur, change fired, or switching between stop/start. */
   private cancelPendingFill() {
     if (this.pendingFill) {
       clearTimeout(this.pendingFill.timer);
@@ -282,11 +286,11 @@ export class RecorderManager {
     clearTimeout(p.timer);
     if (!this.canRecord()) return;
     if (!p.el.isConnected) return;
-    // 净位移过小 / 滚回原位：滚动微动噪声不产步骤。
+    // Net displacement too small / scrolled back: scroll micro-move noise produces no step.
     const moved = Math.abs(p.top - p.startTop) + Math.abs(p.left - p.startLeft);
     if (moved < RecorderManager.SCROLL_MIN_DELTA) return;
-    // 窗口级滚动锚到 scrollingElement（standards 模式恒为 <html>，css 'html' 单候选即可——
-    // 回放 evaluate el.scrollTop 即窗口滚动）；元素级滚动用常规候选链。
+    // Window-level scrolling anchors to scrollingElement (always <html> in standards mode, a single css 'html' candidate
+    // suffices — replay's evaluate of el.scrollTop is the window scroll); element-level scrolling uses the regular candidate chain.
     const locs: Locator[] = p.windowScroll ? [{ strategy: 'css', value: 'html' }] : generateLocators(p.el);
     const intentLocator = p.windowScroll ? undefined : buildIntentLocator(p.el);
     this.handler?.({
@@ -300,9 +304,9 @@ export class RecorderManager {
     });
   }
 
-  /** 把挂起的 click / scroll 按各自序列起点时间排序发射（fill 不动——它有自己的 debounce 语义，
-   *  由 input/change/blur 入口单独管理）。用于 input 等高频入口，保证 click→input、scroll→input
-   *  的步骤顺序不被 pending 窗口打乱。 */
+  /** Emits pending click / scroll sorted by each one's sequence start time (fill untouched — it has its own debounce
+   *  semantics, managed separately by the input/change/blur entries). Used by high-frequency entries like input, so the
+   *  click→input / scroll→input step order isn't scrambled by pending windows. */
   private flushInteractions() {
     const jobs: Array<{ since: number; run: () => void }> = [];
     if (this.pendingClick) jobs.push({ since: this.pendingClick.since, run: () => this.flushPendingClick() });
@@ -311,8 +315,8 @@ export class RecorderManager {
     for (const j of jobs) j.run();
   }
 
-  /** click + fill + scroll 全部落定（按序列起点排序）。用于 change/keydown/blur 这类
-   *  「输入定型」入口和 dblclick 之外的显式交互入口。 */
+  /** click + fill + scroll all settled (sorted by sequence start). Used by "input finalized" entries like
+   *  change/keydown/blur and by explicit interaction entries other than dblclick. */
   private flushAllTransient() {
     this.flushInteractions();
     this.flushPendingFill();
@@ -323,9 +327,10 @@ export class RecorderManager {
     const { target, intentLocator } = this.pendingFill;
     this.pendingFill = null;
     if (!this.canRecord()) return;
-    // React controlled input 在校验失败/错误提示出现时可能整节点 remount：旧节点被 detach，
-    // 后续输入都进了新节点。旧节点持有的只是当时的值前缀（如 "a"），发射出去就是碎片 fill。
-    // 跳过 detached 目标——新节点的 flush 会带上完整值。
+    // React controlled inputs may remount the whole node when validation fails / an error message appears: the old node
+    // is detached and all subsequent typing goes into the new node. The old node only holds the value prefix from its
+    // time (e.g. "a"); emitting it would be a fragment fill.
+    // Skip detached targets — the new node's flush will carry the complete value.
     if (!target.isConnected) return;
     const value = target.value;
     const isSensitive = target.type === 'password'
@@ -350,9 +355,9 @@ export class RecorderManager {
   }
 
   private attachListeners() {
-    // 页面内控制面板（content/panel.js 注入的 #itest-recorder-panel-host）位于宿主页面 DOM 上，
-    // 拖动标题栏、悬停、点按钮都会触发 document 上的 capture 事件。统一在 handler 入口处跳过：
-    // 面板的 Shadow DOM 默认 composed=false，e.target 落在 host 上，contains 命中即可。
+    // The in-page control panel (#itest-recorder-panel-host, injected by content/panel.js) lives in the host page's DOM;
+    // dragging the title bar, hovering, clicking its buttons all fire capture events on document. Skipped uniformly at the
+    // handler entry: the panel's Shadow DOM defaults to composed=false, so e.target lands on the host and a contains hit suffices.
     const isOnRecorderPanel = (e: Event) => {
       const host = document.getElementById('itest-recorder-panel-host');
       if (!host) return false;
@@ -361,15 +366,16 @@ export class RecorderManager {
       return host.contains(e.target as Node);
     };
 
-    /** 自身含 role / data-testid / name / 已知交互 class 的元素不属于 layout 容器。其它情况如果父链上
-     *  命中至少 1 个稳定语义类（glass-card / auth-form-shell 等），就当作「页面级容器」不记 hover。 */
+    /** Elements that themselves carry role / data-testid / name / known interactive classes are not layout containers.
+     *  Otherwise, if the parent chain hits at least 1 stable semantic class (glass-card / auth-form-shell etc.),
+     *  treat it as a "page-level container" and don't record the hover. */
     function isLayoutContainer(el: Element): boolean {
       if (el.getAttribute('role')) return false;
       if (el.getAttribute('data-testid') || el.getAttribute('data-test-id')) return false;
       if (el.getAttribute('name')) return false;
-      // button / a / summary / label 这些「自叶子 UI」不会被用户刻意 hover 到（点击才是它们的语义），
-      // 但它们的 hover 一般也不该记——按按钮 hover 多数是光标移动路径上的过渡。让它们继续走到签名
-      // 去重（hover 之后通常会 click / input）即可。
+      // "Self-leaf UI" like button / a / summary / label is rarely deliberately hovered by users (clicking is their semantics),
+      // but their hovers generally shouldn't be recorded either — hovering a button is mostly transit along the cursor's path.
+      // Just let them proceed to signature dedupe (a hover is usually followed by click / input).
       let cur: Element | null = el.parentElement;
       let depth = 0;
       while (cur && depth < 4) {
@@ -387,8 +393,8 @@ export class RecorderManager {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
       this.cancelPendingHover();
-      // 切到按钮 / 别处点击：flush 当前 input 的累计 fill，否则会丢最后一次停顿前的字符；
-      // 挂起中的 click/scroll（快速连续操作）也按序落定，保持步骤时序。
+      // Clicking a button / elsewhere: flush the current input's accumulated fill, otherwise characters typed before the
+      // last pause are lost; pending click/scroll (rapid consecutive actions) also settle in order, preserving step timing.
       this.flushAllTransient();
       const target = e.target as Element;
       if (!target) return;
@@ -397,17 +403,20 @@ export class RecorderManager {
       const now = Date.now();
       if (this.lastClick && this.lastClick.signature === sig && now - this.lastClick.at < RecorderManager.DEDUP_WINDOW_MS) {
         this.lastClick.at = now;
-        // 双击/三击的第二击：不重置 pendingClick（等 dblclick 决定升级；
-        // dblclick 被页面拦截不来时，timer 到点照常发射单击——比旧版「压成 1 个 click」多救回一次）
+        // The second press of a double/triple click: don't reset pendingClick (wait for dblclick to decide the upgrade;
+        // if dblclick is swallowed by the page and never arrives, the timer emits a single click when due — one more
+        // rescue than the old "compress into 1 click" behavior)
         return;
       }
       this.lastClick = { signature: sig, at: now };
-      // 不同目标的挂起 click 先落定（250ms 内连点两个不同目标各留一步）；同目标的旧挂起
-      // 不 flush——dblclick 升级靠它（>200ms 去重窗的第二击走到这里覆盖旧 pending，
-      // dblclick 到达时升级的仍是最新一击，双击总数恒为一条）。
+      // A pending click on a different target settles first (two different targets clicked within 250ms each leave a step);
+      // the old same-target pending is NOT flushed — the dblclick upgrade depends on it (the second press beyond the 200ms
+      // dedupe window reaches here and overwrites the old pending, so when dblclick arrives it upgrades the latest press
+      // and the double-click always totals one step).
       if (this.pendingClick && this.pendingClick.sig !== sig) this.flushPendingClick();
-      // click 延迟 CLICK_FLUSH_MS 发射：窗口内 dblclick 到达即升级为 clickCount=2/3，
-      // 否则 timer 到点按单击发射。此前双击被压成 1 个 click，表格行双击进详情这类场景录不出来。
+      // click is emitted after CLICK_FLUSH_MS delay: a dblclick within the window upgrades it to clickCount=2/3,
+      // otherwise the timer emits a single click when due. Previously double-clicks were compressed into 1 click,
+      // so scenarios like table-row double-click into details couldn't be recorded.
       const intentLocator = buildIntentLocator(target);
       const timer = setTimeout(() => {
         if (this.pendingClick && this.pendingClick.timer === timer) this.flushPendingClick();
@@ -420,17 +429,18 @@ export class RecorderManager {
       this.cancelPendingHover();
       const target = e.target as Element;
       if (!target) return;
-      // 常态：双击前必有同目标 click 挂起（第二次 click 走 dedup return）——取走它升级为双击。
+      // Normal case: a same-target click is always pending before a double-click (the second click goes through the
+      // dedupe return) — take it and upgrade to double-click.
       const taken = this.pendingClick;
       this.pendingClick = null;
       if (taken) clearTimeout(taken.timer);
-      // 其余挂起（fill/scroll）按序先落定：fill → 双击。
+      // Remaining pendings (fill/scroll) settle in order first: fill → double-click.
       this.flushPendingFill();
       this.flushPendingScroll();
       this.lastClick = null;
       const detail = (e as MouseEvent).detail ?? 2;
       const clickCount: 2 | 3 = detail >= 3 ? 3 : 2;
-      // pendingClick 被提前 flush 走的兜底：用 dblclick 自己的 target 重产候选。
+      // Fallback for pendingClick having been flushed early: regenerate candidates from the dblclick's own target.
       const locs = taken ? taken.locs : generateLocators(target);
       const intentLocator = taken ? taken.intentLocator : buildIntentLocator(target);
       this.handler?.({
@@ -442,26 +452,27 @@ export class RecorderManager {
         ...(intentLocator ? { intentLocator } : {}),
       });
     };
-    // scroll 事件不冒泡，capture 监听在 document 上可拦截任意元素/文档的滚动。
-    // 事件流 debounce：滚动期间持续重置 timer 并更新最终位置，静止 SCROLL_SETTLE_MS 后发射
-    // 绝对位置（回放与起点无关）。窗口级滚动（target=document/scrollingElement）锚到 'html'。
+    // scroll events don't bubble; a capture listener on document intercepts scrolling of any element/document.
+    // Event-stream debounce: while scrolling, keep resetting the timer and updating the final position; after
+    // SCROLL_SETTLE_MS of stillness, emit the absolute position (replay doesn't depend on the start).
+    // Window-level scrolling (target=document/scrollingElement) anchors to 'html'.
     const onScroll = (e: Event) => {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
       const maybe = e.target as Element | null;
       if (!maybe) return;
-      // Document 上没有 scrollTop（元素才有）——以此区分文档级滚动与元素级滚动。
+      // Document has no scrollTop (elements do) — used to distinguish document-level from element-level scrolling.
       const se = document.scrollingElement;
       const isWindowScroll = maybe === se || (maybe as { scrollTop?: unknown }).scrollTop === undefined;
       const el = isWindowScroll ? (se ?? document.documentElement) : maybe;
-      // 不用 instanceof Element 判别（跨 realm / jsdom 测试下不可靠，同 onChange 的约定）；
-      // scroll 事件的 target 只会是元素或 document，窗口分支已锚定 documentElement。
+      // Not discriminated via instanceof Element (unreliable across realms / in jsdom tests — same convention as onChange);
+      // a scroll event's target is only ever an element or document, and the window branch already anchored to documentElement.
       if (!el.isConnected) return;
       const top = Math.max(0, Math.round(el.scrollTop));
       const left = Math.max(0, Math.round(el.scrollLeft));
       const now = Date.now();
       if (this.pendingScroll && this.pendingScroll.el !== el) {
-        // 换容器：旧的先落定（用户滚了两个区域）。
+        // Container switched: settle the old one first (the user scrolled two regions).
         this.flushPendingScroll();
       }
       const timer = setTimeout(() => {
@@ -480,13 +491,13 @@ export class RecorderManager {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
       this.cancelPendingHover();
-      // 挂起中的 click/scroll 先按序落定（click→input 顺序不被 pending 窗口打乱）；
-      // fill 不在此 flush——它有自己的 debounce 合并窗。
+      // Pending click/scroll settle in order first (click→input order not scrambled by pending windows);
+      // fill is not flushed here — it has its own debounce merge window.
       this.flushInteractions();
       const target = e.target as HTMLInputElement;
       if (!target) return;
-      // select/radio 由 change 产出 select/check 步骤，checkbox 由 change 产出 check，file 由 change 产出 upload；
-      // contenteditable 等非表单目标没有 value 属性，也不产 fill。
+      // select/radio produce select/check steps via change, checkbox produces check via change, file produces upload via change;
+      // non-form targets like contenteditable have no value property and produce no fill.
       const tag = (target.tagName ?? '').toLowerCase();
       if (tag === 'select') return;
       if (target.type === 'checkbox' || target.type === 'radio' || target.type === 'file') return;
@@ -497,9 +508,9 @@ export class RecorderManager {
         || /password/i.test(target.id ?? '');
       this.lastInputAt = Date.now();
       const intentLocator = buildIntentLocator(target);
-      // 验证码输入框 → aiTask 步骤（回放时 AI 实时识别图片并填入）。
-      // 1.5s 窗内同 locator 去重：captcha 在 React 重渲染或后端定时刷新时会反复触发 input，
-      // 不去重就会连续产 6+ 条相同 aiTask。
+      // Captcha input → aiTask step (at replay, AI recognizes the image in real time and fills it in).
+      // Same-locator dedupe within a 1.5s window: captcha inputs repeatedly fire input on React re-render or backend
+      // timed refresh; without dedupe you'd get 6+ identical aiTasks in a row.
       if (!isSensitive && isCaptchaInput(target)) {
         const sig = this.aiTaskSignature(target);
         if (this.lastAiTaskSig && this.lastAiTaskSig.signature === sig && Date.now() - this.lastAiTaskSig.at < RecorderManager.AITASK_DEDUP_MS) {
@@ -517,16 +528,17 @@ export class RecorderManager {
         });
         return;
       }
-      // 普通 input：debounce 合并 + 同 input 累加。切换到另一个 input 时先 flush 旧的。
-      // 注意 pendingFill 拿的是 target 引用，flush 窗内它 value 又被改写，flush 时读最新 value 即可。
+      // Regular input: debounce merge + accumulation on the same input. Flush the old one when switching to another input.
+      // Note pendingFill holds a target reference; if its value is rewritten again within the flush window, reading the
+      // latest value at flush time is correct.
       if (this.pendingFill && this.pendingFill.target !== target) {
         this.flushPendingFill();
       }
       this.cancelPendingFill();
       const flushMs = this.options.fillFlushMs;
       const timer = setTimeout(() => {
-        // 只 flush 当前 timer 仍挂着的 pendingFill：避免输入字符之间 cancelPendingFill 已把 timer 清掉后
-        // 又被这个回调捡起来发射残留步骤。
+        // Only flush the pendingFill whose current timer is still attached: prevents this callback from picking up and
+        // emitting a leftover step after cancelPendingFill already cleared the timer between keystrokes.
         if (this.pendingFill && this.pendingFill.timer === timer) {
           this.flushPendingFill();
         }
@@ -534,15 +546,16 @@ export class RecorderManager {
       this.pendingFill = { target, timer, intentLocator: intentLocator ?? undefined, since: Date.now() };
     };
     const onBlur = (e: Event) => {
-      // 用户失焦（点别处 / Tab 切走）时强制 flush 当前 fill + 挂起的 click/scroll，
-      // 避免 500ms 内就跳转丢失步骤。
+      // Force-flush the current fill + pending click/scroll when the user blurs (clicking elsewhere / Tab away),
+      // so a navigation within 500ms doesn't lose steps.
       this.flushAllTransient();
     };
-    // 输入框内按 Enter 提交（表单无提交按钮 / 用户习惯直接回车）：此前全程无 click 事件，
-    // 登录动作整段丢失。keydown 时先 flush 累计 fill（回放顺序 = fill 完整值 → press Enter），
-    // 再发射 press 步骤。只录 text 类输入框上的 Enter——button 聚焦时按 Enter 浏览器会派发
-    // click，由 onClick 记录，这里再记就重复了。IME 组合期（isComposing / keyCode 229）的
-    // Enter 是「确认候选词」不是提交，跳过。
+    // Enter inside an input submits (form without a submit button / users who habitually press Enter): previously there
+    // was no click event at all, so the whole login action was lost. On keydown, flush the accumulated fill first
+    // (replay order = fill the complete value → press Enter), then emit the press step. Only record Enter on text-class
+    // inputs — pressing Enter while a button is focused makes the browser dispatch a click, which onClick records;
+    // recording it here too would duplicate. Enter during IME composition (isComposing / keyCode 229) confirms a
+    // candidate word rather than submitting — skip it.
     const onKeyDown = (e: Event) => {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
@@ -569,11 +582,11 @@ export class RecorderManager {
         ...(intentLocator ? { intentLocator } : {}),
       });
     };
-    // Chrome 自动填充 / 1Password / LastPass 等密码管理器扩展会直接调 native setter 写 value,
-    // **不触发** input 事件,只触发 change 事件(且通常在失焦之后一次性发)。
-    // onChange 已 flush pending fill,这里再针对密码输入框补一条「change 但无 pending」路径,
-    // 即便用户全程没键盘输入(纯自动填充)也能把 password 值录上。
-    // 注意:必须 dedup——同 locator 的 change 可能反复触发(autofill 重填、blur 后再 focus)。
+    // Chrome autofill / 1Password / LastPass and other password-manager extensions write value via the native setter directly,
+    // **without firing** input events, only change events (and usually in one shot after blur).
+    // onChange already flushes pending fill; this adds a "change without pending" path for password inputs,
+    // so even with zero keyboard input from the user (pure autofill) the password value still gets recorded.
+    // Note: dedupe is mandatory — the same locator's change may fire repeatedly (autofill refill, blur then focus again).
     const onChangePasswordAutofill = (e: Event) => {
       const target = e.target as HTMLInputElement | null;
       if (!target) return;
@@ -584,7 +597,7 @@ export class RecorderManager {
       if (!isSensitive) return;
       if (!target.isConnected) return;
       const value = target.value;
-      if (!value) return; // 空值不上报(同手动键入前 focus 时的空字符串一致)
+      if (!value) return; // empty values not reported (consistent with the empty string on focus before manual typing)
       const intentLocator = buildIntentLocator(target);
       const sig = generateLocators(target)
         .filter((l) => l.strategy === 'role' || l.strategy === 'testId' || l.strategy === 'text')
@@ -596,8 +609,8 @@ export class RecorderManager {
         return;
       }
       this.lastSensitiveChange = { signature: sig, at: now };
-      // 如果已经有 pending fill 在同一 target 上,250ms 后 flush 会覆盖;这里直接 emit 一次保证
-      // 自动填充场景下也立即落库(value 已定型,不需要等 debounce)。
+      // If a pending fill already exists on the same target, the 250ms flush would overwrite it; emit once directly here
+      // so autofill also persists immediately (the value is finalized — no need to wait for debounce).
       this.cancelPendingFill();
       this.handler?.({
         type: 'fill',
@@ -612,14 +625,14 @@ export class RecorderManager {
     const onChange = (e: Event) => {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
-      // change 触发意味着用户对当前 input 的输入已经定型（失焦 / Enter / 选择项），flush 全部挂起
-      // （fill + click/scroll 按序）。
+      // change firing means the user's input on the current input is finalized (blur / Enter / option picked): flush all
+      // pendings (fill + click/scroll in order).
       this.flushAllTransient();
       onChangePasswordAutofill(e);
       const target = e.target as HTMLInputElement | HTMLSelectElement;
       if (!target) return;
       const now = Date.now();
-      // 用 tagName/type 而非 instanceof 判别：后者在跨 realm（jsdom 测试）下不可靠。
+      // Discriminated by tagName/type rather than instanceof: the latter is unreliable across realms (jsdom tests).
       const tag = (target.tagName ?? '').toLowerCase();
       if (tag === 'input') {
         const t = (target as HTMLInputElement).type;
@@ -666,8 +679,9 @@ export class RecorderManager {
     const onMouseOver = (e: Event) => {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
-      // 默认不录 hover：hover 噪声源太多（layout 容器、body/html、重复经过同一元素……），
-      // 录到的步骤大半是用户没意图的「我看过这里」。只在调试 / inspector 模式下显式开启。
+      // Hover not recorded by default: too many hover noise sources (layout containers, body/html, repeated passes over
+      // the same element…). Most recorded steps would be unintentional "I looked here". Enabled explicitly only in
+      // debug / inspector mode.
       if (!this.options.recordHover) return;
       const target = e.target as Element;
       if (!target) return;
@@ -681,35 +695,35 @@ export class RecorderManager {
         this.cancelPendingHover();
         return;
       }
-      // body / html 上的 hover 不该记：光标离开所有有意义元素落到空白处时，e.target 会变成 body
-      // 或 html，停留计时器照样到点发射 noise 步骤。直接丢弃。tagName 统一 toLowerCase 比较
-      // 以兼容 jsdom 返回 'BODY'/'HTML' 大写的情况。
+      // Hover on body / html shouldn't be recorded: when the cursor leaves all meaningful elements onto blank space,
+      // e.target becomes body or html and the dwell timer would still fire a noise step when due. Drop it directly.
+      // tagName compared via toLowerCase for jsdom returning uppercase 'BODY'/'HTML'.
       const rootTag = tag.toLowerCase();
       if (rootTag === 'body' || rootTag === 'html') {
         this.cancelPendingHover();
         return;
       }
-      // 页面级 layout 容器 hover 同样不记：`<form>` / `<div class="auth-form-shell">` /
-      // `<div class="glass-card project-card">` 这种元素，e.target 通常是它们的空白处或子元素，
-      // 没有「hover 到这个容器」的用户意图。判定：自身没有 role / data-testid / name，父链上
-      // 至少有 1 个稳定语义类（glass-card / auth-form-shell 等），就视为布局容器丢弃。
+      // Page-level layout container hovers are also not recorded: for elements like `<form>` / `<div class="auth-form-shell">` /
+      // `<div class="glass-card project-card">`, e.target is usually their blank space or a child — there is no user
+      // intent of "hovering this container". Rule: no role / data-testid / name of its own plus at least 1 stable semantic
+      // class on the parent chain (glass-card / auth-form-shell etc.) → treat as a layout container and drop.
       if (isLayoutContainer(target)) {
         this.cancelPendingHover();
         return;
       }
-      // 已记录过 hover 的元素内部微动不重复；停留中的元素内部划过不打断计时。
+      // Internal micro-moves of an already-hovered element are not re-recorded; sweeping within a dwelling element doesn't interrupt its timer.
       if (this.lastHoverEl?.contains(target)) return;
       if (this.pendingHover?.el.contains(target)) return;
-      // locator 签名级去重：React 重渲染 / 同级 hover 文本相同的元素（e.target 引用变了
-      // 但 selector 不变）会被 1.5s 窗口挡掉，避免重复步骤。
-      // 仅用 role/testId/text（语义候选）做签名；CSS 路径里 Tailwind utility 容易因重渲染微变，xpath 索引更
-      // 会因 DOM 顺序不同而变化，两者都不稳定，不能拿来比较。
+      // Locator-signature-level dedupe: React re-renders / sibling elements with identical hover text (e.target reference
+      // changed but selector unchanged) are blocked by the 1.5s window, avoiding duplicate steps.
+      // The signature uses only role/testId/text (semantic candidates); Tailwind utilities in CSS paths easily shift on
+      // re-render, and xpath indexes shift with DOM order — both unstable, unusable for comparison.
       const sig = generateLocators(target)
         .filter((l) => l.strategy === 'role' || l.strategy === 'testId' || l.strategy === 'text')
         .map((l) => `${l.strategy}:${l.value}`)
         .join('|');
       if (this.lastHoverSig && this.lastHoverSig.signature === sig && Date.now() - this.lastHoverSig.at < RecorderManager.HOVER_SIG_DEDUP_MS) return;
-      // 光标进入新元素：重置停留计时（移动路径上的元素到不了时门槛）。
+      // Cursor entering a new element: reset the dwell timer (elements swept past on the path never reach the threshold).
       this.cancelPendingHover();
       const el = target;
       const timer = setTimeout(() => {
@@ -731,7 +745,7 @@ export class RecorderManager {
     const onMouseLeave = (e: Event) => {
       if (!this.canRecord()) return;
       if (isOnRecorderPanel(e)) return;
-      // 离开元素（含其祖先）即离开停留目标：取消未到时的悬停（光标移出窗口/空白区时 mouseover 不会再来）。
+      // Leaving the element (or its ancestors) means leaving the dwell target: cancel the dwell not yet due (mouseover won't come again when the cursor exits the window / blank area).
       const t = e.target as Element;
       if (this.pendingHover && t.contains(this.pendingHover.el)) this.cancelPendingHover();
     };
@@ -740,7 +754,7 @@ export class RecorderManager {
     document.addEventListener('scroll', onScroll, true);
     document.addEventListener('input', onInput, true);
     document.addEventListener('change', onChange, true);
-    // blur 强制 flush fill——避免切走焦点时 500ms 内丢失最后一次输入。
+    // blur force-flushes fill — avoids losing the last input within 500ms when focus switches away.
     document.addEventListener('focusout', onBlur, true);
     document.addEventListener('keydown', onKeyDown, true);
     document.addEventListener('mouseover', onMouseOver, true);

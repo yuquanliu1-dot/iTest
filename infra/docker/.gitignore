@@ -1,4 +1,4 @@
-# 部署密钥/目标配置，勿提交
+# Deployment secrets/target config, do not commit
 .env.production
 deploy.env
 deploy.d/*

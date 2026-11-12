@@ -1,9 +1,9 @@
-// 中台地址运行时配置：popup 存 chrome.storage，background 据此动态注册 bridge.js 注入。
-// 纯函数部分独立成模块，便于 vitest 直接测试。
+// Console (web app) address runtime config: the popup stores it in chrome.storage, and background registers the bridge.js injection dynamically based on it.
+// The pure-function part is split into its own module for direct vitest testing.
 
 export const DEFAULT_CONSOLE_ORIGIN = 'http://localhost:5173';
 
-/** 校验并归一化用户输入为中台 origin（如 http://192.168.1.10:5173），非法返回 null */
+/** Validates and normalizes user input into a console origin (e.g. http://192.168.1.10:5173); returns null when invalid */
 export function normalizeConsoleOrigin(input: string): string | null {
   try {
     const u = new URL(input.trim());

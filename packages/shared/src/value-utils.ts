@@ -46,14 +46,14 @@ function evaluateFragment(f: ValueFragment): string {
     case 'fixed': return f.value;
     case 'date': return formatDate(new Date(), f.format);
     case 'randomNumber': {
-      // length 控制位数；缺省时不做左补零（保持行为可预测）。
+      // length controls the digit count; when absent, no left zero-padding is done (keeps behavior predictable).
       if (f.length == null) {
         const min = f.min ?? 0;
         const max = f.max ?? 999999;
         if (max < min) throw new Error(`randomNumber range invalid: max (${max}) < min (${min})`);
         return String(randomInt(min, max));
       }
-      // 长度指定时，把范围约束到与位数匹配，避免超出。
+      // When length is given, constrain the range to match the digit count to avoid overflow.
       const len = f.length;
       const max = f.max ?? (len <= 1 ? 9 : Math.pow(10, len) - 1);
       const min = f.min ?? (len <= 1 ? 0 : Math.pow(10, len - 1));
@@ -78,7 +78,7 @@ function evaluateComposite(c: CompositeValue): string {
   return parts.join('');
 }
 
-/** 执行期物化：string 直接走 substituteVars；composite 按片段拼接后 substituteVars；其它 generator 求值后 substituteVars。模板未定义变量时抛错并列出缺失名。 */
+/** Runtime materialization: string goes straight through substituteVars; composite is assembled from fragments then substituteVars; other generators are evaluated then substituteVars. Throws and lists the missing names when the template references undefined variables. */
 export function materializeValue(value: string | ValueGenerator | CompositeValue, vars: Record<string, string>): string {
   let text: string;
   if (typeof value === 'string') text = value;
@@ -91,7 +91,7 @@ export function materializeValue(value: string | ValueGenerator | CompositeValue
   return r.value;
 }
 
-/** JSON 深比较（key 顺序无关）。 */
+/** Deep JSON comparison (key order independent). */
 export function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (typeof a !== typeof b || a === null || b === null) return false;

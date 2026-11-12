@@ -7,15 +7,15 @@ let document: Document;
 beforeEach(() => {
   const dom = new JSDOM('<!doctype html><html><body></body></html>');
   document = dom.window.document;
-  // selector-core.ts 通过 bare `document` 访问节点——ESM 里这是 globalThis 上的 document，
-  // 不会自动跟我们的模块局部 binding 同步。需要把 globalThis.document 也指向同一个实例，
-  // 否则 finder 会用 vitest jsdom env 默认的全局 document（空 body）做唯一性校验，
-  // 找不到唯一 selector 后回退到手工 path，看不出 preferredDataAttribute 的差别。
+  // selector-core.ts accesses nodes through the bare `document` — in ESM that is the document on globalThis,
+  // which does not auto-sync with our module-local binding. globalThis.document must point at the same instance,
+  // otherwise finder runs its uniqueness checks against vitest jsdom env's default global document (empty body),
+  // falls back to the hand-built path when no unique selector is found, and the preferredDataAttribute difference becomes invisible.
   (globalThis as { document?: Document }).document = dom.window.document;
-  // @medv/finder 内部用全局 Node / CSS.escape，jsdom 不实现 CSS.escape。
-  // 测试期 polyfill 到原生 CSS.escape（Node 21+ / Chrome 93+ 全支持）。
-  // 必须直接用原生 fallback，不能再 `globalThis.CSS?.escape ? ... : ...`——否则 finder 调用
-  // polyfill 时会反过来调到自己，无限递归直到 stack overflow。
+  // @medv/finder uses the global Node / CSS.escape internally; jsdom doesn't implement CSS.escape.
+  // Polyfill to the native CSS.escape for the test run (Node 21+ / Chrome 93+ all support it).
+  // Must use the native fallback directly — no more `globalThis.CSS?.escape ? ... : ...` — otherwise finder calling
+  // the polyfill would call back into itself, recursing infinitely until stack overflow.
   (globalThis as { Node?: unknown }).Node = (dom.window as { Node: unknown }).Node;
   const nativeEscape: ((s: string) => string) | undefined = (globalThis as {
     CSS?: { escape?: (s: string) => string };
@@ -115,8 +115,8 @@ describe('selector-core — Tailwind-aware CSS', () => {
     </body></html>`);
     const path = dom.window.document.querySelector('path')!;
     const css = generateLocators(path).find((l) => l.strategy === 'css')!.value;
-    // finder 走 penalty 排序：稳定 class 链 < Tailwind utility 链；父链 [data-testid=...] / .group-nav-tile / .glass-panel
-    // 命中后整条路径都用语义 class，不再包含 Tailwind utility。
+    // finder runs penalty ranking: stable class chain < Tailwind utility chain; once [data-testid=...] / .group-nav-tile / .glass-panel
+    // in the parent chain are hit, the whole path uses semantic classes and contains no Tailwind utilities.
     expect(css).toMatch(/(group-nav-tile|glass-panel)/);
     expect(css).not.toMatch(/\b(flex|w-full|h-dvh|items-center|justify-center|overflow-hidden)\b/);
   });
@@ -149,7 +149,7 @@ describe('selector-core — placeholder/name candidates replace xpath', () => {
   });
 
   it('button with no form attrs still produces css candidate without placeholder/name', () => {
-    // 验证移除 xpath 后 css 候选(medv/finder)仍能 cover 普通 button。
+    // Verifies css candidates (medv/finder) still cover a plain button after xpath removal.
     const dom = new JSDOM(`<button class="login-btn">登录</button>`);
     const btn = dom.window.document.querySelector('button')!;
     const locs = generateLocators(btn);
@@ -184,7 +184,7 @@ describe('selector-core — hardened text candidate', () => {
     const span = dom.window.document.querySelector('span')!;
     const text = generateLocators(span).find((l) => l.strategy === 'text')?.value;
     expect(text!.length).toBeLessThanOrEqual(50);
-    expect(text!.endsWith(' ')).toBe(false); // 不在词中间切
+    expect(text!.endsWith(' ')).toBe(false); // not cut mid-word
   });
 
   it('emits short text when content is stable', () => {
@@ -194,19 +194,19 @@ describe('selector-core — hardened text candidate', () => {
   });
 
   it('drops text candidate when element has element children (container, not leaf)', () => {
-    // 对话框 / 卡片等容器的 innerText 是整棵子树拼接，命中后回放锁定的「文本」会变成父容器，
-    // 而不是用户真正点的子元素。必须丢弃。
+    // A dialog/card container's innerText is the whole subtree concatenated; once matched, the "text" replay locks onto
+    // becomes the parent container instead of the child element the user actually clicked. Must be dropped.
     const dom = new JSDOM(`<div role="dialog"><h1>编辑项目</h1><button>取消</button></div>`);
     const dialog = dom.window.document.querySelector('[role="dialog"]')!;
     expect(generateLocators(dialog).find((l) => l.strategy === 'text')).toBeUndefined();
-    // 但子节点 button 仍然产自己的 text 候选。
+    // But the child button still produces its own text candidate.
     const btn = dom.window.document.querySelector('button')!;
     expect(generateLocators(btn).find((l) => l.strategy === 'text')?.value).toBe('取消');
   });
 
   it('keeps text candidate for button whose label lives in a child span/icon', () => {
-    // button 里的 <span>登录</span>：button 自身含 element 子节点但仍是「叶子 UI」，
-    // 应取子树文本作为 name，否则 role 候选会丢 name 变成裸 'button'。
+    // <span>登录</span> inside a button: the button itself has element children but is still "self-leaf UI",
+    // so the subtree text should be the name — otherwise the role candidate loses its name and becomes a bare 'button'.
     const dom = new JSDOM(`<button class="btn-primary"><span class="icon"></span><span>登录</span></button>`);
     const btn = dom.window.document.querySelector('button')!;
     expect(generateLocators(btn).find((l) => l.strategy === 'role')?.value).toBe('button[name="登录"]');
@@ -221,15 +221,16 @@ describe('selector-core — hardened text candidate', () => {
 
 describe('selector-core — preferredDataAttribute', () => {
   it('uses custom preferredDataAttribute for CSS path when present', () => {
-    // 多个 data-* 属性都在 attr 候选里：finder 走 penalty 排序，
-    // preferredDataAttribute 把它的优先级提到 #id 同级，确保整条父链都走这个属性。
-    // 注意：DOM 必须有多个同名 span，否则 finder 会直接优化成 `span` 单元素路径（penalty 2），
-    // 此时不需要任何属性锚点。同时元素必须落在 globalThis.document.body 里，
-    // 否则 finder 找不到唯一 selector 后回退到手工 path，看不出 attr 选项的差别。
+    // Multiple data-* attributes are in the attr candidates: finder sorts by penalty,
+    // and preferredDataAttribute raises its priority to the #id tier, ensuring the whole parent chain uses that attribute.
+    // Note: the DOM must contain multiple same-named spans, otherwise finder optimizes straight to the `span`
+    // single-element path (penalty 2), where no attribute anchor is needed. Also, the element must land in
+    // globalThis.document.body, otherwise finder fails to find a unique selector and falls back to the manual
+    // path, hiding the difference the attr option makes.
     //
-    // 默认 attr callback 里 data-qa/data-testid 都已经在白名单，所以默认调用也会产出
-    // [data-*] 路径——只有当父链同时存在多个 data-* 时，preferred 的差异化才显现：
-    // finder 会优先挑 penalty 更低的那个属性，整条父链都跟着切。
+    // In the default attr callback both data-qa/data-testid are already whitelisted, so even the default call
+    // produces [data-*] paths — the preferred differentiation only shows when multiple data-* attributes exist
+    // on the parent chain: finder picks the attribute with the lower penalty and the whole chain switches with it.
     const dom = new JSDOM(`<!doctype html><html><body>
       <div id="root">
         <div data-testid="projects-list" data-qa="projects"><span>项目</span></div>
@@ -240,8 +241,9 @@ describe('selector-core — preferredDataAttribute', () => {
       document.body.appendChild(dom.window.document.body.firstChild);
     }
     const span = document.querySelectorAll('span')[0]!;
-    // 准备一个仅 data-qa（不挂 data-testid）的对照组，避免 data-testid 仍能命中后被
-    // penalty 排序当成同分最优。preferred 在 attr callback 里短路命中，整条路径就能切到 [data-qa=...]。
+    // Prepare a control group with data-qa only (no data-testid), so data-testid matching first doesn't
+    // get treated as an equal-best optimum by penalty sorting. preferred short-circuits in the attr callback,
+    // letting the whole path switch to [data-qa=...].
     const dom2 = new JSDOM(`<!doctype html><html><body>
       <div id="root">
         <div data-qa="projects"><span>项目</span></div>
@@ -251,13 +253,13 @@ describe('selector-core — preferredDataAttribute', () => {
     while (dom2.window.document.body.firstChild) {
       document.body.appendChild(dom2.window.document.body.firstChild);
     }
-    const span2 = document.querySelectorAll('span')[2]!; // 第二个 span 在 dom2 里
-    // 默认（preferred=data-testid）→ 父链走 [data-testid="projects-list"]，命中后不需要 #root。
+    const span2 = document.querySelectorAll('span')[2]!; // the second span lives in dom2
+    // Default (preferred=data-testid) → parent chain goes through [data-testid="projects-list"]; once matched, #root is unnecessary.
     const cssDefault = generateLocators(span).find((l) => l.strategy === 'css')!.value;
     expect(cssDefault).toContain('data-testid');
     expect(cssDefault).toContain('projects-list');
     expect(cssDefault).not.toContain('data-qa');
-    // preferred=data-qa → 父链改走 [data-qa="projects"]（无 data-testid 干扰时）。
+    // preferred=data-qa → parent chain switches to [data-qa="projects"] (when no data-testid interferes).
     const cssCustom = generateLocators(span2, { preferredDataAttribute: 'data-qa' }).find((l) => l.strategy === 'css')!.value;
     expect(cssCustom).toContain('data-qa');
     expect(cssCustom).toContain('projects');
@@ -265,8 +267,8 @@ describe('selector-core — preferredDataAttribute', () => {
 });
 
 describe('selector-core — 悬停瞬态与属性名候选（规则查看 用例回归）', () => {
-  /** 把 JSDOM 文档挂到 globalThis.document.body——finder 以 document.body 为 root 做唯一性校验，
-   *  detached 元素会让 finder 抛错走 fallback 路径。 */
+  /** Mounts the JSDOM document onto globalThis.document.body — finder uses document.body as the root for
+   *  uniqueness checks; detached elements make finder throw and fall back to the manual path. */
   function mountToBody(dom: JSDOM) {
     while (dom.window.document.body.firstChild) {
       document.body.appendChild(dom.window.document.body.firstChild);
@@ -288,8 +290,8 @@ describe('selector-core — 悬停瞬态与属性名候选（规则查看 用例
   });
 
   it('可排序表头 cell：运行时位置类（el-table_1_column_4 / has-gutter）不进 css 候选', () => {
-    // 回归动机：资产管理-资产编辑 用例第 4 步断言唯一候选 .has-gutter .el-table_1_column_4 > .cell
-    // 回放 count=0（实例号/列序跨会话漂移 + gutter 布局态），而页面文本「主识别IP」明明在。
+    // Regression motive: step 4 of the 资产管理-资产编辑 case asserted the sole candidate .has-gutter .el-table_1_column_4 > .cell,
+    // which replayed count=0 (instance/column order drifts across sessions + gutter layout state), while the page text "主识别IP" was clearly there.
     const dom = new JSDOM(`<!doctype html><html><body>
       <div class="el-table">
         <div class="el-table__header-wrapper">
@@ -315,8 +317,8 @@ describe('selector-core — 悬停瞬态与属性名候选（规则查看 用例
       expect(v).not.toMatch(/el-table_\d+(?:_column_\d+)?/);
       expect(v).not.toContain('has-gutter');
     }
-    // 退化事实记录：div.cell 含排序 caret 子元素 → 非叶子 → 不产 text 候选（th 也无 role/testId）。
-    // 这正是断言面板要靠 r.text 补 text 兜底候选的原因（content/panel.js assert 分支）。
+    // Degenerate-fact record: div.cell contains sort caret children → not a leaf → no text candidate (th has no role/testId either).
+    // This is exactly why the assertion panel relies on r.text to add a text fallback candidate (content/panel.js assert branch).
     expect(locs.find((l) => l.strategy === 'text')).toBeUndefined();
   });
 
@@ -328,8 +330,8 @@ describe('selector-core — 悬停瞬态与属性名候选（规则查看 用例
     expect(locs.find((l) => l.strategy === 'css' && l.value === '[title="查看"]')).toBeDefined();
   });
   it('属性候选排在 finder 链之后（唯一性强的链先探测）', () => {
-    // 规则查看 回测回归：[title="查看"] 表格每行都有（天然多匹配），排在唯一性最强的
-    // finder 链之前会让回放首探测命中它并退到 .first()，抓到 .hidden-columns 隐藏克隆。
+    // 规则查看 backtest regression: [title="查看"] exists in every table row (naturally multi-match); ranking it
+    // before the strongest-unique finder chain makes the replay's first probe hit it and degrade to .first(), grabbing the .hidden-columns hidden clone.
     const dom = new JSDOM('<i class="icon-chakan" title="查看"></i>');
     const icon = dom.window.document.querySelector('i')!;
     const cssList = generateLocators(icon).filter((l) => l.strategy === 'css').map((l) => l.value);
@@ -366,13 +368,13 @@ describe('selector-core — 悬停瞬态与属性名候选（规则查看 用例
 
 describe('selector-core — label 关联文本（role 候选可访问名）', () => {
   it('label[for=id] 关联文本进 role 候选 name（input 自身无任何文本来源）', () => {
-    // <label for> 文本在目标元素外，getByText 回放必 count=0（规则查看 同款根因），
-    // 所以只允许进 role 候选——getByRole 的可访问名计算含 label 关联。
+    // <label for> text lives outside the target element; getByText replay is guaranteed count=0 (same root cause as the 规则查看 case),
+    // so it is only allowed into the role candidate — getByRole's accessible-name computation includes label association.
     const dom = new JSDOM(`<label for="u">用户名</label><input id="u" />`);
     const input = dom.window.document.querySelector('input')!;
     const locs = generateLocators(input);
     expect(locs.find((l) => l.strategy === 'role')?.value).toBe('textbox[name="用户名"]');
-    // label 文本不得泄漏进 text 候选
+    // label text must not leak into the text candidate
     expect(locs.find((l) => l.strategy === 'text')).toBeUndefined();
   });
 

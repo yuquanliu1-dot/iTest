@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// xpath 仍保留在 schema(历史数据兼容),但录制端和新生成的 AI 用例不应再产。
+// xpath is kept in the schema (legacy data compatibility), but neither the recorder nor newly generated AI cases should emit it.
 export const LocatorStrategy = z.enum(['role', 'text', 'testId', 'css', 'xpath', 'accessibilityId', 'label', 'predicate']);
 export type LocatorStrategy = z.infer<typeof LocatorStrategy>;
 
@@ -10,8 +10,8 @@ export const Locator = z.object({
 });
 export type Locator = z.infer<typeof Locator>;
 
-/** navigate.url 三形态:绝对 http(s)(外链)/ 相对(以 / 开头,执行时拼用例绑定的 web 服务)/
- *  {{变量}} 打头(如 {{web_backend}}/api/x,替换后再按前两形态判断)。 */
+/** navigate.url three forms: absolute http(s) (external link) / relative (starts with /, assembled with the case-bound web service at execution time) /
+ *  leading {{variable}} (e.g. {{web_backend}}/api/x — substituted first, then judged by the first two forms). */
 const navigateUrl = z.string().refine(
   (u) => /^https?:\/\//i.test(u) || u.startsWith('/') || u.startsWith('{{'),
   { message: 'url 必须是绝对 http(s) 地址、以 / 开头的相对路径,或 {{变量}} 打头' },
@@ -19,16 +19,16 @@ const navigateUrl = z.string().refine(
 export const NavigateAction = z.object({ kind: z.literal('navigate'), url: navigateUrl });
 
 export const IntentLocator = z.object({
-  /** 录制阶段确定的语义角色（data-testid / name 等），回放时作为补充候选。 */
+  /** Semantic role determined at recording time (data-testid / name etc.), used as a supplementary candidate at replay. */
   semanticRole: z.string().min(1).max(64),
-  /** 业务文案，回放时参与文本兜底。 */
+  /** Business copy; participates in text fallback at replay. */
   contextText: z.string().max(500).optional(),
 });
 export type IntentLocator = z.infer<typeof IntentLocator>;
 
-/** iframe 帧链（录制器产物）：自顶向下，每级是该 iframe 元素自身的候选链。
- *  回放按序解析 elementHandle.contentFrame() 逐级下钻；页级断言（target=page/url/errorMessage）
- *  与非 DOM 动作不带。录制侧同源约束：跨源 frame 解析不出链，步骤照录但无链。 */
+/** iframe frame chain (recorder artifact): top-down, each level being the candidate chain of that iframe element itself.
+ *  Replay resolves elementHandle.contentFrame() in order, drilling down level by level; page-level assertions (target=page/url/errorMessage)
+ *  and non-DOM actions do not carry it. Recorder-side same-origin constraint: cross-origin frames cannot resolve a chain — the step is recorded, but without one. */
 export const FrameChain = z.array(z.object({ locator: z.array(Locator).min(1) }));
 export type FrameChain = z.infer<typeof FrameChain>;
 
@@ -46,13 +46,13 @@ export const ClickAction = z.object({
   kind: z.literal('click'),
   locator: z.array(Locator).min(1),
   intentLocator: IntentLocator.optional(),
-  /** 2=双击 3=三连击；缺省 1（单击）。录制器捕获原生 dblclick 时置 2。 */
+  /** 2=double click 3=triple click; default 1 (single click). Set to 2 when the recorder captures a native dblclick. */
   clickCount: z.number().int().min(2).max(3).optional(),
   frameChain: FrameChain.optional(),
 });
 
-/** 滚动：绝对位置滚动（非增量 delta——回放与起点无关，浏览器自动钳到内容边界）。
- *  locator 指向实际滚动的容器；窗口级滚动录 document.scrollingElement（css 'html'）。 */
+/** Scroll: absolute-position scrolling (not incremental delta — replay is independent of the start point; the browser clamps to content bounds automatically).
+ *  locator points at the actually scrolling container; window-level scrolling records document.scrollingElement (css 'html'). */
 export const ScrollAction = z.object({
   kind: z.literal('scroll'),
   locator: z.array(Locator).min(1),
@@ -62,7 +62,7 @@ export const ScrollAction = z.object({
   frameChain: FrameChain.optional(),
 });
 
-/** 单段 CompositeValue 的可能形态；按顺序拼接生成最终输入。 */
+/** Possible shapes of a single CompositeValue segment; concatenated in order to produce the final input. */
 export const ValueFragment = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('fixed'), value: z.string().max(500) }),
   z.object({ mode: z.literal('date'), format: z.enum(['YYYYMMDD', 'YYYY-MM-DD', 'YYYY/MM/DD']) }),
@@ -70,7 +70,7 @@ export const ValueFragment = z.discriminatedUnion('mode', [
     mode: z.literal('randomNumber'),
     min: z.number().int().min(0).default(0),
     max: z.number().int().default(999999),
-    /** 固定位数；存在则左补零到该长度。 */
+    /** Fixed digit count; when present, left-padded with zeros to that length. */
     length: z.number().int().min(1).max(128).optional(),
   }),
   z.object({ mode: z.literal('randomString'), length: z.number().int().min(1).max(1024).default(12) }),
@@ -78,7 +78,7 @@ export const ValueFragment = z.discriminatedUnion('mode', [
 ]);
 export type ValueFragment = z.infer<typeof ValueFragment>;
 
-/** 估算最大长度（供 refine + 前端 builder 复用）。 */
+/** Estimates the max length (reused by refine + the frontend builder). */
 export function estimateMaxLen(input: { fragments: ValueFragment[] }): number {
   let total = 0;
   for (const f of input.fragments) {
@@ -118,7 +118,7 @@ export const FillAction = z.object({
 export const HoverAction = z.object({ kind: z.literal('hover'), locator: z.array(Locator).min(1), frameChain: FrameChain.optional() });
 export const WaitForAction = z.object({
   kind: z.literal('waitFor'),
-  /** 空数组 = 固定时长等待（不等待具体元素），睡 timeoutMs（默认 5000）。 */
+  /** Empty array = fixed-duration wait (no specific element), sleeping timeoutMs (default 5000). */
   locator: z.array(Locator),
   intentLocator: IntentLocator.optional(),
   timeoutMs: z.number().int().positive().optional(),
@@ -131,7 +131,7 @@ export const AssertTextAction = z.object({
   target: z.enum(['specifiedElement', 'page', 'errorMessage', 'url']).default('specifiedElement'),
   match: z.enum(['equals', 'contains', 'notContains', 'regex']).default('equals'),
   equals: z.string(),
-  /** 仅 target=specifiedElement 时携带。 */
+  /** Carried only when target=specifiedElement. */
   frameChain: FrameChain.optional(),
 });
 export const AssertVisibleAction = z.object({
@@ -156,8 +156,8 @@ export const SelectAction = z.object({
   value: z.string().min(1),
   frameChain: FrameChain.optional(),
 });
-/** 2026-11-04: press 步骤——在定位元素上按单个键（录制器捕获输入框内 Enter 提交等键盘动作）。
- *  key 用 Playwright 键名（如 "Enter" / "Tab"），回放映射 locator.press(key)。 */
+/** 2026-11-04: press step — press a single key on the located element (the recorder captures keyboard actions like Enter-to-submit inside inputs).
+ *  key uses Playwright key names (e.g. "Enter" / "Tab"); replay maps to locator.press(key). */
 export const PressAction = z.object({
   kind: z.literal('press'),
   locator: z.array(Locator).min(1),
@@ -176,8 +176,8 @@ export const SwitchTabAction = z.object({
   kind: z.literal('switchTab'),
   tabRef: z.string().min(1).max(64),
 });
-/** 智能任务：回放时由 LLM 多轮驱动执行的自然语言步骤（不预编译，运行时看截图决策）。
- * 适用于验证码识别、动态/不稳定页面交互等难以固化为 DSL 的场景。 */
+/** Smart task: a natural-language step driven by multi-turn LLM execution at replay (not precompiled; decisions made from screenshots at runtime).
+ * Fits scenarios that resist solidifying into DSL, such as CAPTCHA recognition and dynamic/unstable page interactions. */
 export const AiTaskAction = z.object({
   kind: z.literal('aiTask'),
   instruction: z.string().min(1).max(2000),
@@ -199,11 +199,11 @@ export const ExtractAction = z.object({
   intentLocator: IntentLocator.optional(),
   varName: z.string().min(1).max(64),
   mode: ExtractMode.default('completeValue'),
-  /** regex 模式必填；smartExtract 模式由后端一次编译后写入。 */
+  /** Required in regex mode; in smartExtract mode written in by the backend after a one-time compile. */
   pattern: z.string().min(1).max(500).optional(),
-  /** regex 模式下的捕获组 1-based；0 表示整个 match。 */
+  /** Capture group in regex mode, 1-based; 0 means the whole match. */
   group: z.number().int().min(0).max(10).optional(),
-  /** smartExtract 模式用户输入的自然语言描述，仅 UI 展示。 */
+  /** The user's natural-language description in smartExtract mode, for UI display only. */
   description: z.string().max(500).optional(),
   frameChain: FrameChain.optional(),
 });
@@ -214,7 +214,7 @@ export type DbAssertionMatch = z.infer<typeof DbAssertionMatch>;
 
 export const ObserveLogAction = z.object({
   kind: z.literal('observeLog'),
-  /** 环境 syslog 对象的 label；缺省 = 环境默认 syslog 对象。 */
+  /** The environment syslog object's label; omitted = the environment's default syslog object. */
   syslogRef: z.string().min(1).max(64).optional(),
   windowMs: z.number().int().min(1000).max(600000).default(60000),
   keywords: z.array(z.string().min(1).max(200)).max(10).default([]),
@@ -229,7 +229,7 @@ export type ObserveLogAction = z.infer<typeof ObserveLogAction>;
 export const HttpMethod = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
 export type HttpMethod = z.infer<typeof HttpMethod>;
 
-/** RFC3164 facility，枚举下标即 facility code（kernel=0 ... local7=23）；12-15 按 RFC5424 命名补齐以免 local* 错位。 */
+/** RFC3164 facility; the enum index is the facility code (kernel=0 ... local7=23); 12-15 are named per RFC5424 to keep local* aligned. */
 export const SyslogFacility = z.enum([
   'kernel', 'user', 'mail', 'daemon', 'auth', 'syslog', 'lpr', 'news',
   'uucp', 'cron', 'authpriv', 'ftp', 'ntp', 'audit', 'alert', 'clockDaemon2',
@@ -237,35 +237,36 @@ export const SyslogFacility = z.enum([
 ]);
 export type SyslogFacility = z.infer<typeof SyslogFacility>;
 
-/** RFC3164 severity，枚举下标即 severity code（emerg=0 ... debug=7）。 */
+/** RFC3164 severity; the enum index is the severity code (emerg=0 ... debug=7). */
 export const SyslogSeverity = z.enum(['emerg', 'alert', 'crit', 'err', 'warning', 'notice', 'info', 'debug']);
 export type SyslogSeverity = z.infer<typeof SyslogSeverity>;
 
-/** 2026-10-20: sendSyslog 步骤——向 syslog 服务器发送一条 RFC3164 日志。 */
+/** 2026-10-20: sendSyslog step — send one RFC3164 log message to a syslog server. */
 export const SendSyslogAction = z.object({
   kind: z.literal('sendSyslog'),
   protocol: z.enum(['udp', 'tcp']).default('udp'),
-  /** syslog 服务器地址，支持 {{var}} 替换。 */
+  /** Syslog server address; supports {{var}} substitution. */
   host: z.string().min(1).max(253),
   port: z.number().int().min(1).max(65535).default(514),
   facility: SyslogFacility.default('user'),
   severity: SyslogSeverity.default('info'),
-  /** 日志正文（RFC3164 MSG 部分），不做变量替换。 */
+  /** Log body (RFC3164 MSG part), no variable substitution. */
   message: z.string().min(1).max(2000),
   timeoutMs: z.number().int().min(1000).max(30000).default(5000),
 });
 export type SendSyslogAction = z.infer<typeof SendSyslogAction>;
 
-/** 2026-10-22: sql 步骤——对【被测系统自己的数据库】执行单条只读 SQL。
- *  2026-11-08: queryDb 已下线（它连的是环境默认 db 对象 = SUT 库，表名却锁死平台自己的表，
- *  两侧对不上，恒定失败）。查库统一走 sql：dbRef 缺省 = 环境默认 db 对象。 */
+/** 2026-10-22: sql step — execute a single read-only SQL against the SUT's own database.
+ *  2026-11-08: queryDb has been retired (it connected to the environment's default db object = the SUT database, yet hardcoded
+ *  the platform's own table names — the two sides never matched, so it failed constantly). Database queries uniformly go through sql:
+ *  dbRef omitted = the environment's default db object. */
 export const SqlAction = z.object({
   kind: z.literal('sql'),
-  /** 环境 db 对象的 label；缺省 = 环境默认 db 对象。 */
+  /** The environment db object's label; omitted = the environment's default db object. */
   dbRef: z.string().min(1).max(64).optional(),
-  /** 单条只读 SQL（SELECT / WITH 开头），执行层再做词法守卫。 */
+  /** A single read-only SQL (starting with SELECT / WITH); the execution layer applies a further lexical guard. */
   sql: z.string().min(1).max(8000),
-  /** 位置参数；方言适配由执行层处理（postgres $n / mysql ?）。 */
+  /** Positional parameters; dialect adaptation handled by the execution layer (postgres $n / mysql ?). */
   params: z.array(z.union([z.string().max(2000), z.number(), z.boolean(), z.null()])).max(20).default([]),
   limit: z.number().int().min(1).max(200).default(50),
   assertion: z.object({
@@ -276,53 +277,53 @@ export const SqlAction = z.object({
 });
 export type SqlAction = z.infer<typeof SqlAction>;
 
-/** httpRequest 的 body 匹配方式。独立于 DbAssertionMatch（那是被 sql/observeLog 共用的，
- *  加枚举会波及两处的执行与 UI），此处多一个 notContains —— 安全类断言常要判「响应体不含注入串」。 */
+/** httpRequest's body match mode. Kept separate from DbAssertionMatch (which is shared by sql/observeLog —
+ *  adding an enum value there would ripple into both execution and UI); this one adds notContains — security assertions often need "response body does not contain the injection string". */
 export const HttpBodyMatch = z.enum(['equals', 'contains', 'notContains', 'regex']);
 export type HttpBodyMatch = z.infer<typeof HttpBodyMatch>;
 
 export const HttpRequestAction = z.object({
   kind: z.literal('httpRequest'),
   method: HttpMethod.default('GET'),
-  /** 支持 {{var}} 替换。 */
+  /** Supports {{var}} substitution. */
   url: z.string().min(1).max(2000),
   headers: z.array(z.object({
     key: z.string().min(1).max(128),
-    /** 支持 {{var}} 替换。 */
+    /** Supports {{var}} substitution. */
     value: z.string().max(2000),
   })).max(20).default([]),
-  /** 原文请求体，支持 {{var}} 替换。 */
+  /** Raw request body; supports {{var}} substitution. */
   body: z.string().max(65536).optional(),
   timeoutMs: z.number().int().min(1000).max(30000).default(10000),
-  /** true 时把浏览器登录态 Cookie 按 URL host 转发给请求（不覆盖手填 Cookie 头）。 */
+  /** When true, forwards the browser login-state Cookie to the request by URL host (never overwrites a hand-filled Cookie header). */
   carryLoginState: z.boolean().optional(),
-  /** 响应值提取为变量，供后续步骤 {{var}} 消费。 */
+  /** Extracts a response value into a variable for subsequent steps to consume via {{var}}. */
   saveAs: z.object({
     varName: z.string().min(1).max(64),
     from: z.enum(['body', 'status']),
-    /** 简化 dot-path（如 data.items[0].id），仅 from='body' 时生效；缺省取完整 body 文本。 */
+    /** Simplified dot-path (e.g. data.items[0].id); effective only when from='body'; omitted = the full body text. */
     path: z.string().max(200).optional(),
   }).optional(),
-  /** status 与 body 二者可选，都设置则都须通过。 */
+  /** status and body are both optional; when both are set, both must pass. */
   assertion: z.object({
     status: z.number().int().min(100).max(599).optional(),
     match: HttpBodyMatch.default('contains'),
-    /** 作用于响应 body 文本的匹配期望值。 */
+    /** The expected value matched against the response body text. */
     expected: z.string().max(2000).optional(),
     /**
-     * true 时把「传输层失败」（连接被拒 / 被重置 / 超时）判为断言命中。
+     * When true, "transport-layer failure" (connection refused / reset / timeout) is judged as an assertion hit.
      *
-     * 2026-10-22：安全类用例的期望常是「服务在传输层拒绝伪造 Host」——SUT 直接 RST 断连，
-     * 没有任何 HTTP 响应可断言（prod228 用例 4608e4f4：curl (52) Empty reply from server）。
-     * 缺省（false）时传输失败直接抛错判步骤失败，绕过了 assertion —— 假失败。
-     * 开启后：传输失败 → 断言命中、步骤通过并记录失败原因；有响应时照常按 status/expected 判定。
+     * 2026-10-22: security cases often expect "the service rejects the forged Host at the transport layer" — the SUT
+     * RSTs the connection outright and there is no HTTP response to assert (prod228 case 4608e4f4: curl (52) Empty reply from server).
+     * Default (false): transport failure throws immediately, marking the step failed and bypassing the assertion — a false failure.
+     * When enabled: transport failure → assertion hit, step passes, and the failure reason is recorded; with a response present, status/expected judging proceeds as usual.
      */
     allowTransportFailure: z.boolean().optional(),
   }).optional(),
 });
 export type HttpRequestAction = z.infer<typeof HttpRequestAction>;
 
-/** 2026-10-07: 移动端测试 step DSL 增量（Task 1 of iTest mobile-testing plan）。 */
+/** 2026-10-07: mobile-testing step DSL additions (Task 1 of the iTest mobile-testing plan). */
 export const TapAction = z.object({
   kind: z.literal('tap'),
   locator: z.array(Locator).min(1),

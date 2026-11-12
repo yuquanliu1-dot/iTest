@@ -1,7 +1,7 @@
 export const VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const VAR_RE = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
 
-/** 校验变量名格式：`^[A-Za-z_][A-Za-z0-9_]*$`，1-64 字符。 */
+/** Validates the variable name format: `^[A-Za-z_][A-Za-z0-9_]*$`, 1-64 characters. */
 export function validateVariableName(name: string): { ok: boolean; reason?: string } {
   if (!name) return { ok: false, reason: '变量名不能为空' };
   if (name.length > 64) return { ok: false, reason: '变量名长度不能超过 64' };
@@ -9,7 +9,7 @@ export function validateVariableName(name: string): { ok: boolean; reason?: stri
   return { ok: true };
 }
 
-/** 从字符串里抠出所有 `{{name}}` 引用名，去重保序。 */
+/** Extracts all `{{name}}` reference names from a string, deduplicated, order preserved. */
 export function collectVarRefs(text: string): string[] {
   const out = new Set<string>();
   for (const m of text.matchAll(VAR_RE)) out.add(m[1]!);
@@ -21,7 +21,7 @@ export interface SubstituteResult {
   missing: string[];
 }
 
-/** 替换 `{{name}}` 模板。未定义变量保留模板原值，并把 name 计入 missing（永不抛错）。 */
+/** Substitutes `{{name}}` templates. Undefined variables keep the template as-is and are recorded in missing (never throws). */
 export function substituteVars(text: string, vars: Record<string, string>): SubstituteResult {
   const missing: string[] = [];
   const value = text.replace(VAR_RE, (m, name: string) => {
@@ -32,10 +32,10 @@ export function substituteVars(text: string, vars: Record<string, string>): Subs
   return { value, missing };
 }
 
-/** 嵌套量词黑名单（命中即视为可能灾难性回溯）。 */
+/** Nested quantifier blacklist (a hit means possible catastrophic backtracking). */
 const NESTED_QUANTIFIER_RE = /\([^?][^)]*[+*]\)[+*?]|\([^?][^)]*\+[^)]*[+*]\)/;
 
-/** 正则安全校验：编译超 50ms 或命中黑名单即拒。 */
+/** Regex safety check: rejects on compile time > 50ms or a blacklist hit. */
 export function safeRegex(
   pattern: string,
 ): { ok: true } | { ok: false; reason: string } {

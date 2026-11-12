@@ -1,11 +1,12 @@
 /**
- * 用例覆盖类型（弹窗多选 → prompt 覆盖要求 → stage_case.coverageTypes）。
+ * Case coverage types (dialog multi-select → prompt coverage requirements → stage_case.coverageTypes).
  *
- * 定义放 shared 而非各自一份：web 渲染勾选项、api 校验 stage_case 入参，
- * 两边各写一份迟早漂移（多一个类型 web 能勾而 api 拒，或反之）。
+ * The definition lives in shared rather than one copy per side: web renders the checkboxes and api
+ * validates stage_case inputs — two independent copies would inevitably drift (a new type web can
+ * check but api rejects, or vice versa).
  *
- * key 存进 ai_stage_cases.coverage_types（jsonb），label 仅供展示，
- * 因此改 label 不影响历史数据；新增/删除 key 才需要考虑迁移。
+ * key is stored in ai_stage_cases.coverage_types (jsonb); label is display-only,
+ * so changing a label never affects historical data; only adding/removing keys requires a migration.
  */
 export const COVERAGE_TYPES = [
   { key: 'functional', label: '功能（正常流）' },
@@ -19,12 +20,12 @@ export type CoverageType = (typeof COVERAGE_TYPES)[number]['key'];
 
 export const COVERAGE_TYPE_KEYS: readonly CoverageType[] = COVERAGE_TYPES.map((t) => t.key);
 
-/** key → 展示文案。回执/摘要里回显用户可读标签，而不是英文 key。 */
+/** key → display label. Receipts/summaries echo the human-readable label instead of the English key. */
 export const COVERAGE_LABELS: ReadonlyMap<string, string> = new Map(
   COVERAGE_TYPES.map((t) => [t.key, t.label]),
 );
 
-/** 覆盖要求拼接成 prompt 的文本块（弹窗未勾选任何类型时返回空串）。 */
+/** Coverage requirements assembled into a prompt text block (returns an empty string when no type is checked in the dialog). */
 export function coveragePrompt(keys: readonly string[]): string {
   const labels = COVERAGE_TYPES.filter((t) => keys.includes(t.key)).map((t) => t.label);
   if (labels.length === 0) return '';

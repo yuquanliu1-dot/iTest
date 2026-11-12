@@ -19,15 +19,15 @@ packages/shared/src/*.js
 *.jpg
 *.jpeg
 verify-*.jpeg
-# landing 页产品截图（页面引用的静态资源，需随仓库分发）
+# landing page product screenshots (static assets referenced by the page, must ship with the repo)
 !apps/web/public/landing/*.png
-# README 引用的界面截图（同上，需随仓库分发）
+# UI screenshots referenced by README (same as above, must ship with the repo)
 !docs/screenshots/*.png
 
 # local worktrees
 .worktrees/
 .superpowers/
 
-# 内部自签 CA 走镜像 build context,默认提交到仓库（org 内通用）；
-# 真正的 PAT / 凭据仍走 .env,不要混淆。
+# Internal self-signed CA goes through the image build context; committed to the repo by default (org-wide);
+# real PATs / credentials still go through .env, do not mix them up.
 # infra/docker/certs/gitlab-ca.crt

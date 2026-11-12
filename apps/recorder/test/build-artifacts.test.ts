@@ -5,18 +5,18 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-/** 两个内容脚本模块图根：content/recorder.js 用 chrome.runtime.getURL() 动态 import 它们。
- *  content script 跑在 isolated world 里，没有 node_modules 解析器——模块图里只要出现
- *  裸说明符（'@medv/finder'），import 就抛 ERR_MODULE_NOT_FOUND，整个 IIFE 死掉，
- *  manager 永不 start，页面面板永远停在「0 步」。
- *  2026-10-20 病例：tsc 的平铺产物覆盖了 esbuild 的 bundle，而 vitest 能解析 node_modules，
- *  所以单测全绿却录不到任何步骤。这条断言直接盯「Chromium 实际会加载的那份文件」。 */
+/** Two content-script module graph roots: content/recorder.js dynamically imports them via chrome.runtime.getURL().
+ *  Content scripts run in an isolated world with no node_modules resolver — as soon as a bare
+ *  specifier ('@medv/finder') appears in the module graph, the import throws ERR_MODULE_NOT_FOUND, the whole IIFE dies,
+ *  the manager never starts, and the on-page panel is stuck at "0 steps" forever.
+ *  2026-10-20 incident: tsc's flattened output overwrote esbuild's bundle, and since vitest can resolve node_modules,
+ *  all unit tests stayed green while no steps were ever recorded. This assertion watches exactly "the file Chromium will actually load". */
 const ENTRIES = ['modules/recorder-manager.js', 'modules/picker.js'];
 
 const SPEC_RE = /(?:^|\n)\s*(?:import|export)\s[^'"\n]*?from\s*['"]([^'"]+)['"]/g;
 const BARE_IMPORT_RE = /(?:^|\n)\s*import\s*['"]([^'"]+)['"]/g;
 
-/** 从入口沿相对说明符递归走完整个模块图，收集不可解析的裸说明符。 */
+/** Walks the entire module graph from the entry along relative specifiers, collecting unresolvable bare specifiers. */
 function reachableBareSpecifiers(entryRel: string): string[] {
   const seen = new Set<string>();
   const bare = new Set<string>();

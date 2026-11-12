@@ -11,16 +11,16 @@ RUN corepack enable && corepack prepare pnpm@9.12.0 --activate \
 
 COPY apps/web/src ./apps/web/src
 COPY apps/web/index.html ./apps/web/index.html
-# vite 会把 public/ 原样拷进 dist——漏掉它则 /landing/*.png 全部 404 回落到 index.html，
-# 浏览器拿到 text/html 当图片渲染 → landing 截图全裂（2026-10-19 prod228 实测）。
+# vite copies public/ verbatim into dist — without it every /landing/*.png 404s and falls back to index.html,
+# the browser renders text/html as an image → all landing screenshots break (observed on prod228, 2026-10-19).
 COPY apps/web/public ./apps/web/public
 COPY packages/shared/src ./packages/shared/src
 COPY packages/ui/src ./packages/ui/src
 
 RUN pnpm --filter @itest/web build
-# 发版链路是 macOS bsdtar 打包 → Linux GNU tar 解包，解包新建文件的模式 = 归档模式 & ~umask；
-# 服务器 umask 027 会把 644 削成 640，镜像继承后 nginx 非 root worker 读不到 → 静态资源 403
-# （2026-10-19 landing/*.png 实测）。构建期统一补权限：a+rX = 所有文件补可读、目录补可进入。
+# The release pipeline is macOS bsdtar packing → Linux GNU tar unpacking; the mode of newly unpacked files = archive mode & ~umask;
+# the server's umask 027 cuts 644 down to 640, the image inherits it and nginx's non-root worker cannot read → static assets 403
+# (observed on landing/*.png, 2026-10-19). Permissions are fixed uniformly at build time: a+rX = all files readable, all directories enterable.
 RUN chmod -R a+rX /repo/apps/web/dist
 
 # ----- runtime -----

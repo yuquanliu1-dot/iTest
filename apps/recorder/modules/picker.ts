@@ -3,22 +3,22 @@ import { detectComponent, type ComponentInfo } from './component-detector.js';
 
 export interface PickResult {
   locators: Locator[];
-  /** 元素可见文本快照（截断 500 字符） */
+  /** Snapshot of the element's visible text (truncated at 500 characters) */
   text: string;
-  /** input/textarea 的当前值，其他元素为空串 */
+  /** Current value of input/textarea; empty string for other elements */
   inputValue: string;
   tagName: string;
-  /** 元素 id / name 属性，用于变量名建议 */
+  /** Element id / name attributes, used for variable name suggestions */
   id: string;
   nameAttr: string;
-  /** 静态嗅探到的组件归属，便于录制定位策略选择 */
+  /** Component ownership sniffed statically, informing the recording locator strategy */
   componentHint?: ComponentInfo;
 }
 
 /**
- * 元素拾取模式：高亮 hover 目标，点击选定，Esc 取消。
- * 使用方（content script）负责在拾取期间暂停普通录制。
- * 取消时回调收到 null；stop() 强制停止（录制终止时）不回调。
+ * Element pick mode: highlights the hovered target, click to select, Esc to cancel.
+ * The consumer (content script) is responsible for pausing normal recording during the pick.
+ * The cancel callback receives null; stop() force-stops (recording terminated) without invoking the callback.
  */
 export class ElementPicker {
   private active = false;
@@ -56,7 +56,7 @@ export class ElementPicker {
       e.stopPropagation();
       const el = e.target as HTMLElement;
       const text = (el.innerText ?? el.textContent ?? '').trim().slice(0, 500);
-      // 用 tagName 而非 instanceof 判别：后者在跨 realm（jsdom 测试）下不可靠。
+      // Discriminate by tagName rather than instanceof: the latter is unreliable across realms (jsdom tests).
       const tag = (el.tagName ?? '').toLowerCase();
       const inputValue =
         tag === 'input' || tag === 'textarea' ? (el as HTMLInputElement).value : '';
@@ -80,7 +80,7 @@ export class ElementPicker {
     document.addEventListener('keydown', this.onKey, true);
   }
 
-  /** 强制停止（录制停止时调用）。未激活时无操作。 */
+  /** Force stop (called when recording stops). No-op when not active. */
   stop(): void {
     if (!this.active) return;
     this.teardown();

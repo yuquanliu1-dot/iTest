@@ -1,13 +1,13 @@
-/* iTest Design Tokens — 与 CRM shadcn（radix-nova）令牌体系完全对齐
-   来源：crm/packages/ui/src/styles/globals.css
-   结构：:root / .dark 存原始值（组件 inline style 直接引用 var(--*)，任何主题下都可用）；
-   @theme inline 映射为 Tailwind 颜色/字体/圆角/阴影命名空间；
-   派生淡出色（-soft 系列）用 color-mix 定义一次，随 .dark 自动适配。
-   暗色由 <html class="dark"> 切换（stores/theme.ts）。 */
+/* iTest Design Tokens — fully aligned with the CRM shadcn (radix-nova) token system
+   Source: crm/packages/ui/src/styles/globals.css
+   Structure: :root / .dark store raw values (components reference var(--*) via inline style, so they work under any theme);
+   @theme inline maps them into Tailwind's color/font/radius/shadow namespaces;
+   derived soft colors (the -soft series) are defined once with color-mix and adapt automatically under .dark.
+   Dark mode is toggled by <html class="dark"> (stores/theme.ts). */
 @custom-variant dark (&:is(.dark *));
 
-/* shadcn radix 数据态简写（Radix 组件写 data-state，而 Tailwind 内置 data-* 只匹配属性存在）。
-   与 shadcn CLI dist/tailwind.css 中的定义等价，供移植的 shadcn 组件使用。 */
+/* shadcn radix data-state shorthand (Radix components write data-state, while Tailwind's built-in data-* only matches attribute presence).
+   Equivalent to the definitions in the shadcn CLI dist/tailwind.css, for use by ported shadcn components. */
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
 @custom-variant data-checked (&:where([data-state="checked"], [data-checked]:not([data-checked="false"])));
@@ -59,7 +59,7 @@
   --sidebar-border: #e2e2e2;
   --sidebar-ring: #006b4f;
 
-  /* ── iTest 域扩展：派生淡出色（CRM 无对应，语义承自旧 accent-light/success-light 等） ── */
+  /* ── iTest domain extensions: derived soft colors (no CRM equivalent; semantics inherited from the old accent-light/success-light etc.) ── */
   --primary-soft: color-mix(in oklch, var(--primary) 10%, transparent);
   --primary-glow: color-mix(in oklch, var(--primary) 18%, transparent);
   --success-soft: color-mix(in oklch, var(--success) 8%, transparent);
@@ -77,7 +77,7 @@
   --chart-4-soft: color-mix(in oklch, var(--chart-4) 16%, transparent);
   --chart-5-soft: color-mix(in oklch, var(--chart-5) 16%, transparent);
 
-  /* iTest 域扩展：用例优先级徽标（GitHub 风底色/文字对） */
+  /* iTest domain extension: case priority badges (GitHub-style background/text pairs) */
   --priority-urgent-bg: #fff1e5;
   --priority-urgent-text: #bc4c00;
   --priority-high-bg: #ffebe9;
@@ -87,10 +87,10 @@
   --priority-low-bg: #dafbe1;
   --priority-low-text: #1a7f37;
 
-  /* 品牌渐变（登录页 logo 光束）— 由紫罗兰切换为 CRM 绿色系 */
+  /* Brand gradient (login page logo beam) — switched from violet to the CRM green family */
   --brand-gradient: linear-gradient(140deg, #00915f 0%, #006b4f 60%, #025e46 100%);
 
-  /* Radius — CRM 基准 5px */
+  /* Radius — CRM baseline 5px */
   --radius: 5px;
   --radius-xs: 3px;
   --radius-sm: 4px;
@@ -98,7 +98,7 @@
   --radius-lg: 8px;
   --radius-xl: 12px;
 
-  /* Shadows — CRM 极淡阴影档 */
+  /* Shadows — CRM ultra-light shadow tiers */
   --shadow-x: 0px;
   --shadow-y: 1px;
   --shadow-blur: 2px;
@@ -114,7 +114,7 @@
   --shadow-xl: 0px 8px 16px -4px hsl(0 0% 0% / 0.08);
   --shadow-2xl: 0px 16px 32px -8px hsl(0 0% 0% / 0.12);
 
-  /* Font — Geist（fontsource variable 加载），中文回退 PingFang/雅黑 */
+  /* Font — Geist (fontsource variable); Chinese fallback PingFang/YaHei */
   --font-sans: "Geist Variable", "Geist", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: "Geist Mono Variable", "Geist Mono", "SF Mono", Menlo, Consolas, monospace;
 }
@@ -160,7 +160,7 @@
   --sidebar-border: #2a2a2a;
   --sidebar-ring: #40be96;
 
-  /* 优先级徽标暗色（半透明底 + 亮文字） */
+  /* Priority badges, dark mode (translucent background + bright text) */
   --priority-urgent-bg: rgba(251, 146, 60, 0.16);
   --priority-urgent-text: #fb923c;
   --priority-high-bg: rgba(248, 113, 113, 0.16);

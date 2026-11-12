@@ -1,13 +1,13 @@
 /**
- * 探索式测试会话共享常量：persona 枚举 + findings 结构类型。
- * api 侧用 directive 拼探索指令，web 侧用 label 渲染下拉——单一真源。
+ * Exploratory-testing session shared constants: persona enum + findings structural types.
+ * The api side assembles exploration directives from directive, the web side renders dropdowns from label — a single source of truth.
  */
 
 export interface ExplorationPersona {
   key: string;
   labelZh: string;
   labelEn: string;
-  /** 注入探索 AI 的视角指令（拼进每轮 instruction 的 persona 段）。 */
+  /** Perspective directive injected into the exploration AI (the persona segment assembled into each round's instruction). */
   directive: string;
 }
 
@@ -51,7 +51,7 @@ export function getExplorationPersona(key: string): ExplorationPersona {
   return EXPLORATION_PERSONAS.find((p) => p.key === key) ?? EXPLORATION_PERSONAS[0]!;
 }
 
-/** 模型 findings 契约里的单条复现步骤。 */
+/** A single reproduction step in the model findings contract. */
 export interface ExplorationReproStep {
   action: string;
   expected?: string;

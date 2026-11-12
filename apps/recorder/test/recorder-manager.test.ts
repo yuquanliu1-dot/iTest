@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { JSDOM, type DOMWindow } from 'jsdom';
 import { RecorderManager, type RecordedStep } from '../modules/recorder-manager.js';
 
-// recorder-manager 在 attach 时引用全局 `document`。
-// 每个用例新建一个 JSDOM，把它挂到 globalThis.document 上，再让 manager 监听。
+// recorder-manager references the global `document` at attach time.
+// Each case builds a fresh JSDOM, attaches it to globalThis.document, then lets the manager listen.
 let dom: JSDOM;
 let captured: RecordedStep[];
 
@@ -56,7 +56,7 @@ describe('RecorderManager — happy path E2E', () => {
     vi.useFakeTimers();
     withRecorder(() => {
       fire(input, 'input');
-      // 推进超过 250ms fill 合并窗。
+      // Advance past the 250ms fill coalescing window.
       vi.advanceTimersByTime(300);
     });
     expect(captured).toHaveLength(1);
@@ -109,7 +109,7 @@ describe('RecorderManager — Enter 提交（press 步骤）', () => {
     vi.useFakeTimers();
     withRecorder(() => {
       fire(input, 'input');
-      // 停顿 <250ms，fill 仍在合并窗内；Enter 事件先行 flush。
+      // Pause <250ms, fill is still inside the coalescing window; the Enter event flushes it first.
       fireKey(input);
     });
     expect(captured.map((s) => s.type)).toEqual(['fill', 'press']);
@@ -137,8 +137,8 @@ describe('RecorderManager — noise filtering', () => {
     dom.window.document.body.appendChild(btn);
     const mgr = new RecorderManager();
     mgr.start((s) => captured.push(s));
-    // 用 vi.useFakeTimers 替代：把两次点击都钉在同一个 Date.now 上，
-    // 自然落在 200ms 去重窗口内，期望只生成 1 条步骤。
+    // Use vi.useFakeTimers instead: pin both clicks to the same Date.now,
+    // naturally landing inside the 200ms dedup window; expect only 1 step.
     const realNow = Date.now;
     Date.now = () => 1000;
     fire(btn, 'click');
@@ -185,7 +185,7 @@ describe('RecorderManager — noise filtering', () => {
     dom.window.document.body.appendChild(div);
     const mgr = new RecorderManager();
     mgr.start((s) => captured.push(s));
-    // 让「hover-when-input」窗内最近一次 input 时间靠近 now：手动调 lastInputAt。
+    // Bring the latest input time within the "hover-when-input" window close to now: set lastInputAt manually.
     (mgr as unknown as { lastInputAt: number }).lastInputAt = Date.now() - 10;
     fire(div, 'mouseover');
     mgr.stop();
@@ -204,7 +204,7 @@ describe('RecorderManager — noise filtering', () => {
       fire(a, 'mouseover');
       fire(b, 'mouseover');
       fire(c, 'mouseover');
-      // 光标继续移动时各元素都到不了停留门槛；最终离开也不再触发。
+      // While the cursor keeps moving, no element reaches the dwell threshold; leaving for good no longer triggers either.
       fire(c, 'mouseleave');
       vi.advanceTimersByTime(500);
     });
@@ -266,10 +266,10 @@ describe('RecorderManager — noise filtering', () => {
   });
 
   it('dedups sibling elements with same locator signature within 1.5s (React re-render case)', () => {
-    // 模拟 React 重渲染后 e.target 是新 Element 引用但 selector 不变。
-    // 两个相邻 div 都带 data-testid="badge" + 文本"状态标签"：testId/text/css 候选全相同，
-    // 仅 xpath 索引不同；但用户视角下"指向同一段文本"应被去重。
-    // 1.5s 内第二次 hover 应被签名级去重挡掉。
+    // Simulates React re-render: e.target is a new Element reference but the selector is unchanged.
+    // Two adjacent divs both carry data-testid="badge" + text "状态标签": testId/text/css candidates are all identical,
+    // only the xpath index differs; from the user's perspective "pointing at the same text" should be deduped.
+    // The second hover within 1.5s should be blocked by signature-level dedup.
     const a = makeEl('<div data-testid="badge">状态标签</div>');
     const b = makeEl('<div data-testid="badge">状态标签</div>');
     dom.window.document.body.appendChild(a);
@@ -303,7 +303,7 @@ describe('RecorderManager — noise filtering', () => {
       vi.advanceTimersByTime(500);
       now = 1100;
       fire(a, 'mouseleave');
-      // 跨越 1.5s 窗口后再 hover 同签名元素（fake timer 推进期间 Date.now 也随之更新）。
+      // Hover the same-signature element again after crossing the 1.5s window (Date.now updates along with fake timer advances).
       vi.advanceTimersByTime(2000);
       now = 3700;
       fire(b, 'mouseover');
@@ -338,8 +338,8 @@ describe('RecorderManager — output shape matches StepAction DSL', () => {
 
 describe('RecorderManager — default options', () => {
   it('does NOT emit hover steps when recordHover is not enabled (default off)', () => {
-    // 默认 recordHover=false：hover 是最大的噪声源之一，调试时才开。验证：默认调用
-    // mgr.start() 后 mouseover 不产出 hover 步骤。
+    // Default recordHover=false: hover is one of the biggest noise sources, enabled only for debugging. Verify that after
+    // calling mgr.start() with defaults, mouseover produces no hover step.
     const heading = makeEl('<h1>标题</h1>');
     dom.window.document.body.appendChild(heading);
     vi.useFakeTimers();
@@ -381,7 +381,7 @@ describe('RecorderManager — dblclick 升级', () => {
     });
     expect(captured).toHaveLength(1);
     expect(captured[0]!.clickCount).toBe(2);
-    // dblclick 已即时发射，后续窗口到点不再补发单击
+    // dblclick was emitted immediately; when the later window expires the single click must not be re-emitted
     vi.advanceTimersByTime(300);
     expect(captured).toHaveLength(1);
   });
@@ -410,14 +410,14 @@ describe('RecorderManager — dblclick 升级', () => {
   });
 
   it('页面拦截 dblclick 时不丢步：挂起单击照常发射', () => {
-    // 有些页面 preventDefault 掉 dblclick，浏览器不派发——timer 到点仍按单击发射，
-    // 比旧版「压成 1 个 click」多救回一次真实动作。
+    // Some pages preventDefault the dblclick so the browser never dispatches it — the timer still emits as a single click when due,
+    // rescuing one more real action than the old "collapse into 1 click" behavior.
     const btn = makeEl('<button data-testid="row">行</button>');
     dom.window.document.body.appendChild(btn);
     vi.useFakeTimers();
     withRecorder(() => {
       fire(btn, 'click');
-      // 不派发 dblclick，模拟被拦截
+      // Do not dispatch dblclick — simulate it being intercepted
       vi.advanceTimersByTime(300);
     });
     expect(captured).toHaveLength(1);
@@ -454,7 +454,7 @@ describe('RecorderManager — scroll 捕获', () => {
       (pane as HTMLElement).scrollTop = 200;
       fireScroll(pane);
       vi.advanceTimersByTime(100);
-      // 滚动流持续重置 settle 计时
+      // The scroll stream keeps resetting the settle timer
       (pane as HTMLElement).scrollTop = 260;
       fireScroll(pane);
       vi.advanceTimersByTime(400);
@@ -481,8 +481,8 @@ describe('RecorderManager — scroll 捕获', () => {
   });
 
   it('窗口级滚动锚到 css html（scrollingElement / 无 scrollTop 的 target）', () => {
-    // jsdom 没有 document.scrollingElement，target=document 无 scrollTop → 走窗口分支，
-    // el 取 documentElement，回放侧对 css 'html' evaluate scrollTop 即窗口滚动。
+    // jsdom has no document.scrollingElement; target=document has no scrollTop → takes the window branch,
+    // el becomes documentElement; on replay, evaluating scrollTop against css 'html' is window scrolling.
     vi.useFakeTimers();
     withRecorder(() => {
       (dom.window.document.documentElement as HTMLElement).scrollTop = 100;
@@ -517,14 +517,15 @@ describe('RecorderManager — scroll 捕获', () => {
     });
     const scrolls = captured.filter((s) => s.type === 'scroll');
     expect(scrolls).toHaveLength(2);
-    // 发射的是各序列的最终绝对位置（回放与起点无关）
+    // What gets emitted is each sequence's final absolute position (replay is independent of the start point)
     expect(scrolls[0]!.scrollTop).toBe(130);
     expect(scrolls[1]!.scrollTop).toBe(70);
   });
 
   it('单事件跳变（scrollIntoView 式程序滚动）不产步骤', () => {
-    // 真实浏览器里用户手势滚动是连续事件流；单事件跳变是程序行为（锚点/scrollIntoView），
-    // 序列起点=首事件位置 → 净位移 0 → 视为噪声丢弃。用此语义锁定。
+    // In a real browser, user-gesture scrolling is a continuous event stream; a single-event jump is programmatic
+    // behavior (anchor/scrollIntoView): sequence start = first event position → net displacement 0 → treated as noise and dropped.
+    // This test locks in that semantic.
     const pane = makeEl('<div data-testid="pane">内容</div>');
     dom.window.document.body.appendChild(pane);
     vi.useFakeTimers();
@@ -655,14 +656,14 @@ describe('recorder-manager — phase1 change events + pause', () => {
     mgr.setPaused(false);
     vi.useFakeTimers();
     btn.dispatchEvent(new Event('click', { bubbles: true }));
-    // click 走 250ms 延迟发射窗
+    // click goes through the 250ms deferred emit window
     vi.advanceTimersByTime(300);
     expect(captured).toHaveLength(1);
     btn.remove();
   });
 
-  // 回归：同一副本未 stop 就再次 start()（background 每次 complete 重发的 start 广播都会命中存活的副本）
-  // 不应叠加 document 级监听——一次点击只能产一条。恢复于 2026-10-15 重复步骤病例。
+  // Regression: re-start() on the same instance without stop() (the start broadcast background re-sends on every complete hits the surviving instance)
+  // must not stack document-level listeners — one click can only produce one step. Restored for the 2026-10-15 duplicate-steps incident.
   it('re-start without stop does not stack listeners (one click → one step)', () => {
     const { mgr, captured } = setup();
     mgr.start((s) => captured.push(s));
@@ -670,7 +671,7 @@ describe('recorder-manager — phase1 change events + pause', () => {
     document.body.appendChild(btn);
     vi.useFakeTimers();
     btn.dispatchEvent(new Event('click', { bubbles: true }));
-    // click 走 250ms 延迟发射窗
+    // click goes through the 250ms deferred emit window
     vi.advanceTimersByTime(300);
     expect(captured).toHaveLength(1);
     btn.remove();
@@ -688,15 +689,15 @@ describe('recorder-manager — phase1 change events + pause', () => {
     pwd.remove();
   });
 
-  // 浏览器自动填充 / 1Password 等密码管理器扩展会直接设 input.value 但**不**触发 input 事件,
-  // 只在失焦后触发 change。本测试验证 change 兜底能录上无 input 历史的密码。
+  // Browser autofill / password-manager extensions like 1Password set input.value directly but do **not** fire an input event;
+  // they only fire change after blur. This test verifies the change fallback can record passwords that have no input history.
   it('password autofill via change only (no input) records fill with sensitive=true', () => {
     const { captured } = setup();
     const pwd = document.createElement('input');
     pwd.type = 'password';
     pwd.name = 'password';
     document.body.appendChild(pwd);
-    // 模拟 Chrome autofill:native setter 写值,**不**触发 input
+    // Simulate Chrome autofill: native setter writes the value, **without** firing input
     const proto = Object.getPrototypeOf(pwd);
     const desc = Object.getOwnPropertyDescriptor(proto, 'value');
     desc!.set!.call(pwd, 'AutoFilledSecret');
@@ -708,7 +709,7 @@ describe('recorder-manager — phase1 change events + pause', () => {
     pwd.remove();
   });
 
-  // 同一密码输入框在 1s 内反复 change(autofill 重填 / 失焦再聚焦)只产一条 fill。
+  // Repeated changes on the same password input within 1s (autofill refill / blur then refocus) produce only one fill.
   it('password autofill dedupes within 1s window', async () => {
     const { captured } = setup();
     const pwd = document.createElement('input');
@@ -727,7 +728,7 @@ describe('recorder-manager — phase1 change events + pause', () => {
     pwd.remove();
   });
 
-  // change 兜底不会污染非密码字段(non-password 输入框)。
+  // The change fallback must not pollute non-password fields (non-password inputs).
   it('change autofill fallback ignores non-sensitive fields', () => {
     const { captured } = setup();
     const inp = document.createElement('input');
@@ -808,14 +809,14 @@ describe('RecorderManager — input / aiTask dedup', () => {
     const captured: RecordedStep[] = [];
     const mgr = new RecorderManager();
     mgr.start((s) => captured.push(s));
-    // 模拟用户敲「admin」5 个字符：每次 input 事件间隔 50ms（远低于 250ms 合并窗）。
+    // Simulate the user typing "admin", 5 chars: each input event 50ms apart (well under the 250ms coalescing window).
     for (const ch of 'admin') {
       inp.value = inp.value + ch;
       inp.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
       vi.advanceTimersByTime(50);
     }
-    // 停顿超过合并窗（250ms）才 flush——必须是 fillFlushMs 而不是旧的 500ms，否则测试用例
-    // 会依赖过期的默认值。
+    // Flush only after a pause longer than the coalescing window (250ms) — must be fillFlushMs, not the old 500ms,
+    // otherwise the test case would depend on a stale default.
     vi.advanceTimersByTime(300);
     mgr.stop();
     expect(captured.filter((s) => s.type === 'fill')).toHaveLength(1);
@@ -823,8 +824,8 @@ describe('RecorderManager — input / aiTask dedup', () => {
   });
 
   it('skips fill flush when the input was detached mid-typing (React remount)', () => {
-    // 模拟 React controlled input 在校验失败时 remount：旧节点 detach，新节点持有完整值。
-    // flush 到旧节点时必须跳过，否则产出一个前缀碎片 fill（如只有 "a"）。
+    // Simulates a React controlled input remounting when validation fails: the old node detaches, the new node holds the full value.
+    // The flush targeting the old node must be skipped, otherwise a prefix-fragment fill is produced (e.g. just "a").
     const input = makeEl('<input type="text" name="username" />');
     dom.window.document.body.appendChild(input);
     const inp = input as HTMLInputElement;
@@ -835,7 +836,7 @@ describe('RecorderManager — input / aiTask dedup', () => {
     inp.value = 'a';
     inp.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
     vi.advanceTimersByTime(100);
-    // React remount：旧节点从 DOM 摘除，新节点带着 state 里的完整值继续接收输入。
+    // React remount: the old node is removed from the DOM; the new node carries the full value from state and keeps receiving input.
     const replacement = makeEl('<input type="text" name="username" />');
     (replacement as HTMLInputElement).value = 'admin';
     input.remove();
@@ -857,7 +858,7 @@ describe('RecorderManager — input / aiTask dedup', () => {
     mgr.start((s) => captured.push(s));
     inp.value = 'admin';
     inp.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-    // 还没到合并窗就 focusout：blur 触发强制 flush。
+    // focusout before the coalescing window elapses: blur triggers a forced flush.
     inp.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true }));
     mgr.stop();
     expect(captured.filter((s) => s.type === 'fill')).toHaveLength(1);
@@ -874,7 +875,7 @@ describe('RecorderManager — input / aiTask dedup', () => {
     mgr.start((s) => captured.push(s));
     inp.value = 'admin';
     inp.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-    // 失焦 / Enter 触发 change：强制 flush 当前 input。
+    // Blur / Enter fires change: force-flush the current input.
     inp.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     mgr.stop();
     expect(captured.filter((s) => s.type === 'fill')).toHaveLength(1);
@@ -888,7 +889,7 @@ describe('RecorderManager — input / aiTask dedup', () => {
     const captured: RecordedStep[] = [];
     const mgr = new RecorderManager();
     mgr.start((s) => captured.push(s));
-    // captcha 输入框在 React 重渲染或后端定时刷新时会反复触发 input。
+    // Captcha inputs fire input repeatedly on React re-renders or backend scheduled refreshes.
     for (let i = 0; i < 5; i++) {
       inp.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
       vi.advanceTimersByTime(100);
@@ -914,8 +915,8 @@ describe('RecorderManager — input / aiTask dedup', () => {
   });
 
   it('suppresses hover on layout containers (e.g. form / glass-card children)', () => {
-    // 用户登录页面：光标落在表单内部空白处，e.target 会是 form 或嵌套的 div.auth-form-shell，
-    // 它们没有「hover 到这个容器」的用户意图，必须丢弃。
+    // On the user login page, when the cursor lands on blank space inside the form, e.target is the form or a nested div.auth-form-shell;
+    // there is no user intent of "hovering this container", so it must be dropped.
     vi.useFakeTimers();
     withRecorder(() => {
       const wrap = makeEl('<div class="glass-card auth-form-panel"><form class="auth-form-shell"><span>中间空白</span></form></div>');
@@ -929,8 +930,8 @@ describe('RecorderManager — input / aiTask dedup', () => {
   });
 
   it('keeps hover on elements with role / data-testid even inside layout containers', () => {
-    // 容器的子元素如果带 role 或 data-testid（典型如 nav 里的菜单项），仍然是用户可感知的 UI，
-    // 不能因为它处于 glass-card 内就被吞掉。
+    // If a container's child carries role or data-testid (typically menu items in a nav), it is still user-perceivable UI
+    // and must not be swallowed just because it sits inside a glass-card.
     vi.useFakeTimers();
     withRecorder(() => {
       const wrap = makeEl('<div class="glass-card"><button data-testid="menu-item">菜单项</button></div>');
@@ -939,8 +940,8 @@ describe('RecorderManager — input / aiTask dedup', () => {
       fire(btn, 'mouseover');
       vi.advanceTimersByTime(500);
     });
-    // button 上 hover 走不到 500ms 停留就被 click / hover-when-button 抑制路径处理，这里只验证
-    // 它不会被 layout 容器判定吃掉：可以用 mouseover 触发后再 click，期望有 click 但不一定有 hover。
+    // Hover on a button never reaches the 500ms dwell because the click / hover-when-button suppression paths handle it;
+    // here we only verify it is not swallowed by the layout-container rule: trigger mouseover then click, expecting a click but not necessarily a hover.
     expect(captured.filter((s) => s.type === 'hover').length).toBeGreaterThanOrEqual(0);
   });
 });

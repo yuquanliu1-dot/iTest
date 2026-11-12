@@ -1,32 +1,32 @@
 /**
- * 环境 db 对象的库型（方言）判定。
+ * Dialect determination for environment db objects.
  *
- * 背景：db 对象的 payload 里 `dbType` 是权威字段，但存量数据可能没有它——
- * 2026-10-28 prod228 实测，AI 工具 upsert 时只写了 `url`(jdbc:mysql://…) 而漏了
- * `dbType`，于是「缺省 postgres」的旧逻辑把 MySQL 当 PG 连，报出的
- * `Connection terminated unexpectedly` 完全掩盖了真实原因（PG 驱动读不懂 MySQL 握手包）。
+ * Background: in a db object's payload `dbType` is the authoritative field, but legacy data may lack it —
+ * observed on prod228, 2026-10-28: when upserting, the AI tool wrote only `url` (jdbc:mysql://…) and omitted
+ * `dbType`, so the old "default postgres" logic connected to MySQL as if it were PG, and the resulting
+ * `Connection terminated unexpectedly` completely masked the real cause (the PG driver cannot read a MySQL handshake packet).
  *
- * 判定顺序：
- *   1. `dbType` 显式给了 → 直接用（唯一权威）。
- *   2. 没给 → 从 `url` 的 jdbc 前缀推断（`jdbc:mysql://` → mysql，
- *      `jdbc:postgresql://` → postgres）。这是「AI 写了 jdbc url 就必然是那个库型」的
- *      强信号——jdbc url 是用户从被测系统配置里抄来的，比端口号可靠。
- *   3. 都没有 → postgres（兼容 0023 迁移平铺的老数据：那些库确实都是 PG）。
+ * Decision order:
+ *   1. `dbType` explicitly given → use it directly (the sole authority).
+ *   2. Absent → infer from the jdbc prefix of `url` (`jdbc:mysql://` → mysql,
+ *      `jdbc:postgresql://` → postgres). This is a strong signal — "if the AI wrote a jdbc url, the
+ *      dialect is necessarily that one" — jdbc urls are copied from the SUT's config by users, more reliable than the port.
+ *   3. Neither → postgres (compatible with the flattened old data from migration 0023: those databases really are all PG).
  */
 
-/** 库型：postgres / mysql / gauss100（GaussDB 100，Zenith 私有协议，Node 无驱动走 HTTP 桥）。命名与 apps/api 的 DbDialect 一致。 */
+/** Dialects: postgres / mysql / gauss100 (GaussDB 100, Zenith proprietary protocol; no Node driver, goes through the HTTP bridge). Naming matches apps/api's DbDialect. */
 export type DbDialect = 'postgres' | 'mysql' | 'gauss100';
 
-/** db 对象 payload 里与库型判定相关的字段（其余字段不关心）。 */
+/** Dialect-relevant fields in a db object's payload (the rest are irrelevant). */
 export interface DbDialectPayload {
   dbType?: unknown;
   url?: unknown;
 }
 
 /**
- * jdbc url → 方言。只认 url 的 scheme 前缀，不解析 host/port：
- * `jdbc:mysql://…` / `jdbc:postgresql://…` / `jdbc:zenith:@…`（GaussDB 100，注意无 `//`）。
- * 认不出就返回 null（交由调用方回落到缺省）。
+ * jdbc url → dialect. Only the url scheme prefix is recognized, no host/port parsing:
+ * `jdbc:mysql://…` / `jdbc:postgresql://…` / `jdbc:zenith:@…` (GaussDB 100, note: no `//`).
+ * Returns null when unrecognized (the caller falls back to the default).
  */
 export function dialectFromJdbcUrl(url: unknown): DbDialect | null {
   if (typeof url !== 'string') return null;
@@ -38,10 +38,10 @@ export function dialectFromJdbcUrl(url: unknown): DbDialect | null {
 }
 
 /**
- * db 对象的库型判定（探测与运行期共用，见 apps/api/src/execute/envContext.ts）。
+ * Dialect determination for a db object (shared by probing and runtime, see apps/api/src/execute/envContext.ts).
  *
- * @param payload db 对象的原始 payload（未脱敏）
- * @param fallback 无从判定时的缺省库型，默认 postgres（0023 迁移的老数据都是 PG）
+ * @param payload the db object's raw payload (unmasked)
+ * @param fallback dialect used when nothing can be determined, defaults to postgres (the migration-0023 legacy data is all PG)
  */
 export function resolveDbDialect(payload: DbDialectPayload | null | undefined, fallback: DbDialect = 'postgres'): DbDialect {
   if (!payload) return fallback;
@@ -51,7 +51,7 @@ export function resolveDbDialect(payload: DbDialectPayload | null | undefined, f
   return fallback;
 }
 
-/** 各库型的默认端口（gauss100 的「库名」= schema，端口 2888）。 */
+/** Default port per dialect (gauss100's "database name" = schema, port 2888). */
 export function defaultDbPort(dialect: DbDialect): number {
   switch (dialect) {
     case 'mysql':

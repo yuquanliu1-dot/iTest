@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { JSDOM, type DOMWindow } from 'jsdom';
 import { ElementPicker, type PickResult } from '../modules/picker.js';
 
-// picker 在 start 时引用全局 `document`。
-// 每个用例新建一个 JSDOM，把它挂到 globalThis.document 上（与 recorder-manager.test.ts 同一套路）。
+// picker references the global `document` at start time.
+// Each case builds a fresh JSDOM and attaches it to globalThis.document (same approach as recorder-manager.test.ts).
 let dom: JSDOM;
 
 beforeEach(() => {
@@ -56,10 +56,10 @@ describe('ElementPicker', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     expect(received).toHaveLength(1);
     expect(received[0]).toBeNull();
-    // 监听器已移除：Esc 后再点击不应再触发
+    // Listeners already removed: clicking again after Esc must not trigger another callback
     el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     expect(received).toHaveLength(1);
-    // stop() 幂等
+    // stop() is idempotent
     picker.stop();
     expect(received).toHaveLength(1);
   });
@@ -69,7 +69,7 @@ describe('ElementPicker', () => {
     document.body.appendChild(el);
     const results: (PickResult | null)[] = [];
     picker.start((r) => results.push(r));
-    picker.start((r) => results.push(r)); // 第二次调用应被忽略
+    picker.start((r) => results.push(r)); // the second call should be ignored
     el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     expect(results).toHaveLength(1);
   });

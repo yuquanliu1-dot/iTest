@@ -1,58 +1,58 @@
-# deploy.d/ — 多环境发布凭证目录
+# deploy.d/ — multi-environment release credentials directory
 
-每个文件对应一个目标环境的发布配置，文件名即环境名（如 `prod.env` / `staging.env` / `dev.env`）。
-`release.sh` 通过 `--env <name>` 选择要加载的文件，默认 `prod`。
+Each file holds the release configuration for one target environment; the file name is the environment name (e.g. `prod.env` / `staging.env` / `dev.env`).
+`release.sh` picks the file to load via `--env <name>`, defaulting to `prod`.
 
-## 首次使用
+## First use
 
 ```bash
 cd infra/docker/deploy.d
 cp .env.example <env>.env
-$EDITOR <env>.env          # 填入目标服务器的 SSH 凭据与远端路径
+$EDITOR <env>.env          # fill in the target server's SSH credentials and remote path
 ```
 
-推荐按目标命名(如 `prod228.env` / `staging-31.env`),便于一眼区分多台 prod 主机。
+Name files after their target (e.g. `prod228.env` / `staging-31.env`) so multiple prod hosts are easy to tell apart at a glance.
 
-新增环境直接 `cp <env>.env <other>.env` 后改值；旧 env 不会被覆盖。
+To add an environment, simply `cp <env>.env <other>.env` and edit the values; existing env files are never overwritten.
 
-## 文件命名约定
+## File naming convention
 
-| 文件 | 加载方式 |
+| File | How it is loaded |
 | --- | --- |
-| `.env.example` | 模板，提交进 git |
-| `README.md` | 本说明，提交进 git |
-| `<env>.env` | 实际配置，被 gitignore 排除 |
+| `.env.example` | Template, committed to git |
+| `README.md` | This document, committed to git |
+| `<env>.env` | Actual config, excluded via gitignore |
 
-`release.sh --env staging` 会尝试加载 `deploy.d/staging.env`；文件不存在则报错退出。
+`release.sh --env staging` attempts to load `deploy.d/staging.env`; a missing file causes an error exit.
 
-## 凭据存储安全
+## Credential storage safety
 
-- 整目录除模板与 README 外全部走 `.gitignore` 的 `deploy.d/*` 通配
-- 任何 `<env>.env` 都不应被 `git add` 显式提交
-- 跨机器同步:推荐放密码管理器 / 1Password / KeePass,**不要** push 到任何远程
+- Everything in this directory except the template and README is covered by the `deploy.d/*` gitignore wildcard
+- No `<env>.env` should ever be committed explicitly via `git add`
+- Cross-machine sync: prefer a password manager / 1Password / KeePass; do **not** push to any remote
 
-## sshpass 依赖
+## sshpass dependency
 
-如果 `<env>.env` 里 `DEPLOY_SSH_PASSWORD` 非空,本机需要 `sshpass`:
+If `DEPLOY_SSH_PASSWORD` in `<env>.env` is non-empty, the local machine needs `sshpass`:
 
 - macOS: `brew install hudochenkov/sshpass/sshpass`
 - Debian/Ubuntu: `apt install sshpass`
 
-`DEPLOY_SSH_PASSWORD` 留空则走本机 ssh key,不依赖 sshpass。
+Leaving `DEPLOY_SSH_PASSWORD` empty uses the local ssh key instead, with no sshpass dependency.
 
-## 常见工作流
+## Common workflows
 
 ```bash
-# 干跑打包到 prod(不实际上传)
+# Dry-run packaging for prod (no actual upload)
 infra/docker/release.sh --env prod --dry-run
 
-# 真发到 prod
+# Real release to prod
 infra/docker/release.sh --env prod
 
-# 发到 staging
+# Release to staging
 infra/docker/release.sh --env staging
 
-# 自定义环境(临时测试)
+# Custom environment (temporary testing)
 cp deploy.d/.env.example deploy.d/sandbox.env
 $EDITOR deploy.d/sandbox.env
 infra/docker/release.sh --env sandbox --dry-run

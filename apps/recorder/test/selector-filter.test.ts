@@ -23,27 +23,27 @@ describe('selector-filter', () => {
     expect(out.length).toBeGreaterThan(0);
   });
   it('filterCssPath strips runtime id segments but preserves tag and stable class', () => {
-    // 整段只剩 tag 时仍保留片段（不要把 button#login-7f9c3a 整段删掉）。
+    // Keep the fragment even when only the tag remains (do not delete the whole button#login-7f9c3a segment).
     expect(filterCssPath('button#login-7f9c3a')).toBe('button');
     expect(filterCssPath('div#__BV_btn_24.ivu-btn-large')).toBe('div.ivu-btn-large');
     expect(filterCssPath('input#root-abc123.form-control')).toBe('input.form-control');
-    // 稳定 id 不应被误删。
+    // Stable ids must not be stripped.
     expect(filterCssPath('button#login')).toBe('button#login');
-    // Radix 运行时短 id（hex 不够 6 位）也要剥掉。
+    // Radix runtime short ids (hex shorter than 6 chars) must be stripped too.
     expect(filterCssPath('div#radix-:r37:.glass-panel')).toBe('div.glass-panel');
     expect(filterCssPath('div#radix-:r1ab:')).toBe('div');
   });
   it('filters numeric-only classes (Tailwind arbitrary value residue)', () => {
-    // Tailwind v4 `col-5` / `basis-3` 等合并后偶尔留纯数字 class，语义为零。
+    // Tailwind v4 merged classes like `col-5` / `basis-3` occasionally leave a digits-only class behind, zero semantics.
     expect(filterCssPath('div.5.shrink-0')).toBe('div.shrink-0');
     expect(hasUnstableClass('div.5')).toBe(true);
     expect(hasUnstableClass('div.shrink-0')).toBe(false);
   });
   it('filters Radix data-[state] attributes kept as class by buildCssPath', () => {
-    // buildCssPath 把整段 className（含 `data-[state=open]:animate-in`）当作 class 段保留，
-    // 这些状态值每次切换都变，必须当 STATE 丢掉。注意：扁平切分后 `data-[state=open]:animate-in`
-    // 会被切成两个 token —— `.data-`（纯 class 段）和 `[state=open]:animate-in`（属性选择器段），
-    // 两者任一命中 STATE_ATTR_RE 都要丢弃。
+    // buildCssPath keeps the entire className segment (including `data-[state=open]:animate-in`) as a class segment;
+    // these state values change on every toggle, so they must be dropped as STATE. Note: after flat splitting,
+    // `data-[state=open]:animate-in` becomes two tokens — `.data-` (a plain class segment) and
+    // `[state=open]:animate-in` (an attribute-selector segment); if either matches STATE_ATTR_RE, drop it.
     expect(hasUnstableClass('div.data-[state=open]:animate-in')).toBe(true);
     expect(hasUnstableClass('div.[state=open]:animate-in')).toBe(true);
     expect(filterCssPath('div.data-[state=open]:animate-in.data-[state=closed]:fade-out-0'))
@@ -66,7 +66,7 @@ describe('selector-filter', () => {
     expect(isUtilityClass('group-hover:opacity-100')).toBe(true);
     expect(filterCssPath('button.btn-primary.disabled:cursor-not-allowed.disabled:opacity-50'))
       .toBe('button.btn-primary');
-    // form 容器上的 md:flex-row / auth-page-enter 整体被剥到只剩稳定容器 class
+    // md:flex-row / auth-page-enter on the form container are stripped down to only the stable container class
     expect(filterCssPath('div.md:flex-row.auth-page-enter.div.glass-card'))
       .toContain('glass-card');
     expect(filterCssPath('div.md:flex-row.auth-page-enter.div.glass-card'))
@@ -75,8 +75,8 @@ describe('selector-filter', () => {
 });
 
 describe('transient interaction-state classes（悬停/聚焦瞬态）', () => {
-  // 回归动机：规则查看 用例回放 count=0——录制时鼠标悬停行带 Element-UI .hover-row，
-  // 回放无鼠标悬停该 class 必不存在。
+  // Regression motive: the 规则查看 case replayed count=0 — at recording time the hovered row carried Element-UI .hover-row,
+  // which cannot exist at replay without a mouse hover.
   it('isTransientStateClass: hover-row / current-row / is-hover / 后缀族', () => {
     expect(isTransientStateClass('hover-row')).toBe(true);
     expect(isTransientStateClass('current-row')).toBe(true);
@@ -85,7 +85,7 @@ describe('transient interaction-state classes（悬停/聚焦瞬态）', () => {
     expect(isTransientStateClass('cell-hover')).toBe(true);
     expect(isTransientStateClass('ant-table-cell-row-hover')).toBe(true);
     expect(isTransientStateClass('tab-active')).toBe(true);
-    // 稳定结构类不误伤
+    // Stable structural classes must not be hit
     expect(isTransientStateClass('el-table__row')).toBe(false);
     expect(isTransientStateClass('icon-chakan')).toBe(false);
     expect(isTransientStateClass('btn-primary')).toBe(false);
@@ -96,7 +96,7 @@ describe('transient interaction-state classes（悬停/聚焦瞬态）', () => {
     expect(hasUnstableClass('tr.el-table__row > td > .icon-chakan')).toBe(false);
   });
   it('filterCssPath strips hover-row but keeps the rest of the chain', () => {
-    // 输入契约：' > ' 连接的子代组合器路径（finder / buildCssPathFallback 的产出形式）。
+    // Input contract: child-combinator paths joined by ' > ' (the output form of finder / buildCssPathFallback).
     expect(filterCssPath('table > tr.el-table__row.hover-row > td > .icon-chakan'))
       .toBe('table > tr.el-table__row > td > .icon-chakan');
     expect(filterCssPath('tr.is-hover > td')).toBe('tr > td');
@@ -106,19 +106,20 @@ describe('transient interaction-state classes（悬停/聚焦瞬态）', () => {
 });
 
 describe('Element-UI 运行时位置类（资产管理-资产编辑 用例回归）', () => {
-  // 回归动机：run eed6450e 第 4 步断言唯一候选 .has-gutter .el-table_1_column_4 > .cell
-  // 回放 count=0——el-table_{实例号}_column_{列序} 是组件创建序/列注册序，跨会话渲染一变即漂移；
-  // has-gutter 只在有横向滚动条时渲染。两者与 hover-row 同族：录制在、回放不可依赖。
+  // Regression motive: step 4 of run eed6450e asserted the sole candidate .has-gutter .el-table_1_column_4 > .cell,
+  // which replayed count=0 — el-table_{instance}_column_{column order} is the component creation/column registration
+  // order and drifts as soon as cross-session rendering changes; has-gutter only renders with a horizontal scrollbar.
+  // Both are in the same family as hover-row: present at recording time, not dependable at replay.
   it('isTransientStateClass: el-table_{n}[_column_{n}] 与 has-gutter', () => {
     expect(isTransientStateClass('el-table_1')).toBe(true);
     expect(isTransientStateClass('el-table_1_column_4')).toBe(true);
     expect(isTransientStateClass('el-table_12_column_34')).toBe(true);
     expect(isTransientStateClass('has-gutter')).toBe(true);
-    // BEM 稳定结构类不误伤（无 _数字 序号）
+    // BEM stable structural classes must not be hit (no _<digits> suffix)
     expect(isTransientStateClass('el-table__row')).toBe(false);
     expect(isTransientStateClass('el-table__header-wrapper')).toBe(false);
     expect(isTransientStateClass('el-table__fixed-right')).toBe(false);
-    // 非 el-table 开头的数字后缀不误伤
+    // Numeric suffixes not starting with el-table must not be hit
     expect(isTransientStateClass('icon-chakan')).toBe(false);
     expect(isTransientStateClass('glass-card')).toBe(false);
   });
@@ -129,7 +130,7 @@ describe('Element-UI 运行时位置类（资产管理-资产编辑 用例回归
   it('filterCssPath strips runtime positional / gutter but keeps tags and stable classes', () => {
     expect(filterCssPath('div.el-table__header-wrapper > table > tr.has-gutter > th.el-table_1_column_4.is-sortable > div.cell'))
       .toBe('div.el-table__header-wrapper > table > tr > th.is-sortable > div.cell');
-    expect(filterCssPath('div.el-table_1 > div.cell')).toBe('div > div.cell'); // 运行时壳被剥，tag 保留
+    expect(filterCssPath('div.el-table_1 > div.cell')).toBe('div > div.cell'); // runtime shell stripped, tag kept
   });
 });
 
@@ -140,10 +141,11 @@ describe('isUtilityClass (Tailwind strip)', () => {
     expect(isUtilityClass('h-dvh')).toBe(true);
     expect(isUtilityClass('overflow-hidden')).toBe(true);
     expect(isUtilityClass('items-center')).toBe(true);
-    // 任意 Tailwind 前缀 + dash-token 都识别（hover:bg-blue-500 等冒号修饰符不匹配——
-    // Tailwind 前缀解析阶段已剥掉。`text-[12px]` / `w-1/2` 的方括号斜杠非合法 JS class token，
-    // 浏览器拿到的是浏览器生成的合法 CSS 字面量；Tailwind 编译器会剥为稳定 token。
-    // 我们的检测仅对稳定 token 起作用；不影响录制策略。
+    // Any Tailwind prefix + dash-token is recognized (colon modifiers like hover:bg-blue-500 don't match here —
+    // they were already stripped during Tailwind prefix parsing. The brackets/slashes of `text-[12px]` / `w-1/2`
+    // are not legal JS class tokens; what the browser receives is a valid CSS literal generated by the browser,
+    // and the Tailwind compiler strips them into stable tokens. Our detection only acts on stable tokens;
+    // recording strategy is unaffected.
   });
   it('keeps iDO semantic classes even when they look like utilities', () => {
     expect(isUtilityClass('glass-card')).toBe(false);
@@ -154,23 +156,23 @@ describe('isUtilityClass (Tailwind strip)', () => {
   });
   it('keeps unrecognized project classes', () => {
     expect(isUtilityClass('my-component')).toBe(false);
-    expect(isUtilityClass('LoginForm')).toBe(false); // uppercase 不匹配（regex anchor 是小写前缀）
+    expect(isUtilityClass('LoginForm')).toBe(false); // uppercase doesn't match (the regex anchor is a lowercase prefix)
     expect(isUtilityClass('foo-bar')).toBe(false);
   });
   it('filterCssPath strips utilities but keeps semantic class', () => {
     expect(filterCssPath('button.group-nav-tile.w-full.flex.items-center.justify-center'))
       .toBe('button.group-nav-tile');
-    // `group` 在 SEMANTIC_KEEP 中（iDO 语义），不剥离。
+    // `group` is in SEMANTIC_KEEP (iDO semantics), not stripped.
     expect(filterCssPath('div.glass-card.project-card.cursor-pointer.group'))
       .toBe('div.glass-card.project-card.group');
-    // 工具类剥离后该段只剩 `div` tag（与 runtime-id 行为一致：tag 保留，类被剥完）。
+    // After utility stripping the segment is left with only the `div` tag (same behavior as runtime ids: tag kept, classes stripped out).
     expect(filterCssPath('body > div#root > div.flex.h-dvh.overflow-hidden > nav.glass-panel'))
       .toBe('body > div#root > div > nav.glass-panel');
   });
   it('hasUnstableClass flags utility-laden paths', () => {
     expect(hasUnstableClass('body.flex.h-dvh')).toBe(true);
     expect(hasUnstableClass('button.w-full')).toBe(true);
-    // 纯语义类路径稳定
+    // Pure semantic-class path is stable
     expect(hasUnstableClass('button.group-nav-tile')).toBe(false);
   });
 });

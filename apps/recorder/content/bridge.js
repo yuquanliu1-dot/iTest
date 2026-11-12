@@ -1,11 +1,11 @@
-// 幂等守卫：中台地址配成 localhost 时静态+动态注册会双注入，同扩展 content script 共享隔离世界，
-// 二次注入直接跳过，避免双 start 消息（双 WS、双录制 tab）。
+// Idempotence guard: when the console address is configured as localhost, static + dynamic registration double-inject; extension
+// content scripts in the same isolated world skip the second injection directly, avoiding duplicate start messages (double WS, double recording tab).
 (() => {
   if (globalThis.__itaBridge) return;
   globalThis.__itaBridge = true;
 
-  // chrome.runtime.id 在扩展被卸载/重新加载后变为 undefined；sendMessage 会抛
-  // "Extension context invalidated"。提前检测并静默吞掉，避免每次心跳都往 console 喷红。
+  // chrome.runtime.id becomes undefined after the extension is unloaded/reloaded; sendMessage throws
+  // "Extension context invalidated". Detect early and swallow silently to avoid spraying console red on every heartbeat.
   const isContextAlive = () => {
     try {
       return typeof chrome !== 'undefined' && !!chrome.runtime?.id;
@@ -20,9 +20,9 @@
       window.postMessage({ source: 'ita-ext', type: 'start-result', ok: false, error: 'context_invalidated' }, '*');
       return;
     }
-    // 探测握手：web 顶栏在 mount 时发 ping，扩展回 pong + manifest version。
-    // 不调 background、不打开 WS，仅在 content script 自答。
-    // 收到的是空 version → context invalidated（扩展刚被重载过），web 端可提示刷新页面。
+    // Probe handshake: the web top bar sends ping on mount, the extension replies pong + manifest version.
+    // No background call, no WS opened — answered within the content script alone.
+    // An empty version → context invalidated (extension just reloaded); the web side can prompt a page refresh.
     if (e.data.type === 'ping') {
       let version = null;
       if (isContextAlive()) {
@@ -37,7 +37,7 @@
         { type: 'start', session: e.data.session, targetUrl: e.data.targetUrl },
         (resp) => {
           if (chrome.runtime.lastError) {
-            // 扩展中途被卸载/重载：回报 ok=false 让中台停止等待并提示刷新。
+            // The extension was unloaded/reloaded mid-flight: report ok=false so the console stops waiting and prompts a refresh.
             window.postMessage({ source: 'ita-ext', type: 'start-result', ok: false, error: 'context_invalidated' }, '*');
             return;
           }
@@ -55,7 +55,7 @@
     }
   });
 
-  // 面板/弹窗发起的停止：background 通知 web 页收尾
+  // Stop initiated from the panel/popup: background notifies the web page to wrap up
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg?.type === 'recording-stopped') {
       window.postMessage({ source: 'ita-ext', type: 'recording-stopped' }, '*');

@@ -46,7 +46,7 @@ services:
       timeout: 5s
       retries: 6
       start_period: 30s
-    # api 不映射宿主端口:入口只有 nginx 反代(http://api:54321 内部 DNS 轮询),多副本时固定端口必然冲突
+    # api does not map host ports: the only entry is the nginx reverse proxy (http://api:54321 internal DNS round-robin); fixed ports would inevitably conflict with multiple replicas
     volumes:
       - itest-data:/repo/apps/api/.data
       - itest-screenshots:/repo/apps/api/screenshots
@@ -67,10 +67,10 @@ services:
     ports:
       - "8080:80"
 
-  # GaussDB 100 JDBC 桥：gauss100 私有线协议 Node 无驱动，SQL 经 HTTP 转发给桥内的华为 JDBC。
-  # 不映射宿主端口（内网 api 专用）；api 不 depends_on——桥挂只影响 gauss100 连通性，不拖死 api
-  # （api 侧懒失败：query 首调发现桥不可达即报错，其余库型不受影响）。
-  # token 鉴权默认关闭（纯内网）；需要时在 .env.production 加 GAUSS_BRIDGE_TOKEN 并给桥同名变量。
+  # GaussDB 100 JDBC bridge: gauss100's proprietary wire protocol has no Node driver; SQL is forwarded over HTTP to the Huawei JDBC inside the bridge.
+  # No host port mapping (internal-network api only); api does not depends_on the bridge — a dead bridge only breaks gauss100 connectivity, it does not drag api down
+  # (api-side lazy failure: the query call errors out the first time it finds the bridge unreachable; other database types are unaffected).
+  # Token auth is off by default (internal network only); if needed, add GAUSS_BRIDGE_TOKEN to .env.production and give the bridge a variable of the same name.
   gauss-bridge:
     image: itest-gauss-bridge:latest
     container_name: itest-gauss-bridge

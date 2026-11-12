@@ -1,17 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 /**
- * background.js 的会话/传输层单测。
+ * Unit tests for the session/transport layer of background.js.
  *
- * 覆盖的是 b0dbb886 同族的「步骤静默丢失」三条路径：
- *  ① WS 闸门丢步 → 改成入队 + 补发；
- *  ② MV3 SW 被回收 → 会话状态落 storage.session，醒来按同 sessionId 续写；
- *  ③ 弹窗 ack 假成功 → step 消息改成端到端回执。
+ * Covers the three "silent step loss" paths from the b0dbb886 family:
+ *  ① WS gate dropping steps → queue + re-send on connect;
+ *  ② MV3 SW being reclaimed → session state persisted to storage.session, resumed with the same sessionId on wake;
+ *  ③ popup ack false success → step messages changed to end-to-end receipts.
  *
- * background.js 是纯 JS ESM，顶层就摸 chrome.*，所以这里先装好替身再动态 import。
+ * background.js is a plain JS ESM that touches chrome.* at the top level, so stubs are installed here before a dynamic import.
  */
 
-/** chrome API 替身：只覆盖 background.js 用得到的面。 */
+/** chrome API stubs: only the surface background.js actually uses. */
 type MsgListener = (msg: any, sender: any, sendResponse: (r?: any) => void) => boolean | void;
 
 class FakeWebSocket {
@@ -26,19 +26,19 @@ class FakeWebSocket {
   }
   send(data: string): void {
     this.sent.push(data);
-    // 服务端收到 finish 会关连接（apps/api/src/recorder/ws.ts 的 msg.type === 'finish' 分支）
+    // The server closes the connection when it receives finish (the msg.type === 'finish' branch in apps/api/src/recorder/ws.ts)
     if (data.includes('"type":"finish"')) this.close();
   }
   close(): void {
     this.readyState = 3;
     this.onclose?.();
   }
-  /** 模拟服务端接受连接 */
+  /** Simulates the server accepting the connection */
   accept(): void {
     this.readyState = 1;
     this.onopen?.();
   }
-  /** 模拟连接被断开 */
+  /** Simulates the connection being dropped */
   drop(): void {
     this.readyState = 3;
     this.onclose?.();
@@ -112,12 +112,12 @@ function createFakeChrome(sessionStore: Record<string, any>) {
   return { chrome, state };
 }
 
-/** 等若干个微任务轮次：handler 里的 await 链要跑完。 */
+/** Waits several microtask rounds: the await chains inside handlers must finish. */
 async function tick(times = 6): Promise<void> {
   for (let i = 0; i < times; i++) await Promise.resolve();
 }
 
-/** 发一条消息给 background，等它的回执。 */
+/** Sends a message to background and waits for its receipt. */
 function send(state: FakeState, msg: any, sender: any = { tab: { id: 77 } }): Promise<any> {
   const listener = state.listeners[state.listeners.length - 1]!;
   return new Promise((resolve) => {
@@ -154,8 +154,8 @@ describe('background — 录制会话与步骤投递', () => {
     const { chrome, state } = createFakeChrome(sessionStore);
     (globalThis as any).chrome = chrome;
     (globalThis as any).WebSocket = FakeWebSocket;
-    // background.js 是纯 JS 模块（仓库里没有 .d.ts），测试只关心它的副作用
-    // @ts-expect-error 找不到 '../background.js' 的类型声明
+    // background.js is a plain JS module (no .d.ts in the repo); the test only cares about its side effects
+    // @ts-expect-error no type declaration found for '../background.js'
     await import('../background.js');
     await tick();
     return { chrome, state };
@@ -163,18 +163,18 @@ describe('background — 录制会话与步骤投递', () => {
 
   it('连接未就绪时步骤入队而不是丢弃，连上后按序补发', async () => {
     const { state } = await load();
-    // start：连接还没 accept
+    // start: connection not accepted yet
     const startPromise = send(state, { type: 'start', session: SESSION });
     await tick();
     const sock = FakeWebSocket.instances[0]!;
     expect(sock.url).toContain('sessionId=sid-1');
 
-    // 连接未就绪时来一步：后台接收成功（不是丢弃），但还没发出去
+    // A step arrives while the connection is not ready: background accepts it (not dropped), but has not sent it yet
     const resp = await send(state, { type: 'step', dsl: CLICK });
     expect(resp.ok).toBe(true);
     expect(sock.sent).toHaveLength(0);
 
-    // 连接建立 → 补发
+    // Connection established → re-send queued steps
     sock.accept();
     await tick();
     expect(sock.payloads().map((p) => p.step.action.kind)).toEqual(['click']);
@@ -191,18 +191,18 @@ describe('background — 录制会话与步骤投递', () => {
     await tick();
     await startPromise;
 
-    // 连接断开
+    // Connection dropped
     sock.drop();
     await tick();
 
-    // 断线期间连来两步 → 入队
+    // Two steps arrive while disconnected → queued
     const r1 = await send(state, { type: 'step', dsl: CLICK });
     const r2 = await send(state, { type: 'step', dsl: { kind: 'fill', locator: [], value: 'a' } });
     expect(r1.ok).toBe(true);
     expect(r2.ok).toBe(true);
     expect(sock.sent).toHaveLength(0);
 
-    // 退避 1s 后自动重连
+    // Auto-reconnect after 1s backoff
     await vi.advanceTimersByTimeAsync(1000);
     const sock2 = FakeWebSocket.instances[1]!;
     expect(sock2.url).toContain('sessionId=sid-1');
@@ -213,7 +213,7 @@ describe('background — 录制会话与步骤投递', () => {
   });
 
   it('SW 被回收后按 storage.session 恢复会话并继续投递步骤', async () => {
-    // 模拟上一轮 SW 写下的会话快照
+    // Simulates the session snapshot written by the previous SW round
     sessionStore.recordingSession = {
       wsUrl: 'ws://sut/recorder',
       sessionId: 'sid-9',
@@ -229,13 +229,13 @@ describe('background — 录制会话与步骤投递', () => {
       pending: [],
     };
     const { state } = await load();
-    // 恢复时按同 sessionId 重连（服务端据此续写）
+    // Reconnects with the same sessionId on restore (the server resumes writing based on it)
     const sock = FakeWebSocket.instances[0]!;
     expect(sock.url).toContain('sessionId=sid-9');
     sock.accept();
     await tick();
 
-    // 恢复后到来的步骤照常投递（不再被空闸门吃掉）
+    // Steps arriving after restore are delivered as usual (no longer swallowed by the empty gate)
     const resp = await send(state, { type: 'step', dsl: CLICK });
     expect(resp.ok).toBe(true);
     expect(sock.payloads().map((p) => p.step.action.kind)).toEqual(['click']);
@@ -276,7 +276,7 @@ describe('background — 录制会话与步骤投递', () => {
       mode: 'fresh',
       incognito: false,
       webTabId: 77,
-      recordingTabId: 9999, // 已被用户关掉
+      recordingTabId: 9999, // already closed by the user
       recordingTabs: [],
       nextTabIndex: 1,
       paused: false,
