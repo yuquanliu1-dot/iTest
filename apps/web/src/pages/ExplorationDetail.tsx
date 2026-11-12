@@ -58,7 +58,7 @@ export default function ExplorationDetail() {
   // 切会话的归零由组件卸载 cleanup 负责，页面不自己归零（父级 effect 晚于子级跑，会吃掉上报）。
   const [hasLiveFrame, setHasLiveFrame] = useState(false);
   // 画面高度由页面持有（受控传给 LiveViewImg）：会话过程卡取同一高度 → 两窗顶部同起点、底部恒对齐；
-  // 画面宽度按高度等比自适应（grid auto 轨道），拖高变宽，剩余宽度全部让给会话过程。
+  // 两窗宽度等分（各 1fr），画面在框内按比例内嵌。
   const [liveH, setLiveH] = useState(220);
 
   const invalidate = () => {
@@ -346,15 +346,16 @@ export default function ExplorationDetail() {
           </div>
         )}
 
-        {/* 实时画面 + 会话过程 并排：画面宽度按高度等比自适应（auto 轨道），剩余宽度全给会话过程。
+        {/* 实时画面 + 会话过程 并排：两窗等宽（各占一半），底对齐不变。
             会话过程卡定高 = 画面框高（liveH + 上下边框 2px）→ 两窗顶部同起点、底部恒对齐，
-            步骤多时在窗口内滚动，不把整页撑长；拖拽把手调画面高度时两窗同步变高变宽。
+            步骤多时在窗口内滚动，不把整页撑长；拖拽把手调画面高度时两窗同步变高。
+            画面框宽 = 列宽（等宽），画面在框内按比例内嵌（contain，不裁切）。
             画面框下方还有拖拽把手/回放按钮行，属于「窗口外」的部分，不参与对齐。
             没有画面时（录制已过 TTL / 从未跑过 / 流断掉）不并排：右侧留白是死区，
             此时会话过程回到整宽卡片（与改版前一致）。 */}
         <div
           className="shrink-0 grid gap-4"
-          style={{ gridTemplateColumns: steps.length > 0 && hasLiveFrame ? 'auto minmax(0, 1fr)' : 'minmax(0, 1fr)' }}
+          style={{ gridTemplateColumns: steps.length > 0 && hasLiveFrame ? 'minmax(0, 1fr) minmax(0, 1fr)' : 'minmax(0, 1fr)' }}
         >
           <div className="min-w-0">
             <LiveViewCard

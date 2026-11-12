@@ -68,7 +68,8 @@ export default function LiveViewImg({
   url: string;
   mode?: LiveViewMode;
   retry?: boolean;
-  /** 受控画面高度（详情页并排布局用）：传入后高度恒定、宽度按画面比例自适应；
+  /** 受控画面高度（详情页并排布局用）：传入后高度恒定、宽度填满所在列——
+   *  详情页并排时两窗等宽，画面在框内按比例内嵌（object-contain），不裁切。
    *  不传保持旧行为（w-full 占满列宽、maxHeight 封顶）。拖拽把手把新高度经回调交还页面。 */
   frameHeight?: number;
   onFrameHeightChange?: (h: number) => void;
@@ -160,7 +161,7 @@ export default function LiveViewImg({
           onError={() => setBroken(true)}
           alt={t(BADGE[mode].text)}
           className={frameHeight != null ? 'block object-contain' : 'block w-full object-contain'}
-          style={frameHeight != null ? { height, width: 'auto', maxWidth: '100%' } : { maxHeight: height }}
+          style={frameHeight != null ? { height, width: '100%' } : { maxHeight: height }}
         />
         <ModeBadge mode={mode} />
         <span

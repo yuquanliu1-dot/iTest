@@ -100,7 +100,7 @@ describe('ExplorationDetail 会话过程', () => {
     expect(screen.getAllByText('失败')).toHaveLength(1);
   });
 
-  it('并排布局契约：会话过程卡定高=画面框高（220+2 边框）、画面列 auto 轨道宽度自适应、剩余宽度给会话过程', async () => {
+  it('并排布局契约：会话过程卡定高=画面框高（220+2 边框）、两窗等宽（各 1fr）', async () => {
     renderDetail();
     await waitFor(() => expect(explorationGet).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText('会话过程')).toBeTruthy());
@@ -111,7 +111,7 @@ describe('ExplorationDetail 会话过程', () => {
     });
     const card = screen.getByText('会话过程').closest('.bg-card') as HTMLElement;
     const grid = card.parentElement as HTMLElement;
-    expect(grid.style.gridTemplateColumns).toBe('auto minmax(0, 1fr)');
+    expect(grid.style.gridTemplateColumns).toBe('minmax(0, 1fr) minmax(0, 1fr)');
   });
 
   it('无留痕（老会话）→ 不渲染会话过程卡片', async () => {

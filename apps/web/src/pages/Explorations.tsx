@@ -225,14 +225,27 @@ export default function Explorations() {
                             {s.matrixRole ? ` · ${personaLabel(s.matrixRole, i18n.language)}` : ''}
                           </span>
                         )}
-                        {/* 缺陷候选数：列表页一眼看出这轮探出了几个疑点 */}
+                        {/* 缺陷候选数：列表页一眼看出这轮探出了几个疑点——
+                            有候选时用警示色显性标出（数字放大加粗），0 个弱化成灰底，
+                            不与真有疑点的卡片抢眼。 */}
                         <span
-                          className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px]"
-                          style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
+                          className="flex items-center gap-1 rounded-full px-2 py-0.5"
+                          style={
+                            (s.findingsCount ?? 0) > 0
+                              ? {
+                                  background: 'var(--warning-soft)',
+                                  color: 'var(--warning)',
+                                  boxShadow: 'inset 0 0 0 1px var(--warning-soft-border)',
+                                }
+                              : { background: 'var(--muted)', color: 'var(--muted-foreground)' }
+                          }
                           title={t('explorations:findings')}
                         >
-                          <Icon name="beaker" size={10} />
-                          {t('explorations:findings')} {s.findingsCount ?? 0}
+                          <Icon name="beaker" size={11} />
+                          <span className="text-[11px]">{t('explorations:findings')}</span>
+                          <span className="text-[13px] font-semibold tabular-nums leading-none">
+                            {s.findingsCount ?? 0}
+                          </span>
                         </span>
                       </div>
                       <div className="text-[12px] mt-1.5 line-clamp-2" style={{ color: 'var(--muted-foreground)' }}>
