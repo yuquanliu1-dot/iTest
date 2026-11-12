@@ -61,17 +61,17 @@ export default function LiveViewImg({
   url,
   mode = 'live',
   retry = false,
-  frameHeight,
   onFrameHeightChange,
   onFrameVisibleChange,
 }: {
   url: string;
   mode?: LiveViewMode;
   retry?: boolean;
-  /** 受控画面高度（详情页并排布局用）：传入后高度恒定、宽度填满所在列——
-   *  详情页并排时两窗等宽，画面在框内按比例内嵌（object-contain），不裁切。
-   *  不传保持旧行为（w-full 占满列宽、maxHeight 封顶）。拖拽把手把新高度经回调交还页面。 */
-  frameHeight?: number;
+  /** 自适应模式（详情页并排布局用）：传了 onFrameHeightChange 即进入——
+   *  画面按所在列宽等比撑高（w-full + height:auto），框内零留白零裁切；
+   *  实际渲染高度经回调交还页面（img 加载时 + 几何变化时 ResizeObserver 兜底，
+   *  并排栅格切换列宽不触发 window resize，必须靠 RO）。
+   *  不传保持旧行为（w-full 占满列宽、maxHeight 封顶 + 拖拽把手）。 */
   onFrameHeightChange?: (h: number) => void;
   /** 画面窗口在不在（挂载即 true、流断撤框即 false）——并排布局据此决定是否并排。 */
   onFrameVisibleChange?: (visible: boolean) => void;
@@ -84,15 +84,30 @@ export default function LiveViewImg({
   const [zoomShot, setZoomShot] = useState<string | null>(null);
   const [zoomFailed, setZoomFailed] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
-  // 画面高度可拖拽调整：默认 220（同改版前 maxHeight），把手在画面下方。
-  // frameHeight 受控时以此为准，内部状态仅作非受控回退。
+  // 自适应 = 页面要拿画面真实高度对齐会话过程卡；固定高模式（默认 220 可拖拽）留给其余用法。
+  const adaptive = onFrameHeightChange != null;
   const [innerHeight, setInnerHeight] = useState(DEFAULT_H);
-  const height = frameHeight ?? innerHeight;
+  const height = innerHeight;
   const applyHeight = (h: number) => {
     setInnerHeight(h);
     onFrameHeightChange?.(h);
   };
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  // 高度回报：取 img 渲染高度（width:100% + height:auto 下即列宽/画面比例）。
+  // onLoad 覆盖首次加载与断流重连（key=attempt 重挂后 load 再触发）；RO 覆盖后续几何变化。
+  useEffect(() => {
+    if (!adaptive || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      const h = imgRef.current?.clientHeight ?? 0;
+      if (h > 0) onFrameHeightChange?.(h);
+    });
+    if (imgRef.current) ro.observe(imgRef.current);
+    return () => ro.disconnect();
+  }, [adaptive, attempt, onFrameHeightChange]);
+  const reportFrameHeight = () => {
+    const h = imgRef.current?.clientHeight ?? 0;
+    if (h > 0) onFrameHeightChange?.(h);
+  };
   useEffect(() => {
     if (!broken || !retry) return;
     const timer = setTimeout(() => {
@@ -159,9 +174,10 @@ export default function LiveViewImg({
           ref={imgRef}
           src={src}
           onError={() => setBroken(true)}
+          onLoad={reportFrameHeight}
           alt={t(BADGE[mode].text)}
-          className={frameHeight != null ? 'block object-contain' : 'block w-full object-contain'}
-          style={frameHeight != null ? { height, width: '100%' } : { maxHeight: height }}
+          className={adaptive ? 'block w-full' : 'block w-full object-contain'}
+          style={adaptive ? { width: '100%' } : { maxHeight: height }}
         />
         <ModeBadge mode={mode} />
         <span
@@ -173,26 +189,29 @@ export default function LiveViewImg({
       </div>
 
       {/* 拖拽把手：调画面高度。放在画面外下方，避免与点画面放大冲突。
-          命中区 14px（细线只有 1px，用户看不见也点不中），中间一段短横做可视抓手。 */}
-      <div
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label={t('common:dragToResizeImage')}
-        onPointerDown={onHandleDown}
-        onPointerMove={onHandleMove}
-        onPointerUp={onHandleUp}
-        className="flex shrink-0 cursor-row-resize items-center justify-center"
-        style={{ height: 14, touchAction: 'none', marginTop: 2 }}
-      >
+          命中区 14px（细线只有 1px，用户看不见也点不中），中间一段短横做可视抓手。
+          自适应模式不渲染——高度由画面比例决定，手动调高会把留白重新请回来。 */}
+      {!adaptive && (
         <div
-          style={{
-            width: 36,
-            height: 3,
-            borderRadius: 2,
-            background: 'var(--border)',
-          }}
-        />
-      </div>
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={t('common:dragToResizeImage')}
+          onPointerDown={onHandleDown}
+          onPointerMove={onHandleMove}
+          onPointerUp={onHandleUp}
+          className="flex shrink-0 cursor-row-resize items-center justify-center"
+          style={{ height: 14, touchAction: 'none', marginTop: 2 }}
+        >
+          <div
+            style={{
+              width: 36,
+              height: 3,
+              borderRadius: 2,
+              background: 'var(--border)',
+            }}
+          />
+        </div>
+      )}
 
       <Dialog open={zoomed} onOpenChange={(o) => !o && setZoomed(false)}>
         <DialogContent

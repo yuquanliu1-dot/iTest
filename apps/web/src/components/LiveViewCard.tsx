@@ -21,7 +21,6 @@ export default function LiveViewCard({
   replayUrl,
   replayMetaUrl,
   running,
-  frameHeight,
   onFrameHeightChange,
   onFrameVisibleChange,
 }: {
@@ -31,8 +30,7 @@ export default function LiveViewCard({
   /** 录制可用性探测 URL（?replay=meta）。 */
   replayMetaUrl: string;
   running: boolean;
-  /** 受控画面高度 + 回调：透传 LiveViewImg（详情页并排布局用），其余用法不传保持旧行为。 */
-  frameHeight?: number;
+  /** 自适应高度回报：透传 LiveViewImg（详情页并排布局用），其余用法不传保持旧行为。 */
   onFrameHeightChange?: (h: number) => void;
   onFrameVisibleChange?: (visible: boolean) => void;
 }) {
@@ -83,7 +81,6 @@ export default function LiveViewCard({
           url={src}
           mode={mode}
           retry={running}
-          frameHeight={frameHeight}
           onFrameHeightChange={onFrameHeightChange}
           onFrameVisibleChange={onFrameVisibleChange}
         />

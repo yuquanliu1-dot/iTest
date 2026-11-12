@@ -57,8 +57,8 @@ export default function ExplorationDetail() {
   // （录制只在服务端内存里 TTL 30min，过期后回看没框，会话过程回落整宽卡片）。
   // 切会话的归零由组件卸载 cleanup 负责，页面不自己归零（父级 effect 晚于子级跑，会吃掉上报）。
   const [hasLiveFrame, setHasLiveFrame] = useState(false);
-  // 画面高度由页面持有（受控传给 LiveViewImg）：会话过程卡取同一高度 → 两窗顶部同起点、底部恒对齐；
-  // 两窗宽度等分（各 1fr），画面在框内按比例内嵌。
+  // 画面高度自适应：LiveViewImg 按列宽等比撑高（框内零留白零裁切）并把实际渲染高度回报上来，
+  // 会话过程卡取同一高度 → 两窗顶部同起点、底部恒对齐；220 只是首帧加载前的兜底值。
   const [liveH, setLiveH] = useState(220);
 
   const invalidate = () => {
@@ -358,10 +358,10 @@ export default function ExplorationDetail() {
         )}
 
         {/* 实时画面 + 会话过程 并排：两窗等宽（各占一半），底对齐不变。
+            画面高度自适应：按列宽等比撑高（框内零留白零裁切），LiveViewImg 把实际高度回报到 liveH；
             会话过程卡定高 = 画面框高（liveH + 上下边框 2px）→ 两窗顶部同起点、底部恒对齐，
-            步骤多时在窗口内滚动，不把整页撑长；拖拽把手调画面高度时两窗同步变高。
-            画面框宽 = 列宽（等宽），画面在框内按比例内嵌（contain，不裁切）。
-            画面框下方还有拖拽把手/回放按钮行，属于「窗口外」的部分，不参与对齐。
+            步骤多时在窗口内滚动，不把整页撑长。
+            画面框下方还有回放按钮行，属于「窗口外」的部分，不参与对齐。
             没有画面时（录制已过 TTL / 从未跑过 / 流断掉）不并排：右侧留白是死区，
             此时会话过程回到整宽卡片（与改版前一致）。 */}
         <div
@@ -374,7 +374,6 @@ export default function ExplorationDetail() {
               replayUrl={(speed) => api.explorations.replayUrl(session.id, speed)}
               replayMetaUrl={api.explorations.replayMetaUrl(session.id)}
               running={session.status === 'running'}
-              frameHeight={liveH}
               onFrameHeightChange={setLiveH}
               onFrameVisibleChange={setHasLiveFrame}
             />

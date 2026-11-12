@@ -22,10 +22,17 @@ vi.mock('../api/client', async (importOriginal) => {
 });
 
 // 实时画面重组件 stub 掉：MJPEG/录像与本用例无关。
-// stub 模拟「画面就位」：挂载后上报 onFrameVisibleChange(true)，驱动并排分支（真组件由 LiveViewImg 上报）。
+// stub 模拟「画面就位」：挂载后上报 onFrameVisibleChange(true) + onFrameHeightChange(300)
+// （真组件由 LiveViewImg 按列宽等比撑高后回报实际高度），驱动并排分支与高度对齐契约。
 vi.mock('../components/LiveViewCard', () => ({
-  default: function LiveViewCardStub(props: { onFrameVisibleChange?: (v: boolean) => void }) {
-    useEffect(() => props.onFrameVisibleChange?.(true), [props.onFrameVisibleChange]);
+  default: function LiveViewCardStub(props: {
+    onFrameHeightChange?: (h: number) => void;
+    onFrameVisibleChange?: (v: boolean) => void;
+  }) {
+    useEffect(() => {
+      props.onFrameVisibleChange?.(true);
+      props.onFrameHeightChange?.(300);
+    }, [props.onFrameHeightChange, props.onFrameVisibleChange]);
     return null;
   },
 }));
@@ -124,14 +131,14 @@ describe('ExplorationDetail 会话过程', () => {
     expect(dashes).toHaveLength(0);
   });
 
-  it('并排布局契约：会话过程卡定高=画面框高（220+2 边框）、两窗等宽（各 1fr）', async () => {
+  it('并排布局契约：画面高度自适应回报后会话过程卡跟随（300+2 边框）、两窗等宽（各 1fr）', async () => {
     renderDetail();
     await waitFor(() => expect(explorationGet).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText('会话过程')).toBeTruthy());
-    // 上报「有画面」走一次 effect + 重渲染后才切到并排分支（此前渲染的是整宽回落卡）
+    // 上报「有画面 + 画面高 300」走一次 effect + 重渲染后才切到并排分支（此前渲染的是整宽回落卡）
     await waitFor(() => {
       const c = screen.getByText('会话过程').closest('.bg-card') as HTMLElement;
-      expect(c.style.height).toBe('222px');
+      expect(c.style.height).toBe('302px');
     });
     const card = screen.getByText('会话过程').closest('.bg-card') as HTMLElement;
     const grid = card.parentElement as HTMLElement;
