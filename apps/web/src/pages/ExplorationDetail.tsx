@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -119,6 +119,13 @@ export default function ExplorationDetail() {
   // 过程卡长文本展开（key = o<序号>/d<序号>）与代码范围分组折叠（key = 组名；缺省 = 文件数>8 收起）。
   const [expandedText, setExpandedText] = useState<Record<string, boolean>>({});
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  // 会话过程自动跟滚：运行中新步骤到达时贴底跟随；stepsStick 记录用户是否「盯着底部」——
+  // 上翻即暂停，滚回底部恢复（见 stepsBody 上的 onScroll 与下方 effect）。
+  const stepsListRef = useRef<HTMLOListElement | null>(null);
+  const stepsStickRef = useRef(true);
+  // 会话是否在跑（pending 也算）：自动滚动只服务「盯运行中会话」的场景，
+  // 终态会话是历史记录，用户从顶往下读，不劫持滚动。早退分支之前算好（hook 不能放早退后）。
+  const sessionLive = session?.status === 'running' || session?.status === 'pending';
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['exploration', id] });
@@ -228,7 +235,16 @@ export default function ExplorationDetail() {
     </div>
   );
   const stepsBody = (
-    <ol className="flex flex-col gap-1 overflow-y-auto min-h-0 flex-1">
+    <ol
+      ref={stepsListRef}
+      onScroll={() => {
+        const el = stepsListRef.current;
+        if (!el) return;
+        // 距底 <24px 视为「在底部」：自动滚动会持续把 stick 置回 true；用户上翻则置 false 暂停。
+        stepsStickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      }}
+      className="flex flex-col gap-1 overflow-y-auto min-h-0 flex-1"
+    >
       {steps.map((s, i) => {
         const navLanded = navLandedMismatch(s);
         return (
@@ -270,6 +286,15 @@ export default function ExplorationDetail() {
       })}
     </ol>
   );
+
+  // 运行中新步骤到达 → 自动贴底跟随。hasLiveFrame 入 deps：并排↔整宽切换会重挂 <ol>
+  // （scrollTop 归零），切换后要重新贴底。整宽模式 <ol> 不内滚（页面滚），置 scrollTop 是无害 no-op。
+  useEffect(() => {
+    if (!sessionLive) return;
+    const el = stepsListRef.current;
+    if (!el || !stepsStickRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [steps.length, hasLiveFrame, sessionLive]);
 
   if (isError) {
     return (
