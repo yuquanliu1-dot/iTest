@@ -48,11 +48,10 @@ export default function Explorations() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [charter, setCharter] = useState('');
-  const [title, setTitle] = useState('');
   // 人格多选：选 1 个=单会话；选 ≥2 个=人格矩阵（同一章程并行起多路，建组跳矩阵视图）。
   // 单入口不拆两个弹窗——同能力不做双入口。
+  // 不收会话标题/矩阵名：api 侧有默认（title=章程前 80 字、label=N 人格矩阵），少填两项少一道坎。
   const [personas, setPersonas] = useState<string[]>(['qa']);
-  const [matrixLabel, setMatrixLabel] = useState('');
   const [startUrl, setStartUrl] = useState('');
   const [allowDestructive, setAllowDestructive] = useState(false);
   const [allowFaultInjection, setAllowFaultInjection] = useState(false);
@@ -77,7 +76,6 @@ export default function Explorations() {
         allowDestructive,
         allowFaultInjection,
         budgetTurns,
-        ...(title.trim() ? { title: title.trim() } : {}),
         ...(startUrl.trim() ? { startUrl: startUrl.trim() } : {}),
         ...(windowMode === 'custom' && windowCustomReady ? { windowWidth, windowHeight } : {}),
       };
@@ -88,16 +86,13 @@ export default function Explorations() {
       const m = await api.explorations.createMatrix({
         ...shared,
         personas,
-        ...(matrixLabel.trim() ? { label: matrixLabel.trim() } : {}),
       });
       return { single: false, id: m.matrixId };
     },
     onSuccess: (r) => {
       setCharter('');
-      setTitle('');
       setStartUrl('');
       setPersonas(['qa']);
-      setMatrixLabel('');
       setAllowDestructive(false);
       setAllowFaultInjection(false);
       setBudgetTurns(24);
@@ -364,21 +359,6 @@ export default function Explorations() {
               value={startUrl}
               onChange={(e) => setStartUrl(e.target.value)}
             />
-            <Input
-              label={t('explorations:sessionName')}
-              placeholder={t('explorations:sessionNamePlaceholder')}
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-            {/* 矩阵名只在多视角（≥2 个人格）时出现 */}
-            {personas.length >= 2 && (
-              <Input
-                label={t('explorations:matrixLabel')}
-                placeholder={t('explorations:matrixLabelPlaceholder')}
-                value={matrixLabel}
-                onChange={(e) => setMatrixLabel(e.target.value)}
-              />
-            )}
             {/* 轮次预算：软预算，超界优雅收尾（已发现的 findings 全保留） */}
             <div className="flex flex-col gap-1">
               <Input
