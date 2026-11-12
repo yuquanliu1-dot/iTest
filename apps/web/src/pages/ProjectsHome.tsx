@@ -438,9 +438,17 @@ export default function ProjectsHome() {
                 compact
                 title={t('productLines:noProjects')}
                 action={
-                  <Button size="sm" variant="ghost" onClick={() => selectLine(null)}>
-                    {t('productLines:clearFilter')}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    {/* Selected line has no projects: offer project creation right here, defaulting to that line — otherwise the
+                        create entry only exists in the unfiltered view and silently defaults to the first line. */}
+                    <Button size="sm" onClick={() => setForm({ ...EMPTY_FORM, open: true, productLineId: filterLineId ?? '' })}>
+                      <Icon name="plus" size={14} />
+                      {t('projects:createProject')}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => selectLine(null)}>
+                      {t('productLines:clearFilter')}
+                    </Button>
+                  </div>
                 }
               />
             ) : (
