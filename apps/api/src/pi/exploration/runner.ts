@@ -16,13 +16,12 @@ import { chromium } from 'playwright-core';
 import { getExplorationPersona } from '@itest/shared';
 import { db } from '../../db/client.js';
 import { explorationSessions } from '../../db/schema.js';
+import { claimSession, finishSession, heartbeat } from '../../execute/explorationShared.js';
 import {
-  claimSession,
-  finishSession,
-  heartbeat,
+  explorationWallClockMs,
+  EXPLORATION_IDLE_TIMEOUT_MS,
   EXPLORATION_MAX_TURNS,
-  EXPLORATION_WALL_CLOCK_MS,
-} from '../../execute/explorationShared.js';
+} from '../../execute/explorationBudget.js';
 import { EXPLORATION_MAX_EXCLUDED, EXPLORATION_MAX_REPO_READS, type ExplorationStep } from '../../execute/explorationPrompt.js';
 import { resolveEnv } from '../../execute/envContext.js';
 import { resolveCodeScope, type CodeScope } from '../../execute/codeScope.js';
@@ -42,7 +41,7 @@ import { createExplorationTools, trailStepOf } from './tools/index.js';
 import { createFaultController, type FaultController } from './tools/fault.js';
 import { composeExplorationPrompt, createExplorationSession } from './session.js';
 import { createFindingStore, type FindingStore } from './findings.js';
-import { createCoverageTracker } from './coverage.js';
+import { createCoverageTracker, coverageDigest } from './coverage.js';
 import { createErrorSignalCollector } from './observation.js';
 import { fallbackFailureReason, readToolSummary } from './trail.js';
 
@@ -52,7 +51,7 @@ const INTERACTION_KINDS = new Set(['click', 'fill', 'press', 'select', 'scroll',
 /**
  * 探索式测试会话 runner（pi 链路）入口：EXPLORATION_RUNTIME=pi 时由 execute/exploration.ts 分派到这里。
  */
-export async function runExplorationSessionPi(input: { sessionId: string }): Promise<void> {
+export async function runExplorationSessionPi(input: { sessionId: string; idleTimeoutMs?: number }): Promise<void> {
   const { sessionId } = input;
   const sessionRow = (await db.select().from(explorationSessions).where(eq(explorationSessions.id, sessionId)))[0];
   if (!sessionRow) return;
@@ -75,6 +74,23 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
   let turnCount = 0;
   let userCancelled = false;
   let budgetExceeded = false;
+  /** 模型调用挂死（超过 EXPLORATION_IDLE_TIMEOUT_MS 没有任何 pi 事件）→ 中止会话。 */
+  let idleTimedOut = false;
+  /** 最后一次 pi 事件时间（空闲看门狗的判据；流式期间每个数据块都刷新）。 */
+  let lastEventAt = Date.now();
+  /** 空闲看门狗定时器（finally 必清）。 */
+  let idleTimer: NodeJS.Timeout | undefined;
+  /** 挂死判据：这么久没有任何 pi 事件 = 这一轮永远回不来。默认 5 分钟——
+   *  推理型网关可能长时间不出首字节（思考阶段不出 token），阈值太小会误杀正常调用。 */
+  const idleTimeoutMs = input.idleTimeoutMs ?? EXPLORATION_IDLE_TIMEOUT_MS;
+  /** 看门狗轮询间隔（不超过阈值本身——阈值很小时要跟得上）。 */
+  const idleCheckMs = Math.min(30_000, idleTimeoutMs);
+  /** DB 心跳刷新间隔：墙钟放大后（最长 240 分钟），心跳不能只在轮次边界刷——
+   *  一轮长思考/长流式输出可能超过外层看门狗的判死窗口（5 分钟），届时活会话
+   *  会被误判成「执行器中断」。30s 一次：心跳常新，挂死的裁决权留给本 runner
+   *  的空闲看门狗（终态给得出「长时间无响应」这种可行动原因，而不是 failed）。 */
+  const HEARTBEAT_REFRESH_MS = 30_000;
+  let heartbeatTimer: NodeJS.Timeout | undefined;
   /** 最后一条 assistant 文本（done summary：pi 循环自然结束时的总结）。 */
   let summaryText = '';
   /** finish 工具提交的总结（finish 后 abort，正常/异常路径都以它为终态总结）。 */
@@ -129,15 +145,28 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
     }
     await persistSessionState();
   };
-  /** 终态总结：finish 提交 > 预算注记 > 最后一条 assistant 文本；缺陷计数注记两路径都带。 */
+  /** 终态总结：finish 提交 > 预算/挂死注记 > 最后一条 assistant 文本；缺陷计数与覆盖摘要两路径都带。 */
   const terminalSummary = (): string | null => {
     const countsNote = (findingStore?.savedCount ?? 0) > 0 ? `（报告缺陷 ${findingStore!.savedCount} 条）` : '';
-    if (finishSummary) return `${finishSummary}${countsNote}`.trim();
-    if (budgetExceeded) return `${summaryText || '探索结束'}（预算耗尽，${turnCount} 轮后停止）${countsNote}`.trim();
-    return summaryText ? `${summaryText}${countsNote}`.trim() : null;
+    // 覆盖摘要：盖住了多少、哪些子目标没盖到——探索深度不只看跑了几轮。
+    const coverageNote = coverageLedger ? `（覆盖：${coverageDigest(coverageLedger.snapshot())}）` : '';
+    if (finishSummary) return `${finishSummary}${countsNote}${coverageNote}`.trim();
+    const stopNote = idleTimedOut
+      ? '（模型调用长时间无响应，已中止）'
+      : budgetExceeded
+        ? `（预算耗尽，${turnCount} 轮后停止）`
+        : '';
+    // finish 未提交：末条 assistant 文本不是正式总结（可能是中途观察记录/英文闲聊），
+    // 诚实标注再引用——用户不该把残骸当结论读。
+    const body = summaryText ? `模型未提交正式总结（以下为末条发言）：${summaryText}` : '探索结束';
+    return `${body}${stopNote}${countsNote}${coverageNote}`.trim();
   };
 
   try {
+    // 会话存活证据：定时刷新（会话跑动全程覆盖，含长思考轮——期间轮次边界的心跳不会触发）。
+    heartbeatTimer = setInterval(() => {
+      void heartbeat(sessionId).catch((e) => logger.warn({ err: e, sessionId }, 'exploration heartbeat refresh failed'));
+    }, HEARTBEAT_REFRESH_MS);
     await heartbeat(sessionId);
     envCtx = await resolveEnv({ versionId: sessionRow.versionId }, { expectedProjectId: sessionRow.projectId });
     const webRef = defaultWebRef({ envCtx });
@@ -168,7 +197,7 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
       return;
     }
 
-    // —— C2 章程分解（开跑前 1 次 LLM 调用 → 2~6 条子目标；软失败 = 无子目标，探索照常跑）——
+    // —— C2 章程分解（开跑前 1 次 LLM 调用 → 2~12 条子目标；软失败 = 无子目标，探索照常跑）——
     //  子目标进 system prompt（压缩安全）并落 coverage_ledger.goals（终态快照供人工评估覆盖度）。
     //  放在探针之后：探针不过这场会话直接失败，没必要再烧一次分解调用。
     const persona = getExplorationPersona(sessionRow.persona);
@@ -178,7 +207,8 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
       return;
     }
     // 探索墙钟从范围解析 + 探针 + 章程分解后起算——预算全部留给智能体阶段。
-    const deadline = Date.now() + EXPLORATION_WALL_CLOCK_MS;
+    // 墙钟由轮次物化（不再是固定 15 分钟）：轮次是深度的唯一旋钮，墙钟只是它的物化 + 兜底。
+    const deadline = Date.now() + explorationWallClockMs(maxTurns);
 
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
     try {
@@ -331,6 +361,9 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
       };
 
       piSession.subscribe((ev) => {
+        // 任何事件都算「会话还活着」——流式输出期间 message_update 每块都来，
+        // 空闲看门狗因此不会在模型正常思考/输出时误判挂死。
+        lastEventAt = Date.now();
         if (ev.type === 'tool_execution_start') {
           const step = trailStepOf(ev.toolName, ev.args);
           if (step) pendingTrail.set(ev.toolCallId, step);
@@ -382,6 +415,18 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
 
       logger.info({ sessionId, channelName, vision, scopeOrigins, maxTurns }, 'exploration pi session starting');
 
+      // —— 空闲看门狗：墙钟放大到 240 分钟后，必须由它兜「模型调用挂死」——
+      //  这么久（EXPLORATION_IDLE_TIMEOUT_MS）没有任何 pi 事件 = 这一轮永远回不来。
+      //  命中即 abort：留痕全保留，终态注明是挂死中止而不是跑完了。
+      idleTimer = setInterval(() => {
+        if (userCancelled || budgetExceeded || idleTimedOut) return;
+        if (Date.now() - lastEventAt > idleTimeoutMs) {
+          idleTimedOut = true;
+          logger.warn({ sessionId, idleMs: Date.now() - lastEventAt }, 'exploration idle timeout; aborting session');
+          piSession.abort();
+        }
+      }, idleCheckMs);
+
       // 起始指令 + 墙钟硬闸：事件驱动的 maybeAbort 覆盖正常轮转；这里兜「LLM 调用挂死无事件」
       // 的路径——到点 abort 让 prompt 展开，收尾语义照常走（留痕全保留）。
       const remainingMs = deadline - Date.now();
@@ -431,12 +476,13 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    logger.warn({ err: e, sessionId, userCancelled, budgetExceeded }, 'exploration pi session failed');
+    logger.warn({ err: e, sessionId, userCancelled, budgetExceeded, idleTimedOut }, 'exploration pi session failed');
     await flushTrailPersist();
     await finishSession(sessionId, {
       // finish 已提交总结的会话即使收尾链路抛错也按 completed 落终态（模型明确说完了）。
-      status: finishSummary ? 'completed' : userCancelled ? 'cancelled' : budgetExceeded ? 'completed' : 'failed',
-      error: finishSummary || userCancelled || budgetExceeded ? null : msg,
+      // 挂死中止同预算耗尽口径：不是失败，是被平台主动叫停（总结里注明原因）。
+      status: finishSummary ? 'completed' : userCancelled ? 'cancelled' : budgetExceeded || idleTimedOut ? 'completed' : 'failed',
+      error: finishSummary || userCancelled || budgetExceeded || idleTimedOut ? null : msg,
       summary: terminalSummary(),
       turnsUsed: turnCount,
       usage: usage.stat,
@@ -444,6 +490,14 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
     void judgeExplorationSession(sessionId).catch(() => undefined);
   } finally {
     // 兜底落库：正常/失败路径都已在置终态前 flush 过，这里只防意外漏写。
+    if (idleTimer) {
+      clearInterval(idleTimer);
+      idleTimer = undefined;
+    }
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
     await flushTrailPersist();
     errorSignals?.close();
     if (envCtx) await envCtx.close().catch(() => {});

@@ -7,7 +7,9 @@
  *  ③ message_end → turns/usage/summary 正确入账（pi 一轮可链多工具，轮次只认 assistant message_end）;
  *  ④ 工具调用探针不过 → 立即 failed + 可行动报错，不开浏览器不空跑；
  *  ⑤ 视觉探针不过 → 降级纯文本模式（提示词带「无视觉通道」），会话照常完成；
- *  ⑥ 轮次预算耗尽 → session.abort() 被调、终态 completed + 「预算耗尽」注记（收尾等最后一拍检查落定）。
+ *  ⑥ 轮次预算耗尽 → session.abort() 被调、终态 completed + 「预算耗尽」注记（收尾等最后一拍检查落定）；
+ *  ⑦ 模型调用挂死（长时间无事件）→ 空闲看门狗 abort，终态 completed + 注明「长时间无响应」（不是 failed）；
+ *  ⑧ 终态总结带覆盖摘要（页面/交互/子目标完成情况）——深度证据不只看轮次。
  *
  * pi 会话/模型探针全部打桩——本测试只验「平台自己的编排语义」，不调真模型。
  */
@@ -27,6 +29,7 @@ const {
   abortCalls,
   newContextCalls,
   promptDriver,
+  abortRelease,
   toolProbeMock,
   visionProbeMock,
   envCfg,
@@ -46,7 +49,9 @@ const {
     abortCalls: { n: 0 },
     newContextCalls,
     /** 各测试自设的 prompt 驱动器（模拟 pi 工具循环的事件流）。 */
-    promptDriver: { fn: null as null | ((text: string) => Promise<void>) },
+    promptDriver: { fn: null as null | ((text: string) => Promise<void>), hang: false },
+    /** promptDriver.hang 时挂住 prompt，等 abort 放行（模拟模型调用挂死）。 */
+    abortRelease: { fn: null as null | (() => void) },
     toolProbeMock: vi.fn(),
     visionProbeMock: vi.fn(),
     /** 环境供数配置（各测试自设；beforeEach 复位）：web 服务/凭据/db 清单。 */
@@ -120,10 +125,19 @@ vi.mock('../src/pi/exploration/session.js', async (importOriginal) => {
         },
         prompt: async (text: string) => {
           promptCalls.push(text);
+          // hang 模式：这一轮永远不回来（模型调用挂死），等 abort 放行。
+          if (promptDriver.hang) {
+            await new Promise<void>((res) => {
+              abortRelease.fn = res;
+            });
+            return;
+          }
           if (promptDriver.fn) await promptDriver.fn(text);
         },
         abort: () => {
           abortCalls.n += 1;
+          abortRelease.fn?.();
+          abortRelease.fn = null;
         },
       };
     },
@@ -213,6 +227,8 @@ beforeEach(() => {
   toolProbeMock.mockReset().mockResolvedValue(null);
   visionProbeMock.mockReset().mockResolvedValue(null);
   promptDriver.fn = null;
+  promptDriver.hang = false;
+  abortRelease.fn = null;
   envCfg.webServices = [];
   envCfg.cred = null;
   envCfg.dbs = [];
@@ -300,7 +316,11 @@ describe('探索 runner pi 链路', () => {
       [sessionId],
     );
     expect(row.rows[0]!.status).toBe('completed');
-    expect(row.rows[0]!.summary).toBe('探索完成：发现 1 个异常。');
+    // 总结 = 模型文本 + 覆盖摘要（盖住多少/还差什么，轮次之外的深度证据）。
+    // 未走 finish 提交 → 末条 assistant 文本要带「未提交正式总结」标注（残骸不冒充结论）。
+    expect(String(row.rows[0]!.summary)).toContain('模型未提交正式总结');
+    expect(String(row.rows[0]!.summary)).toContain('探索完成：发现 1 个异常。');
+    expect(String(row.rows[0]!.summary)).toContain('（覆盖：页面 0 个、交互 1 次）');
     expect(Number(row.rows[0]!.turns_used)).toBe(1);
     const usage = row.rows[0]!.usage as Record<string, unknown>;
     expect(usage.calls).toBe(1);
@@ -397,6 +417,44 @@ describe('探索 runner pi 链路', () => {
     expect(String(row.rows[0]!.summary)).toContain('2 轮');
     expect(Number(row.rows[0]!.turns_used)).toBe(2);
     expect((row.rows[0]!.usage as Record<string, unknown>).calls).toBe(2);
+  }, 30000);
+
+  it('模型调用挂死（长时间无事件）→ 空闲看门狗中止会话，终态注明原因（不是 failed）', async () => {
+    const sessionId = await insertSession();
+    // 模型这一轮永远不回来（prompt 挂住，等 abort 放行）。
+    promptDriver.hang = true;
+
+    await runExplorationSession({ sessionId, idleTimeoutMs: 100 });
+
+    expect(abortCalls.n).toBeGreaterThanOrEqual(1);
+    const row = await pool.query(`SELECT status, error, summary FROM exploration_sessions WHERE id=$1`, [sessionId]);
+    // 挂死是平台主动叫停，不是失败：终态 completed + 注明原因（人工看得懂为何停下）。
+    expect(row.rows[0]!.status).toBe('completed');
+    expect(row.rows[0]!.error).toBeNull();
+    expect(String(row.rows[0]!.summary)).toContain('模型调用长时间无响应');
+  }, 30000);
+
+  it('终态总结带覆盖摘要——盖住了多少、还差什么（轮次之外的深度证据）', async () => {
+    decomposeCfg.goals = [{ id: 'g1', text: '打开新增对话框' }];
+    const sessionId = await insertSession();
+    promptDriver.fn = async () => {
+      emit({ type: 'tool_execution_start', toolCallId: 't1', toolName: 'navigate', args: { url: BASE } });
+      emit({ type: 'tool_execution_end', toolCallId: 't1', toolName: 'navigate', isError: false });
+      emit({
+        type: 'message_end',
+        message: { role: 'assistant', content: [{ type: 'text', text: '看完了首页。' }], usage: { input: 1, output: 1 } },
+      });
+    };
+
+    await runExplorationSession({ sessionId });
+
+    const row = await pool.query(`SELECT summary FROM exploration_sessions WHERE id=$1`, [sessionId]);
+    const summary = String(row.rows[0]!.summary);
+    expect(summary).toContain('覆盖：');
+    expect(summary).toContain('交互 1 次');
+    // 子目标没完成要显式说（平台不猜「做没做到」，按模型回告口径列未完成项）。
+    expect(summary).toContain('子目标 0/1');
+    expect(summary).toContain('g1 打开新增对话框');
   }, 30000);
 
   it('finish 工具 → 终态总结取 finish 提交（不是末条 assistant 文本）+ 排除账本落库', async () => {

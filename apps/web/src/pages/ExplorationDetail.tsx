@@ -29,6 +29,51 @@ function screenshotUrl(path: string | null): string | null {
   return path.startsWith('/') ? path : `/${path}`;
 }
 
+/** 过程文本钳长：evaluate 的 JSON 原样铺开是过程卡的主要噪声，超长截断 + 行内展开。 */
+const STEP_TEXT_CLAMP = 140;
+
+/** URL → path（解析不了原样返回）。 */
+function pathOf(u: string): string {
+  try {
+    return new URL(u).pathname;
+  } catch {
+    return u;
+  }
+}
+
+/**
+ * navigate 落点核对：outcome 恒为「已打开 <page.url()>」（工具层契约，browser.ts）。
+ * target 的 path ≠ 实际 path = SPA 重定向/回退（导航受挫），是「为何空手而归」的关键事件。
+ * target 为根路径时不判（登录跳转每次会话都有，徽标会疲劳）。
+ */
+function navLandedMismatch(step: { type: string; ok: boolean; target?: string; outcome?: string }): string | null {
+  if (step.type !== 'navigate' || !step.ok || !step.target) return null;
+  const m = step.outcome?.match(/^已打开\s+(\S+)/);
+  if (!m) return null;
+  const targetPath = pathOf(step.target);
+  const landedPath = pathOf(m[1]!);
+  if (targetPath === landedPath || targetPath === '/') return null;
+  return landedPath;
+}
+
+/** 代码范围文件分组（机械按扩展名）：组头一行回答「改了哪几块、各多大」。 */
+type FileGroupKey = 'sql' | 'java' | 'frontend' | 'other';
+function fileGroupOf(path: string): FileGroupKey {
+  const p = path.toLowerCase();
+  if (p.endsWith('.sql')) return 'sql';
+  if (p.endsWith('.java')) return 'java';
+  if (/\.(?:vue|js|ts|jsx|tsx|css|scss|less|html)$/.test(p)) return 'frontend';
+  return 'other';
+}
+const FILE_GROUP_ORDER: FileGroupKey[] = ['sql', 'java', 'frontend', 'other'];
+
+/** 变更类型徽标色：A=新增 / D=删除 / M=修改。 */
+function fileStatusColor(status: string): string {
+  if (status === 'A') return 'var(--success)';
+  if (status === 'D') return 'var(--destructive)';
+  return 'var(--muted-foreground)';
+}
+
 export default function ExplorationDetail() {
   const { id, projectId, versionId } = useParams<{ id: string; projectId: string; versionId: string }>();
   const navigate = useNavigate();
@@ -52,6 +97,17 @@ export default function ExplorationDetail() {
   const codeScope = session?.codeScope ?? null;
   const coverage = session?.coverageLedger ?? null;
   const errorSignals = session?.errorSignals ?? [];
+  const fileGroups = (() => {
+    const files = session?.codeScope?.files ?? [];
+    const by = new Map<FileGroupKey, typeof files>();
+    for (const f of files) {
+      const k = fileGroupOf(f.path);
+      const arr = by.get(k) ?? [];
+      arr.push(f);
+      by.set(k, arr);
+    }
+    return FILE_GROUP_ORDER.filter((k) => by.has(k)).map((k) => ({ key: k, files: by.get(k)! }));
+  })();
 
   // 画面在不在（有框可看）：LiveViewImg 挂载即上报 true、流断撤框/卸载（含切会话）上报 false
   // （录制只在服务端内存里 TTL 30min，过期后回看没框，会话过程回落整宽卡片）。
@@ -60,6 +116,9 @@ export default function ExplorationDetail() {
   // 画面高度自适应：LiveViewImg 按列宽等比撑高（框内零留白零裁切）并把实际渲染高度回报上来，
   // 会话过程卡取同一高度 → 两窗顶部同起点、底部恒对齐；220 只是首帧加载前的兜底值。
   const [liveH, setLiveH] = useState(220);
+  // 过程卡长文本展开（key = o<序号>/d<序号>）与代码范围分组折叠（key = 组名；缺省 = 文件数>8 收起）。
+  const [expandedText, setExpandedText] = useState<Record<string, boolean>>({});
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['exploration', id] });
@@ -138,6 +197,27 @@ export default function ExplorationDetail() {
   // 证据截图放大
   const [zoom, setZoom] = useState<string | null>(null);
 
+  /** 过程文本一行：超 STEP_TEXT_CLAMP 钳长 + 行内展开/收起（长 JSON 不再原样铺开）。 */
+  const clampedLine = (text: string, mono: boolean, color: string, key: string) => {
+    const open = !!expandedText[key];
+    const tooLong = text.length > STEP_TEXT_CLAMP;
+    return (
+      <div className={`${mono ? 'font-mono text-[11px] break-all' : 'text-[11px] break-words'} pl-[76px]`} style={{ color }}>
+        {tooLong && !open ? `${text.slice(0, STEP_TEXT_CLAMP)}…` : text}
+        {tooLong && (
+          <button
+            type="button"
+            className="ml-1 underline underline-offset-2"
+            style={{ color: 'var(--primary)' }}
+            onClick={() => setExpandedText((m) => ({ ...m, [key]: !m[key] }))}
+          >
+            {t(open ? 'explorations:collapse' : 'explorations:expand')}
+          </button>
+        )}
+      </div>
+    );
+  };
+
   // 会话过程：并排（右栏）与整宽两种摆法共用同一份标题/列表
   const stepsHeader = (
     <div className="flex items-baseline gap-2 shrink-0">
@@ -149,43 +229,45 @@ export default function ExplorationDetail() {
   );
   const stepsBody = (
     <ol className="flex flex-col gap-1 overflow-y-auto min-h-0 flex-1">
-      {steps.map((s, i) => (
-        <li key={i} className="flex flex-col gap-0.5">
-          <div className="flex items-start gap-2 text-[12px]">
-            <span className="font-mono shrink-0" style={{ color: 'var(--muted-foreground)' }}>
-              {String(i + 1).padStart(2, '0')}
-            </span>
-            <span
-              className="shrink-0 px-1 rounded text-[11px]"
-              style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
-            >
-              {t(`explorations:actionTypes.${s.type}`, { defaultValue: s.type })}
-            </span>
-            {/* target 为 "-"（observe/页内脚本这类无定位目标的动作）时不渲染空占位 */}
-            {s.target && s.target !== '-' ? (
-              <span className="font-mono break-all flex-1" style={{ color: 'var(--foreground)' }}>
-                {s.target}
+      {steps.map((s, i) => {
+        const navLanded = navLandedMismatch(s);
+        return (
+          <li key={i} className="flex flex-col gap-0.5">
+            <div className="flex items-start gap-2 text-[12px]">
+              <span className="font-mono shrink-0" style={{ color: 'var(--muted-foreground)' }}>
+                {String(i + 1).padStart(2, '0')}
               </span>
+              <span
+                className="shrink-0 px-1 rounded text-[11px]"
+                style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}
+              >
+                {t(`explorations:actionTypes.${s.type}`, { defaultValue: s.type })}
+              </span>
+              {/* target 为 "-"（observe/页内脚本这类无定位目标的动作）时不渲染空占位 */}
+              {s.target && s.target !== '-' ? (
+                <span className="font-mono break-all flex-1" style={{ color: 'var(--foreground)' }}>
+                  {s.target}
+                </span>
+              ) : (
+                <span className="flex-1" />
+              )}
+              <span className="shrink-0" style={{ color: s.ok ? 'var(--success)' : 'var(--destructive)' }}>
+                {s.ok ? t('explorations:stepOk') : t('explorations:stepFail')}
+              </span>
+            </div>
+            {/* navigate 落点核对：目标 path ≠ 实际 path（SPA 重定向/回退）→ 琥珀点名，不再灰字淹没 */}
+            {navLanded ? (
+              <div className="text-[11px] flex items-center gap-1 pl-[76px]" style={{ color: 'var(--warning)' }}>
+                <Icon name="warning" size={11} className="shrink-0" />
+                <span>{t('explorations:landedMismatch', { path: navLanded })}</span>
+              </div>
             ) : (
-              <span className="flex-1" />
+              s.outcome && clampedLine(s.outcome, false, s.ok ? 'var(--muted-foreground)' : 'var(--destructive)', `o${i}`)
             )}
-            <span className="shrink-0" style={{ color: s.ok ? 'var(--success)' : 'var(--destructive)' }}>
-              {s.ok ? t('explorations:stepOk') : t('explorations:stepFail')}
-            </span>
-          </div>
-          {/* 结果摘要：这一步「看到了什么/变成了什么/为什么失败」——没有它过程里全是空条目 */}
-          {s.outcome && (
-            <div className="text-[11px] break-words pl-[76px]" style={{ color: s.ok ? 'var(--muted-foreground)' : 'var(--destructive)' }}>
-              {s.outcome}
-            </div>
-          )}
-          {s.detail && (
-            <div className="font-mono text-[11px] break-all pl-[76px]" style={{ color: 'var(--muted-foreground)' }}>
-              {s.detail}
-            </div>
-          )}
-        </li>
-      ))}
+            {s.detail && clampedLine(s.detail, true, 'var(--muted-foreground)', `d${i}`)}
+          </li>
+        );
+      })}
     </ol>
   );
 
@@ -326,15 +408,52 @@ export default function ExplorationDetail() {
                     ))}
                   </div>
                 )}
-                {codeScope.files.length > 0 && (
-                  <div className="flex flex-col gap-0.5">
-                    {codeScope.files.slice(0, 20).map((f) => (
-                      <div key={f.path} className="text-[12px] font-mono flex items-baseline gap-2 min-w-0">
-                        <span className="truncate flex-1" style={{ color: 'var(--foreground)' }} title={f.path}>{f.path}</span>
-                        <span className="shrink-0" style={{ color: 'var(--success)' }}>+{f.additions}</span>
-                        <span className="shrink-0" style={{ color: 'var(--destructive)' }}>-{f.deletions}</span>
-                      </div>
-                    ))}
+                {/* 文件按类型分组（SQL/Java/前端/其它）全量渲染：静默 slice 曾把 +372 的最大新增
+                    吞在 20 条之外；组头回答「改了哪几块、各多大」，>8 条的组默认收起。 */}
+                {fileGroups.length > 0 && (
+                  <div className="flex flex-col gap-1.5">
+                    {fileGroups.map((g) => {
+                      const add = g.files.reduce((n, f) => n + f.additions, 0);
+                      const del = g.files.reduce((n, f) => n + f.deletions, 0);
+                      const collapsed = collapsedGroups[g.key] ?? g.files.length > 8;
+                      return (
+                        <div key={g.key} className="flex flex-col gap-0.5">
+                          <button
+                            type="button"
+                            className="flex items-center gap-1.5 text-left"
+                            onClick={() => setCollapsedGroups((m) => ({ ...m, [g.key]: !collapsed }))}
+                          >
+                            <Icon name={collapsed ? 'chevronRight' : 'chevronDown'} size={11} className="shrink-0" style={{ color: 'var(--muted-foreground)' }} />
+                            <span className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
+                              {t(`explorations:codeScopeGroup.${g.key}`)}
+                            </span>
+                            <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                              {g.files.length} {t('explorations:codeScopeFiles')}
+                              {add > 0 && <span style={{ color: 'var(--success)' }}> ·+{add}</span>}
+                              {del > 0 && <span style={{ color: 'var(--destructive)' }}> ·-{del}</span>}
+                            </span>
+                          </button>
+                          {!collapsed && (
+                            <div className="flex flex-col gap-0.5 pl-4">
+                              {g.files.map((f) => (
+                                <div key={f.path} className="text-[12px] font-mono flex items-baseline gap-2 min-w-0">
+                                  <span
+                                    className="shrink-0 px-1 rounded text-[10px]"
+                                    title={t(`explorations:codeScopeFileStatus.${f.status}`, { defaultValue: f.status })}
+                                    style={{ color: fileStatusColor(f.status), background: 'var(--muted)' }}
+                                  >
+                                    {f.status}
+                                  </span>
+                                  <span className="truncate flex-1" style={{ color: 'var(--foreground)' }} title={f.path}>{f.path}</span>
+                                  <span className="shrink-0" style={{ color: 'var(--success)' }}>+{f.additions}</span>
+                                  <span className="shrink-0" style={{ color: 'var(--destructive)' }}>-{f.deletions}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
                 {codeScope.hintUrls.length > 0 && (

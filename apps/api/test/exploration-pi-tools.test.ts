@@ -5,7 +5,7 @@
  *  - click 破坏性闸（默认拒 / 显式授权放行）+ 脆弱 selector 闸；
  *  - fill 凭据占位符替换（留痕只记原值）+ 回读不一致反馈 + 缺凭据 → 终止性错误回调；
  *  - evaluate 三层沙箱的 L1（静态扫描拒收）与 L3（返回值封顶/序列化）闸；
- *  - C1 覆盖账本（路径去重/交互计数/回灌摘要）；
+ *  - C1 覆盖账本（路径去重/交互计数/回灌摘要）+ 终态覆盖摘要（盖住多少/还差什么）；
  *  - D3 错误信号（console/HTTP 采集、增量 drain、封顶）；
  *  - A1 证据帧：finding 落库带 evidence_frame、重复条目去重、落库成功后留痕片段清空；
  *  - trailStepOf 的动作留痕形状（legacy 词表对齐：sql/repo/press/wait…）。
@@ -254,6 +254,34 @@ describe('pi 探索工具层', () => {
     expect(rendered).toContain('覆盖进度');
     expect(rendered).toContain('/app/assets?page=1');
     expect(rendered).toContain('click×2');
+  }, 20000);
+
+  it('coverageDigest：终态覆盖摘要——盖住多少 + 还差什么（未完成子目标点名）', async () => {
+    const { coverageDigest } = await import('../src/pi/exploration/coverage.js');
+    const snapshot = {
+      paths: ['/app/assets', '/app/users'],
+      interactions: [
+        { kind: 'click', count: 3 },
+        { kind: 'fill', count: 1 },
+      ],
+      goals: [
+        { id: 'g1', text: '打开新增对话框', done: true },
+        { id: 'g2', text: '空值提交看是否被拒', done: false },
+        { id: 'g3', text: '越权访问他人资产', done: false },
+      ],
+      updatedAt: new Date().toISOString(),
+    };
+
+    const digest = coverageDigest(snapshot);
+    expect(digest).toContain('页面 2 个');
+    expect(digest).toContain('交互 4 次');
+    expect(digest).toContain('子目标 1/3');
+    expect(digest).toContain('g2 空值提交看是否被拒');
+    // 未完成项最多点名 3 条（再多只给条数，不铺开——摘要会随每轮 observe 回灌烧 token）。
+    const many = coverageDigest({ ...snapshot, goals: Array.from({ length: 6 }, (_, i) => ({ id: `g${i}`, text: `目标${i}`, done: false })) });
+    expect(many).toContain('（另 3 条）');
+    // 无子目标时不提子目标（窄章程别塞空话）。
+    expect(coverageDigest({ ...snapshot, goals: [] })).not.toContain('子目标');
   }, 20000);
 
   it('D3 错误信号：console/HTTP 采集 + 增量 drain + 封顶 200', async () => {

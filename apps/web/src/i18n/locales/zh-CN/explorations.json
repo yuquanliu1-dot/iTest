@@ -37,7 +37,7 @@
   "allowDestructive": "允许破坏性操作",
   "allowDestructiveHint": "默认拒：勾选后才允许点删除/支付/发送这类不可逆入口（章程说辞不算授权）。",
   "budgetTurns": "轮次预算",
-  "budgetTurnsHint": "每轮=一次页面操作+观察；预算内自主收尾。默认 24，范围 4~60。",
+  "budgetTurnsHint": "每轮=一次页面操作+观察；预算内自主收尾。默认 24，范围 4~240（跑时上限随轮次放大，每轮约 1 分钟）。",
   "windowDefault": "默认（1280×800）",
   "rerun": "以此章程重跑",
   "rerunCreated": "已按同一章程开启新会话",
@@ -74,6 +74,20 @@
   "codeScopeFiles": "改动文件",
   "codeScopeHintUrls": "候选起点（启发式，可能不准，以实际页面为准）",
   "codeScopeReason": "解析依据",
+  "codeScopeGroup": {
+    "sql": "数据库 SQL",
+    "java": "Java 后端",
+    "frontend": "前端",
+    "other": "其它"
+  },
+  "codeScopeFileStatus": {
+    "A": "新增",
+    "M": "修改",
+    "D": "删除"
+  },
+  "landedMismatch": "实际落在 {{path}}（SPA 重定向/回退）",
+  "expand": "展开",
+  "collapse": "收起",
   "stepOk": "成功",
   "stepFail": "失败",
   "actionTypes": {

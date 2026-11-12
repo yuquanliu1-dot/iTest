@@ -19,9 +19,8 @@ import {
   screenshotDiskPath,
   withFindingCounts,
   withTimeout,
-  EXPLORATION_MAX_TURNS,
-  EXPLORATION_WALL_CLOCK_MS,
 } from './explorationShared.js';
+import { EXPLORATION_MAX_TURNS, explorationWallClockMs } from './explorationBudget.js';
 import { runExplorationSessionPi } from '../pi/exploration/runner.js';
 import { judgeExplorationSession } from '../pi/exploration/judge.js';
 import { resolveEnv } from './envContext.js';
@@ -61,7 +60,7 @@ import { loginStateKey, getLoginState, saveLoginState, type LoginStorageState } 
 import { resolveLlmClient } from '../agent/llmSettings.js';
 
 // 轮次预算/墙钟常量移至 explorationShared.ts（pi 链路 runner 同用一份），按既有对外表面再导出。
-export { EXPLORATION_MAX_TURNS, EXPLORATION_WALL_CLOCK_MS } from './explorationShared.js';
+export { EXPLORATION_MAX_TURNS, explorationWallClockMs } from './explorationBudget.js';
 
 /** 单次只读取证的等待侧超时（只截断等待，不取消底层查询——只读查询代价可接受）。 */
 const SQL_PROBE_TIMEOUT_MS = 10_000;
@@ -70,8 +69,9 @@ const SQL_PROBE_TIMEOUT_MS = 10_000;
 const SQL_STEP_TARGET_MAX = 1000;
 
 /** 运行时分派开关：EXPLORATION_RUNTIME=pi 走新链路（pi agent + Playwright 工具集），
- *  其余值走 legacy（runAiTask JSON 动作协议，完整保留可随时回退）。默认 legacy。 */
-export async function runExplorationSession(input: { sessionId: string }): Promise<void> {
+ *  其余值走 legacy（runAiTask JSON 动作协议，完整保留可随时回退）。默认 legacy。
+ *  idleTimeoutMs：空闲看门狗阈值（挂死判据），默认走常量；测试可注入小值。 */
+export async function runExplorationSession(input: { sessionId: string; idleTimeoutMs?: number }): Promise<void> {
   if ((process.env.EXPLORATION_RUNTIME ?? 'legacy').trim().toLowerCase() === 'pi') {
     return runExplorationSessionPi(input);
   }
@@ -173,8 +173,9 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
       await finishSession(sessionId, { status: 'cancelled', turnsUsed: 0, usage: usage.stat }).catch(() => undefined);
       return;
     }
-    // 探索墙钟从范围解析结束后起算——15 分钟预算全部留给智能体阶段。
-    const deadline = Date.now() + EXPLORATION_WALL_CLOCK_MS;
+    // 探索墙钟从范围解析结束后起算——预算全部留给智能体阶段。
+    // 墙钟由轮次物化（不再固定 15 分钟）：轮次是深度的唯一旋钮。
+    const deadline = Date.now() + explorationWallClockMs(maxTurns);
 
     envCtx = await resolveEnv({ versionId: session.versionId }, { expectedProjectId: session.projectId });
     // 探针闭包里要用 env（envCtx 是 let，闭包内 TS 不做窄化）

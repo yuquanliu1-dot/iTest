@@ -55,7 +55,7 @@ export default function Explorations() {
   const [startUrl, setStartUrl] = useState('');
   const [allowDestructive, setAllowDestructive] = useState(false);
   const [allowFaultInjection, setAllowFaultInjection] = useState(false);
-  // 轮次预算：默认 24（后端同默认，范围 4~60）；清空=不传=后端默认。
+  // 轮次预算：默认 24（后端同默认，范围 4~240）；清空=不传=后端默认。
   const [budgetTurns, setBudgetTurns] = useState<number | undefined>(24);
   // 测试窗口两态：默认 1280×800 / 自定义宽高（对齐用例详情的窗口策略；探索 headless 无「当前窗口」态）。
   const [windowMode, setWindowMode] = useState<'default' | 'custom'>('default');
@@ -365,7 +365,7 @@ export default function Explorations() {
                 label={t('explorations:budgetTurns')}
                 type="number"
                 min={4}
-                max={60}
+                max={240}
                 value={budgetTurns ?? ''}
                 onChange={(e) => setBudgetTurns(e.target.value === '' ? undefined : Number(e.target.value))}
               />

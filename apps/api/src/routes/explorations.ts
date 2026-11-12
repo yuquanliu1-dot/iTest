@@ -49,8 +49,9 @@ const CreateBody = z.object({
    */
   windowWidth: z.number().int().positive().optional(),
   windowHeight: z.number().int().positive().optional(),
-  /** 轮次预算（默认 24，4~60）：软预算，超界优雅收尾，已发现的 findings 全保留。 */
-  budgetTurns: z.number().int().min(4).max(60).optional(),
+  /** 轮次预算（默认 24，4~240）：软预算，超界优雅收尾，已发现的 findings 全保留。
+   *  会话墙钟由轮次物化（每轮 60s，钳在 15~240 分钟）——轮次是深度的唯一旋钮。 */
+  budgetTurns: z.number().int().min(4).max(240).optional(),
 });
 
 const ListQuery = z.object({
@@ -77,7 +78,7 @@ const CreateMatrixBody = z.object({
   allowFaultInjection: z.boolean().default(false),
   windowWidth: z.number().int().positive().optional(),
   windowHeight: z.number().int().positive().optional(),
-  budgetTurns: z.number().int().min(4).max(60).optional(),
+  budgetTurns: z.number().int().min(4).max(240).optional(),
 });
 
 /** 会话可见性断言：经 session.projectId 判定，不存在与不可见统一 404。 */

@@ -1137,7 +1137,8 @@ export const explorationSessions = pgTable('exploration_sessions', {
   /**
    * 轮次预算（null=代码默认 EXPLORATION_MAX_TURNS）：软预算，超界 shouldAbort 优雅收尾
    * （已发现的 findings 全保留）。runaway 硬闸随它放大（+16），否则用户配大轮次会被
-   * 固定硬闸先拦，可配置形同虚设。墙钟不随它放大——防的是单轮卡死，与探索深度无关。
+   * 固定硬闸先拦，可配置形同虚设。会话墙钟由轮次物化（每轮 60s，钳在 15~240 分钟）——
+   * 轮次是深度的唯一旋钮；单轮挂死另由空闲看门狗兜（EXPLORATION_IDLE_TIMEOUT_MS）。
    */
   budgetTurns: integer('budget_turns'),
   /**

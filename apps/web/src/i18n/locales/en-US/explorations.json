@@ -37,7 +37,7 @@
   "allowDestructive": "Allow destructive actions",
   "allowDestructiveHint": "Denied by default. Only with this enabled may the AI click irreversible entries such as delete, pay or send. A charter asking to check them is not authorisation.",
   "budgetTurns": "Turn budget",
-  "budgetTurnsHint": "One turn = one page operation plus observation. Default 24, range 4–60.",
+  "budgetTurnsHint": "One turn = one page operation plus observation. Default 24, range 4–240 (the run limit scales with the budget, ~1 minute per turn).",
   "windowDefault": "Default (1280×800)",
   "rerun": "Re-run this charter",
   "rerunCreated": "New session started with the same charter",
@@ -74,6 +74,20 @@
   "codeScopeFiles": "Changed files",
   "codeScopeHintUrls": "Hint entry points (heuristic, may be inaccurate — verify on actual pages)",
   "codeScopeReason": "Resolution basis",
+  "codeScopeGroup": {
+    "sql": "SQL scripts",
+    "java": "Java backend",
+    "frontend": "Frontend",
+    "other": "Other"
+  },
+  "codeScopeFileStatus": {
+    "A": "added",
+    "M": "modified",
+    "D": "deleted"
+  },
+  "landedMismatch": "Actually landed on {{path}} (SPA redirect)",
+  "expand": "Expand",
+  "collapse": "Collapse",
   "stepOk": "OK",
   "stepFail": "Failed",
   "actionTypes": {

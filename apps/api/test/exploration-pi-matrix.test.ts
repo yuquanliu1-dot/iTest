@@ -139,10 +139,10 @@ describe('P4 · C2 章程分解', () => {
     expect(parseGoals({ goals: [{ text: '   ' }] })).toEqual([]);
   });
 
-  it('去重 + 封顶 6 条（超出的丢弃，不无限膨胀）', () => {
+  it('去重 + 封顶 12 条（超出的丢弃，不无限膨胀）', () => {
     expect(parseGoals({ goals: [{ text: '重复' }, { text: '重复' }] })).toHaveLength(1);
-    const many = Array.from({ length: 9 }, (_, i) => ({ text: `子目标${i}` }));
-    expect(parseGoals({ goals: many })).toHaveLength(6);
+    const many = Array.from({ length: 15 }, (_, i) => ({ text: `子目标${i}` }));
+    expect(parseGoals({ goals: many })).toHaveLength(12);
   });
 
   it('分解成功 → 子目标进账本；LLM 挂了 → 空子目标（软失败，不掀翻会话）', async () => {
