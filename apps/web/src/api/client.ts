@@ -1232,7 +1232,7 @@ export interface ExplorationSession {
   /** 浏览器视口宽高（两态：null=默认 1280×800；成对给=自定义，对齐用例自定义窗口）。 */
   windowWidth: number | null;
   windowHeight: number | null;
-  /** 轮次预算（null=后端默认 24）：软预算，超界优雅收尾，已发现的 findings 全保留。 */
+  /** 轮次预算（null=后端默认 60）：软预算，超界优雅收尾，已发现的 findings 全保留。 */
   budgetTurns?: number | null;
   /** 负面结果账本：模型申报的「已排除的假设 + 依据」（外化记忆最小切片）。 */
   excludedLedger?: Array<{ claim: string; evidence: string }> | null;

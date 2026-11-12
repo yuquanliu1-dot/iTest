@@ -55,13 +55,19 @@ export default function Explorations() {
   const [startUrl, setStartUrl] = useState('');
   const [allowDestructive, setAllowDestructive] = useState(false);
   const [allowFaultInjection, setAllowFaultInjection] = useState(false);
-  // 轮次预算：默认 24（后端同默认，范围 4~240）；清空=不传=后端默认。
-  const [budgetTurns, setBudgetTurns] = useState<number | undefined>(24);
+  // 轮次预算：默认 60（后端同默认，范围 4~240）；清空=不传=后端默认。
+  const [budgetTurns, setBudgetTurns] = useState<number | undefined>(60);
   // 测试窗口两态：默认 1280×800 / 自定义宽高（对齐用例详情的窗口策略；探索 headless 无「当前窗口」态）。
   const [windowMode, setWindowMode] = useState<'default' | 'custom'>('default');
   const [windowWidth, setWindowWidth] = useState<number | undefined>();
   const [windowHeight, setWindowHeight] = useState<number | undefined>();
   const windowCustomReady = windowMode !== 'custom' || ((windowWidth ?? 0) > 0 && (windowHeight ?? 0) > 0);
+  // 高级选项默认收起：章程 + 视角两件事就能开跑，起始页/轮次/窗口是调节项，
+  // 平铺在首屏会把「这次要探什么」这条主线挤没。
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  // 章程字数实时显示：未达下限（10 字）时提示转琥珀色——按钮禁用但把原因说清楚。
+  const charterLen = charter.trim().length;
+  const charterTooShort = charterLen < 10;
 
   const togglePersona = (key: string) =>
     setPersonas((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
@@ -95,10 +101,11 @@ export default function Explorations() {
       setPersonas(['qa']);
       setAllowDestructive(false);
       setAllowFaultInjection(false);
-      setBudgetTurns(24);
+      setBudgetTurns(60);
       setWindowMode('default');
       setWindowWidth(undefined);
       setWindowHeight(undefined);
+      setShowAdvanced(false);
       setShowCreate(false);
       toast(t(r.single ? 'explorations:createdToast' : 'explorations:matrixCreatedToast'), 'success');
       qc.invalidateQueries({ queryKey: ['explorations'] });
@@ -302,31 +309,48 @@ export default function Explorations() {
         )}
       </PageShellContent>
 
+      {/* 新建探索会话：单列主线（章程 → 视角），调节项收进「高级选项」，权限单列一组。
+          唯一必填是章程——字数实时显示，不达标时提示转琥珀色（按钮禁用但把原因说清楚）。 */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        {/* 两列栅格 + 收敛后的提示文案：常见视口（含 1280×720）下一屏装下，不用滚动 */}
-        <DialogContent className="sm:max-w-2xl p-3 gap-3">
-          <DialogHeader>
-            <DialogTitle>{t('explorations:newSession')}</DialogTitle>
+        <DialogContent className="sm:max-w-xl p-0 gap-0">
+          <DialogHeader className="px-5 pt-4 pb-3 gap-1.5 pr-8">
+            <DialogTitle className="text-[15px] font-semibold">{t('explorations:newSession')}</DialogTitle>
+            <p className="text-[12px]" style={{ color: 'var(--muted-foreground)' }}>
+              {t('explorations:createIntro')}
+            </p>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-x-3 gap-y-2 px-1 py-1">
-            <div className="col-span-2 flex flex-col gap-1">
-              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>
-                {t('explorations:charter')}
-              </label>
+
+          <div className="flex flex-col gap-4 px-5 pb-4">
+            {/* ① 探索章程（必填）：整个会话的目标与边界，写得越具体 AI 越敢往深处钻。 */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2">
+                <label htmlFor="exploration-charter" className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
+                  {t('explorations:charter')}
+                </label>
+                <span className="px-1.5 py-px rounded text-[10px]" style={{ background: 'var(--muted)', color: 'var(--muted-foreground)' }}>
+                  {t('explorations:charterRequired')}
+                </span>
+                <span className="flex-1" />
+                <span className="text-[11px] tabular-nums" style={{ color: 'var(--muted-foreground)' }}>
+                  {t('explorations:charterCounter', { count: charterLen })}
+                </span>
+              </div>
               <textarea
+                id="exploration-charter"
                 className="input-base"
-                rows={3}
+                rows={4}
                 value={charter}
                 placeholder={t('explorations:charterPlaceholder')}
                 onChange={(e) => setCharter(e.target.value)}
               />
-              <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
-                {t('explorations:charterHint')}
+              <span className="text-[11px]" style={{ color: charterTooShort ? 'var(--warning)' : 'var(--muted-foreground)' }}>
+                {charterTooShort ? t('explorations:charterTooShort') : t('explorations:charterHint')}
               </span>
             </div>
-            {/* 人格多选（单入口）：1 个=单会话；≥2 个=矩阵并行——提交行为随选择数分叉 */}
-            <div className="col-span-2 flex flex-col gap-1">
-              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted-foreground)' }}>
+
+            {/* ② 探索视角：选 1 个跑一场，选多个则同一章程并行多路（互相印证，缺陷更可信）。 */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
                 {t('explorations:matrixPersonas')}
               </label>
               <div className="flex flex-wrap gap-2">
@@ -349,101 +373,147 @@ export default function Explorations() {
                   );
                 })}
               </div>
-              <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
                 {t('explorations:matrixPersonasHint')}
               </span>
             </div>
-            <Input
-              label={t('explorations:startUrl')}
-              placeholder={t('explorations:startUrlPlaceholder')}
-              value={startUrl}
-              onChange={(e) => setStartUrl(e.target.value)}
-            />
-            {/* 轮次预算：软预算，超界优雅收尾（已发现的 findings 全保留） */}
-            <div className="flex flex-col gap-1">
-              <Input
-                label={t('explorations:budgetTurns')}
-                type="number"
-                min={4}
-                max={240}
-                value={budgetTurns ?? ''}
-                onChange={(e) => setBudgetTurns(e.target.value === '' ? undefined : Number(e.target.value))}
-              />
-              <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
-                {t('explorations:budgetTurnsHint')}
-              </span>
-            </div>
-            {/* 测试窗口：默认 1280×800 / 自定义宽高（同用例详情的窗口策略，两态版） */}
-            <div className="col-span-2 flex items-end gap-3">
-              <div className="flex flex-col gap-1">
-                <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>{t('cases:windowStrategy')}</span>
-                <Segmented
-                  value={windowMode}
-                  onChange={setWindowMode}
-                  options={[
-                    { label: t('explorations:windowDefault'), value: 'default' },
-                    { label: t('cases:windowCustom'), value: 'custom' },
-                  ]}
+
+            {/* ③ 探索轮次：深度的唯一旋钮，放主线上不折叠。定宽输入 + 提示同行，软预算
+                超界优雅收尾（已发现的 findings 全保留）。 */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
+                {t('explorations:budgetTurns')}
+              </label>
+              <div className="flex items-center gap-3">
+                <Input
+                  className="w-24 shrink-0"
+                  type="number"
+                  min={4}
+                  max={240}
+                  value={budgetTurns ?? ''}
+                  onChange={(e) => setBudgetTurns(e.target.value === '' ? undefined : Number(e.target.value))}
                 />
+                <span className="text-[11px] flex-1 min-w-0" style={{ color: 'var(--muted-foreground)' }}>
+                  {t('explorations:budgetTurnsHint')}
+                </span>
               </div>
-              {windowMode === 'custom' && (
-                <>
-                  <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                    {t('cases:width')}
-                    <Input
-                      size="sm"
-                      type="number"
-                      value={windowWidth ?? ''}
-                      onChange={(e) => setWindowWidth(e.target.value === '' ? undefined : Number(e.target.value))}
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
-                    {t('cases:height')}
-                    <Input
-                      size="sm"
-                      type="number"
-                      value={windowHeight ?? ''}
-                      onChange={(e) => setWindowHeight(e.target.value === '' ? undefined : Number(e.target.value))}
-                    />
-                  </label>
-                </>
+            </div>
+
+            {/* ④ 高级选项：起始页/窗口是调节项，默认收起——不影响开跑。 */}
+            <div className="flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced((v) => !v)}
+                aria-expanded={showAdvanced}
+                className="flex items-center gap-1.5 text-left"
+              >
+                <Icon
+                  name={showAdvanced ? 'chevronDown' : 'chevronRight'}
+                  size={12}
+                  className="shrink-0"
+                  style={{ color: 'var(--muted-foreground)' }}
+                />
+                <span className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
+                  {t('explorations:advancedOptions')}
+                </span>
+                <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                  {t('explorations:advancedOptionsHint')}
+                </span>
+              </button>
+              {showAdvanced && (
+                <div className="flex flex-col gap-3 pl-3.5" style={{ borderLeft: '1px solid var(--border)' }}>
+                  <Input
+                    label={t('explorations:startUrl')}
+                    placeholder={t('explorations:startUrlPlaceholder')}
+                    value={startUrl}
+                    onChange={(e) => setStartUrl(e.target.value)}
+                  />
+                  {/* 测试窗口：默认 1280×800 / 自定义宽高（同用例详情的窗口策略，两态版） */}
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
+                      {t('explorations:windowSize')}
+                    </span>
+                    <div className="flex items-end gap-3 flex-wrap">
+                      <Segmented
+                        value={windowMode}
+                        onChange={setWindowMode}
+                        options={[
+                          { label: t('explorations:windowDefault'), value: 'default' },
+                          { label: t('cases:windowCustom'), value: 'custom' },
+                        ]}
+                      />
+                      {windowMode === 'custom' && (
+                        <>
+                          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                            {t('cases:width')}
+                            <Input
+                              size="sm"
+                              type="number"
+                              value={windowWidth ?? ''}
+                              onChange={(e) => setWindowWidth(e.target.value === '' ? undefined : Number(e.target.value))}
+                            />
+                          </label>
+                          <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                            {t('cases:height')}
+                            <Input
+                              size="sm"
+                              type="number"
+                              value={windowHeight ?? ''}
+                              onChange={(e) => setWindowHeight(e.target.value === '' ? undefined : Number(e.target.value))}
+                            />
+                          </label>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
-            {/* 两个授权开关并排：默认拒。章程说辞不算授权（机械闸只认这两个开关）。 */}
-            <div className="col-span-2 grid grid-cols-2 gap-x-3 gap-y-1">
-              <div className="flex flex-col gap-1">
-                <Toggle
-                  checked={allowDestructive}
-                  onChange={setAllowDestructive}
-                  label={t('explorations:allowDestructive')}
-                />
-                <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
-                  {t('explorations:allowDestructiveHint')}
-                </span>
-              </div>
-              <div className="flex flex-col gap-1">
-                <Toggle
-                  checked={allowFaultInjection}
-                  onChange={setAllowFaultInjection}
-                  label={t('explorations:allowFaultInjection')}
-                />
-                <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>
-                  {t('explorations:allowFaultInjectionHint')}
-                </span>
+
+            {/* ⑤ 权限（默认全关）：平台只认这两个授权位——章程里说辞不算授权。 */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
+                {t('explorations:permissionsTitle')}
+              </span>
+              <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                {t('explorations:permissionsHint')}
+              </span>
+              <div className="flex flex-col gap-2 mt-0.5">
+                <div className="flex flex-col gap-0.5">
+                  <Toggle
+                    checked={allowDestructive}
+                    onChange={setAllowDestructive}
+                    label={t('explorations:allowDestructive')}
+                  />
+                  <span className="text-[11px] pl-[40px]" style={{ color: 'var(--muted-foreground)' }}>
+                    {t('explorations:allowDestructiveHint')}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <Toggle
+                    checked={allowFaultInjection}
+                    onChange={setAllowFaultInjection}
+                    label={t('explorations:allowFaultInjection')}
+                  />
+                  <span className="text-[11px] pl-[40px]" style={{ color: 'var(--muted-foreground)' }}>
+                    {t('explorations:allowFaultInjectionHint')}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
-          <DialogFooter>
+
+          <DialogFooter className="px-5 py-3" style={{ borderTop: '1px solid var(--border)' }}>
             <Button variant="ghost" onClick={() => setShowCreate(false)}>{t('common:cancel')}</Button>
             <Button
-              disabled={charter.trim().length < 10 || personas.length === 0 || !windowCustomReady || create.isPending}
+              disabled={charterTooShort || personas.length === 0 || !windowCustomReady || create.isPending}
               onClick={() => create.mutate()}
             >
               {create.isPending
                 ? t('common:loading')
                 : personas.length >= 2
-                  ? `${t('explorations:matrixCreate')}（${personas.length}）`
-                  : t('explorations:newSession')}
+                  ? t('explorations:startExploringMatrix', { count: personas.length })
+                  : t('explorations:startExploring')}
             </Button>
           </DialogFooter>
         </DialogContent>

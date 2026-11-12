@@ -13,7 +13,7 @@
 /** 轮次预算默认值（用户可在创建会话时覆盖，4~240；null=用这里）：超界优雅收尾
  *  （已发现的 findings 全保留）。runAiTask 硬闸 = 预算 +16 仅 runaway 兜底——硬闸随预算放大，
  *  否则用户配大轮次会被固定硬闸先拦，可配置形同虚设。 */
-export const EXPLORATION_MAX_TURNS = 24;
+export const EXPLORATION_MAX_TURNS = 60;
 /** 每轮预估耗时（一次 LLM 调用 + 浏览器动作 + 查库等待）——会话墙钟由轮次物化。 */
 export const EXPLORATION_MS_PER_TURN = 60_000;
 /** 会话墙钟下限（预算很小时也给的最小跑动时间）。 */

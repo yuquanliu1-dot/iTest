@@ -49,7 +49,7 @@ const CreateBody = z.object({
    */
   windowWidth: z.number().int().positive().optional(),
   windowHeight: z.number().int().positive().optional(),
-  /** 轮次预算（默认 24，4~240）：软预算，超界优雅收尾，已发现的 findings 全保留。
+  /** 轮次预算（默认 60，4~240）：软预算，超界优雅收尾，已发现的 findings 全保留。
    *  会话墙钟由轮次物化（每轮 60s，钳在 15~240 分钟）——轮次是深度的唯一旋钮。 */
   budgetTurns: z.number().int().min(4).max(240).optional(),
 });
