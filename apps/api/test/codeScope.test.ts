@@ -125,6 +125,41 @@ describe('resolveCodeScope', () => {
     expect(r.scope).toBeUndefined();
   });
 
+  it('按时间加深失败（浅边界早于窗口起点）→ 回退按提交数加深，照常解析', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const r = await resolveCodeScope(
+      { sessionId: randomUUID(), charter: '探索最近30天提交的功能', versionId: '00000000-0000-0000-0000-000000000000' },
+      {
+        repoDir: root,
+        deepen: async (bounds) => {
+          calls.push(bounds as unknown as Record<string, unknown>);
+          if ('since' in bounds) throw new Error('fatal: error processing shallow info: 4');
+          return sha3;
+        },
+        llm: llmStub({ intent: 'time_window', sinceDays: 30, confidence: 0.9, reason: '章程要求最近 30 天' }),
+      },
+    );
+    expect(r.status).toBe('resolved');
+    expect(calls).toEqual([{ since: expect.any(String) }, { depth: 500 }]);
+    expect(r.scope!.commits.map((c) => c.subject)).toEqual(['c3 调整应用入口', 'c2 资产详情路由']);
+    expect(r.scope!.reason).toContain('按提交数加深');
+  });
+
+  it('加深始终失败 → failed（回退重试后仍失败，不掀翻会话）', async () => {
+    const r = await resolveCodeScope(
+      { sessionId: randomUUID(), charter: '探索最近30天提交的功能', versionId: '00000000-0000-0000-0000-000000000000' },
+      {
+        repoDir: root,
+        deepen: async () => {
+          throw new Error('network down');
+        },
+        llm: llmStub({ intent: 'time_window', sinceDays: 30, confidence: 0.9, reason: '章程要求最近 30 天' }),
+      },
+    );
+    expect(r.status).toBe('failed');
+    expect(r.scope).toBeUndefined();
+  });
+
   it('意图别名容错：type/days/from·to、中文意图值', () => {
     expect(parseIntentValue({ type: 'time_window', days: '30' })).toMatchObject({ kind: 'time_window', sinceDays: 30 });
     expect(parseIntentValue({ 意图: '无关' }).kind).toBe('none');

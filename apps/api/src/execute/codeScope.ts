@@ -434,21 +434,34 @@ export async function resolveCodeScope(
     if (intent.kind === 'none') return await finish('none', null);
     if (left() < MIN_PHASE_BUDGET_MS) return await finish('failed', null);
 
-    // —— 第 2 步：加深历史（since 优先；覆盖度核验不足时 depth 兜底在窗口分支里做）——
+    // —— Step 2: deepen history (since first; on failure one depth-based retry below — the window branch has a
+    // second depth fallback for shallow-boundary coverage) ——
     const nowMs = Date.now();
     const windowStartMs = intent.kind === 'time_window'
       ? intent.sinceMs ?? (intent.untilMs ?? nowMs) - (intent.sinceDays ?? DEFAULT_SCOPE_DAYS) * DAY_MS
       : (intent.kind === 'commit_range' ? parseDateInput(intent.fromHint ?? '')?.ms : parseDateInput(intent.commitHint ?? '')?.ms)
         ?? nowMs - DEFAULT_SCOPE_DAYS * DAY_MS;
-    await withTimeout(
-      deepen({ since: toGitTs(new Date(windowStartMs - DAY_MS)) }),
-      Math.max(MIN_PHASE_BUDGET_MS, Math.min(left(), DEEPEN_MAX_MS)),
-      '仓库历史加深超时',
-    );
-    const headSha = await resolveRef(repoDir, 'HEAD');
-    if (!headSha) return await finish('failed', null); // 仓库无提交或仍不可用
-
     const notes: string[] = [];
+    try {
+      await withTimeout(
+        deepen({ since: toGitTs(new Date(windowStartMs - DAY_MS)) }),
+        Math.max(MIN_PHASE_BUDGET_MS, Math.min(left(), DEEPEN_MAX_MS)),
+        '仓库历史加深超时',
+      );
+    } catch (e) {
+      // Date-windowed deepen fails outright when the shallow tip predates the window start (e.g. the version pins a
+      // tag older than the charter's time window → git refuses the boundary rewrite with "error processing shallow
+      // info: 4", observed on prod228). Depth-based deepen has no date constraint and rewrites the boundary
+      // unconditionally, so retry once with it; if that fails too, let the error propagate (failed, as before).
+      await withTimeout(
+        deepen({ depth: 500 }),
+        Math.max(MIN_PHASE_BUDGET_MS, Math.min(left(), DEEPEN_MAX_MS)),
+        '仓库历史加深超时',
+      );
+      notes.push('按时间加深失败（浅边界早于窗口起点），已改按提交数加深');
+    }
+    const headSha = await resolveRef(repoDir, 'HEAD');
+    if (!headSha) return await finish('failed', null); // repo has no commits or is still unavailable
     let fromSha: string | undefined;
     let toSha: string | undefined;
     let commitSha: string | undefined;
