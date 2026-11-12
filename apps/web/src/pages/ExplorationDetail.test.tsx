@@ -100,6 +100,30 @@ describe('ExplorationDetail 会话过程', () => {
     expect(screen.getAllByText('失败')).toHaveLength(1);
   });
 
+  it('结果摘要（outcome）：观察/页内脚本这类无 target 的步骤显示结论，不再只有空占位', async () => {
+    explorationGet.mockResolvedValue({
+      ...session,
+      steps: [
+        {
+          type: 'observe',
+          target: '-',
+          ok: true,
+          outcome: 'URL http://127.0.0.1:56100/defect.html｜视口 1280x800｜可交互元素 12 个',
+        },
+        { type: 'evaluate', target: '-', ok: false, outcome: '失败：目标不可见' },
+      ],
+    });
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('会话过程')).toBeTruthy());
+
+    expect(screen.getByText('URL http://127.0.0.1:56100/defect.html｜视口 1280x800｜可交互元素 12 个')).toBeTruthy();
+    expect(screen.getByText('失败：目标不可见')).toBeTruthy();
+    // target 为 "-" 的步骤不渲染空占位（原来是一行孤零零的 "-"）。
+    const ol = document.querySelector('ol')!;
+    const dashes = Array.from(ol.querySelectorAll('span')).filter((el) => el.textContent?.trim() === '-');
+    expect(dashes).toHaveLength(0);
+  });
+
   it('并排布局契约：会话过程卡定高=画面框高（220+2 边框）、两窗等宽（各 1fr）', async () => {
     renderDetail();
     await waitFor(() => expect(explorationGet).toHaveBeenCalled());

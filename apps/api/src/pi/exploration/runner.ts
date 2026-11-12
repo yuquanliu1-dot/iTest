@@ -44,6 +44,7 @@ import { composeExplorationPrompt, createExplorationSession } from './session.js
 import { createFindingStore, type FindingStore } from './findings.js';
 import { createCoverageTracker } from './coverage.js';
 import { createErrorSignalCollector } from './observation.js';
+import { fallbackFailureReason, readToolSummary } from './trail.js';
 
 /** 覆盖账本计数的交互动作类型（观察/判定类动作不算交互——账本回答「动过哪些地方」）。 */
 const INTERACTION_KINDS = new Set(['click', 'fill', 'press', 'select', 'scroll', 'back', 'navigate']);
@@ -338,11 +339,18 @@ export async function runExplorationSessionPi(input: { sessionId: string }): Pro
           pendingTrail.delete(ev.toolCallId);
           if (step) {
             step.ok = !ev.isError;
-            // sql/repo 取证的结果摘要进留痕 detail（trailToSteps 的 expected 用；截 first text 块）。
+            // 结果摘要（工具层产出）：这一步「看到了什么/变成了什么/为什么失败」——
+            // 没有它，「会话过程」里 observe/截图/页内脚本这些步骤只有 target="-"，用户看不到价值。
+            step.outcome = readToolSummary(ev.result) ?? (ev.isError ? fallbackFailureReason(ev.result) : undefined);
+            // sql/repo 取证的结果原文进留痕 detail（trailToSteps 的 expected 用）。
+            // 只取首行之后的部分：首行是「sql_probe（库）：N 行」这类抬头，已由 outcome 承担。
             if (ev.toolName === 'sql_probe' || ev.toolName === 'repo_read') {
               const content = ev.result?.content as Array<{ type: string; text?: string }> | undefined;
               const firstText = content?.find((b) => b.type === 'text' && typeof b.text === 'string');
-              if (firstText?.text) step.detail = firstText.text.replace(/\s+/g, ' ').slice(0, 200);
+              if (firstText?.text) {
+                const body = firstText.text.includes('\n') ? firstText.text.slice(firstText.text.indexOf('\n') + 1) : firstText.text;
+                step.detail = body.replace(/\s+/g, ' ').slice(0, 400);
+              }
             }
             sessionSteps.push(step);
             trailSince.push(step);

@@ -182,6 +182,10 @@ export interface ExplorationStep {
   ok: boolean;
   /** sql 步骤的结果摘要（行数 + 首行）；其余动作无。 */
   detail?: string;
+  /** 这一步的结果摘要（人话：看到了什么 / 改变了什么 / 为什么失败）——
+   *  「会话过程」列表的正文。工具层产出（details.summary），runner 落库；
+   *  没有它的话 observe/截图/页内脚本这类步骤在详情页只有 target="-"，用户看不到价值。 */
+  outcome?: string;
   /** fill 的输入值（模型输出的原值：占位符字面量或普通文本，绝不是替换后的真实凭据——
    *  valueSub 替换发生在执行器内部，onAction 收到的动作仍是原值）。升格用例时机械映射需要。 */
   value?: string;
@@ -225,6 +229,7 @@ export function trailToSteps(trail: Array<{ type?: unknown; target?: unknown; de
       case 'wait': steps.push({ action: `等待 ${target} 毫秒` }); break;
       case 'navigate': steps.push({ action: `访问 ${target}` }); break;
       case 'screenshot': steps.push({ action: `截图 ${target}` }); break;
+      case 'inject_fault': steps.push({ action: `注入故障 ${target}` }); break;
       // 查库取证：expected 带平台记录的行数/摘要——reviewer 不用再自己去查一遍库。
       case 'sql': steps.push({ action: `查库 ${target}`, ...(detail ? { expected: detail } : {}) }); break;
       // 读码取证：expected 带平台记录的结果摘要（命中数/文件行数）。

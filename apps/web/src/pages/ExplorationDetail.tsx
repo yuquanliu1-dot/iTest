@@ -161,13 +161,24 @@ export default function ExplorationDetail() {
             >
               {t(`explorations:actionTypes.${s.type}`, { defaultValue: s.type })}
             </span>
-            <span className="font-mono break-all flex-1" style={{ color: 'var(--foreground)' }}>
-              {s.target}
-            </span>
+            {/* target 为 "-"（observe/页内脚本这类无定位目标的动作）时不渲染空占位 */}
+            {s.target && s.target !== '-' ? (
+              <span className="font-mono break-all flex-1" style={{ color: 'var(--foreground)' }}>
+                {s.target}
+              </span>
+            ) : (
+              <span className="flex-1" />
+            )}
             <span className="shrink-0" style={{ color: s.ok ? 'var(--success)' : 'var(--destructive)' }}>
               {s.ok ? t('explorations:stepOk') : t('explorations:stepFail')}
             </span>
           </div>
+          {/* 结果摘要：这一步「看到了什么/变成了什么/为什么失败」——没有它过程里全是空条目 */}
+          {s.outcome && (
+            <div className="text-[11px] break-words pl-[76px]" style={{ color: s.ok ? 'var(--muted-foreground)' : 'var(--destructive)' }}>
+              {s.outcome}
+            </div>
+          )}
           {s.detail && (
             <div className="font-mono text-[11px] break-all pl-[76px]" style={{ color: 'var(--muted-foreground)' }}>
               {s.detail}

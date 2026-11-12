@@ -13,6 +13,7 @@ import { dumpElements, type ElementInfo } from '../../../execute/elementDump.js'
 import { waitForPageSettled } from '../../../execute/pageSettle.js';
 import { captureLiveRegionMessages } from '../../../execute/liveRegion.js';
 import { brittleSelectorReason } from '../../../execute/gates.js';
+import { toolErr, toolOk, toolOkImage } from './result.js';
 import { logger } from '../../../logger.js';
 
 /** 工具集依赖（runner 装配时注入；工厂形态便于测试替换 page）。 */
@@ -28,8 +29,9 @@ export interface ToolDeps {
   onFatal?: (err: Error) => void;
   /** 破坏性操作显式授权位（false/缺省 = click 判中即拒；章程说辞不算授权）。 */
   allowDestructive?: boolean;
-  /** 错误信号增量（observe 回灌：自上次 drain 起 console/pageerror/HTTP 4xx-5xx）。 */
-  errorSignals?: () => string;
+  /** 错误信号增量（observe 回灌：自上次 drain 起 console/pageerror/HTTP 4xx-5xx）。
+   *  同时给条数——留痕摘要要写「本轮新增 N 条错误信号」，这是「观察」这一步最有价值的结论。 */
+  errorSignals?: () => { text: string; count: number };
   /** 覆盖账本摘要（observe 回灌：已覆盖路径/交互，别重复）。 */
   coverageSummary?: () => string;
 }
@@ -63,27 +65,29 @@ export function createObserveTool(deps: ToolDeps) {
       }
       // 回灌块：覆盖账本（已覆盖别重复）+ 错误信号增量（console/pageerror/HTTP 4xx-5xx）。
       // 错误信号放最前——「页面报错了」比「页面长什么样」优先级更高。
-      const blocks = [deps.errorSignals?.() ?? '', deps.coverageSummary?.() ?? ''].filter(Boolean);
+      const signals = deps.errorSignals?.() ?? { text: '', count: 0 };
+      const blocks = [signals.text, deps.coverageSummary?.() ?? ''].filter(Boolean);
       const text = [...blocks, `当前 URL：${deps.page.url()}`, `视口：${vp.width}x${vp.height}`, renderElements(elements)].join('\n');
+      // 结果摘要（留痕正文）：这一步「看到了什么」——URL、视口、可交互元素数、本轮新错误信号数。
+      const summary = [
+        `URL ${deps.page.url()}`,
+        `视口 ${vp.width}x${vp.height}`,
+        `可交互元素 ${elements.length} 个`,
+        signals.count > 0 ? `新错误信号 ${signals.count} 条` : '无新错误信号',
+      ].join('｜');
       if (!deps.vision) {
-        return {
-          content: [{ type: 'text', text: `${text}\n（当前渠道无视觉通道：无截图附图，请依据元素清单的 selector/tag/text/value 操作）` }],
-          details: undefined,
-        };
+        return toolOk(
+          `${summary}（无视觉通道，纯元素清单）`,
+          `${text}\n（当前渠道无视觉通道：无截图附图，请依据元素清单的 selector/tag/text/value 操作）`,
+        );
       }
       // 主截图 JPEG q85：坐标指认不需要无损精度（与 legacy aiTask 同取舍）
       // 15s：截图超时静默退化成「本轮无图」，宁长勿短（prod228 实证 5s 偶发超时）。
       const buf = await deps.page.screenshot({ timeout: 15_000, type: 'jpeg', quality: 85 }).catch(() => null);
       if (!buf) {
-        return { content: [{ type: 'text', text: `${text}\n（本轮截图失败，请依据元素清单操作）` }], details: undefined };
+        return toolOk(`${summary}（本轮截图失败）`, `${text}\n（本轮截图失败，请依据元素清单操作）`);
       }
-      return {
-        content: [
-          { type: 'text', text },
-          { type: 'image', data: buf.toString('base64'), mimeType: 'image/jpeg' },
-        ],
-        details: undefined,
-      };
+      return toolOkImage(summary, text, buf.toString('base64'), 'image/jpeg');
     },
   });
 }
@@ -98,21 +102,19 @@ export function createScreenshotTool(deps: ToolDeps) {
     executionMode: 'sequential',
     execute: async (_toolCallId, params) => {
       if (!deps.vision) {
-        return {
-          content: [{ type: 'text', text: '当前渠道无视觉通道：截图不可用，请依据元素清单的 selector/tag/text/value 操作。' }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          '视觉通道不可用，截图工具不可用',
+          '当前渠道无视觉通道：截图不可用，请依据元素清单的 selector/tag/text/value 操作。',
+        );
       }
       const sel = params.selector?.trim();
       if (sel) {
         const reason = brittleSelectorReason(sel);
         if (reason) {
-          return {
-            content: [{ type: 'text', text: `screenshot ${sel}: error 脆弱 selector 被拒（${reason}）。改用元素清单里给出的 selector。` }],
-            details: undefined,
-            isError: true,
-          };
+          return toolErr(
+            `脆弱 selector 被拒（${reason}）`,
+            `screenshot ${sel}: error 脆弱 selector 被拒（${reason}）。改用元素清单里给出的 selector。`,
+          );
         }
         const el = deps.page.locator(sel).first();
         let buf: Buffer | null = null;
@@ -136,34 +138,37 @@ export function createScreenshotTool(deps: ToolDeps) {
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          return {
-            content: [{ type: 'text', text: `screenshot ${sel}: error ${msg.slice(0, 200)}。确认 selector 在元素清单里且元素可见；找不到就先 observe 核对当前页面。` }],
-            details: undefined,
-            isError: true,
-          };
+          return toolErr(
+            `元素截图失败：${msg.slice(0, 120)}`,
+            `screenshot ${sel}: error ${msg.slice(0, 200)}。确认 selector 在元素清单里且元素可见；找不到就先 observe 核对当前页面。`,
+          );
         }
         if (!buf) {
-          return { content: [{ type: 'text', text: `screenshot ${sel}: error 元素截图失败，可改用全页截图（不带 selector）。` }], details: undefined, isError: true };
+          return toolErr(
+            '元素截图失败，可改用全页截图（不带 selector）',
+            `screenshot ${sel}: error 元素截图失败，可改用全页截图（不带 selector）。`,
+          );
         }
-        return {
-          content: [
-            { type: 'text', text: `元素 ${sel} 的 4 倍放大白底截图如下。` },
-            { type: 'image', data: buf.toString('base64'), mimeType: 'image/png' },
-          ],
-          details: undefined,
-        };
+        return toolOkImage(
+          `已取元素放大截图：${sel}`,
+          `元素 ${sel} 的 4 倍放大白底截图如下。`,
+          buf.toString('base64'),
+          'image/png',
+        );
       }
       const buf = await deps.page.screenshot({ timeout: 15_000, type: 'png' }).catch(() => null);
       if (!buf) {
-        return { content: [{ type: 'text', text: 'screenshot: error 全页截图失败（页面可能在持续重绘）。先 wait 几秒再试。' }], details: undefined, isError: true };
+        return toolErr(
+          '全页截图失败（页面可能在持续重绘）',
+          'screenshot: error 全页截图失败（页面可能在持续重绘）。先 wait 几秒再试。',
+        );
       }
-      return {
-        content: [
-          { type: 'text', text: `全页视口截图如下（当前 URL：${deps.page.url()}）。` },
-          { type: 'image', data: buf.toString('base64'), mimeType: 'image/png' },
-        ],
-        details: undefined,
-      };
+      return toolOkImage(
+        `已取全页截图（${deps.page.url()}）`,
+        `全页视口截图如下（当前 URL：${deps.page.url()}）。`,
+        buf.toString('base64'),
+        'image/png',
+      );
     },
   });
 }
@@ -181,22 +186,24 @@ export function createReadTextTool(deps: ToolDeps) {
       if (sel) {
         const reason = brittleSelectorReason(sel);
         if (reason) {
-          return {
-            content: [{ type: 'text', text: `read_text ${sel}: error 脆弱 selector 被拒（${reason}）。改用元素清单里给出的 selector。` }],
-            details: undefined,
-            isError: true,
-          };
+          return toolErr(
+            `脆弱 selector 被拒（${reason}）`,
+            `read_text ${sel}: error 脆弱 selector 被拒（${reason}）。改用元素清单里给出的 selector。`,
+          );
         }
         try {
           const text = await deps.page.locator(sel).first().innerText({ timeout: 3000 });
-          return { content: [{ type: 'text', text: `${sel} 的文本：\n${text.trim().slice(0, 4000) || '（空）'}` }], details: undefined };
+          const body = text.trim().slice(0, 4000);
+          return toolOk(
+            `${sel} 文本 ${body.length} 字${body ? `：${body.slice(0, 80)}` : '（空）'}`,
+            `${sel} 的文本：\n${body || '（空）'}`,
+          );
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          return {
-            content: [{ type: 'text', text: `read_text ${sel}: error ${msg.slice(0, 200)}。确认 selector 在元素清单里且元素可见。` }],
-            details: undefined,
-            isError: true,
-          };
+          return toolErr(
+            `读取文本失败：${msg.slice(0, 120)}`,
+            `read_text ${sel}: error ${msg.slice(0, 200)}。确认 selector 在元素清单里且元素可见。`,
+          );
         }
       }
       // 无 selector：toast/提示一手文本 + 页面主体文本兜底（都封顶，反馈不能无限膨胀）
@@ -208,7 +215,10 @@ export function createReadTextTool(deps: ToolDeps) {
         msgs.length > 0 ? `页面消息（aria-live）：\n${msgs.slice(0, 5).map((m) => `- "${m.slice(0, 160)}"`).join('\n')}` : '页面消息（aria-live）：（无）',
         `页面主体文本（截断）：\n${body.slice(0, 2000) || '（空）'}`,
       ];
-      return { content: [{ type: 'text', text: lines.join('\n') }], details: undefined };
+      return toolOk(
+        `页面消息 ${msgs.length} 条｜主体文本 ${body.length} 字${msgs.length > 0 ? `：${msgs[0]!.slice(0, 60)}` : ''}`,
+        lines.join('\n'),
+      );
     },
   });
 }

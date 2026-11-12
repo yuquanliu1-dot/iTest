@@ -554,8 +554,11 @@ describe('探索 runner pi 链路', () => {
     expect(String(row.rows[0]!.error)).toContain('env-missing');
     expect(String(row.rows[0]!.error)).toContain('ghost');
     // 留痕保留失败动作，且 value 是替换前的占位符字面量（绝不含真实凭据）。
-    const trail = (row.rows[0]!.actions_trail ?? []) as Array<{ type: string; ok: boolean; value?: string }>;
-    expect(trail).toEqual([{ type: 'fill', target: '#user', value: '__ITEST_USERNAME@ghost__', ok: false }]);
+    // outcome 由兜底逻辑从错误文本摘出原因（fill 是终止性错误，工具层没给 summary）。
+    const trail = (row.rows[0]!.actions_trail ?? []) as Array<{ type: string; ok: boolean; value?: string; outcome?: string }>;
+    expect(trail).toEqual([
+      { type: 'fill', target: '#user', value: '__ITEST_USERNAME@ghost__', ok: false, outcome: '失败：env-missing' },
+    ]);
     // 有 db → sql_probe 挂载；无代码范围 → repo_read 不挂载。
     const toolNames = (sessionArgs.at(-1)!.tools as Array<{ name: string }>).map((t) => t.name);
     expect(toolNames).toContain('sql_probe');

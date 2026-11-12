@@ -24,8 +24,8 @@ export const ERROR_SIGNALS_MAX = 200;
 const SIGNAL_TEXT_MAX = 300;
 
 export interface ErrorSignalCollector {
-  /** 取走自上次 drain 起的新信号（observe 增量回灌用；已渲染文本）。 */
-  drainRendered(): string;
+  /** 取走自上次 drain 起的新信号（observe 增量回灌用；已渲染文本 + 条数）。 */
+  drainRendered(): { text: string; count: number };
   /** 全量（封顶内）留档快照。 */
   all(): ErrorSignal[];
   close(): void;
@@ -60,16 +60,16 @@ export function createErrorSignalCollector(page: Page): ErrorSignalCollector {
   page.on('response', onResponse);
 
   return {
-    drainRendered(): string {
+    drainRendered(): { text: string; count: number } {
       const fresh = items.slice(drained);
       drained = items.length;
-      if (fresh.length === 0) return '';
+      if (fresh.length === 0) return { text: '', count: 0 };
       const lines = fresh.slice(-5).map((s) => {
         const u = s.url ? ` ${s.url}` : '';
         return `- [${s.kind}] ${s.text}${u}`;
       });
       const note = fresh.length > 5 ? `（本轮新增 ${fresh.length} 条，仅显示最后 5 条）` : '';
-      return `页面错误信号（自上次观察起）：\n${lines.join('\n')}${note}`;
+      return { text: `页面错误信号（自上次观察起）：\n${lines.join('\n')}${note}`, count: fresh.length };
     },
     all(): ErrorSignal[] {
       return [...items];

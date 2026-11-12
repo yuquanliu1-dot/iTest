@@ -20,6 +20,7 @@ import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
 import { isOpenDropdownFilter } from '../../../execute/dropdownFilter.js';
 import { brittleSelectorReason, destructiveActionReason, scopeViolationReason } from '../../../execute/gates.js';
+import { toolErr, toolOk } from './result.js';
 import type { ToolDeps } from './index.js';
 
 /** 动作后短暂稳定（与 legacy settleAfterAction 同参）：导航/重渲染落地后再进下一个动作。 */
@@ -44,45 +45,29 @@ export function createNavigateTool(deps: ToolDeps) {
     execute: async (_toolCallId, params) => {
       const url = params.url.trim();
       if (!/^https?:\/\//.test(url)) {
-        return {
-          content: [{ type: 'text', text: `navigate ${url}: error 仅接受 http/https 绝对地址。` }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr('导航地址非法（只接受 http/https 绝对地址）', `navigate ${url}: error 仅接受 http/https 绝对地址。`);
       }
       const reason = scopeViolationReason(url, deps.scopeOrigins);
       if (reason) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `navigate ${url}: error 探索范围被拒（${reason}）。只能在起点站点的域名内探索；若起点页面打不开，如实结束并说明，不要改去其它站点。`,
-            },
-          ],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `越界被拒：${reason}`,
+          `navigate ${url}: error 探索范围被拒（${reason}）。只能在起点站点的域名内探索；若起点页面打不开，如实结束并说明，不要改去其它站点。`,
+        );
       }
       try {
         await deps.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
         // 与 legacy init-goto 对齐：等 SPA hydrate，长连接页面 5s 兜底不阻塞。
         await deps.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
-        return {
-          content: [{ type: 'text', text: `navigate ${url}: ok（当前 URL：${deps.page.url()}）。下一步调用 observe 获取页面截图与元素清单。` }],
-          details: undefined,
-        };
+        return toolOk(
+          `已打开 ${deps.page.url()}`,
+          `navigate ${url}: ok（当前 URL：${deps.page.url()}）。下一步调用 observe 获取页面截图与元素清单。`,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `navigate ${url}: error ${msg.slice(0, 200)}。起点页面打不开/不可达时如实结束并说明，不要改去其它站点。`,
-            },
-          ],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `打开失败：${msg.slice(0, 120)}`,
+          `navigate ${url}: error ${msg.slice(0, 200)}。起点页面打不开/不可达时如实结束并说明，不要改去其它站点。`,
+        );
       }
     },
   });
@@ -103,7 +88,7 @@ export function createClickTool(deps: ToolDeps) {
       const target = params.target.trim();
       const brittle = brittleSelectorReason(target);
       if (brittle) {
-        return { content: [{ type: 'text', text: brittleReject('click', target, brittle) }], details: undefined, isError: true };
+        return toolErr(`脆弱 selector 被拒（${brittle}）`, brittleReject('click', target, brittle));
       }
       // 破坏性闸：可见文本判定（text+placeholder+value+selector 拼接；元素读不到时 selector
       // 字符串仍参与判定——legacy 同口径）。判定读不到不误伤（放行）。
@@ -123,31 +108,24 @@ export function createClickTool(deps: ToolDeps) {
       }
       const reason = destructiveActionReason(targetText);
       if (reason && deps.allowDestructive !== true) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `click ${targetText.slice(0, 60)}: error 该目标被平台判为破坏性/不可逆操作（${reason}），已机械拒收。不要重试或改写措辞绕过；改为 report_finding 描述该入口的风险与缺失的确认机制。`,
-            },
-          ],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `破坏性操作被拒（${reason}）`,
+          `click ${targetText.slice(0, 60)}: error 该目标被平台判为破坏性/不可逆操作（${reason}），已机械拒收。不要重试或改写措辞绕过；改为 report_finding 描述该入口的风险与缺失的确认机制。`,
+        );
       }
       try {
         await deps.page.locator(target).first().click({ timeout: 5000, force: true });
         await settleAfterAction(deps.page);
-        return {
-          content: [{ type: 'text', text: `click ${target}: ok（当前 URL：${deps.page.url()}）。先 observe 确认页面变化。` }],
-          details: undefined,
-        };
+        return toolOk(
+          `已点击，当前页面 ${deps.page.url()}`,
+          `click ${target}: ok（当前 URL：${deps.page.url()}）。先 observe 确认页面变化。`,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return {
-          content: [{ type: 'text', text: `click ${target}: error ${msg.slice(0, 200)}。先 observe 核对当前页面（弹窗/跳转/加载中都会让目标消失）。` }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `点击失败：${msg.slice(0, 120)}`,
+          `click ${target}: error ${msg.slice(0, 200)}。先 observe 核对当前页面（弹窗/跳转/加载中都会让目标消失）。`,
+        );
       }
     },
   });
@@ -169,7 +147,7 @@ export function createFillTool(deps: ToolDeps) {
       const rawValue = params.value;
       const brittle = brittleSelectorReason(target);
       if (brittle) {
-        return { content: [{ type: 'text', text: brittleReject('fill', target, brittle) }], details: undefined, isError: true };
+        return toolErr(`脆弱 selector 被拒（${brittle}）`, brittleReject('fill', target, brittle));
       }
       let realValue = rawValue;
       try {
@@ -179,11 +157,7 @@ export function createFillTool(deps: ToolDeps) {
         // 反馈给模型只会让它换 selector 空转烧轮次——终止会话（onFatal），此处照常回错误行。
         const err = e instanceof Error ? e : new Error(String(e));
         deps.onFatal?.(err);
-        return {
-          content: [{ type: 'text', text: `fill ${target}: error ${err.message}` }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(`凭据缺失：${err.message.slice(0, 120)}`, `fill ${target}: error ${err.message}`);
       }
       const substituted = realValue !== rawValue;
       try {
@@ -204,24 +178,22 @@ export function createFillTool(deps: ToolDeps) {
           const tail = substituted
             ? `实际值与目标不一致（实际值长度 ${actual.length}）。`
             : `实际值 "${actual.slice(0, 80)}" 与目标 "${rawValue.slice(0, 80)}" 不一致。`;
-          return {
-            content: [{ type: 'text', text: `fill ${target}: ${tail}先 observe 核对目标框是否正确，必要时换 selector 重填。` }],
-            details: undefined,
-            isError: true,
-          };
+          return toolErr(
+            '回读值与目标不一致',
+            `fill ${target}: ${tail}先 observe 核对目标框是否正确，必要时换 selector 重填。`,
+          );
         }
         await settleAfterAction(deps.page);
-        return {
-          content: [{ type: 'text', text: `fill ${target}: ok（已填入${substituted ? '（占位符已替换）' : ''}）。` }],
-          details: undefined,
-        };
+        return toolOk(
+          substituted ? '已填入（占位符已替换）' : '已填入',
+          `fill ${target}: ok（已填入${substituted ? '（占位符已替换）' : ''}）。`,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return {
-          content: [{ type: 'text', text: `fill ${target}: error ${msg.slice(0, 200)}。先 observe 核对当前页面与元素清单。` }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `填写失败：${msg.slice(0, 120)}`,
+          `fill ${target}: error ${msg.slice(0, 200)}。先 observe 核对当前页面与元素清单。`,
+        );
       }
     },
   });
@@ -239,10 +211,16 @@ export function createPressTool(deps: ToolDeps) {
       try {
         await deps.page.keyboard.press(key as never);
         await settleAfterAction(deps.page);
-        return { content: [{ type: 'text', text: `press ${key}: ok（当前 URL：${deps.page.url()}）。Enter/Escape 常触发提交或关弹窗，先 observe。` }], details: undefined };
+        return toolOk(
+          `已按键 ${key}，当前页面 ${deps.page.url()}`,
+          `press ${key}: ok（当前 URL：${deps.page.url()}）。Enter/Escape 常触发提交或关弹窗，先 observe。`,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return { content: [{ type: 'text', text: `press ${key}: error ${msg.slice(0, 200)}（键名需是 Playwright 键名）。` }], details: undefined, isError: true };
+        return toolErr(
+          `按键失败：${msg.slice(0, 120)}`,
+          `press ${key}: error ${msg.slice(0, 200)}（键名需是 Playwright 键名）。`,
+        );
       }
     },
   });
@@ -269,11 +247,10 @@ export function createSelectTool(deps: ToolDeps) {
       try {
         const tag = await loc.evaluate((el) => el.tagName.toLowerCase());
         if (tag !== 'select') {
-          return {
-            content: [{ type: 'text', text: `select ${target}: error 目标不是原生 <select>（是 ${tag}）。组件库自绘下拉请用 click 展开、再 click 点选选项。` }],
-            details: undefined,
-            isError: true,
-          };
+          return toolErr(
+            `目标不是原生 <select>（是 ${tag}）`,
+            `select ${target}: error 目标不是原生 <select>（是 ${tag}）。组件库自绘下拉请用 click 展开、再 click 点选选项。`,
+          );
         }
         // 先按 value 选，失败回落按可见文本选（模型给的多半是界面文案）。
         try {
@@ -282,14 +259,16 @@ export function createSelectTool(deps: ToolDeps) {
           await loc.selectOption({ label: value }, { timeout: 3000 });
         }
         await settleAfterAction(deps.page);
-        return { content: [{ type: 'text', text: `select ${target}: ok（已选「${value.slice(0, 60)}」）。先 observe 确认联动结果。` }], details: undefined };
+        return toolOk(
+          `已选「${value.slice(0, 40)}」`,
+          `select ${target}: ok（已选「${value.slice(0, 60)}」）。先 observe 确认联动结果。`,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return {
-          content: [{ type: 'text', text: `select ${target}: error ${msg.slice(0, 200)}。确认目标在元素清单里，且选项文本/value 存在于该下拉。` }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `选择失败：${msg.slice(0, 120)}`,
+          `select ${target}: error ${msg.slice(0, 200)}。确认目标在元素清单里，且选项文本/value 存在于该下拉。`,
+        );
       }
     },
   });
@@ -311,13 +290,13 @@ export function createScrollTool(deps: ToolDeps) {
       try {
         await deps.page.mouse.wheel(0, dy);
         await deps.page.waitForTimeout(200);
-        return {
-          content: [{ type: 'text', text: `scroll ${params.direction} ${amount}px: ok。视口变了，元素清单需重新 observe 获取。` }],
-          details: undefined,
-        };
+        return toolOk(
+          `已滚动 ${params.direction} ${amount}px`,
+          `scroll ${params.direction} ${amount}px: ok。视口变了，元素清单需重新 observe 获取。`,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return { content: [{ type: 'text', text: `scroll: error ${msg.slice(0, 200)}` }], details: undefined, isError: true };
+        return toolErr(`滚动失败：${msg.slice(0, 120)}`, `scroll: error ${msg.slice(0, 200)}`);
       }
     },
   });
@@ -334,10 +313,13 @@ export function createBackTool(deps: ToolDeps) {
       try {
         await deps.page.goBack({ timeout: 10_000 }).catch(() => undefined);
         await settleAfterAction(deps.page);
-        return { content: [{ type: 'text', text: `back: ok（当前 URL：${deps.page.url()}）。先 observe 重新获取页面状态。` }], details: undefined };
+        return toolOk(
+          `已后退，当前页面 ${deps.page.url()}`,
+          `back: ok（当前 URL：${deps.page.url()}）。先 observe 重新获取页面状态。`,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return { content: [{ type: 'text', text: `back: error ${msg.slice(0, 200)}` }], details: undefined, isError: true };
+        return toolErr(`后退失败：${msg.slice(0, 120)}`, `back: error ${msg.slice(0, 200)}`);
       }
     },
   });
@@ -359,21 +341,20 @@ export function createWaitTool(deps: ToolDeps) {
         if (sel) {
           const brittle = brittleSelectorReason(sel);
           if (brittle) {
-            return { content: [{ type: 'text', text: brittleReject('wait', sel, brittle) }], details: undefined, isError: true };
+            return toolErr(`脆弱 selector 被拒（${brittle}）`, brittleReject('wait', sel, brittle));
           }
           await deps.page.locator(sel).first().waitFor({ state: 'visible', timeout: 5000 });
-          return { content: [{ type: 'text', text: `wait ${sel}: ok（元素已可见）。` }], details: undefined };
+          return toolOk(`元素已可见：${sel}`, `wait ${sel}: ok（元素已可见）。`);
         }
         const ms = Math.min(5000, Math.max(100, Math.round(params.ms ?? 1000)));
         await deps.page.waitForTimeout(ms);
-        return { content: [{ type: 'text', text: `wait ${ms}ms: ok。时间到，先 observe 获取最新页面状态。` }], details: undefined };
+        return toolOk(`已等待 ${ms}ms`, `wait ${ms}ms: ok。时间到，先 observe 获取最新页面状态。`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return {
-          content: [{ type: 'text', text: `wait: error ${msg.slice(0, 200)}。元素迟迟不出现就先 observe 看当前实际页面。` }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `等待失败：${msg.slice(0, 120)}`,
+          `wait: error ${msg.slice(0, 200)}。元素迟迟不出现就先 observe 看当前实际页面。`,
+        );
       }
     },
   });

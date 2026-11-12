@@ -1181,6 +1181,8 @@ export interface ExplorationStep {
   ok: boolean;
   /** sql 步骤的结果摘要（行数 + 首行）。 */
   detail?: string;
+  /** 这一步的结果摘要（人话：看到了什么 / 改变了什么 / 为什么失败）——「会话过程」列表的正文。 */
+  outcome?: string;
   /** fill 的输入值（占位符字面量或普通文本）。 */
   value?: string;
   /** wait 的毫秒数。 */

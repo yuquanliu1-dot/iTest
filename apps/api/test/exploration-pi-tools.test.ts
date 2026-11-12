@@ -272,9 +272,11 @@ describe('pi 探索工具层', () => {
     handlers.response?.[0]?.({ status: () => 500, url: () => 'http://sut.example.com/api/boom' });
 
     const drained = collector.drainRendered();
-    expect(drained).toContain('[console] Uncaught TypeError');
-    expect(drained).toContain('[http] HTTP 500');
-    expect(collector.drainRendered()).toBe('');
+    expect(drained.text).toContain('[console] Uncaught TypeError');
+    expect(drained.text).toContain('[http] HTTP 500');
+    expect(drained.count).toBe(2);
+    // 增量语义：drain 后再 drain 为空（observe 回灌只带新信号，不重复轰炸）。
+    expect(collector.drainRendered()).toEqual({ text: '', count: 0 });
     expect(collector.all()).toHaveLength(2);
 
     // 封顶：超过 200 条后丢弃新条目。

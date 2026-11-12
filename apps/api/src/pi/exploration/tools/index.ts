@@ -135,6 +135,8 @@ export function trailStepOf(toolName: string, args: unknown): ExplorationStep | 
       return { type: 'report_finding', target: str('title'), ok: true };
     case 'note_excluded':
       return { type: 'note_excluded', target: '-', ok: true };
+    case 'inject_fault':
+      return { type: 'inject_fault', target: str('mode'), ok: true };
     case 'finish':
       return { type: 'finish', target: '-', ok: true };
     default:

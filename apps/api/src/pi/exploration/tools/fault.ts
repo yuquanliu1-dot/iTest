@@ -15,6 +15,7 @@
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
 import type { BrowserContext, Page } from 'playwright-core';
+import { toolErr, toolOk } from './result.js';
 
 export type FaultMode = 'offline' | 'slow_network' | 'cpu_throttle' | 'none';
 
@@ -147,37 +148,28 @@ export function createInjectFaultTool(deps: { fault: FaultController }) {
     execute: async (_toolCallId, params) => {
       const mode = normalizeFaultMode(params.mode);
       if (!mode) {
-        return {
-          content: [{ type: 'text', text: 'mode 只能是 offline / slow_network / cpu_throttle / none。' }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          '模式非法（只认 offline / slow_network / cpu_throttle / none）',
+          'mode 只能是 offline / slow_network / cpu_throttle / none。',
+        );
       }
       try {
         await deps.fault.apply(mode, {
           ...(typeof params.delayMs === 'number' ? { delayMs: params.delayMs } : {}),
           ...(typeof params.rate === 'number' ? { rate: params.rate } : {}),
         });
-        return {
-          content: [
-            {
-              type: 'text',
-              text:
-                mode === 'none'
-                  ? '已复原（无故障）。用 observe 确认页面恢复正常。'
-                  : `已注入故障：${mode}。用 observe 看页面在故障下的表现（错误提示/加载态/降级），再决定是否上报缺陷。`,
-            },
-          ],
-          details: undefined,
-          isError: false,
-        };
+        return toolOk(
+          mode === 'none' ? '已复原（无故障）' : `已注入故障：${mode}`,
+          mode === 'none'
+            ? '已复原（无故障）。用 observe 确认页面恢复正常。'
+            : `已注入故障：${mode}。用 observe 看页面在故障下的表现（错误提示/加载态/降级），再决定是否上报缺陷。`,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return {
-          content: [{ type: 'text', text: `注入故障失败：${msg}（可换一种模式再试，或用 none 复原）` }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `注入失败：${msg.slice(0, 120)}`,
+          `注入故障失败：${msg}（可换一种模式再试，或用 none 复原）`,
+        );
       }
     },
   });

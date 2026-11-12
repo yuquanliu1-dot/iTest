@@ -16,6 +16,7 @@ import { withTimeout } from '../../../execute/explorationShared.js';
 import { EXPLORATION_MAX_REPO_READS, EXPLORATION_MAX_SQL_PROBES } from '../../../execute/explorationPrompt.js';
 import { SQL_PROBE_MAX_ROWS } from '../../../execute/aiTask.js';
 import type { RepoReadRequest, RepoReadResult } from '../../../execute/aiTask.js';
+import { toolErr, toolOk } from './result.js';
 import { logger } from '../../../logger.js';
 
 /** 单次只读取证的等待侧超时（只截断等待，不取消底层查询——只读查询代价可接受）。 */
@@ -46,35 +47,32 @@ export function createSqlProbeTool(deps: { env: SqlProbeEnv; dbRefs: Array<{ lab
     execute: async (_toolCallId, params) => {
       const query = params.query.trim();
       if (!query) {
-        return { content: [{ type: 'text', text: 'sql_probe: error query 为空。' }], details: undefined, isError: true };
+        return toolErr('查询为空', 'sql_probe: error query 为空。');
       }
       // 双闸第一道：只读守卫（写语句直接拒；runSql 内部还有第二道）。
       try {
         assertReadOnlySql(query);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return {
-          content: [{ type: 'text', text: `sql_probe: error 只读守卫拒绝（${msg.slice(0, 160)}）。只允许 SELECT/WITH 查询。` }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `只读守卫拒绝（${msg.slice(0, 100)}）`,
+          `sql_probe: error 只读守卫拒绝（${msg.slice(0, 160)}）。只允许 SELECT/WITH 查询。`,
+        );
       }
       if (used >= EXPLORATION_MAX_SQL_PROBES) {
-        return {
-          content: [{ type: 'text', text: `sql_probe: error 本会话查库次数已用尽（上限 ${EXPLORATION_MAX_SQL_PROBES} 次）。回到页面观察取证，把剩余轮次用在探索上。` }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `查库次数已用尽（上限 ${EXPLORATION_MAX_SQL_PROBES} 次）`,
+          `sql_probe: error 本会话查库次数已用尽（上限 ${EXPLORATION_MAX_SQL_PROBES} 次）。回到页面观察取证，把剩余轮次用在探索上。`,
+        );
       }
       used += 1;
       const entry = deps.env.resolveDb(params.db?.trim() || null);
       if (!entry) {
         const names = deps.dbRefs.map((d) => d.label).join('、') || '（无）';
-        return {
-          content: [{ type: 'text', text: `sql_probe: error 数据库未命中${params.db ? `「${params.db}」` : '（默认库）'}，可用：${names}。` }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `数据库未命中${params.db ? `「${params.db}」` : '（默认库）'}，可用：${names}`,
+          `sql_probe: error 数据库未命中${params.db ? `「${params.db}」` : '（默认库）'}，可用：${names}。`,
+        );
       }
       try {
         const pool = await deps.env.resolveDbPool(entry.label);
@@ -86,15 +84,19 @@ export function createSqlProbeTool(deps: { env: SqlProbeEnv; dbRefs: Array<{ lab
         );
         const rows = r.rows as Array<Record<string, unknown>>;
         const text = `sql_probe（${entry.label}）：${r.rowCount} 行${r.truncated ? '（已按 limit 截断）' : ''}\n${renderSqlProbeRows(rows, r.rowCount, !!r.truncated)}`;
-        return { content: [{ type: 'text', text }], details: undefined };
+        // 留痕摘要 = 「查到了什么」（行数 + 首行），detail 另存取证原文（升格用例的 expected 用）。
+        const first = rows[0] ? Object.entries(rows[0]).slice(0, 3).map(([k, v]) => `${k}=${String(v).slice(0, 30)}`).join(' ') : '';
+        return toolOk(
+          `${entry.label} 返回 ${r.rowCount} 行${r.truncated ? '（已按 limit 截断）' : ''}${first ? `｜首行 ${first}` : ''}`,
+          text,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         logger.info({ err: msg.slice(0, 160) }, 'exploration sql probe failed');
-        return {
-          content: [{ type: 'text', text: `sql_probe: error ${msg.slice(0, 200)}。查表名/字段名不确定时先查元数据（见工具说明）。` }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `查询失败：${msg.slice(0, 120)}`,
+          `sql_probe: error ${msg.slice(0, 200)}。查表名/字段名不确定时先查元数据（见工具说明）。`,
+        );
       }
     },
   });
@@ -125,10 +127,10 @@ export function createRepoReadTool(deps: {
       const offset = Math.max(0, Math.round(params.offset ?? 0));
       let req: RepoReadRequest;
       if (params.op === 'read') {
-        if (!cleanPath) return { content: [{ type: 'text', text: 'repo_read: error read 需要 path。' }], details: undefined, isError: true };
+        if (!cleanPath) return toolErr('read 需要 path', 'repo_read: error read 需要 path。');
         req = { op: 'read', path: cleanPath, offset, maxLines };
       } else if (params.op === 'grep') {
-        if (!cleanPattern) return { content: [{ type: 'text', text: 'repo_read: error grep 需要 pattern。' }], details: undefined, isError: true };
+        if (!cleanPattern) return toolErr('grep 需要 pattern', 'repo_read: error grep 需要 pattern。');
         req = { op: 'grep', pattern: cleanPattern, ...(cleanPath ? { path: cleanPath } : {}), maxLines };
       } else if (params.op === 'ls') {
         req = { op: 'ls', ...(cleanPath ? { path: cleanPath } : {}) };
@@ -137,10 +139,13 @@ export function createRepoReadTool(deps: {
       }
       const r = await deps.channel(req);
       if (!r.ok) {
-        return { content: [{ type: 'text', text: `repo_read ${params.op}: error ${r.error}` }], details: undefined, isError: true };
+        return toolErr(`读取失败：${r.error.slice(0, 120)}`, `repo_read ${params.op}: error ${r.error}`);
       }
       const head = params.op === 'diff' && deps.hasDiff ? '本次改动 diff：\n' : '';
-      return { content: [{ type: 'text', text: `repo_read ${params.op} ${cleanPath ?? ''}: ok\n${head}${r.content}` }], details: undefined };
+      return toolOk(
+        `${params.op} ${cleanPath ?? ''} 命中 ${r.content.length} 字符`.trim(),
+        `repo_read ${params.op} ${cleanPath ?? ''}: ok\n${head}${r.content}`,
+      );
     },
   });
 }

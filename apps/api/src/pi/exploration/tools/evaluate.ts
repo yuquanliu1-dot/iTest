@@ -13,6 +13,7 @@
  */
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
+import { toolErr, toolOk } from './result.js';
 import { logger } from '../../../logger.js';
 
 const EVAL_TIMEOUT_MS = 10_000;
@@ -47,21 +48,15 @@ export function createEvaluateTool(deps: { page: import('playwright-core').Page 
     execute: async (_toolCallId, params) => {
       const expr = params.expression.trim();
       if (!expr) {
-        return { content: [{ type: 'text', text: 'evaluate: error expression 为空。' }], details: undefined, isError: true };
+        return toolErr('表达式为空', 'evaluate: error expression 为空。');
       }
       // L1 静态扫描
       const hits = EVAL_FORBIDDEN.filter((p) => p.re.test(expr)).map((p) => p.why);
       if (hits.length > 0) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `evaluate: error 表达式包含禁用操作（${hits.join('、')}）。本工具只做只读取证；需要导航用 navigate，需要点/填用 click/fill。`,
-            },
-          ],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `表达式含禁用操作（${hits.join('、')}）`,
+          `evaluate: error 表达式包含禁用操作（${hits.join('、')}）。本工具只做只读取证；需要导航用 navigate，需要点/填用 click/fill。`,
+        );
       }
       // L2 词法遮蔽：局部标识符遮蔽为抛错桩（不劫持全局）。表达式以 return 包裹——语句形态
       // 解析失败会原样报语法错，模型自然改写成表达式。
@@ -89,28 +84,26 @@ export function createEvaluateTool(deps: { page: import('playwright-core').Page 
         try {
           json = JSON.stringify(result) ?? 'undefined';
         } catch {
-          return {
-            content: [{ type: 'text', text: 'evaluate: error 返回值不可 JSON 序列化（DOM 节点/循环引用/BigInt）。请只返回可序列化的数据。' }],
-            details: undefined,
-            isError: true,
-          };
+          return toolErr(
+            '返回值不可 JSON 序列化',
+            'evaluate: error 返回值不可 JSON 序列化（DOM 节点/循环引用/BigInt）。请只返回可序列化的数据。',
+          );
         }
         if (json.length > EVAL_RESULT_MAX) {
-          return {
-            content: [{ type: 'text', text: `evaluate: error 返回值过大（${json.length} 字符 > 32KB）。缩小取值范围（如只取 length 或单个字段）。` }],
-            details: undefined,
-            isError: true,
-          };
+          return toolErr(
+            `返回值过大（${json.length} 字符 > 32KB）`,
+            `evaluate: error 返回值过大（${json.length} 字符 > 32KB）。缩小取值范围（如只取 length 或单个字段）。`,
+          );
         }
-        return { content: [{ type: 'text', text: `evaluate 结果：${json}` }], details: undefined };
+        // 结果摘要 = 返回值本身（留痕正文要能看出「这脚本查出了什么」）。
+        return toolOk(`返回 ${json.slice(0, 160)}`, `evaluate 结果：${json}`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         logger.info({ err: msg.slice(0, 120) }, 'exploration evaluate failed');
-        return {
-          content: [{ type: 'text', text: `evaluate: error ${msg.slice(0, 200)}。语法错时改写成单个表达式；引用不存在的变量会 ReferenceError，先确认对象存在。` }],
-          details: undefined,
-          isError: true,
-        };
+        return toolErr(
+          `执行失败：${msg.slice(0, 120)}`,
+          `evaluate: error ${msg.slice(0, 200)}。语法错时改写成单个表达式；引用不存在的变量会 ReferenceError，先确认对象存在。`,
+        );
       } finally {
         if (timer) clearTimeout(timer);
       }

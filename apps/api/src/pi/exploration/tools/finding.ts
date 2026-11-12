@@ -9,6 +9,7 @@
  */
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
+import { toolErr, toolOk, toolOkImage } from './result.js';
 import type { ExplorationDeps } from './index.js';
 
 export function createReportFindingTool(deps: ExplorationDeps) {
@@ -40,13 +41,14 @@ export function createReportFindingTool(deps: ExplorationDeps) {
         ...(steps.length > 0 ? { reproSteps: steps } : {}),
       };
       const r = await deps.findings.report(raw);
-      const content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [
-        { type: 'text', text: r.message },
-      ];
-      if (r.imageBase64 && deps.vision) {
-        content.push({ type: 'image', data: r.imageBase64, mimeType: 'image/png' });
+      const title = params.title.trim().slice(0, 60);
+      if (!r.ok) {
+        return toolErr(`缺陷未落库：${title}`, r.message);
       }
-      return { content, details: undefined, isError: !r.ok };
+      if (r.imageBase64 && deps.vision) {
+        return toolOkImage(`缺陷 #${r.order}「${title}」已落库`, r.message, r.imageBase64, 'image/png');
+      }
+      return toolOk(`缺陷 #${r.order}「${title}」已落库`, r.message);
     },
   });
 }
@@ -68,18 +70,9 @@ export function createNoteExcludedTool(deps: ExplorationDeps) {
     executionMode: 'sequential',
     execute: async (_toolCallId, params) => {
       const accepted = deps.noteExcluded(params.items);
-      return {
-        content: [
-          {
-            type: 'text',
-            text:
-              accepted > 0
-                ? `已记入排除账本 ${accepted} 条。已排除的路径不要重复探索。`
-                : '账本已满或条目与已申报重复，未新增。继续探索其它路径。',
-          },
-        ],
-        details: undefined,
-      };
+      return accepted > 0
+        ? toolOk(`已记入排除项 ${accepted} 条`, `已记入排除账本 ${accepted} 条。已排除的路径不要重复探索。`)
+        : toolOk('未新增排除项（账本已满或与已申报重复）', '账本已满或条目与已申报重复，未新增。继续探索其它路径。');
     },
   });
 }
@@ -109,7 +102,11 @@ export function createFinishTool(deps: ExplorationDeps & { onFinish(summary: str
         .filter((g): g is { id: string; done: boolean } => typeof g?.id === 'string' && g.id.trim() !== '')
         .map((g) => ({ id: g.id.trim().slice(0, 16), done: g.done === true }));
       deps.onFinish(summary || '探索结束', goals.length > 0 ? goals : undefined);
-      return { content: [{ type: 'text', text: '收到，正在收尾会话。' }], details: undefined };
+      const done = goals.filter((g) => g.done).length;
+      return toolOk(
+        goals.length > 0 ? `已提交总结（子目标 ${done}/${goals.length} 完成）` : '已提交总结',
+        '收到，正在收尾会话。',
+      );
     },
   });
 }
