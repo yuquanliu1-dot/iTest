@@ -18,6 +18,7 @@ import Code from '@carbon/icons-react/es/Code';
 import Copy from '@carbon/icons-react/es/Copy';
 import DataBase from '@carbon/icons-react/es/DataBase';
 import Dashboard from '@carbon/icons-react/es/Dashboard';
+import ReportData from '@carbon/icons-react/es/ReportData';
 import Download from '@carbon/icons-react/es/Download';
 import Edit from '@carbon/icons-react/es/Edit';
 import Launch from '@carbon/icons-react/es/Launch';
@@ -61,14 +62,15 @@ import Terminal from '@carbon/icons-react/es/Terminal';
 import TrashCan from '@carbon/icons-react/es/TrashCan';
 import Upload from '@carbon/icons-react/es/Upload';
 import User from '@carbon/icons-react/es/User';
+import UserMultiple from '@carbon/icons-react/es/UserMultiple';
 import Close from '@carbon/icons-react/es/Close';
 import Globe from '@carbon/icons-react/es/Globe';
 import Information from '@carbon/icons-react/es/Information';
 
 import type { CarbonIconType } from '@carbon/icons-react/es/CarbonIcon';
 
-// 与 CRM 对齐：IBM Carbon 图标注册表。调用点 API（<Icon name size className style />）不变，
-// 仅替换实现；Carbon 图标 fill=currentColor，size 走 width/height。
+// Aligned with CRM: IBM Carbon icon registry. The call-site API (<Icon name size className style />) is unchanged,
+// only the implementation is swapped; Carbon icons use fill=currentColor and size goes through width/height.
 
 const iconMap: Record<string, CarbonIconType> = {
   activity: Activity,
@@ -101,6 +103,7 @@ const iconMap: Record<string, CarbonIconType> = {
   folder: Folder,
   flag: Flag,
   reportView: Document,
+  reportData: ReportData,
   gitBranch: Branch,
   globe: Globe,
   grid: Grid,
@@ -138,6 +141,7 @@ const iconMap: Record<string, CarbonIconType> = {
   trash: TrashCan,
   upload: Upload,
   user: User,
+  userMultiple: UserMultiple,
   information: Information,
   warning: WarningAltFilled,
   x: Close,

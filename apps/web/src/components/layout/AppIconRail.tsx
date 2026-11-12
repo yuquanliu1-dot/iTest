@@ -13,14 +13,14 @@ type RailItem = {
   icon: IconName;
 };
 
-/** 顶部：全局入口 */
+/** Top: global entries */
 const TOP_ITEMS: RailItem[] = [
   { titleKey: 'common:navProjects', to: '/', icon: 'layers' },
 ];
 
-/** 底部（mt-auto）：管理入口 */
+/** Bottom (mt-auto): admin entries */
 const BOTTOM_ITEMS: RailItem[] = [
-  { titleKey: 'common:navMembers', to: '/members', icon: 'user' },
+  { titleKey: 'common:navMembers', to: '/members', icon: 'userMultiple' },
   { titleKey: 'common:navSettings', to: '/settings', icon: 'settings' },
 ];
 
@@ -28,16 +28,16 @@ type ProjectNavItem = {
   titleKey: string;
   path: string;
   icon: IconName;
-  /** 除自身前缀外额外归属的前缀（如用例详情 /cases 归属「用例」） */
+  /** Additional prefixes that belong to this item beyond its own prefix (e.g. the case detail /cases belongs to "Cases") */
   related?: string[];
 };
 
 const PROJECT_ITEMS: ProjectNavItem[] = [
   { titleKey: 'common:navWorkspace', path: 'overview', icon: 'dashboard' },
   { titleKey: 'common:navAssistant', path: 'assistant', icon: 'message' },
-  { titleKey: 'common:navCases', path: 'groups', icon: 'beaker', related: ['cases', 'ai'] },
+  { titleKey: 'common:navCases', path: 'groups', icon: 'listChecks', related: ['cases', 'ai'] },
   { titleKey: 'common:navPlans', path: 'plans', icon: 'play' },
-  { titleKey: 'common:navReports', path: 'reports', icon: 'flag' },
+  { titleKey: 'common:navReports', path: 'reports', icon: 'reportData' },
   { titleKey: 'common:navExplorations', path: 'explorations', icon: 'search' },
 ];
 
@@ -89,9 +89,9 @@ function RailLink({
 }
 
 /**
- * 56px 图标栏（CRM app-icon-rail）：项目入口在上，项目路由下追加
- * 工作台/用例/执行计划/执行历史（分隔线分组），成员/系统配置沉底。
- * active=bg-muted，hover tooltip。
+ * 56px icon rail (CRM app-icon-rail): the projects entry sits on top, project routes append
+ * workspace/cases/plans/reports below (separated by a divider), and members/system settings sink to the bottom.
+ * active=bg-muted, hover tooltip.
  */
 export default function AppIconRail() {
   const { t } = useTranslation();
@@ -107,8 +107,8 @@ export default function AppIconRail() {
     (item) => !(item.to === '/members' && !canManageMembers),
   );
 
-  // /members、/settings 是组织级路由，URL 不带项目段；只要 store 还持有项目上下文就保留
-  // 项目导航，避免点管理入口时像「退出了项目版本」。
+  // /members and /settings are org-level routes without a project segment in the URL; as long as the store still holds
+  // project context, keep project navigation so clicking an admin entry doesn't feel like "leaving the project version".
   const onAdminPage = pathname.startsWith('/members') || pathname.startsWith('/settings');
   const projectId = urlProjectId ?? (onAdminPage ? current?.id : undefined);
   const versionId = urlVersionId ?? (onAdminPage ? current?.versionId ?? undefined : undefined);
